@@ -199,6 +199,45 @@ impl SetupEventPort for TauriSetupEventPort {
 }
 
 const SPOOL_JANITOR_INTERVAL_SECS: u64 = 60 * 60;
+const CLIPBOARD_SUBSCRIBE_BACKOFF_INITIAL_MS: u64 = 250;
+const CLIPBOARD_SUBSCRIBE_BACKOFF_MAX_MS: u64 = 30_000;
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundClipboardErrorPayload {
+    message_id: String,
+    origin_device_id: String,
+    error: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundClipboardSubscribeErrorPayload {
+    attempt: u32,
+    error: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundClipboardSubscribeRetryPayload {
+    attempt: u32,
+    retry_in_ms: u64,
+    error: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundClipboardSubscribeRecoveredPayload {
+    recovered_after_attempts: u32,
+}
+
+fn subscribe_backoff_ms(attempt: u32) -> u64 {
+    let exponent = attempt.saturating_sub(1).min(16);
+    let factor = 1u64 << exponent;
+    CLIPBOARD_SUBSCRIBE_BACKOFF_INITIAL_MS
+        .saturating_mul(factor)
+        .min(CLIPBOARD_SUBSCRIBE_BACKOFF_MAX_MS)
+}
 
 /// Create SQLite database connection pool
 /// 创建 SQLite 数据库连接池
@@ -774,7 +813,7 @@ fn derive_default_paths_from_app_dirs(
 
 fn apply_profile_suffix(path: PathBuf) -> PathBuf {
     let profile = match std::env::var("UC_PROFILE") {
-        Ok(value) if !value.is_empty() => value,
+        Ok(value) if !value.is_empty() => value.replace('/', "_").replace('\\', "_"),
         _ => return path,
     };
 
@@ -1031,6 +1070,7 @@ pub fn start_background_tasks<R: Runtime>(
 
     let pairing_app_handle = app_handle.clone();
     let space_access_app_handle = app_handle.clone();
+    let clipboard_app_handle = app_handle.clone();
     let pairing_space_access_orchestrator = space_access_orchestrator.clone();
     let representation_repo = deps.representation_repo.clone();
     let worker_tx = deps.worker_tx.clone();
@@ -1134,15 +1174,92 @@ pub fn start_background_tasks<R: Runtime>(
 
     async_runtime::spawn(
         async move {
-            let clipboard_rx = match clipboard_network.subscribe_clipboard().await {
-                Ok(rx) => rx,
-                Err(err) => {
-                    warn!(error = %err, "Failed to subscribe to clipboard messages");
-                    return;
-                }
-            };
+            let mut subscribe_attempt: u32 = 0;
+            let mut first_subscribe_failure_emitted = false;
 
-            run_clipboard_receive_loop(clipboard_rx, sync_inbound_usecase).await;
+            loop {
+                let subscribe_result = tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {
+                        info!("Clipboard receive task stopping on shutdown signal");
+                        return;
+                    }
+                    result = clipboard_network.subscribe_clipboard() => result,
+                };
+
+                match subscribe_result {
+                    Ok(clipboard_rx) => {
+                        if subscribe_attempt > 0 {
+                            info!(attempts = subscribe_attempt, "Recovered clipboard subscription");
+
+                            if let Some(app) = clipboard_app_handle.as_ref() {
+                                let payload = InboundClipboardSubscribeRecoveredPayload {
+                                    recovered_after_attempts: subscribe_attempt,
+                                };
+                                if let Err(err) =
+                                    app.emit("inbound-clipboard-subscribe-recovered", payload)
+                                {
+                                    warn!(error = %err, "Failed to emit inbound clipboard subscribe recovered event");
+                                }
+                            }
+                        }
+
+                        subscribe_attempt = 0;
+                        first_subscribe_failure_emitted = false;
+                        run_clipboard_receive_loop(
+                            clipboard_rx,
+                            &sync_inbound_usecase,
+                            clipboard_app_handle.clone(),
+                        )
+                        .await;
+                    }
+                    Err(err) => {
+                        subscribe_attempt = subscribe_attempt.saturating_add(1);
+                        let retry_in_ms = subscribe_backoff_ms(subscribe_attempt);
+
+                        warn!(
+                            error = %err,
+                            attempt = subscribe_attempt,
+                            retry_in_ms,
+                            "Failed to subscribe to clipboard messages"
+                        );
+
+                        if let Some(app) = clipboard_app_handle.as_ref() {
+                            if !first_subscribe_failure_emitted {
+                                let payload = InboundClipboardSubscribeErrorPayload {
+                                    attempt: subscribe_attempt,
+                                    error: err.to_string(),
+                                };
+                                if let Err(emit_err) =
+                                    app.emit("inbound-clipboard-subscribe-error", payload)
+                                {
+                                    warn!(error = %emit_err, "Failed to emit inbound clipboard subscribe error event");
+                                }
+                                first_subscribe_failure_emitted = true;
+                            }
+
+                            let retry_payload = InboundClipboardSubscribeRetryPayload {
+                                attempt: subscribe_attempt,
+                                retry_in_ms,
+                                error: err.to_string(),
+                            };
+                            if let Err(emit_err) =
+                                app.emit("inbound-clipboard-subscribe-retry", retry_payload)
+                            {
+                                warn!(error = %emit_err, "Failed to emit inbound clipboard subscribe retry event");
+                            }
+                        }
+
+                        let backoff = Duration::from_millis(retry_in_ms);
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
+                                info!("Clipboard receive task stopping during backoff on shutdown signal");
+                                return;
+                            }
+                            _ = tokio::time::sleep(backoff) => {}
+                        }
+                    }
+                }
+            }
         }
         .instrument(info_span!("loop.clipboard.receive_task")),
     );
@@ -1198,9 +1315,10 @@ fn new_sync_inbound_clipboard_usecase(deps: &AppDeps) -> SyncInboundClipboardUse
     )
 }
 
-async fn run_clipboard_receive_loop(
+async fn run_clipboard_receive_loop<R: Runtime>(
     mut clipboard_rx: mpsc::Receiver<ClipboardMessage>,
-    usecase: SyncInboundClipboardUseCase,
+    usecase: &SyncInboundClipboardUseCase,
+    app_handle: Option<AppHandle<R>>,
 ) {
     while let Some(message) = clipboard_rx.recv().await {
         let message_id = message.id.clone();
@@ -1215,13 +1333,27 @@ async fn run_clipboard_receive_loop(
             .instrument(span)
             .await;
 
-        if let Err(err) = result {
-            warn!(
-                error = %err,
-                message_id = %message_id,
-                origin_device_id = %origin_device_id,
-                "Failed to apply inbound clipboard message"
-            );
+        match result {
+            Ok(()) => {}
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    message_id = %message_id,
+                    origin_device_id = %origin_device_id,
+                    "Failed to apply inbound clipboard message"
+                );
+
+                if let Some(app) = app_handle.as_ref() {
+                    let payload = InboundClipboardErrorPayload {
+                        message_id: message_id.clone(),
+                        origin_device_id: origin_device_id.clone(),
+                        error: err.to_string(),
+                    };
+                    if let Err(emit_err) = app.emit("inbound-clipboard-error", payload) {
+                        warn!(error = %emit_err, "Failed to emit inbound clipboard error event");
+                    }
+                }
+            }
         }
     }
 
@@ -4712,5 +4844,14 @@ The functionality is still validated in development mode when running the app wi
             paths.vault_dir,
             PathBuf::from("src-tauri/.app_data_b/vault")
         );
+    }
+
+    #[test]
+    fn apply_profile_suffix_sanitizes_path_separators_in_profile() {
+        let path = PathBuf::from("src-tauri/.app_data");
+
+        let updated = with_uc_profile(Some("team/a\\b"), || apply_profile_suffix(path.clone()));
+
+        assert_eq!(updated, PathBuf::from("src-tauri/.app_data_team_a_b"));
     }
 }
