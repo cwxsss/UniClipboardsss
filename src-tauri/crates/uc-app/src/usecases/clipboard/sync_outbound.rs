@@ -180,16 +180,34 @@ impl SyncOutboundClipboardUseCase {
             .to_bytes()
             .context("failed to serialize outbound protocol clipboard message")?;
 
+        let mut send_failures = Vec::new();
+        let mut sent_count = 0usize;
+
         for peer in connected_peers {
-            self.network
+            if let Err(err) = self
+                .network
                 .send_clipboard(&peer.peer_id, outbound_bytes.clone())
                 .await
-                .with_context(|| {
-                    format!(
-                        "failed to send outbound clipboard message to peer {}",
-                        peer.peer_id
-                    )
-                })?;
+            {
+                warn!(
+                    peer_id = %peer.peer_id,
+                    error = %err,
+                    "failed to send outbound clipboard message to peer; continuing best-effort fanout"
+                );
+                send_failures.push(peer.peer_id);
+                continue;
+            }
+
+            sent_count += 1;
+        }
+
+        if !send_failures.is_empty() {
+            return Err(anyhow::anyhow!(
+                "outbound clipboard fanout partially failed: {} sent, {} failed ({})",
+                sent_count,
+                send_failures.len(),
+                send_failures.join(", ")
+            ));
         }
 
         info!("Outbound clipboard sync sent to connected peers");
@@ -210,6 +228,7 @@ fn is_text_plain_mime(mime: &str) -> bool {
 mod tests {
     use super::*;
 
+    use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -245,6 +264,7 @@ mod tests {
 
     struct TestNetwork {
         connected_peers: Vec<ConnectedPeer>,
+        failing_peers: HashSet<String>,
         send_calls: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
         get_connected_peers_calls: Arc<AtomicUsize>,
     }
@@ -256,6 +276,10 @@ mod tests {
             peer_id: &str,
             encrypted_data: Vec<u8>,
         ) -> anyhow::Result<()> {
+            if self.failing_peers.contains(peer_id) {
+                return Err(anyhow::anyhow!("simulated send failure for {peer_id}"));
+            }
+
             self.send_calls
                 .lock()
                 .expect("send calls lock")
@@ -447,6 +471,7 @@ mod tests {
     fn build_usecase(
         connected_peers: Vec<ConnectedPeer>,
         encryption_ready: bool,
+        failing_peers: &[&str],
     ) -> (
         SyncOutboundClipboardUseCase,
         Arc<Mutex<Vec<(String, Vec<u8>)>>>,
@@ -463,6 +488,10 @@ mod tests {
             }),
             Arc::new(TestNetwork {
                 connected_peers,
+                failing_peers: failing_peers
+                    .iter()
+                    .map(|peer| (*peer).to_string())
+                    .collect(),
                 send_calls: send_calls.clone(),
                 get_connected_peers_calls: get_connected_peers_calls.clone(),
             }),
@@ -495,6 +524,7 @@ mod tests {
                 connected_at: Utc::now(),
             }],
             true,
+            &[],
         );
 
         usecase
@@ -513,6 +543,7 @@ mod tests {
                 connected_at: Utc::now(),
             }],
             true,
+            &[],
         );
 
         usecase
@@ -534,6 +565,7 @@ mod tests {
                 connected_at: Utc::now(),
             }],
             false,
+            &[],
         );
 
         usecase
@@ -554,6 +586,7 @@ mod tests {
                 connected_at: Utc::now(),
             }],
             true,
+            &[],
         );
 
         usecase
@@ -572,6 +605,7 @@ mod tests {
                 connected_at: Utc::now(),
             }],
             true,
+            &[],
         );
 
         usecase
@@ -593,5 +627,43 @@ mod tests {
             }
             _ => panic!("expected ProtocolMessage::Clipboard"),
         }
+    }
+
+    #[test]
+    fn continues_sending_to_other_peers_after_single_peer_failure() {
+        let (usecase, send_calls, _, _) = build_usecase(
+            vec![
+                ConnectedPeer {
+                    peer_id: "peer-1".to_string(),
+                    device_name: "Desk".to_string(),
+                    connected_at: Utc::now(),
+                },
+                ConnectedPeer {
+                    peer_id: "peer-2".to_string(),
+                    device_name: "Laptop".to_string(),
+                    connected_at: Utc::now(),
+                },
+            ],
+            true,
+            &["peer-1"],
+        );
+
+        let err = usecase
+            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .expect_err("should surface partial fanout failure");
+
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("partially failed"),
+            "unexpected error message: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("peer-1"),
+            "error should include failed peer id: {err_msg}"
+        );
+
+        let calls = send_calls.lock().expect("send calls lock");
+        assert_eq!(calls.len(), 1, "peer-2 should still receive payload");
+        assert_eq!(calls[0].0, "peer-2");
     }
 }
