@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Platform-specific implementations for UniClipboard (clipboard, security, storage)"
 
+[features]
+test-helpers = []
+
 [dependencies]
 # Workspace crates
 uc-core = { path = "../uc-core" }
