@@ -70,15 +70,8 @@ impl SyncOutboundClipboardUseCase {
         snapshot: SystemClipboardSnapshot,
         origin: ClipboardChangeOrigin,
     ) -> Result<()> {
-        if origin != ClipboardChangeOrigin::LocalCapture {
-            if origin == ClipboardChangeOrigin::LocalRestore {
-                warn!(
-                    origin = ?origin,
-                    "Skipping outbound sync for LocalRestore; restore changes are not propagated to peers"
-                );
-            }
-            // TODO: Decide restore sync policy: allow LocalRestore for peer propagation or keep explicit no-op.
-            debug!(origin = ?origin, "Skipping outbound sync for non-local-capture origin");
+        if origin == ClipboardChangeOrigin::RemotePush {
+            debug!(origin = ?origin, "Skipping outbound sync for remote-push origin");
             return Ok(());
         }
 
@@ -535,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn does_not_send_for_remote_push_or_local_restore() {
+    fn does_not_send_for_remote_push() {
         let (usecase, send_calls, _, _) = build_usecase(
             vec![ConnectedPeer {
                 peer_id: "peer-1".to_string(),
@@ -549,11 +542,27 @@ mod tests {
         usecase
             .execute(build_snapshot(), ClipboardChangeOrigin::RemotePush)
             .expect("remote push should no-op");
-        usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalRestore)
-            .expect("local restore should no-op");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
+    }
+
+    #[test]
+    fn sends_for_local_restore() {
+        let (usecase, send_calls, _, _) = build_usecase(
+            vec![ConnectedPeer {
+                peer_id: "peer-1".to_string(),
+                device_name: "Desk".to_string(),
+                connected_at: Utc::now(),
+            }],
+            true,
+            &[],
+        );
+
+        usecase
+            .execute(build_snapshot(), ClipboardChangeOrigin::LocalRestore)
+            .expect("local restore should fan out");
+
+        assert_eq!(send_calls.lock().expect("send calls lock").len(), 1);
     }
 
     #[test]
