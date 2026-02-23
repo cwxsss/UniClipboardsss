@@ -16,6 +16,7 @@ fn resolved_app_dir_name() -> String {
 
 pub struct DirsAppDirsAdapter {
     base_data_local_dir_override: Option<PathBuf>,
+    cached_app_dir_name: String,
 }
 
 impl DirsAppDirsAdapter {
@@ -30,6 +31,7 @@ impl DirsAppDirsAdapter {
     pub fn new() -> Self {
         Self {
             base_data_local_dir_override: None,
+            cached_app_dir_name: resolved_app_dir_name(),
         }
     }
 
@@ -50,6 +52,7 @@ impl DirsAppDirsAdapter {
     pub fn with_base_data_local_dir(base: PathBuf) -> Self {
         Self {
             base_data_local_dir_override: Some(base),
+            cached_app_dir_name: resolved_app_dir_name(),
         }
     }
 
@@ -87,7 +90,11 @@ impl AppDirsPort for DirsAppDirsAdapter {
     ///
     /// # Returns
     ///
-    /// `AppDirs` with `app_data_root` set to the base local data directory joined with `"uniclipboard"`.
+    /// `AppDirs` with `app_data_root` set to the base local data directory joined with the
+    /// value captured from `resolved_app_dir_name()` when this adapter is created.
+    ///
+    /// Depending on `UC_PROFILE`, `resolved_app_dir_name()` resolves to `"uniclipboard"`
+    /// or `"uniclipboard-{profile}"`.
     ///
     /// # Examples
     ///
@@ -105,11 +112,9 @@ impl AppDirsPort for DirsAppDirsAdapter {
         let base_cache = self
             .base_cache_dir()
             .ok_or(AppDirsError::CacheDirUnavailable)?;
-        let app_dir_name = resolved_app_dir_name();
-
         Ok(AppDirs {
-            app_data_root: base_data.join(&app_dir_name),
-            app_cache_root: base_cache.join(&app_dir_name),
+            app_data_root: base_data.join(&self.cached_app_dir_name),
+            app_cache_root: base_cache.join(&self.cached_app_dir_name),
         })
     }
 }
