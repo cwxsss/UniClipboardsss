@@ -71,6 +71,13 @@ impl SyncOutboundClipboardUseCase {
         origin: ClipboardChangeOrigin,
     ) -> Result<()> {
         if origin != ClipboardChangeOrigin::LocalCapture {
+            if origin == ClipboardChangeOrigin::LocalRestore {
+                warn!(
+                    origin = ?origin,
+                    "Skipping outbound sync for LocalRestore; restore changes are not propagated to peers"
+                );
+            }
+            // TODO: Decide restore sync policy: allow LocalRestore for peer propagation or keep explicit no-op.
             debug!(origin = ?origin, "Skipping outbound sync for non-local-capture origin");
             return Ok(());
         }
