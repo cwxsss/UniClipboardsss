@@ -278,6 +278,6 @@ pub async fn get_clipboard_entry_details(
 ## References / 参考
 
 - New architecture commands: `src-tauri/src/main.rs:110-134`
-- Legacy commands: `src-tauri/src-legacy/main.rs:270-320`
+- Legacy commands: removed with `src-tauri/src-legacy` (2026-02-26)
 - Event forwarding: `src-tauri/crates/uc-tauri/src/events/mod.rs`
 - Clipboard handler: `src-tauri/crates/uc-tauri/src/bootstrap/runtime.rs:426-448`

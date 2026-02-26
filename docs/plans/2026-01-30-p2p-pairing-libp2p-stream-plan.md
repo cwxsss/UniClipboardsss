@@ -40,8 +40,8 @@
   - `src-tauri/crates/uc-core/src/network/protocol_ids.rs`
     - `ProtocolId::Pairing => "/uc-pairing/1.0.0"`
     - `ProtocolId::Business => "/uc-business/1.0.0"`
-- legacy 中已有 length-prefixed framing 的工程化实现可参考（但不直接复用 legacy 模块结构）：
-  - `src-tauri/src-legacy/infrastructure/p2p/swarm.rs`（`read_len_prefixed` / `write_len_prefixed`）
+- 历史实现中的 length-prefixed framing 可作为思路参考（目录已删除，保留设计语义）：
+  - `read_len_prefixed` / `write_len_prefixed`
 
 ## Target Architecture Overview
 

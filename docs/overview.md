@@ -179,15 +179,14 @@ The project is transitioning from **Clean Architecture** to **Hexagonal Architec
 
 ### In Progress 🔄
 
-- Migrating use cases from legacy code to uc-app
+- Completing remaining use case implementations in uc-app
 - Updating Tauri commands to use new architecture
 - Completing placeholder implementations
 
 ### Legacy Code
 
-- `src-tauri/src-legacy/` contains old Clean Architecture code
-- Still in use during transition
-- Will be removed once migration is complete
+- Legacy `src-tauri/src-legacy/` was removed on 2026-02-26
+- Historical notes may still mention legacy modules
 
 ## Development Setup
 

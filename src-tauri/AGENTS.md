@@ -19,7 +19,6 @@ src-tauri/
 |  |- uc-infra/          # DB/FS/security adapters
 |  |- uc-platform/       # OS/network/platform adapters
 |  `- uc-tauri/          # Tauri adapters, commands, bootstrap wiring
-|- src-legacy/           # Migration reference only (do not add new logic)
 |- migrations/           # Legacy diesel migrations
 `- crates/uc-infra/migrations/ # Active infra migrations
 ```
@@ -36,7 +35,7 @@ src-tauri/
 | App workflows                    | `crates/uc-app/src/usecases/`              | Pairing/setup/space_access orchestration                      |
 | Infra implementations            | `crates/uc-infra/src/`                     | Diesel repos, encryption, fs, timers                          |
 | Platform adapters                | `crates/uc-platform/src/`                  | libp2p, clipboard, secure storage                             |
-| Legacy reference                 | `src-legacy/`                              | Reference-only; no new code                                   |
+| Legacy reference                 | Removed (2026-02-26)                       | Do not reintroduce legacy module tree                         |
 
 ## CODE MAP
 
@@ -62,7 +61,7 @@ src-tauri/
 
 - Mixing boundary layers in one change set (`uc-core` + `uc-infra` etc.).
 - Adding business logic inside `uc-tauri` command handlers or platform adapters.
-- New code under `src-legacy/`.
+- Reintroducing code under any `src-legacy/` path.
 - Introducing `unwrap()/expect()` in production paths.
 - Emitting snake_case payload fields to frontend events.
 
@@ -91,6 +90,6 @@ bun run test:coverage
 
 ## NOTES
 
-- `src-legacy/` is not in active runtime path; treat as migration archive.
+- `src-legacy/` was removed on 2026-02-26; treat any references as historical context only.
 - Current repository root also has parent-level `AGENTS.md`; local file narrows rules to `src-tauri/` workspace details.
 - Any change touching `crates/uc-platform/src/adapters/libp2p_network.rs` must run `cargo test -p uc-platform` before merge.

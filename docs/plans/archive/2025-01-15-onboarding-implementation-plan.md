@@ -570,7 +570,7 @@ The frontend `useOnboarding` hook should already be compatible with the new comm
 
 - Device registration is handled automatically on app startup (via `PlatformRuntime`)
 - Encryption password initialization uses existing `InitializeEncryptionUseCase`
-- Legacy onboarding code in `src-tauri/src-legacy/` can be removed after verification
+- Legacy onboarding code (former `src-tauri/src-legacy/`) has been removed after verification
 
 ---
 

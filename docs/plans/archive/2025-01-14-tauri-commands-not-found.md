@@ -17,12 +17,12 @@ These errors prevented the application from starting properly.
 
 ### Issue 1: `check_onboarding_status` Not Registered
 
-**Root Cause**: The onboarding command was defined in the legacy codebase (`src-tauri/src-legacy/api/onboarding.rs`) but was not registered in the new architecture's `src-tauri/src/main.rs`.
+**Root Cause**: The onboarding command was defined in the legacy codebase (later removed on 2026-02-26) but was not registered in the new architecture's `src-tauri/src/main.rs`.
 
 **Evidence**:
 
 - Frontend call: `src/api/onboarding.ts:15` → `invoke('check_onboarding_status')`
-- Legacy definition: `src-legacy/api/onboarding.rs:35`
+- Legacy definition: removed historical file (`src-legacy/api/onboarding.rs:35`)
 - Missing registration: `src/main.rs:195-206` (no entry for this command)
 
 ### Issue 2: `enable_modern_window_style` Not Registered

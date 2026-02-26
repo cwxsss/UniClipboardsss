@@ -86,12 +86,12 @@ The project is transitioning from Clean Architecture to Hexagonal Architecture (
 
 **In Progress**:
 
-- 🔄 Use case implementations (some still in legacy code)
+- 🔄 Use case implementations (remaining work in new crates)
 - 🔄 Tauri command migration to new architecture
 
 **Legacy Code**:
 
-- `src-tauri/src-legacy/` contains old Clean Architecture code being phased out
+- Legacy `src-tauri/src-legacy/` directory has been removed (2026-02-26)
 
 ## Getting Started
 

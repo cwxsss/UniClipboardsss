@@ -54,7 +54,7 @@
 ## Dependency Notes
 
 - libp2p dependencies moved out of `src-tauri/Cargo.toml` into `uc-platform/Cargo.toml`
-- `libp2p-stream` currently only used in legacy code under `src-tauri/src-legacy`
+- `libp2p-stream` is now used in active platform code (`src-tauri/crates/uc-platform`)
 - Tauri log plugin mismatch fix:
   - JS: `@tauri-apps/plugin-log` pinned to 2.7.1 in `package.json`
   - Rust: `tauri-plugin-log` remains 2.x

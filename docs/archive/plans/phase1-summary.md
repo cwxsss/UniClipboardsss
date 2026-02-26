@@ -39,7 +39,7 @@
 ### 3. **Backward Compatibility** / 向后兼容
 
 - ✅ Existing `AppBuilder` kept unchanged
-- ✅ All existing code in src-legacy continues to work
+- ✅ (Historical) Legacy code path was still functional at that phase
 - ✅ No breaking changes to existing APIs
 - ✅ Pure addition of new modules (zero modification of existing code)
 
@@ -47,7 +47,7 @@
 
 - ❌ No existing code was modified
 - ❌ No behavior changes
-- ❌ AppBuilder still works (in src-legacy)
+- ❌ AppBuilder still worked in legacy path (historical note)
 - ❌ main.rs unchanged (still using legacy code)
 - ❌ All legacy infrastructure intact
 
@@ -82,7 +82,7 @@
 ### Binary Build Status
 
 - ⚠️ Binary build NOT tested (blocked by unrelated refactoring in progress)
-  - The main branch has moved legacy code to `src-legacy` directory
+  - The main branch had moved legacy code to `src-legacy` directory (later removed)
   - New `src/main.rs` is incomplete (references non-existent api modules)
   - This is outside the scope of Phase 1 validation
   - Library-level validation is sufficient for Phase 1 completion
