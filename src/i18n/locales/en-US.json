@@ -503,6 +503,11 @@
     "page": {
       "loadingSetupState": "Loading setup state...",
       "processing": "Processing...",
+      "processingJoinSpace": {
+        "title": "Connecting to device…",
+        "subtitle": "A pairing request has been sent. Please wait for the other device to respond.",
+        "hint": "Go to the other device and approve the pairing request"
+      },
       "unknownState": "Unknown setup state: {{state}}",
       "errors": {
         "loadSetupStateFailed": "Failed to load setup state",
@@ -519,6 +524,7 @@
       "unknownDevice": "Unknown device",
       "back": "Back",
       "refresh": "Refresh",
+      "cancel": "Cancel",
       "encryptPassphraseLabel": "Encryption passphrase",
       "encryptPassphrasePlaceholder": "Enter the passphrase shown on the host device"
     },

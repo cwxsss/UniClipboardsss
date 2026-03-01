@@ -503,6 +503,11 @@
     "page": {
       "loadingSetupState": "正在加载初始化状态...",
       "processing": "正在处理...",
+      "processingJoinSpace": {
+        "title": "正在连接设备…",
+        "subtitle": "配对请求已发送，请等待对方设备响应。",
+        "hint": "请前往另一台设备上，同意配对请求"
+      },
       "unknownState": "未知的初始化状态：{{state}}",
       "errors": {
         "loadSetupStateFailed": "加载初始化状态失败",
@@ -519,6 +524,7 @@
       "unknownDevice": "未知设备",
       "back": "返回",
       "refresh": "刷新",
+      "cancel": "取消",
       "encryptPassphraseLabel": "加密口令",
       "encryptPassphrasePlaceholder": "请输入主设备上显示的加密口令"
     },

@@ -1,5 +1,5 @@
-import { AnimatePresence } from 'framer-motion'
-import { Loader2, Shield, Wifi, Key } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Loader2, Monitor, Shield, Smartphone, Wifi, Key } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -17,6 +17,7 @@ import {
   verifyPassphrase,
   SetupState,
 } from '@/api/setup'
+import { Button } from '@/components/ui/button'
 import CreatePassphraseStep from '@/pages/setup/CreatePassphraseStep'
 import JoinPickDeviceStep from '@/pages/setup/JoinPickDeviceStep'
 import JoinVerifyPassphraseStep from '@/pages/setup/JoinVerifyPassphraseStep'
@@ -257,11 +258,8 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
         )
       }
 
-      if ('ProcessingCreateSpace' in setupState || 'ProcessingJoinSpace' in setupState) {
-        const message =
-          'ProcessingCreateSpace' in setupState
-            ? setupState.ProcessingCreateSpace.message
-            : setupState.ProcessingJoinSpace.message
+      if ('ProcessingCreateSpace' in setupState) {
+        const message = setupState.ProcessingCreateSpace.message
         return (
           <div className="flex h-full w-full items-center justify-center">
             <div className="flex items-center gap-3 text-sm text-muted-foreground">
@@ -269,6 +267,45 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
               {message ?? t('processing')}
             </div>
           </div>
+        )
+      }
+
+      if ('ProcessingJoinSpace' in setupState) {
+        return (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            className="w-full"
+          >
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+                {t('processingJoinSpace.title')}
+              </h1>
+              <p className="mt-2 max-w-sm text-muted-foreground">
+                {t('processingJoinSpace.subtitle')}
+              </p>
+              <div className="mt-8 flex items-center gap-2.5 rounded-lg border border-border/50 bg-muted/40 px-5 py-3 text-sm text-muted-foreground">
+                <div className="flex shrink-0 items-center gap-1">
+                  <Monitor className="h-4 w-4" />
+                  <span className="text-xs">/</span>
+                  <Smartphone className="h-4 w-4" />
+                </div>
+                <span>{t('processingJoinSpace.hint')}</span>
+              </div>
+              <Button
+                variant="ghost"
+                className="mt-8 text-muted-foreground"
+                onClick={() => runAction(() => cancelSetup())}
+                disabled={loading}
+              >
+                {tCommon('cancel')}
+              </Button>
+            </div>
+          </motion.div>
         )
       }
     }
