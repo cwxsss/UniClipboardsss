@@ -12,6 +12,7 @@ pub mod events;
 pub mod models;
 pub mod protocol;
 pub mod services;
+pub mod tray;
 
 #[cfg(test)]
 pub mod test_utils;
