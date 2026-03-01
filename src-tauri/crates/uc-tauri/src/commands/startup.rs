@@ -3,8 +3,10 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::{AppHandle, Manager};
-use tracing::{info, warn};
+use tauri::AppHandle;
+use tracing::info;
+
+use crate::tray::show_main_window;
 
 /// Startup barrier used to coordinate backend readiness.
 ///
@@ -49,26 +51,7 @@ impl StartupBarrier {
             return;
         }
 
-        if let Some(main_window) = app_handle.get_webview_window("main") {
-            if let Err(e) = main_window.show() {
-                warn!("Failed to show main window: {}", e);
-            } else {
-                info!("Main window shown (startup barrier)");
-            }
-
-            if let Err(e) = main_window.set_focus() {
-                warn!("Failed to focus main window: {}", e);
-            } else {
-                info!("Main window focused (startup barrier)");
-            }
-
-            if let Err(e) = main_window.unminimize() {
-                warn!("Failed to unminimize main window: {}", e);
-            } else {
-                info!("Main window unminimized (startup barrier)");
-            }
-        } else {
-            warn!("Main window not found (startup barrier)");
-        }
+        show_main_window(app_handle);
+        info!("Main window show requested (startup barrier)");
     }
 }

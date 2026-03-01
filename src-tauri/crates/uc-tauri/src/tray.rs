@@ -148,7 +148,7 @@ impl TrayState {
 }
 
 /// Show the main window: unminimize, show, and focus.
-fn show_main_window(app: &tauri::AppHandle) {
+pub fn show_main_window(app: &tauri::AppHandle) {
     match app.get_webview_window("main") {
         Some(window) => {
             let _ = window.unminimize();
