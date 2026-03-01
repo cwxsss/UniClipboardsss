@@ -34,6 +34,7 @@ use uc_tauri::bootstrap::{
     start_background_tasks, wire_dependencies, AppRuntime, SetupRuntimePorts,
 };
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
+use uc_tauri::tray::TrayState;
 
 // Platform-specific command modules
 mod plugins;
@@ -573,6 +574,16 @@ fn run_app(config: AppConfig) {
         // Register AppRuntime for Tauri commands
         .manage(runtime_for_tauri)
         .manage(pairing_orchestrator.clone())
+        .manage(TrayState::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    info!("Main window hidden to tray");
+                }
+            }
+        })
         .on_page_load(|webview, payload| {
             if webview.label() != "main" {
                 return;
@@ -629,6 +640,41 @@ fn run_app(config: AppConfig) {
             runtime_for_handler.set_app_handle(app.handle().clone());
             info!("AppHandle set on AppRuntime for event emission");
 
+            // Load startup settings for tray and silent start
+            let (silent_start, initial_language) = {
+                let settings_port = runtime_for_handler.deps.settings.clone();
+                match tauri::async_runtime::block_on(settings_port.load()) {
+                    Ok(settings) => {
+                        let silent = settings.general.silent_start;
+                        let lang = settings.general.language.unwrap_or_default();
+                        (silent, lang)
+                    }
+                    Err(e) => {
+                        warn!("Failed to load settings for startup: {}, using defaults", e);
+                        (false, "en-US".to_string())
+                    }
+                }
+            };
+
+            // Initialize system tray
+            let tray_state = app.state::<TrayState>();
+            if let Err(e) = tray_state.init(app.handle(), &initial_language) {
+                error!("Failed to initialize system tray: {}", e);
+                // Non-fatal: continue startup without tray
+            }
+
+            // Show window based on silent_start setting
+            if !silent_start {
+                if let Some(main_window) = app.get_webview_window("main") {
+                    let _ = main_window.show();
+                    let _ = main_window.set_focus();
+                    let _ = main_window.unminimize();
+                    info!("Main window shown (silent_start=false)");
+                }
+            } else {
+                info!("Silent start enabled, main window stays hidden");
+            }
+
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -651,6 +697,7 @@ fn run_app(config: AppConfig) {
             // Spawn the initialization task immediately (don't wait for frontend)
             let runtime = runtime_for_handler.clone();
             let platform_event_tx_clone = platform_event_tx.clone();
+            let silent_start_for_barrier = silent_start;
             tauri::async_runtime::spawn(async move {
                 info!("Starting backend initialization");
 
@@ -684,7 +731,11 @@ fn run_app(config: AppConfig) {
                 // to avoid deadlocks when the main window is hidden; frontend handles its own loading state.
                 info!("[Startup] Backend startup tasks completed, marking backend_ready");
                 startup_barrier_for_backend.mark_backend_ready();
-                startup_barrier_for_backend.try_finish(&app_handle_for_startup);
+                if !silent_start_for_barrier {
+                    startup_barrier_for_backend.try_finish(&app_handle_for_startup);
+                } else {
+                    info!("[Startup] Silent start: skipping startup barrier window show");
+                }
 
                 // 2. Auto-unlock (non-blocking) if enabled in settings
                 let runtime_for_auto_unlock = runtime.clone();
@@ -762,6 +813,8 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::pairing::unpair_p2p_device,
             uc_tauri::commands::pairing::list_paired_devices,
             uc_tauri::commands::pairing::set_pairing_state,
+            // Tray commands
+            uc_tauri::commands::tray::set_tray_language,
             // Lifecycle commands
             uc_tauri::commands::lifecycle::retry_lifecycle,
             uc_tauri::commands::lifecycle::get_lifecycle_status,
