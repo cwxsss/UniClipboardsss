@@ -190,6 +190,10 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
       i18n.changeLanguage(next)
     }
     persistLanguage(next)
+    // Sync tray menu labels with UI language
+    invokeWithTrace('set_tray_language', { language: next }).catch(err => {
+      console.error('Failed to sync tray language:', err)
+    })
   }, [setting?.general?.language])
 
   const value: SettingContextType = {

@@ -1,6 +1,13 @@
 import { listen } from '@tauri-apps/api/event'
-import { useEffect, useState } from 'react'
-import { BrowserRouter as Router, Routes, Route, Navigate, Outlet } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  Navigate,
+  Outlet,
+  useNavigate,
+} from 'react-router-dom'
 import { type EncryptionSessionStatus } from '@/api/security'
 import { getSetupState, type SetupState } from '@/api/setup'
 import { TitleBar } from '@/components'
@@ -12,6 +19,7 @@ import { SettingProvider } from '@/contexts/SettingContext'
 import { ShortcutProvider } from '@/contexts/ShortcutContext'
 import { UpdateProvider } from '@/contexts/UpdateContext'
 import { usePlatform } from '@/hooks/usePlatform'
+import { useUINavigateListener } from '@/hooks/useUINavigateListener'
 import { MainLayout, SettingsFullLayout, WindowShell } from '@/layouts'
 import DashboardPage from '@/pages/DashboardPage'
 import DevicesPage from '@/pages/DevicesPage'
@@ -224,6 +232,15 @@ const AppContentWithBar = () => {
       window.localStorage.removeItem(SETUP_ACK_STORAGE_KEY)
     }
   }, [hasAcknowledgedSetup])
+
+  const navigate = useNavigate()
+  const handleNavigate = useCallback(
+    (route: string) => {
+      navigate(route)
+    },
+    [navigate]
+  )
+  useUINavigateListener(handleNavigate)
 
   const handleSetupComplete = () => {
     setHasAcknowledgedSetup(true)
