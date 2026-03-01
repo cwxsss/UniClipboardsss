@@ -67,7 +67,7 @@ export default function JoinPickDeviceStep({
         </div>
       )}
 
-      <div className="space-y-2">
+      <div className="min-h-[14rem] space-y-2">
         {isScanningInitial ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <RefreshCw className="mb-4 h-8 w-8 animate-spin text-muted-foreground" />
@@ -95,7 +95,7 @@ export default function JoinPickDeviceStep({
           peers.map((peer: JoinPickDeviceStepProps['peers'][number]) => (
             <div
               key={peer.id}
-              className="flex items-center gap-4 py-4 transition-colors hover:bg-muted/30"
+              className="flex items-center gap-4 rounded-lg px-4 py-4 transition-colors hover:bg-muted/30"
             >
               <div className="flex h-10 w-10 items-center justify-center text-primary">
                 {getIcon(peer.device_type)}
