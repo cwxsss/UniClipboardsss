@@ -80,15 +80,15 @@ const DeleteConfirmDialog: React.FC<DeleteConfirmDialogProps> = ({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t('clipboard:confirmDeleteTitle')}</AlertDialogTitle>
+          <AlertDialogTitle>{t('clipboard.confirmDeleteTitle')}</AlertDialogTitle>
           <AlertDialogDescription>
-            {t('clipboard:confirmDeleteDescription', { count })}
+            {t('clipboard.confirmDeleteDescription', { count })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={isDeleting} onClick={handleCancel}>
             <span className="flex items-center gap-1.5">
-              {t('clipboard:cancelLabel')}
+              {t('clipboard.cancelLabel')}
               <Kbd>ESC</Kbd>
             </span>
           </AlertDialogCancel>
@@ -101,10 +101,10 @@ const DeleteConfirmDialog: React.FC<DeleteConfirmDialogProps> = ({
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
             {isDeleting ? (
-              t('clipboard:deletingLabel')
+              t('clipboard.deletingLabel')
             ) : (
               <span className="flex items-center gap-1.5">
-                {t('clipboard:deleteLabel')}
+                {t('clipboard.deleteLabel')}
                 <span className="flex items-center gap-0.5">
                   <Kbd>D</Kbd>
                   <span className="text-xs text-destructive-foreground/70 mx-0.5">/</span>
