@@ -147,8 +147,13 @@ impl TrayState {
     }
 }
 
-/// Show the main window: unminimize, show, and focus.
+/// Show the main window: make Dock icon visible on macOS, then unminimize, show, and focus.
 pub fn show_main_window(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = app.set_dock_visibility(true) {
+        warn!(error = %error, "Failed to show Dock icon before showing main window");
+    }
+
     match app.get_webview_window("main") {
         Some(window) => {
             let _ = window.unminimize();

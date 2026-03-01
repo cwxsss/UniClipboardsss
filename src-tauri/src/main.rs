@@ -580,6 +580,10 @@ fn run_app(config: AppConfig) {
                 if window.label() == "main" {
                     api.prevent_close();
                     let _ = window.hide();
+                    #[cfg(target_os = "macos")]
+                    if let Err(error) = window.app_handle().set_dock_visibility(false) {
+                        warn!(error = %error, "Failed to hide Dock icon after hiding main window");
+                    }
                     info!("Main window hidden to tray");
                 }
             }
@@ -663,14 +667,15 @@ fn run_app(config: AppConfig) {
                 // Non-fatal: continue startup without tray
             }
 
+            #[cfg(target_os = "macos")]
+            if let Err(error) = app.handle().set_dock_visibility(false) {
+                warn!(error = %error, "Failed to hide Dock icon during startup");
+            }
+
             // Show window based on silent_start setting
             if !silent_start {
-                if let Some(main_window) = app.get_webview_window("main") {
-                    let _ = main_window.show();
-                    let _ = main_window.set_focus();
-                    let _ = main_window.unminimize();
-                    info!("Main window shown (silent_start=false)");
-                }
+                uc_tauri::tray::show_main_window(app.handle());
+                info!("Main window show requested (silent_start=false)");
             } else {
                 info!("Silent start enabled, main window stays hidden");
             }
