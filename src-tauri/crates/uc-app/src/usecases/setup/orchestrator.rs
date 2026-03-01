@@ -60,6 +60,7 @@ pub struct SetupOrchestrator {
     joiner_offer: Arc<Mutex<Option<SpaceAccessJoinerOffer>>>,
     passphrase: Arc<Mutex<Option<Passphrase>>>,
     seeded: AtomicBool,
+    seed_lock: Mutex<()>,
 
     // 能力型 use cases (依赖注入)
     initialize_encryption: Arc<InitializeEncryption>,
@@ -110,6 +111,7 @@ impl SetupOrchestrator {
             joiner_offer: Arc::new(Mutex::new(None)),
             passphrase: Arc::new(Mutex::new(None)),
             seeded: AtomicBool::new(false),
+            seed_lock: Mutex::new(()),
             initialize_encryption,
             mark_setup_complete,
             setup_status,
@@ -619,7 +621,12 @@ impl SetupOrchestrator {
     }
 
     async fn seed_state_from_status(&self) {
-        if self.seeded.swap(true, Ordering::SeqCst) {
+        if self.seeded.load(Ordering::SeqCst) {
+            return;
+        }
+
+        let _seed_guard = self.seed_lock.lock().await;
+        if self.seeded.load(Ordering::SeqCst) {
             return;
         }
 
@@ -633,6 +640,10 @@ impl SetupOrchestrator {
                 error!(error = %err, "failed to load setup status");
             }
         }
+
+        // Mark seeding complete after persistent status has been read/applied,
+        // so concurrent get_state calls cannot observe transient default state.
+        self.seeded.store(true, Ordering::SeqCst);
     }
 
     async fn ensure_pairing_session(&self) -> Result<(), SetupError> {
@@ -835,6 +846,7 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
+    use tokio::sync::Notify;
     use tokio::time::{sleep, Duration, Instant};
     use uc_core::network::{DiscoveredPeer, PairedDevice, PairingState};
     use uc_core::ports::network_control::NetworkControlPort;
@@ -870,6 +882,13 @@ mod tests {
         set_calls: AtomicUsize,
     }
 
+    struct BlockingSetupStatusPort {
+        status: SetupStatus,
+        entered_get_status: Notify,
+        release_get_status: Notify,
+        get_calls: AtomicUsize,
+    }
+
     #[derive(Default)]
     struct MockSetupEventPort {
         emitted: tokio::sync::Mutex<Vec<(SetupState, Option<String>)>>,
@@ -901,6 +920,29 @@ mod tests {
         }
     }
 
+    impl BlockingSetupStatusPort {
+        fn new(status: SetupStatus) -> Self {
+            Self {
+                status,
+                entered_get_status: Notify::new(),
+                release_get_status: Notify::new(),
+                get_calls: AtomicUsize::new(0),
+            }
+        }
+
+        async fn wait_until_get_status_called(&self) {
+            self.entered_get_status.notified().await;
+        }
+
+        fn release_blocked_get_status(&self) {
+            self.release_get_status.notify_waiters();
+        }
+
+        fn get_call_count(&self) -> usize {
+            self.get_calls.load(Ordering::SeqCst)
+        }
+    }
+
     #[async_trait]
     impl SetupStatusPort for MockSetupStatusPort {
         async fn get_status(&self) -> anyhow::Result<SetupStatus> {
@@ -910,6 +952,20 @@ mod tests {
         async fn set_status(&self, status: &SetupStatus) -> anyhow::Result<()> {
             *self.status.lock().unwrap() = status.clone();
             self.set_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SetupStatusPort for BlockingSetupStatusPort {
+        async fn get_status(&self) -> anyhow::Result<SetupStatus> {
+            self.get_calls.fetch_add(1, Ordering::SeqCst);
+            self.entered_get_status.notify_one();
+            self.release_get_status.notified().await;
+            Ok(self.status.clone())
+        }
+
+        async fn set_status(&self, _status: &SetupStatus) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -1655,6 +1711,39 @@ mod tests {
         let state = orchestrator.get_state().await;
 
         assert_eq!(state, SetupState::Completed);
+    }
+
+    #[tokio::test]
+    async fn concurrent_get_state_waits_for_seed_completion() {
+        let setup_status = Arc::new(BlockingSetupStatusPort::new(SetupStatus {
+            has_completed: true,
+        }));
+        let orchestrator = Arc::new(build_orchestrator(setup_status.clone()));
+
+        let first_call = {
+            let orchestrator = orchestrator.clone();
+            tokio::spawn(async move { orchestrator.get_state().await })
+        };
+
+        setup_status.wait_until_get_status_called().await;
+
+        let second_call = {
+            let orchestrator = orchestrator.clone();
+            tokio::spawn(async move { orchestrator.get_state().await })
+        };
+
+        setup_status.release_blocked_get_status();
+
+        let first_state = first_call
+            .await
+            .expect("first get_state task should succeed");
+        let second_state = second_call
+            .await
+            .expect("second get_state task should succeed");
+
+        assert_eq!(first_state, SetupState::Completed);
+        assert_eq!(second_state, SetupState::Completed);
+        assert_eq!(setup_status.get_call_count(), 1);
     }
 
     #[tokio::test]
