@@ -1,5 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   BrowserRouter as Router,
   Routes,
@@ -169,8 +169,6 @@ const TitleBarWithSearch = ({ isSetupActive }: { isSetupActive: boolean }) => {
 }
 
 // App content with WindowShell structure
-const SETUP_ACK_STORAGE_KEY = 'setup.completedAcknowledged'
-
 const AppContentWithBar = () => {
   // WindowShell provides the correct window-level structure:
   // - TitleBar: Window chrome layer (full-width, drag region)
@@ -178,13 +176,22 @@ const AppContentWithBar = () => {
   const { isMac, isTauri } = usePlatform()
   const showCustomTitleBar = !isTauri || isMac
   const [setupState, setSetupState] = useState<SetupState | null>(null)
-  const [hasAcknowledgedSetup, setHasAcknowledgedSetup] = useState(() => {
-    if (typeof window === 'undefined') {
-      return false
+
+  // Track whether setup just completed during this session.
+  // On cold start (null → Completed), this stays false so DoneStep is skipped.
+  // During active setup (e.g. Welcome → Completed), this becomes true to show DoneStep.
+  const [showCompletionStep, setShowCompletionStep] = useState(false)
+  const prevSetupStateRef = useRef<SetupState | null>(null)
+
+  useEffect(() => {
+    const prev = prevSetupStateRef.current
+    if (prev !== null && prev !== 'Completed' && setupState === 'Completed') {
+      setShowCompletionStep(true)
     }
-    return window.localStorage.getItem(SETUP_ACK_STORAGE_KEY) === 'true'
-  })
-  const isSetupActive = setupState !== 'Completed' || !hasAcknowledgedSetup
+    prevSetupStateRef.current = setupState
+  }, [setupState])
+
+  const isSetupActive = setupState !== null && (setupState !== 'Completed' || showCompletionStep)
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -213,26 +220,6 @@ const AppContentWithBar = () => {
     }
   }, [])
 
-  useEffect(() => {
-    if (!setupState || setupState === 'Completed') {
-      return
-    }
-    if (hasAcknowledgedSetup) {
-      setHasAcknowledgedSetup(false)
-    }
-  }, [setupState, hasAcknowledgedSetup])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-    if (hasAcknowledgedSetup) {
-      window.localStorage.setItem(SETUP_ACK_STORAGE_KEY, 'true')
-    } else {
-      window.localStorage.removeItem(SETUP_ACK_STORAGE_KEY)
-    }
-  }, [hasAcknowledgedSetup])
-
   const navigate = useNavigate()
   const handleNavigate = useCallback(
     (route: string) => {
@@ -243,7 +230,7 @@ const AppContentWithBar = () => {
   useUINavigateListener(handleNavigate)
 
   const handleSetupComplete = () => {
-    setHasAcknowledgedSetup(true)
+    setShowCompletionStep(false)
   }
 
   return (
