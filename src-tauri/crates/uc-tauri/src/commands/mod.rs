@@ -7,6 +7,7 @@ pub mod pairing;
 pub mod settings;
 pub mod setup;
 pub mod startup;
+pub mod tray;
 
 use tracing::Span;
 use uc_core::ports::observability::TraceMetadata;
