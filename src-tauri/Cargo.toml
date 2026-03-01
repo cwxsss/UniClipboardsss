@@ -26,7 +26,7 @@ uc-infra = { path = "crates/uc-infra" }
 uc-tauri = { path = "crates/uc-tauri" }
 
 # ===== Tauri 相关依赖 =====
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-stronghold = "2"
 
@@ -83,5 +83,5 @@ resolver = "2"
 
 # Dependencies for workspace crates, mainly for tauri plugins
 [workspace.dependencies]
-tauri = "2"
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2"
