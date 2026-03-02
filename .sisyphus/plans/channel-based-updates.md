@@ -348,7 +348,7 @@ node scripts/assemble-update-manifest.js --test
 
 ### Wave 2 — Core Implementation
 
-- [ ] 5. Create Tauri Update Commands
+- [x] 5. Create Tauri Update Commands
 
   **What to do**:
   Create new Tauri commands for channel-aware update checking and installation. This replaces the current JS-side `check()` call with Rust-side `updater_builder().endpoints()` for dynamic channel support.
@@ -432,7 +432,7 @@ node scripts/assemble-update-manifest.js --test
 
 ---
 
-- [ ] 6. CI: Assemble + Deploy Per-Channel Update Manifests
+- [x] 6. CI: Assemble + Deploy Per-Channel Update Manifests
 
   **What to do**:
   Create the CI infrastructure to assemble platform-specific `latest.json` files into a combined manifest, and deploy per-channel to GitHub Pages.
@@ -516,7 +516,7 @@ node scripts/assemble-update-manifest.js --test
 
 ---
 
-- [ ] 7. Frontend API Wrapper
+- [x] 7. Frontend API Wrapper
 
   **What to do**:
   Create `src/api/updater.ts` with typed wrappers for the new Tauri update commands.
@@ -573,7 +573,7 @@ node scripts/assemble-update-manifest.js --test
 
 ### Wave 3 — Frontend Integration
 
-- [ ] 8. Refactor UpdateContext + useUpdate Hook
+- [x] 8. Refactor UpdateContext + useUpdate Hook
 
   **What to do**:
   Rewrite `UpdateContext.tsx` to use the new Tauri commands (via API wrapper from Task 7) instead of the JS `@tauri-apps/plugin-updater` `check()` function.
