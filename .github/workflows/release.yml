@@ -177,8 +177,41 @@ jobs:
         run: |
           mkdir -p release-assets
 
-          # Find and copy all release bundles
-          find artifacts -type f \( \
+          # Collect release bundles. For macOS updater archives, keep target in filename
+          # so aarch64/x86_64 artifacts won't overwrite each other during flattening.
+          while IFS= read -r src; do
+            filename="$(basename "$src")"
+            target=""
+
+            case "$src" in
+              *aarch64-apple-darwin*) target="aarch64-apple-darwin" ;;
+              *x86_64-apple-darwin*) target="x86_64-apple-darwin" ;;
+            esac
+
+            dest="$filename"
+            if [ -n "$target" ] && [ "$filename" = "UniClipboard.app.tar.gz" ]; then
+              dest="UniClipboard_${target}.app.tar.gz"
+            elif [ -n "$target" ] && [ "$filename" = "UniClipboard.app.tar.gz.sig" ]; then
+              dest="UniClipboard_${target}.app.tar.gz.sig"
+            fi
+
+            if [ -e "release-assets/$dest" ]; then
+              if [ -n "$target" ]; then
+                dest="${target}__${dest}"
+              else
+                safe_suffix="$(echo "$src" | tr '/\\' '_' | tr -cd '[:alnum:]_.-' | cut -c1-80)"
+                base="$dest"
+                ext=""
+                if [[ "$dest" == *.* ]]; then
+                  ext=".${dest##*.}"
+                  base="${dest%.*}"
+                fi
+                dest="${base}__${safe_suffix}${ext}"
+              fi
+            fi
+
+            cp "$src" "release-assets/$dest"
+          done < <(find artifacts -type f \( \
             -name "*.dmg" -o \
             -name "*.app.tar.gz" -o \
             -name "*.deb" -o \
@@ -187,7 +220,7 @@ jobs:
             -name "*.exe" -o \
             -name "*.sig" -o \
             -name "*.json" \
-          \) -exec cp {} release-assets/ \;
+          \) | sort)
 
           echo "Release assets:"
           ls -lh release-assets

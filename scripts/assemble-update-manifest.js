@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-/* global process */
-
 /**
  * Assemble Update Manifest Script
  *
@@ -20,13 +18,10 @@
  *   --test                    Dry-run with mock data, output to stdout
  */
 
-import fs from 'fs'
-import os from 'os'
-import path from 'path'
-import { fileURLToPath } from 'url'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import process from 'node:process'
 
 // Parse command line arguments
 function parseArgs() {
@@ -61,36 +56,80 @@ function parseArgs() {
 }
 
 /**
- * Determine platform from .sig filename.
+ * Determine platform from .sig filename/path.
  *
  * Mapping rules:
  *   - aarch64 + .app.tar.gz.sig  → darwin-aarch64
  *   - x64/x86_64 + .app.tar.gz.sig → darwin-x86_64
- *   - .AppImage.tar.gz.sig        → linux-x86_64
- *   - .nsis.zip.sig or .msi.zip.sig → windows-x86_64
+ *   - .AppImage.sig or .AppImage.tar.gz.sig → linux-x86_64
+ *   - .exe.sig / .nsis.zip.sig / .msi.zip.sig → windows-x86_64
  *
  * Returns null if no match.
  */
-function detectPlatform(filename) {
-  if (filename.endsWith('.app.tar.gz.sig')) {
-    if (filename.includes('aarch64')) {
+function detectPlatform(filePath) {
+  const normalized = filePath.replaceAll('\\', '/').toLowerCase()
+
+  if (normalized.endsWith('.app.tar.gz.sig')) {
+    if (normalized.includes('aarch64-apple-darwin') || normalized.includes('aarch64')) {
       return 'darwin-aarch64'
     }
-    if (filename.includes('x64') || filename.includes('x86_64')) {
+    if (
+      normalized.includes('x86_64-apple-darwin') ||
+      normalized.includes('x64') ||
+      normalized.includes('x86_64')
+    ) {
       return 'darwin-x86_64'
     }
     return null
   }
 
-  if (filename.endsWith('.AppImage.tar.gz.sig')) {
+  if (normalized.endsWith('.appimage.tar.gz.sig') || normalized.endsWith('.appimage.sig')) {
     return 'linux-x86_64'
   }
 
-  if (filename.endsWith('.nsis.zip.sig') || filename.endsWith('.msi.zip.sig')) {
+  if (
+    normalized.endsWith('.nsis.zip.sig') ||
+    normalized.endsWith('.msi.zip.sig') ||
+    normalized.endsWith('.exe.sig')
+  ) {
     return 'windows-x86_64'
   }
 
   return null
+}
+
+function candidatePriority(filePath) {
+  const normalized = filePath.replaceAll('\\', '/').toLowerCase()
+
+  if (normalized.endsWith('.app.tar.gz.sig')) return 40
+  if (normalized.endsWith('.appimage.tar.gz.sig')) return 30
+  if (normalized.endsWith('.appimage.sig')) return 20
+  if (normalized.endsWith('.nsis.zip.sig')) return 30
+  if (normalized.endsWith('.exe.sig')) return 20
+  if (normalized.endsWith('.msi.zip.sig')) return 10
+
+  return 0
+}
+
+/**
+ * Recursively list files under a directory, returning paths relative to the root directory.
+ */
+function listFilesRecursively(rootDir, currentDir = rootDir) {
+  const entries = fs.readdirSync(currentDir, { withFileTypes: true })
+  const files = []
+
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursively(rootDir, fullPath))
+      continue
+    }
+    if (entry.isFile()) {
+      files.push(path.relative(rootDir, fullPath))
+    }
+  }
+
+  return files
 }
 
 /**
@@ -100,10 +139,10 @@ function detectPlatform(filename) {
  * @param {boolean} [silent=false] - Suppress diagnostic output to stderr
  */
 function scanArtifacts(artifactsDir, baseUrl, silent = false) {
-  const platforms = {}
+  const selectedByPlatform = {}
 
-  const files = fs.readdirSync(artifactsDir)
-  const sigFiles = files.filter(f => f.endsWith('.sig'))
+  const files = listFilesRecursively(artifactsDir)
+  const sigFiles = files.filter(f => f.toLowerCase().endsWith('.sig')).sort()
 
   if (sigFiles.length === 0 && !silent) {
     process.stderr.write(`Warning: No .sig files found in ${artifactsDir}\n`)
@@ -120,16 +159,32 @@ function scanArtifacts(artifactsDir, baseUrl, silent = false) {
 
     const sigPath = path.join(artifactsDir, sigFile)
     const signature = fs.readFileSync(sigPath, 'utf8').trim()
+    const priority = candidatePriority(sigFile)
 
     // The artifact filename is the sig filename without the trailing .sig
-    const artifactFilename = sigFile.slice(0, -4) // remove ".sig"
+    const artifactFilename = path.basename(sigFile.slice(0, -4)) // remove ".sig"
     const url = `${baseUrl}/${artifactFilename}`
 
-    platforms[platform] = { signature, url }
+    const existing = selectedByPlatform[platform]
+    if (existing && existing.priority > priority) {
+      if (!silent) {
+        process.stderr.write(
+          `  [${platform}] keep ${existing.sigFile}, skip lower-priority ${sigFile}\n`
+        )
+      }
+      continue
+    }
+
+    selectedByPlatform[platform] = { signature, url, priority, sigFile }
 
     if (!silent) {
       process.stderr.write(`  [${platform}] ${sigFile} -> ${url}\n`)
     }
+  }
+
+  const platforms = {}
+  for (const [platform, item] of Object.entries(selectedByPlatform)) {
+    platforms[platform] = { signature: item.signature, url: item.url }
   }
 
   return platforms
