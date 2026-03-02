@@ -2,6 +2,22 @@ use std::time::Duration;
 
 use super::model::*;
 
+impl Default for UpdateChannel {
+    /// Returns the default `UpdateChannel`, which is `Stable`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use uc_core::settings::model::UpdateChannel;
+    ///
+    /// let channel = UpdateChannel::default();
+    /// assert_eq!(channel, UpdateChannel::Stable);
+    /// ```
+    fn default() -> Self {
+        UpdateChannel::Stable
+    }
+}
+
 impl Default for GeneralSettings {
     /// Returns the default `GeneralSettings` used when no user preferences are configured.
     ///
@@ -13,6 +29,7 @@ impl Default for GeneralSettings {
     /// - `theme_color`: `None`
     /// - `device_name`: `None`
     /// - `language`: `None`
+    /// - `update_channel`: `None` (auto-detect from version)
     ///
     /// # Examples
     ///
@@ -27,6 +44,7 @@ impl Default for GeneralSettings {
     /// assert!(settings.theme_color.is_none());
     /// assert!(settings.device_name.is_none());
     /// assert!(settings.language.is_none());
+    /// assert!(settings.update_channel.is_none());
     /// ```
     fn default() -> Self {
         Self {
@@ -37,6 +55,7 @@ impl Default for GeneralSettings {
             theme_color: None,
             device_name: None,
             language: None,
+            update_channel: None,
         }
     }
 }

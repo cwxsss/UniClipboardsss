@@ -14,6 +14,10 @@ pub struct GeneralSettings {
     pub theme_color: Option<String>,
     pub language: Option<String>,
     pub device_name: Option<String>,
+    /// Update channel preference. `None` means auto-detect from version string;
+    /// `Some(channel)` means the user has overridden the channel.
+    #[serde(default)]
+    pub update_channel: Option<UpdateChannel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -22,6 +26,15 @@ pub enum Theme {
     Light,
     Dark,
     System,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateChannel {
+    Stable,
+    Alpha,
+    Beta,
+    Rc,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -174,8 +187,83 @@ pub fn current_schema_version() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuleEvaluation, SecuritySettings, Settings, SyncFrequency};
+    use super::{
+        GeneralSettings, RuleEvaluation, SecuritySettings, Settings, SyncFrequency, UpdateChannel,
+    };
     use serde_json::json;
+
+    #[test]
+    fn test_update_channel_serialization_roundtrip() {
+        let channels = [
+            UpdateChannel::Stable,
+            UpdateChannel::Alpha,
+            UpdateChannel::Beta,
+            UpdateChannel::Rc,
+        ];
+        for channel in &channels {
+            let serialized = serde_json::to_value(channel).expect("serialize UpdateChannel");
+            let deserialized: UpdateChannel =
+                serde_json::from_value(serialized).expect("deserialize UpdateChannel");
+            assert_eq!(channel, &deserialized);
+        }
+    }
+
+    #[test]
+    fn test_update_channel_serialized_names() {
+        assert_eq!(
+            serde_json::to_value(UpdateChannel::Stable).unwrap(),
+            json!("stable")
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateChannel::Alpha).unwrap(),
+            json!("alpha")
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateChannel::Beta).unwrap(),
+            json!("beta")
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateChannel::Rc).unwrap(),
+            json!("rc")
+        );
+    }
+
+    #[test]
+    fn test_general_settings_missing_update_channel_defaults_to_none() {
+        let value = json!({
+            "auto_start": false,
+            "silent_start": false,
+            "auto_check_update": true,
+            "theme": "system",
+            "theme_color": null,
+            "language": null,
+            "device_name": null
+        });
+
+        let settings: GeneralSettings =
+            serde_json::from_value(value).expect("deserialize GeneralSettings");
+
+        assert!(settings.update_channel.is_none());
+    }
+
+    #[test]
+    fn test_general_settings_explicit_update_channel_is_preserved() {
+        let value = json!({
+            "auto_start": false,
+            "silent_start": false,
+            "auto_check_update": true,
+            "theme": "system",
+            "theme_color": null,
+            "language": null,
+            "device_name": null,
+            "update_channel": "beta"
+        });
+
+        let settings: GeneralSettings =
+            serde_json::from_value(value).expect("deserialize GeneralSettings");
+
+        assert_eq!(settings.update_channel, Some(UpdateChannel::Beta));
+    }
 
     #[test]
     fn test_sync_frequency_equality() {
