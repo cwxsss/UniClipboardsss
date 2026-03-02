@@ -1,7 +1,11 @@
-import { check, type Update } from '@tauri-apps/plugin-updater'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { UpdateContext } from './update-context'
+import {
+  checkForUpdate,
+  installUpdate as apiInstallUpdate,
+  type UpdateMetadata,
+} from '@/api/updater'
 import { toast } from '@/components/ui/toast'
 import { useSetting } from '@/hooks/useSetting'
 
@@ -12,7 +16,7 @@ interface UpdateProviderProps {
 export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
   const { t } = useTranslation()
   const { setting } = useSetting()
-  const [updateInfo, setUpdateInfo] = useState<Update | null>(null)
+  const [updateInfo, setUpdateInfo] = useState<UpdateMetadata | null>(null)
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false)
   const isCheckingRef = useRef(false)
   const hasCheckedOnStartup = useRef(false)
@@ -26,14 +30,19 @@ export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
     setIsCheckingUpdate(true)
 
     try {
-      const update = await check()
+      const channel = setting?.general?.update_channel ?? null
+      const update = await checkForUpdate(channel)
       setUpdateInfo(update)
       return update
     } finally {
       isCheckingRef.current = false
       setIsCheckingUpdate(false)
     }
-  }, [updateInfo])
+  }, [updateInfo, setting?.general?.update_channel])
+
+  const doInstallUpdate = useCallback(async () => {
+    await apiInstallUpdate()
+  }, [])
 
   useEffect(() => {
     if (!setting?.general || hasCheckedOnStartup.current) {
@@ -57,8 +66,9 @@ export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
       updateInfo,
       isCheckingUpdate,
       checkForUpdates,
+      installUpdate: doInstallUpdate,
     }),
-    [updateInfo, isCheckingUpdate, checkForUpdates]
+    [updateInfo, isCheckingUpdate, checkForUpdates, doInstallUpdate]
   )
 
   return <UpdateContext.Provider value={value}>{children}</UpdateContext.Provider>

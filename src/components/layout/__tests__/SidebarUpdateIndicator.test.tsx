@@ -1,6 +1,6 @@
-import type { Update } from '@tauri-apps/plugin-updater'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import type { UpdateMetadata } from '@/api/updater'
 import Sidebar from '@/components/layout/Sidebar'
 import { SettingContext } from '@/contexts/setting-context'
 import { UpdateContext } from '@/contexts/update-context'
@@ -52,14 +52,12 @@ const baseSetting: Settings = {
 
 describe('Sidebar update indicator', () => {
   it('shows update icon when updater returns update info', async () => {
-    const updateInfo = {
+    const updateInfo: UpdateMetadata = {
       version: '0.1.1',
       currentVersion: '0.1.0',
       date: '2026-01-25T00:00:00Z',
       body: 'Bug fixes',
-      downloadAndInstall: vi.fn(),
-      close: vi.fn(),
-    } as unknown as Update
+    }
 
     render(
       <SettingContext.Provider
@@ -79,6 +77,7 @@ describe('Sidebar update indicator', () => {
             updateInfo,
             isCheckingUpdate: false,
             checkForUpdates: vi.fn(),
+            installUpdate: vi.fn(),
           }}
         >
           <MemoryRouter>
@@ -112,6 +111,7 @@ describe('Sidebar update indicator', () => {
             updateInfo: null,
             isCheckingUpdate: false,
             checkForUpdates: vi.fn(),
+            installUpdate: vi.fn(),
           }}
         >
           <MemoryRouter>

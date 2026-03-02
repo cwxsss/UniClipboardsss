@@ -20,7 +20,7 @@ import { useUpdate } from '@/hooks/useUpdate'
 const AboutSection: React.FC = () => {
   const { t } = useTranslation()
   const { setting, loading: settingLoading, updateGeneralSetting } = useSetting()
-  const { updateInfo, isCheckingUpdate, checkForUpdates } = useUpdate()
+  const { updateInfo, isCheckingUpdate, checkForUpdates, installUpdate } = useUpdate()
   const [autoCheckUpdate, setAutoCheckUpdate] = useState(true)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
@@ -63,10 +63,8 @@ const AboutSection: React.FC = () => {
   const handleInstallUpdate = async () => {
     if (!updateInfo || isInstallingUpdate) return
     setIsInstallingUpdate(true)
-
     try {
-      await updateInfo.downloadAndInstall()
-      await updateInfo.close()
+      await installUpdate()
       setUpdateDialogOpen(false)
     } catch (error) {
       console.error('更新失败:', error)

@@ -1,10 +1,11 @@
-import type { Update } from '@tauri-apps/plugin-updater'
 import { createContext } from 'react'
+import type { UpdateMetadata } from '@/api/updater'
 
 export interface UpdateContextType {
-  updateInfo: Update | null
+  updateInfo: UpdateMetadata | null
   isCheckingUpdate: boolean
-  checkForUpdates: () => Promise<Update | null>
+  checkForUpdates: () => Promise<UpdateMetadata | null>
+  installUpdate: () => Promise<void>
 }
 
 export const UpdateContext = createContext<UpdateContextType | undefined>(undefined)

@@ -72,7 +72,7 @@ const Sidebar: React.FC = () => {
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
-  const { updateInfo, isCheckingUpdate } = useUpdate()
+  const { updateInfo, isCheckingUpdate, installUpdate } = useUpdate()
 
   const navItems = [
     { to: '/', icon: Home, label: t('nav.dashboard') },
@@ -88,10 +88,8 @@ const Sidebar: React.FC = () => {
   const handleInstallUpdate = async () => {
     if (!updateInfo || isInstallingUpdate) return
     setIsInstallingUpdate(true)
-
     try {
-      await updateInfo.downloadAndInstall()
-      await updateInfo.close()
+      await installUpdate()
       setUpdateDialogOpen(false)
     } catch (error) {
       console.error('更新失败:', error)

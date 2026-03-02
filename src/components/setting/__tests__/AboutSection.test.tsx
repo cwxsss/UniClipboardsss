@@ -62,8 +62,6 @@ describe('AboutSection', () => {
       currentVersion: '0.1.0',
       date: '2026-01-25T00:00:00Z',
       body: 'Bug fixes',
-      downloadAndInstall: vi.fn(),
-      close: vi.fn(),
     })
 
     render(
@@ -84,6 +82,7 @@ describe('AboutSection', () => {
             updateInfo: null,
             isCheckingUpdate: false,
             checkForUpdates,
+            installUpdate: vi.fn(),
           }}
         >
           <AboutSection />
@@ -123,6 +122,7 @@ describe('AboutSection', () => {
             updateInfo: null,
             isCheckingUpdate: false,
             checkForUpdates: vi.fn(),
+            installUpdate: vi.fn(),
           }}
         >
           <AboutSection />

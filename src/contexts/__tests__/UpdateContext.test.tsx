@@ -1,12 +1,13 @@
-import { check, type Update } from '@tauri-apps/plugin-updater'
 import { render, screen, waitFor } from '@testing-library/react'
+import { checkForUpdate } from '@/api/updater'
 import { SettingContext } from '@/contexts/setting-context'
 import { UpdateProvider } from '@/contexts/UpdateContext'
 import { useUpdate } from '@/hooks/useUpdate'
 import type { Settings } from '@/types/setting'
 
-vi.mock('@tauri-apps/plugin-updater', () => ({
-  check: vi.fn(),
+vi.mock('@/api/updater', () => ({
+  checkForUpdate: vi.fn(),
+  installUpdate: vi.fn(),
 }))
 
 vi.mock('react-i18next', () => ({
@@ -65,21 +66,19 @@ const UpdateConsumer = () => {
 }
 
 describe('UpdateProvider', () => {
-  const checkMock = vi.mocked(check)
+  const checkForUpdateMock = vi.mocked(checkForUpdate)
 
   beforeEach(() => {
-    checkMock.mockReset()
+    checkForUpdateMock.mockReset()
   })
 
   it('checks for updates once on startup when enabled', async () => {
-    checkMock.mockResolvedValue({
+    checkForUpdateMock.mockResolvedValue({
       version: '0.1.1',
       currentVersion: '0.1.0',
       date: '2026-01-25T00:00:00Z',
       body: 'Bug fixes',
-      downloadAndInstall: vi.fn(),
-      close: vi.fn(),
-    } as unknown as Update)
+    })
 
     const { rerender } = render(
       <SettingContext.Provider
@@ -101,7 +100,7 @@ describe('UpdateProvider', () => {
     )
 
     await waitFor(() => {
-      expect(checkMock).toHaveBeenCalledTimes(1)
+      expect(checkForUpdateMock).toHaveBeenCalledTimes(1)
     })
 
     expect(screen.getByText('0.1.1')).toBeInTheDocument()
@@ -126,7 +125,7 @@ describe('UpdateProvider', () => {
     )
 
     await waitFor(() => {
-      expect(checkMock).toHaveBeenCalledTimes(1)
+      expect(checkForUpdateMock).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -159,7 +158,7 @@ describe('UpdateProvider', () => {
     )
 
     await waitFor(() => {
-      expect(checkMock).not.toHaveBeenCalled()
+      expect(checkForUpdateMock).not.toHaveBeenCalled()
     })
   })
 })
