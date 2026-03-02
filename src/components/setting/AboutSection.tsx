@@ -12,16 +12,25 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
 import { useSetting } from '@/hooks/useSetting'
 import { useUpdate } from '@/hooks/useUpdate'
+import type { UpdateChannel } from '@/types/setting'
 
 const AboutSection: React.FC = () => {
   const { t } = useTranslation()
   const { setting, loading: settingLoading, updateGeneralSetting } = useSetting()
   const { updateInfo, isCheckingUpdate, checkForUpdates, installUpdate } = useUpdate()
   const [autoCheckUpdate, setAutoCheckUpdate] = useState(true)
+  const [updateChannel, setUpdateChannel] = useState<UpdateChannel | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [isInstallingUpdate, setIsInstallingUpdate] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -30,6 +39,11 @@ const AboutSection: React.FC = () => {
   useEffect(() => {
     if (!setting?.general) return
     setAutoCheckUpdate(setting.general.auto_check_update)
+  }, [setting])
+
+  useEffect(() => {
+    if (!setting?.general) return
+    setUpdateChannel(setting.general.update_channel ?? null)
   }, [setting])
 
   const handleAutoCheckUpdateChange = async (checked: boolean) => {
@@ -41,6 +55,23 @@ const AboutSection: React.FC = () => {
     } catch (error) {
       console.error('更改自动检查更新状态失败:', error)
       setAutoCheckUpdate(previous)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleUpdateChannelChange = async (value: string) => {
+    const previous = updateChannel
+    try {
+      setSaving(true)
+      const newChannel = value === 'auto' ? null : (value as UpdateChannel)
+      setUpdateChannel(newChannel)
+      await updateGeneralSetting({ update_channel: newChannel })
+      // Immediately check for updates on the new channel
+      checkForUpdates().catch(console.error)
+    } catch (error) {
+      console.error('更改更新频道失败:', error)
+      setUpdateChannel(previous)
     } finally {
       setSaving(false)
     }
@@ -128,6 +159,41 @@ const AboutSection: React.FC = () => {
             onCheckedChange={handleAutoCheckUpdateChange}
             disabled={isBusy}
           />
+        </div>
+
+        <div className="flex items-center justify-between py-2 mt-2">
+          <div className="space-y-0.5">
+            <h4 className="text-sm font-medium">
+              {t('settings.sections.about.updateChannel.label')}
+            </h4>
+            <p className="text-xs text-muted-foreground">
+              {t('settings.sections.about.updateChannel.description')}
+            </p>
+          </div>
+          <Select
+            value={updateChannel ?? 'auto'}
+            onValueChange={handleUpdateChannelChange}
+            disabled={isBusy}
+          >
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">
+                {t('settings.sections.about.updateChannel.auto')}
+              </SelectItem>
+              <SelectItem value="stable">
+                {t('settings.sections.about.updateChannel.stable')}
+              </SelectItem>
+              <SelectItem value="beta">
+                {t('settings.sections.about.updateChannel.beta')}
+              </SelectItem>
+              <SelectItem value="alpha">
+                {t('settings.sections.about.updateChannel.alpha')}
+              </SelectItem>
+              <SelectItem value="rc">{t('settings.sections.about.updateChannel.rc')}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="space-y-4 pt-4 border-t border-border/50">

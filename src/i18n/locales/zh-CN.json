@@ -208,6 +208,15 @@
           "label": "自动检查更新",
           "description": "应用启动时自动检查是否有新版本"
         },
+        "updateChannel": {
+          "label": "更新渠道",
+          "description": "选择接收更新的发布渠道",
+          "auto": "自动检测",
+          "stable": "稳定版",
+          "beta": "测试版",
+          "alpha": "内测版",
+          "rc": "候选版"
+        },
         "copyright": "© 2025 UniClipboard Team. All rights reserved.",
         "links": {
           "privacyPolicy": "隐私政策",

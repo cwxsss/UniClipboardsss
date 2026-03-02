@@ -208,6 +208,15 @@
           "label": "Auto-check for updates",
           "description": "Automatically check for new versions when the app starts"
         },
+        "updateChannel": {
+          "label": "Update Channel",
+          "description": "Choose which release channel to receive updates from",
+          "auto": "Auto-detect",
+          "stable": "Stable",
+          "beta": "Beta",
+          "alpha": "Alpha",
+          "rc": "Release Candidate"
+        },
         "copyright": "© 2025 UniClipboard Team. All rights reserved.",
         "links": {
           "privacyPolicy": "Privacy Policy",
