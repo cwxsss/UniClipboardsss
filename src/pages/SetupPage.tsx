@@ -74,12 +74,13 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
   }, [setupState])
 
   useEffect(() => {
-    let mounted = true
+    let effectActive = true
+    let disposed = false
     let unlisten: (() => void) | null = null
 
     const setupListener = async () => {
-      unlisten = await onSetupStateChanged(event => {
-        if (!mounted) {
+      const stopListening = await onSetupStateChanged(event => {
+        if (!effectActive) {
           return
         }
 
@@ -101,15 +102,24 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
           activeEventSessionIdRef.current = null
         }
       })
+
+      if (disposed) {
+        stopListening()
+        return
+      }
+
+      unlisten = stopListening
     }
 
-    setupListener()
+    void setupListener()
 
     return () => {
-      mounted = false
+      effectActive = false
+      disposed = true
       activeEventSessionIdRef.current = null
       if (unlisten) {
         unlisten()
+        unlisten = null
       }
     }
   }, [isSetupFlowActive, syncSetupState])

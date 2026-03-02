@@ -1,5 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   BrowserRouter as Router,
   Routes,
@@ -177,23 +177,17 @@ const AppContentWithBar = () => {
   // - Content: App layout layer (Sidebar + Main via routes)
   const { isMac, isTauri } = usePlatform()
   const showCustomTitleBar = !isTauri || isMac
-  const [setupState, setSetupState] = useState<SetupState | null>(null)
+  const [setupGate, setSetupGate] = useState<{
+    setupState: SetupState | null
+    showCompletionStep: boolean
+  }>({
+    setupState: null,
+    showCompletionStep: false,
+  })
 
-  // Track whether setup just completed during this session.
-  // On cold start (null → Completed), this stays false so DoneStep is skipped.
-  // During active setup (e.g. Welcome → Completed), this becomes true to show DoneStep.
-  const [showCompletionStep, setShowCompletionStep] = useState(false)
-  const prevSetupStateRef = useRef<SetupState | null>(null)
-
-  useEffect(() => {
-    const prev = prevSetupStateRef.current
-    if (prev !== null && prev !== 'Completed' && setupState === 'Completed') {
-      setShowCompletionStep(true)
-    }
-    prevSetupStateRef.current = setupState
-  }, [setupState])
-
-  const isSetupActive = setupState !== null && (setupState !== 'Completed' || showCompletionStep)
+  const isSetupActive =
+    setupGate.setupState !== null &&
+    (setupGate.setupState !== 'Completed' || setupGate.showCompletionStep)
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -203,7 +197,15 @@ const AppContentWithBar = () => {
       try {
         const state = await getSetupState()
         if (!isMounted) return
-        setSetupState(state)
+        setSetupGate(prev => {
+          const shouldShowCompletionStep =
+            prev.showCompletionStep ||
+            (prev.setupState !== null && prev.setupState !== 'Completed' && state === 'Completed')
+          return {
+            setupState: state,
+            showCompletionStep: shouldShowCompletionStep,
+          }
+        })
         if (state !== 'Completed') {
           timer = setTimeout(loadSetupState, 1000)
         }
@@ -232,7 +234,7 @@ const AppContentWithBar = () => {
   useUINavigateListener(handleNavigate)
 
   const handleSetupComplete = () => {
-    setShowCompletionStep(false)
+    setSetupGate(prev => ({ ...prev, showCompletionStep: false }))
   }
 
   return (

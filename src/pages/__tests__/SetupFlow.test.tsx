@@ -1,7 +1,7 @@
 import { render, screen, act } from '@testing-library/react'
 import type { HTMLAttributes, ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getSetupState, startNewSpace } from '@/api/setup'
+import { getSetupState, onSetupStateChanged, startNewSpace } from '@/api/setup'
 import i18n from '@/i18n'
 import SetupPage from '@/pages/SetupPage'
 
@@ -41,6 +41,11 @@ vi.mock('framer-motion', () => ({
 describe('Setup flow', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('zh-CN')
+    vi.mocked(getSetupState).mockReset()
+    vi.mocked(startNewSpace).mockReset()
+    vi.mocked(onSetupStateChanged).mockReset()
+    vi.mocked(onSetupStateChanged).mockResolvedValue(() => {})
+    navigateMock.mockReset()
   })
 
   it('renders welcome step for SetupState.Welcome', async () => {
@@ -94,5 +99,31 @@ describe('Setup flow', () => {
     })
 
     expect(startNewSpace).toHaveBeenCalled()
+  })
+
+  it('cleans listener when registration resolves after unmount', async () => {
+    vi.mocked(getSetupState).mockResolvedValue('Welcome')
+
+    const stopListening = vi.fn()
+    let resolveRegistration: ((value: () => void) => void) | null = null
+    const registrationPromise = new Promise<() => void>(resolve => {
+      resolveRegistration = resolve
+    })
+    vi.mocked(onSetupStateChanged).mockImplementation(() => registrationPromise)
+
+    const view = render(<SetupPage />)
+    view.unmount()
+
+    expect(stopListening).not.toHaveBeenCalled()
+
+    await act(async () => {
+      if (!resolveRegistration) {
+        throw new Error('listener registration resolver missing')
+      }
+      resolveRegistration(stopListening)
+      await Promise.resolve()
+    })
+
+    expect(stopListening).toHaveBeenCalledTimes(1)
   })
 })
