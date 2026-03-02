@@ -1,6 +1,12 @@
 name: 'Release'
-run-name: "release-${{ inputs.channel }}-${{ github.run_number }}"
+run-name: >-
+  ${{ github.event_name == 'push'
+    && format('release-{0}', github.ref_name)
+    || format('release-{0}-{1}', inputs.channel, github.run_number) }}
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       branch:
@@ -45,22 +51,25 @@ jobs:
     permissions:
       contents: write
     outputs:
-      version: ${{ steps.bump-version.outputs.version }}
+      version: ${{ steps.set-outputs.outputs.version }}
       previous_tag: ${{ steps.get-previous-tag.outputs.previous_tag }}
-      is_prerelease: ${{ steps.check-prerelease.outputs.is_prerelease }}
+      is_prerelease: ${{ steps.set-outputs.outputs.is_prerelease }}
+      channel: ${{ steps.set-outputs.outputs.channel }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ github.event_name == 'push' && github.ref || inputs.branch }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
 
       - name: Bump version
+        if: github.event_name == 'workflow_dispatch'
         id: bump-version
         run: |
           # Run version bump script
@@ -71,29 +80,40 @@ jobs:
           echo "New version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Check prerelease status
-        id: check-prerelease
+      - name: Set outputs
+        id: set-outputs
         run: |
-          VERSION="${{ steps.bump-version.outputs.version }}"
-          if [[ "$VERSION" =~ -[a-zA-Z] ]]; then
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Extract version from tag (strip 'v' prefix)
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ steps.bump-version.outputs.version }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Determine prerelease status and channel
+          if [[ "$VERSION" =~ -([a-zA-Z]+) ]]; then
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "This is a prerelease version"
+            echo "channel=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
           else
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "This is a stable release"
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Commit version bump
+        if: github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
-          git commit -m "chore: bump version to ${{ steps.bump-version.outputs.version }}"
+          git commit -m "chore: bump version to ${{ steps.set-outputs.outputs.version }}"
           git push origin ${{ inputs.branch }}
 
       - name: Check if tag exists
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          VERSION="${{ steps.bump-version.outputs.version }}"
+          VERSION="${{ steps.set-outputs.outputs.version }}"
           if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
             echo "Error: Tag v$VERSION already exists"
             echo "This should not happen after version bump. Please check the workflow."
@@ -106,8 +126,9 @@ jobs:
           # Fetch all tags
           git fetch --tags origin
 
-          # Get the most recent tag
-          PREV_TAG=$(git tag --sort=-version:refname | head -n 1 || echo "")
+          # Get the most recent tag excluding current version
+          CURRENT_TAG="v${{ steps.set-outputs.outputs.version }}"
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "^${CURRENT_TAG}$" | head -n 1 || echo "")
 
           if [ -z "$PREV_TAG" ]; then
             echo "No previous tag found, using initial commit"
@@ -121,8 +142,8 @@ jobs:
     needs: validate
     uses: ./.github/workflows/build.yml
     with:
-      platform: ${{ inputs.platform }}
-      branch: ${{ inputs.branch }}
+      platform: ${{ inputs.platform || 'all' }}
+      branch: ${{ inputs.branch || '' }}
     secrets: inherit
 
   create-release:
@@ -135,7 +156,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ github.event_name == 'push' && github.ref || inputs.branch }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -165,6 +186,7 @@ jobs:
           ls -lh release-assets
 
       - name: Create git tag
+        if: github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -177,7 +199,7 @@ jobs:
           VERSION="${{ needs.validate.outputs.version }}"
           REPO="${{ github.repository }}"
           BASE_URL="https://github.com/$REPO/releases/download/v$VERSION"
-          CHANNEL="${{ inputs.channel }}"
+          CHANNEL="${{ needs.validate.outputs.channel }}"
           IS_PRERELEASE="${{ needs.validate.outputs.is_prerelease }}"
 
           # Find actual filenames
@@ -269,9 +291,9 @@ jobs:
           echo "## Release Created Successfully! :rocket:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** v${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Channel:** ${{ inputs.channel }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Platform:** ${{ inputs.platform }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Channel:** ${{ needs.validate.outputs.channel }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Platform:** ${{ inputs.platform || 'all' }}" >> $GITHUB_STEP_SUMMARY
           echo "**Prerelease:** ${{ needs.validate.outputs.is_prerelease }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
