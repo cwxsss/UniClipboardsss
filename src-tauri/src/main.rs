@@ -33,8 +33,8 @@ use uc_tauri::bootstrap::{
     ensure_default_device_name, load_config, resolve_pairing_config, resolve_pairing_device_name,
     start_background_tasks, wire_dependencies, AppRuntime, SetupRuntimePorts,
 };
-use uc_tauri::protocol::{parse_uc_request, UcRoute};
 use uc_tauri::commands::updater::PendingUpdate;
+use uc_tauri::protocol::{parse_uc_request, UcRoute};
 use uc_tauri::tray::TrayState;
 
 // Platform-specific command modules
