@@ -7,12 +7,33 @@
 use crate::commands::record_trace_fields;
 use serde::Serialize;
 use std::sync::Mutex;
+use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tauri_plugin_updater::UpdaterExt as _;
-use tracing::{info, info_span, Instrument};
+use tracing::{error, info, info_span, Instrument};
 use uc_core::ports::observability::TraceMetadata;
 use uc_core::settings::channel::detect_channel;
 use uc_core::settings::model::UpdateChannel;
+
+/// Events emitted during update download via `tauri::ipc::Channel`.
+/// 更新下载期间通过 `tauri::ipc::Channel` 发出的事件。
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event", content = "data")]
+pub enum DownloadEvent {
+    #[serde(rename_all = "camelCase")]
+    Started {
+        content_length: Option<u64>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Progress {
+        chunk_length: usize,
+    },
+    Finished,
+    #[serde(rename_all = "camelCase")]
+    Failed {
+        error: String,
+    },
+}
 
 /// Holds a pending update ready for installation.
 /// 保存等待安装的挂起更新。
@@ -149,6 +170,7 @@ pub async fn check_for_update(
 pub async fn install_update(
     app: AppHandle,
     pending: State<'_, PendingUpdate>,
+    on_event: Channel<DownloadEvent>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), String> {
     let span = info_span!(
@@ -172,8 +194,77 @@ pub async fn install_update(
 
         info!(new_version = %update.version, "installing update");
 
+        let mut first_chunk = true;
         update
-            .download_and_install(|_, _| {}, || {})
+            .download_and_install(
+                |chunk_length, content_length| {
+                    if first_chunk {
+                        first_chunk = false;
+                        if let Err(e) = on_event.send(DownloadEvent::Started { content_length }) {
+                            let send_err = e.to_string();
+                            error!(
+                                event = "Started",
+                                content_length,
+                                error = %send_err,
+                                "failed to send download event"
+                            );
+                            if let Err(fallback_err) = on_event.send(DownloadEvent::Failed {
+                                error: format!("Failed to send Started event: {}", send_err),
+                            }) {
+                                error!(
+                                    event = "Failed",
+                                    original_event = "Started",
+                                    content_length,
+                                    error = %fallback_err,
+                                    "failed to send fallback failure event"
+                                );
+                            }
+                        }
+                    }
+                    if let Err(e) = on_event.send(DownloadEvent::Progress { chunk_length }) {
+                        let send_err = e.to_string();
+                        error!(
+                            event = "Progress",
+                            chunk_length,
+                            content_length,
+                            error = %send_err,
+                            "failed to send download event"
+                        );
+                        if let Err(fallback_err) = on_event.send(DownloadEvent::Failed {
+                            error: format!("Failed to send Progress event: {}", send_err),
+                        }) {
+                            error!(
+                                event = "Failed",
+                                original_event = "Progress",
+                                chunk_length,
+                                content_length,
+                                error = %fallback_err,
+                                "failed to send fallback failure event"
+                            );
+                        }
+                    }
+                },
+                || {
+                    if let Err(e) = on_event.send(DownloadEvent::Finished) {
+                        let send_err = e.to_string();
+                        error!(
+                            event = "Finished",
+                            error = %send_err,
+                            "failed to send download event"
+                        );
+                        if let Err(fallback_err) = on_event.send(DownloadEvent::Failed {
+                            error: format!("Failed to send Finished event: {}", send_err),
+                        }) {
+                            error!(
+                                event = "Failed",
+                                original_event = "Finished",
+                                error = %fallback_err,
+                                "failed to send fallback failure event"
+                            );
+                        }
+                    }
+                },
+            )
             .await
             .map_err(|e| e.to_string())?;
 
