@@ -10,25 +10,28 @@
 
 ```bash
 # Patch 版本升级 (0.1.0 -> 0.1.1)
-node scripts/bump-version.js --type patch --channel stable
+bun run version:bump --type patch --channel stable
 
 # Minor 版本升级 (0.1.0 -> 0.2.0)
-node scripts/bump-version.js --type minor --channel stable
+bun run version:bump --type minor --channel stable
 
 # Major 版本升级 (0.1.0 -> 1.0.0)
-node scripts/bump-version.js --type major --channel stable
+bun run version:bump --type major --channel stable
 
 # 创建 alpha 预发布版本 (0.1.0 -> 0.1.0-alpha.1)
-node scripts/bump-version.js --type patch --channel alpha
+bun run version:bump --type patch --channel alpha
 
 # 继续发布 alpha 版本 (0.1.0-alpha.1 -> 0.1.0-alpha.2)
-node scripts/bump-version.js --type patch --channel alpha
+bun run version:bump --type patch --channel alpha
+
+# 一步设置到指定版本 (例如: 0.1.0-alpha.2)
+bun run version:bump --to 0.1.0-alpha.2
 
 # 从预发布版本升级到稳定版 (0.1.0-alpha.5 -> 0.1.0)
-node scripts/bump-version.js --type patch --channel stable
+bun run version:bump --type patch --channel stable
 
 # 预览变更（不实际修改文件）
-node scripts/bump-version.js --type patch --channel alpha --dry-run
+bun run version:bump --type patch --channel alpha --dry-run
 ```
 
 ### 脚本功能
@@ -38,6 +41,12 @@ node scripts/bump-version.js --type patch --channel alpha --dry-run
 - `package.json`
 - `src-tauri/tauri.conf.json`
 - `src-tauri/Cargo.toml`
+
+参数说明：
+
+- `--type <patch|minor|major>` + `--channel <stable|alpha|beta|rc>`: 按规则升级版本
+- `--to <version>`: 直接设置目标版本（语义化版本），不能与 `--type/--channel` 同时使用
+- `--dry-run`: 仅预览，不修改文件
 
 ## 发布渠道
 
@@ -160,10 +169,10 @@ node scripts/bump-version.js --type patch --channel alpha --dry-run
 
 ```bash
 # 本地测试
-node scripts/bump-version.js --type patch --channel alpha --dry-run
+bun run version:bump --type patch --channel alpha --dry-run
 
 # 确认无误后执行
-node scripts/bump-version.js --type patch --channel alpha
+bun run version:bump --type patch --channel alpha
 
 # 提交并推送
 git add .
@@ -184,15 +193,21 @@ git push
 如果当前版本是 `0.1.0-alpha.1`，继续使用相同参数：
 
 ```bash
-node scripts/bump-version.js --type patch --channel alpha
+bun run version:bump --type patch --channel alpha
 ```
 
 结果: `0.1.0-alpha.1` -> `0.1.0-alpha.2`
 
+如果希望从稳定版直接到指定预发布号（例如 `0.1.0` -> `0.1.0-alpha.2`）：
+
+```bash
+bun run version:bump --to 0.1.0-alpha.2
+```
+
 ### 场景 3: Alpha 测试完成，发布稳定版
 
 ```bash
-node scripts/bump-version.js --type patch --channel stable
+bun run version:bump --type patch --channel stable
 ```
 
 结果: `0.1.0-alpha.5` -> `0.1.0`
@@ -200,7 +215,7 @@ node scripts/bump-version.js --type patch --channel stable
 ### 场景 4: 发布新的 minor 版本
 
 ```bash
-node scripts/bump-version.js --type minor --channel stable
+bun run version:bump --type minor --channel stable
 ```
 
 结果: `0.1.5` -> `0.2.0`

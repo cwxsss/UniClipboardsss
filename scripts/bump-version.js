@@ -9,9 +9,11 @@
  *   node scripts/bump-version.js --type patch --channel alpha
  *   node scripts/bump-version.js --type minor --channel stable
  *   node scripts/bump-version.js --type major --channel beta
+ *   node scripts/bump-version.js --to 0.1.0-alpha.2
  *
  * Options:
- *   --type <patch|minor|major>  Version bump type (required)
+ *   --to <version>  Set exact semver target (mutually exclusive with --type/--channel)
+ *   --type <patch|minor|major>  Version bump type (required unless --to is used)
  *   --channel <stable|alpha|beta|rc>  Release channel (default: stable)
  *   --dry-run  Show what would be changed without writing
  */
@@ -19,7 +21,7 @@
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { bumpVersion } from './bump-version-lib.js'
+import { bumpVersion, parseSemver } from './bump-version-lib.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -28,17 +30,23 @@ const __dirname = path.dirname(__filename)
 function parseArgs() {
   const args = process.argv.slice(2)
   const options = {
+    to: null,
     type: null,
     channel: 'stable',
+    channelProvided: false,
     dryRun: false,
   }
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--type' && args[i + 1]) {
+    if (args[i] === '--to' && args[i + 1]) {
+      options.to = args[i + 1]
+      i++
+    } else if (args[i] === '--type' && args[i + 1]) {
       options.type = args[i + 1]
       i++
     } else if (args[i] === '--channel' && args[i + 1]) {
       options.channel = args[i + 1]
+      options.channelProvided = true
       i++
     } else if (args[i] === '--dry-run') {
       options.dryRun = true
@@ -105,21 +113,35 @@ function main() {
   try {
     const options = parseArgs()
 
-    if (!options.type) {
-      console.error('Error: --type is required (patch|minor|major)')
-      process.exit(1)
-    }
+    const isExactVersionMode = Boolean(options.to)
 
-    if (!['patch', 'minor', 'major'].includes(options.type)) {
-      console.error(`Error: Invalid bump type '${options.type}'. Must be patch, minor, or major.`)
-      process.exit(1)
-    }
+    if (isExactVersionMode) {
+      if (options.type) {
+        console.error('Error: --to cannot be used together with --type')
+        process.exit(1)
+      }
+      if (options.channelProvided) {
+        console.error('Error: --to cannot be used together with --channel')
+        process.exit(1)
+      }
+      parseSemver(options.to)
+    } else {
+      if (!options.type) {
+        console.error('Error: --type is required (patch|minor|major)')
+        process.exit(1)
+      }
 
-    if (!['stable', 'alpha', 'beta', 'rc'].includes(options.channel)) {
-      console.error(
-        `Error: Invalid channel '${options.channel}'. Must be stable, alpha, beta, or rc.`
-      )
-      process.exit(1)
+      if (!['patch', 'minor', 'major'].includes(options.type)) {
+        console.error(`Error: Invalid bump type '${options.type}'. Must be patch, minor, or major.`)
+        process.exit(1)
+      }
+
+      if (!['stable', 'alpha', 'beta', 'rc'].includes(options.channel)) {
+        console.error(
+          `Error: Invalid channel '${options.channel}'. Must be stable, alpha, beta, or rc.`
+        )
+        process.exit(1)
+      }
     }
 
     // Read current version from package.json
@@ -129,12 +151,18 @@ function main() {
     const currentVersion = pkg.version
 
     // Calculate new version
-    const newVersion = bumpVersion(currentVersion, options.type, options.channel)
+    const newVersion = isExactVersionMode
+      ? options.to
+      : bumpVersion(currentVersion, options.type, options.channel)
 
     console.log('\n📦 Version Bump Summary\n')
     console.log(`Current version: ${currentVersion}`)
-    console.log(`Bump type:       ${options.type}`)
-    console.log(`Channel:         ${options.channel}`)
+    if (isExactVersionMode) {
+      console.log('Mode:            exact')
+    } else {
+      console.log(`Bump type:       ${options.type}`)
+      console.log(`Channel:         ${options.channel}`)
+    }
     console.log(`New version:     ${newVersion}`)
 
     if (options.dryRun) {

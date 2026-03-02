@@ -7,6 +7,7 @@
     "dev": "cross-env UNICLIPBOARD_ENV=development vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "version:bump": "node scripts/bump-version.js",
     "tauri": "tauri",
     "tauri:dev": "cross-env UNICLIPBOARD_ENV=development tauri dev",
     "tauri:dev:peerA": "cross-env UNICLIPBOARD_ENV=development UC_DISABLE_SINGLE_INSTANCE=1 UC_PROFILE=a UC_CLIPBOARD_MODE=full tauri dev",
