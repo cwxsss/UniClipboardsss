@@ -9,6 +9,11 @@
 export type Theme = 'light' | 'dark' | 'system'
 
 /**
+ * 更新频道 - 对应 Rust UpdateChannel enum
+ */
+export type UpdateChannel = 'stable' | 'alpha' | 'beta' | 'rc'
+
+/**
  * 通用设置 - 对应 Rust GeneralSettings
  */
 export interface GeneralSettings {
@@ -19,6 +24,7 @@ export interface GeneralSettings {
   theme_color?: string | null
   language?: string | null
   device_name?: string | null
+  update_channel?: UpdateChannel | null
 }
 
 /**
