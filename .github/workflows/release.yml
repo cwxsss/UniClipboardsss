@@ -179,7 +179,8 @@ jobs:
             -name "*.AppImage" -o \
             -name "*.msi" -o \
             -name "*.exe" -o \
-            -name "*.sig" \
+            -name "*.sig" -o \
+            -name "*.json" \
           \) -exec cp {} release-assets/ \;
 
           echo "Release assets:"
