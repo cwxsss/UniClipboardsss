@@ -8926,6 +8926,7 @@ dependencies = [
  "tauri",
  "tauri-plugin-autostart",
  "tauri-plugin-log",
+ "tauri-plugin-updater",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -8938,6 +8939,7 @@ dependencies = [
  "uc-core",
  "uc-infra",
  "uc-platform",
+ "url",
 ]
 
 [[package]]

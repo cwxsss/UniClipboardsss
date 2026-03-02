@@ -8,6 +8,7 @@ pub mod settings;
 pub mod setup;
 pub mod startup;
 pub mod tray;
+pub mod updater;
 
 use tracing::Span;
 use uc_core::ports::observability::TraceMetadata;
@@ -21,6 +22,7 @@ pub use pairing::*;
 pub use settings::*;
 pub use setup::*;
 pub use startup::*;
+pub use updater::*;
 
 pub use error::map_err;
 

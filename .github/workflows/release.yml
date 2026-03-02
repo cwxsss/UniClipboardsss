@@ -152,11 +152,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pages: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'push' && github.ref || inputs.branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -287,6 +293,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Assemble update manifest
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          CHANNEL="${{ needs.validate.outputs.channel }}"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/v${VERSION}"
+
+          node scripts/assemble-update-manifest.js \
+            --version "$VERSION" \
+            --artifacts-dir release-assets \
+            --output "updates/${CHANNEL}.json" \
+            --base-url "$BASE_URL"
+
+          echo "Manifest assembled for channel: ${CHANNEL}"
+          cat "updates/${CHANNEL}.json"
+
+      - name: Deploy update manifests to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./updates
+          destination_dir: .
+          keep_files: true
+          commit_message: "deploy: update ${CHANNEL} manifest for v${VERSION}"
+        env:
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+          VERSION: ${{ needs.validate.outputs.version }}
+
       - name: Summary
         run: |
           echo "## Release Created Successfully! :rocket:" >> $GITHUB_STEP_SUMMARY
@@ -301,3 +334,9 @@ jobs:
           echo "1. Go to [Releases](https://github.com/${{ github.repository }}/releases)" >> $GITHUB_STEP_SUMMARY
           echo "2. Edit the draft release and update release notes" >> $GITHUB_STEP_SUMMARY
           echo "3. Publish the release when ready" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Update Manifest" >> $GITHUB_STEP_SUMMARY
+          echo "Channel manifest deployed to GitHub Pages:" >> $GITHUB_STEP_SUMMARY
+          REPO_OWNER=$(echo "${{ github.repository }}" | cut -d'/' -f1)
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          echo "https://${REPO_OWNER}.github.io/${REPO_NAME}/${{ needs.validate.outputs.channel }}.json" >> $GITHUB_STEP_SUMMARY

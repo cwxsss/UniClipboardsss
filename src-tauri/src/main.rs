@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::http::header::{
     HeaderValue, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
 };
@@ -34,6 +34,7 @@ use uc_tauri::bootstrap::{
     start_background_tasks, wire_dependencies, AppRuntime, SetupRuntimePorts,
 };
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
+use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::tray::TrayState;
 
 // Platform-specific command modules
@@ -684,6 +685,8 @@ fn run_app(config: AppConfig) {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
+            app.manage(PendingUpdate(Mutex::new(None)));
+
             // Start background spooler and blob worker tasks
             start_background_tasks(
                 background,
@@ -827,6 +830,9 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::autostart::enable_autostart,
             uc_tauri::commands::autostart::disable_autostart,
             uc_tauri::commands::autostart::is_autostart_enabled,
+            // Updater commands
+            uc_tauri::commands::updater::check_for_update,
+            uc_tauri::commands::updater::install_update,
             // macOS-specific commands (conditionally compiled)
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::enable_rounded_corners,
