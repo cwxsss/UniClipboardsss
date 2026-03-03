@@ -1,7 +1,8 @@
 import { getVersion } from '@tauri-apps/api/app'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SettingSectionHeader } from './SettingSectionHeader'
+import { SettingGroup } from './SettingGroup'
+import { SettingRow } from './SettingRow'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,7 +14,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import {
   Select,
@@ -134,10 +134,9 @@ const AboutSection: React.FC = () => {
   }
 
   return (
-    <Card>
-      <SettingSectionHeader title={t('settings.sections.about.appName')} />
-      <CardContent className="pt-0">
-        <div className="flex items-center justify-between mb-6">
+    <>
+      <SettingGroup title={t('settings.sections.about.appName')}>
+        <div className="flex items-center justify-between px-4 py-4">
           <div className="flex items-center">
             <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-primary to-primary/60 flex items-center justify-center shadow-lg shadow-primary/20">
               <svg
@@ -182,31 +181,21 @@ const AboutSection: React.FC = () => {
           </button>
         </div>
 
-        <div className="flex items-center justify-between py-2">
-          <div className="space-y-0.5">
-            <h4 className="text-sm font-medium">
-              {t('settings.sections.about.autoCheckUpdate.label')}
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              {t('settings.sections.about.autoCheckUpdate.description')}
-            </p>
-          </div>
+        <SettingRow
+          label={t('settings.sections.about.autoCheckUpdate.label')}
+          description={t('settings.sections.about.autoCheckUpdate.description')}
+        >
           <Switch
             checked={autoCheckUpdate}
             onCheckedChange={handleAutoCheckUpdateChange}
             disabled={isBusy}
           />
-        </div>
+        </SettingRow>
 
-        <div className="flex items-center justify-between py-2 mt-2">
-          <div className="space-y-0.5">
-            <h4 className="text-sm font-medium">
-              {t('settings.sections.about.updateChannel.label')}
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              {t('settings.sections.about.updateChannel.description')}
-            </p>
-          </div>
+        <SettingRow
+          label={t('settings.sections.about.updateChannel.label')}
+          description={t('settings.sections.about.updateChannel.description')}
+        >
           <Select
             value={updateChannel ?? 'auto'}
             onValueChange={handleUpdateChannelChange}
@@ -227,9 +216,9 @@ const AboutSection: React.FC = () => {
               </SelectItem>
             </SelectContent>
           </Select>
-        </div>
+        </SettingRow>
 
-        <div className="space-y-4 pt-4 border-t border-border/50">
+        <div className="px-4 py-4 space-y-3">
           <p className="text-sm text-muted-foreground">{t('settings.sections.about.copyright')}</p>
           <div className="flex space-x-6 text-sm">
             <a
@@ -258,7 +247,8 @@ const AboutSection: React.FC = () => {
             </a>
           </div>
         </div>
-      </CardContent>
+      </SettingGroup>
+
       <AlertDialog open={updateDialogOpen} onOpenChange={setUpdateDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -325,7 +315,7 @@ const AboutSection: React.FC = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Card>
+    </>
   )
 }
 

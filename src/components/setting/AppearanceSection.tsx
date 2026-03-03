@@ -1,6 +1,6 @@
 import { type LucideIcon, Check, Monitor, Moon, Sun } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { SettingCard } from './SettingCard'
+import { SettingGroup } from './SettingGroup'
 import { DEFAULT_THEME_COLOR, THEME_COLORS } from '@/constants/theme'
 import { useSetting, type Theme } from '@/hooks/useSetting'
 import { cn } from '@/lib/utils'
@@ -74,8 +74,8 @@ export default function AppearanceSection() {
 
   return (
     <>
-      <SettingCard title={t('settings.sections.appearance.themeMode.title')}>
-        <div className="grid grid-cols-3 gap-4">
+      <SettingGroup title={t('settings.sections.appearance.themeMode.title')}>
+        <div className="grid grid-cols-3 gap-4 p-4">
           <ThemeOption
             value="light"
             icon={Sun}
@@ -98,10 +98,10 @@ export default function AppearanceSection() {
             handleThemeChange={handleThemeChange}
           />
         </div>
-      </SettingCard>
+      </SettingGroup>
 
-      <SettingCard title={t('settings.sections.appearance.themeColor.title')}>
-        <div className="grid grid-cols-5 gap-4">
+      <SettingGroup title={t('settings.sections.appearance.themeColor.title')}>
+        <div className="grid grid-cols-5 gap-4 p-4">
           {THEME_COLORS.map(item => (
             <div
               key={item.name}
@@ -132,7 +132,7 @@ export default function AppearanceSection() {
             </div>
           ))}
         </div>
-      </SettingCard>
+      </SettingGroup>
     </>
   )
 }

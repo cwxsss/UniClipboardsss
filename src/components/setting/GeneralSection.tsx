@@ -5,7 +5,8 @@ import {
 } from '@tauri-apps/plugin-autostart'
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SettingCard } from './SettingCard'
+import { SettingGroup } from './SettingGroup'
+import { SettingRow } from './SettingRow'
 import {
   Select,
   SelectContent,
@@ -132,67 +133,46 @@ export default function GeneralSection() {
 
   return (
     <>
-      <SettingCard title={t('settings.sections.general.startupTitle')}>
-        <div className="space-y-4">
-          <div className="flex items-center justify-between py-2">
-            <div className="space-y-0.5 max-w-[60%]">
-              <h4 className="text-sm font-medium">
-                {t('settings.sections.general.deviceName.label')}
-              </h4>
-              <p className="text-xs text-muted-foreground">
-                {t('settings.sections.general.deviceName.description')}
-              </p>
-            </div>
-            <div className="w-40">
-              <Input
-                value={deviceName}
-                onChange={handleDeviceNameChange}
-                onBlur={handleDeviceNameBlur}
-                placeholder={t('settings.sections.general.deviceName.placeholder')}
-                disabled={isBusy}
-              />
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between py-2">
-            <div className="space-y-0.5">
-              <h4 className="text-sm font-medium">
-                {t('settings.sections.general.autoStart.label')}
-              </h4>
-              <p className="text-xs text-muted-foreground">
-                {t('settings.sections.general.autoStart.description')}
-              </p>
-            </div>
-            <Switch checked={autoStart} onCheckedChange={handleAutoStartChange} disabled={isBusy} />
-          </div>
-
-          <div className="flex items-center justify-between py-2">
-            <div className="space-y-0.5">
-              <h4 className="text-sm font-medium">
-                {t('settings.sections.general.silentStart.label')}
-              </h4>
-              <p className="text-xs text-muted-foreground">
-                {t('settings.sections.general.silentStart.description')}
-              </p>
-            </div>
-            <Switch
-              checked={silentStart}
-              onCheckedChange={handleSilentStartChange}
+      <SettingGroup title={t('settings.sections.general.startupTitle')}>
+        <SettingRow
+          label={t('settings.sections.general.deviceName.label')}
+          description={t('settings.sections.general.deviceName.description')}
+        >
+          <div className="w-40">
+            <Input
+              value={deviceName}
+              onChange={handleDeviceNameChange}
+              onBlur={handleDeviceNameBlur}
+              placeholder={t('settings.sections.general.deviceName.placeholder')}
               disabled={isBusy}
             />
           </div>
-        </div>
-      </SettingCard>
+        </SettingRow>
 
-      <SettingCard title={t('settings.sections.general.language.title')}>
-        <div className="flex items-center justify-between gap-4 py-2">
-          <div className="space-y-0.5">
-            <h4 className="text-sm font-medium">{t('settings.sections.general.language.label')}</h4>
-            <p className="text-xs text-muted-foreground">
-              {t('settings.sections.general.language.description')}
-            </p>
-          </div>
+        <SettingRow
+          label={t('settings.sections.general.autoStart.label')}
+          description={t('settings.sections.general.autoStart.description')}
+        >
+          <Switch checked={autoStart} onCheckedChange={handleAutoStartChange} disabled={isBusy} />
+        </SettingRow>
 
+        <SettingRow
+          label={t('settings.sections.general.silentStart.label')}
+          description={t('settings.sections.general.silentStart.description')}
+        >
+          <Switch
+            checked={silentStart}
+            onCheckedChange={handleSilentStartChange}
+            disabled={isBusy}
+          />
+        </SettingRow>
+      </SettingGroup>
+
+      <SettingGroup title={t('settings.sections.general.language.title')}>
+        <SettingRow
+          label={t('settings.sections.general.language.label')}
+          description={t('settings.sections.general.language.description')}
+        >
           <div className="w-40">
             <Select value={language} onValueChange={handleLanguageChange} disabled={isBusy}>
               <SelectTrigger>
@@ -207,8 +187,8 @@ export default function GeneralSection() {
               </SelectContent>
             </Select>
           </div>
-        </div>
-      </SettingCard>
+        </SettingRow>
+      </SettingGroup>
     </>
   )
 }

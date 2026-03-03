@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SettingSectionHeader } from './SettingSectionHeader'
+import { SettingGroup } from './SettingGroup'
+import { SettingRow } from './SettingRow'
 import { Switch } from '@/components/ui'
-import { Card, CardContent } from '@/components/ui/card'
 import { useSetting } from '@/hooks/useSetting'
 
 const SecuritySection: React.FC = () => {
@@ -33,23 +33,14 @@ const SecuritySection: React.FC = () => {
   }
 
   return (
-    <Card>
-      <SettingSectionHeader title={t('settings.sections.security.title')} />
-      <CardContent className="pt-0 space-y-4">
-        {/* Auto unlock */}
-        <div className="flex items-center justify-between py-2">
-          <div className="space-y-0.5">
-            <h4 className="text-sm font-medium">
-              {t('settings.sections.security.autoUnlock.label')}
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              {t('settings.sections.security.autoUnlock.description')}
-            </p>
-          </div>
-          <Switch checked={autoUnlockEnabled} onCheckedChange={handleAutoUnlockChange} />
-        </div>
-      </CardContent>
-    </Card>
+    <SettingGroup title={t('settings.sections.security.title')}>
+      <SettingRow
+        label={t('settings.sections.security.autoUnlock.label')}
+        description={t('settings.sections.security.autoUnlock.description')}
+      >
+        <Switch checked={autoUnlockEnabled} onCheckedChange={handleAutoUnlockChange} />
+      </SettingRow>
+    </SettingGroup>
   )
 }
 

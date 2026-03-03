@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SettingCard } from './SettingCard'
+import { SettingGroup } from './SettingGroup'
+import { SettingRow } from './SettingRow'
 import {
   Switch,
   Input,
@@ -100,59 +101,50 @@ const SyncSection: React.FC = () => {
   }
 
   return (
-    <>
-      {/* Auto sync switch */}
-      <SettingCard title={t('settings.sections.sync.autoSync.label')}>
-        <div className="flex items-center justify-between py-2">
-          <p className="text-sm text-muted-foreground">
-            {t('settings.sections.sync.autoSync.description')}
-          </p>
-          <Switch id="auto-sync" checked={autoSync} onCheckedChange={handleAutoSyncChange} />
-        </div>
-      </SettingCard>
+    <SettingGroup title={t('settings.categories.sync')}>
+      <SettingRow
+        label={t('settings.sections.sync.autoSync.label')}
+        description={t('settings.sections.sync.autoSync.description')}
+      >
+        <Switch id="auto-sync" checked={autoSync} onCheckedChange={handleAutoSyncChange} />
+      </SettingRow>
 
-      {/* Sync frequency selection */}
-      <SettingCard title={t('settings.sections.sync.syncFrequency.label')}>
-        <div className="flex items-center justify-between gap-4 py-2">
-          <p className="text-sm text-muted-foreground">
-            {t('settings.sections.sync.syncFrequency.description')}
-          </p>
-          <Select value={syncFrequency} onValueChange={handleSyncFrequencyChange}>
-            <SelectTrigger className="w-52">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {syncFrequencyOptions.map(option => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </SettingCard>
+      <SettingRow
+        label={t('settings.sections.sync.syncFrequency.label')}
+        description={t('settings.sections.sync.syncFrequency.description')}
+      >
+        <Select value={syncFrequency} onValueChange={handleSyncFrequencyChange}>
+          <SelectTrigger className="w-52">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {syncFrequencyOptions.map(option => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </SettingRow>
 
-      {/* Max file size input */}
-      <SettingCard title={t('settings.sections.sync.maxFileSize.label')}>
-        <div className="flex items-center justify-between gap-4 py-2">
-          <p className="text-sm text-muted-foreground">
-            {t('settings.sections.sync.maxFileSize.description')}
-          </p>
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex items-center gap-2">
-              <Input
-                type="text"
-                value={maxFileSize.toString()}
-                onChange={handleMaxFileSizeChange}
-                className={maxFileSizeError ? 'border-red-500 w-32' : 'w-32'}
-              />
-              <span className="text-sm text-muted-foreground">MB</span>
-            </div>
-            {maxFileSizeError && <p className="text-xs text-red-500">{maxFileSizeError}</p>}
+      <SettingRow
+        label={t('settings.sections.sync.maxFileSize.label')}
+        description={t('settings.sections.sync.maxFileSize.description')}
+      >
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
+            <Input
+              type="text"
+              value={maxFileSize.toString()}
+              onChange={handleMaxFileSizeChange}
+              className={maxFileSizeError ? 'border-red-500 w-32' : 'w-32'}
+            />
+            <span className="text-sm text-muted-foreground">MB</span>
           </div>
+          {maxFileSizeError && <p className="text-xs text-red-500">{maxFileSizeError}</p>}
         </div>
-      </SettingCard>
-    </>
+      </SettingRow>
+    </SettingGroup>
   )
 }
 
