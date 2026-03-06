@@ -7,8 +7,8 @@
 
 ### Boundary Integrity
 
-- [ ] **BOUND-01**: User-triggered Tauri commands invoke clipboard/business operations through use cases rather than direct runtime dependency access.
-- [ ] **BOUND-02**: Runtime composition keeps dependency containers private to wiring/bootstrap modules and prevents command-layer penetration.
+- [x] **BOUND-01**: User-triggered Tauri commands invoke clipboard/business operations through use cases rather than direct runtime dependency access.
+- [x] **BOUND-02**: Runtime composition keeps dependency containers private to wiring/bootstrap modules and prevents command-layer penetration.
 - [ ] **BOUND-03**: Network payload decode path uses a `uc-core` port abstraction so platform adapters do not depend directly on infra crate implementations.
 - [ ] **BOUND-04**: Non-domain ports are placed outside `uc-core` so core remains focused on domain contracts.
 
@@ -51,24 +51,24 @@
 
 ## Traceability
 
-| Requirement | Phase    | Status  |
-| ----------- | -------- | ------- |
-| BOUND-01    | Phase 10 | Pending |
-| BOUND-02    | Phase 10 | Pending |
-| BOUND-03    | Phase 10 | Pending |
-| BOUND-04    | Phase 10 | Pending |
-| CONTRACT-01 | Phase 11 | Pending |
-| CONTRACT-02 | Phase 11 | Pending |
-| CONTRACT-03 | Phase 11 | Pending |
-| CONTRACT-04 | Phase 11 | Pending |
-| LIFE-01     | Phase 12 | Pending |
-| LIFE-02     | Phase 12 | Pending |
-| LIFE-03     | Phase 12 | Pending |
-| LIFE-04     | Phase 12 | Pending |
-| DECOMP-01   | Phase 13 | Pending |
-| DECOMP-02   | Phase 13 | Pending |
-| DECOMP-03   | Phase 13 | Pending |
-| DECOMP-04   | Phase 13 | Pending |
+| Requirement | Phase    | Status   |
+| ----------- | -------- | -------- |
+| BOUND-01    | Phase 10 | Complete |
+| BOUND-02    | Phase 10 | Complete |
+| BOUND-03    | Phase 10 | Pending  |
+| BOUND-04    | Phase 10 | Pending  |
+| CONTRACT-01 | Phase 11 | Pending  |
+| CONTRACT-02 | Phase 11 | Pending  |
+| CONTRACT-03 | Phase 11 | Pending  |
+| CONTRACT-04 | Phase 11 | Pending  |
+| LIFE-01     | Phase 12 | Pending  |
+| LIFE-02     | Phase 12 | Pending  |
+| LIFE-03     | Phase 12 | Pending  |
+| LIFE-04     | Phase 12 | Pending  |
+| DECOMP-01   | Phase 13 | Pending  |
+| DECOMP-02   | Phase 13 | Pending  |
+| DECOMP-03   | Phase 13 | Pending  |
+| DECOMP-04   | Phase 13 | Pending  |
 
 **Coverage:**
 
