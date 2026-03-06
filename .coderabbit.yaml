@@ -1,11 +1,11 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 reviews:
+  path_instructions:
+    - path: '**/*.md'
+      instructions: |
+        Do not nitpick or suggest any changes related to Markdown formatting, line length, list styles, table alignment, spacing, link syntax, heading styles, or any other pure formatting issues.
+        Focus exclusively on whether the content is accurate, clear, logically structured, and uses professional technical wording.
+        Ignore all formatting-only problems.
   tools:
     markdownlint:
       enabled: false
-
-path_instructions:
-  - path: '**/*.md'
-    instructions: |
-      Do not nitpick or suggest any changes related to Markdown formatting, line length, list styles, table alignment, spacing, link syntax, heading styles, or any other pure formatting issues.
-      Focus exclusively on whether the content is accurate, clear, logically structured, and uses professional technical wording.
-      Ignore all formatting-only problems.
