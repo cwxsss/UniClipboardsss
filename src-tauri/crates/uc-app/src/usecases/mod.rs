@@ -45,7 +45,7 @@ pub use list_clipboard_entries::ListClipboardEntries;
 pub use pairing::{
     AnnounceDeviceName, GetLocalDeviceInfo, GetLocalPeerId, ListConnectedPeers,
     ListDiscoveredPeers, ListPairedDevices, LocalDeviceInfo, PairingConfig, PairingOrchestrator,
-    ResolveConnectionPolicy, SetPairingState, UnpairDevice,
+    ResolveConnectionPolicy, SetPairingState, StagedPairedDeviceStore, UnpairDevice,
 };
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator};
 pub use start_network::StartNetwork;

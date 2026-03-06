@@ -20,7 +20,7 @@
 use anyhow::{Context, Result};
 
 use super::{PairingDomainEvent, PairingEventPort, PairingFacade};
-use crate::usecases::pairing::staged_paired_device_store;
+use crate::usecases::pairing::staged_paired_device_store::StagedPairedDeviceStore;
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
@@ -104,6 +104,8 @@ pub struct PairingOrchestrator {
     action_tx: mpsc::Sender<PairingAction>,
     /// 配对事件订阅者
     event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
+    /// 配对设备暂存区
+    staged_store: Arc<StagedPairedDeviceStore>,
 }
 
 /// 配对会话上下文
@@ -144,6 +146,7 @@ impl PairingOrchestrator {
         local_device_id: String,
         local_peer_id: String,
         local_identity_pubkey: Vec<u8>,
+        staged_store: Arc<StagedPairedDeviceStore>,
     ) -> (Self, mpsc::Receiver<PairingAction>) {
         let (action_tx, action_rx) = mpsc::channel(100);
 
@@ -160,6 +163,7 @@ impl PairingOrchestrator {
             },
             action_tx,
             event_senders: Arc::new(Mutex::new(Vec::new())),
+            staged_store,
         };
 
         (orchestrator, action_rx)
@@ -705,6 +709,7 @@ impl PairingOrchestrator {
             self.session_peers.clone(),
             self.event_senders.clone(),
             self.device_repo.clone(),
+            self.staged_store.clone(),
             session_id.to_string(),
             action,
         )
@@ -717,6 +722,7 @@ impl PairingOrchestrator {
         session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
         device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
+        staged_store: Arc<StagedPairedDeviceStore>,
         session_id: String,
         action: PairingAction,
     ) -> impl Future<Output = Result<()>> + Send {
@@ -866,7 +872,7 @@ impl PairingOrchestrator {
                             "Persisting paired device before verification completion"
                         );
                         let peer_id = device.peer_id.to_string();
-                        staged_paired_device_store::stage(&session_id, device.clone());
+                        staged_store.stage(&session_id, device.clone());
 
                         let persist_result = device_repo.upsert(device).await;
 
@@ -921,6 +927,7 @@ impl PairingOrchestrator {
                         let session_peers = peers_for_timer;
                         let event_senders = event_senders_for_timer;
                         let device_repo = device_repo.clone();
+                        let staged_store_for_timer = staged_store.clone();
                         let session_id_for_log = action_session_id.clone();
                         let sleep_duration = deadline
                             .signed_duration_since(Utc::now())
@@ -934,6 +941,7 @@ impl PairingOrchestrator {
                                 session_peers,
                                 event_senders,
                                 device_repo,
+                                staged_store_for_timer,
                                 action_session_id,
                                 kind,
                             )
@@ -1070,6 +1078,7 @@ impl PairingOrchestrator {
         session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
         device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
+        staged_store: Arc<StagedPairedDeviceStore>,
         session_id: String,
         kind: TimeoutKind,
     ) -> Result<()> {
@@ -1103,6 +1112,7 @@ impl PairingOrchestrator {
                     session_peers.clone(),
                     event_senders.clone(),
                     device_repo.clone(),
+                    staged_store.clone(),
                     session_id.clone(),
                     action,
                 )
@@ -1169,7 +1179,6 @@ impl PairingEventPort for PairingOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usecases::pairing::staged_paired_device_store;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::time::timeout;
@@ -1349,7 +1358,7 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_persists_device_before_marking_persist_ok() {
-        staged_paired_device_store::clear();
+        let staged_store = Arc::new(StagedPairedDeviceStore::new());
         let device_repo = Arc::new(CountingDeviceRepository::default());
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             PairingConfig::default(),
@@ -1358,6 +1367,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![0u8; 32],
+            staged_store.clone(),
         );
 
         orchestrator
@@ -1381,7 +1391,7 @@ mod tests {
 
         assert_eq!(device_repo.upsert_calls(), 1);
 
-        let staged = staged_paired_device_store::take_by_peer_id("peer-remote");
+        let staged = staged_store.take_by_peer_id("peer-remote");
         assert!(staged.is_some());
     }
 
@@ -1396,6 +1406,7 @@ mod tests {
             "device-123".to_string(),
             "peer-456".to_string(),
             vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
     }
 
@@ -1410,6 +1421,7 @@ mod tests {
             "device-123".to_string(),
             "peer-456".to_string(),
             vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         let session_id = orchestrator
@@ -1468,6 +1480,7 @@ mod tests {
             "device-123".to_string(),
             "peer-456".to_string(),
             vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         orchestrator
@@ -1501,6 +1514,7 @@ mod tests {
             "device-123".to_string(),
             "peer-456".to_string(),
             vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         let session_id = orchestrator
@@ -1556,6 +1570,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         let request = PairingRequest {
@@ -1623,7 +1638,7 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_emits_failed_event_when_persist_upsert_fails() {
-        staged_paired_device_store::clear();
+        let staged_store = Arc::new(StagedPairedDeviceStore::new());
         let config = PairingConfig::default();
         let device_repo = Arc::new(FailingDeviceRepository);
         let (orchestrator, mut action_rx) = PairingOrchestrator::new(
@@ -1633,6 +1648,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![0u8; 32],
+            staged_store,
         );
 
         let mut event_rx = crate::usecases::pairing::PairingEventPort::subscribe(&orchestrator)
@@ -1918,6 +1934,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         let mut event_rx = crate::usecases::pairing::PairingEventPort::subscribe(&orchestrator)
@@ -1956,6 +1973,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         orchestrator
@@ -2028,6 +2046,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         orchestrator

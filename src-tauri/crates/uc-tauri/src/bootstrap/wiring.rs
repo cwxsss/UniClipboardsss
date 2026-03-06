@@ -54,7 +54,9 @@ use uc_app::usecases::space_access::{
     SpaceAccessJoinerOffer, SpaceAccessNetworkAdapter, SpaceAccessOrchestrator,
     SpaceAccessPersistenceAdapter,
 };
-use uc_app::usecases::{PairingConfig, PairingOrchestrator, ResolveConnectionPolicy};
+use uc_app::usecases::{
+    PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, StagedPairedDeviceStore,
+};
 use uc_app::AppDeps;
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
@@ -1176,6 +1178,7 @@ pub fn start_background_tasks<R: Runtime>(
     app_handle: Option<AppHandle<R>>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
     pairing_action_rx: mpsc::Receiver<PairingAction>,
+    staged_store: Arc<StagedPairedDeviceStore>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
     task_registry: &Arc<TaskRegistry>,
@@ -1222,6 +1225,7 @@ pub fn start_background_tasks<R: Runtime>(
         persistence: Arc::new(tokio::sync::Mutex::new(SpaceAccessPersistenceAdapter::new(
             deps.encryption_state.clone(),
             deps.paired_device_repo.clone(),
+            staged_store.clone(),
         ))),
     };
 
@@ -3546,6 +3550,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let network = Arc::new(NoopNetwork::default());
@@ -3595,6 +3600,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
@@ -3641,6 +3647,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
@@ -3688,6 +3695,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
@@ -3771,6 +3779,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
@@ -3854,6 +3863,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
@@ -3909,6 +3919,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
@@ -4054,6 +4065,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let network = Arc::new(TestNetwork {
@@ -4115,6 +4127,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let network = Arc::new(TestNetwork {
@@ -4308,6 +4321,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
 
@@ -4381,6 +4395,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
 
@@ -4456,6 +4471,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
 
@@ -4514,6 +4530,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
 
@@ -4588,6 +4605,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
         let close_calls = Arc::new(Mutex::new(Vec::new()));
@@ -4648,6 +4666,7 @@ mod tests {
             "device-123".to_string(),
             "peer-local".to_string(),
             vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         let orchestrator = Arc::new(orchestrator);
 

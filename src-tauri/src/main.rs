@@ -15,7 +15,10 @@ use tauri_plugin_stronghold;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use uc_app::usecases::{pairing::PairingOrchestrator, space_access::SpaceAccessOrchestrator};
+use uc_app::usecases::{
+    pairing::{PairingOrchestrator, StagedPairedDeviceStore},
+    space_access::SpaceAccessOrchestrator,
+};
 use uc_core::config::AppConfig;
 use uc_core::ports::ClipboardChangeHandler;
 use uc_core::ports::PeerDirectoryPort;
@@ -508,6 +511,7 @@ fn run_app(config: AppConfig) {
         (device_name, config)
     });
     let pairing_device_id = pairing_device_identity.current_device_id().to_string();
+    let staged_store = Arc::new(StagedPairedDeviceStore::new());
     let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
         pairing_config,
         pairing_device_repo,
@@ -515,6 +519,7 @@ fn run_app(config: AppConfig) {
         pairing_device_id,
         pairing_peer_id,
         pairing_identity_pubkey,
+        staged_store.clone(),
     );
     let pairing_orchestrator = Arc::new(pairing_orchestrator);
     let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
@@ -700,6 +705,7 @@ fn run_app(config: AppConfig) {
                 Some(app.handle().clone()),
                 pairing_orchestrator.clone(),
                 pairing_action_rx,
+                staged_store,
                 space_access_orchestrator.clone(),
                 key_slot_store.clone(),
                 runtime_for_handler.task_registry(),

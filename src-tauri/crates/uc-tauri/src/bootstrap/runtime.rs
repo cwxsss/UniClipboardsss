@@ -42,7 +42,7 @@ use uc_app::{
             DefaultSpaceAccessCryptoFactory, HmacProofAdapter, SpaceAccessNetworkAdapter,
             SpaceAccessOrchestrator, SpaceAccessPersistenceAdapter,
         },
-        PairingConfig, PairingOrchestrator, SetupOrchestrator,
+        PairingConfig, PairingOrchestrator, SetupOrchestrator, StagedPairedDeviceStore,
     },
     App, AppDeps,
 };
@@ -355,6 +355,7 @@ impl AppRuntime {
         let persistence_port = Arc::new(Mutex::new(SpaceAccessPersistenceAdapter::new(
             deps.encryption_state.clone(),
             deps.paired_device_repo.clone(),
+            Arc::new(StagedPairedDeviceStore::new()),
         )));
         let setup_event_port = Arc::new(crate::bootstrap::wiring::TauriSetupEventPort::new(
             app_handle,
@@ -387,6 +388,7 @@ impl AppRuntime {
             "setup-placeholder-device-id".to_string(),
             "setup-placeholder-peer-id".to_string(),
             vec![],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
         Arc::new(orchestrator)
     }

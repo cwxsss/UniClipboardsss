@@ -9,7 +9,7 @@ pub mod list_paired_devices;
 pub mod orchestrator;
 pub mod resolve_connection_policy;
 pub mod set_pairing_state;
-pub(crate) mod staged_paired_device_store;
+pub mod staged_paired_device_store;
 #[cfg(test)]
 mod transport_error_test;
 pub mod unpair_device;
@@ -25,4 +25,5 @@ pub use list_paired_devices::ListPairedDevices;
 pub use orchestrator::{PairingConfig, PairingOrchestrator};
 pub use resolve_connection_policy::ResolveConnectionPolicy;
 pub use set_pairing_state::SetPairingState;
+pub use staged_paired_device_store::StagedPairedDeviceStore;
 pub use unpair_device::UnpairDevice;
