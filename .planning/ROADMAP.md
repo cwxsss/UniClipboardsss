@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v0.1.0 Daily Driver** - Phases 1-9 (shipped 2026-03-06)
-- 🚧 **v0.1.1 Architecture Remediation** - Phases 10-13 (in progress)
+- 🚧 **v0.2.0 Architecture Remediation** - Phases 10-13 (in progress)
 
 ## Phases
 
@@ -14,7 +14,7 @@ See: `.planning/milestones/v0.1.0-ROADMAP.md`
 
 </details>
 
-### 🚧 v0.1.1 Architecture Remediation (In Progress)
+### 🚧 v0.2.0 Architecture Remediation (In Progress)
 
 **Milestone Goal:** Eliminate root-cause architecture defects from issue #214 while preserving daily-driver clipboard sync behavior.
 
@@ -96,7 +96,7 @@ Plans:
 
 | Phase                                          | Milestone | Plans Complete | Status      | Completed |
 | ---------------------------------------------- | --------- | -------------- | ----------- | --------- |
-| 10. Boundary Repair Baseline                   | v0.1.1    | 0/3            | Not started | -         |
-| 11. Command Contract Hardening                 | v0.1.1    | 0/2            | Not started | -         |
-| 12. Lifecycle Governance Baseline              | v0.1.1    | 0/2            | Not started | -         |
-| 13. Responsibility Decomposition & Testability | v0.1.1    | 0/3            | Not started | -         |
+| 10. Boundary Repair Baseline                   | v0.2.0    | 0/3            | Not started | -         |
+| 11. Command Contract Hardening                 | v0.2.0    | 0/2            | Not started | -         |
+| 12. Lifecycle Governance Baseline              | v0.2.0    | 0/2            | Not started | -         |
+| 13. Responsibility Decomposition & Testability | v0.2.0    | 0/3            | Not started | -         |

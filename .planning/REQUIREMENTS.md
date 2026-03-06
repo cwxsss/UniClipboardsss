@@ -3,7 +3,7 @@
 **Defined:** 2026-03-06
 **Core Value:** Seamless clipboard synchronization across devices — users can copy on one device and paste on another without interrupting their workflow.
 
-## v0.1.1 Requirements
+## v0.2.0 Requirements
 
 ### Boundary Integrity
 
@@ -39,7 +39,7 @@
 
 - **ARCHNEXT-01**: Expand typed error migration from command boundary into remaining port surfaces still using broad `anyhow` results.
 - **ARCHNEXT-02**: Continue deeper domain model refinement where anemic models hide critical invariants.
-- **ARCHNEXT-03**: Reassess broader crate/module split once v0.1.1 stability is validated.
+- **ARCHNEXT-03**: Reassess broader crate/module split once v0.2.0 stability is validated.
 
 ## Out of Scope
 
@@ -72,7 +72,7 @@
 
 **Coverage:**
 
-- v0.1.1 requirements: 16 total
+- v0.2.0 requirements: 16 total
 - Mapped to phases: 16
 - Unmapped: 0 ✓
 

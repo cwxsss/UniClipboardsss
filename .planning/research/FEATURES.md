@@ -56,7 +56,7 @@ Testability foundation
 
 ## MVP Definition
 
-### Launch With (v0.1.1)
+### Launch With (v0.2.0)
 
 - [ ] Boundary repairs for top violations from issue #214 (cluster A baseline)
 - [ ] Typed command DTO/error contract baseline (cluster C baseline)

@@ -43,7 +43,7 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - Mobile app — desktop-first
 - OAuth/third-party login — not required for current product model
 
-## Current Milestone: v0.1.1 Architecture Remediation
+## Current Milestone: v0.2.0 Architecture Remediation
 
 **Goal:** Eliminate root-cause architectural defects from issue #214 while keeping clipboard sync behavior stable for daily use.
 
@@ -86,4 +86,4 @@ Large-payload transfer and large-image capture paths were materially optimized i
 
 ---
 
-_Last updated: 2026-03-06 after v0.1.1 milestone initialization_
+_Last updated: 2026-03-06 after v0.2.0 milestone initialization_
