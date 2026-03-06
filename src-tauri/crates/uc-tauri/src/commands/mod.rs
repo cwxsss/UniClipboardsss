@@ -24,7 +24,7 @@ pub use setup::*;
 pub use startup::*;
 pub use updater::*;
 
-pub use error::map_err;
+pub use error::CommandError;
 
 pub(crate) fn record_trace_fields(span: &Span, trace: &Option<TraceMetadata>) {
     if let Some(metadata) = trace.as_ref() {
