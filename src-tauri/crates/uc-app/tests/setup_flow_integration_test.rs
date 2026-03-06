@@ -33,10 +33,10 @@ use uc_core::PeerId;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
 use uc_infra::security::{
     DefaultKeyMaterialService, EncryptionRepository, FileEncryptionStateRepository,
-    InMemoryEncryptionSession,
 };
 use uc_infra::setup_status::FileSetupStatusRepository;
 use uc_infra::time::Timer;
+use uc_platform::adapters::InMemoryEncryptionSessionPort;
 
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration, Instant};
@@ -492,7 +492,7 @@ async fn create_space_flow_marks_setup_complete_and_persists_state() {
     let encryption = Arc::new(EncryptionRepository);
     let key_scope = Arc::new(TestKeyScope::default());
     let encryption_state = Arc::new(FileEncryptionStateRepository::new(vault_dir.clone()));
-    let encryption_session = Arc::new(InMemoryEncryptionSession::new());
+    let encryption_session = Arc::new(InMemoryEncryptionSessionPort::new());
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         encryption.clone(),
@@ -632,7 +632,7 @@ async fn ensure_discovery_starts_network_before_listing_peers() {
     let encryption = Arc::new(EncryptionRepository);
     let key_scope = Arc::new(TestKeyScope::default());
     let encryption_state = Arc::new(FileEncryptionStateRepository::new(vault_dir.clone()));
-    let encryption_session = Arc::new(InMemoryEncryptionSession::new());
+    let encryption_session = Arc::new(InMemoryEncryptionSessionPort::new());
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         encryption.clone(),
@@ -707,7 +707,7 @@ async fn join_space_access_invokes_space_access_orchestrator() {
     let encryption = Arc::new(EncryptionRepository);
     let key_scope = Arc::new(TestKeyScope::default());
     let encryption_state = Arc::new(FileEncryptionStateRepository::new(vault_dir.clone()));
-    let encryption_session = Arc::new(InMemoryEncryptionSession::new());
+    let encryption_session = Arc::new(InMemoryEncryptionSessionPort::new());
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         encryption.clone(),
@@ -786,7 +786,7 @@ async fn join_space_access_propagates_space_access_error() {
     let encryption = Arc::new(EncryptionRepository);
     let key_scope = Arc::new(TestKeyScope::default());
     let encryption_state = Arc::new(FileEncryptionStateRepository::new(vault_dir.clone()));
-    let encryption_session = Arc::new(InMemoryEncryptionSession::new());
+    let encryption_session = Arc::new(InMemoryEncryptionSessionPort::new());
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         encryption.clone(),
