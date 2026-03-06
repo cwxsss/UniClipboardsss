@@ -2,6 +2,7 @@
 //! 应用生命周期相关的 Tauri 命令
 
 use crate::bootstrap::AppRuntime;
+use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use crate::models::LifecycleStatusDto;
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use uc_platform::ports::observability::TraceMetadata;
 pub async fn retry_lifecycle(
     runtime: State<'_, Arc<AppRuntime>>,
     _trace: Option<TraceMetadata>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let span = info_span!(
         "command.lifecycle.retry",
         trace_id = tracing::field::Empty,
@@ -29,7 +30,7 @@ pub async fn retry_lifecycle(
             .app_lifecycle_coordinator()
             .ensure_ready()
             .await
-            .map_err(|e| e.to_string())
+            .map_err(CommandError::internal)
     }
     .instrument(span)
     .await
@@ -42,7 +43,7 @@ pub async fn retry_lifecycle(
 pub async fn get_lifecycle_status(
     runtime: State<'_, Arc<AppRuntime>>,
     _trace: Option<TraceMetadata>,
-) -> Result<LifecycleStatusDto, String> {
+) -> Result<LifecycleStatusDto, CommandError> {
     let span = info_span!(
         "command.lifecycle.get_status",
         trace_id = tracing::field::Empty,

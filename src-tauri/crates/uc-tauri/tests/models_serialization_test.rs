@@ -2,6 +2,7 @@
 //! 命令层 DTO 模型序列化测试。
 
 use uc_app::usecases::LifecycleState;
+use uc_core::settings::model::Settings;
 use uc_tauri::models::{ClipboardEntriesResponse, ClipboardEntryProjection, LifecycleStatusDto};
 
 #[test]
@@ -80,5 +81,33 @@ fn clipboard_entry_projection_preserves_snake_case() {
     assert!(
         value.get("sizeBytes").is_none(),
         "unexpected camelCase 'sizeBytes'"
+    );
+}
+
+#[test]
+fn get_settings_response_has_expected_fields() {
+    let settings = Settings::default();
+    let json = serde_json::to_value(&settings).expect("serialize Settings");
+
+    // Verify top-level fields are present (contract stability check)
+    assert!(
+        json.get("general").is_some(),
+        "expected 'general' field in Settings JSON"
+    );
+    assert!(
+        json.get("sync").is_some(),
+        "expected 'sync' field in Settings JSON"
+    );
+    assert!(
+        json.get("security").is_some(),
+        "expected 'security' field in Settings JSON"
+    );
+    assert!(
+        json.get("retention_policy").is_some(),
+        "expected 'retention_policy' field in Settings JSON"
+    );
+    assert!(
+        json.get("schema_version").is_some(),
+        "expected 'schema_version' field in Settings JSON"
     );
 }

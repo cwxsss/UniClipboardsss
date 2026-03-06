@@ -2,6 +2,7 @@
 //! 剪贴板相关的 Tauri 命令
 
 use crate::bootstrap::AppRuntime;
+use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use crate::models::{
     ClipboardEntriesResponse, ClipboardEntryDetail, ClipboardEntryProjection,
@@ -23,7 +24,7 @@ pub async fn get_clipboard_entries(
     limit: Option<usize>,
     offset: Option<usize>,
     _trace: Option<TraceMetadata>,
-) -> Result<ClipboardEntriesResponse, String> {
+) -> Result<ClipboardEntriesResponse, CommandError> {
     let resolved_limit = limit.unwrap_or(50);
     let resolved_offset = offset.unwrap_or(0);
     let device_id = runtime.device_id();
@@ -42,7 +43,7 @@ pub async fn get_clipboard_entries(
         // Check encryption session readiness to avoid decryption failures during startup
         let encryption_state = runtime.encryption_state().await.map_err(|e| {
             tracing::error!(error = %e, "Failed to check encryption state");
-            format!("Failed to check encryption state: {}", e)
+            CommandError::InternalError(format!("Failed to check encryption state: {}", e))
         })?;
 
         let session_ready = runtime.is_encryption_ready().await;
@@ -60,7 +61,7 @@ pub async fn get_clipboard_entries(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to get clipboard entry projections");
-                e.to_string()
+                CommandError::InternalError(e.to_string())
             })?;
 
         // Map DTOs to command layer models
@@ -138,7 +139,7 @@ pub async fn delete_clipboard_entry(
     runtime: State<'_, Arc<AppRuntime>>,
     entry_id: String,
     _trace: Option<TraceMetadata>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let device_id = runtime.device_id();
 
     let span = info_span!(
@@ -155,7 +156,7 @@ pub async fn delete_clipboard_entry(
         let use_case = runtime.usecases().delete_clipboard_entry();
         use_case.execute(&parsed_id).await.map_err(|e| {
             tracing::error!(error = %e, entry_id = %entry_id, "Failed to delete entry");
-            e.to_string()
+            CommandError::InternalError(e.to_string())
         })?;
 
         tracing::info!(entry_id = %entry_id, "Deleted clipboard entry");
@@ -172,7 +173,7 @@ pub async fn get_clipboard_entry_detail(
     runtime: State<'_, Arc<AppRuntime>>,
     entry_id: String,
     _trace: Option<TraceMetadata>,
-) -> Result<ClipboardEntryDetail, String> {
+) -> Result<ClipboardEntryDetail, CommandError> {
     let span = info_span!(
         "command.clipboard.get_entry_detail",
         trace_id = tracing::field::Empty,
@@ -186,7 +187,7 @@ pub async fn get_clipboard_entry_detail(
         let use_case = runtime.usecases().get_entry_detail();
         let result = use_case.execute(&parsed_id).await.map_err(|e| {
             tracing::error!(error = %e, entry_id = %entry_id, "Failed to get entry detail");
-            e.to_string()
+            CommandError::InternalError(e.to_string())
         })?;
 
         let detail = ClipboardEntryDetail {
@@ -213,7 +214,7 @@ pub async fn get_clipboard_entry_resource(
     runtime: State<'_, Arc<AppRuntime>>,
     entry_id: String,
     _trace: Option<TraceMetadata>,
-) -> Result<ClipboardEntryResource, String> {
+) -> Result<ClipboardEntryResource, CommandError> {
     let span = info_span!(
         "command.clipboard.get_entry_resource",
         trace_id = tracing::field::Empty,
@@ -231,7 +232,7 @@ pub async fn get_clipboard_entry_resource(
                 entry_id = %entry_id,
                 "Failed to get entry resource"
             );
-            e.to_string()
+            CommandError::InternalError(e.to_string())
         })?;
 
         let resource = ClipboardEntryResource {
@@ -252,14 +253,14 @@ pub async fn get_clipboard_entry_resource(
 pub async fn sync_clipboard_items(
     runtime: State<'_, Arc<AppRuntime>>,
     _trace: Option<TraceMetadata>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     sync_clipboard_items_impl(runtime.as_ref(), _trace).await
 }
 
 async fn sync_clipboard_items_impl(
     runtime: &AppRuntime,
     trace: Option<TraceMetadata>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     let span = info_span!(
         "command.clipboard.sync_items",
         trace_id = tracing::field::Empty,
@@ -272,7 +273,7 @@ async fn sync_clipboard_items_impl(
             runtime.clipboard_integration_mode(),
             ClipboardIntegrationMode::Passive
         ) {
-            return Err("Clipboard sync disabled in passive mode".to_string());
+            return Err(CommandError::ValidationError("Clipboard sync disabled in passive mode".to_string()));
         }
 
         let outbound_sync_uc = runtime.usecases().sync_outbound_clipboard();
@@ -284,13 +285,15 @@ async fn sync_clipboard_items_impl(
             Ok(Ok(())) => Ok(true),
             Ok(Err(err)) => {
                 tracing::warn!(error = %err, "Outbound clipboard sync command failed");
-                Err(format!("Outbound clipboard sync command failed: {err}"))
+                Err(CommandError::InternalError(format!("sync failed: {err}")))
             }
-            Err(err) => {
-                tracing::warn!(error = %err, "Outbound clipboard sync command task join failed");
-                Err(format!(
-                    "Outbound clipboard sync command task join failed: {err}"
-                ))
+            Err(join_err) if join_err.is_cancelled() => {
+                tracing::warn!("Outbound clipboard sync task cancelled");
+                Err(CommandError::Cancelled("sync task cancelled".to_string()))
+            }
+            Err(join_err) => {
+                tracing::warn!(error = %join_err, "Outbound clipboard sync command task join failed");
+                Err(CommandError::InternalError(format!("sync task panic: {join_err}")))
             }
         }
     }
@@ -305,7 +308,7 @@ pub async fn restore_clipboard_entry(
     runtime: State<'_, Arc<AppRuntime>>,
     entry_id: String,
     _trace: Option<TraceMetadata>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     restore_clipboard_entry_impl(runtime.as_ref(), entry_id, _trace).await
 }
 
@@ -313,7 +316,7 @@ async fn restore_clipboard_entry_impl(
     runtime: &AppRuntime,
     entry_id: String,
     trace: Option<TraceMetadata>,
-) -> Result<bool, String> {
+) -> Result<bool, CommandError> {
     let span = info_span!(
         "command.clipboard.restore_entry",
         trace_id = tracing::field::Empty,
@@ -328,24 +331,24 @@ async fn restore_clipboard_entry_impl(
         let restore_uc = runtime.usecases().restore_clipboard_selection();
         let snapshot = restore_uc.build_snapshot(&parsed_id).await.map_err(|e| {
             tracing::error!(error = %e, entry_id = %entry_id, "Failed to build restore snapshot");
-            e.to_string()
+            CommandError::InternalError(e.to_string())
         })?;
 
         let touch_uc = runtime.usecases().touch_clipboard_entry();
         let touched = touch_uc.execute(&parsed_id).await.map_err(|e| {
             tracing::error!(error = %e, entry_id = %entry_id, "Failed to update entry active time");
-            e.to_string()
+            CommandError::InternalError(e.to_string())
         })?;
 
         if !touched {
             tracing::warn!(entry_id = %entry_id, "Entry not found when touching active time");
-            return Err("Entry not found".to_string());
+            return Err(CommandError::NotFound("Entry not found".to_string()));
         }
 
         let outbound_snapshot = snapshot.clone();
         restore_uc.restore_snapshot(snapshot).await.map_err(|err| {
             tracing::error!(error = %err, entry_id = %entry_id, "Failed to write restore snapshot");
-            err.to_string()
+            CommandError::InternalError(err.to_string())
         })?;
 
         let outbound_sync_uc = runtime.usecases().sync_outbound_clipboard();
@@ -387,6 +390,7 @@ async fn restore_clipboard_entry_impl(
 mod tests {
     use super::{restore_clipboard_entry_impl, sync_clipboard_items_impl};
     use crate::bootstrap::AppRuntime;
+    use crate::commands::error::CommandError;
     use crate::test_utils::noop_network_ports;
     use async_trait::async_trait;
     use std::collections::HashMap;
@@ -1176,7 +1180,11 @@ mod tests {
         let runtime = AppRuntime::new(deps);
         let result = restore_clipboard_entry_impl(&runtime, entry_id.to_string(), None).await;
 
-        assert!(result.is_err());
+        let err = result.expect_err("touch_result=false should produce NotFound");
+        assert!(
+            matches!(err, CommandError::NotFound(_)),
+            "expected NotFound, got: {err:?}"
+        );
         let calls = calls.lock().unwrap().clone();
         assert_eq!(calls, vec!["touch"]);
     }
@@ -1238,8 +1246,8 @@ mod tests {
 
         let err = result.expect_err("passive mode should return error");
         assert!(
-            err.contains("Clipboard sync disabled in passive mode"),
-            "unexpected error: {err}"
+            matches!(err, CommandError::ValidationError(_)),
+            "expected ValidationError, got: {err:?}"
         );
     }
 }

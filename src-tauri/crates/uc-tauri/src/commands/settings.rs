@@ -2,6 +2,7 @@
 //! 设置相关的 Tauri 命令
 
 use crate::bootstrap::{resolve_pairing_device_name, AppRuntime};
+use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use serde_json::Value;
 use std::sync::Arc;
@@ -13,15 +14,15 @@ use uc_platform::ports::observability::TraceMetadata;
 /// Get application settings
 /// 获取应用设置
 ///
-/// Returns the complete application settings as JSON.
+/// Returns the complete application settings as a typed Settings struct.
 ///
 /// ## Returns / 返回值
-/// - JSON representation of current Settings
+/// - Typed Settings struct (serialized to JSON by Tauri)
 #[tauri::command]
 pub async fn get_settings(
     runtime: State<'_, Arc<AppRuntime>>,
     _trace: Option<TraceMetadata>,
-) -> Result<Value, String> {
+) -> Result<Settings, CommandError> {
     let span = info_span!(
         "command.settings.get",
         trace_id = tracing::field::Empty,
@@ -33,26 +34,15 @@ pub async fn get_settings(
         let uc = runtime.usecases().get_settings();
         let settings = uc.execute().await.map_err(|e| {
             tracing::error!(error = %e, "Failed to get settings");
-            e.to_string()
+            CommandError::InternalError(e.to_string())
         })?;
 
-        // Convert Settings to JSON value
-        let json_value = serde_json::to_value(&settings).map_err(|e| {
-            tracing::error!(error = %e, "Failed to serialize settings");
-            format!("Failed to serialize settings: {}", e)
-        })?;
-
-        // DIAGNOSTIC: Log device_name presence and length without exposing raw value (privacy)
-        let device_name = json_value
-            .get("general")
-            .and_then(|g| g.get("device_name"))
-            .and_then(|v| v.as_str());
         tracing::info!(
-            device_name_present = device_name.is_some(),
-            device_name_len = device_name.map(|s| s.len()),
+            device_name_present = settings.general.device_name.is_some(),
+            device_name_len = settings.general.device_name.as_deref().map(|s| s.len()),
             "Retrieved settings successfully"
         );
-        Ok(json_value)
+        Ok(settings)
     }
     .instrument(span)
     .await
@@ -70,7 +60,7 @@ pub async fn update_settings(
     runtime: State<'_, Arc<AppRuntime>>,
     settings: Value,
     _trace: Option<TraceMetadata>,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let span = info_span!(
         "command.settings.update",
         trace_id = tracing::field::Empty,
@@ -82,7 +72,7 @@ pub async fn update_settings(
         // Parse JSON into Settings domain model
         let parsed_settings: Settings = serde_json::from_value(settings.clone()).map_err(|e| {
             tracing::error!(error = %e, "Failed to parse settings JSON");
-            format!("Failed to parse settings: {}", e)
+            CommandError::ValidationError(format!("Failed to parse settings: {}", e))
         })?;
 
         let old_settings = runtime
@@ -92,7 +82,7 @@ pub async fn update_settings(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to load existing settings");
-                e.to_string()
+                CommandError::InternalError(e.to_string())
             })?;
         let device_name_changed =
             old_settings.general.device_name != parsed_settings.general.device_name;
@@ -100,7 +90,7 @@ pub async fn update_settings(
         let uc = runtime.usecases().update_settings();
         uc.execute(parsed_settings).await.map_err(|e| {
             tracing::error!(error = %e, "Failed to update settings");
-            e.to_string()
+            CommandError::InternalError(e.to_string())
         })?;
 
         if device_name_changed {
@@ -108,7 +98,7 @@ pub async fn update_settings(
             let uc = runtime.usecases().announce_device_name();
             uc.execute(device_name).await.map_err(|e| {
                 tracing::error!(error = %e, "Failed to announce device name after settings update");
-                e.to_string()
+                CommandError::InternalError(e.to_string())
             })?;
         }
 
