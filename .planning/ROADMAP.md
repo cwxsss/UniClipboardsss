@@ -88,9 +88,9 @@ Plans:
 
 Plans:
 
-- [ ] 13-01: Decompose high-risk sync/setup use cases into focused services/components
-- [ ] 13-02: Reorganize app dependency containers for maintainable bounded contexts
-- [ ] 13-03: Consolidate shared test helpers and add flow-level regression coverage
+- [ ] 13-01-PLAN.md — Shared test helpers + AppDeps domain sub-grouping
+- [ ] 13-02-PLAN.md — Setup orchestrator action executor extraction
+- [ ] 13-03-PLAN.md — Pairing orchestrator protocol handler + session manager extraction
 
 ## Progress
 
