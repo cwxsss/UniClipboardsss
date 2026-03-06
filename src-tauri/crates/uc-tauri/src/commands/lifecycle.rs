@@ -3,6 +3,7 @@
 
 use crate::bootstrap::AppRuntime;
 use crate::commands::record_trace_fields;
+use crate::models::LifecycleStatusDto;
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info_span, Instrument};
@@ -34,14 +35,14 @@ pub async fn retry_lifecycle(
     .await
 }
 
-/// Get current lifecycle status as JSON.
+/// Get current lifecycle status as a typed DTO.
 ///
-/// 获取当前生命周期状态（JSON）。
+/// 获取当前生命周期状态（类型化 DTO）。
 #[tauri::command]
 pub async fn get_lifecycle_status(
     runtime: State<'_, Arc<AppRuntime>>,
     _trace: Option<TraceMetadata>,
-) -> Result<String, String> {
+) -> Result<LifecycleStatusDto, String> {
     let span = info_span!(
         "command.lifecycle.get_status",
         trace_id = tracing::field::Empty,
@@ -51,7 +52,7 @@ pub async fn get_lifecycle_status(
     async {
         let status_port = runtime.usecases().get_lifecycle_status();
         let state = status_port.get_state().await;
-        serde_json::to_string(&state).map_err(|e| e.to_string())
+        Ok(LifecycleStatusDto::from_state(state))
     }
     .instrument(span)
     .await

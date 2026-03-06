@@ -69,7 +69,7 @@ struct P2PCommandErrorEvent {
 pub async fn list_paired_devices(
     runtime: State<'_, Arc<AppRuntime>>,
     _trace: Option<TraceMetadata>,
-) -> Result<Vec<PairedDevice>, String> {
+) -> Result<Vec<PairedPeer>, String> {
     let span = info_span!(
         "command.pairing.list",
         trace_id = tracing::field::Empty,
@@ -84,7 +84,11 @@ pub async fn list_paired_devices(
             emit_command_error(&runtime, "list_paired_devices", &message);
             message
         })?;
-        Ok(devices)
+        let peers: Vec<PairedPeer> = devices
+            .into_iter()
+            .map(|d| map_paired_device_to_peer(d, None, false))
+            .collect();
+        Ok(peers)
     }
     .instrument(span)
     .await
