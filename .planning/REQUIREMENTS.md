@@ -23,8 +23,8 @@
 
 - [x] **LIFE-01**: User can close or restart the app without orphaned long-lived sync/pairing tasks remaining active.
 - [x] **LIFE-02**: Runtime task management provides cancellation propagation and bounded graceful shutdown for spawned async workers.
-- [ ] **LIFE-03**: Pairing/setup staging state avoids unmanaged global mutable statics and is owned by injected lifecycle-aware components.
-- [ ] **LIFE-04**: Encryption/session state management has a single authoritative implementation to avoid divergent runtime behavior.
+- [x] **LIFE-03**: Pairing/setup staging state avoids unmanaged global mutable statics and is owned by injected lifecycle-aware components.
+- [x] **LIFE-04**: Encryption/session state management has a single authoritative implementation to avoid divergent runtime behavior.
 
 ### Responsibility Decomposition & Testability
 
@@ -63,8 +63,8 @@
 | CONTRACT-04 | Phase 11 | Complete |
 | LIFE-01     | Phase 12 | Complete |
 | LIFE-02     | Phase 12 | Complete |
-| LIFE-03     | Phase 12 | Pending  |
-| LIFE-04     | Phase 12 | Pending  |
+| LIFE-03     | Phase 12 | Complete |
+| LIFE-04     | Phase 12 | Complete |
 | DECOMP-01   | Phase 13 | Pending  |
 | DECOMP-02   | Phase 13 | Pending  |
 | DECOMP-03   | Phase 13 | Pending  |
