@@ -700,11 +700,21 @@ fn create_platform_layer(
     let encryption_session: Arc<dyn EncryptionSessionPort> =
         Arc::new(InMemoryEncryptionSessionPort::new());
     let policy_resolver = Arc::new(ResolveConnectionPolicy::new(paired_device_repo.clone()));
+    let transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort> =
+        Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter);
+    let transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort> =
+        Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter);
     let libp2p_network = Arc::new(
-        Libp2pNetworkAdapter::new(identity_store, policy_resolver, encryption_session.clone())
-            .map_err(|e| {
-                WiringError::NetworkInit(format!("Failed to initialize libp2p identity: {e}"))
-            })?,
+        Libp2pNetworkAdapter::new(
+            identity_store,
+            policy_resolver,
+            encryption_session.clone(),
+            transfer_decryptor,
+            transfer_encryptor,
+        )
+        .map_err(|e| {
+            WiringError::NetworkInit(format!("Failed to initialize libp2p identity: {e}"))
+        })?,
     );
     info!(peer_id = %libp2p_network.local_peer_id(), "Loaded libp2p identity");
     let network_ports = Arc::new(NetworkPorts {
