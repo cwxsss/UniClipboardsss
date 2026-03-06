@@ -47,7 +47,9 @@ use uc_app::{
 use uc_core::config::AppConfig;
 use uc_core::network::DiscoveredPeer;
 use uc_core::ports::space::SpaceAccessTransportPort;
-use uc_core::ports::{ClipboardChangeHandler, DiscoveryPort, PeerDirectoryPort, TimerPort};
+use uc_core::ports::{
+    ClipboardChangeHandler, DiscoveryPort, PeerDirectoryPort, SettingsPort, TimerPort,
+};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_infra::time::Timer;
 
@@ -57,6 +59,12 @@ use crate::events::ClipboardEvent;
 ///
 /// This struct holds all application dependencies and provides
 /// access to use cases through the `usecases()` method.
+///
+/// Approved access pattern for command modules:
+/// - Use `runtime.usecases()` for business operations
+/// - Use `runtime.device_id()`, `runtime.is_encryption_ready()`, and
+///   `runtime.settings_port()` for simple read-only state access
+/// - Direct `runtime.deps.*` access is not allowed in command modules
 ///
 /// ## Architecture / 架构
 ///
@@ -86,7 +94,7 @@ use crate::events::ClipboardEvent;
 /// 此结构体保存所有应用依赖，并通过 `usecases()` 方法提供用例访问。
 pub struct AppRuntime {
     /// Application dependencies
-    pub deps: AppDeps,
+    pub(crate) deps: AppDeps,
     /// Tauri AppHandle for emitting events (optional, set after Tauri setup)
     /// Uses RwLock for interior mutability since Arc<AppRuntime> is shared
     app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,
@@ -206,6 +214,23 @@ impl AppRuntime {
     /// 获取用例访问器。
     pub fn usecases(&self) -> UseCases<'_> {
         UseCases::new(self)
+    }
+
+    /// Returns the current device ID for tracing spans and session context.
+    /// For business operations involving device identity, use `self.usecases()`.
+    pub fn device_id(&self) -> String {
+        self.deps.device_identity.current_device_id().to_string()
+    }
+
+    /// Check if the encryption session is ready.
+    pub async fn is_encryption_ready(&self) -> bool {
+        self.deps.encryption_session.is_ready().await
+    }
+
+    /// Returns a clone of the settings port for resolve_pairing_device_name.
+    /// This is a thin accessor; for settings business operations, use usecases().
+    pub fn settings_port(&self) -> Arc<dyn SettingsPort> {
+        self.deps.settings.clone()
     }
 
     pub fn clipboard_integration_mode(
