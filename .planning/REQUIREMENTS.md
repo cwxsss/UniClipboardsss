@@ -1,0 +1,67 @@
+# Requirements: UniClipboard Desktop
+
+**Defined:** 2026-03-06
+**Core Value:** Seamless clipboard synchronization across devices — users can copy on one device and paste on another without interrupting their workflow.
+
+## v0.1.1 Requirements
+
+### Boundary Integrity
+
+- [ ] **BOUND-01**: User-triggered Tauri commands invoke clipboard/business operations through use cases rather than direct runtime dependency access.
+- [ ] **BOUND-02**: Runtime composition keeps dependency containers private to wiring/bootstrap modules and prevents command-layer penetration.
+- [ ] **BOUND-03**: Network payload decode path uses a `uc-core` port abstraction so platform adapters do not depend directly on infra crate implementations.
+- [ ] **BOUND-04**: Non-domain ports are placed outside `uc-core` so core remains focused on domain contracts.
+
+### Command Contracts
+
+- [ ] **CONTRACT-01**: User-visible command responses use explicit DTOs instead of returning domain models directly.
+- [ ] **CONTRACT-02**: Command failures are returned with structured, typed error categories rather than raw `String`-only errors.
+- [ ] **CONTRACT-03**: Command/event payload serialization remains frontend-compatible (camelCase where required) with tests covering key payload contracts.
+- [ ] **CONTRACT-04**: Command timeout/error contracts distinguish cancellation, timeout, and internal failures for reliable UI handling.
+
+### Lifecycle Governance
+
+- [ ] **LIFE-01**: User can close or restart the app without orphaned long-lived sync/pairing tasks remaining active.
+- [ ] **LIFE-02**: Runtime task management provides cancellation propagation and bounded graceful shutdown for spawned async workers.
+- [ ] **LIFE-03**: Pairing/setup staging state avoids unmanaged global mutable statics and is owned by injected lifecycle-aware components.
+- [ ] **LIFE-04**: Encryption/session state management has a single authoritative implementation to avoid divergent runtime behavior.
+
+### Responsibility Decomposition & Testability
+
+- [ ] **DECOMP-01**: High-risk use-case modules (`sync_inbound`, `sync_outbound`, setup orchestration) are decomposed so business intent and infra mechanics are separated.
+- [ ] **DECOMP-02**: Dependency organization for use cases is grouped to reduce god-container coupling and improve maintainability.
+- [ ] **DECOMP-03**: Shared test helpers/noop implementations reduce duplicated mock scaffolding and speed up feature-level test setup.
+- [ ] **DECOMP-04**: Regression checks cover core user flows (pairing, sync, setup transitions) during decomposition refactors.
+
+## v0.2+ Requirements
+
+### Extended Architecture Hardening
+
+- **ARCHNEXT-01**: Expand typed error migration from command boundary into remaining port surfaces still using broad `anyhow` results.
+- **ARCHNEXT-02**: Continue deeper domain model refinement where anemic models hide critical invariants.
+- **ARCHNEXT-03**: Reassess broader crate/module split once v0.1.1 stability is validated.
+
+## Out of Scope
+
+| Feature                                                              | Reason                                                                  |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| New end-user sync capabilities (quick-paste UI, favorites/search UX) | This milestone is dedicated to architecture remediation stability work. |
+| Major framework/runtime migration                                    | Adds unrelated risk and does not directly address issue #214 clusters.  |
+| Cross-internet sync and file sync expansion                          | Previously deferred product-scope work remains deferred.                |
+
+## Traceability
+
+| Requirement                               | Phase | Status  |
+| ----------------------------------------- | ----- | ------- |
+| (to be populated during roadmap creation) | —     | Pending |
+
+**Coverage:**
+
+- v0.1.1 requirements: 16 total
+- Mapped to phases: 0 (pending roadmap)
+- Unmapped: 16 ⚠️
+
+---
+
+_Requirements defined: 2026-03-06_
+_Last updated: 2026-03-06 after milestone v0.1.1 requirement scoping_
