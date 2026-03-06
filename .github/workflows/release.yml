@@ -338,7 +338,8 @@ jobs:
             echo "Uploading ${filename} to R2..."
             wrangler r2 object put \
               "uniclipboard-releases/artifacts/v${VERSION}/${filename}" \
-              --file "$file"
+              --file "$file" \
+              --remote
           done
 
       - name: Assemble and upload R2 manifest
@@ -362,7 +363,8 @@ jobs:
           wrangler r2 object put \
             "uniclipboard-releases/manifests/${CHANNEL}.json" \
             --file "updates-r2/${CHANNEL}.json" \
-            --content-type "application/json"
+            --content-type "application/json" \
+            --remote
 
       - name: Assemble update manifest
         run: |
