@@ -3,7 +3,7 @@
 ## Milestones
 
 - ✅ **v0.1.0 Daily Driver** — Phases 1-9 (shipped 2026-03-06)
-  See: `.planning/milestones/v0.1-ROADMAP.md`
+  See: `.planning/milestones/v0.1.0-ROADMAP.md`
 
 ## Active Roadmap
 
