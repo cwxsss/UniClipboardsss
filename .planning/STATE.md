@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v0.1.1
 milestone_name: Architecture Remediation
 status: active
-stopped_at: Roadmap created, awaiting approval
-last_updated: '2026-03-06T14:26:00+08:00'
-last_activity: '2026-03-06 - Created draft roadmap for milestone v0.1.1 (phases 10-13)'
+stopped_at: Milestone initialized; Phase 10 ready for discussion/planning
+last_updated: '2026-03-06T14:31:00+08:00'
+last_activity: '2026-03-06 - Approved and committed milestone v0.1.1 roadmap (phases 10-13)'
 progress:
   total_phases: 4
   completed_phases: 0
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 
 Phase: 10 of 13 (Boundary Repair Baseline)
 Plan: 0 of 3 in current phase
-Status: Roadmap drafted; awaiting approval
-Last activity: 2026-03-06 — Milestone v0.1.1 roadmap created (phases 10-13)
+Status: Ready to discuss/plan Phase 10
+Last activity: 2026-03-06 — Milestone v0.1.1 initialized and roadmap committed
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -44,7 +44,7 @@ Progress: [░░░░░░░░░░] 0%
 
 ### Pending Todos
 
-- Pending roadmap approval for milestone v0.1.1.
+None.
 
 ### Blockers/Concerns
 
@@ -52,6 +52,6 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Session Continuity
 
-Last activity: 2026-03-06 - Milestone v0.1.1 roadmap draft completed
-Stopped at: Roadmap approval checkpoint
+Last activity: 2026-03-06 - Milestone v0.1.1 initialization complete
+Stopped at: Ready for `$gsd-discuss-phase 10` or `$gsd-plan-phase 10`
 Resume file: None
