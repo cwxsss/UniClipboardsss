@@ -10,7 +10,6 @@ test-helpers = []
 [dependencies]
 # Workspace crates
 uc-core = { path = "../uc-core" }
-uc-infra = { path = "../uc-infra" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
