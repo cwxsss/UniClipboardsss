@@ -2,33 +2,34 @@
 
 ## v0.1.0 — Daily Driver
 
-**Shipped:** 2026-03-03
-**Phases:** 3 | **Plans:** 6 | **Tasks:** ~10
-**Timeline:** 2 days (2026-03-02 → 2026-03-03)
-**Files changed:** 81 (+10,161 / -700)
+**Shipped:** 2026-03-06
+**Phases:** 9 | **Plans:** 17 | **Tasks:** ~30
+**Timeline:** 5 days (2026-03-02 → 2026-03-06)
+**Files changed:** 204 (+23,577 / -1,703)
 
 ### Delivered
 
-Evolved from basic text-only clipboard sync to a unified chunked transfer layer supporting multi-representation payloads (text/image) with per-chunk XChaCha20-Poly1305 encryption, two-segment wire framing, and true inbound streaming — all while maintaining V1 backward compatibility.
+Evolved UniClipboard from baseline LAN clipboard sync into a production-ready daily driver with unified encrypted transfer, true streaming inbound decode, optimized at-rest blob format, reliable Windows image capture, cross-platform dashboard image rendering, setup-flow UX redesign, V3 binary sync protocol with zero-copy fanout, and large-image clipboard read/memory optimizations.
 
 ### Accomplishments
 
-1. Real-time download progress bar in update dialogs via Tauri IPC Channel
-2. V2 chunked transfer protocol with XChaCha20-Poly1305 per-chunk AEAD encryption and blake3 nonce derivation
-3. Multi-representation clipboard sync (text/image) with priority-based selection (image > html > rtf > plain)
-4. Two-segment wire framing eliminating ~33% base64 overhead for V2 payloads
-5. True inbound streaming via SyncIoBridge + spawn_blocking, reducing peak memory from ~2x payload to ~1x chunk size
-6. V1 backward compatibility maintained for old devices
+1. Unified transfer protocol (UTL-01..07) with per-chunk XChaCha20-Poly1305 encryption and V1 compatibility.
+2. Two-segment wire framing + transport-level streaming decode to remove `read_to_end` bottleneck.
+3. Binary V2 blob-at-rest format + zstd compression + migration and spool cleanup flow.
+4. Windows image capture stabilized via clipboard-rs upgrade and native CF_DIB fallback.
+5. V3 binary sync pipeline delivered (compression + Arc zero-copy fanout + V3-only inbound rewrite).
+6. macOS large-image read pipeline optimized (TIFF alias dedup + deferred conversion), reducing peak memory.
 
 ### Known Gaps
 
-- Phase 01: Missing formal VERIFICATION.md (informal verification in SUMMARY)
-- Phase 03: Pre-existing test failure `business_command_timeouts_cover_stream_operation_budgets`
-- Phase 03: Human verification pending — real-device V2 streaming memory profile
-- Phase 03: Human verification pending — E2E V2 inbound with encryption session on two devices
-- Pre-existing: `broadcast_clipboard` port unimplemented (sync_outbound uses per-peer loop)
+- Milestone audit status for original v0.1 scope was `tech_debt` (not strict `passed`).
+- Phase 01: Missing formal VERIFICATION.md (informal verification recorded in SUMMARY).
+- Pre-existing test failure: `business_command_timeouts_cover_stream_operation_budgets`.
+- Human verification pending: multi-device memory profile and E2E inbound with active encryption session.
+- `broadcast_clipboard` port remains unimplemented (pre-existing).
+- `.planning/REQUIREMENTS.md` was not maintained as active file during phases 4-9; requirements were reconstructed from roadmap/summaries.
 
 ### Git
 
-- Range: `8304405..624291b`
+- Range: `8304405..bab0ae7`
 - Tag: `v0.1.0`
