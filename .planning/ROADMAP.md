@@ -94,9 +94,9 @@ Plans:
 
 ## Progress
 
-| Phase                                          | Milestone | Plans Complete | Status      | Completed |
-| ---------------------------------------------- | --------- | -------------- | ----------- | --------- |
-| 10. Boundary Repair Baseline                   | 3/3       | Complete       | 2026-03-06  | -         |
-| 11. Command Contract Hardening                 | 2/2       | Complete       | 2026-03-06  | -         |
-| 12. Lifecycle Governance Baseline              | 2/2       | Complete       | 2026-03-06  | -         |
-| 13. Responsibility Decomposition & Testability | v0.2.0    | 0/3            | Not started | -         |
+| Phase                                          | Milestone | Plans Complete | Status     | Completed |
+| ---------------------------------------------- | --------- | -------------- | ---------- | --------- |
+| 10. Boundary Repair Baseline                   | 3/3       | Complete       | 2026-03-06 | -         |
+| 11. Command Contract Hardening                 | 2/2       | Complete       | 2026-03-06 | -         |
+| 12. Lifecycle Governance Baseline              | 2/2       | Complete       | 2026-03-06 | -         |
+| 13. Responsibility Decomposition & Testability | 1/3       | In Progress    |            | -         |

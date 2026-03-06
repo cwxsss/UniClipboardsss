@@ -29,8 +29,8 @@
 ### Responsibility Decomposition & Testability
 
 - [ ] **DECOMP-01**: High-risk use-case modules (`sync_inbound`, `sync_outbound`, setup orchestration) are decomposed so business intent and infra mechanics are separated.
-- [ ] **DECOMP-02**: Dependency organization for use cases is grouped to reduce god-container coupling and improve maintainability.
-- [ ] **DECOMP-03**: Shared test helpers/noop implementations reduce duplicated mock scaffolding and speed up feature-level test setup.
+- [x] **DECOMP-02**: Dependency organization for use cases is grouped to reduce god-container coupling and improve maintainability.
+- [x] **DECOMP-03**: Shared test helpers/noop implementations reduce duplicated mock scaffolding and speed up feature-level test setup.
 - [ ] **DECOMP-04**: Regression checks cover core user flows (pairing, sync, setup transitions) during decomposition refactors.
 
 ## v0.2+ Requirements
@@ -66,8 +66,8 @@
 | LIFE-03     | Phase 12 | Complete |
 | LIFE-04     | Phase 12 | Complete |
 | DECOMP-01   | Phase 13 | Pending  |
-| DECOMP-02   | Phase 13 | Pending  |
-| DECOMP-03   | Phase 13 | Pending  |
+| DECOMP-02   | Phase 13 | Complete |
+| DECOMP-03   | Phase 13 | Complete |
 | DECOMP-04   | Phase 13 | Pending  |
 
 **Coverage:**
