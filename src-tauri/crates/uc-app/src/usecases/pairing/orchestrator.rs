@@ -1,39 +1,42 @@
 //! Pairing protocol orchestrator
 //!
-//! 这个模块负责编排配对状态机,将网络事件、用户输入和定时器事件转换为状态机事件,
-//! 并执行状态机返回的动作。
+//! This module coordinates the pairing state machine by converting network events,
+//! user inputs, and timer events into state machine events, then executing the
+//! resulting actions.
 //!
-//! # Architecture / 架构
+//! # Architecture
 //!
 //! ```text
 //! Network/User/Timer Events
-//!   ↓
-//! PairingOrchestrator (converts events)
-//!   ↓
+//!   |
+//! PairingOrchestrator (thin coordinator)
+//!   |--- PairingSessionManager (session lifecycle)
+//!   |--- PairingProtocolHandler (action execution)
+//!   |
 //! PairingStateMachine (pure state transitions)
-//!   ↓
-//! PairingActions (executed by orchestrator)
-//!   ↓
+//!   |
+//! PairingActions (executed by protocol handler)
+//!   |
 //! Network/User/Persistence side effects
 //! ```
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::{PairingDomainEvent, PairingEventPort, PairingFacade};
 use crate::usecases::pairing::staged_paired_device_store::StagedPairedDeviceStore;
-use chrono::{DateTime, Duration, Utc};
-use std::collections::{HashMap, VecDeque};
-use std::future::Future;
-use std::pin::Pin;
+use chrono::Utc;
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex};
 use tracing::{info_span, Instrument};
+
+use super::protocol_handler::PairingProtocolHandler;
+use super::session_manager::{LocalDeviceInfo, PairingSessionContext, PairingSessionManager};
 
 use uc_core::{
     network::{
         pairing_state_machine::{
-            FailureReason, PairingAction, PairingEvent, PairingPolicy, PairingRole, PairingState,
-            PairingStateMachine, SessionId, TimeoutKind,
+            PairingAction, PairingEvent, PairingRole, PairingState, SessionId,
         },
         protocol::{
             PairingChallenge, PairingChallengeResponse, PairingConfirm, PairingKeyslotOffer,
@@ -44,18 +47,18 @@ use uc_core::{
     settings::model::Settings,
 };
 
-/// 配对编排器配置
+/// Pairing orchestrator configuration
 #[derive(Debug, Clone)]
 pub struct PairingConfig {
-    /// 步骤超时时间(秒)
+    /// Step timeout (seconds)
     pub step_timeout_secs: i64,
-    /// 用户确认超时时间(秒)
+    /// User verification timeout (seconds)
     pub user_verification_timeout_secs: i64,
-    /// 会话超时时间(秒)
+    /// Session timeout (seconds)
     pub session_timeout_secs: i64,
-    /// 最大重试次数
+    /// Max retries
     pub max_retries: u8,
-    /// 协议版本
+    /// Protocol version
     pub protocol_version: String,
 }
 
@@ -85,60 +88,20 @@ impl PairingConfig {
     }
 }
 
-/// 配对编排器
-///
-/// 负责管理多个并发的配对会话,协调状态机与外部世界的交互。
+/// Pairing orchestrator -- thin coordinator delegating to session manager and protocol handler.
 #[derive(Clone)]
 pub struct PairingOrchestrator {
-    /// 配置
-    config: PairingConfig,
-    /// 活跃的配对会话 (session_id -> state machine)
-    sessions: Arc<RwLock<HashMap<SessionId, PairingSessionContext>>>,
-    /// 会话对应的对端信息
-    session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
-    /// 配对设备仓库
-    device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
-    /// 本地设备身份
-    local_identity: LocalDeviceInfo,
-    /// 动作发送器
-    action_tx: mpsc::Sender<PairingAction>,
-    /// 配对事件订阅者
-    event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
-    /// 配对设备暂存区
-    staged_store: Arc<StagedPairedDeviceStore>,
+    /// Session lifecycle manager
+    session_manager: PairingSessionManager,
+    /// Protocol action handler
+    protocol_handler: PairingProtocolHandler,
 }
 
-/// 配对会话上下文
-struct PairingSessionContext {
-    /// 状态机
-    state_machine: PairingStateMachine,
-    /// 会话创建时间
-    created_at: DateTime<Utc>,
-    /// 定时器句柄
-    timers: Mutex<HashMap<TimeoutKind, tokio::task::AbortHandle>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PairingPeerInfo {
-    pub peer_id: String,
-    pub device_name: Option<String>,
-}
-
-/// 本地设备信息
-#[derive(Clone)]
-struct LocalDeviceInfo {
-    /// 设备名称
-    device_name: String,
-    /// 设备ID
-    device_id: String,
-    /// 本地身份公钥
-    identity_pubkey: Vec<u8>,
-    /// 本地 PeerID
-    peer_id: String,
-}
+/// Re-export PairingPeerInfo as a public type for API compatibility.
+pub use super::session_manager::PairingPeerInfo;
 
 impl PairingOrchestrator {
-    /// 创建新的配对编排器
+    /// Create a new pairing orchestrator.
     pub fn new(
         config: PairingConfig,
         device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
@@ -149,40 +112,33 @@ impl PairingOrchestrator {
         staged_store: Arc<StagedPairedDeviceStore>,
     ) -> (Self, mpsc::Receiver<PairingAction>) {
         let (action_tx, action_rx) = mpsc::channel(100);
+        let event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+
+        let local_identity = LocalDeviceInfo {
+            device_name: local_device_name,
+            device_id: local_device_id,
+            identity_pubkey: local_identity_pubkey,
+            peer_id: local_peer_id,
+        };
+
+        let session_manager = PairingSessionManager::new(config, local_identity);
+        let protocol_handler =
+            PairingProtocolHandler::new(action_tx, device_repo, staged_store, event_senders);
 
         let orchestrator = Self {
-            config,
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            session_peers: Arc::new(RwLock::new(HashMap::new())),
-            device_repo,
-            local_identity: LocalDeviceInfo {
-                device_name: local_device_name,
-                device_id: local_device_id,
-                identity_pubkey: local_identity_pubkey,
-                peer_id: local_peer_id,
-            },
-            action_tx,
-            event_senders: Arc::new(Mutex::new(Vec::new())),
-            staged_store,
+            session_manager,
+            protocol_handler,
         };
 
         (orchestrator, action_rx)
     }
 
-    /// 发起配对 (Initiator)
+    /// Initiate pairing (Initiator role).
     pub async fn initiate_pairing(&self, peer_id: String) -> Result<SessionId> {
-        let span = info_span!(
-            "pairing.initiate",
-            peer_id = %peer_id
-        );
+        let span = info_span!("pairing.initiate", peer_id = %peer_id);
         async {
-            let policy = self.build_policy();
-            let mut state_machine = PairingStateMachine::new_with_local_identity_and_policy(
-                self.local_identity.device_name.clone(),
-                self.local_identity.device_id.clone(),
-                self.local_identity.identity_pubkey.clone(),
-                policy,
-            );
+            let mut state_machine = self.session_manager.new_state_machine();
             let (state, actions) = state_machine.handle_event(
                 PairingEvent::StartPairing {
                     role: PairingRole::Initiator,
@@ -200,19 +156,19 @@ impl PairingOrchestrator {
                     ))
                 }
             };
-            self.record_session_peer(&session_id, peer_id.clone(), None)
+            self.session_manager
+                .record_session_peer(&session_id, peer_id.clone(), None)
                 .await;
 
             let context = PairingSessionContext {
                 state_machine,
                 created_at: Utc::now(),
-                timers: Mutex::new(HashMap::new()),
+                timers: tokio::sync::Mutex::new(HashMap::new()),
             };
 
-            self.sessions
-                .write()
-                .await
-                .insert(session_id.clone(), context);
+            self.session_manager
+                .insert_session(session_id.clone(), context)
+                .await;
 
             for action in actions {
                 self.execute_action(&session_id, &peer_id, action).await?;
@@ -224,16 +180,16 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理收到的配对请求 (Responder)
+    /// Handle incoming pairing request (Responder role).
     pub async fn handle_incoming_request(
         &self,
         peer_id: String,
         request: PairingRequest,
     ) -> Result<()> {
-        if request.peer_id != self.local_identity.peer_id {
+        if request.peer_id != self.session_manager.local_peer_id() {
             return Err(anyhow::anyhow!(
                 "Request target peer_id mismatch: expected {}, got {}",
-                self.local_identity.peer_id,
+                self.session_manager.local_peer_id(),
                 request.peer_id
             ));
         }
@@ -245,20 +201,15 @@ impl PairingOrchestrator {
             peer_id = %peer_id
         );
         async {
-            self.record_session_peer(
-                &session_id,
-                peer_id.clone(),
-                Some(request.device_name.clone()),
-            )
-            .await;
+            self.session_manager
+                .record_session_peer(
+                    &session_id,
+                    peer_id.clone(),
+                    Some(request.device_name.clone()),
+                )
+                .await;
 
-            let policy = self.build_policy();
-            let mut state_machine = PairingStateMachine::new_with_local_identity_and_policy(
-                self.local_identity.device_name.clone(),
-                self.local_identity.device_id.clone(),
-                self.local_identity.identity_pubkey.clone(),
-                policy,
-            );
+            let mut state_machine = self.session_manager.new_state_machine();
             let (_state, actions) = state_machine.handle_event(
                 PairingEvent::RecvRequest {
                     session_id: session_id.clone(),
@@ -271,15 +222,13 @@ impl PairingOrchestrator {
             let context = PairingSessionContext {
                 state_machine,
                 created_at: Utc::now(),
-                timers: Mutex::new(HashMap::new()),
+                timers: tokio::sync::Mutex::new(HashMap::new()),
             };
 
-            self.sessions
-                .write()
-                .await
-                .insert(session_id.clone(), context);
+            self.session_manager
+                .insert_session(session_id.clone(), context)
+                .await;
 
-            // 执行动作(如果有)
             for action in actions {
                 self.execute_action(&session_id, &peer_id, action).await?;
             }
@@ -290,7 +239,7 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理收到的Challenge (Initiator)
+    /// Handle received Challenge (Initiator).
     pub async fn handle_challenge(
         &self,
         session_id: &str,
@@ -303,26 +252,24 @@ impl PairingOrchestrator {
             peer_id = %peer_id
         );
         async {
-            self.record_session_peer(
-                session_id,
-                peer_id.to_string(),
-                Some(challenge.device_name.clone()),
-            )
-            .await;
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                let context = sessions.get_mut(session_id).context("Session not found")?;
-                let (_state, actions) = context.state_machine.handle_event(
+            self.session_manager
+                .record_session_peer(
+                    session_id,
+                    peer_id.to_string(),
+                    Some(challenge.device_name.clone()),
+                )
+                .await;
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
                     PairingEvent::RecvChallenge {
                         session_id: session_id.to_string(),
                         challenge,
                     },
-                    Utc::now(),
-                );
-                actions
-            };
+                )
+                .await?;
 
-            // 执行动作(包括展示验证UI)
             for action in actions {
                 self.execute_action(session_id, peer_id, action).await?;
             }
@@ -333,7 +280,7 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理收到的KeyslotOffer (Initiator)
+    /// Handle received KeyslotOffer (Initiator).
     pub async fn handle_keyslot_offer(
         &self,
         session_id: &str,
@@ -377,20 +324,21 @@ impl PairingOrchestrator {
                     return Ok(());
                 }
             };
-            self.emit_event(PairingDomainEvent::KeyslotReceived {
-                session_id: session_id.to_string(),
-                peer_id: peer_id.to_string(),
-                keyslot_file,
-                challenge,
-            })
-            .await;
+            self.protocol_handler
+                .emit_event(PairingDomainEvent::KeyslotReceived {
+                    session_id: session_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    keyslot_file,
+                    challenge,
+                })
+                .await;
             Ok(())
         }
         .instrument(span)
         .await
     }
 
-    /// 处理收到的ChallengeResponse (Responder)
+    /// Handle received ChallengeResponse (Responder).
     pub async fn handle_challenge_response(
         &self,
         session_id: &str,
@@ -416,7 +364,7 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理收到的Response (Responder)
+    /// Handle received Response (Responder).
     pub async fn handle_response(
         &self,
         session_id: &str,
@@ -435,24 +383,16 @@ impl PairingOrchestrator {
                 accepted = %response.accepted,
                 "Handling pairing response from initiator"
             );
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                let context = sessions.get_mut(session_id).context("Session not found")?;
-                let (new_state, actions) = context.state_machine.handle_event(
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
                     PairingEvent::RecvResponse {
                         session_id: session_id.to_string(),
                         response,
                     },
-                    Utc::now(),
-                );
-                tracing::debug!(
-                    session_id = %session_id,
-                    new_state = ?new_state,
-                    num_actions = actions.len(),
-                    "Response handled, new state and actions generated"
-                );
-                actions
-            };
+                )
+                .await?;
 
             for action in actions {
                 self.execute_action(session_id, peer_id, action).await?;
@@ -464,21 +404,19 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 用户接受配对 (验证短码匹配)
+    /// User accepts pairing (verification short code match).
     pub async fn user_accept_pairing(&self, session_id: &str) -> Result<()> {
         let span = info_span!("pairing.user_accept", session_id = %session_id);
         async {
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                let context = sessions.get_mut(session_id).context("Session not found")?;
-                let (_state, actions) = context.state_machine.handle_event(
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
                     PairingEvent::UserAccept {
                         session_id: session_id.to_string(),
                     },
-                    Utc::now(),
-                );
-                actions
-            };
+                )
+                .await?;
 
             for action in actions {
                 self.execute_action(session_id, "", action).await?;
@@ -490,21 +428,19 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 用户拒绝配对
+    /// User rejects pairing.
     pub async fn user_reject_pairing(&self, session_id: &str) -> Result<()> {
         let span = info_span!("pairing.user_reject", session_id = %session_id);
         async {
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                let context = sessions.get_mut(session_id).context("Session not found")?;
-                let (_state, actions) = context.state_machine.handle_event(
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
                     PairingEvent::UserReject {
                         session_id: session_id.to_string(),
                     },
-                    Utc::now(),
-                );
-                actions
-            };
+                )
+                .await?;
 
             for action in actions {
                 self.execute_action(session_id, "", action).await?;
@@ -516,7 +452,7 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理收到的Confirm (双方)
+    /// Handle received Confirm.
     pub async fn handle_confirm(
         &self,
         session_id: &str,
@@ -536,24 +472,16 @@ impl PairingOrchestrator {
                 error = ?confirm.error,
                 "Handling pairing confirm message"
             );
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                let context = sessions.get_mut(session_id).context("Session not found")?;
-                let (new_state, actions) = context.state_machine.handle_event(
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
                     PairingEvent::RecvConfirm {
                         session_id: session_id.to_string(),
                         confirm,
                     },
-                    Utc::now(),
-                );
-                tracing::debug!(
-                    session_id = %session_id,
-                    new_state = ?new_state,
-                    num_actions = actions.len(),
-                    "Confirm handled, new state and actions generated"
-                );
-                actions
-            };
+                )
+                .await?;
 
             for action in actions {
                 self.execute_action(session_id, peer_id, action).await?;
@@ -565,7 +493,7 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理收到的Reject (双方)
+    /// Handle received Reject.
     pub async fn handle_reject(&self, session_id: &str, peer_id: &str) -> Result<()> {
         let span = info_span!(
             "pairing.handle_reject",
@@ -573,17 +501,15 @@ impl PairingOrchestrator {
             peer_id = %peer_id
         );
         async {
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                let context = sessions.get_mut(session_id).context("Session not found")?;
-                let (_state, actions) = context.state_machine.handle_event(
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
                     PairingEvent::RecvReject {
                         session_id: session_id.to_string(),
                     },
-                    Utc::now(),
-                );
-                actions
-            };
+                )
+                .await?;
 
             for action in actions {
                 self.execute_action(session_id, peer_id, action).await?;
@@ -595,7 +521,7 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理收到的Cancel (双方)
+    /// Handle received Cancel.
     pub async fn handle_cancel(&self, session_id: &str, peer_id: &str) -> Result<()> {
         let span = info_span!(
             "pairing.handle_cancel",
@@ -603,17 +529,15 @@ impl PairingOrchestrator {
             peer_id = %peer_id
         );
         async {
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                let context = sessions.get_mut(session_id).context("Session not found")?;
-                let (_state, actions) = context.state_machine.handle_event(
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
                     PairingEvent::RecvCancel {
                         session_id: session_id.to_string(),
                     },
-                    Utc::now(),
-                );
-                actions
-            };
+                )
+                .await?;
 
             for action in actions {
                 self.execute_action(session_id, peer_id, action).await?;
@@ -625,7 +549,7 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理收到的Busy (双方)
+    /// Handle received Busy.
     pub async fn handle_busy(&self, session_id: &str, peer_id: &str) -> Result<()> {
         let span = info_span!(
             "pairing.handle_busy",
@@ -633,17 +557,15 @@ impl PairingOrchestrator {
             peer_id = %peer_id
         );
         async {
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                let context = sessions.get_mut(session_id).context("Session not found")?;
-                let (_state, actions) = context.state_machine.handle_event(
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
                     PairingEvent::RecvBusy {
                         session_id: session_id.to_string(),
                     },
-                    Utc::now(),
-                );
-                actions
-            };
+                )
+                .await?;
 
             for action in actions {
                 self.execute_action(session_id, peer_id, action).await?;
@@ -655,7 +577,7 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 处理传输层错误
+    /// Handle transport error.
     pub async fn handle_transport_error(
         &self,
         session_id: &str,
@@ -669,22 +591,16 @@ impl PairingOrchestrator {
             error = %error
         );
         async {
-            let actions = {
-                let mut sessions = self.sessions.write().await;
-                // If session is already gone, we don't care
-                if let Some(context) = sessions.get_mut(session_id) {
-                    let (_state, actions) = context.state_machine.handle_event(
-                        PairingEvent::TransportError {
-                            session_id: session_id.to_string(),
-                            error: error.clone(),
-                        },
-                        Utc::now(),
-                    );
-                    actions
-                } else {
-                    vec![]
-                }
-            };
+            let actions = self
+                .session_manager
+                .process_event_if_exists(
+                    session_id,
+                    PairingEvent::TransportError {
+                        session_id: session_id.to_string(),
+                        error: error.clone(),
+                    },
+                )
+                .await;
 
             for action in actions {
                 self.execute_action(session_id, peer_id, action).await?;
@@ -696,449 +612,40 @@ impl PairingOrchestrator {
         .await
     }
 
-    /// 执行单个动作
+    /// Get peer info for a session.
+    pub async fn get_session_peer(
+        &self,
+        session_id: &str,
+    ) -> Option<super::session_manager::PairingPeerInfo> {
+        self.session_manager.get_session_peer(session_id).await
+    }
+
+    /// Get role for a session.
+    pub async fn get_session_role(&self, session_id: &str) -> Option<PairingRole> {
+        self.session_manager.get_session_role(session_id).await
+    }
+
+    /// Cleanup expired sessions.
+    pub async fn cleanup_expired_sessions(&self) {
+        self.session_manager.cleanup_expired_sessions().await
+    }
+
+    /// Execute a single action (delegates to protocol handler).
     async fn execute_action(
         &self,
         session_id: &str,
-        _peer_id: &str,
+        peer_id: &str,
         action: PairingAction,
     ) -> Result<()> {
-        Self::execute_action_inner(
-            self.action_tx.clone(),
-            self.sessions.clone(),
-            self.session_peers.clone(),
-            self.event_senders.clone(),
-            self.device_repo.clone(),
-            self.staged_store.clone(),
-            session_id.to_string(),
-            action,
-        )
-        .await
-    }
-
-    fn execute_action_inner(
-        action_tx: mpsc::Sender<PairingAction>,
-        sessions: Arc<RwLock<HashMap<SessionId, PairingSessionContext>>>,
-        session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
-        event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
-        device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
-        staged_store: Arc<StagedPairedDeviceStore>,
-        session_id: String,
-        action: PairingAction,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async move {
-            let mut queue = VecDeque::from([action]);
-
-            while let Some(action) = queue.pop_front() {
-                match action {
-                    PairingAction::Send {
-                        peer_id: target_peer,
-                        message,
-                    } => {
-                        action_tx
-                            .send(PairingAction::Send {
-                                peer_id: target_peer,
-                                message,
-                            })
-                            .await
-                            .context("Failed to queue send action")?;
-                    }
-                    PairingAction::ShowVerification {
-                        session_id: action_session_id,
-                        short_code,
-                        local_fingerprint,
-                        peer_fingerprint,
-                        peer_display_name,
-                    } => {
-                        let short_code_clone = short_code.clone();
-                        let local_fingerprint_clone = local_fingerprint.clone();
-                        let peer_fingerprint_clone = peer_fingerprint.clone();
-                        let peer_id_for_event = {
-                            let peers = session_peers.read().await;
-                            peers
-                                .get(&action_session_id)
-                                .map(|info| info.peer_id.clone())
-                        };
-                        if let Some(peer_id) = peer_id_for_event {
-                            Self::emit_event_to_senders(
-                                event_senders.clone(),
-                                PairingDomainEvent::PairingVerificationRequired {
-                                    session_id: action_session_id.clone(),
-                                    peer_id,
-                                    short_code: short_code_clone,
-                                    local_fingerprint: local_fingerprint_clone,
-                                    peer_fingerprint: peer_fingerprint_clone,
-                                },
-                            )
-                            .await;
-                        } else {
-                            tracing::warn!(
-                                session_id = %action_session_id,
-                                "Pairing verification event missing peer info"
-                            );
-                        }
-                        tracing::debug!(
-                            session_id = %action_session_id,
-                            action = "ShowVerification",
-                            "Sending UI action to frontend"
-                        );
-                        action_tx
-                            .send(PairingAction::ShowVerification {
-                                session_id: action_session_id,
-                                short_code,
-                                local_fingerprint,
-                                peer_fingerprint,
-                                peer_display_name,
-                            })
-                            .await
-                            .context("Failed to queue ui action")?;
-                    }
-                    PairingAction::ShowVerifying {
-                        session_id: verifying_session_id,
-                        peer_display_name,
-                    } => {
-                        tracing::debug!(
-                            session_id = %verifying_session_id,
-                            action = "ShowVerifying",
-                            "Sending UI action to frontend"
-                        );
-                        action_tx
-                            .send(PairingAction::ShowVerifying {
-                                session_id: verifying_session_id,
-                                peer_display_name,
-                            })
-                            .await
-                            .context("Failed to queue ui action")?;
-                    }
-                    PairingAction::EmitResult {
-                        session_id: result_session_id,
-                        success,
-                        error,
-                    } => {
-                        let result_session_id_for_send = result_session_id.clone();
-                        let error_for_send = error.clone();
-                        tracing::info!(
-                            session_id = %result_session_id,
-                            success = %success,
-                            error = ?error,
-                            "Emitting pairing result to frontend"
-                        );
-                        action_tx
-                            .send(PairingAction::EmitResult {
-                                session_id: result_session_id_for_send,
-                                success,
-                                error: error_for_send,
-                            })
-                            .await
-                            .context("Failed to queue emit result action")?;
-                        let peer_id = {
-                            let peers = session_peers.read().await;
-                            peers
-                                .get(&result_session_id)
-                                .map(|peer| peer.peer_id.clone())
-                                .unwrap_or_default()
-                        };
-                        if peer_id.is_empty() {
-                            tracing::warn!(
-                                session_id = %result_session_id,
-                                "Pairing result emitted without peer id"
-                            );
-                        }
-                        let event = if success {
-                            PairingDomainEvent::PairingSucceeded {
-                                session_id: result_session_id.clone(),
-                                peer_id,
-                            }
-                        } else {
-                            let reason =
-                                error.clone().map(FailureReason::Other).unwrap_or_else(|| {
-                                    FailureReason::Other("Pairing failed".to_string())
-                                });
-                            PairingDomainEvent::PairingFailed {
-                                session_id: result_session_id.clone(),
-                                peer_id,
-                                reason,
-                            }
-                        };
-                        Self::emit_event_to_senders(event_senders.clone(), event).await;
-                    }
-                    PairingAction::PersistPairedDevice {
-                        session_id: _,
-                        device,
-                    } => {
-                        tracing::info!(
-                            session_id = %session_id,
-                            peer_id = %device.peer_id,
-                            "Persisting paired device before verification completion"
-                        );
-                        let peer_id = device.peer_id.to_string();
-                        staged_store.stage(&session_id, device.clone());
-
-                        let persist_result = device_repo.upsert(device).await;
-
-                        let actions = {
-                            let mut sessions = sessions.write().await;
-                            if let Some(context) = sessions.get_mut(&session_id) {
-                                let event = match persist_result {
-                                    Ok(()) => PairingEvent::PersistOk {
-                                        session_id: session_id.clone(),
-                                        device_id: peer_id,
-                                    },
-                                    Err(err) => PairingEvent::PersistErr {
-                                        session_id: session_id.clone(),
-                                        error: err.to_string(),
-                                    },
-                                };
-                                let (_state, actions) =
-                                    context.state_machine.handle_event(event, Utc::now());
-                                tracing::debug!(
-                                    session_id = %session_id,
-                                    num_actions = actions.len(),
-                                    "Persist event generated actions"
-                                );
-                                actions
-                            } else {
-                                vec![]
-                            }
-                        };
-                        queue.extend(actions);
-                    }
-                    PairingAction::StartTimer {
-                        session_id: action_session_id,
-                        kind,
-                        deadline,
-                    } => {
-                        let sessions_for_timer = sessions.clone();
-                        let peers_for_timer = session_peers.clone();
-                        let event_senders_for_timer = event_senders.clone();
-                        let mut sessions = sessions.write().await;
-                        let context = sessions
-                            .get_mut(&action_session_id)
-                            .context("Session not found")?;
-                        {
-                            let mut timers = context.timers.lock().await;
-                            if let Some(handle) = timers.remove(&kind) {
-                                handle.abort();
-                            }
-                        }
-
-                        let action_tx = action_tx.clone();
-                        let sessions = sessions_for_timer;
-                        let session_peers = peers_for_timer;
-                        let event_senders = event_senders_for_timer;
-                        let device_repo = device_repo.clone();
-                        let staged_store_for_timer = staged_store.clone();
-                        let session_id_for_log = action_session_id.clone();
-                        let sleep_duration = deadline
-                            .signed_duration_since(Utc::now())
-                            .to_std()
-                            .unwrap_or_else(|_| std::time::Duration::from_secs(0));
-                        let future = async move {
-                            tokio::time::sleep(sleep_duration).await;
-                            if let Err(error) = Self::handle_timeout(
-                                action_tx,
-                                sessions,
-                                session_peers,
-                                event_senders,
-                                device_repo,
-                                staged_store_for_timer,
-                                action_session_id,
-                                kind,
-                            )
-                            .await
-                            {
-                                tracing::error!(
-                                    %session_id_for_log,
-                                    ?kind,
-                                    error = ?error,
-                                    "pairing timer handling failed"
-                                );
-                            }
-                        };
-                        let future: Pin<Box<dyn Future<Output = ()> + Send>> = Box::pin(future);
-                        let handle = tokio::spawn(future);
-
-                        let abort_handle = handle.abort_handle();
-                        let mut timers = context.timers.lock().await;
-                        timers.insert(kind, abort_handle);
-                    }
-                    PairingAction::CancelTimer {
-                        session_id: action_session_id,
-                        kind,
-                    } => {
-                        let mut sessions = sessions.write().await;
-                        let context = sessions
-                            .get_mut(&action_session_id)
-                            .context("Session not found")?;
-                        let mut timers = context.timers.lock().await;
-                        if let Some(handle) = timers.remove(&kind) {
-                            handle.abort();
-                        }
-                    }
-                    PairingAction::LogTransition { .. } => {
-                        // 日志已记录,无需额外操作
-                    }
-                    PairingAction::NoOp => {}
-                }
-            }
-
-            Ok(())
-        }
-    }
-
-    async fn record_session_peer(
-        &self,
-        session_id: &str,
-        peer_id: String,
-        device_name: Option<String>,
-    ) {
-        let mut peers = self.session_peers.write().await;
-        let entry = peers
-            .entry(session_id.to_string())
-            .or_insert_with(|| PairingPeerInfo {
-                peer_id: peer_id.clone(),
-                device_name: None,
-            });
-        entry.peer_id = peer_id;
-        if device_name.is_some() {
-            entry.device_name = device_name;
-        }
-    }
-
-    pub async fn get_session_peer(&self, session_id: &str) -> Option<PairingPeerInfo> {
-        let peers = self.session_peers.read().await;
-        peers.get(session_id).cloned()
-    }
-
-    pub async fn get_session_role(&self, session_id: &str) -> Option<PairingRole> {
-        let sessions = self.sessions.read().await;
-        sessions
-            .get(session_id)
-            .and_then(|ctx| ctx.state_machine.role())
-    }
-
-    fn build_policy(&self) -> PairingPolicy {
-        PairingPolicy {
-            step_timeout_secs: self.config.step_timeout_secs,
-            user_verification_timeout_secs: self.config.user_verification_timeout_secs,
-            max_retries: self.config.max_retries,
-            protocol_version: self.config.protocol_version.clone(),
-        }
-    }
-
-    /// 清理过期会话
-    pub async fn cleanup_expired_sessions(&self) {
-        let span = info_span!("pairing.cleanup_expired_sessions");
-        async {
-            let mut sessions = self.sessions.write().await;
-            let now = Utc::now();
-            let timeout = Duration::seconds(self.config.session_timeout_secs);
-            let expired_ids: Vec<SessionId> = sessions
-                .iter()
-                .filter_map(|(session_id, context)| {
-                    let expired = now.signed_duration_since(context.created_at).num_seconds()
-                        >= timeout.num_seconds();
-                    if expired {
-                        Some(session_id.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            let mut expired_contexts = Vec::with_capacity(expired_ids.len());
-            for session_id in &expired_ids {
-                if let Some(context) = sessions.remove(session_id) {
-                    expired_contexts.push((session_id.clone(), context));
-                }
-            }
-            drop(sessions);
-
-            if !expired_ids.is_empty() {
-                let mut peers = self.session_peers.write().await;
-                for session_id in &expired_ids {
-                    peers.remove(session_id);
-                }
-            }
-
-            for (_session_id, context) in expired_contexts {
-                let mut timers = context.timers.lock().await;
-                for (_kind, handle) in timers.drain() {
-                    handle.abort();
-                }
-            }
-        }
-        .instrument(span)
-        .await
-    }
-
-    async fn handle_timeout(
-        action_tx: mpsc::Sender<PairingAction>,
-        sessions: Arc<RwLock<HashMap<SessionId, PairingSessionContext>>>,
-        session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
-        event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
-        device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
-        staged_store: Arc<StagedPairedDeviceStore>,
-        session_id: String,
-        kind: TimeoutKind,
-    ) -> Result<()> {
-        let span = info_span!(
-            "pairing.handle_timeout",
-            session_id = %session_id,
-            kind = ?kind
-        );
-        async {
-            let actions = {
-                let mut sessions = sessions.write().await;
-                let context = sessions.get_mut(&session_id).context("Session not found")?;
-                {
-                    let mut timers = context.timers.lock().await;
-                    timers.remove(&kind);
-                }
-                let (_state, actions) = context.state_machine.handle_event(
-                    PairingEvent::Timeout {
-                        session_id: session_id.clone(),
-                        kind,
-                    },
-                    Utc::now(),
-                );
-                actions
-            };
-
-            for action in actions {
-                Self::execute_action_inner(
-                    action_tx.clone(),
-                    sessions.clone(),
-                    session_peers.clone(),
-                    event_senders.clone(),
-                    device_repo.clone(),
-                    staged_store.clone(),
-                    session_id.clone(),
-                    action,
-                )
-                .await?;
-            }
-
-            Ok(())
-        }
-        .instrument(span)
-        .await
-    }
-
-    async fn emit_event(&self, event: PairingDomainEvent) {
-        Self::emit_event_to_senders(self.event_senders.clone(), event).await;
-    }
-
-    async fn emit_event_to_senders(
-        event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
-        event: PairingDomainEvent,
-    ) {
-        let senders = { event_senders.lock().await.clone() };
-        for sender in senders {
-            if sender.send(event.clone()).await.is_err() {
-                tracing::debug!("Pairing event receiver dropped");
-            }
-        }
+        self.protocol_handler
+            .execute_action(
+                session_id,
+                peer_id,
+                action,
+                self.session_manager.sessions(),
+                self.session_manager.session_peers(),
+            )
+            .await
     }
 }
 
@@ -1170,7 +677,7 @@ impl PairingFacade for PairingOrchestrator {
 impl PairingEventPort for PairingOrchestrator {
     async fn subscribe(&self) -> anyhow::Result<mpsc::Receiver<PairingDomainEvent>> {
         let (event_tx, event_rx) = mpsc::channel(100);
-        let mut senders = self.event_senders.lock().await;
+        let mut senders = self.protocol_handler.event_senders().lock().await;
         senders.push(event_tx);
         Ok(event_rx)
     }
@@ -1185,7 +692,7 @@ mod tests {
     use tokio::time::timeout;
     use uc_core::crypto::pin_hash::hash_pin;
     use uc_core::network::paired_device::{PairedDevice, PairingState};
-    use uc_core::network::pairing_state_machine::FailureReason;
+    use uc_core::network::pairing_state_machine::{FailureReason, TimeoutKind};
     use uc_core::network::protocol::{PairingRequest, PairingResponse};
     use uc_core::network::PairingMessage;
     use uc_core::security::model::{
@@ -1442,10 +949,10 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         orchestrator.cleanup_expired_sessions().await;
 
-        let sessions = orchestrator.sessions.read().await;
+        let sessions = orchestrator.session_manager.sessions().read().await;
         assert!(sessions.is_empty());
 
-        let peers = orchestrator.session_peers.read().await;
+        let peers = orchestrator.session_manager.session_peers().read().await;
         assert!(peers.is_empty());
     }
 
@@ -1480,7 +987,7 @@ mod tests {
         let abort_handle = join_handle.abort_handle();
 
         {
-            let mut sessions = orchestrator.sessions.write().await;
+            let mut sessions = orchestrator.session_manager.sessions().write().await;
             let context = sessions.get_mut(&session_id).expect("session context");
             let mut timers = context.timers.lock().await;
             timers.insert(TimeoutKind::Persist, abort_handle);
@@ -1757,7 +1264,7 @@ mod tests {
             .await
             .unwrap();
 
-        let sessions = orchestrator.sessions.read().await;
+        let sessions = orchestrator.session_manager.sessions().read().await;
         let context = sessions.get(&session_id).expect("session");
         let timers = context.timers.lock().await;
         assert!(timers.contains_key(&TimeoutKind::WaitingChallenge));
@@ -1795,7 +1302,7 @@ mod tests {
             .unwrap();
 
         {
-            let sessions = orchestrator.sessions.read().await;
+            let sessions = orchestrator.session_manager.sessions().read().await;
             let context = sessions.get(&session_id).expect("session");
             let timers = context.timers.lock().await;
             assert!(timers.contains_key(&TimeoutKind::WaitingChallenge));
@@ -1812,7 +1319,7 @@ mod tests {
             .await
             .unwrap();
 
-        let sessions = orchestrator.sessions.read().await;
+        let sessions = orchestrator.session_manager.sessions().read().await;
         let context = sessions.get(&session_id).expect("session");
         let timers = context.timers.lock().await;
         assert!(!timers.contains_key(&TimeoutKind::WaitingChallenge));
@@ -1933,6 +1440,7 @@ mod tests {
         );
 
         orchestrator
+            .session_manager
             .record_session_peer(
                 "session-1",
                 "peer-remote".to_string(),
@@ -2006,6 +1514,7 @@ mod tests {
         );
 
         orchestrator
+            .session_manager
             .record_session_peer(
                 "session-verify",
                 "peer-remote".to_string(),

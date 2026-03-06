@@ -7,7 +7,9 @@ pub mod list_connected_peers;
 pub mod list_discovered_peers;
 pub mod list_paired_devices;
 pub mod orchestrator;
+mod protocol_handler;
 pub mod resolve_connection_policy;
+pub(crate) mod session_manager;
 pub mod set_pairing_state;
 pub mod staged_paired_device_store;
 #[cfg(test)]
