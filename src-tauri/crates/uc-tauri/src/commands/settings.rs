@@ -26,7 +26,7 @@ pub async fn get_settings(
         "command.settings.get",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.deps.device_identity.current_device_id(),
+        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
     async {
@@ -75,7 +75,7 @@ pub async fn update_settings(
         "command.settings.update",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.deps.device_identity.current_device_id(),
+        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
     async {
@@ -104,7 +104,7 @@ pub async fn update_settings(
         })?;
 
         if device_name_changed {
-            let device_name = resolve_pairing_device_name(runtime.deps.settings.clone()).await;
+            let device_name = resolve_pairing_device_name(runtime.settings_port()).await;
             let uc = runtime.usecases().announce_device_name();
             uc.execute(device_name).await.map_err(|e| {
                 tracing::error!(error = %e, "Failed to announce device name after settings update");

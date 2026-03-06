@@ -50,7 +50,7 @@ pub async fn initialize_encryption(
         "command.encryption.initialize",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.deps.device_identity.current_device_id(),
+        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
 
@@ -119,7 +119,7 @@ pub async fn unlock_encryption_session_with_runtime<R: Runtime>(
         "command.encryption.unlock_session",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.deps.device_identity.current_device_id(),
+        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &trace);
     let uc = runtime.usecases().auto_unlock_encryption_session();
@@ -900,7 +900,7 @@ pub async fn is_encryption_initialized(
         "command.encryption.is_initialized",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.deps.device_identity.current_device_id(),
+        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
     async {
@@ -939,7 +939,7 @@ pub async fn get_encryption_session_status(
         "command.encryption.session_status",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.deps.device_identity.current_device_id(),
+        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
 
@@ -954,7 +954,7 @@ pub async fn get_encryption_session_status(
                 e.to_string()
             })?;
 
-        let session_ready = runtime.deps.encryption_session.is_ready().await;
+        let session_ready = runtime.is_encryption_ready().await;
         let initialized = state == uc_core::security::state::EncryptionState::Initialized;
 
         tracing::info!(

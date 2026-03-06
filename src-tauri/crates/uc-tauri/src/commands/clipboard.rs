@@ -26,7 +26,7 @@ pub async fn get_clipboard_entries(
 ) -> Result<ClipboardEntriesResponse, String> {
     let resolved_limit = limit.unwrap_or(50);
     let resolved_offset = offset.unwrap_or(0);
-    let device_id = runtime.deps.device_identity.current_device_id();
+    let device_id = runtime.device_id();
 
     let span = info_span!(
         "command.clipboard.get_entries",
@@ -50,7 +50,7 @@ pub async fn get_clipboard_entries(
                 format!("Failed to check encryption state: {}", e)
             })?;
 
-        let session_ready = runtime.deps.encryption_session.is_ready().await;
+        let session_ready = runtime.is_encryption_ready().await;
         if should_return_not_ready(encryption_state, session_ready) {
             tracing::warn!(
                 "Encryption initialized but session not ready yet, returning not-ready response. \
@@ -144,7 +144,7 @@ pub async fn delete_clipboard_entry(
     entry_id: String,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), String> {
-    let device_id = runtime.deps.device_identity.current_device_id();
+    let device_id = runtime.device_id();
 
     let span = info_span!(
         "command.clipboard.delete_entry",

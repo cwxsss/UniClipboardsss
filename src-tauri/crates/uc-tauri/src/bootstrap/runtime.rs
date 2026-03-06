@@ -94,7 +94,7 @@ use crate::events::ClipboardEvent;
 /// 此结构体保存所有应用依赖，并通过 `usecases()` 方法提供用例访问。
 pub struct AppRuntime {
     /// Application dependencies
-    pub(crate) deps: AppDeps,
+    deps: AppDeps,
     /// Tauri AppHandle for emitting events (optional, set after Tauri setup)
     /// Uses RwLock for interior mutability since Arc<AppRuntime> is shared
     app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,

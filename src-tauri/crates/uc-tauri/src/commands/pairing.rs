@@ -143,7 +143,7 @@ pub async fn get_p2p_peers(
         "command.pairing.get_p2p_peers",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.deps.device_identity.current_device_id(),
+        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
     async {
@@ -208,7 +208,7 @@ pub async fn get_paired_peers_with_status(
         "command.pairing.get_paired_peers_with_status",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.deps.device_identity.current_device_id(),
+        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
     async {
