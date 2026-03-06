@@ -1,3 +1,4 @@
+use crate::ports::IdentityStorePort;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -23,7 +24,7 @@ use uc_core::network::{
     ProtocolMessage, ResolvedConnectionPolicy,
 };
 use uc_core::ports::{
-    ClipboardTransportPort, ConnectionPolicyResolverPort, EncryptionSessionPort, IdentityStorePort,
+    ClipboardTransportPort, ConnectionPolicyResolverPort, EncryptionSessionPort,
     NetworkControlPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort,
     TransferPayloadDecryptorPort, TransferPayloadEncryptorPort,
 };

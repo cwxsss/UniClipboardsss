@@ -1,8 +1,8 @@
 //! Placeholder autostart port implementation
 //! 占位符自动启动端口实现
 
+use crate::ports::AutostartPort;
 use anyhow::Result;
-use uc_core::ports::AutostartPort;
 
 impl AutostartPort for PlaceholderAutostartPort {
     fn is_enabled(&self) -> Result<bool> {

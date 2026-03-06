@@ -7,8 +7,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info_span, Instrument};
-use uc_core::ports::observability::TraceMetadata;
 use uc_core::settings::model::Settings;
+use uc_platform::ports::observability::TraceMetadata;
 
 /// Get application settings
 /// 获取应用设置

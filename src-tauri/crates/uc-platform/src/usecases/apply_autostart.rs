@@ -1,6 +1,7 @@
+use crate::ports::AutostartPort;
 use anyhow::Result;
 use std::sync::Arc;
-use uc_core::ports::{AutostartPort, SettingsPort};
+use uc_core::ports::SettingsPort;
 
 pub struct ApplyAutostartSetting<S, A>
 where

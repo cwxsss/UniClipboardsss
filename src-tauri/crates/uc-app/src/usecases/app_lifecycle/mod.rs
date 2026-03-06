@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tracing::{info, info_span, warn, Instrument};
 
-use super::{StartClipboardWatcher, StartNetworkAfterUnlock};
+use super::{StartClipboardWatcherPort, StartNetworkAfterUnlock};
 
 // ---------------------------------------------------------------------------
 // Lifecycle state
@@ -89,7 +89,7 @@ pub trait DeviceAnnouncer: Send + Sync {
 /// 4. If both succeed, sets state to **Ready** and emits a `Ready` event.
 /// 5. On failure, sets the appropriate failed state and emits a failure event.
 pub struct AppLifecycleCoordinator {
-    watcher: Arc<StartClipboardWatcher>,
+    watcher: Arc<dyn StartClipboardWatcherPort>,
     network: Arc<StartNetworkAfterUnlock>,
     announcer: Option<Arc<dyn DeviceAnnouncer>>,
     emitter: Arc<dyn SessionReadyEmitter>,
@@ -99,7 +99,7 @@ pub struct AppLifecycleCoordinator {
 
 /// Helper for constructing the coordinator with explicit dependency fields.
 pub struct AppLifecycleCoordinatorDeps {
-    pub watcher: Arc<StartClipboardWatcher>,
+    pub watcher: Arc<dyn StartClipboardWatcherPort>,
     pub network: Arc<StartNetworkAfterUnlock>,
     pub announcer: Option<Arc<dyn DeviceAnnouncer>>,
     pub emitter: Arc<dyn SessionReadyEmitter>,
@@ -110,7 +110,7 @@ pub struct AppLifecycleCoordinatorDeps {
 impl AppLifecycleCoordinator {
     /// Create a new coordinator instance.
     pub fn new(
-        watcher: Arc<StartClipboardWatcher>,
+        watcher: Arc<dyn StartClipboardWatcherPort>,
         network: Arc<StartNetworkAfterUnlock>,
         announcer: Option<Arc<dyn DeviceAnnouncer>>,
         emitter: Arc<dyn SessionReadyEmitter>,

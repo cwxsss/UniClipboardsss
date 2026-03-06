@@ -11,7 +11,7 @@ pub mod tray;
 pub mod updater;
 
 use tracing::Span;
-use uc_core::ports::observability::TraceMetadata;
+use uc_platform::ports::observability::TraceMetadata;
 
 // Re-export commonly used types
 pub use autostart::*;
@@ -40,7 +40,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tracing::info_span;
     use tracing_subscriber::fmt::MakeWriter;
-    use uc_core::ports::observability::TraceMetadata;
+    use uc_platform::ports::observability::TraceMetadata;
 
     #[derive(Clone)]
     struct BufferWriter {

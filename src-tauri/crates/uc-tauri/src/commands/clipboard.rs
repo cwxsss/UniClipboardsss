@@ -12,8 +12,8 @@ use tauri::State;
 use tracing::{info_span, Instrument};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_core::ids::EntryId;
-use uc_core::ports::observability::TraceMetadata;
 use uc_core::security::state::EncryptionState;
+use uc_platform::ports::observability::TraceMetadata;
 
 /// Get clipboard history entries (preview only)
 /// 获取剪贴板历史条目（仅预览）
@@ -40,15 +40,10 @@ pub async fn get_clipboard_entries(
 
     async move {
         // Check encryption session readiness to avoid decryption failures during startup
-        let encryption_state = runtime
-            .deps
-            .encryption_state
-            .load_state()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to check encryption state");
-                format!("Failed to check encryption state: {}", e)
-            })?;
+        let encryption_state = runtime.encryption_state().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to check encryption state");
+            format!("Failed to check encryption state: {}", e)
+        })?;
 
         let session_ready = runtime.is_encryption_ready().await;
         if should_return_not_ready(encryption_state, session_ready) {

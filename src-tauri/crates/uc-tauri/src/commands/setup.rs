@@ -6,8 +6,8 @@ use crate::commands::record_trace_fields;
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info_span, Instrument};
-use uc_core::ports::observability::TraceMetadata;
 use uc_core::setup::SetupState;
+use uc_platform::ports::observability::TraceMetadata;
 
 fn encode_setup_state(state: SetupState) -> Result<String, String> {
     serde_json::to_string(&state).map_err(|e| e.to_string())

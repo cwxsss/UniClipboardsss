@@ -41,6 +41,7 @@ pub mod settings;
 pub mod setup;
 pub mod setup_event_port;
 pub mod space;
+pub mod start_clipboard_watcher;
 mod timer;
 
 pub use blob_repository::BlobRepositoryPort;
@@ -75,3 +76,4 @@ pub use security::transfer_crypto::{
 pub use settings::{SettingsMigrationPort, SettingsPort};
 pub use setup::SetupStatusPort;
 pub use setup_event_port::SetupEventPort;
+pub use start_clipboard_watcher::{StartClipboardWatcherError, StartClipboardWatcherPort};

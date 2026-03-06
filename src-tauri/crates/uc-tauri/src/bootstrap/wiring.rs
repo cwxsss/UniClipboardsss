@@ -108,6 +108,9 @@ use uc_platform::adapters::{
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::LocalClipboard;
 use uc_platform::identity_store::FileIdentityStore;
+use uc_platform::ports::{
+    AppDirsPort, AutostartPort, IdentityStorePort, UiPort, WatcherControlPort,
+};
 use uc_platform::runtime::event_bus::PlatformCommandSender;
 
 /// Result type for wiring operations
@@ -147,6 +150,7 @@ pub enum WiringError {
 pub struct WiredDependencies {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
+    pub watcher_control: Arc<dyn WatcherControlPort>,
 }
 
 /// Background runtime components that must be started after async runtime is ready.
@@ -1112,7 +1116,6 @@ pub fn wire_dependencies_with_identity_store(
         key_scope: platform.key_scope,
         secure_storage: platform.secure_storage,
         key_material: infra.key_material,
-        watcher_control: platform.watcher_control,
 
         // Device dependencies / 设备依赖
         device_repo: infra.device_repo,
@@ -1138,10 +1141,6 @@ pub fn wire_dependencies_with_identity_store(
         // Settings dependencies / 设置依赖
         settings: infra.settings_repo,
 
-        // UI dependencies / UI 依赖
-        ui_port: platform.ui,
-        autostart: platform.autostart,
-
         // System dependencies / 系统依赖
         clock: infra.clock,
         hash: infra.hash,
@@ -1160,6 +1159,7 @@ pub fn wire_dependencies_with_identity_store(
             worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
         },
+        watcher_control: platform.watcher_control,
     })
 }
 

@@ -8917,7 +8917,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uc-core",
- "uc-infra",
  "uuid",
  "winapi",
 ]
@@ -9024,7 +9023,7 @@ dependencies = [
 
 [[package]]
 name = "uniclipboard"
-version = "0.1.0-alpha.6"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",

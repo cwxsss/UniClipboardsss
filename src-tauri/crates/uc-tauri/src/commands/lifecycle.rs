@@ -6,7 +6,7 @@ use crate::commands::record_trace_fields;
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info_span, Instrument};
-use uc_core::ports::observability::TraceMetadata;
+use uc_platform::ports::observability::TraceMetadata;
 
 /// Retry lifecycle boot (watcher + network + session ready).
 ///

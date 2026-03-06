@@ -17,12 +17,12 @@ use tracing::{debug, error, info, warn};
 
 use uc_app::usecases::{pairing::PairingOrchestrator, space_access::SpaceAccessOrchestrator};
 use uc_core::config::AppConfig;
-use uc_core::ports::AppDirsPort;
 use uc_core::ports::ClipboardChangeHandler;
 use uc_core::ports::PeerDirectoryPort;
 use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::ipc::PlatformCommand;
+use uc_platform::ports::AppDirsPort;
 use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::event_bus::{
     PlatformCommandReceiver, PlatformEventReceiver, PlatformEventSender,
@@ -494,6 +494,7 @@ fn run_app(config: AppConfig) {
 
     let deps = wired.deps;
     let background = wired.background;
+    let watcher_control = wired.watcher_control;
 
     let pairing_device_repo = deps.paired_device_repo.clone();
     let pairing_device_identity = deps.device_identity.clone();
@@ -550,6 +551,7 @@ fn run_app(config: AppConfig) {
             space_access_orchestrator.clone(),
             discovery_network,
         ),
+        watcher_control,
     );
 
     // Wrap runtime in Arc for clipboard handler (PlatformRuntime needs Arc<dyn ClipboardChangeHandler>)
@@ -647,7 +649,7 @@ fn run_app(config: AppConfig) {
 
             // Load startup settings for tray and silent start
             let (silent_start, initial_language) = {
-                let settings_port = runtime_for_handler.deps.settings.clone();
+                let settings_port = runtime_for_handler.settings_port();
                 match tauri::async_runtime::block_on(settings_port.load()) {
                     Ok(settings) => {
                         let silent = settings.general.silent_start;
@@ -690,7 +692,7 @@ fn run_app(config: AppConfig) {
             // Start background spooler and blob worker tasks
             start_background_tasks(
                 background,
-                &runtime_for_handler.deps,
+                runtime_for_handler.wiring_deps(),
                 Some(app.handle().clone()),
                 pairing_orchestrator.clone(),
                 pairing_action_rx,
@@ -710,7 +712,7 @@ fn run_app(config: AppConfig) {
                 info!("Starting backend initialization");
 
                 // 0. Ensure device name is initialized (runs on every startup)
-                if let Err(e) = ensure_default_device_name(runtime.deps.settings.clone()).await {
+                if let Err(e) = ensure_default_device_name(runtime.settings_port()).await {
                     warn!("Failed to initialize default device name: {}", e);
                     // Non-fatal: continue startup even if device name initialization fails
                 }
@@ -750,7 +752,7 @@ fn run_app(config: AppConfig) {
                 let app_handle_for_unlock = app_handle_for_startup.clone();
                 tauri::async_runtime::spawn(async move {
                     let auto_unlock_enabled =
-                        match runtime_for_auto_unlock.deps.settings.load().await {
+                        match runtime_for_auto_unlock.settings_port().load().await {
                             Ok(settings) => settings.security.auto_unlock_enabled,
                             Err(e) => {
                                 warn!("[Startup] Failed to load settings for auto unlock: {}", e);

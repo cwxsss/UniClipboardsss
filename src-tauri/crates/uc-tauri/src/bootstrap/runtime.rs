@@ -50,6 +50,7 @@ use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{
     ClipboardChangeHandler, DiscoveryPort, PeerDirectoryPort, SettingsPort, TimerPort,
 };
+use uc_core::security::state::EncryptionState;
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_infra::time::Timer;
 
@@ -107,7 +108,9 @@ pub struct AppRuntime {
     /// 缓存的 Setup 编排器 – 在所有 Tauri 命令间共享，
     /// 避免每次调用都重置内存中的 Setup 状态机。
     setup_orchestrator: Arc<SetupOrchestrator>,
-    clipboard_integration_mode: uc_app::usecases::clipboard::ClipboardIntegrationMode,
+    clipboard_integration_mode: uc_core::clipboard::ClipboardIntegrationMode,
+    /// Platform ports that are not in AppDeps (evicted from uc-core)
+    watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
 }
 
 /// Setup wiring dependencies for runtime-level orchestrators.
@@ -157,12 +160,28 @@ impl AppRuntime {
     /// Create a new AppRuntime from dependencies.
     /// 从依赖创建新的 AppRuntime。
     pub fn new(deps: AppDeps) -> Self {
+        struct NoopWatcherControl;
+        #[async_trait::async_trait]
+        impl uc_platform::ports::WatcherControlPort for NoopWatcherControl {
+            async fn start_watcher(&self) -> Result<(), uc_platform::ports::WatcherControlError> {
+                Ok(())
+            }
+            async fn stop_watcher(&self) -> Result<(), uc_platform::ports::WatcherControlError> {
+                Ok(())
+            }
+        }
         let setup_ports = SetupRuntimePorts::placeholder(&deps);
-        Self::with_setup(deps, setup_ports)
+        let watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort> =
+            Arc::new(NoopWatcherControl);
+        Self::with_setup(deps, setup_ports, watcher_control)
     }
 
     /// Create a new AppRuntime with explicit setup orchestrator dependencies.
-    pub fn with_setup(deps: AppDeps, setup_ports: SetupRuntimePorts) -> Self {
+    pub fn with_setup(
+        deps: AppDeps,
+        setup_ports: SetupRuntimePorts,
+        watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
+    ) -> Self {
         let lifecycle_status: Arc<dyn uc_app::usecases::LifecycleStatusPort> =
             Arc::new(crate::adapters::lifecycle::InMemoryLifecycleStatus::new());
         let app_handle = Arc::new(std::sync::RwLock::new(None));
@@ -174,6 +193,7 @@ impl AppRuntime {
             &setup_ports,
             app_handle.clone(),
             clipboard_integration_mode,
+            watcher_control.clone(),
         );
 
         Self {
@@ -182,6 +202,7 @@ impl AppRuntime {
             lifecycle_status,
             setup_orchestrator,
             clipboard_integration_mode,
+            watcher_control,
         }
     }
 
@@ -227,15 +248,31 @@ impl AppRuntime {
         self.deps.encryption_session.is_ready().await
     }
 
+    /// Returns the persisted encryption state used by readiness checks.
+    pub async fn encryption_state(&self) -> Result<EncryptionState, String> {
+        self.deps
+            .encryption_state
+            .load_state()
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     /// Returns a clone of the settings port for resolve_pairing_device_name.
     /// This is a thin accessor; for settings business operations, use usecases().
     pub fn settings_port(&self) -> Arc<dyn SettingsPort> {
         self.deps.settings.clone()
     }
 
-    pub fn clipboard_integration_mode(
-        &self,
-    ) -> uc_app::usecases::clipboard::ClipboardIntegrationMode {
+    /// Returns a reference to the underlying AppDeps for wiring/bootstrap code only.
+    ///
+    /// **IMPORTANT**: This method is intended exclusively for bootstrap wiring code
+    /// (e.g., `start_background_tasks` in `main.rs`). Command handlers MUST NOT use
+    /// this method — use `runtime.usecases()` or specific facade methods instead.
+    pub fn wiring_deps(&self) -> &AppDeps {
+        &self.deps
+    }
+
+    pub fn clipboard_integration_mode(&self) -> uc_core::clipboard::ClipboardIntegrationMode {
         self.clipboard_integration_mode
     }
 
@@ -244,7 +281,8 @@ impl AppRuntime {
         lifecycle_status: &Arc<dyn uc_app::usecases::LifecycleStatusPort>,
         setup_ports: &SetupRuntimePorts,
         app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,
-        clipboard_integration_mode: uc_app::usecases::clipboard::ClipboardIntegrationMode,
+        clipboard_integration_mode: uc_core::clipboard::ClipboardIntegrationMode,
+        watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
     ) -> Arc<SetupOrchestrator> {
         let initialize_encryption = Arc::new(uc_app::usecases::InitializeEncryption::from_ports(
             deps.encryption.clone(),
@@ -261,10 +299,11 @@ impl AppRuntime {
             deps.network_ports.peers.clone(),
             deps.settings.clone(),
         ));
-        let start_watcher = Arc::new(uc_app::usecases::StartClipboardWatcher::from_port(
-            deps.watcher_control.clone(),
-            clipboard_integration_mode,
-        ));
+        let start_watcher: Arc<dyn uc_app::usecases::StartClipboardWatcherPort> =
+            Arc::new(uc_platform::usecases::StartClipboardWatcher::from_port(
+                watcher_control,
+                clipboard_integration_mode,
+            ));
         let start_network = Arc::new(uc_app::usecases::StartNetworkAfterUnlock::from_port(
             deps.network_control.clone(),
         ));
@@ -666,9 +705,9 @@ impl<'a> UseCases<'a> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn start_clipboard_watcher(&self) -> uc_app::usecases::StartClipboardWatcher {
-        uc_app::usecases::StartClipboardWatcher::from_port(
-            self.runtime.deps.watcher_control.clone(),
+    pub fn start_clipboard_watcher(&self) -> uc_platform::usecases::StartClipboardWatcher {
+        uc_platform::usecases::StartClipboardWatcher::from_port(
+            self.runtime.watcher_control.clone(),
             self.runtime.clipboard_integration_mode,
         )
     }
@@ -789,7 +828,8 @@ impl<'a> UseCases<'a> {
         ));
         uc_app::usecases::AppLifecycleCoordinator::from_deps(
             uc_app::usecases::AppLifecycleCoordinatorDeps {
-                watcher: Arc::new(self.start_clipboard_watcher()),
+                watcher: Arc::new(self.start_clipboard_watcher())
+                    as Arc<dyn uc_app::usecases::StartClipboardWatcherPort>,
                 network: Arc::new(self.start_network_after_unlock()),
                 announcer: Some(announcer),
                 emitter: Arc::new(crate::adapters::lifecycle::TauriSessionReadyEmitter::new(

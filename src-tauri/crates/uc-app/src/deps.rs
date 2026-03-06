@@ -66,7 +66,6 @@ pub struct AppDeps {
     pub key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort>,
     pub secure_storage: Arc<dyn SecureStoragePort>,
     pub key_material: Arc<dyn KeyMaterialPort>,
-    pub watcher_control: Arc<dyn WatcherControlPort>,
 
     // Device dependencies / 设备依赖
     pub device_repo: Arc<dyn DeviceRepositoryPort>,
@@ -91,10 +90,6 @@ pub struct AppDeps {
 
     // Settings dependencies / 设置依赖
     pub settings: Arc<dyn SettingsPort>,
-
-    // UI dependencies / UI 依赖
-    pub ui_port: Arc<dyn UiPort>,
-    pub autostart: Arc<dyn AutostartPort>,
 
     // System dependencies / 系统依赖
     pub clock: Arc<dyn ClockPort>,

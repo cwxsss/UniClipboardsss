@@ -10,8 +10,8 @@ use tauri::{Emitter, State};
 use tracing::{info_span, Instrument};
 use uc_app::usecases::{LocalDeviceInfo, PairingOrchestrator};
 use uc_core::network::{ConnectedPeer, DiscoveredPeer, PairedDevice, PairingState};
-use uc_core::ports::observability::TraceMetadata;
 use uc_core::PeerId;
+use uc_platform::ports::observability::TraceMetadata;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

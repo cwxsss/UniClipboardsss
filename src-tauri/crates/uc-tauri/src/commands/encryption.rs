@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tracing::{info, info_span, warn, Instrument};
-use uc_core::ports::observability::TraceMetadata;
+use uc_platform::ports::observability::TraceMetadata;
 
 const LOG_CONTEXT: &str = "[initialize_encryption]";
 const UNLOCK_CONTEXT: &str = "[unlock_encryption_session]";
@@ -904,15 +904,10 @@ pub async fn is_encryption_initialized(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let state = runtime
-            .deps
-            .encryption_state
-            .load_state()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to check encryption status");
-                e.to_string()
-            })?;
+        let state = runtime.encryption_state().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to check encryption status");
+            e
+        })?;
         let result = matches!(
             state,
             uc_core::security::state::EncryptionState::Initialized
@@ -944,15 +939,10 @@ pub async fn get_encryption_session_status(
     record_trace_fields(&span, &_trace);
 
     async {
-        let state = runtime
-            .deps
-            .encryption_state
-            .load_state()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to load encryption state");
-                e.to_string()
-            })?;
+        let state = runtime.encryption_state().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to load encryption state");
+            e
+        })?;
 
         let session_ready = runtime.is_encryption_ready().await;
         let initialized = state == uc_core::security::state::EncryptionState::Initialized;

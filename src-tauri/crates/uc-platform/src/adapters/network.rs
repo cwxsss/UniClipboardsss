@@ -1,6 +1,7 @@
 //! Placeholder network port implementation
 //! 占位符网络端口实现
 
+use crate::ports::IdentityStorePort;
 use anyhow::Result;
 use async_trait::async_trait;
 use libp2p::PeerId;
@@ -8,7 +9,6 @@ use tracing::error;
 use uc_core::network::{
     ClipboardMessage, ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage,
 };
-use uc_core::ports::IdentityStorePort;
 use uc_core::ports::{
     ClipboardTransportPort, NetworkControlPort, NetworkEventPort, PairingTransportPort,
     PeerDirectoryPort,
