@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1.1
 milestone_name: Architecture Remediation
 status: active
-stopped_at: Defining requirements
-last_updated: '2026-03-06T14:10:00+08:00'
-last_activity: '2026-03-06 - Started milestone v0.1.1 from issue #214 architecture review scope'
+stopped_at: Roadmap created, awaiting approval
+last_updated: '2026-03-06T14:26:00+08:00'
+last_activity: '2026-03-06 - Created draft roadmap for milestone v0.1.1 (phases 10-13)'
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
-  total_plans: 0
+  total_plans: 10
   completed_plans: 0
   percent: 0
 ---
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Milestone complete; waiting to define next milestone
+**Current focus:** Milestone v0.1.1 planning complete; Phase 10 ready for discussion/planning
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-03-06 — Milestone v0.1.1 started
+Phase: 10 of 13 (Boundary Repair Baseline)
+Plan: 0 of 3 in current phase
+Status: Roadmap drafted; awaiting approval
+Last activity: 2026-03-06 — Milestone v0.1.1 roadmap created (phases 10-13)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -40,10 +40,11 @@ Progress: [░░░░░░░░░░] 0%
 - Rebuilt milestone-level roadmap and requirements archives from phase summaries and roadmap evidence.
 - Kept unresolved architecture deep-review items as next-milestone active goals.
 - Started v0.1.1 milestone from issue #214 as the primary remediation scope.
+- Scoped v0.1.1 around boundary, contracts, lifecycle, and decomposition/testability baselines.
 
 ### Pending Todos
 
-- Pending requirement scoping and roadmap approval for v0.1.1.
+- Pending roadmap approval for milestone v0.1.1.
 
 ### Blockers/Concerns
 
@@ -51,6 +52,6 @@ Progress: [░░░░░░░░░░] 0%
 
 ## Session Continuity
 
-Last activity: 2026-03-06 - Milestone v0.1.1 initialization started
-Stopped at: Requirement definition gate
+Last activity: 2026-03-06 - Milestone v0.1.1 roadmap draft completed
+Stopped at: Roadmap approval checkpoint
 Resume file: None

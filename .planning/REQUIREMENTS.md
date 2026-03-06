@@ -51,17 +51,32 @@
 
 ## Traceability
 
-| Requirement                               | Phase | Status  |
-| ----------------------------------------- | ----- | ------- |
-| (to be populated during roadmap creation) | —     | Pending |
+| Requirement | Phase    | Status  |
+| ----------- | -------- | ------- |
+| BOUND-01    | Phase 10 | Pending |
+| BOUND-02    | Phase 10 | Pending |
+| BOUND-03    | Phase 10 | Pending |
+| BOUND-04    | Phase 10 | Pending |
+| CONTRACT-01 | Phase 11 | Pending |
+| CONTRACT-02 | Phase 11 | Pending |
+| CONTRACT-03 | Phase 11 | Pending |
+| CONTRACT-04 | Phase 11 | Pending |
+| LIFE-01     | Phase 12 | Pending |
+| LIFE-02     | Phase 12 | Pending |
+| LIFE-03     | Phase 12 | Pending |
+| LIFE-04     | Phase 12 | Pending |
+| DECOMP-01   | Phase 13 | Pending |
+| DECOMP-02   | Phase 13 | Pending |
+| DECOMP-03   | Phase 13 | Pending |
+| DECOMP-04   | Phase 13 | Pending |
 
 **Coverage:**
 
 - v0.1.1 requirements: 16 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 16 ⚠️
+- Mapped to phases: 16
+- Unmapped: 0 ✓
 
 ---
 
 _Requirements defined: 2026-03-06_
-_Last updated: 2026-03-06 after milestone v0.1.1 requirement scoping_
+_Last updated: 2026-03-06 after roadmap traceability mapping_
