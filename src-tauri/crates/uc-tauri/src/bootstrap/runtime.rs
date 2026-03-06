@@ -34,6 +34,8 @@ use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::Mutex;
 use tracing::Instrument;
+
+use super::task_registry::TaskRegistry;
 use uc_app::{
     usecases::{
         space_access::{
@@ -111,6 +113,9 @@ pub struct AppRuntime {
     clipboard_integration_mode: uc_core::clipboard::ClipboardIntegrationMode,
     /// Platform ports that are not in AppDeps (evicted from uc-core)
     watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
+    /// Centralized task lifecycle registry for tracking and shutting down
+    /// all long-lived spawned tasks.
+    task_registry: Arc<TaskRegistry>,
 }
 
 /// Setup wiring dependencies for runtime-level orchestrators.
@@ -186,6 +191,7 @@ impl AppRuntime {
             Arc::new(crate::adapters::lifecycle::InMemoryLifecycleStatus::new());
         let app_handle = Arc::new(std::sync::RwLock::new(None));
         let clipboard_integration_mode = super::resolve_clipboard_integration_mode();
+        let task_registry = Arc::new(TaskRegistry::new());
 
         let setup_orchestrator = Self::build_setup_orchestrator(
             &deps,
@@ -203,6 +209,7 @@ impl AppRuntime {
             setup_orchestrator,
             clipboard_integration_mode,
             watcher_control,
+            task_registry,
         }
     }
 
@@ -274,6 +281,14 @@ impl AppRuntime {
 
     pub fn clipboard_integration_mode(&self) -> uc_core::clipboard::ClipboardIntegrationMode {
         self.clipboard_integration_mode
+    }
+
+    /// Returns a reference to the task registry for lifecycle management.
+    ///
+    /// Used by bootstrap code to spawn tracked background tasks and by the
+    /// app exit hook to trigger graceful shutdown.
+    pub fn task_registry(&self) -> &Arc<TaskRegistry> {
+        &self.task_registry
     }
 
     fn build_setup_orchestrator(

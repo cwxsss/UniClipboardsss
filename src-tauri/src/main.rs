@@ -573,11 +573,15 @@ fn run_app(config: AppConfig) {
 
     let disable_single_instance = std::env::var("UC_DISABLE_SINGLE_INSTANCE").as_deref() == Ok("1");
 
+    // Store TaskRegistry reference for exit hook registration
+    let task_registry = runtime_for_handler.task_registry().clone();
+
     let builder = Builder::default()
         // Register AppRuntime for Tauri commands
         .manage(runtime_for_tauri)
         .manage(pairing_orchestrator.clone())
         .manage(TrayState::default())
+        .manage(task_registry.clone())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
@@ -698,6 +702,7 @@ fn run_app(config: AppConfig) {
                 pairing_action_rx,
                 space_access_orchestrator.clone(),
                 key_slot_store.clone(),
+                runtime_for_handler.task_registry(),
             );
 
             // Clone handles for async blocks
@@ -843,6 +848,15 @@ fn run_app(config: AppConfig) {
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::reposition_traffic_lights,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error building tauri application")
+        .run(move |_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                info!("App exit requested, cancelling all tracked tasks");
+                task_registry.token().cancel();
+            }
+            if let tauri::RunEvent::Exit = event {
+                info!("Application exiting");
+            }
+        });
 }

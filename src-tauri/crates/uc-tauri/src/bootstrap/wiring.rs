@@ -41,6 +41,8 @@ use tauri::{async_runtime, AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
+use super::task_registry::TaskRegistry;
+
 use crate::events::{
     forward_clipboard_event, ClipboardEvent, P2PPairingVerificationEvent, P2PPeerConnectionEvent,
     P2PPeerDiscoveryEvent, P2PPeerNameUpdatedEvent,
@@ -1165,6 +1167,9 @@ pub fn wire_dependencies_with_identity_store(
 
 /// Start background spooler and blob worker tasks.
 /// 启动后台假脱机写入和 blob 物化任务。
+///
+/// All long-lived tasks are spawned through the `TaskRegistry` for centralized
+/// lifecycle management and graceful shutdown via cooperative cancellation.
 pub fn start_background_tasks<R: Runtime>(
     background: BackgroundRuntimeDeps,
     deps: &AppDeps,
@@ -1173,6 +1178,7 @@ pub fn start_background_tasks<R: Runtime>(
     pairing_action_rx: mpsc::Receiver<PairingAction>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
+    task_registry: &Arc<TaskRegistry>,
 ) {
     let BackgroundRuntimeDeps {
         libp2p_network: _,
@@ -1219,24 +1225,33 @@ pub fn start_background_tasks<R: Runtime>(
         ))),
     };
 
+    // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
+    // We use a single orchestration spawn to set up all registry tasks, since
+    // registry.spawn() is async and start_background_tasks is sync.
+    let registry = task_registry.clone();
     async_runtime::spawn(async move {
+        // --- Spool scanner (runs once at startup, then spawns long-lived sub-tasks) ---
         let scanner = SpoolScanner::new(spool_dir, representation_repo.clone(), worker_tx.clone());
         match scanner.scan_and_recover().await {
             Ok(recovered) => info!("Recovered {} representations from spool", recovered),
             Err(err) => warn!(error = %err, "Spool scan failed; continuing startup"),
         }
 
+        // --- Spooler task (long-lived, channel-driven) ---
         let spooler = SpoolerTask::new(
             spool_rx,
             spool_manager.clone(),
             worker_tx,
             representation_cache.clone(),
         );
-        async_runtime::spawn(async move {
-            spooler.run().await;
-            warn!("SpoolerTask stopped");
-        });
+        registry
+            .spawn("spooler", |_token| async move {
+                spooler.run().await;
+                warn!("SpoolerTask stopped");
+            })
+            .await;
 
+        // --- Background blob worker (long-lived, channel-driven) ---
         let worker = BackgroundBlobWorker::new(
             worker_rx,
             representation_cache,
@@ -1250,241 +1265,292 @@ pub fn start_background_tasks<R: Runtime>(
             worker_retry_max_attempts,
             Duration::from_millis(worker_retry_backoff_ms),
         );
-        async_runtime::spawn(async move {
-            worker.run().await;
-            warn!("BackgroundBlobWorker stopped");
-        });
+        registry
+            .spawn("blob_worker", |_token| async move {
+                worker.run().await;
+                warn!("BackgroundBlobWorker stopped");
+            })
+            .await;
 
+        // --- Spool janitor (long-lived, interval-based loop with cooperative cancellation) ---
         let janitor = SpoolJanitor::new(
             spool_manager.clone(),
             representation_repo.clone(),
             clock,
             spool_ttl_days,
         );
-        async_runtime::spawn(async move {
-            let mut interval =
-                tokio::time::interval(Duration::from_secs(SPOOL_JANITOR_INTERVAL_SECS));
-            loop {
-                interval.tick().await;
-                match janitor.run_once().await {
-                    Ok(removed) => {
-                        if removed > 0 {
-                            info!("Spool janitor removed {} expired entries", removed);
+        registry
+            .spawn("spool_janitor", |token| async move {
+                let mut interval =
+                    tokio::time::interval(Duration::from_secs(SPOOL_JANITOR_INTERVAL_SECS));
+                loop {
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            info!("Spool janitor shutting down");
+                            return;
                         }
-                    }
-                    Err(err) => {
-                        warn!(error = %err, "Spool janitor run failed");
-                    }
-                }
-            }
-        });
-    });
-
-    async_runtime::spawn(async move {
-        let completion_rx =
-            match SpaceAccessEventPort::subscribe(space_access_orchestrator.as_ref()).await {
-                Ok(rx) => rx,
-                Err(err) => {
-                    warn!(error = %err, "Failed to subscribe to space access completion events");
-                    return;
-                }
-            };
-
-        run_space_access_completion_loop(completion_rx, space_access_app_handle).await;
-        warn!("Space access completion loop stopped");
-    });
-
-    async_runtime::spawn(
-        async move {
-            let mut subscribe_attempt: u32 = 0;
-            let mut first_subscribe_failure_emitted = false;
-
-            loop {
-                let subscribe_result = tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {
-                        info!("Clipboard receive task stopping on shutdown signal");
-                        return;
-                    }
-                    result = clipboard_network.subscribe_clipboard() => result,
-                };
-
-                match subscribe_result {
-                    Ok(clipboard_rx) => {
-                        if subscribe_attempt > 0 {
-                            info!(attempts = subscribe_attempt, "Recovered clipboard subscription");
-
-                            if let Some(app) = clipboard_app_handle.as_ref() {
-                                let payload = InboundClipboardSubscribeRecoveredPayload {
-                                    recovered_after_attempts: subscribe_attempt,
-                                };
-                                if let Err(err) =
-                                    app.emit("inbound-clipboard-subscribe-recovered", payload)
-                                {
-                                    warn!(error = %err, "Failed to emit inbound clipboard subscribe recovered event");
+                        _ = interval.tick() => {
+                            match janitor.run_once().await {
+                                Ok(removed) => {
+                                    if removed > 0 {
+                                        info!("Spool janitor removed {} expired entries", removed);
+                                    }
+                                }
+                                Err(err) => {
+                                    warn!(error = %err, "Spool janitor run failed");
                                 }
                             }
                         }
-
-                        subscribe_attempt = 0;
-                        first_subscribe_failure_emitted = false;
-                        run_clipboard_receive_loop(
-                            clipboard_rx,
-                            &sync_inbound_usecase,
-                            clipboard_app_handle.clone(),
-                        )
-                        .await;
                     }
-                    Err(err) => {
-                        subscribe_attempt = subscribe_attempt.saturating_add(1);
-                        let retry_in_ms = subscribe_backoff_ms(subscribe_attempt);
+                }
+            })
+            .await;
 
-                        warn!(
-                            error = %err,
-                            attempt = subscribe_attempt,
-                            retry_in_ms,
-                            "Failed to subscribe to clipboard messages"
-                        );
-
-                        if let Some(app) = clipboard_app_handle.as_ref() {
-                            if !first_subscribe_failure_emitted {
-                                let payload = InboundClipboardSubscribeErrorPayload {
-                                    attempt: subscribe_attempt,
-                                    error: err.to_string(),
-                                };
-                                if let Err(emit_err) =
-                                    app.emit("inbound-clipboard-subscribe-error", payload)
-                                {
-                                    warn!(error = %emit_err, "Failed to emit inbound clipboard subscribe error event");
-                                }
-                                first_subscribe_failure_emitted = true;
-                            }
-
-                            let retry_payload = InboundClipboardSubscribeRetryPayload {
-                                attempt: subscribe_attempt,
-                                retry_in_ms,
-                                error: err.to_string(),
-                            };
-                            if let Err(emit_err) =
-                                app.emit("inbound-clipboard-subscribe-retry", retry_payload)
-                            {
-                                warn!(error = %emit_err, "Failed to emit inbound clipboard subscribe retry event");
-                            }
+        // --- Space access completion loop ---
+        registry
+            .spawn("space_access_completion", |token| async move {
+                let completion_rx =
+                    match SpaceAccessEventPort::subscribe(space_access_orchestrator.as_ref()).await {
+                        Ok(rx) => rx,
+                        Err(err) => {
+                            warn!(
+                                error = %err,
+                                "Failed to subscribe to space access completion events"
+                            );
+                            return;
                         }
+                    };
 
-                        let backoff = Duration::from_millis(retry_in_ms);
-                        tokio::select! {
-                            _ = tokio::signal::ctrl_c() => {
-                                info!("Clipboard receive task stopping during backoff on shutdown signal");
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        info!("Space access completion loop shutting down");
+                    }
+                    _ = run_space_access_completion_loop(completion_rx, space_access_app_handle) => {
+                        warn!("Space access completion loop stopped");
+                    }
+                }
+            })
+            .await;
+
+        // --- Clipboard receive loop (replaces ctrl_c with CancellationToken) ---
+        registry
+            .spawn("clipboard_receive", |token| {
+                async move {
+                    let mut subscribe_attempt: u32 = 0;
+                    let mut first_subscribe_failure_emitted = false;
+
+                    loop {
+                        let subscribe_result = tokio::select! {
+                            _ = token.cancelled() => {
+                                info!("Clipboard receive task stopping on shutdown signal");
                                 return;
                             }
-                            _ = tokio::time::sleep(backoff) => {}
+                            result = clipboard_network.subscribe_clipboard() => result,
+                        };
+
+                        match subscribe_result {
+                            Ok(clipboard_rx) => {
+                                if subscribe_attempt > 0 {
+                                    info!(
+                                        attempts = subscribe_attempt,
+                                        "Recovered clipboard subscription"
+                                    );
+
+                                    if let Some(app) = clipboard_app_handle.as_ref() {
+                                        let payload = InboundClipboardSubscribeRecoveredPayload {
+                                            recovered_after_attempts: subscribe_attempt,
+                                        };
+                                        if let Err(err) = app.emit(
+                                            "inbound-clipboard-subscribe-recovered",
+                                            payload,
+                                        ) {
+                                            warn!(
+                                                error = %err,
+                                                "Failed to emit inbound clipboard subscribe recovered event"
+                                            );
+                                        }
+                                    }
+                                }
+
+                                subscribe_attempt = 0;
+                                first_subscribe_failure_emitted = false;
+                                run_clipboard_receive_loop(
+                                    clipboard_rx,
+                                    &sync_inbound_usecase,
+                                    clipboard_app_handle.clone(),
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                subscribe_attempt = subscribe_attempt.saturating_add(1);
+                                let retry_in_ms = subscribe_backoff_ms(subscribe_attempt);
+
+                                warn!(
+                                    error = %err,
+                                    attempt = subscribe_attempt,
+                                    retry_in_ms,
+                                    "Failed to subscribe to clipboard messages"
+                                );
+
+                                if let Some(app) = clipboard_app_handle.as_ref() {
+                                    if !first_subscribe_failure_emitted {
+                                        let payload = InboundClipboardSubscribeErrorPayload {
+                                            attempt: subscribe_attempt,
+                                            error: err.to_string(),
+                                        };
+                                        if let Err(emit_err) = app
+                                            .emit("inbound-clipboard-subscribe-error", payload)
+                                        {
+                                            warn!(
+                                                error = %emit_err,
+                                                "Failed to emit inbound clipboard subscribe error event"
+                                            );
+                                        }
+                                        first_subscribe_failure_emitted = true;
+                                    }
+
+                                    let retry_payload = InboundClipboardSubscribeRetryPayload {
+                                        attempt: subscribe_attempt,
+                                        retry_in_ms,
+                                        error: err.to_string(),
+                                    };
+                                    if let Err(emit_err) = app
+                                        .emit("inbound-clipboard-subscribe-retry", retry_payload)
+                                    {
+                                        warn!(
+                                            error = %emit_err,
+                                            "Failed to emit inbound clipboard subscribe retry event"
+                                        );
+                                    }
+                                }
+
+                                let backoff = Duration::from_millis(retry_in_ms);
+                                tokio::select! {
+                                    _ = token.cancelled() => {
+                                        info!("Clipboard receive task stopping during backoff on shutdown signal");
+                                        return;
+                                    }
+                                    _ = tokio::time::sleep(backoff) => {}
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
-        .instrument(info_span!("loop.clipboard.receive_task")),
-    );
+                .instrument(info_span!("loop.clipboard.receive_task"))
+            })
+            .await;
 
-    async_runtime::spawn(async move {
+        // --- Pairing action loop (long-lived, channel-driven) ---
         let action_network = pairing_transport.clone();
         let action_app_handle = pairing_app_handle.clone();
         let action_orchestrator = pairing_orchestrator.clone();
         let action_space_access_orchestrator = pairing_space_access_orchestrator.clone();
         let action_key_slot_store = key_slot_store.clone();
         let action_space_access_runtime_ports = space_access_runtime_ports.clone();
-        async_runtime::spawn(async move {
-            run_pairing_action_loop(
-                pairing_action_rx,
-                action_network,
-                action_app_handle,
-                action_orchestrator,
-                action_space_access_orchestrator,
-                action_key_slot_store,
-                action_space_access_runtime_ports,
-            )
+        registry
+            .spawn("pairing_action", |_token| async move {
+                run_pairing_action_loop(
+                    pairing_action_rx,
+                    action_network,
+                    action_app_handle,
+                    action_orchestrator,
+                    action_space_access_orchestrator,
+                    action_key_slot_store,
+                    action_space_access_runtime_ports,
+                )
+                .await;
+            })
             .await;
-        });
 
-        let mut subscribe_attempt: u32 = 0;
-        loop {
-            let subscribe_result = tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Pairing event loop task stopping on shutdown signal");
-                    return;
-                }
-                result = pairing_events.subscribe_events() => result,
-            };
+        // --- Pairing event loop (long-lived, with retry + cooperative cancellation) ---
+        registry
+            .spawn("pairing_events", |token| async move {
+                let mut subscribe_attempt: u32 = 0;
+                loop {
+                    let subscribe_result = tokio::select! {
+                        _ = token.cancelled() => {
+                            info!("Pairing event loop task stopping on shutdown signal");
+                            return;
+                        }
+                        result = pairing_events.subscribe_events() => result,
+                    };
 
-            match subscribe_result {
-                Ok(event_rx) => {
-                    if subscribe_attempt > 0 {
-                        info!(
-                            attempts = subscribe_attempt,
-                            "Recovered pairing network event subscription"
-                        );
-                        emit_pairing_events_subscribe_recovered(
-                            pairing_app_handle.as_ref(),
-                            subscribe_attempt,
-                        );
+                    match subscribe_result {
+                        Ok(event_rx) => {
+                            if subscribe_attempt > 0 {
+                                info!(
+                                    attempts = subscribe_attempt,
+                                    "Recovered pairing network event subscription"
+                                );
+                                emit_pairing_events_subscribe_recovered(
+                                    pairing_app_handle.as_ref(),
+                                    subscribe_attempt,
+                                );
+                            }
+
+                            subscribe_attempt = 0;
+
+                            run_pairing_event_loop(
+                                event_rx,
+                                pairing_orchestrator.clone(),
+                                pairing_app_handle.clone(),
+                                peer_directory.clone(),
+                                pairing_space_access_orchestrator.clone(),
+                                space_access_runtime_ports.clone(),
+                            )
+                            .await;
+
+                            let err = anyhow::anyhow!("pairing network event stream closed");
+                            subscribe_attempt = subscribe_attempt.saturating_add(1);
+                            let retry_in_ms =
+                                pairing_events_subscribe_backoff_ms(subscribe_attempt);
+                            warn!(
+                                error = %err,
+                                attempt = subscribe_attempt,
+                                retry_in_ms,
+                                "Pairing event loop stopped unexpectedly; restarting"
+                            );
+                            emit_pairing_events_subscribe_failure(
+                                pairing_app_handle.as_ref(),
+                                subscribe_attempt,
+                                retry_in_ms,
+                                err.to_string(),
+                            );
+                        }
+                        Err(err) => {
+                            subscribe_attempt = subscribe_attempt.saturating_add(1);
+                            let retry_in_ms =
+                                pairing_events_subscribe_backoff_ms(subscribe_attempt);
+                            warn!(
+                                error = %err,
+                                attempt = subscribe_attempt,
+                                retry_in_ms,
+                                "Failed to subscribe to network events for pairing"
+                            );
+                            emit_pairing_events_subscribe_failure(
+                                pairing_app_handle.as_ref(),
+                                subscribe_attempt,
+                                retry_in_ms,
+                                err.to_string(),
+                            );
+                        }
                     }
 
-                    subscribe_attempt = 0;
-
-                    run_pairing_event_loop(
-                        event_rx,
-                        pairing_orchestrator.clone(),
-                        pairing_app_handle.clone(),
-                        peer_directory.clone(),
-                        pairing_space_access_orchestrator.clone(),
-                        space_access_runtime_ports.clone(),
-                    )
-                    .await;
-
-                    let err = anyhow::anyhow!("pairing network event stream closed");
-                    subscribe_attempt = subscribe_attempt.saturating_add(1);
-                    let retry_in_ms = pairing_events_subscribe_backoff_ms(subscribe_attempt);
-                    warn!(
-                        error = %err,
-                        attempt = subscribe_attempt,
-                        retry_in_ms,
-                        "Pairing event loop stopped unexpectedly; restarting"
-                    );
-                    emit_pairing_events_subscribe_failure(
-                        pairing_app_handle.as_ref(),
+                    let backoff = Duration::from_millis(pairing_events_subscribe_backoff_ms(
                         subscribe_attempt,
-                        retry_in_ms,
-                        err.to_string(),
-                    );
+                    ));
+                    tokio::select! {
+                        _ = token.cancelled() => {
+                            info!("Pairing event loop task stopping during backoff on shutdown signal");
+                            return;
+                        }
+                        _ = tokio::time::sleep(backoff) => {}
+                    }
                 }
-                Err(err) => {
-                    subscribe_attempt = subscribe_attempt.saturating_add(1);
-                    let retry_in_ms = pairing_events_subscribe_backoff_ms(subscribe_attempt);
-                    warn!(
-                        error = %err,
-                        attempt = subscribe_attempt,
-                        retry_in_ms,
-                        "Failed to subscribe to network events for pairing"
-                    );
-                    emit_pairing_events_subscribe_failure(
-                        pairing_app_handle.as_ref(),
-                        subscribe_attempt,
-                        retry_in_ms,
-                        err.to_string(),
-                    );
-                }
-            }
+            })
+            .await;
 
-            let backoff =
-                Duration::from_millis(pairing_events_subscribe_backoff_ms(subscribe_attempt));
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Pairing event loop task stopping during backoff on shutdown signal");
-                    return;
-                }
-                _ = tokio::time::sleep(backoff) => {}
-            }
-        }
+        info!("All background tasks registered with TaskRegistry");
     });
 }
 
