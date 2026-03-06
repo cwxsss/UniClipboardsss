@@ -99,4 +99,4 @@ Plans:
 | 10. Boundary Repair Baseline                   | 3/3       | Complete       | 2026-03-06 | -         |
 | 11. Command Contract Hardening                 | 2/2       | Complete       | 2026-03-06 | -         |
 | 12. Lifecycle Governance Baseline              | 2/2       | Complete       | 2026-03-06 | -         |
-| 13. Responsibility Decomposition & Testability | 2/3       | In Progress    |            | -         |
+| 13. Responsibility Decomposition & Testability | 3/3       | Complete       | 2026-03-06 | -         |
