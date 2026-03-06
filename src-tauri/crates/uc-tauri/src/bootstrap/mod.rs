@@ -7,6 +7,7 @@ pub mod init;
 pub mod logging;
 pub mod run;
 pub mod runtime;
+pub mod task_registry;
 pub mod tracing;
 pub mod wiring;
 
