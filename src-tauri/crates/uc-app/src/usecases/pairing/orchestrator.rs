@@ -1179,6 +1179,7 @@ impl PairingEventPort for PairingOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::NoopPairedDeviceRepository;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::time::timeout;
@@ -1192,8 +1193,6 @@ mod tests {
         KdfParamsV1, KeyScope, KeySlotFile, KeySlotVersion,
     };
 
-    struct MockDeviceRepository;
-
     #[derive(Default)]
     struct CountingDeviceRepository {
         upsert_calls: AtomicUsize,
@@ -1204,54 +1203,6 @@ mod tests {
     impl CountingDeviceRepository {
         fn upsert_calls(&self) -> usize {
             self.upsert_calls.load(Ordering::SeqCst)
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl PairedDeviceRepositoryPort for MockDeviceRepository {
-        async fn get_by_peer_id(
-            &self,
-            _peer_id: &uc_core::ids::PeerId,
-        ) -> Result<Option<PairedDevice>, uc_core::ports::errors::PairedDeviceRepositoryError>
-        {
-            Ok(None)
-        }
-
-        async fn list_all(
-            &self,
-        ) -> Result<Vec<PairedDevice>, uc_core::ports::errors::PairedDeviceRepositoryError>
-        {
-            Ok(vec![])
-        }
-
-        async fn upsert(
-            &self,
-            _device: PairedDevice,
-        ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn set_state(
-            &self,
-            _peer_id: &uc_core::ids::PeerId,
-            _state: PairingState,
-        ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn update_last_seen(
-            &self,
-            _peer_id: &uc_core::ids::PeerId,
-            _last_seen_at: chrono::DateTime<chrono::Utc>,
-        ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn delete(
-            &self,
-            _peer_id: &uc_core::ids::PeerId,
-        ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
-            Ok(())
         }
     }
 
@@ -1398,7 +1349,7 @@ mod tests {
     #[tokio::test]
     async fn test_orchestrator_creation() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (_orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1413,7 +1364,7 @@ mod tests {
     #[tokio::test]
     async fn test_initiate_pairing() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1434,7 +1385,7 @@ mod tests {
     #[tokio::test]
     async fn initiate_pairing_emits_request_action() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, mut action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1442,6 +1393,7 @@ mod tests {
             "device-1".to_string(),
             "peer-local".to_string(),
             vec![1; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         let _session_id = orchestrator
@@ -1472,7 +1424,7 @@ mod tests {
             max_retries: 1,
             protocol_version: "1.0.0".to_string(),
         };
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1506,7 +1458,7 @@ mod tests {
             max_retries: 1,
             protocol_version: "1.0.0".to_string(),
         };
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1562,7 +1514,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_response_emits_confirm_action() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, mut action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1740,7 +1692,7 @@ mod tests {
     #[tokio::test]
     async fn test_show_verification_is_forwarded_to_action_channel() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, mut action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1748,6 +1700,7 @@ mod tests {
             "device-1".to_string(),
             "peer-local".to_string(),
             vec![1; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         orchestrator
@@ -1776,7 +1729,7 @@ mod tests {
     #[tokio::test]
     async fn test_start_timer_records_handle() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1784,6 +1737,7 @@ mod tests {
             "device-1".to_string(),
             "peer-1".to_string(),
             vec![1; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         let session_id = orchestrator
@@ -1812,7 +1766,7 @@ mod tests {
     #[tokio::test]
     async fn test_cancel_timer_removes_handle() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1820,6 +1774,7 @@ mod tests {
             "device-1".to_string(),
             "peer-1".to_string(),
             vec![1; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         let session_id = orchestrator
@@ -1866,7 +1821,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_incoming_request_validates_target_peer_id() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1874,6 +1829,7 @@ mod tests {
             "device-1".to_string(),
             "peer-local".to_string(),
             vec![1; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
         );
 
         let request = PairingRequest {
@@ -1926,7 +1882,7 @@ mod tests {
     #[tokio::test]
     async fn pairing_orchestrator_emits_keyslot_received_event() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -1965,7 +1921,7 @@ mod tests {
     #[tokio::test]
     async fn pairing_orchestrator_emits_pairing_result_events() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _action_rx) = PairingOrchestrator::new(
             config,
             device_repo,
@@ -2038,7 +1994,7 @@ mod tests {
     #[tokio::test]
     async fn pairing_orchestrator_emits_verification_required_event() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(MockDeviceRepository);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, mut action_rx) = PairingOrchestrator::new(
             config,
             device_repo,

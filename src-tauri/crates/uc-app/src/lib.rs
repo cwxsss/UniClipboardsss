@@ -8,6 +8,7 @@ pub use tracing;
 pub mod app_paths;
 pub mod deps;
 pub mod models;
+pub mod testing;
 pub mod usecases;
 
 pub use deps::AppDeps;

@@ -863,6 +863,11 @@ impl SetupOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{
+        NoopDiscoveryPort, NoopLifecycleEventEmitter, NoopLifecycleStatus, NoopNetworkControl,
+        NoopPairedDeviceRepository, NoopPairingTransport, NoopProofPort, NoopSessionReadyEmitter,
+        NoopSpaceAccessPersistence, NoopSpaceAccessTransport, NoopTimerPort,
+    };
     use crate::usecases::pairing::{PairingConfig, PairingOrchestrator};
     use crate::usecases::space_access::SpaceAccessOrchestrator;
     use async_trait::async_trait;
@@ -870,34 +875,25 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
     use tokio::sync::Notify;
     use tokio::time::{sleep, Duration, Instant};
-    use uc_core::network::{DiscoveredPeer, PairedDevice, PairingState};
-    use uc_core::ports::network_control::NetworkControlPort;
     use uc_core::ports::security::encryption::EncryptionPort;
     use uc_core::ports::security::encryption_session::EncryptionSessionPort;
     use uc_core::ports::security::encryption_state::EncryptionStatePort;
     use uc_core::ports::security::key_material::KeyMaterialPort;
     use uc_core::ports::security::key_scope::{KeyScopePort, ScopeError};
-    use uc_core::ports::space::{CryptoPort, PersistencePort, ProofPort, SpaceAccessTransportPort};
-    use uc_core::ports::watcher_control::{WatcherControlError, WatcherControlPort};
-    use uc_core::ports::{
-        DiscoveryPort, PairedDeviceRepositoryError, PairedDeviceRepositoryPort,
-        PairingTransportPort, SetupEventPort, TimerPort,
-    };
+    use uc_core::ports::space::CryptoPort;
+    use uc_core::ports::SetupEventPort;
     use uc_core::security::model::{
         EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfAlgorithm,
         KdfParams, KdfParamsV1, Kek, KeyScope, KeySlot, KeySlotFile, KeySlotVersion, MasterKey,
         Passphrase,
     };
-    use uc_core::security::space_access::SpaceAccessProofArtifact;
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::setup::{SetupError as SetupDomainError, SetupStatus};
-    use uc_core::PeerId;
+    use uc_platform::ports::{WatcherControlError, WatcherControlPort};
 
     use crate::usecases::clipboard::ClipboardIntegrationMode;
-    use crate::usecases::{
-        AppLifecycleCoordinatorDeps, LifecycleEvent, LifecycleEventEmitter, LifecycleState,
-        LifecycleStatusPort, SessionReadyEmitter, StartClipboardWatcher, StartNetworkAfterUnlock,
-    };
+    use crate::usecases::{AppLifecycleCoordinatorDeps, StartNetworkAfterUnlock};
+    use uc_platform::usecases::StartClipboardWatcher;
 
     struct MockSetupStatusPort {
         status: StdMutex<SetupStatus>,
@@ -1251,106 +1247,21 @@ mod tests {
     }
 
     // -- Lifecycle mocks -------------------------------------------------------
+    // NoopNetworkControl, NoopSessionReadyEmitter, NoopLifecycleStatus,
+    // NoopLifecycleEventEmitter, NoopPairedDeviceRepository, NoopDiscoveryPort
+    // — imported from crate::testing.
+    // NoopWatcherControl stays inline (WatcherControlPort is in uc-platform, a dev-dep).
 
-    struct MockWatcherControl;
+    struct NoopWatcherControl;
 
     #[async_trait]
-    impl WatcherControlPort for MockWatcherControl {
+    impl WatcherControlPort for NoopWatcherControl {
         async fn start_watcher(&self) -> Result<(), WatcherControlError> {
             Ok(())
         }
 
         async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
             Ok(())
-        }
-    }
-
-    struct MockNetworkControl;
-
-    #[async_trait]
-    impl NetworkControlPort for MockNetworkControl {
-        async fn start_network(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct MockSessionReadyEmitter;
-
-    #[async_trait]
-    impl SessionReadyEmitter for MockSessionReadyEmitter {
-        async fn emit_ready(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct MockLifecycleStatus;
-
-    #[async_trait]
-    impl LifecycleStatusPort for MockLifecycleStatus {
-        async fn set_state(&self, _state: LifecycleState) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn get_state(&self) -> LifecycleState {
-            LifecycleState::Idle
-        }
-    }
-
-    struct MockLifecycleEventEmitter;
-
-    #[async_trait]
-    impl LifecycleEventEmitter for MockLifecycleEventEmitter {
-        async fn emit_lifecycle_event(&self, _event: LifecycleEvent) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct NoopPairedDeviceRepository;
-
-    #[async_trait]
-    impl PairedDeviceRepositoryPort for NoopPairedDeviceRepository {
-        async fn get_by_peer_id(
-            &self,
-            _peer_id: &PeerId,
-        ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(None)
-        }
-
-        async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(Vec::new())
-        }
-
-        async fn upsert(&self, _device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn set_state(
-            &self,
-            _peer_id: &PeerId,
-            _state: PairingState,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn update_last_seen(
-            &self,
-            _peer_id: &PeerId,
-            _last_seen_at: chrono::DateTime<chrono::Utc>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-    }
-
-    struct NoopDiscoveryPort;
-
-    #[async_trait]
-    impl DiscoveryPort for NoopDiscoveryPort {
-        async fn list_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-            Ok(Vec::new())
         }
     }
 
@@ -1420,142 +1331,21 @@ mod tests {
         }
     }
 
-    struct NoopSpaceAccessPairingTransport;
-
-    #[async_trait]
-    impl PairingTransportPort for NoopSpaceAccessPairingTransport {
-        async fn open_pairing_session(
-            &self,
-            _peer_id: String,
-            _session_id: String,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn send_pairing_on_session(
-            &self,
-            _message: uc_core::network::PairingMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn close_pairing_session(
-            &self,
-            _session_id: String,
-            _reason: Option<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn unpair_device(&self, _peer_id: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct NoopSpaceAccessTransportPort;
-
-    #[async_trait]
-    impl SpaceAccessTransportPort for NoopSpaceAccessTransportPort {
-        async fn send_offer(
-            &mut self,
-            _session_id: &uc_core::network::SessionId,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn send_proof(
-            &mut self,
-            _session_id: &uc_core::network::SessionId,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn send_result(
-            &mut self,
-            _session_id: &uc_core::network::SessionId,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct NoopSpaceAccessProofPort;
-
-    #[async_trait]
-    impl ProofPort for NoopSpaceAccessProofPort {
-        async fn build_proof(
-            &self,
-            pairing_session_id: &uc_core::SessionId,
-            space_id: &uc_core::ids::SpaceId,
-            challenge_nonce: [u8; 32],
-            _master_key: &MasterKey,
-        ) -> anyhow::Result<SpaceAccessProofArtifact> {
-            Ok(SpaceAccessProofArtifact {
-                pairing_session_id: pairing_session_id.clone(),
-                space_id: space_id.clone(),
-                challenge_nonce,
-                proof_bytes: vec![],
-            })
-        }
-
-        async fn verify_proof(
-            &self,
-            _proof: &SpaceAccessProofArtifact,
-            _expected_nonce: [u8; 32],
-        ) -> anyhow::Result<bool> {
-            Ok(true)
-        }
-    }
-
-    struct NoopSpaceAccessTimerPort;
-
-    #[async_trait]
-    impl TimerPort for NoopSpaceAccessTimerPort {
-        async fn start(
-            &mut self,
-            _session_id: &uc_core::SessionId,
-            _ttl_secs: u64,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn stop(&mut self, _session_id: &uc_core::SessionId) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct NoopSpaceAccessPersistencePort;
-
-    #[async_trait]
-    impl PersistencePort for NoopSpaceAccessPersistencePort {
-        async fn persist_joiner_access(
-            &mut self,
-            _space_id: &uc_core::ids::SpaceId,
-            _peer_id: &str,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn persist_sponsor_access(
-            &mut self,
-            _space_id: &uc_core::ids::SpaceId,
-            _peer_id: &str,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
+    // NoopPairingTransport, NoopSpaceAccessTransport, NoopProofPort,
+    // NoopTimerPort, NoopSpaceAccessPersistence — all imported from crate::testing
 
     fn build_mock_lifecycle() -> Arc<AppLifecycleCoordinator> {
         Arc::new(AppLifecycleCoordinator::from_deps(
             AppLifecycleCoordinatorDeps {
                 watcher: Arc::new(StartClipboardWatcher::new(
-                    Arc::new(MockWatcherControl),
+                    Arc::new(NoopWatcherControl),
                     ClipboardIntegrationMode::Full,
                 )),
-                network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(MockNetworkControl))),
+                network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(NoopNetworkControl))),
                 announcer: None,
-                emitter: Arc::new(MockSessionReadyEmitter),
-                status: Arc::new(MockLifecycleStatus),
-                lifecycle_emitter: Arc::new(MockLifecycleEventEmitter),
+                emitter: Arc::new(NoopSessionReadyEmitter),
+                status: Arc::new(NoopLifecycleStatus),
+                lifecycle_emitter: Arc::new(NoopLifecycleEventEmitter),
             },
         ))
     }
@@ -1589,6 +1379,7 @@ mod tests {
             "test-device-id".to_string(),
             "test-peer-id".to_string(),
             vec![1; 32],
+            Arc::new(crate::usecases::StagedPairedDeviceStore::new()),
         );
         Arc::new(orchestrator)
     }
@@ -1607,6 +1398,7 @@ mod tests {
             "test-device-id".to_string(),
             "test-peer-id".to_string(),
             vec![1; 32],
+            Arc::new(crate::usecases::StagedPairedDeviceStore::new()),
         );
         (Arc::new(orchestrator), tokio::sync::Mutex::new(rx))
     }
@@ -1620,7 +1412,7 @@ mod tests {
     }
 
     fn build_network_control() -> Arc<dyn NetworkControlPort> {
-        Arc::new(MockNetworkControl)
+        Arc::new(NoopNetworkControl)
     }
 
     fn build_crypto_factory() -> Arc<dyn SpaceAccessCryptoFactory> {
@@ -1632,23 +1424,23 @@ mod tests {
     }
 
     fn build_pairing_transport() -> Arc<dyn PairingTransportPort> {
-        Arc::new(NoopSpaceAccessPairingTransport)
+        Arc::new(NoopPairingTransport)
     }
 
     fn build_transport_port() -> Arc<Mutex<dyn SpaceAccessTransportPort>> {
-        Arc::new(Mutex::new(NoopSpaceAccessTransportPort))
+        Arc::new(Mutex::new(NoopSpaceAccessTransport))
     }
 
     fn build_proof_port() -> Arc<dyn ProofPort> {
-        Arc::new(NoopSpaceAccessProofPort)
+        Arc::new(NoopProofPort)
     }
 
     fn build_timer_port() -> Arc<Mutex<dyn TimerPort>> {
-        Arc::new(Mutex::new(NoopSpaceAccessTimerPort))
+        Arc::new(Mutex::new(NoopTimerPort))
     }
 
     fn build_persistence_port() -> Arc<Mutex<dyn PersistencePort>> {
-        Arc::new(Mutex::new(NoopSpaceAccessPersistencePort))
+        Arc::new(Mutex::new(NoopSpaceAccessPersistence))
     }
 
     fn build_setup_event_port() -> Arc<dyn SetupEventPort> {
