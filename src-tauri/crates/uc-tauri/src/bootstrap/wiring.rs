@@ -57,7 +57,7 @@ use uc_app::usecases::space_access::{
 use uc_app::usecases::{
     PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, StagedPairedDeviceStore,
 };
-use uc_app::AppDeps;
+use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
 use uc_core::ids::RepresentationId;
@@ -1099,55 +1099,48 @@ pub fn wire_dependencies_with_identity_store(
     // Step 4: Construct AppDeps with all dependencies
     // 步骤 4：使用所有依赖构造 AppDeps
     let deps = AppDeps {
-        // Clipboard dependencies / 剪贴板依赖
-        clipboard: platform.clipboard,
-        system_clipboard: platform.system_clipboard,
-        clipboard_entry_repo: infra.clipboard_entry_repo,
-        clipboard_event_repo: encrypting_event_writer,
-        representation_repo: decrypting_rep_repo,
-        representation_normalizer: platform.representation_normalizer,
-        selection_repo: infra.selection_repo,
-        representation_policy: Arc::new(SelectRepresentationPolicyV1::new()),
-        representation_cache: representation_cache_port,
-        spool_queue,
-        clipboard_change_origin,
-        worker_tx,
-
-        // Security dependencies / 安全依赖
-        encryption: infra.encryption,
-        encryption_session: platform.encryption_session,
-        encryption_state: infra.encryption_state,
-        key_scope: platform.key_scope,
-        secure_storage: platform.secure_storage,
-        key_material: infra.key_material,
-
-        // Device dependencies / 设备依赖
-        device_repo: infra.device_repo,
-        device_identity: platform.device_identity,
-
-        // Pairing dependencies / 配对依赖
-        paired_device_repo: infra.paired_device_repo,
-
-        // Network dependencies / 网络依赖
+        clipboard: ClipboardPorts {
+            clipboard: platform.clipboard,
+            system_clipboard: platform.system_clipboard,
+            clipboard_entry_repo: infra.clipboard_entry_repo,
+            clipboard_event_repo: encrypting_event_writer,
+            representation_repo: decrypting_rep_repo,
+            representation_normalizer: platform.representation_normalizer,
+            selection_repo: infra.selection_repo,
+            representation_policy: Arc::new(SelectRepresentationPolicyV1::new()),
+            representation_cache: representation_cache_port,
+            spool_queue,
+            clipboard_change_origin,
+            worker_tx,
+        },
+        security: SecurityPorts {
+            encryption: infra.encryption,
+            encryption_session: platform.encryption_session,
+            encryption_state: infra.encryption_state,
+            key_scope: platform.key_scope,
+            secure_storage: platform.secure_storage,
+            key_material: infra.key_material,
+        },
+        device: DevicePorts {
+            device_repo: infra.device_repo,
+            device_identity: platform.device_identity,
+            paired_device_repo: infra.paired_device_repo,
+        },
         network_ports: platform.network_ports,
         network_control: platform.libp2p_network.clone(),
-
-        // Setup status dependencies / 设置状态依赖
         setup_status: infra.setup_status,
-
-        // Storage dependencies / 存储依赖
-        blob_store: platform.blob_store,
-        blob_repository: infra.blob_repository,
-        blob_writer: platform.blob_writer,
-        thumbnail_repo: infra.thumbnail_repo,
-        thumbnail_generator: infra.thumbnail_generator,
-
-        // Settings dependencies / 设置依赖
+        storage: StoragePorts {
+            blob_store: platform.blob_store,
+            blob_repository: infra.blob_repository,
+            blob_writer: platform.blob_writer,
+            thumbnail_repo: infra.thumbnail_repo,
+            thumbnail_generator: infra.thumbnail_generator,
+        },
         settings: infra.settings_repo,
-
-        // System dependencies / 系统依赖
-        clock: infra.clock,
-        hash: infra.hash,
+        system: SystemPorts {
+            clock: infra.clock,
+            hash: infra.hash,
+        },
     };
 
     Ok(WiredDependencies {
@@ -1201,13 +1194,13 @@ pub fn start_background_tasks<R: Runtime>(
     let space_access_app_handle = app_handle.clone();
     let clipboard_app_handle = app_handle.clone();
     let pairing_space_access_orchestrator = space_access_orchestrator.clone();
-    let representation_repo = deps.representation_repo.clone();
-    let worker_tx = deps.worker_tx.clone();
-    let blob_writer = deps.blob_writer.clone();
-    let hasher = deps.hash.clone();
-    let clock = deps.clock.clone();
-    let thumbnail_repo = deps.thumbnail_repo.clone();
-    let thumbnail_generator = deps.thumbnail_generator.clone();
+    let representation_repo = deps.clipboard.representation_repo.clone();
+    let worker_tx = deps.clipboard.worker_tx.clone();
+    let blob_writer = deps.storage.blob_writer.clone();
+    let hasher = deps.system.hash.clone();
+    let clock = deps.system.clock.clone();
+    let thumbnail_repo = deps.storage.thumbnail_repo.clone();
+    let thumbnail_generator = deps.storage.thumbnail_generator.clone();
     let pairing_transport = deps.network_ports.pairing.clone();
     let pairing_events = deps.network_ports.events.clone();
     let peer_directory = deps.network_ports.peers.clone();
@@ -1219,12 +1212,12 @@ pub fn start_background_tasks<R: Runtime>(
             pairing_space_access_orchestrator.context(),
         ))),
         proof: Arc::new(HmacProofAdapter::new_with_encryption_session(
-            deps.encryption_session.clone(),
+            deps.security.encryption_session.clone(),
         )),
         timer: Arc::new(tokio::sync::Mutex::new(Timer::new())),
         persistence: Arc::new(tokio::sync::Mutex::new(SpaceAccessPersistenceAdapter::new(
-            deps.encryption_state.clone(),
-            deps.paired_device_repo.clone(),
+            deps.security.encryption_state.clone(),
+            deps.device.paired_device_repo.clone(),
             staged_store.clone(),
         ))),
     };
@@ -1562,18 +1555,18 @@ fn new_sync_inbound_clipboard_usecase(deps: &AppDeps) -> SyncInboundClipboardUse
     let mode = super::resolve_clipboard_integration_mode();
     SyncInboundClipboardUseCase::with_capture_dependencies(
         mode,
-        deps.system_clipboard.clone(),
-        deps.clipboard_change_origin.clone(),
-        deps.encryption_session.clone(),
-        deps.encryption.clone(),
-        deps.device_identity.clone(),
+        deps.clipboard.system_clipboard.clone(),
+        deps.clipboard.clipboard_change_origin.clone(),
+        deps.security.encryption_session.clone(),
+        deps.security.encryption.clone(),
+        deps.device.device_identity.clone(),
         Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter),
-        deps.clipboard_entry_repo.clone(),
-        deps.clipboard_event_repo.clone(),
-        deps.representation_policy.clone(),
-        deps.representation_normalizer.clone(),
-        deps.representation_cache.clone(),
-        deps.spool_queue.clone(),
+        deps.clipboard.clipboard_entry_repo.clone(),
+        deps.clipboard.clipboard_event_repo.clone(),
+        deps.clipboard.representation_policy.clone(),
+        deps.clipboard.representation_normalizer.clone(),
+        deps.clipboard.representation_cache.clone(),
+        deps.clipboard.spool_queue.clone(),
     )
 }
 

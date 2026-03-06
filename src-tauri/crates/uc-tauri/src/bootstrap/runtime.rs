@@ -247,17 +247,22 @@ impl AppRuntime {
     /// Returns the current device ID for tracing spans and session context.
     /// For business operations involving device identity, use `self.usecases()`.
     pub fn device_id(&self) -> String {
-        self.deps.device_identity.current_device_id().to_string()
+        self.deps
+            .device
+            .device_identity
+            .current_device_id()
+            .to_string()
     }
 
     /// Check if the encryption session is ready.
     pub async fn is_encryption_ready(&self) -> bool {
-        self.deps.encryption_session.is_ready().await
+        self.deps.security.encryption_session.is_ready().await
     }
 
     /// Returns the persisted encryption state used by readiness checks.
     pub async fn encryption_state(&self) -> Result<EncryptionState, String> {
         self.deps
+            .security
             .encryption_state
             .load_state()
             .await
@@ -300,11 +305,11 @@ impl AppRuntime {
         watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
     ) -> Arc<SetupOrchestrator> {
         let initialize_encryption = Arc::new(uc_app::usecases::InitializeEncryption::from_ports(
-            deps.encryption.clone(),
-            deps.key_material.clone(),
-            deps.key_scope.clone(),
-            deps.encryption_state.clone(),
-            deps.encryption_session.clone(),
+            deps.security.encryption.clone(),
+            deps.security.key_material.clone(),
+            deps.security.key_scope.clone(),
+            deps.security.encryption_state.clone(),
+            deps.security.encryption_session.clone(),
         ));
         let mark_setup_complete = Arc::new(uc_app::usecases::MarkSetupComplete::from_ports(
             deps.setup_status.clone(),
@@ -337,11 +342,11 @@ impl AppRuntime {
             },
         ));
         let crypto_factory = Arc::new(DefaultSpaceAccessCryptoFactory::new(
-            deps.encryption.clone(),
-            deps.key_material.clone(),
-            deps.key_scope.clone(),
-            deps.encryption_state.clone(),
-            deps.encryption_session.clone(),
+            deps.security.encryption.clone(),
+            deps.security.key_material.clone(),
+            deps.security.key_scope.clone(),
+            deps.security.encryption_state.clone(),
+            deps.security.encryption_session.clone(),
         ));
         let transport_port: Arc<Mutex<dyn SpaceAccessTransportPort>> =
             Arc::new(Mutex::new(SpaceAccessNetworkAdapter::new(
@@ -349,12 +354,12 @@ impl AppRuntime {
                 setup_ports.space_access_orchestrator.context(),
             )));
         let proof_port: Arc<dyn uc_core::ports::space::ProofPort> = Arc::new(
-            HmacProofAdapter::new_with_encryption_session(deps.encryption_session.clone()),
+            HmacProofAdapter::new_with_encryption_session(deps.security.encryption_session.clone()),
         );
         let timer_port: Arc<Mutex<dyn TimerPort>> = Arc::new(Mutex::new(Timer::new()));
         let persistence_port = Arc::new(Mutex::new(SpaceAccessPersistenceAdapter::new(
-            deps.encryption_state.clone(),
-            deps.paired_device_repo.clone(),
+            deps.security.encryption_state.clone(),
+            deps.device.paired_device_repo.clone(),
             Arc::new(StagedPairedDeviceStore::new()),
         )));
         let setup_event_port = Arc::new(crate::bootstrap::wiring::TauriSetupEventPort::new(
@@ -383,7 +388,7 @@ impl AppRuntime {
     fn placeholder_pairing_orchestrator(deps: &AppDeps) -> Arc<PairingOrchestrator> {
         let (orchestrator, _rx) = PairingOrchestrator::new(
             PairingConfig::default(),
-            deps.paired_device_repo.clone(),
+            deps.device.paired_device_repo.clone(),
             "setup-placeholder-device".to_string(),
             "setup-placeholder-device-id".to_string(),
             "setup-placeholder-peer-id".to_string(),
@@ -475,7 +480,7 @@ impl<'a> UseCases<'a> {
     /// ```
     pub fn list_clipboard_entries(&self) -> uc_app::usecases::ListClipboardEntries {
         uc_app::usecases::ListClipboardEntries::from_arc(
-            self.runtime.deps.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
         )
     }
 
@@ -495,9 +500,9 @@ impl<'a> UseCases<'a> {
     /// ```
     pub fn delete_clipboard_entry(&self) -> uc_app::usecases::DeleteClipboardEntry {
         uc_app::usecases::DeleteClipboardEntry::from_ports(
-            self.runtime.deps.clipboard_entry_repo.clone(),
-            self.runtime.deps.selection_repo.clone(),
-            self.runtime.deps.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_event_repo.clone(),
         )
     }
 
@@ -521,10 +526,10 @@ impl<'a> UseCases<'a> {
         &self,
     ) -> uc_app::usecases::clipboard::get_entry_detail::GetEntryDetailUseCase {
         uc_app::usecases::clipboard::get_entry_detail::GetEntryDetailUseCase::new(
-            self.runtime.deps.clipboard_entry_repo.clone(),
-            self.runtime.deps.selection_repo.clone(),
-            self.runtime.deps.representation_repo.clone(),
-            self.runtime.deps.blob_store.clone(),
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.storage.blob_store.clone(),
         )
     }
 
@@ -535,9 +540,9 @@ impl<'a> UseCases<'a> {
         &self,
     ) -> uc_app::usecases::clipboard::get_entry_resource::GetEntryResourceUseCase {
         uc_app::usecases::clipboard::get_entry_resource::GetEntryResourceUseCase::new(
-            self.runtime.deps.clipboard_entry_repo.clone(),
-            self.runtime.deps.selection_repo.clone(),
-            self.runtime.deps.representation_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
         )
     }
 
@@ -548,8 +553,8 @@ impl<'a> UseCases<'a> {
         &self,
     ) -> uc_app::usecases::clipboard::resolve_blob_resource::ResolveBlobResourceUseCase {
         uc_app::usecases::clipboard::resolve_blob_resource::ResolveBlobResourceUseCase::new(
-            self.runtime.deps.representation_repo.clone(),
-            self.runtime.deps.blob_store.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.storage.blob_store.clone(),
         )
     }
 
@@ -557,7 +562,9 @@ impl<'a> UseCases<'a> {
     ///
     /// 列出已配对设备。
     pub fn list_paired_devices(&self) -> uc_app::usecases::ListPairedDevices {
-        uc_app::usecases::ListPairedDevices::new(self.runtime.deps.paired_device_repo.clone())
+        uc_app::usecases::ListPairedDevices::new(
+            self.runtime.deps.device.paired_device_repo.clone(),
+        )
     }
 
     /// Get local peer id from network port.
@@ -602,7 +609,7 @@ impl<'a> UseCases<'a> {
     ///
     /// 更新对等端配对状态。
     pub fn set_pairing_state(&self) -> uc_app::usecases::SetPairingState {
-        uc_app::usecases::SetPairingState::new(self.runtime.deps.paired_device_repo.clone())
+        uc_app::usecases::SetPairingState::new(self.runtime.deps.device.paired_device_repo.clone())
     }
 
     /// Unpair device and remove from repository.
@@ -611,7 +618,7 @@ impl<'a> UseCases<'a> {
     pub fn unpair_device(&self) -> uc_app::usecases::UnpairDevice {
         uc_app::usecases::UnpairDevice::new(
             self.runtime.deps.network_ports.pairing.clone(),
-            self.runtime.deps.paired_device_repo.clone(),
+            self.runtime.deps.device.paired_device_repo.clone(),
         )
     }
 
@@ -623,8 +630,8 @@ impl<'a> UseCases<'a> {
     ) -> uc_app::usecases::clipboard::resolve_thumbnail_resource::ResolveThumbnailResourceUseCase
     {
         uc_app::usecases::clipboard::resolve_thumbnail_resource::ResolveThumbnailResourceUseCase::new(
-            self.runtime.deps.thumbnail_repo.clone(),
-            self.runtime.deps.blob_store.clone(),
+            self.runtime.deps.storage.thumbnail_repo.clone(),
+            self.runtime.deps.storage.blob_store.clone(),
         )
     }
 
@@ -649,22 +656,22 @@ impl<'a> UseCases<'a> {
     /// ```
     pub fn initialize_encryption(&self) -> uc_app::usecases::InitializeEncryption {
         uc_app::usecases::InitializeEncryption::from_ports(
-            self.runtime.deps.encryption.clone(),
-            self.runtime.deps.key_material.clone(),
-            self.runtime.deps.key_scope.clone(),
-            self.runtime.deps.encryption_state.clone(),
-            self.runtime.deps.encryption_session.clone(),
+            self.runtime.deps.security.encryption.clone(),
+            self.runtime.deps.security.key_material.clone(),
+            self.runtime.deps.security.key_scope.clone(),
+            self.runtime.deps.security.encryption_state.clone(),
+            self.runtime.deps.security.encryption_session.clone(),
         )
     }
 
     /// Get the AutoUnlockEncryptionSession use case for startup unlock.
     pub fn auto_unlock_encryption_session(&self) -> uc_app::usecases::AutoUnlockEncryptionSession {
         uc_app::usecases::AutoUnlockEncryptionSession::from_ports(
-            self.runtime.deps.encryption_state.clone(),
-            self.runtime.deps.key_scope.clone(),
-            self.runtime.deps.key_material.clone(),
-            self.runtime.deps.encryption.clone(),
-            self.runtime.deps.encryption_session.clone(),
+            self.runtime.deps.security.encryption_state.clone(),
+            self.runtime.deps.security.key_scope.clone(),
+            self.runtime.deps.security.key_material.clone(),
+            self.runtime.deps.security.encryption.clone(),
+            self.runtime.deps.security.encryption_session.clone(),
         )
     }
 
@@ -756,10 +763,10 @@ impl<'a> UseCases<'a> {
     /// ```
     pub fn list_entry_projections(&self) -> uc_app::usecases::ListClipboardEntryProjections {
         uc_app::usecases::ListClipboardEntryProjections::new(
-            self.runtime.deps.clipboard_entry_repo.clone(),
-            self.runtime.deps.selection_repo.clone(),
-            self.runtime.deps.representation_repo.clone(),
-            self.runtime.deps.thumbnail_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.storage.thumbnail_repo.clone(),
         )
     }
 
@@ -771,12 +778,12 @@ impl<'a> UseCases<'a> {
     ) -> uc_app::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase
     {
         uc_app::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase::new(
-            self.runtime.deps.clipboard_entry_repo.clone(),
-            self.runtime.deps.system_clipboard.clone(),
-            self.runtime.deps.selection_repo.clone(),
-            self.runtime.deps.representation_repo.clone(),
-            self.runtime.deps.blob_store.clone(),
-            self.runtime.deps.clipboard_change_origin.clone(),
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.system_clipboard.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.storage.blob_store.clone(),
+            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
             self.runtime.clipboard_integration_mode,
         )
     }
@@ -788,8 +795,8 @@ impl<'a> UseCases<'a> {
         &self,
     ) -> uc_app::usecases::clipboard::touch_clipboard_entry::TouchClipboardEntryUseCase {
         uc_app::usecases::clipboard::touch_clipboard_entry::TouchClipboardEntryUseCase::new(
-            self.runtime.deps.clipboard_entry_repo.clone(),
-            self.runtime.deps.clock.clone(),
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.system.clock.clone(),
         )
     }
 
@@ -798,18 +805,18 @@ impl<'a> UseCases<'a> {
     ) -> uc_app::usecases::clipboard::sync_inbound::SyncInboundClipboardUseCase {
         uc_app::usecases::clipboard::sync_inbound::SyncInboundClipboardUseCase::with_capture_dependencies(
             self.runtime.clipboard_integration_mode,
-            self.runtime.deps.system_clipboard.clone(),
-            self.runtime.deps.clipboard_change_origin.clone(),
-            self.runtime.deps.encryption_session.clone(),
-            self.runtime.deps.encryption.clone(),
-            self.runtime.deps.device_identity.clone(),
+            self.runtime.deps.clipboard.system_clipboard.clone(),
+            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
+            self.runtime.deps.security.encryption_session.clone(),
+            self.runtime.deps.security.encryption.clone(),
+            self.runtime.deps.device.device_identity.clone(),
             Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter),
-            self.runtime.deps.clipboard_entry_repo.clone(),
-            self.runtime.deps.clipboard_event_repo.clone(),
-            self.runtime.deps.representation_policy.clone(),
-            self.runtime.deps.representation_normalizer.clone(),
-            self.runtime.deps.representation_cache.clone(),
-            self.runtime.deps.spool_queue.clone(),
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_policy.clone(),
+            self.runtime.deps.clipboard.representation_normalizer.clone(),
+            self.runtime.deps.clipboard.representation_cache.clone(),
+            self.runtime.deps.clipboard.spool_queue.clone(),
         )
     }
 
@@ -817,11 +824,11 @@ impl<'a> UseCases<'a> {
         &self,
     ) -> uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase {
         uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase::new(
-            self.runtime.deps.system_clipboard.clone(),
+            self.runtime.deps.clipboard.system_clipboard.clone(),
             self.runtime.deps.network_ports.clipboard.clone(),
             self.runtime.deps.network_ports.peers.clone(),
-            self.runtime.deps.encryption_session.clone(),
-            self.runtime.deps.device_identity.clone(),
+            self.runtime.deps.security.encryption_session.clone(),
+            self.runtime.deps.device.device_identity.clone(),
             self.runtime.deps.settings.clone(),
             Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter),
         )
@@ -968,6 +975,7 @@ impl ClipboardChangeHandler for AppRuntime {
         let snapshot_hash = snapshot.snapshot_hash().to_string();
         let origin = self
             .deps
+            .clipboard
             .clipboard_change_origin
             .consume_origin_for_snapshot_or_default(
                 &snapshot_hash,
@@ -978,13 +986,13 @@ impl ClipboardChangeHandler for AppRuntime {
 
         // Create CaptureClipboardUseCase with dependencies
         let usecase = uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase::new(
-            self.deps.clipboard_entry_repo.clone(),
-            self.deps.clipboard_event_repo.clone(),
-            self.deps.representation_policy.clone(),
-            self.deps.representation_normalizer.clone(),
-            self.deps.device_identity.clone(),
-            self.deps.representation_cache.clone(),
-            self.deps.spool_queue.clone(),
+            self.deps.clipboard.clipboard_entry_repo.clone(),
+            self.deps.clipboard.clipboard_event_repo.clone(),
+            self.deps.clipboard.representation_policy.clone(),
+            self.deps.clipboard.representation_normalizer.clone(),
+            self.deps.device.device_identity.clone(),
+            self.deps.clipboard.representation_cache.clone(),
+            self.deps.clipboard.spool_queue.clone(),
         );
 
         // Execute capture with the provided snapshot
@@ -1744,53 +1752,60 @@ mod tests {
         let (worker_tx, _worker_rx) = mpsc::channel(1);
 
         let deps = AppDeps {
-            clipboard: Arc::new(NoopClipboard),
-            system_clipboard: Arc::new(NoopClipboard),
-            clipboard_entry_repo: Arc::new(MockEntryRepository {
-                save_calls: save_calls.clone(),
-            }),
-            clipboard_event_repo: Arc::new(MockEventWriter {
-                insert_calls: insert_calls.clone(),
-            }),
-            representation_repo: Arc::new(NoopPort),
-            representation_normalizer: Arc::new(MockNormalizer {
-                normalize_calls: normalize_calls.clone(),
-            }),
-            selection_repo: Arc::new(NoopPort),
-            representation_policy: Arc::new(MockRepresentationPolicy {
-                select_calls: select_calls.clone(),
-            }),
-            representation_cache: Arc::new(MockRepresentationCache {
-                put_calls: cache_put_calls.clone(),
-            }),
-            spool_queue: Arc::new(MockSpoolQueue {
-                enqueue_calls: enqueue_calls.clone(),
-            }),
-            worker_tx,
-            encryption: Arc::new(NoopPort),
-            encryption_session: Arc::new(NoopPort),
-            encryption_state: Arc::new(NoopPort),
-            key_scope: Arc::new(NoopPort),
-            secure_storage: Arc::new(NoopPort),
-            key_material: Arc::new(NoopPort),
-            watcher_control: Arc::new(NoopPort),
-            device_repo: Arc::new(NoopPort),
-            device_identity: Arc::new(MockDeviceIdentity),
-            paired_device_repo: Arc::new(NoopPort),
+            clipboard: uc_app::ClipboardPorts {
+                clipboard: Arc::new(NoopClipboard),
+                system_clipboard: Arc::new(NoopClipboard),
+                clipboard_entry_repo: Arc::new(MockEntryRepository {
+                    save_calls: save_calls.clone(),
+                }),
+                clipboard_event_repo: Arc::new(MockEventWriter {
+                    insert_calls: insert_calls.clone(),
+                }),
+                representation_repo: Arc::new(NoopPort),
+                representation_normalizer: Arc::new(MockNormalizer {
+                    normalize_calls: normalize_calls.clone(),
+                }),
+                selection_repo: Arc::new(NoopPort),
+                representation_policy: Arc::new(MockRepresentationPolicy {
+                    select_calls: select_calls.clone(),
+                }),
+                representation_cache: Arc::new(MockRepresentationCache {
+                    put_calls: cache_put_calls.clone(),
+                }),
+                spool_queue: Arc::new(MockSpoolQueue {
+                    enqueue_calls: enqueue_calls.clone(),
+                }),
+                worker_tx,
+                clipboard_change_origin: origin_port,
+            },
+            security: uc_app::SecurityPorts {
+                encryption: Arc::new(NoopPort),
+                encryption_session: Arc::new(NoopPort),
+                encryption_state: Arc::new(NoopPort),
+                key_scope: Arc::new(NoopPort),
+                secure_storage: Arc::new(NoopPort),
+                key_material: Arc::new(NoopPort),
+            },
+            device: uc_app::DevicePorts {
+                device_repo: Arc::new(NoopPort),
+                device_identity: Arc::new(MockDeviceIdentity),
+                paired_device_repo: Arc::new(NoopPort),
+            },
             network_ports: noop_network_ports(),
             network_control: Arc::new(NoopPort),
             setup_status: Arc::new(NoopPort),
-            blob_store: Arc::new(NoopPort),
-            blob_repository: Arc::new(NoopPort),
-            blob_writer: Arc::new(NoopPort),
-            thumbnail_repo: Arc::new(NoopPort),
-            thumbnail_generator: Arc::new(NoopPort),
+            storage: uc_app::StoragePorts {
+                blob_store: Arc::new(NoopPort),
+                blob_repository: Arc::new(NoopPort),
+                blob_writer: Arc::new(NoopPort),
+                thumbnail_repo: Arc::new(NoopPort),
+                thumbnail_generator: Arc::new(NoopPort),
+            },
             settings: Arc::new(NoopPort),
-            ui_port: Arc::new(NoopPort),
-            autostart: Arc::new(NoopPort),
-            clock: Arc::new(NoopPort),
-            hash: Arc::new(NoopPort),
-            clipboard_change_origin: origin_port,
+            system: uc_app::SystemPorts {
+                clock: Arc::new(NoopPort),
+                hash: Arc::new(NoopPort),
+            },
         };
 
         let runtime = AppRuntime::new(deps);

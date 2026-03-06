@@ -11,7 +11,9 @@ pub mod models;
 pub mod testing;
 pub mod usecases;
 
-pub use deps::AppDeps;
+pub use deps::{
+    AppDeps, ClipboardPorts, DevicePorts, NetworkPorts, SecurityPorts, StoragePorts, SystemPorts,
+};
 
 /// The application runtime.
 pub struct App {
