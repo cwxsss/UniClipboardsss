@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 current_plan: 3
-status: executing
-stopped_at: Completed 10-01-PLAN.md
+status: verifying
+stopped_at: Completed 10-03-PLAN.md
 last_updated: '2026-03-06T09:03:47.192Z'
 last_activity: 2026-03-06
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 3
-  completed_plans: 2
-  percent: 67
+  completed_plans: 3
+  percent: 100
 ---
 
 # Project State
@@ -27,13 +27,13 @@ See: .planning/PROJECT.md (updated 2026-03-06)
 ## Current Position
 
 Phase: 10 of 13 (Boundary Repair Baseline)
-Plan: 2 of 3 in current phase
+Plan: 3 of 3 in current phase (all complete)
 Current Plan: 3
 Total Plans in Phase: 3
-Status: Executing Phase 10 plans
+Status: All Phase 10 plans complete — awaiting verification
 Last activity: 2026-03-06
 
-Progress: [███████░░░] 67%
+Progress: [██████████] 100%
 
 ## Accumulated Context
 
@@ -48,6 +48,9 @@ Progress: [███████░░░] 67%
 - [Phase 10-boundary-repair-baseline]: uc-platform no longer depends on uc-infra; bootstrap wiring owns concrete crypto adapter construction.
 - [Phase 10]: Keep command-layer access restricted to runtime.usecases() and facade methods only.
 - [Phase 10]: Finalize 10-01 with existing task commits and document out-of-scope compile blocker in src-tauri/src/main.rs.
+- [Phase 10-03]: ClipboardIntegrationMode promoted to uc-core as a shared domain type to avoid uc-app↔uc-platform dependency cycles.
+- [Phase 10-03]: AppRuntime::wiring_deps() added for bootstrap code access; command handlers must use usecases() only.
+- [Phase 10-03]: StartClipboardWatcherPort kept in uc-core (domain contract used by AppLifecycleCoordinator — cannot be in uc-platform).
 
 ### Pending Todos
 
@@ -56,7 +59,6 @@ None.
 ### Blockers/Concerns
 
 - Architecture/lifecycle remediation touches cross-cutting modules and must preserve sync stability.
-- Full workspace cargo check fails because src-tauri/src/main.rs still references private AppRuntime.deps (E0616 at lines 693, 713, 753).
 
 ## Session Continuity
 

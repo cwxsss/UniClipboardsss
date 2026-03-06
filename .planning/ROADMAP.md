@@ -96,7 +96,7 @@ Plans:
 
 | Phase                                          | Milestone | Plans Complete | Status      | Completed |
 | ---------------------------------------------- | --------- | -------------- | ----------- | --------- |
-| 10. Boundary Repair Baseline                   | v0.2.0    | 2/3            | In Progress | -         |
+| 10. Boundary Repair Baseline                   | 3/3       | Complete       | 2026-03-06  | -         |
 | 11. Command Contract Hardening                 | v0.2.0    | 0/2            | Not started | -         |
 | 12. Lifecycle Governance Baseline              | v0.2.0    | 0/2            | Not started | -         |
 | 13. Responsibility Decomposition & Testability | v0.2.0    | 0/3            | Not started | -         |
