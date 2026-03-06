@@ -5,7 +5,7 @@
 English | [简体中文](./README_ZH.md)
 
 UniClipboard is a **privacy-first**, cross-device clipboard synchronization tool.
-It enables seamless and secure syncing of text, images, and files across multiple devices. All data is end-to-end encrypted and decrypted only on the user’s devices—neither servers nor the network layer can ever access plaintext data.
+It enables seamless and secure syncing of text and images across multiple devices, with file sync planned for future releases. Data is encrypted both in transit and at rest, and decrypted only on the user’s devices—neither servers nor the network layer can ever access plaintext data.
 
 ![Image](./assets/demo.png)
 
@@ -56,7 +56,7 @@ It enables seamless and secure syncing of text, images, and files across multipl
 
 - **Cross-platform support**: Supports Windows, macOS, and Linux operating systems
 - **Real-time sync**: Instantly share clipboard content between connected devices
-- **Rich content types**: Supports text, images, files, and more
+- **Content types**: Currently supports text and images; file sync is planned for future releases
 - **Secure encryption**: Uses XChaCha20-Poly1305 AEAD encryption algorithm to ensure secure data transmission
 - **Multi-device management**: Easily add and manage multiple devices
 - **Flexible configuration**: Provides extensive customization options
@@ -88,7 +88,7 @@ bun tauri build
 
 1. **First launch**: Start the application and complete basic setup to create your device identity
 2. **Add devices**: Click "Add Device" button on the "Devices" page to add new devices
-3. **Clipboard sync**: Copied content will automatically sync to all connected devices
+3. **Clipboard sync**: Copied text and images will automatically sync to all connected devices
 4. **Settings**: Customize application behavior, network, and security options on the "Settings" page
 
 ### Main Pages
@@ -108,7 +108,7 @@ Supports multiple network connection modes that can be configured based on your 
 
 ### Security Features
 
-- **End-to-end encryption**: All data transmitted between devices is encrypted
+- **End-to-end encryption**: Data is encrypted in transit between devices and remains encrypted at rest in local storage
 - **XChaCha20-Poly1305 encryption**: Modern AEAD cipher providing authenticated encryption
   - 24-byte random nonce effectively reduces nonce reuse risks
   - 32-byte (256-bit) encryption key
