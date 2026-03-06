@@ -11,7 +11,7 @@ use super::{StartClipboardWatcherPort, StartNetworkAfterUnlock};
 // ---------------------------------------------------------------------------
 
 /// Represents the current state of the application lifecycle.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LifecycleState {
     /// Initial state – no lifecycle attempt has been made yet.
     Idle,

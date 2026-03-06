@@ -9,6 +9,7 @@
 //! 这些将内部领域模型与 API 契约分离。
 
 use serde::{Deserialize, Serialize};
+use uc_app::usecases::LifecycleState;
 
 /// Clipboard entry projection for frontend API.
 /// 前端 API 的剪贴板条目投影。
@@ -83,4 +84,126 @@ pub struct ClipboardEntryResource {
     pub size_bytes: i64,
     /// Custom protocol URL for resource fetching
     pub url: String,
+}
+
+/// Lifecycle status DTO for the frontend API.
+/// 前端 API 的生命周期状态 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleStatusDto {
+    /// Current lifecycle state (e.g. "Idle", "Ready", "WatcherFailed", etc.)
+    pub state: LifecycleState,
+}
+
+impl LifecycleStatusDto {
+    pub fn from_state(state: LifecycleState) -> Self {
+        Self { state }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_entries_response_ready_serializes_correctly() {
+        let response = ClipboardEntriesResponse::Ready { entries: vec![] };
+        let json = serde_json::to_string(&response).expect("serialize failed");
+        assert_eq!(json, r#"{"status":"ready","entries":[]}"#);
+    }
+
+    #[test]
+    fn clipboard_entries_response_not_ready_serializes_correctly() {
+        let response = ClipboardEntriesResponse::NotReady;
+        let json = serde_json::to_string(&response).expect("serialize failed");
+        assert_eq!(json, r#"{"status":"not_ready"}"#);
+    }
+
+    #[test]
+    fn lifecycle_status_dto_serializes_with_camel_case() {
+        // The struct field "state" is already one word, but we verify camelCase rename_all is applied
+        let dto = LifecycleStatusDto {
+            state: LifecycleState::Ready,
+        };
+        let value = serde_json::to_value(&dto).expect("serialize failed");
+        // Verify it has "state" key (camelCase of "state" is still "state")
+        assert!(
+            value.get("state").is_some(),
+            "expected 'state' field in JSON"
+        );
+        assert_eq!(value["state"], serde_json::json!("Ready"));
+
+        // Verify all variants serialize as expected
+        let idle = LifecycleStatusDto::from_state(LifecycleState::Idle);
+        let idle_json = serde_json::to_value(&idle).expect("serialize failed");
+        assert_eq!(idle_json["state"], serde_json::json!("Idle"));
+
+        let watcher_failed = LifecycleStatusDto::from_state(LifecycleState::WatcherFailed);
+        let wf_json = serde_json::to_value(&watcher_failed).expect("serialize failed");
+        assert_eq!(wf_json["state"], serde_json::json!("WatcherFailed"));
+    }
+
+    #[test]
+    fn clipboard_entry_projection_preserves_snake_case() {
+        let entry = ClipboardEntryProjection {
+            id: "test-id".to_string(),
+            preview: "hello".to_string(),
+            has_detail: true,
+            size_bytes: 100,
+            captured_at: 1234567890,
+            content_type: "text/plain".to_string(),
+            thumbnail_url: None,
+            is_encrypted: false,
+            is_favorited: false,
+            updated_at: 1234567890,
+            active_time: 1234567890,
+        };
+        let value = serde_json::to_value(&entry).expect("serialize failed");
+        // Verify snake_case field names (not camelCase)
+        assert!(
+            value.get("has_detail").is_some(),
+            "expected snake_case 'has_detail'"
+        );
+        assert!(
+            value.get("size_bytes").is_some(),
+            "expected snake_case 'size_bytes'"
+        );
+        assert!(
+            value.get("captured_at").is_some(),
+            "expected snake_case 'captured_at'"
+        );
+        assert!(
+            value.get("content_type").is_some(),
+            "expected snake_case 'content_type'"
+        );
+        assert!(
+            value.get("thumbnail_url").is_some(),
+            "expected snake_case 'thumbnail_url'"
+        );
+        assert!(
+            value.get("is_encrypted").is_some(),
+            "expected snake_case 'is_encrypted'"
+        );
+        assert!(
+            value.get("is_favorited").is_some(),
+            "expected snake_case 'is_favorited'"
+        );
+        assert!(
+            value.get("updated_at").is_some(),
+            "expected snake_case 'updated_at'"
+        );
+        assert!(
+            value.get("active_time").is_some(),
+            "expected snake_case 'active_time'"
+        );
+        // Ensure camelCase variants are NOT present
+        assert!(
+            value.get("hasDetail").is_none(),
+            "unexpected camelCase 'hasDetail'"
+        );
+        assert!(
+            value.get("sizeBytes").is_none(),
+            "unexpected camelCase 'sizeBytes'"
+        );
+    }
 }
