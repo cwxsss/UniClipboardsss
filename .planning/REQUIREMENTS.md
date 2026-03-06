@@ -14,9 +14,9 @@
 
 ### Command Contracts
 
-- [x] **CONTRACT-01**: User-visible command responses use explicit DTOs instead of returning domain models directly.
+- [ ] **CONTRACT-01**: User-visible command responses use explicit DTOs instead of returning domain models directly.
 - [x] **CONTRACT-02**: Command failures are returned with structured, typed error categories rather than raw `String`-only errors.
-- [x] **CONTRACT-03**: Command/event payload serialization remains frontend-compatible (camelCase where required) with tests covering key payload contracts.
+- [ ] **CONTRACT-03**: Command/event payload serialization remains frontend-compatible (camelCase where required) with tests covering key payload contracts.
 - [x] **CONTRACT-04**: Command timeout/error contracts distinguish cancellation, timeout, and internal failures for reliable UI handling.
 
 ### Lifecycle Governance
@@ -57,9 +57,9 @@
 | BOUND-02    | Phase 10 | Complete |
 | BOUND-03    | Phase 10 | Pending  |
 | BOUND-04    | Phase 10 | Pending  |
-| CONTRACT-01 | Phase 11 | Complete |
+| CONTRACT-01 | Phase 14 | Pending  |
 | CONTRACT-02 | Phase 11 | Complete |
-| CONTRACT-03 | Phase 11 | Complete |
+| CONTRACT-03 | Phase 15 | Pending  |
 | CONTRACT-04 | Phase 11 | Complete |
 | LIFE-01     | Phase 12 | Complete |
 | LIFE-02     | Phase 12 | Complete |
@@ -75,6 +75,7 @@
 - v0.2.0 requirements: 16 total
 - Mapped to phases: 16
 - Unmapped: 0 ✓
+- Satisfied at milestone level: 14/16 (CONTRACT-01, CONTRACT-03 pending frontend/backend gap closure in Phases 14–15)
 
 ---
 

@@ -92,6 +92,22 @@ Plans:
 - [ ] 13-02-PLAN.md — Setup orchestrator action executor extraction
 - [ ] 13-03-PLAN.md — Pairing orchestrator protocol handler + session manager extraction
 
+#### Phase 14: Lifecycle DTO Frontend Integration
+
+**Goal**: Align frontend lifecycle APIs with backend LifecycleStatusDto command contract and restore lifecycle status UI.
+**Depends on**: Phase 13
+**Requirements**: CONTRACT-01, CONTRACT-03
+**Gap Closure**: Closes lifecycle DTO mismatch between frontend and `get_lifecycle_status` command and fixes the broken lifecycle status display flow.
+**Plans**: 0 plans
+
+#### Phase 15: Clipboard Management Command Wiring
+
+**Goal**: Provide backend commands for clipboard stats/item/favorite management and wire them to existing frontend APIs.
+**Depends on**: Phase 13
+**Requirements**: CONTRACT-03
+**Gap Closure**: Closes missing clipboard stats/item/favorite commands and restores clipboard management flow from frontend to uc-tauri.
+**Plans**: 0 plans
+
 ## Progress
 
 | Phase                                          | Milestone | Plans Complete | Status     | Completed |
