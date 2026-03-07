@@ -6,7 +6,8 @@ use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use crate::models::{
     ClipboardEntriesResponse, ClipboardEntryDetail, ClipboardEntryProjection,
-    ClipboardEntryResource, ClipboardStats,
+    ClipboardEntryResource, ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse,
+    ClipboardStats, ClipboardTextItemDto,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -179,6 +180,100 @@ pub async fn toggle_favorite_clipboard_item(
                     "Failed to toggle favorite for clipboard entry",
                 );
                 Err(CommandError::InternalError(e.to_string()))
+            }
+        }
+    }
+    .instrument(span)
+    .await
+}
+
+/// Get a single clipboard item by ID, returning a response matching the
+/// frontend ClipboardItemResponse contract. Returns Ok(None) when the entry
+/// does not exist.
+/// 获取单个剪贴板条目，返回与前端 ClipboardItemResponse 匹配的响应。
+#[tauri::command]
+pub async fn get_clipboard_item(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+    full_content: Option<bool>,
+    _trace: Option<TraceMetadata>,
+) -> Result<Option<ClipboardItemResponse>, CommandError> {
+    let resolved_full = full_content.unwrap_or(false);
+    let device_id = runtime.device_id();
+
+    let span = info_span!(
+        "command.clipboard.get_item",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+        device_id = %device_id,
+        entry_id = %id,
+        full_content = resolved_full,
+    );
+    record_trace_fields(&span, &_trace);
+
+    async move {
+        let parsed_id = EntryId::from(id.clone());
+
+        // Use list_entry_projections to find the entry and build a response
+        // that matches the frontend contract. This reuses existing projection
+        // infrastructure rather than duplicating query logic.
+        let uc = runtime.usecases().list_entry_projections();
+        let projections = uc.execute(1_000, 0).await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to list projections for get_clipboard_item");
+            CommandError::InternalError(e.to_string())
+        })?;
+
+        let projection = projections.into_iter().find(|p| p.id == id);
+
+        match projection {
+            None => {
+                tracing::info!(entry_id = %id, "Clipboard item not found");
+                Ok(None)
+            }
+            Some(proj) => {
+                let is_image = proj.content_type.to_ascii_lowercase().starts_with("image/");
+
+                let item = if is_image {
+                    ClipboardItemDto {
+                        text: None,
+                        image: Some(ClipboardImageItemDto {
+                            thumbnail: proj.thumbnail_url.clone(),
+                            size: proj.size_bytes,
+                            width: 0,
+                            height: 0,
+                        }),
+                        file: None,
+                        link: None,
+                        code: None,
+                        unknown: None,
+                    }
+                } else {
+                    ClipboardItemDto {
+                        text: Some(ClipboardTextItemDto {
+                            display_text: proj.preview.clone(),
+                            has_detail: proj.has_detail,
+                            size: proj.size_bytes,
+                        }),
+                        image: None,
+                        file: None,
+                        link: None,
+                        code: None,
+                        unknown: None,
+                    }
+                };
+
+                let response = ClipboardItemResponse {
+                    id: proj.id,
+                    is_downloaded: true,
+                    is_favorited: proj.is_favorited,
+                    created_at: proj.captured_at,
+                    updated_at: proj.updated_at,
+                    active_time: proj.active_time,
+                    item,
+                };
+
+                tracing::info!(entry_id = %id, "Retrieved clipboard item");
+                Ok(Some(response))
             }
         }
     }

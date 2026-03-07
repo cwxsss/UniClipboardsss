@@ -805,6 +805,9 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::clipboard::delete_clipboard_entry,
             uc_tauri::commands::clipboard::restore_clipboard_entry,
             uc_tauri::commands::clipboard::sync_clipboard_items,
+            uc_tauri::commands::clipboard::get_clipboard_stats,
+            uc_tauri::commands::clipboard::toggle_favorite_clipboard_item,
+            uc_tauri::commands::clipboard::get_clipboard_item,
             // Encryption commands
             uc_tauri::commands::encryption::initialize_encryption,
             uc_tauri::commands::encryption::get_encryption_session_status,

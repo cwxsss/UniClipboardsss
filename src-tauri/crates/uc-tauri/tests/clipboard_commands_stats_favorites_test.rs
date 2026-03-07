@@ -4,7 +4,10 @@
 //! frontend depends on. Integration-level command invocation tests are deferred
 //! until the pre-existing uc-tauri test compilation issues are resolved.
 
-use uc_tauri::models::ClipboardStats;
+use uc_tauri::models::{
+    ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse, ClipboardStats,
+    ClipboardTextItemDto,
+};
 
 #[test]
 fn clipboard_stats_serialization_matches_contract() {
@@ -112,5 +115,126 @@ mod toggle_favorite_usecase_tests {
 
         let result = uc.execute(&entry_id, true).await.expect("should not error");
         assert!(!result, "expected Ok(false) for missing entry");
+    }
+}
+
+/// Verify ClipboardItemResponse DTO matches the frontend ClipboardItemResponse
+/// interface, validating JSON keys and nested item structure.
+mod get_clipboard_item_contract_tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_item_response_text_matches_frontend_contract() {
+        let response = ClipboardItemResponse {
+            id: "entry-abc".to_string(),
+            is_downloaded: true,
+            is_favorited: false,
+            created_at: 1000,
+            updated_at: 2000,
+            active_time: 3000,
+            item: ClipboardItemDto {
+                text: Some(ClipboardTextItemDto {
+                    display_text: "hello".to_string(),
+                    has_detail: true,
+                    size: 5,
+                }),
+                image: None,
+                file: None,
+                link: None,
+                code: None,
+                unknown: None,
+            },
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize");
+
+        // Top-level keys match frontend interface
+        assert_eq!(value["id"], "entry-abc");
+        assert_eq!(value["is_downloaded"], true);
+        assert_eq!(value["is_favorited"], false);
+        assert_eq!(value["created_at"], 1000);
+        assert_eq!(value["updated_at"], 2000);
+        assert_eq!(value["active_time"], 3000);
+
+        // Nested item with text present
+        let item = &value["item"];
+        assert!(item.get("text").is_some());
+        assert_eq!(item["text"]["display_text"], "hello");
+        assert_eq!(item["text"]["has_detail"], true);
+        assert_eq!(item["text"]["size"], 5);
+
+        // Other item types should be absent (skip_serializing_if)
+        assert!(item.get("image").is_none());
+        assert!(item.get("file").is_none());
+        assert!(item.get("link").is_none());
+        assert!(item.get("code").is_none());
+    }
+
+    #[test]
+    fn clipboard_item_response_image_matches_frontend_contract() {
+        let response = ClipboardItemResponse {
+            id: "entry-img".to_string(),
+            is_downloaded: true,
+            is_favorited: true,
+            created_at: 500,
+            updated_at: 600,
+            active_time: 700,
+            item: ClipboardItemDto {
+                text: None,
+                image: Some(ClipboardImageItemDto {
+                    thumbnail: Some("uc://thumbnail/rep-1".to_string()),
+                    size: 2048,
+                    width: 120,
+                    height: 80,
+                }),
+                file: None,
+                link: None,
+                code: None,
+                unknown: None,
+            },
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize");
+        let item = &value["item"];
+
+        assert!(item.get("text").is_none());
+        assert!(item.get("image").is_some());
+        assert_eq!(item["image"]["thumbnail"], "uc://thumbnail/rep-1");
+        assert_eq!(item["image"]["size"], 2048);
+        assert_eq!(item["image"]["width"], 120);
+        assert_eq!(item["image"]["height"], 80);
+    }
+
+    #[test]
+    fn clipboard_item_response_round_trip() {
+        let response = ClipboardItemResponse {
+            id: "round-trip".to_string(),
+            is_downloaded: false,
+            is_favorited: true,
+            created_at: 111,
+            updated_at: 222,
+            active_time: 333,
+            item: ClipboardItemDto {
+                text: Some(ClipboardTextItemDto {
+                    display_text: "rt".to_string(),
+                    has_detail: false,
+                    size: 2,
+                }),
+                image: None,
+                file: None,
+                link: None,
+                code: None,
+                unknown: None,
+            },
+        };
+
+        let json = serde_json::to_string(&response).expect("serialize");
+        let deserialized: ClipboardItemResponse = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(deserialized.id, "round-trip");
+        assert!(!deserialized.is_downloaded);
+        assert!(deserialized.is_favorited);
+        assert_eq!(deserialized.created_at, 111);
+        assert_eq!(deserialized.item.text.as_ref().unwrap().display_text, "rt");
     }
 }
