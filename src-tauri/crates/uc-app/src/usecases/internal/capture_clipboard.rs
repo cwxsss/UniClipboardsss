@@ -291,10 +291,28 @@ impl CaptureClipboardUseCase {
     }
 
     fn has_supported_representation(snapshot: &SystemClipboardSnapshot) -> bool {
-        snapshot
+        let result = snapshot
             .representations
             .iter()
-            .any(Self::is_supported_representation)
+            .any(Self::is_supported_representation);
+
+        debug!(
+            repr_count = snapshot.representations.len(),
+            format_ids = ?snapshot
+                .representations
+                .iter()
+                .map(|r| r.format_id.to_string())
+                .collect::<Vec<_>>(),
+            mimes = ?snapshot
+                .representations
+                .iter()
+                .map(|r| r.mime.as_ref().map(|m| m.as_str().to_string()))
+                .collect::<Vec<_>>(),
+            result,
+            "has_supported_representation evaluated",
+        );
+
+        result
     }
 
     fn is_supported_representation(rep: &uc_core::ObservedClipboardRepresentation) -> bool {
@@ -315,6 +333,9 @@ impl CaptureClipboardUseCase {
             || rep.format_id.eq_ignore_ascii_case("html")
             || rep.format_id.eq_ignore_ascii_case("files")
             || rep.format_id.eq_ignore_ascii_case("image")
+            || rep.format_id.eq_ignore_ascii_case("public.utf8-plain-text")
+            || rep.format_id.eq_ignore_ascii_case("public.text")
+            || rep.format_id.eq_ignore_ascii_case("NSStringPboardType")
     }
 }
 

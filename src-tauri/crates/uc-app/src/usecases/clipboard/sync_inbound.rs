@@ -371,6 +371,24 @@ impl SyncInboundClipboardUseCase {
                 .capture_clipboard
                 .as_ref()
                 .context("V3 passive inbound: capture dependencies required")?;
+
+            // Debug snapshot before handing off to capture use case
+            debug!(
+                origin = ?ClipboardChangeOrigin::RemotePush,
+                repr_count = snapshot.representations.len(),
+                repr_format_ids = ?snapshot
+                    .representations
+                    .iter()
+                    .map(|r| r.format_id.to_string())
+                    .collect::<Vec<_>>(),
+                repr_mimes = ?snapshot
+                    .representations
+                    .iter()
+                    .map(|r| r.mime.as_ref().map(|m| m.as_str().to_string()))
+                    .collect::<Vec<_>>(),
+                "V3 passive snapshot before capture",
+            );
+
             return match capture
                 .execute_with_origin(snapshot, ClipboardChangeOrigin::RemotePush)
                 .await
