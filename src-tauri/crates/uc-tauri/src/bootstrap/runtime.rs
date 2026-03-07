@@ -800,6 +800,17 @@ impl<'a> UseCases<'a> {
         )
     }
 
+    /// Toggle favorite state for a clipboard entry.
+    ///
+    /// 切换剪贴板条目的收藏状态。
+    pub fn toggle_favorite_clipboard_entry(
+        &self,
+    ) -> uc_app::usecases::clipboard::toggle_favorite_clipboard_entry::ToggleFavoriteClipboardEntryUseCase{
+        uc_app::usecases::clipboard::toggle_favorite_clipboard_entry::ToggleFavoriteClipboardEntryUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+        )
+    }
+
     pub fn sync_inbound_clipboard(
         &self,
     ) -> uc_app::usecases::clipboard::sync_inbound::SyncInboundClipboardUseCase {
