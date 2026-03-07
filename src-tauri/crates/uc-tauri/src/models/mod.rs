@@ -86,6 +86,16 @@ pub struct ClipboardEntryResource {
     pub url: String,
 }
 
+/// Clipboard statistics DTO for frontend API.
+/// 前端 API 使用的剪贴板统计信息 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardStats {
+    /// Total number of clipboard items
+    pub total_items: i64,
+    /// Total size of all clipboard items in bytes
+    pub total_size: i64,
+}
+
 /// Lifecycle status DTO for the frontend API.
 /// 前端 API 的生命周期状态 DTO。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +214,32 @@ mod tests {
         assert!(
             value.get("sizeBytes").is_none(),
             "unexpected camelCase 'sizeBytes'"
+        );
+    }
+
+    #[test]
+    fn clipboard_stats_serializes_with_snake_case_fields() {
+        let stats = ClipboardStats {
+            total_items: 5,
+            total_size: 1024,
+        };
+        let value = serde_json::to_value(&stats).expect("serialize failed");
+
+        assert!(
+            value.get("total_items").is_some(),
+            "expected snake_case 'total_items'",
+        );
+        assert!(
+            value.get("total_size").is_some(),
+            "expected snake_case 'total_size'",
+        );
+        assert!(
+            value.get("totalItems").is_none(),
+            "unexpected camelCase 'totalItems'",
+        );
+        assert!(
+            value.get("totalSize").is_none(),
+            "unexpected camelCase 'totalSize'",
         );
     }
 }

@@ -6,12 +6,13 @@ use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use crate::models::{
     ClipboardEntriesResponse, ClipboardEntryDetail, ClipboardEntryProjection,
-    ClipboardEntryResource,
+    ClipboardEntryResource, ClipboardStats,
 };
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info_span, Instrument};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
+use uc_app::usecases::clipboard::ClipboardUseCases;
 use uc_core::ids::EntryId;
 use uc_core::security::state::EncryptionState;
 use uc_platform::ports::observability::TraceMetadata;
@@ -93,6 +94,79 @@ pub async fn get_clipboard_entries(
 
 fn should_return_not_ready(state: EncryptionState, session_ready: bool) -> bool {
     matches!(state, EncryptionState::Initialized) && !session_ready
+}
+
+/// Get aggregate clipboard statistics (total_items, total_size).
+/// 获取剪贴板统计信息（总条目数和总大小）。
+#[tauri::command]
+pub async fn get_clipboard_stats(
+    runtime: State<'_, Arc<AppRuntime>>,
+    _trace: Option<TraceMetadata>,
+) -> Result<ClipboardStats, CommandError> {
+    let device_id = runtime.device_id();
+
+    let span = info_span!(
+        "command.clipboard.get_stats",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+        device_id = %device_id,
+    );
+    record_trace_fields(&span, &_trace);
+
+    async move {
+        let uc = runtime.usecases().list_entry_projections();
+        let dtos = uc.execute(1_000, 0).await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to list clipboard entry projections for stats");
+            CommandError::InternalError(e.to_string())
+        })?;
+
+        let stats = ClipboardUseCases::compute_stats(&dtos);
+        Ok(ClipboardStats {
+            total_items: stats.total_items,
+            total_size: stats.total_size,
+        })
+    }
+    .instrument(span)
+    .await
+}
+
+/// Toggle favorite state for a clipboard item.
+/// 切换剪贴板条目的收藏状态。
+#[tauri::command]
+pub async fn toggle_favorite_clipboard_item(
+    runtime: State<'_, Arc<AppRuntime>>,
+    id: String,
+    is_favorited: bool,
+    _trace: Option<TraceMetadata>,
+) -> Result<(), CommandError> {
+    let device_id = runtime.device_id();
+
+    let span = info_span!(
+        "command.clipboard.toggle_favorite",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+        device_id = %device_id,
+        entry_id = %id,
+        is_favorited,
+    );
+    record_trace_fields(&span, &_trace);
+
+    async move {
+        let entry_id = EntryId::from(id.clone());
+
+        // Favorite domain support is not yet implemented in uc-app.
+        // For now, we log and surface a NotFound contract so the
+        // frontend can handle the error path explicitly.
+        tracing::warn!(
+            entry_id = %entry_id,
+            is_favorited,
+            "toggle_favorite_clipboard_item not implemented at app layer yet",
+        );
+
+        Err(CommandError::NotFound("Entry not found".to_string()))
+    }
+    .instrument(span)
+    .await
 }
 
 #[cfg(test)]
