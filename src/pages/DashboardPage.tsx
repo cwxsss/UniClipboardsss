@@ -13,15 +13,15 @@ import { useAppDispatch } from '@/store/hooks'
 import { fetchClipboardItems, setNotReady } from '@/store/slices/clipboardSlice'
 import { ClipboardEvent } from '@/types/events'
 
-// Debounce delay in milliseconds
-const DEBOUNCE_DELAY = 500
+// Throttle window in milliseconds for clipboard dashboard refresh
+const THROTTLE_WINDOW_MS = 500
 const PAGE_SIZE = 20
 
 // Global listener state management
 interface ListenerState {
   isActive: boolean
   unlisten?: () => void
-  lastEventTimestamp?: number
+  lastReloadTimestamp?: number
 }
 
 const globalListenerState: ListenerState = {
@@ -40,8 +40,8 @@ const DashboardPage: React.FC = () => {
 
   // Use ref to store the latest filter value
   const currentFilterRef = useRef<Filter>(currentFilter)
-  // Debounce ref
-  const debouncedLoadRef = useRef<number | null>(null)
+  // Throttle trailing timeout ref
+  const throttleTimeoutRef = useRef<number | null>(null)
   const encryptionReadyRef = useRef<boolean | null>(null)
   const pendingInitialLoadRef = useRef(false)
   const loadInFlightRef = useRef(false)
@@ -105,21 +105,6 @@ const DashboardPage: React.FC = () => {
     [dispatch, t]
   )
 
-  // Debounced data loading
-  const debouncedLoadData = useCallback(
-    (specificFilter?: Filter) => {
-      if (debouncedLoadRef.current) {
-        clearTimeout(debouncedLoadRef.current)
-      }
-
-      debouncedLoadRef.current = setTimeout(() => {
-        loadData({ specificFilter, reset: true })
-        debouncedLoadRef.current = null
-      }, DEBOUNCE_DELAY)
-    },
-    [loadData]
-  )
-
   // Update ref to track the latest filter
   useEffect(() => {
     console.log(t('dashboard.logs.filterChanged'), currentFilter)
@@ -157,21 +142,37 @@ const DashboardPage: React.FC = () => {
 
             // Check event type
             if (event.payload.type === 'NewContent' && event.payload.entry_id) {
-              // Check event timestamp to avoid processing duplicate events within short time
-              const currentTime = Date.now()
-              if (
-                globalListenerState.lastEventTimestamp &&
-                currentTime - globalListenerState.lastEventTimestamp < DEBOUNCE_DELAY
-              ) {
-                console.log(t('dashboard.logs.ignoringDuplicateEvent'))
+              // 确保加密会话已就绪后再刷新列表
+              if (encryptionReadyRef.current !== true) {
+                console.log('[Dashboard] Encryption not ready, ignoring clipboard event')
                 return
               }
 
-              // Update last event timestamp
-              globalListenerState.lastEventTimestamp = currentTime
+              const now = Date.now()
+              const lastReload = globalListenerState.lastReloadTimestamp
 
-              // Use debounced function to load data
-              debouncedLoadData(currentFilterRef.current)
+              // If outside throttle window or first reload, refresh immediately
+              if (lastReload === undefined || now - lastReload >= THROTTLE_WINDOW_MS) {
+                globalListenerState.lastReloadTimestamp = now
+
+                if (throttleTimeoutRef.current) {
+                  clearTimeout(throttleTimeoutRef.current)
+                  throttleTimeoutRef.current = null
+                }
+
+                void loadData({ specificFilter: currentFilterRef.current, reset: true })
+                return
+              }
+
+              // Within throttle window: schedule a single trailing reload if not already scheduled
+              if (!throttleTimeoutRef.current) {
+                const delay = THROTTLE_WINDOW_MS - (now - lastReload)
+                throttleTimeoutRef.current = window.setTimeout(() => {
+                  globalListenerState.lastReloadTimestamp = Date.now()
+                  void loadData({ specificFilter: currentFilterRef.current, reset: true })
+                  throttleTimeoutRef.current = null
+                }, delay)
+              }
             }
           })
 
@@ -201,14 +202,14 @@ const DashboardPage: React.FC = () => {
 
     // Cleanup function when component unmounts
     return () => {
-      // Clear debounce timer
-      if (debouncedLoadRef.current) {
-        clearTimeout(debouncedLoadRef.current)
+      // Clear trailing throttle timer
+      if (throttleTimeoutRef.current) {
+        clearTimeout(throttleTimeoutRef.current)
       }
       // Don't clean up global listener, keep it active
       console.log(t('dashboard.logs.componentUnmounting'))
     }
-  }, [debouncedLoadData, t])
+  }, [loadData, t])
 
   // Listen for encryption session ready event
   useEffect(() => {
