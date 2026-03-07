@@ -59,7 +59,7 @@
 | BOUND-04    | Phase 10 | Pending  |
 | CONTRACT-01 | Phase 14 | Pending  |
 | CONTRACT-02 | Phase 11 | Complete |
-| CONTRACT-03 | Phase 15 | Pending  |
+| CONTRACT-03 | Phase 15 | Complete |
 | CONTRACT-04 | Phase 11 | Complete |
 | LIFE-01     | Phase 12 | Complete |
 | LIFE-02     | Phase 12 | Complete |
