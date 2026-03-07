@@ -689,4 +689,107 @@ mod tests {
         assert_eq!(result[0].id, good_entry_id.inner().clone());
         assert_eq!(result[0].preview, "good-content");
     }
+
+    #[tokio::test]
+    async fn test_projection_defaults_is_favorited_false() {
+        let entry_id = EntryId::from("entry-favorite-default");
+        let event_id = EventId::from("event-favorite-default");
+        let rep_id = RepresentationId::from("rep-favorite-default");
+
+        let entry = ClipboardEntry::new(
+            entry_id.clone(),
+            event_id.clone(),
+            1_000,
+            Some("favorite default".to_string()),
+            128,
+        );
+
+        let selection = ClipboardSelectionDecision::new(
+            entry_id.clone(),
+            ClipboardSelection {
+                primary_rep_id: rep_id.clone(),
+                secondary_rep_ids: vec![],
+                preview_rep_id: rep_id.clone(),
+                paste_rep_id: rep_id.clone(),
+                policy_version: SelectionPolicyVersion::V1,
+            },
+        );
+
+        let representation = PersistedClipboardRepresentation::new(
+            rep_id.clone(),
+            FormatId::from("public.utf8-plain-text"),
+            Some(MimeType("text/plain".to_string())),
+            128,
+            Some(b"favorite-default".to_vec()),
+            None,
+        );
+
+        let entry_repo = Arc::new(MockEntryRepository {
+            entries: vec![entry],
+        });
+        let selection_repo = Arc::new(MockSelectionRepository {
+            selections: HashMap::from([(entry_id.inner().clone(), selection)]),
+        });
+        let representation_repo = Arc::new(MockRepresentationRepository {
+            representations: HashMap::from([(
+                (event_id.inner().clone(), rep_id.inner().clone()),
+                representation,
+            )]),
+            fail_keys: HashSet::new(),
+        });
+        let thumbnail_repo = Arc::new(MockThumbnailRepository {
+            thumbnails: HashMap::new(),
+        });
+
+        let use_case = ListClipboardEntryProjections::new(
+            entry_repo,
+            selection_repo,
+            representation_repo,
+            thumbnail_repo,
+        );
+
+        let result = use_case.execute(10, 0).await.expect("expected projections");
+        let projection = result.first().expect("expected projection");
+
+        assert!(!projection.is_favorited);
+    }
+
+    #[test]
+    fn test_compute_clipboard_stats_sums_items_and_size() {
+        use crate::usecases::clipboard::{compute_clipboard_stats, ClipboardStats};
+
+        let projections = vec![
+            EntryProjectionDto {
+                id: "1".to_string(),
+                preview: "first".to_string(),
+                has_detail: true,
+                size_bytes: 10,
+                captured_at: 1,
+                content_type: "text/plain".to_string(),
+                thumbnail_url: None,
+                is_encrypted: false,
+                is_favorited: false,
+                updated_at: 1,
+                active_time: 1,
+            },
+            EntryProjectionDto {
+                id: "2".to_string(),
+                preview: "second".to_string(),
+                has_detail: false,
+                size_bytes: 20,
+                captured_at: 2,
+                content_type: "text/plain".to_string(),
+                thumbnail_url: None,
+                is_encrypted: false,
+                is_favorited: false,
+                updated_at: 2,
+                active_time: 2,
+            },
+        ];
+
+        let stats: ClipboardStats = compute_clipboard_stats(&projections);
+
+        assert_eq!(stats.total_items, 2);
+        assert_eq!(stats.total_size, 30);
+    }
 }

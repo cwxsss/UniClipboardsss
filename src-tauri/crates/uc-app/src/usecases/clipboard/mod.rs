@@ -9,6 +9,29 @@ pub mod sync_inbound;
 pub mod sync_outbound;
 pub mod touch_clipboard_entry;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardStats {
+    pub total_items: i64,
+    pub total_size: i64,
+}
+
+pub struct ClipboardUseCases;
+
+impl ClipboardUseCases {
+    pub fn compute_stats(entries: &[EntryProjectionDto]) -> ClipboardStats {
+        compute_clipboard_stats(entries)
+    }
+}
+
+pub fn compute_clipboard_stats(entries: &[EntryProjectionDto]) -> ClipboardStats {
+    let total_items = entries.len() as i64;
+    let total_size = entries.iter().map(|e| e.size_bytes).sum();
+    ClipboardStats {
+        total_items,
+        total_size,
+    }
+}
+
 pub use integration_mode::ClipboardIntegrationMode;
 pub use list_entry_projections::{
     EntryProjectionDto, ListClipboardEntryProjections, ListProjectionsError,
