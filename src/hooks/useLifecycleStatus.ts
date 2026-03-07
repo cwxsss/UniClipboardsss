@@ -1,9 +1,10 @@
 import { listen } from '@tauri-apps/api/event'
 import { useState, useEffect, useCallback } from 'react'
-import { getLifecycleStatus, retryLifecycle, LifecycleState } from '@/api/lifecycle'
+import { getLifecycleStatus, retryLifecycle } from '@/api/lifecycle'
+import type { CommandError, LifecycleStatusDto } from '@/api/types'
 
 export function useLifecycleStatus() {
-  const [status, setStatus] = useState<LifecycleState>('Idle')
+  const [status, setStatus] = useState<LifecycleStatusDto | null>(null)
   const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
@@ -11,8 +12,8 @@ export function useLifecycleStatus() {
     getLifecycleStatus()
       .then(setStatus)
       .catch(() => {
-        // If the command fails, assume idle
-        setStatus('Idle')
+        // If the command fails, leave status null (unknown)
+        setStatus(null)
       })
 
     // Listen for lifecycle events
@@ -34,8 +35,10 @@ export function useLifecycleStatus() {
       await retryLifecycle()
       const newStatus = await getLifecycleStatus()
       setStatus(newStatus)
-    } catch {
-      // Refresh status even on failure
+    } catch (error) {
+      // Refresh status even on failure; if backend returns CommandError, callers
+      // can choose to surface `code`/`message` in the UI later.
+      const _typedError = error as CommandError | unknown
       try {
         const newStatus = await getLifecycleStatus()
         setStatus(newStatus)

@@ -8806,6 +8806,7 @@ dependencies = [
  "tracing-subscriber",
  "uc-core",
  "uc-infra",
+ "uc-platform",
  "uuid",
 ]
 

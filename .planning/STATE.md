@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: 3
-status: completed
-stopped_at: Completed 13-02-PLAN.md
-last_updated: '2026-03-06T16:37:41.952Z'
-last_activity: 2026-03-06
+current_plan: 2
+status: in_progress
+stopped_at: Completed 14-02-PLAN.md
+last_updated: '2026-03-07T00:00:00.000Z'
+last_activity: 2026-03-07
 progress:
   total_phases: 4
   completed_phases: 4
@@ -22,16 +22,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-06)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Milestone v0.2.0 execution in progress; Phase 12 lifecycle governance baseline
+**Current focus:** Milestone v0.2.0 execution in progress; Phase 14 lifecycle DTO/frontend integration
 
 ## Current Position
 
-Phase: 12 of 13 (Lifecycle Governance Baseline)
-Plan: 1 of 3 in current phase (12-01 complete)
-Current Plan: 3
-Total Plans in Phase: 3
-Status: Phase 12 plan 01 complete; plan 02 pending
-Last activity: 2026-03-06
+Phase: 14 of 14 (Lifecycle DTO + Frontend Integration)
+Plan: 2 of 2 in current phase (14-02 executing)
+Current Plan: 2
+Total Plans in Phase: 2
+Status: Phase 14 plan 01 complete; plan 02 lifecycle UI + tests implemented
+Last activity: 2026-03-07
 
 Progress: [██████████] 100%
 
@@ -64,6 +64,10 @@ Progress: [██████████] 100%
 - [Phase 13]: PairingSessionManager owns sessions and session_peers maps; orchestrator accesses via accessor methods
 - [Phase 13]: PairingProtocolHandler receives session/peer map references per-call rather than owning them
 - [Phase 13]: Session state passed as borrowed Arc refs to action executor methods -- avoids circular ownership
+- [Phase 14-01]: Frontend represents lifecycle status as LifecycleStatusDto DTO, not bare string state.
+- [Phase 14-01]: CommandError is modeled as { code, message } discriminated union, ready for future UI handling.
+- [Phase 14-02]: Dashboard lifecycle banner is driven by LifecycleStatusDto.state, covering Idle/Pending (initialization) and WatcherFailed/NetworkFailed (failure) states with a retry action.
+- [Phase 14-02]: Backend lifecycle and CommandError contracts are guarded by dedicated uc-tauri tests; frontend DTO shapes are validated via Vitest.
 
 ### Pending Todos
 
@@ -75,8 +79,8 @@ None.
 
 ## Session Continuity
 
-Last activity: 2026-03-06 - Phase 12 plan 12-01 execution complete
-Stopped at: Completed 13-02-PLAN.md
+Last activity: 2026-03-07 - Phase 14 plan 14-02 execution complete
+Stopped at: Completed 14-02-PLAN.md
 Resume file: None
 
 ## Performance Metrics

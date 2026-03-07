@@ -33,7 +33,7 @@ const DashboardPage: React.FC = () => {
   const { searchValue } = useSearch()
   const [currentFilter, setCurrentFilter] = useState<Filter>(Filter.All)
   const dispatch = useAppDispatch()
-  const { status: lifecycleStatus, retry: retryLifecycle, retrying } = useLifecycleStatus()
+  const { status: lifecycleStatusDto, retry: retryLifecycle, retrying } = useLifecycleStatus()
 
   // 设置当前页面作用域为 clipboard
   useShortcutScope('clipboard')
@@ -295,10 +295,11 @@ const DashboardPage: React.FC = () => {
       <Header onFilterChange={handleFilterChange} className="hidden" />
 
       {/* Lifecycle failure banner */}
-      {(lifecycleStatus === 'WatcherFailed' || lifecycleStatus === 'NetworkFailed') && (
+      {(lifecycleStatusDto?.state === 'WatcherFailed' ||
+        lifecycleStatusDto?.state === 'NetworkFailed') && (
         <div className="mx-3 mt-2 mb-1 p-3 rounded-md bg-destructive/10 border border-destructive/20 flex items-center justify-between">
           <span className="text-sm font-medium text-destructive">
-            {lifecycleStatus === 'WatcherFailed'
+            {lifecycleStatusDto?.state === 'WatcherFailed'
               ? t('lifecycle.watcherFailed')
               : t('lifecycle.networkFailed')}
           </span>

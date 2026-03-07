@@ -499,8 +499,8 @@ fn run_app(config: AppConfig) {
     let background = wired.background;
     let watcher_control = wired.watcher_control;
 
-    let pairing_device_repo = deps.paired_device_repo.clone();
-    let pairing_device_identity = deps.device_identity.clone();
+    let pairing_device_repo = deps.device.paired_device_repo.clone();
+    let pairing_device_identity = deps.device.device_identity.clone();
     let pairing_settings = deps.settings.clone();
     let discovery_network = deps.network_ports.peers.clone();
     let pairing_peer_id = background.libp2p_network.local_peer_id();
