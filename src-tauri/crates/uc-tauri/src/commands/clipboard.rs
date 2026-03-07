@@ -154,16 +154,33 @@ pub async fn toggle_favorite_clipboard_item(
     async move {
         let entry_id = EntryId::from(id.clone());
 
-        // Favorite domain support is not yet implemented in uc-app.
-        // For now, we log and surface a NotFound contract so the
-        // frontend can handle the error path explicitly.
-        tracing::warn!(
-            entry_id = %entry_id,
-            is_favorited,
-            "toggle_favorite_clipboard_item not implemented at app layer yet",
-        );
-
-        Err(CommandError::NotFound("Entry not found".to_string()))
+        let uc = runtime.usecases().toggle_favorite_clipboard_entry();
+        match uc.execute(&entry_id, is_favorited).await {
+            Ok(true) => {
+                tracing::info!(
+                    entry_id = %entry_id,
+                    is_favorited,
+                    "Toggled favorite for clipboard entry",
+                );
+                Ok(())
+            }
+            Ok(false) => {
+                tracing::warn!(
+                    entry_id = %entry_id,
+                    is_favorited,
+                    "Entry not found for favorite toggle",
+                );
+                Err(CommandError::NotFound("Entry not found".to_string()))
+            }
+            Err(e) => {
+                tracing::error!(
+                    entry_id = %entry_id,
+                    error = %e,
+                    "Failed to toggle favorite for clipboard entry",
+                );
+                Err(CommandError::InternalError(e.to_string()))
+            }
+        }
     }
     .instrument(span)
     .await
