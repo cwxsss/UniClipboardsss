@@ -380,7 +380,7 @@ export function isTextType(contentType: string): boolean {
  */
 export async function favoriteClipboardItem(id: string): Promise<boolean> {
   try {
-    return await invokeWithTrace('toggle_favorite_clipboard_item', { id, isFavorited: true })
+    return await invokeWithTrace('toggle_favorite_clipboard_item', { id, is_favorited: true })
   } catch (error) {
     console.error('收藏剪贴板条目失败:', error)
     throw error
@@ -394,7 +394,7 @@ export async function favoriteClipboardItem(id: string): Promise<boolean> {
  */
 export async function unfavoriteClipboardItem(id: string): Promise<boolean> {
   try {
-    return await invokeWithTrace('toggle_favorite_clipboard_item', { id, isFavorited: false })
+    return await invokeWithTrace('toggle_favorite_clipboard_item', { id, is_favorited: false })
   } catch (error) {
     console.error('取消收藏剪贴板条目失败:', error)
     throw error
