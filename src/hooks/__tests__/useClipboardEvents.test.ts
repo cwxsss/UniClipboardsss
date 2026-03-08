@@ -59,7 +59,8 @@ function createTestStore() {
 
   // Spy on dispatch to record actions
   const originalDispatch = store.dispatch.bind(store)
-  store.dispatch = ((action: unknown) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  store.dispatch = ((action: any) => {
     if (action && typeof action === 'object' && 'type' in action) {
       dispatchedActions.push(action as { type: string; payload?: unknown })
     }
@@ -71,26 +72,22 @@ function createTestStore() {
 function createWrapper() {
   const store = createTestStore()
   const Wrapper = ({ children }: { children: React.ReactNode }) =>
-    React.createElement(Provider, { store }, children)
+    React.createElement(Provider, { store, children })
   return { Wrapper, store }
 }
 
 describe('useClipboardEvents', () => {
   let clipboardListenerCallback: ((event: { payload: unknown }) => void) | null = null
-  let _encryptionListenerCallback: ((event: { payload: unknown }) => void) | null = null
   const mockUnlisten = vi.fn()
 
   beforeEach(() => {
     vi.clearAllMocks()
     dispatchedActions = []
     clipboardListenerCallback = null
-    _encryptionListenerCallback = null
 
     mockListen.mockImplementation(async (channel: string, callback: unknown) => {
       if (channel === 'clipboard://event') {
         clipboardListenerCallback = callback as (event: { payload: unknown }) => void
-      } else if (channel === 'encryption://event') {
-        _encryptionListenerCallback = callback as (event: { payload: unknown }) => void
       }
       return mockUnlisten
     })
