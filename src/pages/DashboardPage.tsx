@@ -15,7 +15,6 @@ const DashboardPage: React.FC = () => {
   const { status: lifecycleStatusDto, retry: retryLifecycle, retrying } = useLifecycleStatus()
 
   useShortcutScope('clipboard')
-
   const { hasMore, handleLoadMore } = useClipboardEvents(currentFilter)
 
   const handleFilterChange = (filterId: Filter) => {
