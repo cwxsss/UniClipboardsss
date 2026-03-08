@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tauri::AppHandle;
 use tauri_plugin_autostart::ManagerExt as _;
-use uc_core::ports::AutostartPort;
+use uc_platform::ports::AutostartPort;
 
 /// Tauri-specific runtime adapter for autostart functionality.
 ///

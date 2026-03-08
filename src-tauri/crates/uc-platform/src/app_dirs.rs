@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
-use uc_core::{
-    app_dirs::AppDirs,
-    ports::{AppDirsError, AppDirsPort},
-};
+use crate::ports::AppDirsPort;
+use uc_core::app_dirs::AppDirs;
+use uc_core::ports::AppDirsError;
 
 const APP_DIR_NAME: &str = "uniclipboard";
 
@@ -99,7 +98,7 @@ impl AppDirsPort for DirsAppDirsAdapter {
     /// # Examples
     ///
     /// ```
-    /// use uc_core::ports::AppDirsPort;
+    /// use uc_platform::ports::AppDirsPort;
     /// use uc_platform::app_dirs::DirsAppDirsAdapter;
     ///
     /// let adapter = DirsAppDirsAdapter::new();
@@ -122,8 +121,8 @@ impl AppDirsPort for DirsAppDirsAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::AppDirsPort;
     use crate::test_support::with_uc_profile;
-    use uc_core::ports::AppDirsPort;
 
     /// Verifies that the adapter appends the `uniclipboard` directory name to the base data directory.
     ///

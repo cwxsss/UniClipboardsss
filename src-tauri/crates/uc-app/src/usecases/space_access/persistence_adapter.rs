@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-use crate::usecases::pairing::staged_paired_device_store;
+use crate::usecases::pairing::staged_paired_device_store::StagedPairedDeviceStore;
 use uc_core::ids::{PeerId, SpaceId};
 use uc_core::network::PairingState;
 use uc_core::ports::paired_device_repository::PairedDeviceRepositoryPort;
@@ -13,6 +13,7 @@ use uc_core::ports::space::PersistencePort;
 pub struct SpaceAccessPersistenceAdapter {
     encryption_state: Arc<dyn EncryptionStatePort>,
     paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+    staged_store: Arc<StagedPairedDeviceStore>,
 }
 
 enum TrustPromotionSource {
@@ -24,18 +25,20 @@ impl SpaceAccessPersistenceAdapter {
     pub fn new(
         encryption_state: Arc<dyn EncryptionStatePort>,
         paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+        staged_store: Arc<StagedPairedDeviceStore>,
     ) -> Self {
         Self {
             encryption_state,
             paired_device_repo,
+            staged_store,
         }
     }
 
     async fn promote_peer_to_trusted(&self, peer_id: &str) -> anyhow::Result<TrustPromotionSource> {
-        if let Some(mut staged_device) = staged_paired_device_store::get_by_peer_id(peer_id) {
+        if let Some(mut staged_device) = self.staged_store.get_by_peer_id(peer_id) {
             staged_device.pairing_state = PairingState::Trusted;
             self.paired_device_repo.upsert(staged_device).await?;
-            if staged_paired_device_store::take_by_peer_id(peer_id).is_none() {
+            if self.staged_store.take_by_peer_id(peer_id).is_none() {
                 warn!(
                     peer_id = %peer_id,
                     operation = "take_by_peer_id",
@@ -110,18 +113,13 @@ impl PersistencePort for SpaceAccessPersistenceAdapter {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Arc, OnceLock};
+    use std::sync::Arc;
 
     use chrono::Utc;
     use tokio::sync::Mutex;
     use uc_core::network::PairedDevice;
     use uc_core::ports::errors::PairedDeviceRepositoryError;
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
-
-    fn test_staged_store_lock() -> &'static Mutex<()> {
-        static TEST_STAGED_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        TEST_STAGED_STORE_LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     struct MockEncryptionState;
 
@@ -198,8 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_deferred_persistence_promotes_to_trusted_on_proof_verified() {
-        let _guard = test_staged_store_lock().lock().await;
-        staged_paired_device_store::clear();
+        let staged_store = Arc::new(StagedPairedDeviceStore::new());
         let peer_id = PeerId::from("peer-1");
         let repo = Arc::new(MockPairedDeviceRepo::default());
 
@@ -214,8 +211,11 @@ mod tests {
         .await
         .expect("seed pending paired device");
 
-        let mut adapter =
-            SpaceAccessPersistenceAdapter::new(Arc::new(MockEncryptionState), repo.clone());
+        let mut adapter = SpaceAccessPersistenceAdapter::new(
+            Arc::new(MockEncryptionState),
+            repo.clone(),
+            staged_store,
+        );
 
         assert_eq!(
             repo.state_of(peer_id.as_str()).await,
@@ -235,10 +235,9 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_deferred_persistence_commits_staged_device_on_proof_verified() {
-        let _guard = test_staged_store_lock().lock().await;
-        staged_paired_device_store::clear();
+        let staged_store = Arc::new(StagedPairedDeviceStore::new());
         let peer_id = PeerId::from("peer-staged");
-        staged_paired_device_store::stage(
+        staged_store.stage(
             "session-staged",
             PairedDevice {
                 peer_id: peer_id.clone(),
@@ -251,8 +250,11 @@ mod tests {
         );
 
         let repo = Arc::new(MockPairedDeviceRepo::default());
-        let mut adapter =
-            SpaceAccessPersistenceAdapter::new(Arc::new(MockEncryptionState), repo.clone());
+        let mut adapter = SpaceAccessPersistenceAdapter::new(
+            Arc::new(MockEncryptionState),
+            repo.clone(),
+            staged_store,
+        );
 
         adapter
             .persist_sponsor_access(&SpaceId::from("space-1"), peer_id.as_str())
@@ -267,8 +269,7 @@ mod tests {
 
     #[tokio::test]
     async fn joiner_persistence_promotes_peer_to_trusted() {
-        let _guard = test_staged_store_lock().lock().await;
-        staged_paired_device_store::clear();
+        let staged_store = Arc::new(StagedPairedDeviceStore::new());
         let peer_id = PeerId::from("peer-joiner");
         let repo = Arc::new(MockPairedDeviceRepo::default());
         repo.upsert(PairedDevice {
@@ -282,8 +283,11 @@ mod tests {
         .await
         .expect("seed pending paired device");
 
-        let mut adapter =
-            SpaceAccessPersistenceAdapter::new(Arc::new(MockEncryptionState), repo.clone());
+        let mut adapter = SpaceAccessPersistenceAdapter::new(
+            Arc::new(MockEncryptionState),
+            repo.clone(),
+            staged_store,
+        );
 
         adapter
             .persist_joiner_access(&SpaceId::from("space-1"), peer_id.as_str())
@@ -298,10 +302,9 @@ mod tests {
 
     #[tokio::test]
     async fn joiner_persistence_promotes_staged_device_and_consumes_stage() {
-        let _guard = test_staged_store_lock().lock().await;
-        staged_paired_device_store::clear();
+        let staged_store = Arc::new(StagedPairedDeviceStore::new());
         let peer_id = PeerId::from("peer-joiner-staged");
-        staged_paired_device_store::stage(
+        staged_store.stage(
             "session-joiner-staged",
             PairedDevice {
                 peer_id: peer_id.clone(),
@@ -313,11 +316,14 @@ mod tests {
             },
         );
 
-        assert!(staged_paired_device_store::get_by_peer_id(peer_id.as_str()).is_some());
+        assert!(staged_store.get_by_peer_id(peer_id.as_str()).is_some());
 
         let repo = Arc::new(MockPairedDeviceRepo::default());
-        let mut adapter =
-            SpaceAccessPersistenceAdapter::new(Arc::new(MockEncryptionState), repo.clone());
+        let mut adapter = SpaceAccessPersistenceAdapter::new(
+            Arc::new(MockEncryptionState),
+            repo.clone(),
+            staged_store.clone(),
+        );
 
         adapter
             .persist_joiner_access(&SpaceId::from("space-1"), peer_id.as_str())
@@ -328,7 +334,7 @@ mod tests {
             repo.state_of(peer_id.as_str()).await,
             Some(PairingState::Trusted)
         );
-        assert!(staged_paired_device_store::get_by_peer_id(peer_id.as_str()).is_none());
-        assert!(staged_paired_device_store::take_by_peer_id(peer_id.as_str()).is_none());
+        assert!(staged_store.get_by_peer_id(peer_id.as_str()).is_none());
+        assert!(staged_store.take_by_peer_id(peer_id.as_str()).is_none());
     }
 }
