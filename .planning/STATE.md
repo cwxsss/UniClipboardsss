@@ -4,14 +4,14 @@ milestone: v0.1
 milestone_name: milestone
 current_plan: 2
 status: completed
-stopped_at: Completed 16-01-PLAN.md
-last_updated: '2026-03-08T07:54:37.346Z'
+stopped_at: Completed 16-02-PLAN.md
+last_updated: '2026-03-08T08:03:05.577Z'
 last_activity: 2026-03-08
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 17
-  completed_plans: 16
+  completed_plans: 17
   percent: 100
 ---
 
@@ -72,6 +72,7 @@ Progress: [██████████] 100%
 - [Phase 15-clipboard-management-command-wiring]: Toggle favorite validates entry existence but defers schema persistence; get_clipboard_item reuses list_entry_projections.
 - [Phase 16]: execute_single returns Ok(None) for missing selection/representation, matching execute() skip behavior
 - [Phase 16]: get_clipboard_entry uses ClipboardEntriesResponse enum for frontend API consistency
+- [Phase 16]: Throttle window reduced to 300ms; getClipboardEntry returns null on error for silent fallback; transformProjectionToResponse extracted as shared helper
 
 ### Roadmap Evolution
 
@@ -92,7 +93,7 @@ None.
 ## Session Continuity
 
 Last activity: 2026-03-07 - Phase 14 plan 14-02 execution complete
-Stopped at: Completed 16-01-PLAN.md
+Stopped at: Completed 16-02-PLAN.md
 Resume file: None
 
 ## Performance Metrics
@@ -110,3 +111,4 @@ Resume file: None
 | Phase 15-clipboard-management-command-wiring P01 | 30min    | 2 tasks | 5 files  |
 | Phase 15-clipboard-management-command-wiring P03 | 12min    | 3 tasks | 6 files  |
 | Phase 16 P01                                     | 8min     | 2 tasks | 10 files |
+| Phase 16 P02                                     | 6min     | 2 tasks | 4 files  |
