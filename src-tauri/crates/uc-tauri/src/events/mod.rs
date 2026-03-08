@@ -15,7 +15,11 @@ pub use p2p_peer::{P2PPeerConnectionEvent, P2PPeerDiscoveryEvent, P2PPeerNameUpd
 #[serde(tag = "type")]
 pub enum ClipboardEvent {
     /// New clipboard content captured
-    NewContent { entry_id: String, preview: String },
+    NewContent {
+        entry_id: String,
+        preview: String,
+        origin: String,
+    },
     /// Clipboard content deleted
     Deleted { entry_id: String },
 }

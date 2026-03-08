@@ -71,6 +71,145 @@ impl ListClipboardEntryProjections {
         }
     }
 
+    /// Execute the use case for a single entry by ID
+    pub async fn execute_single(
+        &self,
+        entry_id: &str,
+    ) -> Result<Option<EntryProjectionDto>, ListProjectionsError> {
+        use uc_core::ids::EntryId;
+
+        let id = EntryId::from(entry_id);
+        let entry = self
+            .entry_repo
+            .get_entry(&id)
+            .await
+            .map_err(|e| ListProjectionsError::RepositoryError(e.to_string()))?;
+
+        let entry = match entry {
+            Some(e) => e,
+            None => return Ok(None),
+        };
+
+        let entry_id_str = entry.entry_id.inner().clone();
+        let event_id_str = entry.event_id.inner().clone();
+        let captured_at = entry.created_at_ms;
+        let active_time = entry.active_time_ms;
+
+        // Get selection for this entry
+        let selection = match self.selection_repo.get_selection(&entry.entry_id).await {
+            Ok(Some(selection)) => selection,
+            Ok(None) => {
+                warn!(
+                    entry_id = %entry_id_str,
+                    "Entry has no selection"
+                );
+                return Ok(None);
+            }
+            Err(e) => {
+                return Err(ListProjectionsError::RepositoryError(format!(
+                    "Selection lookup failed for {}: {}",
+                    entry_id_str, e
+                )));
+            }
+        };
+
+        // Get preview representation
+        let preview_rep_id = selection.selection.preview_rep_id.inner().clone();
+        let representation = match self
+            .representation_repo
+            .get_representation(&entry.event_id, &selection.selection.preview_rep_id)
+            .await
+        {
+            Ok(Some(rep)) => rep,
+            Ok(None) => {
+                warn!(
+                    event_id = %event_id_str,
+                    preview_rep_id = %preview_rep_id,
+                    "Preview representation missing"
+                );
+                return Ok(None);
+            }
+            Err(e) => {
+                return Err(ListProjectionsError::RepositoryError(format!(
+                    "Representation lookup failed for {}: {}",
+                    event_id_str, e
+                )));
+            }
+        };
+
+        let is_image = representation
+            .mime_type
+            .as_ref()
+            .map(|mt| {
+                mt.as_str()
+                    .to_ascii_lowercase()
+                    .starts_with(MIME_IMAGE_PREFIX)
+            })
+            .unwrap_or(false);
+
+        let preview = if let Some(data) = representation.inline_data.as_ref() {
+            String::from_utf8_lossy(data).trim().to_string()
+        } else if is_image {
+            format!("Image ({} bytes)", representation.size_bytes)
+        } else {
+            entry
+                .title
+                .as_ref()
+                .map(|title| title.trim().to_string())
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| {
+                    "Text content (full payload in background processing)".to_string()
+                })
+        };
+
+        let content_type = representation
+            .mime_type
+            .as_ref()
+            .map(|mt| mt.as_str().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let thumbnail_url = if is_image {
+            match self
+                .thumbnail_repo
+                .get_by_representation_id(&selection.selection.preview_rep_id)
+                .await
+            {
+                Ok(Some(_metadata)) => Some(format!("uc://thumbnail/{}", preview_rep_id)),
+                Ok(None) => None,
+                Err(err) => {
+                    tracing::error!(
+                        error = %err,
+                        entry_id = %entry_id_str,
+                        "Failed to fetch thumbnail metadata"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let has_detail = representation.blob_id.is_some()
+            || matches!(
+                representation.payload_state(),
+                PayloadAvailability::Staged | PayloadAvailability::Processing
+            );
+
+        Ok(Some(EntryProjectionDto {
+            id: entry_id_str,
+            preview,
+            has_detail,
+            size_bytes: entry.total_size,
+            captured_at,
+            content_type,
+            thumbnail_url,
+            is_encrypted: false,
+            is_favorited: false,
+            updated_at: captured_at,
+            active_time,
+        }))
+    }
+
     /// Execute the use case
     pub async fn execute(
         &self,

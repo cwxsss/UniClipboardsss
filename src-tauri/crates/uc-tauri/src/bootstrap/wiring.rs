@@ -1602,6 +1602,7 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                                 let event = ClipboardEvent::NewContent {
                                     entry_id: entry_id.to_string(),
                                     preview: "Remote clipboard content applied".to_string(),
+                                    origin: "remote".to_string(),
                                 };
                                 if let Err(emit_err) = forward_clipboard_event(app, event) {
                                     warn!(error = %emit_err, message_id = %message_id, "Failed to emit clipboard event after inbound apply in passive mode");

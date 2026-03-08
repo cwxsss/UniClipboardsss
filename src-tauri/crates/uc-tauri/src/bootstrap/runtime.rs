@@ -1022,9 +1022,15 @@ impl ClipboardChangeHandler for AppRuntime {
                     poisoned.into_inner()
                 });
                 if let Some(app) = app_handle_guard.as_ref() {
+                    let origin_str = match origin {
+                        ClipboardChangeOrigin::LocalCapture
+                        | ClipboardChangeOrigin::LocalRestore => "local",
+                        ClipboardChangeOrigin::RemotePush => "remote",
+                    };
                     let event = ClipboardEvent::NewContent {
                         entry_id: entry_id.to_string(),
                         preview: "New clipboard content".to_string(),
+                        origin: origin_str.to_string(),
                     };
 
                     if let Err(e) = app.emit("clipboard://event", event) {

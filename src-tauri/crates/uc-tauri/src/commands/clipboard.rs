@@ -188,6 +188,66 @@ pub async fn toggle_favorite_clipboard_item(
     .await
 }
 
+/// Get a single clipboard entry by entry_id, returning ClipboardEntriesResponse.
+/// Uses execute_single for efficient single-entry lookup.
+/// 通过 entry_id 获取单个剪贴板条目，使用 execute_single 高效查找。
+#[tauri::command]
+pub async fn get_clipboard_entry(
+    runtime: State<'_, Arc<AppRuntime>>,
+    entry_id: String,
+    _trace: Option<TraceMetadata>,
+) -> Result<ClipboardEntriesResponse, CommandError> {
+    let device_id = runtime.device_id();
+
+    let span = info_span!(
+        "command.clipboard.get_entry_single",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+        device_id = %device_id,
+        entry_id = %entry_id,
+    );
+    record_trace_fields(&span, &_trace);
+
+    async move {
+        // Check encryption session readiness
+        let encryption_state = runtime.encryption_state().await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to check encryption state");
+            CommandError::InternalError(format!("Failed to check encryption state: {}", e))
+        })?;
+        let session_ready = runtime.is_encryption_ready().await;
+        if should_return_not_ready(encryption_state, session_ready) {
+            return Ok(ClipboardEntriesResponse::NotReady);
+        }
+
+        let uc = runtime.usecases().list_entry_projections();
+        let projection = uc.execute_single(&entry_id).await.map_err(|e| {
+            tracing::error!(error = %e, "Failed to get single entry projection");
+            CommandError::InternalError(e.to_string())
+        })?;
+
+        let entries: Vec<ClipboardEntryProjection> = match projection {
+            Some(dto) => vec![ClipboardEntryProjection {
+                id: dto.id,
+                preview: dto.preview,
+                has_detail: dto.has_detail,
+                size_bytes: dto.size_bytes,
+                captured_at: dto.captured_at,
+                content_type: dto.content_type,
+                thumbnail_url: dto.thumbnail_url,
+                is_encrypted: dto.is_encrypted,
+                is_favorited: dto.is_favorited,
+                updated_at: dto.updated_at,
+                active_time: dto.active_time,
+            }],
+            None => vec![],
+        };
+
+        Ok(ClipboardEntriesResponse::Ready { entries })
+    }
+    .instrument(span)
+    .await
+}
+
 /// Get a single clipboard item by ID, returning a response matching the
 /// frontend ClipboardItemResponse contract. Returns Ok(None) when the entry
 /// does not exist.
@@ -562,6 +622,7 @@ async fn restore_clipboard_entry_impl(
                 crate::events::ClipboardEvent::NewContent {
                     entry_id: entry_id.clone(),
                     preview: "Clipboard restored".to_string(),
+                    origin: "local".to_string(),
                 },
             ) {
                 tracing::warn!(error = %err, entry_id = %entry_id, "Failed to emit restore event");
