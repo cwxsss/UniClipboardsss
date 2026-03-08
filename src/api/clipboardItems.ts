@@ -124,6 +124,46 @@ export interface ClipboardStats {
 }
 
 /**
+ * Transform a backend ClipboardEntryProjection to frontend ClipboardItemResponse.
+ * Shared by getClipboardItems and getClipboardEntry to avoid duplication.
+ */
+function transformProjectionToResponse(entry: ClipboardEntryProjection): ClipboardItemResponse {
+  const isImage = isImageType(entry.content_type)
+
+  const item: ClipboardItem = {
+    image: isImage
+      ? {
+          thumbnail: entry.thumbnail_url ?? null,
+          size: entry.size_bytes,
+          width: 0,
+          height: 0,
+        }
+      : null,
+    text: !isImage
+      ? {
+          display_text: entry.preview,
+          has_detail: entry.has_detail,
+          size: entry.size_bytes,
+        }
+      : null,
+    file: null as unknown as ClipboardFileItem,
+    link: null as unknown as ClipboardLinkItem,
+    code: null as unknown as ClipboardCodeItem,
+    unknown: null,
+  }
+
+  return {
+    id: entry.id,
+    is_downloaded: true,
+    is_favorited: entry.is_favorited,
+    created_at: entry.captured_at,
+    updated_at: entry.updated_at,
+    active_time: entry.active_time,
+    item,
+  }
+}
+
+/**
  * 获取剪贴板统计信息
  * @returns Promise，返回剪贴板统计信息
  */
@@ -166,48 +206,33 @@ export async function getClipboardItems(
     }
 
     // Transform backend projection to frontend response format
-    // TODO: Currently treating all entries as text. Implement proper content type detection
-    // when backend provides accurate content_type values
-    const items = response.entries.map(entry => {
-      const isImage = isImageType(entry.content_type)
-
-      const item: ClipboardItem = {
-        image: isImage
-          ? {
-              thumbnail: entry.thumbnail_url ?? null,
-              size: entry.size_bytes,
-              width: 0, // TODO: 使用原图的宽高信息
-              height: 0,
-            }
-          : null,
-        text: !isImage
-          ? {
-              display_text: entry.preview, // Use preview directly from backend
-              has_detail: entry.has_detail, // Indicates if full content is available via resource
-              size: entry.size_bytes,
-            }
-          : null,
-        file: null as unknown as ClipboardFileItem,
-        link: null as unknown as ClipboardLinkItem,
-        code: null as unknown as ClipboardCodeItem,
-        unknown: null,
-      }
-
-      return {
-        id: entry.id,
-        is_downloaded: true, // Default to true for local entries
-        is_favorited: entry.is_favorited,
-        created_at: entry.captured_at,
-        updated_at: entry.updated_at,
-        active_time: entry.active_time,
-        item,
-      }
-    })
+    const items = response.entries.map(transformProjectionToResponse)
 
     return { status: 'ready', items }
   } catch (error) {
     console.error('获取剪贴板历史记录失败:', error)
     throw error
+  }
+}
+
+/**
+ * Fetch a single clipboard entry by ID using the new get_clipboard_entry command.
+ * Returns the transformed ClipboardItemResponse, or null if not ready / not found.
+ */
+export async function getClipboardEntry(entryId: string): Promise<ClipboardItemResponse | null> {
+  try {
+    const response = await invokeWithTrace<ClipboardEntriesResponse>('get_clipboard_entry', {
+      entryId,
+    })
+
+    if (response.status === 'not_ready' || response.entries.length === 0) {
+      return null
+    }
+
+    return transformProjectionToResponse(response.entries[0])
+  } catch (error) {
+    console.error('Failed to get clipboard entry:', error)
+    return null
   }
 }
 
