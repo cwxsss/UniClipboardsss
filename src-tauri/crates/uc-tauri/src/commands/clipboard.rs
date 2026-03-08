@@ -273,8 +273,6 @@ pub async fn get_clipboard_item(
     record_trace_fields(&span, &_trace);
 
     async move {
-        let parsed_id = EntryId::from(id.clone());
-
         // Use list_entry_projections to find the entry and build a response
         // that matches the frontend contract. This reuses existing projection
         // infrastructure rather than duplicating query logic.
@@ -667,6 +665,7 @@ mod tests {
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::{Blob, BlobId, ContentHash, DeviceId};
     use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
+    use uc_platform::ports::{WatcherControlError, WatcherControlPort};
 
     struct MockEntryRepository {
         entry: Option<ClipboardEntry>,
@@ -1320,27 +1319,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
-    impl UiPort for NoopPort {
-        async fn open_settings(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl AutostartPort for NoopPort {
-        fn is_enabled(&self) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-
-        fn enable(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn disable(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
     impl ClockPort for NoopPort {
         fn now_ms(&self) -> i64 {
             0
@@ -1383,49 +1361,56 @@ mod tests {
 
         let (worker_tx, _worker_rx) = mpsc::channel(1);
         let deps = AppDeps {
-            clipboard: Arc::new(NoopClipboard),
-            system_clipboard: Arc::new(MockSystemClipboard {
-                calls: calls.clone(),
-            }),
-            clipboard_entry_repo: Arc::new(MockEntryRepository {
-                entry: Some(entry),
-                touch_result: false,
-                calls: calls.clone(),
-            }),
-            clipboard_event_repo: Arc::new(NoopPort),
-            representation_repo: Arc::new(MockRepresentationRepository { reps }),
-            representation_normalizer: Arc::new(NoopPort),
-            selection_repo: Arc::new(MockSelectionRepository {
-                selection: Some(selection),
-            }),
-            representation_policy: Arc::new(NoopPort),
-            representation_cache: Arc::new(NoopPort),
-            spool_queue: Arc::new(NoopPort),
-            clipboard_change_origin: Arc::new(InMemoryClipboardChangeOrigin::new()),
-            worker_tx,
-            encryption: Arc::new(NoopPort),
-            encryption_session: Arc::new(NoopPort),
-            encryption_state: Arc::new(NoopPort),
-            key_scope: Arc::new(NoopPort),
-            secure_storage: Arc::new(NoopPort),
-            key_material: Arc::new(NoopPort),
-            watcher_control: Arc::new(NoopPort),
-            device_repo: Arc::new(NoopPort),
-            device_identity: Arc::new(MockDeviceIdentity),
-            paired_device_repo: Arc::new(NoopPort),
+            clipboard: uc_app::ClipboardPorts {
+                clipboard: Arc::new(NoopClipboard),
+                system_clipboard: Arc::new(MockSystemClipboard {
+                    calls: calls.clone(),
+                }),
+                clipboard_entry_repo: Arc::new(MockEntryRepository {
+                    entry: Some(entry),
+                    touch_result: false,
+                    calls: calls.clone(),
+                }),
+                clipboard_event_repo: Arc::new(NoopPort),
+                representation_repo: Arc::new(MockRepresentationRepository { reps }),
+                representation_normalizer: Arc::new(NoopPort),
+                selection_repo: Arc::new(MockSelectionRepository {
+                    selection: Some(selection),
+                }),
+                representation_policy: Arc::new(NoopPort),
+                representation_cache: Arc::new(NoopPort),
+                spool_queue: Arc::new(NoopPort),
+                clipboard_change_origin: Arc::new(InMemoryClipboardChangeOrigin::new()),
+                worker_tx,
+            },
+            security: uc_app::SecurityPorts {
+                encryption: Arc::new(NoopPort),
+                encryption_session: Arc::new(NoopPort),
+                encryption_state: Arc::new(NoopPort),
+                key_scope: Arc::new(NoopPort),
+                secure_storage: Arc::new(NoopPort),
+                key_material: Arc::new(NoopPort),
+            },
+            device: uc_app::DevicePorts {
+                device_repo: Arc::new(NoopPort),
+                device_identity: Arc::new(MockDeviceIdentity),
+                paired_device_repo: Arc::new(NoopPort),
+            },
             network_ports: noop_network_ports(),
             network_control: Arc::new(NoopPort),
             setup_status: Arc::new(NoopPort),
-            blob_store: Arc::new(NoopPort),
-            blob_repository: Arc::new(NoopPort),
-            blob_writer: Arc::new(NoopPort),
-            thumbnail_repo: Arc::new(NoopPort),
-            thumbnail_generator: Arc::new(NoopPort),
+            storage: uc_app::StoragePorts {
+                blob_store: Arc::new(NoopPort),
+                blob_repository: Arc::new(NoopPort),
+                blob_writer: Arc::new(NoopPort),
+                thumbnail_repo: Arc::new(NoopPort),
+                thumbnail_generator: Arc::new(NoopPort),
+            },
             settings: Arc::new(NoopPort),
-            ui_port: Arc::new(NoopPort),
-            autostart: Arc::new(NoopPort),
-            clock: Arc::new(NoopPort),
-            hash: Arc::new(NoopPort),
+            system: uc_app::SystemPorts {
+                clock: Arc::new(NoopPort),
+                hash: Arc::new(NoopPort),
+            },
         };
 
         let runtime = AppRuntime::new(deps);
@@ -1449,47 +1434,54 @@ mod tests {
 
         let (worker_tx, _worker_rx) = mpsc::channel(1);
         let deps = AppDeps {
-            clipboard: Arc::new(NoopClipboard),
-            system_clipboard: Arc::new(NoopClipboard),
-            clipboard_entry_repo: Arc::new(MockEntryRepository {
-                entry: None,
-                touch_result: true,
-                calls: Arc::new(Mutex::new(Vec::new())),
-            }),
-            clipboard_event_repo: Arc::new(NoopPort),
-            representation_repo: Arc::new(MockRepresentationRepository {
-                reps: HashMap::new(),
-            }),
-            representation_normalizer: Arc::new(NoopPort),
-            selection_repo: Arc::new(MockSelectionRepository { selection: None }),
-            representation_policy: Arc::new(NoopPort),
-            representation_cache: Arc::new(NoopPort),
-            spool_queue: Arc::new(NoopPort),
-            clipboard_change_origin: Arc::new(InMemoryClipboardChangeOrigin::new()),
-            worker_tx,
-            encryption: Arc::new(NoopPort),
-            encryption_session: Arc::new(NoopPort),
-            encryption_state: Arc::new(NoopPort),
-            key_scope: Arc::new(NoopPort),
-            secure_storage: Arc::new(NoopPort),
-            key_material: Arc::new(NoopPort),
-            watcher_control: Arc::new(NoopPort),
-            device_repo: Arc::new(NoopPort),
-            device_identity: Arc::new(MockDeviceIdentity),
-            paired_device_repo: Arc::new(NoopPort),
+            clipboard: uc_app::ClipboardPorts {
+                clipboard: Arc::new(NoopClipboard),
+                system_clipboard: Arc::new(NoopClipboard),
+                clipboard_entry_repo: Arc::new(MockEntryRepository {
+                    entry: None,
+                    touch_result: true,
+                    calls: Arc::new(Mutex::new(Vec::new())),
+                }),
+                clipboard_event_repo: Arc::new(NoopPort),
+                representation_repo: Arc::new(MockRepresentationRepository {
+                    reps: HashMap::new(),
+                }),
+                representation_normalizer: Arc::new(NoopPort),
+                selection_repo: Arc::new(MockSelectionRepository { selection: None }),
+                representation_policy: Arc::new(NoopPort),
+                representation_cache: Arc::new(NoopPort),
+                spool_queue: Arc::new(NoopPort),
+                clipboard_change_origin: Arc::new(InMemoryClipboardChangeOrigin::new()),
+                worker_tx,
+            },
+            security: uc_app::SecurityPorts {
+                encryption: Arc::new(NoopPort),
+                encryption_session: Arc::new(NoopPort),
+                encryption_state: Arc::new(NoopPort),
+                key_scope: Arc::new(NoopPort),
+                secure_storage: Arc::new(NoopPort),
+                key_material: Arc::new(NoopPort),
+            },
+            device: uc_app::DevicePorts {
+                device_repo: Arc::new(NoopPort),
+                device_identity: Arc::new(MockDeviceIdentity),
+                paired_device_repo: Arc::new(NoopPort),
+            },
             network_ports: noop_network_ports(),
             network_control: Arc::new(NoopPort),
             setup_status: Arc::new(NoopPort),
-            blob_store: Arc::new(NoopPort),
-            blob_repository: Arc::new(NoopPort),
-            blob_writer: Arc::new(NoopPort),
-            thumbnail_repo: Arc::new(NoopPort),
-            thumbnail_generator: Arc::new(NoopPort),
+            storage: uc_app::StoragePorts {
+                blob_store: Arc::new(NoopPort),
+                blob_repository: Arc::new(NoopPort),
+                blob_writer: Arc::new(NoopPort),
+                thumbnail_repo: Arc::new(NoopPort),
+                thumbnail_generator: Arc::new(NoopPort),
+            },
             settings: Arc::new(NoopPort),
-            ui_port: Arc::new(NoopPort),
-            autostart: Arc::new(NoopPort),
-            clock: Arc::new(NoopPort),
-            hash: Arc::new(NoopPort),
+            system: uc_app::SystemPorts {
+                clock: Arc::new(NoopPort),
+                hash: Arc::new(NoopPort),
+            },
         };
 
         let runtime = Arc::new(AppRuntime::new(deps));
