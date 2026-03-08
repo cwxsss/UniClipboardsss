@@ -16,6 +16,7 @@ import {
   ClipboardFileItem,
   fetchClipboardResourceText,
   getClipboardEntryResource,
+  getResourceImageUrl,
 } from '@/api/clipboardItems'
 import { toast } from '@/components/ui/toast'
 import { resolveUcUrl } from '@/lib/protocol'
@@ -68,7 +69,7 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
     getClipboardEntryResource(entryId)
       .then(resource => {
         if (!cancelled) {
-          setOriginalImageUrl(resource.url)
+          setOriginalImageUrl(getResourceImageUrl(resource))
         }
       })
       .catch(e => {

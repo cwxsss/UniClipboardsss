@@ -71,9 +71,17 @@ Progress: [██████████] 100%
 - [Phase 15-clipboard-management-command-wiring]: Clipboard stats aggregation lives in uc-app helper and is exposed to uc-tauri via a dedicated DTO and command.
 - [Phase 15-clipboard-management-command-wiring]: Toggle favorite validates entry existence but defers schema persistence; get_clipboard_item reuses list_entry_projections.
 
+### Roadmap Evolution
+
+- Phase 16 added: Optimize DashboardPage refresh mechanism on new clipboard content
+
 ### Pending Todos
 
 None.
+
+### Known Issues
+
+- **Restore triggers duplicate entry on remote peer**: When peerA restores a clipboard entry from history, peerA treats it as a restore (content goes back to OS clipboard). However, peerB receives it as a brand new clipboard event and creates a duplicate entry, even if peerB already has an entry with the same content hash. Root cause: inbound sync does not deduplicate against existing entries by content hash. Not a critical issue but causes UI clutter on remote peers.
 
 ### Blockers/Concerns
 

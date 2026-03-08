@@ -76,14 +76,16 @@ pub struct ClipboardEntryDetail {
 /// 剪贴板条目资源元信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardEntryResource {
-    /// Blob identifier for the entry payload
-    pub blob_id: String,
+    /// Blob identifier for the entry payload (None for inline content)
+    pub blob_id: Option<String>,
     /// MIME type for the payload
     pub mime_type: String,
     /// Payload size in bytes
     pub size_bytes: i64,
-    /// Custom protocol URL for resource fetching
-    pub url: String,
+    /// Custom protocol URL for resource fetching (None for inline content)
+    pub url: Option<String>,
+    /// Base64-encoded inline data (present when content is stored inline, not in blob)
+    pub inline_data: Option<String>,
 }
 
 /// Clipboard statistics DTO for frontend API.

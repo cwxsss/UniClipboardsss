@@ -9,6 +9,7 @@ use crate::models::{
     ClipboardEntryResource, ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse,
     ClipboardStats, ClipboardTextItemDto,
 };
+use base64::Engine;
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info_span, Instrument};
@@ -422,10 +423,13 @@ pub async fn get_clipboard_entry_resource(
         })?;
 
         let resource = ClipboardEntryResource {
-            blob_id: result.blob_id.to_string(),
+            blob_id: result.blob_id.map(|b| b.to_string()),
             mime_type: result.mime_type.unwrap_or_else(|| "unknown".to_string()),
             size_bytes: result.size_bytes,
             url: result.url,
+            inline_data: result
+                .inline_data
+                .map(|bytes| base64::engine::general_purpose::STANDARD.encode(&bytes)),
         };
 
         tracing::info!(entry_id = %entry_id, "Retrieved clipboard entry resource");

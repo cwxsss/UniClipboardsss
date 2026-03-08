@@ -36,10 +36,12 @@ export interface ClipboardEntryDetail {
 }
 
 export interface ClipboardEntryResource {
-  blob_id: string
+  blob_id: string | null
   mime_type: string
   size_bytes: number
-  url: string
+  url: string | null
+  /** Base64-encoded inline data (present when content is stored inline, not in blob) */
+  inline_data: string | null
 }
 
 /**
@@ -258,13 +260,23 @@ export async function getClipboardEntryResource(id: string): Promise<ClipboardEn
 }
 
 /**
- * Fetch clipboard entry text content via resource URL
- * 通过资源 URL 拉取并解码剪贴板文本内容
+ * Fetch clipboard entry text content via resource URL or inline data
+ * 通过资源 URL 或内联数据拉取并解码剪贴板文本内容
  */
 export async function fetchClipboardResourceText(
   resource: ClipboardEntryResource
 ): Promise<string> {
   try {
+    // Use inline data when available (small content stored directly)
+    if (resource.inline_data) {
+      const bytes = Uint8Array.from(atob(resource.inline_data), c => c.charCodeAt(0))
+      return new TextDecoder('utf-8').decode(bytes)
+    }
+
+    // Fall back to URL fetch for blob-backed content
+    if (!resource.url) {
+      throw new Error('Resource has neither inline_data nor url')
+    }
     const resolvedUrl = resolveUcUrl(resource.url)
     const response = await fetch(resolvedUrl)
     if (!response.ok) {
@@ -276,6 +288,21 @@ export async function fetchClipboardResourceText(
     console.error('Failed to fetch clipboard resource text:', error)
     throw error
   }
+}
+
+/**
+ * Get a displayable image URL from a clipboard resource.
+ * Uses blob URL when available, falls back to data URL from inline data.
+ * 从剪贴板资源获取可显示的图片 URL。
+ */
+export function getResourceImageUrl(resource: ClipboardEntryResource): string | null {
+  if (resource.url) {
+    return resource.url
+  }
+  if (resource.inline_data) {
+    return `data:${resource.mime_type};base64,${resource.inline_data}`
+  }
+  return null
 }
 
 /**
