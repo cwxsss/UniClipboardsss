@@ -275,8 +275,12 @@ mod tests {
             unimplemented!()
         }
 
-        async fn get_entry(&self, _entry_id: &EntryId) -> Result<Option<ClipboardEntry>> {
-            unimplemented!()
+        async fn get_entry(&self, entry_id: &EntryId) -> Result<Option<ClipboardEntry>> {
+            Ok(self
+                .entries
+                .iter()
+                .find(|e| e.entry_id == *entry_id)
+                .cloned())
         }
 
         async fn list_entries(&self, limit: usize, offset: usize) -> Result<Vec<ClipboardEntry>> {
@@ -791,5 +795,101 @@ mod tests {
 
         assert_eq!(stats.total_items, 2);
         assert_eq!(stats.total_size, 30);
+    }
+
+    #[tokio::test]
+    async fn test_execute_single_returns_projection_for_existing_entry() {
+        let entry_id = EntryId::from("entry-single");
+        let event_id = EventId::from("event-single");
+        let rep_id = RepresentationId::from("rep-single");
+
+        let entry = ClipboardEntry::new(
+            entry_id.clone(),
+            event_id.clone(),
+            500,
+            Some("single entry".to_string()),
+            64,
+        );
+
+        let selection = ClipboardSelectionDecision::new(
+            entry_id.clone(),
+            ClipboardSelection {
+                primary_rep_id: rep_id.clone(),
+                secondary_rep_ids: vec![],
+                preview_rep_id: rep_id.clone(),
+                paste_rep_id: rep_id.clone(),
+                policy_version: SelectionPolicyVersion::V1,
+            },
+        );
+
+        let representation = PersistedClipboardRepresentation::new(
+            rep_id.clone(),
+            FormatId::from("public.utf8-plain-text"),
+            Some(MimeType("text/plain".to_string())),
+            64,
+            Some(b"single content".to_vec()),
+            None,
+        );
+
+        let entry_repo = Arc::new(MockEntryRepository {
+            entries: vec![entry],
+        });
+        let selection_repo = Arc::new(MockSelectionRepository {
+            selections: HashMap::from([(entry_id.inner().clone(), selection)]),
+        });
+        let representation_repo = Arc::new(MockRepresentationRepository {
+            representations: HashMap::from([(
+                (event_id.inner().clone(), rep_id.inner().clone()),
+                representation,
+            )]),
+            fail_keys: HashSet::new(),
+        });
+        let thumbnail_repo = Arc::new(MockThumbnailRepository {
+            thumbnails: HashMap::new(),
+        });
+
+        let use_case = ListClipboardEntryProjections::new(
+            entry_repo,
+            selection_repo,
+            representation_repo,
+            thumbnail_repo,
+        );
+
+        let result = use_case
+            .execute_single("entry-single")
+            .await
+            .expect("should succeed");
+        assert!(result.is_some());
+        let projection = result.unwrap();
+        assert_eq!(projection.id, "entry-single");
+        assert_eq!(projection.preview, "single content");
+    }
+
+    #[tokio::test]
+    async fn test_execute_single_returns_none_for_nonexistent_entry() {
+        let entry_repo = Arc::new(MockEntryRepository { entries: vec![] });
+        let selection_repo = Arc::new(MockSelectionRepository {
+            selections: HashMap::new(),
+        });
+        let representation_repo = Arc::new(MockRepresentationRepository {
+            representations: HashMap::new(),
+            fail_keys: HashSet::new(),
+        });
+        let thumbnail_repo = Arc::new(MockThumbnailRepository {
+            thumbnails: HashMap::new(),
+        });
+
+        let use_case = ListClipboardEntryProjections::new(
+            entry_repo,
+            selection_repo,
+            representation_repo,
+            thumbnail_repo,
+        );
+
+        let result = use_case
+            .execute_single("nonexistent")
+            .await
+            .expect("should succeed");
+        assert!(result.is_none());
     }
 }
