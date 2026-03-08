@@ -116,3 +116,15 @@ Plans:
 | 11. Command Contract Hardening                 | 2/2       | Complete       | 2026-03-06 | -         |
 | 12. Lifecycle Governance Baseline              | 2/2       | Complete       | 2026-03-06 | -         |
 | 13. Responsibility Decomposition & Testability | 3/3       | Complete       | 2026-03-06 | -         |
+
+### Phase 16: Optimize DashboardPage refresh mechanism on new clipboard content
+
+**Goal:** Replace full-reload pattern with incremental updates for local captures and throttled full-reload for remote sync, extracting event/state management into a dedicated useClipboardEvents hook.
+**Requirements**: P16-01, P16-02, P16-03, P16-04, P16-05, P16-06
+**Depends on:** Phase 15
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 16-01-PLAN.md — Backend origin event + get_clipboard_entry command + Redux reducers
+- [ ] 16-02-PLAN.md — useClipboardEvents hook extraction + DashboardPage simplification
