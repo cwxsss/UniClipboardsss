@@ -236,83 +236,15 @@ jobs:
       - name: Generate release notes
         id: release-notes
         run: |
-          VERSION="${{ needs.validate.outputs.version }}"
-          REPO="${{ github.repository }}"
-          BASE_URL="https://github.com/$REPO/releases/download/v$VERSION"
-          CHANNEL="${{ needs.validate.outputs.channel }}"
-          IS_PRERELEASE="${{ needs.validate.outputs.is_prerelease }}"
-
-          # Find actual filenames
-          MACOS_ARM64_DMG=$(find release-assets -name "*aarch64.dmg" -type f -printf "%f\n" | head -n1 || echo "")
-          MACOS_X64_DMG=$(find release-assets -name "*x64.dmg" -type f -printf "%f\n" | head -n1 || echo "")
-          LINUX_DEB=$(find release-assets -name "*.deb" -type f -printf "%f\n" | head -n1 || echo "")
-          LINUX_APPIMAGE=$(find release-assets -name "*.AppImage" -type f -printf "%f\n" | head -n1 || echo "")
-          WINDOWS_EXE=$(find release-assets -name "*.exe" -type f -printf "%f\n" | head -n1 || echo "")
-
-          # Start release notes
-          cat > release-notes.md << EOF
-          ## What's Changed
-
-          <!-- Please update this section with actual changes -->
-
-          **Full Changelog**: https://github.com/$REPO/compare/${{ needs.validate.outputs.previous_tag }}...v$VERSION
-
-          EOF
-
-          # Add prerelease warning if applicable
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            cat >> release-notes.md << EOF
-          ## ⚠️ Prerelease Warning
-
-          This is a **$CHANNEL** release and may contain bugs or incomplete features.
-          Not recommended for production use. Please report issues on GitHub.
-
-          EOF
-          fi
-
-          # Installation section
-          cat >> release-notes.md << EOF
-          ## Installation
-
-          ### macOS
-          EOF
-
-          if [ -n "$MACOS_ARM64_DMG" ]; then
-            echo "- **Apple Silicon (M1/M2/M3)**: [$MACOS_ARM64_DMG]($BASE_URL/$MACOS_ARM64_DMG)" >> release-notes.md
-          fi
-
-          if [ -n "$MACOS_X64_DMG" ]; then
-            echo "- **Intel**: [$MACOS_X64_DMG]($BASE_URL/$MACOS_X64_DMG)" >> release-notes.md
-          fi
-
-          cat >> release-notes.md << EOF
-
-          ### Linux
-          EOF
-
-          if [ -n "$LINUX_DEB" ]; then
-            echo "- **Debian/Ubuntu**: [$LINUX_DEB]($BASE_URL/$LINUX_DEB)" >> release-notes.md
-          fi
-
-          if [ -n "$LINUX_APPIMAGE" ]; then
-            echo "- **AppImage**: [$LINUX_APPIMAGE]($BASE_URL/$LINUX_APPIMAGE)" >> release-notes.md
-          fi
-
-          cat >> release-notes.md << EOF
-
-          ### Windows
-          EOF
-
-          if [ -n "$WINDOWS_EXE" ]; then
-            echo "- **NSIS Installer**: [$WINDOWS_EXE]($BASE_URL/$WINDOWS_EXE)" >> release-notes.md
-          fi
-
-          cat >> release-notes.md << 'EOF'
-
-          ## Verification
-
-          All releases are signed. `.sig` files are provided for verification.
-          EOF
+          node scripts/generate-release-notes.js \
+            --version "${{ needs.validate.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --previous-tag "${{ needs.validate.outputs.previous_tag }}" \
+            --channel "${{ needs.validate.outputs.channel }}" \
+            --is-prerelease "${{ needs.validate.outputs.is_prerelease }}" \
+            --artifacts-dir "release-assets" \
+            --template ".github/release-notes/release.md.tmpl" \
+            --output "release-notes.md"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -405,7 +337,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Go to [Releases](https://github.com/${{ github.repository }}/releases)" >> $GITHUB_STEP_SUMMARY
-          echo "2. Edit the draft release and update release notes" >> $GITHUB_STEP_SUMMARY
+          echo "2. Review the generated draft release notes" >> $GITHUB_STEP_SUMMARY
           echo "3. Publish the release when ready" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Update Manifest" >> $GITHUB_STEP_SUMMARY
