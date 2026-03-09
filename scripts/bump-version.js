@@ -16,7 +16,6 @@
  *   --dry-run  Show what would be changed without writing
  */
 
-import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -99,23 +98,44 @@ export function updateCargoToml(newVersion, dryRun) {
   return { path: cargoPath, old: oldVersion, new: newVersion }
 }
 
-export function updateBunLock(dryRun) {
-  const lockPath = path.join(process.cwd(), 'bun.lock')
+export function updateCargoLock(newVersion, dryRun) {
+  const cargoTomlPath = path.join(process.cwd(), 'src-tauri', 'Cargo.toml')
+  const cargoLockPath = path.join(process.cwd(), 'src-tauri', 'Cargo.lock')
 
-  if (!fs.existsSync(lockPath)) {
-    return { path: lockPath, skipped: true, reason: 'bun.lock not found' }
+  if (!fs.existsSync(cargoLockPath)) {
+    return { path: cargoLockPath, skipped: true, reason: 'Cargo.lock not found' }
   }
 
-  if (dryRun) {
-    return { path: lockPath, skipped: true, reason: 'dry run' }
+  const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8')
+  const nameMatch = cargoToml.match(/^name\s*=\s*"([^"]+)"/m)
+  if (!nameMatch) {
+    throw new Error('Could not find package name in Cargo.toml')
   }
 
-  execFileSync('bun', ['install', '--lockfile-only'], {
-    cwd: process.cwd(),
-    stdio: 'pipe',
-  })
+  const packageName = nameMatch[1]
+  const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const content = fs.readFileSync(cargoLockPath, 'utf8')
+  const packageRegex = new RegExp(
+    `(\\[\\[package\\]\\]\\nname = "${escapedPackageName}"\\nversion = "([^"]+)")`,
+    'm'
+  )
+  const match = content.match(packageRegex)
 
-  return { path: lockPath, skipped: false }
+  if (!match) {
+    throw new Error(`Could not find package '${packageName}' in Cargo.lock`)
+  }
+
+  const oldVersion = match[2]
+  const newContent = content.replace(
+    packageRegex,
+    `[[package]]\nname = "${packageName}"\nversion = "${newVersion}"`
+  )
+
+  if (!dryRun) {
+    fs.writeFileSync(cargoLockPath, newContent, 'utf8')
+  }
+
+  return { path: cargoLockPath, old: oldVersion, new: newVersion, skipped: false }
 }
 
 export function run(options = parseArgs()) {
@@ -161,6 +181,10 @@ export function run(options = parseArgs()) {
   }
   console.log(`New version:     ${newVersion}`)
 
+  if (newVersion === currentVersion) {
+    console.log('Version change:  unchanged')
+  }
+
   if (options.dryRun) {
     console.log('\n🔍 DRY RUN - No files will be modified\n')
   } else {
@@ -179,13 +203,13 @@ export function run(options = parseArgs()) {
   console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${cargoResult.path}`)
   console.log(`  ${cargoResult.old} → ${cargoResult.new}`)
 
-  const bunLockResult = updateBunLock(options.dryRun)
-  if (bunLockResult.skipped) {
-    console.log(`${options.dryRun ? '[DRY RUN]' : '-'} ${bunLockResult.path}`)
-    console.log(`  skipped: ${bunLockResult.reason}`)
+  const cargoLockResult = updateCargoLock(newVersion, options.dryRun)
+  if (cargoLockResult.skipped) {
+    console.log(`${options.dryRun ? '[DRY RUN]' : '-'} ${cargoLockResult.path}`)
+    console.log(`  skipped: ${cargoLockResult.reason}`)
   } else {
-    console.log(`✓ ${bunLockResult.path}`)
-    console.log('  regenerated via `bun install --lockfile-only`')
+    console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${cargoLockResult.path}`)
+    console.log(`  ${cargoLockResult.old} → ${cargoLockResult.new}`)
   }
 
   if (!options.dryRun) {
