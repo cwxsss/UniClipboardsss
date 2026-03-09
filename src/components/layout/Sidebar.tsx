@@ -17,6 +17,7 @@ import {
 import { Progress } from '@/components/ui/progress'
 import { toast } from '@/components/ui/toast'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { ReleaseNotes } from '@/components/update/ReleaseNotes'
 import { useSetting } from '@/hooks/useSetting'
 import { useUpdate } from '@/hooks/useUpdate'
 import { cn } from '@/lib/utils'
@@ -214,8 +215,8 @@ const Sidebar: React.FC = () => {
                   <div className="text-sm font-medium text-foreground">
                     {t('update.releaseNotes')}
                   </div>
-                  <div className="max-h-48 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground whitespace-pre-wrap">
-                    {updateInfo?.body?.trim() ? updateInfo.body : t('update.noNotes')}
+                  <div className="max-h-48 overflow-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                    <ReleaseNotes content={updateInfo?.body ?? ''} fallback={t('update.noNotes')} />
                   </div>
                 </div>
                 {downloadProgress.phase !== 'idle' && (
