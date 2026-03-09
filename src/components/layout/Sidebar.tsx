@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import { ArrowUpCircle, Home, MessageSquare, Monitor, Settings } from 'lucide-react'
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { FeedbackDialog } from '@/components/feedback/FeedbackDialog'
 import {
   AlertDialog,
@@ -20,6 +20,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ReleaseNotes } from '@/components/update/ReleaseNotes'
 import { useSetting } from '@/hooks/useSetting'
 import { useUpdate } from '@/hooks/useUpdate'
+import { startCircularReveal } from '@/lib/theme-transition'
 import { cn } from '@/lib/utils'
 import { sentryEnabled } from '@/observability/sentry'
 
@@ -29,12 +30,35 @@ const NavButton: React.FC<{
   label: string
   isActive: boolean
   layoutId: string
-}> = ({ to, icon: Icon, label, isActive, layoutId }) => {
+  onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void
+  'data-settings-icon'?: boolean
+}> = ({
+  to,
+  icon: Icon,
+  label,
+  isActive,
+  layoutId,
+  onClick,
+  'data-settings-icon': dataSettingsIcon,
+}) => {
   return (
     <TooltipProvider delayDuration={0}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <Link data-tauri-drag-region="false" to={to} className="relative group">
+          <Link
+            data-tauri-drag-region="false"
+            data-settings-icon={dataSettingsIcon || undefined}
+            to={to}
+            className="relative group"
+            onClick={
+              onClick
+                ? e => {
+                    e.preventDefault()
+                    onClick(e)
+                  }
+                : undefined
+            }
+          >
             {isActive && (
               <motion.div
                 layoutId={layoutId}
@@ -70,6 +94,7 @@ const NavButton: React.FC<{
 const Sidebar: React.FC = () => {
   const { t } = useTranslation()
   const location = useLocation()
+  const navigate = useNavigate()
   const { setting } = useSetting()
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
@@ -192,6 +217,16 @@ const Sidebar: React.FC = () => {
             label={t('nav.settings')}
             isActive={location.pathname.startsWith('/settings')}
             layoutId="sidebar-nav-bottom"
+            data-settings-icon
+            onClick={e => {
+              if (location.pathname.startsWith('/settings')) return
+              const isKeyboard = e.clientX === 0 && e.clientY === 0
+              startCircularReveal(
+                isKeyboard ? null : e.clientX,
+                isKeyboard ? null : e.clientY,
+                () => navigate('/settings')
+              )
+            }}
           />
         </div>
       </aside>
