@@ -12,6 +12,7 @@ import {
   SidebarMenu,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
+import { getSettingsIconPosition, startCircularCollapse } from '@/lib/theme-transition'
 
 interface SettingsSidebarProps {
   activeCategory: string
@@ -23,11 +24,15 @@ const SettingsSidebar: FC<SettingsSidebarProps> = ({ activeCategory, onCategoryC
   const navigate = useNavigate()
 
   const handleBack = () => {
-    if (window.history.state && window.history.state.idx > 0) {
-      navigate(-1)
-    } else {
-      navigate('/')
+    const doNavigate = () => {
+      if (window.history.state && window.history.state.idx > 0) {
+        navigate(-1)
+      } else {
+        navigate('/')
+      }
     }
+    const { x, y } = getSettingsIconPosition()
+    startCircularCollapse(x, y, doNavigate)
   }
 
   return (

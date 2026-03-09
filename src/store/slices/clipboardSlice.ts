@@ -133,11 +133,23 @@ const clipboardSlice = createSlice({
     clearError: state => {
       state.error = null
     },
+    prependItem: (state, action: PayloadAction<ClipboardItemResponse>) => {
+      if (state.items.some(item => item.id === action.payload.id)) return
+      state.items.unshift(action.payload)
+    },
+    removeItem: (state, action: PayloadAction<string>) => {
+      state.items = state.items.filter(item => item.id !== action.payload)
+    },
   },
   extraReducers: builder => {
     // 处理获取剪贴板内容
     builder.addCase(fetchClipboardItems.pending, state => {
-      state.loading = true
+      // Only show loading state when there are no cached items.
+      // When items already exist (e.g., navigating back to the page),
+      // we fetch in the background without triggering skeleton/loading UI.
+      if (state.items.length === 0) {
+        state.loading = true
+      }
       state.error = null
       state.notReady = false
     })
@@ -204,7 +216,8 @@ const clipboardSlice = createSlice({
 })
 
 // 导出 Actions
-export const { setDeleteConfirmId, setNotReady, clearError } = clipboardSlice.actions
+export const { setDeleteConfirmId, setNotReady, clearError, prependItem, removeItem } =
+  clipboardSlice.actions
 
 // 导出 Reducer
 export default clipboardSlice.reducer

@@ -4,7 +4,6 @@ mod device_announce;
 mod heartbeat;
 mod pairing;
 mod protocol_message;
-
 /// Standard MIME type constants used throughout the clipboard protocol.
 pub const MIME_IMAGE_PREFIX: &str = "image/";
 pub const MIME_TEXT_HTML: &str = "text/html";

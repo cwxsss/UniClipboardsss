@@ -11,6 +11,47 @@ use uc_core::ids::RepresentationId;
 #[cfg(target_os = "macos")]
 const TIFF_ALIASES: &[&str] = &["public.tiff", "NeXT TIFF v4.0 pasteboard type"];
 
+/// Convert TIFF bytes to PNG, returning the PNG bytes.
+///
+/// macOS clipboard stores images as raw uncompressed TIFF (~18 MB for a
+/// 3000x2000 image). Converting to PNG at capture time reduces payload
+/// by 80-90%, dramatically improving sync speed to other platforms.
+///
+/// Returns `None` if conversion fails (caller should fall back to raw TIFF).
+#[cfg(target_os = "macos")]
+fn tiff_to_png(tiff_bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Cursor;
+    use tracing::info;
+
+    let img = match image::load_from_memory_with_format(tiff_bytes, image::ImageFormat::Tiff) {
+        Ok(img) => img,
+        Err(err) => {
+            warn!(error = %err, "Failed to decode TIFF for PNG conversion");
+            return None;
+        }
+    };
+
+    let mut png_bytes = Vec::new();
+    match img.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png) {
+        Ok(()) => {
+            info!(
+                tiff_size = tiff_bytes.len(),
+                png_size = png_bytes.len(),
+                ratio = format!(
+                    "{:.1}%",
+                    (png_bytes.len() as f64 / tiff_bytes.len() as f64) * 100.0
+                ),
+                "Converted TIFF to PNG for sync"
+            );
+            Some(png_bytes)
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to encode PNG from TIFF");
+            None
+        }
+    }
+}
+
 pub struct CommonClipboardImpl;
 
 fn should_skip_raw_format(format_id: &str, image_already_read: bool) -> bool {
@@ -171,22 +212,40 @@ impl CommonClipboardImpl {
             {
                 let mut captured = false;
 
-                // Try raw TIFF first (fastest — no decode, no re-encode)
+                // Try raw TIFF first, then convert to PNG for efficient sync.
+                // Raw TIFF is ~18 MB for a 3000x2000 image; PNG is ~2-5 MB.
                 match ctx.get_buffer("public.tiff") {
                     Ok(tiff_bytes) => {
                         debug!(
                             format_id = "image",
-                            size_bytes = tiff_bytes.len(),
-                            mime = "image/tiff",
-                            "Read image representation via raw public.tiff (fast path)"
+                            tiff_size_bytes = tiff_bytes.len(),
+                            "Read raw public.tiff from clipboard, converting to PNG"
                         );
-                        reps.push(ObservedClipboardRepresentation::new(
-                            RepresentationId::new(),
-                            "image".into(),
-                            Some(MimeType("image/tiff".to_string())),
-                            tiff_bytes,
-                        ));
-                        captured = true;
+                        match tiff_to_png(&tiff_bytes) {
+                            Some(png_bytes) => {
+                                reps.push(ObservedClipboardRepresentation::new(
+                                    RepresentationId::new(),
+                                    "image".into(),
+                                    Some(MimeType("image/png".to_string())),
+                                    png_bytes,
+                                ));
+                                captured = true;
+                            }
+                            None => {
+                                // Conversion failed; fall back to raw TIFF
+                                warn!(
+                                    tiff_size_bytes = tiff_bytes.len(),
+                                    "TIFF-to-PNG conversion failed, falling back to raw TIFF"
+                                );
+                                reps.push(ObservedClipboardRepresentation::new(
+                                    RepresentationId::new(),
+                                    "image".into(),
+                                    Some(MimeType("image/tiff".to_string())),
+                                    tiff_bytes,
+                                ));
+                                captured = true;
+                            }
+                        }
                     }
                     Err(err) => {
                         debug!(error = %err, "public.tiff not available, trying public.png");
@@ -384,7 +443,9 @@ impl CommonClipboardImpl {
                     }
                     "public.html" | "Apple HTML pasteboard type" | "html" => Some("text/html"),
                     "public.rtf" | "rtf" => Some("text/rtf"),
-                    "public.png" => Some("image/png"),
+                    "public.png" | "image" => Some("image/png"),
+                    "public.tiff" => Some("image/tiff"),
+                    "public.jpeg" => Some("image/jpeg"),
                     "public.file-url" | "NSFilenamesPboardType" => Some("text/uri-list"),
                     _ => None,
                 });
@@ -406,7 +467,7 @@ impl CommonClipboardImpl {
                     .collect();
                 map_clipboard_err(ctx.set_files(files))?;
             }
-            Some("image/png") => {
+            Some(mime) if mime.starts_with("image/") => {
                 let img =
                     clipboard_rs::RustImageData::from_bytes(&rep.bytes).map_err(|e| anyhow!(e))?;
                 map_clipboard_err(ctx.set_image(img))?;

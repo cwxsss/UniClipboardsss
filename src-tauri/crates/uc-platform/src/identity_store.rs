@@ -2,8 +2,9 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::ports::{IdentityStoreError, IdentityStorePort};
 use libp2p::identity::Keypair;
-use uc_core::ports::{IdentityStoreError, IdentityStorePort, SecureStoragePort};
+use uc_core::ports::SecureStoragePort;
 
 const IDENTITY_KEY: &str = "libp2p-identity:v1";
 const IDENTITY_DIR: &str = "identity";

@@ -1,16 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.1.0
-milestone_name: Daily Driver
-status: complete
-stopped_at: Milestone v0.1.0 archived (phases 1-9)
-last_updated: '2026-03-06T13:40:00+08:00'
-last_activity: '2026-03-06 - Completed consolidated milestone archive for phases 1-9'
+milestone: v0.2.0
+milestone_name: Architecture Remediation
+current_plan: 0
+status: completed
+stopped_at: Milestone v0.2.0 completed and archived
+last_updated: '2026-03-09T12:00:00.000Z'
+last_activity: 2026-03-09
 progress:
   total_phases: 9
   completed_phases: 9
-  total_plans: 17
-  completed_plans: 17
+  total_plans: 22
+  completed_plans: 22
   percent: 100
 ---
 
@@ -18,15 +19,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-06)
+See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Milestone complete; waiting to define next milestone
+**Current focus:** v0.2.0 completed; planning next milestone
 
 ## Current Position
 
-Milestone v0.1.0 archived (phases 1-9).
-No active phase selected.
+Milestone v0.2.0 Architecture Remediation shipped 2026-03-09.
+All 16 REQUIREMENTS.md requirements satisfied. Phase 18 completed with known gaps (CT-02/CT-04/CT-05).
 
 Progress: [██████████] 100%
 
@@ -34,20 +35,20 @@ Progress: [██████████] 100%
 
 ### Decisions
 
-- Consolidated phases 1-9 under a single archived milestone label (`v0.1.0`) per user request.
-- Rebuilt milestone-level roadmap and requirements archives from phase summaries and roadmap evidence.
-- Kept unresolved architecture deep-review items as next-milestone active goals.
+Archived with milestone. See `.planning/milestones/v0.2.0-ROADMAP.md` for full phase details.
 
-### Pending Todos
+### Known Issues
 
-None.
+- **Restore triggers duplicate entry on remote peer**: Inbound sync does not deduplicate by content hash. Causes UI clutter on remote peers.
+- **Transfer progress frontend missing**: Backend emits transfer://progress events but frontend components were removed (quick task 4).
+- **Lifecycle events not wired**: Frontend polls instead of listening for lifecycle://event.
 
 ### Blockers/Concerns
 
-- Existing tech debt items from earlier audit remain open and should be addressed in next milestone planning.
+None — milestone completed.
 
 ## Session Continuity
 
-Last activity: 2026-03-06 - Milestone v0.1.0 completion archived
-Stopped at: Ready for `$gsd-new-milestone`
+Last activity: 2026-03-09 - Milestone v0.2.0 archived
+Stopped at: Milestone completion
 Resume file: None
