@@ -21,6 +21,7 @@ const TIFF_ALIASES: &[&str] = &["public.tiff", "NeXT TIFF v4.0 pasteboard type"]
 #[cfg(target_os = "macos")]
 fn tiff_to_png(tiff_bytes: &[u8]) -> Option<Vec<u8>> {
     use std::io::Cursor;
+    use tracing::info;
 
     let img = match image::load_from_memory_with_format(tiff_bytes, image::ImageFormat::Tiff) {
         Ok(img) => img,
