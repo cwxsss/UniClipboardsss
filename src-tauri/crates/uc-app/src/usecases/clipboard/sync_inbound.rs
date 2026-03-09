@@ -360,6 +360,15 @@ impl SyncInboundClipboardUseCase {
 
         // In Full mode: remember inbound snapshot hash + write to OS clipboard
         if self.mode.allow_os_write() {
+            let selected_rep_ref = &snapshot_for_os.representations[0];
+            info!(
+                message_id = %message.id,
+                format_id = %selected_rep_ref.format_id,
+                mime = ?selected_rep_ref.mime.as_ref().map(|m| m.as_str()),
+                data_size = selected_rep_ref.bytes.len(),
+                "V3 inbound: writing selected representation to OS clipboard"
+            );
+
             let snapshot_hash = snapshot_for_os.snapshot_hash().to_string();
             self.clipboard_change_origin
                 .remember_remote_snapshot_hash(
@@ -378,6 +387,21 @@ impl SyncInboundClipboardUseCase {
                 self.rollback_recent_id(&message.id).await;
                 return Err(err).context("V3 inbound: failed to write snapshot to OS clipboard");
             }
+
+            // Guard against loopback when the OS re-encodes clipboard content.
+            // Some platforms (e.g. Windows clipboard-rs) re-encode images (PNG→DIB→PNG),
+            // producing different bytes than the original. The hash-based guard above
+            // won't match the re-encoded content, so we set a one-shot origin override:
+            // the NEXT clipboard change will be treated as RemotePush regardless of hash.
+            // This avoids reading back the clipboard (which can crash on Windows with
+            // large native bitmaps).
+            self.clipboard_change_origin
+                .set_next_origin(
+                    ClipboardChangeOrigin::RemotePush,
+                    Duration::from_millis(REMOTE_SNAPSHOT_HASH_TTL_MS),
+                )
+                .await;
+
             info!(message_id = %message.id, "V3 inbound clipboard applied");
             return Ok(InboundApplyOutcome::Applied { entry_id: None });
         }
@@ -1156,13 +1180,19 @@ mod tests {
             .await
             .expect("execute inbound message");
 
-        // V3 inbound does NOT read OS clipboard for dedup (uses message.id dedup)
+        // V3 inbound: remember hash, write, then set_next_origin as loopback guard
         assert_eq!(
             calls.lock().expect("calls lock").as_slice(),
-            ["remember_remote_snapshot_hash", "write_snapshot"]
+            [
+                "remember_remote_snapshot_hash",
+                "write_snapshot",
+                "set_origin",
+            ]
         );
         let values = origin_values.lock().expect("origin values lock");
-        assert_eq!(values.len(), 0);
+        // set_next_origin(RemotePush) called as loopback guard after write
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].0, ClipboardChangeOrigin::RemotePush);
         let remote_values = remote_hash_values.lock().expect("remote hash values lock");
         assert_eq!(remote_values.len(), 1);
         assert_eq!(remote_values[0].1, Duration::from_secs(60));
