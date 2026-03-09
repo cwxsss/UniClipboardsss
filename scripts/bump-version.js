@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-/* global process */
-
 /**
  * Version Bump Script
  *
@@ -18,17 +16,13 @@
  *   --dry-run  Show what would be changed without writing
  */
 
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import process from 'node:process'
 import { bumpVersion, parseSemver } from './bump-version-lib.js'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
-// Parse command line arguments
-function parseArgs() {
-  const args = process.argv.slice(2)
+export function parseArgs(argv = process.argv.slice(2)) {
   const options = {
     to: null,
     type: null,
@@ -37,18 +31,18 @@ function parseArgs() {
     dryRun: false,
   }
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--to' && args[i + 1]) {
-      options.to = args[i + 1]
-      i++
-    } else if (args[i] === '--type' && args[i + 1]) {
-      options.type = args[i + 1]
-      i++
-    } else if (args[i] === '--channel' && args[i + 1]) {
-      options.channel = args[i + 1]
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--to' && argv[i + 1]) {
+      options.to = argv[i + 1]
+      i += 1
+    } else if (argv[i] === '--type' && argv[i + 1]) {
+      options.type = argv[i + 1]
+      i += 1
+    } else if (argv[i] === '--channel' && argv[i + 1]) {
+      options.channel = argv[i + 1]
       options.channelProvided = true
-      i++
-    } else if (args[i] === '--dry-run') {
+      i += 1
+    } else if (argv[i] === '--dry-run') {
       options.dryRun = true
     }
   }
@@ -56,8 +50,7 @@ function parseArgs() {
   return options
 }
 
-// Update package.json
-function updatePackageJson(newVersion, dryRun) {
+export function updatePackageJson(newVersion, dryRun) {
   const pkgPath = path.join(process.cwd(), 'package.json')
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
   const oldVersion = pkg.version
@@ -71,8 +64,7 @@ function updatePackageJson(newVersion, dryRun) {
   return { path: pkgPath, old: oldVersion, new: newVersion }
 }
 
-// Update tauri.conf.json
-function updateTauriConfig(newVersion, dryRun) {
+export function updateTauriConfig(newVersion, dryRun) {
   const configPath = path.join(process.cwd(), 'src-tauri', 'tauri.conf.json')
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
   const oldVersion = config.version
@@ -86,10 +78,9 @@ function updateTauriConfig(newVersion, dryRun) {
   return { path: configPath, old: oldVersion, new: newVersion }
 }
 
-// Update Cargo.toml
-function updateCargoToml(newVersion, dryRun) {
+export function updateCargoToml(newVersion, dryRun) {
   const cargoPath = path.join(process.cwd(), 'src-tauri', 'Cargo.toml')
-  let content = fs.readFileSync(cargoPath, 'utf8')
+  const content = fs.readFileSync(cargoPath, 'utf8')
 
   const versionRegex = /^version\s*=\s*"([^"]+)"/m
   const match = content.match(versionRegex)
@@ -108,102 +99,124 @@ function updateCargoToml(newVersion, dryRun) {
   return { path: cargoPath, old: oldVersion, new: newVersion }
 }
 
-// Main execution
+export function updateBunLock(dryRun) {
+  const lockPath = path.join(process.cwd(), 'bun.lock')
+
+  if (!fs.existsSync(lockPath)) {
+    return { path: lockPath, skipped: true, reason: 'bun.lock not found' }
+  }
+
+  if (dryRun) {
+    return { path: lockPath, skipped: true, reason: 'dry run' }
+  }
+
+  execFileSync('bun', ['install', '--lockfile-only'], {
+    cwd: process.cwd(),
+    stdio: 'pipe',
+  })
+
+  return { path: lockPath, skipped: false }
+}
+
+export function run(options = parseArgs()) {
+  const isExactVersionMode = Boolean(options.to)
+
+  if (isExactVersionMode) {
+    if (options.type) {
+      throw new Error('--to cannot be used together with --type')
+    }
+    if (options.channelProvided) {
+      throw new Error('--to cannot be used together with --channel')
+    }
+    parseSemver(options.to)
+  } else {
+    if (!options.type) {
+      throw new Error('--type is required (patch|minor|major)')
+    }
+
+    if (!['patch', 'minor', 'major'].includes(options.type)) {
+      throw new Error(`Invalid bump type '${options.type}'. Must be patch, minor, or major.`)
+    }
+
+    if (!['stable', 'alpha', 'beta', 'rc'].includes(options.channel)) {
+      throw new Error(`Invalid channel '${options.channel}'. Must be stable, alpha, beta, or rc.`)
+    }
+  }
+
+  const pkgPath = path.join(process.cwd(), 'package.json')
+  const pkgContent = fs.readFileSync(pkgPath, 'utf8')
+  const pkg = JSON.parse(pkgContent)
+  const currentVersion = pkg.version
+  const newVersion = isExactVersionMode
+    ? options.to
+    : bumpVersion(currentVersion, options.type, options.channel)
+
+  console.log('\n📦 Version Bump Summary\n')
+  console.log(`Current version: ${currentVersion}`)
+  if (isExactVersionMode) {
+    console.log('Mode:            exact')
+  } else {
+    console.log(`Bump type:       ${options.type}`)
+    console.log(`Channel:         ${options.channel}`)
+  }
+  console.log(`New version:     ${newVersion}`)
+
+  if (options.dryRun) {
+    console.log('\n🔍 DRY RUN - No files will be modified\n')
+  } else {
+    console.log('')
+  }
+
+  const packageResult = updatePackageJson(newVersion, options.dryRun)
+  console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${packageResult.path}`)
+  console.log(`  ${packageResult.old} → ${packageResult.new}`)
+
+  const tauriResult = updateTauriConfig(newVersion, options.dryRun)
+  console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${tauriResult.path}`)
+  console.log(`  ${tauriResult.old} → ${tauriResult.new}`)
+
+  const cargoResult = updateCargoToml(newVersion, options.dryRun)
+  console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${cargoResult.path}`)
+  console.log(`  ${cargoResult.old} → ${cargoResult.new}`)
+
+  const bunLockResult = updateBunLock(options.dryRun)
+  if (bunLockResult.skipped) {
+    console.log(`${options.dryRun ? '[DRY RUN]' : '-'} ${bunLockResult.path}`)
+    console.log(`  skipped: ${bunLockResult.reason}`)
+  } else {
+    console.log(`✓ ${bunLockResult.path}`)
+    console.log('  regenerated via `bun install --lockfile-only`')
+  }
+
+  if (!options.dryRun) {
+    console.log('\n✨ Version bump complete!\n')
+    console.log('Next steps:')
+    console.log('  1. Review the changes: git diff')
+    console.log(
+      '  2. Commit the changes: git add . && git commit -m "chore: bump version to ' +
+        newVersion +
+        '"'
+    )
+    console.log('  3. Push and trigger release workflow\n')
+  }
+
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${newVersion}\n`)
+  }
+
+  return { newVersion }
+}
+
 function main() {
   try {
-    const options = parseArgs()
-
-    const isExactVersionMode = Boolean(options.to)
-
-    if (isExactVersionMode) {
-      if (options.type) {
-        console.error('Error: --to cannot be used together with --type')
-        process.exit(1)
-      }
-      if (options.channelProvided) {
-        console.error('Error: --to cannot be used together with --channel')
-        process.exit(1)
-      }
-      parseSemver(options.to)
-    } else {
-      if (!options.type) {
-        console.error('Error: --type is required (patch|minor|major)')
-        process.exit(1)
-      }
-
-      if (!['patch', 'minor', 'major'].includes(options.type)) {
-        console.error(`Error: Invalid bump type '${options.type}'. Must be patch, minor, or major.`)
-        process.exit(1)
-      }
-
-      if (!['stable', 'alpha', 'beta', 'rc'].includes(options.channel)) {
-        console.error(
-          `Error: Invalid channel '${options.channel}'. Must be stable, alpha, beta, or rc.`
-        )
-        process.exit(1)
-      }
-    }
-
-    // Read current version from package.json
-    const pkgPath = path.join(process.cwd(), 'package.json')
-    const pkgContent = fs.readFileSync(pkgPath, 'utf8')
-    const pkg = JSON.parse(pkgContent)
-    const currentVersion = pkg.version
-
-    // Calculate new version
-    const newVersion = isExactVersionMode
-      ? options.to
-      : bumpVersion(currentVersion, options.type, options.channel)
-
-    console.log('\n📦 Version Bump Summary\n')
-    console.log(`Current version: ${currentVersion}`)
-    if (isExactVersionMode) {
-      console.log('Mode:            exact')
-    } else {
-      console.log(`Bump type:       ${options.type}`)
-      console.log(`Channel:         ${options.channel}`)
-    }
-    console.log(`New version:     ${newVersion}`)
-
-    if (options.dryRun) {
-      console.log('\n🔍 DRY RUN - No files will be modified\n')
-    } else {
-      console.log('')
-    }
-
-    // Update files
-    const packageResult = updatePackageJson(newVersion, options.dryRun)
-    console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${packageResult.path}`)
-    console.log(`  ${packageResult.old} → ${packageResult.new}`)
-
-    const tauriResult = updateTauriConfig(newVersion, options.dryRun)
-    console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${tauriResult.path}`)
-    console.log(`  ${tauriResult.old} → ${tauriResult.new}`)
-
-    const cargoResult = updateCargoToml(newVersion, options.dryRun)
-    console.log(`${options.dryRun ? '[DRY RUN]' : '✓'} ${cargoResult.path}`)
-    console.log(`  ${cargoResult.old} → ${cargoResult.new}`)
-
-    if (!options.dryRun) {
-      console.log('\n✨ Version bump complete!\n')
-      console.log('Next steps:')
-      console.log('  1. Review the changes: git diff')
-      console.log(
-        '  2. Commit the changes: git add . && git commit -m "chore: bump version to ' +
-          newVersion +
-          '"'
-      )
-      console.log('  3. Push and trigger release workflow\n')
-    }
-
-    // Output for GitHub Actions
-    if (process.env.GITHUB_OUTPUT) {
-      fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${newVersion}\n`)
-    }
+    run()
   } catch (error) {
-    console.error(`\n❌ Error: ${error.message}\n`)
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(`\n❌ Error: ${message}\n`)
     process.exit(1)
   }
 }
 
-main()
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main()
+}
