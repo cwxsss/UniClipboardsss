@@ -288,7 +288,8 @@ jobs:
             --artifacts-dir release-assets \
             --output "updates-r2/${CHANNEL}.json" \
             --base-url "${WORKER_URL}/artifacts/v${VERSION}" \
-            --notes-file "docs/changelog/${VERSION}.md"
+            --notes-file "docs/changelog/${VERSION}.md" \
+            --zh-notes-file "docs/changelog/${VERSION}.zh.md"
 
           echo "R2 manifest assembled for channel: ${CHANNEL}"
           cat "updates-r2/${CHANNEL}.json"
@@ -310,7 +311,8 @@ jobs:
             --artifacts-dir release-assets \
             --output "updates/${CHANNEL}.json" \
             --base-url "$BASE_URL" \
-            --notes-file "docs/changelog/${VERSION}.md"
+            --notes-file "docs/changelog/${VERSION}.md" \
+            --zh-notes-file "docs/changelog/${VERSION}.zh.md"
 
           echo "Manifest assembled for channel: ${CHANNEL}"
           cat "updates/${CHANNEL}.json"

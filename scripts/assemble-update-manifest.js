@@ -17,6 +17,7 @@
  *   --base-url <url>          GitHub release download base URL (required)
  *   --test                    Dry-run with mock data, output to stdout
  *   --notes-file <path>       Changelog file to include as release notes
+ *   --zh-notes-file <path>    Chinese changelog file to include as release notes
  */
 
 import fs from 'node:fs'
@@ -50,6 +51,9 @@ function parseArgs() {
       i++
     } else if (args[i] === '--notes-file' && args[i + 1]) {
       options.notesFile = args[i + 1]
+      i++
+    } else if (args[i] === '--zh-notes-file' && args[i + 1]) {
+      options.zhNotesFile = args[i + 1]
       i++
     } else if (args[i] === '--test') {
       options.test = true
@@ -197,12 +201,14 @@ function scanArtifacts(artifactsDir, baseUrl, silent = false) {
 /**
  * Assemble the combined update manifest JSON.
  */
-function assembleManifest(version, platforms, notes = '') {
+function assembleManifest(version, platforms, notes = '', zhNotes = '') {
   const pubDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+
+  const combinedNotes = zhNotes ? notes + '\n\n<!-- zh -->\n\n' + zhNotes : notes
 
   return {
     version,
-    notes,
+    notes: combinedNotes,
     pub_date: pubDate,
     platforms,
   }
@@ -235,10 +241,14 @@ function createMockArtifacts() {
 function main() {
   const options = parseArgs()
 
-  // Read notes file if provided
+  // Read notes files if provided
   let notes = ''
   if (options.notesFile && fs.existsSync(options.notesFile)) {
     notes = fs.readFileSync(options.notesFile, 'utf8').trim()
+  }
+  let zhNotes = ''
+  if (options.zhNotesFile && fs.existsSync(options.zhNotesFile)) {
+    zhNotes = fs.readFileSync(options.zhNotesFile, 'utf8').trim()
   }
 
   if (options.test) {
@@ -254,7 +264,7 @@ function main() {
 
     try {
       const platforms = scanArtifacts(tmpDir, baseUrl, true)
-      const manifest = assembleManifest(version, platforms, notes)
+      const manifest = assembleManifest(version, platforms, notes, zhNotes)
       const json = JSON.stringify(manifest, null, 2)
 
       process.stdout.write(json + '\n')
@@ -299,7 +309,7 @@ function main() {
     process.exit(1)
   }
 
-  const manifest = assembleManifest(options.version, platforms, notes)
+  const manifest = assembleManifest(options.version, platforms, notes, zhNotes)
   const json = JSON.stringify(manifest, null, 2)
 
   // Ensure output directory exists
