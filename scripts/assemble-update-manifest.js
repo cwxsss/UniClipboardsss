@@ -16,6 +16,7 @@
  *   --output <path>           Output JSON file path (required)
  *   --base-url <url>          GitHub release download base URL (required)
  *   --test                    Dry-run with mock data, output to stdout
+ *   --notes-file <path>       Changelog file to include as release notes
  */
 
 import fs from 'node:fs'
@@ -46,6 +47,9 @@ function parseArgs() {
       i++
     } else if (args[i] === '--base-url' && args[i + 1]) {
       options.baseUrl = args[i + 1]
+      i++
+    } else if (args[i] === '--notes-file' && args[i + 1]) {
+      options.notesFile = args[i + 1]
       i++
     } else if (args[i] === '--test') {
       options.test = true
@@ -193,12 +197,12 @@ function scanArtifacts(artifactsDir, baseUrl, silent = false) {
 /**
  * Assemble the combined update manifest JSON.
  */
-function assembleManifest(version, platforms) {
+function assembleManifest(version, platforms, notes = '') {
   const pubDate = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
 
   return {
     version,
-    notes: '',
+    notes,
     pub_date: pubDate,
     platforms,
   }
@@ -231,6 +235,12 @@ function createMockArtifacts() {
 function main() {
   const options = parseArgs()
 
+  // Read notes file if provided
+  let notes = ''
+  if (options.notesFile && fs.existsSync(options.notesFile)) {
+    notes = fs.readFileSync(options.notesFile, 'utf8').trim()
+  }
+
   if (options.test) {
     // --test mode: create mock data and output valid JSON to stdout only.
     // All diagnostic output is suppressed so that piped JSON parsing works cleanly
@@ -244,7 +254,7 @@ function main() {
 
     try {
       const platforms = scanArtifacts(tmpDir, baseUrl, true)
-      const manifest = assembleManifest(version, platforms)
+      const manifest = assembleManifest(version, platforms, notes)
       const json = JSON.stringify(manifest, null, 2)
 
       process.stdout.write(json + '\n')
@@ -289,7 +299,7 @@ function main() {
     process.exit(1)
   }
 
-  const manifest = assembleManifest(options.version, platforms)
+  const manifest = assembleManifest(options.version, platforms, notes)
   const json = JSON.stringify(manifest, null, 2)
 
   // Ensure output directory exists
