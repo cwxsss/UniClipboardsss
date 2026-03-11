@@ -150,19 +150,20 @@ Plans:
 | 20. Clipboard Capture Flow Correlation | v0.3.0    | 3/3            | Complete | 2026-03-10 |
 | 21. Sync Flow Correlation              | v0.3.0    | 2/2            | Complete | 2026-03-11 |
 | 22. Seq Local Visualization            | v0.3.0    | 2/2            | Complete | 2026-03-11 |
-| 23. Distributed Tracing                | 1/2       | In Progress    |          | -          |
+| 23. Distributed Tracing                | v0.3.0    | 2/2            | Complete | 2026-03-11 |
+| 24. Per-device Sync Settings           | -         | 3/3            | Complete | 2026-03-11 |
 
 ### Phase 24: Implement per-device sync settings for paired devices
 
 **Goal:** Users can configure sync settings on a per-device basis for each paired device, with per-device overrides and global fallback, affecting actual sync behavior.
 **Requirements**: DEVSYNC-01, DEVSYNC-02, DEVSYNC-03, DEVSYNC-04, DEVSYNC-05
 **Depends on:** Phase 23
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 24-01-PLAN.md — Domain model extension, DB migration, repository update for per-device sync settings
-- [ ] 24-02-PLAN.md — Use cases, Tauri commands, and sync engine integration
-- [ ] 24-03-PLAN.md — Frontend API, Redux thunks, and DeviceSettingsPanel wiring
+- [x] 24-01-PLAN.md — Domain model extension, DB migration, repository update for per-device sync settings
+- [x] 24-02-PLAN.md — Use cases, Tauri commands, and sync engine integration
+- [x] 24-03-PLAN.md — Frontend API, Redux thunks, and DeviceSettingsPanel wiring
 
 **Success Criteria** (what must be TRUE):
 
