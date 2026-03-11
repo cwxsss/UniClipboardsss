@@ -43,7 +43,6 @@ export function startCircularReveal(x: number | null, y: number | null, updateDO
       {
         duration: 500,
         easing: 'ease-in-out',
-        fill: 'forwards',
         pseudoElement: '::view-transition-new(root)',
       }
     )
@@ -81,7 +80,6 @@ export function startCircularCollapse(x: number, y: number, updateDOM: () => voi
       {
         duration: 500,
         easing: 'ease-in-out',
-        fill: 'forwards',
         pseudoElement: '::view-transition-old(root)',
       }
     )
