@@ -165,6 +165,60 @@ export interface SpaceAccessCompletedEvent {
 }
 
 /**
+ * Per-device sync settings content type toggles
+ */
+export interface ContentTypes {
+  text: boolean
+  image: boolean
+  link: boolean
+  file: boolean
+  code_snippet: boolean
+  rich_text: boolean
+}
+
+/**
+ * Per-device sync settings (matches Rust SyncSettings serde shape)
+ *
+ * Field names are snake_case to match Rust serde serialization.
+ * SyncFrequency enum values are lowercase ("realtime", "interval").
+ */
+export interface SyncSettings {
+  auto_sync: boolean
+  sync_frequency: 'realtime' | 'interval'
+  content_types: ContentTypes
+  max_file_size_mb: number
+}
+
+/**
+ * Get resolved sync settings for a specific paired device.
+ * Returns per-device overrides if set, otherwise global defaults.
+ */
+export async function getDeviceSyncSettings(peerId: string): Promise<SyncSettings> {
+  try {
+    return await invokeWithTrace<SyncSettings>('get_device_sync_settings', { peerId })
+  } catch (error) {
+    console.error('Failed to get device sync settings:', error)
+    throw error
+  }
+}
+
+/**
+ * Update or clear per-device sync settings.
+ * Passing null for settings resets to global defaults.
+ */
+export async function updateDeviceSyncSettings(
+  peerId: string,
+  settings: SyncSettings | null
+): Promise<void> {
+  try {
+    await invokeWithTrace('update_device_sync_settings', { peerId, settings })
+  } catch (error) {
+    console.error('Failed to update device sync settings:', error)
+    throw error
+  }
+}
+
+/**
  * 获取本地 Peer ID
  */
 export async function getLocalPeerId(): Promise<string> {
