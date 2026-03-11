@@ -104,6 +104,7 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
   const [copySuccess, setCopySuccess] = useState(false)
 
   const activeItemRef = useRef<HTMLDivElement>(null)
+  const wasAtFirstPositionRef = useRef(false)
 
   // Convert clipboard item to display item
   const convertToDisplayItem = useCallback(
@@ -200,13 +201,23 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     return flatItems[activeIndex] ?? null
   }, [flatItems, activeIndex])
 
+  // Track whether active item is at first position
+  useEffect(() => {
+    wasAtFirstPositionRef.current = activeIndex === 0
+  }, [activeIndex])
+
   // Auto-select first item when list loads or changes
   useEffect(() => {
-    if (
-      flatItems.length > 0 &&
-      (activeItemId === null || !flatItems.some(it => it.id === activeItemId))
-    ) {
-      setActiveItemId(flatItems[0].id)
+    if (flatItems.length > 0) {
+      // Auto-follow: if active was at first position, follow the new first item
+      if (wasAtFirstPositionRef.current && flatItems[0].id !== activeItemId) {
+        setActiveItemId(flatItems[0].id)
+        return
+      }
+      // Auto-select: if no active item or active item no longer in list
+      if (activeItemId === null || !flatItems.some(it => it.id === activeItemId)) {
+        setActiveItemId(flatItems[0].id)
+      }
     }
     if (flatItems.length === 0) {
       setActiveItemId(null)
