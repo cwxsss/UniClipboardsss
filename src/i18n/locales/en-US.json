@@ -386,7 +386,8 @@
     "settings": {
       "readOnly": "Locked",
       "badges": {
-        "mvp": "MVP"
+        "mvp": "MVP",
+        "comingSoon": "Coming Soon"
       },
       "sync": {
         "title": "Sync Settings",
@@ -407,6 +408,18 @@
           "syncFile": {
             "title": "Sync Files",
             "description": "Allow syncing file content (up to 10MB)"
+          },
+          "syncLink": {
+            "title": "Sync Links",
+            "description": "Allow syncing URL/link content"
+          },
+          "syncCodeSnippet": {
+            "title": "Sync Code Snippets",
+            "description": "Allow syncing code snippet content"
+          },
+          "syncRichText": {
+            "title": "Sync Rich Text",
+            "description": "Allow syncing rich text content (HTML, RTF)"
           }
         }
       },
