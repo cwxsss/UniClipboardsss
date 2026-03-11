@@ -68,6 +68,14 @@ mod tests {
         async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
             Ok(())
         }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
@@ -80,6 +88,7 @@ mod tests {
                 identity_fingerprint: "fp".to_string(),
                 paired_at: chrono::Utc::now(),
                 last_seen_at: None,
+                sync_settings: None,
             }],
         };
 

@@ -534,6 +534,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: "Persisted Name".to_string(),
+            sync_settings: None,
         };
 
         let discovered = DiscoveredPeer {
@@ -562,6 +563,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: "".to_string(),
+            sync_settings: None,
         };
 
         let discovered = DiscoveredPeer {
@@ -589,6 +591,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: "".to_string(),
+            sync_settings: None,
         };
 
         let result = map_paired_device_to_peer(device, None, false);

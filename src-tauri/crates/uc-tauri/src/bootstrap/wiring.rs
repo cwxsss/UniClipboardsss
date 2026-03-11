@@ -3435,6 +3435,14 @@ mod tests {
         ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
             Ok(())
         }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &uc_core::ids::PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
+            Ok(())
+        }
     }
 
     struct NoopKeySlotStore;

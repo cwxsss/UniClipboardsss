@@ -64,6 +64,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: format!("Device {}", peer_id),
+            sync_settings: None,
         }
     }
 

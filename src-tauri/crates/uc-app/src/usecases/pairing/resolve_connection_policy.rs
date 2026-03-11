@@ -96,6 +96,7 @@ mod tests {
                 paired_at: chrono::Utc::now(),
                 last_seen_at: None,
                 device_name: "Mock Device".to_string(),
+                sync_settings: None,
             }))
         }
 
@@ -124,6 +125,14 @@ mod tests {
         }
 
         async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
             Ok(())
         }
     }

@@ -192,6 +192,14 @@ mod tests {
         async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
             Ok(())
         }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
@@ -207,6 +215,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: "Peer Device".to_string(),
+            sync_settings: None,
         })
         .await
         .expect("seed pending paired device");
@@ -246,6 +255,7 @@ mod tests {
                 paired_at: Utc::now(),
                 last_seen_at: None,
                 device_name: "Staged Device".to_string(),
+                sync_settings: None,
             },
         );
 
@@ -279,6 +289,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: "Joiner Peer".to_string(),
+            sync_settings: None,
         })
         .await
         .expect("seed pending paired device");
@@ -313,6 +324,7 @@ mod tests {
                 paired_at: Utc::now(),
                 last_seen_at: None,
                 device_name: "Joiner Staged Peer".to_string(),
+                sync_settings: None,
             },
         );
 

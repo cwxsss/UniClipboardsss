@@ -760,6 +760,14 @@ mod tests {
         ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
             Ok(())
         }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &uc_core::ids::PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
+            Ok(())
+        }
     }
 
     #[async_trait::async_trait]
@@ -812,6 +820,14 @@ mod tests {
         ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
             Ok(())
         }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &uc_core::ids::PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), uc_core::ports::errors::PairedDeviceRepositoryError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
@@ -841,6 +857,7 @@ mod tests {
                         paired_at: Utc::now(),
                         last_seen_at: None,
                         device_name: "Remote Device".to_string(),
+                        sync_settings: None,
                     },
                 },
             )
