@@ -47,8 +47,14 @@ Archived with milestone. See `.planning/milestones/v0.2.0-ROADMAP.md` for full p
 
 None — milestone completed.
 
+### Quick Tasks Completed
+
+| #   | Description                                                      | Date       | Commit   | Directory                                                                                         |
+| --- | ---------------------------------------------------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------- |
+| 5   | Auto-scroll active item to first when new clipboard item arrives | 2026-03-11 | bfba245b | [5-auto-scroll-active-item-to-first-when-ne](./quick/5-auto-scroll-active-item-to-first-when-ne/) |
+
 ## Session Continuity
 
-Last activity: 2026-03-09 - Milestone v0.2.0 archived
+Last activity: 2026-03-11 - Completed quick task 5: Auto-scroll active item to first when new clipboard item arrives
 Stopped at: Milestone completion
 Resume file: None
