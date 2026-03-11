@@ -157,7 +157,7 @@ Plans:
 **Goal:** Users can configure sync settings on a per-device basis for each paired device, with per-device overrides and global fallback, affecting actual sync behavior.
 **Requirements**: DEVSYNC-01, DEVSYNC-02, DEVSYNC-03, DEVSYNC-04, DEVSYNC-05
 **Depends on:** Phase 23
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 24-01-PLAN.md — Domain model extension, DB migration, repository update for per-device sync settings
