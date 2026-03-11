@@ -151,3 +151,23 @@ Plans:
 | 21. Sync Flow Correlation              | v0.3.0    | 2/2            | Complete | 2026-03-11 |
 | 22. Seq Local Visualization            | v0.3.0    | 2/2            | Complete | 2026-03-11 |
 | 23. Distributed Tracing                | 1/2       | In Progress    |          | -          |
+
+### Phase 24: Implement per-device sync settings for paired devices
+
+**Goal:** Users can configure sync settings on a per-device basis for each paired device, with per-device overrides and global fallback, affecting actual sync behavior.
+**Requirements**: DEVSYNC-01, DEVSYNC-02, DEVSYNC-03, DEVSYNC-04, DEVSYNC-05
+**Depends on:** Phase 23
+**Plans:** 3 plans
+
+Plans:
+- [ ] 24-01-PLAN.md — Domain model extension, DB migration, repository update for per-device sync settings
+- [ ] 24-02-PLAN.md — Use cases, Tauri commands, and sync engine integration
+- [ ] 24-03-PLAN.md — Frontend API, Redux thunks, and DeviceSettingsPanel wiring
+
+**Success Criteria** (what must be TRUE):
+
+1. Each paired device can store its own sync settings or inherit global defaults.
+2. The outbound sync engine checks per-device auto_sync before sending clipboard data.
+3. Users can view, modify, and reset per-device sync settings through the UI.
+4. Settings changes take effect immediately without app restart.
+5. New devices default to global settings when first paired.
