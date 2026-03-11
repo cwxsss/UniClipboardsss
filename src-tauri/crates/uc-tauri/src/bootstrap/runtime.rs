@@ -879,6 +879,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.device.device_identity.clone(),
             self.runtime.deps.settings.clone(),
             Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter),
+            self.runtime.deps.device.paired_device_repo.clone(),
         )
     }
 

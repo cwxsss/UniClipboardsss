@@ -12,11 +12,14 @@ use uc_core::ids::{FormatId, RepresentationId};
 use uc_core::network::{
     ClipboardMessage, ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage, ProtocolMessage,
 };
+use uc_core::network::{PairedDevice, PairingState};
 use uc_core::ports::{
     ClipboardChangeOriginPort, ClipboardTransportPort, DeviceIdentityPort, EncryptionPort,
-    EncryptionSessionPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort, SettingsPort,
+    EncryptionSessionPort, NetworkEventPort, PairedDeviceRepositoryError,
+    PairedDeviceRepositoryPort, PairingTransportPort, PeerDirectoryPort, SettingsPort,
     SystemClipboardPort,
 };
+use uc_core::PeerId;
 use uc_core::security::model::{
     EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfParams, Kek,
     MasterKey, Passphrase,
@@ -330,6 +333,54 @@ impl NetworkEventPort for InProcessNetwork {
     }
 }
 
+struct NoopPairedDeviceRepo;
+
+#[async_trait]
+impl PairedDeviceRepositoryPort for NoopPairedDeviceRepo {
+    async fn get_by_peer_id(
+        &self,
+        _peer_id: &PeerId,
+    ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
+        Ok(None)
+    }
+
+    async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
+        Ok(vec![])
+    }
+
+    async fn upsert(&self, _device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
+        Ok(())
+    }
+
+    async fn set_state(
+        &self,
+        _peer_id: &PeerId,
+        _state: PairingState,
+    ) -> Result<(), PairedDeviceRepositoryError> {
+        Ok(())
+    }
+
+    async fn update_last_seen(
+        &self,
+        _peer_id: &PeerId,
+        _last_seen_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), PairedDeviceRepositoryError> {
+        Ok(())
+    }
+
+    async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
+        Ok(())
+    }
+
+    async fn update_sync_settings(
+        &self,
+        _peer_id: &PeerId,
+        _settings: Option<uc_core::settings::model::SyncSettings>,
+    ) -> Result<(), PairedDeviceRepositoryError> {
+        Ok(())
+    }
+}
+
 /// Build a minimal 2x2 red PNG image for testing.
 fn make_test_png() -> Vec<u8> {
     // Minimal valid 2x2 RGBA PNG image (red pixels)
@@ -494,6 +545,7 @@ async fn clipboard_sync_e2e_dual_peer_in_process() -> Result<()> {
         identity_a,
         settings.clone(),
         transfer_encryptor.clone(),
+        Arc::new(NoopPairedDeviceRepo),
     );
     let outbound_b = SyncOutboundClipboardUseCase::new(
         clipboard_b.clone(),
@@ -503,6 +555,7 @@ async fn clipboard_sync_e2e_dual_peer_in_process() -> Result<()> {
         identity_b,
         settings,
         transfer_encryptor,
+        Arc::new(NoopPairedDeviceRepo),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -600,6 +653,7 @@ async fn clipboard_sync_e2e_image_single_rep() -> Result<()> {
         identity_a,
         settings,
         transfer_encryptor,
+        Arc::new(NoopPairedDeviceRepo),
     );
 
     let png_clone = png_bytes.clone();
@@ -698,6 +752,7 @@ async fn clipboard_sync_e2e_windows_image_multi_rep() -> Result<()> {
         identity_a,
         settings,
         transfer_encryptor,
+        Arc::new(NoopPairedDeviceRepo),
     );
 
     let png_clone = png_bytes.clone();

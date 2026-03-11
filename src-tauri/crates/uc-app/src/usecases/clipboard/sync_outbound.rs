@@ -11,11 +11,12 @@ use uc_core::network::protocol::{
     BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion,
 };
 use uc_core::network::{ClipboardMessage, ProtocolMessage};
+use uc_core::network::paired_device::resolve_sync_settings;
 use uc_core::ports::{
-    ClipboardTransportPort, DeviceIdentityPort, EncryptionSessionPort, PeerDirectoryPort,
-    SettingsPort, SystemClipboardPort, TransferPayloadEncryptorPort,
+    ClipboardTransportPort, DeviceIdentityPort, EncryptionSessionPort, PairedDeviceRepositoryPort,
+    PeerDirectoryPort, SettingsPort, SystemClipboardPort, TransferPayloadEncryptorPort,
 };
-use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+use uc_core::{ClipboardChangeOrigin, PeerId, SystemClipboardSnapshot};
 
 pub struct SyncOutboundClipboardUseCase {
     local_clipboard: Arc<dyn SystemClipboardPort>,
@@ -25,6 +26,7 @@ pub struct SyncOutboundClipboardUseCase {
     device_identity: Arc<dyn DeviceIdentityPort>,
     settings: Arc<dyn SettingsPort>,
     transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
 }
 
 impl SyncOutboundClipboardUseCase {
@@ -36,6 +38,7 @@ impl SyncOutboundClipboardUseCase {
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
         transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+        paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
     ) -> Self {
         Self {
             local_clipboard,
@@ -45,7 +48,61 @@ impl SyncOutboundClipboardUseCase {
             device_identity,
             settings,
             transfer_encryptor,
+            paired_device_repo,
         }
+    }
+
+    /// Filter sendable peers by per-device auto_sync setting.
+    ///
+    /// Peers not found in the paired device table are kept (safety fallback).
+    /// Errors from settings/repo loads are logged and the peer is kept.
+    async fn filter_by_auto_sync(
+        &self,
+        peers: &[uc_core::network::DiscoveredPeer],
+    ) -> Vec<uc_core::network::DiscoveredPeer> {
+        let global_settings = match self.settings.load().await {
+            Ok(s) => Some(s),
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "Failed to load global settings for per-device auto_sync check; proceeding with all peers"
+                );
+                None
+            }
+        };
+
+        let mut result = Vec::with_capacity(peers.len());
+        for peer in peers {
+            let peer_id = PeerId::from(peer.peer_id.as_str());
+            match self.paired_device_repo.get_by_peer_id(&peer_id).await {
+                Ok(Some(device)) => {
+                    if let Some(ref gs) = global_settings {
+                        let effective = resolve_sync_settings(&device, &gs.sync);
+                        if !effective.auto_sync {
+                            debug!(
+                                peer_id = %peer.peer_id,
+                                "Skipping sync for peer: auto_sync disabled"
+                            );
+                            continue;
+                        }
+                    }
+                    result.push(peer.clone());
+                }
+                Ok(None) => {
+                    // Peer not in paired_device table yet -- proceed with sync
+                    result.push(peer.clone());
+                }
+                Err(err) => {
+                    warn!(
+                        peer_id = %peer.peer_id,
+                        error = %err,
+                        "Failed to load paired device for auto_sync check; proceeding with sync"
+                    );
+                    result.push(peer.clone());
+                }
+            }
+        }
+        result
     }
 
     pub fn execute_current_snapshot(&self, origin: ClipboardChangeOrigin) -> Result<()> {
@@ -96,11 +153,16 @@ impl SyncOutboundClipboardUseCase {
             return Ok(());
         }
 
-        let sendable_peers = self
+        let all_sendable_peers = self
             .peer_directory
             .list_sendable_peers()
             .await
             .context("failed to load sendable peers for outbound sync")?;
+
+        // Filter out peers whose effective auto_sync is disabled
+        let sendable_peers = self
+            .filter_by_auto_sync(&all_sendable_peers)
+            .await;
         let discovered_peer_count = match self.peer_directory.get_discovered_peers().await {
             Ok(peers) => peers.len(),
             Err(err) => {
@@ -389,8 +451,10 @@ mod tests {
         ClipboardMessage, ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage,
         ProtocolMessage,
     };
+    use uc_core::network::PairingState;
     use uc_core::ports::{
-        ClipboardTransportPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort,
+        ClipboardTransportPort, NetworkEventPort, PairedDeviceRepositoryError,
+        PairedDeviceRepositoryPort, PairingTransportPort, PeerDirectoryPort,
     };
     use uc_core::security::model::{EncryptionError, MasterKey};
     use uc_core::settings::model::Settings;
@@ -558,6 +622,62 @@ mod tests {
         }
     }
 
+    struct TestPairedDeviceRepo;
+
+    #[async_trait]
+    impl PairedDeviceRepositoryPort for TestPairedDeviceRepo {
+        async fn get_by_peer_id(
+            &self,
+            _peer_id: &uc_core::PeerId,
+        ) -> Result<Option<uc_core::network::PairedDevice>, PairedDeviceRepositoryError> {
+            Ok(None)
+        }
+
+        async fn list_all(
+            &self,
+        ) -> Result<Vec<uc_core::network::PairedDevice>, PairedDeviceRepositoryError> {
+            Ok(vec![])
+        }
+
+        async fn upsert(
+            &self,
+            _device: uc_core::network::PairedDevice,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn set_state(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _state: PairingState,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn update_last_seen(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _last_seen_at: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn delete(
+            &self,
+            _peer_id: &uc_core::PeerId,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+    }
+
     struct TestSettings {
         settings: Settings,
     }
@@ -654,6 +774,7 @@ mod tests {
                 settings: Settings::default(),
             }),
             Arc::new(TransferPayloadEncryptorAdapter),
+            Arc::new(TestPairedDeviceRepo),
         );
 
         (
