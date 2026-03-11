@@ -151,7 +151,7 @@ Plans:
 | 21. Sync Flow Correlation              | v0.3.0    | 2/2            | Complete | 2026-03-11 |
 | 22. Seq Local Visualization            | v0.3.0    | 2/2            | Complete | 2026-03-11 |
 | 23. Distributed Tracing                | v0.3.0    | 2/2            | Complete | 2026-03-11 |
-| 24. Per-device Sync Settings           | -         | 3/3            | Complete | 2026-03-11 |
+| 24. Per-device Sync Settings           | -         | Complete    | 2026-03-11 | 2026-03-11 |
 
 ### Phase 24: Implement per-device sync settings for paired devices
 
