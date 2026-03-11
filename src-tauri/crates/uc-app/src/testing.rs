@@ -67,6 +67,14 @@ impl PairedDeviceRepositoryPort for NoopPairedDeviceRepository {
     async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
         Ok(())
     }
+
+    async fn update_sync_settings(
+        &self,
+        _peer_id: &PeerId,
+        _settings: Option<uc_core::settings::model::SyncSettings>,
+    ) -> Result<(), PairedDeviceRepositoryError> {
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -90,6 +90,7 @@ diesel::table! {
         paired_at -> BigInt,
         last_seen_at -> Nullable<BigInt>,
         device_name -> Text,
+        sync_settings -> Nullable<Text>,
     }
 }
 
