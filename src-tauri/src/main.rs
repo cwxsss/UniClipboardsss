@@ -838,6 +838,8 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::pairing::unpair_p2p_device,
             uc_tauri::commands::pairing::list_paired_devices,
             uc_tauri::commands::pairing::set_pairing_state,
+            uc_tauri::commands::pairing::get_device_sync_settings,
+            uc_tauri::commands::pairing::update_device_sync_settings,
             // Tray commands
             uc_tauri::commands::tray::set_tray_language,
             // Lifecycle commands

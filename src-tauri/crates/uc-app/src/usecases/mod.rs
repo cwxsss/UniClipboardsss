@@ -43,9 +43,10 @@ pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
 pub use list_clipboard_entries::ListClipboardEntries;
 pub use pairing::{
-    AnnounceDeviceName, GetLocalDeviceInfo, GetLocalPeerId, ListConnectedPeers,
-    ListDiscoveredPeers, ListPairedDevices, LocalDeviceInfo, PairingConfig, PairingOrchestrator,
-    ResolveConnectionPolicy, SetPairingState, StagedPairedDeviceStore, UnpairDevice,
+    AnnounceDeviceName, GetDeviceSyncSettings, GetLocalDeviceInfo, GetLocalPeerId,
+    ListConnectedPeers, ListDiscoveredPeers, ListPairedDevices, LocalDeviceInfo, PairingConfig,
+    PairingOrchestrator, ResolveConnectionPolicy, SetPairingState, StagedPairedDeviceStore,
+    UnpairDevice, UpdateDeviceSyncSettings,
 };
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator};
 pub use start_network::StartNetwork;

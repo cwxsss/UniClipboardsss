@@ -612,6 +612,25 @@ impl<'a> UseCases<'a> {
         uc_app::usecases::SetPairingState::new(self.runtime.deps.device.paired_device_repo.clone())
     }
 
+    /// Get resolved sync settings for a specific device.
+    ///
+    /// Returns per-device overrides if set, otherwise global defaults.
+    pub fn get_device_sync_settings(&self) -> uc_app::usecases::GetDeviceSyncSettings {
+        uc_app::usecases::GetDeviceSyncSettings::from_ports(
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.settings.clone(),
+        )
+    }
+
+    /// Update or clear per-device sync settings.
+    ///
+    /// Passing `None` resets to global defaults.
+    pub fn update_device_sync_settings(&self) -> uc_app::usecases::UpdateDeviceSyncSettings {
+        uc_app::usecases::UpdateDeviceSyncSettings::from_ports(
+            self.runtime.deps.device.paired_device_repo.clone(),
+        )
+    }
+
     /// Unpair device and remove from repository.
     ///
     /// 取消配对并从存储中删除。
