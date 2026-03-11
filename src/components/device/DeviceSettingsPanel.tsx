@@ -45,36 +45,10 @@ const DeviceSettingsPanel: React.FC<DeviceSettingsPanelProps> = ({ deviceId }) =
     )
   }, [dispatch, deviceId, settings])
 
-  const handleContentTypeToggle = useCallback(
-    (field: keyof ContentTypes) => {
-      if (!settings) return
-      dispatch(
-        updateDeviceSyncSettings({
-          peerId: deviceId,
-          settings: {
-            ...settings,
-            content_types: {
-              ...settings.content_types,
-              [field]: !settings.content_types[field],
-            },
-          },
-        })
-      )
-    },
-    [dispatch, deviceId, settings]
-  )
-
   const handleRestoreDefaults = useCallback(async () => {
     await dispatch(updateDeviceSyncSettings({ peerId: deviceId, settings: null }))
     dispatch(fetchDeviceSyncSettings(deviceId))
   }, [dispatch, deviceId])
-
-  const permissionItems = [
-    { key: 'readClipboard', checked: true, editable: false },
-    { key: 'writeClipboard', checked: true, editable: false },
-    { key: 'historyAccess', checked: true, editable: false },
-    { key: 'fileTransfer', checked: false, editable: false },
-  ]
 
   // Loading skeleton
   if (isLoading && !settings) {
@@ -154,59 +128,20 @@ const DeviceSettingsPanel: React.FC<DeviceSettingsPanelProps> = ({ deviceId }) =
                   <h5 className="text-sm font-medium text-foreground">
                     {t(`devices.settings.sync.rules.${i18nKey}.title`)}
                   </h5>
-                  <span className="text-[10px] leading-none rounded px-1.5 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                    {t('devices.settings.badges.comingSoon')}
+                  <span className="text-[10px] leading-none rounded px-1.5 py-1 bg-muted text-muted-foreground">
+                    {t('devices.settings.badges.notEditable')}
                   </span>
                 </div>
                 <p className="text-xs mt-0.5 text-muted-foreground">
                   {t(`devices.settings.sync.rules.${i18nKey}.description`)}
                 </p>
               </div>
-              <label className="flex items-center shrink-0 cursor-pointer">
+              <label className="flex items-center shrink-0 cursor-not-allowed opacity-50">
                 <div className="relative">
                   <input
                     type="checkbox"
                     className="sr-only peer"
                     checked={settings?.content_types[field] ?? true}
-                    onChange={() => handleContentTypeToggle(field)}
-                    disabled={isLoading}
-                  />
-                  <div className="block w-9 h-5 rounded-full transition-colors bg-muted peer-checked:bg-primary" />
-                  <div className="absolute left-1 top-1 w-3 h-3 rounded-full transition-transform transform peer-checked:translate-x-4 bg-white" />
-                </div>
-              </label>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <div className="mb-2 px-1">
-          <h4 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
-            {t('devices.settings.permissions.title')}
-          </h4>
-        </div>
-
-        <div className="divide-y divide-border/40">
-          {permissionItems.map(perm => (
-            <div
-              key={perm.key}
-              className="flex items-center justify-between py-3 px-1 bg-muted/30 text-muted-foreground"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-muted-foreground">
-                  {t(`devices.settings.permissions.items.${perm.key}`)}
-                </span>
-                <span className="text-[10px] leading-none rounded px-1.5 py-1 bg-muted text-muted-foreground">
-                  {t('devices.settings.readOnly')}
-                </span>
-              </div>
-              <label className="flex items-center shrink-0 cursor-not-allowed opacity-70">
-                <div className="relative">
-                  <input
-                    type="checkbox"
-                    className="sr-only peer"
-                    checked={perm.checked}
                     disabled
                     readOnly
                   />
@@ -218,6 +153,7 @@ const DeviceSettingsPanel: React.FC<DeviceSettingsPanelProps> = ({ deviceId }) =
           ))}
         </div>
       </div>
+
     </div>
   )
 }

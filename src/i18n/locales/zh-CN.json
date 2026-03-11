@@ -387,7 +387,8 @@
       "readOnly": "不可更改",
       "badges": {
         "mvp": "MVP",
-        "comingSoon": "即将推出"
+        "comingSoon": "即将推出",
+        "notEditable": "不可变更"
       },
       "sync": {
         "title": "同步设置",

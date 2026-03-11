@@ -387,7 +387,8 @@
       "readOnly": "Locked",
       "badges": {
         "mvp": "MVP",
-        "comingSoon": "Coming Soon"
+        "comingSoon": "Coming Soon",
+        "notEditable": "Not Editable"
       },
       "sync": {
         "title": "Sync Settings",
