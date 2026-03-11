@@ -1507,6 +1507,7 @@ impl PairingStateMachine {
             paired_at: now,
             last_seen_at: None,
             device_name,
+            sync_settings: None,
         })
     }
 }

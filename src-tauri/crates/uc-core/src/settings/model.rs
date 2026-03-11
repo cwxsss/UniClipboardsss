@@ -37,7 +37,7 @@ pub enum UpdateChannel {
     Rc,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ContentTypes {
     pub text: bool,
     pub image: bool,
@@ -47,7 +47,7 @@ pub struct ContentTypes {
     pub rich_text: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncSettings {
     pub auto_sync: bool,
     pub sync_frequency: SyncFrequency,

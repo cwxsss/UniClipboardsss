@@ -1,4 +1,5 @@
 use crate::network::{PairedDevice, PairingState};
+use crate::settings::model::SyncSettings;
 use crate::PeerId;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -29,4 +30,10 @@ pub trait PairedDeviceRepositoryPort: Send + Sync {
     ) -> Result<(), PairedDeviceRepositoryError>;
 
     async fn delete(&self, peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError>;
+
+    async fn update_sync_settings(
+        &self,
+        peer_id: &PeerId,
+        settings: Option<SyncSettings>,
+    ) -> Result<(), PairedDeviceRepositoryError>;
 }
