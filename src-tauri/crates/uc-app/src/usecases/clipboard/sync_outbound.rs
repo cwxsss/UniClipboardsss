@@ -60,18 +60,23 @@ impl SyncOutboundClipboardUseCase {
     async fn apply_sync_policy(
         &self,
         peers: &[uc_core::network::DiscoveredPeer],
-        _snapshot: &SystemClipboardSnapshot,
+        snapshot: &SystemClipboardSnapshot,
     ) -> Vec<uc_core::network::DiscoveredPeer> {
+        use uc_core::settings::content_type_filter::{classify_snapshot, is_content_type_allowed};
+
         let global_settings = match self.settings.load().await {
             Ok(s) => Some(s),
             Err(err) => {
                 warn!(
                     error = %err,
-                    "Failed to load global settings for per-device auto_sync check; proceeding with all peers"
+                    "Failed to load global settings for per-device sync policy check; proceeding with all peers"
                 );
                 None
             }
         };
+
+        // Classify the snapshot once, not per-peer
+        let content_category = classify_snapshot(snapshot);
 
         let mut result = Vec::with_capacity(peers.len());
         for peer in peers {
@@ -87,6 +92,14 @@ impl SyncOutboundClipboardUseCase {
                             );
                             continue;
                         }
+                        if !is_content_type_allowed(content_category, &effective.content_types) {
+                            debug!(
+                                peer_id = %peer.peer_id,
+                                content_type = ?content_category,
+                                "Skipping sync for peer: content type disabled"
+                            );
+                            continue;
+                        }
                     }
                     result.push(peer.clone());
                 }
@@ -98,7 +111,7 @@ impl SyncOutboundClipboardUseCase {
                     warn!(
                         peer_id = %peer.peer_id,
                         error = %err,
-                        "Failed to load paired device for auto_sync check; proceeding with sync"
+                        "Failed to load paired device for sync policy check; proceeding with sync"
                     );
                     result.push(peer.clone());
                 }
