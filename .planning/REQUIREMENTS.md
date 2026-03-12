@@ -31,6 +31,16 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 - [x] **SEQ-05**: Seq configuration (endpoint URL and API key, if needed) can be set via configuration (env var or settings) with sensible defaults for local development.
 - [x] **SEQ-06**: Seq displays clipboard capture flows as time-ordered sequences of stages for a given `flow_id`, either via trace/waterfall view or equivalent queryable structure.
 
+### Content Type Sync Filtering
+
+- [ ] **CT-01**: Clipboard snapshots are classified into a content type category (text, image, rich_text, link, file, code_snippet, unknown) based on the primary MIME type of their representations.
+- [ ] **CT-02**: The outbound sync engine filters peers by content type toggle in addition to auto_sync, skipping peers whose content type is disabled for the snapshot being synced.
+- [ ] **CT-03**: Unknown or unimplemented content types (rich_text, link, file, code_snippet) always sync regardless of toggle state.
+- [ ] **CT-04**: ContentTypes defaults to all-true so new devices sync all content by default.
+- [ ] **CT-05**: Text and image content type toggles are interactive in the DeviceSettingsPanel when auto_sync is enabled.
+- [ ] **CT-06**: Unimplemented content type toggles (file, link, code_snippet, rich_text) display a "Coming Soon" badge and are non-interactive.
+- [ ] **CT-07**: An inline warning appears when auto_sync is on but all content types are disabled for a device.
+
 ## v2 Requirements
 
 Deferred to a future milestone. Tracked but not in the current roadmap.
@@ -50,7 +60,7 @@ Explicitly excluded from v0.3.0. Documented to prevent scope creep.
 | Full OpenTelemetry integration (traces/logs/metrics) | Adds significant dependency and configuration complexity; reserved for a later milestone focused on multi-backend and collector integration. |
 | Remote/cloud log shipping (Datadog/Honeycomb/etc.)   | Clipboard logs may contain sensitive content; current milestone is local developer observability only.                                       |
 | React/frontend log integration into Rust tracing     | Cross-boundary logging adds complexity; frontend debugging handled via browser/React DevTools and Redux tooling.                             |
-| In-app log viewer UI                                 | High effort, low value compared to Seq’s dedicated log UI; would duplicate existing tooling.                                                 |
+| In-app log viewer UI                                 | High effort, low value compared to Seq's dedicated log UI; would duplicate existing tooling.                                                 |
 | Metrics dashboards and alerting rules                | Belong to a separate observability/metrics milestone; this milestone focuses on structured logs and flows.                                   |
 | Distributed tracing across devices                   | Requires protocol-level changes for trace context propagation; current milestone limits scope to single-device flows.                        |
 
@@ -75,14 +85,21 @@ Which phases cover which requirements.
 | SEQ-04      | Phase 22 | Complete |
 | SEQ-05      | Phase 22 | Complete |
 | SEQ-06      | Phase 22 | Complete |
+| CT-01       | Phase 25 | Planned  |
+| CT-02       | Phase 25 | Planned  |
+| CT-03       | Phase 25 | Planned  |
+| CT-04       | Phase 25 | Planned  |
+| CT-05       | Phase 25 | Planned  |
+| CT-06       | Phase 25 | Planned  |
+| CT-07       | Phase 25 | Planned  |
 
 **Coverage:**
 
-- v1 requirements: 15 total
-- Mapped to phases: 15
-- Unmapped: 0 ✓
+- v1 requirements: 22 total
+- Mapped to phases: 22
+- Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-09_
-_Last updated: 2026-03-09 after roadmap creation_
+_Last updated: 2026-03-12 after Phase 25 planning_

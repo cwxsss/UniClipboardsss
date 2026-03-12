@@ -142,16 +142,16 @@ Plans:
 
 ## Progress
 
-| Phase                                  | Milestone | Plans Complete | Status   | Completed  |
-| -------------------------------------- | --------- | -------------- | -------- | ---------- |
-| 1-9                                    | v0.1.0    | 17/17          | Complete | 2026-03-06 |
-| 10-18                                  | v0.2.0    | 22/22          | Complete | 2026-03-09 |
-| 19. Dual Output Logging Foundation     | v0.3.0    | 2/2            | Complete | 2026-03-10 |
-| 20. Clipboard Capture Flow Correlation | v0.3.0    | 3/3            | Complete | 2026-03-10 |
-| 21. Sync Flow Correlation              | v0.3.0    | 2/2            | Complete | 2026-03-11 |
-| 22. Seq Local Visualization            | v0.3.0    | 2/2            | Complete | 2026-03-11 |
-| 23. Distributed Tracing                | v0.3.0    | 2/2            | Complete | 2026-03-11 |
-| 24. Per-device Sync Settings           | -         | Complete    | 2026-03-11 | 2026-03-11 |
+| Phase                                  | Milestone | Plans Complete | Status     | Completed  |
+| -------------------------------------- | --------- | -------------- | ---------- | ---------- |
+| 1-9                                    | v0.1.0    | 17/17          | Complete   | 2026-03-06 |
+| 10-18                                  | v0.2.0    | 22/22          | Complete   | 2026-03-09 |
+| 19. Dual Output Logging Foundation     | v0.3.0    | 2/2            | Complete   | 2026-03-10 |
+| 20. Clipboard Capture Flow Correlation | v0.3.0    | 3/3            | Complete   | 2026-03-10 |
+| 21. Sync Flow Correlation              | v0.3.0    | 2/2            | Complete   | 2026-03-11 |
+| 22. Seq Local Visualization            | v0.3.0    | 2/2            | Complete   | 2026-03-11 |
+| 23. Distributed Tracing                | v0.3.0    | 2/2            | Complete   | 2026-03-11 |
+| 24. Per-device Sync Settings           | -         | Complete       | 2026-03-11 | 2026-03-11 |
 
 ### Phase 24: Implement per-device sync settings for paired devices
 
@@ -161,6 +161,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] 24-01-PLAN.md — Domain model extension, DB migration, repository update for per-device sync settings
 - [x] 24-02-PLAN.md — Use cases, Tauri commands, and sync engine integration
 - [x] 24-03-PLAN.md — Frontend API, Redux thunks, and DeviceSettingsPanel wiring
@@ -172,3 +173,24 @@ Plans:
 3. Users can view, modify, and reset per-device sync settings through the UI.
 4. Settings changes take effect immediately without app restart.
 5. New devices default to global settings when first paired.
+
+### Phase 25: Implement per-device sync content type toggles
+
+**Goal:** Users can control which content types (text, image) sync to each paired device, with the sync engine filtering outbound content by type and the UI providing interactive toggles for implemented types.
+**Requirements**: CT-01, CT-02, CT-03, CT-04, CT-05, CT-06, CT-07
+**Depends on:** Phase 24
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 25-01-PLAN.md — Backend content type classification and sync policy filtering
+- [ ] 25-02-PLAN.md — Frontend content type toggle interactivity and visual states
+
+**Success Criteria** (what must be TRUE):
+
+1. Clipboard snapshots are classified by primary content type from MIME data.
+2. Outbound sync filters peers by both auto_sync and content type toggles in a single pass.
+3. Unknown/unimplemented content types always sync regardless of toggle state.
+4. Text and image toggles are interactive in the UI; other types show "Coming Soon".
+5. All-disabled warning appears when auto_sync is on but all content types are off.
+6. ContentTypes defaults to all-true so new devices sync everything by default.
