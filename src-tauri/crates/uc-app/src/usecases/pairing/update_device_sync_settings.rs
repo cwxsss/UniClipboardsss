@@ -10,16 +10,10 @@ pub struct UpdateDeviceSyncSettings {
 
 impl UpdateDeviceSyncSettings {
     pub fn from_ports(paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>) -> Self {
-        Self {
-            paired_device_repo,
-        }
+        Self { paired_device_repo }
     }
 
-    pub async fn execute(
-        &self,
-        peer_id: &PeerId,
-        settings: Option<SyncSettings>,
-    ) -> Result<()> {
+    pub async fn execute(&self, peer_id: &PeerId, settings: Option<SyncSettings>) -> Result<()> {
         self.paired_device_repo
             .update_sync_settings(peer_id, settings)
             .await

@@ -19,12 +19,12 @@ use uc_core::ports::{
     PairedDeviceRepositoryPort, PairingTransportPort, PeerDirectoryPort, SettingsPort,
     SystemClipboardPort,
 };
-use uc_core::PeerId;
 use uc_core::security::model::{
     EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfParams, Kek,
     MasterKey, Passphrase,
 };
 use uc_core::settings::model::Settings;
+use uc_core::PeerId;
 use uc_core::{
     ClipboardChangeOrigin, DeviceId, MimeType, ObservedClipboardRepresentation,
     SystemClipboardSnapshot,
