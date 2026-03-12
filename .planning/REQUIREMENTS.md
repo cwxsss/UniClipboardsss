@@ -33,10 +33,10 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 
 ### Content Type Sync Filtering
 
-- [ ] **CT-01**: Clipboard snapshots are classified into a content type category (text, image, rich_text, link, file, code_snippet, unknown) based on the primary MIME type of their representations.
-- [ ] **CT-02**: The outbound sync engine filters peers by content type toggle in addition to auto_sync, skipping peers whose content type is disabled for the snapshot being synced.
-- [ ] **CT-03**: Unknown or unimplemented content types (rich_text, link, file, code_snippet) always sync regardless of toggle state.
-- [ ] **CT-04**: ContentTypes defaults to all-true so new devices sync all content by default.
+- [x] **CT-01**: Clipboard snapshots are classified into a content type category (text, image, rich_text, link, file, code_snippet, unknown) based on the primary MIME type of their representations.
+- [x] **CT-02**: The outbound sync engine filters peers by content type toggle in addition to auto_sync, skipping peers whose content type is disabled for the snapshot being synced.
+- [x] **CT-03**: Unknown or unimplemented content types (rich_text, link, file, code_snippet) always sync regardless of toggle state.
+- [x] **CT-04**: ContentTypes defaults to all-true so new devices sync all content by default.
 - [x] **CT-05**: Text and image content type toggles are interactive in the DeviceSettingsPanel when auto_sync is enabled.
 - [x] **CT-06**: Unimplemented content type toggles (file, link, code_snippet, rich_text) display a "Coming Soon" badge and are non-interactive.
 - [x] **CT-07**: An inline warning appears when auto_sync is on but all content types are disabled for a device.
