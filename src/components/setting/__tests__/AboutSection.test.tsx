@@ -11,6 +11,10 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 
+vi.mock('@/hooks/useShortcutLayer', () => ({
+  useShortcutLayer: vi.fn(),
+}))
+
 const baseSetting: Settings = {
   schema_version: 1,
   general: {

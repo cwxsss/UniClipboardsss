@@ -8,6 +8,8 @@ import {
 import SettingsSidebar from '@/components/setting/SettingsSidebar'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
+import { useShortcut } from '@/hooks/useShortcut'
+import { useShortcutScope } from '@/hooks/useShortcutScope'
 import { SettingContentLayout } from '@/layouts'
 import { getSettingsIconPosition, startCircularCollapse } from '@/lib/theme-transition'
 import { captureUserIntent } from '@/observability/breadcrumbs'
@@ -15,27 +17,29 @@ import { captureUserIntent } from '@/observability/breadcrumbs'
 function SettingsPage() {
   const [activeCategory, setActiveCategory] = useState(DEFAULT_CATEGORY)
   const navigate = useNavigate()
+  useShortcutScope('settings')
+
+  useShortcut({
+    key: 'esc',
+    scope: 'settings',
+    handler: () => {
+      const doNavigate = () => {
+        const idx = (window.history.state as { idx?: number } | null)?.idx
+        if (typeof idx === 'number' && idx > 0) {
+          navigate(-1)
+        } else {
+          navigate('/')
+        }
+      }
+      const { x, y } = getSettingsIconPosition()
+      startCircularCollapse(x, y, doNavigate)
+    },
+  })
 
   // Handle ESC key to navigate back with collapse animation
   useEffect(() => {
     captureUserIntent('open_settings')
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        const doNavigate = () => {
-          const idx = (window.history.state as { idx?: number } | null)?.idx
-          if (typeof idx === 'number' && idx > 0) {
-            navigate(-1)
-          } else {
-            navigate('/')
-          }
-        }
-        const { x, y } = getSettingsIconPosition()
-        startCircularCollapse(x, y, doNavigate)
-      }
-    }
-    window.addEventListener('keydown', handleEsc)
-    return () => window.removeEventListener('keydown', handleEsc)
-  }, [navigate])
+  }, [])
 
   const handleCategoryChange = (category: string) => {
     setActiveCategory(category)
