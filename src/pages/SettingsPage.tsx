@@ -11,7 +11,6 @@ import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
 import { useShortcut } from '@/hooks/useShortcut'
 import { useShortcutScope } from '@/hooks/useShortcutScope'
 import { SettingContentLayout } from '@/layouts'
-import { getSettingsIconPosition, startCircularCollapse } from '@/lib/theme-transition'
 import { captureUserIntent } from '@/observability/breadcrumbs'
 
 function SettingsPage() {
@@ -23,16 +22,12 @@ function SettingsPage() {
     key: 'esc',
     scope: 'settings',
     handler: () => {
-      const doNavigate = () => {
-        const idx = (window.history.state as { idx?: number } | null)?.idx
-        if (typeof idx === 'number' && idx > 0) {
-          navigate(-1)
-        } else {
-          navigate('/')
-        }
+      const idx = (window.history.state as { idx?: number } | null)?.idx
+      if (typeof idx === 'number' && idx > 0) {
+        navigate(-1)
+      } else {
+        navigate('/')
       }
-      const { x, y } = getSettingsIconPosition()
-      startCircularCollapse(x, y, doNavigate)
     },
   })
 

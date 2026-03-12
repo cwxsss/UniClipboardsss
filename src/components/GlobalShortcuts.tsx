@@ -1,10 +1,5 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useShortcut } from '@/hooks/useShortcut'
-import {
-  getSettingsIconPosition,
-  startCircularCollapse,
-  startCircularReveal,
-} from '@/lib/theme-transition'
 import { SHORTCUT_DEFINITIONS } from '@/shortcuts/definitions'
 
 /**
@@ -24,19 +19,15 @@ export const GlobalShortcuts = () => {
     scope: 'global',
     enabled: settingsShortcutEnabled,
     handler: () => {
-      const { x, y } = getSettingsIconPosition()
       if (location.pathname.startsWith('/settings')) {
-        const doNavigate = () => {
-          const idx = (window.history.state as { idx?: number } | null)?.idx
-          if (typeof idx === 'number' && idx > 0) {
-            navigate(-1)
-          } else {
-            navigate('/')
-          }
+        const idx = (window.history.state as { idx?: number } | null)?.idx
+        if (typeof idx === 'number' && idx > 0) {
+          navigate(-1)
+        } else {
+          navigate('/')
         }
-        startCircularCollapse(x, y, doNavigate)
       } else {
-        startCircularReveal(x, y, () => navigate('/settings'))
+        navigate('/settings')
       }
     },
   })
