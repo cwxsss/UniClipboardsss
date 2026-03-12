@@ -5,7 +5,7 @@ milestone_name: milestone
 status: executing
 stopped_at: Completed quick-8-PLAN.md
 last_updated: '2026-03-12T07:23:15.314Z'
-last_activity: 2026-03-12 — Completed 25-02 Frontend content type toggle interactivity
+last_activity: 2026-03-12 — Completed quick task 8: Fix Vite chunk size warning by code-splitting large bundles
 progress:
   total_phases: 7
   completed_phases: 7
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 Phase: 25 of 25 (Per-device Sync Content Type Toggles)
 Plan: 2 of 2 complete
 Status: In Progress
-Last activity: 2026-03-12 — Completed 25-02 Frontend content type toggle interactivity
+Last activity: 2026-03-12 — Completed quick task 8: Fix Vite chunk size warning by code-splitting large bundles
 
 Progress: [██████████] 100%
 
@@ -117,6 +117,12 @@ None yet.
 
 - Phase 22 likely needs extra validation around CLEF field mapping and Seq waterfall/query behavior.
 - Existing `log::*` and `tracing::*` coexistence may need an audit during Phase 19 to avoid mixed-output surprises.
+
+### Quick Tasks Completed
+
+| #   | Description                                                 | Date       | Commit   | Directory                                                                                         |
+| --- | ----------------------------------------------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------- |
+| 8   | Fix Vite chunk size warning by code-splitting large bundles | 2026-03-12 | 06d711af | [8-fix-vite-chunk-size-warning-by-code-spli](./quick/8-fix-vite-chunk-size-warning-by-code-spli/) |
 
 ## Session Continuity
 
