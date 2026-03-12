@@ -70,11 +70,6 @@ const DeviceSettingsPanel: React.FC<DeviceSettingsPanelProps> = ({ deviceId }) =
     dispatch(fetchDeviceSyncSettings(deviceId))
   }, [dispatch, deviceId])
 
-  const allContentTypesDisabled = settings
-    ? Object.values(settings.content_types).every(v => !v)
-    : false
-  const showAllDisabledWarning = settings?.auto_sync && allContentTypesDisabled
-
   // Loading skeleton
   if (isLoading && !settings) {
     return (
@@ -198,14 +193,6 @@ const DeviceSettingsPanel: React.FC<DeviceSettingsPanelProps> = ({ deviceId }) =
               </div>
             )
           })}
-
-          {showAllDisabledWarning && (
-            <div className="px-1 py-2">
-              <p className="text-xs text-amber-600 dark:text-amber-400">
-                {t('devices.settings.sync.allContentTypesDisabled')}
-              </p>
-            </div>
-          )}
         </div>
       </div>
     </div>
