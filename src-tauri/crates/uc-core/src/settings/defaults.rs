@@ -60,6 +60,37 @@ impl Default for GeneralSettings {
     }
 }
 
+impl Default for ContentTypes {
+    /// Returns default `ContentTypes` with all fields set to `true`.
+    ///
+    /// New devices sync everything by default. Users can then disable
+    /// specific content types per device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use uc_core::settings::model::ContentTypes;
+    ///
+    /// let ct = ContentTypes::default();
+    /// assert!(ct.text);
+    /// assert!(ct.image);
+    /// assert!(ct.link);
+    /// assert!(ct.file);
+    /// assert!(ct.code_snippet);
+    /// assert!(ct.rich_text);
+    /// ```
+    fn default() -> Self {
+        Self {
+            text: true,
+            image: true,
+            link: true,
+            file: true,
+            code_snippet: true,
+            rich_text: true,
+        }
+    }
+}
+
 impl Default for SyncSettings {
     /// Creates a `SyncSettings` populated with sensible defaults.
     ///

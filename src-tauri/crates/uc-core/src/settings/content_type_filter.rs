@@ -17,8 +17,22 @@ pub enum ContentTypeCategory {
 ///
 /// Returns the first recognized category found by iterating representations in order.
 /// If no representation has a recognized MIME type, returns `Unknown`.
-pub fn classify_snapshot(_snapshot: &SystemClipboardSnapshot) -> ContentTypeCategory {
-    // Stub: always returns Unknown for RED phase
+pub fn classify_snapshot(snapshot: &SystemClipboardSnapshot) -> ContentTypeCategory {
+    for rep in &snapshot.representations {
+        if let Some(ref mime) = rep.mime {
+            let m = mime.0.as_str();
+            // Order matters: check specific patterns before generic ones.
+            // text/html and text/uri-list must match before the text/plain check.
+            match m {
+                "text/html" => return ContentTypeCategory::RichText,
+                "text/uri-list" => return ContentTypeCategory::Link,
+                "text/plain" => return ContentTypeCategory::Text,
+                "application/octet-stream" => return ContentTypeCategory::File,
+                _ if m.starts_with("image/") => return ContentTypeCategory::Image,
+                _ => {}
+            }
+        }
+    }
     ContentTypeCategory::Unknown
 }
 
@@ -26,9 +40,17 @@ pub fn classify_snapshot(_snapshot: &SystemClipboardSnapshot) -> ContentTypeCate
 ///
 /// Only `Text` and `Image` are filterable. All other categories (including `Unknown`)
 /// always return `true` — unimplemented types always sync.
-pub fn is_content_type_allowed(_category: ContentTypeCategory, _ct: &ContentTypes) -> bool {
-    // Stub: always returns true for RED phase
-    true
+pub fn is_content_type_allowed(category: ContentTypeCategory, ct: &ContentTypes) -> bool {
+    match category {
+        ContentTypeCategory::Text => ct.text,
+        ContentTypeCategory::Image => ct.image,
+        // Unimplemented types always sync regardless of toggle state
+        ContentTypeCategory::RichText
+        | ContentTypeCategory::Link
+        | ContentTypeCategory::File
+        | ContentTypeCategory::CodeSnippet
+        | ContentTypeCategory::Unknown => true,
+    }
 }
 
 #[cfg(test)]

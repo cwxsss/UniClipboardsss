@@ -33,28 +33,33 @@ const defaultContentTypes = {
   rich_text: true,
 }
 
-function createStore(overrides: Record<string, any> = {}) {
-  const devicesState = {
+function createDevicesState(overrides: Record<string, unknown> = {}) {
+  return {
     localDevice: null,
     localDeviceLoading: false,
     localDeviceError: null,
-    pairedDevices: [],
+    pairedDevices: [] as never[],
     pairedDevicesLoading: false,
     pairedDevicesError: null,
     deviceSyncSettings: {
       [DEVICE_ID]: {
         auto_sync: true,
-        sync_frequency: 'realtime',
+        sync_frequency: 'realtime' as const,
         content_types: { ...defaultContentTypes },
         max_file_size_mb: 100,
       },
     },
-    deviceSyncSettingsLoading: {},
+    deviceSyncSettingsLoading: {} as Record<string, boolean>,
     ...overrides,
   }
+}
+
+function createStore(overrides: Record<string, unknown> = {}) {
+  const devicesState = createDevicesState(overrides)
   return configureStore({
     reducer: { devices: devicesReducer },
-    preloadedState: { devices: devicesState } as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    preloadedState: { devices: devicesState as any },
   })
 }
 

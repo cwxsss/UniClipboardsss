@@ -37,7 +37,7 @@ pub enum UpdateChannel {
     Rc,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContentTypes {
     pub text: bool,
     pub image: bool,
