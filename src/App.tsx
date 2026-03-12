@@ -1,5 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   BrowserRouter as Router,
   Routes,
@@ -22,11 +22,11 @@ import { UpdateProvider } from '@/contexts/UpdateContext'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useUINavigateListener } from '@/hooks/useUINavigateListener'
 import { MainLayout, SettingsFullLayout, WindowShell } from '@/layouts'
-const DashboardPage = lazy(() => import('@/pages/DashboardPage'))
-const DevicesPage = lazy(() => import('@/pages/DevicesPage'))
-const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
-const SetupPage = lazy(() => import('@/pages/SetupPage'))
-const UnlockPage = lazy(() => import('@/pages/UnlockPage'))
+import DashboardPage from '@/pages/DashboardPage'
+import DevicesPage from '@/pages/DevicesPage'
+import SettingsPage from '@/pages/SettingsPage'
+import SetupPage from '@/pages/SetupPage'
+import UnlockPage from '@/pages/UnlockPage'
 import { useGetEncryptionSessionStatusQuery } from '@/store/api'
 import './App.css'
 
@@ -96,11 +96,7 @@ const AppContent = ({
   const resolvedEncryptionStatus = encryptionStatus ?? encryptionData ?? null
 
   if (isSetupActive) {
-    return (
-      <Suspense fallback={null}>
-        <SetupPage onCompleteSetup={onSetupComplete} />
-      </Suspense>
-    )
+    return <SetupPage onCompleteSetup={onSetupComplete} />
   }
 
   if (encryptionLoading) {
@@ -119,35 +115,29 @@ const AppContent = ({
 
   // If initialized but not ready, show unlock page
   if (resolvedEncryptionStatus?.initialized && !resolvedEncryptionStatus?.session_ready) {
-    return (
-      <Suspense fallback={null}>
-        <UnlockPage />
-      </Suspense>
-    )
+    return <UnlockPage />
   }
 
   return (
     <ShortcutProvider>
       <GlobalShortcuts />
-      <Suspense fallback={null}>
-        <Routes>
-          <Route element={<AuthenticatedLayout />}>
-            <Route
-              path="/"
-              element={
-                <div className="w-full h-full">
-                  <DashboardPage />
-                </div>
-              }
-            />
-            <Route path="/devices" element={<DevicesPage />} />
-          </Route>
-          <Route element={<SettingsFullLayout />}>
-            <Route path="/settings" element={<SettingsPage />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
+      <Routes>
+        <Route element={<AuthenticatedLayout />}>
+          <Route
+            path="/"
+            element={
+              <div className="w-full h-full">
+                <DashboardPage />
+              </div>
+            }
+          />
+          <Route path="/devices" element={<DevicesPage />} />
+        </Route>
+        <Route element={<SettingsFullLayout />}>
+          <Route path="/settings" element={<SettingsPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
       <Toaster />
       <PairingNotificationProvider />
     </ShortcutProvider>
