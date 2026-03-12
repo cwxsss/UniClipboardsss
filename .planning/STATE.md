@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: completed
-stopped_at: Phase 25 context gathered
-last_updated: '2026-03-12T02:53:49.213Z'
-last_activity: 2026-03-11 — Completed 24-03 Frontend API, Redux thunks, and DeviceSettingsPanel wiring
+status: in-progress
+stopped_at: Completed 25-02-PLAN.md
+last_updated: '2026-03-12T04:27:41.000Z'
+last_activity: 2026-03-12 — Completed 25-02 Frontend content type toggle interactivity
 progress:
   total_phases: 7
   completed_phases: 6
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 24 - Per-device Sync Settings
+**Current focus:** Phase 25 - Per-device Sync Content Type Toggles
 
 ## Current Position
 
-Phase: 24 of 24 (Per-device Sync Settings)
-Plan: 3 of 3 complete
-Status: Complete
-Last activity: 2026-03-11 — Completed 24-03 Frontend API, Redux thunks, and DeviceSettingsPanel wiring
+Phase: 25 of 25 (Per-device Sync Content Type Toggles)
+Plan: 2 of 2 complete
+Status: In Progress
+Last activity: 2026-03-12 — Completed 25-02 Frontend content type toggle interactivity
 
 Progress: [██████████] 100%
 
@@ -60,6 +60,7 @@ Progress: [██████████] 100%
   | Phase 24 P01 | 4min | 2 tasks | 10 files |
   | Phase 24 P02 | 6min | 2 tasks | 9 files |
   | Phase 24 P03 | 10min | 3 tasks | 5 files |
+  | Phase 25 P02 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,8 @@ Recent decisions affecting current work:
 - [Phase 24]: Per-device auto_sync filtering applied before ensure_business_path to avoid unnecessary connections
 - 24-03: Removed permissions section from DeviceSettingsPanel per user feedback
 - 24-03: Content type toggles made non-editable since sync engine filtering not yet implemented
+- 25-02: Editable vs coming_soon status field on contentTypeEntries drives badge and interactivity
+- 25-02: All-disabled warning uses Object.values().every() on content_types for computed state
 
 ### Roadmap Evolution
 
@@ -112,6 +115,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-12T02:53:49.209Z
-Stopped at: Phase 25 context gathered
-Resume file: .planning/phases/25-implement-per-device-sync-content-type-toggles/25-CONTEXT.md
+Last session: 2026-03-12T04:27:41.000Z
+Stopped at: Completed 25-02-PLAN.md
+Resume file: .planning/phases/25-implement-per-device-sync-content-type-toggles/25-02-SUMMARY.md

@@ -179,7 +179,7 @@ Plans:
 **Goal:** Users can control which content types (text, image) sync to each paired device, with the sync engine filtering outbound content by type and the UI providing interactive toggles for implemented types.
 **Requirements**: CT-01, CT-02, CT-03, CT-04, CT-05, CT-06, CT-07
 **Depends on:** Phase 24
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 
