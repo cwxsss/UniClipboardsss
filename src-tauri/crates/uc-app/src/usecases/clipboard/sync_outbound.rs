@@ -1484,6 +1484,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_sync_policy_skips_peer_when_image_content_type_disabled() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert(
+            "peer-1".to_string(),
+            make_paired_device(
+                "peer-1",
+                Some(SyncSettingsModel {
+                    auto_sync: true,
+                    sync_frequency: SyncFrequency::Realtime,
+                    content_types: ContentTypes {
+                        text: true,
+                        image: false,
+                        link: true,
+                        file: true,
+                        code_snippet: true,
+                        rich_text: true,
+                    },
+                    max_file_size_mb: 100,
+                }),
+            ),
+        );
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let uc = build_policy_usecase(peers.clone(), repo);
+
+        let result = uc.apply_sync_policy(&peers, &make_image_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            0,
+            "peer with image content type disabled should be skipped for image snapshot"
+        );
+    }
+
+    #[tokio::test]
     async fn apply_sync_policy_keeps_peer_not_in_paired_device_table() {
         let peers = vec![make_discovered_peer("peer-1")];
         let repo = Arc::new(ConfigurablePairedDeviceRepo {
