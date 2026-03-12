@@ -99,6 +99,7 @@
             "range": "Must be between 1 and 50 MB"
           }
         },
+        "allContentTypesDisabled": "All content types are disabled. No content will sync to this device.",
         "loadError": "Failed to load settings:"
       },
       "security": {

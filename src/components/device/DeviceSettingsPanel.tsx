@@ -1,11 +1,8 @@
 import React, { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useAppDispatch, useAppSelector } from '@/store/hooks'
-import {
-  fetchDeviceSyncSettings,
-  updateDeviceSyncSettings,
-} from '@/store/slices/devicesSlice'
 import type { ContentTypes } from '@/api/p2p'
+import { useAppDispatch, useAppSelector } from '@/store/hooks'
+import { fetchDeviceSyncSettings, updateDeviceSyncSettings } from '@/store/slices/devicesSlice'
 
 interface DeviceSettingsPanelProps {
   deviceId: string
@@ -13,13 +10,17 @@ interface DeviceSettingsPanelProps {
 }
 
 /** Maps ContentTypes fields to i18n keys */
-const contentTypeEntries: { field: keyof ContentTypes; i18nKey: string }[] = [
-  { field: 'text', i18nKey: 'syncText' },
-  { field: 'image', i18nKey: 'syncImage' },
-  { field: 'file', i18nKey: 'syncFile' },
-  { field: 'link', i18nKey: 'syncLink' },
-  { field: 'code_snippet', i18nKey: 'syncCodeSnippet' },
-  { field: 'rich_text', i18nKey: 'syncRichText' },
+const contentTypeEntries: {
+  field: keyof ContentTypes
+  i18nKey: string
+  status: 'editable' | 'coming_soon'
+}[] = [
+  { field: 'text', i18nKey: 'syncText', status: 'editable' },
+  { field: 'image', i18nKey: 'syncImage', status: 'editable' },
+  { field: 'file', i18nKey: 'syncFile', status: 'coming_soon' },
+  { field: 'link', i18nKey: 'syncLink', status: 'coming_soon' },
+  { field: 'code_snippet', i18nKey: 'syncCodeSnippet', status: 'coming_soon' },
+  { field: 'rich_text', i18nKey: 'syncRichText', status: 'coming_soon' },
 ]
 
 const DeviceSettingsPanel: React.FC<DeviceSettingsPanelProps> = ({ deviceId }) => {
@@ -45,10 +46,34 @@ const DeviceSettingsPanel: React.FC<DeviceSettingsPanelProps> = ({ deviceId }) =
     )
   }, [dispatch, deviceId, settings])
 
+  const handleContentTypeToggle = useCallback(
+    (field: keyof ContentTypes) => {
+      if (!settings) return
+      dispatch(
+        updateDeviceSyncSettings({
+          peerId: deviceId,
+          settings: {
+            ...settings,
+            content_types: {
+              ...settings.content_types,
+              [field]: !settings.content_types[field],
+            },
+          },
+        })
+      )
+    },
+    [dispatch, deviceId, settings]
+  )
+
   const handleRestoreDefaults = useCallback(async () => {
     await dispatch(updateDeviceSyncSettings({ peerId: deviceId, settings: null }))
     dispatch(fetchDeviceSyncSettings(deviceId))
   }, [dispatch, deviceId])
+
+  const allContentTypesDisabled = settings
+    ? Object.values(settings.content_types).every(v => !v)
+    : false
+  const showAllDisabledWarning = settings?.auto_sync && allContentTypesDisabled
 
   // Loading skeleton
   if (isLoading && !settings) {
@@ -121,39 +146,68 @@ const DeviceSettingsPanel: React.FC<DeviceSettingsPanelProps> = ({ deviceId }) =
           </div>
 
           {/* Content type toggles */}
-          {contentTypeEntries.map(({ field, i18nKey }) => (
-            <div key={field} className="flex items-center justify-between py-3 px-1">
-              <div className="pr-4">
-                <div className="flex items-center gap-2">
-                  <h5 className="text-sm font-medium text-foreground">
-                    {t(`devices.settings.sync.rules.${i18nKey}.title`)}
-                  </h5>
-                  <span className="text-[10px] leading-none rounded px-1.5 py-1 bg-muted text-muted-foreground">
-                    {t('devices.settings.badges.notEditable')}
-                  </span>
+          {contentTypeEntries.map(({ field, i18nKey, status }) => {
+            const isComingSoon = status === 'coming_soon'
+            const isAutoSyncOff = !settings?.auto_sync
+            const isDisabled = isComingSoon || isAutoSyncOff || isLoading
+
+            return (
+              <div key={field} className="flex items-center justify-between py-3 px-1">
+                <div className="pr-4">
+                  <div className="flex items-center gap-2">
+                    <h5 className="text-sm font-medium text-foreground">
+                      {t(`devices.settings.sync.rules.${i18nKey}.title`)}
+                    </h5>
+                    {isComingSoon && (
+                      <span className="text-[10px] leading-none rounded px-1.5 py-1 bg-muted text-muted-foreground">
+                        {t('devices.settings.badges.comingSoon')}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs mt-0.5 text-muted-foreground">
+                    {t(`devices.settings.sync.rules.${i18nKey}.description`)}
+                  </p>
                 </div>
-                <p className="text-xs mt-0.5 text-muted-foreground">
-                  {t(`devices.settings.sync.rules.${i18nKey}.description`)}
-                </p>
+                <label
+                  className={`flex items-center shrink-0 ${
+                    isDisabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                  }`}
+                >
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={settings?.content_types[field] ?? true}
+                      onChange={() => handleContentTypeToggle(field)}
+                      disabled={isDisabled}
+                    />
+                    <div
+                      className={`block w-9 h-5 rounded-full transition-colors bg-muted ${
+                        isComingSoon
+                          ? 'peer-checked:bg-muted-foreground/40'
+                          : 'peer-checked:bg-primary'
+                      }`}
+                    />
+                    <div
+                      className={`absolute left-1 top-1 w-3 h-3 rounded-full transition-transform transform peer-checked:translate-x-4 ${
+                        isComingSoon ? 'bg-muted-foreground/40' : 'bg-white'
+                      }`}
+                    />
+                  </div>
+                </label>
               </div>
-              <label className="flex items-center shrink-0 cursor-not-allowed opacity-50">
-                <div className="relative">
-                  <input
-                    type="checkbox"
-                    className="sr-only peer"
-                    checked={settings?.content_types[field] ?? true}
-                    disabled
-                    readOnly
-                  />
-                  <div className="block w-9 h-5 rounded-full transition-colors bg-muted peer-checked:bg-muted-foreground/40" />
-                  <div className="absolute left-1 top-1 w-3 h-3 rounded-full transition-transform transform peer-checked:translate-x-4 bg-muted-foreground/40" />
-                </div>
-              </label>
+            )
+          })}
+
+          {showAllDisabledWarning && (
+            <div className="px-1 py-2">
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                {t('devices.settings.sync.allContentTypesDisabled')}
+              </p>
             </div>
-          ))}
+          )}
         </div>
       </div>
-
     </div>
   )
 }

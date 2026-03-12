@@ -99,6 +99,7 @@
             "range": "必须在 1 到 50 MB 之间"
           }
         },
+        "allContentTypesDisabled": "所有内容类型已禁用，不会有内容同步到此设备。",
         "loadError": "加载设置失败:"
       },
       "security": {
