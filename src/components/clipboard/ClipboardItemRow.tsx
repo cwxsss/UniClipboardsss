@@ -1,4 +1,16 @@
-import { AlertCircle, Code, ExternalLink, File, FileText, Image as ImageIcon } from 'lucide-react'
+import {
+  AlertCircle,
+  Code,
+  ExternalLink,
+  File,
+  FileArchive,
+  FileImage,
+  FileMusic,
+  FileSpreadsheet,
+  FileText,
+  FileType,
+  Image as ImageIcon,
+} from 'lucide-react'
 import React from 'react'
 import type { DisplayClipboardItem } from './ClipboardContent'
 import TransferProgressBar from './TransferProgressBar'
@@ -17,8 +29,40 @@ import { selectTransferByEntryId } from '@/store/slices/fileTransferSlice'
 interface ClipboardItemRowProps extends React.HTMLAttributes<HTMLDivElement> {
   item: DisplayClipboardItem
   isActive: boolean
+  isStale?: boolean
   onClick: () => void
   itemRef?: React.Ref<HTMLDivElement>
+}
+
+const FILE_EXT_ICON_MAP: Record<string, React.ElementType> = {
+  // Images
+  jpg: FileImage,
+  jpeg: FileImage,
+  png: FileImage,
+  gif: FileImage,
+  bmp: FileImage,
+  svg: FileImage,
+  webp: FileImage,
+  // Archives
+  zip: FileArchive,
+  rar: FileArchive,
+  '7z': FileArchive,
+  tar: FileArchive,
+  gz: FileArchive,
+  // Documents
+  doc: FileSpreadsheet,
+  docx: FileSpreadsheet,
+  xls: FileSpreadsheet,
+  xlsx: FileSpreadsheet,
+  ppt: FileSpreadsheet,
+  pptx: FileSpreadsheet,
+  // PDF
+  pdf: FileType,
+  // Audio
+  mp3: FileMusic,
+  wav: FileMusic,
+  flac: FileMusic,
+  aac: FileMusic,
 }
 
 const typeIcons: Record<DisplayClipboardItem['type'], React.ElementType> = {
@@ -28,6 +72,15 @@ const typeIcons: Record<DisplayClipboardItem['type'], React.ElementType> = {
   code: Code,
   file: File,
   unknown: FileText,
+}
+
+/**
+ * Extract the file extension from the first file name of a file item for icon lookup.
+ */
+function getFileExt(item: DisplayClipboardItem): string {
+  if (item.type !== 'file' || !item.content) return ''
+  const firstName = (item.content as ClipboardFileItem).file_names[0] ?? ''
+  return firstName.split('.').pop()?.toLowerCase() ?? ''
 }
 
 function getPreviewText(item: DisplayClipboardItem): string {
@@ -47,8 +100,11 @@ function getPreviewText(item: DisplayClipboardItem): string {
     case 'code':
       return (item.content as ClipboardCodeItem).code.split('\n')[0] ?? ''
     case 'file': {
-      const names = (item.content as ClipboardFileItem).file_names
-      return names.length > 0 ? names.join(', ') : 'File'
+      const fileContent = item.content as ClipboardFileItem
+      const names = fileContent.file_names
+      if (names.length === 0) return 'File'
+      if (names.length === 1) return names[0]
+      return `${names.length} files`
     }
     default:
       return ''
@@ -56,8 +112,8 @@ function getPreviewText(item: DisplayClipboardItem): string {
 }
 
 const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>(
-  ({ item, isActive, onClick, itemRef, className: extraClassName, ...rest }, ref) => {
-    const Icon = typeIcons[item.type] ?? FileText
+  ({ item, isActive, isStale, onClick, itemRef, className: extraClassName, ...rest }, ref) => {
+    const Icon = FILE_EXT_ICON_MAP[getFileExt(item)] ?? typeIcons[item.type] ?? FileText
     const transfer = useAppSelector(state => selectTransferByEntryId(state, item.id))
     const isTransferring = transfer?.status === 'active'
     const isTransferFailed = transfer?.status === 'failed'
@@ -77,9 +133,20 @@ const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>
       >
         <div className="flex items-center gap-3">
           <Icon
-            className={cn('h-4 w-4 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground')}
+            className={cn(
+              'h-4 w-4 shrink-0',
+              isActive ? 'text-primary' : 'text-muted-foreground',
+              isStale && 'opacity-40'
+            )}
           />
-          <span className="w-0 flex-grow truncate text-sm">{getPreviewText(item)}</span>
+          <span
+            className={cn(
+              'w-0 flex-grow truncate text-sm',
+              isStale && 'text-muted-foreground line-through opacity-60'
+            )}
+          >
+            {getPreviewText(item)}
+          </span>
           {isTransferFailed ? (
             <Tooltip>
               <TooltipTrigger asChild>

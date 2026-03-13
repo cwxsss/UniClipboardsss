@@ -5,7 +5,8 @@ use anyhow::Result;
 use std::sync::Arc;
 use tracing::{info, info_span, warn, Instrument};
 use uc_core::ports::{
-    ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardSelectionRepositoryPort,
+    ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardRepresentationRepositoryPort,
+    ClipboardSelectionRepositoryPort,
 };
 
 /// Result of a bulk clipboard history clear operation.
@@ -24,6 +25,7 @@ pub struct ClearClipboardHistory {
     entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
     selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
     event_writer: Arc<dyn ClipboardEventWriterPort>,
+    representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
 }
 
 const BATCH_SIZE: usize = 1000;
@@ -34,11 +36,13 @@ impl ClearClipboardHistory {
         entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
         selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
         event_writer: Arc<dyn ClipboardEventWriterPort>,
+        representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
     ) -> Self {
         Self {
             entry_repo,
             selection_repo,
             event_writer,
+            representation_repo,
         }
     }
 
@@ -73,6 +77,7 @@ impl ClearClipboardHistory {
             self.entry_repo.clone(),
             self.selection_repo.clone(),
             self.event_writer.clone(),
+            self.representation_repo.clone(),
         );
 
         for entry in &entries {

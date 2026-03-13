@@ -1,9 +1,10 @@
 use anyhow::Result;
 use std::sync::Arc;
-use tracing::{info, info_span, Instrument};
+use tracing::{info, info_span, warn, Instrument};
 use uc_core::ids::EntryId;
 use uc_core::ports::{
-    ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardSelectionRepositoryPort,
+    ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardRepresentationRepositoryPort,
+    ClipboardSelectionRepositoryPort,
 };
 
 /// Use case for deleting clipboard entries with all associated data.
@@ -12,74 +13,34 @@ pub struct DeleteClipboardEntry {
     entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
     selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
     event_writer: Arc<dyn ClipboardEventWriterPort>,
+    representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
 }
 
 impl DeleteClipboardEntry {
     /// Constructs a `DeleteClipboardEntry` use case from repository and event-writer ports.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use std::sync::Arc;
-    /// # use uc_app::usecases::DeleteClipboardEntry;
-    /// # use uc_core::ports::{
-    /// #     ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardSelectionRepositoryPort,
-    /// # };
-    /// # fn doc_example() {
-    /// // Assume `entry_repo`, `selection_repo`, and `event_writer` implement the required ports.
-    /// let entry_repo: Arc<dyn ClipboardEntryRepositoryPort> = todo!();
-    /// let selection_repo: Arc<dyn ClipboardSelectionRepositoryPort> = todo!();
-    /// let event_writer: Arc<dyn ClipboardEventWriterPort> = todo!();
-    ///
-    /// let use_case = DeleteClipboardEntry::from_ports(entry_repo, selection_repo, event_writer);
-    /// # let _ = use_case;
-    /// # }
-    /// ```
     pub fn from_ports(
         entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
         selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
         event_writer: Arc<dyn ClipboardEventWriterPort>,
+        representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
     ) -> Self {
         Self {
             entry_repo,
             selection_repo,
             event_writer,
+            representation_repo,
         }
     }
 
     /// Deletes a clipboard entry and its associated selection, event, and snapshot representations in the required order.
+    /// For file entries (text/uri-list), also deletes the cache files from disk.
     ///
     /// Deletion order (respecting foreign key constraints):
     /// 1. Verify the entry exists (returns an error if missing).
+    /// 1b. If entry has text/uri-list representation, delete cache files from disk.
     /// 2. Delete the clipboard selection associated with the entry.
     /// 3. Delete the clipboard entry (must be deleted before its referenced event).
     /// 4. Delete the event and its snapshot representations using the entry's `event_id`.
-    ///
-    /// # Arguments
-    /// * `entry_id` - ID of the clipboard entry to delete.
-    ///
-    /// # Returns
-    /// `Ok(())` on success; an error if the entry is not found or if any repository/writer operation fails.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use std::sync::Arc;
-    /// # use uc_app::usecases::DeleteClipboardEntry;
-    /// # use uc_core::ids::EntryId;
-    /// # use uc_core::ports::{
-    /// #     ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardSelectionRepositoryPort,
-    /// # };
-    /// # async fn doc_example() -> anyhow::Result<()> {
-    /// let entry_repo: Arc<dyn ClipboardEntryRepositoryPort> = todo!();
-    /// let selection_repo: Arc<dyn ClipboardSelectionRepositoryPort> = todo!();
-    /// let event_writer: Arc<dyn ClipboardEventWriterPort> = todo!();
-    /// let use_case = DeleteClipboardEntry::from_ports(entry_repo, selection_repo, event_writer);
-    /// let entry_id = EntryId::from("entry-id".to_string());
-    /// use_case.execute(&entry_id).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
     #[tracing::instrument(
         name = "usecase.delete_clipboard_entry.execute",
         skip(self),
@@ -99,6 +60,49 @@ impl DeleteClipboardEntry {
         ))
         .await?;
         let event_id = entry.event_id.clone();
+
+        // 1b. Check for file representations and delete cache files
+        async {
+            if let Ok(representations) = self
+                .representation_repo
+                .get_representations_for_event(&event_id)
+                .await
+            {
+                for rep in &representations {
+                    let mime = rep.mime_type.as_ref().map(|m| m.as_str()).unwrap_or("");
+                    if mime.contains("uri-list") {
+                        // Parse URI list content and delete each file
+                        if let Some(ref inline) = rep.inline_data {
+                            let uri_text = String::from_utf8_lossy(inline);
+                            for line in uri_text.lines() {
+                                let line = line.trim();
+                                if line.is_empty() || line.starts_with('#') {
+                                    continue;
+                                }
+                                if let Ok(url) = url::Url::parse(line) {
+                                    if let Ok(path) = url.to_file_path() {
+                                        if let Err(e) = tokio::fs::remove_file(&path).await {
+                                            warn!(
+                                                path = %path.display(),
+                                                error = %e,
+                                                "Failed to delete cache file during entry cleanup"
+                                            );
+                                        } else {
+                                            info!(
+                                                path = %path.display(),
+                                                "Deleted cache file during entry cleanup"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .instrument(info_span!("cleanup_cache_files", event_id = %event_id))
+        .await;
 
         // 2. Delete selection (references entry)
         self.selection_repo
@@ -143,7 +147,7 @@ impl DeleteClipboardEntry {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use uc_core::clipboard::ClipboardEntry;
+    use uc_core::clipboard::{ClipboardEntry, PersistedClipboardRepresentation};
     use uc_core::ids::{EntryId, EventId};
 
     // Mock entry repository
@@ -385,6 +389,61 @@ mod tests {
         }
     }
 
+    // Mock representation repository (returns empty by default)
+    struct MockRepresentationRepo;
+
+    #[async_trait]
+    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepo {
+        async fn get_representation(
+            &self,
+            _event_id: &EventId,
+            _representation_id: &uc_core::ids::RepresentationId,
+        ) -> Result<Option<PersistedClipboardRepresentation>> {
+            Ok(None)
+        }
+
+        async fn get_representation_by_id(
+            &self,
+            _representation_id: &uc_core::ids::RepresentationId,
+        ) -> Result<Option<PersistedClipboardRepresentation>> {
+            Ok(None)
+        }
+
+        async fn get_representation_by_blob_id(
+            &self,
+            _blob_id: &uc_core::BlobId,
+        ) -> Result<Option<PersistedClipboardRepresentation>> {
+            Ok(None)
+        }
+
+        async fn update_blob_id(
+            &self,
+            _representation_id: &uc_core::ids::RepresentationId,
+            _blob_id: &uc_core::BlobId,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn update_blob_id_if_none(
+            &self,
+            _representation_id: &uc_core::ids::RepresentationId,
+            _blob_id: &uc_core::BlobId,
+        ) -> Result<bool> {
+            Ok(false)
+        }
+
+        async fn update_processing_result(
+            &self,
+            _rep_id: &uc_core::ids::RepresentationId,
+            _expected_states: &[uc_core::clipboard::PayloadAvailability],
+            _blob_id: Option<&uc_core::BlobId>,
+            _new_state: uc_core::clipboard::PayloadAvailability,
+            _last_error: Option<&str>,
+        ) -> Result<uc_core::ports::clipboard::ProcessingUpdateOutcome> {
+            Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
+        }
+    }
+
     #[tokio::test]
     async fn test_execute_deletes_all_related_data() {
         // Setup: Create mock repositories
@@ -426,6 +485,7 @@ mod tests {
             Arc::new(entry_repo),
             Arc::new(selection_repo),
             Arc::new(event_writer),
+            Arc::new(MockRepresentationRepo),
         );
 
         // Execute deletion
@@ -471,6 +531,7 @@ mod tests {
             Arc::new(entry_repo),
             Arc::new(selection_repo),
             Arc::new(event_writer),
+            Arc::new(MockRepresentationRepo),
         );
 
         // Execute deletion
@@ -531,6 +592,7 @@ mod tests {
             Arc::new(entry_repo),
             Arc::new(selection_repo),
             Arc::new(event_writer),
+            Arc::new(MockRepresentationRepo),
         );
 
         // Execute deletion

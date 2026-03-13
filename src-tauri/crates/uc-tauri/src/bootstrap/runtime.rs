@@ -509,6 +509,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
         )
     }
 
@@ -518,6 +519,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
         )
     }
 
