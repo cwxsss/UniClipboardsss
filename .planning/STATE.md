@@ -67,6 +67,7 @@ Progress: [███████░░░] 74%
   | Phase 26 P02 | 2min | 3 tasks | 3 files |
   | Phase 27 P01 | 5min | 2 tasks | 13 files |
   | Phase 28 P01 | 3min | 2 tasks | 4 files |
+  | Phase 28 P02 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -115,6 +116,8 @@ Recent decisions affecting current work:
 - [Phase 28]: Used same binary codec pattern as clipboard_payload_v3.rs for FileTransferMessage consistency
 - [Phase 28]: Extracted write_string_u16/read_string_u16 helpers for reuse across message variants
 - [Phase 28]: Rejected filenames containing '..' anywhere (not just as path component) for extra safety
+- [Phase 28]: First non-comment URI line determines file vs link classification per RFC 2483
+- [Phase 28]: File category now filterable via ct.file toggle (was always-true)
 
 ### Roadmap Evolution
 
@@ -147,6 +150,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T09:40:46Z
-Stopped at: Completed 28-01-PLAN.md
-Resume file: .planning/phases/28-implement-file-sync-via-libp2p-for-cross-platform-file-copy-paste/28-02-PLAN.md
+Last session: 2026-03-13T09:41:00Z
+Stopped at: Completed 28-02-PLAN.md
+Resume file: .planning/phases/28-implement-file-sync-via-libp2p-for-cross-platform-file-copy-paste/28-03-PLAN.md
