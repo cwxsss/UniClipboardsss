@@ -18,6 +18,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useSetting } from '@/hooks/useSetting'
+import { useAppDispatch } from '@/store/hooks'
+import { resetItems } from '@/store/slices/clipboardSlice'
 import type { RetentionRule } from '@/types/setting'
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -254,6 +256,7 @@ function StorageUsageBar({
 
 const StorageSection: React.FC = () => {
   const { t } = useTranslation()
+  const dispatch = useAppDispatch()
   const { setting, error, updateRetentionPolicy } = useSetting()
 
   // Retention policy state
@@ -420,6 +423,7 @@ const StorageSection: React.FC = () => {
     setClearingHistory(true)
     try {
       await storageApi.clearAllClipboardHistory()
+      dispatch(resetItems())
       await loadStats()
     } catch (err) {
       console.error('Failed to clear history:', err)
