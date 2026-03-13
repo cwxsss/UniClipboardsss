@@ -247,7 +247,7 @@ Plans:
 **Goal:** Add file entries to Dashboard clipboard history with right-click context menu (Copy / Sync to Clipboard), progress indicators for file transfers, system notification merging for multi-file batches, and error feedback display.
 **Requirements**: FSYNC-UI
 **Depends on:** Phase 29
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 

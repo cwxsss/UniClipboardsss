@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: completed
-stopped_at: Completed 30-01-PLAN.md
-last_updated: '2026-03-13T12:58:11.582Z'
-last_activity: '2026-03-13 — Completed 29-04 plan: FileTransferService wiring and transport activation'
+status: executing
+stopped_at: Completed 30-02-PLAN.md
+last_updated: '2026-03-13T14:10:35.070Z'
+last_activity: '2026-03-13 — Completed 30-02 plan: File transfer progress tracking UI'
 progress:
   total_phases: 13
   completed_phases: 10
   total_plans: 33
-  completed_plans: 27
-  percent: 87
+  completed_plans: 28
+  percent: 89
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 30 of 31 (File sync UI)
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: In Progress
-Last activity: 2026-03-13 — Completed 30-01 plan: File entries context menu with state-dependent actions
+Last activity: 2026-03-13 — Completed 30-02 plan: File transfer progress tracking UI
 
-Progress: [████████░░] 87%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ Progress: [████████░░] 87%
   | Phase 29 P03 | 4min | 3 tasks | 4 files |
   | Phase 29 P04 | 3 | 2 tasks | 4 files |
   | Phase 30 P01 | 4min | 2 tasks | 8 files |
+  | Phase 30 P02 | 3 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -137,6 +138,8 @@ Recent decisions affecting current work:
 - [Phase 29]: Per-peer send failures logged as warnings without aborting transfers to remaining peers
 - [Phase 30]: FileContextMenu uses ContextMenuTrigger asChild for zero extra DOM wrappers
 - [Phase 30]: Transfer tracking uses Set<string> in ClipboardContent state for transferringEntries
+- [Phase 30]: TransferProgressBar uses two variants (compact/detailed) instead of separate components
+- [Phase 30]: Transfer-to-entry mapping uses dual Record maps for O(1) lookup in both directions
 
 ### Roadmap Evolution
 
@@ -169,6 +172,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T14:03:31Z
-Stopped at: Completed 30-01-PLAN.md
+Last session: 2026-03-13T14:10:35.067Z
+Stopped at: Completed 30-02-PLAN.md
 Resume file: None
