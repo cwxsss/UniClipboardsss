@@ -66,11 +66,11 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 - [x] **FCLIP-03**: If user copies other content during file transfer, auto-clipboard-write is cancelled; user can manually copy from Dashboard.
 - [x] **FCLIP-04**: A `copy_file_to_clipboard` Tauri command validates file existence before writing to clipboard; returns error if any file is missing.
 - [x] **FCLIP-05**: File clipboard entries are persisted as ClipboardEntry with `text/uri-list` representation, reusing the existing clipboard history model.
-- [ ] **FCLIP-06**: File entries in Dashboard display file names and extension-based icons (image, archive, document, video, audio, generic).
-- [ ] **FCLIP-07**: Stale file entries (cache file deleted) show grey text with strikethrough styling and disabled Copy in context menu.
-- [ ] **FCLIP-08**: File existence is validated lazily (on Copy attempt only), not on startup or component mount.
-- [ ] **FCLIP-09**: Deleting a file entry from Dashboard cascades to delete the associated cache file on disk.
-- [ ] **FCLIP-10**: Multi-file entries show file count summary; single-file entries show filename.
+- [x] **FCLIP-06**: File entries in Dashboard display file names and extension-based icons (image, archive, document, video, audio, generic).
+- [x] **FCLIP-07**: Stale file entries (cache file deleted) show grey text with strikethrough styling and disabled Copy in context menu.
+- [x] **FCLIP-08**: File existence is validated lazily (on Copy attempt only), not on startup or component mount.
+- [x] **FCLIP-09**: Deleting a file entry from Dashboard cascades to delete the associated cache file on disk.
+- [x] **FCLIP-10**: Multi-file entries show file count summary; single-file entries show filename.
 
 ## v2 Requirements
 

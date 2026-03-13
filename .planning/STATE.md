@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 31.1-01 plan
-last_updated: '2026-03-14T19:12:42.000Z'
-last_activity: '2026-03-14 — Completed 31.1-01 plan: Inbound file sync clipboard integration backend'
+stopped_at: Completed 31.1-02 plan
+last_updated: '2026-03-14T19:29:56.000Z'
+last_activity: '2026-03-14 — Completed 31.1-02 plan: Frontend file entry display with stale handling and delete cascade'
 progress:
   total_phases: 14
   completed_phases: 11
   total_plans: 34
-  completed_plans: 30
-  percent: 92
+  completed_plans: 31
+  percent: 94
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 31.1 of 31.1 (Inbound file sync clipboard integration)
-Plan: 1 of 1 complete
-Status: Plan 01 Complete
-Last activity: 2026-03-14 — Completed 31.1-01 plan: Inbound file sync clipboard integration backend
+Plan: 2 of 2 complete
+Status: Phase 31.1 Complete
+Last activity: 2026-03-14 — Completed 31.1-02 plan: Frontend file entry display with stale handling and delete cascade
 
-Progress: [█████████░] 92%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -78,6 +78,7 @@ Progress: [█████████░] 92%
   | Phase 30 P02 | 3 | 2 tasks | 9 files |
   | Phase 30 P03 | 5min | 2 tasks | 12 files |
   | Phase 31.1 P01 | 10min | 2 tasks | 11 files |
+  | Phase 31.1 P02 | 11min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -149,6 +150,10 @@ Recent decisions affecting current work:
 - [Phase 31.1]: Batch accumulator lives in event loop outside tokio::spawn for cross-event state coordination
 - [Phase 31.1]: Entry persistence always via CaptureClipboardUseCase::execute_with_origin(RemotePush) regardless of clipboard race
 - [Phase 31.1]: Added get_representations_for_event to ClipboardRepresentationRepositoryPort with default empty impl
+- [Phase 31.1]: Extension-based file icon map uses constant Record lookup for ESLint static-components compliance
+- [Phase 31.1]: Lazy stale detection -- staleness only discovered when copyFileToClipboard returns error, not on startup
+- [Phase 31.1]: Delete cascade parses inline_data of text/uri-list representations to find and remove cache files
+- [Phase 31.1]: ClearClipboardHistory updated with representation_repo for consistent delete cascade
 
 ### Roadmap Evolution
 
@@ -182,6 +187,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-14T19:12:42.000Z
-Stopped at: Completed 31.1-01-PLAN.md
-Resume file: .planning/phases/31.1-inbound-file-sync-clipboard-integration-with-persistent-file-uri-list-for-cross-platform-paste/31.1-01-SUMMARY.md
+Last session: 2026-03-14T19:29:56.000Z
+Stopped at: Completed 31.1-02-PLAN.md
+Resume file: .planning/phases/31.1-inbound-file-sync-clipboard-integration-with-persistent-file-uri-list-for-cross-platform-paste/31.1-02-SUMMARY.md
