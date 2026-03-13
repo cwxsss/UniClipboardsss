@@ -234,10 +234,11 @@ Plans:
 **Goal:** Implement the FileTransferService with libp2p stream protocol, chunked file transfer with Blake3 hash verification, send/receive use cases, serial queue for multi-file operations, and auto-retry with exponential backoff.
 **Requirements**: FSYNC-TRANSFER
 **Depends on:** Phase 28
-**Plans:** 3/3 plans complete
+**Plans:** 4 plans (3 complete + 1 gap closure)
 
 Plans:
 - [x] TBD (run /gsd:plan-phase 29 to break down) (completed 2026-03-13)
+- [ ] 29-04-PLAN.md — Gap closure: wire FileTransferService in bootstrap and activate transport calls in SyncOutboundFileUseCase
 
 ### Phase 30: File sync UI — Dashboard file entries, context menu, progress, notifications
 
