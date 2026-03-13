@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 28 of 31 (File sync foundation)
-Plan: 2 of 5 complete
-Status: In Progress
-Last activity: 2026-03-13 — Completed 28-02 plan: file classification fix, settings model, and content type filter update
+Plan: 3 of 3 complete
+Status: Phase Complete
+Last activity: 2026-03-13 — Completed 28-03 plan: protocol registration, port trait, network events, database schema, and wiring
 
 Progress: [███████░░░] 74%
 
@@ -68,6 +68,7 @@ Progress: [███████░░░] 74%
   | Phase 27 P01 | 5min | 2 tasks | 13 files |
   | Phase 28 P01 | 3min | 2 tasks | 4 files |
   | Phase 28 P02 | 4min | 2 tasks | 4 files |
+  | Phase 28 P03 | 7min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -118,6 +119,8 @@ Recent decisions affecting current work:
 - [Phase 28]: Rejected filenames containing '..' anywhere (not just as path component) for extra safety
 - [Phase 28]: First non-comment URI line determines file vs link classification per RFC 2483
 - [Phase 28]: File category now filterable via ct.file toggle (was always-true)
+- [Phase 28]: NoopFileTransportPort stub pattern used at NetworkPorts construction sites for pre-adapter compilation
+- [Phase 28]: Manual schema.rs update for file_transfer table since diesel CLI not available
 
 ### Roadmap Evolution
 
@@ -150,6 +153,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T09:41:00Z
-Stopped at: Completed 28-02-PLAN.md
-Resume file: .planning/phases/28-implement-file-sync-via-libp2p-for-cross-platform-file-copy-paste/28-03-PLAN.md
+Last session: 2026-03-13T09:51:57Z
+Stopped at: Completed 28-03-PLAN.md (Phase 28 complete)
+Resume file: Phase 29 plans
