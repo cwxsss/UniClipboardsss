@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: completed
-stopped_at: Completed 29-03-PLAN.md
-last_updated: "2026-03-13T11:55:54.353Z"
-last_activity: "2026-03-13 — Completed 29-03 plan: serial transfer queue, retry policy, and bootstrap wiring"
+stopped_at: Completed 29-04-PLAN.md
+last_updated: "2026-03-13T12:52:41.723Z"
+last_activity: "2026-03-13 — Completed 29-04 plan: FileTransferService wiring and transport activation"
 progress:
   total_phases: 13
   completed_phases: 10
-  total_plans: 32
-  completed_plans: 25
-  percent: 79
+  total_plans: 33
+  completed_plans: 26
+  percent: 84
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 29 of 31 (File transfer service)
-Plan: 3 of 3 complete
+Plan: 4 of 4 complete
 Status: Phase Complete
-Last activity: 2026-03-13 — Completed 29-03 plan: serial transfer queue, retry policy, and bootstrap wiring
+Last activity: 2026-03-13 — Completed 29-04 plan: FileTransferService wiring and transport activation
 
-Progress: [████████░░] 79%
+Progress: [████████░░] 84%
 
 ## Performance Metrics
 
@@ -73,6 +73,7 @@ Progress: [████████░░] 79%
   | Phase 29 P02 | 4min | 1 tasks | 6 files |
 | Phase 29 P01 | 3min | 2 tasks | 7 files |
 | Phase 29 P03 | 4min | 3 tasks | 4 files |
+| Phase 29 P04 | 3 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -131,6 +132,8 @@ Recent decisions affecting current work:
 - [Phase 29]: Binary chunk frame format: 4-byte header-length prefix + JSON header + raw chunk data for efficient binary transfer
 - [Phase 29]: Queue and retry modules co-created since queue.rs depends on retry.rs
 - [Phase 29]: File cache directory derived from storage_paths.cache_dir.join('file-cache') rather than adding to AppConfig
+- [Phase 29]: Clone FileTransferService (Arc<Inner>) out of Mutex before await to avoid holding lock across async boundary
+- [Phase 29]: Per-peer send failures logged as warnings without aborting transfers to remaining peers
 
 ### Roadmap Evolution
 
@@ -163,6 +166,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T11:55:54.350Z
-Stopped at: Completed 29-03-PLAN.md
+Last session: 2026-03-13T12:52:41.721Z
+Stopped at: Completed 29-04-PLAN.md
 Resume file: None
