@@ -452,3 +452,28 @@ export async function unfavoriteClipboardItem(id: string): Promise<boolean> {
     throw error
   }
 }
+
+/**
+ * Download a file entry from a remote device to local clipboard.
+ * Returns a transfer_id to track progress via transfer://progress events.
+ */
+export async function downloadFileEntry(entryId: string): Promise<{ transfer_id: string }> {
+  try {
+    return await invokeWithTrace('download_file_entry', { entryId })
+  } catch (error) {
+    console.error('Failed to download file entry:', error)
+    throw error
+  }
+}
+
+/**
+ * Open the file location (containing folder) in the system file manager.
+ */
+export async function openFileLocation(entryId: string): Promise<void> {
+  try {
+    await invokeWithTrace('open_file_location', { entryId })
+  } catch (error) {
+    console.error('Failed to open file location:', error)
+    throw error
+  }
+}

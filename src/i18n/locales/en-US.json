@@ -357,6 +357,8 @@
     },
     "errors": {
       "copyFailed": "Failed to copy to clipboard",
+      "syncFailed": "Sync to clipboard failed",
+      "openLocationFailed": "Failed to open file location",
       "loadDetailFailed": "Failed to load details",
       "unknown": "An unknown error occurred"
     },
@@ -401,10 +403,19 @@
       "size": "Size",
       "dimensions": "Dimensions"
     },
+    "contextMenu": {
+      "copy": "Copy",
+      "syncToClipboard": "Sync to Clipboard",
+      "syncing": "Syncing...",
+      "openFileLocation": "Open File Location",
+      "delete": "Delete"
+    },
     "actionBar": {
       "title": "Clipboard History",
       "copy": "Copy",
-      "delete": "Delete"
+      "delete": "Delete",
+      "syncToClipboard": "Sync to Clipboard",
+      "syncing": "Syncing..."
     },
     "confirmDeleteTitle": "Confirm Delete",
     "confirmDeleteDescription_one": "Are you sure you want to delete the selected item? This action cannot be undone.",

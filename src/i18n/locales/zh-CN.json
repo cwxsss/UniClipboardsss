@@ -357,6 +357,8 @@
     },
     "errors": {
       "copyFailed": "复制到剪贴板失败",
+      "syncFailed": "同步到剪贴板失败",
+      "openLocationFailed": "打开文件位置失败",
       "loadDetailFailed": "加载详情失败",
       "unknown": "发生未知错误"
     },
@@ -401,10 +403,19 @@
       "size": "大小",
       "dimensions": "尺寸"
     },
+    "contextMenu": {
+      "copy": "复制",
+      "syncToClipboard": "同步到剪贴板",
+      "syncing": "同步中...",
+      "openFileLocation": "打开文件位置",
+      "delete": "删除"
+    },
     "actionBar": {
       "title": "剪贴板历史",
       "copy": "复制",
-      "delete": "删除"
+      "delete": "删除",
+      "syncToClipboard": "同步到剪贴板",
+      "syncing": "同步中..."
     },
     "confirmDeleteTitle": "确认删除",
     "confirmDeleteDescription_one": "确定要删除选中的项目吗？此操作无法撤销。",
