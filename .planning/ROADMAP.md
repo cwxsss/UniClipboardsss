@@ -273,5 +273,5 @@ Plans:
 
 Plans:
 
-- [ ] 31.1-01-PLAN.md — Backend clipboard write on file transfer complete, CopyFileToClipboardUseCase, Tauri command
+- [x] 31.1-01-PLAN.md — Backend clipboard write on file transfer complete, CopyFileToClipboardUseCase, Tauri command
 - [ ] 31.1-02-PLAN.md — Frontend file entry display with extension icons, stale file styling, delete cascade

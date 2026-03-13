@@ -61,11 +61,11 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 
 ### File Clipboard Integration
 
-- [ ] **FCLIP-01**: Received files are automatically written to the system clipboard after file transfer completes, enabling paste (Cmd+V / Ctrl+V) in Finder/Explorer.
-- [ ] **FCLIP-02**: Clipboard write uses `text/uri-list` representation with `file://` URIs and sets `ClipboardChangeOrigin::RemotePush` to prevent re-capture loops.
-- [ ] **FCLIP-03**: If user copies other content during file transfer, auto-clipboard-write is cancelled; user can manually copy from Dashboard.
-- [ ] **FCLIP-04**: A `copy_file_to_clipboard` Tauri command validates file existence before writing to clipboard; returns error if any file is missing.
-- [ ] **FCLIP-05**: File clipboard entries are persisted as ClipboardEntry with `text/uri-list` representation, reusing the existing clipboard history model.
+- [x] **FCLIP-01**: Received files are automatically written to the system clipboard after file transfer completes, enabling paste (Cmd+V / Ctrl+V) in Finder/Explorer.
+- [x] **FCLIP-02**: Clipboard write uses `text/uri-list` representation with `file://` URIs and sets `ClipboardChangeOrigin::RemotePush` to prevent re-capture loops.
+- [x] **FCLIP-03**: If user copies other content during file transfer, auto-clipboard-write is cancelled; user can manually copy from Dashboard.
+- [x] **FCLIP-04**: A `copy_file_to_clipboard` Tauri command validates file existence before writing to clipboard; returns error if any file is missing.
+- [x] **FCLIP-05**: File clipboard entries are persisted as ClipboardEntry with `text/uri-list` representation, reusing the existing clipboard history model.
 - [ ] **FCLIP-06**: File entries in Dashboard display file names and extension-based icons (image, archive, document, video, audio, generic).
 - [ ] **FCLIP-07**: Stale file entries (cache file deleted) show grey text with strikethrough styling and disabled Copy in context menu.
 - [ ] **FCLIP-08**: File existence is validated lazily (on Copy attempt only), not on startup or component mount.
@@ -135,11 +135,11 @@ Which phases cover which requirements.
 | KB-05       | Phase 27   | Planned  |
 | KB-06       | Phase 27   | Planned  |
 | KB-07       | Phase 27   | Planned  |
-| FCLIP-01    | Phase 31.1 | Planned  |
-| FCLIP-02    | Phase 31.1 | Planned  |
-| FCLIP-03    | Phase 31.1 | Planned  |
-| FCLIP-04    | Phase 31.1 | Planned  |
-| FCLIP-05    | Phase 31.1 | Planned  |
+| FCLIP-01    | Phase 31.1 | Complete |
+| FCLIP-02    | Phase 31.1 | Complete |
+| FCLIP-03    | Phase 31.1 | Complete |
+| FCLIP-04    | Phase 31.1 | Complete |
+| FCLIP-05    | Phase 31.1 | Complete |
 | FCLIP-06    | Phase 31.1 | Planned  |
 | FCLIP-07    | Phase 31.1 | Planned  |
 | FCLIP-08    | Phase 31.1 | Planned  |

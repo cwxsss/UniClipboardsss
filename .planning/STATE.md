@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: completed
-stopped_at: Phase 31.1 context gathered
-last_updated: '2026-03-13T18:11:59.696Z'
-last_activity: '2026-03-13 — Completed 30-03 plan: File sync notifications and error feedback'
+status: in-progress
+stopped_at: Completed 31.1-01 plan
+last_updated: '2026-03-14T19:12:42.000Z'
+last_activity: '2026-03-14 — Completed 31.1-01 plan: Inbound file sync clipboard integration backend'
 progress:
   total_phases: 14
   completed_phases: 11
-  total_plans: 33
-  completed_plans: 29
-  percent: 91
+  total_plans: 34
+  completed_plans: 30
+  percent: 92
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 30 - File sync UI, dashboard file entries, context menu, progress notifications
+**Current focus:** Phase 31.1 - Inbound file sync clipboard integration
 
 ## Current Position
 
-Phase: 30 of 31 (File sync UI)
-Plan: 3 of 3 complete
-Status: Phase Complete
-Last activity: 2026-03-13 — Completed 30-03 plan: File sync notifications and error feedback
+Phase: 31.1 of 31.1 (Inbound file sync clipboard integration)
+Plan: 1 of 1 complete
+Status: Plan 01 Complete
+Last activity: 2026-03-14 — Completed 31.1-01 plan: Inbound file sync clipboard integration backend
 
-Progress: [█████████░] 91%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -77,6 +77,7 @@ Progress: [█████████░] 91%
   | Phase 30 P01 | 4min | 2 tasks | 8 files |
   | Phase 30 P02 | 3 | 2 tasks | 9 files |
   | Phase 30 P03 | 5min | 2 tasks | 12 files |
+  | Phase 31.1 P01 | 10min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -144,6 +145,10 @@ Recent decisions affecting current work:
 - [Phase 30]: Notification batching uses 500ms window to coalesce multi-file sync notifications
 - [Phase 30]: Error notifications fire immediately without batching for prompt user feedback
 - [Phase 30]: Clipboard race handled by cancelClipboardWrite reducer dispatched on clipboard://new-content event
+- [Phase 31.1]: CopyFileToClipboardUseCase takes entry_id only, looks up event_id via ClipboardEntryRepositoryPort
+- [Phase 31.1]: Batch accumulator lives in event loop outside tokio::spawn for cross-event state coordination
+- [Phase 31.1]: Entry persistence always via CaptureClipboardUseCase::execute_with_origin(RemotePush) regardless of clipboard race
+- [Phase 31.1]: Added get_representations_for_event to ClipboardRepresentationRepositoryPort with default empty impl
 
 ### Roadmap Evolution
 
@@ -177,6 +182,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T18:11:59.693Z
-Stopped at: Phase 31.1 context gathered
-Resume file: .planning/phases/31.1-inbound-file-sync-clipboard-integration-with-persistent-file-uri-list-for-cross-platform-paste/31.1-CONTEXT.md
+Last session: 2026-03-14T19:12:42.000Z
+Stopped at: Completed 31.1-01-PLAN.md
+Resume file: .planning/phases/31.1-inbound-file-sync-clipboard-integration-with-persistent-file-uri-list-for-cross-platform-paste/31.1-01-SUMMARY.md
