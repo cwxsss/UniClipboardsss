@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: executing
-stopped_at: Completed 29-02-PLAN.md
-last_updated: "2026-03-13T11:43:55.337Z"
-last_activity: "2026-03-13 — Completed 29-01 plan: FileTransferService with chunked protocol and binary framing"
+status: completed
+stopped_at: Completed 29-03-PLAN.md
+last_updated: "2026-03-13T11:55:54.353Z"
+last_activity: "2026-03-13 — Completed 29-03 plan: serial transfer queue, retry policy, and bootstrap wiring"
 progress:
   total_phases: 13
-  completed_phases: 9
-  total_plans: 43
-  completed_plans: 34
+  completed_phases: 10
+  total_plans: 32
+  completed_plans: 25
   percent: 79
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 29 of 31 (File transfer service)
-Plan: 2 of 3 complete
-Status: In Progress
-Last activity: 2026-03-13 — Completed 29-02 plan: file sync use cases with safety checks, policy, quota, and hash verification
+Plan: 3 of 3 complete
+Status: Phase Complete
+Last activity: 2026-03-13 — Completed 29-03 plan: serial transfer queue, retry policy, and bootstrap wiring
 
 Progress: [████████░░] 79%
 
@@ -72,6 +72,7 @@ Progress: [████████░░] 79%
   | Phase 29 P01 | -min | - tasks | - files |
   | Phase 29 P02 | 4min | 1 tasks | 6 files |
 | Phase 29 P01 | 3min | 2 tasks | 7 files |
+| Phase 29 P03 | 4min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -128,6 +129,8 @@ Recent decisions affecting current work:
 - [Phase 29]: Hash verification failure deletes temp file immediately with no retry policy
 - [Phase 29]: Shared sync policy module extracted for reuse between clipboard and file sync
 - [Phase 29]: Binary chunk frame format: 4-byte header-length prefix + JSON header + raw chunk data for efficient binary transfer
+- [Phase 29]: Queue and retry modules co-created since queue.rs depends on retry.rs
+- [Phase 29]: File cache directory derived from storage_paths.cache_dir.join('file-cache') rather than adding to AppConfig
 
 ### Roadmap Evolution
 
@@ -160,6 +163,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T11:43:55.335Z
-Stopped at: Completed 29-02-PLAN.md
-Resume file: Phase 29 Plan 03
+Last session: 2026-03-13T11:55:54.350Z
+Stopped at: Completed 29-03-PLAN.md
+Resume file: None
