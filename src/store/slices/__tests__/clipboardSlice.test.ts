@@ -27,6 +27,7 @@ const initialState = {
   notReady: false,
   error: null,
   deleteConfirmId: null,
+  staleEntryIds: [],
 }
 
 describe('clipboardSlice reducers', () => {

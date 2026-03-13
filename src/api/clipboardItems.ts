@@ -128,7 +128,8 @@ export interface ClipboardStats {
  * Shared by getClipboardItems and getClipboardEntry to avoid duplication.
  */
 function transformProjectionToResponse(entry: ClipboardEntryProjection): ClipboardItemResponse {
-  const isImage = isImageType(entry.content_type)
+  const isFile = entry.content_type.includes('uri-list')
+  const isImage = !isFile && isImageType(entry.content_type)
 
   const item: ClipboardItem = {
     image: isImage
@@ -139,14 +140,29 @@ function transformProjectionToResponse(entry: ClipboardEntryProjection): Clipboa
           height: 0,
         }
       : null,
-    text: !isImage
+    text:
+      !isImage && !isFile
+        ? {
+            display_text: entry.preview,
+            has_detail: entry.has_detail,
+            size: entry.size_bytes,
+          }
+        : null,
+    file: isFile
       ? {
-          display_text: entry.preview,
-          has_detail: entry.has_detail,
-          size: entry.size_bytes,
+          file_names: entry.preview
+            .split('\n')
+            .filter(Boolean)
+            .map(uri => {
+              try {
+                return decodeURIComponent(new URL(uri).pathname.split('/').pop() || uri)
+              } catch {
+                return uri
+              }
+            }),
+          file_sizes: [], // Size info not available from URI list; use entry.size_bytes as total
         }
-      : null,
-    file: null as unknown as ClipboardFileItem,
+      : (null as unknown as ClipboardFileItem),
     link: null as unknown as ClipboardLinkItem,
     code: null as unknown as ClipboardCodeItem,
     unknown: null,
@@ -451,6 +467,14 @@ export async function unfavoriteClipboardItem(id: string): Promise<boolean> {
     console.error('取消收藏剪贴板条目失败:', error)
     throw error
   }
+}
+
+/**
+ * Copy a file entry to the system clipboard via the backend use case.
+ * If the cache file has been deleted, the backend returns an error.
+ */
+export async function copyFileToClipboard(entryId: string): Promise<void> {
+  await invokeWithTrace('copy_file_to_clipboard', { entry_id: entryId })
 }
 
 /**

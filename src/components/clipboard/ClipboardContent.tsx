@@ -16,6 +16,7 @@ import {
   ClipboardLinkItem,
   ClipboardCodeItem,
   ClipboardFileItem,
+  copyFileToClipboard,
   downloadFileEntry,
   openFileLocation,
 } from '@/api/clipboardItems'
@@ -26,7 +27,7 @@ import { useShortcut } from '@/hooks/useShortcut'
 import { useTransferProgress } from '@/hooks/useTransferProgress'
 import { captureUserIntent } from '@/observability/breadcrumbs'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
-import { removeClipboardItem, copyToClipboard } from '@/store/slices/clipboardSlice'
+import { removeClipboardItem, copyToClipboard, markEntryStale } from '@/store/slices/clipboardSlice'
 
 export interface DisplayClipboardItem {
   id: string
@@ -107,7 +108,12 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     panelIds: ['clipboard-list', 'clipboard-preview'],
     storage: localStorage,
   })
-  const { items: reduxItems, loading, notReady } = useAppSelector(state => state.clipboard)
+  const {
+    items: reduxItems,
+    loading,
+    notReady,
+    staleEntryIds,
+  } = useAppSelector(state => state.clipboard)
 
   const [activeItemId, setActiveItemId] = useState<string | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -287,6 +293,26 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     async (itemId: string) => {
       try {
         captureUserIntent('copy_clipboard', { count: 1 })
+
+        // For file entries, use the dedicated file copy command
+        const item = flatItems.find(it => it.id === itemId)
+        if (item?.type === 'file') {
+          try {
+            await copyFileToClipboard(itemId)
+            setCopySuccess(true)
+            setTimeout(() => setCopySuccess(false), 1500)
+            return true
+          } catch (err) {
+            // If copy fails (e.g. cache file deleted), mark entry as stale
+            const errMsg = err instanceof Error ? err.message : String(err)
+            dispatch(markEntryStale(itemId))
+            toast.error(t('clipboard.errors.copyFailed'), {
+              description: errMsg,
+            })
+            return false
+          }
+        }
+
         const result = await dispatch(copyToClipboard(itemId)).unwrap()
         if (result.success) {
           setCopySuccess(true)
@@ -301,7 +327,7 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
         return false
       }
     },
-    [dispatch, t]
+    [dispatch, t, flatItems]
   )
 
   // Sync to clipboard (download file entry)
@@ -423,6 +449,7 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                         itemType={item.type}
                         isDownloaded={item.isDownloaded ?? true}
                         isTransferring={transferringEntries.has(item.id)}
+                        isStale={staleEntryIds.includes(item.id)}
                         onCopy={id => void handleCopyItem(id)}
                         onDelete={id => {
                           setActiveItemId(id)
@@ -435,6 +462,7 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                         <ClipboardItemRow
                           item={item}
                           isActive={item.id === activeItemId}
+                          isStale={staleEntryIds.includes(item.id)}
                           onClick={() => setActiveItemId(item.id)}
                           itemRef={item.id === activeItemId ? activeItemRef : undefined}
                         />

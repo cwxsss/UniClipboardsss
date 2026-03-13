@@ -17,6 +17,7 @@ interface FileContextMenuProps {
   itemType: DisplayClipboardItem['type']
   isDownloaded: boolean
   isTransferring: boolean
+  isStale?: boolean
   onCopy: (itemId: string) => void
   onDelete: (itemId: string) => void
   onSyncToClipboard: (itemId: string) => void
@@ -29,6 +30,7 @@ const FileContextMenu: React.FC<FileContextMenuProps> = ({
   itemType,
   isDownloaded,
   isTransferring,
+  isStale,
   onCopy,
   onDelete,
   onSyncToClipboard,
@@ -60,10 +62,12 @@ const FileContextMenu: React.FC<FileContextMenuProps> = ({
 
         {/* Copy (for non-file types, or downloaded file types) */}
         {showCopyAction && (
-          <ContextMenuItem onClick={() => onCopy(itemId)}>
+          <ContextMenuItem disabled={isFile && isStale} onClick={() => !isStale && onCopy(itemId)}>
             <Copy className="mr-2 h-4 w-4" />
-            {t('clipboard.contextMenu.copy')}
-            <ContextMenuShortcut>C</ContextMenuShortcut>
+            {isFile && isStale
+              ? t('clipboard.contextMenu.fileDeleted', 'File deleted')
+              : t('clipboard.contextMenu.copy')}
+            {!isStale && <ContextMenuShortcut>C</ContextMenuShortcut>}
           </ContextMenuItem>
         )}
 

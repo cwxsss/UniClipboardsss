@@ -18,6 +18,7 @@ interface ClipboardState {
   notReady: boolean
   error: string | null
   deleteConfirmId: string | null
+  staleEntryIds: string[]
 }
 
 // 初始状态
@@ -27,6 +28,7 @@ const initialState: ClipboardState = {
   notReady: false,
   error: null,
   deleteConfirmId: null,
+  staleEntryIds: [],
 }
 
 // 定义获取剪贴板项目的参数接口
@@ -144,6 +146,14 @@ const clipboardSlice = createSlice({
       state.items = []
       state.error = null
     },
+    markEntryStale: (state, action: PayloadAction<string>) => {
+      if (!state.staleEntryIds.includes(action.payload)) {
+        state.staleEntryIds.push(action.payload)
+      }
+    },
+    clearStaleEntries: state => {
+      state.staleEntryIds = []
+    },
   },
   extraReducers: builder => {
     // 处理获取剪贴板内容
@@ -220,8 +230,16 @@ const clipboardSlice = createSlice({
 })
 
 // 导出 Actions
-export const { setDeleteConfirmId, setNotReady, clearError, prependItem, removeItem, resetItems } =
-  clipboardSlice.actions
+export const {
+  setDeleteConfirmId,
+  setNotReady,
+  clearError,
+  prependItem,
+  removeItem,
+  resetItems,
+  markEntryStale,
+  clearStaleEntries,
+} = clipboardSlice.actions
 
 // 导出 Reducer
 export default clipboardSlice.reducer
