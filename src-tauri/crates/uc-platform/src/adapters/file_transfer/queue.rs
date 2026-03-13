@@ -107,6 +107,7 @@ impl TransferError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
@@ -159,10 +160,15 @@ mod tests {
         let queue = FileTransferQueue::spawn(16, no_retry_policy(), move |req| {
             let ts = ts_clone.clone();
             async move {
-                ts.lock().await.push((req.transfer_id.clone(), std::time::Instant::now()));
+                ts.lock()
+                    .await
+                    .push((req.transfer_id.clone(), std::time::Instant::now()));
                 // Simulate work
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                ts.lock().await.push((format!("{}-done", req.transfer_id), std::time::Instant::now()));
+                ts.lock().await.push((
+                    format!("{}-done", req.transfer_id),
+                    std::time::Instant::now(),
+                ));
                 Ok(())
             }
         });
@@ -255,6 +261,115 @@ mod tests {
 
         let result = processed.lock().await;
         assert_eq!(*result, vec!["xfer-0", "xfer-1", "xfer-2"]);
+    }
+
+    #[tokio::test]
+    async fn test_queue_retries_network_error_then_succeeds() {
+        let attempt_counter = Arc::new(AtomicU32::new(0));
+        let processed = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let attempt_clone = attempt_counter.clone();
+        let processed_clone = processed.clone();
+
+        let retry_policy = super::super::retry::RetryPolicy {
+            max_retries: 2,
+            initial_delay: std::time::Duration::from_millis(1),
+            max_delay: std::time::Duration::from_millis(10),
+            multiplier: 2.0,
+        };
+
+        let queue = FileTransferQueue::spawn(16, retry_policy, move |req| {
+            let attempt = attempt_clone.clone();
+            let processed = processed_clone.clone();
+            async move {
+                let current = attempt.fetch_add(1, Ordering::SeqCst) + 1;
+                if current < 3 {
+                    Err(TransferError::Network("timeout".into()))
+                } else {
+                    processed.lock().await.push(req.transfer_id);
+                    Ok(())
+                }
+            }
+        });
+
+        queue
+            .enqueue(FileTransferRequest {
+                peer_id: "peer-1".to_string(),
+                file_path: PathBuf::from("/tmp/retry-file.txt"),
+                transfer_id: "retry-xfer".to_string(),
+                batch_id: None,
+                batch_total: None,
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let result = processed.lock().await;
+        assert_eq!(*result, vec!["retry-xfer"]);
+        assert_eq!(attempt_counter.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_queue_no_retry_on_hash_mismatch() {
+        let attempt_counter = Arc::new(AtomicU32::new(0));
+        let processed = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        let attempt_clone = attempt_counter.clone();
+        let processed_clone = processed.clone();
+
+        let retry_policy = super::super::retry::RetryPolicy {
+            max_retries: 2,
+            initial_delay: std::time::Duration::from_millis(1),
+            max_delay: std::time::Duration::from_millis(10),
+            multiplier: 2.0,
+        };
+
+        let queue = FileTransferQueue::spawn(16, retry_policy, move |req| {
+            let attempt = attempt_clone.clone();
+            let processed = processed_clone.clone();
+            async move {
+                if req.transfer_id == "fail-xfer" {
+                    attempt.fetch_add(1, Ordering::SeqCst);
+                    Err(TransferError::HashMismatch {
+                        expected: "a".into(),
+                        actual: "b".into(),
+                    })
+                } else {
+                    processed.lock().await.push(req.transfer_id);
+                    Ok(())
+                }
+            }
+        });
+
+        queue
+            .enqueue(FileTransferRequest {
+                peer_id: "peer-1".to_string(),
+                file_path: PathBuf::from("/tmp/fail.txt"),
+                transfer_id: "fail-xfer".to_string(),
+                batch_id: None,
+                batch_total: None,
+            })
+            .await
+            .unwrap();
+
+        queue
+            .enqueue(FileTransferRequest {
+                peer_id: "peer-1".to_string(),
+                file_path: PathBuf::from("/tmp/ok.txt"),
+                transfer_id: "ok-xfer".to_string(),
+                batch_id: None,
+                batch_total: None,
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        assert_eq!(attempt_counter.load(Ordering::SeqCst), 1);
+        let result = processed.lock().await;
+        assert!(result.contains(&"ok-xfer".to_string()));
+        assert!(!result.contains(&"fail-xfer".to_string()));
     }
 
     #[test]

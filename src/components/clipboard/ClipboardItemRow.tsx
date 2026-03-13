@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils'
 import { useAppSelector } from '@/store/hooks'
 import { selectTransferByEntryId } from '@/store/slices/fileTransferSlice'
 
-interface ClipboardItemRowProps {
+interface ClipboardItemRowProps extends React.HTMLAttributes<HTMLDivElement> {
   item: DisplayClipboardItem
   isActive: boolean
   onClick: () => void
@@ -55,53 +55,54 @@ function getPreviewText(item: DisplayClipboardItem): string {
   }
 }
 
-const ClipboardItemRow: React.FC<ClipboardItemRowProps> = ({
-  item,
-  isActive,
-  onClick,
-  itemRef,
-}) => {
-  const Icon = typeIcons[item.type] ?? FileText
-  const transfer = useAppSelector(state => selectTransferByEntryId(state, item.id))
-  const isTransferring = transfer?.status === 'active'
-  const isTransferFailed = transfer?.status === 'failed'
+const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>(
+  ({ item, isActive, onClick, itemRef, className: extraClassName, ...rest }, ref) => {
+    const Icon = typeIcons[item.type] ?? FileText
+    const transfer = useAppSelector(state => selectTransferByEntryId(state, item.id))
+    const isTransferring = transfer?.status === 'active'
+    const isTransferFailed = transfer?.status === 'failed'
 
-  return (
-    <div
-      ref={itemRef}
-      className={cn(
-        'flex flex-col gap-1 py-2.5 px-3 rounded-lg cursor-pointer select-none transition-colors shrink-0 overflow-hidden',
-        isActive ? 'bg-primary/10 text-foreground' : 'hover:bg-muted/50 text-foreground/80',
-        isTransferring && 'ring-1 ring-primary/20',
-        isTransferFailed && 'ring-1 ring-destructive/20'
-      )}
-      onClick={onClick}
-    >
-      <div className="flex items-center gap-3">
-        <Icon
-          className={cn('h-4 w-4 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground')}
-        />
-        <span className="w-0 flex-grow truncate text-sm">{getPreviewText(item)}</span>
-        {isTransferFailed ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
-            </TooltipTrigger>
-            <TooltipContent side="left">
-              <p className="text-xs">{transfer?.errorMessage || 'Transfer failed'}</p>
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          <span className="text-xs text-muted-foreground shrink-0">{item.time}</span>
+    return (
+      <div
+        ref={itemRef ?? ref}
+        {...rest}
+        className={cn(
+          'flex flex-col gap-1 py-2.5 px-3 rounded-lg cursor-pointer select-none transition-colors shrink-0 overflow-hidden',
+          isActive ? 'bg-primary/10 text-foreground' : 'hover:bg-muted/50 text-foreground/80',
+          isTransferring && 'ring-1 ring-primary/20',
+          isTransferFailed && 'ring-1 ring-destructive/20',
+          extraClassName
+        )}
+        onClick={onClick}
+      >
+        <div className="flex items-center gap-3">
+          <Icon
+            className={cn('h-4 w-4 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground')}
+          />
+          <span className="w-0 flex-grow truncate text-sm">{getPreviewText(item)}</span>
+          {isTransferFailed ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                <p className="text-xs">{transfer?.errorMessage || 'Transfer failed'}</p>
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="text-xs text-muted-foreground shrink-0">{item.time}</span>
+          )}
+        </div>
+        {isTransferring && transfer && (
+          <div className="pl-7">
+            <TransferProgressBar progress={transfer} variant="compact" />
+          </div>
         )}
       </div>
-      {isTransferring && transfer && (
-        <div className="pl-7">
-          <TransferProgressBar progress={transfer} variant="compact" />
-        </div>
-      )}
-    </div>
-  )
-}
+    )
+  }
+)
+
+ClipboardItemRow.displayName = 'ClipboardItemRow'
 
 export default ClipboardItemRow

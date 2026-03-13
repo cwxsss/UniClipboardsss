@@ -152,14 +152,9 @@ where
     tokio::fs::create_dir_all(cache_dir).await?;
 
     // Set unix permissions on temp file after creation
-    let result = receive_chunks_to_file(
-        reader,
-        &tmp_path,
-        announce,
-        progress_callback,
-    )
-    .instrument(info_span!("receive_chunks", transfer_id = %announce.transfer_id))
-    .await;
+    let result = receive_chunks_to_file(reader, &tmp_path, announce, progress_callback)
+        .instrument(info_span!("receive_chunks", transfer_id = %announce.transfer_id))
+        .await;
 
     match result {
         Ok(received_hash) => {
@@ -176,10 +171,7 @@ where
 
             // Sanitize filename
             let safe_filename = sanitize_filename(&announce.filename);
-            let final_path = cache_dir.join(format!(
-                "{}_{}",
-                announce.transfer_id, safe_filename
-            ));
+            let final_path = cache_dir.join(format!("{}_{}", announce.transfer_id, safe_filename));
 
             // Atomic rename
             tokio::fs::rename(&tmp_path, &final_path).await?;
@@ -227,8 +219,7 @@ where
                 if payload.len() < 4 + header_len {
                     return Err(anyhow!("chunk payload missing header data"));
                 }
-                let _header: FileChunkHeader =
-                    serde_json::from_slice(&payload[4..4 + header_len])?;
+                let _header: FileChunkHeader = serde_json::from_slice(&payload[4..4 + header_len])?;
                 let chunk_data = &payload[4 + header_len..];
 
                 hasher.update(chunk_data);
@@ -371,8 +362,8 @@ mod tests {
 
         // Use in-memory duplex stream
         let (client, server) = tokio::io::duplex(64 * 1024);
-        let (mut client_read, mut client_write) = tokio::io::split(client);
-        let (mut server_read, mut server_write) = tokio::io::split(server);
+        let (_client_read, mut client_write) = tokio::io::split(client);
+        let (mut server_read, _server_write) = tokio::io::split(server);
 
         let source_path_clone = source_path.clone();
         let send_handle = tokio::spawn(async move {
@@ -398,13 +389,7 @@ mod tests {
             assert_eq!(announce.filename, "source.txt");
 
             // Receive the file
-            receive_file_chunked(
-                &mut server_read,
-                &announce,
-                &cache_dir_clone,
-                None,
-            )
-            .await
+            receive_file_chunked(&mut server_read, &announce, &cache_dir_clone, None).await
         });
 
         let send_hash = send_handle.await.unwrap().unwrap();
@@ -596,5 +581,71 @@ mod tests {
         let metadata = tokio::fs::metadata(&final_path).await.unwrap();
         let mode = metadata.permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "file should have 0600 permissions");
+    }
+
+    #[tokio::test]
+    async fn test_large_file_multi_chunk_roundtrip() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("large_source.bin");
+        let cache_dir = temp_dir.path().join("cache");
+
+        // Create a 1MB file filled with deterministic pseudo-random data (repeating 0..255)
+        let file_size: usize = 1_048_576;
+        let test_data: Vec<u8> = (0..file_size).map(|i| (i % 256) as u8).collect();
+        tokio::fs::write(&source_path, &test_data).await.unwrap();
+
+        // Compute expected blake3 hash from the source data independently
+        let expected_hash = blake3::hash(&test_data).to_hex().to_string();
+
+        // Use duplex stream with buffer large enough for a full chunk + framing overhead
+        let (client, server) = tokio::io::duplex(CHUNK_SIZE + 4096);
+        let (_client_read, mut client_write) = tokio::io::split(client);
+        let (mut server_read, _server_write) = tokio::io::split(server);
+
+        let source_path_clone = source_path.clone();
+        let send_handle = tokio::spawn(async move {
+            send_file_chunked(
+                &mut client_write,
+                &source_path_clone,
+                "large-xfer",
+                Some("batch-large".to_string()),
+                Some(1),
+                CHUNK_SIZE, // Use the real 256KB chunk size
+                None,
+            )
+            .await
+        });
+
+        let cache_dir_clone = cache_dir.clone();
+        let recv_handle = tokio::spawn(async move {
+            // Read the announce frame first
+            let frame = read_file_frame(&mut server_read).await.unwrap().unwrap();
+            assert_eq!(frame.0, FileMessageType::Announce);
+            let announce: FileAnnounce = serde_json::from_slice(&frame.1).unwrap();
+            assert_eq!(announce.transfer_id, "large-xfer");
+            assert_eq!(announce.file_size, 1_048_576);
+            assert_eq!(announce.filename, "large_source.bin");
+
+            // Receive the file
+            receive_file_chunked(&mut server_read, &announce, &cache_dir_clone, None).await
+        });
+
+        let send_hash = send_handle.await.unwrap().unwrap();
+        let final_path = recv_handle.await.unwrap().unwrap();
+
+        // Verify received file is exactly 1MB
+        let received_data = tokio::fs::read(&final_path).await.unwrap();
+        assert_eq!(received_data.len(), file_size);
+
+        // Verify file content matches byte-for-byte
+        assert_eq!(received_data, test_data);
+
+        // Verify blake3 hashes match (sender hash, independent hash, and received file hash)
+        let received_hash = blake3::hash(&received_data).to_hex().to_string();
+        assert_eq!(send_hash, expected_hash);
+        assert_eq!(received_hash, expected_hash);
+
+        // Verify send_hash is non-empty
+        assert!(!send_hash.is_empty());
     }
 }

@@ -5,7 +5,9 @@ use anyhow::{bail, Context, Result};
 use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
-use uc_core::ports::{FileTransportPort, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort};
+use uc_core::ports::{
+    FileTransportPort, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort,
+};
 
 use super::sync_policy::apply_file_sync_policy;
 
@@ -134,9 +136,7 @@ impl SyncOutboundFileUseCase {
                 peer_count,
             })
         }
-        .instrument(info_span!(
-            "usecase.file_sync.sync_outbound.execute",
-        ))
+        .instrument(info_span!("usecase.file_sync.sync_outbound.execute",))
         .await
     }
 }
@@ -147,11 +147,11 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
-    use uc_core::network::DiscoveredPeer;
     use uc_core::network::protocol::FileTransferMessage;
+    use uc_core::network::DiscoveredPeer;
+    use uc_core::network::{ConnectedPeer, PairedDevice, PairingState};
     use uc_core::ports::errors::PairedDeviceRepositoryError;
     use uc_core::ports::{PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort};
-    use uc_core::network::{ConnectedPeer, PairedDevice, PairingState};
     use uc_core::settings::model::{ContentTypes, Settings, SyncFrequency, SyncSettings};
     use uc_core::PeerId;
 
@@ -322,7 +322,10 @@ mod tests {
             let result = uc.execute(link_path.clone()).await;
             assert!(result.is_err());
             assert!(
-                result.unwrap_err().to_string().contains("Symlinks not supported"),
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Symlinks not supported"),
                 "Expected symlink rejection"
             );
             let _ = std::fs::remove_file(&link_path);
@@ -340,7 +343,10 @@ mod tests {
         let result = uc.execute(link_path.clone()).await;
         assert!(result.is_err());
         assert!(
-            result.unwrap_err().to_string().contains("Hardlinks not supported"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Hardlinks not supported"),
             "Expected hardlink rejection"
         );
         let _ = std::fs::remove_file(&link_path);
@@ -389,5 +395,202 @@ mod tests {
         // p1 and p3 are unknown (kept), p2 is filtered
         assert_eq!(result.peer_count, 2);
         assert!(!result.transfer_id.is_empty());
+    }
+
+    // --- Tracking mock for argument verification ---
+
+    struct TrackingFileTransport {
+        calls: Arc<std::sync::Mutex<Vec<(String, PathBuf, String, Option<String>, Option<u32>)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl FileTransportPort for TrackingFileTransport {
+        async fn send_file_announce(
+            &self,
+            _peer_id: &str,
+            _announce: FileTransferMessage,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn send_file_data(
+            &self,
+            _peer_id: &str,
+            _data: FileTransferMessage,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn send_file_complete(
+            &self,
+            _peer_id: &str,
+            _complete: FileTransferMessage,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn cancel_transfer(
+            &self,
+            _peer_id: &str,
+            _cancel: FileTransferMessage,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn send_file(
+            &self,
+            peer_id: &str,
+            file_path: PathBuf,
+            transfer_id: String,
+            batch_id: Option<String>,
+            batch_total: Option<u32>,
+        ) -> anyhow::Result<()> {
+            self.calls.lock().unwrap().push((
+                peer_id.to_string(),
+                file_path,
+                transfer_id,
+                batch_id,
+                batch_total,
+            ));
+            Ok(())
+        }
+    }
+
+    // --- Partial-failure mock ---
+
+    struct PartialFailFileTransport {
+        fail_peer_id: String,
+        attempted: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl FileTransportPort for PartialFailFileTransport {
+        async fn send_file_announce(
+            &self,
+            _peer_id: &str,
+            _announce: FileTransferMessage,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn send_file_data(
+            &self,
+            _peer_id: &str,
+            _data: FileTransferMessage,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn send_file_complete(
+            &self,
+            _peer_id: &str,
+            _complete: FileTransferMessage,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn cancel_transfer(
+            &self,
+            _peer_id: &str,
+            _cancel: FileTransferMessage,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn send_file(
+            &self,
+            peer_id: &str,
+            _file_path: PathBuf,
+            _transfer_id: String,
+            _batch_id: Option<String>,
+            _batch_total: Option<u32>,
+        ) -> anyhow::Result<()> {
+            self.attempted.lock().unwrap().push(peer_id.to_string());
+            if peer_id == self.fail_peer_id {
+                anyhow::bail!("connection refused");
+            }
+            Ok(())
+        }
+    }
+
+    fn make_use_case_with_transport(
+        peers: Vec<DiscoveredPeer>,
+        devices: Vec<PairedDevice>,
+        transport: Arc<dyn FileTransportPort>,
+    ) -> SyncOutboundFileUseCase {
+        SyncOutboundFileUseCase::new(
+            Arc::new(MockSettings {
+                settings: make_settings(),
+            }),
+            Arc::new(MockPairedDeviceRepo { devices }),
+            Arc::new(MockPeerDirectory { peers }),
+            transport,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_outbound_calls_send_file_with_correct_args() {
+        let tmp = NamedTempFile::new().unwrap();
+        let file_path = tmp.path().to_path_buf();
+        let peers = vec![make_peer("p1"), make_peer("p2"), make_peer("p3")];
+
+        let calls: Arc<
+            std::sync::Mutex<Vec<(String, PathBuf, String, Option<String>, Option<u32>)>>,
+        > = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = Arc::new(TrackingFileTransport {
+            calls: Arc::clone(&calls),
+        });
+
+        let uc = make_use_case_with_transport(peers, vec![], transport);
+        let result = uc.execute(file_path.clone()).await.unwrap();
+
+        let recorded = calls.lock().unwrap();
+        assert_eq!(
+            recorded.len(),
+            3,
+            "send_file should be called exactly 3 times"
+        );
+
+        // Verify peer_ids in order
+        assert_eq!(recorded[0].0, "p1");
+        assert_eq!(recorded[1].0, "p2");
+        assert_eq!(recorded[2].0, "p3");
+
+        // All calls share the same non-empty transfer_id
+        let tid = &recorded[0].2;
+        assert!(!tid.is_empty(), "transfer_id should not be empty");
+        assert_eq!(&recorded[1].2, tid);
+        assert_eq!(&recorded[2].2, tid);
+        assert_eq!(tid, &result.transfer_id);
+
+        // All calls have the correct file_path
+        assert_eq!(recorded[0].1, file_path);
+        assert_eq!(recorded[1].1, file_path);
+        assert_eq!(recorded[2].1, file_path);
+    }
+
+    #[tokio::test]
+    async fn test_outbound_partial_failure_does_not_abort() {
+        let tmp = NamedTempFile::new().unwrap();
+        let peers = vec![make_peer("p1"), make_peer("p2"), make_peer("p3")];
+
+        let attempted: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let transport = Arc::new(PartialFailFileTransport {
+            fail_peer_id: "p2".to_string(),
+            attempted: Arc::clone(&attempted),
+        });
+
+        let uc = make_use_case_with_transport(peers, vec![], transport);
+        let result = uc.execute(tmp.path().to_path_buf()).await;
+
+        // The use case should succeed despite p2 failing
+        assert!(
+            result.is_ok(),
+            "use case should return Ok even with partial failure"
+        );
+        let result = result.unwrap();
+
+        // peer_count includes the failed peer
+        assert_eq!(result.peer_count, 3);
+
+        // All 3 peers were attempted
+        let attempted = attempted.lock().unwrap();
+        assert_eq!(attempted.len(), 3, "all 3 peers should be attempted");
+        assert_eq!(attempted[0], "p1");
+        assert_eq!(attempted[1], "p2");
+        assert_eq!(attempted[2], "p3");
     }
 }
