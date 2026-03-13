@@ -139,6 +139,8 @@ pub enum NetworkEvent {
         peer_id: String,
         filename: String,
         file_path: PathBuf,
+        batch_id: Option<String>,
+        batch_total: Option<u32>,
     },
     FileTransferFailed {
         transfer_id: String,
@@ -228,6 +230,8 @@ mod tests {
                 peer_id: "peer-abc".to_string(),
                 filename: "report.pdf".to_string(),
                 file_path: PathBuf::from("/tmp/file-cache/xfer-1_report.pdf"),
+                batch_id: None,
+                batch_total: None,
             },
             NetworkEvent::FileTransferFailed {
                 transfer_id: "xfer-2".to_string(),

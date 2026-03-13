@@ -242,6 +242,8 @@ impl FileTransferService {
                         peer_id: peer_id.clone(),
                         filename: announce.filename.clone(),
                         file_path: final_path,
+                        batch_id: announce.batch_id.clone(),
+                        batch_total: announce.batch_total,
                     })
                     .await;
                 Ok(())
@@ -334,7 +336,7 @@ impl FileTransferService {
             &mut write_half,
             &file_path,
             &transfer_id,
-            batch_id,
+            batch_id.clone(),
             batch_total,
             self.inner.config.chunk_size,
             Some(&progress_callback),
@@ -383,6 +385,8 @@ impl FileTransferService {
                         peer_id: peer_id_str.to_string(),
                         filename,
                         file_path,
+                        batch_id,
+                        batch_total,
                     })
                     .await;
                 Ok(())

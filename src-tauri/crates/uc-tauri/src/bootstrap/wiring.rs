@@ -1254,6 +1254,19 @@ pub fn start_background_tasks<R: Runtime>(
         ))),
     };
 
+    // Create clipboard deps for inbound file clipboard integration
+    let inbound_system_clipboard = deps.clipboard.system_clipboard.clone();
+    let inbound_clipboard_change_origin = deps.clipboard.clipboard_change_origin.clone();
+    let inbound_capture_clipboard_deps = CaptureClipboardDeps {
+        clipboard_entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+        clipboard_event_repo: deps.clipboard.clipboard_event_repo.clone(),
+        representation_policy: deps.clipboard.representation_policy.clone(),
+        representation_normalizer: deps.clipboard.representation_normalizer.clone(),
+        device_identity: deps.device.device_identity.clone(),
+        representation_cache: deps.clipboard.representation_cache.clone(),
+        spool_queue: deps.clipboard.spool_queue.clone(),
+    };
+
     // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
     // We use a single orchestration spawn to set up all registry tasks, since
     // registry.spawn() is async and start_background_tasks is sync.
@@ -1528,6 +1541,9 @@ pub fn start_background_tasks<R: Runtime>(
                                 space_access_runtime_ports.clone(),
                                 inbound_file_settings.clone(),
                                 inbound_file_cache_dir.clone(),
+                                inbound_system_clipboard.clone(),
+                                inbound_clipboard_change_origin.clone(),
+                                inbound_capture_clipboard_deps.clone(),
                             )
                             .await;
 
@@ -1992,6 +2008,92 @@ async fn resolve_device_name_for_peer(
     }
 }
 
+/// Dependencies needed to create CaptureClipboardUseCase for file entry persistence.
+#[derive(Clone)]
+struct CaptureClipboardDeps {
+    clipboard_entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
+    clipboard_event_repo: Arc<dyn uc_core::ports::ClipboardEventWriterPort>,
+    representation_policy: Arc<dyn uc_core::ports::SelectRepresentationPolicyPort>,
+    representation_normalizer: Arc<dyn ClipboardRepresentationNormalizerPort>,
+    device_identity: Arc<dyn uc_core::ports::DeviceIdentityPort>,
+    representation_cache: Arc<dyn RepresentationCachePort>,
+    spool_queue: Arc<dyn SpoolQueuePort>,
+}
+
+/// Write file paths to system clipboard after transfer completes.
+/// Handles clipboard race detection and entry persistence.
+async fn write_file_to_clipboard_after_transfer(
+    file_paths: Vec<PathBuf>,
+    system_clipboard: &Arc<dyn SystemClipboardPort>,
+    clipboard_change_origin: &Arc<dyn ClipboardChangeOriginPort>,
+    capture_deps: &CaptureClipboardDeps,
+) {
+    use uc_app::usecases::file_sync::copy_file_to_clipboard::{
+        build_file_snapshot, build_uri_list,
+    };
+
+    let uri_list = match build_uri_list(&file_paths) {
+        Ok(uris) => uris,
+        Err(err) => {
+            warn!(error = %err, "Failed to build URI list for clipboard write");
+            return;
+        }
+    };
+
+    let snapshot = build_file_snapshot(&uri_list);
+
+    // Always persist the clipboard entry regardless of clipboard race
+    let capture_uc = uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase::new(
+        capture_deps.clipboard_entry_repo.clone(),
+        capture_deps.clipboard_event_repo.clone(),
+        capture_deps.representation_policy.clone(),
+        capture_deps.representation_normalizer.clone(),
+        capture_deps.device_identity.clone(),
+        capture_deps.representation_cache.clone(),
+        capture_deps.spool_queue.clone(),
+    );
+    match capture_uc
+        .execute_with_origin(snapshot.clone(), uc_core::ClipboardChangeOrigin::RemotePush)
+        .await
+    {
+        Ok(Some(entry_id)) => {
+            info!(
+                entry_id = %entry_id,
+                file_count = file_paths.len(),
+                "File clipboard entry persisted"
+            );
+        }
+        Ok(None) => {
+            debug!("File clipboard entry persistence returned None (expected for RemotePush skip)");
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to persist file clipboard entry");
+        }
+    }
+
+    // Set origin to RemotePush before clipboard write to prevent re-capture loop
+    clipboard_change_origin
+        .set_next_origin(
+            uc_core::ClipboardChangeOrigin::RemotePush,
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+    // Write to system clipboard
+    if let Err(err) = system_clipboard.write_snapshot(snapshot) {
+        // Consume origin on failure to avoid stale origin
+        clipboard_change_origin
+            .consume_origin_or_default(uc_core::ClipboardChangeOrigin::LocalCapture)
+            .await;
+        warn!(error = %err, "Failed to write file URIs to system clipboard");
+    } else {
+        info!(
+            file_count = file_paths.len(),
+            "File URIs written to system clipboard"
+        );
+    }
+}
+
 async fn run_pairing_event_loop<R: Runtime>(
     mut event_rx: mpsc::Receiver<NetworkEvent>,
     orchestrator: Arc<PairingOrchestrator>,
@@ -2001,7 +2103,14 @@ async fn run_pairing_event_loop<R: Runtime>(
     space_access_runtime_ports: RuntimeSpaceAccessPorts,
     inbound_file_settings: Arc<dyn SettingsPort>,
     inbound_file_cache_dir: PathBuf,
+    system_clipboard: Arc<dyn SystemClipboardPort>,
+    clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    capture_clipboard_deps: CaptureClipboardDeps,
 ) {
+    // Batch accumulator: batch_id -> (completed_paths: Vec<PathBuf>, expected_total: u32, peer_id: String)
+    let mut batch_accumulator: std::collections::HashMap<String, (Vec<PathBuf>, u32, String)> =
+        std::collections::HashMap::new();
+
     while let Some(event) = event_rx.recv().await {
         match event {
             NetworkEvent::PairingMessageReceived { peer_id, message } => {
@@ -2130,12 +2239,16 @@ async fn run_pairing_event_loop<R: Runtime>(
                 peer_id,
                 filename,
                 file_path,
+                batch_id,
+                batch_total,
             } => {
                 info!(
                     transfer_id = %transfer_id,
                     peer_id = %peer_id,
                     filename = %filename,
                     file_path = %file_path.display(),
+                    batch_id = ?batch_id,
+                    batch_total = ?batch_total,
                     "File transfer completed, processing inbound file"
                 );
 
@@ -2144,16 +2257,24 @@ async fn run_pairing_event_loop<R: Runtime>(
                     inbound_file_cache_dir.clone(),
                 );
 
-                // Compute blake3 hash for verification
+                // Clone values before spawn takes ownership
                 let app_handle_clone = app_handle.clone();
                 let span_transfer_id = transfer_id.clone();
+                let system_clipboard_clone = system_clipboard.clone();
+                let clipboard_change_origin_clone = clipboard_change_origin.clone();
+                let capture_deps_clone = capture_clipboard_deps.clone();
+                let file_path_for_spawn = file_path.clone();
+                let peer_id_for_spawn = peer_id.clone();
+                let filename_for_spawn = filename.clone();
+                let transfer_id_for_spawn = transfer_id.clone();
+                let is_batch = batch_id.is_some() && batch_total.is_some();
                 tokio::spawn(
                     async move {
-                        let file_bytes = match tokio::fs::read(&file_path).await {
+                        let file_bytes = match tokio::fs::read(&file_path_for_spawn).await {
                             Ok(bytes) => bytes,
                             Err(err) => {
                                 error!(
-                                    transfer_id = %transfer_id,
+                                    transfer_id = %transfer_id_for_spawn,
                                     error = %err,
                                     "Failed to read transferred file for hash verification"
                                 );
@@ -2164,7 +2285,11 @@ async fn run_pairing_event_loop<R: Runtime>(
                         let expected_hash = blake3::hash(&file_bytes).to_hex().to_string();
 
                         match inbound_uc
-                            .handle_transfer_complete(&transfer_id, &file_path, &expected_hash)
+                            .handle_transfer_complete(
+                                &transfer_id_for_spawn,
+                                &file_path_for_spawn,
+                                &expected_hash,
+                            )
                             .await
                         {
                             Ok(result) => {
@@ -2178,8 +2303,8 @@ async fn run_pairing_event_loop<R: Runtime>(
                                 if let Some(app) = app_handle_clone.as_ref() {
                                     let payload = serde_json::json!({
                                         "transfer_id": result.transfer_id,
-                                        "filename": filename,
-                                        "peer_id": peer_id,
+                                        "filename": filename_for_spawn,
+                                        "peer_id": peer_id_for_spawn,
                                         "file_size": result.file_size,
                                         "auto_pulled": result.auto_pulled,
                                         "file_path": result.file_path.to_string_lossy(),
@@ -2192,10 +2317,22 @@ async fn run_pairing_event_loop<R: Runtime>(
                                         );
                                     }
                                 }
+
+                                // Write single file to clipboard only if NOT part of a batch
+                                // Batch clipboard writes are handled by the batch accumulator
+                                if !is_batch {
+                                    write_file_to_clipboard_after_transfer(
+                                        vec![result.file_path],
+                                        &system_clipboard_clone,
+                                        &clipboard_change_origin_clone,
+                                        &capture_deps_clone,
+                                    )
+                                    .await;
+                                }
                             }
                             Err(err) => {
                                 error!(
-                                    transfer_id = %transfer_id,
+                                    transfer_id = %transfer_id_for_spawn,
                                     error = %err,
                                     "Inbound file sync processing failed"
                                 );
@@ -2207,6 +2344,45 @@ async fn run_pairing_event_loop<R: Runtime>(
                         transfer_id = %span_transfer_id,
                     )),
                 );
+
+                // Handle batch accumulation (outside spawn for state access)
+                if let (Some(bid), Some(total)) = (batch_id, batch_total) {
+                    let entry = batch_accumulator
+                        .entry(bid.clone())
+                        .or_insert_with(|| (Vec::new(), total, peer_id.clone()));
+                    entry.0.push(file_path.clone());
+
+                    if entry.0.len() < total as usize {
+                        info!(
+                            batch_id = %bid,
+                            completed = entry.0.len(),
+                            total = total,
+                            "Batch file received, waiting for remaining files"
+                        );
+                    } else {
+                        let all_paths = entry.0.clone();
+                        batch_accumulator.remove(&bid);
+                        info!(
+                            batch_id = %bid,
+                            total = total,
+                            "Batch complete, writing all files to clipboard"
+                        );
+
+                        // Write all batch files to clipboard
+                        let system_clipboard_batch = system_clipboard.clone();
+                        let clipboard_origin_batch = clipboard_change_origin.clone();
+                        let capture_deps_batch = capture_clipboard_deps.clone();
+                        tokio::spawn(async move {
+                            write_file_to_clipboard_after_transfer(
+                                all_paths,
+                                &system_clipboard_batch,
+                                &clipboard_origin_batch,
+                                &capture_deps_batch,
+                            )
+                            .await;
+                        });
+                    }
+                }
             }
             _ => {}
         }

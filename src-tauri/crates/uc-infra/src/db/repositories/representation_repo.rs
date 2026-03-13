@@ -265,6 +265,24 @@ where
         Ok(ProcessingUpdateOutcome::Updated(representation))
     }
 
+    async fn get_representations_for_event(
+        &self,
+        event_id: &EventId,
+    ) -> Result<Vec<PersistedClipboardRepresentation>> {
+        let event_id_str = event_id.to_string();
+
+        let rows: Vec<SnapshotRepresentationRow> = self.executor.run(|conn| {
+            let result: Result<Vec<SnapshotRepresentationRow>, diesel::result::Error> =
+                clipboard_snapshot_representation::table
+                    .filter(clipboard_snapshot_representation::event_id.eq(&event_id_str))
+                    .load::<SnapshotRepresentationRow>(conn);
+            result.map_err(|e| anyhow::anyhow!("Database error: {}", e))
+        })?;
+
+        let mapper = RepresentationRowMapper;
+        rows.iter().map(|r| mapper.to_domain(r)).collect()
+    }
+
     async fn update_mime_type(&self, rep_id: &RepresentationId, mime: &MimeType) -> Result<()> {
         let rep_id_str = rep_id.to_string();
         let mime_str = mime.as_str().to_string();
