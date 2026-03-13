@@ -269,9 +269,10 @@ Plans:
 **Goal:** Integrate received files with system clipboard so users can paste (Cmd+V / Ctrl+V) in Finder/Explorer after file transfer completes. Includes auto-write on transfer completion, manual copy from Dashboard with file validation, persistent file URI storage, stale file handling, and delete cascade for cache files.
 **Requirements**: FCLIP-01, FCLIP-02, FCLIP-03, FCLIP-04, FCLIP-05, FCLIP-06, FCLIP-07, FCLIP-08, FCLIP-09, FCLIP-10
 **Depends on:** Phase 30
-**Plans:** 2/2 plans complete
+**Plans:** 3 plans
 
 Plans:
 
 - [x] 31.1-01-PLAN.md — Backend clipboard write on file transfer complete, CopyFileToClipboardUseCase, Tauri command
-- [ ] 31.1-02-PLAN.md — Frontend file entry display with extension icons, stale file styling, delete cascade
+- [x] 31.1-02-PLAN.md — Frontend file entry display with extension icons, stale file styling, delete cascade
+- [ ] 31.1-03-PLAN.md — Gap closure: clipboard race detection in write_file_to_clipboard_after_transfer (FCLIP-03)
