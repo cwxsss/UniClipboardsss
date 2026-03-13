@@ -78,7 +78,9 @@ const ClearHistoryDialog: React.FC<ClearHistoryDialogProps> = ({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{t('settings.sections.storage.clearHistory.dialogTitle')}</AlertDialogTitle>
+          <AlertDialogTitle>
+            {t('settings.sections.storage.clearHistory.dialogTitle')}
+          </AlertDialogTitle>
           <AlertDialogDescription>
             {t('settings.sections.storage.clearHistory.dialogDescription')}
           </AlertDialogDescription>

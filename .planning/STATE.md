@@ -8,9 +8,9 @@ last_updated: '2026-03-13T05:15:20.000Z'
 last_activity: '2026-03-13 — Completed 27-01 plan: keyboard shortcuts settings data model and display'
 progress:
   total_phases: 10
-  completed_phases: 8
-  total_plans: 19
-  completed_plans: 19
+  completed_phases: 9
+  total_plans: 20
+  completed_plans: 20
   percent: 100
 ---
 
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 27 of 27 (Keyboard shortcuts settings page)
-Plan: 1 of 1 complete
-Status: In Progress
+Phase: 28 of 28 (Support Link Content Type)
+Plan: 2 of 2 complete
+Status: In Progress (Phase 27 KB-04~07 pending)
 Last activity: 2026-03-13 — Completed 27-01 plan: keyboard shortcuts settings data model and display
 
 Progress: [██████████] 100%
@@ -66,6 +66,8 @@ Progress: [██████████] 100%
   | Phase 26 P01 | 7min | 3 tasks | 4 files |
   | Phase 26 P02 | 2min | 3 tasks | 3 files |
   | Phase 27 P01 | 5min | 2 tasks | 13 files |
+  | Phase 28 P01 | 7min | 2 tasks | 6 files |
+  | Phase 28 P02 | 3min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -111,6 +113,9 @@ Recent decisions affecting current work:
 - [Phase 26]: Settings navigation category state is one-shot and cleared after consumption to prevent stale tab forcing.
 - [Phase 27]: Used HashMap<String, serde_json::Value> for keyboard_shortcuts for flexible override storage
 - [Phase 27]: Used mod prefix for all shortcut definitions for cross-platform compatibility (mod = Cmd on Mac, Ctrl on others)
+- [Phase 28]: url crate v2 for URL parsing validation instead of regex
+- [Phase 28]: ClipboardItemDto.link changed from serde_json::Value to ClipboardLinkItemDto for type safety
+- [Phase 28]: URL regex heuristic checks http/https/ftp/ftps/mailto with no-whitespace for text/plain link detection
 
 ### Roadmap Evolution
 
@@ -119,6 +124,7 @@ Recent decisions affecting current work:
 - Phase 25 added: Implement per-device sync content type toggles
 - Phase 26 added: Implement global sync master toggle and improve sync UX
 - Phase 27 added: 支持快捷键设置在 settings page 中
+- Phase 28 added: Support link content type (MIME link and URL-detected plain text)
 
 ### Pending Todos
 

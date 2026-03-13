@@ -7,7 +7,7 @@ use crate::commands::record_trace_fields;
 use crate::models::{
     ClipboardEntriesResponse, ClipboardEntryDetail, ClipboardEntryProjection,
     ClipboardEntryResource, ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse,
-    ClipboardStats, ClipboardTextItemDto,
+    ClipboardLinkItemDto, ClipboardStats, ClipboardTextItemDto,
 };
 use base64::Engine;
 use std::sync::Arc;
@@ -15,6 +15,7 @@ use tauri::State;
 use tracing::{info_span, Instrument};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::clipboard::ClipboardUseCases;
+use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 use uc_core::security::state::EncryptionState;
 use uc_platform::ports::observability::TraceMetadata;
@@ -68,18 +69,26 @@ pub async fn get_clipboard_entries(
         // Map DTOs to command layer models
         let projections: Vec<ClipboardEntryProjection> = dtos
             .into_iter()
-            .map(|dto| ClipboardEntryProjection {
-                id: dto.id,
-                preview: dto.preview,
-                has_detail: dto.has_detail,
-                size_bytes: dto.size_bytes,
-                captured_at: dto.captured_at,
-                content_type: dto.content_type,
-                thumbnail_url: dto.thumbnail_url,
-                is_encrypted: dto.is_encrypted,
-                is_favorited: dto.is_favorited,
-                updated_at: dto.updated_at,
-                active_time: dto.active_time,
+            .map(|dto| {
+                let link_domains = dto
+                    .link_urls
+                    .as_ref()
+                    .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
+                ClipboardEntryProjection {
+                    id: dto.id,
+                    preview: dto.preview,
+                    has_detail: dto.has_detail,
+                    size_bytes: dto.size_bytes,
+                    captured_at: dto.captured_at,
+                    content_type: dto.content_type,
+                    thumbnail_url: dto.thumbnail_url,
+                    is_encrypted: dto.is_encrypted,
+                    is_favorited: dto.is_favorited,
+                    updated_at: dto.updated_at,
+                    active_time: dto.active_time,
+                    link_urls: dto.link_urls,
+                    link_domains,
+                }
             })
             .collect();
 
@@ -215,19 +224,27 @@ pub async fn get_clipboard_entry(
         })?;
 
         let entries: Vec<ClipboardEntryProjection> = match projection {
-            Some(dto) => vec![ClipboardEntryProjection {
-                id: dto.id,
-                preview: dto.preview,
-                has_detail: dto.has_detail,
-                size_bytes: dto.size_bytes,
-                captured_at: dto.captured_at,
-                content_type: dto.content_type,
-                thumbnail_url: dto.thumbnail_url,
-                is_encrypted: dto.is_encrypted,
-                is_favorited: dto.is_favorited,
-                updated_at: dto.updated_at,
-                active_time: dto.active_time,
-            }],
+            Some(dto) => {
+                let link_domains = dto
+                    .link_urls
+                    .as_ref()
+                    .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
+                vec![ClipboardEntryProjection {
+                    id: dto.id,
+                    preview: dto.preview,
+                    has_detail: dto.has_detail,
+                    size_bytes: dto.size_bytes,
+                    captured_at: dto.captured_at,
+                    content_type: dto.content_type,
+                    thumbnail_url: dto.thumbnail_url,
+                    is_encrypted: dto.is_encrypted,
+                    is_favorited: dto.is_favorited,
+                    updated_at: dto.updated_at,
+                    active_time: dto.active_time,
+                    link_urls: dto.link_urls,
+                    link_domains,
+                }]
+            }
             None => vec![],
         };
 
@@ -277,7 +294,8 @@ pub async fn get_clipboard_item(
                 Ok(None)
             }
             Some(proj) => {
-                let is_image = proj.content_type.to_ascii_lowercase().starts_with("image/");
+                let content_type_lower = proj.content_type.to_ascii_lowercase();
+                let is_image = content_type_lower.starts_with("image/");
 
                 let item = if is_image {
                     ClipboardItemDto {
@@ -290,6 +308,16 @@ pub async fn get_clipboard_item(
                         }),
                         file: None,
                         link: None,
+                        code: None,
+                        unknown: None,
+                    }
+                } else if let Some(urls) = proj.link_urls {
+                    let domains = urls.iter().filter_map(|u| extract_domain(u)).collect();
+                    ClipboardItemDto {
+                        text: None,
+                        image: None,
+                        file: None,
+                        link: Some(ClipboardLinkItemDto { urls, domains }),
                         code: None,
                         unknown: None,
                     }

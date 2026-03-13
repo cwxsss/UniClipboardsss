@@ -218,3 +218,25 @@ Plans:
 
 - [x] 27-01-PLAN.md — Backend/frontend Settings types, activate definitions, ShortcutsSection display UI
 - [ ] 27-02-PLAN.md — Key recording, conflict detection, persistence, reset, and live override wiring
+
+### Phase 28: Support link content type (MIME link and URL-detected plain text)
+
+**Goal:** Link content type is fully functional across the pipeline: classification detects both text/uri-list and single-URL plain text, sync filtering respects the link toggle, and the Dashboard displays links with clickable URLs and domain information.
+**Requirements**: LINK-01, LINK-02, LINK-03, LINK-04, LINK-05, LINK-06, LINK-07
+**Depends on:** Phase 25
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [ ] 28-01-PLAN.md — Backend link detection, classification, utility functions, and DTO population
+- [ ] 28-02-PLAN.md — Frontend link display, multi-URL rendering, and sync toggle activation
+
+**Success Criteria** (what must be TRUE):
+
+1. text/uri-list MIME snapshots and single-URL plain text are both classified as Link.
+2. Sync filtering respects the ct.link toggle for Link content.
+3. get_clipboard_item returns structured link data (urls + domains) for link entries.
+4. Dashboard list view shows clickable URLs with +N more badge for multi-URL entries.
+5. Dashboard detail panel shows all URLs with domain names.
+6. Link sync toggle is interactive in DeviceSettingsPanel (not "Coming Soon").
+7. Mixed text content (e.g., "see https://...") remains classified as Text.

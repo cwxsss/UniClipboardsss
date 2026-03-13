@@ -59,6 +59,16 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 - [ ] **KB-06**: Custom key overrides persist to the Rust settings system via existing `update_settings` command and survive app restart.
 - [ ] **KB-07**: Changed shortcuts take effect immediately without app restart, with per-shortcut and Reset All restore-to-defaults capability.
 
+### Link Content Type
+
+- [x] **LINK-01**: Plain text clipboard content that is a single valid URL (entire trimmed text, no whitespace) is classified as Link instead of Text by `classify_snapshot`.
+- [x] **LINK-02**: `is_content_type_allowed` respects the `ct.link` toggle for Link content, making link sync filterable per device.
+- [x] **LINK-03**: `text/uri-list` content is parsed per RFC 2483 (one URL per line, # comment lines skipped) and returned as a list of URLs with extracted domains.
+- [x] **LINK-04**: `get_clipboard_item` returns structured `ClipboardLinkItemDto` with urls and domains arrays for link entries.
+- [x] **LINK-05**: Dashboard list view shows link entries with clickable first URL and "+N more" badge for multi-URL entries.
+- [x] **LINK-06**: Dashboard detail panel shows all URLs with domain names and character count for link entries.
+- [x] **LINK-07**: Link sync toggle in DeviceSettingsPanel is interactive (not "Coming Soon"), while file/code_snippet/rich_text remain "Coming Soon".
+
 ## v2 Requirements
 
 Deferred to a future milestone. Tracked but not in the current roadmap.
@@ -122,14 +132,21 @@ Which phases cover which requirements.
 | KB-05       | Phase 27 | Planned  |
 | KB-06       | Phase 27 | Planned  |
 | KB-07       | Phase 27 | Planned  |
+| LINK-01     | Phase 28 | Planned  |
+| LINK-02     | Phase 28 | Planned  |
+| LINK-03     | Phase 28 | Planned  |
+| LINK-04     | Phase 28 | Planned  |
+| LINK-05     | Phase 28 | Planned  |
+| LINK-06     | Phase 28 | Planned  |
+| LINK-07     | Phase 28 | Planned  |
 
 **Coverage:**
 
-- v1 requirements: 34 total
-- Mapped to phases: 34
+- v1 requirements: 41 total
+- Mapped to phases: 41
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-09_
-_Last updated: 2026-03-13 after Phase 27 planning_
+_Last updated: 2026-03-13 after Phase 28 planning_

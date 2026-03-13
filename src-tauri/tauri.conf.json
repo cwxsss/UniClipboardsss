@@ -25,9 +25,7 @@
         "visible": false,
         "devtools": true,
         "windowEffects": {
-          "effects": [
-            "hudWindow"
-          ],
+          "effects": ["hudWindow"],
           "state": "active",
           "radius": 16
         }
