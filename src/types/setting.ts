@@ -108,6 +108,18 @@ export interface PairingSettings {
 }
 
 /**
+ * File sync settings - corresponds to Rust FileSyncSettings
+ */
+export interface FileSyncSettings {
+  file_sync_enabled: boolean
+  small_file_threshold: number  // bytes, default 10MB
+  max_file_size: number         // bytes, default 5GB
+  file_cache_quota_per_device: number  // bytes, default 500MB
+  file_retention_hours: number  // default 24
+  file_auto_cleanup: boolean    // default true
+}
+
+/**
  * 应用设置 - 对应 Rust Settings
  */
 export interface Settings {
@@ -118,6 +130,7 @@ export interface Settings {
   security: SecuritySettings
   pairing: PairingSettings
   keyboard_shortcuts?: Record<string, string | string[]>
+  file_sync?: FileSyncSettings
 }
 
 // ============================================================================
