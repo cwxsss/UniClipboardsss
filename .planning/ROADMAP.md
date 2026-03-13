@@ -224,7 +224,7 @@ Plans:
 **Goal:** Establish the file sync foundation: define file transfer message types, create FileTransportPort trait, fix file classification (file:// vs http:// in content type filter), add database schema for file entries, and extend settings model with file sync fields.
 **Requirements**: FSYNC-FOUNDATION
 **Depends on:** Phase 27
-**Plans:** 0 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] TBD (run /gsd:plan-phase 28 to break down)
