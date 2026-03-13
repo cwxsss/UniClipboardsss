@@ -125,6 +125,29 @@ pub enum NetworkEvent {
         direction: ProtocolDirection,
         reason: ProtocolDenyReason,
     },
+    // File transfer lifecycle events
+    FileTransferStarted {
+        transfer_id: String,
+        peer_id: String,
+        filename: String,
+        file_size: u64,
+    },
+    FileTransferCompleted {
+        transfer_id: String,
+        peer_id: String,
+        filename: String,
+    },
+    FileTransferFailed {
+        transfer_id: String,
+        peer_id: String,
+        error: String,
+    },
+    FileTransferCancelled {
+        transfer_id: String,
+        peer_id: String,
+        reason: String,
+    },
+
     // Transfer progress events
     TransferProgress(TransferProgress),
 
@@ -185,6 +208,40 @@ mod tests {
                 assert_eq!(p.chunks_completed, 2);
             }
             _ => panic!("expected TransferProgress"),
+        }
+    }
+
+    #[test]
+    fn file_transfer_events_serialize_round_trip() {
+        let events = vec![
+            NetworkEvent::FileTransferStarted {
+                transfer_id: "xfer-1".to_string(),
+                peer_id: "peer-abc".to_string(),
+                filename: "report.pdf".to_string(),
+                file_size: 1_048_576,
+            },
+            NetworkEvent::FileTransferCompleted {
+                transfer_id: "xfer-1".to_string(),
+                peer_id: "peer-abc".to_string(),
+                filename: "report.pdf".to_string(),
+            },
+            NetworkEvent::FileTransferFailed {
+                transfer_id: "xfer-2".to_string(),
+                peer_id: "peer-xyz".to_string(),
+                error: "connection lost".to_string(),
+            },
+            NetworkEvent::FileTransferCancelled {
+                transfer_id: "xfer-3".to_string(),
+                peer_id: "peer-def".to_string(),
+                reason: "user cancelled".to_string(),
+            },
+        ];
+
+        for event in &events {
+            let json = serde_json::to_string(event).unwrap();
+            let restored: NetworkEvent = serde_json::from_str(&json).unwrap();
+            let json2 = serde_json::to_string(&restored).unwrap();
+            assert_eq!(json, json2);
         }
     }
 

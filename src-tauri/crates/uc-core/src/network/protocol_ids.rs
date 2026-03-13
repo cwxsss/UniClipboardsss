@@ -3,6 +3,7 @@ pub enum ProtocolId {
     Pairing,
     PairingStream,
     Business,
+    FileTransfer,
 }
 
 impl ProtocolId {
@@ -11,6 +12,7 @@ impl ProtocolId {
             ProtocolId::Pairing => "/uc-pairing/1.0.0",
             ProtocolId::PairingStream => "/uniclipboard/pairing-stream/1.0.0",
             ProtocolId::Business => "/uniclipboard/business/1.0.0",
+            ProtocolId::FileTransfer => "/uniclipboard/file-transfer/1.0.0",
         }
     }
 }
@@ -29,6 +31,10 @@ mod tests {
         assert_eq!(
             ProtocolId::Business.as_str(),
             "/uniclipboard/business/1.0.0"
+        );
+        assert_eq!(
+            ProtocolId::FileTransfer.as_str(),
+            "/uniclipboard/file-transfer/1.0.0"
         );
     }
 }
