@@ -1,6 +1,7 @@
 import { Code, ExternalLink, File, FileText, Image as ImageIcon } from 'lucide-react'
 import React from 'react'
 import type { DisplayClipboardItem } from './ClipboardContent'
+import TransferProgressBar from './TransferProgressBar'
 import {
   ClipboardCodeItem,
   ClipboardFileItem,
@@ -9,6 +10,8 @@ import {
   ClipboardTextItem,
 } from '@/api/clipboardItems'
 import { cn } from '@/lib/utils'
+import { useAppSelector } from '@/store/hooks'
+import { selectTransferByEntryId } from '@/store/slices/fileTransferSlice'
 
 interface ClipboardItemRowProps {
   item: DisplayClipboardItem
@@ -58,21 +61,31 @@ const ClipboardItemRow: React.FC<ClipboardItemRowProps> = ({
   itemRef,
 }) => {
   const Icon = typeIcons[item.type] ?? FileText
+  const transfer = useAppSelector(state => selectTransferByEntryId(state, item.id))
+  const isTransferring = transfer?.status === 'active'
 
   return (
     <div
       ref={itemRef}
       className={cn(
-        'flex items-center gap-3 py-2.5 px-3 rounded-lg cursor-pointer select-none transition-colors shrink-0 overflow-hidden',
-        isActive ? 'bg-primary/10 text-foreground' : 'hover:bg-muted/50 text-foreground/80'
+        'flex flex-col gap-1 py-2.5 px-3 rounded-lg cursor-pointer select-none transition-colors shrink-0 overflow-hidden',
+        isActive ? 'bg-primary/10 text-foreground' : 'hover:bg-muted/50 text-foreground/80',
+        isTransferring && 'ring-1 ring-primary/20'
       )}
       onClick={onClick}
     >
-      <Icon
-        className={cn('h-4 w-4 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground')}
-      />
-      <span className="w-0 flex-grow truncate text-sm">{getPreviewText(item)}</span>
-      <span className="text-xs text-muted-foreground shrink-0">{item.time}</span>
+      <div className="flex items-center gap-3">
+        <Icon
+          className={cn('h-4 w-4 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground')}
+        />
+        <span className="w-0 flex-grow truncate text-sm">{getPreviewText(item)}</span>
+        <span className="text-xs text-muted-foreground shrink-0">{item.time}</span>
+      </div>
+      {isTransferring && transfer && (
+        <div className="pl-7">
+          <TransferProgressBar progress={transfer} variant="compact" />
+        </div>
+      )}
     </div>
   )
 }

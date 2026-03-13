@@ -419,6 +419,14 @@
       "syncToClipboard": "同步到剪贴板",
       "syncing": "同步中..."
     },
+    "transfer": {
+      "sending": "发送中",
+      "receiving": "接收中",
+      "progress": "{{transferred}} / {{total}} ({{percent}}%)",
+      "chunks": "{{completed}} / {{total}} 块",
+      "completed": "传输完成",
+      "failed": "传输失败"
+    },
     "confirmDeleteTitle": "确认删除",
     "confirmDeleteDescription_one": "确定要删除选中的项目吗？此操作无法撤销。",
     "confirmDeleteDescription_other": "确定要删除选中的 {{count}} 项吗？此操作无法撤销。",

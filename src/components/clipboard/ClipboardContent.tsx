@@ -22,6 +22,7 @@ import {
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { toast } from '@/components/ui/toast'
 import { useShortcut } from '@/hooks/useShortcut'
+import { useTransferProgress } from '@/hooks/useTransferProgress'
 import { captureUserIntent } from '@/observability/breadcrumbs'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { removeClipboardItem, copyToClipboard } from '@/store/slices/clipboardSlice'
@@ -91,6 +92,9 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
   onLoadMore,
 }) => {
   const { t } = useTranslation()
+
+  // Activate transfer progress event listener
+  useTransferProgress()
 
   const dispatch = useAppDispatch()
 

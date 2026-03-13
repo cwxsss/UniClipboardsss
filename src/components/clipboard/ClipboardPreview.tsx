@@ -2,6 +2,7 @@ import { Clipboard, CloudOff, ExternalLink, File, Loader2, Image as ImageIcon } 
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { DisplayClipboardItem } from './ClipboardContent'
+import TransferProgressBar from './TransferProgressBar'
 import {
   ClipboardCodeItem,
   ClipboardFileItem,
@@ -15,6 +16,8 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { resolveUcUrl } from '@/lib/protocol'
+import { useAppSelector } from '@/store/hooks'
+import { selectTransferByEntryId } from '@/store/slices/fileTransferSlice'
 import { formatFileSize } from '@/utils'
 
 interface ClipboardPreviewProps {
@@ -23,6 +26,9 @@ interface ClipboardPreviewProps {
 
 const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
   const { t } = useTranslation()
+  const transfer = useAppSelector(state =>
+    item ? selectTransferByEntryId(state, item.id) : undefined
+  )
   const [fullText, setFullText] = useState<string | null>(null)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [isLoadingText, setIsLoadingText] = useState(false)
@@ -281,6 +287,16 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
       <ScrollArea className="flex-1 min-h-0 overflow-hidden">
         <div className="overflow-hidden">{renderContent()}</div>
       </ScrollArea>
+
+      {/* Transfer progress section */}
+      {transfer && transfer.status === 'active' && (
+        <div className="shrink-0">
+          <Separator className="bg-border/40" />
+          <div className="p-4">
+            <TransferProgressBar progress={transfer} variant="detailed" />
+          </div>
+        </div>
+      )}
 
       {/* Information section */}
       {infoRows.length > 0 && (
