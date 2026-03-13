@@ -419,6 +419,14 @@
       "syncToClipboard": "同步到剪贴板",
       "syncing": "同步中..."
     },
+    "notification": {
+      "syncStartSingle": "正在同步文件到 {{device}}",
+      "syncStartBatch": "正在同步 {{count}} 个文件到 {{device}}",
+      "syncCompleteSingle": "文件同步完成",
+      "syncCompleteBatch": "所有 {{count}} 个文件已同步",
+      "syncFailed": "文件同步失败",
+      "syncFailedDetail": "文件同步失败：{{reason}}"
+    },
     "transfer": {
       "sending": "发送中",
       "receiving": "接收中",

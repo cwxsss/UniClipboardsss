@@ -27,6 +27,7 @@ uc-tauri = { path = "crates/uc-tauri" }
 
 # ===== Tauri 相关依赖 =====
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-stronghold = "2"
 

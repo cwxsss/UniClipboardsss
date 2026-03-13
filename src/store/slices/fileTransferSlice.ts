@@ -11,6 +11,8 @@ export interface TransferProgressInfo {
   bytesTransferred: number
   totalBytes: number | null
   status: 'active' | 'completed' | 'failed'
+  errorMessage?: string
+  clipboardWriteCancelled?: boolean
   startedAt: number
   updatedAt: number
 }

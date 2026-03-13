@@ -419,6 +419,14 @@
       "syncToClipboard": "Sync to Clipboard",
       "syncing": "Syncing..."
     },
+    "notification": {
+      "syncStartSingle": "File syncing to {{device}}",
+      "syncStartBatch": "Syncing {{count}} files to {{device}}",
+      "syncCompleteSingle": "File synced successfully",
+      "syncCompleteBatch": "All {{count}} files synced",
+      "syncFailed": "File sync failed",
+      "syncFailedDetail": "Failed to sync file: {{reason}}"
+    },
     "transfer": {
       "sending": "Sending",
       "receiving": "Receiving",

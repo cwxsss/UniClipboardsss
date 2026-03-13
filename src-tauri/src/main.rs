@@ -632,6 +632,7 @@ fn run_app(config: AppConfig) {
         // 1) In frontend devtools: fetch("uc://blob/<blob_id>")
         // 2) In frontend devtools: fetch("uc://thumbnail/<representation_id>")
         // 3) Network should show 200 with Access-Control-Allow-Origin matching http://localhost:1420
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init());
 
     let builder = if disable_single_instance {
