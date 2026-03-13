@@ -119,7 +119,11 @@ Recent decisions affecting current work:
 - Phase 25 added: Implement per-device sync content type toggles
 - Phase 26 added: Implement global sync master toggle and improve sync UX
 - Phase 27 added: 支持快捷键设置在 settings page 中
-- Phase 28 added: Implement file sync via libp2p for cross-platform file copy-paste
+- Phase 28 split: Original monolithic file sync phase split into 4 phases (28-31)
+- Phase 28 updated: File sync foundation — message types, ports, classification fix, schema, settings
+- Phase 29 added: File transfer service — chunked protocol, use cases, retry logic
+- Phase 30 added: File sync UI — Dashboard file entries, context menu, progress, notifications
+- Phase 31 added: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
 
 ### Pending Todos
 

@@ -218,3 +218,43 @@ Plans:
 
 - [x] 27-01-PLAN.md — Backend/frontend Settings types, activate definitions, ShortcutsSection display UI
 - [ ] 27-02-PLAN.md — Key recording, conflict detection, persistence, reset, and live override wiring
+
+### Phase 28: File sync foundation — message types, ports, classification fix, schema, settings
+
+**Goal:** Establish the file sync foundation: define file transfer message types, create FileTransportPort trait, fix file classification (file:// vs http:// in content type filter), add database schema for file entries, and extend settings model with file sync fields.
+**Requirements**: FSYNC-FOUNDATION
+**Depends on:** Phase 27
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 28 to break down)
+
+### Phase 29: File transfer service — chunked protocol, use cases, retry logic
+
+**Goal:** Implement the FileTransferService with libp2p stream protocol, chunked file transfer with Blake3 hash verification, send/receive use cases, serial queue for multi-file operations, and auto-retry with exponential backoff.
+**Requirements**: FSYNC-TRANSFER
+**Depends on:** Phase 28
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 29 to break down)
+
+### Phase 30: File sync UI — Dashboard file entries, context menu, progress, notifications
+
+**Goal:** Add file entries to Dashboard clipboard history with right-click context menu (Copy / Sync to Clipboard), progress indicators for file transfers, system notification merging for multi-file batches, and error feedback display.
+**Requirements**: FSYNC-UI
+**Depends on:** Phase 29
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 30 to break down)
+
+### Phase 31: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
+
+**Goal:** Add file sync settings UI (enable toggle, thresholds, quotas), enforce per-device file cache quotas, implement auto-cleanup of expired temp files, and polish error handling across the file sync pipeline.
+**Requirements**: FSYNC-POLISH
+**Depends on:** Phase 30
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 31 to break down)
