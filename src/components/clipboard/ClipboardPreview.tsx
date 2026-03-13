@@ -1,4 +1,4 @@
-import { Clipboard, ExternalLink, File, Loader2, Image as ImageIcon } from 'lucide-react'
+import { Clipboard, CloudOff, ExternalLink, File, Loader2, Image as ImageIcon } from 'lucide-react'
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { DisplayClipboardItem } from './ClipboardContent'
@@ -164,18 +164,36 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
         const fileNames = (item.content as ClipboardFileItem).file_names
         const fileSizes = (item.content as ClipboardFileItem).file_sizes
         return (
-          <div className="p-4 flex flex-col gap-2">
-            {fileNames.map((name, i) => (
-              <div key={i} className="flex items-center gap-2 text-sm text-foreground/80">
-                <File size={16} className="text-muted-foreground shrink-0" />
-                <span className="truncate flex-1">{name}</span>
-                {fileSizes[i] != null && (
-                  <span className="text-xs text-muted-foreground">
-                    {formatFileSize(fileSizes[i])}
-                  </span>
-                )}
+          <div className="p-4 flex flex-col gap-3">
+            {/* Download status badge */}
+            {item.isDownloaded === false && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded-md px-2 py-1 w-fit">
+                <CloudOff size={12} />
+                <span>{t('clipboard.preview.notDownloaded')}</span>
               </div>
-            ))}
+            )}
+
+            {/* Source device */}
+            {item.device && (
+              <div className="text-xs text-muted-foreground">
+                {t('clipboard.preview.sourceDevice')}: {item.device}
+              </div>
+            )}
+
+            {/* File list */}
+            <div className="flex flex-col gap-2">
+              {fileNames.map((name, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm text-foreground/80">
+                  <File size={16} className="text-muted-foreground shrink-0" />
+                  <span className="truncate flex-1">{name}</span>
+                  {fileSizes[i] != null && (
+                    <span className="text-xs text-muted-foreground">
+                      {formatFileSize(fileSizes[i])}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )
       }

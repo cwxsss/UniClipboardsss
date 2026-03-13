@@ -401,7 +401,9 @@
       "characters": "字符数",
       "words": "词数",
       "size": "大小",
-      "dimensions": "尺寸"
+      "dimensions": "尺寸",
+      "notDownloaded": "未下载",
+      "sourceDevice": "来源设备"
     },
     "contextMenu": {
       "copy": "复制",

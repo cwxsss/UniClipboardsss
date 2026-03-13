@@ -401,7 +401,9 @@
       "characters": "Characters",
       "words": "Words",
       "size": "Size",
-      "dimensions": "Dimensions"
+      "dimensions": "Dimensions",
+      "notDownloaded": "Not downloaded",
+      "sourceDevice": "Source device"
     },
     "contextMenu": {
       "copy": "Copy",

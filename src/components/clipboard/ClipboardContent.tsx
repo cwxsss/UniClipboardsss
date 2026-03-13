@@ -6,6 +6,7 @@ import ClipboardActionBar from './ClipboardActionBar'
 import ClipboardItemRow from './ClipboardItemRow'
 import ClipboardPreview from './ClipboardPreview'
 import DeleteConfirmDialog from './DeleteConfirmDialog'
+import FileContextMenu from './FileContextMenu'
 import {
   getDisplayType,
   ClipboardItemResponse,
@@ -15,6 +16,8 @@ import {
   ClipboardLinkItem,
   ClipboardCodeItem,
   ClipboardFileItem,
+  downloadFileEntry,
+  openFileLocation,
 } from '@/api/clipboardItems'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { toast } from '@/components/ui/toast'
@@ -102,6 +105,7 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
   const [activeItemId, setActiveItemId] = useState<string | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [copySuccess, setCopySuccess] = useState(false)
+  const [transferringEntries, setTransferringEntries] = useState<Set<string>>(new Set())
   const [tick, setTick] = useState(0)
 
   const activeItemRef = useRef<HTMLDivElement>(null)
@@ -293,6 +297,43 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     [dispatch, t]
   )
 
+  // Sync to clipboard (download file entry)
+  const handleSyncToClipboard = useCallback(
+    async (itemId: string) => {
+      try {
+        setTransferringEntries(prev => new Set(prev).add(itemId))
+        await downloadFileEntry(itemId)
+        // Transfer started; progress events will update via transfer progress hook (Plan 02)
+      } catch (err) {
+        console.error('Sync to clipboard failed:', err)
+        toast.error(t('clipboard.errors.syncFailed'), {
+          description: err instanceof Error ? err.message : t('clipboard.errors.unknown'),
+        })
+        setTransferringEntries(prev => {
+          const next = new Set(prev)
+          next.delete(itemId)
+          return next
+        })
+      }
+    },
+    [t]
+  )
+
+  // Open file location in system file manager
+  const handleOpenFileLocation = useCallback(
+    async (itemId: string) => {
+      try {
+        await openFileLocation(itemId)
+      } catch (err) {
+        console.error('Open file location failed:', err)
+        toast.error(t('clipboard.errors.openLocationFailed'), {
+          description: err instanceof Error ? err.message : t('clipboard.errors.unknown'),
+        })
+      }
+    },
+    [t]
+  )
+
   // Keyboard: C to copy
   useShortcut({
     key: 'c',
@@ -369,13 +410,28 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                       {group.label}
                     </div>
                     {group.items.map(item => (
-                      <ClipboardItemRow
-                        key={item.id}
-                        item={item}
-                        isActive={item.id === activeItemId}
-                        onClick={() => setActiveItemId(item.id)}
-                        itemRef={item.id === activeItemId ? activeItemRef : undefined}
-                      />
+                      <FileContextMenu
+                        key={`ctx-${item.id}`}
+                        itemId={item.id}
+                        itemType={item.type}
+                        isDownloaded={item.isDownloaded ?? true}
+                        isTransferring={transferringEntries.has(item.id)}
+                        onCopy={id => void handleCopyItem(id)}
+                        onDelete={id => {
+                          setActiveItemId(id)
+                          captureUserIntent('delete_entry', { count: 1 })
+                          setDeleteDialogOpen(true)
+                        }}
+                        onSyncToClipboard={id => void handleSyncToClipboard(id)}
+                        onOpenFileLocation={id => void handleOpenFileLocation(id)}
+                      >
+                        <ClipboardItemRow
+                          item={item}
+                          isActive={item.id === activeItemId}
+                          onClick={() => setActiveItemId(item.id)}
+                          itemRef={item.id === activeItemId ? activeItemRef : undefined}
+                        />
+                      </FileContextMenu>
                     ))}
                   </div>
                 ))}
@@ -392,6 +448,11 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
               <ClipboardActionBar
                 hasActiveItem={activeItemId !== null}
                 copySuccess={copySuccess}
+                activeItemType={activeItem?.type}
+                isActiveItemDownloaded={activeItem?.isDownloaded}
+                isActiveItemTransferring={
+                  activeItemId ? transferringEntries.has(activeItemId) : false
+                }
                 onCopy={() => {
                   if (activeItemId) void handleCopyItem(activeItemId)
                 }}
@@ -400,6 +461,9 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                     captureUserIntent('delete_entry', { count: 1 })
                     setDeleteDialogOpen(true)
                   }
+                }}
+                onSyncToClipboard={() => {
+                  if (activeItemId) void handleSyncToClipboard(activeItemId)
                 }}
               />
             </div>
