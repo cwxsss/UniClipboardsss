@@ -1,6 +1,7 @@
 mod clipboard;
 mod clipboard_payload_v3;
 mod device_announce;
+pub mod file_transfer;
 mod heartbeat;
 mod pairing;
 mod protocol_message;
@@ -18,4 +19,5 @@ pub use pairing::{
     PairingBusy, PairingCancel, PairingChallenge, PairingChallengeResponse, PairingConfirm,
     PairingKeyslotOffer, PairingMessage, PairingReject, PairingRequest, PairingResponse,
 };
+pub use file_transfer::FileTransferMessage;
 pub use protocol_message::ProtocolMessage;
