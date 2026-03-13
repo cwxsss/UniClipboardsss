@@ -954,6 +954,31 @@ impl<'a> UseCases<'a> {
         )
     }
 
+    /// Create a `SyncOutboundFileUseCase` wired with this runtime's settings,
+    /// device repo, peer directory, and file transport port.
+    ///
+    /// 创建使用此运行时的设置、设备仓库、对等目录和文件传输端口的 SyncOutboundFileUseCase。
+    pub fn sync_outbound_file(&self) -> uc_app::usecases::file_sync::SyncOutboundFileUseCase {
+        uc_app::usecases::file_sync::SyncOutboundFileUseCase::new(
+            self.runtime.deps.settings.clone(),
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.network_ports.peers.clone(),
+            self.runtime.deps.network_ports.file_transfer.clone(),
+        )
+    }
+
+    /// Create a `SyncInboundFileUseCase` wired with this runtime's settings
+    /// and file cache directory.
+    ///
+    /// 创建使用此运行时设置和文件缓存目录的 SyncInboundFileUseCase。
+    pub fn sync_inbound_file(&self) -> uc_app::usecases::file_sync::SyncInboundFileUseCase {
+        let file_cache_dir = self.runtime.storage_paths.cache_dir.join("file-cache");
+        uc_app::usecases::file_sync::SyncInboundFileUseCase::new(
+            self.runtime.deps.settings.clone(),
+            file_cache_dir,
+        )
+    }
+
     // NOTE: Other use case methods will be added as the use case design evolves
     // to support trait object instantiation. Currently, use cases with generic
     // type parameters cannot be instantiated through this accessor.

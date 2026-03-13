@@ -4,7 +4,7 @@
 //! (hash mismatch, rejection, file errors) fail immediately.
 
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::warn;
 
 use super::queue::TransferError;
 
