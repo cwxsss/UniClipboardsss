@@ -721,8 +721,7 @@ fn create_platform_layer(
         peers: libp2p_network.clone(),
         pairing: libp2p_network.clone(),
         events: libp2p_network.clone(),
-        // TODO(phase-29): provide FileTransportPort adapter from libp2p
-        file_transfer: Arc::new(uc_core::ports::NoopFileTransportPort),
+        file_transfer: libp2p_network.clone(),
     });
 
     // Wrap blob_store with encryption decorator

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use tracing::{info, info_span, Instrument};
+use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use uc_core::ports::{FileTransportPort, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort};
@@ -108,12 +108,25 @@ impl SyncOutboundFileUseCase {
                     peer_id = %peer.peer_id,
                     transfer_id = %transfer_id,
                     file = %file_path.display(),
-                    "Queuing file transfer to peer"
+                    "Sending file to peer"
                 );
-                // Actual transfer delegation will happen via FileTransportPort
-                // when the chunked send protocol is wired (Phase 29 Plan 01).
-                // For now we log intent per peer.
-                let _ = &self.file_transport;
+                if let Err(e) = self
+                    .file_transport
+                    .send_file(
+                        &peer.peer_id,
+                        file_path.clone(),
+                        transfer_id.clone(),
+                        None, // batch_id — single-file transfer for now
+                        None, // batch_total
+                    )
+                    .await
+                {
+                    warn!(
+                        peer_id = %peer.peer_id,
+                        error = %e,
+                        "Failed to send file to peer"
+                    );
+                }
             }
 
             Ok(SyncOutboundResult {
