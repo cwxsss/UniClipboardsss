@@ -59,6 +59,19 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 - [ ] **KB-06**: Custom key overrides persist to the Rust settings system via existing `update_settings` command and survive app restart.
 - [ ] **KB-07**: Changed shortcuts take effect immediately without app restart, with per-shortcut and Reset All restore-to-defaults capability.
 
+### File Clipboard Integration
+
+- [ ] **FCLIP-01**: Received files are automatically written to the system clipboard after file transfer completes, enabling paste (Cmd+V / Ctrl+V) in Finder/Explorer.
+- [ ] **FCLIP-02**: Clipboard write uses `text/uri-list` representation with `file://` URIs and sets `ClipboardChangeOrigin::RemotePush` to prevent re-capture loops.
+- [ ] **FCLIP-03**: If user copies other content during file transfer, auto-clipboard-write is cancelled; user can manually copy from Dashboard.
+- [ ] **FCLIP-04**: A `copy_file_to_clipboard` Tauri command validates file existence before writing to clipboard; returns error if any file is missing.
+- [ ] **FCLIP-05**: File clipboard entries are persisted as ClipboardEntry with `text/uri-list` representation, reusing the existing clipboard history model.
+- [ ] **FCLIP-06**: File entries in Dashboard display file names and extension-based icons (image, archive, document, video, audio, generic).
+- [ ] **FCLIP-07**: Stale file entries (cache file deleted) show grey text with strikethrough styling and disabled Copy in context menu.
+- [ ] **FCLIP-08**: File existence is validated lazily (on Copy attempt only), not on startup or component mount.
+- [ ] **FCLIP-09**: Deleting a file entry from Dashboard cascades to delete the associated cache file on disk.
+- [ ] **FCLIP-10**: Multi-file entries show file count summary; single-file entries show filename.
+
 ## v2 Requirements
 
 Deferred to a future milestone. Tracked but not in the current roadmap.
@@ -86,50 +99,60 @@ Explicitly excluded from v0.3.0. Documented to prevent scope creep.
 
 Which phases cover which requirements.
 
-| Requirement | Phase    | Status   |
-| ----------- | -------- | -------- |
-| LOG-01      | Phase 19 | Complete |
-| LOG-02      | Phase 19 | Complete |
-| LOG-03      | Phase 19 | Complete |
-| LOG-04      | Phase 19 | Complete |
-| FLOW-01     | Phase 20 | Complete |
-| FLOW-02     | Phase 20 | Complete |
-| FLOW-03     | Phase 20 | Complete |
-| FLOW-04     | Phase 20 | Complete |
-| FLOW-05     | Phase 21 | Complete |
-| SEQ-01      | Phase 22 | Complete |
-| SEQ-02      | Phase 22 | Complete |
-| SEQ-03      | Phase 22 | Complete |
-| SEQ-04      | Phase 22 | Complete |
-| SEQ-05      | Phase 22 | Complete |
-| SEQ-06      | Phase 22 | Complete |
-| CT-01       | Phase 25 | Planned  |
-| CT-02       | Phase 25 | Planned  |
-| CT-03       | Phase 25 | Planned  |
-| CT-04       | Phase 25 | Planned  |
-| CT-05       | Phase 25 | Planned  |
-| CT-06       | Phase 25 | Planned  |
-| CT-07       | Phase 25 | Planned  |
-| GSYNC-01    | Phase 26 | Complete |
-| GSYNC-02    | Phase 26 | Complete |
-| GSYNC-03    | Phase 26 | Complete |
-| GSYNC-04    | Phase 26 | Complete |
-| GSYNC-05    | Phase 26 | Complete |
-| KB-01       | Phase 27 | Planned  |
-| KB-02       | Phase 27 | Planned  |
-| KB-03       | Phase 27 | Planned  |
-| KB-04       | Phase 27 | Planned  |
-| KB-05       | Phase 27 | Planned  |
-| KB-06       | Phase 27 | Planned  |
-| KB-07       | Phase 27 | Planned  |
+| Requirement | Phase      | Status   |
+| ----------- | ---------- | -------- |
+| LOG-01      | Phase 19   | Complete |
+| LOG-02      | Phase 19   | Complete |
+| LOG-03      | Phase 19   | Complete |
+| LOG-04      | Phase 19   | Complete |
+| FLOW-01     | Phase 20   | Complete |
+| FLOW-02     | Phase 20   | Complete |
+| FLOW-03     | Phase 20   | Complete |
+| FLOW-04     | Phase 20   | Complete |
+| FLOW-05     | Phase 21   | Complete |
+| SEQ-01      | Phase 22   | Complete |
+| SEQ-02      | Phase 22   | Complete |
+| SEQ-03      | Phase 22   | Complete |
+| SEQ-04      | Phase 22   | Complete |
+| SEQ-05      | Phase 22   | Complete |
+| SEQ-06      | Phase 22   | Complete |
+| CT-01       | Phase 25   | Planned  |
+| CT-02       | Phase 25   | Planned  |
+| CT-03       | Phase 25   | Planned  |
+| CT-04       | Phase 25   | Planned  |
+| CT-05       | Phase 25   | Planned  |
+| CT-06       | Phase 25   | Planned  |
+| CT-07       | Phase 25   | Planned  |
+| GSYNC-01    | Phase 26   | Complete |
+| GSYNC-02    | Phase 26   | Complete |
+| GSYNC-03    | Phase 26   | Complete |
+| GSYNC-04    | Phase 26   | Complete |
+| GSYNC-05    | Phase 26   | Complete |
+| KB-01       | Phase 27   | Planned  |
+| KB-02       | Phase 27   | Planned  |
+| KB-03       | Phase 27   | Planned  |
+| KB-04       | Phase 27   | Planned  |
+| KB-05       | Phase 27   | Planned  |
+| KB-06       | Phase 27   | Planned  |
+| KB-07       | Phase 27   | Planned  |
+| FCLIP-01    | Phase 31.1 | Planned  |
+| FCLIP-02    | Phase 31.1 | Planned  |
+| FCLIP-03    | Phase 31.1 | Planned  |
+| FCLIP-04    | Phase 31.1 | Planned  |
+| FCLIP-05    | Phase 31.1 | Planned  |
+| FCLIP-06    | Phase 31.1 | Planned  |
+| FCLIP-07    | Phase 31.1 | Planned  |
+| FCLIP-08    | Phase 31.1 | Planned  |
+| FCLIP-09    | Phase 31.1 | Planned  |
+| FCLIP-10    | Phase 31.1 | Planned  |
 
 **Coverage:**
 
-- v1 requirements: 34 total
-- Mapped to phases: 34
+- v1 requirements: 44 total
+- Mapped to phases: 44
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-09_
-_Last updated: 2026-03-13 after Phase 27 planning_
+_Last updated: 2026-03-14 after Phase 31.1 planning_

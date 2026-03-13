@@ -263,3 +263,15 @@ Plans:
 Plans:
 
 - [ ] TBD (run /gsd:plan-phase 31 to break down)
+
+### Phase 31.1: Inbound file sync clipboard integration with persistent file URI list for cross-platform paste (INSERTED)
+
+**Goal:** Integrate received files with system clipboard so users can paste (Cmd+V / Ctrl+V) in Finder/Explorer after file transfer completes. Includes auto-write on transfer completion, manual copy from Dashboard with file validation, persistent file URI storage, stale file handling, and delete cascade for cache files.
+**Requirements**: FCLIP-01, FCLIP-02, FCLIP-03, FCLIP-04, FCLIP-05, FCLIP-06, FCLIP-07, FCLIP-08, FCLIP-09, FCLIP-10
+**Depends on:** Phase 30
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 31.1-01-PLAN.md — Backend clipboard write on file transfer complete, CopyFileToClipboardUseCase, Tauri command
+- [ ] 31.1-02-PLAN.md — Frontend file entry display with extension icons, stale file styling, delete cascade
