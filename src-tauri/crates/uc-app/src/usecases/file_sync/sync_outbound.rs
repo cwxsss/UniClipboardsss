@@ -254,6 +254,16 @@ mod tests {
         ) -> anyhow::Result<()> {
             Ok(())
         }
+        async fn send_file(
+            &self,
+            _peer_id: &str,
+            _file_path: std::path::PathBuf,
+            _transfer_id: String,
+            _batch_id: Option<String>,
+            _batch_total: Option<u32>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     fn make_peer(id: &str) -> DiscoveredPeer {

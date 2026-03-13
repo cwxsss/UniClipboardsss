@@ -30,6 +30,7 @@ use uc_core::ports::{
     TransferProgress,
 };
 
+use super::file_transfer::service::{FileTransferConfig, FileTransferService};
 use super::pairing_stream::service::{
     PairingStreamConfig, PairingStreamError, PairingStreamService,
 };
@@ -260,6 +261,7 @@ pub struct Libp2pNetworkAdapter {
     _transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
     stream_control: Mutex<Option<stream::Control>>,
     pairing_service: Mutex<Option<PairingStreamService>>,
+    file_transfer_service: Mutex<Option<FileTransferService>>,
 }
 
 impl Libp2pNetworkAdapter {
@@ -302,6 +304,7 @@ impl Libp2pNetworkAdapter {
             _transfer_encryptor: transfer_encryptor,
             stream_control: Mutex::new(None),
             pairing_service,
+            file_transfer_service: Mutex::new(None),
         })
     }
 
@@ -356,6 +359,22 @@ impl Libp2pNetworkAdapter {
                 .lock()
                 .map_err(|_| anyhow!("pairing service mutex poisoned"))?;
             *guard = Some(pairing_service);
+        }
+
+        // Construct FileTransferService and spawn accept loop
+        let file_transfer_service = FileTransferService::new(
+            stream_control.clone(),
+            self.event_tx.clone(),
+            Arc::new(uc_core::ports::transfer_progress::NoopTransferProgressPort),
+            FileTransferConfig::default(),
+        );
+        file_transfer_service.spawn_accept_loop();
+        {
+            let mut guard = self
+                .file_transfer_service
+                .lock()
+                .map_err(|_| anyhow!("file transfer service mutex poisoned"))?;
+            *guard = Some(file_transfer_service);
         }
 
         spawn_business_stream_handler(
@@ -870,6 +889,67 @@ impl NetworkControlPort for Libp2pNetworkAdapter {
                 Err(err)
             }
         }
+    }
+}
+
+#[async_trait]
+impl uc_core::ports::FileTransportPort for Libp2pNetworkAdapter {
+    async fn send_file_announce(
+        &self,
+        _peer_id: &str,
+        _announce: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        // Individual message methods are not used — full transfer goes through send_file()
+        Ok(())
+    }
+
+    async fn send_file_data(
+        &self,
+        _peer_id: &str,
+        _data: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn send_file_complete(
+        &self,
+        _peer_id: &str,
+        _complete: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn cancel_transfer(
+        &self,
+        _peer_id: &str,
+        _cancel: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn send_file(
+        &self,
+        peer_id: &str,
+        file_path: std::path::PathBuf,
+        transfer_id: String,
+        batch_id: Option<String>,
+        batch_total: Option<u32>,
+    ) -> Result<()> {
+        let service = {
+            let guard = self
+                .file_transfer_service
+                .lock()
+                .map_err(|_| anyhow!("file transfer service mutex poisoned"))?;
+            guard
+                .as_ref()
+                .ok_or_else(|| {
+                    anyhow!("file transfer service not initialized — network not started")
+                })?
+                .clone()
+        };
+        service
+            .send_file(peer_id, file_path, transfer_id, batch_id, batch_total)
+            .await
     }
 }
 
