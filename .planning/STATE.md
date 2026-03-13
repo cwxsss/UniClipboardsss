@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 28 of 28 (Support Link Content Type)
+Phase: 29 of 29 (Add macOS auto-unlock keychain Always Allow confirmation modal on UnlockPage)
 Plan: 2 of 2 complete
 Status: In Progress (Phase 27 KB-04~07 pending)
 Last activity: 2026-03-13 — Completed 27-01 plan: keyboard shortcuts settings data model and display
@@ -68,6 +68,8 @@ Progress: [██████████] 100%
   | Phase 27 P01 | 5min | 2 tasks | 13 files |
   | Phase 28 P01 | 7min | 2 tasks | 6 files |
   | Phase 28 P02 | 3min | 2 tasks | 6 files |
+  | Phase 29 P01 | 4min | 2 tasks | 5 files |
+  | Phase 29 P02 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -116,6 +118,10 @@ Recent decisions affecting current work:
 - [Phase 28]: url crate v2 for URL parsing validation instead of regex
 - [Phase 28]: ClipboardItemDto.link changed from serde_json::Value to ClipboardLinkItemDto for type safety
 - [Phase 28]: URL regex heuristic checks http/https/ftp/ftps/mailto with no-whitespace for text/plain link detection
+- [Phase 29]: VerifyKeychainAccess use case takes only KeyScopePort + KeyMaterialPort (lighter than AutoUnlock's 5 ports)
+- [Phase 29]: KeyringError mapped to Ok(false) to treat keyring issues as not-granted rather than hard failure
+- 29-02: Used regular Button instead of AlertDialogAction for confirm to prevent auto-close on verification failure
+- 29-02: Confirm button text changed to "I understand" per user feedback during verification
 
 ### Roadmap Evolution
 
@@ -125,6 +131,7 @@ Recent decisions affecting current work:
 - Phase 26 added: Implement global sync master toggle and improve sync UX
 - Phase 27 added: 支持快捷键设置在 settings page 中
 - Phase 28 added: Support link content type (MIME link and URL-detected plain text)
+- Phase 29 added: Add macOS auto-unlock keychain Always Allow confirmation modal on UnlockPage
 
 ### Pending Todos
 

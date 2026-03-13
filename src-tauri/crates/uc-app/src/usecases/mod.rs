@@ -30,6 +30,7 @@ pub mod start_network;
 pub mod start_network_after_unlock;
 pub mod storage;
 pub mod update_settings;
+pub mod verify_keychain_access;
 
 pub use app_lifecycle::{
     AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, DeviceAnnouncer, LifecycleEvent,
@@ -54,3 +55,4 @@ pub use start_network::StartNetwork;
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
 pub use uc_core::ports::{StartClipboardWatcherError, StartClipboardWatcherPort};
 pub use update_settings::UpdateSettings;
+pub use verify_keychain_access::VerifyKeychainAccess;
