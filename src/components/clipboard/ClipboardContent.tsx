@@ -21,6 +21,7 @@ import {
 } from '@/api/clipboardItems'
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { toast } from '@/components/ui/toast'
+import { useFileSyncNotifications } from '@/hooks/useFileSyncNotifications'
 import { useShortcut } from '@/hooks/useShortcut'
 import { useTransferProgress } from '@/hooks/useTransferProgress'
 import { captureUserIntent } from '@/observability/breadcrumbs'
@@ -95,6 +96,8 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
 
   // Activate transfer progress event listener
   useTransferProgress()
+  // Activate file sync notification batching
+  useFileSyncNotifications()
 
   const dispatch = useAppDispatch()
 

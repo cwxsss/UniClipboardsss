@@ -1,7 +1,12 @@
 import { listen } from '@tauri-apps/api/event'
 import { useEffect, useRef } from 'react'
 import { useAppDispatch } from '@/store/hooks'
-import { updateTransferProgress, removeTransfer } from '@/store/slices/fileTransferSlice'
+import {
+  updateTransferProgress,
+  removeTransfer,
+  markTransferFailed,
+  cancelClipboardWrite,
+} from '@/store/slices/fileTransferSlice'
 
 const COMPLETED_CLEAR_DELAY_MS = 3000
 
@@ -30,6 +35,26 @@ export function useTransferProgress(): void {
 
     const setup = async () => {
       try {
+        // Listen for transfer errors
+        const unlistenError = await listen<{ transferId: string; error: string }>(
+          'transfer://error',
+          event => {
+            if (cancelled) return
+            dispatch(
+              markTransferFailed({
+                transferId: event.payload.transferId,
+                error: event.payload.error,
+              })
+            )
+          }
+        )
+
+        // Listen for clipboard changes to cancel auto-write on active transfers
+        const unlistenClipboard = await listen('clipboard://new-content', () => {
+          if (cancelled) return
+          dispatch(cancelClipboardWrite())
+        })
+
         const unlisten = await listen<TransferProgressEvent>('transfer://progress', event => {
           if (cancelled) return
 
@@ -65,14 +90,14 @@ export function useTransferProgress(): void {
           }
         })
 
-        return unlisten
+        return { unlisten, unlistenError, unlistenClipboard }
       } catch (err) {
         console.error('[useTransferProgress] Failed to setup transfer progress listener:', err)
         return undefined
       }
     }
 
-    const unlistenPromise = setup()
+    const setupPromise = setup()
 
     return () => {
       cancelled = true
@@ -81,9 +106,13 @@ export function useTransferProgress(): void {
         clearTimeout(timeout)
       }
       clearTimeoutsRef.current.clear()
-      // Unlisten
-      unlistenPromise.then(unlisten => {
-        if (unlisten) unlisten()
+      // Unlisten all
+      setupPromise.then(listeners => {
+        if (listeners) {
+          listeners.unlisten()
+          listeners.unlistenError()
+          listeners.unlistenClipboard()
+        }
       })
     }
   }, [dispatch])

@@ -80,11 +80,21 @@ const fileTransferSlice = createSlice({
       state.entryTransferMap[entryId] = transferId
     },
 
-    markTransferFailed(state, action: PayloadAction<{ transferId: string }>) {
+    markTransferFailed(state, action: PayloadAction<{ transferId: string; error?: string }>) {
       const transfer = state.activeTransfers[action.payload.transferId]
       if (transfer) {
         transfer.status = 'failed'
+        transfer.errorMessage = action.payload.error
         transfer.updatedAt = Date.now()
+      }
+    },
+
+    cancelClipboardWrite(state) {
+      // Cancel auto-clipboard-write for all active transfers when user copies something new
+      for (const transfer of Object.values(state.activeTransfers)) {
+        if (transfer.status === 'active') {
+          transfer.clipboardWriteCancelled = true
+        }
       }
     },
 
@@ -119,6 +129,7 @@ export const {
   updateTransferProgress,
   linkTransferToEntry,
   markTransferFailed,
+  cancelClipboardWrite,
   clearCompletedTransfers,
   removeTransfer,
 } = fileTransferSlice.actions
