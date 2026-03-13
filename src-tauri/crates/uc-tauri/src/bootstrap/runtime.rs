@@ -1229,6 +1229,50 @@ impl ClipboardChangeHandler for AppRuntime {
     }
 }
 
+/// Resolve macOS APFS file references (`/.file/id=<CNID>.<volumeID>`) to real file paths.
+///
+/// When files are copied in Finder, macOS may place APFS Catalog Node ID references
+/// on the clipboard instead of standard paths. These must be resolved via CoreFoundation.
+#[cfg(target_os = "macos")]
+fn resolve_apfs_file_reference(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use core_foundation::string::CFString;
+    use core_foundation::url::{kCFURLPOSIXPathStyle, CFURL};
+
+    let path_str = path.to_str()?;
+    if !path_str.starts_with("/.file/id=") {
+        return None;
+    }
+
+    // CFURLCreateWithFileSystemPath automatically resolves APFS file references
+    let cf_path = CFString::new(path_str);
+    let url = CFURL::from_file_system_path(cf_path, kCFURLPOSIXPathStyle, false);
+
+    // Extract the resolved path
+    let resolved = url.get_file_system_path(kCFURLPOSIXPathStyle);
+    let resolved_str = resolved.to_string();
+
+    // If still unresolved, return None
+    if resolved_str.starts_with("/.file/") {
+        tracing::warn!(
+            original = %path_str,
+            "Failed to resolve APFS file reference"
+        );
+        return None;
+    }
+
+    tracing::debug!(
+        original = %path_str,
+        resolved = %resolved_str,
+        "Resolved APFS file reference"
+    );
+    Some(std::path::PathBuf::from(resolved_str))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_apfs_file_reference(_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
 /// Extract file paths from a clipboard snapshot's representations.
 ///
 /// Looks for `text/uri-list` or `file/uri-list` MIME types, or `files` / `public.file-url`
@@ -1265,7 +1309,9 @@ fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<P
             if let Ok(url) = url::Url::parse(line) {
                 if url.scheme() == "file" {
                     if let Ok(path) = url.to_file_path() {
-                        paths.push(path);
+                        // On macOS, resolve APFS file references (/.file/id=...) to real paths
+                        let resolved = resolve_apfs_file_reference(&path).unwrap_or(path);
+                        paths.push(resolved);
                     }
                 }
             }
