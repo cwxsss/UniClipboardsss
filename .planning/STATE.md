@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: completed
-stopped_at: Completed 28-03-PLAN.md (Phase 28 complete)
-last_updated: "2026-03-13T09:58:40.910Z"
-last_activity: "2026-03-13 — Completed 28-03 plan: protocol registration, port trait, network events, database schema, and wiring"
+status: executing
+stopped_at: Completed 29-01-PLAN.md
+last_updated: "2026-03-13T11:43:55.337Z"
+last_activity: "2026-03-13 — Completed 29-01 plan: FileTransferService with chunked protocol and binary framing"
 progress:
   total_phases: 13
   completed_phases: 9
-  total_plans: 32
-  completed_plans: 22
-  percent: 74
+  total_plans: 43
+  completed_plans: 34
+  percent: 79
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 28 - File sync foundation
+**Current focus:** Phase 29 - File transfer service, chunked protocol, use cases, retry logic
 
 ## Current Position
 
-Phase: 28 of 31 (File sync foundation)
-Plan: 3 of 3 complete
-Status: Phase Complete
-Last activity: 2026-03-13 — Completed 28-03 plan: protocol registration, port trait, network events, database schema, and wiring
+Phase: 29 of 31 (File transfer service)
+Plan: 1 of 3 complete
+Status: In Progress
+Last activity: 2026-03-13 — Completed 29-01 plan: FileTransferService with chunked protocol and binary framing
 
-Progress: [███████░░░] 74%
+Progress: [████████░░] 79%
 
 ## Performance Metrics
 
@@ -69,6 +69,7 @@ Progress: [███████░░░] 74%
   | Phase 28 P01 | 3min | 2 tasks | 4 files |
   | Phase 28 P02 | 4min | 2 tasks | 4 files |
   | Phase 28 P03 | 7min | 2 tasks | 12 files |
+| Phase 29 P01 | 3min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,7 @@ Recent decisions affecting current work:
 - [Phase 28]: File category now filterable via ct.file toggle (was always-true)
 - [Phase 28]: NoopFileTransportPort stub pattern used at NetworkPorts construction sites for pre-adapter compilation
 - [Phase 28]: Manual schema.rs update for file_transfer table since diesel CLI not available
+- [Phase 29]: Binary chunk frame format: 4-byte header-length prefix + JSON header + raw chunk data for efficient binary transfer
 
 ### Roadmap Evolution
 
@@ -153,6 +155,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T09:51:57Z
-Stopped at: Completed 28-03-PLAN.md (Phase 28 complete)
-Resume file: Phase 29 plans
+Last session: 2026-03-13T11:43:55.335Z
+Stopped at: Completed 29-01-PLAN.md
+Resume file: None
