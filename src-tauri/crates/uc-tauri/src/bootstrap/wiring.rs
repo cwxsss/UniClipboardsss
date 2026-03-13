@@ -1233,6 +1233,11 @@ pub fn start_background_tasks<R: Runtime>(
     let peer_directory = deps.network_ports.peers.clone();
     let clipboard_network = deps.network_ports.clipboard.clone();
     let sync_inbound_usecase = new_sync_inbound_clipboard_usecase(deps);
+    let inbound_file_settings = deps.settings.clone();
+    let inbound_file_cache_dir = spool_dir
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("file-cache");
     let space_access_runtime_ports = RuntimeSpaceAccessPorts {
         transport: Arc::new(tokio::sync::Mutex::new(SpaceAccessNetworkAdapter::new(
             pairing_transport.clone(),
@@ -1521,6 +1526,8 @@ pub fn start_background_tasks<R: Runtime>(
                                 peer_directory.clone(),
                                 pairing_space_access_orchestrator.clone(),
                                 space_access_runtime_ports.clone(),
+                                inbound_file_settings.clone(),
+                                inbound_file_cache_dir.clone(),
                             )
                             .await;
 
@@ -1992,6 +1999,8 @@ async fn run_pairing_event_loop<R: Runtime>(
     peer_directory: Arc<dyn PeerDirectoryPort>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     space_access_runtime_ports: RuntimeSpaceAccessPorts,
+    inbound_file_settings: Arc<dyn SettingsPort>,
+    inbound_file_cache_dir: PathBuf,
 ) {
     while let Some(event) = event_rx.recv().await {
         match event {
@@ -2115,6 +2124,89 @@ async fn run_pairing_event_loop<R: Runtime>(
                         warn!(error = %err, "Failed to emit transfer progress event");
                     }
                 }
+            }
+            NetworkEvent::FileTransferCompleted {
+                transfer_id,
+                peer_id,
+                filename,
+                file_path,
+            } => {
+                info!(
+                    transfer_id = %transfer_id,
+                    peer_id = %peer_id,
+                    filename = %filename,
+                    file_path = %file_path.display(),
+                    "File transfer completed, processing inbound file"
+                );
+
+                let inbound_uc = uc_app::usecases::file_sync::SyncInboundFileUseCase::new(
+                    inbound_file_settings.clone(),
+                    inbound_file_cache_dir.clone(),
+                );
+
+                // Compute blake3 hash for verification
+                let app_handle_clone = app_handle.clone();
+                let span_transfer_id = transfer_id.clone();
+                tokio::spawn(
+                    async move {
+                        let file_bytes = match tokio::fs::read(&file_path).await {
+                            Ok(bytes) => bytes,
+                            Err(err) => {
+                                error!(
+                                    transfer_id = %transfer_id,
+                                    error = %err,
+                                    "Failed to read transferred file for hash verification"
+                                );
+                                return;
+                            }
+                        };
+
+                        let expected_hash = blake3::hash(&file_bytes).to_hex().to_string();
+
+                        match inbound_uc
+                            .handle_transfer_complete(&transfer_id, &file_path, &expected_hash)
+                            .await
+                        {
+                            Ok(result) => {
+                                info!(
+                                    transfer_id = %result.transfer_id,
+                                    file_size = result.file_size,
+                                    auto_pulled = result.auto_pulled,
+                                    "Inbound file sync processed"
+                                );
+
+                                if let Some(app) = app_handle_clone.as_ref() {
+                                    let payload = serde_json::json!({
+                                        "transfer_id": result.transfer_id,
+                                        "filename": filename,
+                                        "peer_id": peer_id,
+                                        "file_size": result.file_size,
+                                        "auto_pulled": result.auto_pulled,
+                                        "file_path": result.file_path.to_string_lossy(),
+                                    });
+                                    if let Err(err) = app.emit("file-transfer://completed", payload)
+                                    {
+                                        warn!(
+                                            error = %err,
+                                            "Failed to emit file transfer completed event"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                error!(
+                                    transfer_id = %transfer_id,
+                                    error = %err,
+                                    "Inbound file sync processing failed"
+                                );
+                            }
+                        }
+                    }
+                    .instrument(info_span!(
+                        "inbound_file_sync",
+                        transfer_id = %span_transfer_id,
+                    )),
+                );
             }
             _ => {}
         }
@@ -2820,6 +2912,18 @@ mod tests {
     }
 
     struct NoopPairedDeviceRepository;
+
+    struct NoopSettings;
+
+    #[async_trait]
+    impl SettingsPort for NoopSettings {
+        async fn load(&self) -> anyhow::Result<uc_core::settings::model::Settings> {
+            Ok(uc_core::settings::model::Settings::default())
+        }
+        async fn save(&self, _settings: &uc_core::settings::model::Settings) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
 
     #[derive(Default, Clone, Copy)]
     struct BaseNetwork;
@@ -3829,6 +3933,8 @@ mod tests {
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
+            Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
+            PathBuf::from("/tmp/test-file-cache"),
         ));
 
         let request = PairingRequest {
@@ -4354,6 +4460,8 @@ mod tests {
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
+            Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
+            PathBuf::from("/tmp/test-file-cache"),
         ));
 
         event_tx
@@ -4416,6 +4524,8 @@ mod tests {
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
+            Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
+            PathBuf::from("/tmp/test-file-cache"),
         ));
 
         event_tx

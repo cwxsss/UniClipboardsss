@@ -5,8 +5,7 @@
 
 use super::framing::{read_file_frame, write_file_frame, FileMessageType};
 use super::protocol::{
-    receive_file_chunked, send_file_chunked, FileAcceptance, FileAnnounce,
-    CHUNK_SIZE,
+    receive_file_chunked, send_file_chunked, FileAcceptance, FileAnnounce, CHUNK_SIZE,
 };
 use anyhow::{anyhow, Result};
 use libp2p::{futures::StreamExt, PeerId, StreamProtocol};
@@ -115,7 +114,9 @@ impl FileTransferService {
             let span = info_span!("file_transfer.incoming", peer_id = %span_peer_id);
             tokio::spawn(
                 async move {
-                    if let Err(err) = service.handle_incoming_transfer(peer_id.clone(), stream).await
+                    if let Err(err) = service
+                        .handle_incoming_transfer(peer_id.clone(), stream)
+                        .await
                     {
                         warn!(
                             peer_id = %peer_id,
@@ -220,13 +221,8 @@ impl FileTransferService {
             });
         };
 
-        let result = receive_file_chunked(
-            &mut stream,
-            &announce,
-            cache_dir,
-            Some(&progress_callback),
-        )
-        .await;
+        let result =
+            receive_file_chunked(&mut stream, &announce, cache_dir, Some(&progress_callback)).await;
 
         // Hold permits until transfer completes
         drop(permits);
@@ -245,6 +241,7 @@ impl FileTransferService {
                         transfer_id: announce.transfer_id.clone(),
                         peer_id: peer_id.clone(),
                         filename: announce.filename.clone(),
+                        file_path: final_path,
                     })
                     .await;
                 Ok(())
@@ -283,10 +280,7 @@ impl FileTransferService {
         let stream = {
             let mut control = self.inner.control.lock().await;
             control
-                .open_stream(
-                    peer,
-                    StreamProtocol::new(ProtocolId::FileTransfer.as_str()),
-                )
+                .open_stream(peer, StreamProtocol::new(ProtocolId::FileTransfer.as_str()))
                 .await
                 .map_err(|err| anyhow!("failed to open file transfer stream: {err}"))?
         };
@@ -319,22 +313,21 @@ impl FileTransferService {
         let progress_port = self.inner.progress_port.clone();
         let peer_id_for_progress = peer_id_str.to_string();
         let transfer_id_for_progress = transfer_id.clone();
-        let progress_callback =
-            move |chunks_completed: u32, total_chunks: u32, bytes: u64| {
-                let progress = TransferProgress {
-                    transfer_id: transfer_id_for_progress.clone(),
-                    peer_id: peer_id_for_progress.clone(),
-                    direction: TransferDirection::Sending,
-                    chunks_completed,
-                    total_chunks,
-                    bytes_transferred: bytes,
-                    total_bytes: Some(file_size),
-                };
-                let port = progress_port.clone();
-                tokio::spawn(async move {
-                    let _ = port.report_progress(progress).await;
-                });
+        let progress_callback = move |chunks_completed: u32, total_chunks: u32, bytes: u64| {
+            let progress = TransferProgress {
+                transfer_id: transfer_id_for_progress.clone(),
+                peer_id: peer_id_for_progress.clone(),
+                direction: TransferDirection::Sending,
+                chunks_completed,
+                total_chunks,
+                bytes_transferred: bytes,
+                total_bytes: Some(file_size),
             };
+            let port = progress_port.clone();
+            tokio::spawn(async move {
+                let _ = port.report_progress(progress).await;
+            });
+        };
 
         // Send the file
         let send_result = send_file_chunked(
@@ -389,6 +382,7 @@ impl FileTransferService {
                         transfer_id: transfer_id.clone(),
                         peer_id: peer_id_str.to_string(),
                         filename,
+                        file_path,
                     })
                     .await;
                 Ok(())

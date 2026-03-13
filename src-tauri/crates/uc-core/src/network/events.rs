@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use super::protocol::{ClipboardMessage, PairingMessage, PairingRequest, PairingResponse};
 use crate::ports::transfer_progress::TransferProgress;
 use chrono::{DateTime, Utc};
@@ -136,6 +138,7 @@ pub enum NetworkEvent {
         transfer_id: String,
         peer_id: String,
         filename: String,
+        file_path: PathBuf,
     },
     FileTransferFailed {
         transfer_id: String,
@@ -224,6 +227,7 @@ mod tests {
                 transfer_id: "xfer-1".to_string(),
                 peer_id: "peer-abc".to_string(),
                 filename: "report.pdf".to_string(),
+                file_path: PathBuf::from("/tmp/file-cache/xfer-1_report.pdf"),
             },
             NetworkEvent::FileTransferFailed {
                 transfer_id: "xfer-2".to_string(),

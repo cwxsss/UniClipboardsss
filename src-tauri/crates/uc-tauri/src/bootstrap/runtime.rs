@@ -30,6 +30,7 @@
 //! 3. Commands can now call `runtime.usecases().your_use_case()`
 
 use async_trait::async_trait;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::Mutex;
@@ -1150,6 +1151,13 @@ impl ClipboardChangeHandler for AppRuntime {
                     }
                     drop(app_handle_guard);
 
+                    // Extract file paths before outbound_snapshot is moved
+                    let file_paths_for_sync = if origin == ClipboardChangeOrigin::LocalCapture {
+                        extract_file_paths_from_snapshot(&outbound_snapshot)
+                    } else {
+                        Vec::new()
+                    };
+
                     let outbound_sync_uc = self.usecases().sync_outbound_clipboard();
                     let flow_id_for_sync = flow_id.clone();
                     let flow_id_str = flow_id_for_sync.to_string();
@@ -1174,6 +1182,36 @@ impl ClipboardChangeHandler for AppRuntime {
                         .instrument(tracing::info_span!("outbound_sync", %flow_id_for_sync)),
                     );
 
+                    // Trigger outbound file sync for LocalCapture only
+                    if !file_paths_for_sync.is_empty() {
+                        let outbound_file_uc = self.usecases().sync_outbound_file();
+                        tauri::async_runtime::spawn(
+                            async move {
+                                for path in file_paths_for_sync {
+                                    tracing::info!(file = %path.display(), "Sending file to peers");
+                                    match outbound_file_uc.execute(path.clone()).await {
+                                        Ok(result) => {
+                                            tracing::info!(
+                                                transfer_id = %result.transfer_id,
+                                                peer_count = result.peer_count,
+                                                file = %path.display(),
+                                                "Outbound file sync completed"
+                                            );
+                                        }
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                error = %err,
+                                                file = %path.display(),
+                                                "Outbound file sync failed"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            .instrument(tracing::info_span!("outbound_file_sync")),
+                        );
+                    }
+
                     Ok(())
                 }
                 Ok(None) => {
@@ -1189,6 +1227,51 @@ impl ClipboardChangeHandler for AppRuntime {
         .instrument(span)
         .await
     }
+}
+
+/// Extract file paths from a clipboard snapshot's representations.
+///
+/// Looks for `text/uri-list` or `file/uri-list` MIME types, or `files` / `public.file-url`
+/// format IDs, and parses `file://` URIs into `PathBuf`s.
+fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for rep in &snapshot.representations {
+        let is_file_rep = rep
+            .mime
+            .as_ref()
+            .map(|m| {
+                let s = m.as_str();
+                s.eq_ignore_ascii_case("text/uri-list") || s.eq_ignore_ascii_case("file/uri-list")
+            })
+            .unwrap_or(false)
+            || rep.format_id.eq_ignore_ascii_case("files")
+            || rep.format_id.eq_ignore_ascii_case("public.file-url");
+
+        if !is_file_rep {
+            continue;
+        }
+
+        // Parse bytes as UTF-8 text containing file:// URIs (one per line)
+        let text = match std::str::from_utf8(&rep.bytes) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Ok(url) = url::Url::parse(line) {
+                if url.scheme() == "file" {
+                    if let Ok(path) = url.to_file_path() {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+    }
+    paths
 }
 
 #[cfg(test)]
