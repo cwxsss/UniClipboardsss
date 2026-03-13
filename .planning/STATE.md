@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: completed
-stopped_at: Completed 29-04-PLAN.md
-last_updated: "2026-03-13T12:58:11.582Z"
-last_activity: "2026-03-13 — Completed 29-04 plan: FileTransferService wiring and transport activation"
+stopped_at: Completed 30-01-PLAN.md
+last_updated: '2026-03-13T12:58:11.582Z'
+last_activity: '2026-03-13 — Completed 29-04 plan: FileTransferService wiring and transport activation'
 progress:
   total_phases: 13
   completed_phases: 10
   total_plans: 33
-  completed_plans: 26
-  percent: 84
+  completed_plans: 27
+  percent: 87
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 29 - File transfer service, chunked protocol, use cases, retry logic
+**Current focus:** Phase 30 - File sync UI, dashboard file entries, context menu, progress notifications
 
 ## Current Position
 
-Phase: 29 of 31 (File transfer service)
-Plan: 4 of 4 complete
-Status: Phase Complete
-Last activity: 2026-03-13 — Completed 29-04 plan: FileTransferService wiring and transport activation
+Phase: 30 of 31 (File sync UI)
+Plan: 1 of 3 complete
+Status: In Progress
+Last activity: 2026-03-13 — Completed 30-01 plan: File entries context menu with state-dependent actions
 
-Progress: [████████░░] 84%
+Progress: [████████░░] 87%
 
 ## Performance Metrics
 
@@ -71,9 +71,10 @@ Progress: [████████░░] 84%
   | Phase 28 P03 | 7min | 2 tasks | 12 files |
   | Phase 29 P01 | -min | - tasks | - files |
   | Phase 29 P02 | 4min | 1 tasks | 6 files |
-| Phase 29 P01 | 3min | 2 tasks | 7 files |
-| Phase 29 P03 | 4min | 3 tasks | 4 files |
-| Phase 29 P04 | 3 | 2 tasks | 4 files |
+  | Phase 29 P01 | 3min | 2 tasks | 7 files |
+  | Phase 29 P03 | 4min | 3 tasks | 4 files |
+  | Phase 29 P04 | 3 | 2 tasks | 4 files |
+  | Phase 30 P01 | 4min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,8 @@ Recent decisions affecting current work:
 - [Phase 29]: File cache directory derived from storage_paths.cache_dir.join('file-cache') rather than adding to AppConfig
 - [Phase 29]: Clone FileTransferService (Arc<Inner>) out of Mutex before await to avoid holding lock across async boundary
 - [Phase 29]: Per-peer send failures logged as warnings without aborting transfers to remaining peers
+- [Phase 30]: FileContextMenu uses ContextMenuTrigger asChild for zero extra DOM wrappers
+- [Phase 30]: Transfer tracking uses Set<string> in ClipboardContent state for transferringEntries
 
 ### Roadmap Evolution
 
@@ -166,6 +169,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T12:52:41.721Z
-Stopped at: Completed 29-04-PLAN.md
+Last session: 2026-03-13T14:03:31Z
+Stopped at: Completed 30-01-PLAN.md
 Resume file: None

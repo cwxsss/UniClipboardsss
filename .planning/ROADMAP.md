@@ -227,6 +227,7 @@ Plans:
 **Plans:** 3/3 plans complete
 
 Plans:
+
 - [x] TBD (run /gsd:plan-phase 28 to break down) (completed 2026-03-13)
 
 ### Phase 29: File transfer service — chunked protocol, use cases, retry logic
@@ -237,6 +238,7 @@ Plans:
 **Plans:** 4/4 plans complete
 
 Plans:
+
 - [x] TBD (run /gsd:plan-phase 29 to break down) (completed 2026-03-13)
 - [ ] 29-04-PLAN.md — Gap closure: wire FileTransferService in bootstrap and activate transport calls in SyncOutboundFileUseCase
 
@@ -245,9 +247,10 @@ Plans:
 **Goal:** Add file entries to Dashboard clipboard history with right-click context menu (Copy / Sync to Clipboard), progress indicators for file transfers, system notification merging for multi-file batches, and error feedback display.
 **Requirements**: FSYNC-UI
 **Depends on:** Phase 29
-**Plans:** 0 plans
+**Plans:** 1/3 plans executed
 
 Plans:
+
 - [ ] TBD (run /gsd:plan-phase 30 to break down)
 
 ### Phase 31: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
@@ -258,4 +261,5 @@ Plans:
 **Plans:** 0 plans
 
 Plans:
+
 - [ ] TBD (run /gsd:plan-phase 31 to break down)
