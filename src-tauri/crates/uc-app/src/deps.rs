@@ -18,6 +18,7 @@ use uc_core::ports::clipboard::{
     SpoolQueuePort, SystemClipboardPort, ThumbnailGeneratorPort, ThumbnailRepositoryPort,
 };
 use uc_core::ports::file_manager::FileManagerPort;
+use uc_core::ports::file_transport::FileTransportPort;
 use uc_core::ports::*;
 
 /// Focused network capability bundle for dependency injection.
@@ -35,6 +36,9 @@ pub struct NetworkPorts {
     /// Network event subscription capability (`Arc<dyn NetworkEventPort>`).
     /// 网络事件订阅能力（`Arc<dyn NetworkEventPort>`）。
     pub events: Arc<dyn NetworkEventPort>,
+    /// File transfer transport capability (`Arc<dyn FileTransportPort>`).
+    /// 文件传输能力（`Arc<dyn FileTransportPort>`）。
+    pub file_transfer: Arc<dyn FileTransportPort>,
 }
 
 /// Clipboard-domain ports bundle.
