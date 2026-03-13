@@ -10,7 +10,8 @@ use uc_core::clipboard::{
 };
 use uc_core::ids::{EntryId, FormatId, RepresentationId};
 use uc_core::ports::{
-    ClipboardChangeOriginPort, ClipboardRepresentationRepositoryPort, SystemClipboardPort,
+    ClipboardChangeOriginPort, ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort,
+    SystemClipboardPort,
 };
 use uc_core::ClipboardChangeOrigin;
 
@@ -19,6 +20,7 @@ use uc_core::ClipboardChangeOrigin;
 /// Used when user right-clicks a file entry in Dashboard and selects "Copy".
 /// Validates file existence before writing to prevent pasting deleted files.
 pub struct CopyFileToClipboardUseCase {
+    entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
     representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
     local_clipboard: Arc<dyn SystemClipboardPort>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
@@ -27,12 +29,14 @@ pub struct CopyFileToClipboardUseCase {
 
 impl CopyFileToClipboardUseCase {
     pub fn new(
+        entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
         representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
         local_clipboard: Arc<dyn SystemClipboardPort>,
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
         mode: ClipboardIntegrationMode,
     ) -> Self {
         Self {
+            entry_repo,
             representation_repo,
             local_clipboard,
             clipboard_change_origin,
@@ -44,20 +48,23 @@ impl CopyFileToClipboardUseCase {
     ///
     /// Loads the entry's text/uri-list representation, validates file existence,
     /// then writes to system clipboard.
-    pub async fn execute(
-        &self,
-        entry_id: &EntryId,
-        event_id: &uc_core::ids::EventId,
-    ) -> Result<()> {
+    pub async fn execute(&self, entry_id: &EntryId) -> Result<()> {
         async {
             if !self.mode.allow_os_write() {
                 bail!("System clipboard writes disabled (UC_CLIPBOARD_MODE=passive)");
             }
 
+            // Look up the entry to get its event_id
+            let entry = self
+                .entry_repo
+                .get_entry(entry_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Entry not found: {}", entry_id))?;
+
             // Load representations for this entry
             let reps = self
                 .representation_repo
-                .get_representations_for_event(event_id)
+                .get_representations_for_event(&entry.event_id)
                 .await?;
 
             // Find text/uri-list or file/uri-list representation

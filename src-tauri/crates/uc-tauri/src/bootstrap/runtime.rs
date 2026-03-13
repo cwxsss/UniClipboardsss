@@ -980,6 +980,22 @@ impl<'a> UseCases<'a> {
         )
     }
 
+    /// Create a `CopyFileToClipboardUseCase` wired with this runtime's
+    /// entry repo, representation repo, system clipboard, and clipboard change origin.
+    ///
+    /// 创建使用此运行时的条目仓库、表示仓库、系统剪贴板和剪贴板变更来源的 CopyFileToClipboardUseCase。
+    pub fn copy_file_to_clipboard(
+        &self,
+    ) -> uc_app::usecases::file_sync::CopyFileToClipboardUseCase {
+        uc_app::usecases::file_sync::CopyFileToClipboardUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.clipboard.system_clipboard.clone(),
+            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
+            self.runtime.clipboard_integration_mode,
+        )
+    }
+
     // NOTE: Other use case methods will be added as the use case design evolves
     // to support trait object instantiation. Currently, use cases with generic
     // type parameters cannot be instantiated through this accessor.

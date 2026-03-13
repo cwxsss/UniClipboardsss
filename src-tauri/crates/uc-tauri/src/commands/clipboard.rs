@@ -619,6 +619,21 @@ async fn restore_clipboard_entry_impl(
     .await
 }
 
+/// Copy file references from a clipboard entry to the system clipboard.
+/// 将剪贴板条目中的文件引用复制到系统剪贴板。
+///
+/// Used when user right-clicks a file entry in Dashboard and selects "Copy".
+/// Validates file existence before writing -- returns error if any file is deleted.
+#[tauri::command]
+pub async fn copy_file_to_clipboard(
+    runtime: State<'_, Arc<AppRuntime>>,
+    entry_id: String,
+) -> Result<(), String> {
+    let uc = runtime.usecases().copy_file_to_clipboard();
+    let id = EntryId::from(entry_id);
+    uc.execute(&id).await.map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{restore_clipboard_entry_impl, sync_clipboard_items_impl};
