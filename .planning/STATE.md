@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 29-01-PLAN.md
+stopped_at: Completed 29-02-PLAN.md
 last_updated: "2026-03-13T11:43:55.337Z"
 last_activity: "2026-03-13 — Completed 29-01 plan: FileTransferService with chunked protocol and binary framing"
 progress:
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 29 of 31 (File transfer service)
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 Status: In Progress
-Last activity: 2026-03-13 — Completed 29-01 plan: FileTransferService with chunked protocol and binary framing
+Last activity: 2026-03-13 — Completed 29-02 plan: file sync use cases with safety checks, policy, quota, and hash verification
 
 Progress: [████████░░] 79%
 
@@ -69,6 +69,8 @@ Progress: [████████░░] 79%
   | Phase 28 P01 | 3min | 2 tasks | 4 files |
   | Phase 28 P02 | 4min | 2 tasks | 4 files |
   | Phase 28 P03 | 7min | 2 tasks | 12 files |
+  | Phase 29 P01 | -min | - tasks | - files |
+  | Phase 29 P02 | 4min | 1 tasks | 6 files |
 | Phase 29 P01 | 3min | 2 tasks | 7 files |
 
 ## Accumulated Context
@@ -122,6 +124,9 @@ Recent decisions affecting current work:
 - [Phase 28]: File category now filterable via ct.file toggle (was always-true)
 - [Phase 28]: NoopFileTransportPort stub pattern used at NetworkPorts construction sites for pre-adapter compilation
 - [Phase 28]: Manual schema.rs update for file_transfer table since diesel CLI not available
+- [Phase 29]: Used libc::statvfs directly for disk space check instead of adding fs2 dependency
+- [Phase 29]: Hash verification failure deletes temp file immediately with no retry policy
+- [Phase 29]: Shared sync policy module extracted for reuse between clipboard and file sync
 - [Phase 29]: Binary chunk frame format: 4-byte header-length prefix + JSON header + raw chunk data for efficient binary transfer
 
 ### Roadmap Evolution
@@ -156,5 +161,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-13T11:43:55.335Z
-Stopped at: Completed 29-01-PLAN.md
-Resume file: None
+Stopped at: Completed 29-02-PLAN.md
+Resume file: Phase 29 Plan 03
