@@ -6,6 +6,32 @@ use tracing::{info, info_span, warn, Instrument};
 
 use uc_core::ports::SettingsPort;
 
+use super::cleanup::{check_device_quota, QuotaExceededError};
+
+/// Standardized error messages for the file transfer pipeline.
+pub mod transfer_errors {
+    /// File sync is disabled on the local device.
+    pub const FILE_SYNC_DISABLED: &str = "File sync is disabled on this device";
+
+    /// Format a quota exceeded message.
+    pub fn quota_exceeded(device_id: &str) -> String {
+        format!("Cache quota exceeded on device {}", device_id)
+    }
+
+    /// Format a file exceeds max size message.
+    pub fn file_exceeds_max_size(filename: &str, file_size_mb: u64, max_size_mb: u64) -> String {
+        format!(
+            "File {} ({} MB) exceeds maximum size limit ({} MB)",
+            filename, file_size_mb, max_size_mb
+        )
+    }
+
+    /// Format a transfer failed message.
+    pub fn transfer_failed(filename: &str, reason: &str) -> String {
+        format!("Transfer failed for {}: {}", filename, reason)
+    }
+}
+
 /// Result of a completed inbound file transfer.
 #[derive(Debug)]
 pub struct InboundFileResult {
@@ -26,6 +52,37 @@ impl SyncInboundFileUseCase {
             settings,
             cache_dir,
         }
+    }
+
+    /// Check if file sync is enabled in settings.
+    ///
+    /// Returns false when the user has disabled file sync, in which case
+    /// incoming transfers should be rejected.
+    pub async fn is_file_sync_enabled(&self) -> Result<bool> {
+        let settings = self
+            .settings
+            .load()
+            .await
+            .context("Failed to load settings")?;
+        Ok(settings.file_sync.file_sync_enabled)
+    }
+
+    /// Check if accepting a file from a peer would exceed the per-device quota.
+    ///
+    /// Delegates to the cleanup module's `check_device_quota` function which
+    /// uses filesystem-based cache size calculation.
+    pub async fn check_quota_for_transfer(
+        &self,
+        source_device_id: &str,
+        incoming_file_size: u64,
+    ) -> std::result::Result<(), QuotaExceededError> {
+        check_device_quota(
+            self.settings.as_ref(),
+            &self.cache_dir,
+            source_device_id,
+            incoming_file_size,
+        )
+        .await
     }
 
     /// Check if a file should be auto-pulled based on its size.
@@ -96,6 +153,23 @@ impl SyncInboundFileUseCase {
         expected_hash: &str,
     ) -> Result<InboundFileResult> {
         async move {
+            // Guard: file_sync_enabled
+            let settings = self
+                .settings
+                .load()
+                .await
+                .context("Failed to load settings")?;
+
+            if !settings.file_sync.file_sync_enabled {
+                info!(
+                    transfer_id = %transfer_id,
+                    "File sync disabled, cleaning up received file"
+                );
+                // Clean up the already-transferred temp file
+                cleanup_temp_file(file_path, transfer_id).await;
+                bail!("{}", transfer_errors::FILE_SYNC_DISABLED);
+            }
+
             // Read file and compute Blake3 hash
             let file_bytes = tokio::fs::read(file_path).await.with_context(|| {
                 format!("Failed to read transferred file: {}", file_path.display())
@@ -111,13 +185,7 @@ impl SyncInboundFileUseCase {
                     actual = %actual_hash,
                     "Hash verification failed; deleting temp file"
                 );
-                if let Err(err) = tokio::fs::remove_file(file_path).await {
-                    warn!(
-                        transfer_id = %transfer_id,
-                        error = %err,
-                        "Failed to delete temp file after hash mismatch"
-                    );
-                }
+                cleanup_temp_file(file_path, transfer_id).await;
                 bail!(
                     "Hash verification failed for transfer {}: expected {}, got {}",
                     transfer_id,
@@ -150,6 +218,20 @@ impl SyncInboundFileUseCase {
             transfer_id = %transfer_id,
         ))
         .await
+    }
+}
+
+/// Clean up a temp file on failure, logging any cleanup errors.
+async fn cleanup_temp_file(path: &Path, transfer_id: &str) {
+    if let Err(err) = tokio::fs::remove_file(path).await {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            warn!(
+                transfer_id = %transfer_id,
+                path = %path.display(),
+                error = %err,
+                "Failed to clean up temp file after error"
+            );
+        }
     }
 }
 
@@ -219,6 +301,13 @@ mod tests {
         let mut settings = Settings::default();
         settings.file_sync.small_file_threshold = small_threshold;
         settings.file_sync.file_cache_quota_per_device = quota;
+
+        SyncInboundFileUseCase::new(Arc::new(MockSettings { settings }), cache_dir)
+    }
+
+    fn make_use_case_disabled(cache_dir: PathBuf) -> SyncInboundFileUseCase {
+        let mut settings = Settings::default();
+        settings.file_sync.file_sync_enabled = false;
 
         SyncInboundFileUseCase::new(Arc::new(MockSettings { settings }), cache_dir)
     }
@@ -316,5 +405,65 @@ mod tests {
             .contains("Hash verification failed"));
         // File should have been deleted
         assert!(!file_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_is_file_sync_enabled_true() {
+        let tmp = TempDir::new().unwrap();
+        let uc = make_use_case(tmp.path().to_path_buf(), 10_000_000, 500_000_000);
+        assert!(uc.is_file_sync_enabled().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_is_file_sync_enabled_false() {
+        let tmp = TempDir::new().unwrap();
+        let uc = make_use_case_disabled(tmp.path().to_path_buf());
+        assert!(!uc.is_file_sync_enabled().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_handle_transfer_complete_rejects_when_disabled() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("received_file.bin");
+        tokio::fs::write(&file_path, b"file content").await.unwrap();
+
+        let uc = make_use_case_disabled(tmp.path().to_path_buf());
+        let result = uc
+            .handle_transfer_complete("xfer-disabled", &file_path, "somehash")
+            .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("File sync is disabled"));
+        // Temp file should be cleaned up
+        assert!(!file_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_check_quota_for_transfer_within_limit() {
+        let tmp = TempDir::new().unwrap();
+        let uc = make_use_case(tmp.path().to_path_buf(), 10_000_000, 500_000_000);
+        assert!(uc
+            .check_quota_for_transfer("peer-1", 100_000_000)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_check_quota_for_transfer_exceeded() {
+        let tmp = TempDir::new().unwrap();
+        let peer_dir = tmp.path().join("peer-1");
+        std::fs::create_dir_all(&peer_dir).unwrap();
+
+        {
+            let mut f = std::fs::File::create(peer_dir.join("existing.bin")).unwrap();
+            std::io::Write::write_all(&mut f, &[0u8; 900]).unwrap();
+        }
+
+        let uc = make_use_case(tmp.path().to_path_buf(), 10_000_000, 1000); // 1KB quota
+        let result = uc.check_quota_for_transfer("peer-1", 200).await;
+        assert!(result.is_err());
     }
 }
