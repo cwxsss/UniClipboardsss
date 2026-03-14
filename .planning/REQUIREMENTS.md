@@ -59,6 +59,10 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 - [ ] **KB-06**: Custom key overrides persist to the Rust settings system via existing `update_settings` command and survive app restart.
 - [ ] **KB-07**: Changed shortcuts take effect immediately without app restart, with per-shortcut and Reset All restore-to-defaults capability.
 
+### File Sync Settings & Polish
+
+- [x] **FSYNC-POLISH**: File sync pipeline has settings UI (enable toggle, small file threshold, max file size, cache quota, retention period, auto-cleanup), per-device quota enforcement, automatic expired file cache cleanup on startup, and standardized error handling across inbound/outbound transfer use cases.
+
 ### File Clipboard Integration
 
 - [x] **FCLIP-01**: Received files are automatically written to the system clipboard after file transfer completes, enabling paste (Cmd+V / Ctrl+V) in Finder/Explorer.
@@ -99,60 +103,61 @@ Explicitly excluded from v0.3.0. Documented to prevent scope creep.
 
 Which phases cover which requirements.
 
-| Requirement | Phase      | Status   |
-| ----------- | ---------- | -------- |
-| LOG-01      | Phase 19   | Complete |
-| LOG-02      | Phase 19   | Complete |
-| LOG-03      | Phase 19   | Complete |
-| LOG-04      | Phase 19   | Complete |
-| FLOW-01     | Phase 20   | Complete |
-| FLOW-02     | Phase 20   | Complete |
-| FLOW-03     | Phase 20   | Complete |
-| FLOW-04     | Phase 20   | Complete |
-| FLOW-05     | Phase 21   | Complete |
-| SEQ-01      | Phase 22   | Complete |
-| SEQ-02      | Phase 22   | Complete |
-| SEQ-03      | Phase 22   | Complete |
-| SEQ-04      | Phase 22   | Complete |
-| SEQ-05      | Phase 22   | Complete |
-| SEQ-06      | Phase 22   | Complete |
-| CT-01       | Phase 25   | Planned  |
-| CT-02       | Phase 25   | Planned  |
-| CT-03       | Phase 25   | Planned  |
-| CT-04       | Phase 25   | Planned  |
-| CT-05       | Phase 25   | Planned  |
-| CT-06       | Phase 25   | Planned  |
-| CT-07       | Phase 25   | Planned  |
-| GSYNC-01    | Phase 26   | Complete |
-| GSYNC-02    | Phase 26   | Complete |
-| GSYNC-03    | Phase 26   | Complete |
-| GSYNC-04    | Phase 26   | Complete |
-| GSYNC-05    | Phase 26   | Complete |
-| KB-01       | Phase 27   | Planned  |
-| KB-02       | Phase 27   | Planned  |
-| KB-03       | Phase 27   | Planned  |
-| KB-04       | Phase 27   | Planned  |
-| KB-05       | Phase 27   | Planned  |
-| KB-06       | Phase 27   | Planned  |
-| KB-07       | Phase 27   | Planned  |
-| FCLIP-01    | Phase 31.1 | Complete |
-| FCLIP-02    | Phase 31.1 | Complete |
-| FCLIP-03    | Phase 31.1 | Complete |
-| FCLIP-04    | Phase 31.1 | Complete |
-| FCLIP-05    | Phase 31.1 | Complete |
-| FCLIP-06    | Phase 31.1 | Planned  |
-| FCLIP-07    | Phase 31.1 | Planned  |
-| FCLIP-08    | Phase 31.1 | Planned  |
-| FCLIP-09    | Phase 31.1 | Planned  |
-| FCLIP-10    | Phase 31.1 | Planned  |
+| Requirement  | Phase      | Status   |
+| ------------ | ---------- | -------- |
+| LOG-01       | Phase 19   | Complete |
+| LOG-02       | Phase 19   | Complete |
+| LOG-03       | Phase 19   | Complete |
+| LOG-04       | Phase 19   | Complete |
+| FLOW-01      | Phase 20   | Complete |
+| FLOW-02      | Phase 20   | Complete |
+| FLOW-03      | Phase 20   | Complete |
+| FLOW-04      | Phase 20   | Complete |
+| FLOW-05      | Phase 21   | Complete |
+| SEQ-01       | Phase 22   | Complete |
+| SEQ-02       | Phase 22   | Complete |
+| SEQ-03       | Phase 22   | Complete |
+| SEQ-04       | Phase 22   | Complete |
+| SEQ-05       | Phase 22   | Complete |
+| SEQ-06       | Phase 22   | Complete |
+| CT-01        | Phase 25   | Planned  |
+| CT-02        | Phase 25   | Planned  |
+| CT-03        | Phase 25   | Planned  |
+| CT-04        | Phase 25   | Planned  |
+| CT-05        | Phase 25   | Planned  |
+| CT-06        | Phase 25   | Planned  |
+| CT-07        | Phase 25   | Planned  |
+| GSYNC-01     | Phase 26   | Complete |
+| GSYNC-02     | Phase 26   | Complete |
+| GSYNC-03     | Phase 26   | Complete |
+| GSYNC-04     | Phase 26   | Complete |
+| GSYNC-05     | Phase 26   | Complete |
+| KB-01        | Phase 27   | Planned  |
+| KB-02        | Phase 27   | Planned  |
+| KB-03        | Phase 27   | Planned  |
+| KB-04        | Phase 27   | Planned  |
+| KB-05        | Phase 27   | Planned  |
+| KB-06        | Phase 27   | Planned  |
+| KB-07        | Phase 27   | Planned  |
+| FSYNC-POLISH | Phase 31   | Complete |
+| FCLIP-01     | Phase 31.1 | Complete |
+| FCLIP-02     | Phase 31.1 | Complete |
+| FCLIP-03     | Phase 31.1 | Complete |
+| FCLIP-04     | Phase 31.1 | Complete |
+| FCLIP-05     | Phase 31.1 | Complete |
+| FCLIP-06     | Phase 31.1 | Planned  |
+| FCLIP-07     | Phase 31.1 | Planned  |
+| FCLIP-08     | Phase 31.1 | Planned  |
+| FCLIP-09     | Phase 31.1 | Planned  |
+| FCLIP-10     | Phase 31.1 | Planned  |
 
 **Coverage:**
 
-- v1 requirements: 44 total
-- Mapped to phases: 44
+- v1 requirements: 45 total
+- Mapped to phases: 45
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-09_
-_Last updated: 2026-03-14 after Phase 31.1 planning_
+_Last updated: 2026-03-14 after Phase 31 completion_
