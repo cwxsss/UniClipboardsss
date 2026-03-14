@@ -825,13 +825,20 @@ fn resolve_app_dirs(
     let config_overrides_root = !config.database_path.as_os_str().is_empty() && !is_in_memory_db;
 
     if config_overrides_root {
-        let app_data_root = apply_profile_suffix(
-            config
-                .database_path
-                .parent()
-                .unwrap_or(&config.database_path)
-                .to_path_buf(),
-        );
+        let raw_root = config
+            .database_path
+            .parent()
+            .unwrap_or(&config.database_path)
+            .to_path_buf();
+        // Ensure the data root is absolute — relative paths break clipboard
+        // file writes (CF_HDROP on Windows and NSPasteboard on macOS require
+        // absolute paths).
+        let abs_root = if raw_root.is_relative() {
+            std::env::current_dir().unwrap_or_default().join(&raw_root)
+        } else {
+            raw_root
+        };
+        let app_data_root = apply_profile_suffix(abs_root);
         // When config overrides the data root, co-locate cache under it.
         // This ensures dev mode keeps all data in one place (e.g. .app_data/).
         let app_cache_root = app_data_root.join("cache");
@@ -1953,6 +1960,30 @@ async fn write_file_to_clipboard_after_transfer(
     use uc_app::usecases::file_sync::copy_file_to_clipboard::{
         build_file_snapshot, build_path_list,
     };
+
+    // Canonicalize paths to absolute paths.
+    // The clipboard (CF_HDROP on Windows, NSPasteboard on macOS) requires absolute
+    // paths; relative paths like ".app_data/cache/..." won't resolve when pasting.
+    let file_paths: Vec<PathBuf> = file_paths
+        .into_iter()
+        .map(|p| {
+            if p.is_relative() {
+                match p.canonicalize() {
+                    Ok(abs) => abs,
+                    Err(err) => {
+                        warn!(
+                            path = %p.display(),
+                            error = %err,
+                            "Failed to canonicalize relative file path, using as-is"
+                        );
+                        p
+                    }
+                }
+            } else {
+                p
+            }
+        })
+        .collect();
 
     // Verify all files exist before attempting clipboard write
     let files_exist: Vec<bool> = file_paths.iter().map(|p| p.exists()).collect();
