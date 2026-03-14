@@ -97,7 +97,14 @@ impl SyncOutboundFileUseCase {
                 apply_file_sync_policy(&self.settings, &self.paired_device_repo, &peers).await;
 
             if eligible.is_empty() {
-                info!("No eligible peers for file sync");
+                if peers.is_empty() {
+                    warn!("No eligible peers for file sync: no peers discovered on network");
+                } else {
+                    info!(
+                        discovered_peer_count = peers.len(),
+                        "No eligible peers for file sync: all peers filtered by sync policy"
+                    );
+                }
                 return Ok(SyncOutboundResult {
                     transfer_id: String::new(),
                     peer_count: 0,

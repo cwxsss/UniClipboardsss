@@ -1478,12 +1478,21 @@ async fn run_swarm(
                                 let caches = caches.read().await;
                                 caches.discovered_peers.len()
                             };
-                            info!(
-                                emitted_event_count = events.len(),
-                                discovered_cache_size = cache_size,
-                                local_peer_id = %local_peer_id,
-                                "processed mdns expired event"
-                            );
+                            if cache_size == 0 && !events.is_empty() {
+                                warn!(
+                                    emitted_event_count = events.len(),
+                                    discovered_cache_size = cache_size,
+                                    local_peer_id = %local_peer_id,
+                                    "All discovered peers expired via mDNS; outbound sync will be unavailable until peers are rediscovered"
+                                );
+                            } else {
+                                info!(
+                                    emitted_event_count = events.len(),
+                                    discovered_cache_size = cache_size,
+                                    local_peer_id = %local_peer_id,
+                                    "processed mdns expired event"
+                                );
+                            }
 
                             for event in events {
                                 let _ = try_send_event(&event_tx, event, "PeerLost");

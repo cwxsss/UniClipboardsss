@@ -196,13 +196,21 @@ impl SyncOutboundClipboardUseCase {
                 0
             }
         };
-        info!(
-            discovered_peer_count,
-            sendable_peer_count = sendable_peers.len(),
-            "Evaluated outbound clipboard sendable peers"
-        );
+        if all_sendable_peers.is_empty() {
+            warn!(
+                discovered_peer_count,
+                "Skipping outbound sync: no peers discovered on network"
+            );
+            return Ok(());
+        } else {
+            info!(
+                discovered_peer_count,
+                sendable_peer_count = sendable_peers.len(),
+                "Evaluated outbound clipboard sendable peers"
+            );
+        }
         if sendable_peers.is_empty() {
-            info!("Skipping outbound sync because there are no sendable peers");
+            info!("Skipping outbound sync: all peers filtered by sync policy");
             return Ok(());
         }
 
