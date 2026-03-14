@@ -1954,6 +1954,25 @@ async fn write_file_to_clipboard_after_transfer(
         build_file_snapshot, build_path_list,
     };
 
+    // Verify all files exist before attempting clipboard write
+    let files_exist: Vec<bool> = file_paths.iter().map(|p| p.exists()).collect();
+    let all_exist = files_exist.iter().all(|&e| e);
+    info!(
+        file_count = file_paths.len(),
+        paths = ?file_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        files_exist = ?files_exist,
+        all_exist,
+        "write_file_to_clipboard_after_transfer: starting"
+    );
+
+    if !all_exist {
+        warn!(
+            paths = ?file_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            files_exist = ?files_exist,
+            "Some files do not exist on disk — clipboard write will likely fail"
+        );
+    }
+
     let path_list = build_path_list(&file_paths);
     let snapshot = build_file_snapshot(&path_list);
 
@@ -1981,6 +2000,10 @@ async fn write_file_to_clipboard_after_transfer(
         .await;
 
     // Write to system clipboard
+    info!(
+        path_list = %path_list,
+        "write_file_to_clipboard_after_transfer: calling write_snapshot"
+    );
     if let Err(err) = system_clipboard.write_snapshot(snapshot) {
         // Consume origin on failure to avoid stale origin
         clipboard_change_origin
