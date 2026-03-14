@@ -2021,7 +2021,8 @@ struct CaptureClipboardDeps {
 }
 
 /// Write file paths to system clipboard after transfer completes.
-/// Handles clipboard race detection and entry persistence.
+/// Persists clipboard entry first, then checks for clipboard race (FCLIP-03):
+/// if user copied other content during transfer, auto-write is skipped.
 async fn write_file_to_clipboard_after_transfer(
     file_paths: Vec<PathBuf>,
     system_clipboard: &Arc<dyn SystemClipboardPort>,
@@ -2069,6 +2070,21 @@ async fn write_file_to_clipboard_after_transfer(
         Err(err) => {
             warn!(error = %err, "Failed to persist file clipboard entry");
         }
+    }
+
+    // FCLIP-03: Check for clipboard race before writing
+    // If an origin is already set (not the default LocalCapture),
+    // the user or another operation touched the clipboard during transfer.
+    let current_origin = clipboard_change_origin
+        .consume_origin_or_default(uc_core::ClipboardChangeOrigin::LocalCapture)
+        .await;
+    if current_origin != uc_core::ClipboardChangeOrigin::LocalCapture {
+        info!(
+            origin = ?current_origin,
+            file_count = file_paths.len(),
+            "Clipboard race detected: skipping auto-write (user copied during transfer). Files available in Dashboard."
+        );
+        return;
     }
 
     // Set origin to RemotePush before clipboard write to prevent re-capture loop
