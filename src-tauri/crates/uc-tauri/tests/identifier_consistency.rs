@@ -16,5 +16,5 @@ fn identifier_matches_uniclipboard() {
         .and_then(|value| value.as_str())
         .unwrap_or("<missing>");
 
-    assert_eq!(identifier, "com.uniclipboard.app");
+    assert_eq!(identifier, "app.uniclipboard.desktop");
 }

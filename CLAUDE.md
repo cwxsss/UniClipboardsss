@@ -96,9 +96,9 @@ Logging is initialized in `src-tauri/src/main.rs` using `init_tracing_subscriber
 
 ### Log File Locations
 
-- **macOS**: `~/Library/Logs/com.uniclipboard/uniclipboard.log`
-- **Linux**: `~/.local/share/com.uniclipboard/logs/uniclipboard.log`
-- **Windows**: `%LOCALAPPDATA%\com.uniclipboard\logs/uniclipboard.log`
+- **macOS**: `~/Library/Logs/app.uniclipboard.desktop/uniclipboard.log`
+- **Linux**: `~/.local/share/app.uniclipboard.desktop/logs/uniclipboard.log`
+- **Windows**: `%LOCALAPPDATA%\app.uniclipboard.desktop\logs/uniclipboard.log`
 
 ### Using Logs in Code
 
@@ -191,7 +191,7 @@ usecase.delete_clipboard_entry.execute        ← #[instrument] auto-created
 **Production:**
 
 - Check the log file at the platform-specific location above
-- Run `tail -f ~/Library/Logs/com.uniclipboard/uniclipboard.log` (macOS) for live monitoring
+- Run `tail -f ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.log` (macOS) for live monitoring
 
 ### Log Filtering
 
