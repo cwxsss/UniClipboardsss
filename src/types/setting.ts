@@ -112,11 +112,11 @@ export interface PairingSettings {
  */
 export interface FileSyncSettings {
   file_sync_enabled: boolean
-  small_file_threshold: number  // bytes, default 10MB
-  max_file_size: number         // bytes, default 5GB
-  file_cache_quota_per_device: number  // bytes, default 500MB
-  file_retention_hours: number  // default 24
-  file_auto_cleanup: boolean    // default true
+  small_file_threshold: number // bytes, default 10MB
+  max_file_size: number // bytes, default 5GB
+  file_cache_quota_per_device: number // bytes, default 500MB
+  file_retention_hours: number // default 24
+  file_auto_cleanup: boolean // default true
 }
 
 /**
@@ -189,6 +189,7 @@ export interface SettingContextType {
   updateSecuritySetting: (newSecuritySetting: Partial<SecuritySettings>) => Promise<void>
   updateRetentionPolicy: (newPolicy: Partial<RetentionPolicy>) => Promise<void>
   updateKeyboardShortcuts: (overrides: Record<string, string | string[]>) => Promise<void>
+  updateFileSyncSetting: (newFileSyncSetting: Partial<FileSyncSettings>) => Promise<void>
 }
 
 // ============================================================================
