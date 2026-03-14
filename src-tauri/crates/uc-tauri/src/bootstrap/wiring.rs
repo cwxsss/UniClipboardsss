@@ -795,146 +795,83 @@ fn get_default_app_dirs() -> WiringResult<uc_core::app_dirs::AppDirs> {
 
 /// Get resolved storage paths from configuration.
 ///
-/// This function computes the storage paths that will be used by the application,
-/// including applying profile suffixes and any path overrides from the config.
+/// Builds `AppPaths` through a single construction path:
+/// 1. `resolve_app_dirs()` adjusts both roots together based on config
+/// 2. `AppPaths::from_app_dirs()` defines all subdirectories (single source of truth)
+/// 3. Individual path overrides (db_path, vault_dir) applied on top
 ///
 /// # Errors
 ///
 /// Returns `WiringError::ConfigInit` if the platform adapter fails to determine the directories.
-///
-/// # Examples
-///
-/// ```ignore
-/// use uc_tauri::bootstrap::wiring::get_storage_paths;
-///
-/// let config = uc_core::config::AppConfig::default();
-/// let paths = get_storage_paths(&config).expect("failed to get storage paths");
-/// // `paths` contains resolved paths with profile suffix applied
-/// ```
 pub fn get_storage_paths(
     config: &uc_core::config::AppConfig,
 ) -> WiringResult<uc_app::app_paths::AppPaths> {
-    let default_paths = derive_default_paths(config)?;
-    Ok(uc_app::app_paths::AppPaths {
-        db_path: default_paths.db_path,
-        vault_dir: default_paths.vault_dir,
-        settings_path: default_paths.settings_path,
-        logs_dir: default_paths.app_data_root.join("logs"),
-        cache_dir: default_paths.cache_dir.clone(),
-        file_cache_dir: default_paths.file_cache_dir,
-        app_data_root: default_paths.app_data_root,
-    })
+    let platform_dirs = get_default_app_dirs()?;
+    resolve_app_paths(&platform_dirs, config)
 }
 
-/// Intermediate path set derived from `AppConfig` before constructing `AppPaths`.
-/// Mirrors `AppPaths` subdirectory names — when adding a new subdirectory,
-/// add it here AND in `AppPaths::from_app_dirs()` to keep them in sync.
-#[derive(Debug, Clone)]
-struct DefaultPaths {
-    app_data_root: PathBuf,
-    db_path: PathBuf,
-    vault_dir: PathBuf,
-    settings_path: PathBuf,
-    cache_dir: PathBuf,
-    file_cache_dir: PathBuf,
-}
-
-/// Compute default application file-system paths from the given configuration.
+/// Resolve the effective `AppDirs` by applying config overrides.
 ///
-/// The returned paths combine platform-specific application directories with any
-/// explicit overrides present in `config`, producing concrete locations for:
-/// - app_data_root: base application data directory
-/// - db_path: path to the SQLite database file
-/// - vault_dir: directory for vault/key material
-/// - settings_path: path to the settings file
+/// When config specifies a `database_path`, its parent becomes the new `app_data_root`,
+/// and `app_cache_root` is co-located under it as `app_data_root/cache`.
+/// This ensures dev mode (with `config.toml`) keeps all data in one place.
 ///
-/// # Examples
-///
-/// ```ignore
-/// use uc_core::config::AppConfig;
-///
-/// let cfg = AppConfig::empty();
-/// let paths = derive_default_paths(&cfg).expect("derive default paths");
-/// assert!(!paths.app_data_root.as_os_str().is_empty());
-/// assert!(!paths.settings_path.as_os_str().is_empty());
-/// ```
-fn derive_default_paths(config: &AppConfig) -> WiringResult<DefaultPaths> {
-    let app_dirs = get_default_app_dirs()?;
-
-    derive_default_paths_from_app_dirs(&app_dirs, config)
-}
-
-/// Derives concrete filesystem paths (database, vault, settings, and app data root)
-/// from platform `AppDirs`, applying any overrides present in `AppConfig`.
-///
-/// If `config.database_path` is empty the default database path from `AppDirs` is used;
-/// otherwise `config.database_path` is returned. If `config.vault_key_path` is empty
-/// the default vault directory from `AppDirs` is used; otherwise the parent directory
-/// of `config.vault_key_path` is used as the vault directory.
-///
-/// # Parameters
-///
-/// - `app_dirs`: Platform-specific base directories to derive defaults from.
-/// - `config`: Application configuration that may override the default database path
-///   and vault key path.
-///
-/// # Returns
-///
-/// `DefaultPaths` containing:
-/// - `app_data_root`: the application data root from `AppDirs`.
-/// - `db_path`: the resolved database file path.
-/// - `vault_dir`: the resolved vault directory.
-/// - `settings_path`: the resolved settings file path.
-///
-/// # Examples
-///
-/// ```ignore
-/// use uc_core::app_dirs::AppDirs;
-/// use uc_core::config::AppConfig;
-/// use uc_tauri::bootstrap::wiring::derive_default_paths_from_app_dirs;
-///
-/// // Assuming `AppDirs` is constructed in tests/setup.
-/// let app_dirs = AppDirs::default();
-/// let config = AppConfig::empty();
-/// let paths = derive_default_paths_from_app_dirs(&app_dirs, &config).unwrap();
-/// // Basic sanity check: returned paths are populated.
-/// assert!(!paths.app_data_root.as_os_str().is_empty());
-/// assert!(!paths.settings_path.as_os_str().is_empty());
-/// ```
-fn derive_default_paths_from_app_dirs(
-    app_dirs: &uc_core::app_dirs::AppDirs,
+/// When config is empty (production), platform defaults are used unchanged.
+fn resolve_app_dirs(
+    platform_dirs: &uc_core::app_dirs::AppDirs,
     config: &AppConfig,
-) -> WiringResult<DefaultPaths> {
-    let default_app_data_root = app_dirs.app_data_root.clone();
-
+) -> uc_core::app_dirs::AppDirs {
     let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
-    let app_data_root = if config.database_path.as_os_str().is_empty() || is_in_memory_db {
-        default_app_data_root
-    } else {
-        let configured_root = config
-            .database_path
-            .parent()
-            .unwrap_or(&config.database_path)
-            .to_path_buf();
-        apply_profile_suffix(configured_root)
-    };
+    let config_overrides_root = !config.database_path.as_os_str().is_empty() && !is_in_memory_db;
 
-    let db_path = if config.database_path.as_os_str().is_empty() {
-        app_data_root.join("uniclipboard.db")
-    } else if is_in_memory_db {
-        config.database_path.clone()
+    if config_overrides_root {
+        let app_data_root = apply_profile_suffix(
+            config
+                .database_path
+                .parent()
+                .unwrap_or(&config.database_path)
+                .to_path_buf(),
+        );
+        // When config overrides the data root, co-locate cache under it.
+        // This ensures dev mode keeps all data in one place (e.g. .app_data/).
+        let app_cache_root = app_data_root.join("cache");
+        uc_core::app_dirs::AppDirs {
+            app_data_root,
+            app_cache_root,
+        }
     } else {
+        platform_dirs.clone()
+    }
+}
+
+/// Build `AppPaths` from platform dirs and config overrides.
+///
+/// Always builds through `AppPaths::from_app_dirs()` (single construction path),
+/// then applies individual field overrides for db_path and vault_dir if config
+/// specifies custom values.
+fn resolve_app_paths(
+    platform_dirs: &uc_core::app_dirs::AppDirs,
+    config: &AppConfig,
+) -> WiringResult<uc_app::app_paths::AppPaths> {
+    let resolved_dirs = resolve_app_dirs(platform_dirs, config);
+    let mut paths = uc_app::app_paths::AppPaths::from_app_dirs(&resolved_dirs);
+
+    // Apply individual path overrides from config
+    let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
+
+    if is_in_memory_db {
+        paths.db_path = config.database_path.clone();
+    } else if !config.database_path.as_os_str().is_empty() {
         let db_file_name = config
             .database_path
             .file_name()
             .map(|name| name.to_os_string())
             .unwrap_or_else(|| std::ffi::OsString::from("uniclipboard.db"));
-        app_data_root.join(db_file_name)
-    };
+        paths.db_path = paths.app_data_root.join(db_file_name);
+    }
 
-    let vault_dir = if config.vault_key_path.as_os_str().is_empty() {
-        app_data_root.join("vault")
-    } else {
+    // Vault dir override
+    if !config.vault_key_path.as_os_str().is_empty() {
         let configured_vault_root = config
             .vault_key_path
             .parent()
@@ -942,7 +879,7 @@ fn derive_default_paths_from_app_dirs(
             .to_path_buf();
 
         if config.database_path.as_os_str().is_empty() {
-            apply_profile_suffix(configured_vault_root)
+            paths.vault_dir = apply_profile_suffix(configured_vault_root);
         } else {
             let configured_db_root = config
                 .database_path
@@ -954,24 +891,14 @@ fn derive_default_paths_from_app_dirs(
                 let relative = configured_vault_root
                     .strip_prefix(&configured_db_root)
                     .unwrap_or(std::path::Path::new(""));
-                app_data_root.join(relative)
+                paths.vault_dir = paths.app_data_root.join(relative);
             } else {
-                apply_profile_suffix(configured_vault_root)
+                paths.vault_dir = apply_profile_suffix(configured_vault_root);
             }
         }
-    };
+    }
 
-    let settings_path = app_data_root.join("settings.json");
-
-    // Subdirectory names must match AppPaths::from_app_dirs() — see app_paths.rs.
-    Ok(DefaultPaths {
-        app_data_root,
-        db_path,
-        vault_dir,
-        settings_path,
-        cache_dir: app_dirs.app_cache_root.clone(),
-        file_cache_dir: app_dirs.app_cache_root.join("file-cache"),
-    })
+    Ok(paths)
 }
 
 fn apply_profile_suffix(path: PathBuf) -> PathBuf {
@@ -1043,7 +970,8 @@ pub fn wire_dependencies_with_identity_store(
     //
     // Defensive: Use system default if database_path is empty
     // 防御性编程：如果 database_path 为空，使用系统默认值
-    let paths = derive_default_paths(config)?;
+    let platform_dirs = get_default_app_dirs()?;
+    let paths = resolve_app_paths(&platform_dirs, config)?;
 
     let db_path = paths.db_path;
 
@@ -1118,7 +1046,7 @@ pub fn wire_dependencies_with_identity_store(
     let representation_cache_port: Arc<dyn RepresentationCachePort> = representation_cache.clone();
 
     // Create spool manager
-    let spool_dir = paths.cache_dir.join("spool");
+    let spool_dir = paths.spool_dir.clone();
     let spool_manager = Arc::new(
         SpoolManager::new(spool_dir.clone(), storage_config.spool_max_bytes)
             .map_err(|e| WiringError::BlobStorageInit(format!("Failed to create spool: {}", e)))?,
@@ -5670,50 +5598,39 @@ The functionality is still validated in development mode when running the app wi
     }
 
     #[test]
-    fn derive_default_paths_from_empty_config_uses_single_app_data_root() {
-        let config = AppConfig::empty();
-
-        let paths = with_uc_profile(None, || {
-            derive_default_paths(&config).expect("derive_default_paths failed")
-        });
-
-        assert!(paths.app_data_root.ends_with("uniclipboard"));
-        assert_eq!(paths.db_path, paths.app_data_root.join("uniclipboard.db"));
-        assert_eq!(paths.vault_dir, paths.app_data_root.join("vault"));
-        assert_eq!(
-            paths.settings_path,
-            paths.app_data_root.join("settings.json")
-        );
-    }
-
-    #[test]
-    fn wiring_derives_paths_from_port_fact() {
-        let dirs = uc_core::app_dirs::AppDirs {
-            app_data_root: std::path::PathBuf::from("/tmp/uniclipboard"),
-            app_cache_root: std::path::PathBuf::from("/tmp/uniclipboard-cache"),
-        };
-        let paths = with_uc_profile(None, || {
-            derive_default_paths_from_app_dirs(&dirs, &AppConfig::empty())
-                .expect("derive_default_paths_from_app_dirs failed")
-        });
-        assert!(paths.db_path.ends_with("uniclipboard.db"));
-    }
-
-    #[test]
-    fn derive_default_paths_sets_cache_dir() {
+    fn resolve_app_paths_empty_config_uses_platform_defaults() {
         let dirs = uc_core::app_dirs::AppDirs {
             app_data_root: PathBuf::from("/tmp/uniclipboard"),
             app_cache_root: PathBuf::from("/tmp/uniclipboard-cache"),
         };
         let paths = with_uc_profile(None, || {
-            derive_default_paths_from_app_dirs(&dirs, &AppConfig::empty())
-                .expect("derive_default_paths_from_app_dirs failed")
+            resolve_app_paths(&dirs, &AppConfig::empty()).expect("resolve_app_paths failed")
         });
+
+        assert_eq!(paths.app_data_root, PathBuf::from("/tmp/uniclipboard"));
+        assert_eq!(
+            paths.db_path,
+            PathBuf::from("/tmp/uniclipboard/uniclipboard.db")
+        );
+        assert_eq!(paths.vault_dir, PathBuf::from("/tmp/uniclipboard/vault"));
+        assert_eq!(
+            paths.settings_path,
+            PathBuf::from("/tmp/uniclipboard/settings.json")
+        );
+        // Production: cache uses platform's separate cache root
         assert_eq!(paths.cache_dir, PathBuf::from("/tmp/uniclipboard-cache"));
+        assert_eq!(
+            paths.file_cache_dir,
+            PathBuf::from("/tmp/uniclipboard-cache/file-cache")
+        );
+        assert_eq!(
+            paths.spool_dir,
+            PathBuf::from("/tmp/uniclipboard-cache/spool")
+        );
     }
 
     #[test]
-    fn derive_default_paths_uses_config_database_parent_as_app_data_root() {
+    fn resolve_app_paths_config_override_colocates_cache() {
         let dirs = uc_core::app_dirs::AppDirs {
             app_data_root: PathBuf::from("/tmp/uniclipboard"),
             app_cache_root: PathBuf::from("/tmp/uniclipboard-cache"),
@@ -5723,8 +5640,7 @@ The functionality is still validated in development mode when running the app wi
         config.database_path = PathBuf::from("src-tauri/.app_data_a/uniclipboard.db");
 
         let paths = with_uc_profile(None, || {
-            derive_default_paths_from_app_dirs(&dirs, &config)
-                .expect("derive_default_paths_from_app_dirs failed")
+            resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
         assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_a"));
@@ -5740,10 +5656,23 @@ The functionality is still validated in development mode when running the app wi
             paths.settings_path,
             PathBuf::from("src-tauri/.app_data_a/settings.json")
         );
+        // Dev mode: cache co-located under app_data_root
+        assert_eq!(
+            paths.cache_dir,
+            PathBuf::from("src-tauri/.app_data_a/cache")
+        );
+        assert_eq!(
+            paths.file_cache_dir,
+            PathBuf::from("src-tauri/.app_data_a/cache/file-cache")
+        );
+        assert_eq!(
+            paths.spool_dir,
+            PathBuf::from("src-tauri/.app_data_a/cache/spool")
+        );
     }
 
     #[test]
-    fn derive_default_paths_appends_profile_suffix_for_configured_root() {
+    fn resolve_app_paths_appends_profile_suffix_for_configured_root() {
         let dirs = uc_core::app_dirs::AppDirs {
             app_data_root: PathBuf::from("/tmp/uniclipboard"),
             app_cache_root: PathBuf::from("/tmp/uniclipboard-cache"),
@@ -5753,8 +5682,7 @@ The functionality is still validated in development mode when running the app wi
         config.database_path = PathBuf::from("src-tauri/.app_data/uniclipboard.db");
 
         let paths = with_uc_profile(Some("a"), || {
-            derive_default_paths_from_app_dirs(&dirs, &config)
-                .expect("derive_default_paths_from_app_dirs failed")
+            resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
         assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_a"));
@@ -5770,10 +5698,15 @@ The functionality is still validated in development mode when running the app wi
             paths.settings_path,
             PathBuf::from("src-tauri/.app_data_a/settings.json")
         );
+        // Cache also gets profile suffix via app_data_root
+        assert_eq!(
+            paths.cache_dir,
+            PathBuf::from("src-tauri/.app_data_a/cache")
+        );
     }
 
     #[test]
-    fn derive_default_paths_appends_profile_suffix_for_configured_vault_root() {
+    fn resolve_app_paths_appends_profile_suffix_for_configured_vault_root() {
         let dirs = uc_core::app_dirs::AppDirs {
             app_data_root: PathBuf::from("/tmp/uniclipboard"),
             app_cache_root: PathBuf::from("/tmp/uniclipboard-cache"),
@@ -5784,8 +5717,7 @@ The functionality is still validated in development mode when running the app wi
         config.vault_key_path = PathBuf::from("src-tauri/.app_data/vault/key");
 
         let paths = with_uc_profile(Some("b"), || {
-            derive_default_paths_from_app_dirs(&dirs, &config)
-                .expect("derive_default_paths_from_app_dirs failed")
+            resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
         assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_b"));
@@ -5793,6 +5725,39 @@ The functionality is still validated in development mode when running the app wi
             paths.vault_dir,
             PathBuf::from("src-tauri/.app_data_b/vault")
         );
+    }
+
+    #[test]
+    fn resolve_app_dirs_empty_config_preserves_platform_dirs() {
+        let platform = uc_core::app_dirs::AppDirs {
+            app_data_root: PathBuf::from("/sys/data/uniclipboard"),
+            app_cache_root: PathBuf::from("/sys/cache/uniclipboard"),
+        };
+        let resolved = with_uc_profile(None, || resolve_app_dirs(&platform, &AppConfig::empty()));
+
+        assert_eq!(
+            resolved.app_data_root,
+            PathBuf::from("/sys/data/uniclipboard")
+        );
+        assert_eq!(
+            resolved.app_cache_root,
+            PathBuf::from("/sys/cache/uniclipboard")
+        );
+    }
+
+    #[test]
+    fn resolve_app_dirs_config_override_moves_both_roots() {
+        let platform = uc_core::app_dirs::AppDirs {
+            app_data_root: PathBuf::from("/sys/data/uniclipboard"),
+            app_cache_root: PathBuf::from("/sys/cache/uniclipboard"),
+        };
+        let mut config = AppConfig::empty();
+        config.database_path = PathBuf::from(".app_data/uniclipboard.db");
+
+        let resolved = with_uc_profile(None, || resolve_app_dirs(&platform, &config));
+
+        assert_eq!(resolved.app_data_root, PathBuf::from(".app_data"));
+        assert_eq!(resolved.app_cache_root, PathBuf::from(".app_data/cache"));
     }
 
     #[test]

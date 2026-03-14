@@ -2058,6 +2058,7 @@ mod tests {
             logs_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/logs"),
             cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache"),
             file_cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/file-cache"),
+            spool_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/spool"),
             app_data_root: std::path::PathBuf::from("/tmp/uniclipboard-test"),
         }
     }

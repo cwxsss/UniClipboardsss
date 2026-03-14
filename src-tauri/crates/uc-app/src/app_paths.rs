@@ -10,10 +10,10 @@ pub struct AppPaths {
     pub logs_dir: PathBuf,
     pub cache_dir: PathBuf,
     /// Subdirectory for inbound file transfer cache.
-    /// 入站文件传输缓存子目录。
     pub file_cache_dir: PathBuf,
+    /// Subdirectory for representation spool (disk staging).
+    pub spool_dir: PathBuf,
     /// The resolved application data root directory.
-    /// 已解析的应用数据根目录。
     pub app_data_root: PathBuf,
 }
 
@@ -49,6 +49,7 @@ impl AppPaths {
             logs_dir: dirs.app_data_root.join("logs"),
             cache_dir: dirs.app_cache_root.clone(),
             file_cache_dir: dirs.app_cache_root.join("file-cache"),
+            spool_dir: dirs.app_cache_root.join("spool"),
             app_data_root: dirs.app_data_root.clone(),
         }
     }
@@ -93,6 +94,10 @@ mod tests {
         assert_eq!(
             paths.file_cache_dir,
             PathBuf::from("/tmp/uniclipboard-cache/file-cache")
+        );
+        assert_eq!(
+            paths.spool_dir,
+            PathBuf::from("/tmp/uniclipboard-cache/spool")
         );
         assert_eq!(paths.app_data_root, PathBuf::from("/tmp/uniclipboard"));
     }
