@@ -165,6 +165,7 @@ pub struct BackgroundRuntimeDeps {
     pub spool_rx: mpsc::Receiver<SpoolRequest>,
     pub worker_rx: mpsc::Receiver<RepresentationId>,
     pub spool_dir: PathBuf,
+    pub file_cache_dir: PathBuf,
     pub spool_ttl_days: u64,
     pub worker_retry_max_attempts: u32,
     pub worker_retry_backoff_ms: u64,
@@ -605,6 +606,7 @@ fn create_platform_layer(
     clock: Arc<dyn ClockPort>,
     storage_config: Arc<ClipboardStorageConfig>,
     identity_store: Arc<dyn IdentityStorePort>,
+    file_cache_dir: PathBuf,
 ) -> WiringResult<PlatformLayer> {
     // Create system clipboard implementation (platform-specific)
     // 创建系统剪贴板实现（平台特定）
@@ -710,6 +712,7 @@ fn create_platform_layer(
             encryption_session.clone(),
             transfer_decryptor,
             transfer_encryptor,
+            file_cache_dir,
         )
         .map_err(|e| {
             WiringError::NetworkInit(format!("Failed to initialize libp2p identity: {e}"))
@@ -817,11 +820,15 @@ pub fn get_storage_paths(
         vault_dir: default_paths.vault_dir,
         settings_path: default_paths.settings_path,
         logs_dir: default_paths.app_data_root.join("logs"),
-        cache_dir: default_paths.cache_dir,
+        cache_dir: default_paths.cache_dir.clone(),
+        file_cache_dir: default_paths.file_cache_dir,
         app_data_root: default_paths.app_data_root,
     })
 }
 
+/// Intermediate path set derived from `AppConfig` before constructing `AppPaths`.
+/// Mirrors `AppPaths` subdirectory names — when adding a new subdirectory,
+/// add it here AND in `AppPaths::from_app_dirs()` to keep them in sync.
 #[derive(Debug, Clone)]
 struct DefaultPaths {
     app_data_root: PathBuf,
@@ -829,6 +836,7 @@ struct DefaultPaths {
     vault_dir: PathBuf,
     settings_path: PathBuf,
     cache_dir: PathBuf,
+    file_cache_dir: PathBuf,
 }
 
 /// Compute default application file-system paths from the given configuration.
@@ -955,12 +963,14 @@ fn derive_default_paths_from_app_dirs(
 
     let settings_path = app_data_root.join("settings.json");
 
+    // Subdirectory names must match AppPaths::from_app_dirs() — see app_paths.rs.
     Ok(DefaultPaths {
         app_data_root,
         db_path,
         vault_dir,
         settings_path,
         cache_dir: app_dirs.app_cache_root.clone(),
+        file_cache_dir: app_dirs.app_cache_root.join("file-cache"),
     })
 }
 
@@ -1075,6 +1085,7 @@ pub fn wire_dependencies_with_identity_store(
         infra.clock.clone(),
         storage_config.clone(),
         identity_store,
+        paths.file_cache_dir.clone(),
     )?;
 
     // Step 3.5: Wrap ports with encryption decorators
@@ -1179,6 +1190,7 @@ pub fn wire_dependencies_with_identity_store(
             spool_rx,
             worker_rx,
             spool_dir,
+            file_cache_dir: paths.file_cache_dir.clone(),
             spool_ttl_days: storage_config.spool_ttl_days,
             worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
@@ -1210,6 +1222,7 @@ pub fn start_background_tasks<R: Runtime>(
         spool_rx,
         worker_rx,
         spool_dir,
+        file_cache_dir,
         spool_ttl_days,
         worker_retry_max_attempts,
         worker_retry_backoff_ms,
@@ -1234,10 +1247,7 @@ pub fn start_background_tasks<R: Runtime>(
     let clipboard_network = deps.network_ports.clipboard.clone();
     let sync_inbound_usecase = new_sync_inbound_clipboard_usecase(deps);
     let inbound_file_settings = deps.settings.clone();
-    let inbound_file_cache_dir = spool_dir
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("file-cache");
+    let inbound_file_cache_dir = file_cache_dir;
     let space_access_runtime_ports = RuntimeSpaceAccessPorts {
         transport: Arc::new(tokio::sync::Mutex::new(SpaceAccessNetworkAdapter::new(
             pairing_transport.clone(),
@@ -5542,6 +5552,7 @@ mod tests {
                 clock,
                 storage_config,
                 test_identity_store(),
+                PathBuf::from("/tmp/test-file-cache"),
             );
 
             match result {
