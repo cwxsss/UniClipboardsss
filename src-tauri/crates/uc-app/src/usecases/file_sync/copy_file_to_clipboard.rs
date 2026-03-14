@@ -163,9 +163,12 @@ impl CopyFileToClipboardUseCase {
         let path_list = build_path_list(file_paths);
         let snapshot = build_file_snapshot(&path_list);
 
-        // Set origin to RemotePush to prevent re-capture loop
+        // Set origin to LocalRestore so the clipboard watcher skips capture entirely.
+        // The entry already exists in the database (created during inbound sync or
+        // already present when user clicks "Copy"), so we must not create a duplicate.
+        // RemotePush would still create a new entry; only LocalRestore skips capture.
         self.clipboard_change_origin
-            .set_next_origin(ClipboardChangeOrigin::RemotePush, Duration::from_secs(2))
+            .set_next_origin(ClipboardChangeOrigin::LocalRestore, Duration::from_secs(2))
             .await;
 
         if let Err(err) = self.local_clipboard.write_snapshot(snapshot) {
