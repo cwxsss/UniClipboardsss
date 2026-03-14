@@ -93,24 +93,30 @@ impl CopyFileToClipboardUseCase {
 
             let uri_string = String::from_utf8(bytes)?;
 
-            // Parse and validate file paths
+            // Parse and validate file paths (native paths or backward-compat file:// URIs)
             let mut file_paths = Vec::new();
             for line in uri_string.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with('#') {
                     continue;
                 }
-                match url::Url::parse(line) {
-                    Ok(url) => {
-                        if let Ok(path) = url.to_file_path() {
-                            file_paths.push(path);
-                        } else {
-                            warn!(uri = %line, "Failed to convert URI to file path");
+                if line.starts_with("file://") {
+                    // Backward compat: older entries stored as file:// URIs
+                    match url::Url::parse(line) {
+                        Ok(url) => {
+                            if let Ok(path) = url.to_file_path() {
+                                file_paths.push(path);
+                            } else {
+                                warn!(uri = %line, "Failed to convert URI to file path");
+                            }
+                        }
+                        Err(e) => {
+                            warn!(uri = %line, error = %e, "Failed to parse file URI");
                         }
                     }
-                    Err(e) => {
-                        warn!(uri = %line, error = %e, "Failed to parse file URI");
-                    }
+                } else {
+                    // Native path (new format)
+                    file_paths.push(PathBuf::from(line));
                 }
             }
 
@@ -154,8 +160,8 @@ impl CopyFileToClipboardUseCase {
     }
 
     async fn write_files_to_clipboard(&self, file_paths: &[PathBuf]) -> Result<()> {
-        let uri_list = build_uri_list(file_paths)?;
-        let snapshot = build_file_snapshot(&uri_list);
+        let path_list = build_path_list(file_paths);
+        let snapshot = build_file_snapshot(&path_list);
 
         // Set origin to RemotePush to prevent re-capture loop
         self.clipboard_change_origin
@@ -179,15 +185,13 @@ impl CopyFileToClipboardUseCase {
     }
 }
 
-/// Build a newline-separated URI list from file paths.
-pub fn build_uri_list(file_paths: &[PathBuf]) -> Result<String> {
-    let mut uris = Vec::with_capacity(file_paths.len());
-    for path in file_paths {
-        let url = url::Url::from_file_path(path)
-            .map_err(|_| anyhow::anyhow!("Failed to convert path to URI: {}", path.display()))?;
-        uris.push(url.to_string());
-    }
-    Ok(uris.join("\n"))
+/// Build a newline-separated list of native file paths.
+pub fn build_path_list(file_paths: &[PathBuf]) -> String {
+    file_paths
+        .iter()
+        .map(|p| p.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Build a SystemClipboardSnapshot with a text/uri-list representation.

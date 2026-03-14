@@ -1968,18 +1968,11 @@ async fn write_file_to_clipboard_after_transfer(
     capture_deps: &CaptureClipboardDeps,
 ) {
     use uc_app::usecases::file_sync::copy_file_to_clipboard::{
-        build_file_snapshot, build_uri_list,
+        build_file_snapshot, build_path_list,
     };
 
-    let uri_list = match build_uri_list(&file_paths) {
-        Ok(uris) => uris,
-        Err(err) => {
-            warn!(error = %err, "Failed to build URI list for clipboard write");
-            return;
-        }
-    };
-
-    let snapshot = build_file_snapshot(&uri_list);
+    let path_list = build_path_list(&file_paths);
+    let snapshot = build_file_snapshot(&path_list);
 
     // Always persist the clipboard entry regardless of clipboard race
     let capture_uc = uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase::new(
