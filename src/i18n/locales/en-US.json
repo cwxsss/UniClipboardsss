@@ -243,7 +243,8 @@
           "goDevices": "Go to devices",
           "goSettings": "Go to settings",
           "focusSearch": "Focus search",
-          "closeModal": "Close modal"
+          "closeModal": "Close modal",
+          "toggleQuickPanel": "Toggle quick panel"
         },
         "issues": {
           "sameScope": "Shortcut conflict in same scope: {{key}}",
@@ -618,6 +619,14 @@
     "networkFailed": "Network failed to start",
     "retry": "Retry",
     "retrying": "Retrying..."
+  },
+  "previewPanel": {
+    "title": "Preview",
+    "error": "Failed to load preview",
+    "imageUnavailable": "Image not available",
+    "empty": "Hover over an item to preview",
+    "imageAlt": "Clipboard image",
+    "deleteHint": "{{modifier}}⌫ delete"
   },
   "setup": {
     "page": {
