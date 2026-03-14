@@ -32,7 +32,11 @@ impl SyncInboundFileUseCase {
     ///
     /// Returns true if the file size is below the small_file_threshold from settings.
     pub async fn should_auto_pull(&self, file_size: u64) -> Result<bool> {
-        let settings = self.settings.load().await.context("Failed to load settings")?;
+        let settings = self
+            .settings
+            .load()
+            .await
+            .context("Failed to load settings")?;
         Ok(file_size <= settings.file_sync.small_file_threshold)
     }
 
@@ -63,7 +67,11 @@ impl SyncInboundFileUseCase {
     ///
     /// Default quota is 500MB per device (configurable via settings).
     pub async fn check_quota(&self, peer_id: &str, additional_bytes: u64) -> Result<bool> {
-        let settings = self.settings.load().await.context("Failed to load settings")?;
+        let settings = self
+            .settings
+            .load()
+            .await
+            .context("Failed to load settings")?;
         let quota = settings.file_sync.file_cache_quota_per_device;
 
         // Calculate current usage for this peer
@@ -89,9 +97,9 @@ impl SyncInboundFileUseCase {
     ) -> Result<InboundFileResult> {
         async move {
             // Read file and compute Blake3 hash
-            let file_bytes = tokio::fs::read(file_path)
-                .await
-                .with_context(|| format!("Failed to read transferred file: {}", file_path.display()))?;
+            let file_bytes = tokio::fs::read(file_path).await.with_context(|| {
+                format!("Failed to read transferred file: {}", file_path.display())
+            })?;
 
             let actual_hash = blake3::hash(&file_bytes).to_hex().to_string();
 
@@ -203,7 +211,11 @@ mod tests {
         }
     }
 
-    fn make_use_case(cache_dir: PathBuf, small_threshold: u64, quota: u64) -> SyncInboundFileUseCase {
+    fn make_use_case(
+        cache_dir: PathBuf,
+        small_threshold: u64,
+        quota: u64,
+    ) -> SyncInboundFileUseCase {
         let mut settings = Settings::default();
         settings.file_sync.small_file_threshold = small_threshold;
         settings.file_sync.file_cache_quota_per_device = quota;
@@ -214,14 +226,22 @@ mod tests {
     #[tokio::test]
     async fn test_should_auto_pull_small_file() {
         let tmp = TempDir::new().unwrap();
-        let uc = make_use_case(tmp.path().to_path_buf(), 10 * 1024 * 1024, 500 * 1024 * 1024);
+        let uc = make_use_case(
+            tmp.path().to_path_buf(),
+            10 * 1024 * 1024,
+            500 * 1024 * 1024,
+        );
         assert!(uc.should_auto_pull(1024).await.unwrap());
     }
 
     #[tokio::test]
     async fn test_should_auto_pull_large_file() {
         let tmp = TempDir::new().unwrap();
-        let uc = make_use_case(tmp.path().to_path_buf(), 10 * 1024 * 1024, 500 * 1024 * 1024);
+        let uc = make_use_case(
+            tmp.path().to_path_buf(),
+            10 * 1024 * 1024,
+            500 * 1024 * 1024,
+        );
         // 20MB > 10MB threshold
         assert!(!uc.should_auto_pull(20 * 1024 * 1024).await.unwrap());
     }
@@ -278,7 +298,9 @@ mod tests {
     async fn test_hash_verification_failure_deletes_file() {
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("bad_file.bin");
-        tokio::fs::write(&file_path, b"actual content").await.unwrap();
+        tokio::fs::write(&file_path, b"actual content")
+            .await
+            .unwrap();
 
         let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -288,7 +310,10 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Hash verification failed"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Hash verification failed"));
         // File should have been deleted
         assert!(!file_path.exists());
     }

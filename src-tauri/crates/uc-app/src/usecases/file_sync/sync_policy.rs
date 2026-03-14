@@ -52,10 +52,8 @@ pub async fn apply_file_sync_policy(
                         continue;
                     }
                     // Check file content type toggle
-                    if !is_content_type_allowed(
-                        ContentTypeCategory::File,
-                        &effective.content_types,
-                    ) {
+                    if !is_content_type_allowed(ContentTypeCategory::File, &effective.content_types)
+                    {
                         debug!(
                             peer_id = %peer.peer_id,
                             "Skipping file sync: file content type disabled"
@@ -117,11 +115,7 @@ mod tests {
             &self,
             peer_id: &PeerId,
         ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(self
-                .devices
-                .iter()
-                .find(|d| d.peer_id == *peer_id)
-                .cloned())
+            Ok(self.devices.iter().find(|d| d.peer_id == *peer_id).cloned())
         }
         async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
             Ok(self.devices.clone())
@@ -173,10 +167,7 @@ mod tests {
         s
     }
 
-    fn make_paired_device(
-        peer_id: &str,
-        sync_settings: Option<SyncSettings>,
-    ) -> PairedDevice {
+    fn make_paired_device(peer_id: &str, sync_settings: Option<SyncSettings>) -> PairedDevice {
         PairedDevice {
             peer_id: PeerId::from(peer_id),
             pairing_state: PairingState::Trusted,
@@ -193,9 +184,8 @@ mod tests {
         let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings {
             settings: Some(make_settings_with_auto_sync(false)),
         });
-        let repo: Arc<dyn PairedDeviceRepositoryPort> = Arc::new(MockPairedDeviceRepo {
-            devices: vec![],
-        });
+        let repo: Arc<dyn PairedDeviceRepositoryPort> =
+            Arc::new(MockPairedDeviceRepo { devices: vec![] });
         let peers = vec![make_peer("peer-1"), make_peer("peer-2")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
@@ -252,9 +242,8 @@ mod tests {
     #[tokio::test]
     async fn test_file_policy_settings_error_keeps_all_peers() {
         let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings { settings: None });
-        let repo: Arc<dyn PairedDeviceRepositoryPort> = Arc::new(MockPairedDeviceRepo {
-            devices: vec![],
-        });
+        let repo: Arc<dyn PairedDeviceRepositoryPort> =
+            Arc::new(MockPairedDeviceRepo { devices: vec![] });
         let peers = vec![make_peer("peer-1"), make_peer("peer-2")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
@@ -267,9 +256,8 @@ mod tests {
             settings: Some(make_settings_with_auto_sync(true)),
         });
         // No devices in repo -- unknown peer
-        let repo: Arc<dyn PairedDeviceRepositoryPort> = Arc::new(MockPairedDeviceRepo {
-            devices: vec![],
-        });
+        let repo: Arc<dyn PairedDeviceRepositoryPort> =
+            Arc::new(MockPairedDeviceRepo { devices: vec![] });
         let peers = vec![make_peer("peer-unknown")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
