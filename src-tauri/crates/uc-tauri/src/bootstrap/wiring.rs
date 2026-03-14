@@ -1948,11 +1948,12 @@ async fn resolve_device_name_for_peer(
     }
 }
 
-/// Write file paths to system clipboard after transfer completes.
-/// DB entry was already created by inbound clipboard sync (Step 6).
+/// Restore received file paths to system clipboard after transfer completes.
+/// DB entry was already created by inbound clipboard sync, so this uses
+/// `LocalRestore` origin to prevent the clipboard watcher from re-capturing.
 /// Checks for clipboard race (FCLIP-03): if user copied other content
-/// during transfer, auto-write is skipped.
-async fn write_file_to_clipboard_after_transfer(
+/// during transfer, auto-restore is skipped.
+async fn restore_file_to_clipboard_after_transfer(
     file_paths: Vec<PathBuf>,
     system_clipboard: &Arc<dyn SystemClipboardPort>,
     clipboard_change_origin: &Arc<dyn ClipboardChangeOriginPort>,
@@ -1993,7 +1994,7 @@ async fn write_file_to_clipboard_after_transfer(
         paths = ?file_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
         files_exist = ?files_exist,
         all_exist,
-        "write_file_to_clipboard_after_transfer: starting"
+        "restore_file_to_clipboard_after_transfer: starting restore"
     );
 
     if !all_exist {
@@ -2017,23 +2018,25 @@ async fn write_file_to_clipboard_after_transfer(
         info!(
             origin = ?current_origin,
             file_count = file_paths.len(),
-            "Clipboard race detected: skipping auto-write (user copied during transfer). Files available in Dashboard."
+            "Clipboard race detected: skipping auto-restore (user copied during transfer). Files available in Dashboard."
         );
         return;
     }
 
-    // Set origin to RemotePush before clipboard write to prevent re-capture loop
+    // Set origin to LocalRestore so the clipboard watcher skips capture entirely.
+    // The DB entry was already created by inbound sync — RemotePush would still
+    // trigger a duplicate capture; only LocalRestore is skipped.
     clipboard_change_origin
         .set_next_origin(
-            uc_core::ClipboardChangeOrigin::RemotePush,
+            uc_core::ClipboardChangeOrigin::LocalRestore,
             std::time::Duration::from_secs(2),
         )
         .await;
 
-    // Write to system clipboard
+    // Restore to system clipboard
     info!(
         path_list = %path_list,
-        "write_file_to_clipboard_after_transfer: calling write_snapshot"
+        "restore_file_to_clipboard_after_transfer: restoring to OS clipboard"
     );
     if let Err(err) = system_clipboard.write_snapshot(snapshot) {
         // Consume origin on failure to avoid stale origin
@@ -2271,10 +2274,10 @@ async fn run_pairing_event_loop<R: Runtime>(
                                     }
                                 }
 
-                                // Write single file to clipboard only if NOT part of a batch
-                                // Batch clipboard writes are handled by the batch accumulator
+                                // Restore single file to clipboard only if NOT part of a batch
+                                // Batch clipboard restores are handled by the batch accumulator
                                 if !is_batch {
-                                    write_file_to_clipboard_after_transfer(
+                                    restore_file_to_clipboard_after_transfer(
                                         vec![result.file_path],
                                         &system_clipboard_clone,
                                         &clipboard_change_origin_clone,
@@ -2317,14 +2320,14 @@ async fn run_pairing_event_loop<R: Runtime>(
                         info!(
                             batch_id = %bid,
                             total = total,
-                            "Batch complete, writing all files to clipboard"
+                            "Batch complete, restoring all files to clipboard"
                         );
 
-                        // Write all batch files to clipboard
+                        // Restore all batch files to clipboard
                         let system_clipboard_batch = system_clipboard.clone();
                         let clipboard_origin_batch = clipboard_change_origin.clone();
                         tokio::spawn(async move {
-                            write_file_to_clipboard_after_transfer(
+                            restore_file_to_clipboard_after_transfer(
                                 all_paths,
                                 &system_clipboard_batch,
                                 &clipboard_origin_batch,
