@@ -258,11 +258,11 @@ Plans:
 **Goal:** Add file sync settings UI (enable toggle, thresholds, quotas), enforce per-device file cache quotas, implement auto-cleanup of expired temp files, and polish error handling across the file sync pipeline.
 **Requirements**: FSYNC-POLISH
 **Depends on:** Phase 30
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 31 to break down)
+- [x] TBD (run /gsd:plan-phase 31 to break down) (completed 2026-03-14)
 
 ### Phase 31.1: Inbound file sync clipboard integration with persistent file URI list for cross-platform paste (INSERTED)
 
