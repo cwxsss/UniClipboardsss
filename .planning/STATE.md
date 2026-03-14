@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: completed
-stopped_at: Completed 31.1-03-PLAN.md
-last_updated: '2026-03-14T01:21:21.462Z'
-last_activity: '2026-03-14 — Completed 31.1-03 plan: Clipboard race detection gap closure (FCLIP-03)'
+status: executing
+stopped_at: Completed 31-01-PLAN.md
+last_updated: '2026-03-14T14:07:58.585Z'
+last_activity: '2026-03-14 — Completed 31-02 plan: Auto-cleanup and quota enforcement'
 progress:
   total_phases: 14
   completed_phases: 12
   total_plans: 36
-  completed_plans: 32
-  percent: 91
+  completed_plans: 34
+  percent: 92
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 31.1 - Inbound file sync clipboard integration
+**Current focus:** Phase 31 - File sync settings and polish
 
 ## Current Position
 
-Phase: 31.1 of 31.1 (Inbound file sync clipboard integration)
-Plan: 3 of 3 complete
-Status: Phase 31.1 Complete
-Last activity: 2026-03-14 — Completed 31.1-03 plan: Clipboard race detection gap closure (FCLIP-03)
+Phase: 31 of 31 (File sync settings and polish)
+Plan: 2 of 3 complete
+Status: In Progress
+Last activity: 2026-03-14 — Completed 31-02 plan: Auto-cleanup and quota enforcement
 
-Progress: [█████████░] 91%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -80,6 +80,8 @@ Progress: [█████████░] 91%
   | Phase 31.1 P01 | 10min | 2 tasks | 11 files |
   | Phase 31.1 P02 | 11min | 2 tasks | 8 files |
   | Phase 31.1 P03 | 1min | 1 tasks | 1 files |
+  | Phase 31 P01 | 5min | 2 tasks | 8 files |
+  | Phase 31 P02 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -156,6 +158,9 @@ Recent decisions affecting current work:
 - [Phase 31.1]: Delete cascade parses inline_data of text/uri-list representations to find and remove cache files
 - [Phase 31.1]: ClearClipboardHistory updated with representation_repo for consistent delete cascade
 - [Phase 31.1]: Pre-write race check uses consume_origin_or_default(LocalCapture) to detect clipboard activity during transfer
+- [Phase 31]: Used separate updateFileSyncSetting context method matching existing FileSyncSettings type at Settings.file_sync
+- [Phase 31]: Filesystem-based cleanup instead of DB repository: no FileEntryRepository port exists yet, file-cache directory is source of truth
+- [Phase 31]: Cleanup module placed in file_sync/ (not file/) to match existing module naming
 
 ### Roadmap Evolution
 
@@ -189,6 +194,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-14T01:21:21.460Z
-Stopped at: Completed 31.1-03-PLAN.md
+Last session: 2026-03-14T14:05:18.000Z
+Stopped at: Completed 31-01-PLAN.md
 Resume file: None

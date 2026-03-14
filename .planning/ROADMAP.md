@@ -258,7 +258,7 @@ Plans:
 **Goal:** Add file sync settings UI (enable toggle, thresholds, quotas), enforce per-device file cache quotas, implement auto-cleanup of expired temp files, and polish error handling across the file sync pipeline.
 **Requirements**: FSYNC-POLISH
 **Depends on:** Phase 30
-**Plans:** 0 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 
