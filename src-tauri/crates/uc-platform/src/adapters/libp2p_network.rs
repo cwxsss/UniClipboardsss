@@ -11,6 +11,7 @@ use libp2p::{
 };
 use libp2p_stream as stream;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -262,6 +263,7 @@ pub struct Libp2pNetworkAdapter {
     stream_control: Mutex<Option<stream::Control>>,
     pairing_service: Mutex<Option<PairingStreamService>>,
     file_transfer_service: Mutex<Option<FileTransferService>>,
+    file_cache_dir: PathBuf,
 }
 
 impl Libp2pNetworkAdapter {
@@ -271,6 +273,7 @@ impl Libp2pNetworkAdapter {
         encryption_session: Arc<dyn EncryptionSessionPort>,
         transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
         transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+        file_cache_dir: PathBuf,
     ) -> Result<Self> {
         let keypair = load_or_create_identity(identity_store.as_ref())
             .map_err(|e| anyhow!("failed to load libp2p identity: {e}"))?;
@@ -305,6 +308,7 @@ impl Libp2pNetworkAdapter {
             stream_control: Mutex::new(None),
             pairing_service,
             file_transfer_service: Mutex::new(None),
+            file_cache_dir,
         })
     }
 
@@ -366,7 +370,7 @@ impl Libp2pNetworkAdapter {
             stream_control.clone(),
             self.event_tx.clone(),
             Arc::new(uc_core::ports::transfer_progress::NoopTransferProgressPort),
-            FileTransferConfig::default(),
+            FileTransferConfig::new(self.file_cache_dir.clone()),
         );
         file_transfer_service.spawn_accept_loop();
         {
@@ -2586,6 +2590,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         );
         assert!(adapter.is_ok());
     }
@@ -2598,6 +2603,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2619,6 +2625,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2740,6 +2747,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2884,6 +2892,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2907,6 +2916,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2932,6 +2942,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
         let local_peer_id = adapter.local_peer_id();
@@ -3014,6 +3025,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
         let payload: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4].into_boxed_slice());
@@ -3062,6 +3074,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -3081,6 +3094,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -3141,6 +3155,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3149,6 +3164,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
@@ -3177,6 +3193,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3185,6 +3202,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
@@ -3243,6 +3261,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3251,6 +3270,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a

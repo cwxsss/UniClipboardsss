@@ -975,7 +975,7 @@ impl<'a> UseCases<'a> {
     ///
     /// 创建使用此运行时设置和文件缓存目录的 SyncInboundFileUseCase。
     pub fn sync_inbound_file(&self) -> uc_app::usecases::file_sync::SyncInboundFileUseCase {
-        let file_cache_dir = self.runtime.storage_paths.cache_dir.join("file-cache");
+        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
         uc_app::usecases::file_sync::SyncInboundFileUseCase::new(
             self.runtime.deps.settings.clone(),
             file_cache_dir,
@@ -2057,6 +2057,7 @@ mod tests {
             settings_path: std::path::PathBuf::from("/tmp/uniclipboard-test/settings.json"),
             logs_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/logs"),
             cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache"),
+            file_cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/file-cache"),
             app_data_root: std::path::PathBuf::from("/tmp/uniclipboard-test"),
         }
     }

@@ -36,12 +36,12 @@ pub struct FileTransferConfig {
     pub cache_dir: PathBuf,
 }
 
-impl Default for FileTransferConfig {
-    fn default() -> Self {
+impl FileTransferConfig {
+    pub fn new(cache_dir: PathBuf) -> Self {
         Self {
             chunk_size: CHUNK_SIZE,
             transfer_timeout: Duration::from_secs(300), // 5 minutes
-            cache_dir: PathBuf::from("file-cache"),
+            cache_dir,
         }
     }
 }
@@ -478,11 +478,11 @@ mod tests {
     use uc_core::ports::transfer_progress::NoopTransferProgressPort;
 
     #[test]
-    fn file_transfer_config_default() {
-        let config = FileTransferConfig::default();
+    fn file_transfer_config_new() {
+        let config = FileTransferConfig::new(PathBuf::from("/tmp/test-cache"));
         assert_eq!(config.chunk_size, CHUNK_SIZE);
         assert_eq!(config.transfer_timeout, Duration::from_secs(300));
-        assert_eq!(config.cache_dir, PathBuf::from("file-cache"));
+        assert_eq!(config.cache_dir, PathBuf::from("/tmp/test-cache"));
     }
 
     #[test]
@@ -497,7 +497,7 @@ mod tests {
         let control = behaviour.new_control();
         let (event_tx, _event_rx) = mpsc::channel(16);
         let progress_port = Arc::new(NoopTransferProgressPort);
-        let config = FileTransferConfig::default();
+        let config = FileTransferConfig::new(PathBuf::from("/tmp/test-file-cache"));
 
         let service = FileTransferService::new(control, event_tx, progress_port, config);
 
