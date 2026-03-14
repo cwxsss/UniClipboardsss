@@ -146,10 +146,9 @@ pub async fn receive_file_chunked<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let tmp_path = cache_dir.join(format!("{}.tmp", announce.transfer_id));
-
-    // Create cache dir if needed
-    tokio::fs::create_dir_all(cache_dir).await?;
+    let transfer_dir = cache_dir.join(&announce.transfer_id);
+    tokio::fs::create_dir_all(&transfer_dir).await?;
+    let tmp_path = transfer_dir.join(format!("{}.tmp", announce.transfer_id));
 
     // Set unix permissions on temp file after creation
     let result = receive_chunks_to_file(reader, &tmp_path, announce, progress_callback)
@@ -171,7 +170,7 @@ where
 
             // Sanitize filename
             let safe_filename = sanitize_filename(&announce.filename);
-            let final_path = cache_dir.join(format!("{}_{}", announce.transfer_id, safe_filename));
+            let final_path = transfer_dir.join(&safe_filename);
 
             // Atomic rename
             tokio::fs::rename(&tmp_path, &final_path).await?;
@@ -399,10 +398,21 @@ mod tests {
         let received_data = tokio::fs::read(&final_path).await.unwrap();
         assert_eq!(received_data, test_data);
 
-        // Verify the final path has the expected name pattern
-        let filename = final_path.file_name().unwrap().to_str().unwrap();
-        assert!(filename.starts_with("test-xfer_"));
-        assert!(filename.ends_with("source.txt"));
+        // Verify the final path has the expected name pattern: cache/test-xfer/source.txt
+        assert_eq!(
+            final_path.file_name().unwrap().to_str().unwrap(),
+            "source.txt"
+        );
+        assert_eq!(
+            final_path
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "test-xfer"
+        );
 
         // Verify hash was computed
         assert!(!send_hash.is_empty());
@@ -458,7 +468,7 @@ mod tests {
         assert!(err_msg.contains("hash mismatch"));
 
         // Verify temp file was cleaned up
-        let tmp_path = cache_dir.join("bad-hash-xfer.tmp");
+        let tmp_path = cache_dir.join("bad-hash-xfer").join("bad-hash-xfer.tmp");
         assert!(!tmp_path.exists());
     }
 
@@ -510,17 +520,25 @@ mod tests {
             .unwrap();
 
         // Verify .tmp file does NOT exist
-        let tmp_path = cache_dir.join("rename-xfer.tmp");
+        let tmp_path = cache_dir.join("rename-xfer").join("rename-xfer.tmp");
         assert!(!tmp_path.exists());
 
-        // Verify final file exists with correct name
+        // Verify final file exists with correct name: cache/rename-xfer/result.dat
         assert!(final_path.exists());
-        assert!(final_path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .contains("result.dat"));
+        assert_eq!(
+            final_path.file_name().unwrap().to_str().unwrap(),
+            "result.dat"
+        );
+        assert_eq!(
+            final_path
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "rename-xfer"
+        );
 
         // Verify contents
         let contents = tokio::fs::read(&final_path).await.unwrap();

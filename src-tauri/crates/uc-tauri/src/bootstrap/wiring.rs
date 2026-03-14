@@ -1173,7 +1173,8 @@ pub fn start_background_tasks<R: Runtime>(
     let pairing_events = deps.network_ports.events.clone();
     let peer_directory = deps.network_ports.peers.clone();
     let clipboard_network = deps.network_ports.clipboard.clone();
-    let sync_inbound_usecase = new_sync_inbound_clipboard_usecase(deps);
+    let sync_inbound_usecase =
+        new_sync_inbound_clipboard_usecase(deps, Some(file_cache_dir.clone()));
     let inbound_file_settings = deps.settings.clone();
     let inbound_file_cache_dir = file_cache_dir;
     let space_access_runtime_ports = RuntimeSpaceAccessPorts {
@@ -1195,15 +1196,6 @@ pub fn start_background_tasks<R: Runtime>(
     // Create clipboard deps for inbound file clipboard integration
     let inbound_system_clipboard = deps.clipboard.system_clipboard.clone();
     let inbound_clipboard_change_origin = deps.clipboard.clipboard_change_origin.clone();
-    let inbound_capture_clipboard_deps = CaptureClipboardDeps {
-        clipboard_entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-        clipboard_event_repo: deps.clipboard.clipboard_event_repo.clone(),
-        representation_policy: deps.clipboard.representation_policy.clone(),
-        representation_normalizer: deps.clipboard.representation_normalizer.clone(),
-        device_identity: deps.device.device_identity.clone(),
-        representation_cache: deps.clipboard.representation_cache.clone(),
-        spool_queue: deps.clipboard.spool_queue.clone(),
-    };
 
     // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
     // We use a single orchestration spawn to set up all registry tasks, since
@@ -1481,7 +1473,6 @@ pub fn start_background_tasks<R: Runtime>(
                                 inbound_file_cache_dir.clone(),
                                 inbound_system_clipboard.clone(),
                                 inbound_clipboard_change_origin.clone(),
-                                inbound_capture_clipboard_deps.clone(),
                             )
                             .await;
 
@@ -1539,7 +1530,10 @@ pub fn start_background_tasks<R: Runtime>(
     });
 }
 
-fn new_sync_inbound_clipboard_usecase(deps: &AppDeps) -> SyncInboundClipboardUseCase {
+fn new_sync_inbound_clipboard_usecase(
+    deps: &AppDeps,
+    file_cache_dir: Option<PathBuf>,
+) -> SyncInboundClipboardUseCase {
     let mode = super::resolve_clipboard_integration_mode();
     SyncInboundClipboardUseCase::with_capture_dependencies(
         mode,
@@ -1555,6 +1549,7 @@ fn new_sync_inbound_clipboard_usecase(deps: &AppDeps) -> SyncInboundClipboardUse
         deps.clipboard.representation_normalizer.clone(),
         deps.clipboard.representation_cache.clone(),
         deps.clipboard.spool_queue.clone(),
+        file_cache_dir,
     )
 }
 
@@ -1946,26 +1941,14 @@ async fn resolve_device_name_for_peer(
     }
 }
 
-/// Dependencies needed to create CaptureClipboardUseCase for file entry persistence.
-#[derive(Clone)]
-struct CaptureClipboardDeps {
-    clipboard_entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
-    clipboard_event_repo: Arc<dyn uc_core::ports::ClipboardEventWriterPort>,
-    representation_policy: Arc<dyn uc_core::ports::SelectRepresentationPolicyPort>,
-    representation_normalizer: Arc<dyn ClipboardRepresentationNormalizerPort>,
-    device_identity: Arc<dyn uc_core::ports::DeviceIdentityPort>,
-    representation_cache: Arc<dyn RepresentationCachePort>,
-    spool_queue: Arc<dyn SpoolQueuePort>,
-}
-
 /// Write file paths to system clipboard after transfer completes.
-/// Persists clipboard entry first, then checks for clipboard race (FCLIP-03):
-/// if user copied other content during transfer, auto-write is skipped.
+/// DB entry was already created by inbound clipboard sync (Step 6).
+/// Checks for clipboard race (FCLIP-03): if user copied other content
+/// during transfer, auto-write is skipped.
 async fn write_file_to_clipboard_after_transfer(
     file_paths: Vec<PathBuf>,
     system_clipboard: &Arc<dyn SystemClipboardPort>,
     clipboard_change_origin: &Arc<dyn ClipboardChangeOriginPort>,
-    capture_deps: &CaptureClipboardDeps,
 ) {
     use uc_app::usecases::file_sync::copy_file_to_clipboard::{
         build_file_snapshot, build_path_list,
@@ -1973,35 +1956,6 @@ async fn write_file_to_clipboard_after_transfer(
 
     let path_list = build_path_list(&file_paths);
     let snapshot = build_file_snapshot(&path_list);
-
-    // Always persist the clipboard entry regardless of clipboard race
-    let capture_uc = uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase::new(
-        capture_deps.clipboard_entry_repo.clone(),
-        capture_deps.clipboard_event_repo.clone(),
-        capture_deps.representation_policy.clone(),
-        capture_deps.representation_normalizer.clone(),
-        capture_deps.device_identity.clone(),
-        capture_deps.representation_cache.clone(),
-        capture_deps.spool_queue.clone(),
-    );
-    match capture_uc
-        .execute_with_origin(snapshot.clone(), uc_core::ClipboardChangeOrigin::RemotePush)
-        .await
-    {
-        Ok(Some(entry_id)) => {
-            info!(
-                entry_id = %entry_id,
-                file_count = file_paths.len(),
-                "File clipboard entry persisted"
-            );
-        }
-        Ok(None) => {
-            debug!("File clipboard entry persistence returned None (expected for RemotePush skip)");
-        }
-        Err(err) => {
-            warn!(error = %err, "Failed to persist file clipboard entry");
-        }
-    }
 
     // FCLIP-03: Check for clipboard race before writing
     // If an origin is already set (not the default LocalCapture),
@@ -2052,7 +2006,6 @@ async fn run_pairing_event_loop<R: Runtime>(
     inbound_file_cache_dir: PathBuf,
     system_clipboard: Arc<dyn SystemClipboardPort>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
-    capture_clipboard_deps: CaptureClipboardDeps,
 ) {
     // Batch accumulator: batch_id -> (completed_paths: Vec<PathBuf>, expected_total: u32, peer_id: String)
     let mut batch_accumulator: std::collections::HashMap<String, (Vec<PathBuf>, u32, String)> =
@@ -2209,7 +2162,6 @@ async fn run_pairing_event_loop<R: Runtime>(
                 let span_transfer_id = transfer_id.clone();
                 let system_clipboard_clone = system_clipboard.clone();
                 let clipboard_change_origin_clone = clipboard_change_origin.clone();
-                let capture_deps_clone = capture_clipboard_deps.clone();
                 let file_path_for_spawn = file_path.clone();
                 let peer_id_for_spawn = peer_id.clone();
                 let filename_for_spawn = filename.clone();
@@ -2272,7 +2224,6 @@ async fn run_pairing_event_loop<R: Runtime>(
                                         vec![result.file_path],
                                         &system_clipboard_clone,
                                         &clipboard_change_origin_clone,
-                                        &capture_deps_clone,
                                     )
                                     .await;
                                 }
@@ -2318,13 +2269,11 @@ async fn run_pairing_event_loop<R: Runtime>(
                         // Write all batch files to clipboard
                         let system_clipboard_batch = system_clipboard.clone();
                         let clipboard_origin_batch = clipboard_change_origin.clone();
-                        let capture_deps_batch = capture_clipboard_deps.clone();
                         tokio::spawn(async move {
                             write_file_to_clipboard_after_transfer(
                                 all_paths,
                                 &system_clipboard_batch,
                                 &clipboard_origin_batch,
-                                &capture_deps_batch,
                             )
                             .await;
                         });
@@ -4014,6 +3963,7 @@ mod tests {
                 origin_device_name: "Remote".to_string(),
                 payload_version: uc_core::network::protocol::ClipboardPayloadVersion::V3,
                 origin_flow_id: None,
+                file_transfers: vec![],
             },
             None,
         ))
@@ -4058,6 +4008,8 @@ mod tests {
             runtime_ports,
             Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
             PathBuf::from("/tmp/test-file-cache"),
+            Arc::new(NoopSystemClipboard) as Arc<dyn SystemClipboardPort>,
+            Arc::new(NoopClipboardChangeOrigin) as Arc<dyn ClipboardChangeOriginPort>,
         ));
 
         let request = PairingRequest {
@@ -4585,6 +4537,8 @@ mod tests {
             runtime_ports,
             Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
             PathBuf::from("/tmp/test-file-cache"),
+            Arc::new(NoopSystemClipboard) as Arc<dyn SystemClipboardPort>,
+            Arc::new(NoopClipboardChangeOrigin) as Arc<dyn ClipboardChangeOriginPort>,
         ));
 
         event_tx
@@ -4649,6 +4603,8 @@ mod tests {
             runtime_ports,
             Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
             PathBuf::from("/tmp/test-file-cache"),
+            Arc::new(NoopSystemClipboard) as Arc<dyn SystemClipboardPort>,
+            Arc::new(NoopClipboardChangeOrigin) as Arc<dyn ClipboardChangeOriginPort>,
         ));
 
         event_tx

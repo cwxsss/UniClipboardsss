@@ -33,6 +33,15 @@ impl TryFrom<u8> for ClipboardPayloadVersion {
     }
 }
 
+/// Mapping between a file transfer and its original filename.
+/// Carried in clipboard sync so the receiver can pre-compute local cache paths
+/// before the file transfer completes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileTransferMapping {
+    pub transfer_id: String,
+    pub filename: String,
+}
+
 /// Clipboard content broadcast via network.
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +61,10 @@ pub struct ClipboardMessage {
     /// Defaults to None for backward compatibility with older peers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_flow_id: Option<String>,
+    /// File transfer mappings for cross-platform path rewriting.
+    /// When present, the receiver rewrites file paths to local cache locations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_transfers: Vec<FileTransferMapping>,
 }
 
 #[cfg(test)]
@@ -87,6 +100,7 @@ mod tests {
             origin_device_name: "Test Device".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id: None,
+            file_transfers: vec![],
         };
 
         let json = serde_json::to_string(&message).expect("serialize message");
@@ -105,6 +119,7 @@ mod tests {
             origin_device_name: "Test Device".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id: None,
+            file_transfers: vec![],
         };
 
         let json_str = serde_json::to_string(&message).expect("serialize message");
@@ -188,6 +203,7 @@ mod tests {
             origin_device_name: "D".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id: Some("01234567-89ab-cdef-0123-456789abcdef".to_string()),
+            file_transfers: vec![],
         };
         let json = serde_json::to_string(&msg).unwrap();
         let decoded: ClipboardMessage = serde_json::from_str(&json).unwrap();

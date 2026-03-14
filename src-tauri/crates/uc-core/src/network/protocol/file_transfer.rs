@@ -34,27 +34,15 @@ pub enum FileTransferMessage {
         batch_id: Option<String>,
     },
     /// Receiver accepts the announced transfer.
-    Accept {
-        transfer_id: String,
-    },
+    Accept { transfer_id: String },
     /// A chunk of file data.
-    Data {
-        chunk_index: u32,
-        data: Vec<u8>,
-    },
+    Data { chunk_index: u32, data: Vec<u8> },
     /// Sender signals transfer completion with a verification hash.
-    Complete {
-        content_hash: String,
-    },
+    Complete { content_hash: String },
     /// Either side cancels the transfer.
-    Cancel {
-        reason: String,
-    },
+    Cancel { reason: String },
     /// Protocol-level error.
-    Error {
-        code: u16,
-        message: String,
-    },
+    Error { code: u16, message: String },
 }
 
 // Discriminant tags
@@ -160,9 +148,7 @@ impl FileTransferMessage {
                     other => {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            format!(
-                                "invalid has_batch_id flag: expected 0 or 1, got {other}"
-                            ),
+                            format!("invalid has_batch_id flag: expected 0 or 1, got {other}"),
                         ));
                     }
                 };
@@ -187,9 +173,7 @@ impl FileTransferMessage {
                 if data_len > MAX_CHUNK_SIZE {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!(
-                            "data_len {data_len} exceeds maximum {MAX_CHUNK_SIZE}"
-                        ),
+                        format!("data_len {data_len} exceeds maximum {MAX_CHUNK_SIZE}"),
                     ));
                 }
                 let mut data = vec![0u8; data_len];

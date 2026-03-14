@@ -906,6 +906,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.representation_normalizer.clone(),
             self.runtime.deps.clipboard.representation_cache.clone(),
             self.runtime.deps.clipboard.spool_queue.clone(),
+            Some(self.runtime.storage_paths.file_cache_dir.clone()),
         )
     }
 
@@ -1176,13 +1177,40 @@ impl ClipboardChangeHandler for AppRuntime {
                         Vec::new()
                     };
 
+                    // Pre-generate transfer_ids for file paths and build file_transfers
+                    // mapping so clipboard sync carries the mapping for cross-platform
+                    // path rewriting on the receiver side.
+                    let file_sync_entries: Vec<(PathBuf, String, String)> = file_paths_for_sync
+                        .iter()
+                        .map(|path| {
+                            let transfer_id = uuid::Uuid::new_v4().to_string();
+                            let filename = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            (path.clone(), transfer_id, filename)
+                        })
+                        .collect();
+
+                    let file_transfers: Vec<uc_core::network::protocol::FileTransferMapping> =
+                        file_sync_entries
+                            .iter()
+                            .map(|(_, tid, fname)| {
+                                uc_core::network::protocol::FileTransferMapping {
+                                    transfer_id: tid.clone(),
+                                    filename: fname.clone(),
+                                }
+                            })
+                            .collect();
+
                     let outbound_sync_uc = self.usecases().sync_outbound_clipboard();
                     let flow_id_for_sync = flow_id.clone();
                     let flow_id_str = flow_id_for_sync.to_string();
                     tauri::async_runtime::spawn(
                         async move {
                             match tokio::task::spawn_blocking(move || {
-                                outbound_sync_uc.execute(outbound_snapshot, origin, Some(flow_id_str))
+                                outbound_sync_uc.execute(outbound_snapshot, origin, Some(flow_id_str), file_transfers)
                             })
                             .await
                             {
@@ -1201,13 +1229,13 @@ impl ClipboardChangeHandler for AppRuntime {
                     );
 
                     // Trigger outbound file sync for LocalCapture only
-                    if !file_paths_for_sync.is_empty() {
+                    if !file_sync_entries.is_empty() {
                         let outbound_file_uc = self.usecases().sync_outbound_file();
                         tauri::async_runtime::spawn(
                             async move {
-                                for path in file_paths_for_sync {
-                                    tracing::info!(file = %path.display(), "Sending file to peers");
-                                    match outbound_file_uc.execute(path.clone()).await {
+                                for (path, transfer_id, _filename) in file_sync_entries {
+                                    tracing::info!(file = %path.display(), transfer_id = %transfer_id, "Sending file to peers");
+                                    match outbound_file_uc.execute(path.clone(), Some(transfer_id)).await {
                                         Ok(result) => {
                                             tracing::info!(
                                                 transfer_id = %result.transfer_id,

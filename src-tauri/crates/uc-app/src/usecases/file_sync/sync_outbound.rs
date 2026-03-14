@@ -45,7 +45,11 @@ impl SyncOutboundFileUseCase {
     /// Validates file safety (rejects symlinks, hardlinks, deleted files),
     /// applies sync policy to filter eligible peers, then delegates to
     /// the file transport port for each peer.
-    pub async fn execute(&self, file_path: PathBuf) -> Result<SyncOutboundResult> {
+    pub async fn execute(
+        &self,
+        file_path: PathBuf,
+        pre_generated_transfer_id: Option<String>,
+    ) -> Result<SyncOutboundResult> {
         async move {
             // 1. Validate file exists and get metadata
             let metadata = tokio::fs::symlink_metadata(&file_path)
@@ -100,8 +104,9 @@ impl SyncOutboundFileUseCase {
                 });
             }
 
-            // 7. Generate transfer ID
-            let transfer_id = Uuid::new_v4().to_string();
+            // 7. Use pre-generated transfer ID or generate a new one
+            let transfer_id =
+                pre_generated_transfer_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
             // 8. Queue file transfer for each eligible peer
             let peer_count = eligible.len();
@@ -319,7 +324,7 @@ mod tests {
         {
             std::os::unix::fs::symlink(tmp.path(), &link_path).unwrap();
             let uc = make_use_case(vec![make_peer("p1")], vec![]);
-            let result = uc.execute(link_path.clone()).await;
+            let result = uc.execute(link_path.clone(), None).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -340,7 +345,7 @@ mod tests {
         std::fs::hard_link(tmp.path(), &link_path).unwrap();
 
         let uc = make_use_case(vec![make_peer("p1")], vec![]);
-        let result = uc.execute(link_path.clone()).await;
+        let result = uc.execute(link_path.clone(), None).await;
         assert!(result.is_err());
         assert!(
             result
@@ -356,7 +361,7 @@ mod tests {
     async fn test_outbound_skips_deleted_file() {
         let path = PathBuf::from("/tmp/nonexistent_file_for_test_12345.txt");
         let uc = make_use_case(vec![make_peer("p1")], vec![]);
-        let result = uc.execute(path).await;
+        let result = uc.execute(path, None).await;
         assert!(result.is_err());
     }
 
@@ -365,7 +370,7 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         // Global auto_sync=true but no peers at all
         let uc = make_use_case(vec![], vec![]);
-        let result = uc.execute(tmp.path().to_path_buf()).await.unwrap();
+        let result = uc.execute(tmp.path().to_path_buf(), None).await.unwrap();
         assert_eq!(result.peer_count, 0);
     }
 
@@ -391,7 +396,7 @@ mod tests {
         };
 
         let uc = make_use_case(peers, vec![device_p2]);
-        let result = uc.execute(tmp.path().to_path_buf()).await.unwrap();
+        let result = uc.execute(tmp.path().to_path_buf(), None).await.unwrap();
         // p1 and p3 are unknown (kept), p2 is filtered
         assert_eq!(result.peer_count, 2);
         assert!(!result.transfer_id.is_empty());
@@ -534,7 +539,7 @@ mod tests {
         });
 
         let uc = make_use_case_with_transport(peers, vec![], transport);
-        let result = uc.execute(file_path.clone()).await.unwrap();
+        let result = uc.execute(file_path.clone(), None).await.unwrap();
 
         let recorded = calls.lock().unwrap();
         assert_eq!(
@@ -574,7 +579,7 @@ mod tests {
         });
 
         let uc = make_use_case_with_transport(peers, vec![], transport);
-        let result = uc.execute(tmp.path().to_path_buf()).await;
+        let result = uc.execute(tmp.path().to_path_buf(), None).await;
 
         // The use case should succeed despite p2 failing
         assert!(

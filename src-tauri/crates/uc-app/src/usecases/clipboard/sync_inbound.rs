@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -46,6 +47,8 @@ pub struct SyncInboundClipboardUseCase {
     capture_clipboard:
         Option<crate::usecases::internal::capture_clipboard::CaptureClipboardUseCase>,
     recent_ids: Mutex<VecDeque<(String, Instant)>>,
+    /// Local file cache directory for rewriting remote file paths.
+    file_cache_dir: Option<PathBuf>,
 }
 
 impl SyncInboundClipboardUseCase {
@@ -74,6 +77,7 @@ impl SyncInboundClipboardUseCase {
             transfer_decryptor,
             capture_clipboard: None,
             recent_ids: Mutex::new(VecDeque::new()),
+            file_cache_dir: None,
         })
     }
 
@@ -91,6 +95,7 @@ impl SyncInboundClipboardUseCase {
         representation_normalizer: Arc<dyn ClipboardRepresentationNormalizerPort>,
         representation_cache: Arc<dyn RepresentationCachePort>,
         spool_queue: Arc<dyn SpoolQueuePort>,
+        file_cache_dir: Option<PathBuf>,
     ) -> Self {
         Self {
             mode,
@@ -112,6 +117,7 @@ impl SyncInboundClipboardUseCase {
                 ),
             ),
             recent_ids: Mutex::new(VecDeque::new()),
+            file_cache_dir,
         }
     }
 
@@ -330,17 +336,101 @@ impl SyncInboundClipboardUseCase {
                 representations: binary_reps,
             } = v3_payload;
 
+            let has_file_transfers = !message.file_transfers.is_empty();
+
             let all_reps: Vec<ObservedClipboardRepresentation> = binary_reps
                 .into_iter()
                 .map(|rep| {
+                    let mut data = rep.data;
+
+                    // When file_transfers are present, rewrite file path representations
+                    // to point to local cache paths ({cache_dir}/{transfer_id}/{filename}).
+                    if has_file_transfers {
+                        let is_file_rep = rep
+                            .mime
+                            .as_deref()
+                            .map(|m| m == "text/uri-list" || m == "file/uri-list")
+                            .unwrap_or(false)
+                            || rep.format_id.eq_ignore_ascii_case("files")
+                            || rep.format_id.eq_ignore_ascii_case("public.file-url")
+                            || rep.format_id.contains("uri-list");
+
+                        if is_file_rep {
+                            if let Some(ref cache_dir) = self.file_cache_dir {
+                                let local_paths: Vec<String> = message
+                                    .file_transfers
+                                    .iter()
+                                    .map(|ft| {
+                                        cache_dir
+                                            .join(&ft.transfer_id)
+                                            .join(&ft.filename)
+                                            .to_string_lossy()
+                                            .to_string()
+                                    })
+                                    .collect();
+                                data = local_paths.join("\n").into_bytes();
+                                debug!(
+                                    format_id = %rep.format_id,
+                                    path_count = local_paths.len(),
+                                    "Rewrote file paths to local cache locations"
+                                );
+                            }
+                        }
+                    }
+
                     ObservedClipboardRepresentation::new(
                         RepresentationId::new(),
                         FormatId::from(rep.format_id.as_str()),
                         rep.mime.map(MimeType),
-                        rep.data,
+                        data,
                     )
                 })
                 .collect();
+
+            // When file_transfers are present, skip OS clipboard write (files don't exist yet)
+            // and force DB persistence so the entry exists before file transfer completes.
+            if has_file_transfers {
+                let capture = match self.capture_clipboard.as_ref() {
+                    Some(c) => c,
+                    None => {
+                        warn!(
+                            message_id = %message.id,
+                            "V3 inbound with file_transfers: capture dependencies required but missing"
+                        );
+                        return Ok(InboundApplyOutcome::Applied { entry_id: None });
+                    }
+                };
+
+                let snapshot_for_capture = SystemClipboardSnapshot {
+                    ts_ms,
+                    representations: all_reps,
+                };
+
+                return match capture
+                    .execute_with_origin(snapshot_for_capture, ClipboardChangeOrigin::RemotePush)
+                    .await
+                {
+                    Ok(Some(entry_id)) => {
+                        info!(
+                            message_id = %message.id,
+                            entry_id = %entry_id,
+                            file_transfer_count = message.file_transfers.len(),
+                            "V3 inbound with file_transfers: persisted entry, skipped OS clipboard write"
+                        );
+                        Ok(InboundApplyOutcome::Applied {
+                            entry_id: Some(entry_id),
+                        })
+                    }
+                    Ok(None) => {
+                        self.rollback_recent_id(&message.id).await;
+                        Err(anyhow::anyhow!("V3 file_transfers capture skipped persistence"))
+                    }
+                    Err(err) => {
+                        self.rollback_recent_id(&message.id).await;
+                        Err(err).context("V3 inbound with file_transfers: capture failed")
+                    }
+                };
+            }
 
             // For OS clipboard writes we still restrict to a single highest-priority representation.
             // write_snapshot requires exactly ONE representation (tracked in issue #92).
@@ -987,6 +1077,7 @@ mod tests {
             origin_device_name: "peer-device".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id: None,
+            file_transfers: vec![],
         };
         (message, plaintext)
     }
@@ -1101,6 +1192,7 @@ mod tests {
             Arc::new(MockNormalizer),
             Arc::new(MockRepresentationCache),
             Arc::new(MockSpoolQueue),
+            None,
         );
 
         (usecase, writes, calls, save_calls, insert_calls)
@@ -1449,6 +1541,7 @@ mod tests {
             origin_device_name: "peer-device".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id: None,
+            file_transfers: vec![],
         };
 
         let result = usecase
@@ -1584,6 +1677,7 @@ mod tests {
             origin_device_name: "peer-device".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id: None,
+            file_transfers: vec![],
         };
 
         // No pre-decoded plaintext, so it will try the fallback decrypt path
