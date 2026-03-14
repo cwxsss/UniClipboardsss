@@ -999,6 +999,18 @@ impl<'a> UseCases<'a> {
         )
     }
 
+    /// Create a `CleanupExpiredFilesUseCase` wired with this runtime's settings
+    /// and file cache directory.
+    ///
+    /// 创建使用此运行时设置和文件缓存目录的 CleanupExpiredFilesUseCase。
+    pub fn cleanup_expired_files(&self) -> uc_app::usecases::file_sync::CleanupExpiredFilesUseCase {
+        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
+        uc_app::usecases::file_sync::CleanupExpiredFilesUseCase::new(
+            self.runtime.deps.settings.clone(),
+            file_cache_dir,
+        )
+    }
+
     // NOTE: Other use case methods will be added as the use case design evolves
     // to support trait object instantiation. Currently, use cases with generic
     // type parameters cannot be instantiated through this accessor.

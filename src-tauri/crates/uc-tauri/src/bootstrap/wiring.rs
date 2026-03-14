@@ -1204,6 +1204,10 @@ pub fn start_background_tasks<R: Runtime>(
     let inbound_system_clipboard = deps.clipboard.system_clipboard.clone();
     let inbound_clipboard_change_origin = deps.clipboard.clipboard_change_origin.clone();
 
+    // Clones for file cache cleanup task
+    let deps_settings = deps.settings.clone();
+    let cleanup_file_cache_dir = inbound_file_cache_dir.clone();
+
     // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
     // We use a single orchestration spawn to set up all registry tasks, since
     // registry.spawn() is async and start_background_tasks is sync.
@@ -1532,6 +1536,34 @@ pub fn start_background_tasks<R: Runtime>(
                 }
             })
             .await;
+
+        // --- File cache cleanup (runs once at startup, fire-and-forget) ---
+        {
+            let cleanup_settings = deps_settings.clone();
+            let cleanup_cache_dir = cleanup_file_cache_dir.clone();
+            registry
+                .spawn("file_cache_cleanup", |_token| async move {
+                    let uc = uc_app::usecases::file_sync::CleanupExpiredFilesUseCase::new(
+                        cleanup_settings,
+                        cleanup_cache_dir,
+                    );
+                    match uc.execute().await {
+                        Ok(result) => {
+                            if result.files_removed > 0 {
+                                info!(
+                                    files_removed = result.files_removed,
+                                    bytes_reclaimed = result.bytes_reclaimed,
+                                    "Startup file cache cleanup completed"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Startup file cache cleanup failed (non-fatal)");
+                        }
+                    }
+                })
+                .await;
+        }
 
         info!("All background tasks registered with TaskRegistry");
     });
