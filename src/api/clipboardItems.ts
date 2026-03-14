@@ -474,7 +474,7 @@ export async function unfavoriteClipboardItem(id: string): Promise<boolean> {
  * If the cache file has been deleted, the backend returns an error.
  */
 export async function copyFileToClipboard(entryId: string): Promise<void> {
-  await invokeWithTrace('copy_file_to_clipboard', { entry_id: entryId })
+  await invokeWithTrace('copy_file_to_clipboard', { entryId })
 }
 
 /**
