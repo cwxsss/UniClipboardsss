@@ -37,7 +37,7 @@ pub trait FileTransportPort: Send + Sync {
 /// No-op stub implementation for compilation when no real adapter is available.
 ///
 /// Used as a placeholder in `NetworkPorts` construction until the actual
-/// libp2p file transfer adapter is implemented (Phase 29).
+/// libp2p file transfer adapter is implemented (Phase 30).
 pub struct NoopFileTransportPort;
 
 #[async_trait]

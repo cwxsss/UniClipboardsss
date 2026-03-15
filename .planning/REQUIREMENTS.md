@@ -140,18 +140,18 @@ Which phases cover which requirements.
 | KB-05             | Phase 27   | Planned  |
 | KB-06             | Phase 27   | Planned  |
 | KB-07             | Phase 27   | Planned  |
-| FSYNC-POLISH      | Phase 31   | Complete |
-| FCLIP-01          | Phase 31.1 | Complete |
-| FCLIP-02          | Phase 31.1 | Complete |
-| FCLIP-03          | Phase 31.1 | Complete |
-| FCLIP-04          | Phase 31.1 | Complete |
-| FCLIP-05          | Phase 31.1 | Complete |
-| FCLIP-06          | Phase 31.1 | Planned  |
-| FCLIP-07          | Phase 31.1 | Planned  |
-| FCLIP-08          | Phase 31.1 | Planned  |
-| FCLIP-09          | Phase 31.1 | Planned  |
-| FCLIP-10          | Phase 31.1 | Planned  |
-| FSYNC-CONSISTENCY | Phase 32   | Planned  |
+| FSYNC-POLISH      | Phase 32   | Complete |
+| FCLIP-01          | Phase 32.1 | Complete |
+| FCLIP-02          | Phase 32.1 | Complete |
+| FCLIP-03          | Phase 32.1 | Complete |
+| FCLIP-04          | Phase 32.1 | Complete |
+| FCLIP-05          | Phase 32.1 | Complete |
+| FCLIP-06          | Phase 32.1 | Planned  |
+| FCLIP-07          | Phase 32.1 | Planned  |
+| FCLIP-08          | Phase 32.1 | Planned  |
+| FCLIP-09          | Phase 32.1 | Planned  |
+| FCLIP-10          | Phase 32.1 | Planned  |
+| FSYNC-CONSISTENCY | Phase 33   | Planned  |
 
 **Coverage:**
 
@@ -162,4 +162,4 @@ Which phases cover which requirements.
 ---
 
 _Requirements defined: 2026-03-09_
-_Last updated: 2026-03-14 after Phase 31 completion_
+_Last updated: 2026-03-14 after Phase 32 completion_

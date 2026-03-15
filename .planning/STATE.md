@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: completed
-stopped_at: Completed 32-06-PLAN.md
+stopped_at: Completed 33-06-PLAN.md
 last_updated: '2026-03-15T04:55:14.835Z'
-last_activity: '2026-03-15 — Completed 32-05 plan: File transfer state UI and Copy gating'
+last_activity: '2026-03-15 — Completed 33-05 plan: File transfer state UI and Copy gating'
 progress:
   total_phases: 15
   completed_phases: 14
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 32 - Fix file sync eventual consistency
+**Current focus:** Phase 33 - Fix file sync eventual consistency
 
 ## Current Position
 
 Phase: 32 of 32 (Fix file sync eventual consistency)
 Plan: 5 of 5 complete
 Status: Complete
-Last activity: 2026-03-15 — Completed 32-05 plan: File transfer state UI and Copy gating
+Last activity: 2026-03-15 — Completed 33-05 plan: File transfer state UI and Copy gating
 
 Progress: [██████████] 98%
 
@@ -69,26 +69,26 @@ Progress: [██████████] 98%
   | Phase 28 P01 | 3min | 2 tasks | 4 files |
   | Phase 28 P02 | 4min | 2 tasks | 4 files |
   | Phase 28 P03 | 7min | 2 tasks | 12 files |
-  | Phase 29 P01 | -min | - tasks | - files |
-  | Phase 29 P02 | 4min | 1 tasks | 6 files |
-  | Phase 29 P01 | 3min | 2 tasks | 7 files |
-  | Phase 29 P03 | 4min | 3 tasks | 4 files |
-  | Phase 29 P04 | 3 | 2 tasks | 4 files |
-  | Phase 30 P01 | 4min | 2 tasks | 8 files |
-  | Phase 30 P02 | 3 | 2 tasks | 9 files |
-  | Phase 30 P03 | 5min | 2 tasks | 12 files |
-  | Phase 31.1 P01 | 10min | 2 tasks | 11 files |
-  | Phase 31.1 P02 | 11min | 2 tasks | 8 files |
-  | Phase 31.1 P03 | 1min | 1 tasks | 1 files |
-  | Phase 31 P01 | 5min | 2 tasks | 8 files |
-  | Phase 31 P02 | 5 | 2 tasks | 4 files |
-  | Phase 31 P03 | 5min | 2 tasks | 3 files |
-  | Phase 32 P01 | 13min | 2 tasks | 11 files |
-  | Phase 32 P02 | 4min | 2 tasks | 7 files |
-  | Phase 32 P03 | 20min | 2 tasks | 12 files |
-  | Phase 32 P04 | 3min | 1 tasks | 5 files |
-  | Phase 32 P05 | 5min | 2 tasks | 7 files |
-  | Phase 32 P06 | 5 | 1 tasks | 3 files |
+  | Phase 30 P01 | -min | - tasks | - files |
+  | Phase 30 P02 | 4min | 1 tasks | 6 files |
+  | Phase 30 P01 | 3min | 2 tasks | 7 files |
+  | Phase 30 P03 | 4min | 3 tasks | 4 files |
+  | Phase 30 P04 | 3 | 2 tasks | 4 files |
+  | Phase 31 P01 | 4min | 2 tasks | 8 files |
+  | Phase 31 P02 | 3 | 2 tasks | 9 files |
+  | Phase 31 P03 | 5min | 2 tasks | 12 files |
+  | Phase 32.1 P01 | 10min | 2 tasks | 11 files |
+  | Phase 32.1 P02 | 11min | 2 tasks | 8 files |
+  | Phase 32.1 P03 | 1min | 1 tasks | 1 files |
+  | Phase 32 P01 | 5min | 2 tasks | 8 files |
+  | Phase 32 P02 | 5 | 2 tasks | 4 files |
+  | Phase 32 P03 | 5min | 2 tasks | 3 files |
+  | Phase 33 P01 | 13min | 2 tasks | 11 files |
+  | Phase 33 P02 | 4min | 2 tasks | 7 files |
+  | Phase 33 P03 | 20min | 2 tasks | 12 files |
+  | Phase 33 P04 | 3min | 1 tasks | 5 files |
+  | Phase 33 P05 | 5min | 2 tasks | 7 files |
+  | Phase 33 P06 | 5 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -141,48 +141,48 @@ Recent decisions affecting current work:
 - [Phase 28]: File category now filterable via ct.file toggle (was always-true)
 - [Phase 28]: NoopFileTransportPort stub pattern used at NetworkPorts construction sites for pre-adapter compilation
 - [Phase 28]: Manual schema.rs update for file_transfer table since diesel CLI not available
-- [Phase 29]: Used libc::statvfs directly for disk space check instead of adding fs2 dependency
-- [Phase 29]: Hash verification failure deletes temp file immediately with no retry policy
-- [Phase 29]: Shared sync policy module extracted for reuse between clipboard and file sync
-- [Phase 29]: Binary chunk frame format: 4-byte header-length prefix + JSON header + raw chunk data for efficient binary transfer
-- [Phase 29]: Queue and retry modules co-created since queue.rs depends on retry.rs
-- [Phase 29]: File cache directory derived from storage_paths.cache_dir.join('file-cache') rather than adding to AppConfig
-- [Phase 29]: Clone FileTransferService (Arc<Inner>) out of Mutex before await to avoid holding lock across async boundary
-- [Phase 29]: Per-peer send failures logged as warnings without aborting transfers to remaining peers
-- [Phase 30]: FileContextMenu uses ContextMenuTrigger asChild for zero extra DOM wrappers
-- [Phase 30]: Transfer tracking uses Set<string> in ClipboardContent state for transferringEntries
-- [Phase 30]: TransferProgressBar uses two variants (compact/detailed) instead of separate components
-- [Phase 30]: Transfer-to-entry mapping uses dual Record maps for O(1) lookup in both directions
-- [Phase 30]: Notification batching uses 500ms window to coalesce multi-file sync notifications
-- [Phase 30]: Error notifications fire immediately without batching for prompt user feedback
-- [Phase 30]: Clipboard race handled by cancelClipboardWrite reducer dispatched on clipboard://new-content event
-- [Phase 31.1]: CopyFileToClipboardUseCase takes entry_id only, looks up event_id via ClipboardEntryRepositoryPort
-- [Phase 31.1]: Batch accumulator lives in event loop outside tokio::spawn for cross-event state coordination
-- [Phase 31.1]: Entry persistence always via CaptureClipboardUseCase::execute_with_origin(RemotePush) regardless of clipboard race
-- [Phase 31.1]: Added get_representations_for_event to ClipboardRepresentationRepositoryPort with default empty impl
-- [Phase 31.1]: Extension-based file icon map uses constant Record lookup for ESLint static-components compliance
-- [Phase 31.1]: Lazy stale detection -- staleness only discovered when copyFileToClipboard returns error, not on startup
-- [Phase 31.1]: Delete cascade parses inline_data of text/uri-list representations to find and remove cache files
-- [Phase 31.1]: ClearClipboardHistory updated with representation_repo for consistent delete cascade
-- [Phase 31.1]: Pre-write race check uses consume_origin_or_default(LocalCapture) to detect clipboard activity during transfer
-- [Phase 31]: Used separate updateFileSyncSetting context method matching existing FileSyncSettings type at Settings.file_sync
-- [Phase 31]: Filesystem-based cleanup instead of DB repository: no FileEntryRepository port exists yet, file-cache directory is source of truth
-- [Phase 31]: Cleanup module placed in file_sync/ (not file/) to match existing module naming
-- [Phase 31]: Guards return Result errors (not events) since use cases have no event channel access; callers handle event emission
-- [Phase 31]: transfer_errors module provides constants and formatters for consistent user-facing error messages
-- [Phase 32]: Arc<TrackInboundTransfersUseCase> shared across spawned tasks for durable marking inside async spawns
-- [Phase 32]: get_entry_id_for_transfer added to port for transfer_id-only context resolution in progress events
-- [Phase 32]: file-transfer:// namespace prefix unifies all file transfer events
-- [Phase 32]: tokio::watch for timeout sweep cancellation to keep it simpler than TaskRegistry token
-- [Phase 32]: String-based entry_id in FileTransferRepositoryPort to avoid coupling to uc_ids across crate boundaries
-- [Phase 32]: NoopFileTransferRepositoryPort stub for compilation before infra adapter lands
-- [Phase 32]: Aggregate transfer status priority: failed > transferring > pending > completed
-- [Phase 32]: PendingTransferLinkage returned from InboundApplyOutcome for platform layer status emission
-- [Phase 32]: Durable entryStatusById separate from ephemeral activeTransfers to survive progress cleanup
-- [Phase 32]: Old transfer://progress and transfer://error channels replaced with file-transfer:// namespace
-- [Phase 32]: Durable entryStatusById takes priority over ephemeral activeTransfers for all UI state decisions
-- [Phase 32]: Hydration dispatch placed inside thunk (not fulfilled reducer) because reducers cannot dispatch actions
-- [Phase 32]: fetchClipboardItems filters file_transfer_status != null before building hydrateEntryTransferStatuses payload to avoid seeding null statuses into entryStatusById
+- [Phase 30]: Used libc::statvfs directly for disk space check instead of adding fs2 dependency
+- [Phase 30]: Hash verification failure deletes temp file immediately with no retry policy
+- [Phase 30]: Shared sync policy module extracted for reuse between clipboard and file sync
+- [Phase 30]: Binary chunk frame format: 4-byte header-length prefix + JSON header + raw chunk data for efficient binary transfer
+- [Phase 30]: Queue and retry modules co-created since queue.rs depends on retry.rs
+- [Phase 30]: File cache directory derived from storage_paths.cache_dir.join('file-cache') rather than adding to AppConfig
+- [Phase 30]: Clone FileTransferService (Arc<Inner>) out of Mutex before await to avoid holding lock across async boundary
+- [Phase 30]: Per-peer send failures logged as warnings without aborting transfers to remaining peers
+- [Phase 31]: FileContextMenu uses ContextMenuTrigger asChild for zero extra DOM wrappers
+- [Phase 31]: Transfer tracking uses Set<string> in ClipboardContent state for transferringEntries
+- [Phase 31]: TransferProgressBar uses two variants (compact/detailed) instead of separate components
+- [Phase 31]: Transfer-to-entry mapping uses dual Record maps for O(1) lookup in both directions
+- [Phase 31]: Notification batching uses 500ms window to coalesce multi-file sync notifications
+- [Phase 31]: Error notifications fire immediately without batching for prompt user feedback
+- [Phase 31]: Clipboard race handled by cancelClipboardWrite reducer dispatched on clipboard://new-content event
+- [Phase 32.1]: CopyFileToClipboardUseCase takes entry_id only, looks up event_id via ClipboardEntryRepositoryPort
+- [Phase 32.1]: Batch accumulator lives in event loop outside tokio::spawn for cross-event state coordination
+- [Phase 32.1]: Entry persistence always via CaptureClipboardUseCase::execute_with_origin(RemotePush) regardless of clipboard race
+- [Phase 32.1]: Added get_representations_for_event to ClipboardRepresentationRepositoryPort with default empty impl
+- [Phase 32.1]: Extension-based file icon map uses constant Record lookup for ESLint static-components compliance
+- [Phase 32.1]: Lazy stale detection -- staleness only discovered when copyFileToClipboard returns error, not on startup
+- [Phase 32.1]: Delete cascade parses inline_data of text/uri-list representations to find and remove cache files
+- [Phase 32.1]: ClearClipboardHistory updated with representation_repo for consistent delete cascade
+- [Phase 32.1]: Pre-write race check uses consume_origin_or_default(LocalCapture) to detect clipboard activity during transfer
+- [Phase 32]: Used separate updateFileSyncSetting context method matching existing FileSyncSettings type at Settings.file_sync
+- [Phase 32]: Filesystem-based cleanup instead of DB repository: no FileEntryRepository port exists yet, file-cache directory is source of truth
+- [Phase 32]: Cleanup module placed in file_sync/ (not file/) to match existing module naming
+- [Phase 32]: Guards return Result errors (not events) since use cases have no event channel access; callers handle event emission
+- [Phase 32]: transfer_errors module provides constants and formatters for consistent user-facing error messages
+- [Phase 33]: Arc<TrackInboundTransfersUseCase> shared across spawned tasks for durable marking inside async spawns
+- [Phase 33]: get_entry_id_for_transfer added to port for transfer_id-only context resolution in progress events
+- [Phase 33]: file-transfer:// namespace prefix unifies all file transfer events
+- [Phase 33]: tokio::watch for timeout sweep cancellation to keep it simpler than TaskRegistry token
+- [Phase 33]: String-based entry_id in FileTransferRepositoryPort to avoid coupling to uc_ids across crate boundaries
+- [Phase 33]: NoopFileTransferRepositoryPort stub for compilation before infra adapter lands
+- [Phase 33]: Aggregate transfer status priority: failed > transferring > pending > completed
+- [Phase 33]: PendingTransferLinkage returned from InboundApplyOutcome for platform layer status emission
+- [Phase 33]: Durable entryStatusById separate from ephemeral activeTransfers to survive progress cleanup
+- [Phase 33]: Old transfer://progress and transfer://error channels replaced with file-transfer:// namespace
+- [Phase 33]: Durable entryStatusById takes priority over ephemeral activeTransfers for all UI state decisions
+- [Phase 33]: Hydration dispatch placed inside thunk (not fulfilled reducer) because reducers cannot dispatch actions
+- [Phase 33]: fetchClipboardItems filters file_transfer_status != null before building hydrateEntryTransferStatuses payload to avoid seeding null statuses into entryStatusById
 
 ### Roadmap Evolution
 
@@ -193,11 +193,11 @@ Recent decisions affecting current work:
 - Phase 27 added: 支持快捷键设置在 settings page 中
 - Phase 28 split: Original monolithic file sync phase split into 4 phases (28-31)
 - Phase 28 updated: File sync foundation — message types, ports, classification fix, schema, settings
-- Phase 29 added: File transfer service — chunked protocol, use cases, retry logic
-- Phase 30 added: File sync UI — Dashboard file entries, context menu, progress, notifications
-- Phase 31 added: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
-- Phase 31.1 inserted after Phase 31: Inbound file sync clipboard integration with persistent file URI list for cross-platform paste (URGENT)
-- Phase 32 added: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
+- Phase 30 added: File transfer service — chunked protocol, use cases, retry logic
+- Phase 31 added: File sync UI — Dashboard file entries, context menu, progress, notifications
+- Phase 32 added: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
+- Phase 32.1 inserted after Phase 32: Inbound file sync clipboard integration with persistent file URI list for cross-platform paste (URGENT)
+- Phase 33 added: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
 
 ### Pending Todos
 
@@ -218,5 +218,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-15T04:50:35.378Z
-Stopped at: Completed 32-06-PLAN.md
+Stopped at: Completed 33-06-PLAN.md
 Resume file: None

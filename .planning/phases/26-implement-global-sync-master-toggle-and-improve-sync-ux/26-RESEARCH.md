@@ -410,7 +410,7 @@ _(Note: The `apply_sync_policy` method is currently private (`async fn`, not `pu
 ### Primary (HIGH confidence)
 
 - Direct code inspection of `sync_outbound.rs` -- `apply_sync_policy()` at lines 60-121
-- Direct code inspection of `paired_device.rs` -- `resolve_sync_settings()` at lines 29-34
+- Direct code inspection of `paired_device.rs` -- `resolve_sync_settings()` at lines 30-34
 - Direct code inspection of `DeviceSettingsPanel.tsx` -- existing disable pattern at lines 146-148
 - Direct code inspection of `PairedDevicesPanel.tsx` -- component structure and imports
 - Direct code inspection of `SyncSection.tsx` -- current auto_sync toggle and i18n usage

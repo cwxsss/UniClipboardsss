@@ -14,7 +14,7 @@ provides:
   - FileSyncSettings struct with defaults
   - TypeScript FileSyncSettings interface
 
-affects: [29-file-transfer-service, 30-file-sync-ui, 31-file-sync-settings-and-polish]
+affects: [30-file-transfer-service, 31-file-sync-ui, 32-file-sync-settings-and-polish]
 
 tech-stack:
   added: []
@@ -29,11 +29,11 @@ key-files:
     - src/types/setting.ts
 
 key-decisions:
-  - "First non-comment URI line determines file vs link classification per RFC 2483"
-  - "File category now filterable via ct.file toggle (was always-true)"
+  - 'First non-comment URI line determines file vs link classification per RFC 2483'
+  - 'File category now filterable via ct.file toggle (was always-true)'
 
 patterns-established:
-  - "URI-list sub-classification: inspect representation data bytes for scheme detection"
+  - 'URI-list sub-classification: inspect representation data bytes for scheme detection'
 
 requirements-completed: [FSYNC-FOUNDATION]
 
@@ -54,6 +54,7 @@ completed: 2026-03-13
 - **Files modified:** 4
 
 ## Accomplishments
+
 - Fixed critical bug: text/uri-list with file:// URIs now classified as File instead of Link
 - Added FileSyncSettings struct (Rust) and interface (TypeScript) with 6 fields and defaults
 - Made File content type category filterable via ct.file toggle
@@ -67,12 +68,14 @@ Each task was committed atomically:
 2. **Task 2: Add FileSyncSettings to settings model and TypeScript interface** - `fed7ada2` (feat)
 
 ## Files Created/Modified
+
 - `src-tauri/crates/uc-core/src/settings/content_type_filter.rs` - Fixed classify_snapshot for URI-list sub-classification, updated is_content_type_allowed for File
 - `src-tauri/crates/uc-core/src/settings/model.rs` - Added FileSyncSettings struct and tests
 - `src-tauri/crates/uc-core/src/settings/defaults.rs` - Added Default impl for FileSyncSettings
 - `src/types/setting.ts` - Added FileSyncSettings TypeScript interface
 
 ## Decisions Made
+
 - First non-comment URI line determines file vs link classification per RFC 2483
 - File category now filterable via ct.file toggle (previously always-true like other unimplemented types)
 - Case-insensitive file:// scheme detection for cross-platform compatibility
@@ -82,15 +85,19 @@ Each task was committed atomically:
 None - plan executed exactly as written.
 
 ## Issues Encountered
+
 None
 
 ## User Setup Required
+
 None - no external service configuration required.
 
 ## Next Phase Readiness
-- File classification and settings model ready for file transfer service (Phase 29)
-- FileSyncSettings provides configuration foundation for file sync UI (Phase 30) and settings (Phase 31)
+
+- File classification and settings model ready for file transfer service (Phase 30)
+- FileSyncSettings provides configuration foundation for file sync UI (Phase 31) and settings (Phase 32)
 
 ---
-*Phase: 28-implement-file-sync-via-libp2p-for-cross-platform-file-copy-paste*
-*Completed: 2026-03-13*
+
+_Phase: 28-implement-file-sync-via-libp2p-for-cross-platform-file-copy-paste_
+_Completed: 2026-03-13_

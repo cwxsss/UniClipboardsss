@@ -15,7 +15,7 @@ provides:
   - PlatformEvent::FileCopied variant
   - file_transfer database table with status/batch/cache indexes
   - FileTransportPort wired into NetworkPorts dependency graph
-affects: [phase-29-file-transfer-service, phase-30-file-sync-ui]
+affects: [phase-30-file-transfer-service, phase-31-file-sync-ui]
 
 tech-stack:
   added: []
@@ -38,11 +38,11 @@ key-files:
     - src-tauri/crates/uc-tauri/src/bootstrap/wiring.rs
 
 key-decisions:
-  - "NoopFileTransportPort stub used at construction sites to keep builds green until Phase 29 adapter"
-  - "Manual schema.rs update since diesel CLI not available in environment"
+  - 'NoopFileTransportPort stub used at construction sites to keep builds green until Phase 30 adapter'
+  - 'Manual schema.rs update since diesel CLI not available in environment'
 
 patterns-established:
-  - "Noop port stub pattern: provide NoopXxxPort alongside trait for pre-adapter compilation"
+  - 'Noop port stub pattern: provide NoopXxxPort alongside trait for pre-adapter compilation'
 
 requirements-completed: [FSYNC-FOUNDATION]
 
@@ -63,6 +63,7 @@ completed: 2026-03-13
 - **Files modified:** 12
 
 ## Accomplishments
+
 - Registered FileTransfer protocol ID with canonical path /uniclipboard/file-transfer/1.0.0
 - Defined FileTransportPort trait with send_file_announce/data/complete and cancel_transfer methods plus NoopFileTransportPort stub
 - Extended NetworkEvent with FileTransferStarted/Completed/Failed/Cancelled lifecycle variants
@@ -78,6 +79,7 @@ Each task was committed atomically:
 2. **Task 2: Create database migration and wire FileTransportPort into deps** - `e9c944f6` (feat)
 
 ## Files Created/Modified
+
 - `src-tauri/crates/uc-core/src/ports/file_transport.rs` - FileTransportPort trait + NoopFileTransportPort stub
 - `src-tauri/crates/uc-core/src/network/protocol_ids.rs` - Added FileTransfer variant
 - `src-tauri/crates/uc-core/src/network/events.rs` - File transfer lifecycle event variants + tests
@@ -92,7 +94,8 @@ Each task was committed atomically:
 - `src-tauri/crates/uc-tauri/src/bootstrap/wiring.rs` - NoopFileTransportPort in production wiring
 
 ## Decisions Made
-- Used NoopFileTransportPort stub at NetworkPorts construction sites to keep all crates compiling; real adapter comes in Phase 29
+
+- Used NoopFileTransportPort stub at NetworkPorts construction sites to keep all crates compiling; real adapter comes in Phase 30
 - Manually updated schema.rs since diesel CLI is not installed in the environment; migration SQL files are authoritative
 
 ## Deviations from Plan
@@ -100,17 +103,19 @@ Each task was committed atomically:
 ### Auto-fixed Issues
 
 **1. [Rule 3 - Blocking] Added FileCopied match arm in platform runtime**
+
 - **Found during:** Task 1 (event extensions)
 - **Issue:** Adding PlatformEvent::FileCopied caused exhaustive match error in runtime.rs
-- **Fix:** Added match arm with debug log and TODO comment for Phase 29
+- **Fix:** Added match arm with debug log and TODO comment for Phase 30
 - **Files modified:** src-tauri/crates/uc-platform/src/runtime/runtime.rs
 - **Verification:** cargo check -p uc-platform passes
 - **Committed in:** 24d86297 (Task 1 commit)
 
 **2. [Rule 3 - Blocking] Updated NetworkPorts construction sites with noop stub**
+
 - **Found during:** Task 2 (wiring)
 - **Issue:** Adding file_transfer field to NetworkPorts broke construction in wiring.rs and test_utils.rs
-- **Fix:** Used NoopFileTransportPort at both sites with TODO(phase-29) comments
+- **Fix:** Used NoopFileTransportPort at both sites with TODO(phase-30) comments
 - **Files modified:** src-tauri/crates/uc-tauri/src/bootstrap/wiring.rs, src-tauri/crates/uc-tauri/src/test_utils.rs
 - **Verification:** cargo check -p uc-app -p uc-infra passes
 - **Committed in:** e9c944f6 (Task 2 commit)
@@ -121,19 +126,23 @@ Each task was committed atomically:
 **Impact on plan:** Both auto-fixes were necessary to keep builds green. Plan anticipated these (mentioned noop stub if needed). No scope creep.
 
 ## Issues Encountered
+
 None
 
 ## User Setup Required
+
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - Phase 28 foundation complete: message types, classification, settings, protocol ID, port trait, events, and schema all in place
-- Phase 29 can implement the actual file transfer adapter against FileTransportPort
-- Phase 30 can build UI against the NetworkEvent file transfer variants
+- Phase 30 can implement the actual file transfer adapter against FileTransportPort
+- Phase 31 can build UI against the NetworkEvent file transfer variants
 
 ---
-*Phase: 28-implement-file-sync-via-libp2p-for-cross-platform-file-copy-paste*
-*Completed: 2026-03-13*
+
+_Phase: 28-implement-file-sync-via-libp2p-for-cross-platform-file-copy-paste_
+_Completed: 2026-03-13_
 
 ## Self-Check: PASSED
 
