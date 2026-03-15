@@ -57,7 +57,7 @@ Fix the eventual consistency problem in file sync where metadata arrives before 
 
 ### Timeout Policy
 
-- pending → failed: if no data chunk arrives within 30 seconds of metadata receipt
+- pending → failed: if no data chunk arrives within 60 seconds of metadata receipt
 - transferring → failed: if no new chunk arrives within 5 minutes
 - Timeout transitions clean up temp files and notify frontend via status-changed event
 
