@@ -10,6 +10,8 @@ interface ClipboardActionBarProps {
   activeItemType?: 'text' | 'image' | 'link' | 'code' | 'file' | 'unknown'
   isActiveItemDownloaded?: boolean
   isActiveItemTransferring?: boolean
+  isCopyBlocked?: boolean
+  copyBlockedReason?: string
   onCopy: () => void
   onDelete: () => void
   onSyncToClipboard?: () => void
@@ -21,6 +23,8 @@ const ClipboardActionBar: React.FC<ClipboardActionBarProps> = ({
   activeItemType,
   isActiveItemDownloaded,
   isActiveItemTransferring,
+  isCopyBlocked,
+  copyBlockedReason,
   onCopy,
   onDelete,
   onSyncToClipboard,
@@ -60,20 +64,22 @@ const ClipboardActionBar: React.FC<ClipboardActionBarProps> = ({
           <button
             className={cn(
               'flex items-center gap-1.5 text-sm transition-colors',
-              hasActiveItem
+              hasActiveItem && !isCopyBlocked
                 ? 'text-foreground hover:text-primary cursor-pointer'
                 : 'text-muted-foreground/50 cursor-default'
             )}
-            onClick={hasActiveItem ? onCopy : undefined}
-            disabled={!hasActiveItem}
+            onClick={hasActiveItem && !isCopyBlocked ? onCopy : undefined}
+            disabled={!hasActiveItem || isCopyBlocked}
+            aria-disabled={isCopyBlocked}
+            title={copyBlockedReason || undefined}
           >
             {copySuccess ? (
               <Check className="h-4 w-4 text-green-500" />
             ) : (
               <Copy className="h-4 w-4" />
             )}
-            <span>{t('clipboard.actionBar.copy')}</span>
-            <Kbd>C</Kbd>
+            <span>{copyBlockedReason || t('clipboard.actionBar.copy')}</span>
+            {!isCopyBlocked && <Kbd>C</Kbd>}
           </button>
         )}
 

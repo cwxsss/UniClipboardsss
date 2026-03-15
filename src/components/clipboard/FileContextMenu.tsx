@@ -10,6 +10,8 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu'
+import { useAppSelector } from '@/store/hooks'
+import { selectEntryTransferStatus } from '@/store/slices/fileTransferSlice'
 
 interface FileContextMenuProps {
   children: React.ReactNode
@@ -37,16 +39,29 @@ const FileContextMenu: React.FC<FileContextMenuProps> = ({
   onOpenFileLocation,
 }) => {
   const { t } = useTranslation()
+  const entryStatus = useAppSelector(state => selectEntryTransferStatus(state, itemId))
 
   const isFile = itemType === 'file'
-  const showSyncAction = isFile && !isDownloaded
-  const showCopyAction = !isFile || isDownloaded
+  const durableStatus = entryStatus?.status
+
+  // Copy is disabled for non-completed file entries (pending, transferring, failed)
+  const isCopyDisabledByTransfer = isFile && durableStatus != null && durableStatus !== 'completed'
+  const copyDisabledReason = isCopyDisabledByTransfer
+    ? durableStatus === 'pending'
+      ? t('clipboard.transfer.copyDisabled.pending')
+      : durableStatus === 'transferring'
+        ? t('clipboard.transfer.copyDisabled.transferring')
+        : t('clipboard.transfer.copyDisabled.failed')
+    : null
+
+  const showSyncAction = isFile && !isDownloaded && !isCopyDisabledByTransfer
+  const showCopyAction = !isFile || isDownloaded || isCopyDisabledByTransfer
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-52">
-        {/* Sync to Clipboard (file not yet downloaded) */}
+        {/* Sync to Clipboard (file not yet downloaded, no blocking transfer state) */}
         {showSyncAction && (
           <ContextMenuItem disabled={isTransferring} onClick={() => onSyncToClipboard(itemId)}>
             {isTransferring ? (
@@ -60,31 +75,41 @@ const FileContextMenu: React.FC<FileContextMenuProps> = ({
           </ContextMenuItem>
         )}
 
-        {/* Copy (for non-file types, or downloaded file types) */}
+        {/* Copy (disabled for non-completed file transfers) */}
         {showCopyAction && (
-          <ContextMenuItem disabled={isFile && isStale} onClick={() => !isStale && onCopy(itemId)}>
+          <ContextMenuItem
+            disabled={isCopyDisabledByTransfer || (isFile && isStale)}
+            aria-disabled={isCopyDisabledByTransfer || (isFile && isStale)}
+            onClick={() => !isCopyDisabledByTransfer && !isStale && onCopy(itemId)}
+          >
             <Copy className="mr-2 h-4 w-4" />
-            {isFile && isStale
-              ? t('clipboard.contextMenu.fileDeleted', 'File deleted')
-              : t('clipboard.contextMenu.copy')}
-            {!isStale && <ContextMenuShortcut>C</ContextMenuShortcut>}
+            {copyDisabledReason
+              ? copyDisabledReason
+              : isFile && isStale
+                ? t('clipboard.contextMenu.fileDeleted', 'File deleted')
+                : t('clipboard.contextMenu.copy')}
+            {!isCopyDisabledByTransfer && !isStale && <ContextMenuShortcut>C</ContextMenuShortcut>}
           </ContextMenuItem>
         )}
 
         <ContextMenuSeparator />
 
-        {/* Open File Location (file type, downloaded) */}
-        {isFile && isDownloaded && (
-          <>
-            <ContextMenuItem onClick={() => onOpenFileLocation(itemId)}>
-              <FolderOpen className="mr-2 h-4 w-4" />
-              {t('clipboard.contextMenu.openFileLocation')}
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )}
+        {/* Open File Location (file type, downloaded, completed transfer) */}
+        {isFile &&
+          isDownloaded &&
+          durableStatus !== 'pending' &&
+          durableStatus !== 'transferring' &&
+          durableStatus !== 'failed' && (
+            <>
+              <ContextMenuItem onClick={() => onOpenFileLocation(itemId)}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                {t('clipboard.contextMenu.openFileLocation')}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )}
 
-        {/* Delete */}
+        {/* Delete - always available for every transfer state */}
         <ContextMenuItem
           className="text-destructive focus:text-destructive"
           onClick={() => onDelete(itemId)}

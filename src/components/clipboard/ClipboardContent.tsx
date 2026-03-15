@@ -28,6 +28,7 @@ import { useTransferProgress } from '@/hooks/useTransferProgress'
 import { captureUserIntent } from '@/observability/breadcrumbs'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import { removeClipboardItem, copyToClipboard, markEntryStale } from '@/store/slices/clipboardSlice'
+import { selectEntryTransferStatus } from '@/store/slices/fileTransferSlice'
 
 export interface DisplayClipboardItem {
   id: string
@@ -234,6 +235,15 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     return flatItems[activeIndex] ?? null
   }, [flatItems, activeIndex])
 
+  // Durable transfer status for the active file entry (gates Copy action)
+  const activeEntryStatus = useAppSelector(state =>
+    activeItemId ? selectEntryTransferStatus(state, activeItemId) : undefined
+  )
+  const isActiveFileCopyBlocked =
+    activeItem?.type === 'file' &&
+    activeEntryStatus != null &&
+    activeEntryStatus.status !== 'completed'
+
   // Auto-select first item when list loads or changes
   useEffect(() => {
     const currentFirstId = flatItems.length > 0 ? flatItems[0].id : null
@@ -367,13 +377,13 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
     [t]
   )
 
-  // Keyboard: C to copy
+  // Keyboard: C to copy (blocked for non-completed file entries)
   useShortcut({
     key: 'c',
     scope: 'clipboard',
-    enabled: activeItemId !== null,
+    enabled: activeItemId !== null && !isActiveFileCopyBlocked,
     handler: () => {
-      if (activeItemId) void handleCopyItem(activeItemId)
+      if (activeItemId && !isActiveFileCopyBlocked) void handleCopyItem(activeItemId)
     },
     preventDefault: false,
   })
@@ -488,8 +498,18 @@ const ClipboardContent: React.FC<ClipboardContentProps> = ({
                 isActiveItemTransferring={
                   activeItemId ? transferringEntries.has(activeItemId) : false
                 }
+                isCopyBlocked={isActiveFileCopyBlocked}
+                copyBlockedReason={
+                  isActiveFileCopyBlocked && activeEntryStatus
+                    ? activeEntryStatus.status === 'pending'
+                      ? t('clipboard.transfer.copyDisabled.pending')
+                      : activeEntryStatus.status === 'transferring'
+                        ? t('clipboard.transfer.copyDisabled.transferring')
+                        : t('clipboard.transfer.copyDisabled.failed')
+                    : undefined
+                }
                 onCopy={() => {
-                  if (activeItemId) void handleCopyItem(activeItemId)
+                  if (activeItemId && !isActiveFileCopyBlocked) void handleCopyItem(activeItemId)
                 }}
                 onDelete={() => {
                   if (activeItemId) {
