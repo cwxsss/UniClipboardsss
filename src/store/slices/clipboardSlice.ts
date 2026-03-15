@@ -1,4 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
+import { hydrateEntryTransferStatuses } from './fileTransferSlice'
 import {
   getClipboardItems,
   deleteClipboardItem,
@@ -51,7 +52,7 @@ type FetchClipboardItemsAction = {
 export const fetchClipboardItems = createAsyncThunk<
   ClipboardItemsResultWithOffset,
   FetchClipboardItemsParams | undefined
->('clipboard/fetchItems', async (params = {}, { rejectWithValue }) => {
+>('clipboard/fetchItems', async (params = {}, { rejectWithValue, dispatch }) => {
   try {
     const result = await getClipboardItems(
       params.orderBy,
@@ -59,6 +60,23 @@ export const fetchClipboardItems = createAsyncThunk<
       params.offset,
       params.filter
     )
+
+    // Hydrate durable file transfer statuses from persisted API fields.
+    // This ensures entryStatusById in fileTransferSlice is seeded on app load
+    // so file entries show correct status badges immediately after restart.
+    if (result.status === 'ready') {
+      const statusEntries = result.items
+        .filter(item => item.file_transfer_status != null)
+        .map(item => ({
+          entryId: item.id,
+          status: item.file_transfer_status as 'pending' | 'transferring' | 'completed' | 'failed',
+          reason: item.file_transfer_reason ?? null,
+        }))
+      if (statusEntries.length > 0) {
+        dispatch(hydrateEntryTransferStatuses(statusEntries))
+      }
+    }
+
     return { ...result, offset: params.offset ?? 0 }
   } catch {
     return rejectWithValue('获取剪贴板内容失败')

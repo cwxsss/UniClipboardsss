@@ -3,6 +3,7 @@
 
 use uc_app::usecases::LifecycleState;
 use uc_core::settings::model::Settings;
+use uc_tauri::bootstrap::file_transfer_wiring::FileTransferStatusPayload;
 use uc_tauri::models::{ClipboardEntriesResponse, ClipboardEntryProjection, LifecycleStatusDto};
 
 #[test]
@@ -161,6 +162,59 @@ fn clipboard_entry_projection_omits_transfer_fields_for_non_file_entry() {
         value.get("file_transfer_reason").is_none(),
         "expected file_transfer_reason to be omitted for non-file entry"
     );
+}
+
+#[test]
+fn file_transfer_status_payload_serializes_camel_case() {
+    // Test without reason (should be omitted due to skip_serializing_if)
+    let payload = FileTransferStatusPayload {
+        transfer_id: "tf-1".to_string(),
+        entry_id: "entry-1".to_string(),
+        status: "pending".to_string(),
+        reason: None,
+    };
+    let value = serde_json::to_value(&payload).expect("serialize failed");
+
+    // Fields must be camelCase
+    assert!(
+        value.get("transferId").is_some(),
+        "expected 'transferId' (camelCase) in JSON, got: {value}"
+    );
+    assert!(
+        value.get("entryId").is_some(),
+        "expected 'entryId' (camelCase) in JSON, got: {value}"
+    );
+    // Snake_case variants must NOT be present
+    assert!(
+        value.get("transfer_id").is_none(),
+        "unexpected snake_case 'transfer_id' in JSON: {value}"
+    );
+    assert!(
+        value.get("entry_id").is_none(),
+        "unexpected snake_case 'entry_id' in JSON: {value}"
+    );
+    // reason must be omitted when None (skip_serializing_if)
+    assert!(
+        value.get("reason").is_none(),
+        "expected 'reason' to be omitted when None, got: {value}"
+    );
+    assert_eq!(value["transferId"], "tf-1");
+    assert_eq!(value["entryId"], "entry-1");
+    assert_eq!(value["status"], "pending");
+
+    // Test with reason (should be included)
+    let payload_with_reason = FileTransferStatusPayload {
+        transfer_id: "tf-2".to_string(),
+        entry_id: "entry-2".to_string(),
+        status: "failed".to_string(),
+        reason: Some("timeout".to_string()),
+    };
+    let value2 = serde_json::to_value(&payload_with_reason).expect("serialize failed");
+    assert_eq!(
+        value2["reason"], "timeout",
+        "expected reason 'timeout' when Some"
+    );
+    assert_eq!(value2["status"], "failed");
 }
 
 #[test]
