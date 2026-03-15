@@ -475,8 +475,8 @@ mod tests {
         async fn refresh_activity(&self, _: &str, _: i64) -> Result<()> {
             Ok(())
         }
-        async fn mark_completed(&self, _: &str, _: Option<&str>, _: i64) -> Result<()> {
-            Ok(())
+        async fn mark_completed(&self, _: &str, _: Option<&str>, _: i64) -> Result<bool> {
+            Ok(false)
         }
         async fn mark_failed(&self, _: &str, _: &str, _: i64) -> Result<()> {
             Ok(())

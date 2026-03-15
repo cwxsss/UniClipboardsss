@@ -155,28 +155,28 @@ impl<E: DbExecutor> FileTransferRepositoryPort for DieselFileTransferRepository<
         transfer_id: &str,
         content_hash: Option<&str>,
         now_ms: i64,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let tid = transfer_id.to_string();
         let hash = content_hash.map(|h| h.to_string());
         self.executor.run(move |conn| {
             // Always set status and updated_at_ms; optionally set content_hash
-            if let Some(h) = &hash {
+            let affected = if let Some(h) = &hash {
                 diesel::update(file_transfer::table.filter(file_transfer::transfer_id.eq(&tid)))
                     .set((
                         file_transfer::status.eq(TrackedFileTransferStatus::Completed.as_str()),
                         file_transfer::updated_at_ms.eq(now_ms),
                         file_transfer::content_hash.eq(Some(h)),
                     ))
-                    .execute(conn)?;
+                    .execute(conn)?
             } else {
                 diesel::update(file_transfer::table.filter(file_transfer::transfer_id.eq(&tid)))
                     .set((
                         file_transfer::status.eq(TrackedFileTransferStatus::Completed.as_str()),
                         file_transfer::updated_at_ms.eq(now_ms),
                     ))
-                    .execute(conn)?;
-            }
-            Ok(())
+                    .execute(conn)?
+            };
+            Ok(affected > 0)
         })
     }
 

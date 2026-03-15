@@ -4,7 +4,8 @@
 //! `TrackInboundTransfersUseCase`, emits `file-transfer://status-changed`
 //! events, runs periodic timeout sweeps, and performs startup reconciliation.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -14,6 +15,45 @@ use tracing::{info, info_span, warn, Instrument};
 use uc_app::usecases::clipboard::sync_inbound::PendingTransferLinkage;
 use uc_app::usecases::file_sync::TrackInboundTransfersUseCase;
 use uc_core::ports::transfer_progress::TransferDirection;
+
+/// Info about a file transfer completion that arrived before its
+/// pending record was seeded in the database.
+#[derive(Debug, Clone)]
+pub struct EarlyCompletionInfo {
+    pub content_hash: Option<String>,
+    pub completed_at_ms: i64,
+}
+
+/// Thread-safe cache for file transfer completions that arrive before
+/// the pending record is seeded in the database (race condition).
+///
+/// Shared between the clipboard receive loop (which seeds pending records)
+/// and the pairing events loop (which handles completions).
+#[derive(Default)]
+pub struct EarlyCompletionCache {
+    inner: Mutex<HashMap<String, EarlyCompletionInfo>>,
+}
+
+impl EarlyCompletionCache {
+    /// Store an early completion for later reconciliation.
+    pub fn store(&self, transfer_id: String, info: EarlyCompletionInfo) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(transfer_id, info);
+    }
+
+    /// Drain entries whose transfer_id appears in the given list.
+    /// Returns the matched entries so the caller can reconcile them.
+    pub fn drain_matching(&self, transfer_ids: &[String]) -> Vec<(String, EarlyCompletionInfo)> {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut matched = Vec::new();
+        for tid in transfer_ids {
+            if let Some(info) = map.remove(tid) {
+                matched.push((tid.clone(), info));
+            }
+        }
+        matched
+    }
+}
 
 /// Event payload for `file-transfer://status-changed`.
 ///
@@ -115,20 +155,46 @@ pub async fn handle_transfer_progress<R: tauri::Runtime>(
 /// Handle a file transfer completion event.
 ///
 /// Marks the transfer row as completed before emitting the status event.
+/// If the pending record hasn't been seeded yet (race condition), stores
+/// the completion in `early_cache` for later reconciliation.
 pub async fn handle_transfer_completed<R: tauri::Runtime>(
     tracker: &TrackInboundTransfersUseCase,
     app: Option<&AppHandle<R>>,
     transfer_id: &str,
     content_hash: Option<&str>,
     now_ms: i64,
+    early_cache: Option<&EarlyCompletionCache>,
 ) {
     // Mark durable row completed
-    if let Err(err) = tracker
+    match tracker
         .mark_completed(transfer_id, content_hash, now_ms)
         .await
     {
-        warn!(error = %err, transfer_id, "Failed to mark transfer completed");
-        return;
+        Ok(true) => {
+            // Row was updated — emit status-changed
+        }
+        Ok(false) => {
+            // No row found — pending record hasn't been seeded yet.
+            // Cache completion for reconciliation after seeding.
+            warn!(
+                transfer_id,
+                "Early completion cached: pending record not yet seeded"
+            );
+            if let Some(cache) = early_cache {
+                cache.store(
+                    transfer_id.to_string(),
+                    EarlyCompletionInfo {
+                        content_hash: content_hash.map(|s| s.to_string()),
+                        completed_at_ms: now_ms,
+                    },
+                );
+            }
+            return;
+        }
+        Err(err) => {
+            warn!(error = %err, transfer_id, "Failed to mark transfer completed");
+            return;
+        }
     }
 
     // Emit status-changed for completed

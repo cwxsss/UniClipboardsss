@@ -130,12 +130,15 @@ pub trait FileTransferRepositoryPort: Send + Sync {
     async fn refresh_activity(&self, transfer_id: &str, now_ms: i64) -> anyhow::Result<()>;
 
     /// Mark a transfer as `completed`.
+    ///
+    /// Returns `true` if a row was actually updated, `false` if no matching
+    /// row existed (e.g., the pending record hasn't been seeded yet).
     async fn mark_completed(
         &self,
         transfer_id: &str,
         content_hash: Option<&str>,
         now_ms: i64,
-    ) -> anyhow::Result<()>;
+    ) -> anyhow::Result<bool>;
 
     /// Mark a transfer as `failed` with a reason.
     async fn mark_failed(&self, transfer_id: &str, reason: &str, now_ms: i64)
@@ -195,8 +198,8 @@ impl FileTransferRepositoryPort for NoopFileTransferRepositoryPort {
     async fn refresh_activity(&self, _: &str, _: i64) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn mark_completed(&self, _: &str, _: Option<&str>, _: i64) -> anyhow::Result<()> {
-        Ok(())
+    async fn mark_completed(&self, _: &str, _: Option<&str>, _: i64) -> anyhow::Result<bool> {
+        Ok(false)
     }
     async fn mark_failed(&self, _: &str, _: &str, _: i64) -> anyhow::Result<()> {
         Ok(())

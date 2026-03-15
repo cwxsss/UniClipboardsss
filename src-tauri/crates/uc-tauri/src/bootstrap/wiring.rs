@@ -1340,6 +1340,12 @@ pub fn start_background_tasks<R: Runtime>(
             ),
         );
         let clipboard_clock = inbound_clock.clone();
+
+        // Shared early-completion cache: captures completions that arrive
+        // before the pending record is seeded (race condition fix).
+        let early_completion_cache =
+            Arc::new(super::file_transfer_wiring::EarlyCompletionCache::default());
+        let pairing_early_completion_cache = early_completion_cache.clone();
         registry
             .spawn("clipboard_receive", |token| {
                 async move {
@@ -1387,6 +1393,7 @@ pub fn start_background_tasks<R: Runtime>(
                                     clipboard_app_handle.clone(),
                                     Some(clipboard_transfer_tracker.clone()),
                                     Some(clipboard_clock.clone()),
+                                    Some(early_completion_cache.clone()),
                                 )
                                 .await;
                             }
@@ -1512,6 +1519,7 @@ pub fn start_background_tasks<R: Runtime>(
                                 inbound_clipboard_change_origin.clone(),
                                 inbound_file_transfer_repo.clone(),
                                 inbound_clock.clone(),
+                                pairing_early_completion_cache.clone(),
                             )
                             .await;
 
@@ -1667,6 +1675,7 @@ async fn run_clipboard_receive_loop<R: Runtime>(
     app_handle: Option<AppHandle<R>>,
     transfer_tracker: Option<Arc<uc_app::usecases::file_sync::TrackInboundTransfersUseCase>>,
     clock: Option<Arc<dyn uc_core::ports::ClockPort>>,
+    early_completion_cache: Option<Arc<super::file_transfer_wiring::EarlyCompletionCache>>,
 ) {
     while let Some((message, pre_decoded)) = clipboard_rx.recv().await {
         let flow_id = uc_observability::FlowId::generate();
@@ -1732,6 +1741,50 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                                     message_id = %message_id,
                                     "Failed to persist pending transfer records"
                                 );
+                            } else if let Some(cache) = early_completion_cache.as_ref() {
+                                // Reconcile early completions that arrived before seeding
+                                let seeded_ids: Vec<String> = pending_transfers
+                                    .iter()
+                                    .map(|t| t.transfer_id.clone())
+                                    .collect();
+                                let early = cache.drain_matching(&seeded_ids);
+                                for (tid, info) in &early {
+                                    info!(
+                                        transfer_id = %tid,
+                                        "Reconciling early completion after seeding"
+                                    );
+                                    match tracker
+                                        .mark_completed(
+                                            tid,
+                                            info.content_hash.as_deref(),
+                                            info.completed_at_ms,
+                                        )
+                                        .await
+                                    {
+                                        Ok(_) => {
+                                            if let Some(app) = app_handle.as_ref() {
+                                                let payload = super::file_transfer_wiring::FileTransferStatusPayload {
+                                                    transfer_id: tid.clone(),
+                                                    entry_id: entry_id.to_string(),
+                                                    status: "completed".to_string(),
+                                                    reason: None,
+                                                };
+                                                if let Err(err) = app
+                                                    .emit("file-transfer://status-changed", payload)
+                                                {
+                                                    warn!(error = %err, "Failed to emit reconciled completion status");
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            warn!(
+                                                error = %err,
+                                                transfer_id = %tid,
+                                                "Failed to reconcile early completion"
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -2231,6 +2284,7 @@ async fn run_pairing_event_loop<R: Runtime>(
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
     file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
     clock: Arc<dyn uc_core::ports::ClockPort>,
+    early_completion_cache: Arc<super::file_transfer_wiring::EarlyCompletionCache>,
 ) {
     // Batch accumulator: batch_id -> (completed_paths: Vec<PathBuf>, expected_total: u32, peer_id: String)
     let mut batch_accumulator: std::collections::HashMap<String, (Vec<PathBuf>, u32, String)> =
@@ -2403,6 +2457,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                 // Clone tracker for spawn
                 let tracker_for_spawn = transfer_tracker.clone();
                 let clock_for_spawn = clock.clone();
+                let early_cache_for_spawn = early_completion_cache.clone();
 
                 // Clone values before spawn takes ownership
                 let app_handle_clone = app_handle.clone();
@@ -2464,6 +2519,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                                     &result.transfer_id,
                                     Some(&expected_hash),
                                     now_ms,
+                                    Some(early_cache_for_spawn.as_ref()),
                                 )
                                 .await;
 
@@ -4273,8 +4329,10 @@ mod tests {
         .expect("send clipboard message");
         drop(tx);
 
-        run_clipboard_receive_loop::<tauri::test::MockRuntime>(rx, &usecase, None, None, None)
-            .await;
+        run_clipboard_receive_loop::<tauri::test::MockRuntime>(
+            rx, &usecase, None, None, None, None,
+        )
+        .await;
 
         let logs = log_buffer.content();
         assert!(
@@ -4316,6 +4374,7 @@ mod tests {
             Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
                 as Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
             Arc::new(uc_infra::SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+            Arc::new(crate::bootstrap::file_transfer_wiring::EarlyCompletionCache::default()),
         ));
 
         let request = PairingRequest {
@@ -4848,6 +4907,7 @@ mod tests {
             Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
                 as Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
             Arc::new(uc_infra::SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+            Arc::new(crate::bootstrap::file_transfer_wiring::EarlyCompletionCache::default()),
         ));
 
         event_tx
@@ -4917,6 +4977,7 @@ mod tests {
             Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
                 as Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
             Arc::new(uc_infra::SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+            Arc::new(crate::bootstrap::file_transfer_wiring::EarlyCompletionCache::default()),
         ));
 
         event_tx

@@ -71,12 +71,15 @@ impl TrackInboundTransfersUseCase {
     }
 
     /// Mark a transfer as completed.
+    ///
+    /// Returns `true` if a row was actually updated, `false` if the pending
+    /// record hasn't been seeded yet (race condition).
     pub async fn mark_completed(
         &self,
         transfer_id: &str,
         content_hash: Option<&str>,
         now_ms: i64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.repo
             .mark_completed(transfer_id, content_hash, now_ms)
             .instrument(info_span!("track_inbound.mark_completed", transfer_id))
@@ -239,14 +242,16 @@ mod tests {
             transfer_id: &str,
             content_hash: Option<&str>,
             now_ms: i64,
-        ) -> Result<()> {
+        ) -> Result<bool> {
             let mut store = self.transfers.lock().unwrap();
             if let Some(t) = store.iter_mut().find(|t| t.transfer_id == transfer_id) {
                 t.status = TrackedFileTransferStatus::Completed;
                 t.content_hash = content_hash.map(|s| s.to_string());
                 t.updated_at_ms = now_ms;
+                Ok(true)
+            } else {
+                Ok(false)
             }
-            Ok(())
         }
 
         async fn mark_failed(&self, transfer_id: &str, reason: &str, now_ms: i64) -> Result<()> {
