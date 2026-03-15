@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 32-04-PLAN.md
-last_updated: '2026-03-15T03:42:34.490Z'
+stopped_at: Completed 32-05-PLAN.md
+last_updated: '2026-03-15T03:50:26.511Z'
 last_activity: '2026-03-15 — Completed 32-04 plan: Frontend durable file transfer status data layer'
 progress:
   total_phases: 15
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 41
-  completed_plans: 39
+  completed_plans: 40
   percent: 96
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 32 of 32 (Fix file sync eventual consistency)
-Plan: 4 of 5 complete
-Status: In Progress
-Last activity: 2026-03-15 — Completed 32-04 plan: Frontend durable file transfer status data layer
+Plan: 5 of 5 complete
+Status: Complete
+Last activity: 2026-03-15 — Completed 32-05 plan: File transfer state UI and Copy gating
 
-Progress: [██████████] 96%
+Progress: [██████████] 98%
 
 ## Performance Metrics
 
@@ -87,6 +87,7 @@ Progress: [██████████] 96%
   | Phase 32 P02 | 4min | 2 tasks | 7 files |
   | Phase 32 P03 | 20min | 2 tasks | 12 files |
   | Phase 32 P04 | 3min | 1 tasks | 5 files |
+  | Phase 32 P05 | 5min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -178,6 +179,7 @@ Recent decisions affecting current work:
 - [Phase 32]: PendingTransferLinkage returned from InboundApplyOutcome for platform layer status emission
 - [Phase 32]: Durable entryStatusById separate from ephemeral activeTransfers to survive progress cleanup
 - [Phase 32]: Old transfer://progress and transfer://error channels replaced with file-transfer:// namespace
+- [Phase 32]: Durable entryStatusById takes priority over ephemeral activeTransfers for all UI state decisions
 
 ### Roadmap Evolution
 
@@ -212,6 +214,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-15T03:42:34.487Z
-Stopped at: Completed 32-04-PLAN.md
+Last session: 2026-03-15T03:50:26.508Z
+Stopped at: Completed 32-05-PLAN.md
 Resume file: None
