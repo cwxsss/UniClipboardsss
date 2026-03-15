@@ -845,6 +845,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.representation_repo.clone(),
             self.runtime.deps.storage.thumbnail_repo.clone(),
+            self.runtime.deps.storage.file_transfer_repo.clone(),
         )
     }
 
