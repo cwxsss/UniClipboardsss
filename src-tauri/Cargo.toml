@@ -87,5 +87,5 @@ resolver = "2"
 
 # Dependencies for workspace crates, mainly for tauri plugins
 [workspace.dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2"
