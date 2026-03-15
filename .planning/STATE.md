@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 32 of 32 (Fix file sync eventual consistency)
-Plan: 2 of 5 complete
+Plan: 3 of 5 complete
 Status: In Progress
-Last activity: 2026-03-15 — Completed 32-02 plan: Infra transfer tracking with migration and repository
+Last activity: 2026-03-15 — Completed 32-03 plan: Tauri/platform integration and startup reconciliation
 
-Progress: [████------] 40%
+Progress: [██████----] 60%
 
 ## Performance Metrics
 
@@ -85,6 +85,7 @@ Progress: [████------] 40%
   | Phase 31 P03 | 5min | 2 tasks | 3 files |
   | Phase 32 P01 | 13min | 2 tasks | 11 files |
   | Phase 32 P02 | 4min | 2 tasks | 7 files |
+  | Phase 32 P03 | 20min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -166,6 +167,10 @@ Recent decisions affecting current work:
 - [Phase 31]: Cleanup module placed in file_sync/ (not file/) to match existing module naming
 - [Phase 31]: Guards return Result errors (not events) since use cases have no event channel access; callers handle event emission
 - [Phase 31]: transfer_errors module provides constants and formatters for consistent user-facing error messages
+- [Phase 32]: Arc<TrackInboundTransfersUseCase> shared across spawned tasks for durable marking inside async spawns
+- [Phase 32]: get_entry_id_for_transfer added to port for transfer_id-only context resolution in progress events
+- [Phase 32]: file-transfer:// namespace prefix unifies all file transfer events
+- [Phase 32]: tokio::watch for timeout sweep cancellation to keep it simpler than TaskRegistry token
 - [Phase 32]: String-based entry_id in FileTransferRepositoryPort to avoid coupling to uc_ids across crate boundaries
 - [Phase 32]: NoopFileTransferRepositoryPort stub for compilation before infra adapter lands
 - [Phase 32]: Aggregate transfer status priority: failed > transferring > pending > completed
@@ -204,6 +209,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-15T03:10:01Z
-Stopped at: Completed 32-02-PLAN.md
-Resume file: .planning/phases/32-fix-file-sync-eventual-consistency-ensure-atomic-sync-with-metadata-and-blob-together/32-03-PLAN.md
+Last session: 2026-03-15T03:34:08Z
+Stopped at: Completed 32-03-PLAN.md
+Resume file: .planning/phases/32-fix-file-sync-eventual-consistency-ensure-atomic-sync-with-metadata-and-blob-together/32-04-PLAN.md
