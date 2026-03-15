@@ -24,7 +24,7 @@ import {
   ClipboardLinkItem,
   ClipboardTextItem,
 } from '@/api/clipboardItems'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { useAppSelector } from '@/store/hooks'
 import {
@@ -166,45 +166,53 @@ const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>
             {getPreviewText(item)}
           </span>
           {isFile && isPending && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Clock
-                  className="h-3.5 w-3.5 text-muted-foreground shrink-0"
-                  aria-label={t('clipboard.transfer.statusBadge.pending')}
-                />
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                <p className="text-xs">{t('clipboard.transfer.pending')}</p>
-              </TooltipContent>
-            </Tooltip>
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Clock
+                    className="h-3.5 w-3.5 text-muted-foreground shrink-0"
+                    aria-label={t('clipboard.transfer.statusBadge.pending')}
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="left">
+                  <p className="text-xs">{t('clipboard.transfer.pending')}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
           {isFile && isTransferring && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Loader2
-                  className="h-3.5 w-3.5 text-primary animate-spin shrink-0"
-                  aria-label={t('clipboard.transfer.statusBadge.transferring')}
-                />
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                <p className="text-xs">{t('clipboard.transfer.transferring')}</p>
-              </TooltipContent>
-            </Tooltip>
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Loader2
+                    className="h-3.5 w-3.5 text-primary animate-spin shrink-0"
+                    aria-label={t('clipboard.transfer.statusBadge.transferring')}
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="left">
+                  <p className="text-xs">{t('clipboard.transfer.transferring')}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
           {isTransferFailed ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <AlertCircle
-                  className="h-3.5 w-3.5 text-destructive shrink-0"
-                  aria-label={t('clipboard.transfer.statusBadge.failed')}
-                />
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                <p className="text-xs">
-                  {entryStatus?.reason || transfer?.errorMessage || t('clipboard.transfer.failed')}
-                </p>
-              </TooltipContent>
-            </Tooltip>
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <AlertCircle
+                    className="h-3.5 w-3.5 text-destructive shrink-0"
+                    aria-label={t('clipboard.transfer.statusBadge.failed')}
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="left">
+                  <p className="text-xs">
+                    {entryStatus?.reason ||
+                      transfer?.errorMessage ||
+                      t('clipboard.transfer.failed')}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           ) : (
             !isPending &&
             !isTransferring && (
