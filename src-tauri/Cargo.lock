@@ -9022,6 +9022,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uc-core",
+ "url",
  "uuid",
 ]
 

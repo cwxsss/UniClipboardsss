@@ -180,7 +180,16 @@ impl CommonClipboardImpl {
         if ctx.has(ContentFormat::Files) {
             match ctx.get_files() {
                 Ok(files) => {
-                    let bytes = files.join("\n").into_bytes();
+                    // clipboard-rs returns raw OS paths (e.g. "C:\Users\mark\file.jpg" on Windows).
+                    // Normalize to file:// URIs so downstream `extract_file_paths_from_snapshot`
+                    // can parse them on all platforms via url::Url::parse().
+                    let uris: Vec<String> = files
+                        .into_iter()
+                        .filter_map(|path| {
+                            url::Url::from_file_path(&path).ok().map(|u| u.to_string())
+                        })
+                        .collect();
+                    let bytes = uris.join("\n").into_bytes();
                     debug!(
                         format_id = "files",
                         size_bytes = bytes.len(),
@@ -461,9 +470,27 @@ impl CommonClipboardImpl {
                 map_clipboard_err(ctx.set_html(String::from_utf8(rep.bytes.clone())?))?;
             }
             Some("text/uri-list") | Some("file/uri-list") => {
-                let files = String::from_utf8(rep.bytes.clone())?
+                // Convert file:// URIs back to raw OS paths for set_files(),
+                // which expects native paths. Also handle raw paths for compatibility
+                // with inbound cache paths that aren't URI-encoded.
+                let files: Vec<String> = String::from_utf8(rep.bytes.clone())?
                     .lines()
-                    .map(|s| s.to_string())
+                    .filter_map(|line| {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            return None;
+                        }
+                        // Try as file:// URI first
+                        if let Ok(url) = url::Url::parse(line) {
+                            if url.scheme() == "file" {
+                                if let Ok(path) = url.to_file_path() {
+                                    return Some(path.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                        // Fallback: treat as raw path
+                        Some(line.to_string())
+                    })
                     .collect();
                 map_clipboard_err(ctx.set_files(files))?;
             }
