@@ -6,6 +6,7 @@ import {
   removeTransfer,
   markTransferFailed,
   cancelClipboardWrite,
+  setEntryTransferStatus,
 } from '@/store/slices/fileTransferSlice'
 
 const COMPLETED_CLEAR_DELAY_MS = 3000
@@ -20,9 +21,16 @@ interface TransferProgressEvent {
   totalBytes?: number | null
 }
 
+interface FileTransferStatusEvent {
+  transferId: string
+  entryId: string
+  status: string
+  reason?: string | null
+}
+
 /**
- * Hook that listens to transfer://progress Tauri events and dispatches
- * progress updates to the Redux fileTransfer slice.
+ * Hook that listens to file-transfer:// Tauri events and dispatches
+ * progress updates and durable status changes to the Redux fileTransfer slice.
  *
  * Call once in a top-level component (e.g., ClipboardContent) to activate.
  */
@@ -35,17 +43,32 @@ export function useTransferProgress(): void {
 
     const setup = async () => {
       try {
-        // Listen for transfer errors
-        const unlistenError = await listen<{ transferId: string; error: string }>(
-          'transfer://error',
+        // Listen for durable status-changed events (pending/transferring/completed/failed)
+        const unlistenStatusChanged = await listen<FileTransferStatusEvent>(
+          'file-transfer://status-changed',
           event => {
             if (cancelled) return
-            dispatch(
-              markTransferFailed({
-                transferId: event.payload.transferId,
-                error: event.payload.error,
-              })
-            )
+            const { entryId, status, reason } = event.payload
+            const validStatuses = ['pending', 'transferring', 'completed', 'failed'] as const
+            if (validStatuses.includes(status as (typeof validStatuses)[number])) {
+              dispatch(
+                setEntryTransferStatus({
+                  entryId,
+                  status: status as (typeof validStatuses)[number],
+                  reason: reason ?? null,
+                })
+              )
+            }
+
+            // If status is failed, also mark the transfer as failed in progress state
+            if (status === 'failed') {
+              dispatch(
+                markTransferFailed({
+                  transferId: event.payload.transferId,
+                  error: reason ?? undefined,
+                })
+              )
+            }
           }
         )
 
@@ -55,7 +78,7 @@ export function useTransferProgress(): void {
           dispatch(cancelClipboardWrite())
         })
 
-        const unlisten = await listen<TransferProgressEvent>('transfer://progress', event => {
+        const unlisten = await listen<TransferProgressEvent>('file-transfer://progress', event => {
           if (cancelled) return
 
           const payload = event.payload
@@ -72,6 +95,7 @@ export function useTransferProgress(): void {
           )
 
           // Auto-clear completed transfers after delay
+          // NOTE: this only clears the ephemeral progress state, NOT the durable entryStatusById
           const isCompleted =
             payload.chunksCompleted === payload.totalChunks && payload.totalChunks > 0
           if (isCompleted) {
@@ -90,7 +114,7 @@ export function useTransferProgress(): void {
           }
         })
 
-        return { unlisten, unlistenError, unlistenClipboard }
+        return { unlisten, unlistenStatusChanged, unlistenClipboard }
       } catch (err) {
         console.error('[useTransferProgress] Failed to setup transfer progress listener:', err)
         return undefined
@@ -110,7 +134,7 @@ export function useTransferProgress(): void {
       setupPromise.then(listeners => {
         if (listeners) {
           listeners.unlisten()
-          listeners.unlistenError()
+          listeners.unlistenStatusChanged()
           listeners.unlistenClipboard()
         }
       })

@@ -119,6 +119,103 @@ describe('favoriteClipboardItem / unfavoriteClipboardItem', () => {
   })
 })
 
+describe('file transfer status hydration', () => {
+  it('hydrates failed file_transfer_status from API response', async () => {
+    invokeMock.mockResolvedValueOnce({
+      status: 'ready',
+      entries: [
+        {
+          id: 'file-entry-1',
+          preview: 'file:///tmp/test.txt',
+          has_detail: false,
+          size_bytes: 100,
+          captured_at: 1000,
+          content_type: 'text/uri-list',
+          is_encrypted: false,
+          is_favorited: false,
+          updated_at: 1000,
+          active_time: 0,
+          file_transfer_status: 'failed',
+          file_transfer_reason: 'timeout after 60s',
+        },
+      ],
+    })
+
+    const result = (await getClipboardItems()) as {
+      status: string
+      items: Array<{
+        id: string
+        file_transfer_status?: string | null
+        file_transfer_reason?: string | null
+      }>
+    }
+
+    expect(result.status).toBe('ready')
+    expect(result.items[0].file_transfer_status).toBe('failed')
+    expect(result.items[0].file_transfer_reason).toBe('timeout after 60s')
+  })
+
+  it('hydrates pending file_transfer_status from API response', async () => {
+    invokeMock.mockResolvedValueOnce({
+      status: 'ready',
+      entries: [
+        {
+          id: 'file-entry-2',
+          preview: 'file:///tmp/doc.pdf',
+          has_detail: false,
+          size_bytes: 5000,
+          captured_at: 2000,
+          content_type: 'text/uri-list',
+          is_encrypted: false,
+          is_favorited: false,
+          updated_at: 2000,
+          active_time: 0,
+          file_transfer_status: 'pending',
+        },
+      ],
+    })
+
+    const result = (await getClipboardItems()) as {
+      status: string
+      items: Array<{
+        id: string
+        file_transfer_status?: string | null
+        file_transfer_reason?: string | null
+      }>
+    }
+
+    expect(result.items[0].file_transfer_status).toBe('pending')
+    expect(result.items[0].file_transfer_reason).toBeNull()
+  })
+
+  it('returns null file_transfer_status for non-file entries', async () => {
+    invokeMock.mockResolvedValueOnce({
+      status: 'ready',
+      entries: [
+        {
+          id: 'text-entry-1',
+          preview: 'hello world',
+          has_detail: false,
+          size_bytes: 11,
+          captured_at: 3000,
+          content_type: 'text/plain',
+          is_encrypted: false,
+          is_favorited: false,
+          updated_at: 3000,
+          active_time: 0,
+        },
+      ],
+    })
+
+    const result = (await getClipboardItems()) as {
+      status: string
+      items: Array<{ id: string; file_transfer_status?: string | null }>
+    }
+
+    expect(result.items[0].file_transfer_status).toBeNull()
+  })
+})
+
 describe('getClipboardItem', () => {
   it('calls get_clipboard_item with id and fullContent', async () => {
     const response = {

@@ -17,14 +17,23 @@ export interface TransferProgressInfo {
   updatedAt: number
 }
 
+/** Durable entry-level transfer status seeded from command responses and status-changed events. */
+export interface EntryTransferStatus {
+  status: 'pending' | 'transferring' | 'completed' | 'failed'
+  reason?: string | null
+}
+
 interface FileTransferState {
   activeTransfers: Record<string, TransferProgressInfo>
   entryTransferMap: Record<string, string>
+  /** Durable entry-level transfer status keyed by entryId. Survives progress cleanup. */
+  entryStatusById: Record<string, EntryTransferStatus>
 }
 
 const initialState: FileTransferState = {
   activeTransfers: {},
   entryTransferMap: {},
+  entryStatusById: {},
 }
 
 interface UpdateTransferProgressPayload {
@@ -122,6 +131,36 @@ const fileTransferSlice = createSlice({
       }
       delete state.activeTransfers[transferId]
     },
+
+    /** Seed or update durable entry-level transfer status from API responses or status-changed events. */
+    setEntryTransferStatus(
+      state,
+      action: PayloadAction<{
+        entryId: string
+        status: EntryTransferStatus['status']
+        reason?: string | null
+      }>
+    ) {
+      const { entryId, status, reason } = action.payload
+      state.entryStatusById[entryId] = { status, reason: reason ?? null }
+    },
+
+    /** Bulk-hydrate durable entry statuses from initial API query. */
+    hydrateEntryTransferStatuses(
+      state,
+      action: PayloadAction<
+        Array<{ entryId: string; status: EntryTransferStatus['status']; reason?: string | null }>
+      >
+    ) {
+      for (const item of action.payload) {
+        state.entryStatusById[item.entryId] = { status: item.status, reason: item.reason ?? null }
+      }
+    },
+
+    /** Remove durable entry status (e.g., when entry is deleted). */
+    removeEntryTransferStatus(state, action: PayloadAction<string>) {
+      delete state.entryStatusById[action.payload]
+    },
   },
 })
 
@@ -132,6 +171,9 @@ export const {
   cancelClipboardWrite,
   clearCompletedTransfers,
   removeTransfer,
+  setEntryTransferStatus,
+  hydrateEntryTransferStatuses,
+  removeEntryTransferStatus,
 } = fileTransferSlice.actions
 
 // Selectors
@@ -151,6 +193,14 @@ export const selectActiveTransfers = (state: RootState): TransferProgressInfo[] 
 export const selectIsEntryTransferring = (state: RootState, entryId: string): boolean => {
   const transfer = selectTransferByEntryId(state, entryId)
   return transfer?.status === 'active'
+}
+
+/** Select durable entry-level transfer status (persisted, survives progress cleanup). */
+export const selectEntryTransferStatus = (
+  state: RootState,
+  entryId: string
+): EntryTransferStatus | undefined => {
+  return state.fileTransfer.entryStatusById[entryId]
 }
 
 export default fileTransferSlice.reducer

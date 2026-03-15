@@ -14,6 +14,8 @@ interface ClipboardEntryProjection {
   updated_at: number
   active_time: number
   thumbnail_url?: string | null
+  file_transfer_status?: string | null
+  file_transfer_reason?: string | null
 }
 
 type ClipboardEntriesResponse =
@@ -116,6 +118,10 @@ export interface ClipboardItemResponse {
   updated_at: number
   active_time: number
   item: ClipboardItem
+  /** Persisted file transfer status for file entries: "pending" | "transferring" | "completed" | "failed" | null */
+  file_transfer_status?: string | null
+  /** Failure reason when file_transfer_status is "failed" */
+  file_transfer_reason?: string | null
 }
 
 export interface ClipboardStats {
@@ -176,6 +182,8 @@ function transformProjectionToResponse(entry: ClipboardEntryProjection): Clipboa
     updated_at: entry.updated_at,
     active_time: entry.active_time,
     item,
+    file_transfer_status: entry.file_transfer_status ?? null,
+    file_transfer_reason: entry.file_transfer_reason ?? null,
   }
 }
 
