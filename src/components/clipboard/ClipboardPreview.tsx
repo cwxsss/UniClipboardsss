@@ -231,6 +231,15 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
                 )}
               </div>
             )}
+            {effectiveStatus === 'completed' && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 rounded-md px-2 py-1 w-fit"
+                aria-label={t('clipboard.transfer.statusBadge.completed')}
+              >
+                <CheckCircle2 size={12} />
+                <span>{t('clipboard.transfer.completed')}</span>
+              </div>
+            )}
             {/* Download status badge (only when no durable transfer status) */}
             {!effectiveStatus && item.isDownloaded === false && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded-md px-2 py-1 w-fit">
@@ -384,19 +393,6 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
                   {t('devices.list.actions.retry')}
                 </button>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Transfer completed indicator */}
-      {effectiveStatus === 'completed' && (
-        <div className="shrink-0">
-          <Separator className="bg-border/40" />
-          <div className="p-4">
-            <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
-              <CheckCircle2 className="h-4 w-4" />
-              <span>{t('clipboard.transfer.completed')}</span>
             </div>
           </div>
         </div>
