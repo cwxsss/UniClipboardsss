@@ -37,6 +37,13 @@ pub struct ClipboardEntryProjection {
     pub updated_at: i64,
     /// Timestamp of last access/use
     pub active_time: i64,
+    /// Aggregate file transfer status for file entries (None for non-file entries).
+    /// Values: "pending", "transferring", "completed", "failed".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_transfer_status: Option<String>,
+    /// Failure reason when `file_transfer_status` is "failed" (None otherwise).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_transfer_reason: Option<String>,
 }
 
 /// Clipboard entries response with readiness status
@@ -221,6 +228,8 @@ mod tests {
             is_favorited: false,
             updated_at: 1234567890,
             active_time: 1234567890,
+            file_transfer_status: None,
+            file_transfer_reason: None,
         };
         let value = serde_json::to_value(&entry).expect("serialize failed");
         // Verify snake_case field names (not camelCase)

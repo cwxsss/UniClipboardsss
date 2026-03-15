@@ -15,9 +15,29 @@ use tauri::State;
 use tracing::{info_span, Instrument};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::clipboard::ClipboardUseCases;
+use uc_app::usecases::EntryProjectionDto;
 use uc_core::ids::EntryId;
 use uc_core::security::state::EncryptionState;
 use uc_platform::ports::observability::TraceMetadata;
+
+/// Map an app-layer projection DTO to the command-layer response model.
+fn dto_to_projection(dto: EntryProjectionDto) -> ClipboardEntryProjection {
+    ClipboardEntryProjection {
+        id: dto.id,
+        preview: dto.preview,
+        has_detail: dto.has_detail,
+        size_bytes: dto.size_bytes,
+        captured_at: dto.captured_at,
+        content_type: dto.content_type,
+        thumbnail_url: dto.thumbnail_url,
+        is_encrypted: dto.is_encrypted,
+        is_favorited: dto.is_favorited,
+        updated_at: dto.updated_at,
+        active_time: dto.active_time,
+        file_transfer_status: dto.file_transfer_status,
+        file_transfer_reason: dto.file_transfer_reason,
+    }
+}
 
 /// Get clipboard history entries (preview only)
 /// 获取剪贴板历史条目（仅预览）
@@ -66,22 +86,8 @@ pub async fn get_clipboard_entries(
             })?;
 
         // Map DTOs to command layer models
-        let projections: Vec<ClipboardEntryProjection> = dtos
-            .into_iter()
-            .map(|dto| ClipboardEntryProjection {
-                id: dto.id,
-                preview: dto.preview,
-                has_detail: dto.has_detail,
-                size_bytes: dto.size_bytes,
-                captured_at: dto.captured_at,
-                content_type: dto.content_type,
-                thumbnail_url: dto.thumbnail_url,
-                is_encrypted: dto.is_encrypted,
-                is_favorited: dto.is_favorited,
-                updated_at: dto.updated_at,
-                active_time: dto.active_time,
-            })
-            .collect();
+        let projections: Vec<ClipboardEntryProjection> =
+            dtos.into_iter().map(|dto| dto_to_projection(dto)).collect();
 
         tracing::info!(count = projections.len(), "Retrieved clipboard entries");
         Ok(ClipboardEntriesResponse::Ready {
@@ -215,19 +221,7 @@ pub async fn get_clipboard_entry(
         })?;
 
         let entries: Vec<ClipboardEntryProjection> = match projection {
-            Some(dto) => vec![ClipboardEntryProjection {
-                id: dto.id,
-                preview: dto.preview,
-                has_detail: dto.has_detail,
-                size_bytes: dto.size_bytes,
-                captured_at: dto.captured_at,
-                content_type: dto.content_type,
-                thumbnail_url: dto.thumbnail_url,
-                is_encrypted: dto.is_encrypted,
-                is_favorited: dto.is_favorited,
-                updated_at: dto.updated_at,
-                active_time: dto.active_time,
-            }],
+            Some(dto) => vec![dto_to_projection(dto)],
             None => vec![],
         };
 

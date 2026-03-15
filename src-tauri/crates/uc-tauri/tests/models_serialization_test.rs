@@ -54,6 +54,8 @@ fn clipboard_entry_projection_preserves_snake_case() {
         is_favorited: false,
         updated_at: 1234567890,
         active_time: 1234567890,
+        file_transfer_status: None,
+        file_transfer_reason: None,
     };
     let value = serde_json::to_value(&entry).expect("serialize failed");
     // Verify snake_case field names (not camelCase)
@@ -81,6 +83,83 @@ fn clipboard_entry_projection_preserves_snake_case() {
     assert!(
         value.get("sizeBytes").is_none(),
         "unexpected camelCase 'sizeBytes'"
+    );
+}
+
+#[test]
+fn clipboard_entry_projection_includes_file_transfer_status_when_present() {
+    let entry = ClipboardEntryProjection {
+        id: "file-entry-1".to_string(),
+        preview: "document.pdf".to_string(),
+        has_detail: false,
+        size_bytes: 1024,
+        captured_at: 1700000000,
+        content_type: "text/uri-list".to_string(),
+        thumbnail_url: None,
+        is_encrypted: false,
+        is_favorited: false,
+        updated_at: 1700000000,
+        active_time: 1700000000,
+        file_transfer_status: Some("pending".to_string()),
+        file_transfer_reason: None,
+    };
+    let value = serde_json::to_value(&entry).expect("serialize failed");
+    assert_eq!(value["file_transfer_status"], "pending");
+    // file_transfer_reason should be absent (skip_serializing_if = None)
+    assert!(
+        value.get("file_transfer_reason").is_none(),
+        "expected file_transfer_reason to be omitted when None"
+    );
+}
+
+#[test]
+fn clipboard_entry_projection_includes_failure_reason_when_failed() {
+    let entry = ClipboardEntryProjection {
+        id: "file-entry-2".to_string(),
+        preview: "photo.jpg".to_string(),
+        has_detail: false,
+        size_bytes: 2048,
+        captured_at: 1700000000,
+        content_type: "text/uri-list".to_string(),
+        thumbnail_url: None,
+        is_encrypted: false,
+        is_favorited: false,
+        updated_at: 1700000000,
+        active_time: 1700000000,
+        file_transfer_status: Some("failed".to_string()),
+        file_transfer_reason: Some("hash mismatch".to_string()),
+    };
+    let value = serde_json::to_value(&entry).expect("serialize failed");
+    assert_eq!(value["file_transfer_status"], "failed");
+    assert_eq!(value["file_transfer_reason"], "hash mismatch");
+}
+
+#[test]
+fn clipboard_entry_projection_omits_transfer_fields_for_non_file_entry() {
+    let entry = ClipboardEntryProjection {
+        id: "text-entry-1".to_string(),
+        preview: "hello world".to_string(),
+        has_detail: true,
+        size_bytes: 11,
+        captured_at: 1700000000,
+        content_type: "text/plain".to_string(),
+        thumbnail_url: None,
+        is_encrypted: false,
+        is_favorited: false,
+        updated_at: 1700000000,
+        active_time: 1700000000,
+        file_transfer_status: None,
+        file_transfer_reason: None,
+    };
+    let value = serde_json::to_value(&entry).expect("serialize failed");
+    // Both transfer fields should be omitted for non-file entries
+    assert!(
+        value.get("file_transfer_status").is_none(),
+        "expected file_transfer_status to be omitted for non-file entry"
+    );
+    assert!(
+        value.get("file_transfer_reason").is_none(),
+        "expected file_transfer_reason to be omitted for non-file entry"
     );
 }
 

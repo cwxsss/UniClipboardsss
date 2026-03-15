@@ -94,7 +94,8 @@ use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
     DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
     DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselDeviceRepository, DieselPairedDeviceRepository, DieselThumbnailRepository,
+    DieselDeviceRepository, DieselFileTransferRepository, DieselPairedDeviceRepository,
+    DieselThumbnailRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
@@ -352,6 +353,9 @@ struct InfraLayer {
     // System services / 系统服务
     clock: Arc<dyn ClockPort>,
     hash: Arc<dyn ContentHashPort>,
+
+    // File transfer tracking / 文件传输追踪
+    file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
 }
 
 /// Platform layer implementations / 平台层实现
@@ -532,6 +536,11 @@ fn create_infra_layer(
     let selection_repo_impl = DieselClipboardSelectionRepository::new(Arc::clone(&db_executor));
     let selection_repo: Arc<dyn ClipboardSelectionRepositoryPort> = Arc::new(selection_repo_impl);
 
+    // Create file transfer repository
+    // 创建文件传输仓库
+    let file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort> =
+        Arc::new(DieselFileTransferRepository::new(Arc::clone(&db_executor)));
+
     let infra = InfraLayer {
         clipboard_entry_repo,
         clipboard_event_repo,
@@ -549,6 +558,7 @@ fn create_infra_layer(
         setup_status,
         clock,
         hash,
+        file_transfer_repo,
     };
 
     Ok(infra)
@@ -1106,7 +1116,7 @@ pub fn wire_dependencies_with_identity_store(
             blob_writer: platform.blob_writer,
             thumbnail_repo: infra.thumbnail_repo,
             thumbnail_generator: infra.thumbnail_generator,
-            file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
+            file_transfer_repo: infra.file_transfer_repo,
         },
         settings: infra.settings_repo,
         system: SystemPorts {

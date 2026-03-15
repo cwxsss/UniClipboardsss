@@ -959,6 +959,18 @@ impl<'a> UseCases<'a> {
         )
     }
 
+    /// Create a `TrackInboundTransfersUseCase` wired with the file transfer repository.
+    ///
+    /// Used by wiring code for event-loop status transitions, timeout sweeps,
+    /// and startup reconciliation.
+    pub fn track_inbound_transfers(
+        &self,
+    ) -> uc_app::usecases::file_sync::TrackInboundTransfersUseCase {
+        uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
+            self.runtime.deps.storage.file_transfer_repo.clone(),
+        )
+    }
+
     /// Create a `SyncOutboundFileUseCase` wired with this runtime's settings,
     /// device repo, peer directory, and file transport port.
     ///
