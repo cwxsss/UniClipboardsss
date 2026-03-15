@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: executing
-stopped_at: Completed 32-05-PLAN.md
-last_updated: '2026-03-15T03:50:26.511Z'
-last_activity: '2026-03-15 — Completed 32-04 plan: Frontend durable file transfer status data layer'
+status: completed
+stopped_at: Completed 32-06-PLAN.md
+last_updated: '2026-03-15T04:50:35.381Z'
+last_activity: '2026-03-15 — Completed 32-05 plan: File transfer state UI and Copy gating'
 progress:
   total_phases: 15
   completed_phases: 14
-  total_plans: 41
-  completed_plans: 40
-  percent: 96
+  total_plans: 42
+  completed_plans: 41
+  percent: 98
 ---
 
 # Project State
@@ -88,6 +88,7 @@ Progress: [██████████] 98%
   | Phase 32 P03 | 20min | 2 tasks | 12 files |
   | Phase 32 P04 | 3min | 1 tasks | 5 files |
   | Phase 32 P05 | 5min | 2 tasks | 7 files |
+  | Phase 32 P06 | 5 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -180,6 +181,8 @@ Recent decisions affecting current work:
 - [Phase 32]: Durable entryStatusById separate from ephemeral activeTransfers to survive progress cleanup
 - [Phase 32]: Old transfer://progress and transfer://error channels replaced with file-transfer:// namespace
 - [Phase 32]: Durable entryStatusById takes priority over ephemeral activeTransfers for all UI state decisions
+- [Phase 32]: Hydration dispatch placed inside thunk (not fulfilled reducer) because reducers cannot dispatch actions
+- [Phase 32]: fetchClipboardItems filters file_transfer_status != null before building hydrateEntryTransferStatuses payload to avoid seeding null statuses into entryStatusById
 
 ### Roadmap Evolution
 
@@ -214,6 +217,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-15T03:50:26.508Z
-Stopped at: Completed 32-05-PLAN.md
+Last session: 2026-03-15T04:50:35.378Z
+Stopped at: Completed 32-06-PLAN.md
 Resume file: None
