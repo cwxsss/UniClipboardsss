@@ -77,14 +77,15 @@ pub struct DevicePorts {
     pub paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
 }
 
-/// Storage-domain ports bundle (blobs and thumbnails).
-/// 存储领域端口组（Blob 和缩略图）。
+/// Storage-domain ports bundle (blobs, thumbnails, file transfer tracking).
+/// 存储领域端口组（Blob、缩略图、文件传输追踪）。
 pub struct StoragePorts {
     pub blob_store: Arc<dyn BlobStorePort>,
     pub blob_repository: Arc<dyn BlobRepositoryPort>,
     pub blob_writer: Arc<dyn BlobWriterPort>,
     pub thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
     pub thumbnail_generator: Arc<dyn ThumbnailGeneratorPort>,
+    pub file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
 }
 
 /// System-domain ports bundle (clock, hash, file manager, cache filesystem).

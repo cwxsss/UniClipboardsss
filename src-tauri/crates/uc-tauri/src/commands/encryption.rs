@@ -918,6 +918,7 @@ mod tests {
                 blob_writer: Arc::new(NoopPort),
                 thumbnail_repo: Arc::new(NoopPort),
                 thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
             },
             settings: Arc::new(NoopPort),
             system: uc_app::SystemPorts {

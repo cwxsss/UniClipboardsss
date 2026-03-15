@@ -29,9 +29,22 @@ use uc_core::{
 const RECENT_ID_TTL: Duration = Duration::from_secs(600);
 const RECENT_ID_MAX: usize = 1024;
 
+/// Lightweight transfer linkage returned from inbound apply for file-backed messages.
+/// Sufficient for the Tauri layer to emit pending status without re-deriving state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTransferLinkage {
+    pub transfer_id: String,
+    pub filename: String,
+    pub cached_path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InboundApplyOutcome {
-    Applied { entry_id: Option<EntryId> },
+    Applied {
+        entry_id: Option<EntryId>,
+        /// Present only for file-backed clipboard messages.
+        pending_transfers: Vec<PendingTransferLinkage>,
+    },
     Skipped,
 }
 
@@ -397,7 +410,10 @@ impl SyncInboundClipboardUseCase {
                             message_id = %message.id,
                             "V3 inbound with file_transfers: capture dependencies required but missing"
                         );
-                        return Ok(InboundApplyOutcome::Applied { entry_id: None });
+                        return Ok(InboundApplyOutcome::Applied {
+                            entry_id: None,
+                            pending_transfers: vec![],
+                        });
                     }
                 };
 
@@ -405,6 +421,29 @@ impl SyncInboundClipboardUseCase {
                     ts_ms,
                     representations: all_reps,
                 };
+
+                // Build pending transfer linkage for the Tauri layer.
+                let linkage: Vec<PendingTransferLinkage> = message
+                    .file_transfers
+                    .iter()
+                    .map(|ft| {
+                        let cached_path = self
+                            .file_cache_dir
+                            .as_ref()
+                            .map(|d| {
+                                d.join(&ft.transfer_id)
+                                    .join(&ft.filename)
+                                    .to_string_lossy()
+                                    .to_string()
+                            })
+                            .unwrap_or_default();
+                        PendingTransferLinkage {
+                            transfer_id: ft.transfer_id.clone(),
+                            filename: ft.filename.clone(),
+                            cached_path,
+                        }
+                    })
+                    .collect();
 
                 return match capture
                     .execute_with_origin(snapshot_for_capture, ClipboardChangeOrigin::RemotePush)
@@ -419,6 +458,7 @@ impl SyncInboundClipboardUseCase {
                         );
                         Ok(InboundApplyOutcome::Applied {
                             entry_id: Some(entry_id),
+                            pending_transfers: linkage,
                         })
                     }
                     Ok(None) => {
@@ -497,7 +537,10 @@ impl SyncInboundClipboardUseCase {
                     .await;
 
                 info!(message_id = %message.id, "V3 inbound clipboard applied");
-                return Ok(InboundApplyOutcome::Applied { entry_id: None });
+                return Ok(InboundApplyOutcome::Applied {
+                    entry_id: None,
+                    pending_transfers: vec![],
+                });
             }
 
             // In Passive mode (allow_os_read = false): persist via capture use case
@@ -532,6 +575,7 @@ impl SyncInboundClipboardUseCase {
                         info!(message_id = %message.id, "V3 inbound clipboard persisted (passive)");
                         Ok(InboundApplyOutcome::Applied {
                             entry_id: Some(entry_id),
+                            pending_transfers: vec![],
                         })
                     }
                     Ok(None) => {
@@ -1397,7 +1441,10 @@ mod tests {
 
         assert!(matches!(
             first,
-            InboundApplyOutcome::Applied { entry_id: Some(_) }
+            InboundApplyOutcome::Applied {
+                entry_id: Some(_),
+                ..
+            }
         ));
         assert_eq!(second, InboundApplyOutcome::Skipped);
     }
@@ -1439,7 +1486,7 @@ mod tests {
 
         // Must be Applied
         assert!(
-            matches!(outcome, InboundApplyOutcome::Applied { entry_id: None }),
+            matches!(outcome, InboundApplyOutcome::Applied { entry_id: None, .. }),
             "expected Applied, got {:?}",
             outcome
         );
@@ -1594,7 +1641,7 @@ mod tests {
             .expect("pre-decoded V3 message must apply");
 
         assert!(
-            matches!(outcome, InboundApplyOutcome::Applied { entry_id: None }),
+            matches!(outcome, InboundApplyOutcome::Applied { entry_id: None, .. }),
             "expected Applied, got {:?}",
             outcome
         );
@@ -1644,7 +1691,10 @@ mod tests {
         // change-origin remote snapshot hash APIs.
         assert!(matches!(
             outcome,
-            InboundApplyOutcome::Applied { entry_id: Some(_) }
+            InboundApplyOutcome::Applied {
+                entry_id: Some(_),
+                ..
+            }
         ));
         assert_eq!(writes.lock().expect("writes lock").len(), 0);
         assert!(calls.lock().expect("calls lock").is_empty());

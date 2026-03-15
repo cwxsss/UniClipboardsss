@@ -32,6 +32,7 @@ pub mod device_repository;
 mod discovery;
 pub mod errors;
 pub mod file_manager;
+pub mod file_transfer_repository;
 pub mod file_transport;
 mod hash;
 pub mod network_control;
@@ -67,6 +68,11 @@ pub use device_identity::DeviceIdentityPort;
 pub use device_repository::DeviceRepositoryPort;
 pub use errors::{AppDirsError, DeviceRepositoryError, PairedDeviceRepositoryError};
 pub use file_manager::{FileManagerError, FileManagerPort};
+pub use file_transfer_repository::{
+    compute_aggregate_status, EntryTransferSummary, ExpiredInflightTransfer,
+    FileTransferRepositoryPort, NoopFileTransferRepositoryPort, PendingInboundTransfer,
+    TrackedFileTransfer, TrackedFileTransferStatus,
+};
 pub use file_transport::{FileTransportPort, NoopFileTransportPort};
 pub use network_control::NetworkControlPort;
 pub use network_events::NetworkEventPort;

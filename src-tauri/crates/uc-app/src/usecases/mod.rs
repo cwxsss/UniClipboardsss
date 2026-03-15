@@ -56,4 +56,6 @@ pub use start_network_after_unlock::StartNetworkAfterUnlock;
 pub use uc_core::ports::{StartClipboardWatcherError, StartClipboardWatcherPort};
 pub use update_settings::UpdateSettings;
 
-pub use file_sync::{SyncInboundFileUseCase, SyncOutboundFileUseCase};
+pub use file_sync::{
+    SyncInboundFileUseCase, SyncOutboundFileUseCase, TrackInboundTransfersUseCase,
+};

@@ -1106,6 +1106,7 @@ pub fn wire_dependencies_with_identity_store(
             blob_writer: platform.blob_writer,
             thumbnail_repo: infra.thumbnail_repo,
             thumbnail_generator: infra.thumbnail_generator,
+            file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
         },
         settings: infra.settings_repo,
         system: SystemPorts {
@@ -1633,6 +1634,7 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                     match outcome {
                         InboundApplyOutcome::Applied {
                             entry_id: Some(entry_id),
+                            ..
                         } => {
                             if let Some(app) = app_handle.as_ref() {
                                 let event = ClipboardEvent::NewContent {
@@ -1645,7 +1647,7 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                                 }
                             }
                         }
-                        InboundApplyOutcome::Applied { entry_id: None } => {
+                        InboundApplyOutcome::Applied { entry_id: None, .. } => {
                             warn!(
                                 message_id = %message_id,
                                 "Inbound apply reported success in passive mode without persisted entry id"
