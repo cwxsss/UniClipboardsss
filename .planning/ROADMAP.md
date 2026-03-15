@@ -276,3 +276,18 @@ Plans:
 - [x] 31.1-01-PLAN.md — Backend clipboard write on file transfer complete, CopyFileToClipboardUseCase, Tauri command
 - [x] 31.1-02-PLAN.md — Frontend file entry display with extension icons, stale file styling, delete cascade
 - [ ] 31.1-03-PLAN.md — Gap closure: clipboard race detection in write_file_to_clipboard_after_transfer (FCLIP-03)
+
+### Phase 32: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
+
+**Goal:** Make receiver-side file sync atomic from the user's perspective by durably tracking metadata and blob lifecycle together. File entries may appear immediately on metadata receipt, but they must surface truthful `pending / transferring / completed / failed` state, enforce the locked timeout budgets, clean failed partial files, and survive restart via persisted transfer status.
+**Requirements**: FSYNC-CONSISTENCY
+**Depends on:** Phase 31
+**Plans:** 1/5 plans executed
+
+Plans:
+
+- [ ] 32-01-PLAN.md — Core/app transfer tracking contract, metadata seeding, projection aggregation
+- [ ] 32-02-PLAN.md — Infra schema upgrade and file transfer repository adapter
+- [ ] 32-03-PLAN.md — Tauri/runtime wiring, timeout sweeps, cleanup, and status event emission
+- [ ] 32-04-PLAN.md — Frontend data hydration for durable transfer status
+- [ ] 32-05-PLAN.md — Frontend UI rendering and action gating for file transfer states

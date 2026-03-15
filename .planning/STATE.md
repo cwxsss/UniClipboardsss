@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: completed
-stopped_at: Phase 32 context gathered
+stopped_at: Completed 32-01-PLAN.md
 last_updated: '2026-03-15T01:39:45.275Z'
 last_activity: '2026-03-14 — Completed 31-03 plan: File sync guards and error standardization'
 progress:
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 31 - File sync settings and polish
+**Current focus:** Phase 32 - Fix file sync eventual consistency
 
 ## Current Position
 
-Phase: 31 of 31 (File sync settings and polish)
-Plan: 3 of 3 complete
-Status: Complete
-Last activity: 2026-03-14 — Completed 31-03 plan: File sync guards and error standardization
+Phase: 32 of 32 (Fix file sync eventual consistency)
+Plan: 1 of 5 complete
+Status: In Progress
+Last activity: 2026-03-15 — Completed 32-01 plan: Core/app transfer tracking contract and projections
 
-Progress: [██████████] 100%
+Progress: [██--------] 20%
 
 ## Performance Metrics
 
@@ -83,6 +83,7 @@ Progress: [██████████] 100%
   | Phase 31 P01 | 5min | 2 tasks | 8 files |
   | Phase 31 P02 | 5 | 2 tasks | 4 files |
   | Phase 31 P03 | 5min | 2 tasks | 3 files |
+  | Phase 32 P01 | 13min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -164,6 +165,10 @@ Recent decisions affecting current work:
 - [Phase 31]: Cleanup module placed in file_sync/ (not file/) to match existing module naming
 - [Phase 31]: Guards return Result errors (not events) since use cases have no event channel access; callers handle event emission
 - [Phase 31]: transfer_errors module provides constants and formatters for consistent user-facing error messages
+- [Phase 32]: String-based entry_id in FileTransferRepositoryPort to avoid coupling to uc_ids across crate boundaries
+- [Phase 32]: NoopFileTransferRepositoryPort stub for compilation before infra adapter lands
+- [Phase 32]: Aggregate transfer status priority: failed > transferring > pending > completed
+- [Phase 32]: PendingTransferLinkage returned from InboundApplyOutcome for platform layer status emission
 
 ### Roadmap Evolution
 
@@ -198,6 +203,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-15T01:39:45.271Z
-Stopped at: Phase 32 context gathered
-Resume file: .planning/phases/32-fix-file-sync-eventual-consistency-ensure-atomic-sync-with-metadata-and-blob-together/32-CONTEXT.md
+Last session: 2026-03-15T03:02:04Z
+Stopped at: Completed 32-01-PLAN.md
+Resume file: .planning/phases/32-fix-file-sync-eventual-consistency-ensure-atomic-sync-with-metadata-and-blob-together/32-02-PLAN.md
