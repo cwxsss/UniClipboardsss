@@ -1334,6 +1334,12 @@ pub fn start_background_tasks<R: Runtime>(
             .await;
 
         // --- Clipboard receive loop (replaces ctrl_c with CancellationToken) ---
+        let clipboard_transfer_tracker = Arc::new(
+            uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
+                inbound_file_transfer_repo.clone(),
+            ),
+        );
+        let clipboard_clock = inbound_clock.clone();
         registry
             .spawn("clipboard_receive", |token| {
                 async move {
@@ -1379,6 +1385,8 @@ pub fn start_background_tasks<R: Runtime>(
                                     clipboard_rx,
                                     &sync_inbound_usecase,
                                     clipboard_app_handle.clone(),
+                                    Some(clipboard_transfer_tracker.clone()),
+                                    Some(clipboard_clock.clone()),
                                 )
                                 .await;
                             }
@@ -1657,6 +1665,8 @@ async fn run_clipboard_receive_loop<R: Runtime>(
     mut clipboard_rx: mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>,
     usecase: &SyncInboundClipboardUseCase,
     app_handle: Option<AppHandle<R>>,
+    transfer_tracker: Option<Arc<uc_app::usecases::file_sync::TrackInboundTransfersUseCase>>,
+    clock: Option<Arc<dyn uc_core::ports::ClockPort>>,
 ) {
     while let Some((message, pre_decoded)) = clipboard_rx.recv().await {
         let flow_id = uc_observability::FlowId::generate();
@@ -1687,13 +1697,45 @@ async fn run_clipboard_receive_loop<R: Runtime>(
 
         match result {
             Ok(outcome) => {
-                // Emit pending status for file transfers regardless of integration mode
+                // Persist pending transfer records and emit status for file transfers
                 if let InboundApplyOutcome::Applied {
                     entry_id: Some(ref entry_id),
                     ref pending_transfers,
                 } = outcome
                 {
                     if !pending_transfers.is_empty() {
+                        // Persist pending records to DB so mark_completed/mark_transferring can find them
+                        if let (Some(tracker), Some(clk)) =
+                            (transfer_tracker.as_ref(), clock.as_ref())
+                        {
+                            let now_ms = clk.now_ms();
+                            let db_transfers: Vec<
+                                uc_core::ports::file_transfer_repository::PendingInboundTransfer,
+                            > = pending_transfers
+                                .iter()
+                                .map(|t| {
+                                    uc_core::ports::file_transfer_repository::PendingInboundTransfer {
+                                        transfer_id: t.transfer_id.clone(),
+                                        entry_id: entry_id.to_string(),
+                                        origin_device_id: origin_device_id.clone(),
+                                        filename: t.filename.clone(),
+                                        cached_path: t.cached_path.clone(),
+                                        created_at_ms: now_ms,
+                                    }
+                                })
+                                .collect();
+                            if let Err(err) =
+                                tracker.record_pending_from_clipboard(db_transfers).await
+                            {
+                                warn!(
+                                    error = %err,
+                                    message_id = %message_id,
+                                    "Failed to persist pending transfer records"
+                                );
+                            }
+                        }
+
+                        // Emit pending status events to frontend
                         if let Some(app) = app_handle.as_ref() {
                             super::file_transfer_wiring::emit_pending_status(
                                 app,
@@ -1704,15 +1746,23 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                     }
                 }
 
-                if matches!(
-                    usecase.mode(),
-                    uc_app::usecases::clipboard::ClipboardIntegrationMode::Passive
-                ) {
-                    match outcome {
-                        InboundApplyOutcome::Applied {
-                            entry_id: Some(entry_id),
-                            ..
-                        } => {
+                // Emit clipboard://event so frontend list refreshes.
+                // In Passive mode: always emit (no OS clipboard write happens).
+                // In Full mode: emit only for file entries (OS clipboard write is skipped for files).
+                match outcome {
+                    InboundApplyOutcome::Applied {
+                        entry_id: Some(entry_id),
+                        ref pending_transfers,
+                    } => {
+                        let is_passive = matches!(
+                            usecase.mode(),
+                            uc_app::usecases::clipboard::ClipboardIntegrationMode::Passive
+                        );
+                        let has_file_transfers = !pending_transfers.is_empty();
+
+                        // Passive mode always needs explicit event (no ClipboardWatcher).
+                        // Full mode with file transfers also needs it (write_snapshot is skipped).
+                        if is_passive || has_file_transfers {
                             if let Some(app) = app_handle.as_ref() {
                                 let event = ClipboardEvent::NewContent {
                                     entry_id: entry_id.to_string(),
@@ -1720,18 +1770,23 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                                     origin: "remote".to_string(),
                                 };
                                 if let Err(emit_err) = forward_clipboard_event(app, event) {
-                                    warn!(error = %emit_err, message_id = %message_id, "Failed to emit clipboard event after inbound apply in passive mode");
+                                    warn!(error = %emit_err, message_id = %message_id, "Failed to emit clipboard event after inbound apply");
                                 }
                             }
                         }
-                        InboundApplyOutcome::Applied { entry_id: None, .. } => {
+                    }
+                    InboundApplyOutcome::Applied { entry_id: None, .. } => {
+                        if matches!(
+                            usecase.mode(),
+                            uc_app::usecases::clipboard::ClipboardIntegrationMode::Passive
+                        ) {
                             warn!(
                                 message_id = %message_id,
                                 "Inbound apply reported success in passive mode without persisted entry id"
                             );
                         }
-                        InboundApplyOutcome::Skipped => {}
                     }
+                    InboundApplyOutcome::Skipped => {}
                 }
             }
             Err(err) => {
@@ -4218,7 +4273,8 @@ mod tests {
         .expect("send clipboard message");
         drop(tx);
 
-        run_clipboard_receive_loop::<tauri::test::MockRuntime>(rx, &usecase, None).await;
+        run_clipboard_receive_loop::<tauri::test::MockRuntime>(rx, &usecase, None, None, None)
+            .await;
 
         let logs = log_buffer.content();
         assert!(
