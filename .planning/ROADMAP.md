@@ -282,7 +282,7 @@ Plans:
 **Goal:** Make receiver-side file sync atomic from the user's perspective by durably tracking metadata and blob lifecycle together. File entries may appear immediately on metadata receipt, but they must surface truthful `pending / transferring / completed / failed` state, enforce the locked timeout budgets, clean failed partial files, and survive restart via persisted transfer status.
 **Requirements**: FSYNC-CONSISTENCY
 **Depends on:** Phase 31
-**Plans:** 5/5 plans complete
+**Plans:** 6 plans
 
 Plans:
 
@@ -291,3 +291,4 @@ Plans:
 - [ ] 32-03-PLAN.md — Tauri/runtime wiring, timeout sweeps, cleanup, and status event emission
 - [ ] 32-04-PLAN.md — Frontend data hydration for durable transfer status
 - [ ] 32-05-PLAN.md — Frontend UI rendering and action gating for file transfer states
+- [ ] 32-06-PLAN.md — Gap closure: wire API hydration to Redux and add camelCase serialization test
