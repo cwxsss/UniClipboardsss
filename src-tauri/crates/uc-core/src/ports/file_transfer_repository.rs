@@ -171,6 +171,10 @@ pub trait FileTransferRepositoryPort: Send + Sync {
         &self,
         entry_id: &str,
     ) -> anyhow::Result<Vec<TrackedFileTransfer>>;
+
+    /// Look up a single transfer by transfer_id.
+    /// Returns the entry_id for the transfer, if found.
+    async fn get_entry_id_for_transfer(&self, transfer_id: &str) -> anyhow::Result<Option<String>>;
 }
 
 /// No-op stub for `FileTransferRepositoryPort` used at construction sites
@@ -219,6 +223,9 @@ impl FileTransferRepositoryPort for NoopFileTransferRepositoryPort {
     }
     async fn list_transfers_for_entry(&self, _: &str) -> anyhow::Result<Vec<TrackedFileTransfer>> {
         Ok(vec![])
+    }
+    async fn get_entry_id_for_transfer(&self, _: &str) -> anyhow::Result<Option<String>> {
+        Ok(None)
     }
 }
 

@@ -39,7 +39,7 @@ pub fn forward_transfer_progress_event<R: tauri::Runtime>(
     progress: TransferProgress,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let event: TransferProgressEvent = progress.into();
-    app.emit("transfer://progress", event)?;
+    app.emit("file-transfer://progress", event)?;
     Ok(())
 }
 
@@ -118,7 +118,7 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         let tx_clone = tx.clone();
-        app_handle.listen("transfer://progress", move |event: tauri::Event| {
+        app_handle.listen("file-transfer://progress", move |event: tauri::Event| {
             let _ = tx_clone.try_send(event.payload().to_string());
         });
 

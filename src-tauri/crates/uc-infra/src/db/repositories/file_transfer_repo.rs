@@ -320,6 +320,18 @@ impl<E: DbExecutor> FileTransferRepositoryPort for DieselFileTransferRepository<
             Ok(rows.iter().map(row_to_domain).collect())
         })
     }
+
+    async fn get_entry_id_for_transfer(&self, transfer_id: &str) -> anyhow::Result<Option<String>> {
+        let tid = transfer_id.to_string();
+        self.executor.run(move |conn| {
+            let entry_id = file_transfer::table
+                .filter(file_transfer::transfer_id.eq(&tid))
+                .select(file_transfer::entry_id)
+                .first::<String>(conn)
+                .optional()?;
+            Ok(entry_id)
+        })
+    }
 }
 
 #[cfg(test)]

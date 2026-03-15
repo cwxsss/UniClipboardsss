@@ -504,6 +504,9 @@ mod tests {
         async fn list_transfers_for_entry(&self, _: &str) -> Result<Vec<TrackedFileTransfer>> {
             Ok(vec![])
         }
+        async fn get_entry_id_for_transfer(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
     }
 
     // Mock repositories for testing

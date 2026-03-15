@@ -136,6 +136,13 @@ impl TrackInboundTransfersUseCase {
     pub async fn get_entry_summary(&self, entry_id: &str) -> Result<Option<EntryTransferSummary>> {
         self.repo.get_entry_transfer_summary(entry_id).await
     }
+
+    /// Look up the entry_id for a given transfer_id.
+    ///
+    /// Used by platform wiring when only transfer_id is available (e.g., progress events).
+    pub async fn get_entry_summary_by_transfer(&self, transfer_id: &str) -> Result<Option<String>> {
+        self.repo.get_entry_id_for_transfer(transfer_id).await
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +357,14 @@ mod tests {
                 .filter(|t| t.entry_id == entry_id)
                 .cloned()
                 .collect())
+        }
+
+        async fn get_entry_id_for_transfer(&self, transfer_id: &str) -> Result<Option<String>> {
+            let store = self.transfers.lock().unwrap();
+            Ok(store
+                .iter()
+                .find(|t| t.transfer_id == transfer_id)
+                .map(|t| t.entry_id.clone()))
         }
     }
 
