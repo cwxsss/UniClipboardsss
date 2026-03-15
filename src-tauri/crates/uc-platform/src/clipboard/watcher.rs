@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, warn};
 
 use clipboard_rs::ClipboardHandler;
@@ -8,10 +9,16 @@ use crate::runtime::event_bus::PlatformEventSender;
 use uc_core::clipboard::SystemClipboardSnapshot;
 use uc_core::ports::SystemClipboardPort;
 
+/// Time window to suppress rapid consecutive file clipboard events.
+/// macOS fires multiple events when copying files (e.g. APFS→resolved path transition)
+/// where content bytes may differ slightly.
+const FILE_DEDUP_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
 pub struct ClipboardWatcher {
     local_clipboard: Arc<dyn SystemClipboardPort>,
     sender: PlatformEventSender,
     last_meaningful_dedupe_key: Option<String>,
+    last_file_emit_time: Option<Instant>,
 }
 
 impl ClipboardWatcher {
@@ -20,6 +27,7 @@ impl ClipboardWatcher {
             local_clipboard,
             sender,
             last_meaningful_dedupe_key: None,
+            last_file_emit_time: None,
         }
     }
 }
@@ -57,7 +65,29 @@ fn is_image_representation(rep: &uc_core::ObservedClipboardRepresentation) -> bo
         || rep.format_id.eq_ignore_ascii_case("image")
 }
 
+fn is_file_representation(rep: &uc_core::ObservedClipboardRepresentation) -> bool {
+    if let Some(mime) = rep.mime.as_ref() {
+        let s = mime.as_str();
+        if s.eq_ignore_ascii_case("text/uri-list") || s.eq_ignore_ascii_case("file/uri-list") {
+            return true;
+        }
+    }
+    rep.format_id.eq_ignore_ascii_case("files")
+        || rep.format_id.eq_ignore_ascii_case("public.file-url")
+}
+
 fn dedupe_key(snapshot: &SystemClipboardSnapshot) -> Option<String> {
+    // Check files first — file representations use text/uri-list MIME which
+    // would otherwise match the generic is_text_representation check.
+    if let Some(rep) = snapshot
+        .representations
+        .iter()
+        .find(|rep| is_file_representation(rep))
+    {
+        let hash = rep.content_hash();
+        return Some(format!("files:{}", hash.0));
+    }
+
     if let Some(rep) = snapshot
         .representations
         .iter()
@@ -88,6 +118,11 @@ fn dedupe_key(snapshot: &SystemClipboardSnapshot) -> Option<String> {
     None
 }
 
+/// Returns true if any representation in the snapshot is a file representation.
+fn snapshot_has_files(snapshot: &SystemClipboardSnapshot) -> bool {
+    snapshot.representations.iter().any(is_file_representation)
+}
+
 impl ClipboardHandler for ClipboardWatcher {
     fn on_clipboard_change(&mut self) {
         match self.local_clipboard.read_snapshot() {
@@ -102,13 +137,38 @@ impl ClipboardHandler for ClipboardWatcher {
                         return;
                     }
                 }
+
+                // Time-window suppression for file snapshots: macOS fires
+                // multiple clipboard events when copying files (APFS→resolved
+                // path transition) where content bytes may differ slightly.
+                if snapshot_has_files(&snapshot) {
+                    let now = Instant::now();
+                    if let Some(last) = self.last_file_emit_time {
+                        if now.duration_since(last) < FILE_DEDUP_WINDOW {
+                            debug!(
+                                elapsed_ms = now.duration_since(last).as_millis(),
+                                "Suppressing rapid consecutive file clipboard event"
+                            );
+                            return;
+                        }
+                    }
+                }
+
                 if let Err(err) = self
                     .sender
                     .try_send(PlatformEvent::ClipboardChanged { snapshot })
                 {
                     warn!(error = %err, "Failed to notify clipboard change");
-                } else if let Some(key) = current_dedupe_key {
-                    self.last_meaningful_dedupe_key = Some(key);
+                } else {
+                    if current_dedupe_key
+                        .as_ref()
+                        .is_some_and(|k| k.starts_with("files:"))
+                    {
+                        self.last_file_emit_time = Some(Instant::now());
+                    }
+                    if let Some(key) = current_dedupe_key {
+                        self.last_meaningful_dedupe_key = Some(key);
+                    }
                 }
             }
 
@@ -250,5 +310,89 @@ mod tests {
 
         assert!(rx.try_recv().is_ok());
         assert!(rx.try_recv().is_err());
+    }
+
+    fn file_snapshot(uri_content: &str) -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms: 0,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::from("rep-files"),
+                FormatId::from("files"),
+                Some(MimeType("text/uri-list".to_string())),
+                uri_content.as_bytes().to_vec(),
+            )],
+        }
+    }
+
+    #[test]
+    fn file_dedupe_key_is_generated() {
+        let snap = file_snapshot("file:///tmp/test.docx");
+        let key = dedupe_key(&snap);
+        assert!(key.is_some());
+        assert!(key.as_ref().is_some_and(|k| k.starts_with("files:")));
+    }
+
+    #[test]
+    fn suppresses_duplicate_file_snapshot_by_hash() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let clipboard = Arc::new(SequenceClipboard {
+            snapshots: Mutex::new(VecDeque::from(vec![
+                file_snapshot("file:///tmp/test.docx"),
+                file_snapshot("file:///tmp/test.docx"),
+            ])),
+        });
+        let mut watcher = ClipboardWatcher::new(clipboard, tx);
+
+        watcher.on_clipboard_change();
+        watcher.on_clipboard_change();
+
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn file_time_window_suppresses_rapid_different_content() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        // Two file snapshots with different content (different hashes),
+        // but the time window should suppress the second one.
+        let clipboard = Arc::new(SequenceClipboard {
+            snapshots: Mutex::new(VecDeque::from(vec![
+                file_snapshot("file:///tmp/test.docx"),
+                file_snapshot("file:///tmp/test-resolved.docx"),
+            ])),
+        });
+        let mut watcher = ClipboardWatcher::new(clipboard, tx);
+
+        watcher.on_clipboard_change();
+        // Immediately call again — within 500ms window
+        watcher.on_clipboard_change();
+
+        assert!(rx.try_recv().is_ok());
+        assert!(
+            rx.try_recv().is_err(),
+            "Second file event within time window should be suppressed"
+        );
+    }
+
+    #[test]
+    fn is_file_representation_matches_files_format() {
+        let rep = ObservedClipboardRepresentation::new(
+            RepresentationId::from("r1"),
+            FormatId::from("files"),
+            Some(MimeType("text/uri-list".to_string())),
+            b"file:///tmp/x".to_vec(),
+        );
+        assert!(is_file_representation(&rep));
+    }
+
+    #[test]
+    fn is_file_representation_matches_public_file_url() {
+        let rep = ObservedClipboardRepresentation::new(
+            RepresentationId::from("r1"),
+            FormatId::from("public.file-url"),
+            None,
+            b"file:///tmp/x".to_vec(),
+        );
+        assert!(is_file_representation(&rep));
     }
 }

@@ -2227,17 +2227,15 @@ async fn restore_file_to_clipboard_after_transfer(
     let path_list = build_path_list(&file_paths);
     let snapshot = build_file_snapshot(&path_list);
 
-    // FCLIP-03: Check for clipboard race before writing
-    // If an origin is already set (not the default LocalCapture),
-    // the user or another operation touched the clipboard during transfer.
-    let current_origin = clipboard_change_origin
-        .consume_origin_or_default(uc_core::ClipboardChangeOrigin::LocalCapture)
-        .await;
-    if current_origin != uc_core::ClipboardChangeOrigin::LocalCapture {
+    // FCLIP-03: Non-destructive check for concurrent clipboard operations.
+    // Use has_pending_origin() (peek) instead of consume_origin_or_default()
+    // to avoid stealing another restore's LocalRestore origin protection,
+    // which would leave that restore's clipboard write unprotected and
+    // cause a ping-pong bounce-back.
+    if clipboard_change_origin.has_pending_origin().await {
         info!(
-            origin = ?current_origin,
             file_count = file_paths.len(),
-            "Clipboard race detected: skipping auto-restore (user copied during transfer). Files available in Dashboard."
+            "Concurrent clipboard operation detected, skipping auto-restore. Files available in Dashboard."
         );
         return;
     }

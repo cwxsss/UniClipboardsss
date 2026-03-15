@@ -1398,6 +1398,9 @@ fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<P
             }
         }
     }
+    // Safety net: deduplicate in case multiple representations contain the same path
+    paths.sort();
+    paths.dedup();
     paths
 }
 
