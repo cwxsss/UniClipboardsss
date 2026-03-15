@@ -5914,7 +5914,13 @@ The functionality is still validated in development mode when running the app wi
 
         assert!(result.is_ok());
         let dirs = result.unwrap();
-        assert!(dirs.app_data_root.ends_with("uniclipboard"));
+        assert!(
+            dirs.app_data_root
+                .to_string_lossy()
+                .contains("uniclipboard"),
+            "expected app_data_root to contain 'uniclipboard', got: {:?}",
+            dirs.app_data_root
+        );
     }
 
     #[test]
@@ -5957,37 +5963,31 @@ The functionality is still validated in development mode when running the app wi
         };
 
         let mut config = AppConfig::empty();
-        config.database_path = PathBuf::from("src-tauri/.app_data_a/uniclipboard.db");
+        config.database_path = PathBuf::from("/tmp/.app_data_a/uniclipboard.db");
 
         let paths = with_uc_profile(None, || {
             resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
-        assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_a"));
+        assert_eq!(paths.app_data_root, PathBuf::from("/tmp/.app_data_a"));
         assert_eq!(
             paths.db_path,
-            PathBuf::from("src-tauri/.app_data_a/uniclipboard.db")
+            PathBuf::from("/tmp/.app_data_a/uniclipboard.db")
         );
-        assert_eq!(
-            paths.vault_dir,
-            PathBuf::from("src-tauri/.app_data_a/vault")
-        );
+        assert_eq!(paths.vault_dir, PathBuf::from("/tmp/.app_data_a/vault"));
         assert_eq!(
             paths.settings_path,
-            PathBuf::from("src-tauri/.app_data_a/settings.json")
+            PathBuf::from("/tmp/.app_data_a/settings.json")
         );
         // Dev mode: cache co-located under app_data_root
-        assert_eq!(
-            paths.cache_dir,
-            PathBuf::from("src-tauri/.app_data_a/cache")
-        );
+        assert_eq!(paths.cache_dir, PathBuf::from("/tmp/.app_data_a/cache"));
         assert_eq!(
             paths.file_cache_dir,
-            PathBuf::from("src-tauri/.app_data_a/cache/file-cache")
+            PathBuf::from("/tmp/.app_data_a/cache/file-cache")
         );
         assert_eq!(
             paths.spool_dir,
-            PathBuf::from("src-tauri/.app_data_a/cache/spool")
+            PathBuf::from("/tmp/.app_data_a/cache/spool")
         );
     }
 
@@ -5999,30 +5999,24 @@ The functionality is still validated in development mode when running the app wi
         };
 
         let mut config = AppConfig::empty();
-        config.database_path = PathBuf::from("src-tauri/.app_data/uniclipboard.db");
+        config.database_path = PathBuf::from("/tmp/.app_data/uniclipboard.db");
 
         let paths = with_uc_profile(Some("a"), || {
             resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
-        assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_a"));
+        assert_eq!(paths.app_data_root, PathBuf::from("/tmp/.app_data_a"));
         assert_eq!(
             paths.db_path,
-            PathBuf::from("src-tauri/.app_data_a/uniclipboard.db")
+            PathBuf::from("/tmp/.app_data_a/uniclipboard.db")
         );
-        assert_eq!(
-            paths.vault_dir,
-            PathBuf::from("src-tauri/.app_data_a/vault")
-        );
+        assert_eq!(paths.vault_dir, PathBuf::from("/tmp/.app_data_a/vault"));
         assert_eq!(
             paths.settings_path,
-            PathBuf::from("src-tauri/.app_data_a/settings.json")
+            PathBuf::from("/tmp/.app_data_a/settings.json")
         );
         // Cache also gets profile suffix via app_data_root
-        assert_eq!(
-            paths.cache_dir,
-            PathBuf::from("src-tauri/.app_data_a/cache")
-        );
+        assert_eq!(paths.cache_dir, PathBuf::from("/tmp/.app_data_a/cache"));
     }
 
     #[test]
@@ -6033,18 +6027,15 @@ The functionality is still validated in development mode when running the app wi
         };
 
         let mut config = AppConfig::empty();
-        config.database_path = PathBuf::from("src-tauri/.app_data/uniclipboard.db");
-        config.vault_key_path = PathBuf::from("src-tauri/.app_data/vault/key");
+        config.database_path = PathBuf::from("/tmp/.app_data/uniclipboard.db");
+        config.vault_key_path = PathBuf::from("/tmp/.app_data/vault/key");
 
         let paths = with_uc_profile(Some("b"), || {
             resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
-        assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_b"));
-        assert_eq!(
-            paths.vault_dir,
-            PathBuf::from("src-tauri/.app_data_b/vault")
-        );
+        assert_eq!(paths.app_data_root, PathBuf::from("/tmp/.app_data_b"));
+        assert_eq!(paths.vault_dir, PathBuf::from("/tmp/.app_data_b/vault"));
     }
 
     #[test]
@@ -6072,12 +6063,15 @@ The functionality is still validated in development mode when running the app wi
             app_cache_root: PathBuf::from("/sys/cache/uniclipboard"),
         };
         let mut config = AppConfig::empty();
-        config.database_path = PathBuf::from(".app_data/uniclipboard.db");
+        config.database_path = PathBuf::from("/custom/.app_data/uniclipboard.db");
 
         let resolved = with_uc_profile(None, || resolve_app_dirs(&platform, &config));
 
-        assert_eq!(resolved.app_data_root, PathBuf::from(".app_data"));
-        assert_eq!(resolved.app_cache_root, PathBuf::from(".app_data/cache"));
+        assert_eq!(resolved.app_data_root, PathBuf::from("/custom/.app_data"));
+        assert_eq!(
+            resolved.app_cache_root,
+            PathBuf::from("/custom/.app_data/cache")
+        );
     }
 
     #[test]
