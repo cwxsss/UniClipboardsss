@@ -374,11 +374,12 @@ impl SyncInboundClipboardUseCase {
                                     .file_transfers
                                     .iter()
                                     .map(|ft| {
-                                        cache_dir
+                                        let path = cache_dir
                                             .join(&ft.transfer_id)
-                                            .join(&ft.filename)
-                                            .to_string_lossy()
-                                            .to_string()
+                                            .join(&ft.filename);
+                                        url::Url::from_file_path(&path)
+                                            .map(|u| u.to_string())
+                                            .unwrap_or_else(|_| path.to_string_lossy().to_string())
                                     })
                                     .collect();
                                 data = local_paths.join("\n").into_bytes();
