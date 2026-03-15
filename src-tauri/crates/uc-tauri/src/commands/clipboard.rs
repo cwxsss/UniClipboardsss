@@ -15,7 +15,6 @@ use tauri::State;
 use tracing::{info_span, Instrument};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::clipboard::ClipboardUseCases;
-use uc_app::usecases::EntryProjectionDto;
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 use uc_core::security::state::EncryptionState;
