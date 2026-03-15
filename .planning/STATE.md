@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: completed
-stopped_at: Completed 32-01-PLAN.md
-last_updated: '2026-03-15T01:39:45.275Z'
-last_activity: '2026-03-14 — Completed 31-03 plan: File sync guards and error standardization'
+status: executing
+stopped_at: Completed 32-04-PLAN.md
+last_updated: '2026-03-15T03:42:34.490Z'
+last_activity: '2026-03-15 — Completed 32-04 plan: Frontend durable file transfer status data layer'
 progress:
   total_phases: 15
   completed_phases: 13
-  total_plans: 36
-  completed_plans: 35
-  percent: 100
+  total_plans: 41
+  completed_plans: 39
+  percent: 96
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 32 of 32 (Fix file sync eventual consistency)
-Plan: 3 of 5 complete
+Plan: 4 of 5 complete
 Status: In Progress
-Last activity: 2026-03-15 — Completed 32-03 plan: Tauri/platform integration and startup reconciliation
+Last activity: 2026-03-15 — Completed 32-04 plan: Frontend durable file transfer status data layer
 
-Progress: [██████----] 60%
+Progress: [██████████] 96%
 
 ## Performance Metrics
 
@@ -86,6 +86,7 @@ Progress: [██████----] 60%
   | Phase 32 P01 | 13min | 2 tasks | 11 files |
   | Phase 32 P02 | 4min | 2 tasks | 7 files |
   | Phase 32 P03 | 20min | 2 tasks | 12 files |
+  | Phase 32 P04 | 3min | 1 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -175,6 +176,8 @@ Recent decisions affecting current work:
 - [Phase 32]: NoopFileTransferRepositoryPort stub for compilation before infra adapter lands
 - [Phase 32]: Aggregate transfer status priority: failed > transferring > pending > completed
 - [Phase 32]: PendingTransferLinkage returned from InboundApplyOutcome for platform layer status emission
+- [Phase 32]: Durable entryStatusById separate from ephemeral activeTransfers to survive progress cleanup
+- [Phase 32]: Old transfer://progress and transfer://error channels replaced with file-transfer:// namespace
 
 ### Roadmap Evolution
 
@@ -209,6 +212,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-15T03:34:08Z
-Stopped at: Completed 32-03-PLAN.md
-Resume file: .planning/phases/32-fix-file-sync-eventual-consistency-ensure-atomic-sync-with-metadata-and-blob-together/32-04-PLAN.md
+Last session: 2026-03-15T03:42:34.487Z
+Stopped at: Completed 32-04-PLAN.md
+Resume file: None

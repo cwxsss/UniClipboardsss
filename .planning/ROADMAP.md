@@ -282,7 +282,7 @@ Plans:
 **Goal:** Make receiver-side file sync atomic from the user's perspective by durably tracking metadata and blob lifecycle together. File entries may appear immediately on metadata receipt, but they must surface truthful `pending / transferring / completed / failed` state, enforce the locked timeout budgets, clean failed partial files, and survive restart via persisted transfer status.
 **Requirements**: FSYNC-CONSISTENCY
 **Depends on:** Phase 31
-**Plans:** 3/5 plans executed
+**Plans:** 4/5 plans executed
 
 Plans:
 
