@@ -77,6 +77,16 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 - [x] **FCLIP-10**: Multi-file entries show file count summary; single-file entries show filename.
 - [x] **FSYNC-CONSISTENCY**: Receiver-side file sync persists transfer lifecycle together with the clipboard entry so metadata-first file entries always expose truthful `pending`, `transferring`, `completed`, or `failed` state; stalled transfers fail under the locked 30-second / 5-minute timeout budgets; failed or reconciled transfers clean partial cache artifacts; and the durable state is visible after restart through command responses and live events.
 
+### Link Content Type
+
+- [x] **LINK-01**: Plain text clipboard content that is a single valid URL (entire trimmed text, no whitespace) is classified as Link instead of Text by `classify_snapshot`.
+- [x] **LINK-02**: `is_content_type_allowed` respects the `ct.link` toggle for Link content, making link sync filterable per device.
+- [x] **LINK-03**: `text/uri-list` content is parsed per RFC 2483 (one URL per line, # comment lines skipped) and returned as a list of URLs with extracted domains.
+- [x] **LINK-04**: `get_clipboard_item` returns structured `ClipboardLinkItemDto` with urls and domains arrays for link entries.
+- [x] **LINK-05**: Dashboard list view shows link entries with clickable first URL and "+N more" badge for multi-URL entries.
+- [x] **LINK-06**: Dashboard detail panel shows all URLs with domain names and character count for link entries.
+- [x] **LINK-07**: Link sync toggle in DeviceSettingsPanel is interactive (not "Coming Soon"), while file/code_snippet/rich_text remain "Coming Soon".
+
 ## v2 Requirements
 
 Deferred to a future milestone. Tracked but not in the current roadmap.
@@ -152,11 +162,18 @@ Which phases cover which requirements.
 | FCLIP-09          | Phase 32.1 | Planned  |
 | FCLIP-10          | Phase 32.1 | Planned  |
 | FSYNC-CONSISTENCY | Phase 33   | Planned  |
+| LINK-01           | Phase 28   | Planned  |
+| LINK-02           | Phase 28   | Planned  |
+| LINK-03           | Phase 28   | Planned  |
+| LINK-04           | Phase 28   | Planned  |
+| LINK-05           | Phase 28   | Planned  |
+| LINK-06           | Phase 28   | Planned  |
+| LINK-07           | Phase 28   | Planned  |
 
 **Coverage:**
 
-- v1 requirements: 45 total
-- Mapped to phases: 45
+- v1 requirements: 52 total
+- Mapped to phases: 52
 - Unmapped: 0
 
 ---

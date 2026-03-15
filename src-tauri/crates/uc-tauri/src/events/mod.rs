@@ -99,6 +99,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_setting_changed_event_camelcase_serialization() {
+        let event = SettingChangedEvent {
+            setting_json: r#"{"key":"value"}"#.to_string(),
+            timestamp: 1234567890,
+        };
+        let json_str = serde_json::to_string(&event).unwrap();
+
+        // Must use camelCase keys
+        assert!(
+            json_str.contains("settingJson"),
+            "expected camelCase key 'settingJson', got: {}",
+            json_str
+        );
+        assert!(
+            json_str.contains("timestamp"),
+            "expected key 'timestamp', got: {}",
+            json_str
+        );
+
+        // Must NOT use snake_case keys
+        assert!(
+            !json_str.contains("setting_json"),
+            "unexpected snake_case key 'setting_json' in: {}",
+            json_str
+        );
+    }
+
     #[tokio::test]
     async fn forward_libp2p_start_failed_emits_event() {
         let app = tauri::test::mock_app();
@@ -116,6 +144,25 @@ mod tests {
         let payload = rx.recv().await.expect("event payload");
         assert!(payload.contains("boom"));
     }
+}
+
+/// Setting changed event emitted to frontend
+/// 发送到前端的设置变更事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingChangedEvent {
+    pub setting_json: String,
+    pub timestamp: u64,
+}
+
+/// Forward setting changed event to all windows
+/// 将设置变更事件转发到所有窗口
+pub fn forward_setting_changed_event<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    event: SettingChangedEvent,
+) -> Result<(), Box<dyn std::error::Error>> {
+    app.emit("setting-changed", event)?;
+    Ok(())
 }
 
 /// Forward clipboard event to frontend

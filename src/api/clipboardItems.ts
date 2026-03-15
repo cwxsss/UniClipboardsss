@@ -16,6 +16,10 @@ interface ClipboardEntryProjection {
   thumbnail_url?: string | null
   file_transfer_status?: string | null
   file_transfer_reason?: string | null
+  /** Parsed link URLs (built from full representation data, not preview) */
+  link_urls?: string[] | null
+  /** Extracted domains for link entries */
+  link_domains?: string[] | null
 }
 
 type ClipboardEntriesResponse =
@@ -94,7 +98,8 @@ export interface ClipboardFileItem {
 }
 
 export interface ClipboardLinkItem {
-  url: string
+  urls: string[]
+  domains: string[]
 }
 
 export interface ClipboardCodeItem {
@@ -130,12 +135,33 @@ export interface ClipboardStats {
 }
 
 /**
+ * Extract hostname from a URL string. Returns the raw string on failure.
+ */
+function extractDomainFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
+
+/**
  * Transform a backend ClipboardEntryProjection to frontend ClipboardItemResponse.
  * Shared by getClipboardItems and getClipboardEntry to avoid duplication.
  */
 function transformProjectionToResponse(entry: ClipboardEntryProjection): ClipboardItemResponse {
   const isFile = entry.content_type.includes('uri-list')
   const isImage = !isFile && isImageType(entry.content_type)
+
+  // Use pre-parsed link data from backend (built from full representation, not preview)
+  const hasLinkData = !isImage && entry.link_urls && entry.link_urls.length > 0
+  let linkItem: ClipboardLinkItem | null = null
+  if (hasLinkData) {
+    linkItem = {
+      urls: entry.link_urls!,
+      domains: entry.link_domains ?? entry.link_urls!.map(extractDomainFromUrl),
+    }
+  }
 
   const item: ClipboardItem = {
     image: isImage
@@ -147,7 +173,7 @@ function transformProjectionToResponse(entry: ClipboardEntryProjection): Clipboa
         }
       : null,
     text:
-      !isImage && !isFile
+      !isImage && !isFile && !hasLinkData
         ? {
             display_text: entry.preview,
             has_detail: entry.has_detail,
@@ -169,7 +195,7 @@ function transformProjectionToResponse(entry: ClipboardEntryProjection): Clipboa
           file_sizes: [], // Size info not available from URI list; use entry.size_bytes as total
         }
       : (null as unknown as ClipboardFileItem),
-    link: null as unknown as ClipboardLinkItem,
+    link: linkItem as unknown as ClipboardLinkItem,
     code: null as unknown as ClipboardCodeItem,
     unknown: null,
   }

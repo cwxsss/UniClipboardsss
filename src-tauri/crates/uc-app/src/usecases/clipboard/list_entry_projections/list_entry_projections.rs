@@ -4,6 +4,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tracing::warn;
+use uc_core::clipboard::link_utils::{is_all_urls, is_single_url, parse_uri_list};
 use uc_core::clipboard::PayloadAvailability;
 use uc_core::network::protocol::MIME_IMAGE_PREFIX;
 use uc_core::ports::{
@@ -35,6 +36,9 @@ pub struct EntryProjectionDto {
     pub file_transfer_reason: Option<String>,
     /// Transfer IDs belonging to this entry (empty for non-file entries).
     pub file_transfer_ids: Vec<String>,
+    /// Parsed link URLs when content is a link type.
+    /// Built from full representation data (not truncated preview).
+    pub link_urls: Option<Vec<String>>,
 }
 
 /// Error type for list projections use case
@@ -61,6 +65,41 @@ pub struct ListClipboardEntryProjections {
     thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
     file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
     max_limit: usize,
+}
+
+/// Detect link URLs from full representation content.
+///
+/// Returns `Some(urls)` when the content is a link type (text/uri-list,
+/// single URL in text/plain, or multi-line URLs in text/plain).
+/// Uses the full inline_data rather than truncated preview text.
+fn detect_link_urls(content_type: &str, inline_data: Option<&[u8]>) -> Option<Vec<String>> {
+    let full_text = inline_data.and_then(|d| std::str::from_utf8(d).ok())?;
+    let ct = content_type.to_ascii_lowercase();
+
+    if ct.starts_with("text/uri-list") {
+        let urls = parse_uri_list(full_text);
+        if urls.is_empty() {
+            None
+        } else {
+            Some(urls)
+        }
+    } else if ct.starts_with("text/plain") {
+        if is_all_urls(full_text) {
+            let urls: Vec<String> = full_text
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(|l| l.to_string())
+                .collect();
+            Some(urls)
+        } else if is_single_url(full_text) {
+            Some(vec![full_text.trim().to_string()])
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 impl ListClipboardEntryProjections {
@@ -200,6 +239,8 @@ impl ListClipboardEntryProjections {
             None
         };
 
+        let link_urls = detect_link_urls(&content_type, representation.inline_data.as_deref());
+
         let has_detail = representation.blob_id.is_some()
             || matches!(
                 representation.payload_state(),
@@ -243,6 +284,7 @@ impl ListClipboardEntryProjections {
             file_transfer_status,
             file_transfer_reason,
             file_transfer_ids,
+            link_urls,
         }))
     }
 
@@ -382,6 +424,8 @@ impl ListClipboardEntryProjections {
                 None
             };
 
+            let link_urls = detect_link_urls(&content_type, representation.inline_data.as_deref());
+
             // has_detail controls whether frontend should try fetching full content.
             // For staged/processing payloads, full content may become available via blob shortly.
             let has_detail = representation.blob_id.is_some()
@@ -427,6 +471,7 @@ impl ListClipboardEntryProjections {
                 file_transfer_status,
                 file_transfer_reason,
                 file_transfer_ids,
+                link_urls,
             });
         }
 
@@ -1047,6 +1092,7 @@ mod tests {
                 file_transfer_status: None,
                 file_transfer_reason: None,
                 file_transfer_ids: vec![],
+                link_urls: None,
             },
             EntryProjectionDto {
                 id: "2".to_string(),
@@ -1063,6 +1109,7 @@ mod tests {
                 file_transfer_status: None,
                 file_transfer_reason: None,
                 file_transfer_ids: vec![],
+                link_urls: None,
             },
         ];
 

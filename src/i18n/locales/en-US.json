@@ -291,7 +291,8 @@
           "goDevices": "Go to devices",
           "goSettings": "Go to settings",
           "focusSearch": "Focus search",
-          "closeModal": "Close modal"
+          "closeModal": "Close modal",
+          "toggleQuickPanel": "Toggle quick panel"
         },
         "issues": {
           "sameScope": "Shortcut conflict in same scope: {{key}}",
@@ -345,7 +346,19 @@
       "label": "Auto Unlock",
       "description": "Automatically unlock when application starts"
     },
-    "macOSNote": "On macOS, you can choose \"Always Allow\" in the keychain prompt to enable seamless auto-unlock."
+    "macOSNote": "On macOS, you can choose \"Always Allow\" in the keychain prompt to enable seamless auto-unlock.",
+    "keychainModal": {
+      "title": "Grant Keychain Access",
+      "description": "To enable auto-unlock, UniClipboard needs permanent access to your macOS Keychain.",
+      "step1": "A macOS Keychain access prompt will appear",
+      "step2": "Select \"Always Allow\" in the prompt",
+      "step3": "Enter your macOS password to confirm",
+      "note": "This is a macOS system dialog, not part of UniClipboard.",
+      "confirm": "I understand",
+      "cancel": "Cancel",
+      "verifying": "Verifying access...",
+      "error": "Keychain Always Allow permission not detected. Please try again and make sure to select \"Always Allow\" in the macOS Keychain prompt."
+    }
   },
   "language": {
     "zh-CN": "简体中文",
@@ -696,6 +709,14 @@
     "networkFailed": "Network failed to start",
     "retry": "Retry",
     "retrying": "Retrying..."
+  },
+  "previewPanel": {
+    "title": "Preview",
+    "error": "Failed to load preview",
+    "imageUnavailable": "Image not available",
+    "empty": "Hover over an item to preview",
+    "imageAlt": "Clipboard image",
+    "deleteHint": "{{modifier}}⌫ delete"
   },
   "setup": {
     "page": {

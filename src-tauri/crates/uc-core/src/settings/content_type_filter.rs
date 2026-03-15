@@ -1,4 +1,5 @@
 use super::model::ContentTypes;
+use crate::clipboard::link_utils::{is_all_urls, is_single_url};
 use crate::clipboard::SystemClipboardSnapshot;
 
 /// Categories of clipboard content determined by MIME type analysis.
@@ -29,7 +30,15 @@ pub fn classify_snapshot(snapshot: &SystemClipboardSnapshot) -> ContentTypeCateg
             match m {
                 "text/html" => return ContentTypeCategory::RichText,
                 "text/uri-list" => return classify_uri_list(&rep.bytes),
-                "text/plain" => return ContentTypeCategory::Text,
+                "text/plain" => {
+                    // Check if the plain text content is URL(s)
+                    if let Ok(text) = std::str::from_utf8(&rep.bytes) {
+                        if is_single_url(text) || is_all_urls(text) {
+                            return ContentTypeCategory::Link;
+                        }
+                    }
+                    return ContentTypeCategory::Text;
+                }
                 "application/octet-stream" => return ContentTypeCategory::File,
                 _ if m.starts_with("image/") => return ContentTypeCategory::Image,
                 _ => {}
@@ -69,16 +78,16 @@ fn classify_uri_list(bytes: &[u8]) -> ContentTypeCategory {
 
 /// Check whether a content type category is allowed by the given content type toggles.
 ///
-/// `Text`, `Image`, and `File` are filterable. All other categories (including `Unknown`)
+/// `Text`, `Image`, `File`, and `Link` are filterable. All other categories (including `Unknown`)
 /// always return `true` — unimplemented types always sync.
 pub fn is_content_type_allowed(category: ContentTypeCategory, ct: &ContentTypes) -> bool {
     match category {
         ContentTypeCategory::Text => ct.text,
         ContentTypeCategory::Image => ct.image,
         ContentTypeCategory::File => ct.file,
+        ContentTypeCategory::Link => ct.link,
         // Unimplemented types always sync regardless of toggle state
         ContentTypeCategory::RichText
-        | ContentTypeCategory::Link
         | ContentTypeCategory::CodeSnippet
         | ContentTypeCategory::Unknown => true,
     }
@@ -172,17 +181,14 @@ mod tests {
 
     #[test]
     fn classify_text_uri_list_with_http_as_link() {
-        let snapshot =
-            make_snapshot_with_data(Some("text/uri-list"), b"https://example.com\r\n");
+        let snapshot = make_snapshot_with_data(Some("text/uri-list"), b"https://example.com\r\n");
         assert_eq!(classify_snapshot(&snapshot), ContentTypeCategory::Link);
     }
 
     #[test]
     fn classify_text_uri_list_with_file_uri_as_file() {
-        let snapshot = make_snapshot_with_data(
-            Some("text/uri-list"),
-            b"file:///home/user/doc.pdf\r\n",
-        );
+        let snapshot =
+            make_snapshot_with_data(Some("text/uri-list"), b"file:///home/user/doc.pdf\r\n");
         assert_eq!(classify_snapshot(&snapshot), ContentTypeCategory::File);
     }
 
@@ -282,7 +288,6 @@ mod tests {
             rich_text: false,
         };
         assert!(is_content_type_allowed(ContentTypeCategory::RichText, &ct));
-        assert!(is_content_type_allowed(ContentTypeCategory::Link, &ct));
         assert!(is_content_type_allowed(
             ContentTypeCategory::CodeSnippet,
             &ct
@@ -314,5 +319,62 @@ mod tests {
             rich_text: true,
         };
         assert!(is_content_type_allowed(ContentTypeCategory::File, &ct));
+    }
+
+    // --- Plain-text URL detection in classify_snapshot ---
+
+    #[test]
+    fn classify_text_plain_single_url_as_link() {
+        let snapshot = make_snapshot_with_data(Some("text/plain"), b"https://github.com");
+        assert_eq!(classify_snapshot(&snapshot), ContentTypeCategory::Link);
+    }
+
+    #[test]
+    fn classify_text_plain_non_url_as_text() {
+        let snapshot = make_snapshot_with_data(Some("text/plain"), b"hello world");
+        assert_eq!(classify_snapshot(&snapshot), ContentTypeCategory::Text);
+    }
+
+    #[test]
+    fn classify_text_plain_mixed_content_as_text() {
+        let snapshot = make_snapshot_with_data(Some("text/plain"), b"see https://github.com");
+        assert_eq!(classify_snapshot(&snapshot), ContentTypeCategory::Text);
+    }
+
+    #[test]
+    fn classify_text_plain_multi_url_as_link() {
+        let snapshot = make_snapshot_with_data(
+            Some("text/plain"),
+            b"https://a.com\nhttps://b.com\nhttps://c.com",
+        );
+        assert_eq!(classify_snapshot(&snapshot), ContentTypeCategory::Link);
+    }
+
+    // --- Link toggle filtering ---
+
+    #[test]
+    fn disallowed_link_when_link_false() {
+        let ct = ContentTypes {
+            text: true,
+            image: true,
+            link: false,
+            file: true,
+            code_snippet: true,
+            rich_text: true,
+        };
+        assert!(!is_content_type_allowed(ContentTypeCategory::Link, &ct));
+    }
+
+    #[test]
+    fn allowed_link_when_link_true() {
+        let ct = ContentTypes {
+            text: true,
+            image: true,
+            link: true,
+            file: true,
+            code_snippet: true,
+            rich_text: true,
+        };
+        assert!(is_content_type_allowed(ContentTypeCategory::Link, &ct));
     }
 }

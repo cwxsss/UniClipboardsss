@@ -57,6 +57,8 @@ fn clipboard_entry_projection_preserves_snake_case() {
         active_time: 1234567890,
         file_transfer_status: None,
         file_transfer_reason: None,
+        link_urls: None,
+        link_domains: None,
     };
     let value = serde_json::to_value(&entry).expect("serialize failed");
     // Verify snake_case field names (not camelCase)
@@ -103,6 +105,8 @@ fn clipboard_entry_projection_includes_file_transfer_status_when_present() {
         active_time: 1700000000,
         file_transfer_status: Some("pending".to_string()),
         file_transfer_reason: None,
+        link_urls: None,
+        link_domains: None,
     };
     let value = serde_json::to_value(&entry).expect("serialize failed");
     assert_eq!(value["file_transfer_status"], "pending");
@@ -129,6 +133,8 @@ fn clipboard_entry_projection_includes_failure_reason_when_failed() {
         active_time: 1700000000,
         file_transfer_status: Some("failed".to_string()),
         file_transfer_reason: Some("hash mismatch".to_string()),
+        link_urls: None,
+        link_domains: None,
     };
     let value = serde_json::to_value(&entry).expect("serialize failed");
     assert_eq!(value["file_transfer_status"], "failed");
@@ -151,6 +157,8 @@ fn clipboard_entry_projection_omits_transfer_fields_for_non_file_entry() {
         active_time: 1700000000,
         file_transfer_status: None,
         file_transfer_reason: None,
+        link_urls: None,
+        link_domains: None,
     };
     let value = serde_json::to_value(&entry).expect("serialize failed");
     // Both transfer fields should be omitted for non-file entries

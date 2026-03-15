@@ -219,6 +219,49 @@ Plans:
 - [x] 27-01-PLAN.md — Backend/frontend Settings types, activate definitions, ShortcutsSection display UI
 - [ ] 27-02-PLAN.md — Key recording, conflict detection, persistence, reset, and live override wiring
 
+### Phase 28: Support link content type (MIME link and URL-detected plain text)
+
+**Goal:** Link content type is fully functional across the pipeline: classification detects both text/uri-list and single-URL plain text, sync filtering respects the link toggle, and the Dashboard displays links with clickable URLs and domain information.
+**Requirements**: LINK-01, LINK-02, LINK-03, LINK-04, LINK-05, LINK-06, LINK-07
+**Depends on:** Phase 25
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [ ] 28-01-PLAN.md — Backend link detection, classification, utility functions, and DTO population
+- [ ] 28-02-PLAN.md — Frontend link display, multi-URL rendering, and sync toggle activation
+
+**Success Criteria** (what must be TRUE):
+
+1. text/uri-list MIME snapshots and single-URL plain text are both classified as Link.
+2. Sync filtering respects the ct.link toggle for Link content.
+3. get_clipboard_item returns structured link data (urls + domains) for link entries.
+4. Dashboard list view shows clickable URLs with +N more badge for multi-URL entries.
+5. Dashboard detail panel shows all URLs with domain names.
+6. Link sync toggle is interactive in DeviceSettingsPanel (not "Coming Soon").
+7. Mixed text content (e.g., "see https://...") remains classified as Text.
+
+### Phase 29: Add macOS auto-unlock keychain Always Allow confirmation modal on UnlockPage
+
+**Goal:** When macOS users toggle auto-unlock ON, a confirmation modal guides them through granting "Always Allow" in the Keychain popup and verifies the permission was granted before enabling auto-unlock. Non-macOS platforms skip the modal entirely.
+**Requirements**: KC-01, KC-02, KC-03, KC-04, KC-05, KC-06
+**Depends on:** Phase 25
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [ ] 29-01-PLAN.md — Backend VerifyKeychainAccess use case, Tauri command, and runtime wiring
+- [ ] 29-02-PLAN.md — Frontend API, AlertDialog modal, i18n strings, and UnlockPage integration
+
+**Success Criteria** (what must be TRUE):
+
+1. A dedicated `verify_keychain_access` Tauri command checks if Keychain Always Allow is granted by calling `load_kek()`.
+2. macOS users see a step-by-step modal when toggling auto-unlock ON; the switch stays OFF until verification passes.
+3. The modal shows a red error on verification failure and stays open for retry.
+4. Cancel closes the modal with no side effects (switch stays OFF).
+5. Windows/Linux users can toggle auto-unlock ON directly without any modal.
+6. All modal strings are internationalized in both en-US and zh-CN locales.
+
 ### Phase 28: File sync foundation — message types, ports, classification fix, schema, settings
 
 **Goal:** Establish the file sync foundation: define file transfer message types, create FileTransportPort trait, fix file classification (file:// vs http:// in content type filter), add database schema for file entries, and extend settings model with file sync fields.

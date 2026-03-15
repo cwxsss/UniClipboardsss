@@ -10,6 +10,7 @@ use tauri::http::{Request, Response, StatusCode};
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_global_shortcut;
 use tauri_plugin_single_instance;
 use tauri_plugin_stronghold;
 use tokio::sync::mpsc;
@@ -43,6 +44,9 @@ use uc_tauri::tray::TrayState;
 
 // Platform-specific command modules
 mod plugins;
+
+use uc_tauri::preview_panel;
+use uc_tauri::quick_panel;
 
 /// Simple executor for platform commands
 ///
@@ -689,6 +693,36 @@ fn run_app(config: AppConfig) {
                 warn!(error = %error, "Failed to hide Dock icon during startup");
             }
 
+            // Register global shortcut plugin (empty — shortcuts registered dynamically)
+            #[cfg(desktop)]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
+
+                // Read shortcut override from settings, or use default
+                let shortcuts = {
+                    let settings_port = runtime_for_handler.settings_port();
+                    match tauri::async_runtime::block_on(settings_port.load()) {
+                        Ok(settings) => quick_panel::resolve_shortcut_from_settings(&settings),
+                        Err(e) => {
+                            warn!("Failed to load settings for shortcut: {}, using default", e);
+                            vec![quick_panel::DEFAULT_SHORTCUT.to_string()]
+                        }
+                    }
+                };
+
+                for shortcut_str in &shortcuts {
+                    if let Err(e) = quick_panel::register_global_shortcut(app.handle(), shortcut_str) {
+                        tracing::error!(error = %e, shortcut = %shortcut_str, "Failed to register global shortcut during startup");
+                    }
+                }
+            }
+
+            // Pre-create quick panel and preview panel (hidden) so the first
+            // shortcut press doesn't activate the app via WebviewWindowBuilder::build()
+            quick_panel::pre_create(app.handle());
+            preview_panel::pre_create(app.handle());
+
             // Show window based on silent_start setting
             if !silent_start {
                 uc_tauri::tray::show_main_window(app.handle());
@@ -819,6 +853,7 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::encryption::initialize_encryption,
             uc_tauri::commands::encryption::get_encryption_session_status,
             uc_tauri::commands::encryption::unlock_encryption_session,
+            uc_tauri::commands::encryption::verify_keychain_access,
             // Settings commands
             uc_tauri::commands::settings::get_settings,
             uc_tauri::commands::settings::update_settings,
@@ -870,6 +905,12 @@ fn run_app(config: AppConfig) {
             plugins::mac_rounded_corners::enable_modern_window_style,
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::reposition_traffic_lights,
+            // Quick panel commands
+            uc_tauri::commands::quick_panel::paste_to_previous_app,
+            uc_tauri::commands::quick_panel::dismiss_quick_panel,
+            // Preview panel commands
+            uc_tauri::commands::preview_panel::show_preview_panel,
+            uc_tauri::commands::preview_panel::dismiss_preview_panel,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

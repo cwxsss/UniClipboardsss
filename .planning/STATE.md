@@ -69,6 +69,10 @@ Progress: [██████████] 98%
   | Phase 28 P01 | 3min | 2 tasks | 4 files |
   | Phase 28 P02 | 4min | 2 tasks | 4 files |
   | Phase 28 P03 | 7min | 2 tasks | 12 files |
+  | Phase 28 P01 | 7min | 2 tasks | 6 files |
+  | Phase 28 P02 | 3min | 2 tasks | 6 files |
+  | Phase 29 P01 | 4min | 2 tasks | 5 files |
+  | Phase 29 P02 | 8min | 2 tasks | 4 files |
   | Phase 30 P01 | -min | - tasks | - files |
   | Phase 30 P02 | 4min | 1 tasks | 6 files |
   | Phase 30 P01 | 3min | 2 tasks | 7 files |
@@ -141,6 +145,13 @@ Recent decisions affecting current work:
 - [Phase 28]: File category now filterable via ct.file toggle (was always-true)
 - [Phase 28]: NoopFileTransportPort stub pattern used at NetworkPorts construction sites for pre-adapter compilation
 - [Phase 28]: Manual schema.rs update for file_transfer table since diesel CLI not available
+- [Phase 28]: url crate v2 for URL parsing validation instead of regex
+- [Phase 28]: ClipboardItemDto.link changed from serde_json::Value to ClipboardLinkItemDto for type safety
+- [Phase 28]: URL regex heuristic checks http/https/ftp/ftps/mailto with no-whitespace for text/plain link detection
+- [Phase 29]: VerifyKeychainAccess use case takes only KeyScopePort + KeyMaterialPort (lighter than AutoUnlock's 5 ports)
+- [Phase 29]: KeyringError mapped to Ok(false) to treat keyring issues as not-granted rather than hard failure
+- 29-02: Used regular Button instead of AlertDialogAction for confirm to prevent auto-close on verification failure
+- 29-02: Confirm button text changed to "I understand" per user feedback during verification
 - [Phase 30]: Used libc::statvfs directly for disk space check instead of adding fs2 dependency
 - [Phase 30]: Hash verification failure deletes temp file immediately with no retry policy
 - [Phase 30]: Shared sync policy module extracted for reuse between clipboard and file sync
@@ -193,6 +204,8 @@ Recent decisions affecting current work:
 - Phase 27 added: 支持快捷键设置在 settings page 中
 - Phase 28 split: Original monolithic file sync phase split into 4 phases (28-31)
 - Phase 28 updated: File sync foundation — message types, ports, classification fix, schema, settings
+- Phase 28 added: Support link content type (MIME link and URL-detected plain text)
+- Phase 29 added: Add macOS auto-unlock keychain Always Allow confirmation modal on UnlockPage
 - Phase 30 added: File transfer service — chunked protocol, use cases, retry logic
 - Phase 31 added: File sync UI — Dashboard file entries, context menu, progress, notifications
 - Phase 32 added: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
