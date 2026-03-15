@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clipboard,
+  Clock,
   CloudOff,
   ExternalLink,
   File,
@@ -28,7 +29,10 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { resolveUcUrl } from '@/lib/protocol'
 import { useAppSelector } from '@/store/hooks'
-import { selectTransferByEntryId } from '@/store/slices/fileTransferSlice'
+import {
+  selectEntryTransferStatus,
+  selectTransferByEntryId,
+} from '@/store/slices/fileTransferSlice'
 import { formatFileSize } from '@/utils'
 
 interface ClipboardPreviewProps {
@@ -40,6 +44,20 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
   const transfer = useAppSelector(state =>
     item ? selectTransferByEntryId(state, item.id) : undefined
   )
+  const entryStatus = useAppSelector(state =>
+    item ? selectEntryTransferStatus(state, item.id) : undefined
+  )
+  // Derive display state from durable status, falling back to ephemeral transfer
+  const durableStatus = entryStatus?.status
+  const effectiveStatus =
+    durableStatus ??
+    (transfer?.status === 'active'
+      ? 'transferring'
+      : transfer?.status === 'failed'
+        ? 'failed'
+        : transfer?.status === 'completed'
+          ? 'completed'
+          : undefined)
   const [fullText, setFullText] = useState<string | null>(null)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [isLoadingText, setIsLoadingText] = useState(false)
@@ -182,8 +200,39 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
         const fileSizes = (item.content as ClipboardFileItem).file_sizes
         return (
           <div className="p-4 flex flex-col gap-3">
-            {/* Download status badge */}
-            {item.isDownloaded === false && (
+            {/* Transfer status badge */}
+            {effectiveStatus === 'pending' && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded-md px-2 py-1 w-fit"
+                aria-label={t('clipboard.transfer.statusBadge.pending')}
+              >
+                <Clock size={12} />
+                <span>{t('clipboard.transfer.pending')}</span>
+              </div>
+            )}
+            {effectiveStatus === 'transferring' && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-primary bg-primary/10 rounded-md px-2 py-1 w-fit"
+                aria-label={t('clipboard.transfer.statusBadge.transferring')}
+              >
+                <Loader2 size={12} className="animate-spin" />
+                <span>{t('clipboard.transfer.transferring')}</span>
+              </div>
+            )}
+            {effectiveStatus === 'failed' && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-destructive bg-destructive/10 rounded-md px-2 py-1 w-fit"
+                aria-label={t('clipboard.transfer.statusBadge.failed')}
+              >
+                <AlertTriangle size={12} />
+                <span>{t('clipboard.transfer.failed')}</span>
+                {entryStatus?.reason && (
+                  <span className="text-destructive/70">— {entryStatus.reason}</span>
+                )}
+              </div>
+            )}
+            {/* Download status badge (only when no durable transfer status) */}
+            {!effectiveStatus && item.isDownloaded === false && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded-md px-2 py-1 w-fit">
                 <CloudOff size={12} />
                 <span>{t('clipboard.preview.notDownloaded')}</span>
@@ -299,8 +348,8 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
         <div className="overflow-hidden">{renderContent()}</div>
       </ScrollArea>
 
-      {/* Transfer progress section */}
-      {transfer && transfer.status === 'active' && (
+      {/* Transfer progress section (ephemeral active transfer) */}
+      {effectiveStatus === 'transferring' && transfer && transfer.status === 'active' && (
         <div className="shrink-0">
           <Separator className="bg-border/40" />
           <div className="p-4">
@@ -309,8 +358,8 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
         </div>
       )}
 
-      {/* Transfer error section */}
-      {transfer && transfer.status === 'failed' && (
+      {/* Transfer error section (durable failed status) */}
+      {effectiveStatus === 'failed' && (
         <div className="shrink-0">
           <Separator className="bg-border/40" />
           <div className="p-4">
@@ -320,8 +369,10 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
                 <p className="text-sm font-medium text-destructive">
                   {t('clipboard.transfer.failed')}
                 </p>
-                {transfer.errorMessage && (
-                  <p className="text-xs text-destructive/80 mt-1">{transfer.errorMessage}</p>
+                {(entryStatus?.reason || transfer?.errorMessage) && (
+                  <p className="text-xs text-destructive/80 mt-1">
+                    {entryStatus?.reason || transfer?.errorMessage}
+                  </p>
                 )}
               </div>
               {item && (
@@ -339,7 +390,7 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
       )}
 
       {/* Transfer completed indicator */}
-      {transfer && transfer.status === 'completed' && (
+      {effectiveStatus === 'completed' && (
         <div className="shrink-0">
           <Separator className="bg-border/40" />
           <div className="p-4">

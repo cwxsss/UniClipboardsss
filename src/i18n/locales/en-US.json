@@ -481,7 +481,20 @@
       "progress": "{{transferred}} / {{total}} ({{percent}}%)",
       "chunks": "{{completed}} / {{total}} chunks",
       "completed": "Transfer complete",
-      "failed": "Transfer failed"
+      "failed": "Transfer failed",
+      "pending": "Pending transfer",
+      "transferring": "Transferring...",
+      "statusBadge": {
+        "pending": "File transfer pending",
+        "transferring": "File transfer in progress",
+        "completed": "File transfer complete",
+        "failed": "File transfer failed"
+      },
+      "copyDisabled": {
+        "pending": "File transfer pending",
+        "transferring": "File transfer in progress",
+        "failed": "File transfer failed"
+      }
     },
     "confirmDeleteTitle": "Confirm Delete",
     "confirmDeleteDescription_one": "Are you sure you want to delete the selected item? This action cannot be undone.",

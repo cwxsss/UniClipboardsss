@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  Clock,
   Code,
   ExternalLink,
   File,
@@ -10,8 +11,10 @@ import {
   FileText,
   FileType,
   Image as ImageIcon,
+  Loader2,
 } from 'lucide-react'
 import React from 'react'
+import { useTranslation } from 'react-i18next'
 import type { DisplayClipboardItem } from './ClipboardContent'
 import TransferProgressBar from './TransferProgressBar'
 import {
@@ -24,7 +27,10 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { useAppSelector } from '@/store/hooks'
-import { selectTransferByEntryId } from '@/store/slices/fileTransferSlice'
+import {
+  selectEntryTransferStatus,
+  selectTransferByEntryId,
+} from '@/store/slices/fileTransferSlice'
 
 interface ClipboardItemRowProps extends React.HTMLAttributes<HTMLDivElement> {
   item: DisplayClipboardItem
@@ -113,10 +119,19 @@ function getPreviewText(item: DisplayClipboardItem): string {
 
 const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>(
   ({ item, isActive, isStale, onClick, itemRef, className: extraClassName, ...rest }, ref) => {
+    const { t } = useTranslation()
     const Icon = FILE_EXT_ICON_MAP[getFileExt(item)] ?? typeIcons[item.type] ?? FileText
     const transfer = useAppSelector(state => selectTransferByEntryId(state, item.id))
-    const isTransferring = transfer?.status === 'active'
-    const isTransferFailed = transfer?.status === 'failed'
+    const entryStatus = useAppSelector(state => selectEntryTransferStatus(state, item.id))
+
+    // Derive display state: durable entryStatus takes priority, fall back to ephemeral transfer
+    const isFile = item.type === 'file'
+    const durableStatus = entryStatus?.status
+    const isTransferring =
+      durableStatus === 'transferring' || (transfer?.status === 'active' && !durableStatus)
+    const isTransferFailed =
+      durableStatus === 'failed' || (transfer?.status === 'failed' && !durableStatus)
+    const isPending = durableStatus === 'pending'
 
     return (
       <div
@@ -127,6 +142,7 @@ const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>
           isActive ? 'bg-primary/10 text-foreground' : 'hover:bg-muted/50 text-foreground/80',
           isTransferring && 'ring-1 ring-primary/20',
           isTransferFailed && 'ring-1 ring-destructive/20',
+          isPending && 'ring-1 ring-muted-foreground/20',
           extraClassName
         )}
         onClick={onClick}
@@ -136,28 +152,64 @@ const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>
             className={cn(
               'h-4 w-4 shrink-0',
               isActive ? 'text-primary' : 'text-muted-foreground',
-              isStale && 'opacity-40'
+              isStale && 'opacity-40',
+              isPending && 'opacity-50'
             )}
           />
           <span
             className={cn(
               'w-0 flex-grow truncate text-sm',
-              isStale && 'text-muted-foreground line-through opacity-60'
+              isStale && 'text-muted-foreground line-through opacity-60',
+              isPending && 'text-muted-foreground opacity-70'
             )}
           >
             {getPreviewText(item)}
           </span>
+          {isFile && isPending && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Clock
+                  className="h-3.5 w-3.5 text-muted-foreground shrink-0"
+                  aria-label={t('clipboard.transfer.statusBadge.pending')}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                <p className="text-xs">{t('clipboard.transfer.pending')}</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {isFile && isTransferring && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Loader2
+                  className="h-3.5 w-3.5 text-primary animate-spin shrink-0"
+                  aria-label={t('clipboard.transfer.statusBadge.transferring')}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="left">
+                <p className="text-xs">{t('clipboard.transfer.transferring')}</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
           {isTransferFailed ? (
             <Tooltip>
               <TooltipTrigger asChild>
-                <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+                <AlertCircle
+                  className="h-3.5 w-3.5 text-destructive shrink-0"
+                  aria-label={t('clipboard.transfer.statusBadge.failed')}
+                />
               </TooltipTrigger>
               <TooltipContent side="left">
-                <p className="text-xs">{transfer?.errorMessage || 'Transfer failed'}</p>
+                <p className="text-xs">
+                  {entryStatus?.reason || transfer?.errorMessage || t('clipboard.transfer.failed')}
+                </p>
               </TooltipContent>
             </Tooltip>
           ) : (
-            <span className="text-xs text-muted-foreground shrink-0">{item.time}</span>
+            !isPending &&
+            !isTransferring && (
+              <span className="text-xs text-muted-foreground shrink-0">{item.time}</span>
+            )
           )}
         </div>
         {isTransferring && transfer && (

@@ -481,7 +481,20 @@
       "progress": "{{transferred}} / {{total}} ({{percent}}%)",
       "chunks": "{{completed}} / {{total}} 块",
       "completed": "传输完成",
-      "failed": "传输失败"
+      "failed": "传输失败",
+      "pending": "等待传输",
+      "transferring": "传输中...",
+      "statusBadge": {
+        "pending": "文件等待传输",
+        "transferring": "文件传输中",
+        "completed": "文件传输完成",
+        "failed": "文件传输失败"
+      },
+      "copyDisabled": {
+        "pending": "文件等待传输中",
+        "transferring": "文件正在传输中",
+        "failed": "文件传输失败"
+      }
     },
     "confirmDeleteTitle": "确认删除",
     "confirmDeleteDescription_one": "确定要删除选中的项目吗？此操作无法撤销。",
