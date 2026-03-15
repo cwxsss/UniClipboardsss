@@ -23,6 +23,7 @@
     "autostart:allow-is-enabled",
     "stronghold:default",
     "updater:default",
+    "notification:default",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered"

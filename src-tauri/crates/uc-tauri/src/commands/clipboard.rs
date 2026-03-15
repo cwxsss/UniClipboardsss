@@ -86,6 +86,8 @@ pub async fn get_clipboard_entries(
                     is_favorited: dto.is_favorited,
                     updated_at: dto.updated_at,
                     active_time: dto.active_time,
+                    file_transfer_status: dto.file_transfer_status,
+                    file_transfer_reason: dto.file_transfer_reason,
                     link_urls: dto.link_urls,
                     link_domains,
                 }
@@ -241,6 +243,8 @@ pub async fn get_clipboard_entry(
                     is_favorited: dto.is_favorited,
                     updated_at: dto.updated_at,
                     active_time: dto.active_time,
+                    file_transfer_status: dto.file_transfer_status,
+                    file_transfer_reason: dto.file_transfer_reason,
                     link_urls: dto.link_urls,
                     link_domains,
                 }]
@@ -613,7 +617,7 @@ async fn restore_clipboard_entry_impl(
 
         let outbound_sync_uc = runtime.usecases().sync_outbound_clipboard();
         match tokio::task::spawn_blocking(move || {
-            outbound_sync_uc.execute(outbound_snapshot, uc_core::ClipboardChangeOrigin::LocalRestore, None)
+            outbound_sync_uc.execute(outbound_snapshot, uc_core::ClipboardChangeOrigin::LocalRestore, None, vec![])
         })
         .await
         {
@@ -645,6 +649,21 @@ async fn restore_clipboard_entry_impl(
     }
     .instrument(span)
     .await
+}
+
+/// Copy file references from a clipboard entry to the system clipboard.
+/// 将剪贴板条目中的文件引用复制到系统剪贴板。
+///
+/// Used when user right-clicks a file entry in Dashboard and selects "Copy".
+/// Validates file existence before writing -- returns error if any file is deleted.
+#[tauri::command]
+pub async fn copy_file_to_clipboard(
+    runtime: State<'_, Arc<AppRuntime>>,
+    entry_id: String,
+) -> Result<(), String> {
+    let uc = runtime.usecases().copy_file_to_clipboard();
+    let id = EntryId::from(entry_id);
+    uc.execute(&id).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1389,6 +1408,8 @@ mod tests {
             settings_path: std::path::PathBuf::from("/tmp/uniclipboard-test/settings.json"),
             logs_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/logs"),
             cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache"),
+            file_cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/file-cache"),
+            spool_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/spool"),
             app_data_root: std::path::PathBuf::from("/tmp/uniclipboard-test"),
         }
     }
@@ -1467,6 +1488,7 @@ mod tests {
                 blob_writer: Arc::new(NoopPort),
                 thumbnail_repo: Arc::new(NoopPort),
                 thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
             },
             settings: Arc::new(NoopPort),
             system: uc_app::SystemPorts {
@@ -1540,6 +1562,7 @@ mod tests {
                 blob_writer: Arc::new(NoopPort),
                 thumbnail_repo: Arc::new(NoopPort),
                 thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
             },
             settings: Arc::new(NoopPort),
             system: uc_app::SystemPorts {

@@ -92,6 +92,7 @@ describe('UpdateProvider', () => {
           updateSecuritySetting: vi.fn(),
           updateRetentionPolicy: vi.fn(),
           updateKeyboardShortcuts: vi.fn(),
+          updateFileSyncSetting: vi.fn(),
         }}
       >
         <UpdateProvider>
@@ -118,6 +119,7 @@ describe('UpdateProvider', () => {
           updateSecuritySetting: vi.fn(),
           updateRetentionPolicy: vi.fn(),
           updateKeyboardShortcuts: vi.fn(),
+          updateFileSyncSetting: vi.fn(),
         }}
       >
         <UpdateProvider>
@@ -152,6 +154,7 @@ describe('UpdateProvider', () => {
           updateSecuritySetting: vi.fn(),
           updateRetentionPolicy: vi.fn(),
           updateKeyboardShortcuts: vi.fn(),
+          updateFileSyncSetting: vi.fn(),
         }}
       >
         <UpdateProvider>

@@ -636,6 +636,7 @@ fn run_app(config: AppConfig) {
         // 1) In frontend devtools: fetch("uc://blob/<blob_id>")
         // 2) In frontend devtools: fetch("uc://thumbnail/<representation_id>")
         // 3) Network should show 200 with Access-Control-Allow-Origin matching http://localhost:1420
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init());
 
     let builder = if disable_single_instance {
@@ -847,6 +848,7 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::clipboard::get_clipboard_stats,
             uc_tauri::commands::clipboard::toggle_favorite_clipboard_item,
             uc_tauri::commands::clipboard::get_clipboard_item,
+            uc_tauri::commands::clipboard::copy_file_to_clipboard,
             // Encryption commands
             uc_tauri::commands::encryption::initialize_encryption,
             uc_tauri::commands::encryption::get_encryption_session_status,

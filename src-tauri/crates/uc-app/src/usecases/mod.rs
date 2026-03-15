@@ -18,6 +18,7 @@ pub mod auto_unlock_encryption_session;
 pub mod change_passphrase;
 pub mod clipboard;
 pub mod delete_clipboard_entry;
+pub mod file_sync;
 pub mod get_settings;
 pub mod initialize_encryption;
 pub mod internal;
@@ -56,3 +57,7 @@ pub use start_network_after_unlock::StartNetworkAfterUnlock;
 pub use uc_core::ports::{StartClipboardWatcherError, StartClipboardWatcherPort};
 pub use update_settings::UpdateSettings;
 pub use verify_keychain_access::VerifyKeychainAccess;
+
+pub use file_sync::{
+    SyncInboundFileUseCase, SyncOutboundFileUseCase, TrackInboundTransfersUseCase,
+};

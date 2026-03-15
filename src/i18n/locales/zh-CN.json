@@ -100,7 +100,55 @@
             "range": "必须在 1 到 50 MB 之间"
           }
         },
-        "loadError": "加载设置失败:"
+        "loadError": "加载设置失败:",
+        "fileSync": {
+          "title": "文件同步",
+          "enable": {
+            "label": "启用文件同步",
+            "description": "通过局域网在设备间同步复制的文件"
+          },
+          "smallFileThreshold": {
+            "label": "即时传输阈值",
+            "description": "小于此大小的文件立即传输；较大文件仅同步元数据",
+            "unit": "MB",
+            "errors": {
+              "invalid": "必须为正整数",
+              "range": "必须在 1-1000 MB 之间",
+              "exceedsMax": "必须小于最大文件大小"
+            }
+          },
+          "maxFileSize": {
+            "label": "最大文件大小",
+            "description": "超过此大小的文件不会被同步",
+            "unit": "MB",
+            "errors": {
+              "invalid": "必须为正整数",
+              "range": "必须在 1-10240 MB (10 GB) 之间"
+            }
+          },
+          "cacheQuota": {
+            "label": "单设备缓存配额",
+            "description": "为每个设备缓存文件的最大磁盘空间",
+            "unit": "MB",
+            "errors": {
+              "invalid": "必须为正整数",
+              "range": "必须在 50-10240 MB 之间"
+            }
+          },
+          "retentionPeriod": {
+            "label": "文件保留期限",
+            "description": "超过此时间的缓存文件将被清理",
+            "unit": "小时",
+            "errors": {
+              "invalid": "必须为正整数",
+              "range": "必须在 1-720 小时（30 天）之间"
+            }
+          },
+          "autoCleanup": {
+            "label": "自动清理",
+            "description": "启动时自动删除过期的缓存文件"
+          }
+        }
       },
       "security": {
         "title": "安全与隐私设置",
@@ -370,6 +418,8 @@
     },
     "errors": {
       "copyFailed": "复制到剪贴板失败",
+      "syncFailed": "同步到剪贴板失败",
+      "openLocationFailed": "打开文件位置失败",
       "loadDetailFailed": "加载详情失败",
       "unknown": "发生未知错误"
     },
@@ -412,12 +462,52 @@
       "characters": "字符数",
       "words": "词数",
       "size": "大小",
-      "dimensions": "尺寸"
+      "dimensions": "尺寸",
+      "notDownloaded": "未下载",
+      "sourceDevice": "来源设备"
+    },
+    "contextMenu": {
+      "copy": "复制",
+      "syncToClipboard": "同步到剪贴板",
+      "syncing": "同步中...",
+      "openFileLocation": "打开文件位置",
+      "delete": "删除"
     },
     "actionBar": {
       "title": "剪贴板历史",
       "copy": "复制",
-      "delete": "删除"
+      "delete": "删除",
+      "syncToClipboard": "同步到剪贴板",
+      "syncing": "同步中..."
+    },
+    "notification": {
+      "syncStartSingle": "正在同步文件到 {{device}}",
+      "syncStartBatch": "正在同步 {{count}} 个文件到 {{device}}",
+      "syncCompleteSingle": "文件同步完成",
+      "syncCompleteBatch": "所有 {{count}} 个文件已同步",
+      "syncFailed": "文件同步失败",
+      "syncFailedDetail": "文件同步失败：{{reason}}"
+    },
+    "transfer": {
+      "sending": "发送中",
+      "receiving": "接收中",
+      "progress": "{{transferred}} / {{total}} ({{percent}}%)",
+      "chunks": "{{completed}} / {{total}} 块",
+      "completed": "传输完成",
+      "failed": "传输失败",
+      "pending": "等待传输",
+      "transferring": "传输中...",
+      "statusBadge": {
+        "pending": "文件等待传输",
+        "transferring": "文件传输中",
+        "completed": "文件传输完成",
+        "failed": "文件传输失败"
+      },
+      "copyDisabled": {
+        "pending": "文件等待传输中",
+        "transferring": "文件正在传输中",
+        "failed": "文件传输失败"
+      }
     },
     "confirmDeleteTitle": "确认删除",
     "confirmDeleteDescription_one": "确定要删除选中的项目吗？此操作无法撤销。",

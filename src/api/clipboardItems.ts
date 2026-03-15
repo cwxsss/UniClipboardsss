@@ -14,6 +14,8 @@ interface ClipboardEntryProjection {
   updated_at: number
   active_time: number
   thumbnail_url?: string | null
+  file_transfer_status?: string | null
+  file_transfer_reason?: string | null
   /** Parsed link URLs (built from full representation data, not preview) */
   link_urls?: string[] | null
   /** Extracted domains for link entries */
@@ -121,6 +123,10 @@ export interface ClipboardItemResponse {
   updated_at: number
   active_time: number
   item: ClipboardItem
+  /** Persisted file transfer status for file entries: "pending" | "transferring" | "completed" | "failed" | null */
+  file_transfer_status?: string | null
+  /** Failure reason when file_transfer_status is "failed" */
+  file_transfer_reason?: string | null
 }
 
 export interface ClipboardStats {
@@ -144,7 +150,8 @@ function extractDomainFromUrl(url: string): string {
  * Shared by getClipboardItems and getClipboardEntry to avoid duplication.
  */
 function transformProjectionToResponse(entry: ClipboardEntryProjection): ClipboardItemResponse {
-  const isImage = isImageType(entry.content_type)
+  const isFile = entry.content_type.includes('uri-list')
+  const isImage = !isFile && isImageType(entry.content_type)
 
   // Use pre-parsed link data from backend (built from full representation, not preview)
   const hasLinkData = !isImage && entry.link_urls && entry.link_urls.length > 0
@@ -166,14 +173,28 @@ function transformProjectionToResponse(entry: ClipboardEntryProjection): Clipboa
         }
       : null,
     text:
-      !isImage && !hasLinkData
+      !isImage && !isFile && !hasLinkData
         ? {
             display_text: entry.preview,
             has_detail: entry.has_detail,
             size: entry.size_bytes,
           }
         : null,
-    file: null as unknown as ClipboardFileItem,
+    file: isFile
+      ? {
+          file_names: entry.preview
+            .split('\n')
+            .filter(Boolean)
+            .map(uri => {
+              try {
+                return decodeURIComponent(new URL(uri).pathname.split('/').pop() || uri)
+              } catch {
+                return uri
+              }
+            }),
+          file_sizes: [], // Size info not available from URI list; use entry.size_bytes as total
+        }
+      : (null as unknown as ClipboardFileItem),
     link: linkItem as unknown as ClipboardLinkItem,
     code: null as unknown as ClipboardCodeItem,
     unknown: null,
@@ -187,6 +208,8 @@ function transformProjectionToResponse(entry: ClipboardEntryProjection): Clipboa
     updated_at: entry.updated_at,
     active_time: entry.active_time,
     item,
+    file_transfer_status: entry.file_transfer_status ?? null,
+    file_transfer_reason: entry.file_transfer_reason ?? null,
   }
 }
 
@@ -476,6 +499,39 @@ export async function unfavoriteClipboardItem(id: string): Promise<boolean> {
     return await invokeWithTrace('toggle_favorite_clipboard_item', { id, is_favorited: false })
   } catch (error) {
     console.error('取消收藏剪贴板条目失败:', error)
+    throw error
+  }
+}
+
+/**
+ * Copy a file entry to the system clipboard via the backend use case.
+ * If the cache file has been deleted, the backend returns an error.
+ */
+export async function copyFileToClipboard(entryId: string): Promise<void> {
+  await invokeWithTrace('copy_file_to_clipboard', { entryId })
+}
+
+/**
+ * Download a file entry from a remote device to local clipboard.
+ * Returns a transfer_id to track progress via transfer://progress events.
+ */
+export async function downloadFileEntry(entryId: string): Promise<{ transfer_id: string }> {
+  try {
+    return await invokeWithTrace('download_file_entry', { entryId })
+  } catch (error) {
+    console.error('Failed to download file entry:', error)
+    throw error
+  }
+}
+
+/**
+ * Open the file location (containing folder) in the system file manager.
+ */
+export async function openFileLocation(entryId: string): Promise<void> {
+  try {
+    await invokeWithTrace('open_file_location', { entryId })
+  } catch (error) {
+    console.error('Failed to open file location:', error)
     throw error
   }
 }

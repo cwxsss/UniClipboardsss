@@ -863,6 +863,8 @@ mod tests {
             settings_path: std::path::PathBuf::from("/tmp/uniclipboard-test/settings.json"),
             logs_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/logs"),
             cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache"),
+            file_cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/file-cache"),
+            spool_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/spool"),
             app_data_root: std::path::PathBuf::from("/tmp/uniclipboard-test"),
         }
     }
@@ -916,6 +918,7 @@ mod tests {
                 blob_writer: Arc::new(NoopPort),
                 thumbnail_repo: Arc::new(NoopPort),
                 thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
             },
             settings: Arc::new(NoopPort),
             system: uc_app::SystemPorts {

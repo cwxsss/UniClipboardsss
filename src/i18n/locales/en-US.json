@@ -100,7 +100,55 @@
             "range": "Must be between 1 and 50 MB"
           }
         },
-        "loadError": "Failed to load settings:"
+        "loadError": "Failed to load settings:",
+        "fileSync": {
+          "title": "File Sync",
+          "enable": {
+            "label": "Enable file sync",
+            "description": "Sync copied files between devices over LAN"
+          },
+          "smallFileThreshold": {
+            "label": "Immediate transfer threshold",
+            "description": "Files smaller than this are transferred immediately; larger files sync metadata only",
+            "unit": "MB",
+            "errors": {
+              "invalid": "Must be a positive number",
+              "range": "Must be between 1 and 1000 MB",
+              "exceedsMax": "Must be less than max file size"
+            }
+          },
+          "maxFileSize": {
+            "label": "Maximum file size",
+            "description": "Files larger than this will not be synced",
+            "unit": "MB",
+            "errors": {
+              "invalid": "Must be a positive number",
+              "range": "Must be between 1 and 10240 MB (10 GB)"
+            }
+          },
+          "cacheQuota": {
+            "label": "Per-device cache quota",
+            "description": "Maximum disk space for cached files from each device",
+            "unit": "MB",
+            "errors": {
+              "invalid": "Must be a positive number",
+              "range": "Must be between 50 and 10240 MB"
+            }
+          },
+          "retentionPeriod": {
+            "label": "File retention period",
+            "description": "Cached files are removed after this duration",
+            "unit": "hours",
+            "errors": {
+              "invalid": "Must be a positive number",
+              "range": "Must be between 1 and 720 hours (30 days)"
+            }
+          },
+          "autoCleanup": {
+            "label": "Auto-cleanup",
+            "description": "Automatically remove expired cached files on startup"
+          }
+        }
       },
       "security": {
         "title": "Security & Privacy",
@@ -370,6 +418,8 @@
     },
     "errors": {
       "copyFailed": "Failed to copy to clipboard",
+      "syncFailed": "Sync to clipboard failed",
+      "openLocationFailed": "Failed to open file location",
       "loadDetailFailed": "Failed to load details",
       "unknown": "An unknown error occurred"
     },
@@ -412,12 +462,52 @@
       "characters": "Characters",
       "words": "Words",
       "size": "Size",
-      "dimensions": "Dimensions"
+      "dimensions": "Dimensions",
+      "notDownloaded": "Not downloaded",
+      "sourceDevice": "Source device"
+    },
+    "contextMenu": {
+      "copy": "Copy",
+      "syncToClipboard": "Sync to Clipboard",
+      "syncing": "Syncing...",
+      "openFileLocation": "Open File Location",
+      "delete": "Delete"
     },
     "actionBar": {
       "title": "Clipboard History",
       "copy": "Copy",
-      "delete": "Delete"
+      "delete": "Delete",
+      "syncToClipboard": "Sync to Clipboard",
+      "syncing": "Syncing..."
+    },
+    "notification": {
+      "syncStartSingle": "File syncing to {{device}}",
+      "syncStartBatch": "Syncing {{count}} files to {{device}}",
+      "syncCompleteSingle": "File synced successfully",
+      "syncCompleteBatch": "All {{count}} files synced",
+      "syncFailed": "File sync failed",
+      "syncFailedDetail": "Failed to sync file: {{reason}}"
+    },
+    "transfer": {
+      "sending": "Sending",
+      "receiving": "Receiving",
+      "progress": "{{transferred}} / {{total}} ({{percent}}%)",
+      "chunks": "{{completed}} / {{total}} chunks",
+      "completed": "Transfer complete",
+      "failed": "Transfer failed",
+      "pending": "Pending transfer",
+      "transferring": "Transferring...",
+      "statusBadge": {
+        "pending": "File transfer pending",
+        "transferring": "File transfer in progress",
+        "completed": "File transfer complete",
+        "failed": "File transfer failed"
+      },
+      "copyDisabled": {
+        "pending": "File transfer pending",
+        "transferring": "File transfer in progress",
+        "failed": "File transfer failed"
+      }
     },
     "confirmDeleteTitle": "Confirm Delete",
     "confirmDeleteDescription_one": "Are you sure you want to delete the selected item? This action cannot be undone.",

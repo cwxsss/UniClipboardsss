@@ -94,7 +94,8 @@ use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
     DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
     DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselDeviceRepository, DieselPairedDeviceRepository, DieselThumbnailRepository,
+    DieselDeviceRepository, DieselFileTransferRepository, DieselPairedDeviceRepository,
+    DieselThumbnailRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
@@ -165,6 +166,7 @@ pub struct BackgroundRuntimeDeps {
     pub spool_rx: mpsc::Receiver<SpoolRequest>,
     pub worker_rx: mpsc::Receiver<RepresentationId>,
     pub spool_dir: PathBuf,
+    pub file_cache_dir: PathBuf,
     pub spool_ttl_days: u64,
     pub worker_retry_max_attempts: u32,
     pub worker_retry_backoff_ms: u64,
@@ -351,6 +353,9 @@ struct InfraLayer {
     // System services / 系统服务
     clock: Arc<dyn ClockPort>,
     hash: Arc<dyn ContentHashPort>,
+
+    // File transfer tracking / 文件传输追踪
+    file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
 }
 
 /// Platform layer implementations / 平台层实现
@@ -531,6 +536,11 @@ fn create_infra_layer(
     let selection_repo_impl = DieselClipboardSelectionRepository::new(Arc::clone(&db_executor));
     let selection_repo: Arc<dyn ClipboardSelectionRepositoryPort> = Arc::new(selection_repo_impl);
 
+    // Create file transfer repository
+    // 创建文件传输仓库
+    let file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort> =
+        Arc::new(DieselFileTransferRepository::new(Arc::clone(&db_executor)));
+
     let infra = InfraLayer {
         clipboard_entry_repo,
         clipboard_event_repo,
@@ -548,6 +558,7 @@ fn create_infra_layer(
         setup_status,
         clock,
         hash,
+        file_transfer_repo,
     };
 
     Ok(infra)
@@ -605,6 +616,7 @@ fn create_platform_layer(
     clock: Arc<dyn ClockPort>,
     storage_config: Arc<ClipboardStorageConfig>,
     identity_store: Arc<dyn IdentityStorePort>,
+    file_cache_dir: PathBuf,
 ) -> WiringResult<PlatformLayer> {
     // Create system clipboard implementation (platform-specific)
     // 创建系统剪贴板实现（平台特定）
@@ -710,6 +722,7 @@ fn create_platform_layer(
             encryption_session.clone(),
             transfer_decryptor,
             transfer_encryptor,
+            file_cache_dir,
         )
         .map_err(|e| {
             WiringError::NetworkInit(format!("Failed to initialize libp2p identity: {e}"))
@@ -721,6 +734,7 @@ fn create_platform_layer(
         peers: libp2p_network.clone(),
         pairing: libp2p_network.clone(),
         events: libp2p_network.clone(),
+        file_transfer: libp2p_network.clone(),
     });
 
     // Wrap blob_store with encryption decorator
@@ -791,141 +805,90 @@ fn get_default_app_dirs() -> WiringResult<uc_core::app_dirs::AppDirs> {
 
 /// Get resolved storage paths from configuration.
 ///
-/// This function computes the storage paths that will be used by the application,
-/// including applying profile suffixes and any path overrides from the config.
+/// Builds `AppPaths` through a single construction path:
+/// 1. `resolve_app_dirs()` adjusts both roots together based on config
+/// 2. `AppPaths::from_app_dirs()` defines all subdirectories (single source of truth)
+/// 3. Individual path overrides (db_path, vault_dir) applied on top
 ///
 /// # Errors
 ///
 /// Returns `WiringError::ConfigInit` if the platform adapter fails to determine the directories.
-///
-/// # Examples
-///
-/// ```ignore
-/// use uc_tauri::bootstrap::wiring::get_storage_paths;
-///
-/// let config = uc_core::config::AppConfig::default();
-/// let paths = get_storage_paths(&config).expect("failed to get storage paths");
-/// // `paths` contains resolved paths with profile suffix applied
-/// ```
 pub fn get_storage_paths(
     config: &uc_core::config::AppConfig,
 ) -> WiringResult<uc_app::app_paths::AppPaths> {
-    let default_paths = derive_default_paths(config)?;
-    Ok(uc_app::app_paths::AppPaths {
-        db_path: default_paths.db_path,
-        vault_dir: default_paths.vault_dir,
-        settings_path: default_paths.settings_path,
-        logs_dir: default_paths.app_data_root.join("logs"),
-        cache_dir: default_paths.cache_dir,
-        app_data_root: default_paths.app_data_root,
-    })
+    let platform_dirs = get_default_app_dirs()?;
+    resolve_app_paths(&platform_dirs, config)
 }
 
-#[derive(Debug, Clone)]
-struct DefaultPaths {
-    app_data_root: PathBuf,
-    db_path: PathBuf,
-    vault_dir: PathBuf,
-    settings_path: PathBuf,
-    cache_dir: PathBuf,
-}
-
-/// Compute default application file-system paths from the given configuration.
+/// Resolve the effective `AppDirs` by applying config overrides.
 ///
-/// The returned paths combine platform-specific application directories with any
-/// explicit overrides present in `config`, producing concrete locations for:
-/// - app_data_root: base application data directory
-/// - db_path: path to the SQLite database file
-/// - vault_dir: directory for vault/key material
-/// - settings_path: path to the settings file
+/// When config specifies a `database_path`, its parent becomes the new `app_data_root`,
+/// and `app_cache_root` is co-located under it as `app_data_root/cache`.
+/// This ensures dev mode (with `config.toml`) keeps all data in one place.
 ///
-/// # Examples
-///
-/// ```ignore
-/// use uc_core::config::AppConfig;
-///
-/// let cfg = AppConfig::empty();
-/// let paths = derive_default_paths(&cfg).expect("derive default paths");
-/// assert!(!paths.app_data_root.as_os_str().is_empty());
-/// assert!(!paths.settings_path.as_os_str().is_empty());
-/// ```
-fn derive_default_paths(config: &AppConfig) -> WiringResult<DefaultPaths> {
-    let app_dirs = get_default_app_dirs()?;
-
-    derive_default_paths_from_app_dirs(&app_dirs, config)
-}
-
-/// Derives concrete filesystem paths (database, vault, settings, and app data root)
-/// from platform `AppDirs`, applying any overrides present in `AppConfig`.
-///
-/// If `config.database_path` is empty the default database path from `AppDirs` is used;
-/// otherwise `config.database_path` is returned. If `config.vault_key_path` is empty
-/// the default vault directory from `AppDirs` is used; otherwise the parent directory
-/// of `config.vault_key_path` is used as the vault directory.
-///
-/// # Parameters
-///
-/// - `app_dirs`: Platform-specific base directories to derive defaults from.
-/// - `config`: Application configuration that may override the default database path
-///   and vault key path.
-///
-/// # Returns
-///
-/// `DefaultPaths` containing:
-/// - `app_data_root`: the application data root from `AppDirs`.
-/// - `db_path`: the resolved database file path.
-/// - `vault_dir`: the resolved vault directory.
-/// - `settings_path`: the resolved settings file path.
-///
-/// # Examples
-///
-/// ```ignore
-/// use uc_core::app_dirs::AppDirs;
-/// use uc_core::config::AppConfig;
-/// use uc_tauri::bootstrap::wiring::derive_default_paths_from_app_dirs;
-///
-/// // Assuming `AppDirs` is constructed in tests/setup.
-/// let app_dirs = AppDirs::default();
-/// let config = AppConfig::empty();
-/// let paths = derive_default_paths_from_app_dirs(&app_dirs, &config).unwrap();
-/// // Basic sanity check: returned paths are populated.
-/// assert!(!paths.app_data_root.as_os_str().is_empty());
-/// assert!(!paths.settings_path.as_os_str().is_empty());
-/// ```
-fn derive_default_paths_from_app_dirs(
-    app_dirs: &uc_core::app_dirs::AppDirs,
+/// When config is empty (production), platform defaults are used unchanged.
+fn resolve_app_dirs(
+    platform_dirs: &uc_core::app_dirs::AppDirs,
     config: &AppConfig,
-) -> WiringResult<DefaultPaths> {
-    let default_app_data_root = app_dirs.app_data_root.clone();
-
+) -> uc_core::app_dirs::AppDirs {
     let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
-    let app_data_root = if config.database_path.as_os_str().is_empty() || is_in_memory_db {
-        default_app_data_root
-    } else {
-        let configured_root = config
+    let config_overrides_root = !config.database_path.as_os_str().is_empty() && !is_in_memory_db;
+
+    if config_overrides_root {
+        let raw_root = config
             .database_path
             .parent()
             .unwrap_or(&config.database_path)
             .to_path_buf();
-        apply_profile_suffix(configured_root)
-    };
-
-    let db_path = if config.database_path.as_os_str().is_empty() {
-        app_data_root.join("uniclipboard.db")
-    } else if is_in_memory_db {
-        config.database_path.clone()
+        // Ensure the data root is absolute — relative paths break clipboard
+        // file writes (CF_HDROP on Windows and NSPasteboard on macOS require
+        // absolute paths).
+        let abs_root = if raw_root.is_relative() {
+            std::env::current_dir().unwrap_or_default().join(&raw_root)
+        } else {
+            raw_root
+        };
+        let app_data_root = apply_profile_suffix(abs_root);
+        // When config overrides the data root, co-locate cache under it.
+        // This ensures dev mode keeps all data in one place (e.g. .app_data/).
+        let app_cache_root = app_data_root.join("cache");
+        uc_core::app_dirs::AppDirs {
+            app_data_root,
+            app_cache_root,
+        }
     } else {
+        platform_dirs.clone()
+    }
+}
+
+/// Build `AppPaths` from platform dirs and config overrides.
+///
+/// Always builds through `AppPaths::from_app_dirs()` (single construction path),
+/// then applies individual field overrides for db_path and vault_dir if config
+/// specifies custom values.
+fn resolve_app_paths(
+    platform_dirs: &uc_core::app_dirs::AppDirs,
+    config: &AppConfig,
+) -> WiringResult<uc_app::app_paths::AppPaths> {
+    let resolved_dirs = resolve_app_dirs(platform_dirs, config);
+    let mut paths = uc_app::app_paths::AppPaths::from_app_dirs(&resolved_dirs);
+
+    // Apply individual path overrides from config
+    let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
+
+    if is_in_memory_db {
+        paths.db_path = config.database_path.clone();
+    } else if !config.database_path.as_os_str().is_empty() {
         let db_file_name = config
             .database_path
             .file_name()
             .map(|name| name.to_os_string())
             .unwrap_or_else(|| std::ffi::OsString::from("uniclipboard.db"));
-        app_data_root.join(db_file_name)
-    };
+        paths.db_path = paths.app_data_root.join(db_file_name);
+    }
 
-    let vault_dir = if config.vault_key_path.as_os_str().is_empty() {
-        app_data_root.join("vault")
-    } else {
+    // Vault dir override
+    if !config.vault_key_path.as_os_str().is_empty() {
         let configured_vault_root = config
             .vault_key_path
             .parent()
@@ -933,7 +896,7 @@ fn derive_default_paths_from_app_dirs(
             .to_path_buf();
 
         if config.database_path.as_os_str().is_empty() {
-            apply_profile_suffix(configured_vault_root)
+            paths.vault_dir = apply_profile_suffix(configured_vault_root);
         } else {
             let configured_db_root = config
                 .database_path
@@ -945,22 +908,14 @@ fn derive_default_paths_from_app_dirs(
                 let relative = configured_vault_root
                     .strip_prefix(&configured_db_root)
                     .unwrap_or(std::path::Path::new(""));
-                app_data_root.join(relative)
+                paths.vault_dir = paths.app_data_root.join(relative);
             } else {
-                apply_profile_suffix(configured_vault_root)
+                paths.vault_dir = apply_profile_suffix(configured_vault_root);
             }
         }
-    };
+    }
 
-    let settings_path = app_data_root.join("settings.json");
-
-    Ok(DefaultPaths {
-        app_data_root,
-        db_path,
-        vault_dir,
-        settings_path,
-        cache_dir: app_dirs.app_cache_root.clone(),
-    })
+    Ok(paths)
 }
 
 fn apply_profile_suffix(path: PathBuf) -> PathBuf {
@@ -1032,7 +987,8 @@ pub fn wire_dependencies_with_identity_store(
     //
     // Defensive: Use system default if database_path is empty
     // 防御性编程：如果 database_path 为空，使用系统默认值
-    let paths = derive_default_paths(config)?;
+    let platform_dirs = get_default_app_dirs()?;
+    let paths = resolve_app_paths(&platform_dirs, config)?;
 
     let db_path = paths.db_path;
 
@@ -1074,6 +1030,7 @@ pub fn wire_dependencies_with_identity_store(
         infra.clock.clone(),
         storage_config.clone(),
         identity_store,
+        paths.file_cache_dir.clone(),
     )?;
 
     // Step 3.5: Wrap ports with encryption decorators
@@ -1106,7 +1063,7 @@ pub fn wire_dependencies_with_identity_store(
     let representation_cache_port: Arc<dyn RepresentationCachePort> = representation_cache.clone();
 
     // Create spool manager
-    let spool_dir = paths.cache_dir.join("spool");
+    let spool_dir = paths.spool_dir.clone();
     let spool_manager = Arc::new(
         SpoolManager::new(spool_dir.clone(), storage_config.spool_max_bytes)
             .map_err(|e| WiringError::BlobStorageInit(format!("Failed to create spool: {}", e)))?,
@@ -1159,6 +1116,7 @@ pub fn wire_dependencies_with_identity_store(
             blob_writer: platform.blob_writer,
             thumbnail_repo: infra.thumbnail_repo,
             thumbnail_generator: infra.thumbnail_generator,
+            file_transfer_repo: infra.file_transfer_repo,
         },
         settings: infra.settings_repo,
         system: SystemPorts {
@@ -1178,6 +1136,7 @@ pub fn wire_dependencies_with_identity_store(
             spool_rx,
             worker_rx,
             spool_dir,
+            file_cache_dir: paths.file_cache_dir.clone(),
             spool_ttl_days: storage_config.spool_ttl_days,
             worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
@@ -1209,6 +1168,7 @@ pub fn start_background_tasks<R: Runtime>(
         spool_rx,
         worker_rx,
         spool_dir,
+        file_cache_dir,
         spool_ttl_days,
         worker_retry_max_attempts,
         worker_retry_backoff_ms,
@@ -1231,7 +1191,10 @@ pub fn start_background_tasks<R: Runtime>(
     let pairing_events = deps.network_ports.events.clone();
     let peer_directory = deps.network_ports.peers.clone();
     let clipboard_network = deps.network_ports.clipboard.clone();
-    let sync_inbound_usecase = new_sync_inbound_clipboard_usecase(deps);
+    let sync_inbound_usecase =
+        new_sync_inbound_clipboard_usecase(deps, Some(file_cache_dir.clone()));
+    let inbound_file_settings = deps.settings.clone();
+    let inbound_file_cache_dir = file_cache_dir;
     let space_access_runtime_ports = RuntimeSpaceAccessPorts {
         transport: Arc::new(tokio::sync::Mutex::new(SpaceAccessNetworkAdapter::new(
             pairing_transport.clone(),
@@ -1247,6 +1210,21 @@ pub fn start_background_tasks<R: Runtime>(
             staged_store.clone(),
         ))),
     };
+
+    // Create clipboard deps for inbound file clipboard integration
+    let inbound_system_clipboard = deps.clipboard.system_clipboard.clone();
+    let inbound_clipboard_change_origin = deps.clipboard.clipboard_change_origin.clone();
+
+    // File transfer tracking deps
+    let inbound_file_transfer_repo = deps.storage.file_transfer_repo.clone();
+    let inbound_clock = deps.system.clock.clone();
+
+    // Clones for file cache cleanup task and startup reconciliation
+    let deps_settings = deps.settings.clone();
+    let cleanup_file_cache_dir = inbound_file_cache_dir.clone();
+    let reconcile_file_transfer_repo = deps.storage.file_transfer_repo.clone();
+    let reconcile_clock = deps.system.clock.clone();
+    let reconcile_app_handle = app_handle.clone();
 
     // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
     // We use a single orchestration spawn to set up all registry tasks, since
@@ -1356,6 +1334,18 @@ pub fn start_background_tasks<R: Runtime>(
             .await;
 
         // --- Clipboard receive loop (replaces ctrl_c with CancellationToken) ---
+        let clipboard_transfer_tracker = Arc::new(
+            uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
+                inbound_file_transfer_repo.clone(),
+            ),
+        );
+        let clipboard_clock = inbound_clock.clone();
+
+        // Shared early-completion cache: captures completions that arrive
+        // before the pending record is seeded (race condition fix).
+        let early_completion_cache =
+            Arc::new(super::file_transfer_wiring::EarlyCompletionCache::default());
+        let pairing_early_completion_cache = early_completion_cache.clone();
         registry
             .spawn("clipboard_receive", |token| {
                 async move {
@@ -1401,6 +1391,9 @@ pub fn start_background_tasks<R: Runtime>(
                                     clipboard_rx,
                                     &sync_inbound_usecase,
                                     clipboard_app_handle.clone(),
+                                    Some(clipboard_transfer_tracker.clone()),
+                                    Some(clipboard_clock.clone()),
+                                    Some(early_completion_cache.clone()),
                                 )
                                 .await;
                             }
@@ -1520,6 +1513,13 @@ pub fn start_background_tasks<R: Runtime>(
                                 peer_directory.clone(),
                                 pairing_space_access_orchestrator.clone(),
                                 space_access_runtime_ports.clone(),
+                                inbound_file_settings.clone(),
+                                inbound_file_cache_dir.clone(),
+                                inbound_system_clipboard.clone(),
+                                inbound_clipboard_change_origin.clone(),
+                                inbound_file_transfer_repo.clone(),
+                                inbound_clock.clone(),
+                                pairing_early_completion_cache.clone(),
                             )
                             .await;
 
@@ -1573,11 +1573,83 @@ pub fn start_background_tasks<R: Runtime>(
             })
             .await;
 
+        // --- File cache cleanup (runs once at startup, fire-and-forget) ---
+        {
+            let cleanup_settings = deps_settings.clone();
+            let cleanup_cache_dir = cleanup_file_cache_dir.clone();
+            registry
+                .spawn("file_cache_cleanup", |_token| async move {
+                    let uc = uc_app::usecases::file_sync::CleanupExpiredFilesUseCase::new(
+                        cleanup_settings,
+                        cleanup_cache_dir,
+                    );
+                    match uc.execute().await {
+                        Ok(result) => {
+                            if result.files_removed > 0 {
+                                info!(
+                                    files_removed = result.files_removed,
+                                    bytes_reclaimed = result.bytes_reclaimed,
+                                    "Startup file cache cleanup completed"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Startup file cache cleanup failed (non-fatal)");
+                        }
+                    }
+                })
+                .await;
+        }
+
+        // --- File transfer startup reconciliation (runs once, fire-and-forget) ---
+        {
+            let reconcile_repo = reconcile_file_transfer_repo.clone();
+            let reconcile_clk = reconcile_clock.clone();
+            let reconcile_app = reconcile_app_handle.clone();
+            registry
+                .spawn("file_transfer_reconcile", |_token| async move {
+                    let tracker = uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
+                        reconcile_repo,
+                    );
+                    let now_ms = reconcile_clk.now_ms();
+                    super::file_transfer_wiring::reconcile_on_startup(
+                        &tracker,
+                        reconcile_app.as_ref(),
+                        now_ms,
+                    )
+                    .await;
+                })
+                .await;
+        }
+
+        // --- File transfer timeout sweep (long-lived, interval-based) ---
+        {
+            let sweep_repo = reconcile_file_transfer_repo;
+            let sweep_clock = reconcile_clock;
+            let sweep_app = reconcile_app_handle;
+            let sweep_tracker = Arc::new(
+                uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(sweep_repo),
+            );
+            let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+            let _sweep_handle = super::file_transfer_wiring::spawn_timeout_sweep(
+                sweep_tracker,
+                sweep_app,
+                sweep_clock,
+                cancel_rx,
+            );
+            // Cancel sender is dropped when the registry shuts down
+            // (the sweep task will terminate when cancel_tx is dropped)
+            std::mem::forget(cancel_tx);
+        }
+
         info!("All background tasks registered with TaskRegistry");
     });
 }
 
-fn new_sync_inbound_clipboard_usecase(deps: &AppDeps) -> SyncInboundClipboardUseCase {
+fn new_sync_inbound_clipboard_usecase(
+    deps: &AppDeps,
+    file_cache_dir: Option<PathBuf>,
+) -> SyncInboundClipboardUseCase {
     let mode = super::resolve_clipboard_integration_mode();
     SyncInboundClipboardUseCase::with_capture_dependencies(
         mode,
@@ -1593,6 +1665,7 @@ fn new_sync_inbound_clipboard_usecase(deps: &AppDeps) -> SyncInboundClipboardUse
         deps.clipboard.representation_normalizer.clone(),
         deps.clipboard.representation_cache.clone(),
         deps.clipboard.spool_queue.clone(),
+        file_cache_dir,
     )
 }
 
@@ -1600,6 +1673,9 @@ async fn run_clipboard_receive_loop<R: Runtime>(
     mut clipboard_rx: mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>,
     usecase: &SyncInboundClipboardUseCase,
     app_handle: Option<AppHandle<R>>,
+    transfer_tracker: Option<Arc<uc_app::usecases::file_sync::TrackInboundTransfersUseCase>>,
+    clock: Option<Arc<dyn uc_core::ports::ClockPort>>,
+    early_completion_cache: Option<Arc<super::file_transfer_wiring::EarlyCompletionCache>>,
 ) {
     while let Some((message, pre_decoded)) = clipboard_rx.recv().await {
         let flow_id = uc_observability::FlowId::generate();
@@ -1630,14 +1706,116 @@ async fn run_clipboard_receive_loop<R: Runtime>(
 
         match result {
             Ok(outcome) => {
-                if matches!(
-                    usecase.mode(),
-                    uc_app::usecases::clipboard::ClipboardIntegrationMode::Passive
-                ) {
-                    match outcome {
-                        InboundApplyOutcome::Applied {
-                            entry_id: Some(entry_id),
-                        } => {
+                // Persist pending transfer records and emit status for file transfers
+                if let InboundApplyOutcome::Applied {
+                    entry_id: Some(ref entry_id),
+                    ref pending_transfers,
+                } = outcome
+                {
+                    if !pending_transfers.is_empty() {
+                        // Persist pending records to DB so mark_completed/mark_transferring can find them
+                        if let (Some(tracker), Some(clk)) =
+                            (transfer_tracker.as_ref(), clock.as_ref())
+                        {
+                            let now_ms = clk.now_ms();
+                            let db_transfers: Vec<
+                                uc_core::ports::file_transfer_repository::PendingInboundTransfer,
+                            > = pending_transfers
+                                .iter()
+                                .map(|t| {
+                                    uc_core::ports::file_transfer_repository::PendingInboundTransfer {
+                                        transfer_id: t.transfer_id.clone(),
+                                        entry_id: entry_id.to_string(),
+                                        origin_device_id: origin_device_id.clone(),
+                                        filename: t.filename.clone(),
+                                        cached_path: t.cached_path.clone(),
+                                        created_at_ms: now_ms,
+                                    }
+                                })
+                                .collect();
+                            if let Err(err) =
+                                tracker.record_pending_from_clipboard(db_transfers).await
+                            {
+                                warn!(
+                                    error = %err,
+                                    message_id = %message_id,
+                                    "Failed to persist pending transfer records"
+                                );
+                            } else if let Some(cache) = early_completion_cache.as_ref() {
+                                // Reconcile early completions that arrived before seeding
+                                let seeded_ids: Vec<String> = pending_transfers
+                                    .iter()
+                                    .map(|t| t.transfer_id.clone())
+                                    .collect();
+                                let early = cache.drain_matching(&seeded_ids);
+                                for (tid, info) in &early {
+                                    info!(
+                                        transfer_id = %tid,
+                                        "Reconciling early completion after seeding"
+                                    );
+                                    match tracker
+                                        .mark_completed(
+                                            tid,
+                                            info.content_hash.as_deref(),
+                                            info.completed_at_ms,
+                                        )
+                                        .await
+                                    {
+                                        Ok(_) => {
+                                            if let Some(app) = app_handle.as_ref() {
+                                                let payload = super::file_transfer_wiring::FileTransferStatusPayload {
+                                                    transfer_id: tid.clone(),
+                                                    entry_id: entry_id.to_string(),
+                                                    status: "completed".to_string(),
+                                                    reason: None,
+                                                };
+                                                if let Err(err) = app
+                                                    .emit("file-transfer://status-changed", payload)
+                                                {
+                                                    warn!(error = %err, "Failed to emit reconciled completion status");
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            warn!(
+                                                error = %err,
+                                                transfer_id = %tid,
+                                                "Failed to reconcile early completion"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Emit pending status events to frontend
+                        if let Some(app) = app_handle.as_ref() {
+                            super::file_transfer_wiring::emit_pending_status(
+                                app,
+                                &entry_id.to_string(),
+                                pending_transfers,
+                            );
+                        }
+                    }
+                }
+
+                // Emit clipboard://event so frontend list refreshes.
+                // In Passive mode: always emit (no OS clipboard write happens).
+                // In Full mode: emit only for file entries (OS clipboard write is skipped for files).
+                match outcome {
+                    InboundApplyOutcome::Applied {
+                        entry_id: Some(entry_id),
+                        ref pending_transfers,
+                    } => {
+                        let is_passive = matches!(
+                            usecase.mode(),
+                            uc_app::usecases::clipboard::ClipboardIntegrationMode::Passive
+                        );
+                        let has_file_transfers = !pending_transfers.is_empty();
+
+                        // Passive mode always needs explicit event (no ClipboardWatcher).
+                        // Full mode with file transfers also needs it (write_snapshot is skipped).
+                        if is_passive || has_file_transfers {
                             if let Some(app) = app_handle.as_ref() {
                                 let event = ClipboardEvent::NewContent {
                                     entry_id: entry_id.to_string(),
@@ -1645,18 +1823,23 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                                     origin: "remote".to_string(),
                                 };
                                 if let Err(emit_err) = forward_clipboard_event(app, event) {
-                                    warn!(error = %emit_err, message_id = %message_id, "Failed to emit clipboard event after inbound apply in passive mode");
+                                    warn!(error = %emit_err, message_id = %message_id, "Failed to emit clipboard event after inbound apply");
                                 }
                             }
                         }
-                        InboundApplyOutcome::Applied { entry_id: None } => {
+                    }
+                    InboundApplyOutcome::Applied { entry_id: None, .. } => {
+                        if matches!(
+                            usecase.mode(),
+                            uc_app::usecases::clipboard::ClipboardIntegrationMode::Passive
+                        ) {
                             warn!(
                                 message_id = %message_id,
                                 "Inbound apply reported success in passive mode without persisted entry id"
                             );
                         }
-                        InboundApplyOutcome::Skipped => {}
                     }
+                    InboundApplyOutcome::Skipped => {}
                 }
             }
             Err(err) => {
@@ -1984,6 +2167,108 @@ async fn resolve_device_name_for_peer(
     }
 }
 
+/// Restore received file paths to system clipboard after transfer completes.
+/// DB entry was already created by inbound clipboard sync, so this uses
+/// `LocalRestore` origin to prevent the clipboard watcher from re-capturing.
+/// Checks for clipboard race (FCLIP-03): if user copied other content
+/// during transfer, auto-restore is skipped.
+async fn restore_file_to_clipboard_after_transfer(
+    file_paths: Vec<PathBuf>,
+    system_clipboard: &Arc<dyn SystemClipboardPort>,
+    clipboard_change_origin: &Arc<dyn ClipboardChangeOriginPort>,
+) {
+    use uc_app::usecases::file_sync::copy_file_to_clipboard::{
+        build_file_snapshot, build_path_list,
+    };
+
+    // Canonicalize paths to absolute paths.
+    // The clipboard (CF_HDROP on Windows, NSPasteboard on macOS) requires absolute
+    // paths; relative paths like ".app_data/cache/..." won't resolve when pasting.
+    let file_paths: Vec<PathBuf> = file_paths
+        .into_iter()
+        .map(|p| {
+            if p.is_relative() {
+                match p.canonicalize() {
+                    Ok(abs) => abs,
+                    Err(err) => {
+                        warn!(
+                            path = %p.display(),
+                            error = %err,
+                            "Failed to canonicalize relative file path, using as-is"
+                        );
+                        p
+                    }
+                }
+            } else {
+                p
+            }
+        })
+        .collect();
+
+    // Verify all files exist before attempting clipboard write
+    let files_exist: Vec<bool> = file_paths.iter().map(|p| p.exists()).collect();
+    let all_exist = files_exist.iter().all(|&e| e);
+    info!(
+        file_count = file_paths.len(),
+        paths = ?file_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+        files_exist = ?files_exist,
+        all_exist,
+        "restore_file_to_clipboard_after_transfer: starting restore"
+    );
+
+    if !all_exist {
+        warn!(
+            paths = ?file_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            files_exist = ?files_exist,
+            "Some files do not exist on disk — clipboard write will likely fail"
+        );
+    }
+
+    let path_list = build_path_list(&file_paths);
+    let snapshot = build_file_snapshot(&path_list);
+
+    // FCLIP-03: Non-destructive check for concurrent clipboard operations.
+    // Use has_pending_origin() (peek) instead of consume_origin_or_default()
+    // to avoid stealing another restore's LocalRestore origin protection,
+    // which would leave that restore's clipboard write unprotected and
+    // cause a ping-pong bounce-back.
+    if clipboard_change_origin.has_pending_origin().await {
+        info!(
+            file_count = file_paths.len(),
+            "Concurrent clipboard operation detected, skipping auto-restore. Files available in Dashboard."
+        );
+        return;
+    }
+
+    // Set origin to LocalRestore so the clipboard watcher skips capture entirely.
+    // The DB entry was already created by inbound sync — RemotePush would still
+    // trigger a duplicate capture; only LocalRestore is skipped.
+    clipboard_change_origin
+        .set_next_origin(
+            uc_core::ClipboardChangeOrigin::LocalRestore,
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+    // Restore to system clipboard
+    info!(
+        path_list = %path_list,
+        "restore_file_to_clipboard_after_transfer: restoring to OS clipboard"
+    );
+    if let Err(err) = system_clipboard.write_snapshot(snapshot) {
+        // Consume origin on failure to avoid stale origin
+        clipboard_change_origin
+            .consume_origin_or_default(uc_core::ClipboardChangeOrigin::LocalCapture)
+            .await;
+        warn!(error = %err, "Failed to write file URIs to system clipboard");
+    } else {
+        info!(
+            file_count = file_paths.len(),
+            "File URIs written to system clipboard"
+        );
+    }
+}
+
 async fn run_pairing_event_loop<R: Runtime>(
     mut event_rx: mpsc::Receiver<NetworkEvent>,
     orchestrator: Arc<PairingOrchestrator>,
@@ -1991,7 +2276,23 @@ async fn run_pairing_event_loop<R: Runtime>(
     peer_directory: Arc<dyn PeerDirectoryPort>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     space_access_runtime_ports: RuntimeSpaceAccessPorts,
+    inbound_file_settings: Arc<dyn SettingsPort>,
+    inbound_file_cache_dir: PathBuf,
+    system_clipboard: Arc<dyn SystemClipboardPort>,
+    clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
+    clock: Arc<dyn uc_core::ports::ClockPort>,
+    early_completion_cache: Arc<super::file_transfer_wiring::EarlyCompletionCache>,
 ) {
+    // Batch accumulator: batch_id -> (completed_paths: Vec<PathBuf>, expected_total: u32, peer_id: String)
+    let mut batch_accumulator: std::collections::HashMap<String, (Vec<PathBuf>, u32, String)> =
+        std::collections::HashMap::new();
+
+    // File transfer tracker for durable status transitions
+    let transfer_tracker = Arc::new(
+        uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(file_transfer_repo),
+    );
+
     while let Some(event) = event_rx.recv().await {
         match event {
             NetworkEvent::PairingMessageReceived { peer_id, message } => {
@@ -2109,11 +2410,231 @@ async fn run_pairing_event_loop<R: Runtime>(
                 }
             }
             NetworkEvent::TransferProgress(progress) => {
+                // Track durable status transitions (pending->transferring, liveness refresh)
+                let now_ms = clock.now_ms();
+                super::file_transfer_wiring::handle_transfer_progress(
+                    transfer_tracker.as_ref(),
+                    app_handle.as_ref(),
+                    &progress.transfer_id,
+                    progress.direction.clone(),
+                    progress.chunks_completed,
+                    now_ms,
+                )
+                .await;
+
+                // Forward the transient progress event to frontend
                 if let Some(app) = app_handle.as_ref() {
                     if let Err(err) = forward_transfer_progress_event(app, progress) {
                         warn!(error = %err, "Failed to emit transfer progress event");
                     }
                 }
+            }
+            NetworkEvent::FileTransferCompleted {
+                transfer_id,
+                peer_id,
+                filename,
+                file_path,
+                batch_id,
+                batch_total,
+            } => {
+                info!(
+                    transfer_id = %transfer_id,
+                    peer_id = %peer_id,
+                    filename = %filename,
+                    file_path = %file_path.display(),
+                    batch_id = ?batch_id,
+                    batch_total = ?batch_total,
+                    "File transfer completed, processing inbound file"
+                );
+
+                let inbound_uc = uc_app::usecases::file_sync::SyncInboundFileUseCase::new(
+                    inbound_file_settings.clone(),
+                    inbound_file_cache_dir.clone(),
+                );
+
+                // Clone tracker for spawn
+                let tracker_for_spawn = transfer_tracker.clone();
+                let clock_for_spawn = clock.clone();
+                let early_cache_for_spawn = early_completion_cache.clone();
+
+                // Clone values before spawn takes ownership
+                let app_handle_clone = app_handle.clone();
+                let span_transfer_id = transfer_id.clone();
+                let system_clipboard_clone = system_clipboard.clone();
+                let clipboard_change_origin_clone = clipboard_change_origin.clone();
+                let file_path_for_spawn = file_path.clone();
+                let peer_id_for_spawn = peer_id.clone();
+                let filename_for_spawn = filename.clone();
+                let transfer_id_for_spawn = transfer_id.clone();
+                let is_batch = batch_id.is_some() && batch_total.is_some();
+                tokio::spawn(
+                    async move {
+                        let file_bytes = match tokio::fs::read(&file_path_for_spawn).await {
+                            Ok(bytes) => bytes,
+                            Err(err) => {
+                                error!(
+                                    transfer_id = %transfer_id_for_spawn,
+                                    error = %err,
+                                    "Failed to read transferred file for hash verification"
+                                );
+                                // Mark durable failure
+                                let now_ms = clock_for_spawn.now_ms();
+                                super::file_transfer_wiring::handle_transfer_failed(
+                                    tracker_for_spawn.as_ref(),
+                                    app_handle_clone.as_ref(),
+                                    &transfer_id_for_spawn,
+                                    &format!("Failed to read file: {}", err),
+                                    now_ms,
+                                )
+                                .await;
+                                return;
+                            }
+                        };
+
+                        let expected_hash = blake3::hash(&file_bytes).to_hex().to_string();
+
+                        match inbound_uc
+                            .handle_transfer_complete(
+                                &transfer_id_for_spawn,
+                                &file_path_for_spawn,
+                                &expected_hash,
+                            )
+                            .await
+                        {
+                            Ok(result) => {
+                                info!(
+                                    transfer_id = %result.transfer_id,
+                                    file_size = result.file_size,
+                                    auto_pulled = result.auto_pulled,
+                                    "Inbound file sync processed"
+                                );
+
+                                // Mark durable completion before emitting events
+                                let now_ms = clock_for_spawn.now_ms();
+                                super::file_transfer_wiring::handle_transfer_completed(
+                                    tracker_for_spawn.as_ref(),
+                                    app_handle_clone.as_ref(),
+                                    &result.transfer_id,
+                                    Some(&expected_hash),
+                                    now_ms,
+                                    Some(early_cache_for_spawn.as_ref()),
+                                )
+                                .await;
+
+                                // Emit the existing file-transfer://completed event
+                                // (UI code depends on it; status-changed is the durable authority)
+                                if let Some(app) = app_handle_clone.as_ref() {
+                                    let payload = serde_json::json!({
+                                        "transfer_id": result.transfer_id,
+                                        "filename": filename_for_spawn,
+                                        "peer_id": peer_id_for_spawn,
+                                        "file_size": result.file_size,
+                                        "auto_pulled": result.auto_pulled,
+                                        "file_path": result.file_path.to_string_lossy(),
+                                    });
+                                    if let Err(err) = app.emit("file-transfer://completed", payload)
+                                    {
+                                        warn!(
+                                            error = %err,
+                                            "Failed to emit file transfer completed event"
+                                        );
+                                    }
+                                }
+
+                                // Restore single file to clipboard only if NOT part of a batch
+                                // Batch clipboard restores are handled by the batch accumulator
+                                if !is_batch {
+                                    restore_file_to_clipboard_after_transfer(
+                                        vec![result.file_path],
+                                        &system_clipboard_clone,
+                                        &clipboard_change_origin_clone,
+                                    )
+                                    .await;
+                                }
+                            }
+                            Err(err) => {
+                                error!(
+                                    transfer_id = %transfer_id_for_spawn,
+                                    error = %err,
+                                    "Inbound file sync processing failed"
+                                );
+                                // Mark durable failure
+                                let now_ms = clock_for_spawn.now_ms();
+                                super::file_transfer_wiring::handle_transfer_failed(
+                                    tracker_for_spawn.as_ref(),
+                                    app_handle_clone.as_ref(),
+                                    &transfer_id_for_spawn,
+                                    &format!("Inbound file sync failed: {}", err),
+                                    now_ms,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    .instrument(info_span!(
+                        "inbound_file_sync",
+                        transfer_id = %span_transfer_id,
+                    )),
+                );
+
+                // Handle batch accumulation (outside spawn for state access)
+                if let (Some(bid), Some(total)) = (batch_id, batch_total) {
+                    let entry = batch_accumulator
+                        .entry(bid.clone())
+                        .or_insert_with(|| (Vec::new(), total, peer_id.clone()));
+                    entry.0.push(file_path.clone());
+
+                    if entry.0.len() < total as usize {
+                        info!(
+                            batch_id = %bid,
+                            completed = entry.0.len(),
+                            total = total,
+                            "Batch file received, waiting for remaining files"
+                        );
+                    } else {
+                        let all_paths = entry.0.clone();
+                        batch_accumulator.remove(&bid);
+                        info!(
+                            batch_id = %bid,
+                            total = total,
+                            "Batch complete, restoring all files to clipboard"
+                        );
+
+                        // Restore all batch files to clipboard
+                        let system_clipboard_batch = system_clipboard.clone();
+                        let clipboard_origin_batch = clipboard_change_origin.clone();
+                        tokio::spawn(async move {
+                            restore_file_to_clipboard_after_transfer(
+                                all_paths,
+                                &system_clipboard_batch,
+                                &clipboard_origin_batch,
+                            )
+                            .await;
+                        });
+                    }
+                }
+            }
+            NetworkEvent::FileTransferFailed {
+                transfer_id,
+                peer_id,
+                error: error_msg,
+            } => {
+                warn!(
+                    transfer_id = %transfer_id,
+                    peer_id = %peer_id,
+                    error = %error_msg,
+                    "File transfer failed"
+                );
+
+                let now_ms = clock.now_ms();
+                super::file_transfer_wiring::handle_transfer_failed(
+                    transfer_tracker.as_ref(),
+                    app_handle.as_ref(),
+                    &transfer_id,
+                    &error_msg,
+                    now_ms,
+                )
+                .await;
             }
             _ => {}
         }
@@ -2819,6 +3340,18 @@ mod tests {
     }
 
     struct NoopPairedDeviceRepository;
+
+    struct NoopSettings;
+
+    #[async_trait]
+    impl SettingsPort for NoopSettings {
+        async fn load(&self) -> anyhow::Result<uc_core::settings::model::Settings> {
+            Ok(uc_core::settings::model::Settings::default())
+        }
+        async fn save(&self, _settings: &uc_core::settings::model::Settings) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
 
     #[derive(Default, Clone, Copy)]
     struct BaseNetwork;
@@ -3786,6 +4319,7 @@ mod tests {
                 origin_device_name: "Remote".to_string(),
                 payload_version: uc_core::network::protocol::ClipboardPayloadVersion::V3,
                 origin_flow_id: None,
+                file_transfers: vec![],
             },
             None,
         ))
@@ -3793,7 +4327,10 @@ mod tests {
         .expect("send clipboard message");
         drop(tx);
 
-        run_clipboard_receive_loop::<tauri::test::MockRuntime>(rx, &usecase, None).await;
+        run_clipboard_receive_loop::<tauri::test::MockRuntime>(
+            rx, &usecase, None, None, None, None,
+        )
+        .await;
 
         let logs = log_buffer.content();
         assert!(
@@ -3828,6 +4365,14 @@ mod tests {
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
+            Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
+            PathBuf::from("/tmp/test-file-cache"),
+            Arc::new(NoopSystemClipboard) as Arc<dyn SystemClipboardPort>,
+            Arc::new(NoopClipboardChangeOrigin) as Arc<dyn ClipboardChangeOriginPort>,
+            Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
+                as Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
+            Arc::new(uc_infra::SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+            Arc::new(crate::bootstrap::file_transfer_wiring::EarlyCompletionCache::default()),
         ));
 
         let request = PairingRequest {
@@ -4353,6 +4898,14 @@ mod tests {
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
+            Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
+            PathBuf::from("/tmp/test-file-cache"),
+            Arc::new(NoopSystemClipboard) as Arc<dyn SystemClipboardPort>,
+            Arc::new(NoopClipboardChangeOrigin) as Arc<dyn ClipboardChangeOriginPort>,
+            Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
+                as Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
+            Arc::new(uc_infra::SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+            Arc::new(crate::bootstrap::file_transfer_wiring::EarlyCompletionCache::default()),
         ));
 
         event_tx
@@ -4415,6 +4968,14 @@ mod tests {
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
+            Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
+            PathBuf::from("/tmp/test-file-cache"),
+            Arc::new(NoopSystemClipboard) as Arc<dyn SystemClipboardPort>,
+            Arc::new(NoopClipboardChangeOrigin) as Arc<dyn ClipboardChangeOriginPort>,
+            Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
+                as Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
+            Arc::new(uc_infra::SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+            Arc::new(crate::bootstrap::file_transfer_wiring::EarlyCompletionCache::default()),
         ));
 
         event_tx
@@ -5239,6 +5800,7 @@ mod tests {
                 clock,
                 storage_config,
                 test_identity_store(),
+                PathBuf::from("/tmp/test-file-cache"),
             );
 
             match result {
@@ -5356,50 +5918,39 @@ The functionality is still validated in development mode when running the app wi
     }
 
     #[test]
-    fn derive_default_paths_from_empty_config_uses_single_app_data_root() {
-        let config = AppConfig::empty();
-
-        let paths = with_uc_profile(None, || {
-            derive_default_paths(&config).expect("derive_default_paths failed")
-        });
-
-        assert!(paths.app_data_root.ends_with("uniclipboard"));
-        assert_eq!(paths.db_path, paths.app_data_root.join("uniclipboard.db"));
-        assert_eq!(paths.vault_dir, paths.app_data_root.join("vault"));
-        assert_eq!(
-            paths.settings_path,
-            paths.app_data_root.join("settings.json")
-        );
-    }
-
-    #[test]
-    fn wiring_derives_paths_from_port_fact() {
-        let dirs = uc_core::app_dirs::AppDirs {
-            app_data_root: std::path::PathBuf::from("/tmp/uniclipboard"),
-            app_cache_root: std::path::PathBuf::from("/tmp/uniclipboard-cache"),
-        };
-        let paths = with_uc_profile(None, || {
-            derive_default_paths_from_app_dirs(&dirs, &AppConfig::empty())
-                .expect("derive_default_paths_from_app_dirs failed")
-        });
-        assert!(paths.db_path.ends_with("uniclipboard.db"));
-    }
-
-    #[test]
-    fn derive_default_paths_sets_cache_dir() {
+    fn resolve_app_paths_empty_config_uses_platform_defaults() {
         let dirs = uc_core::app_dirs::AppDirs {
             app_data_root: PathBuf::from("/tmp/uniclipboard"),
             app_cache_root: PathBuf::from("/tmp/uniclipboard-cache"),
         };
         let paths = with_uc_profile(None, || {
-            derive_default_paths_from_app_dirs(&dirs, &AppConfig::empty())
-                .expect("derive_default_paths_from_app_dirs failed")
+            resolve_app_paths(&dirs, &AppConfig::empty()).expect("resolve_app_paths failed")
         });
+
+        assert_eq!(paths.app_data_root, PathBuf::from("/tmp/uniclipboard"));
+        assert_eq!(
+            paths.db_path,
+            PathBuf::from("/tmp/uniclipboard/uniclipboard.db")
+        );
+        assert_eq!(paths.vault_dir, PathBuf::from("/tmp/uniclipboard/vault"));
+        assert_eq!(
+            paths.settings_path,
+            PathBuf::from("/tmp/uniclipboard/settings.json")
+        );
+        // Production: cache uses platform's separate cache root
         assert_eq!(paths.cache_dir, PathBuf::from("/tmp/uniclipboard-cache"));
+        assert_eq!(
+            paths.file_cache_dir,
+            PathBuf::from("/tmp/uniclipboard-cache/file-cache")
+        );
+        assert_eq!(
+            paths.spool_dir,
+            PathBuf::from("/tmp/uniclipboard-cache/spool")
+        );
     }
 
     #[test]
-    fn derive_default_paths_uses_config_database_parent_as_app_data_root() {
+    fn resolve_app_paths_config_override_colocates_cache() {
         let dirs = uc_core::app_dirs::AppDirs {
             app_data_root: PathBuf::from("/tmp/uniclipboard"),
             app_cache_root: PathBuf::from("/tmp/uniclipboard-cache"),
@@ -5409,8 +5960,7 @@ The functionality is still validated in development mode when running the app wi
         config.database_path = PathBuf::from("src-tauri/.app_data_a/uniclipboard.db");
 
         let paths = with_uc_profile(None, || {
-            derive_default_paths_from_app_dirs(&dirs, &config)
-                .expect("derive_default_paths_from_app_dirs failed")
+            resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
         assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_a"));
@@ -5426,10 +5976,23 @@ The functionality is still validated in development mode when running the app wi
             paths.settings_path,
             PathBuf::from("src-tauri/.app_data_a/settings.json")
         );
+        // Dev mode: cache co-located under app_data_root
+        assert_eq!(
+            paths.cache_dir,
+            PathBuf::from("src-tauri/.app_data_a/cache")
+        );
+        assert_eq!(
+            paths.file_cache_dir,
+            PathBuf::from("src-tauri/.app_data_a/cache/file-cache")
+        );
+        assert_eq!(
+            paths.spool_dir,
+            PathBuf::from("src-tauri/.app_data_a/cache/spool")
+        );
     }
 
     #[test]
-    fn derive_default_paths_appends_profile_suffix_for_configured_root() {
+    fn resolve_app_paths_appends_profile_suffix_for_configured_root() {
         let dirs = uc_core::app_dirs::AppDirs {
             app_data_root: PathBuf::from("/tmp/uniclipboard"),
             app_cache_root: PathBuf::from("/tmp/uniclipboard-cache"),
@@ -5439,8 +6002,7 @@ The functionality is still validated in development mode when running the app wi
         config.database_path = PathBuf::from("src-tauri/.app_data/uniclipboard.db");
 
         let paths = with_uc_profile(Some("a"), || {
-            derive_default_paths_from_app_dirs(&dirs, &config)
-                .expect("derive_default_paths_from_app_dirs failed")
+            resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
         assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_a"));
@@ -5456,10 +6018,15 @@ The functionality is still validated in development mode when running the app wi
             paths.settings_path,
             PathBuf::from("src-tauri/.app_data_a/settings.json")
         );
+        // Cache also gets profile suffix via app_data_root
+        assert_eq!(
+            paths.cache_dir,
+            PathBuf::from("src-tauri/.app_data_a/cache")
+        );
     }
 
     #[test]
-    fn derive_default_paths_appends_profile_suffix_for_configured_vault_root() {
+    fn resolve_app_paths_appends_profile_suffix_for_configured_vault_root() {
         let dirs = uc_core::app_dirs::AppDirs {
             app_data_root: PathBuf::from("/tmp/uniclipboard"),
             app_cache_root: PathBuf::from("/tmp/uniclipboard-cache"),
@@ -5470,8 +6037,7 @@ The functionality is still validated in development mode when running the app wi
         config.vault_key_path = PathBuf::from("src-tauri/.app_data/vault/key");
 
         let paths = with_uc_profile(Some("b"), || {
-            derive_default_paths_from_app_dirs(&dirs, &config)
-                .expect("derive_default_paths_from_app_dirs failed")
+            resolve_app_paths(&dirs, &config).expect("resolve_app_paths failed")
         });
 
         assert_eq!(paths.app_data_root, PathBuf::from("src-tauri/.app_data_b"));
@@ -5479,6 +6045,39 @@ The functionality is still validated in development mode when running the app wi
             paths.vault_dir,
             PathBuf::from("src-tauri/.app_data_b/vault")
         );
+    }
+
+    #[test]
+    fn resolve_app_dirs_empty_config_preserves_platform_dirs() {
+        let platform = uc_core::app_dirs::AppDirs {
+            app_data_root: PathBuf::from("/sys/data/uniclipboard"),
+            app_cache_root: PathBuf::from("/sys/cache/uniclipboard"),
+        };
+        let resolved = with_uc_profile(None, || resolve_app_dirs(&platform, &AppConfig::empty()));
+
+        assert_eq!(
+            resolved.app_data_root,
+            PathBuf::from("/sys/data/uniclipboard")
+        );
+        assert_eq!(
+            resolved.app_cache_root,
+            PathBuf::from("/sys/cache/uniclipboard")
+        );
+    }
+
+    #[test]
+    fn resolve_app_dirs_config_override_moves_both_roots() {
+        let platform = uc_core::app_dirs::AppDirs {
+            app_data_root: PathBuf::from("/sys/data/uniclipboard"),
+            app_cache_root: PathBuf::from("/sys/cache/uniclipboard"),
+        };
+        let mut config = AppConfig::empty();
+        config.database_path = PathBuf::from(".app_data/uniclipboard.db");
+
+        let resolved = with_uc_profile(None, || resolve_app_dirs(&platform, &config));
+
+        assert_eq!(resolved.app_data_root, PathBuf::from(".app_data"));
+        assert_eq!(resolved.app_cache_root, PathBuf::from(".app_data/cache"));
     }
 
     #[test]

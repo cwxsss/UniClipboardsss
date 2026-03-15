@@ -79,6 +79,8 @@ mod tests {
             settings_path: root_path.join("settings.json"),
             logs_dir: root_path.join("logs"),
             cache_dir: cache.path().to_path_buf(),
+            file_cache_dir: cache.path().join("file-cache"),
+            spool_dir: cache.path().join("spool"),
             app_data_root: root_path,
         }
     }

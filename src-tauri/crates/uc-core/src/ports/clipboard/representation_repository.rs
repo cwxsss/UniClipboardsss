@@ -91,6 +91,18 @@ pub trait ClipboardRepresentationRepositoryPort: Send + Sync {
         last_error: Option<&str>,
     ) -> Result<ProcessingUpdateOutcome>;
 
+    /// List all representations for a given event.
+    ///
+    /// Used by file clipboard copy to find text/uri-list representation.
+    async fn get_representations_for_event(
+        &self,
+        event_id: &EventId,
+    ) -> Result<Vec<PersistedClipboardRepresentation>> {
+        // Default implementation returns empty; infrastructure layer overrides.
+        let _ = event_id;
+        Ok(vec![])
+    }
+
     /// Update the MIME type of a representation.
     ///
     /// Used by the background blob worker to correct MIME after format conversion

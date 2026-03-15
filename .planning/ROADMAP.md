@@ -261,3 +261,77 @@ Plans:
 4. Cancel closes the modal with no side effects (switch stays OFF).
 5. Windows/Linux users can toggle auto-unlock ON directly without any modal.
 6. All modal strings are internationalized in both en-US and zh-CN locales.
+
+### Phase 28: File sync foundation — message types, ports, classification fix, schema, settings
+
+**Goal:** Establish the file sync foundation: define file transfer message types, create FileTransportPort trait, fix file classification (file:// vs http:// in content type filter), add database schema for file entries, and extend settings model with file sync fields.
+**Requirements**: FSYNC-FOUNDATION
+**Depends on:** Phase 27
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] TBD (run /gsd:plan-phase 28 to break down) (completed 2026-03-13)
+
+### Phase 30: File transfer service — chunked protocol, use cases, retry logic
+
+**Goal:** Implement the FileTransferService with libp2p stream protocol, chunked file transfer with Blake3 hash verification, send/receive use cases, serial queue for multi-file operations, and auto-retry with exponential backoff.
+**Requirements**: FSYNC-TRANSFER
+**Depends on:** Phase 28
+**Plans:** 4/4 plans complete
+
+Plans:
+
+- [x] TBD (run /gsd:plan-phase 30 to break down) (completed 2026-03-13)
+- [ ] 30-04-PLAN.md — Gap closure: wire FileTransferService in bootstrap and activate transport calls in SyncOutboundFileUseCase
+
+### Phase 31: File sync UI — Dashboard file entries, context menu, progress, notifications
+
+**Goal:** Add file entries to Dashboard clipboard history with right-click context menu (Copy / Sync to Clipboard), progress indicators for file transfers, system notification merging for multi-file batches, and error feedback display.
+**Requirements**: FSYNC-UI
+**Depends on:** Phase 30
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] TBD (run /gsd:plan-phase 31 to break down) (completed 2026-03-13)
+
+### Phase 32: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
+
+**Goal:** Add file sync settings UI (enable toggle, thresholds, quotas), enforce per-device file cache quotas, implement auto-cleanup of expired temp files, and polish error handling across the file sync pipeline.
+**Requirements**: FSYNC-POLISH
+**Depends on:** Phase 31
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] TBD (run /gsd:plan-phase 32 to break down) (completed 2026-03-14)
+
+### Phase 32.1: Inbound file sync clipboard integration with persistent file URI list for cross-platform paste (INSERTED)
+
+**Goal:** Integrate received files with system clipboard so users can paste (Cmd+V / Ctrl+V) in Finder/Explorer after file transfer completes. Includes auto-write on transfer completion, manual copy from Dashboard with file validation, persistent file URI storage, stale file handling, and delete cascade for cache files.
+**Requirements**: FCLIP-01, FCLIP-02, FCLIP-03, FCLIP-04, FCLIP-05, FCLIP-06, FCLIP-07, FCLIP-08, FCLIP-09, FCLIP-10
+**Depends on:** Phase 31
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 32.1-01-PLAN.md — Backend clipboard write on file transfer complete, CopyFileToClipboardUseCase, Tauri command
+- [x] 32.1-02-PLAN.md — Frontend file entry display with extension icons, stale file styling, delete cascade
+- [ ] 32.1-03-PLAN.md — Gap closure: clipboard race detection in write_file_to_clipboard_after_transfer (FCLIP-03)
+
+### Phase 33: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
+
+**Goal:** Make receiver-side file sync atomic from the user's perspective by durably tracking metadata and blob lifecycle together. File entries may appear immediately on metadata receipt, but they must surface truthful `pending / transferring / completed / failed` state, enforce the locked timeout budgets, clean failed partial files, and survive restart via persisted transfer status.
+**Requirements**: FSYNC-CONSISTENCY
+**Depends on:** Phase 32
+**Plans:** 6/6 plans complete
+
+Plans:
+
+- [ ] 33-01-PLAN.md — Core/app transfer tracking contract, metadata seeding, projection aggregation
+- [ ] 33-02-PLAN.md — Infra schema upgrade and file transfer repository adapter
+- [ ] 33-03-PLAN.md — Tauri/runtime wiring, timeout sweeps, cleanup, and status event emission
+- [ ] 33-04-PLAN.md — Frontend data hydration for durable transfer status
+- [ ] 33-05-PLAN.md — Frontend UI rendering and action gating for file transfer states
+- [ ] 33-06-PLAN.md — Gap closure: wire API hydration to Redux and add camelCase serialization test

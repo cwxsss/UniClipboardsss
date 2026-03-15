@@ -229,9 +229,9 @@ The tracing subscriber produces two simultaneous outputs from the same pipeline:
 
 ### JSON File Locations
 
-- **macOS**: `~/Library/Logs/com.uniclipboard/uniclipboard.json.YYYY-MM-DD`
-- **Linux**: `~/.local/share/com.uniclipboard/logs/uniclipboard.json.YYYY-MM-DD`
-- **Windows**: `%LOCALAPPDATA%\com.uniclipboard\logs\uniclipboard.json.YYYY-MM-DD`
+- **macOS**: `~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.YYYY-MM-DD`
+- **Linux**: `~/.local/share/app.uniclipboard.desktop/logs/uniclipboard.json.YYYY-MM-DD`
+- **Windows**: `%LOCALAPPDATA%\app.uniclipboard.desktop\logs\uniclipboard.json.YYYY-MM-DD`
 
 ## Configuration
 
@@ -501,28 +501,28 @@ bun tauri dev
 
 ```bash
 # macOS - view latest JSON log
-cat ~/Library/Logs/com.uniclipboard/uniclipboard.json.$(date +%Y-%m-%d) | jq .
+cat ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.$(date +%Y-%m-%d) | jq .
 
 # macOS - follow live
-tail -f ~/Library/Logs/com.uniclipboard/uniclipboard.json.$(date +%Y-%m-%d)
+tail -f ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.$(date +%Y-%m-%d)
 
 # Linux
-tail -f ~/.local/share/com.uniclipboard/logs/uniclipboard.json.$(date +%Y-%m-%d)
+tail -f ~/.local/share/app.uniclipboard.desktop/logs/uniclipboard.json.$(date +%Y-%m-%d)
 
 # Windows (PowerShell)
-Get-Content "$env:LOCALAPPDATA\com.uniclipboard\logs\uniclipboard.json.$(Get-Date -Format yyyy-MM-dd)" -Wait
+Get-Content "$env:LOCALAPPDATA\app.uniclipboard.desktop\logs\uniclipboard.json.$(Get-Date -Format yyyy-MM-dd)" -Wait
 ```
 
 **Filter JSON logs for errors**:
 
 ```bash
-cat ~/Library/Logs/com.uniclipboard/uniclipboard.json.$(date +%Y-%m-%d) | jq 'select(.level == "ERROR")'
+cat ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.$(date +%Y-%m-%d) | jq 'select(.level == "ERROR")'
 ```
 
 **View last 100 lines**:
 
 ```bash
-tail -n 100 ~/Library/Logs/com.uniclipboard/uniclipboard.json.$(date +%Y-%m-%d)
+tail -n 100 ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.$(date +%Y-%m-%d)
 ```
 
 ## Testing
@@ -574,7 +574,7 @@ cd src-tauri && cargo test --package uc-tauri -- bootstrap::tracing
 ### JSON log file not created
 
 1. Check app has write permissions to the log directory
-2. Verify the directory exists: `ls ~/Library/Logs/com.uniclipboard/` (macOS)
+2. Verify the directory exists: `ls ~/Library/Logs/app.uniclipboard.desktop/` (macOS)
 3. Check `init_tracing_subscriber()` completed without error (look for "Tracing initialized" in console)
 4. Ensure `UC_LOG_PROFILE` is a valid value (or unset for default)
 

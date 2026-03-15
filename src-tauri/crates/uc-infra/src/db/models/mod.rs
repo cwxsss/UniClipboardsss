@@ -4,6 +4,7 @@ pub mod clipboard_event;
 pub mod clipboard_representation_thumbnail;
 pub mod clipboard_selection;
 pub mod device_row;
+pub mod file_transfer;
 pub mod paired_device_row;
 pub mod snapshot_representation;
 
@@ -15,5 +16,6 @@ pub use clipboard_representation_thumbnail::{
 };
 pub use clipboard_selection::{ClipboardSelectionRow, NewClipboardSelectionRow};
 pub use device_row::{DeviceRow, NewDeviceRow};
+pub use file_transfer::{FileTransferRow, NewFileTransferRow};
 pub use paired_device_row::{NewPairedDeviceRow, PairedDeviceRow};
 pub use snapshot_representation::{NewSnapshotRepresentationRow, SnapshotRepresentationRow};

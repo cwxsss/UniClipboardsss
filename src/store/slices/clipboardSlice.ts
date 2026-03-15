@@ -1,4 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
+import { hydrateEntryTransferStatuses } from './fileTransferSlice'
 import {
   getClipboardItems,
   deleteClipboardItem,
@@ -18,6 +19,7 @@ interface ClipboardState {
   notReady: boolean
   error: string | null
   deleteConfirmId: string | null
+  staleEntryIds: string[]
 }
 
 // 初始状态
@@ -27,6 +29,7 @@ const initialState: ClipboardState = {
   notReady: false,
   error: null,
   deleteConfirmId: null,
+  staleEntryIds: [],
 }
 
 // 定义获取剪贴板项目的参数接口
@@ -49,7 +52,7 @@ type FetchClipboardItemsAction = {
 export const fetchClipboardItems = createAsyncThunk<
   ClipboardItemsResultWithOffset,
   FetchClipboardItemsParams | undefined
->('clipboard/fetchItems', async (params = {}, { rejectWithValue }) => {
+>('clipboard/fetchItems', async (params = {}, { rejectWithValue, dispatch }) => {
   try {
     const result = await getClipboardItems(
       params.orderBy,
@@ -57,6 +60,23 @@ export const fetchClipboardItems = createAsyncThunk<
       params.offset,
       params.filter
     )
+
+    // Hydrate durable file transfer statuses from persisted API fields.
+    // This ensures entryStatusById in fileTransferSlice is seeded on app load
+    // so file entries show correct status badges immediately after restart.
+    if (result.status === 'ready') {
+      const statusEntries = result.items
+        .filter(item => item.file_transfer_status != null)
+        .map(item => ({
+          entryId: item.id,
+          status: item.file_transfer_status as 'pending' | 'transferring' | 'completed' | 'failed',
+          reason: item.file_transfer_reason ?? null,
+        }))
+      if (statusEntries.length > 0) {
+        dispatch(hydrateEntryTransferStatuses(statusEntries))
+      }
+    }
+
     return { ...result, offset: params.offset ?? 0 }
   } catch {
     return rejectWithValue('获取剪贴板内容失败')
@@ -144,6 +164,14 @@ const clipboardSlice = createSlice({
       state.items = []
       state.error = null
     },
+    markEntryStale: (state, action: PayloadAction<string>) => {
+      if (!state.staleEntryIds.includes(action.payload)) {
+        state.staleEntryIds.push(action.payload)
+      }
+    },
+    clearStaleEntries: state => {
+      state.staleEntryIds = []
+    },
   },
   extraReducers: builder => {
     // 处理获取剪贴板内容
@@ -220,8 +248,16 @@ const clipboardSlice = createSlice({
 })
 
 // 导出 Actions
-export const { setDeleteConfirmId, setNotReady, clearError, prependItem, removeItem, resetItems } =
-  clipboardSlice.actions
+export const {
+  setDeleteConfirmId,
+  setNotReady,
+  clearError,
+  prependItem,
+  removeItem,
+  resetItems,
+  markEntryStale,
+  clearStaleEntries,
+} = clipboardSlice.actions
 
 // 导出 Reducer
 export default clipboardSlice.reducer

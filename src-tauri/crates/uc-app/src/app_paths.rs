@@ -9,8 +9,11 @@ pub struct AppPaths {
     pub settings_path: PathBuf,
     pub logs_dir: PathBuf,
     pub cache_dir: PathBuf,
+    /// Subdirectory for inbound file transfer cache.
+    pub file_cache_dir: PathBuf,
+    /// Subdirectory for representation spool (disk staging).
+    pub spool_dir: PathBuf,
     /// The resolved application data root directory.
-    /// 已解析的应用数据根目录。
     pub app_data_root: PathBuf,
 }
 
@@ -35,6 +38,9 @@ impl AppPaths {
     /// assert_eq!(paths.settings_path, PathBuf::from("/tmp/uniclipboard/settings.json"));
     /// assert_eq!(paths.logs_dir, PathBuf::from("/tmp/uniclipboard/logs"));
     /// ```
+    /// Single source of truth for all application paths.
+    /// All subdirectory names are defined here — consumers must use these
+    /// fields instead of calling `.join("...")` with hardcoded names.
     pub fn from_app_dirs(dirs: &AppDirs) -> Self {
         Self {
             db_path: dirs.app_data_root.join("uniclipboard.db"),
@@ -42,6 +48,8 @@ impl AppPaths {
             settings_path: dirs.app_data_root.join("settings.json"),
             logs_dir: dirs.app_data_root.join("logs"),
             cache_dir: dirs.app_cache_root.clone(),
+            file_cache_dir: dirs.app_cache_root.join("file-cache"),
+            spool_dir: dirs.app_cache_root.join("spool"),
             app_data_root: dirs.app_data_root.clone(),
         }
     }
@@ -83,6 +91,14 @@ mod tests {
         };
         let paths = AppPaths::from_app_dirs(&dirs);
         assert_eq!(paths.cache_dir, PathBuf::from("/tmp/uniclipboard-cache"));
+        assert_eq!(
+            paths.file_cache_dir,
+            PathBuf::from("/tmp/uniclipboard-cache/file-cache")
+        );
+        assert_eq!(
+            paths.spool_dir,
+            PathBuf::from("/tmp/uniclipboard-cache/spool")
+        );
         assert_eq!(paths.app_data_root, PathBuf::from("/tmp/uniclipboard"));
     }
 }

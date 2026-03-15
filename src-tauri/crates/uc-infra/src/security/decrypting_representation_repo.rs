@@ -182,6 +182,57 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
             .await
     }
 
+    async fn get_representations_for_event(
+        &self,
+        event_id: &EventId,
+    ) -> Result<Vec<PersistedClipboardRepresentation>> {
+        let reps = self.inner.get_representations_for_event(event_id).await?;
+        let mut result = Vec::with_capacity(reps.len());
+        for rep in reps {
+            if let Some(ref encrypted_bytes) = rep.inline_data {
+                match serde_json::from_slice::<EncryptedBlob>(encrypted_bytes) {
+                    Ok(encrypted_blob) => {
+                        let master_key = self
+                            .session
+                            .get_master_key()
+                            .await
+                            .context("encryption session not ready - cannot decrypt")?;
+                        let aad = aad::for_inline(event_id, &rep.id);
+                        match self
+                            .encryption
+                            .decrypt_blob(&master_key, &encrypted_blob, &aad)
+                            .await
+                        {
+                            Ok(plaintext) => {
+                                result.push(PersistedClipboardRepresentation::new_with_state(
+                                    rep.id,
+                                    rep.format_id,
+                                    rep.mime_type,
+                                    rep.size_bytes,
+                                    Some(plaintext),
+                                    rep.blob_id,
+                                    rep.payload_state,
+                                    rep.last_error,
+                                )?);
+                            }
+                            Err(_) => {
+                                // If decryption fails, return with encrypted data
+                                result.push(rep);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Not encrypted, return as-is
+                        result.push(rep);
+                    }
+                }
+            } else {
+                result.push(rep);
+            }
+        }
+        Ok(result)
+    }
+
     async fn update_mime_type(
         &self,
         rep_id: &RepresentationId,

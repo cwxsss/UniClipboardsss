@@ -59,6 +59,24 @@ Requirements for v0.3.0 Log Observability. Each will be mapped to roadmap phases
 - [ ] **KB-06**: Custom key overrides persist to the Rust settings system via existing `update_settings` command and survive app restart.
 - [ ] **KB-07**: Changed shortcuts take effect immediately without app restart, with per-shortcut and Reset All restore-to-defaults capability.
 
+### File Sync Settings & Polish
+
+- [x] **FSYNC-POLISH**: File sync pipeline has settings UI (enable toggle, small file threshold, max file size, cache quota, retention period, auto-cleanup), per-device quota enforcement, automatic expired file cache cleanup on startup, and standardized error handling across inbound/outbound transfer use cases.
+
+### File Clipboard Integration
+
+- [x] **FCLIP-01**: Received files are automatically written to the system clipboard after file transfer completes, enabling paste (Cmd+V / Ctrl+V) in Finder/Explorer.
+- [x] **FCLIP-02**: Clipboard write uses `text/uri-list` representation with `file://` URIs and sets `ClipboardChangeOrigin::RemotePush` to prevent re-capture loops.
+- [x] **FCLIP-03**: If user copies other content during file transfer, auto-clipboard-write is cancelled; user can manually copy from Dashboard.
+- [x] **FCLIP-04**: A `copy_file_to_clipboard` Tauri command validates file existence before writing to clipboard; returns error if any file is missing.
+- [x] **FCLIP-05**: File clipboard entries are persisted as ClipboardEntry with `text/uri-list` representation, reusing the existing clipboard history model.
+- [x] **FCLIP-06**: File entries in Dashboard display file names and extension-based icons (image, archive, document, video, audio, generic).
+- [x] **FCLIP-07**: Stale file entries (cache file deleted) show grey text with strikethrough styling and disabled Copy in context menu.
+- [x] **FCLIP-08**: File existence is validated lazily (on Copy attempt only), not on startup or component mount.
+- [x] **FCLIP-09**: Deleting a file entry from Dashboard cascades to delete the associated cache file on disk.
+- [x] **FCLIP-10**: Multi-file entries show file count summary; single-file entries show filename.
+- [x] **FSYNC-CONSISTENCY**: Receiver-side file sync persists transfer lifecycle together with the clipboard entry so metadata-first file entries always expose truthful `pending`, `transferring`, `completed`, or `failed` state; stalled transfers fail under the locked 30-second / 5-minute timeout budgets; failed or reconciled transfers clean partial cache artifacts; and the durable state is visible after restart through command responses and live events.
+
 ### Link Content Type
 
 - [x] **LINK-01**: Plain text clipboard content that is a single valid URL (entire trimmed text, no whitespace) is classified as Link instead of Text by `classify_snapshot`.
@@ -96,57 +114,69 @@ Explicitly excluded from v0.3.0. Documented to prevent scope creep.
 
 Which phases cover which requirements.
 
-| Requirement | Phase    | Status   |
-| ----------- | -------- | -------- |
-| LOG-01      | Phase 19 | Complete |
-| LOG-02      | Phase 19 | Complete |
-| LOG-03      | Phase 19 | Complete |
-| LOG-04      | Phase 19 | Complete |
-| FLOW-01     | Phase 20 | Complete |
-| FLOW-02     | Phase 20 | Complete |
-| FLOW-03     | Phase 20 | Complete |
-| FLOW-04     | Phase 20 | Complete |
-| FLOW-05     | Phase 21 | Complete |
-| SEQ-01      | Phase 22 | Complete |
-| SEQ-02      | Phase 22 | Complete |
-| SEQ-03      | Phase 22 | Complete |
-| SEQ-04      | Phase 22 | Complete |
-| SEQ-05      | Phase 22 | Complete |
-| SEQ-06      | Phase 22 | Complete |
-| CT-01       | Phase 25 | Planned  |
-| CT-02       | Phase 25 | Planned  |
-| CT-03       | Phase 25 | Planned  |
-| CT-04       | Phase 25 | Planned  |
-| CT-05       | Phase 25 | Planned  |
-| CT-06       | Phase 25 | Planned  |
-| CT-07       | Phase 25 | Planned  |
-| GSYNC-01    | Phase 26 | Complete |
-| GSYNC-02    | Phase 26 | Complete |
-| GSYNC-03    | Phase 26 | Complete |
-| GSYNC-04    | Phase 26 | Complete |
-| GSYNC-05    | Phase 26 | Complete |
-| KB-01       | Phase 27 | Planned  |
-| KB-02       | Phase 27 | Planned  |
-| KB-03       | Phase 27 | Planned  |
-| KB-04       | Phase 27 | Planned  |
-| KB-05       | Phase 27 | Planned  |
-| KB-06       | Phase 27 | Planned  |
-| KB-07       | Phase 27 | Planned  |
-| LINK-01     | Phase 28 | Planned  |
-| LINK-02     | Phase 28 | Planned  |
-| LINK-03     | Phase 28 | Planned  |
-| LINK-04     | Phase 28 | Planned  |
-| LINK-05     | Phase 28 | Planned  |
-| LINK-06     | Phase 28 | Planned  |
-| LINK-07     | Phase 28 | Planned  |
+| Requirement       | Phase      | Status   |
+| ----------------- | ---------- | -------- |
+| LOG-01            | Phase 19   | Complete |
+| LOG-02            | Phase 19   | Complete |
+| LOG-03            | Phase 19   | Complete |
+| LOG-04            | Phase 19   | Complete |
+| FLOW-01           | Phase 20   | Complete |
+| FLOW-02           | Phase 20   | Complete |
+| FLOW-03           | Phase 20   | Complete |
+| FLOW-04           | Phase 20   | Complete |
+| FLOW-05           | Phase 21   | Complete |
+| SEQ-01            | Phase 22   | Complete |
+| SEQ-02            | Phase 22   | Complete |
+| SEQ-03            | Phase 22   | Complete |
+| SEQ-04            | Phase 22   | Complete |
+| SEQ-05            | Phase 22   | Complete |
+| SEQ-06            | Phase 22   | Complete |
+| CT-01             | Phase 25   | Planned  |
+| CT-02             | Phase 25   | Planned  |
+| CT-03             | Phase 25   | Planned  |
+| CT-04             | Phase 25   | Planned  |
+| CT-05             | Phase 25   | Planned  |
+| CT-06             | Phase 25   | Planned  |
+| CT-07             | Phase 25   | Planned  |
+| GSYNC-01          | Phase 26   | Complete |
+| GSYNC-02          | Phase 26   | Complete |
+| GSYNC-03          | Phase 26   | Complete |
+| GSYNC-04          | Phase 26   | Complete |
+| GSYNC-05          | Phase 26   | Complete |
+| KB-01             | Phase 27   | Planned  |
+| KB-02             | Phase 27   | Planned  |
+| KB-03             | Phase 27   | Planned  |
+| KB-04             | Phase 27   | Planned  |
+| KB-05             | Phase 27   | Planned  |
+| KB-06             | Phase 27   | Planned  |
+| KB-07             | Phase 27   | Planned  |
+| FSYNC-POLISH      | Phase 32   | Complete |
+| FCLIP-01          | Phase 32.1 | Complete |
+| FCLIP-02          | Phase 32.1 | Complete |
+| FCLIP-03          | Phase 32.1 | Complete |
+| FCLIP-04          | Phase 32.1 | Complete |
+| FCLIP-05          | Phase 32.1 | Complete |
+| FCLIP-06          | Phase 32.1 | Planned  |
+| FCLIP-07          | Phase 32.1 | Planned  |
+| FCLIP-08          | Phase 32.1 | Planned  |
+| FCLIP-09          | Phase 32.1 | Planned  |
+| FCLIP-10          | Phase 32.1 | Planned  |
+| FSYNC-CONSISTENCY | Phase 33   | Planned  |
+| LINK-01           | Phase 28   | Planned  |
+| LINK-02           | Phase 28   | Planned  |
+| LINK-03           | Phase 28   | Planned  |
+| LINK-04           | Phase 28   | Planned  |
+| LINK-05           | Phase 28   | Planned  |
+| LINK-06           | Phase 28   | Planned  |
+| LINK-07           | Phase 28   | Planned  |
 
 **Coverage:**
 
-- v1 requirements: 41 total
-- Mapped to phases: 41
+- v1 requirements: 52 total
+- Mapped to phases: 52
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-09_
-_Last updated: 2026-03-13 after Phase 28 planning_
+_Last updated: 2026-03-14 after Phase 32 completion_

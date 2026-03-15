@@ -14,6 +14,7 @@
 pub mod blob;
 pub mod blob_store;
 pub mod encryption;
+pub mod file_transfer;
 pub mod in_memory_watcher_control;
 pub mod libp2p_network;
 pub mod network;

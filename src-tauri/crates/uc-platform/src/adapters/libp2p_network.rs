@@ -11,6 +11,7 @@ use libp2p::{
 };
 use libp2p_stream as stream;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -30,6 +31,7 @@ use uc_core::ports::{
     TransferProgress,
 };
 
+use super::file_transfer::service::{FileTransferConfig, FileTransferService};
 use super::pairing_stream::service::{
     PairingStreamConfig, PairingStreamError, PairingStreamService,
 };
@@ -260,6 +262,8 @@ pub struct Libp2pNetworkAdapter {
     _transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
     stream_control: Mutex<Option<stream::Control>>,
     pairing_service: Mutex<Option<PairingStreamService>>,
+    file_transfer_service: Mutex<Option<FileTransferService>>,
+    file_cache_dir: PathBuf,
 }
 
 impl Libp2pNetworkAdapter {
@@ -269,6 +273,7 @@ impl Libp2pNetworkAdapter {
         encryption_session: Arc<dyn EncryptionSessionPort>,
         transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
         transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+        file_cache_dir: PathBuf,
     ) -> Result<Self> {
         let keypair = load_or_create_identity(identity_store.as_ref())
             .map_err(|e| anyhow!("failed to load libp2p identity: {e}"))?;
@@ -302,6 +307,8 @@ impl Libp2pNetworkAdapter {
             _transfer_encryptor: transfer_encryptor,
             stream_control: Mutex::new(None),
             pairing_service,
+            file_transfer_service: Mutex::new(None),
+            file_cache_dir,
         })
     }
 
@@ -356,6 +363,22 @@ impl Libp2pNetworkAdapter {
                 .lock()
                 .map_err(|_| anyhow!("pairing service mutex poisoned"))?;
             *guard = Some(pairing_service);
+        }
+
+        // Construct FileTransferService and spawn accept loop
+        let file_transfer_service = FileTransferService::new(
+            stream_control.clone(),
+            self.event_tx.clone(),
+            Arc::new(uc_core::ports::transfer_progress::NoopTransferProgressPort),
+            FileTransferConfig::new(self.file_cache_dir.clone()),
+        );
+        file_transfer_service.spawn_accept_loop();
+        {
+            let mut guard = self
+                .file_transfer_service
+                .lock()
+                .map_err(|_| anyhow!("file transfer service mutex poisoned"))?;
+            *guard = Some(file_transfer_service);
         }
 
         spawn_business_stream_handler(
@@ -870,6 +893,67 @@ impl NetworkControlPort for Libp2pNetworkAdapter {
                 Err(err)
             }
         }
+    }
+}
+
+#[async_trait]
+impl uc_core::ports::FileTransportPort for Libp2pNetworkAdapter {
+    async fn send_file_announce(
+        &self,
+        _peer_id: &str,
+        _announce: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        // Individual message methods are not used — full transfer goes through send_file()
+        Ok(())
+    }
+
+    async fn send_file_data(
+        &self,
+        _peer_id: &str,
+        _data: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn send_file_complete(
+        &self,
+        _peer_id: &str,
+        _complete: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn cancel_transfer(
+        &self,
+        _peer_id: &str,
+        _cancel: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn send_file(
+        &self,
+        peer_id: &str,
+        file_path: std::path::PathBuf,
+        transfer_id: String,
+        batch_id: Option<String>,
+        batch_total: Option<u32>,
+    ) -> Result<()> {
+        let service = {
+            let guard = self
+                .file_transfer_service
+                .lock()
+                .map_err(|_| anyhow!("file transfer service mutex poisoned"))?;
+            guard
+                .as_ref()
+                .ok_or_else(|| {
+                    anyhow!("file transfer service not initialized — network not started")
+                })?
+                .clone()
+        };
+        service
+            .send_file(peer_id, file_path, transfer_id, batch_id, batch_total)
+            .await
     }
 }
 
@@ -1394,12 +1478,21 @@ async fn run_swarm(
                                 let caches = caches.read().await;
                                 caches.discovered_peers.len()
                             };
-                            info!(
-                                emitted_event_count = events.len(),
-                                discovered_cache_size = cache_size,
-                                local_peer_id = %local_peer_id,
-                                "processed mdns expired event"
-                            );
+                            if cache_size == 0 && !events.is_empty() {
+                                warn!(
+                                    emitted_event_count = events.len(),
+                                    discovered_cache_size = cache_size,
+                                    local_peer_id = %local_peer_id,
+                                    "All discovered peers expired via mDNS; outbound sync will be unavailable until peers are rediscovered"
+                                );
+                            } else {
+                                info!(
+                                    emitted_event_count = events.len(),
+                                    discovered_cache_size = cache_size,
+                                    local_peer_id = %local_peer_id,
+                                    "processed mdns expired event"
+                                );
+                            }
 
                             for event in events {
                                 let _ = try_send_event(&event_tx, event, "PeerLost");
@@ -2506,6 +2599,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         );
         assert!(adapter.is_ok());
     }
@@ -2518,6 +2612,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2539,6 +2634,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2622,6 +2718,7 @@ mod tests {
             origin_device_name: "Desk".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id: None,
+            file_transfers: vec![],
         };
 
         handle_standard_message(
@@ -2660,6 +2757,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2804,6 +2902,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2827,6 +2926,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2852,6 +2952,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
         let local_peer_id = adapter.local_peer_id();
@@ -2934,6 +3035,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
         let payload: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4].into_boxed_slice());
@@ -2982,6 +3084,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -3001,6 +3104,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -3061,6 +3165,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3069,6 +3174,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
@@ -3097,6 +3203,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3105,6 +3212,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
@@ -3163,6 +3271,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3171,6 +3280,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a
@@ -3218,6 +3328,7 @@ mod tests {
             origin_device_name: "Adapter A".to_string(),
             payload_version: uc_core::network::protocol::ClipboardPayloadVersion::V3,
             origin_flow_id: None,
+            file_transfers: vec![],
         };
         // Use frame_to_bytes for the two-segment wire format (header + no trailing payload for this test)
         let payload: Arc<[u8]> = Arc::from(

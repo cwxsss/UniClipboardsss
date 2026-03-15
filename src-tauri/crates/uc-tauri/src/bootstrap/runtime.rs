@@ -30,6 +30,7 @@
 //! 3. Commands can now call `runtime.usecases().your_use_case()`
 
 use async_trait::async_trait;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::Mutex;
@@ -508,6 +509,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
         )
     }
 
@@ -517,6 +519,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
         )
     }
 
@@ -852,6 +855,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.representation_repo.clone(),
             self.runtime.deps.storage.thumbnail_repo.clone(),
+            self.runtime.deps.storage.file_transfer_repo.clone(),
         )
     }
 
@@ -913,6 +917,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.representation_normalizer.clone(),
             self.runtime.deps.clipboard.representation_cache.clone(),
             self.runtime.deps.clipboard.spool_queue.clone(),
+            Some(self.runtime.storage_paths.file_cache_dir.clone()),
         )
     }
 
@@ -961,6 +966,71 @@ impl<'a> UseCases<'a> {
                     crate::adapters::lifecycle::LoggingLifecycleEventEmitter,
                 ),
             },
+        )
+    }
+
+    /// Create a `TrackInboundTransfersUseCase` wired with the file transfer repository.
+    ///
+    /// Used by wiring code for event-loop status transitions, timeout sweeps,
+    /// and startup reconciliation.
+    pub fn track_inbound_transfers(
+        &self,
+    ) -> uc_app::usecases::file_sync::TrackInboundTransfersUseCase {
+        uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
+            self.runtime.deps.storage.file_transfer_repo.clone(),
+        )
+    }
+
+    /// Create a `SyncOutboundFileUseCase` wired with this runtime's settings,
+    /// device repo, peer directory, and file transport port.
+    ///
+    /// 创建使用此运行时的设置、设备仓库、对等目录和文件传输端口的 SyncOutboundFileUseCase。
+    pub fn sync_outbound_file(&self) -> uc_app::usecases::file_sync::SyncOutboundFileUseCase {
+        uc_app::usecases::file_sync::SyncOutboundFileUseCase::new(
+            self.runtime.deps.settings.clone(),
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.network_ports.peers.clone(),
+            self.runtime.deps.network_ports.file_transfer.clone(),
+        )
+    }
+
+    /// Create a `SyncInboundFileUseCase` wired with this runtime's settings
+    /// and file cache directory.
+    ///
+    /// 创建使用此运行时设置和文件缓存目录的 SyncInboundFileUseCase。
+    pub fn sync_inbound_file(&self) -> uc_app::usecases::file_sync::SyncInboundFileUseCase {
+        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
+        uc_app::usecases::file_sync::SyncInboundFileUseCase::new(
+            self.runtime.deps.settings.clone(),
+            file_cache_dir,
+        )
+    }
+
+    /// Create a `CopyFileToClipboardUseCase` wired with this runtime's
+    /// entry repo, representation repo, system clipboard, and clipboard change origin.
+    ///
+    /// 创建使用此运行时的条目仓库、表示仓库、系统剪贴板和剪贴板变更来源的 CopyFileToClipboardUseCase。
+    pub fn copy_file_to_clipboard(
+        &self,
+    ) -> uc_app::usecases::file_sync::CopyFileToClipboardUseCase {
+        uc_app::usecases::file_sync::CopyFileToClipboardUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.clipboard.system_clipboard.clone(),
+            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
+            self.runtime.clipboard_integration_mode,
+        )
+    }
+
+    /// Create a `CleanupExpiredFilesUseCase` wired with this runtime's settings
+    /// and file cache directory.
+    ///
+    /// 创建使用此运行时设置和文件缓存目录的 CleanupExpiredFilesUseCase。
+    pub fn cleanup_expired_files(&self) -> uc_app::usecases::file_sync::CleanupExpiredFilesUseCase {
+        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
+        uc_app::usecases::file_sync::CleanupExpiredFilesUseCase::new(
+            self.runtime.deps.settings.clone(),
+            file_cache_dir,
         )
     }
 
@@ -1135,13 +1205,47 @@ impl ClipboardChangeHandler for AppRuntime {
                     }
                     drop(app_handle_guard);
 
+                    // Extract file paths before outbound_snapshot is moved
+                    let file_paths_for_sync = if origin == ClipboardChangeOrigin::LocalCapture {
+                        extract_file_paths_from_snapshot(&outbound_snapshot)
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Pre-generate transfer_ids for file paths and build file_transfers
+                    // mapping so clipboard sync carries the mapping for cross-platform
+                    // path rewriting on the receiver side.
+                    let file_sync_entries: Vec<(PathBuf, String, String)> = file_paths_for_sync
+                        .iter()
+                        .map(|path| {
+                            let transfer_id = uuid::Uuid::new_v4().to_string();
+                            let filename = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            (path.clone(), transfer_id, filename)
+                        })
+                        .collect();
+
+                    let file_transfers: Vec<uc_core::network::protocol::FileTransferMapping> =
+                        file_sync_entries
+                            .iter()
+                            .map(|(_, tid, fname)| {
+                                uc_core::network::protocol::FileTransferMapping {
+                                    transfer_id: tid.clone(),
+                                    filename: fname.clone(),
+                                }
+                            })
+                            .collect();
+
                     let outbound_sync_uc = self.usecases().sync_outbound_clipboard();
                     let flow_id_for_sync = flow_id.clone();
                     let flow_id_str = flow_id_for_sync.to_string();
                     tauri::async_runtime::spawn(
                         async move {
                             match tokio::task::spawn_blocking(move || {
-                                outbound_sync_uc.execute(outbound_snapshot, origin, Some(flow_id_str))
+                                outbound_sync_uc.execute(outbound_snapshot, origin, Some(flow_id_str), file_transfers)
                             })
                             .await
                             {
@@ -1159,6 +1263,36 @@ impl ClipboardChangeHandler for AppRuntime {
                         .instrument(tracing::info_span!("outbound_sync", %flow_id_for_sync)),
                     );
 
+                    // Trigger outbound file sync for LocalCapture only
+                    if !file_sync_entries.is_empty() {
+                        let outbound_file_uc = self.usecases().sync_outbound_file();
+                        tauri::async_runtime::spawn(
+                            async move {
+                                for (path, transfer_id, _filename) in file_sync_entries {
+                                    tracing::info!(file = %path.display(), transfer_id = %transfer_id, "Sending file to peers");
+                                    match outbound_file_uc.execute(path.clone(), Some(transfer_id)).await {
+                                        Ok(result) => {
+                                            tracing::info!(
+                                                transfer_id = %result.transfer_id,
+                                                peer_count = result.peer_count,
+                                                file = %path.display(),
+                                                "Outbound file sync completed"
+                                            );
+                                        }
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                error = %err,
+                                                file = %path.display(),
+                                                "Outbound file sync failed"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            .instrument(tracing::info_span!("outbound_file_sync")),
+                        );
+                    }
+
                     Ok(())
                 }
                 Ok(None) => {
@@ -1174,6 +1308,100 @@ impl ClipboardChangeHandler for AppRuntime {
         .instrument(span)
         .await
     }
+}
+
+/// Resolve macOS APFS file references (`/.file/id=<CNID>.<volumeID>`) to real file paths.
+///
+/// When files are copied in Finder, macOS may place APFS Catalog Node ID references
+/// on the clipboard instead of standard paths. These must be resolved via CoreFoundation.
+#[cfg(target_os = "macos")]
+fn resolve_apfs_file_reference(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use core_foundation::string::CFString;
+    use core_foundation::url::{kCFURLPOSIXPathStyle, CFURL};
+
+    let path_str = path.to_str()?;
+    if !path_str.starts_with("/.file/id=") {
+        return None;
+    }
+
+    // CFURLCreateWithFileSystemPath automatically resolves APFS file references
+    let cf_path = CFString::new(path_str);
+    let url = CFURL::from_file_system_path(cf_path, kCFURLPOSIXPathStyle, false);
+
+    // Extract the resolved path
+    let resolved = url.get_file_system_path(kCFURLPOSIXPathStyle);
+    let resolved_str = resolved.to_string();
+
+    // If still unresolved, return None
+    if resolved_str.starts_with("/.file/") {
+        tracing::warn!(
+            original = %path_str,
+            "Failed to resolve APFS file reference"
+        );
+        return None;
+    }
+
+    tracing::debug!(
+        original = %path_str,
+        resolved = %resolved_str,
+        "Resolved APFS file reference"
+    );
+    Some(std::path::PathBuf::from(resolved_str))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_apfs_file_reference(_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Extract file paths from a clipboard snapshot's representations.
+///
+/// Looks for `text/uri-list` or `file/uri-list` MIME types, or `files` / `public.file-url`
+/// format IDs, and parses `file://` URIs into `PathBuf`s.
+fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for rep in &snapshot.representations {
+        let is_file_rep = rep
+            .mime
+            .as_ref()
+            .map(|m| {
+                let s = m.as_str();
+                s.eq_ignore_ascii_case("text/uri-list") || s.eq_ignore_ascii_case("file/uri-list")
+            })
+            .unwrap_or(false)
+            || rep.format_id.eq_ignore_ascii_case("files")
+            || rep.format_id.eq_ignore_ascii_case("public.file-url");
+
+        if !is_file_rep {
+            continue;
+        }
+
+        // Parse bytes as UTF-8 text containing file:// URIs (one per line)
+        let text = match std::str::from_utf8(&rep.bytes) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Ok(url) = url::Url::parse(line) {
+                if url.scheme() == "file" {
+                    if let Ok(path) = url.to_file_path() {
+                        // On macOS, resolve APFS file references (/.file/id=...) to real paths
+                        let resolved = resolve_apfs_file_reference(&path).unwrap_or(path);
+                        paths.push(resolved);
+                    }
+                }
+            }
+        }
+    }
+    // Safety net: deduplicate in case multiple representations contain the same path
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 #[cfg(test)]
@@ -1895,6 +2123,8 @@ mod tests {
             settings_path: std::path::PathBuf::from("/tmp/uniclipboard-test/settings.json"),
             logs_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/logs"),
             cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache"),
+            file_cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/file-cache"),
+            spool_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/spool"),
             app_data_root: std::path::PathBuf::from("/tmp/uniclipboard-test"),
         }
     }
@@ -1964,6 +2194,7 @@ mod tests {
                 blob_writer: Arc::new(NoopPort),
                 thumbnail_repo: Arc::new(NoopPort),
                 thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
             },
             settings: Arc::new(NoopPort),
             system: uc_app::SystemPorts {

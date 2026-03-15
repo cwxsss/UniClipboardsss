@@ -85,7 +85,7 @@ IMPORTANT: Do NOT extract timestamp logic to a separate hook or component. The s
 
 <verification>
 - `bun run build` succeeds
-- Manual: Open clipboard page, wait 30-60 seconds, observe timestamps updating without new clipboard activity
+- Manual: Open clipboard page, wait 31-60 seconds, observe timestamps updating without new clipboard activity
 </verification>
 
 <success_criteria>

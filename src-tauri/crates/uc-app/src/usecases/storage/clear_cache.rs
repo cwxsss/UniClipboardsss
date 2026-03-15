@@ -105,6 +105,8 @@ mod tests {
             settings_path: PathBuf::from("/tmp/test-data/settings.json"),
             logs_dir: PathBuf::from("/tmp/test-data/logs"),
             cache_dir: PathBuf::from("/tmp/test-cache"),
+            file_cache_dir: PathBuf::from("/tmp/test-cache/file-cache"),
+            spool_dir: PathBuf::from("/tmp/test-cache/spool"),
             app_data_root: PathBuf::from("/tmp/test-data"),
         }
     }

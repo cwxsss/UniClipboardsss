@@ -109,6 +109,28 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     await saveSetting(updatedSetting)
   }
 
+  // Update file sync settings
+  const updateFileSyncSetting = async (
+    newFileSyncSetting: Partial<Settings['file_sync'] & object>
+  ) => {
+    if (!setting) return
+    const updatedSetting: Settings = {
+      ...setting,
+      file_sync: {
+        ...(setting.file_sync ?? {
+          file_sync_enabled: true,
+          small_file_threshold: 10 * 1024 * 1024,
+          max_file_size: 5 * 1024 * 1024 * 1024,
+          file_cache_quota_per_device: 500 * 1024 * 1024,
+          file_retention_hours: 24,
+          file_auto_cleanup: true,
+        }),
+        ...newFileSyncSetting,
+      },
+    }
+    await saveSetting(updatedSetting)
+  }
+
   // Update keyboard shortcuts
   const updateKeyboardShortcuts = async (overrides: Record<string, string | string[]>) => {
     if (!setting) {
@@ -247,6 +269,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     updateSecuritySetting,
     updateRetentionPolicy,
     updateKeyboardShortcuts,
+    updateFileSyncSetting,
   }
 
   return <SettingContext.Provider value={value}>{children}</SettingContext.Provider>
