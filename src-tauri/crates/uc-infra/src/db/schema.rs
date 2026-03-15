@@ -16,13 +16,14 @@ diesel::table! {
 diesel::table! {
     file_transfer (transfer_id) {
         transfer_id -> Text,
+        entry_id -> Text,
         filename -> Text,
-        file_size -> BigInt,
-        content_hash -> Text,
+        file_size -> Nullable<BigInt>,
+        content_hash -> Nullable<Text>,
         status -> Text,
         source_device -> Text,
-        batch_id -> Nullable<Text>,
         cached_path -> Nullable<Text>,
+        failure_reason -> Nullable<Text>,
         created_at_ms -> BigInt,
         updated_at_ms -> BigInt,
     }
