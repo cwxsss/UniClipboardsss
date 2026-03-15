@@ -21,25 +21,6 @@ use uc_core::ids::EntryId;
 use uc_core::security::state::EncryptionState;
 use uc_platform::ports::observability::TraceMetadata;
 
-/// Map an app-layer projection DTO to the command-layer response model.
-fn dto_to_projection(dto: EntryProjectionDto) -> ClipboardEntryProjection {
-    ClipboardEntryProjection {
-        id: dto.id,
-        preview: dto.preview,
-        has_detail: dto.has_detail,
-        size_bytes: dto.size_bytes,
-        captured_at: dto.captured_at,
-        content_type: dto.content_type,
-        thumbnail_url: dto.thumbnail_url,
-        is_encrypted: dto.is_encrypted,
-        is_favorited: dto.is_favorited,
-        updated_at: dto.updated_at,
-        active_time: dto.active_time,
-        file_transfer_status: dto.file_transfer_status,
-        file_transfer_reason: dto.file_transfer_reason,
-    }
-}
-
 /// Get clipboard history entries (preview only)
 /// 获取剪贴板历史条目（仅预览）
 #[tauri::command]

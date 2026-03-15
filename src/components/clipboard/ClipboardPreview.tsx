@@ -9,7 +9,6 @@ import {
   File,
   Loader2,
   Image as ImageIcon,
-  RefreshCw,
 } from 'lucide-react'
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -21,7 +20,6 @@ import {
   ClipboardImageItem,
   ClipboardLinkItem,
   ClipboardTextItem,
-  downloadFileEntry,
   fetchClipboardResourceText,
   getClipboardEntryResource,
   getResourceImageUrl,
@@ -418,37 +416,6 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
           <Separator className="bg-border/40" />
           <div className="p-4">
             <TransferProgressBar progress={transfer} variant="detailed" />
-          </div>
-        </div>
-      )}
-
-      {/* Transfer error section (durable failed status) */}
-      {effectiveStatus === 'failed' && (
-        <div className="shrink-0">
-          <Separator className="bg-border/40" />
-          <div className="p-4">
-            <div className="bg-destructive/10 border border-destructive/20 rounded-md p-3 flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-destructive">
-                  {t('clipboard.transfer.failed')}
-                </p>
-                {(entryStatus?.reason || transfer?.errorMessage) && (
-                  <p className="text-xs text-destructive/80 mt-1">
-                    {entryStatus?.reason || transfer?.errorMessage}
-                  </p>
-                )}
-              </div>
-              {item && (
-                <button
-                  className="shrink-0 inline-flex items-center gap-1 text-xs text-destructive hover:text-destructive/80 font-medium"
-                  onClick={() => void downloadFileEntry(item.id)}
-                >
-                  <RefreshCw className="h-3 w-3" />
-                  {t('devices.list.actions.retry')}
-                </button>
-              )}
-            </div>
           </div>
         </div>
       )}
