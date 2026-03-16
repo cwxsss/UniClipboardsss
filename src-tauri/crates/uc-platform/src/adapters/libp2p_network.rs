@@ -97,10 +97,18 @@ impl PeerCaches {
         discovered_at: DateTime<Utc>,
     ) -> DiscoveredPeer {
         sort_addresses_quic_first(&mut addresses);
+        // Preserve device_name and device_id from existing entry when
+        // re-discovered via mDNS, so we don't overwrite names that were
+        // resolved through the DeviceAnnounce protocol.
+        let (existing_name, existing_device_id) = self
+            .discovered_peers
+            .get(&peer_id)
+            .map(|p| (p.device_name.clone(), p.device_id.clone()))
+            .unwrap_or((None, None));
         let peer = DiscoveredPeer {
             peer_id,
-            device_name: None,
-            device_id: None,
+            device_name: existing_name,
+            device_id: existing_device_id,
             addresses,
             discovered_at,
             last_seen: discovered_at,
@@ -995,17 +1003,9 @@ fn spawn_business_stream_handler(
             let encryption_session = encryption_session.clone();
             let transfer_decryptor = transfer_decryptor.clone();
             tokio::spawn(async move {
-                if check_business_allowed(
-                    &policy_resolver,
-                    &event_tx,
-                    &peer_id,
-                    ProtocolDirection::Inbound,
-                )
-                .await
-                .is_err()
-                {
-                    return;
-                }
+                // Policy check is deferred until after reading the message type.
+                // DeviceAnnounce is allowed from any peer (even unpaired) so that
+                // device names are available in JoinPickDeviceStep before pairing.
 
                 // Apply overall size guard on the stream
                 let limited = stream.take(BUSINESS_PAYLOAD_MAX_BYTES + 1);
@@ -1055,6 +1055,19 @@ fn spawn_business_stream_handler(
                             if msg.payload_version == ClipboardPayloadVersion::V3
                                 && msg.encrypted_content.is_empty() =>
                         {
+                            // Gate unpaired/pending peers before expensive I/O and crypto.
+                            if check_business_allowed(
+                                &policy_resolver,
+                                &event_tx,
+                                &peer_id,
+                                ProtocolDirection::Inbound,
+                            )
+                            .await
+                            .is_err()
+                            {
+                                return Err("denied by policy".into());
+                            }
+
                             // Streaming decode uses a blocking read-to-end, then async decrypt
                             // via injected TransferPayloadDecryptorPort.
                             let master_key = match encryption_session.get_master_key().await {
@@ -1198,6 +1211,8 @@ fn spawn_business_stream_handler(
 
                 match result {
                     Ok(Ok(ProcessedMessage::StreamingClipboard(msg, plaintext))) => {
+                        // Policy already checked inside the streaming branch before
+                        // get_master_key / spawn_blocking / decrypt.
                         handle_v2_clipboard(
                             caches,
                             event_tx,
@@ -1208,7 +1223,32 @@ fn spawn_business_stream_handler(
                         )
                         .await;
                     }
+                    Ok(Ok(ProcessedMessage::Standard(ProtocolMessage::DeviceAnnounce(
+                        announce,
+                    )))) => {
+                        // DeviceAnnounce is allowed from any peer (even unpaired)
+                        handle_standard_message(
+                            caches,
+                            event_tx,
+                            clipboard_tx,
+                            peer_id,
+                            ProtocolMessage::DeviceAnnounce(announce),
+                        )
+                        .await;
+                    }
                     Ok(Ok(ProcessedMessage::Standard(message))) => {
+                        // All other standard messages require pairing
+                        if check_business_allowed(
+                            &policy_resolver,
+                            &event_tx,
+                            &peer_id,
+                            ProtocolDirection::Inbound,
+                        )
+                        .await
+                        .is_err()
+                        {
+                            return;
+                        }
                         handle_standard_message(caches, event_tx, clipboard_tx, peer_id, message)
                             .await;
                     }
@@ -1865,7 +1905,7 @@ async fn execute_business_command(
                 device_name,
                 timestamp: Utc::now(),
             });
-            let payload = match message.to_bytes() {
+            let payload = match message.frame_to_bytes(None) {
                 Ok(payload) => payload,
                 Err(err) => {
                     warn!(
@@ -1893,17 +1933,9 @@ async fn execute_business_command(
                         continue;
                     }
                 };
-                if check_business_allowed(
-                    &policy_resolver,
-                    &event_tx,
-                    peer_id.as_str(),
-                    ProtocolDirection::Outbound,
-                )
-                .await
-                .is_err()
-                {
-                    continue;
-                }
+                // DeviceAnnounce is allowed for all peers regardless of pairing
+                // state so that device names are visible in the JoinPickDeviceStep
+                // UI before pairing is initiated.
 
                 let mut announce_control = control.clone();
                 match timeout(
@@ -2388,6 +2420,31 @@ mod tests {
         assert!(peer.device_name.is_none());
         assert!(peer.device_id.is_none());
         assert!(!peer.is_paired);
+    }
+
+    #[test]
+    fn cache_upsert_discovered_preserves_device_name() {
+        let mut caches = PeerCaches::new();
+        let t0 = Utc::now();
+
+        // Initial discovery: no name yet
+        let peer = caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+            t0,
+        );
+        assert!(peer.device_name.is_none());
+
+        // Device name resolved via DeviceAnnounce protocol
+        caches.upsert_device_name("peer-1", "My Laptop".to_string(), t0);
+
+        // Re-discovery via mDNS: device_name must be preserved
+        let peer = caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+            t0,
+        );
+        assert_eq!(peer.device_name.as_deref(), Some("My Laptop"));
     }
 
     #[test]
