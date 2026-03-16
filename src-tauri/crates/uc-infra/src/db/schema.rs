@@ -14,6 +14,22 @@ diesel::table! {
 }
 
 diesel::table! {
+    file_transfer (transfer_id) {
+        transfer_id -> Text,
+        entry_id -> Text,
+        filename -> Text,
+        file_size -> Nullable<BigInt>,
+        content_hash -> Nullable<Text>,
+        status -> Text,
+        source_device -> Text,
+        cached_path -> Nullable<Text>,
+        failure_reason -> Nullable<Text>,
+        created_at_ms -> BigInt,
+        updated_at_ms -> BigInt,
+    }
+}
+
+diesel::table! {
     clipboard_entry (entry_id) {
         entry_id -> Text,
         event_id -> Text,
@@ -90,6 +106,7 @@ diesel::table! {
         paired_at -> BigInt,
         last_seen_at -> Nullable<BigInt>,
         device_name -> Text,
+        sync_settings -> Nullable<Text>,
     }
 }
 
@@ -105,6 +122,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     clipboard_selection,
     clipboard_representation_thumbnail,
     clipboard_snapshot_representation,
+    file_transfer,
     paired_device,
     t_device,
 );

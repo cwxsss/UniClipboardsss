@@ -1,7 +1,19 @@
-import { Clipboard, ExternalLink, File, Loader2, Image as ImageIcon } from 'lucide-react'
+import { openUrl } from '@tauri-apps/plugin-opener'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clipboard,
+  Clock,
+  CloudOff,
+  ExternalLink,
+  File,
+  Loader2,
+  Image as ImageIcon,
+} from 'lucide-react'
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { DisplayClipboardItem } from './ClipboardContent'
+import TransferProgressBar from './TransferProgressBar'
 import {
   ClipboardCodeItem,
   ClipboardFileItem,
@@ -14,7 +26,13 @@ import {
 } from '@/api/clipboardItems'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { resolveUcUrl } from '@/lib/protocol'
+import { useAppSelector } from '@/store/hooks'
+import {
+  selectEntryTransferStatus,
+  selectTransferByEntryId,
+} from '@/store/slices/fileTransferSlice'
 import { formatFileSize } from '@/utils'
 
 interface ClipboardPreviewProps {
@@ -23,6 +41,23 @@ interface ClipboardPreviewProps {
 
 const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
   const { t } = useTranslation()
+  const transfer = useAppSelector(state =>
+    item ? selectTransferByEntryId(state, item.id) : undefined
+  )
+  const entryStatus = useAppSelector(state =>
+    item ? selectEntryTransferStatus(state, item.id) : undefined
+  )
+  // Derive display state from durable status, falling back to ephemeral transfer
+  const durableStatus = entryStatus?.status
+  const effectiveStatus =
+    durableStatus ??
+    (transfer?.status === 'active'
+      ? 'transferring'
+      : transfer?.status === 'failed'
+        ? 'failed'
+        : transfer?.status === 'completed'
+          ? 'completed'
+          : undefined)
   const [fullText, setFullText] = useState<string | null>(null)
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [isLoadingText, setIsLoadingText] = useState(false)
@@ -132,19 +167,41 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
         )
       }
       case 'link': {
-        const url = (item.content as ClipboardLinkItem).url
+        const linkItem = item.content as ClipboardLinkItem
         return (
-          <div className="p-4">
-            <a
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-primary font-medium hover:underline break-all text-sm leading-relaxed flex items-center gap-2"
-              onClick={e => e.stopPropagation()}
+          <div className="p-4 space-y-2">
+            <button
+              type="button"
+              className="text-left text-primary font-medium hover:underline break-all text-sm leading-relaxed flex items-center gap-2 cursor-pointer"
+              onClick={e => {
+                e.stopPropagation()
+                openUrl(linkItem.urls[0]).catch(console.error)
+              }}
             >
               <ExternalLink size={14} className="shrink-0" />
-              {url}
-            </a>
+              {linkItem.urls[0]}
+            </button>
+            {linkItem.urls.length > 1 &&
+              linkItem.urls.slice(1).map((url, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-primary/80 hover:underline break-all text-sm leading-relaxed flex items-center gap-2 cursor-pointer"
+                    onClick={e => {
+                      e.stopPropagation()
+                      openUrl(url).catch(console.error)
+                    }}
+                  >
+                    <ExternalLink size={12} className="shrink-0 text-muted-foreground" />
+                    {url}
+                  </button>
+                  {linkItem.domains[i + 1] && (
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {linkItem.domains[i + 1]}
+                    </span>
+                  )}
+                </div>
+              ))}
           </div>
         )
       }
@@ -164,18 +221,76 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
         const fileNames = (item.content as ClipboardFileItem).file_names
         const fileSizes = (item.content as ClipboardFileItem).file_sizes
         return (
-          <div className="p-4 flex flex-col gap-2">
-            {fileNames.map((name, i) => (
-              <div key={i} className="flex items-center gap-2 text-sm text-foreground/80">
-                <File size={16} className="text-muted-foreground shrink-0" />
-                <span className="truncate flex-1">{name}</span>
-                {fileSizes[i] != null && (
-                  <span className="text-xs text-muted-foreground">
-                    {formatFileSize(fileSizes[i])}
-                  </span>
+          <div className="p-4 flex flex-col gap-3">
+            {/* Transfer status badge */}
+            {effectiveStatus === 'pending' && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded-md px-2 py-1 w-fit"
+                aria-label={t('clipboard.transfer.statusBadge.pending')}
+              >
+                <Clock size={12} />
+                <span>{t('clipboard.transfer.pending')}</span>
+              </div>
+            )}
+            {effectiveStatus === 'transferring' && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-primary bg-primary/10 rounded-md px-2 py-1 w-fit"
+                aria-label={t('clipboard.transfer.statusBadge.transferring')}
+              >
+                <Loader2 size={12} className="animate-spin" />
+                <span>{t('clipboard.transfer.transferring')}</span>
+              </div>
+            )}
+            {effectiveStatus === 'failed' && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-destructive bg-destructive/10 rounded-md px-2 py-1 w-fit"
+                aria-label={t('clipboard.transfer.statusBadge.failed')}
+              >
+                <AlertTriangle size={12} />
+                <span>{t('clipboard.transfer.failed')}</span>
+                {entryStatus?.reason && (
+                  <span className="text-destructive/70">— {entryStatus.reason}</span>
                 )}
               </div>
-            ))}
+            )}
+            {effectiveStatus === 'completed' && (
+              <div
+                className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400 bg-green-500/10 rounded-md px-2 py-1 w-fit"
+                aria-label={t('clipboard.transfer.statusBadge.completed')}
+              >
+                <CheckCircle2 size={12} />
+                <span>{t('clipboard.transfer.completed')}</span>
+              </div>
+            )}
+            {/* Download status badge (only when no durable transfer status) */}
+            {!effectiveStatus && item.isDownloaded === false && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/40 rounded-md px-2 py-1 w-fit">
+                <CloudOff size={12} />
+                <span>{t('clipboard.preview.notDownloaded')}</span>
+              </div>
+            )}
+
+            {/* Source device */}
+            {item.device && (
+              <div className="text-xs text-muted-foreground">
+                {t('clipboard.preview.sourceDevice')}: {item.device}
+              </div>
+            )}
+
+            {/* File list */}
+            <div className="flex flex-col gap-2">
+              {fileNames.map((name, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm text-foreground/80">
+                  <File size={16} className="text-muted-foreground shrink-0" />
+                  <span className="truncate flex-1">{name}</span>
+                  {fileSizes[i] != null && (
+                    <span className="text-xs text-muted-foreground">
+                      {formatFileSize(fileSizes[i])}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )
       }
@@ -189,7 +304,7 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
   }
 
   const renderInformation = () => {
-    const rows: { label: string; value: string }[] = []
+    const rows: { label: string; value: React.ReactNode }[] = []
 
     // Content type
     rows.push({
@@ -244,11 +359,58 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
       }
     }
 
+    if (item.type === 'file' && item.content) {
+      const fileItem = item.content as ClipboardFileItem
+      rows.push({
+        label: t('clipboard.preview.fileCount', 'Files'),
+        value: String(fileItem.file_names.length),
+      })
+      const knownSizes = fileItem.file_sizes.filter(s => s >= 0)
+      if (knownSizes.length > 0) {
+        const totalSize = knownSizes.reduce((sum, s) => sum + s, 0)
+        rows.push({
+          label: t('clipboard.preview.size'),
+          value: formatFileSize(totalSize),
+        })
+      }
+    }
+
     if (item.type === 'link' && item.content) {
-      const url = (item.content as ClipboardLinkItem).url
+      const linkItem = item.content as ClipboardLinkItem
+      const uniqueDomains = [...new Set(linkItem.domains.filter(Boolean))]
+      if (uniqueDomains.length > 0) {
+        const domainStr = uniqueDomains.join(', ')
+        rows.push({
+          label:
+            uniqueDomains.length > 1
+              ? t('clipboard.preview.domains', 'Domains')
+              : t('clipboard.preview.domain', 'Domain'),
+          value:
+            uniqueDomains.length > 1 ? (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="truncate block cursor-default">{domainStr}</span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs">
+                    {uniqueDomains.join('\n')}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ) : (
+              domainStr
+            ),
+        })
+      }
+      if (linkItem.urls.length > 1) {
+        rows.push({
+          label: t('clipboard.preview.urlCount', 'URLs'),
+          value: String(linkItem.urls.length),
+        })
+      }
       rows.push({
         label: t('clipboard.preview.characters'),
-        value: String(url.length),
+        value: String(linkItem.urls[0]?.length ?? 0),
       })
     }
 
@@ -263,6 +425,16 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
       <ScrollArea className="flex-1 min-h-0 overflow-hidden">
         <div className="overflow-hidden">{renderContent()}</div>
       </ScrollArea>
+
+      {/* Transfer progress section (ephemeral active transfer) */}
+      {effectiveStatus === 'transferring' && transfer && transfer.status === 'active' && (
+        <div className="shrink-0">
+          <Separator className="bg-border/40" />
+          <div className="p-4">
+            <TransferProgressBar progress={transfer} variant="detailed" />
+          </div>
+        </div>
+      )}
 
       {/* Information section */}
       {infoRows.length > 0 && (

@@ -1,6 +1,6 @@
 /**
  * View Transition utility using the View Transition API.
- * Creates circular reveal / collapse animations from a given origin point.
+ * Creates circular reveal animations from a given origin point (used for theme switching).
  */
 
 import { flushSync } from 'react-dom'
@@ -20,7 +20,7 @@ export function setTransitionOrigin(x: number, y: number) {
  * Falls back to immediate execution if View Transition API is not supported.
  * Pass null for x or y to skip the reveal animation (e.g. keyboard/ESC activations).
  */
-export function startCircularReveal(x: number | null, y: number | null, updateDOM: () => void) {
+function startCircularReveal(x: number | null, y: number | null, updateDOM: () => void) {
   if (x === null || y === null || !document.startViewTransition) {
     updateDOM()
     return
@@ -43,64 +43,10 @@ export function startCircularReveal(x: number | null, y: number | null, updateDO
       {
         duration: 500,
         easing: 'ease-in-out',
-        fill: 'forwards',
         pseudoElement: '::view-transition-new(root)',
       }
     )
   })
-}
-
-/**
- * Execute a DOM update wrapped in a View Transition with circular collapse.
- * The OLD view shrinks from full viewport down to (x, y).
- * This is the reverse of startCircularReveal.
- */
-export function startCircularCollapse(x: number, y: number, updateDOM: () => void) {
-  if (!document.startViewTransition) {
-    updateDOM()
-    return
-  }
-
-  const startRadius = Math.hypot(
-    Math.max(x, window.innerWidth - x),
-    Math.max(y, window.innerHeight - y)
-  )
-
-  // Swap z-index so old view (settings) is on top and collapses away
-  document.documentElement.classList.add('view-transition-collapse')
-
-  const transition = document.startViewTransition(() => {
-    flushSync(updateDOM)
-  })
-
-  transition.ready.then(() => {
-    document.documentElement.animate(
-      {
-        clipPath: [`circle(${startRadius}px at ${x}px ${y}px)`, `circle(0px at ${x}px ${y}px)`],
-      },
-      {
-        duration: 500,
-        easing: 'ease-in-out',
-        fill: 'forwards',
-        pseudoElement: '::view-transition-old(root)',
-      }
-    )
-  })
-
-  transition.finished.then(() => {
-    document.documentElement.classList.remove('view-transition-collapse')
-  })
-}
-
-/** Get the center position of the settings icon in the sidebar */
-export function getSettingsIconPosition(): { x: number; y: number } {
-  const el = document.querySelector('[data-settings-icon]')
-  if (el) {
-    const rect = el.getBoundingClientRect()
-    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-  }
-  // Fallback: bottom-left area where settings icon typically is
-  return { x: 28, y: window.innerHeight - 28 }
 }
 
 /**

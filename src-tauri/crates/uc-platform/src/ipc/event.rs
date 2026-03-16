@@ -32,6 +32,9 @@ pub enum PlatformEvent {
     /// 剪切板内容已成功同步到至少一个设备
     ClipboardSynced { peer_count: usize },
 
+    /// 用户复制了文件（文件路径列表）
+    FileCopied { file_paths: Vec<String> },
+
     /// 操作失败（一次性错误）
     Error { message: String },
 }

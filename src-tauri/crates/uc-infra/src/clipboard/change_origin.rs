@@ -78,6 +78,13 @@ impl ClipboardChangeOriginPort for InMemoryClipboardChangeOrigin {
         default_origin
     }
 
+    async fn has_pending_origin(&self) -> bool {
+        let mut state = self.state.lock().await;
+        let now = Instant::now();
+        Self::prune_expired(&mut state, now);
+        state.next_origin.is_some()
+    }
+
     async fn remember_remote_snapshot_hash(&self, snapshot_hash: String, ttl: Duration) {
         let now = Instant::now();
         let expires_at = now.checked_add(ttl).unwrap_or(now);
@@ -164,6 +171,25 @@ mod tests {
 
         assert_eq!(first, ClipboardChangeOrigin::RemotePush);
         assert_eq!(second, ClipboardChangeOrigin::LocalCapture);
+    }
+
+    #[tokio::test]
+    async fn has_pending_origin_returns_true_when_set() {
+        let port = InMemoryClipboardChangeOrigin::new();
+        assert!(!port.has_pending_origin().await);
+
+        port.set_next_origin(ClipboardChangeOrigin::LocalRestore, Duration::from_secs(1))
+            .await;
+        assert!(port.has_pending_origin().await);
+
+        // has_pending_origin is non-destructive — origin should still be there
+        assert!(port.has_pending_origin().await);
+
+        // Consume it, then it should be gone
+        let _ = port
+            .consume_origin_or_default(ClipboardChangeOrigin::LocalCapture)
+            .await;
+        assert!(!port.has_pending_origin().await);
     }
 
     #[tokio::test]

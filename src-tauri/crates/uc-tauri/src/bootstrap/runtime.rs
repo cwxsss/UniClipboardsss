@@ -30,6 +30,7 @@
 //! 3. Commands can now call `runtime.usecases().your_use_case()`
 
 use async_trait::async_trait;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::Mutex;
@@ -116,6 +117,9 @@ pub struct AppRuntime {
     /// Centralized task lifecycle registry for tracking and shutting down
     /// all long-lived spawned tasks.
     task_registry: Arc<TaskRegistry>,
+    /// Resolved storage paths for storage use cases.
+    /// 已解析的存储路径，用于存储用例。
+    storage_paths: uc_app::app_paths::AppPaths,
 }
 
 /// Setup wiring dependencies for runtime-level orchestrators.
@@ -164,7 +168,7 @@ impl SetupRuntimePorts {
 impl AppRuntime {
     /// Create a new AppRuntime from dependencies.
     /// 从依赖创建新的 AppRuntime。
-    pub fn new(deps: AppDeps) -> Self {
+    pub fn new(deps: AppDeps, storage_paths: uc_app::app_paths::AppPaths) -> Self {
         struct NoopWatcherControl;
         #[async_trait::async_trait]
         impl uc_platform::ports::WatcherControlPort for NoopWatcherControl {
@@ -178,7 +182,7 @@ impl AppRuntime {
         let setup_ports = SetupRuntimePorts::placeholder(&deps);
         let watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort> =
             Arc::new(NoopWatcherControl);
-        Self::with_setup(deps, setup_ports, watcher_control)
+        Self::with_setup(deps, setup_ports, watcher_control, storage_paths)
     }
 
     /// Create a new AppRuntime with explicit setup orchestrator dependencies.
@@ -186,6 +190,7 @@ impl AppRuntime {
         deps: AppDeps,
         setup_ports: SetupRuntimePorts,
         watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
+        storage_paths: uc_app::app_paths::AppPaths,
     ) -> Self {
         let lifecycle_status: Arc<dyn uc_app::usecases::LifecycleStatusPort> =
             Arc::new(crate::adapters::lifecycle::InMemoryLifecycleStatus::new());
@@ -210,6 +215,7 @@ impl AppRuntime {
             clipboard_integration_mode,
             watcher_control,
             task_registry,
+            storage_paths,
         }
     }
 
@@ -503,6 +509,18 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+        )
+        .with_file_cache_dir(self.runtime.storage_paths.file_cache_dir.clone())
+    }
+
+    /// Create a `ClearClipboardHistory` use case wired with this runtime's clipboard, selection, and event repositories.
+    pub fn clear_clipboard_history(&self) -> uc_app::usecases::clipboard::ClearClipboardHistory {
+        uc_app::usecases::clipboard::ClearClipboardHistory::from_ports(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
         )
     }
 
@@ -555,6 +573,30 @@ impl<'a> UseCases<'a> {
         uc_app::usecases::clipboard::resolve_blob_resource::ResolveBlobResourceUseCase::new(
             self.runtime.deps.clipboard.representation_repo.clone(),
             self.runtime.deps.storage.blob_store.clone(),
+        )
+    }
+
+    /// Get storage statistics use case.
+    /// 获取存储统计用例。
+    pub fn get_storage_stats(&self) -> uc_app::usecases::storage::GetStorageStats {
+        uc_app::usecases::storage::GetStorageStats::new(self.runtime.storage_paths.clone())
+    }
+
+    /// Clear cache use case.
+    /// 清除缓存用例。
+    pub fn clear_cache(&self) -> uc_app::usecases::storage::ClearCache {
+        uc_app::usecases::storage::ClearCache::new(
+            self.runtime.storage_paths.clone(),
+            self.runtime.deps.system.cache_fs.clone(),
+        )
+    }
+
+    /// Open data directory use case.
+    /// 打开数据目录用例。
+    pub fn open_data_directory(&self) -> uc_app::usecases::storage::OpenDataDirectory {
+        uc_app::usecases::storage::OpenDataDirectory::new(
+            self.runtime.storage_paths.clone(),
+            self.runtime.deps.system.file_manager.clone(),
         )
     }
 
@@ -612,6 +654,25 @@ impl<'a> UseCases<'a> {
         uc_app::usecases::SetPairingState::new(self.runtime.deps.device.paired_device_repo.clone())
     }
 
+    /// Get resolved sync settings for a specific device.
+    ///
+    /// Returns per-device overrides if set, otherwise global defaults.
+    pub fn get_device_sync_settings(&self) -> uc_app::usecases::GetDeviceSyncSettings {
+        uc_app::usecases::GetDeviceSyncSettings::from_ports(
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.settings.clone(),
+        )
+    }
+
+    /// Update or clear per-device sync settings.
+    ///
+    /// Passing `None` resets to global defaults.
+    pub fn update_device_sync_settings(&self) -> uc_app::usecases::UpdateDeviceSyncSettings {
+        uc_app::usecases::UpdateDeviceSyncSettings::from_ports(
+            self.runtime.deps.device.paired_device_repo.clone(),
+        )
+    }
+
     /// Unpair device and remove from repository.
     ///
     /// 取消配对并从存储中删除。
@@ -661,6 +722,16 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.security.key_scope.clone(),
             self.runtime.deps.security.encryption_state.clone(),
             self.runtime.deps.security.encryption_session.clone(),
+        )
+    }
+
+    /// Get the VerifyKeychainAccess use case for checking Always Allow permission.
+    pub fn verify_keychain_access(
+        &self,
+    ) -> uc_app::usecases::verify_keychain_access::VerifyKeychainAccess {
+        uc_app::usecases::verify_keychain_access::VerifyKeychainAccess::from_ports(
+            self.runtime.deps.security.key_scope.clone(),
+            self.runtime.deps.security.key_material.clone(),
         )
     }
 
@@ -785,6 +856,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.representation_repo.clone(),
             self.runtime.deps.storage.thumbnail_repo.clone(),
+            self.runtime.deps.storage.file_transfer_repo.clone(),
         )
     }
 
@@ -846,6 +918,8 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.representation_normalizer.clone(),
             self.runtime.deps.clipboard.representation_cache.clone(),
             self.runtime.deps.clipboard.spool_queue.clone(),
+            Some(self.runtime.storage_paths.file_cache_dir.clone()),
+            self.runtime.deps.settings.clone(),
         )
     }
 
@@ -860,6 +934,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.device.device_identity.clone(),
             self.runtime.deps.settings.clone(),
             Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter),
+            self.runtime.deps.device.paired_device_repo.clone(),
         )
     }
 
@@ -893,6 +968,71 @@ impl<'a> UseCases<'a> {
                     crate::adapters::lifecycle::LoggingLifecycleEventEmitter,
                 ),
             },
+        )
+    }
+
+    /// Create a `TrackInboundTransfersUseCase` wired with the file transfer repository.
+    ///
+    /// Used by wiring code for event-loop status transitions, timeout sweeps,
+    /// and startup reconciliation.
+    pub fn track_inbound_transfers(
+        &self,
+    ) -> uc_app::usecases::file_sync::TrackInboundTransfersUseCase {
+        uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
+            self.runtime.deps.storage.file_transfer_repo.clone(),
+        )
+    }
+
+    /// Create a `SyncOutboundFileUseCase` wired with this runtime's settings,
+    /// device repo, peer directory, and file transport port.
+    ///
+    /// 创建使用此运行时的设置、设备仓库、对等目录和文件传输端口的 SyncOutboundFileUseCase。
+    pub fn sync_outbound_file(&self) -> uc_app::usecases::file_sync::SyncOutboundFileUseCase {
+        uc_app::usecases::file_sync::SyncOutboundFileUseCase::new(
+            self.runtime.deps.settings.clone(),
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.network_ports.peers.clone(),
+            self.runtime.deps.network_ports.file_transfer.clone(),
+        )
+    }
+
+    /// Create a `SyncInboundFileUseCase` wired with this runtime's settings
+    /// and file cache directory.
+    ///
+    /// 创建使用此运行时设置和文件缓存目录的 SyncInboundFileUseCase。
+    pub fn sync_inbound_file(&self) -> uc_app::usecases::file_sync::SyncInboundFileUseCase {
+        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
+        uc_app::usecases::file_sync::SyncInboundFileUseCase::new(
+            self.runtime.deps.settings.clone(),
+            file_cache_dir,
+        )
+    }
+
+    /// Create a `CopyFileToClipboardUseCase` wired with this runtime's
+    /// entry repo, representation repo, system clipboard, and clipboard change origin.
+    ///
+    /// 创建使用此运行时的条目仓库、表示仓库、系统剪贴板和剪贴板变更来源的 CopyFileToClipboardUseCase。
+    pub fn copy_file_to_clipboard(
+        &self,
+    ) -> uc_app::usecases::file_sync::CopyFileToClipboardUseCase {
+        uc_app::usecases::file_sync::CopyFileToClipboardUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.clipboard.system_clipboard.clone(),
+            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
+            self.runtime.clipboard_integration_mode,
+        )
+    }
+
+    /// Create a `CleanupExpiredFilesUseCase` wired with this runtime's settings
+    /// and file cache directory.
+    ///
+    /// 创建使用此运行时设置和文件缓存目录的 CleanupExpiredFilesUseCase。
+    pub fn cleanup_expired_files(&self) -> uc_app::usecases::file_sync::CleanupExpiredFilesUseCase {
+        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
+        uc_app::usecases::file_sync::CleanupExpiredFilesUseCase::new(
+            self.runtime.deps.settings.clone(),
+            file_cache_dir,
         )
     }
 
@@ -999,103 +1139,299 @@ pub fn create_app(deps: AppDeps) -> App {
 /// from the platform layer.
 #[async_trait::async_trait]
 impl ClipboardChangeHandler for AppRuntime {
-    #[tracing::instrument(name = "runtime.on_clipboard_changed", skip(self, snapshot))]
     async fn on_clipboard_changed(&self, snapshot: SystemClipboardSnapshot) -> anyhow::Result<()> {
-        let snapshot_hash = snapshot.snapshot_hash().to_string();
-        let origin = self
-            .deps
-            .clipboard
-            .clipboard_change_origin
-            .consume_origin_for_snapshot_or_default(
-                &snapshot_hash,
-                ClipboardChangeOrigin::LocalCapture,
-            )
-            .await;
-        let outbound_snapshot = snapshot.clone();
-
-        // Create CaptureClipboardUseCase with dependencies
-        let usecase = uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase::new(
-            self.deps.clipboard.clipboard_entry_repo.clone(),
-            self.deps.clipboard.clipboard_event_repo.clone(),
-            self.deps.clipboard.representation_policy.clone(),
-            self.deps.clipboard.representation_normalizer.clone(),
-            self.deps.device.device_identity.clone(),
-            self.deps.clipboard.representation_cache.clone(),
-            self.deps.clipboard.spool_queue.clone(),
+        let flow_id = uc_observability::FlowId::generate();
+        let span = tracing::info_span!(
+            "runtime.on_clipboard_changed",
+            %flow_id,
+            stage = uc_observability::stages::DETECT,
         );
+        async move {
+            let snapshot_hash = snapshot.snapshot_hash().to_string();
+            let origin = self
+                .deps
+                .clipboard
+                .clipboard_change_origin
+                .consume_origin_for_snapshot_or_default(
+                    &snapshot_hash,
+                    ClipboardChangeOrigin::LocalCapture,
+                )
+                .await;
+            let outbound_snapshot = snapshot.clone();
 
-        // Execute capture with the provided snapshot
-        match usecase.execute_with_origin(snapshot, origin).await {
-            Ok(Some(entry_id)) => {
-                tracing::debug!(
-                    entry_id = %entry_id,
-                    "Successfully captured clipboard"
-                );
+            // Create CaptureClipboardUseCase with dependencies
+            let usecase = uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase::new(
+                self.deps.clipboard.clipboard_entry_repo.clone(),
+                self.deps.clipboard.clipboard_event_repo.clone(),
+                self.deps.clipboard.representation_policy.clone(),
+                self.deps.clipboard.representation_normalizer.clone(),
+                self.deps.device.device_identity.clone(),
+                self.deps.clipboard.representation_cache.clone(),
+                self.deps.clipboard.spool_queue.clone(),
+            );
 
-                // Emit event to frontend if AppHandle is available
-                let app_handle_guard = self.app_handle.read().unwrap_or_else(|poisoned| {
-                    tracing::error!(
-                        "RwLock poisoned in on_clipboard_changed, recovering from poisoned state"
+            // Execute capture with the provided snapshot
+            match usecase.execute_with_origin(snapshot, origin).await {
+                Ok(Some(entry_id)) => {
+                    tracing::debug!(
+                        entry_id = %entry_id,
+                        "Successfully captured clipboard"
                     );
-                    poisoned.into_inner()
-                });
-                if let Some(app) = app_handle_guard.as_ref() {
-                    let origin_str = match origin {
-                        ClipboardChangeOrigin::LocalCapture
-                        | ClipboardChangeOrigin::LocalRestore => "local",
-                        ClipboardChangeOrigin::RemotePush => "remote",
-                    };
-                    let event = ClipboardEvent::NewContent {
-                        entry_id: entry_id.to_string(),
-                        preview: "New clipboard content".to_string(),
-                        origin: origin_str.to_string(),
-                    };
 
-                    if let Err(e) = app.emit("clipboard://event", event) {
-                        tracing::warn!("Failed to emit clipboard event to frontend: {}", e);
-                    } else {
-                        tracing::debug!("Successfully emitted clipboard://event to frontend");
-                    }
-                } else {
-                    tracing::debug!("AppHandle not available, skipping event emission");
-                }
-                drop(app_handle_guard);
+                    // Emit event to frontend if AppHandle is available
+                    {
+                        let app_handle_guard = self.app_handle.read().unwrap_or_else(|poisoned| {
+                            tracing::error!(
+                                "RwLock poisoned in on_clipboard_changed, recovering from poisoned state"
+                            );
+                            poisoned.into_inner()
+                        });
+                        if let Some(app) = app_handle_guard.as_ref() {
+                            let origin_str = match origin {
+                                ClipboardChangeOrigin::LocalCapture
+                                | ClipboardChangeOrigin::LocalRestore => "local",
+                                ClipboardChangeOrigin::RemotePush => "remote",
+                            };
+                            let event = ClipboardEvent::NewContent {
+                                entry_id: entry_id.to_string(),
+                                preview: "New clipboard content".to_string(),
+                                origin: origin_str.to_string(),
+                            };
 
-                let outbound_sync_uc = self.usecases().sync_outbound_clipboard();
-                let parent_span = tracing::Span::current();
-                tauri::async_runtime::spawn(
-                    async move {
-                        match tokio::task::spawn_blocking(move || {
-                            outbound_sync_uc.execute(outbound_snapshot, origin)
-                        })
-                        .await
-                        {
-                            Ok(Ok(())) => {
-                                tracing::info!("Outbound clipboard sync completed");
+                            if let Err(e) = app.emit("clipboard://event", event) {
+                                tracing::warn!("Failed to emit clipboard event to frontend: {}", e);
+                            } else {
+                                tracing::debug!("Successfully emitted clipboard://event to frontend");
                             }
-                            Ok(Err(err)) => {
-                                tracing::warn!(error = %err, "Outbound clipboard sync failed");
-                            }
-                            Err(err) => {
-                                tracing::warn!(error = %err, "Outbound clipboard sync task join failed");
-                            }
+                        } else {
+                            tracing::debug!("AppHandle not available, skipping event emission");
                         }
                     }
-                    .instrument(parent_span),
-                );
 
-                Ok(())
+                    // Extract file paths from snapshot (APFS resolution happens here, in platform layer).
+                    // Only LocalCapture events produce file candidates; all others pass empty vec.
+                    let resolved_paths = if origin == ClipboardChangeOrigin::LocalCapture {
+                        extract_file_paths_from_snapshot(&outbound_snapshot)
+                    } else {
+                        Vec::new()
+                    };
+
+                    // Capture count BEFORE metadata filtering so the planner can detect
+                    // the all_files_excluded case even when file_candidates is empty.
+                    let extracted_paths_count = resolved_paths.len();
+
+                    // Build FileCandidate vec by reading metadata for each resolved path.
+                    // All filesystem I/O stays in the platform layer (uc-tauri); the planner
+                    // in uc-app is a pure function with zero filesystem dependencies.
+                    let file_candidates: Vec<uc_app::usecases::sync_planner::FileCandidate> =
+                        resolved_paths
+                            .into_iter()
+                            .filter_map(|path| {
+                                match std::fs::metadata(&path) {
+                                    Ok(meta) => {
+                                        Some(uc_app::usecases::sync_planner::FileCandidate {
+                                            path,
+                                            size: meta.len(),
+                                        })
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            file = %path.display(),
+                                            "Excluding file from sync: failed to read metadata"
+                                        );
+                                        None
+                                    }
+                                }
+                            })
+                            .collect();
+
+                    // Delegate all sync policy decisions to OutboundSyncPlanner.
+                    let planner = uc_app::usecases::sync_planner::OutboundSyncPlanner::new(
+                        self.deps.settings.clone(),
+                    );
+                    let plan = planner
+                        .plan(outbound_snapshot, origin, file_candidates, extracted_paths_count)
+                        .await;
+
+                    // Dispatch clipboard sync from plan.clipboard.
+                    if let Some(clipboard_intent) = plan.clipboard {
+                        let outbound_sync_uc = self.usecases().sync_outbound_clipboard();
+                        let flow_id_for_sync = flow_id.clone();
+                        let flow_id_str = flow_id_for_sync.to_string();
+                        tauri::async_runtime::spawn(
+                            async move {
+                                match tokio::task::spawn_blocking(move || {
+                                    outbound_sync_uc.execute(
+                                        clipboard_intent.snapshot,
+                                        origin,
+                                        Some(flow_id_str),
+                                        clipboard_intent.file_transfers,
+                                    )
+                                })
+                                .await
+                                {
+                                    Ok(Ok(())) => {
+                                        tracing::info!("Outbound clipboard sync completed");
+                                    }
+                                    Ok(Err(err)) => {
+                                        tracing::warn!(error = %err, "Outbound clipboard sync failed");
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(error = %err, "Outbound clipboard sync task join failed");
+                                    }
+                                }
+                            }
+                            .instrument(tracing::info_span!("outbound_sync", %flow_id_for_sync)),
+                        );
+                    }
+
+                    // Dispatch file sync from plan.files (paths already resolved, sizes already checked).
+                    if !plan.files.is_empty() {
+                        let outbound_file_uc = self.usecases().sync_outbound_file();
+                        tauri::async_runtime::spawn(
+                            async move {
+                                for file_intent in plan.files {
+                                    tracing::info!(
+                                        file = %file_intent.path.display(),
+                                        transfer_id = %file_intent.transfer_id,
+                                        "Sending file to peers"
+                                    );
+                                    match outbound_file_uc
+                                        .execute(file_intent.path.clone(), Some(file_intent.transfer_id))
+                                        .await
+                                    {
+                                        Ok(result) => {
+                                            tracing::info!(
+                                                transfer_id = %result.transfer_id,
+                                                peer_count = result.peer_count,
+                                                file = %file_intent.path.display(),
+                                                "Outbound file sync completed"
+                                            );
+                                        }
+                                        Err(err) => {
+                                            tracing::warn!(
+                                                error = %err,
+                                                file = %file_intent.path.display(),
+                                                "Outbound file sync failed"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            .instrument(tracing::info_span!("outbound_file_sync")),
+                        );
+                    }
+
+                    Ok(())
+                }
+                Ok(None) => {
+                    tracing::debug!(origin = ?origin, "Clipboard capture skipped for current origin");
+                    Ok(())
+                }
+                Err(e) => {
+                    tracing::error!("Failed to capture clipboard: {:?}", e);
+                    Err(e)
+                }
             }
-            Ok(None) => {
-                tracing::debug!(origin = ?origin, "Clipboard capture skipped for current origin");
-                Ok(())
+        }
+        .instrument(span)
+        .await
+    }
+}
+
+/// Resolve macOS APFS file references (`/.file/id=<CNID>.<volumeID>`) to real file paths.
+///
+/// When files are copied in Finder, macOS may place APFS Catalog Node ID references
+/// on the clipboard instead of standard paths. These must be resolved via CoreFoundation.
+#[cfg(target_os = "macos")]
+fn resolve_apfs_file_reference(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    use core_foundation::string::CFString;
+    use core_foundation::url::{kCFURLPOSIXPathStyle, CFURL};
+
+    let path_str = path.to_str()?;
+    if !path_str.starts_with("/.file/id=") {
+        return None;
+    }
+
+    // CFURLCreateWithFileSystemPath automatically resolves APFS file references
+    let cf_path = CFString::new(path_str);
+    let url = CFURL::from_file_system_path(cf_path, kCFURLPOSIXPathStyle, false);
+
+    // Extract the resolved path
+    let resolved = url.get_file_system_path(kCFURLPOSIXPathStyle);
+    let resolved_str = resolved.to_string();
+
+    // If still unresolved, return None
+    if resolved_str.starts_with("/.file/") {
+        tracing::warn!(
+            original = %path_str,
+            "Failed to resolve APFS file reference"
+        );
+        return None;
+    }
+
+    tracing::debug!(
+        original = %path_str,
+        resolved = %resolved_str,
+        "Resolved APFS file reference"
+    );
+    Some(std::path::PathBuf::from(resolved_str))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resolve_apfs_file_reference(_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Extract file paths from a clipboard snapshot's representations.
+///
+/// Looks for `text/uri-list` or `file/uri-list` MIME types, or `files` / `public.file-url`
+/// format IDs, and parses `file://` URIs into `PathBuf`s.
+fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for rep in &snapshot.representations {
+        let is_file_rep = rep
+            .mime
+            .as_ref()
+            .map(|m| {
+                let s = m.as_str();
+                s.eq_ignore_ascii_case("text/uri-list") || s.eq_ignore_ascii_case("file/uri-list")
+            })
+            .unwrap_or(false)
+            || rep.format_id.eq_ignore_ascii_case("files")
+            || rep.format_id.eq_ignore_ascii_case("public.file-url");
+
+        if !is_file_rep {
+            continue;
+        }
+
+        // Parse bytes as UTF-8 text containing file:// URIs (one per line)
+        let text = match std::str::from_utf8(&rep.bytes) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
             }
-            Err(e) => {
-                tracing::error!("Failed to capture clipboard: {:?}", e);
-                Err(e)
+            if let Ok(url) = url::Url::parse(line) {
+                if url.scheme() == "file" {
+                    if let Ok(path) = url.to_file_path() {
+                        // On macOS, resolve APFS file references (/.file/id=...) to real paths
+                        let resolved = resolve_apfs_file_reference(&path).unwrap_or(path);
+                        paths.push(resolved);
+                    }
+                }
             }
         }
     }
+    // Safety net: deduplicate in case multiple representations contain the same path
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 #[cfg(test)]
@@ -1736,6 +2072,14 @@ mod tests {
         async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
             Ok(())
         }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -1769,6 +2113,117 @@ mod tests {
         fn hash_bytes(&self, _bytes: &[u8]) -> anyhow::Result<ContentHash> {
             Err(anyhow::anyhow!("noop hash"))
         }
+    }
+
+    impl uc_core::ports::FileManagerPort for NoopPort {
+        fn open_directory(
+            &self,
+            _path: &std::path::Path,
+        ) -> Result<(), uc_core::ports::FileManagerError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl uc_core::ports::CacheFsPort for NoopPort {
+        async fn exists(&self, _path: &std::path::Path) -> bool {
+            false
+        }
+        async fn read_dir(
+            &self,
+            _path: &std::path::Path,
+        ) -> anyhow::Result<Vec<uc_core::ports::CacheFsDirEntry>> {
+            Ok(vec![])
+        }
+        async fn remove_dir_all(&self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn remove_file(&self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn dir_size(&self, _path: &std::path::Path) -> anyhow::Result<u64> {
+            Ok(0)
+        }
+    }
+
+    fn test_storage_paths() -> uc_app::app_paths::AppPaths {
+        uc_app::app_paths::AppPaths {
+            db_path: std::path::PathBuf::from("/tmp/uniclipboard-test/uniclipboard.db"),
+            vault_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/vault"),
+            settings_path: std::path::PathBuf::from("/tmp/uniclipboard-test/settings.json"),
+            logs_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/logs"),
+            cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache"),
+            file_cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/file-cache"),
+            spool_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/spool"),
+            app_data_root: std::path::PathBuf::from("/tmp/uniclipboard-test"),
+        }
+    }
+
+    /// Verify the integration boundary: when file paths are extracted from the snapshot
+    /// but ALL `std::fs::metadata()` calls fail (e.g. APFS path already deleted),
+    /// `extracted_paths_count` is still captured correctly (> 0), and the planner
+    /// receives empty `file_candidates` with that non-zero count.
+    ///
+    /// The planner's `test_all_files_excluded_by_metadata_failure` covers that this
+    /// combination correctly returns `clipboard: None`.  This test covers the runtime's
+    /// responsibility: that `extracted_paths_count` is captured BEFORE the metadata
+    /// filter rather than after.
+    #[test]
+    fn runtime_captured_count_before_metadata_filter() {
+        use uc_app::usecases::sync_planner::FileCandidate;
+        use uc_core::{ids::FormatId, ObservedClipboardRepresentation, SystemClipboardSnapshot};
+
+        // Build a snapshot with a text/uri-list representation referencing a
+        // non-existent path so that metadata() will fail.
+        let uri_list = "file:///nonexistent/path/that/does/not/exist/test_file.txt\n";
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 0,
+            representations: vec![ObservedClipboardRepresentation::new(
+                uc_core::ids::RepresentationId::new(),
+                FormatId::from_str("text/uri-list"),
+                Some("text/uri-list".parse().unwrap()),
+                uri_list.as_bytes().to_vec(),
+            )],
+        };
+
+        // Step 1: extract paths (mirrors runtime code for LocalCapture).
+        let resolved_paths = extract_file_paths_from_snapshot(&snapshot);
+
+        // Step 2: capture count BEFORE metadata filtering.
+        let extracted_paths_count = resolved_paths.len();
+
+        // The non-existent URI should have produced exactly 1 resolved path.
+        assert_eq!(
+            extracted_paths_count, 1,
+            "expected 1 path extracted from the URI-list snapshot"
+        );
+
+        // Step 3: build FileCandidate vec — all metadata() calls will fail for the
+        // non-existent path.
+        let file_candidates: Vec<FileCandidate> = resolved_paths
+            .into_iter()
+            .filter_map(|path| match std::fs::metadata(&path) {
+                Ok(meta) => Some(FileCandidate {
+                    path,
+                    size: meta.len(),
+                }),
+                Err(_) => None, // metadata failed — excluded
+            })
+            .collect();
+
+        // The non-existent path produces NO candidates.
+        assert!(
+            file_candidates.is_empty(),
+            "expected no file candidates since the path does not exist"
+        );
+
+        // Key invariant: extracted_paths_count (captured before filtering) is still 1,
+        // so passing (file_candidates=[], extracted_paths_count=1) to the planner triggers
+        // the all_files_excluded guard → clipboard: None.
+        assert_eq!(
+            extracted_paths_count, 1,
+            "extracted_paths_count must reflect pre-filter count, not post-filter count"
+        );
     }
 
     #[tokio::test]
@@ -1836,15 +2291,18 @@ mod tests {
                 blob_writer: Arc::new(NoopPort),
                 thumbnail_repo: Arc::new(NoopPort),
                 thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
             },
             settings: Arc::new(NoopPort),
             system: uc_app::SystemPorts {
                 clock: Arc::new(NoopPort),
                 hash: Arc::new(NoopPort),
+                file_manager: Arc::new(NoopPort),
+                cache_fs: Arc::new(NoopPort),
             },
         };
 
-        let runtime = AppRuntime::new(deps);
+        let runtime = AppRuntime::new(deps, test_storage_paths());
         let snapshot = SystemClipboardSnapshot {
             ts_ms: 0,
             representations: vec![],

@@ -33,3 +33,40 @@ pub fn with_uc_profile<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
     let _profile_guard = UcProfileEnvGuard::new(value);
     f()
 }
+
+struct UniclipboardEnvGuard {
+    previous: Option<String>,
+}
+
+impl UniclipboardEnvGuard {
+    fn new(value: Option<&str>) -> Self {
+        let previous = std::env::var("UNICLIPBOARD_ENV").ok();
+        match value {
+            Some(env) => std::env::set_var("UNICLIPBOARD_ENV", env),
+            None => std::env::remove_var("UNICLIPBOARD_ENV"),
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for UniclipboardEnvGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(env) => std::env::set_var("UNICLIPBOARD_ENV", env),
+            None => std::env::remove_var("UNICLIPBOARD_ENV"),
+        }
+    }
+}
+
+pub fn with_uc_profile_and_env<T>(
+    profile: Option<&str>,
+    env: Option<&str>,
+    f: impl FnOnce() -> T,
+) -> T {
+    let _env_lock = UC_PROFILE_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _profile_guard = UcProfileEnvGuard::new(profile);
+    let _env_guard = UniclipboardEnvGuard::new(env);
+    f()
+}

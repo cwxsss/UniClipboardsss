@@ -2,6 +2,7 @@ import { configureStore } from '@reduxjs/toolkit'
 import { appApi } from './api'
 import clipboardReducer from './slices/clipboardSlice'
 import devicesReducer from './slices/devicesSlice'
+import fileTransferReducer from './slices/fileTransferSlice'
 import statsReducer from './slices/statsSlice'
 
 export const store = configureStore({
@@ -10,6 +11,7 @@ export const store = configureStore({
     clipboard: clipboardReducer,
     stats: statsReducer,
     devices: devicesReducer,
+    fileTransfer: fileTransferReducer,
   },
   middleware: getDefaultMiddleware => getDefaultMiddleware().concat(appApi.middleware),
 })

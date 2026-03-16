@@ -4,11 +4,12 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tracing::warn;
+use uc_core::clipboard::link_utils::{is_all_urls, is_single_url, parse_uri_list};
 use uc_core::clipboard::PayloadAvailability;
 use uc_core::network::protocol::MIME_IMAGE_PREFIX;
 use uc_core::ports::{
     ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort,
-    ClipboardSelectionRepositoryPort, ThumbnailRepositoryPort,
+    ClipboardSelectionRepositoryPort, FileTransferRepositoryPort, ThumbnailRepositoryPort,
 };
 
 /// DTO for clipboard entry projection (returned to command layer)
@@ -27,6 +28,22 @@ pub struct EntryProjectionDto {
     pub is_favorited: bool,
     pub updated_at: i64,
     pub active_time: i64,
+    /// Aggregate file transfer status (String for serialization-friendly DTO).
+    /// Maps from `TrackedFileTransferStatus` enum in the use case.
+    /// None for non-file entries.
+    pub file_transfer_status: Option<String>,
+    /// Failure reason when `file_transfer_status` is `"failed"`.
+    pub file_transfer_reason: Option<String>,
+    /// Transfer IDs belonging to this entry (empty for non-file entries).
+    pub file_transfer_ids: Vec<String>,
+    /// Parsed link URLs when content is a link type.
+    /// Built from full representation data (not truncated preview).
+    pub link_urls: Option<Vec<String>>,
+    /// Per-file sizes in bytes for file (uri-list) entries.
+    /// Each element corresponds to a file URI parsed from inline_data.
+    /// -1 means the file could not be stat'd (missing or non-local).
+    /// None for non-file entries.
+    pub file_sizes: Option<Vec<i64>>,
 }
 
 /// Error type for list projections use case
@@ -51,7 +68,67 @@ pub struct ListClipboardEntryProjections {
     selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
     representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
     thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
+    file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
     max_limit: usize,
+}
+
+/// Detect link URLs from full representation content.
+///
+/// Returns `Some(urls)` when the content is a link type (text/uri-list,
+/// single URL in text/plain, or multi-line URLs in text/plain).
+/// Uses the full inline_data rather than truncated preview text.
+fn detect_link_urls(content_type: &str, inline_data: Option<&[u8]>) -> Option<Vec<String>> {
+    let full_text = inline_data.and_then(|d| std::str::from_utf8(d).ok())?;
+    let ct = content_type.to_ascii_lowercase();
+
+    if ct.starts_with("text/uri-list") {
+        let urls = parse_uri_list(full_text);
+        if urls.is_empty() {
+            None
+        } else {
+            Some(urls)
+        }
+    } else if ct.starts_with("text/plain") {
+        if is_all_urls(full_text) {
+            let urls: Vec<String> = full_text
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(|l| l.to_string())
+                .collect();
+            Some(urls)
+        } else if is_single_url(full_text) {
+            Some(vec![full_text.trim().to_string()])
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+/// Compute per-file sizes from a `text/uri-list` inline payload.
+///
+/// For each `file://` URI, stats the local file and returns its size in bytes.
+/// Returns `-1` for URIs that are not `file://` or where the file cannot be found.
+fn compute_file_sizes(inline_data: &[u8]) -> Vec<i64> {
+    let text = match std::str::from_utf8(inline_data) {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+    parse_uri_list(text)
+        .iter()
+        .map(|uri| match url::Url::parse(uri) {
+            Ok(parsed) if parsed.scheme() == "file" => match parsed.to_file_path() {
+                Ok(path) => match std::fs::metadata(&path) {
+                    Ok(meta) => meta.len() as i64,
+                    Err(_) => -1,
+                },
+                Err(_) => -1,
+            },
+            _ => -1,
+        })
+        .collect()
 }
 
 impl ListClipboardEntryProjections {
@@ -61,12 +138,14 @@ impl ListClipboardEntryProjections {
         selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
         representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
         thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
+        file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
     ) -> Self {
         Self {
             entry_repo,
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            file_transfer_repo,
             max_limit: 1000,
         }
     }
@@ -189,11 +268,47 @@ impl ListClipboardEntryProjections {
             None
         };
 
+        let is_uri_list = content_type
+            .to_ascii_lowercase()
+            .starts_with("text/uri-list");
+        let link_urls = detect_link_urls(&content_type, representation.inline_data.as_deref());
+
+        let file_sizes = if is_uri_list {
+            representation
+                .inline_data
+                .as_deref()
+                .map(compute_file_sizes)
+        } else {
+            None
+        };
+
         let has_detail = representation.blob_id.is_some()
             || matches!(
                 representation.payload_state(),
                 PayloadAvailability::Staged | PayloadAvailability::Processing
             );
+
+        // Query aggregate file transfer status for this entry.
+        let (file_transfer_status, file_transfer_reason, file_transfer_ids) = match self
+            .file_transfer_repo
+            .get_entry_transfer_summary(&entry_id_str)
+            .await
+        {
+            Ok(Some(summary)) => (
+                Some(summary.aggregate_status.as_str().to_string()),
+                summary.failure_reason,
+                summary.transfer_ids,
+            ),
+            Ok(None) => (None, None, vec![]),
+            Err(e) => {
+                warn!(
+                    entry_id = %entry_id_str,
+                    error = %e,
+                    "Failed to query file transfer summary for entry"
+                );
+                (None, None, vec![])
+            }
+        };
 
         Ok(Some(EntryProjectionDto {
             id: entry_id_str,
@@ -207,6 +322,11 @@ impl ListClipboardEntryProjections {
             is_favorited: false,
             updated_at: captured_at,
             active_time,
+            file_transfer_status,
+            file_transfer_reason,
+            file_transfer_ids,
+            link_urls,
+            file_sizes,
         }))
     }
 
@@ -346,6 +466,20 @@ impl ListClipboardEntryProjections {
                 None
             };
 
+            let is_uri_list = content_type
+                .to_ascii_lowercase()
+                .starts_with("text/uri-list");
+            let link_urls = detect_link_urls(&content_type, representation.inline_data.as_deref());
+
+            let file_sizes = if is_uri_list {
+                representation
+                    .inline_data
+                    .as_deref()
+                    .map(compute_file_sizes)
+            } else {
+                None
+            };
+
             // has_detail controls whether frontend should try fetching full content.
             // For staged/processing payloads, full content may become available via blob shortly.
             let has_detail = representation.blob_id.is_some()
@@ -353,6 +487,28 @@ impl ListClipboardEntryProjections {
                     representation.payload_state(),
                     PayloadAvailability::Staged | PayloadAvailability::Processing
                 );
+
+            // Query aggregate file transfer status for this entry.
+            let (file_transfer_status, file_transfer_reason, file_transfer_ids) = match self
+                .file_transfer_repo
+                .get_entry_transfer_summary(&entry_id_str)
+                .await
+            {
+                Ok(Some(summary)) => (
+                    Some(summary.aggregate_status.as_str().to_string()),
+                    summary.failure_reason,
+                    summary.transfer_ids,
+                ),
+                Ok(None) => (None, None, vec![]),
+                Err(e) => {
+                    warn!(
+                        entry_id = %entry_id_str,
+                        error = %e,
+                        "Failed to query file transfer summary for entry in list"
+                    );
+                    (None, None, vec![])
+                }
+            };
 
             projections.push(EntryProjectionDto {
                 id: entry_id_str,
@@ -366,6 +522,11 @@ impl ListClipboardEntryProjections {
                 is_favorited: false, // TODO: implement later
                 updated_at: captured_at,
                 active_time,
+                file_transfer_status,
+                file_transfer_reason,
+                file_transfer_ids,
+                link_urls,
+                file_sizes,
             });
         }
 
@@ -384,6 +545,69 @@ mod tests {
     use uc_core::ids::{EntryId, EventId, FormatId, RepresentationId};
     use uc_core::BlobId;
     use uc_core::ClipboardSelectionDecision;
+
+    use uc_core::ports::file_transfer_repository::{
+        EntryTransferSummary, ExpiredInflightTransfer, PendingInboundTransfer, TrackedFileTransfer,
+        TrackedFileTransferStatus,
+    };
+
+    /// Helper to create a noop file transfer repo for tests that don't care about transfer state.
+    fn noop_file_transfer_repo() -> Arc<dyn FileTransferRepositoryPort> {
+        Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
+    }
+
+    /// Mock file transfer repo that returns configurable summaries per entry.
+    struct MockFileTransferRepo {
+        summaries: HashMap<String, EntryTransferSummary>,
+    }
+
+    #[async_trait::async_trait]
+    impl FileTransferRepositoryPort for MockFileTransferRepo {
+        async fn insert_pending_transfers(&self, _: &[PendingInboundTransfer]) -> Result<()> {
+            Ok(())
+        }
+        async fn backfill_announce_metadata(&self, _: &str, _: i64, _: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn mark_transferring(&self, _: &str, _: i64) -> Result<bool> {
+            Ok(false)
+        }
+        async fn refresh_activity(&self, _: &str, _: i64) -> Result<()> {
+            Ok(())
+        }
+        async fn mark_completed(&self, _: &str, _: Option<&str>, _: i64) -> Result<bool> {
+            Ok(false)
+        }
+        async fn mark_failed(&self, _: &str, _: &str, _: i64) -> Result<()> {
+            Ok(())
+        }
+        async fn list_expired_inflight(
+            &self,
+            _: i64,
+            _: i64,
+        ) -> Result<Vec<ExpiredInflightTransfer>> {
+            Ok(vec![])
+        }
+        async fn bulk_fail_inflight(
+            &self,
+            _: &str,
+            _: i64,
+        ) -> Result<Vec<ExpiredInflightTransfer>> {
+            Ok(vec![])
+        }
+        async fn get_entry_transfer_summary(
+            &self,
+            entry_id: &str,
+        ) -> Result<Option<EntryTransferSummary>> {
+            Ok(self.summaries.get(entry_id).cloned())
+        }
+        async fn list_transfers_for_entry(&self, _: &str) -> Result<Vec<TrackedFileTransfer>> {
+            Ok(vec![])
+        }
+        async fn get_entry_id_for_transfer(&self, _: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+    }
 
     // Mock repositories for testing
     struct MockEntryRepository {
@@ -550,6 +774,7 @@ mod tests {
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            noop_file_transfer_repo(),
         );
 
         let result = use_case.execute(0, 0).await;
@@ -578,6 +803,7 @@ mod tests {
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            noop_file_transfer_repo(),
         );
 
         let result = use_case.execute(2000, 0).await;
@@ -661,6 +887,7 @@ mod tests {
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            noop_file_transfer_repo(),
         );
 
         let result = use_case.execute(50, 0).await.expect("expected projections");
@@ -731,6 +958,7 @@ mod tests {
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            noop_file_transfer_repo(),
         );
 
         let result = use_case.execute(50, 0).await.expect("expected projections");
@@ -821,6 +1049,7 @@ mod tests {
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            noop_file_transfer_repo(),
         );
 
         let result = use_case
@@ -889,6 +1118,7 @@ mod tests {
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            noop_file_transfer_repo(),
         );
 
         let result = use_case.execute(10, 0).await.expect("expected projections");
@@ -914,6 +1144,11 @@ mod tests {
                 is_favorited: false,
                 updated_at: 1,
                 active_time: 1,
+                file_transfer_status: None,
+                file_transfer_reason: None,
+                file_transfer_ids: vec![],
+                link_urls: None,
+                file_sizes: None,
             },
             EntryProjectionDto {
                 id: "2".to_string(),
@@ -927,6 +1162,11 @@ mod tests {
                 is_favorited: false,
                 updated_at: 2,
                 active_time: 2,
+                file_transfer_status: None,
+                file_transfer_reason: None,
+                file_transfer_ids: vec![],
+                link_urls: None,
+                file_sizes: None,
             },
         ];
 
@@ -992,6 +1232,7 @@ mod tests {
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            noop_file_transfer_repo(),
         );
 
         let result = use_case
@@ -1023,6 +1264,7 @@ mod tests {
             selection_repo,
             representation_repo,
             thumbnail_repo,
+            noop_file_transfer_repo(),
         );
 
         let result = use_case
@@ -1030,5 +1272,302 @@ mod tests {
             .await
             .expect("should succeed");
         assert!(result.is_none());
+    }
+
+    // --- File transfer projection tests ---
+
+    /// Helper to create a minimal entry + selection + representation for projection tests.
+    fn make_test_entry_fixtures(
+        entry_id_str: &str,
+    ) -> (
+        ClipboardEntry,
+        uc_core::ClipboardSelectionDecision,
+        PersistedClipboardRepresentation,
+        EntryId,
+        EventId,
+        RepresentationId,
+    ) {
+        let entry_id = EntryId::from(entry_id_str);
+        let event_id = EventId::from(format!("event-{}", entry_id_str));
+        let rep_id = RepresentationId::from(format!("rep-{}", entry_id_str));
+
+        let entry = ClipboardEntry::new(
+            entry_id.clone(),
+            event_id.clone(),
+            1000,
+            Some("test file entry".to_string()),
+            128,
+        );
+
+        let selection = ClipboardSelectionDecision::new(
+            entry_id.clone(),
+            ClipboardSelection {
+                primary_rep_id: rep_id.clone(),
+                secondary_rep_ids: vec![],
+                preview_rep_id: rep_id.clone(),
+                paste_rep_id: rep_id.clone(),
+                policy_version: SelectionPolicyVersion::V1,
+            },
+        );
+
+        let representation = PersistedClipboardRepresentation::new(
+            rep_id.clone(),
+            FormatId::from("public.file-url"),
+            Some(MimeType("text/uri-list".to_string())),
+            128,
+            Some(b"file:///cache/t1/hello.txt".to_vec()),
+            None,
+        );
+
+        (entry, selection, representation, entry_id, event_id, rep_id)
+    }
+
+    #[tokio::test]
+    async fn test_single_file_pending_entry() {
+        let (entry, selection, representation, entry_id, event_id, rep_id) =
+            make_test_entry_fixtures("file-pending");
+
+        let file_transfer_repo = Arc::new(MockFileTransferRepo {
+            summaries: HashMap::from([(
+                entry_id.inner().clone(),
+                EntryTransferSummary {
+                    entry_id: entry_id.inner().clone(),
+                    aggregate_status: TrackedFileTransferStatus::Pending,
+                    failure_reason: None,
+                    transfer_ids: vec!["t1".to_string()],
+                },
+            )]),
+        });
+
+        let use_case = ListClipboardEntryProjections::new(
+            Arc::new(MockEntryRepository {
+                entries: vec![entry],
+            }),
+            Arc::new(MockSelectionRepository {
+                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
+            }),
+            Arc::new(MockRepresentationRepository {
+                representations: HashMap::from([(
+                    (event_id.inner().clone(), rep_id.inner().clone()),
+                    representation,
+                )]),
+                fail_keys: HashSet::new(),
+            }),
+            Arc::new(MockThumbnailRepository {
+                thumbnails: HashMap::new(),
+            }),
+            file_transfer_repo,
+        );
+
+        let result = use_case.execute(10, 0).await.unwrap();
+        assert_eq!(result.len(), 1);
+        let proj = &result[0];
+        assert_eq!(proj.file_transfer_status, Some("pending".to_string()));
+        assert_eq!(proj.file_transfer_reason, None);
+        assert_eq!(proj.file_transfer_ids, vec!["t1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_multi_file_entry_with_one_failed_transfer() {
+        let (entry, selection, representation, entry_id, event_id, rep_id) =
+            make_test_entry_fixtures("file-multi-fail");
+
+        let file_transfer_repo = Arc::new(MockFileTransferRepo {
+            summaries: HashMap::from([(
+                entry_id.inner().clone(),
+                EntryTransferSummary {
+                    entry_id: entry_id.inner().clone(),
+                    aggregate_status: TrackedFileTransferStatus::Failed,
+                    failure_reason: Some("timeout".to_string()),
+                    transfer_ids: vec!["t1".to_string(), "t2".to_string()],
+                },
+            )]),
+        });
+
+        let use_case = ListClipboardEntryProjections::new(
+            Arc::new(MockEntryRepository {
+                entries: vec![entry],
+            }),
+            Arc::new(MockSelectionRepository {
+                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
+            }),
+            Arc::new(MockRepresentationRepository {
+                representations: HashMap::from([(
+                    (event_id.inner().clone(), rep_id.inner().clone()),
+                    representation,
+                )]),
+                fail_keys: HashSet::new(),
+            }),
+            Arc::new(MockThumbnailRepository {
+                thumbnails: HashMap::new(),
+            }),
+            file_transfer_repo,
+        );
+
+        let result = use_case.execute(10, 0).await.unwrap();
+        let proj = &result[0];
+        assert_eq!(proj.file_transfer_status, Some("failed".to_string()));
+        assert_eq!(proj.file_transfer_reason, Some("timeout".to_string()));
+        assert_eq!(proj.file_transfer_ids.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_completed_entry_after_all_transfers_finish() {
+        let (entry, selection, representation, entry_id, event_id, rep_id) =
+            make_test_entry_fixtures("file-complete");
+
+        let file_transfer_repo = Arc::new(MockFileTransferRepo {
+            summaries: HashMap::from([(
+                entry_id.inner().clone(),
+                EntryTransferSummary {
+                    entry_id: entry_id.inner().clone(),
+                    aggregate_status: TrackedFileTransferStatus::Completed,
+                    failure_reason: None,
+                    transfer_ids: vec!["t1".to_string(), "t2".to_string()],
+                },
+            )]),
+        });
+
+        let use_case = ListClipboardEntryProjections::new(
+            Arc::new(MockEntryRepository {
+                entries: vec![entry],
+            }),
+            Arc::new(MockSelectionRepository {
+                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
+            }),
+            Arc::new(MockRepresentationRepository {
+                representations: HashMap::from([(
+                    (event_id.inner().clone(), rep_id.inner().clone()),
+                    representation,
+                )]),
+                fail_keys: HashSet::new(),
+            }),
+            Arc::new(MockThumbnailRepository {
+                thumbnails: HashMap::new(),
+            }),
+            file_transfer_repo,
+        );
+
+        let result = use_case.execute(10, 0).await.unwrap();
+        let proj = &result[0];
+        assert_eq!(proj.file_transfer_status, Some("completed".to_string()));
+        assert_eq!(proj.file_transfer_reason, None);
+    }
+
+    #[tokio::test]
+    async fn test_timed_out_transfer_surfaced_as_failed() {
+        let (entry, selection, representation, entry_id, event_id, rep_id) =
+            make_test_entry_fixtures("file-timeout");
+
+        // A timed-out transfer is already marked failed by the timeout sweep
+        let file_transfer_repo = Arc::new(MockFileTransferRepo {
+            summaries: HashMap::from([(
+                entry_id.inner().clone(),
+                EntryTransferSummary {
+                    entry_id: entry_id.inner().clone(),
+                    aggregate_status: TrackedFileTransferStatus::Failed,
+                    failure_reason: Some(
+                        "orphaned: app restarted while transfer was in-flight".to_string(),
+                    ),
+                    transfer_ids: vec!["t1".to_string()],
+                },
+            )]),
+        });
+
+        let use_case = ListClipboardEntryProjections::new(
+            Arc::new(MockEntryRepository {
+                entries: vec![entry],
+            }),
+            Arc::new(MockSelectionRepository {
+                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
+            }),
+            Arc::new(MockRepresentationRepository {
+                representations: HashMap::from([(
+                    (event_id.inner().clone(), rep_id.inner().clone()),
+                    representation,
+                )]),
+                fail_keys: HashSet::new(),
+            }),
+            Arc::new(MockThumbnailRepository {
+                thumbnails: HashMap::new(),
+            }),
+            file_transfer_repo,
+        );
+
+        let result = use_case.execute(10, 0).await.unwrap();
+        let proj = &result[0];
+        assert_eq!(proj.file_transfer_status, Some("failed".to_string()));
+        assert!(proj
+            .file_transfer_reason
+            .as_ref()
+            .unwrap()
+            .contains("orphaned"));
+    }
+
+    #[tokio::test]
+    async fn test_non_file_entry_has_no_transfer_status() {
+        let entry_id = EntryId::from("text-entry");
+        let event_id = EventId::from("event-text");
+        let rep_id = RepresentationId::from("rep-text");
+
+        let entry = ClipboardEntry::new(
+            entry_id.clone(),
+            event_id.clone(),
+            1000,
+            Some("hello world".to_string()),
+            11,
+        );
+
+        let selection = ClipboardSelectionDecision::new(
+            entry_id.clone(),
+            ClipboardSelection {
+                primary_rep_id: rep_id.clone(),
+                secondary_rep_ids: vec![],
+                preview_rep_id: rep_id.clone(),
+                paste_rep_id: rep_id.clone(),
+                policy_version: SelectionPolicyVersion::V1,
+            },
+        );
+
+        let representation = PersistedClipboardRepresentation::new(
+            rep_id.clone(),
+            FormatId::from("public.utf8-plain-text"),
+            Some(MimeType("text/plain".to_string())),
+            11,
+            Some(b"hello world".to_vec()),
+            None,
+        );
+
+        // No summaries in the mock = non-file entry
+        let file_transfer_repo = Arc::new(MockFileTransferRepo {
+            summaries: HashMap::new(),
+        });
+
+        let use_case = ListClipboardEntryProjections::new(
+            Arc::new(MockEntryRepository {
+                entries: vec![entry],
+            }),
+            Arc::new(MockSelectionRepository {
+                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
+            }),
+            Arc::new(MockRepresentationRepository {
+                representations: HashMap::from([(
+                    (event_id.inner().clone(), rep_id.inner().clone()),
+                    representation,
+                )]),
+                fail_keys: HashSet::new(),
+            }),
+            Arc::new(MockThumbnailRepository {
+                thumbnails: HashMap::new(),
+            }),
+            file_transfer_repo,
+        );
+
+        let result = use_case.execute(10, 0).await.unwrap();
+        assert_eq!(result.len(), 1);
+        let proj = &result[0];
+        assert_eq!(proj.file_transfer_status, None);
+        assert_eq!(proj.file_transfer_reason, None);
+        assert!(proj.file_transfer_ids.is_empty());
     }
 }

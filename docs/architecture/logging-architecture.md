@@ -2,9 +2,17 @@
 
 ## Overview
 
-UniClipboard uses **`tracing`** crate as the primary logging framework with structured logging and span-based context tracking. The system runs a **dual-track setup** during the transition from legacy `log` crate to `tracing`.
+UniClipboard uses **`tracing`** crate as the primary logging framework with structured logging and span-based context tracking. The system produces **dual output** from a single tracing pipeline:
 
-**Current Status**: Phases 0-3 complete, actively using `tracing` across all architectural layers.
+- **Console output**: Pretty human-readable format with ANSI colors (stdout)
+- **JSON file output**: Structured flat JSON with daily-rotating files for tooling and analysis
+
+A **dual-track** coexistence is maintained during the transition from legacy `log` crate to `tracing`:
+
+- `log::*` macros -> `tauri-plugin-log` -> Webview (dev) / stdout (prod)
+- `tracing::*` macros -> `uc-observability` subscriber -> console + JSON file
+
+**Current Status**: Phases 0-3 complete, actively using `tracing` across all architectural layers. Dual-output logging with profile system active.
 
 ## Architecture
 
@@ -12,7 +20,7 @@ UniClipboard uses **`tracing`** crate as the primary logging framework with stru
 
 The application uses `tracing` crate for structured, span-aware logging:
 
-**✅ Supported Features**:
+**Supported Features**:
 
 - **Spans** - Structured context spans with parent-child relationships
 - **Structured fields** - Field-based logging with typed values
@@ -22,13 +30,13 @@ The application uses `tracing` crate for structured, span-aware logging:
 
 **Migration Status**:
 
-| Phase   | Description                                             | Status          |
-| ------- | ------------------------------------------------------- | --------------- |
-| Phase 0 | Infrastructure setup (tracing dependencies, subscriber) | ✅ Complete     |
-| Phase 1 | Command layer root spans                                | ✅ Complete     |
-| Phase 2 | UseCase layer child spans                               | ✅ Complete     |
-| Phase 3 | Infra/Platform layer debug spans                        | ✅ Complete     |
-| Phase 4 | Remove `log` dependency (optional)                      | ⏸️ Not required |
+| Phase   | Description                                             | Status       |
+| ------- | ------------------------------------------------------- | ------------ |
+| Phase 0 | Infrastructure setup (tracing dependencies, subscriber) | Complete     |
+| Phase 1 | Command layer root spans                                | Complete     |
+| Phase 2 | UseCase layer child spans                               | Complete     |
+| Phase 3 | Infra/Platform layer debug spans                        | Complete     |
+| Phase 4 | Remove `log` dependency (optional)                      | Not required |
 
 ### Dual-Track System
 
@@ -38,41 +46,68 @@ During the transition, both `log` and `tracing` coexist:
 // Legacy code (still works via tauri-plugin-log)
 log::info!("Application started");
 
-// New code (preferred)
+// New code (preferred) - produces both console + JSON output
 tracing::info!("Application started");
 tracing::info_span!("command.clipboard.capture", device_id = %id);
 ```
 
 **Note**: `tracing-log` bridge is NOT configured. The two systems operate independently:
 
-- `log::` macros → `tauri-plugin-log` → Webview (dev) / file (prod)
-- `tracing::` macros → `tracing-subscriber` → stdout
+- `log::` macros -> `tauri-plugin-log` -> Webview (dev) / stdout (prod)
+- `tracing::` macros -> `uc-observability` subscriber -> console (pretty) + JSON file
 
 ### Module Organization
 
-#### 1. Bootstrap Configuration
+#### 1. Observability Crate
+
+**Location**: `src-tauri/crates/uc-observability/`
+
+```
+uc-observability/
+├── src/
+│   ├── lib.rs         # Public API re-exports
+│   ├── profile.rs     # LogProfile enum (Dev/Prod/DebugClipboard)
+│   ├── format.rs      # FlatJsonFormat custom FormatEvent
+│   └── init.rs        # Layer builders + standalone init
+└── Cargo.toml
+```
+
+Provides:
+
+- `LogProfile` - Profile-based filter selection via `UC_LOG_PROFILE`
+- `build_console_layer()` - Pretty console layer with per-layer EnvFilter
+- `build_json_layer()` - JSON file layer with FlatJsonFormat and daily rolling
+- `init_tracing_subscriber()` - Standalone convenience init (no Sentry)
+
+**Zero app-layer dependencies** - Sentry integration is kept in the caller.
+
+#### 2. Bootstrap Configuration
 
 **Location**: `src-tauri/crates/uc-tauri/src/bootstrap/`
 
 ```
 bootstrap/
-├── logging.rs       # tauri-plugin-log configuration (legacy)
-└── tracing.rs       # tracing-subscriber configuration (primary)
+├── logging.rs       # tauri-plugin-log configuration (legacy, Webview + stdout)
+└── tracing.rs       # Thin wrapper: uc-observability layers + Sentry layer
 ```
 
 **Initialization Flow**:
 
 ```
 main.rs
-  ├─> init_tracing_subscriber()     // Global tracing registry
-  │    └─> All tracing::* macros now produce output
+  ├─> init_tracing_subscriber()         // uc-tauri/bootstrap/tracing.rs
+  │    ├─> LogProfile::from_env()       // Select profile
+  │    ├─> sentry::init()               // Optional Sentry (if SENTRY_DSN set)
+  │    ├─> build_console_layer()        // From uc-observability
+  │    ├─> build_json_layer()           // From uc-observability
+  │    └─> registry().with(...).try_init()  // Compose and register
   │
   └─> Builder::default()
        └─> .plugin(logging::get_builder().build())
-            └─> Legacy log::* macros still work
+            └─> Legacy log::* macros still work (Webview/stdout only)
 ```
 
-#### 2. Layer-Based Tracing
+#### 3. Layer-Based Tracing
 
 Each architectural layer has specific span naming conventions:
 
@@ -100,20 +135,119 @@ Each architectural layer has specific span naming conventions:
 - Naming: `platform.{module}.{operation}`
 - Example: `platform.linux.read_clipboard`, `platform.encryption.set_master_key`
 
+## Log Profiles
+
+The `UC_LOG_PROFILE` environment variable selects a logging profile that controls filter verbosity for both console and JSON outputs.
+
+### Profile Selection Precedence
+
+1. **`RUST_LOG`** env var (overrides everything when set)
+2. **`UC_LOG_PROFILE`** env var (`dev`, `prod`, `debug_clipboard`)
+3. **Build-type default**: debug builds -> `dev`, release builds -> `prod`
+
+### Available Profiles
+
+| Profile           | Base Level | Console Behavior           | JSON Behavior             | Special Overrides                                                                                         |
+| ----------------- | ---------- | -------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `dev`             | `debug`    | Pretty format, ANSI colors | Flat JSON, daily rotating | `uc_platform=debug`, `uc_infra=debug`                                                                     |
+| `prod`            | `info`     | Pretty format, ANSI colors | Flat JSON, daily rotating | (none)                                                                                                    |
+| `debug_clipboard` | `info`     | Pretty format, ANSI colors | Flat JSON, daily rotating | `uc_platform::adapters::clipboard=trace`, `uc_app::usecases::clipboard=debug`, `uc_core::clipboard=debug` |
+
+All profiles include common noise filters:
+
+- `libp2p_mdns=info`
+- `libp2p_mdns::behaviour::iface=off`
+- `tauri=warn`
+- `wry=off`
+- `ipc::request=off`
+
+### Usage Examples
+
+```bash
+# Use debug_clipboard profile for clipboard debugging
+UC_LOG_PROFILE=debug_clipboard bun tauri dev
+
+# Use prod profile in development for testing production behavior
+UC_LOG_PROFILE=prod bun tauri dev
+
+# Override profile with RUST_LOG (takes precedence)
+RUST_LOG=uc_platform::clipboard=trace bun tauri dev
+
+# Enable all debug logs
+RUST_LOG=debug bun tauri dev
+```
+
+## Dual Output
+
+The tracing subscriber produces two simultaneous outputs from the same pipeline:
+
+### Console Output
+
+- **Format**: Pretty human-readable with timestamps, file/line, target, ANSI colors
+- **Destination**: stdout (terminal where app is running)
+- **Example**:
+
+```
+2026-03-10 10:30:45.123 INFO [clipboard.rs:51] [command.clipboard.get_entries] Fetching entries
+2026-03-10 10:30:45.456 ERROR [clipboard.rs:52] [platform.linux.read_clipboard] Failed to read clipboard: NotFound
+```
+
+### JSON File Output
+
+- **Format**: Flat NDJSON (one JSON object per line)
+- **Destination**: Daily-rotating file in platform log directory
+- **File naming**: `uniclipboard.json.YYYY-MM-DD`
+- **Rotation**: New file each day (UTC date boundary)
+
+**JSON field layout**:
+
+| Field       | Description                                               |
+| ----------- | --------------------------------------------------------- |
+| `timestamp` | ISO 8601 UTC timestamp (e.g., `2026-03-10T10:30:45.123Z`) |
+| `level`     | Log level (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`)     |
+| `target`    | Rust module path of the log callsite                      |
+| `message`   | The log message string                                    |
+| `span`      | Name of the current (leaf) span                           |
+| _(fields)_  | Span fields flattened to top level                        |
+| _(fields)_  | Event fields at top level                                 |
+
+**Field conflict resolution**: When a span field has the same key as an event field, the span field is prefixed with `parent_`. Event fields always keep their original key.
+
+**Example JSON line**:
+
+```json
+{
+  "timestamp": "2026-03-10T10:30:45.123Z",
+  "level": "INFO",
+  "target": "command.clipboard.get_entries",
+  "message": "Fetching entries",
+  "span": "command.clipboard.get_entries",
+  "device_id": "abc-123",
+  "limit": 50
+}
+```
+
+### JSON File Locations
+
+- **macOS**: `~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.YYYY-MM-DD`
+- **Linux**: `~/.local/share/app.uniclipboard.desktop/logs/uniclipboard.json.YYYY-MM-DD`
+- **Windows**: `%LOCALAPPDATA%\app.uniclipboard.desktop\logs\uniclipboard.json.YYYY-MM-DD`
+
 ## Configuration
 
 ### Development Mode
 
 When `debug_assertions` is true (debug builds):
 
-**tracing-subscriber**:
+**tracing (uc-observability)**:
 
+- **Profile**: `dev` (or `UC_LOG_PROFILE` override)
 - **Level**: `Debug`
 - **Targets**: `uc_platform=debug`, `uc_infra=debug`
-- **Output**: `stdout` (terminal)
-- **Filter**: `libp2p_mdns=warn`
+- **Console**: Pretty format to stdout
+- **JSON**: Flat JSON to daily-rotating file
 
-**tauri-plugin-log**:
+**tauri-plugin-log (legacy)**:
 
 - **Level**: `Debug`
 - **Target**: `Webview` (browser DevTools console)
@@ -123,47 +257,30 @@ When `debug_assertions` is true (debug builds):
 
 When `debug_assertions` is false (release builds):
 
-**tracing-subscriber**:
+**tracing (uc-observability)**:
+
+- **Profile**: `prod` (or `UC_LOG_PROFILE` override)
+- **Level**: `Info`
+- **Console**: Pretty format to stdout
+- **JSON**: Flat JSON to daily-rotating file
+
+**tauri-plugin-log (legacy)**:
 
 - **Level**: `Info`
-- **Targets**: `uc_platform=info`, `uc_infra=info`
-- **Output**: `stdout`
-- **Filter**: `libp2p_mdns=warn`
-
-**tauri-plugin-log**:
-
-- **Level**: `Info`
-- **Targets**: `LogDir` (file) + `Stdout`
+- **Target**: `Stdout` only (file logging handled by tracing)
 - **Filters**: Tauri internals, wry noise, `ipc::request`
 
 ### Environment Variables
 
-Override defaults with `RUST_LOG`:
-
-```bash
-# Enable trace for specific module
-RUST_LOG=uc_platform::clipboard=trace,bun tauri dev
-
-# Enable all debug logs
-RUST_LOG=debug,bun tauri dev
-```
-
-### Log Format
-
-Both systems output compatible formats:
-
-```
-YYYY-MM-DD HH:MM:SS.mmm LEVEL [file:line] [module] message
-```
-
-Example:
-
-```
-2025-01-15 10:30:45.123 INFO [clipboard.rs:51] [command.clipboard.get_entries] Fetching entries
-2025-01-15 10:30:45.456 ERROR [clipboard.rs:52] [platform.linux.read_clipboard] Failed to read clipboard: NotFound
-```
+| Variable         | Purpose                                                   | Default            |
+| ---------------- | --------------------------------------------------------- | ------------------ |
+| `UC_LOG_PROFILE` | Select logging profile (`dev`, `prod`, `debug_clipboard`) | Build-type default |
+| `RUST_LOG`       | Override profile filters (standard tracing env)           | Not set            |
+| `SENTRY_DSN`     | Enable Sentry error reporting                             | Not set (disabled) |
 
 ### Color Coding
+
+Console output color coding:
 
 - ERROR: Red (bold)
 - WARN: Yellow
@@ -332,7 +449,8 @@ count = 42
 
 **libp2p_mdns**:
 
-- Set to `LevelFilter::Warn` to avoid spam from harmless mDNS errors
+- Set to `info` to avoid spam from harmless mDNS errors
+- `libp2p_mdns::behaviour::iface` set to `off`
 - Caused by proxy software virtual network interfaces
 
 **Tauri Internal Events** (tauri-plugin-log only):
@@ -352,17 +470,18 @@ count = 42
 
 ### Development
 
-**Terminal (tracing output)**:
+**Terminal (tracing output - console + JSON)**:
 
 ```bash
 bun tauri dev
-# tracing::* macros appear here
+# tracing::* macros appear in terminal (pretty format)
+# JSON file written to platform log directory simultaneously
 ```
 
 **Browser DevTools (log output)**:
 
 1. Open app in development mode
-2. Press F12 or right-click → Inspect
+2. Press F12 or right-click -> Inspect
 3. Go to Console tab
 4. `log::*` macros appear here
 
@@ -374,60 +493,62 @@ bun tauri dev
 # Run the application
 ./uniclipboard
 
-# tracing::* output appears in terminal
-# log::* output appears in log file
+# tracing::* output appears in terminal (pretty format)
+# log::* output also appears in terminal (stdout)
 ```
 
-**Log file**:
+**JSON log file**:
 
 ```bash
-# macOS
-tail -f ~/Library/Logs/com.uniclipboard/uniclipboard.log
+# macOS - view latest JSON log
+cat ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.$(date +%Y-%m-%d) | jq .
+
+# macOS - follow live
+tail -f ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.$(date +%Y-%m-%d)
 
 # Linux
-tail -f ~/.local/share/com.uniclipboard/logs/uniclipboard.log
+tail -f ~/.local/share/app.uniclipboard.desktop/logs/uniclipboard.json.$(date +%Y-%m-%d)
 
 # Windows (PowerShell)
-Get-Content "$env:LOCALAPPDATA\com.uniclipboard\logs\uniclipboard.log" -Wait
+Get-Content "$env:LOCALAPPDATA\app.uniclipboard.desktop\logs\uniclipboard.json.$(Get-Date -Format yyyy-MM-dd)" -Wait
 ```
 
-**Filter for errors**:
+**Filter JSON logs for errors**:
 
 ```bash
-grep ERROR ~/Library/Logs/com.uniclipboard/uniclipboard.log
+cat ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.$(date +%Y-%m-%d) | jq 'select(.level == "ERROR")'
 ```
 
 **View last 100 lines**:
 
 ```bash
-tail -n 100 ~/Library/Logs/com.uniclipboard/uniclipboard.log
+tail -n 100 ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.json.$(date +%Y-%m-%d)
 ```
 
 ## Testing
 
 ### Unit Tests
 
-The tracing module includes basic tests:
+The tracing and observability modules include tests:
 
-```rust
-#[test]
-fn test_tracing_init() {
-    let is_dev = is_development();
-    let _ = is_dev;
-}
+```bash
+# Run uc-observability tests (profile, format, init)
+cd src-tauri && cargo test --package uc-observability
+
+# Run uc-tauri tracing bootstrap tests
+cd src-tauri && cargo test --package uc-tauri -- bootstrap::tracing
 ```
-
-Run with: `cd src-tauri && cargo test --package uc-tauri`
 
 ### Manual Testing
 
 1. **Development**: Run `bun tauri dev` and check:
-   - Terminal for `tracing::*` output
+   - Terminal for `tracing::*` console output (pretty)
+   - JSON file created in platform log directory
    - Browser DevTools for `log::*` output
 2. **Production**: Build and run, check:
-   - Log file exists and contains entries
-   - Terminal shows `tracing::*` output
-3. **Level filtering**: Verify DEBUG logs appear in dev but not in production
+   - JSON file exists and contains valid NDJSON entries
+   - Terminal shows `tracing::*` console output
+3. **Profile selection**: Verify `UC_LOG_PROFILE=debug_clipboard` shows clipboard trace logs
 
 ## Troubleshooting
 
@@ -450,11 +571,18 @@ Run with: `cd src-tauri && cargo test --package uc-tauri`
 2. Open browser DevTools and check Console tab
 3. Verify there are no JavaScript errors preventing log display
 
-### Log file not created
+### JSON log file not created
 
-1. Check app has write permissions to log directory
-2. Verify LogDir target is enabled in production mode (`logging.rs`)
-3. Check platform-specific log directory path
+1. Check app has write permissions to the log directory
+2. Verify the directory exists: `ls ~/Library/Logs/app.uniclipboard.desktop/` (macOS)
+3. Check `init_tracing_subscriber()` completed without error (look for "Tracing initialized" in console)
+4. Ensure `UC_LOG_PROFILE` is a valid value (or unset for default)
+
+### Profile not taking effect
+
+1. Check if `RUST_LOG` is set -- it overrides `UC_LOG_PROFILE`
+2. Verify `UC_LOG_PROFILE` value is exactly `dev`, `prod`, or `debug_clipboard`
+3. Unrecognized values fall back to build-type default
 
 ### Span hierarchy not visible
 
@@ -519,7 +647,7 @@ pub async fn get_entries(&self) -> Result<Vec<Entry>> {
 
 ## Best Practices
 
-### DO ✅
+### DO
 
 - **Use spans for operations**: Every usecase/command should have a span
 - **Add structured fields**: Include operation parameters as span fields
@@ -528,7 +656,7 @@ pub async fn get_entries(&self) -> Result<Vec<Entry>> {
 - **Instrument async operations**: Use `.instrument(span)` for async functions
 - **Add context to errors**: Include error details and context in error logs
 
-### DON'T ❌
+### DON'T
 
 - **Don't use `log::*` in new code**: Prefer `tracing::*` macros
 - **Don't create spans for trivial operations**: Spans should represent meaningful work
@@ -557,14 +685,257 @@ pub async fn get_entries(&self) -> Result<Vec<Entry>> {
 - Set appropriate levels for each layer
 - Use environment-specific filtering in production
 
+## Seq Integration (Local Visualization)
+
+### Overview
+
+[Seq](https://datalust.co/seq) is a structured log server that provides a rich web UI for searching, filtering, and visualizing structured log events. UniClipboard can stream tracing events to a local Seq instance in real time using the [CLEF](https://clef-json.org/) (Compact Log Event Format) ingestion protocol.
+
+Key capabilities when using Seq:
+
+- **Full-text search** across all log fields
+- **Filter by flow_id** to see all stages of a single clipboard operation in time order
+- **Filter by stage** to see all events at a particular pipeline stage
+- **Time-ordered views** showing event sequences with microsecond precision
+- **Dashboard creation** for monitoring clipboard operations
+
+### Quick Start
+
+**1. Start a local Seq instance:**
+
+```bash
+docker compose -f docker-compose.seq.yml up -d
+```
+
+**2. Set the Seq URL environment variable:**
+
+```bash
+export UC_SEQ_URL=http://localhost:5341
+```
+
+**3. Start the application:**
+
+```bash
+bun tauri dev
+```
+
+Events will begin streaming to Seq immediately. Open [http://localhost:5341](http://localhost:5341) to view them.
+
+### Configuration
+
+| Variable         | Purpose                        | Required | Default    |
+| ---------------- | ------------------------------ | -------- | ---------- |
+| `UC_SEQ_URL`     | Seq server URL for CLEF ingest | Yes      | Not set    |
+| `UC_SEQ_API_KEY` | API key for Seq authentication | No       | Not needed |
+
+- When `UC_SEQ_URL` is **not set**, the Seq layer is completely disabled with zero overhead.
+- When `UC_SEQ_URL` is set, events are formatted as CLEF JSON and sent to `{UC_SEQ_URL}/ingest/clef` via HTTP POST.
+- `UC_SEQ_API_KEY` is only needed if your Seq instance requires authentication (not needed for local development).
+
+### Querying Flows in Seq
+
+Once events are flowing, use Seq's filter bar to query specific clipboard flows:
+
+**Find all events for a specific flow:**
+
+```
+Has(flow_id)
+```
+
+**Filter by a specific flow ID:**
+
+```
+flow_id = 'your-flow-id-here'
+```
+
+**Filter by flow and stage:**
+
+```
+flow_id = 'your-flow-id-here' and stage = 'normalize'
+```
+
+**Find all events at a specific stage:**
+
+```
+stage = 'persist_event'
+```
+
+**See all clipboard capture flows:**
+
+```
+Has(flow_id) and stage = 'detect'
+```
+
+**Tip:** Click on any `flow_id` value in the Seq UI event detail panel, then select "Find" to automatically filter to that flow.
+
+### Architecture
+
+The Seq integration uses a non-blocking pipeline to avoid impacting application performance:
+
+```
+tracing event
+  -> SeqLayer (formats as CLEF JSON string)
+  -> mpsc channel (1024 buffer)
+  -> background sender_loop (batches by count=100 or time=2s)
+  -> HTTP POST to /ingest/clef
+```
+
+- **SeqLayer** implements the `tracing_subscriber::Layer` trait directly
+- Events are formatted using **CLEFFormat** which produces Seq-compatible CLEF JSON
+- An mpsc channel decouples the hot tracing path from network I/O
+- The **background sender** batches events (up to 100 or every 2 seconds) and POSTs them to Seq
+- **SeqGuard** ensures remaining events are flushed on application shutdown
+
+### CLEF Format
+
+Events are sent as newline-delimited CLEF JSON. Each line contains:
+
+```json
+{
+  "@t": "2026-03-11T10:30:45.123456Z",
+  "@l": "Information",
+  "@m": "Clipboard content captured",
+  "flow_id": "01958a3b-...",
+  "stage": "detect",
+  "device_id": "abc-123",
+  "span": "usecase.capture_clipboard.execute"
+}
+```
+
+| Field      | Description                                                        |
+| ---------- | ------------------------------------------------------------------ |
+| `@t`       | Timestamp in ISO 8601 UTC with microsecond precision               |
+| `@l`       | Seq log level (Verbose, Debug, Information, Warning, Error, Fatal) |
+| `@m`       | Log message                                                        |
+| `flow_id`  | Clipboard operation correlation ID (UUID v7)                       |
+| `stage`    | Pipeline stage name (detect, normalize, etc.)                      |
+| _(fields)_ | All span fields flattened to top level                             |
+
+### Troubleshooting
+
+**Events not appearing in Seq:**
+
+1. Verify `UC_SEQ_URL` is set: `echo $UC_SEQ_URL`
+2. Verify Seq is running: `docker compose -f docker-compose.seq.yml ps`
+3. Verify Seq is reachable: `curl -s http://localhost:5341/api` (should return JSON)
+4. Check the application terminal for "Tracing initialized with dual output (console + JSON + Seq)" log line
+5. If the log says just "(console + JSON)" without "+ Seq", the environment variable was not set before app startup
+
+**Seq container not starting:**
+
+1. Ensure Docker is running
+2. Check port 5341 is not already in use: `lsof -i :5341`
+3. Check container logs: `docker compose -f docker-compose.seq.yml logs seq`
+
+**Events appearing but missing flow_id:**
+
+1. Ensure you are triggering a clipboard capture (copy something)
+2. Not all events have `flow_id` -- only clipboard pipeline events carry it
+3. Use `Has(flow_id)` in Seq to filter to only flow-correlated events
+
+**Stopping Seq:**
+
+```bash
+docker compose -f docker-compose.seq.yml down        # Stop and remove container (data persists)
+docker compose -f docker-compose.seq.yml down -v      # Stop and remove container + data volume
+```
+
+## Cross-Device Tracing
+
+UniClipboard provides end-to-end observability for cross-device clipboard synchronization. Each CLEF event includes device correlation fields that enable tracking clipboard content from capture on one device through delivery to another device.
+
+### Device ID Injection
+
+Every tracing event from the clipboard pipeline includes the `device_id` field, which identifies the device that generated the event:
+
+```json
+{
+  "@t": "2026-03-11T10:30:45.123456Z",
+  "@l": "Information",
+  "@m": "Clipboard content captured",
+  "flow_id": "01958a3b-0000-0000-0000-000000000001",
+  "stage": "detect",
+  "device_id": "device-abc-123"
+}
+```
+
+This field is automatically injected at the command/loop layer and propagates through all child spans in the clipboard pipeline.
+
+### Origin Flow ID Linking
+
+When clipboard content is sent from one device to another, the sender's `flow_id` is preserved as `origin_flow_id` on the receiver. This creates a traceable link between the sender's clipboard capture and the receiver's application:
+
+```
+Sender Device                          Receiver Device
+┌─────────────────────────┐           ┌─────────────────────────┐
+│ flow_id: abc-001        │ ────────► │ origin_flow_id: abc-001  │
+│ stage: capture          │           │ flow_id: def-002         │
+│ device_id: sender-123   │           │ stage: inbound_apply     │
+└─────────────────────────┘           │ device_id: receiver-456  │
+                                       └─────────────────────────┘
+```
+
+This linking enables:
+
+- Querying all events related to a single cross-device clipboard operation
+- Understanding end-to-end latency from sender capture to receiver application
+- Identifying which device originated the content
+
+### Seq Signal Queries
+
+Pre-configured Seq signal files are provided for common cross-device observability patterns:
+
+| Signal File              | Purpose                            | Query                                 |
+| ------------------------ | ---------------------------------- | ------------------------------------- |
+| `flow-timeline.json`     | View all stages of a specific flow | `Has(flow_id)`                        |
+| `cross-device-flow.json` | View complete cross-device journey | `Has(flow_id) or Has(origin_flow_id)` |
+
+These files are located in `docs/seq/signals/` and can be imported into Seq as saved searches.
+
+**Usage:**
+
+1. Start Seq: `docker compose -f docker-compose.seq.yml up -d`
+2. Set `UC_SEQ_URL=http://localhost:5341`
+3. Run the application and trigger clipboard sync between devices
+4. In Seq UI, use the saved searches or manually query:
+   - `origin_flow_id = '01958a3b-...'` - Find all receiver events for a sender's flow
+   - `origin_device_id = 'device-abc-123'` - Find all clipboard content from a specific device
+
+### Graceful Degradation
+
+When receiving messages from older peer devices that don't send `origin_flow_id`, the application logs a warning but continues processing:
+
+```
+WARN loop.clipboard.receive_message: Inbound message has no origin_flow_id (sender may be an older version)
+```
+
+This ensures backward compatibility while providing visibility into potential sync issues with legacy versions.
+
+### LAN Access Configuration
+
+For testing cross-device tracing on a local network, update `docker-compose.seq.yml` to bind Seq to all network interfaces:
+
+```yaml
+services:
+  seq:
+    ports:
+      - '0.0.0.0:5341:5341' # Bind to all interfaces, not just localhost
+```
+
+Then set `UC_SEQ_URL=http://<your-local-ip>:5341` on each device to send events to the centralized Seq instance.
+
 ## References
 
 - [Tracing Crate Documentation](https://docs.rs/tracing/)
 - [Tracing Subscriber Documentation](https://docs.rs/tracing-subscriber/)
 - [Tauri Plugin Log Documentation](https://v2.tauri.app/plugin/logging/)
+- [Seq Documentation](https://docs.datalust.co/docs)
+- [CLEF Format Specification](https://clef-json.org/)
 - Source:
-  - `src-tauri/crates/uc-tauri/src/bootstrap/tracing.rs`
-  - `src-tauri/crates/uc-tauri/src/bootstrap/logging.rs`
+  - `src-tauri/crates/uc-observability/` (profile, format, init, seq, clef_format)
+  - `src-tauri/crates/uc-tauri/src/bootstrap/tracing.rs` (Sentry + Seq + uc-observability composition)
+  - `src-tauri/crates/uc-tauri/src/bootstrap/logging.rs` (legacy log plugin, Webview + stdout)
+  - `docker-compose.seq.yml` (local Seq instance)
 - Guides:
   - [Tracing Usage Guide](../guides/tracing.md)
   - [Coding Standards](../guides/coding-standards.md)

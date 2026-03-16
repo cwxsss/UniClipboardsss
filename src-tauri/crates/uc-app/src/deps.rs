@@ -17,6 +17,8 @@ use uc_core::ports::clipboard::{
     ClipboardChangeOriginPort, ClipboardRepresentationNormalizerPort, RepresentationCachePort,
     SpoolQueuePort, SystemClipboardPort, ThumbnailGeneratorPort, ThumbnailRepositoryPort,
 };
+use uc_core::ports::file_manager::FileManagerPort;
+use uc_core::ports::file_transport::FileTransportPort;
 use uc_core::ports::*;
 
 /// Focused network capability bundle for dependency injection.
@@ -34,6 +36,9 @@ pub struct NetworkPorts {
     /// Network event subscription capability (`Arc<dyn NetworkEventPort>`).
     /// 网络事件订阅能力（`Arc<dyn NetworkEventPort>`）。
     pub events: Arc<dyn NetworkEventPort>,
+    /// File transfer transport capability (`Arc<dyn FileTransportPort>`).
+    /// 文件传输能力（`Arc<dyn FileTransportPort>`）。
+    pub file_transfer: Arc<dyn FileTransportPort>,
 }
 
 /// Clipboard-domain ports bundle.
@@ -72,21 +77,24 @@ pub struct DevicePorts {
     pub paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
 }
 
-/// Storage-domain ports bundle (blobs and thumbnails).
-/// 存储领域端口组（Blob 和缩略图）。
+/// Storage-domain ports bundle (blobs, thumbnails, file transfer tracking).
+/// 存储领域端口组（Blob、缩略图、文件传输追踪）。
 pub struct StoragePorts {
     pub blob_store: Arc<dyn BlobStorePort>,
     pub blob_repository: Arc<dyn BlobRepositoryPort>,
     pub blob_writer: Arc<dyn BlobWriterPort>,
     pub thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
     pub thumbnail_generator: Arc<dyn ThumbnailGeneratorPort>,
+    pub file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
 }
 
-/// System-domain ports bundle (clock, hash).
-/// 系统领域端口组（时钟、哈希）。
+/// System-domain ports bundle (clock, hash, file manager, cache filesystem).
+/// 系统领域端口组（时钟、哈希、文件管理器、缓存文件系统）。
 pub struct SystemPorts {
     pub clock: Arc<dyn ClockPort>,
     pub hash: Arc<dyn ContentHashPort>,
+    pub file_manager: Arc<dyn FileManagerPort>,
+    pub cache_fs: Arc<dyn uc_core::ports::cache_fs::CacheFsPort>,
 }
 
 /// Application dependency grouping (non-Builder, just parameter grouping)

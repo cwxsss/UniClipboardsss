@@ -1,10 +1,9 @@
 import { AnimatePresence } from 'framer-motion'
-import { Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { getP2PPeers, P2PPeerInfo } from '@/api/p2p'
 import {
   cancelSetup,
   getSetupState,
@@ -17,6 +16,9 @@ import {
   verifyPassphrase,
   SetupState,
 } from '@/api/setup'
+import FloatingParticles from '@/components/effects/FloatingParticles'
+import { useDeviceDiscovery } from '@/hooks/useDeviceDiscovery'
+import { usePlatform } from '@/hooks/usePlatform'
 import CreatePassphraseStep from '@/pages/setup/CreatePassphraseStep'
 import JoinPickDeviceStep from '@/pages/setup/JoinPickDeviceStep'
 import JoinVerifyPassphraseStep from '@/pages/setup/JoinVerifyPassphraseStep'
@@ -37,30 +39,37 @@ function getStateOrdinal(state: SetupState | null): number {
   if (typeof state === 'object') {
     if ('CreateSpaceInputPassphrase' in state) return 1
     if ('ProcessingCreateSpace' in state) return 2
+    // Join flow actual order: SelectDevice → ConfirmPeer → InputPassphrase → Processing
     if ('JoinSpaceSelectDevice' in state) return 1
-    if ('JoinSpaceInputPassphrase' in state) return 2
-    if ('JoinSpaceConfirmPeer' in state) return 3
+    if ('JoinSpaceConfirmPeer' in state) return 2
+    if ('JoinSpaceInputPassphrase' in state) return 3
     if ('ProcessingJoinSpace' in state) return 4
   }
   return -1
 }
 
-function getStepInfo(state: SetupState | null): { total: number; current: number } | null {
+function getStepInfo(
+  state: SetupState | null,
+  prevState?: SetupState | null
+): { total: number; current: number } | null {
   if (!state || state === 'Welcome') return null
-  if (state === 'Completed') {
-    // Completed can be reached from either flow; show final dot
-    // We don't know which flow, so return null (no dots on done)
-    return null
-  }
+  if (state === 'Completed') return null
   if (typeof state === 'object') {
     // Create flow: InputPassphrase(0) -> Processing(1) -> Done(2)
     if ('CreateSpaceInputPassphrase' in state) return { total: 3, current: 0 }
     if ('ProcessingCreateSpace' in state) return { total: 3, current: 1 }
-    // Join flow: SelectDevice(0) -> InputPassphrase(1) -> ConfirmPeer(2) -> Processing(3) -> Done(4)
-    if ('JoinSpaceSelectDevice' in state) return { total: 5, current: 0 }
-    if ('JoinSpaceInputPassphrase' in state) return { total: 5, current: 1 }
-    if ('JoinSpaceConfirmPeer' in state) return { total: 5, current: 2 }
-    if ('ProcessingJoinSpace' in state) return { total: 5, current: 3 }
+    // Join flow actual order: SelectDevice(0) -> ConfirmPeer(1) -> InputPassphrase(2) -> Processing(3)
+    if ('JoinSpaceSelectDevice' in state) return { total: 4, current: 0 }
+    if ('JoinSpaceConfirmPeer' in state) return { total: 4, current: 1 }
+    if ('JoinSpaceInputPassphrase' in state) return { total: 4, current: 2 }
+    if ('ProcessingJoinSpace' in state) {
+      // ProcessingJoinSpace appears twice in the flow:
+      // 1) After SelectDevice (connecting to device) — keep dot at step 0
+      // 2) After InputPassphrase (verifying passphrase) — show as step 3
+      const isConnectingPhase =
+        prevState && typeof prevState === 'object' && 'JoinSpaceSelectDevice' in prevState
+      return { total: 4, current: isConnectingPhase ? 0 : 3 }
+    }
   }
   return null
 }
@@ -68,13 +77,20 @@ function getStepInfo(state: SetupState | null): { total: number; current: number
 export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
   const { t } = useTranslation(undefined, { keyPrefix: 'setup.page' })
   const { t: tCommon } = useTranslation(undefined, { keyPrefix: 'setup.common' })
+  const { isMac } = usePlatform()
   const navigate = useNavigate()
   const [setupState, setSetupState] = useState<SetupState | null>(null)
   const [loading, setLoading] = useState(false)
-  const [peers, setPeers] = useState<Array<{ id: string; name: string; device_type: string }>>([])
-  const [peersLoading, setPeersLoading] = useState(false)
-  const [isScanningInitial, setIsScanningInitial] = useState(true)
   const [selectedPeerId, setSelectedPeerId] = useState<string | null>(null)
+
+  const isJoinSelectActive =
+    !!setupState && typeof setupState === 'object' && 'JoinSpaceSelectDevice' in setupState
+
+  const { peers, scanPhase, resetScan } = useDeviceDiscovery(isJoinSelectActive, {
+    onError: () => {
+      toast.error(t('errors.refreshPeersFailed'))
+    },
+  })
   const activeEventSessionIdRef = useRef<string | null>(null)
   const setupStateRef = useRef<SetupState | null>(null)
   const prevStateRef = useRef<SetupState | null>(null)
@@ -89,7 +105,9 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
     prevStateRef.current = setupState
   }, [setupState])
 
-  const stepInfo = useMemo(() => getStepInfo(setupState), [setupState])
+  // prevStateRef.current is read during render (before the useEffect updates it),
+  // so it still holds the previous state — exactly what getStepInfo needs.
+  const stepInfo = useMemo(() => getStepInfo(setupState, prevStateRef.current), [setupState])
 
   const isSetupFlowActive = useCallback((state: SetupState | null) => {
     if (!state) return false
@@ -137,12 +155,8 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
           return
         }
 
-        if (!activeEventSessionIdRef.current) {
-          activeEventSessionIdRef.current = event.sessionId
-        }
-
         if (activeEventSessionIdRef.current !== event.sessionId) {
-          return
+          activeEventSessionIdRef.current = event.sessionId
         }
 
         syncSetupState(event.state)
@@ -178,38 +192,6 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
       activeEventSessionIdRef.current = null
     }
   }, [isSetupFlowActive, setupState])
-
-  const handleRefreshPeers = useCallback(async () => {
-    setPeersLoading(true)
-    try {
-      const peerList = await getP2PPeers()
-      setPeers(
-        peerList.map((p: P2PPeerInfo) => ({
-          id: p.peerId,
-          name: p.deviceName || tCommon('unknownDevice'),
-          device_type: 'desktop',
-        }))
-      )
-    } catch (error) {
-      console.error('Failed to refresh peers:', error)
-      toast.error(t('errors.refreshPeersFailed'))
-    } finally {
-      setPeersLoading(false)
-      setIsScanningInitial(false)
-    }
-  }, [t, tCommon])
-
-  useEffect(() => {
-    if (setupState && typeof setupState === 'object' && 'JoinSpaceSelectDevice' in setupState) {
-      handleRefreshPeers()
-      const interval = setInterval(handleRefreshPeers, 3000)
-      return () => {
-        clearInterval(interval)
-      }
-    } else {
-      setIsScanningInitial(true)
-    }
-  }, [setupState, handleRefreshPeers])
 
   const runAction = async (action: () => Promise<SetupState>) => {
     setLoading(true)
@@ -267,7 +249,6 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
             onSubmit={(pass1: string, pass2: string) =>
               runAction(() => submitPassphrase(pass1, pass2))
             }
-            onBack={() => runAction(() => cancelSetup())}
             error={setupState.CreateSpaceInputPassphrase.error}
             loading={loading}
             direction={direction}
@@ -282,12 +263,11 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
               setSelectedPeerId(peerId)
               runAction(() => selectJoinPeer(peerId))
             }}
-            onBack={() => runAction(() => cancelSetup())}
-            onRefresh={handleRefreshPeers}
+            onRescan={resetScan}
             peers={peers}
+            scanPhase={scanPhase}
             error={setupState.JoinSpaceSelectDevice.error}
-            loading={loading || peersLoading}
-            isScanningInitial={isScanningInitial}
+            loading={loading}
             direction={direction}
           />
         )
@@ -299,7 +279,6 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
           <JoinVerifyPassphraseStep
             peerId={selectedPeerId ?? undefined}
             onSubmit={(passphrase: string) => runAction(() => verifyPassphrase(passphrase))}
-            onBack={() => runAction(() => cancelSetup())}
             onCreateNew={() => runAction(() => startNewSpace())}
             error={error}
             loading={loading}
@@ -361,13 +340,48 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-background">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-muted/20" />
-        <div className="absolute -top-32 -left-32 h-96 w-96 bg-primary/5 blur-3xl" />
-        <div className="absolute -bottom-32 -right-32 h-96 w-96 bg-emerald-500/5 blur-3xl" />
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-muted/30" />
+        <div
+          className="absolute -top-32 -left-32 h-[28rem] w-[28rem] rounded-full bg-blue-500/25 blur-[6rem] dark:bg-blue-500/15"
+          style={{ animation: 'aurora-drift-1 12s ease-in-out infinite' }}
+        />
+        <div
+          className="absolute -bottom-24 -right-24 h-[24rem] w-[24rem] rounded-full bg-emerald-500/25 blur-[5rem] dark:bg-emerald-500/15"
+          style={{ animation: 'aurora-drift-2 15s ease-in-out infinite' }}
+        />
+        <div
+          className="absolute top-1/3 left-1/2 h-[20rem] w-[20rem] -translate-x-1/2 rounded-full bg-violet-500/20 blur-[5rem] dark:bg-violet-500/12"
+          style={{ animation: 'aurora-drift-3 18s ease-in-out infinite' }}
+        />
+        <FloatingParticles />
       </div>
 
       <div className="relative flex h-full w-full min-h-0 flex-col">
+        {/* Draggable header with back button */}
+        <header
+          data-tauri-drag-region
+          className={`relative z-10 flex h-12 shrink-0 items-center pr-4 ${
+            isMac ? 'pl-20' : 'pl-4'
+          }`}
+        >
+          {setupState &&
+            typeof setupState === 'object' &&
+            ('CreateSpaceInputPassphrase' in setupState ||
+              'JoinSpaceSelectDevice' in setupState ||
+              'JoinSpaceInputPassphrase' in setupState) && (
+              <button
+                type="button"
+                data-tauri-drag-region="false"
+                onClick={() => runAction(() => cancelSetup())}
+                className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                {tCommon('back')}
+              </button>
+            )}
+        </header>
+
         <main
           className={`flex min-h-0 flex-1 items-center px-8 py-4 sm:px-12 sm:py-6 ${
             stepKey === 'Welcome' ? 'overflow-hidden' : 'overflow-y-auto'

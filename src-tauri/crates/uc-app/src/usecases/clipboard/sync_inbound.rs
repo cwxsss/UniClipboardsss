@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io::Cursor;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,7 +19,7 @@ use uc_core::ports::clipboard::{RepresentationCachePort, SpoolQueuePort};
 use uc_core::ports::{
     ClipboardChangeOriginPort, ClipboardEntryRepositoryPort, ClipboardEventWriterPort,
     ClipboardRepresentationNormalizerPort, DeviceIdentityPort, EncryptionPort,
-    EncryptionSessionPort, SelectRepresentationPolicyPort, SystemClipboardPort,
+    EncryptionSessionPort, SelectRepresentationPolicyPort, SettingsPort, SystemClipboardPort,
     TransferPayloadDecryptorPort,
 };
 use uc_core::{
@@ -28,9 +29,22 @@ use uc_core::{
 const RECENT_ID_TTL: Duration = Duration::from_secs(600);
 const RECENT_ID_MAX: usize = 1024;
 
+/// Lightweight transfer linkage returned from inbound apply for file-backed messages.
+/// Sufficient for the Tauri layer to emit pending status without re-deriving state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTransferLinkage {
+    pub transfer_id: String,
+    pub filename: String,
+    pub cached_path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InboundApplyOutcome {
-    Applied { entry_id: Option<EntryId> },
+    Applied {
+        entry_id: Option<EntryId>,
+        /// Present only for file-backed clipboard messages.
+        pending_transfers: Vec<PendingTransferLinkage>,
+    },
     Skipped,
 }
 
@@ -46,6 +60,9 @@ pub struct SyncInboundClipboardUseCase {
     capture_clipboard:
         Option<crate::usecases::internal::capture_clipboard::CaptureClipboardUseCase>,
     recent_ids: Mutex<VecDeque<(String, Instant)>>,
+    /// Local file cache directory for rewriting remote file paths.
+    file_cache_dir: Option<PathBuf>,
+    settings: Arc<dyn SettingsPort>,
 }
 
 impl SyncInboundClipboardUseCase {
@@ -57,6 +74,7 @@ impl SyncInboundClipboardUseCase {
         encryption: Arc<dyn EncryptionPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
         transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
+        settings: Arc<dyn SettingsPort>,
     ) -> Result<Self> {
         if mode == ClipboardIntegrationMode::Passive {
             return Err(anyhow::anyhow!(
@@ -74,6 +92,8 @@ impl SyncInboundClipboardUseCase {
             transfer_decryptor,
             capture_clipboard: None,
             recent_ids: Mutex::new(VecDeque::new()),
+            file_cache_dir: None,
+            settings,
         })
     }
 
@@ -91,6 +111,8 @@ impl SyncInboundClipboardUseCase {
         representation_normalizer: Arc<dyn ClipboardRepresentationNormalizerPort>,
         representation_cache: Arc<dyn RepresentationCachePort>,
         spool_queue: Arc<dyn SpoolQueuePort>,
+        file_cache_dir: Option<PathBuf>,
+        settings: Arc<dyn SettingsPort>,
     ) -> Self {
         Self {
             mode,
@@ -112,6 +134,8 @@ impl SyncInboundClipboardUseCase {
                 ),
             ),
             recent_ids: Mutex::new(VecDeque::new()),
+            file_cache_dir,
+            settings,
         }
     }
 
@@ -286,6 +310,7 @@ impl SyncInboundClipboardUseCase {
         .instrument(info_span!(
             "inbound.decode",
             wire_bytes = message.encrypted_content.len(),
+            stage = uc_observability::stages::INBOUND_DECODE,
         ))
         .await;
 
@@ -311,149 +336,293 @@ impl SyncInboundClipboardUseCase {
             "V3 inbound payload decoded"
         );
 
-        let selected_idx = match select_highest_priority_repr_index(&v3_payload.representations) {
-            Some(i) => i,
-            None => {
-                warn!(message_id = %message.id, "V3 inbound: no representations — dropping");
-                self.rollback_recent_id(&message.id).await;
-                return Ok(InboundApplyOutcome::Skipped);
-            }
-        };
-
-        // Convert all BinaryRepresentation values into ObservedClipboardRepresentation so that
-        // downstream consumers (capture path) can see the full multi-representation snapshot.
-        let ClipboardBinaryPayload {
-            ts_ms,
-            representations: binary_reps,
-        } = v3_payload;
-
-        let all_reps: Vec<ObservedClipboardRepresentation> = binary_reps
-            .into_iter()
-            .map(|rep| {
-                ObservedClipboardRepresentation::new(
-                    RepresentationId::new(),
-                    FormatId::from(rep.format_id.as_str()),
-                    rep.mime.map(MimeType),
-                    rep.data,
-                )
-            })
-            .collect();
-
-        // For OS clipboard writes we still restrict to a single highest-priority representation.
-        // write_snapshot requires exactly ONE representation (tracked in issue #92).
-        let selected_rep = all_reps
-            .get(selected_idx)
-            .cloned()
-            .expect("selected index must be within range");
-
-        let snapshot_for_os = SystemClipboardSnapshot {
-            ts_ms,
-            representations: vec![selected_rep],
-        };
-
-        // For Passive-mode capture we want the full set of representations so that title
-        // generation and normalization can choose the most appropriate representation.
-        let snapshot_for_capture = SystemClipboardSnapshot {
-            ts_ms,
-            representations: all_reps,
-        };
-
-        // In Full mode: remember inbound snapshot hash + write to OS clipboard
-        if self.mode.allow_os_write() {
-            let selected_rep_ref = &snapshot_for_os.representations[0];
-            info!(
-                message_id = %message.id,
-                format_id = %selected_rep_ref.format_id,
-                mime = ?selected_rep_ref.mime.as_ref().map(|m| m.as_str()),
-                data_size = selected_rep_ref.bytes.len(),
-                "V3 inbound: writing selected representation to OS clipboard"
-            );
-
-            let snapshot_hash = snapshot_for_os.snapshot_hash().to_string();
-            self.clipboard_change_origin
-                .remember_remote_snapshot_hash(
-                    snapshot_hash.clone(),
-                    Duration::from_millis(REMOTE_SNAPSHOT_HASH_TTL_MS),
-                )
-                .await;
-
-            if let Err(err) = self.local_clipboard.write_snapshot(snapshot_for_os) {
-                self.clipboard_change_origin
-                    .consume_origin_for_snapshot_or_default(
-                        &snapshot_hash,
-                        ClipboardChangeOrigin::LocalCapture,
-                    )
-                    .await;
-                self.rollback_recent_id(&message.id).await;
-                return Err(err).context("V3 inbound: failed to write snapshot to OS clipboard");
-            }
-
-            // Guard against loopback when the OS re-encodes clipboard content.
-            // Some platforms (e.g. Windows clipboard-rs) re-encode images (PNG→DIB→PNG),
-            // producing different bytes than the original. The hash-based guard above
-            // won't match the re-encoded content, so we set a one-shot origin override:
-            // the NEXT clipboard change will be treated as RemotePush regardless of hash.
-            // This avoids reading back the clipboard (which can crash on Windows with
-            // large native bitmaps).
-            self.clipboard_change_origin
-                .set_next_origin(
-                    ClipboardChangeOrigin::RemotePush,
-                    Duration::from_millis(REMOTE_SNAPSHOT_HASH_TTL_MS),
-                )
-                .await;
-
-            info!(message_id = %message.id, "V3 inbound clipboard applied");
-            return Ok(InboundApplyOutcome::Applied { entry_id: None });
-        }
-
-        // In Passive mode (allow_os_read = false): persist via capture use case
-        if !self.mode.allow_os_read() {
-            let capture = self
-                .capture_clipboard
-                .as_ref()
-                .context("V3 passive inbound: capture dependencies required")?;
-
-            // Debug snapshot before handing off to capture use case
-            debug!(
-                origin = ?ClipboardChangeOrigin::RemotePush,
-                repr_count = snapshot_for_capture.representations.len(),
-                repr_format_ids = ?snapshot_for_capture
-                    .representations
-                    .iter()
-                    .map(|r| r.format_id.to_string())
-                    .collect::<Vec<_>>(),
-                repr_mimes = ?snapshot_for_capture
-                    .representations
-                    .iter()
-                    .map(|r| r.mime.as_ref().map(|m| m.as_str().to_string()))
-                    .collect::<Vec<_>>(),
-                "V3 passive snapshot before capture",
-            );
-
-            return match capture
-                .execute_with_origin(snapshot_for_capture, ClipboardChangeOrigin::RemotePush)
-                .await
+        async {
+            let selected_idx = match select_highest_priority_repr_index(&v3_payload.representations)
             {
-                Ok(Some(entry_id)) => {
-                    info!(message_id = %message.id, "V3 inbound clipboard persisted (passive)");
-                    Ok(InboundApplyOutcome::Applied {
-                        entry_id: Some(entry_id),
-                    })
-                }
-                Ok(None) => {
+                Some(i) => i,
+                None => {
+                    warn!(message_id = %message.id, "V3 inbound: no representations — dropping");
                     self.rollback_recent_id(&message.id).await;
-                    Err(anyhow::anyhow!("V3 passive capture skipped persistence"))
-                }
-                Err(err) => {
-                    self.rollback_recent_id(&message.id).await;
-                    Err(err).context("V3 passive inbound: capture failed")
+                    return Ok(InboundApplyOutcome::Skipped);
                 }
             };
-        }
 
-        // WriteOnly mode — should not happen in practice for inbound
-        info!(mode = ?self.mode, "V3 inbound: mode disallows write — skipped");
-        Ok(InboundApplyOutcome::Skipped)
+            // Convert all BinaryRepresentation values into ObservedClipboardRepresentation so that
+            // downstream consumers (capture path) can see the full multi-representation snapshot.
+            let ClipboardBinaryPayload {
+                ts_ms,
+                representations: binary_reps,
+            } = v3_payload;
+
+            let has_file_transfers = !message.file_transfers.is_empty();
+
+            let all_reps: Vec<ObservedClipboardRepresentation> = binary_reps
+                .into_iter()
+                .map(|rep| {
+                    let mut data = rep.data;
+
+                    // When file_transfers are present, rewrite file path representations
+                    // to point to local cache paths ({cache_dir}/{transfer_id}/{filename}).
+                    if has_file_transfers {
+                        let is_file_rep = rep
+                            .mime
+                            .as_deref()
+                            .map(|m| m == "text/uri-list" || m == "file/uri-list")
+                            .unwrap_or(false)
+                            || rep.format_id.eq_ignore_ascii_case("files")
+                            || rep.format_id.eq_ignore_ascii_case("public.file-url")
+                            || rep.format_id.contains("uri-list");
+
+                        if is_file_rep {
+                            if let Some(ref cache_dir) = self.file_cache_dir {
+                                let local_paths: Vec<String> = message
+                                    .file_transfers
+                                    .iter()
+                                    .map(|ft| {
+                                        let path = cache_dir
+                                            .join(&ft.transfer_id)
+                                            .join(&ft.filename);
+                                        url::Url::from_file_path(&path)
+                                            .map(|u| u.to_string())
+                                            .unwrap_or_else(|_| path.to_string_lossy().to_string())
+                                    })
+                                    .collect();
+                                data = local_paths.join("\n").into_bytes();
+                                debug!(
+                                    format_id = %rep.format_id,
+                                    path_count = local_paths.len(),
+                                    "Rewrote file paths to local cache locations"
+                                );
+                            }
+                        }
+                    }
+
+                    ObservedClipboardRepresentation::new(
+                        RepresentationId::new(),
+                        FormatId::from(rep.format_id.as_str()),
+                        rep.mime.map(MimeType),
+                        data,
+                    )
+                })
+                .collect();
+
+            // Global file_sync_enabled guard for inbound file content
+            {
+                use uc_core::settings::content_type_filter::{classify_snapshot, ContentTypeCategory};
+                let inbound_snapshot = SystemClipboardSnapshot {
+                    ts_ms,
+                    representations: all_reps.clone(),
+                };
+                let content_category = classify_snapshot(&inbound_snapshot);
+                if content_category == ContentTypeCategory::File {
+                    if let Ok(settings) = self.settings.load().await {
+                        if !settings.file_sync.file_sync_enabled {
+                            info!(message_id = %message.id, "Rejecting inbound file content: file_sync disabled");
+                            self.rollback_recent_id(&message.id).await;
+                            return Ok(InboundApplyOutcome::Skipped);
+                        }
+                    }
+                }
+            }
+
+            // When file_transfers are present, skip OS clipboard write (files don't exist yet)
+            // and force DB persistence so the entry exists before file transfer completes.
+            if has_file_transfers {
+                let capture = match self.capture_clipboard.as_ref() {
+                    Some(c) => c,
+                    None => {
+                        warn!(
+                            message_id = %message.id,
+                            "V3 inbound with file_transfers: capture dependencies required but missing"
+                        );
+                        return Ok(InboundApplyOutcome::Applied {
+                            entry_id: None,
+                            pending_transfers: vec![],
+                        });
+                    }
+                };
+
+                let snapshot_for_capture = SystemClipboardSnapshot {
+                    ts_ms,
+                    representations: all_reps,
+                };
+
+                // Build pending transfer linkage for the Tauri layer.
+                let linkage: Vec<PendingTransferLinkage> = message
+                    .file_transfers
+                    .iter()
+                    .map(|ft| {
+                        let cached_path = self
+                            .file_cache_dir
+                            .as_ref()
+                            .map(|d| {
+                                d.join(&ft.transfer_id)
+                                    .join(&ft.filename)
+                                    .to_string_lossy()
+                                    .to_string()
+                            })
+                            .unwrap_or_default();
+                        PendingTransferLinkage {
+                            transfer_id: ft.transfer_id.clone(),
+                            filename: ft.filename.clone(),
+                            cached_path,
+                        }
+                    })
+                    .collect();
+
+                return match capture
+                    .execute_with_origin(snapshot_for_capture, ClipboardChangeOrigin::RemotePush)
+                    .await
+                {
+                    Ok(Some(entry_id)) => {
+                        info!(
+                            message_id = %message.id,
+                            entry_id = %entry_id,
+                            file_transfer_count = message.file_transfers.len(),
+                            "V3 inbound with file_transfers: persisted entry, skipped OS clipboard write"
+                        );
+                        Ok(InboundApplyOutcome::Applied {
+                            entry_id: Some(entry_id),
+                            pending_transfers: linkage,
+                        })
+                    }
+                    Ok(None) => {
+                        self.rollback_recent_id(&message.id).await;
+                        Err(anyhow::anyhow!("V3 file_transfers capture skipped persistence"))
+                    }
+                    Err(err) => {
+                        self.rollback_recent_id(&message.id).await;
+                        Err(err).context("V3 inbound with file_transfers: capture failed")
+                    }
+                };
+            }
+
+            // For OS clipboard writes we still restrict to a single highest-priority representation.
+            // write_snapshot requires exactly ONE representation (tracked in issue #92).
+            let selected_rep = all_reps
+                .get(selected_idx)
+                .cloned()
+                .expect("selected index must be within range");
+
+            let snapshot_for_os = SystemClipboardSnapshot {
+                ts_ms,
+                representations: vec![selected_rep],
+            };
+
+            // For Passive-mode capture we want the full set of representations so that title
+            // generation and normalization can choose the most appropriate representation.
+            let snapshot_for_capture = SystemClipboardSnapshot {
+                ts_ms,
+                representations: all_reps,
+            };
+
+            // In Full mode: remember inbound snapshot hash + write to OS clipboard
+            if self.mode.allow_os_write() {
+                let selected_rep_ref = &snapshot_for_os.representations[0];
+                info!(
+                    message_id = %message.id,
+                    format_id = %selected_rep_ref.format_id,
+                    mime = ?selected_rep_ref.mime.as_ref().map(|m| m.as_str()),
+                    data_size = selected_rep_ref.bytes.len(),
+                    "V3 inbound: writing selected representation to OS clipboard"
+                );
+
+                let snapshot_hash = snapshot_for_os.snapshot_hash().to_string();
+                self.clipboard_change_origin
+                    .remember_remote_snapshot_hash(
+                        snapshot_hash.clone(),
+                        Duration::from_millis(REMOTE_SNAPSHOT_HASH_TTL_MS),
+                    )
+                    .await;
+
+                if let Err(err) = self.local_clipboard.write_snapshot(snapshot_for_os) {
+                    self.clipboard_change_origin
+                        .consume_origin_for_snapshot_or_default(
+                            &snapshot_hash,
+                            ClipboardChangeOrigin::LocalCapture,
+                        )
+                        .await;
+                    self.rollback_recent_id(&message.id).await;
+                    return Err(err)
+                        .context("V3 inbound: failed to write snapshot to OS clipboard");
+                }
+
+                // Guard against loopback when the OS re-encodes clipboard content.
+                // Some platforms (e.g. Windows clipboard-rs) re-encode images (PNG→DIB→PNG),
+                // producing different bytes than the original. The hash-based guard above
+                // won't match the re-encoded content, so we set a one-shot origin override:
+                // the NEXT clipboard change will be treated as RemotePush regardless of hash.
+                // This avoids reading back the clipboard (which can crash on Windows with
+                // large native bitmaps).
+                self.clipboard_change_origin
+                    .set_next_origin(
+                        ClipboardChangeOrigin::RemotePush,
+                        Duration::from_millis(REMOTE_SNAPSHOT_HASH_TTL_MS),
+                    )
+                    .await;
+
+                info!(message_id = %message.id, "V3 inbound clipboard applied");
+                return Ok(InboundApplyOutcome::Applied {
+                    entry_id: None,
+                    pending_transfers: vec![],
+                });
+            }
+
+            // In Passive mode (allow_os_read = false): persist via capture use case
+            if !self.mode.allow_os_read() {
+                let capture = self
+                    .capture_clipboard
+                    .as_ref()
+                    .context("V3 passive inbound: capture dependencies required")?;
+
+                // Debug snapshot before handing off to capture use case
+                debug!(
+                    origin = ?ClipboardChangeOrigin::RemotePush,
+                    repr_count = snapshot_for_capture.representations.len(),
+                    repr_format_ids = ?snapshot_for_capture
+                        .representations
+                        .iter()
+                        .map(|r| r.format_id.to_string())
+                        .collect::<Vec<_>>(),
+                    repr_mimes = ?snapshot_for_capture
+                        .representations
+                        .iter()
+                        .map(|r| r.mime.as_ref().map(|m| m.as_str().to_string()))
+                        .collect::<Vec<_>>(),
+                    "V3 passive snapshot before capture",
+                );
+
+                return match capture
+                    .execute_with_origin(snapshot_for_capture, ClipboardChangeOrigin::RemotePush)
+                    .await
+                {
+                    Ok(Some(entry_id)) => {
+                        info!(message_id = %message.id, "V3 inbound clipboard persisted (passive)");
+                        Ok(InboundApplyOutcome::Applied {
+                            entry_id: Some(entry_id),
+                            pending_transfers: vec![],
+                        })
+                    }
+                    Ok(None) => {
+                        self.rollback_recent_id(&message.id).await;
+                        Err(anyhow::anyhow!("V3 passive capture skipped persistence"))
+                    }
+                    Err(err) => {
+                        self.rollback_recent_id(&message.id).await;
+                        Err(err).context("V3 passive inbound: capture failed")
+                    }
+                };
+            }
+
+            // WriteOnly mode — should not happen in practice for inbound
+            info!(mode = ?self.mode, "V3 inbound: mode disallows write — skipped");
+            Ok(InboundApplyOutcome::Skipped)
+        }
+        .instrument(info_span!(
+            "inbound.apply",
+            stage = uc_observability::stages::INBOUND_APPLY
+        ))
+        .await
     }
 }
 
@@ -901,6 +1070,21 @@ mod tests {
         }
     }
 
+    struct MockSettings {
+        settings: uc_core::settings::model::Settings,
+    }
+
+    #[async_trait]
+    impl SettingsPort for MockSettings {
+        async fn load(&self) -> Result<uc_core::settings::model::Settings> {
+            Ok(self.settings.clone())
+        }
+
+        async fn save(&self, _settings: &uc_core::settings::model::Settings) -> Result<()> {
+            Ok(())
+        }
+    }
+
     #[derive(Clone)]
     struct SharedLogBuffer {
         buffer: Arc<Mutex<Vec<u8>>>,
@@ -976,6 +1160,8 @@ mod tests {
             origin_device_id: origin_device_id.to_string(),
             origin_device_name: "peer-device".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
+            origin_flow_id: None,
+            file_transfers: vec![],
         };
         (message, plaintext)
     }
@@ -1032,6 +1218,9 @@ mod tests {
                 id: DeviceId::new(local_device_id),
             }),
             Arc::new(TransferPayloadDecryptorAdapter),
+            Arc::new(MockSettings {
+                settings: uc_core::settings::model::Settings::default(),
+            }),
         )
         .expect("build inbound usecase");
 
@@ -1090,6 +1279,10 @@ mod tests {
             Arc::new(MockNormalizer),
             Arc::new(MockRepresentationCache),
             Arc::new(MockSpoolQueue),
+            None,
+            Arc::new(MockSettings {
+                settings: uc_core::settings::model::Settings::default(),
+            }),
         );
 
         (usecase, writes, calls, save_calls, insert_calls)
@@ -1148,6 +1341,9 @@ mod tests {
                 id: DeviceId::new("local-1"),
             }),
             Arc::new(TransferPayloadDecryptorAdapter),
+            Arc::new(MockSettings {
+                settings: uc_core::settings::model::Settings::default(),
+            }),
         );
 
         match result {
@@ -1294,7 +1490,10 @@ mod tests {
 
         assert!(matches!(
             first,
-            InboundApplyOutcome::Applied { entry_id: Some(_) }
+            InboundApplyOutcome::Applied {
+                entry_id: Some(_),
+                ..
+            }
         ));
         assert_eq!(second, InboundApplyOutcome::Skipped);
     }
@@ -1336,7 +1535,7 @@ mod tests {
 
         // Must be Applied
         assert!(
-            matches!(outcome, InboundApplyOutcome::Applied { entry_id: None }),
+            matches!(outcome, InboundApplyOutcome::Applied { entry_id: None, .. }),
             "expected Applied, got {:?}",
             outcome
         );
@@ -1437,6 +1636,8 @@ mod tests {
             origin_device_id: "remote-1".to_string(),
             origin_device_name: "peer-device".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
+            origin_flow_id: None,
+            file_transfers: vec![],
         };
 
         let result = usecase
@@ -1489,7 +1690,7 @@ mod tests {
             .expect("pre-decoded V3 message must apply");
 
         assert!(
-            matches!(outcome, InboundApplyOutcome::Applied { entry_id: None }),
+            matches!(outcome, InboundApplyOutcome::Applied { entry_id: None, .. }),
             "expected Applied, got {:?}",
             outcome
         );
@@ -1539,7 +1740,10 @@ mod tests {
         // change-origin remote snapshot hash APIs.
         assert!(matches!(
             outcome,
-            InboundApplyOutcome::Applied { entry_id: Some(_) }
+            InboundApplyOutcome::Applied {
+                entry_id: Some(_),
+                ..
+            }
         ));
         assert_eq!(writes.lock().expect("writes lock").len(), 0);
         assert!(calls.lock().expect("calls lock").is_empty());
@@ -1571,6 +1775,8 @@ mod tests {
             origin_device_id: "remote-1".to_string(),
             origin_device_name: "peer-device".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
+            origin_flow_id: None,
+            file_transfers: vec![],
         };
 
         // No pre-decoded plaintext, so it will try the fallback decrypt path

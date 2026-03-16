@@ -11,6 +11,14 @@ pub trait ClipboardChangeOriginPort: Send + Sync {
         default_origin: ClipboardChangeOrigin,
     ) -> ClipboardChangeOrigin;
 
+    /// Non-destructive check: returns `true` if an origin has been set
+    /// and has not yet expired, without consuming it.
+    /// Used by FCLIP-03 to detect concurrent clipboard operations without
+    /// stealing another operation's origin protection.
+    async fn has_pending_origin(&self) -> bool {
+        false
+    }
+
     async fn remember_remote_snapshot_hash(&self, _snapshot_hash: String, _ttl: Duration) {}
 
     async fn consume_origin_for_snapshot_or_default(

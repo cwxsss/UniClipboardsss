@@ -1,16 +1,35 @@
 @import 'tailwindcss' source(none);
 @source "../**/*.{ts,tsx,html}";
 @source "../../index.html";
+@source "../../quick-panel.html";
 @import './decorum.css';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+@import '@fontsource-variable/inter';
+@import '@fontsource/jetbrains-mono';
+@import '@fontsource-variable/noto-sans-sc';
 
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --font-size-sm: 0.875rem;
-  --font-size-base: 1rem;
-  --font-size-lg: 1.125rem;
+  /* Font sizes */
+  --font-size-caption: 0.75rem; /* 12px */
+  --font-size-small: 0.8125rem; /* 13px */
+  --font-size-body: 0.875rem; /* 14px */
+  --font-size-body-lg: 0.9375rem; /* 15px */
+  --font-size-section: 1rem; /* 16px */
+  --font-size-title: 1.25rem; /* 20px */
 
-  --line-height-ui: 1.4;
+  /* Line heights */
+  --line-height-tight: 1.4;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.6;
+
+  /* Letter spacing */
+  --letter-spacing-title: -0.01em;
+  --letter-spacing-body: 0.01em;
+  --letter-spacing-button: 0.01em;
+  --letter-spacing-caption: 0.02em;
 
   --sidebar: oklch(0.985 0 0);
 
@@ -74,9 +93,11 @@
 
   --chart-5: oklch(0.424 0.199 265.638);
 
-  --font-sans: Montserrat, sans-serif;
+  --font-sans:
+    'Inter Variable', 'Segoe UI', 'Noto Sans SC Variable', 'Microsoft YaHei', system-ui, sans-serif;
   --font-serif: Georgia, serif;
-  --font-mono: Fira Code, monospace;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+  --font-chinese: 'Noto Sans SC Variable', 'Microsoft YaHei', system-ui, sans-serif;
   --radius: 0.35rem;
   --shadow-color: hsl(240 30% 25%);
   --shadow-opacity: 0.12;
@@ -84,7 +105,7 @@
   --shadow-spread: 0px;
   --shadow-offset-x: 0px;
   --shadow-offset-y: 4px;
-  --letter-spacing: 0em;
+  --letter-spacing: 0.01em;
   --spacing: 0.25rem;
   --shadow-2xs: 0px 4px 6px 0px hsl(240 30% 25% / 0.06);
   --shadow-xs: 0px 4px 6px 0px hsl(240 30% 25% / 0.06);
@@ -173,8 +194,9 @@
 }
 
 @theme inline {
-  --font-sans: 'Geist Variable', sans-serif;
-  --font-mono: Fira Code, monospace;
+  --font-sans:
+    'Inter Variable', 'Segoe UI', 'Noto Sans SC Variable', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
   --font-serif: Georgia, serif;
   --radius: 0.35rem;
   --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
@@ -240,10 +262,81 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
-@import 'tw-animate-css';
-@import 'shadcn/tailwind.css';
 @plugin "@tailwindcss/typography";
-@import '@fontsource-variable/geist';
+
+/* Setup 页面流光背景动画 */
+@keyframes aurora-drift-1 {
+  0%,
+  100% {
+    transform: translate(-30%, -30%) scale(1);
+    opacity: 0.4;
+  }
+  25% {
+    transform: translate(10%, -20%) scale(1.2);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translate(20%, 10%) scale(0.9);
+    opacity: 0.35;
+  }
+  75% {
+    transform: translate(-10%, 20%) scale(1.1);
+    opacity: 0.55;
+  }
+}
+
+@keyframes aurora-drift-2 {
+  0%,
+  100% {
+    transform: translate(30%, 30%) scale(1);
+    opacity: 0.3;
+  }
+  25% {
+    transform: translate(-10%, 20%) scale(1.15);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translate(-20%, -10%) scale(0.95);
+    opacity: 0.35;
+  }
+  75% {
+    transform: translate(15%, -15%) scale(1.1);
+    opacity: 0.45;
+  }
+}
+
+@keyframes aurora-drift-3 {
+  0%,
+  100% {
+    transform: translate(0%, -20%) scale(1.1);
+    opacity: 0.25;
+  }
+  33% {
+    transform: translate(-25%, 15%) scale(0.9);
+    opacity: 0.45;
+  }
+  66% {
+    transform: translate(20%, 5%) scale(1.15);
+    opacity: 0.3;
+  }
+}
+
+@keyframes particle-float {
+  0% {
+    transform: translateY(0) translateX(0);
+    opacity: 0;
+  }
+  10% {
+    opacity: var(--particle-opacity, 0.2);
+  }
+  90% {
+    opacity: var(--particle-opacity, 0.2);
+  }
+  100% {
+    transform: translateY(-110vh) translateX(var(--particle-drift, 0px));
+    opacity: 0;
+  }
+}
 
 /* 玻璃态效果 */
 @layer utilities {
@@ -273,15 +366,6 @@
 
 ::view-transition-new(root) {
   z-index: 9999;
-}
-
-/* Collapse mode: old view on top, shrinks away to reveal new view */
-.view-transition-collapse::view-transition-old(root) {
-  z-index: 9999;
-}
-
-.view-transition-collapse::view-transition-new(root) {
-  z-index: 1;
 }
 
 @layer base {
@@ -320,9 +404,15 @@
   }
 
   body {
-    letter-spacing: var(--tracking-normal);
-    font-size: var(--font-size-base);
-    line-height: var(--line-height-ui);
+    letter-spacing: var(--letter-spacing-body);
+    font-size: var(--font-size-body);
+    line-height: var(--line-height-relaxed);
+  }
+
+  code,
+  pre,
+  .font-mono {
+    font-feature-settings: 'tnum';
   }
   * {
     @apply border-border outline-ring/50;

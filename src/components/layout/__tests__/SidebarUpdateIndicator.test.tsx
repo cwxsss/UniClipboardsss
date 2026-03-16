@@ -70,6 +70,8 @@ describe('Sidebar update indicator', () => {
           updateSyncSetting: vi.fn(),
           updateSecuritySetting: vi.fn(),
           updateRetentionPolicy: vi.fn(),
+          updateKeyboardShortcuts: vi.fn(),
+          updateFileSyncSetting: vi.fn(),
         }}
       >
         <UpdateContext.Provider
@@ -105,6 +107,8 @@ describe('Sidebar update indicator', () => {
           updateSyncSetting: vi.fn(),
           updateSecuritySetting: vi.fn(),
           updateRetentionPolicy: vi.fn(),
+          updateKeyboardShortcuts: vi.fn(),
+          updateFileSyncSetting: vi.fn(),
         }}
       >
         <UpdateContext.Provider

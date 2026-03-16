@@ -62,14 +62,15 @@ export type DurationSeconds = number
 
 /**
  * 保留规则 - 对应 Rust RetentionRule enum
- * Rust 的 enum variants 序列化为带有 tag 字段的对象
+ * Rust 使用 serde externally-tagged + rename_all="snake_case"
+ * 序列化为 { "by_age": { "max_age": 2592000 } } 格式
  */
 export type RetentionRule =
-  | { tag: 'by_age'; max_age: DurationSeconds }
-  | { tag: 'by_count'; max_items: number }
-  | { tag: 'by_content_type'; content_type: ContentTypes; max_age: DurationSeconds }
-  | { tag: 'by_total_size'; max_bytes: number }
-  | { tag: 'sensitive'; max_age: DurationSeconds }
+  | { by_age: { max_age: DurationSeconds } }
+  | { by_count: { max_items: number } }
+  | { by_content_type: { content_type: ContentTypes; max_age: DurationSeconds } }
+  | { by_total_size: { max_bytes: number } }
+  | { sensitive: { max_age: DurationSeconds } }
 
 /**
  * 规则评估方式 - 对应 Rust RuleEvaluation enum
@@ -107,6 +108,18 @@ export interface PairingSettings {
 }
 
 /**
+ * File sync settings - corresponds to Rust FileSyncSettings
+ */
+export interface FileSyncSettings {
+  file_sync_enabled: boolean
+  small_file_threshold: number // bytes, default 10MB
+  max_file_size: number // bytes, default 5GB
+  file_cache_quota_per_device: number // bytes, default 500MB
+  file_retention_hours: number // default 24
+  file_auto_cleanup: boolean // default true
+}
+
+/**
  * 应用设置 - 对应 Rust Settings
  */
 export interface Settings {
@@ -116,6 +129,8 @@ export interface Settings {
   retention_policy: RetentionPolicy
   security: SecuritySettings
   pairing: PairingSettings
+  keyboard_shortcuts?: Record<string, string | string[]>
+  file_sync?: FileSyncSettings
 }
 
 // ============================================================================
@@ -173,6 +188,8 @@ export interface SettingContextType {
   updateSyncSetting: (newSyncSetting: Partial<SyncSettings>) => Promise<void>
   updateSecuritySetting: (newSecuritySetting: Partial<SecuritySettings>) => Promise<void>
   updateRetentionPolicy: (newPolicy: Partial<RetentionPolicy>) => Promise<void>
+  updateKeyboardShortcuts: (overrides: Record<string, string | string[]>) => Promise<void>
+  updateFileSyncSetting: (newFileSyncSetting: Partial<FileSyncSettings>) => Promise<void>
 }
 
 // ============================================================================

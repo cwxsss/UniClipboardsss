@@ -1,6 +1,8 @@
 {
   "common": {
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "unknownSize": "Unknown size",
+    "zeroBytes": "0 Bytes"
   },
   "loading": {
     "initializing": "Initializing...",
@@ -38,7 +40,8 @@
       "security": "Security & Privacy",
       "network": "Network",
       "storage": "Storage",
-      "about": "About"
+      "about": "About",
+      "shortcuts": "Shortcuts"
     },
     "sections": {
       "general": {
@@ -79,7 +82,7 @@
         "title": "Sync",
         "autoSync": {
           "label": "Auto sync",
-          "description": "Enable automatic synchronization of copied content across all devices"
+          "description": "Control clipboard sync across all devices. When disabled, no content will be synced to any device."
         },
         "syncFrequency": {
           "label": "Sync frequency",
@@ -99,7 +102,55 @@
             "range": "Must be between 1 and 50 MB"
           }
         },
-        "loadError": "Failed to load settings:"
+        "loadError": "Failed to load settings:",
+        "fileSync": {
+          "title": "File Sync",
+          "enable": {
+            "label": "Enable file sync",
+            "description": "Sync copied files between devices over LAN"
+          },
+          "smallFileThreshold": {
+            "label": "Immediate transfer threshold",
+            "description": "Files smaller than this are transferred immediately; larger files sync metadata only",
+            "unit": "MB",
+            "errors": {
+              "invalid": "Must be a positive number",
+              "range": "Must be between 1 and 1000 MB",
+              "exceedsMax": "Must be less than max file size"
+            }
+          },
+          "maxFileSize": {
+            "label": "Maximum file size",
+            "description": "Files larger than this will not be synced",
+            "unit": "MB",
+            "errors": {
+              "invalid": "Must be a positive number",
+              "range": "Must be between 1 and 10240 MB (10 GB)"
+            }
+          },
+          "cacheQuota": {
+            "label": "Per-device cache quota",
+            "description": "Maximum disk space for cached files from each device",
+            "unit": "MB",
+            "errors": {
+              "invalid": "Must be a positive number",
+              "range": "Must be between 50 and 10240 MB"
+            }
+          },
+          "retentionPeriod": {
+            "label": "File retention period",
+            "description": "Cached files are removed after this duration",
+            "unit": "hours",
+            "errors": {
+              "invalid": "Must be a positive number",
+              "range": "Must be between 1 and 720 hours (30 days)"
+            }
+          },
+          "autoCleanup": {
+            "label": "Auto-cleanup",
+            "description": "Automatically remove expired cached files on startup"
+          }
+        }
       },
       "security": {
         "title": "Security & Privacy",
@@ -171,35 +222,95 @@
         "title": "Storage",
         "autoClearHistory": {
           "label": "Auto-clear history",
-          "description": "Automatically clear clipboard history at regular intervals",
-          "never": "Never",
-          "daily": "Daily",
-          "weekly": "Weekly",
-          "monthly": "Monthly",
-          "onExit": "On exit"
+          "description": "Automatically clean up old clipboard entries based on retention rules"
         },
         "storageUsage": {
           "label": "Storage usage",
-          "usage": "{{percentage}}% used"
+          "usage": "{{percentage}}% used",
+          "database": "Database",
+          "blobVault": "Blob vault",
+          "cache": "Cache",
+          "logs": "Logs",
+          "total": "Total"
         },
         "historyRetention": {
           "label": "History retention",
-          "description": "Set the maximum retention time for clipboard history",
+          "description": "Maximum retention time for clipboard history",
           "days": "{{days}} days"
         },
         "maxHistoryItems": {
           "label": "Max history items",
-          "description": "Limit the number of clipboard history items to save",
+          "description": "Maximum number of clipboard entries to keep",
           "items": "{{count}} items",
           "unlimited": "Unlimited"
         },
-        "clearHistory": {
-          "label": "History",
-          "description": "Clear all clipboard history and free up storage space",
-          "button": "Clear history",
-          "cleared": "History cleared"
+        "skipPinned": {
+          "label": "Skip pinned items",
+          "description": "Pinned items are excluded from automatic cleanup"
         },
-        "loadError": "Failed to load settings:"
+        "clearHistory": {
+          "label": "Clear history",
+          "description": "Delete all clipboard history and free up storage space",
+          "button": "Clear all",
+          "confirm": "Are you sure? This action cannot be undone.",
+          "cleared": "History cleared",
+          "clearing": "Clearing...",
+          "dialogTitle": "Confirm clear history",
+          "dialogDescription": "This will delete all clipboard history and cannot be undone.",
+          "dialogConfirm": "Clear history"
+        },
+        "clearCache": {
+          "label": "Clear cache",
+          "description": "Remove cached thumbnails and temporary files",
+          "button": "Clear cache",
+          "cleared": "Cache cleared",
+          "clearing": "Clearing..."
+        },
+        "dataDirectory": {
+          "label": "Data directory",
+          "description": "Open the folder where application data is stored",
+          "button": "Open in file manager"
+        },
+        "loadError": "Failed to load storage settings:",
+        "placeholder": "Storage settings are not yet available."
+      },
+      "shortcuts": {
+        "title": "Shortcuts",
+        "description": "Customize keyboard shortcuts",
+        "scope": {
+          "global": "Global",
+          "clipboard": "Clipboard",
+          "settings": "Settings",
+          "devices": "Devices",
+          "modal": "Modal"
+        },
+        "actions": {
+          "clearSelection": "Clear selection",
+          "selectAll": "Select all",
+          "delete": "Delete selected",
+          "favorite": "Toggle favorite",
+          "goClipboard": "Go to clipboard",
+          "goDevices": "Go to devices",
+          "goSettings": "Go to settings",
+          "focusSearch": "Focus search",
+          "closeModal": "Close modal",
+          "toggleQuickPanel": "Toggle quick panel"
+        },
+        "issues": {
+          "sameScope": "Shortcut conflict in same scope: {{key}}",
+          "sameLayer": "Same key used in another scope on this layer: {{key}}",
+          "shadowedByHigher": "Will be shadowed when a higher layer is active: {{key}}",
+          "shadowsLower": "Will shadow shortcuts on lower layers: {{key}}"
+        },
+        "edit": "Edit",
+        "reset": "Reset to default",
+        "resetAll": "Reset All Shortcuts",
+        "recording": "Press keys...",
+        "conflict": "Conflicts with: {{name}}",
+        "confirmOverride": "Apply anyway (clears conflict)",
+        "confirm": "Confirm",
+        "cancel": "Cancel",
+        "modified": "Modified"
       },
       "about": {
         "title": "About",
@@ -237,7 +348,19 @@
       "label": "Auto Unlock",
       "description": "Automatically unlock when application starts"
     },
-    "macOSNote": "On macOS, you can choose \"Always Allow\" in the keychain prompt to enable seamless auto-unlock."
+    "macOSNote": "On macOS, you can choose \"Always Allow\" in the keychain prompt to enable seamless auto-unlock.",
+    "keychainModal": {
+      "title": "Grant Keychain Access",
+      "description": "To enable auto-unlock, UniClipboard needs permanent access to your macOS Keychain.",
+      "step1": "A macOS Keychain access prompt will appear",
+      "step2": "Select \"Always Allow\" in the prompt",
+      "step3": "Enter your macOS password to confirm",
+      "note": "This is a macOS system dialog, not part of UniClipboard.",
+      "confirm": "I understand",
+      "cancel": "Cancel",
+      "verifying": "Verifying access...",
+      "error": "Keychain Always Allow permission not detected. Please try again and make sure to select \"Always Allow\" in the macOS Keychain prompt."
+    }
   },
   "language": {
     "zh-CN": "简体中文",
@@ -297,6 +420,8 @@
     },
     "errors": {
       "copyFailed": "Failed to copy to clipboard",
+      "syncFailed": "Sync to clipboard failed",
+      "openLocationFailed": "Failed to open file location",
       "loadDetailFailed": "Failed to load details",
       "unknown": "An unknown error occurred"
     },
@@ -339,12 +464,52 @@
       "characters": "Characters",
       "words": "Words",
       "size": "Size",
-      "dimensions": "Dimensions"
+      "dimensions": "Dimensions",
+      "notDownloaded": "Not downloaded",
+      "sourceDevice": "Source device"
+    },
+    "contextMenu": {
+      "copy": "Copy",
+      "syncToClipboard": "Sync to Clipboard",
+      "syncing": "Syncing...",
+      "openFileLocation": "Open File Location",
+      "delete": "Delete"
     },
     "actionBar": {
       "title": "Clipboard History",
       "copy": "Copy",
-      "delete": "Delete"
+      "delete": "Delete",
+      "syncToClipboard": "Sync to Clipboard",
+      "syncing": "Syncing..."
+    },
+    "notification": {
+      "syncStartSingle": "File syncing to {{device}}",
+      "syncStartBatch": "Syncing {{count}} files to {{device}}",
+      "syncCompleteSingle": "File synced successfully",
+      "syncCompleteBatch": "All {{count}} files synced",
+      "syncFailed": "File sync failed",
+      "syncFailedDetail": "Failed to sync file: {{reason}}"
+    },
+    "transfer": {
+      "sending": "Sending",
+      "receiving": "Receiving",
+      "progress": "{{transferred}} / {{total}} ({{percent}}%)",
+      "chunks": "{{completed}} / {{total}} chunks",
+      "completed": "Transfer complete",
+      "failed": "Transfer failed",
+      "pending": "Pending transfer",
+      "transferring": "Transferring...",
+      "statusBadge": {
+        "pending": "File transfer pending",
+        "transferring": "File transfer in progress",
+        "completed": "File transfer complete",
+        "failed": "File transfer failed"
+      },
+      "copyDisabled": {
+        "pending": "File transfer pending",
+        "transferring": "File transfer in progress",
+        "failed": "File transfer failed"
+      }
     },
     "confirmDeleteTitle": "Confirm Delete",
     "confirmDeleteDescription_one": "Are you sure you want to delete the selected item? This action cannot be undone.",
@@ -356,6 +521,16 @@
   "devices": {
     "title": "Device Management",
     "addNew": "Add New Device",
+    "thisDevice": {
+      "title": "This Device"
+    },
+    "pairedDevices": {
+      "title": "Paired Devices"
+    },
+    "unpair": {
+      "confirmTitle": "Unpair Device",
+      "confirmDescription": "Are you sure you want to unpair {{deviceName}}? You will need to pair again to sync clipboard content."
+    },
     "tabs": {
       "connected": "Connected Devices",
       "requests": "Pairing Requests"
@@ -379,14 +554,22 @@
       "actions": {
         "retry": "Retry",
         "unpair": "Unpair",
+        "settings": "Settings",
         "addDevice": "Add Device",
         "addAnotherDevice": "Add another device"
       }
     },
+    "syncPaused": {
+      "message": "Clipboard sync is paused. All devices are currently not syncing.",
+      "goToSettings": "Go to Settings"
+    },
     "settings": {
       "readOnly": "Locked",
       "badges": {
-        "mvp": "MVP"
+        "mvp": "MVP",
+        "comingSoon": "Coming Soon",
+        "notEditable": "Not Editable",
+        "globalFileSyncOff": "File sync off"
       },
       "sync": {
         "title": "Sync Settings",
@@ -407,6 +590,18 @@
           "syncFile": {
             "title": "Sync Files",
             "description": "Allow syncing file content (up to 10MB)"
+          },
+          "syncLink": {
+            "title": "Sync Links",
+            "description": "Allow syncing URL/link content"
+          },
+          "syncCodeSnippet": {
+            "title": "Sync Code Snippets",
+            "description": "Allow syncing code snippet content"
+          },
+          "syncRichText": {
+            "title": "Sync Rich Text",
+            "description": "Allow syncing rich text content (HTML, RTF)"
           }
         }
       },
@@ -529,6 +724,14 @@
     "retry": "Retry",
     "retrying": "Retrying..."
   },
+  "previewPanel": {
+    "title": "Preview",
+    "error": "Failed to load preview",
+    "imageUnavailable": "Image not available",
+    "empty": "Hover over an item to preview",
+    "imageAlt": "Clipboard image",
+    "deleteHint": "{{modifier}}⌫ delete"
+  },
   "setup": {
     "page": {
       "loadingSetupState": "Loading setup state...",
@@ -601,7 +804,8 @@
       "subtitle": "Select a device that already joined the encrypted space.",
       "scanning": {
         "title": "Scanning for devices...",
-        "description": "Looking for other devices on your local network."
+        "description": "Looking for other devices on your local network.",
+        "compact": "Scanning..."
       },
       "errors": {
         "timeout": "Scanning timed out. Please try again.",
@@ -613,7 +817,13 @@
       "empty": {
         "title": "No devices discovered",
         "description": "Ensure the host device is on the same network and pairing is enabled.",
-        "rescan": "Scan again"
+        "rescan": "Scan again",
+        "tips": {
+          "heading": "Troubleshooting tips",
+          "sameNetwork": "Confirm both devices are on the same Wi-Fi or LAN",
+          "pairingEnabled": "Confirm the main device has pairing enabled",
+          "firewall": "Check firewall settings aren't blocking local connections"
+        }
       },
       "actions": {
         "select": "Select"

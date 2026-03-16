@@ -20,7 +20,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ReleaseNotes } from '@/components/update/ReleaseNotes'
 import { useSetting } from '@/hooks/useSetting'
 import { useUpdate } from '@/hooks/useUpdate'
-import { startCircularReveal } from '@/lib/theme-transition'
 import { cn } from '@/lib/utils'
 import { sentryEnabled } from '@/observability/sentry'
 
@@ -217,15 +216,9 @@ const Sidebar: React.FC = () => {
             label={t('nav.settings')}
             isActive={location.pathname.startsWith('/settings')}
             layoutId="sidebar-nav-bottom"
-            data-settings-icon
-            onClick={e => {
+            onClick={() => {
               if (location.pathname.startsWith('/settings')) return
-              const isKeyboard = e.clientX === 0 && e.clientY === 0
-              startCircularReveal(
-                isKeyboard ? null : e.clientX,
-                isKeyboard ? null : e.clientY,
-                () => navigate('/settings')
-              )
+              navigate('/settings')
             }}
           />
         </div>

@@ -148,7 +148,6 @@ pub async fn get_p2p_peers(
         "command.pairing.get_p2p_peers",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
     async {
@@ -213,7 +212,6 @@ pub async fn get_paired_peers_with_status(
         "command.pairing.get_paired_peers_with_status",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
     async {
@@ -489,6 +487,67 @@ pub async fn unpair_p2p_device(
     .await
 }
 
+/// Get resolved sync settings for a specific device.
+/// Returns per-device overrides if set, otherwise global defaults.
+#[tauri::command]
+pub async fn get_device_sync_settings(
+    runtime: State<'_, Arc<AppRuntime>>,
+    peer_id: String,
+    _trace: Option<TraceMetadata>,
+) -> Result<uc_core::settings::model::SyncSettings, CommandError> {
+    let span = info_span!(
+        "command.pairing.get_device_sync_settings",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+        peer_id = %peer_id,
+    );
+    record_trace_fields(&span, &_trace);
+    async {
+        let uc = runtime.usecases().get_device_sync_settings();
+        uc.execute(&PeerId::from(peer_id.as_str()))
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to get device sync settings");
+                let message = e.to_string();
+                emit_command_error(&runtime, "get_device_sync_settings", &message);
+                CommandError::InternalError(message)
+            })
+    }
+    .instrument(span)
+    .await
+}
+
+/// Update or clear per-device sync settings.
+/// Passing `null` for settings resets to global defaults.
+#[tauri::command]
+pub async fn update_device_sync_settings(
+    runtime: State<'_, Arc<AppRuntime>>,
+    peer_id: String,
+    settings: Option<uc_core::settings::model::SyncSettings>,
+    _trace: Option<TraceMetadata>,
+) -> Result<(), CommandError> {
+    let span = info_span!(
+        "command.pairing.update_device_sync_settings",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+        peer_id = %peer_id,
+    );
+    record_trace_fields(&span, &_trace);
+    async {
+        let uc = runtime.usecases().update_device_sync_settings();
+        uc.execute(&PeerId::from(peer_id.as_str()), settings)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to update device sync settings");
+                let message = e.to_string();
+                emit_command_error(&runtime, "update_device_sync_settings", &message);
+                CommandError::InternalError(message)
+            })
+    }
+    .instrument(span)
+    .await
+}
+
 fn emit_command_error(runtime: &AppRuntime, command: &str, message: &str) {
     if let Some(app) = runtime.app_handle().as_ref() {
         let payload = P2PCommandErrorEvent {
@@ -536,6 +595,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: "Persisted Name".to_string(),
+            sync_settings: None,
         };
 
         let discovered = DiscoveredPeer {
@@ -564,6 +624,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: "".to_string(),
+            sync_settings: None,
         };
 
         let discovered = DiscoveredPeer {
@@ -591,6 +652,7 @@ mod tests {
             paired_at: Utc::now(),
             last_seen_at: None,
             device_name: "".to_string(),
+            sync_settings: None,
         };
 
         let result = map_paired_device_to_peer(device, None, false);

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -37,7 +38,18 @@ pub enum UpdateChannel {
     Rc,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// A keyboard shortcut value that can be either a single key combo or multiple alternatives.
+///
+/// Serialised with `#[serde(untagged)]` so that `"Ctrl+C"` and `["Ctrl+C","Meta+C"]` are both
+/// accepted without a wrapping tag, matching the TypeScript type `string | string[]`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ShortcutKey {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContentTypes {
     pub text: bool,
     pub image: bool,
@@ -47,7 +59,7 @@ pub struct ContentTypes {
     pub rich_text: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SyncSettings {
     pub auto_sync: bool,
     pub sync_frequency: SyncFrequency,
@@ -144,6 +156,16 @@ pub struct PairingSettings {
     pub protocol_version: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileSyncSettings {
+    pub file_sync_enabled: bool,
+    pub small_file_threshold: u64,
+    pub max_file_size: u64,
+    pub file_cache_quota_per_device: u64,
+    pub file_retention_hours: u32,
+    pub file_auto_cleanup: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "current_schema_version")]
@@ -163,6 +185,12 @@ pub struct Settings {
 
     #[serde(default)]
     pub pairing: PairingSettings,
+
+    #[serde(default)]
+    pub keyboard_shortcuts: HashMap<String, ShortcutKey>,
+
+    #[serde(default)]
+    pub file_sync: FileSyncSettings,
     // #[serde(default)]
     // pub network: NetworkSettings,
 }
@@ -188,7 +216,8 @@ pub fn current_schema_version() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        GeneralSettings, RuleEvaluation, SecuritySettings, Settings, SyncFrequency, UpdateChannel,
+        FileSyncSettings, GeneralSettings, RuleEvaluation, SecuritySettings, Settings,
+        SyncFrequency, UpdateChannel,
     };
     use serde_json::json;
 
@@ -293,6 +322,19 @@ mod tests {
     }
 
     #[test]
+    fn test_settings_missing_keyboard_shortcuts_defaults_to_empty() {
+        let value = json!({
+            "schema_version": 1
+        });
+
+        let settings: Settings = serde_json::from_value(value).expect("deserialize settings");
+        assert!(
+            settings.keyboard_shortcuts.is_empty(),
+            "keyboard_shortcuts should default to empty HashMap"
+        );
+    }
+
+    #[test]
     fn test_pairing_settings_defaults_when_missing() {
         let value = serde_json::json!({
             "schema_version": 1
@@ -304,5 +346,49 @@ mod tests {
         assert_eq!(settings.pairing.session_timeout.as_secs(), 300);
         assert_eq!(settings.pairing.max_retries, 3);
         assert_eq!(settings.pairing.protocol_version, "1.0.0");
+    }
+
+    #[test]
+    fn test_file_sync_settings_backward_compat_defaults_when_missing() {
+        let value = serde_json::json!({
+            "schema_version": 1
+        });
+
+        let settings: Settings = serde_json::from_value(value).expect("deserialize settings");
+        let fs = &settings.file_sync;
+        assert!(fs.file_sync_enabled);
+        assert_eq!(fs.small_file_threshold, 10 * 1024 * 1024);
+        assert_eq!(fs.max_file_size, 5 * 1024 * 1024 * 1024);
+        assert_eq!(fs.file_cache_quota_per_device, 500 * 1024 * 1024);
+        assert_eq!(fs.file_retention_hours, 24);
+        assert!(fs.file_auto_cleanup);
+    }
+
+    #[test]
+    fn test_file_sync_settings_roundtrip() {
+        let fs = FileSyncSettings {
+            file_sync_enabled: false,
+            small_file_threshold: 1_000_000,
+            max_file_size: 2_000_000_000,
+            file_cache_quota_per_device: 100_000_000,
+            file_retention_hours: 48,
+            file_auto_cleanup: false,
+        };
+
+        let serialized = serde_json::to_value(&fs).expect("serialize");
+        let deserialized: FileSyncSettings =
+            serde_json::from_value(serialized).expect("deserialize");
+        assert_eq!(fs, deserialized);
+    }
+
+    #[test]
+    fn test_file_sync_settings_default_values() {
+        let fs = FileSyncSettings::default();
+        assert!(fs.file_sync_enabled);
+        assert_eq!(fs.small_file_threshold, 10 * 1024 * 1024);
+        assert_eq!(fs.max_file_size, 5 * 1024 * 1024 * 1024);
+        assert_eq!(fs.file_cache_quota_per_device, 500 * 1024 * 1024);
+        assert_eq!(fs.file_retention_hours, 24);
+        assert!(fs.file_auto_cleanup);
     }
 }

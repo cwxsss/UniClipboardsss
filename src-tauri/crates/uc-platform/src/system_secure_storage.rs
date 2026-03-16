@@ -4,9 +4,25 @@ use uc_core::ports::{SecureStorageError, SecureStoragePort};
 const SERVICE_NAME: &str = "UniClipboard";
 
 fn resolve_service_name() -> String {
-    match std::env::var("UC_PROFILE") {
-        Ok(profile) if !profile.is_empty() => format!("{SERVICE_NAME}-{profile}"),
-        _ => SERVICE_NAME.to_string(),
+    let mut suffixes: Vec<String> = Vec::new();
+
+    if matches!(
+        std::env::var("UNICLIPBOARD_ENV"),
+        Ok(value) if value.eq_ignore_ascii_case("development") || value.eq_ignore_ascii_case("dev")
+    ) {
+        suffixes.push("dev".to_string());
+    }
+
+    if let Ok(profile) = std::env::var("UC_PROFILE") {
+        if !profile.is_empty() {
+            suffixes.push(profile);
+        }
+    }
+
+    if suffixes.is_empty() {
+        SERVICE_NAME.to_string()
+    } else {
+        format!("{SERVICE_NAME}-{}", suffixes.join("-"))
     }
 }
 
@@ -82,7 +98,7 @@ impl SecureStoragePort for SystemSecureStorage {
 #[cfg(test)]
 mod tests {
     use super::resolve_service_name;
-    use crate::test_support::with_uc_profile;
+    use crate::test_support::{with_uc_profile, with_uc_profile_and_env};
 
     #[test]
     fn service_name_defaults_without_profile() {
@@ -104,5 +120,22 @@ mod tests {
         assert_eq!(peer_a, "UniClipboard-peerA");
         assert_eq!(peer_b, "UniClipboard-peerB");
         assert_ne!(peer_a, peer_b);
+    }
+
+    #[test]
+    fn service_name_isolated_by_development_env() {
+        let prod = with_uc_profile_and_env(None, None, resolve_service_name);
+        let dev = with_uc_profile_and_env(None, Some("development"), resolve_service_name);
+
+        assert_eq!(prod, "UniClipboard");
+        assert_eq!(dev, "UniClipboard-dev");
+        assert_ne!(prod, dev);
+    }
+
+    #[test]
+    fn service_name_combines_development_env_and_profile() {
+        let name =
+            with_uc_profile_and_env(Some("peerA"), Some("development"), resolve_service_name);
+        assert_eq!(name, "UniClipboard-dev-peerA");
     }
 }

@@ -109,6 +109,42 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     await saveSetting(updatedSetting)
   }
 
+  // Update file sync settings
+  const updateFileSyncSetting = async (
+    newFileSyncSetting: Partial<Settings['file_sync'] & object>
+  ) => {
+    if (!setting) return
+    const updatedSetting: Settings = {
+      ...setting,
+      file_sync: {
+        ...(setting.file_sync ?? {
+          file_sync_enabled: true,
+          small_file_threshold: 10 * 1024 * 1024,
+          max_file_size: 5 * 1024 * 1024 * 1024,
+          file_cache_quota_per_device: 500 * 1024 * 1024,
+          file_retention_hours: 24,
+          file_auto_cleanup: true,
+        }),
+        ...newFileSyncSetting,
+      },
+    }
+    await saveSetting(updatedSetting)
+  }
+
+  // Update keyboard shortcuts
+  const updateKeyboardShortcuts = async (overrides: Record<string, string | string[]>) => {
+    if (!setting) {
+      throw new Error('No settings loaded')
+    }
+    const updatedSetting: Settings = { ...setting, keyboard_shortcuts: overrides }
+    try {
+      await saveSetting(updatedSetting)
+    } catch (err) {
+      console.error('Failed to update keyboard shortcuts:', err)
+      throw err
+    }
+  }
+
   // Load settings immediately on mount
   useEffect(() => {
     void loadSetting()
@@ -232,6 +268,8 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     updateSyncSetting,
     updateSecuritySetting,
     updateRetentionPolicy,
+    updateKeyboardShortcuts,
+    updateFileSyncSetting,
   }
 
   return <SettingContext.Provider value={value}>{children}</SettingContext.Provider>

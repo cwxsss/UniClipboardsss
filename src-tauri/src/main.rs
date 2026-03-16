@@ -10,6 +10,7 @@ use tauri::http::{Request, Response, StatusCode};
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_global_shortcut;
 use tauri_plugin_single_instance;
 use tauri_plugin_stronghold;
 use tokio::sync::mpsc;
@@ -33,8 +34,9 @@ use uc_platform::runtime::event_bus::{
 use uc_platform::runtime::runtime::PlatformRuntime;
 use uc_tauri::bootstrap::tracing as bootstrap_tracing;
 use uc_tauri::bootstrap::{
-    ensure_default_device_name, load_config, resolve_pairing_config, resolve_pairing_device_name,
-    start_background_tasks, wire_dependencies, AppRuntime, SetupRuntimePorts,
+    ensure_default_device_name, get_storage_paths, load_config, resolve_pairing_config,
+    resolve_pairing_device_name, start_background_tasks, wire_dependencies, AppRuntime,
+    SetupRuntimePorts,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -42,6 +44,9 @@ use uc_tauri::tray::TrayState;
 
 // Platform-specific command modules
 mod plugins;
+
+use uc_tauri::preview_panel;
+use uc_tauri::quick_panel;
 
 /// Simple executor for platform commands
 ///
@@ -523,17 +528,16 @@ fn run_app(config: AppConfig) {
     );
     let pairing_orchestrator = Arc::new(pairing_orchestrator);
     let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
+    // Resolve app directories once for reuse across wiring
+    let app_dirs = match DirsAppDirsAdapter::new().get_app_dirs() {
+        Ok(dirs) => dirs,
+        Err(err) => {
+            error!(error = %err, "Failed to determine app directories");
+            panic!("Failed to determine app directories: {}", err);
+        }
+    };
+
     let key_slot_store: Arc<dyn KeySlotStore> = {
-        let app_dirs = match DirsAppDirsAdapter::new().get_app_dirs() {
-            Ok(dirs) => dirs,
-            Err(err) => {
-                error!(error = %err, "Failed to determine app directories for keyslot store");
-                panic!(
-                    "Failed to determine app directories for keyslot store: {}",
-                    err
-                );
-            }
-        };
         let app_data_root = if config.database_path.as_os_str().is_empty() {
             app_dirs.app_data_root.clone()
         } else {
@@ -549,6 +553,9 @@ fn run_app(config: AppConfig) {
         Arc::new(JsonKeySlotStore::new(vault_dir))
     };
 
+    // Get resolved storage paths with profile suffix and config overrides applied
+    let storage_paths = get_storage_paths(&config).expect("failed to get storage paths");
+
     let runtime = AppRuntime::with_setup(
         deps,
         SetupRuntimePorts::from_network(
@@ -557,6 +564,7 @@ fn run_app(config: AppConfig) {
             discovery_network,
         ),
         watcher_control,
+        storage_paths,
     );
 
     // Wrap runtime in Arc for clipboard handler (PlatformRuntime needs Arc<dyn ClipboardChangeHandler>)
@@ -628,6 +636,7 @@ fn run_app(config: AppConfig) {
         // 1) In frontend devtools: fetch("uc://blob/<blob_id>")
         // 2) In frontend devtools: fetch("uc://thumbnail/<representation_id>")
         // 3) Network should show 200 with Access-Control-Allow-Origin matching http://localhost:1420
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init());
 
     let builder = if disable_single_instance {
@@ -683,6 +692,36 @@ fn run_app(config: AppConfig) {
             if let Err(error) = app.handle().set_dock_visibility(false) {
                 warn!(error = %error, "Failed to hide Dock icon during startup");
             }
+
+            // Register global shortcut plugin (empty — shortcuts registered dynamically)
+            #[cfg(desktop)]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_global_shortcut::Builder::new().build())?;
+
+                // Read shortcut override from settings, or use default
+                let shortcuts = {
+                    let settings_port = runtime_for_handler.settings_port();
+                    match tauri::async_runtime::block_on(settings_port.load()) {
+                        Ok(settings) => quick_panel::resolve_shortcut_from_settings(&settings),
+                        Err(e) => {
+                            warn!("Failed to load settings for shortcut: {}, using default", e);
+                            vec![quick_panel::DEFAULT_SHORTCUT.to_string()]
+                        }
+                    }
+                };
+
+                for shortcut_str in &shortcuts {
+                    if let Err(e) = quick_panel::register_global_shortcut(app.handle(), shortcut_str) {
+                        tracing::error!(error = %e, shortcut = %shortcut_str, "Failed to register global shortcut during startup");
+                    }
+                }
+            }
+
+            // Pre-create quick panel and preview panel (hidden) so the first
+            // shortcut press doesn't activate the app via WebviewWindowBuilder::build()
+            quick_panel::pre_create(app.handle());
+            preview_panel::pre_create(app.handle());
 
             // Show window based on silent_start setting
             if !silent_start {
@@ -809,10 +848,12 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::clipboard::get_clipboard_stats,
             uc_tauri::commands::clipboard::toggle_favorite_clipboard_item,
             uc_tauri::commands::clipboard::get_clipboard_item,
+            uc_tauri::commands::clipboard::copy_file_to_clipboard,
             // Encryption commands
             uc_tauri::commands::encryption::initialize_encryption,
             uc_tauri::commands::encryption::get_encryption_session_status,
             uc_tauri::commands::encryption::unlock_encryption_session,
+            uc_tauri::commands::encryption::verify_keychain_access,
             // Settings commands
             uc_tauri::commands::settings::get_settings,
             uc_tauri::commands::settings::update_settings,
@@ -838,6 +879,8 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::pairing::unpair_p2p_device,
             uc_tauri::commands::pairing::list_paired_devices,
             uc_tauri::commands::pairing::set_pairing_state,
+            uc_tauri::commands::pairing::get_device_sync_settings,
+            uc_tauri::commands::pairing::update_device_sync_settings,
             // Tray commands
             uc_tauri::commands::tray::set_tray_language,
             // Lifecycle commands
@@ -850,6 +893,11 @@ fn run_app(config: AppConfig) {
             // Updater commands
             uc_tauri::commands::updater::check_for_update,
             uc_tauri::commands::updater::install_update,
+            // Storage commands
+            uc_tauri::commands::storage::get_storage_stats,
+            uc_tauri::commands::storage::clear_cache,
+            uc_tauri::commands::storage::clear_all_clipboard_history,
+            uc_tauri::commands::storage::open_data_directory,
             // macOS-specific commands (conditionally compiled)
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::enable_rounded_corners,
@@ -857,6 +905,12 @@ fn run_app(config: AppConfig) {
             plugins::mac_rounded_corners::enable_modern_window_style,
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::reposition_traffic_lights,
+            // Quick panel commands
+            uc_tauri::commands::quick_panel::paste_to_previous_app,
+            uc_tauri::commands::quick_panel::dismiss_quick_panel,
+            // Preview panel commands
+            uc_tauri::commands::preview_panel::show_preview_panel,
+            uc_tauri::commands::preview_panel::dismiss_preview_panel,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

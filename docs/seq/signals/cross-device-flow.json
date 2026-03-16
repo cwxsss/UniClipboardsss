@@ -1,0 +1,34 @@
+{
+  "Title": "Cross-Device Flow",
+  "Description": "View end-to-end flows across sender and receiver devices",
+  "Query": "Has(flow_id) or Has(origin_flow_id)",
+  "Columns": [
+    { "Name": "flow_id", "Width": 280 },
+    { "Name": "origin_flow_id", "Width": 280 },
+    { "Name": "device_id", "Width": 150 },
+    { "Name": "origin_device_id", "Width": 150 },
+    { "Name": "stage", "Width": 120 },
+    { "Name": "@t", "Header": "Timestamp", "Width": 180 },
+    { "Name": "@m", "Header": "Message", "Width": 350 }
+  ],
+  "Sort": [{ "Field": "@t", "Order": "asc" }],
+  "Signal": {
+    "Type": "saved-search",
+    "Expression": "origin_flow_id = '<select-a-flow-id>'"
+  },
+  "Example": {
+    "Description": "Find all events for a cross-device flow using origin_flow_id",
+    "Query": "origin_flow_id = '01958a3b-0000-0000-0000-000000000001'"
+  },
+  "ExampleDescriptions": [
+    "Track clipboard content from sender to receiver",
+    "View the complete cross-device journey",
+    "Identify where delays occur in cross-device sync"
+  ],
+  "FieldMapping": {
+    "flow_id": "Current device's flow_id for this clipboard operation",
+    "origin_flow_id": "Original sender's flow_id (preserved through the sync pipeline)",
+    "device_id": "Device that generated/processing this event",
+    "origin_device_id": "Original device that captured the clipboard content"
+  }
+}

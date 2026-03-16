@@ -26,6 +26,7 @@ import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
 import { ReleaseNotes } from '@/components/update/ReleaseNotes'
 import { useSetting } from '@/hooks/useSetting'
+import { useShortcutLayer } from '@/hooks/useShortcutLayer'
 import { useUpdate } from '@/hooks/useUpdate'
 import { cn } from '@/lib/utils'
 import type { UpdateChannel } from '@/types/setting'
@@ -55,12 +56,17 @@ const AboutSection: React.FC = () => {
   const { updateInfo, isCheckingUpdate, checkForUpdates, installUpdate, downloadProgress } =
     useUpdate()
   const [appVersion, setAppVersion] = useState<string>('')
-  const [autoCheckUpdate, setAutoCheckUpdate] = useState(true)
+  const [autoCheckUpdate, setAutoCheckUpdate] = useState(setting?.general.auto_check_update ?? true)
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const isInstallingUpdate = downloadProgress.phase !== 'idle'
   const isBusy = settingLoading || saving
+  useShortcutLayer({
+    layer: 'modal',
+    scope: 'modal',
+    enabled: updateDialogOpen,
+  })
 
   const channel = appVersion ? parseChannel(appVersion) : null
 

@@ -11,6 +11,10 @@ vi.mock('react-i18next', () => ({
   }),
 }))
 
+vi.mock('@/hooks/useShortcutLayer', () => ({
+  useShortcutLayer: vi.fn(),
+}))
+
 const baseSetting: Settings = {
   schema_version: 1,
   general: {
@@ -75,6 +79,8 @@ describe('AboutSection', () => {
           updateSyncSetting: vi.fn(),
           updateSecuritySetting: vi.fn(),
           updateRetentionPolicy: vi.fn(),
+          updateKeyboardShortcuts: vi.fn(),
+          updateFileSyncSetting: vi.fn(),
         }}
       >
         <UpdateContext.Provider
@@ -116,6 +122,8 @@ describe('AboutSection', () => {
           updateSyncSetting: vi.fn(),
           updateSecuritySetting: vi.fn(),
           updateRetentionPolicy: vi.fn(),
+          updateKeyboardShortcuts: vi.fn(),
+          updateFileSyncSetting: vi.fn(),
         }}
       >
         <UpdateContext.Provider

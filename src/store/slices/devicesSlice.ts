@@ -2,8 +2,11 @@ import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
 import {
   getLocalDeviceInfo,
   getPairedPeersWithStatus,
+  getDeviceSyncSettings,
+  updateDeviceSyncSettings as updateDeviceSyncSettingsApi,
   type LocalDeviceInfo,
   type PairedPeer,
+  type SyncSettings,
 } from '@/api/p2p'
 
 interface DevicesState {
@@ -16,6 +19,10 @@ interface DevicesState {
   pairedDevices: PairedPeer[]
   pairedDevicesLoading: boolean
   pairedDevicesError: string | null
+
+  // 每设备同步设置
+  deviceSyncSettings: Record<string, SyncSettings>
+  deviceSyncSettingsLoading: Record<string, boolean>
 }
 
 const initialState: DevicesState = {
@@ -25,6 +32,8 @@ const initialState: DevicesState = {
   pairedDevices: [],
   pairedDevicesLoading: false,
   pairedDevicesError: null,
+  deviceSyncSettings: {},
+  deviceSyncSettingsLoading: {},
 }
 
 // 异步 Thunk Actions
@@ -46,6 +55,33 @@ export const fetchPairedDevices = createAsyncThunk(
       return await getPairedPeersWithStatus()
     } catch {
       return rejectWithValue('获取已配对设备失败')
+    }
+  }
+)
+
+export const fetchDeviceSyncSettings = createAsyncThunk(
+  'devices/fetchSyncSettings',
+  async (peerId: string, { rejectWithValue }) => {
+    try {
+      const settings = await getDeviceSyncSettings(peerId)
+      return { peerId, settings }
+    } catch {
+      return rejectWithValue('Failed to fetch device sync settings')
+    }
+  }
+)
+
+export const updateDeviceSyncSettings = createAsyncThunk(
+  'devices/updateSyncSettings',
+  async (
+    { peerId, settings }: { peerId: string; settings: SyncSettings | null },
+    { rejectWithValue }
+  ) => {
+    try {
+      await updateDeviceSyncSettingsApi(peerId, settings)
+      return { peerId, settings }
+    } catch {
+      return rejectWithValue('Failed to update device sync settings')
     }
   }
 )
@@ -113,6 +149,35 @@ const devicesSlice = createSlice({
       .addCase(fetchPairedDevices.rejected, (state, action) => {
         state.pairedDevicesLoading = false
         state.pairedDevicesError = action.payload as string
+      })
+
+    // Device sync settings
+    builder
+      .addCase(fetchDeviceSyncSettings.pending, (state, action) => {
+        state.deviceSyncSettingsLoading[action.meta.arg] = true
+      })
+      .addCase(fetchDeviceSyncSettings.fulfilled, (state, action) => {
+        const { peerId, settings } = action.payload
+        state.deviceSyncSettings[peerId] = settings
+        state.deviceSyncSettingsLoading[peerId] = false
+      })
+      .addCase(fetchDeviceSyncSettings.rejected, (state, action) => {
+        state.deviceSyncSettingsLoading[action.meta.arg] = false
+      })
+
+    builder
+      .addCase(updateDeviceSyncSettings.pending, (state, action) => {
+        state.deviceSyncSettingsLoading[action.meta.arg.peerId] = true
+      })
+      .addCase(updateDeviceSyncSettings.fulfilled, (state, action) => {
+        const { peerId, settings } = action.payload
+        if (settings) {
+          state.deviceSyncSettings[peerId] = settings
+        }
+        state.deviceSyncSettingsLoading[peerId] = false
+      })
+      .addCase(updateDeviceSyncSettings.rejected, (state, action) => {
+        state.deviceSyncSettingsLoading[action.meta.arg.peerId] = false
       })
   },
 })

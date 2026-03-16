@@ -11,6 +11,7 @@ use libp2p::{
 };
 use libp2p_stream as stream;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -30,6 +31,7 @@ use uc_core::ports::{
     TransferProgress,
 };
 
+use super::file_transfer::service::{FileTransferConfig, FileTransferService};
 use super::pairing_stream::service::{
     PairingStreamConfig, PairingStreamError, PairingStreamService,
 };
@@ -95,10 +97,18 @@ impl PeerCaches {
         discovered_at: DateTime<Utc>,
     ) -> DiscoveredPeer {
         sort_addresses_quic_first(&mut addresses);
+        // Preserve device_name and device_id from existing entry when
+        // re-discovered via mDNS, so we don't overwrite names that were
+        // resolved through the DeviceAnnounce protocol.
+        let (existing_name, existing_device_id) = self
+            .discovered_peers
+            .get(&peer_id)
+            .map(|p| (p.device_name.clone(), p.device_id.clone()))
+            .unwrap_or((None, None));
         let peer = DiscoveredPeer {
             peer_id,
-            device_name: None,
-            device_id: None,
+            device_name: existing_name,
+            device_id: existing_device_id,
             addresses,
             discovered_at,
             last_seen: discovered_at,
@@ -260,6 +270,8 @@ pub struct Libp2pNetworkAdapter {
     _transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
     stream_control: Mutex<Option<stream::Control>>,
     pairing_service: Mutex<Option<PairingStreamService>>,
+    file_transfer_service: Mutex<Option<FileTransferService>>,
+    file_cache_dir: PathBuf,
 }
 
 impl Libp2pNetworkAdapter {
@@ -269,6 +281,7 @@ impl Libp2pNetworkAdapter {
         encryption_session: Arc<dyn EncryptionSessionPort>,
         transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
         transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+        file_cache_dir: PathBuf,
     ) -> Result<Self> {
         let keypair = load_or_create_identity(identity_store.as_ref())
             .map_err(|e| anyhow!("failed to load libp2p identity: {e}"))?;
@@ -302,6 +315,8 @@ impl Libp2pNetworkAdapter {
             _transfer_encryptor: transfer_encryptor,
             stream_control: Mutex::new(None),
             pairing_service,
+            file_transfer_service: Mutex::new(None),
+            file_cache_dir,
         })
     }
 
@@ -356,6 +371,22 @@ impl Libp2pNetworkAdapter {
                 .lock()
                 .map_err(|_| anyhow!("pairing service mutex poisoned"))?;
             *guard = Some(pairing_service);
+        }
+
+        // Construct FileTransferService and spawn accept loop
+        let file_transfer_service = FileTransferService::new(
+            stream_control.clone(),
+            self.event_tx.clone(),
+            Arc::new(uc_core::ports::transfer_progress::NoopTransferProgressPort),
+            FileTransferConfig::new(self.file_cache_dir.clone()),
+        );
+        file_transfer_service.spawn_accept_loop();
+        {
+            let mut guard = self
+                .file_transfer_service
+                .lock()
+                .map_err(|_| anyhow!("file transfer service mutex poisoned"))?;
+            *guard = Some(file_transfer_service);
         }
 
         spawn_business_stream_handler(
@@ -873,6 +904,67 @@ impl NetworkControlPort for Libp2pNetworkAdapter {
     }
 }
 
+#[async_trait]
+impl uc_core::ports::FileTransportPort for Libp2pNetworkAdapter {
+    async fn send_file_announce(
+        &self,
+        _peer_id: &str,
+        _announce: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        // Individual message methods are not used — full transfer goes through send_file()
+        Ok(())
+    }
+
+    async fn send_file_data(
+        &self,
+        _peer_id: &str,
+        _data: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn send_file_complete(
+        &self,
+        _peer_id: &str,
+        _complete: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn cancel_transfer(
+        &self,
+        _peer_id: &str,
+        _cancel: uc_core::network::protocol::FileTransferMessage,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn send_file(
+        &self,
+        peer_id: &str,
+        file_path: std::path::PathBuf,
+        transfer_id: String,
+        batch_id: Option<String>,
+        batch_total: Option<u32>,
+    ) -> Result<()> {
+        let service = {
+            let guard = self
+                .file_transfer_service
+                .lock()
+                .map_err(|_| anyhow!("file transfer service mutex poisoned"))?;
+            guard
+                .as_ref()
+                .ok_or_else(|| {
+                    anyhow!("file transfer service not initialized — network not started")
+                })?
+                .clone()
+        };
+        service
+            .send_file(peer_id, file_path, transfer_id, batch_id, batch_total)
+            .await
+    }
+}
+
 /// Maximum JSON header size (64KB). Streams with larger headers are discarded.
 const MAX_JSON_HEADER_SIZE: usize = 64 * 1024;
 
@@ -911,17 +1003,9 @@ fn spawn_business_stream_handler(
             let encryption_session = encryption_session.clone();
             let transfer_decryptor = transfer_decryptor.clone();
             tokio::spawn(async move {
-                if check_business_allowed(
-                    &policy_resolver,
-                    &event_tx,
-                    &peer_id,
-                    ProtocolDirection::Inbound,
-                )
-                .await
-                .is_err()
-                {
-                    return;
-                }
+                // Policy check is deferred until after reading the message type.
+                // DeviceAnnounce is allowed from any peer (even unpaired) so that
+                // device names are available in JoinPickDeviceStep before pairing.
 
                 // Apply overall size guard on the stream
                 let limited = stream.take(BUSINESS_PAYLOAD_MAX_BYTES + 1);
@@ -971,6 +1055,19 @@ fn spawn_business_stream_handler(
                             if msg.payload_version == ClipboardPayloadVersion::V3
                                 && msg.encrypted_content.is_empty() =>
                         {
+                            // Gate unpaired/pending peers before expensive I/O and crypto.
+                            if check_business_allowed(
+                                &policy_resolver,
+                                &event_tx,
+                                &peer_id,
+                                ProtocolDirection::Inbound,
+                            )
+                            .await
+                            .is_err()
+                            {
+                                return Err("denied by policy".into());
+                            }
+
                             // Streaming decode uses a blocking read-to-end, then async decrypt
                             // via injected TransferPayloadDecryptorPort.
                             let master_key = match encryption_session.get_master_key().await {
@@ -1114,6 +1211,8 @@ fn spawn_business_stream_handler(
 
                 match result {
                     Ok(Ok(ProcessedMessage::StreamingClipboard(msg, plaintext))) => {
+                        // Policy already checked inside the streaming branch before
+                        // get_master_key / spawn_blocking / decrypt.
                         handle_v2_clipboard(
                             caches,
                             event_tx,
@@ -1124,7 +1223,32 @@ fn spawn_business_stream_handler(
                         )
                         .await;
                     }
+                    Ok(Ok(ProcessedMessage::Standard(ProtocolMessage::DeviceAnnounce(
+                        announce,
+                    )))) => {
+                        // DeviceAnnounce is allowed from any peer (even unpaired)
+                        handle_standard_message(
+                            caches,
+                            event_tx,
+                            clipboard_tx,
+                            peer_id,
+                            ProtocolMessage::DeviceAnnounce(announce),
+                        )
+                        .await;
+                    }
                     Ok(Ok(ProcessedMessage::Standard(message))) => {
+                        // All other standard messages require pairing
+                        if check_business_allowed(
+                            &policy_resolver,
+                            &event_tx,
+                            &peer_id,
+                            ProtocolDirection::Inbound,
+                        )
+                        .await
+                        .is_err()
+                        {
+                            return;
+                        }
                         handle_standard_message(caches, event_tx, clipboard_tx, peer_id, message)
                             .await;
                     }
@@ -1394,12 +1518,21 @@ async fn run_swarm(
                                 let caches = caches.read().await;
                                 caches.discovered_peers.len()
                             };
-                            info!(
-                                emitted_event_count = events.len(),
-                                discovered_cache_size = cache_size,
-                                local_peer_id = %local_peer_id,
-                                "processed mdns expired event"
-                            );
+                            if cache_size == 0 && !events.is_empty() {
+                                warn!(
+                                    emitted_event_count = events.len(),
+                                    discovered_cache_size = cache_size,
+                                    local_peer_id = %local_peer_id,
+                                    "All discovered peers expired via mDNS; outbound sync will be unavailable until peers are rediscovered"
+                                );
+                            } else {
+                                info!(
+                                    emitted_event_count = events.len(),
+                                    discovered_cache_size = cache_size,
+                                    local_peer_id = %local_peer_id,
+                                    "processed mdns expired event"
+                                );
+                            }
 
                             for event in events {
                                 let _ = try_send_event(&event_tx, event, "PeerLost");
@@ -1772,7 +1905,7 @@ async fn execute_business_command(
                 device_name,
                 timestamp: Utc::now(),
             });
-            let payload = match message.to_bytes() {
+            let payload = match message.frame_to_bytes(None) {
                 Ok(payload) => payload,
                 Err(err) => {
                     warn!(
@@ -1800,17 +1933,9 @@ async fn execute_business_command(
                         continue;
                     }
                 };
-                if check_business_allowed(
-                    &policy_resolver,
-                    &event_tx,
-                    peer_id.as_str(),
-                    ProtocolDirection::Outbound,
-                )
-                .await
-                .is_err()
-                {
-                    continue;
-                }
+                // DeviceAnnounce is allowed for all peers regardless of pairing
+                // state so that device names are visible in the JoinPickDeviceStep
+                // UI before pairing is initiated.
 
                 let mut announce_control = control.clone();
                 match timeout(
@@ -2298,6 +2423,31 @@ mod tests {
     }
 
     #[test]
+    fn cache_upsert_discovered_preserves_device_name() {
+        let mut caches = PeerCaches::new();
+        let t0 = Utc::now();
+
+        // Initial discovery: no name yet
+        let peer = caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+            t0,
+        );
+        assert!(peer.device_name.is_none());
+
+        // Device name resolved via DeviceAnnounce protocol
+        caches.upsert_device_name("peer-1", "My Laptop".to_string(), t0);
+
+        // Re-discovery via mDNS: device_name must be preserved
+        let peer = caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+            t0,
+        );
+        assert_eq!(peer.device_name.as_deref(), Some("My Laptop"));
+    }
+
+    #[test]
     fn cache_removes_discovered_peer_on_loss() {
         let mut caches = PeerCaches::new();
         caches.upsert_discovered(
@@ -2506,6 +2656,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         );
         assert!(adapter.is_ok());
     }
@@ -2518,6 +2669,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2539,6 +2691,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2621,6 +2774,8 @@ mod tests {
             origin_device_id: "peer-1".to_string(),
             origin_device_name: "Desk".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
+            origin_flow_id: None,
+            file_transfers: vec![],
         };
 
         handle_standard_message(
@@ -2659,6 +2814,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2803,6 +2959,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2826,6 +2983,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -2851,6 +3009,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
         let local_peer_id = adapter.local_peer_id();
@@ -2933,6 +3092,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
         let payload: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4].into_boxed_slice());
@@ -2981,6 +3141,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -3000,6 +3161,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter");
 
@@ -3060,6 +3222,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3068,6 +3231,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
@@ -3096,6 +3260,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3104,6 +3269,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
@@ -3162,6 +3328,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3170,6 +3337,7 @@ mod tests {
             Arc::new(InMemoryEncryptionSessionPort::default()),
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
         )
         .expect("create adapter b");
         let rx_a = adapter_a
@@ -3216,6 +3384,8 @@ mod tests {
             origin_device_id: "device-a".to_string(),
             origin_device_name: "Adapter A".to_string(),
             payload_version: uc_core::network::protocol::ClipboardPayloadVersion::V3,
+            origin_flow_id: None,
+            file_transfers: vec![],
         };
         // Use frame_to_bytes for the two-segment wire format (header + no trailing payload for this test)
         let payload: Arc<[u8]> = Arc::from(

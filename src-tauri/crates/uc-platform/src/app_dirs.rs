@@ -4,7 +4,7 @@ use crate::ports::AppDirsPort;
 use uc_core::app_dirs::AppDirs;
 use uc_core::ports::AppDirsError;
 
-const APP_DIR_NAME: &str = "uniclipboard";
+const APP_DIR_NAME: &str = "app.uniclipboard.desktop";
 
 fn resolved_app_dir_name() -> String {
     match std::env::var("UC_PROFILE") {
@@ -131,7 +131,7 @@ mod tests {
     /// ```
     /// let adapter = DirsAppDirsAdapter::with_base_data_local_dir(std::path::PathBuf::from("/tmp"));
     /// let dirs = adapter.get_app_dirs().unwrap();
-    /// assert_eq!(dirs.app_data_root, std::path::PathBuf::from("/tmp/uniclipboard"));
+    /// assert_eq!(dirs.app_data_root, std::path::PathBuf::from("/tmp/app.uniclipboard.desktop"));
     /// ```
     #[test]
     fn adapter_appends_uniclipboard_dir_name() {
@@ -141,7 +141,7 @@ mod tests {
             let dirs = adapter.get_app_dirs().unwrap();
             assert_eq!(
                 dirs.app_data_root,
-                std::path::PathBuf::from("/tmp/uniclipboard")
+                std::path::PathBuf::from("/tmp/app.uniclipboard.desktop")
             );
         });
     }
@@ -151,7 +151,7 @@ mod tests {
         with_uc_profile(None, || {
             let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/tmp"));
             let dirs = adapter.get_app_dirs().unwrap();
-            assert!(dirs.app_cache_root.ends_with("uniclipboard"));
+            assert!(dirs.app_cache_root.ends_with("app.uniclipboard.desktop"));
         });
     }
 
@@ -166,11 +166,23 @@ mod tests {
             adapter.get_app_dirs().unwrap()
         });
 
-        assert_eq!(dirs_a.app_data_root, PathBuf::from("/tmp/uniclipboard-a"));
-        assert_eq!(dirs_b.app_data_root, PathBuf::from("/tmp/uniclipboard-b"));
+        assert_eq!(
+            dirs_a.app_data_root,
+            PathBuf::from("/tmp/app.uniclipboard.desktop-a")
+        );
+        assert_eq!(
+            dirs_b.app_data_root,
+            PathBuf::from("/tmp/app.uniclipboard.desktop-b")
+        );
         assert_ne!(dirs_a.app_data_root, dirs_b.app_data_root);
-        assert_eq!(dirs_a.app_cache_root, PathBuf::from("/tmp/uniclipboard-a"));
-        assert_eq!(dirs_b.app_cache_root, PathBuf::from("/tmp/uniclipboard-b"));
+        assert_eq!(
+            dirs_a.app_cache_root,
+            PathBuf::from("/tmp/app.uniclipboard.desktop-a")
+        );
+        assert_eq!(
+            dirs_b.app_cache_root,
+            PathBuf::from("/tmp/app.uniclipboard.desktop-b")
+        );
         assert_ne!(dirs_a.app_cache_root, dirs_b.app_cache_root);
     }
 }

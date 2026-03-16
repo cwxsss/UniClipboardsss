@@ -50,7 +50,6 @@ pub async fn initialize_encryption(
         "command.encryption.initialize",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
 
@@ -119,7 +118,6 @@ pub async fn unlock_encryption_session_with_runtime<R: Runtime>(
         "command.encryption.unlock_session",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &trace);
     let uc = runtime.usecases().auto_unlock_encryption_session();
@@ -665,6 +663,14 @@ mod tests {
         async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
             Ok(())
         }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -819,6 +825,50 @@ mod tests {
         }
     }
 
+    impl uc_core::ports::FileManagerPort for NoopPort {
+        fn open_directory(
+            &self,
+            _path: &std::path::Path,
+        ) -> Result<(), uc_core::ports::FileManagerError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl uc_core::ports::CacheFsPort for NoopPort {
+        async fn exists(&self, _path: &std::path::Path) -> bool {
+            false
+        }
+        async fn read_dir(
+            &self,
+            _path: &std::path::Path,
+        ) -> anyhow::Result<Vec<uc_core::ports::CacheFsDirEntry>> {
+            Ok(vec![])
+        }
+        async fn remove_dir_all(&self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn remove_file(&self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn dir_size(&self, _path: &std::path::Path) -> anyhow::Result<u64> {
+            Ok(0)
+        }
+    }
+
+    fn test_storage_paths() -> uc_app::app_paths::AppPaths {
+        uc_app::app_paths::AppPaths {
+            db_path: std::path::PathBuf::from("/tmp/uniclipboard-test/uniclipboard.db"),
+            vault_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/vault"),
+            settings_path: std::path::PathBuf::from("/tmp/uniclipboard-test/settings.json"),
+            logs_dir: std::path::PathBuf::from("/tmp/uniclipboard-test/logs"),
+            cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache"),
+            file_cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/file-cache"),
+            spool_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/spool"),
+            app_data_root: std::path::PathBuf::from("/tmp/uniclipboard-test"),
+        }
+    }
+
     #[tokio::test]
     async fn unlock_success_triggers_network_start() {
         let start_calls = Arc::new(AtomicUsize::new(0));
@@ -868,15 +918,18 @@ mod tests {
                 blob_writer: Arc::new(NoopPort),
                 thumbnail_repo: Arc::new(NoopPort),
                 thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
             },
             settings: Arc::new(NoopPort),
             system: uc_app::SystemPorts {
                 clock: Arc::new(NoopPort),
                 hash: Arc::new(NoopPort),
+                file_manager: Arc::new(NoopPort),
+                cache_fs: Arc::new(NoopPort),
             },
         };
 
-        let runtime = Arc::new(AppRuntime::new(deps));
+        let runtime = Arc::new(AppRuntime::new(deps, test_storage_paths()));
         let app = tauri::test::mock_app();
         let app_handle = app.handle();
 
@@ -893,6 +946,30 @@ mod tests {
     }
 }
 
+/// Verify whether macOS Keychain "Always Allow" permission has been granted.
+/// 验证 macOS 钥匙串"始终允许"权限是否已授予。
+///
+/// Returns `true` if Keychain access succeeds silently, `false` if permission denied.
+/// Returns an error if KEK is not found (encryption not properly initialized).
+#[tauri::command]
+pub async fn verify_keychain_access(
+    runtime: State<'_, Arc<AppRuntime>>,
+    _trace: Option<TraceMetadata>,
+) -> Result<bool, String> {
+    let span = info_span!(
+        "command.encryption.verify_keychain_access",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+    );
+    record_trace_fields(&span, &_trace);
+
+    let uc = runtime.usecases().verify_keychain_access();
+    uc.execute()
+        .instrument(span)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Check if encryption is initialized
 /// 检查加密是否已初始化
 ///
@@ -907,7 +984,6 @@ pub async fn is_encryption_initialized(
         "command.encryption.is_initialized",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
     async {
@@ -941,7 +1017,6 @@ pub async fn get_encryption_session_status(
         "command.encryption.session_status",
         trace_id = tracing::field::Empty,
         trace_ts = tracing::field::Empty,
-        device_id = %runtime.device_id(),
     );
     record_trace_fields(&span, &_trace);
 

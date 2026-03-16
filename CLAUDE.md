@@ -35,6 +35,42 @@ bun run build      # Build frontend with TypeScript check
 bun run preview    # Preview production build
 ```
 
+### Testing
+
+```bash
+# Frontend tests (Vitest, configured with jsdom)
+bun test                    # Run all tests
+bun test -- --watch         # Watch mode
+bun test -- src/lib         # Run tests in a specific directory
+
+# Rust tests (MUST run from src-tauri/)
+cd src-tauri && cargo test
+cd src-tauri && cargo test -p uc-core           # Test a specific crate
+cd src-tauri && cargo test test_name             # Run a single test
+
+# Coverage
+bun run test:coverage
+open src-tauri/target/llvm-cov/html/index.html
+```
+
+Integration tests can use Cargo features: `integration_tests`, `network_tests`, `hardware_tests`.
+
+### Linting & Formatting
+
+```bash
+bun run lint        # ESLint
+bun run lint:fix    # ESLint with auto-fix
+bun run format      # Prettier
+```
+
+### Multi-Device Development
+
+```bash
+bun run tauri:dev:peerA    # Launch peer A (full clipboard mode)
+bun run tauri:dev:peerB    # Launch peer B (passive mode, no separate dev server)
+bun run tauri:dev:dual     # Launch both peers concurrently
+```
+
 ### Cross-Platform Building
 
 Building is handled via GitHub Actions. Trigger manually from GitHub Actions tab with:
@@ -60,17 +96,6 @@ cargo test
 **Never run any Cargo command from the project root.**
 **If Cargo.toml is not present in the current directory, stop immediately and do not retry.**
 
-### Test Coverage
-
-Generate local coverage report using cargo-llvm-cov:
-
-```bash
-bun run test:coverage
-open src-tauri/target/llvm-cov/html/index.html
-```
-
-Coverage is automatically uploaded to Codecov on each push/PR for tracking incremental changes.
-
 ## Logging
 
 ### Overview
@@ -87,7 +112,7 @@ See [docs/architecture/logging-architecture.md](docs/architecture/logging-archit
 
 ### Configuration
 
-Logging is initialized in `src-tauri/src/main.rs` using `init_tracing_subscriber()` from `src-tauri/crates/uc-tauri/src/bootstrap/tracing.rs`.
+Logging is initialized in `src-tauri/src/main.rs` using `init_tracing_subscriber()` from the `uc-observability` crate. The `uc-tauri/src/bootstrap/tracing.rs` module delegates to `uc-observability` for dual-output tracing (pretty console + structured JSON/CLEF file).
 
 ### Environment Behavior
 
@@ -96,9 +121,9 @@ Logging is initialized in `src-tauri/src/main.rs` using `init_tracing_subscriber
 
 ### Log File Locations
 
-- **macOS**: `~/Library/Logs/com.uniclipboard/uniclipboard.log`
-- **Linux**: `~/.local/share/com.uniclipboard/logs/uniclipboard.log`
-- **Windows**: `%LOCALAPPDATA%\com.uniclipboard\logs/uniclipboard.log`
+- **macOS**: `~/Library/Logs/app.uniclipboard.desktop/uniclipboard.log`
+- **Linux**: `~/.local/share/app.uniclipboard.desktop/logs/uniclipboard.log`
+- **Windows**: `%LOCALAPPDATA%\app.uniclipboard.desktop\logs/uniclipboard.log`
 
 ### Using Logs in Code
 
@@ -191,7 +216,7 @@ usecase.delete_clipboard_entry.execute        ← #[instrument] auto-created
 **Production:**
 
 - Check the log file at the platform-specific location above
-- Run `tail -f ~/Library/Logs/com.uniclipboard/uniclipboard.log` (macOS) for live monitoring
+- Run `tail -f ~/Library/Logs/app.uniclipboard.desktop/uniclipboard.log` (macOS) for live monitoring
 
 ### Log Filtering
 
@@ -201,97 +226,82 @@ The logging system filters out:
 - Tauri internal event logs to avoid infinite loops
 - `ipc::request` logs in production builds
 
-See `src-tauri/crates/uc-tauri/src/bootstrap/tracing.rs` for tracing configuration and `logging.rs` for legacy log configuration.
+See `src-tauri/crates/uc-observability/` for tracing configuration and log profiles (`Dev`, `Prod`, `DebugClipboard`).
 
 ## Architecture
 
 ### Backend (Rust with Tauri 2)
 
-**NOTE**: The backend is currently undergoing a major refactoring from Clean Architecture to Hexagonal Architecture. Both old and new code coexist during the transition.
-
-#### New Architecture (Target)
-
-The new architecture follows **Hexagonal Architecture (Ports and Adapters)** with crate-based modularization:
+The backend follows **Hexagonal Architecture (Ports and Adapters)** with crate-based modularization:
 
 ```
 src-tauri/crates/
-├── uc-core/         # Core domain layer (90% complete)
-│   ├── clipboard/   # Clipboard aggregate root
-│   ├── device/      # Device aggregate root
-│   ├── network/     # Network domain models
-│   ├── security/    # Security domain models
-│   ├── settings/    # Settings domain models
-│   └── ports/       # Port definitions (traits)
-│       ├── clipboard/
-│       ├── security/
-│       └── blob/
-├── uc-infra/        # Infrastructure implementations (60% complete)
-│   ├── db/          # Database layer
-│   │   ├── mapper/  # Entity mappers
-│   │   ├── models/  # Database models
-│   │   └── repositories/ # Repository implementations
-│   ├── security/    # Encryption implementations
-│   └── settings/    # Settings storage
-├── uc-platform/     # Platform adapter layer (70% complete)
-│   ├── adapters/    # Platform-specific adapters
-│   ├── app_runtime/ # Application runtime
-│   ├── ipc/         # IPC event/command system
-│   └── ports/       # Platform port definitions
-└── uc-app/          # Application layer (30% complete)
-    ├── event/       # Event handling
-    ├── state/       # Application state
-    └── use_cases/   # Use case implementations
+├── uc-core/              # Core domain layer — models, ports (traits), business rules
+│   ├── clipboard/        # Clipboard aggregate root
+│   ├── device/           # Device aggregate root
+│   ├── network/          # Network domain models & protocol
+│   ├── security/         # Security domain models
+│   ├── settings/         # Settings domain models
+│   └── ports/            # Port definitions (29 trait files)
+│       ├── clipboard/    # Clipboard-specific ports
+│       ├── security/     # Security ports
+│       ├── setup/        # Setup ports
+│       └── space/        # Space access ports
+├── uc-infra/             # Infrastructure implementations (adapters)
+│   ├── db/               # Database layer (Diesel ORM + SQLite)
+│   ├── blob/             # Blob storage
+│   ├── network/          # Network infrastructure
+│   ├── security/         # Encryption implementations
+│   └── settings/         # Settings storage
+├── uc-platform/          # Platform adapter layer
+│   ├── adapters/         # Platform-specific adapters
+│   ├── clipboard/        # Platform clipboard access
+│   ├── runtime/          # Application runtime
+│   ├── ipc/              # IPC event/command system
+│   └── ports/            # Platform port definitions
+├── uc-app/               # Application layer — use cases
+│   └── usecases/         # clipboard/, pairing/, file_sync/, setup/, settings/, storage/, etc.
+├── uc-tauri/             # Tauri integration layer
+│   ├── commands/         # Tauri command handlers (56+ commands in 12 files)
+│   ├── bootstrap/        # Runtime initialization
+│   └── models/           # DTOs for frontend
+├── uc-observability/     # Logging & tracing infrastructure
+│   └── (dual-output tracing: console + JSON, CLEF format, Seq integration)
+└── uc-clipboard-probe/   # Clipboard diagnostic utility
 ```
 
-**Dependency flow**: `uc-app` → `uc-core` ← `uc-infra` / `uc-platform`
+**Dependency flow**: `uc-tauri` → `uc-app` → `uc-core` ← `uc-infra` / `uc-platform`
 
-**Key architectural changes**:
+**Key principles**:
 
-- **Port/Adapter pattern**: All external dependencies accessed through trait ports
-- **Message-driven runtime**: Async event-based system replacing global state
+- **Port/Adapter pattern**: All external dependencies accessed through trait ports in `uc-core/ports/`
+- **Message-driven runtime**: Async event-based system with Tokio
 - **Crate boundaries**: Enforced separation through Rust module system
 
-#### Legacy Architecture (Being Replaced)
-
-The old architecture follows traditional **Clean Architecture**:
-
-```
-src-tauri/src/
-├── domain/          # Core business models
-├── interface/       # Trait definitions
-├── infrastructure/  # External implementations
-│   ├── clipboard/   # Platform-specific clipboard
-│   ├── p2p/         # P2P network (libp2p)
-│   ├── security/    # XChaCha20-Poly1305 encryption
-│   ├── storage/     # Diesel ORM + SQLite
-│   └── sync/        # WebSocket/WebDAV sync
-├── application/     # Business services
-├── config/          # TOML-based settings
-├── api/             # Tauri command handlers
-└── main.rs          # Application entry point
-```
-
-**Status**: Legacy code is still in use. Migration is in progress (~40% overall complete).
-
-**Concurrency patterns** (legacy):
-
-- Tokio async runtime for I/O
-- `Arc<Mutex<T>>` for shared state
-- Global `SETTING` RwLock for configuration
+**Entry point**: `src-tauri/src/main.rs` — bootstraps the Tauri app, registers all commands and plugins
 
 ### Frontend (React 18 + TypeScript + Vite)
 
 ```
 src/
-├── pages/          # Route pages (Dashboard, Devices, Settings)
-├── components/     # Reusable UI components (Shadcn/ui based)
-├── layouts/        # Layout wrappers
-├── store/          # Redux Toolkit slices (state management)
-├── api/            # Tauri command invocations
-├── contexts/       # React Context (SettingsProvider)
-├── hooks/          # Custom React hooks
-└── lib/            # Utilities (cn, shadcn UI helpers)
+├── pages/            # Route pages (Dashboard, Devices, Settings)
+├── components/       # Reusable UI components (Shadcn/ui based)
+├── layouts/          # Layout wrappers
+├── store/            # Redux Toolkit slices (state management)
+├── api/              # Tauri command invocations
+├── contexts/         # React Context (SettingsProvider)
+├── hooks/            # Custom React hooks
+├── lib/              # Utilities (cn, shadcn UI helpers)
+├── quick-panel/      # Quick access panel (separate Vite entry, runtime-created window)
+├── preview-panel/    # Content preview panel (separate Vite entry, runtime-created window)
+├── i18n/             # Internationalization
+├── shortcuts/        # Keyboard shortcut definitions and handling
+├── observability/    # Frontend observability (Sentry, Seq, tracing)
+├── types/            # TypeScript type definitions
+└── styles/           # Global CSS and theme definitions
 ```
+
+**Multi-window**: Quick Panel and Preview Panel are separate Vite entry points (`quick-panel.html`, `preview-panel.html`), created at runtime via Tauri window API — not defined in `tauri.conf.json`.
 
 **State management**: Redux Toolkit with RTK Query
 **Routing**: React Router v7
@@ -305,7 +315,7 @@ TypeScript path aliases configured: `@/*` maps to `src/*` ([tsconfig.json:24-27]
 
 ### Database Migrations
 
-Diesel migrations in [src-tauri/src/infrastructure/storage/db/migrations.rs](src-tauri/src/infrastructure/storage/db/migrations.rs). Run with `diesel migration run` (requires Diesel CLI setup).
+Diesel migrations in `src-tauri/crates/uc-infra/src/db/`. Run with `diesel migration run` (requires Diesel CLI setup).
 
 ### Security Implementation
 
@@ -327,19 +337,21 @@ Diesel migrations in [src-tauri/src/infrastructure/storage/db/migrations.rs](src
 
 ### Platform-Specific Code
 
-- macOS: Transparent title bar, cocoa background color ([main.rs:169-191](src-tauri/src/main.rs#L169-L191))
+- macOS: Transparent title bar, `macos-private-api` enabled for quick/preview panels
 - Windows/Unix: Standard window decorations
-- Clipboard: Platform implementations in [infrastructure/clipboard/](src-tauri/src/infrastructure/clipboard/)
+- Clipboard: Platform implementations in `uc-platform/src/clipboard/`
 
 ### Configuration
 
-Settings stored in TOML, managed by global `SETTING` RwLock ([config/setting.rs](src-tauri/src/config/setting.rs)). Includes:
+Settings managed through the `SettingsPort` trait (defined in `uc-core/src/ports/settings.rs`, implemented in `uc-infra/src/settings/`). Includes:
 
 - General (silent_start, etc.)
 - Network (webserver_port)
 - Sync (websocket/webdav settings)
 - Security (encryption password)
 - Storage limits
+- Keyboard shortcuts
+- File sync settings
 
 ## Clipboard Capture Integration
 
@@ -370,24 +382,9 @@ The integration uses a **callback pattern** maintaining proper layer separation:
 
 ## Tauri Commands
 
-All frontend-backend communication through Tauri commands defined in [commands/](src-tauri/crates/uc-tauri/src/commands/) (new architecture) and [api/](src-tauri/src/api/) (legacy).
+All frontend-backend communication through Tauri commands defined in [commands/](src-tauri/crates/uc-tauri/src/commands/). Command files are organized by domain: `clipboard.rs`, `encryption.rs`, `pairing.rs`, `setup.rs`, `storage.rs`, `settings.rs`, `autostart.rs`, `lifecycle.rs`, `updater.rs`, `tray.rs`, `quick_panel.rs`, `preview_panel.rs`.
 
-### Current Commands (Hexagonal Architecture)
-
-**Clipboard Commands**:
-
-- `get_clipboard_entries` - List clipboard history entries (uses `ListClipboardEntries` use case)
-- `delete_clipboard_entry` - Delete a clipboard entry (uses `DeleteClipboardEntry` use case)
-- `capture_clipboard` - Manually capture clipboard content (uses `CaptureClipboard` use case)
-
-**Encryption Commands**:
-
-- `initialize_encryption` - Initialize encryption with passphrase (uses `InitializeEncryption` use case)
-
-**Settings Commands** (⚠️ Legacy - needs migration):
-
-- `get_settings` - Get application settings (direct Port access)
-- `update_settings` - Update application settings (direct Port access)
+See [docs/architecture/commands-status.md](docs/architecture/commands-status.md) for detailed migration status.
 
 ### Architecture Pattern
 
@@ -403,12 +400,6 @@ pub async fn example_command(
 }
 ```
 
-**Status**: See [docs/architecture/commands-status.md](docs/architecture/commands-status.md) for detailed migration status.
-
-### Commands Layer Status
-
-**Current Migration Status:** 5/7 commands using UseCases accessor (71%)
-
 When adding new commands:
 
 1. Define command function in `src-tauri/crates/uc-tauri/src/commands/`
@@ -416,8 +407,6 @@ When adding new commands:
 3. Add accessor method to `UseCases` in `src-tauri/crates/uc-tauri/src/bootstrap/runtime.rs`
 4. Register in `invoke_handler![]` in `src-tauri/src/main.rs`
 5. Use `runtime.usecases().xxx()` - NEVER `runtime.deps.xxx`
-
-See `docs/architecture/commands-status.md` for detailed status.
 
 ## Development Notes
 
@@ -700,14 +689,6 @@ fn run_app(setting: Setting) {
 - `w-20` = 5rem (80px)
 - `w-52` = 13rem (208px)
 - `h-px` = 1px (special utility)
-
-## Testing
-
-No test framework currently configured. When adding tests:
-
-- Rust tests go in `src-tauri/tests/` or inline `#[cfg(test)]` modules
-- Frontend tests use Vitest (add to devDependencies)
-- Integration tests can use Cargo features: `integration_tests`, `network_tests`, `hardware_tests`
 
 ## UI/UX Guidelines
 

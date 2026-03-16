@@ -69,6 +69,8 @@ mod tests {
             origin_device_id: "dev-1".to_string(),
             origin_device_name: "Test Device".to_string(),
             payload_version: super::super::ClipboardPayloadVersion::V3,
+            origin_flow_id: None,
+            file_transfers: vec![],
         })
     }
 
@@ -157,6 +159,8 @@ mod tests {
             origin_device_id: "dev-1".to_string(),
             origin_device_name: "Test Device".to_string(),
             payload_version: super::super::ClipboardPayloadVersion::V3,
+            origin_flow_id: None,
+            file_transfers: vec![],
         });
         let framed = msg.frame_to_bytes(None).expect("frame_to_bytes");
 

@@ -7,15 +7,16 @@ use tracing::{debug, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
+use uc_core::network::paired_device::resolve_sync_settings;
 use uc_core::network::protocol::{
     BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion,
 };
 use uc_core::network::{ClipboardMessage, ProtocolMessage};
 use uc_core::ports::{
-    ClipboardTransportPort, DeviceIdentityPort, EncryptionSessionPort, PeerDirectoryPort,
-    SettingsPort, SystemClipboardPort, TransferPayloadEncryptorPort,
+    ClipboardTransportPort, DeviceIdentityPort, EncryptionSessionPort, PairedDeviceRepositoryPort,
+    PeerDirectoryPort, SettingsPort, SystemClipboardPort, TransferPayloadEncryptorPort,
 };
-use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+use uc_core::{ClipboardChangeOrigin, PeerId, SystemClipboardSnapshot};
 
 pub struct SyncOutboundClipboardUseCase {
     local_clipboard: Arc<dyn SystemClipboardPort>,
@@ -25,6 +26,7 @@ pub struct SyncOutboundClipboardUseCase {
     device_identity: Arc<dyn DeviceIdentityPort>,
     settings: Arc<dyn SettingsPort>,
     transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
 }
 
 impl SyncOutboundClipboardUseCase {
@@ -36,6 +38,7 @@ impl SyncOutboundClipboardUseCase {
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
         transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+        paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
     ) -> Self {
         Self {
             local_clipboard,
@@ -45,7 +48,96 @@ impl SyncOutboundClipboardUseCase {
             device_identity,
             settings,
             transfer_encryptor,
+            paired_device_repo,
         }
+    }
+
+    /// Filter sendable peers by per-device sync policy (auto_sync + content type).
+    ///
+    /// Peers not found in the paired device table are kept (safety fallback).
+    /// Errors from settings/repo loads are logged and the peer is kept.
+    /// The snapshot is classified once and the content type check is applied per-peer.
+    pub async fn apply_sync_policy(
+        &self,
+        peers: &[uc_core::network::DiscoveredPeer],
+        snapshot: &SystemClipboardSnapshot,
+    ) -> Vec<uc_core::network::DiscoveredPeer> {
+        use uc_core::settings::content_type_filter::{
+            classify_snapshot, is_content_type_allowed, ContentTypeCategory,
+        };
+
+        let global_settings = match self.settings.load().await {
+            Ok(s) => Some(s),
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "Failed to load global settings for per-device sync policy check; proceeding with all peers"
+                );
+                None
+            }
+        };
+
+        // Global master toggle: if auto_sync is off, skip ALL outbound sync.
+        if let Some(ref gs) = global_settings {
+            if !gs.sync.auto_sync {
+                info!("Global auto_sync disabled; returning empty peer list");
+                return vec![];
+            }
+        }
+
+        // Classify the snapshot once, not per-peer
+        let content_category = classify_snapshot(snapshot);
+
+        // Global file_sync_enabled guard for file content
+        if content_category == ContentTypeCategory::File {
+            if let Some(ref gs) = global_settings {
+                if !gs.file_sync.file_sync_enabled {
+                    info!("Global file_sync disabled; skipping outbound sync for file content");
+                    return vec![];
+                }
+            }
+        }
+
+        let mut result = Vec::with_capacity(peers.len());
+        for peer in peers {
+            let peer_id = PeerId::from(peer.peer_id.as_str());
+            match self.paired_device_repo.get_by_peer_id(&peer_id).await {
+                Ok(Some(device)) => {
+                    if let Some(ref gs) = global_settings {
+                        let effective = resolve_sync_settings(&device, &gs.sync);
+                        if !effective.auto_sync {
+                            debug!(
+                                peer_id = %peer.peer_id,
+                                "Skipping sync for peer: auto_sync disabled"
+                            );
+                            continue;
+                        }
+                        if !is_content_type_allowed(content_category, &effective.content_types) {
+                            debug!(
+                                peer_id = %peer.peer_id,
+                                content_type = ?content_category,
+                                "Skipping sync for peer: content type disabled"
+                            );
+                            continue;
+                        }
+                    }
+                    result.push(peer.clone());
+                }
+                Ok(None) => {
+                    // Peer not in paired_device table yet -- proceed with sync
+                    result.push(peer.clone());
+                }
+                Err(err) => {
+                    warn!(
+                        peer_id = %peer.peer_id,
+                        error = %err,
+                        "Failed to load paired device for sync policy check; proceeding with sync"
+                    );
+                    result.push(peer.clone());
+                }
+            }
+        }
+        result
     }
 
     pub fn execute_current_snapshot(&self, origin: ClipboardChangeOrigin) -> Result<()> {
@@ -53,13 +145,15 @@ impl SyncOutboundClipboardUseCase {
             .local_clipboard
             .read_snapshot()
             .context("failed to read current clipboard snapshot for outbound sync")?;
-        self.execute(snapshot, origin)
+        self.execute(snapshot, origin, None, vec![])
     }
 
     pub fn execute(
         &self,
         snapshot: SystemClipboardSnapshot,
         origin: ClipboardChangeOrigin,
+        origin_flow_id: Option<String>,
+        file_transfers: Vec<uc_core::network::protocol::FileTransferMapping>,
     ) -> Result<()> {
         let span = info_span!(
             "usecase.clipboard.sync_outbound.execute",
@@ -67,13 +161,18 @@ impl SyncOutboundClipboardUseCase {
             representation_count = snapshot.representations.len(),
         );
 
-        executor::block_on(self.execute_async(snapshot, origin).instrument(span))
+        executor::block_on(
+            self.execute_async(snapshot, origin, origin_flow_id, file_transfers)
+                .instrument(span),
+        )
     }
 
     async fn execute_async(
         &self,
         snapshot: SystemClipboardSnapshot,
         origin: ClipboardChangeOrigin,
+        origin_flow_id: Option<String>,
+        file_transfers: Vec<uc_core::network::protocol::FileTransferMapping>,
     ) -> Result<()> {
         if origin == ClipboardChangeOrigin::RemotePush {
             debug!(origin = ?origin, "Skipping outbound sync for remote-push origin");
@@ -91,11 +190,14 @@ impl SyncOutboundClipboardUseCase {
             return Ok(());
         }
 
-        let sendable_peers = self
+        let all_sendable_peers = self
             .peer_directory
             .list_sendable_peers()
             .await
             .context("failed to load sendable peers for outbound sync")?;
+
+        // Filter out peers whose effective sync policy disallows this content
+        let sendable_peers = self.apply_sync_policy(&all_sendable_peers, &snapshot).await;
         let discovered_peer_count = match self.peer_directory.get_discovered_peers().await {
             Ok(peers) => peers.len(),
             Err(err) => {
@@ -106,13 +208,21 @@ impl SyncOutboundClipboardUseCase {
                 0
             }
         };
-        info!(
-            discovered_peer_count,
-            sendable_peer_count = sendable_peers.len(),
-            "Evaluated outbound clipboard sendable peers"
-        );
+        if all_sendable_peers.is_empty() {
+            warn!(
+                discovered_peer_count,
+                "Skipping outbound sync: no peers discovered on network"
+            );
+            return Ok(());
+        } else {
+            info!(
+                discovered_peer_count,
+                sendable_peer_count = sendable_peers.len(),
+                "Evaluated outbound clipboard sendable peers"
+            );
+        }
         if sendable_peers.is_empty() {
-            info!("Skipping outbound sync because there are no sendable peers");
+            info!("Skipping outbound sync: all peers filtered by sync policy");
             return Ok(());
         }
 
@@ -174,6 +284,8 @@ impl SyncOutboundClipboardUseCase {
             origin_device_id,
             origin_device_name,
             payload_version: ClipboardPayloadVersion::V3,
+            origin_flow_id,
+            file_transfers,
         };
 
         // Clone values needed for parallel encryption block (to avoid &self borrow in tokio::join!)
@@ -214,7 +326,11 @@ impl SyncOutboundClipboardUseCase {
 
             Ok::<Arc<[u8]>, anyhow::Error>(Arc::from(framed.into_boxed_slice()))
         }
-        .instrument(info_span!("outbound.prepare", raw_bytes));
+        .instrument(info_span!(
+            "outbound.prepare",
+            raw_bytes,
+            stage = uc_observability::stages::OUTBOUND_PREPARE
+        ));
 
         let outbound_bytes = if tokio::runtime::Handle::try_current().is_ok() {
             let prepare_handle = tokio::spawn(prepare_future);
@@ -271,7 +387,7 @@ impl SyncOutboundClipboardUseCase {
                     .send_clipboard(&first_peer.peer_id, outbound_bytes.clone())
                     .await
             }
-            .instrument(info_span!("outbound.send", peer_id = %first_peer.peer_id))
+            .instrument(info_span!("outbound.send", peer_id = %first_peer.peer_id, stage = uc_observability::stages::OUTBOUND_SEND))
             .await
             {
                 warn!(
@@ -307,7 +423,7 @@ impl SyncOutboundClipboardUseCase {
                     .send_clipboard(&peer.peer_id, outbound_bytes.clone())
                     .await
             }
-            .instrument(info_span!("outbound.send", peer_id = %peer.peer_id))
+            .instrument(info_span!("outbound.send", peer_id = %peer.peer_id, stage = uc_observability::stages::OUTBOUND_SEND))
             .await
             {
                 warn!(
@@ -375,12 +491,14 @@ mod tests {
     use tokio::sync::mpsc;
     use uc_core::ids::{FormatId, RepresentationId};
     use uc_core::network::protocol::ClipboardPayloadVersion;
+    use uc_core::network::PairingState;
     use uc_core::network::{
         ClipboardMessage, ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage,
         ProtocolMessage,
     };
     use uc_core::ports::{
-        ClipboardTransportPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort,
+        ClipboardTransportPort, NetworkEventPort, PairedDeviceRepositoryError,
+        PairedDeviceRepositoryPort, PairingTransportPort, PeerDirectoryPort,
     };
     use uc_core::security::model::{EncryptionError, MasterKey};
     use uc_core::settings::model::Settings;
@@ -548,6 +666,62 @@ mod tests {
         }
     }
 
+    struct TestPairedDeviceRepo;
+
+    #[async_trait]
+    impl PairedDeviceRepositoryPort for TestPairedDeviceRepo {
+        async fn get_by_peer_id(
+            &self,
+            _peer_id: &uc_core::PeerId,
+        ) -> Result<Option<uc_core::network::PairedDevice>, PairedDeviceRepositoryError> {
+            Ok(None)
+        }
+
+        async fn list_all(
+            &self,
+        ) -> Result<Vec<uc_core::network::PairedDevice>, PairedDeviceRepositoryError> {
+            Ok(vec![])
+        }
+
+        async fn upsert(
+            &self,
+            _device: uc_core::network::PairedDevice,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn set_state(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _state: PairingState,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn update_last_seen(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _last_seen_at: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn delete(
+            &self,
+            _peer_id: &uc_core::PeerId,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+    }
+
     struct TestSettings {
         settings: Settings,
     }
@@ -644,6 +818,7 @@ mod tests {
                 settings: Settings::default(),
             }),
             Arc::new(TransferPayloadEncryptorAdapter),
+            Arc::new(TestPairedDeviceRepo),
         );
 
         (
@@ -669,7 +844,12 @@ mod tests {
         );
 
         usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect("execute local capture");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 1);
@@ -689,7 +869,12 @@ mod tests {
         );
 
         usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::RemotePush)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::RemotePush,
+                None,
+                vec![],
+            )
             .expect("remote push should no-op");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
@@ -709,7 +894,12 @@ mod tests {
         );
 
         usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalRestore)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalRestore,
+                None,
+                vec![],
+            )
             .expect("local restore should fan out");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 1);
@@ -730,7 +920,12 @@ mod tests {
             );
 
         usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect("execute should no-op");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
@@ -774,7 +969,12 @@ mod tests {
         );
 
         usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect("execute local capture");
 
         let calls = send_calls.lock().expect("send calls lock");
@@ -831,7 +1031,12 @@ mod tests {
             );
 
         usecase
-            .execute(empty_snapshot, ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                empty_snapshot,
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect("empty snapshot should no-op without error");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
@@ -880,7 +1085,12 @@ mod tests {
         );
 
         usecase
-            .execute(multi_rep_snapshot, ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                multi_rep_snapshot,
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect("execute multi-rep capture");
 
         // V3 does NOT call encrypt_blob (uses ChunkedEncoder directly)
@@ -944,7 +1154,12 @@ mod tests {
         );
 
         let err = usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect_err("partial fanout failure should be reported");
         let err_msg = err.to_string();
         assert!(
@@ -982,7 +1197,12 @@ mod tests {
         );
 
         let err = usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect_err("all ensure failures should return error");
 
         let err_msg = err.to_string();
@@ -1023,7 +1243,12 @@ mod tests {
         );
 
         let err = usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect_err("partial ensure failures should return error");
 
         let err_msg = err.to_string();
@@ -1048,13 +1273,369 @@ mod tests {
             build_usecase(vec![], true, &[], &[]);
 
         usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect("should no-op");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
         assert_eq!(list_sendable_peers_calls.load(Ordering::SeqCst), 1);
         assert_eq!(ensure_calls.load(Ordering::SeqCst), 0);
         assert_eq!(encrypt_calls.load(Ordering::SeqCst), 0);
+    }
+
+    // --- apply_sync_policy content type filtering tests ---
+
+    use uc_core::network::PairedDevice;
+    use uc_core::settings::model::{
+        ContentTypes, SyncFrequency, SyncSettings as SyncSettingsModel,
+    };
+
+    struct ConfigurablePairedDeviceRepo {
+        devices: std::collections::HashMap<String, PairedDevice>,
+        fail_for: HashSet<String>,
+    }
+
+    #[async_trait]
+    impl PairedDeviceRepositoryPort for ConfigurablePairedDeviceRepo {
+        async fn get_by_peer_id(
+            &self,
+            peer_id: &uc_core::PeerId,
+        ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
+            let id = peer_id.as_str().to_string();
+            if self.fail_for.contains(&id) {
+                return Err(PairedDeviceRepositoryError::Storage(
+                    "simulated repo error".to_string(),
+                ));
+            }
+            Ok(self.devices.get(&id).cloned())
+        }
+
+        async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
+            Ok(self.devices.values().cloned().collect())
+        }
+
+        async fn upsert(&self, _device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn set_state(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _state: PairingState,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn update_last_seen(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _last_seen_at: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn delete(
+            &self,
+            _peer_id: &uc_core::PeerId,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+
+        async fn update_sync_settings(
+            &self,
+            _peer_id: &uc_core::PeerId,
+            _settings: Option<SyncSettingsModel>,
+        ) -> Result<(), PairedDeviceRepositoryError> {
+            Ok(())
+        }
+    }
+
+    fn make_paired_device(peer_id: &str, sync_settings: Option<SyncSettingsModel>) -> PairedDevice {
+        PairedDevice {
+            peer_id: PeerId::from(peer_id),
+            pairing_state: PairingState::Trusted,
+            identity_fingerprint: "fp".to_string(),
+            paired_at: Utc::now(),
+            last_seen_at: None,
+            device_name: format!("Device {}", peer_id),
+            sync_settings,
+        }
+    }
+
+    fn build_policy_usecase(
+        sendable_peers: Vec<DiscoveredPeer>,
+        paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+    ) -> SyncOutboundClipboardUseCase {
+        let network = Arc::new(TestNetwork {
+            sendable_peers,
+            failing_peers: HashSet::new(),
+            ensure_failing_peers: HashSet::new(),
+            send_calls: Arc::new(Mutex::new(Vec::new())),
+            list_sendable_peers_calls: Arc::new(AtomicUsize::new(0)),
+            ensure_business_path_calls: Arc::new(AtomicUsize::new(0)),
+        });
+
+        SyncOutboundClipboardUseCase::new(
+            Arc::new(TestSystemClipboard {
+                snapshot: build_snapshot(),
+            }),
+            network.clone(),
+            network,
+            Arc::new(TestEncryptionSession { ready: true }),
+            Arc::new(TestDeviceIdentity),
+            Arc::new(TestSettings {
+                settings: Settings::default(),
+            }),
+            Arc::new(TransferPayloadEncryptorAdapter),
+            paired_device_repo,
+        )
+    }
+
+    fn make_discovered_peer(peer_id: &str) -> DiscoveredPeer {
+        DiscoveredPeer {
+            peer_id: peer_id.to_string(),
+            device_name: Some(format!("Device {}", peer_id)),
+            device_id: None,
+            addresses: Vec::new(),
+            discovered_at: Utc::now(),
+            last_seen: Utc::now(),
+            is_paired: true,
+        }
+    }
+
+    fn make_text_snapshot() -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms: 1_713_000_000_000,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("public.utf8-plain-text"),
+                Some(MimeType::text_plain()),
+                b"hello".to_vec(),
+            )],
+        }
+    }
+
+    fn make_image_snapshot() -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms: 1_713_000_000_000,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("public.png"),
+                Some(MimeType("image/png".to_string())),
+                vec![0x89, 0x50, 0x4E, 0x47],
+            )],
+        }
+    }
+
+    fn make_unknown_snapshot() -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms: 1_713_000_000_000,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("com.custom.type"),
+                Some(MimeType("application/x-custom".to_string())),
+                b"custom data".to_vec(),
+            )],
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_keeps_peer_when_auto_sync_true_and_content_allowed() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert(
+            "peer-1".to_string(),
+            make_paired_device("peer-1", None), // uses global defaults: auto_sync=true, all content types true
+        );
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let uc = build_policy_usecase(peers.clone(), repo);
+
+        let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
+        assert_eq!(result.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_skips_peer_when_auto_sync_false() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert(
+            "peer-1".to_string(),
+            make_paired_device(
+                "peer-1",
+                Some(SyncSettingsModel {
+                    auto_sync: false,
+                    sync_frequency: SyncFrequency::Realtime,
+                    content_types: ContentTypes::default(),
+                    max_file_size_mb: 100,
+                }),
+            ),
+        );
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let uc = build_policy_usecase(peers.clone(), repo);
+
+        let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            0,
+            "peer with auto_sync=false should be skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_skips_peer_when_content_type_disabled() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert(
+            "peer-1".to_string(),
+            make_paired_device(
+                "peer-1",
+                Some(SyncSettingsModel {
+                    auto_sync: true,
+                    sync_frequency: SyncFrequency::Realtime,
+                    content_types: ContentTypes {
+                        text: false, // text disabled
+                        image: true,
+                        link: true,
+                        file: true,
+                        code_snippet: true,
+                        rich_text: true,
+                    },
+                    max_file_size_mb: 100,
+                }),
+            ),
+        );
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let uc = build_policy_usecase(peers.clone(), repo);
+
+        let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            0,
+            "peer with text content type disabled should be skipped for text snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_keeps_peer_when_content_type_unknown() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert(
+            "peer-1".to_string(),
+            make_paired_device(
+                "peer-1",
+                Some(SyncSettingsModel {
+                    auto_sync: true,
+                    sync_frequency: SyncFrequency::Realtime,
+                    content_types: ContentTypes {
+                        text: false,
+                        image: false,
+                        link: false,
+                        file: false,
+                        code_snippet: false,
+                        rich_text: false,
+                    },
+                    max_file_size_mb: 100,
+                }),
+            ),
+        );
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let uc = build_policy_usecase(peers.clone(), repo);
+
+        let result = uc.apply_sync_policy(&peers, &make_unknown_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            1,
+            "unknown content types should always sync regardless of toggles"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_skips_peer_when_image_content_type_disabled() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert(
+            "peer-1".to_string(),
+            make_paired_device(
+                "peer-1",
+                Some(SyncSettingsModel {
+                    auto_sync: true,
+                    sync_frequency: SyncFrequency::Realtime,
+                    content_types: ContentTypes {
+                        text: true,
+                        image: false,
+                        link: true,
+                        file: true,
+                        code_snippet: true,
+                        rich_text: true,
+                    },
+                    max_file_size_mb: 100,
+                }),
+            ),
+        );
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let uc = build_policy_usecase(peers.clone(), repo);
+
+        let result = uc.apply_sync_policy(&peers, &make_image_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            0,
+            "peer with image content type disabled should be skipped for image snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_keeps_peer_not_in_paired_device_table() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices: std::collections::HashMap::new(), // empty - peer not found
+            fail_for: HashSet::new(),
+        });
+        let uc = build_policy_usecase(peers.clone(), repo);
+
+        let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            1,
+            "peer not in paired_device table should be kept as safety fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_keeps_peer_when_repo_returns_error() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut fail_for = HashSet::new();
+        fail_for.insert("peer-1".to_string());
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices: std::collections::HashMap::new(),
+            fail_for,
+        });
+        let uc = build_policy_usecase(peers.clone(), repo);
+
+        let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            1,
+            "peer should be kept when repo returns error (safety fallback)"
+        );
     }
 
     #[test]
@@ -1078,7 +1659,12 @@ mod tests {
         );
 
         let err = usecase
-            .execute(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
+            .execute(
+                build_snapshot(),
+                ClipboardChangeOrigin::LocalCapture,
+                None,
+                vec![],
+            )
             .expect_err("all send failures should return error");
 
         let err_msg = err.to_string();
@@ -1095,5 +1681,107 @@ mod tests {
             "missing peer-2 in error: {err_msg}"
         );
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
+    }
+
+    fn make_file_snapshot() -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms: 1_713_000_000_000,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("public.file-url"),
+                Some(MimeType("text/uri-list".to_string())),
+                b"file:///tmp/test.txt".to_vec(),
+            )],
+        }
+    }
+
+    fn build_policy_usecase_with_settings(
+        sendable_peers: Vec<DiscoveredPeer>,
+        paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+        settings: Settings,
+    ) -> SyncOutboundClipboardUseCase {
+        let network = Arc::new(TestNetwork {
+            sendable_peers,
+            failing_peers: HashSet::new(),
+            ensure_failing_peers: HashSet::new(),
+            send_calls: Arc::new(Mutex::new(Vec::new())),
+            list_sendable_peers_calls: Arc::new(AtomicUsize::new(0)),
+            ensure_business_path_calls: Arc::new(AtomicUsize::new(0)),
+        });
+
+        SyncOutboundClipboardUseCase::new(
+            Arc::new(TestSystemClipboard {
+                snapshot: build_snapshot(),
+            }),
+            network.clone(),
+            network,
+            Arc::new(TestEncryptionSession { ready: true }),
+            Arc::new(TestDeviceIdentity),
+            Arc::new(TestSettings { settings }),
+            Arc::new(TransferPayloadEncryptorAdapter),
+            paired_device_repo,
+        )
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_blocks_file_content_when_global_file_sync_disabled() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert("peer-1".to_string(), make_paired_device("peer-1", None));
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let mut settings = Settings::default();
+        settings.file_sync.file_sync_enabled = false;
+        let uc = build_policy_usecase_with_settings(peers.clone(), repo, settings);
+
+        let result = uc.apply_sync_policy(&peers, &make_file_snapshot()).await;
+        assert!(
+            result.is_empty(),
+            "file content should be blocked when global file_sync disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_allows_file_content_when_global_file_sync_enabled() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert("peer-1".to_string(), make_paired_device("peer-1", None));
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let mut settings = Settings::default();
+        settings.file_sync.file_sync_enabled = true;
+        let uc = build_policy_usecase_with_settings(peers.clone(), repo, settings);
+
+        let result = uc.apply_sync_policy(&peers, &make_file_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            1,
+            "file content should be allowed when global file_sync enabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_sync_policy_text_unaffected_by_file_sync_disabled() {
+        let peers = vec![make_discovered_peer("peer-1")];
+        let mut devices = std::collections::HashMap::new();
+        devices.insert("peer-1".to_string(), make_paired_device("peer-1", None));
+        let repo = Arc::new(ConfigurablePairedDeviceRepo {
+            devices,
+            fail_for: HashSet::new(),
+        });
+        let mut settings = Settings::default();
+        settings.file_sync.file_sync_enabled = false;
+        let uc = build_policy_usecase_with_settings(peers.clone(), repo, settings);
+
+        let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
+        assert_eq!(
+            result.len(),
+            1,
+            "text content should not be affected by file_sync_enabled"
+        );
     }
 }

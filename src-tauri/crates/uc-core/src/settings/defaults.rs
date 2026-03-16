@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use super::model::*;
@@ -56,6 +57,37 @@ impl Default for GeneralSettings {
             device_name: None,
             language: None,
             update_channel: None,
+        }
+    }
+}
+
+impl Default for ContentTypes {
+    /// Returns default `ContentTypes` with all fields set to `true`.
+    ///
+    /// New devices sync everything by default. Users can then disable
+    /// specific content types per device.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use uc_core::settings::model::ContentTypes;
+    ///
+    /// let ct = ContentTypes::default();
+    /// assert!(ct.text);
+    /// assert!(ct.image);
+    /// assert!(ct.link);
+    /// assert!(ct.file);
+    /// assert!(ct.code_snippet);
+    /// assert!(ct.rich_text);
+    /// ```
+    fn default() -> Self {
+        Self {
+            text: true,
+            image: true,
+            link: true,
+            file: true,
+            code_snippet: true,
+            rich_text: true,
         }
     }
 }
@@ -171,6 +203,28 @@ impl Default for PairingSettings {
     }
 }
 
+impl Default for FileSyncSettings {
+    /// Returns default `FileSyncSettings` enabling file sync with sensible limits.
+    ///
+    /// Defaults:
+    /// - `file_sync_enabled`: true
+    /// - `small_file_threshold`: 10 MB (inline transfer threshold)
+    /// - `max_file_size`: 5 GB
+    /// - `file_cache_quota_per_device`: 500 MB
+    /// - `file_retention_hours`: 24
+    /// - `file_auto_cleanup`: true
+    fn default() -> Self {
+        Self {
+            file_sync_enabled: true,
+            small_file_threshold: 10 * 1024 * 1024,         // 10 MB
+            max_file_size: 5 * 1024 * 1024 * 1024,          // 5 GB
+            file_cache_quota_per_device: 500 * 1024 * 1024,  // 500 MB
+            file_retention_hours: 24,
+            file_auto_cleanup: true,
+        }
+    }
+}
+
 impl Default for Settings {
     /// Constructs a Settings instance populated with the current schema version and sensible nested defaults.
     ///
@@ -203,6 +257,8 @@ impl Default for Settings {
             retention_policy: RetentionPolicy::default(),
             security: SecuritySettings::default(),
             pairing: PairingSettings::default(),
+            keyboard_shortcuts: HashMap::new(),
+            file_sync: FileSyncSettings::default(),
         }
     }
 }

@@ -1,6 +1,8 @@
 {
   "common": {
-    "loading": "加载中..."
+    "loading": "加载中...",
+    "unknownSize": "未知大小",
+    "zeroBytes": "0 字节"
   },
   "loading": {
     "initializing": "正在初始化...",
@@ -38,7 +40,8 @@
       "security": "安全与隐私",
       "network": "网络设置",
       "storage": "存储管理",
-      "about": "关于"
+      "about": "关于",
+      "shortcuts": "快捷键"
     },
     "sections": {
       "general": {
@@ -79,7 +82,7 @@
         "title": "同步设置",
         "autoSync": {
           "label": "自动同步",
-          "description": "启用后，uniClipboard将自动同步您复制的内容到所有设备"
+          "description": "控制所有设备的剪贴板同步。关闭后停止向所有设备同步内容。"
         },
         "syncFrequency": {
           "label": "同步频率",
@@ -99,7 +102,55 @@
             "range": "必须在 1 到 50 MB 之间"
           }
         },
-        "loadError": "加载设置失败:"
+        "loadError": "加载设置失败:",
+        "fileSync": {
+          "title": "文件同步",
+          "enable": {
+            "label": "启用文件同步",
+            "description": "通过局域网在设备间同步复制的文件"
+          },
+          "smallFileThreshold": {
+            "label": "即时传输阈值",
+            "description": "小于此大小的文件立即传输；较大文件仅同步元数据",
+            "unit": "MB",
+            "errors": {
+              "invalid": "必须为正整数",
+              "range": "必须在 1-1000 MB 之间",
+              "exceedsMax": "必须小于最大文件大小"
+            }
+          },
+          "maxFileSize": {
+            "label": "最大文件大小",
+            "description": "超过此大小的文件不会被同步",
+            "unit": "MB",
+            "errors": {
+              "invalid": "必须为正整数",
+              "range": "必须在 1-10240 MB (10 GB) 之间"
+            }
+          },
+          "cacheQuota": {
+            "label": "单设备缓存配额",
+            "description": "为每个设备缓存文件的最大磁盘空间",
+            "unit": "MB",
+            "errors": {
+              "invalid": "必须为正整数",
+              "range": "必须在 50-10240 MB 之间"
+            }
+          },
+          "retentionPeriod": {
+            "label": "文件保留期限",
+            "description": "超过此时间的缓存文件将被清理",
+            "unit": "小时",
+            "errors": {
+              "invalid": "必须为正整数",
+              "range": "必须在 1-720 小时（30 天）之间"
+            }
+          },
+          "autoCleanup": {
+            "label": "自动清理",
+            "description": "启动时自动删除过期的缓存文件"
+          }
+        }
       },
       "security": {
         "title": "安全与隐私设置",
@@ -170,36 +221,96 @@
       "storage": {
         "title": "存储管理",
         "autoClearHistory": {
-          "label": "自动清除历史记录",
-          "description": "定期自动清除剪贴板历史记录",
-          "never": "从不",
-          "daily": "每天",
-          "weekly": "每周",
-          "monthly": "每月",
-          "onExit": "每次退出"
+          "label": "自动清理历史",
+          "description": "根据保留规则自动清理旧的剪贴板条目"
         },
         "storageUsage": {
-          "label": "存储使用情况",
-          "usage": "已使用 {{percentage}}%"
+          "label": "存储用量",
+          "usage": "已使用 {{percentage}}%",
+          "database": "数据库",
+          "blobVault": "Blob 存储",
+          "cache": "缓存",
+          "logs": "日志",
+          "total": "总计"
         },
         "historyRetention": {
-          "label": "历史记录保留时间",
-          "description": "设置剪贴板历史记录的最长保留时间",
+          "label": "历史保留时间",
+          "description": "剪贴板历史的最长保留时间",
           "days": "{{days}} 天"
         },
         "maxHistoryItems": {
-          "label": "最大历史记录数",
-          "description": "限制保存的剪贴板历史记录数量",
-          "items": "{{count}}条",
+          "label": "最大历史条目数",
+          "description": "保留的最大剪贴板条目数量",
+          "items": "{{count}} 条",
           "unlimited": "无限制"
         },
-        "clearHistory": {
-          "label": "历史记录",
-          "description": "清空所有剪贴板历史记录并释放存储空间",
-          "button": "清空历史记录",
-          "cleared": "历史记录已清空"
+        "skipPinned": {
+          "label": "跳过已收藏条目",
+          "description": "已收藏的条目不会被自动清理"
         },
-        "loadError": "加载设置失败:"
+        "clearHistory": {
+          "label": "清除历史",
+          "description": "删除所有剪贴板历史并释放存储空间",
+          "button": "全部清除",
+          "confirm": "确定要清除吗？此操作不可撤销。",
+          "cleared": "历史已清除",
+          "clearing": "清除中...",
+          "dialogTitle": "确认清除历史",
+          "dialogDescription": "此操作将删除所有剪贴板历史记录，且无法恢复。",
+          "dialogConfirm": "清除历史"
+        },
+        "clearCache": {
+          "label": "清除缓存",
+          "description": "删除缓存的缩略图和临时文件",
+          "button": "清除缓存",
+          "cleared": "缓存已清除",
+          "clearing": "清除中..."
+        },
+        "dataDirectory": {
+          "label": "数据目录",
+          "description": "打开应用数据存储所在的文件夹",
+          "button": "在文件管理器中打开"
+        },
+        "loadError": "加载存储设置失败：",
+        "placeholder": "存储设置尚不可用。"
+      },
+      "shortcuts": {
+        "title": "快捷键",
+        "description": "自定义键盘快捷键",
+        "scope": {
+          "global": "全局",
+          "clipboard": "剪贴板",
+          "settings": "设置",
+          "devices": "设备",
+          "modal": "模态框"
+        },
+        "actions": {
+          "clearSelection": "取消选择",
+          "selectAll": "全选",
+          "delete": "删除选中项",
+          "favorite": "收藏/取消收藏",
+          "goClipboard": "前往剪贴板",
+          "goDevices": "前往设备",
+          "goSettings": "前往设置",
+          "focusSearch": "聚焦搜索框",
+          "closeModal": "关闭模态框",
+          "toggleQuickPanel": "切换快捷面板"
+        },
+        "issues": {
+          "sameScope": "同一作用域内快捷键冲突：{{key}}",
+          "sameLayer": "同一层级内其它作用域也使用了该快捷键：{{key}}",
+          "shadowedByHigher": "当更高层级激活时会被遮蔽：{{key}}",
+          "shadowsLower": "会遮蔽更低层级中的快捷键：{{key}}"
+        },
+        "edit": "编辑",
+        "reset": "恢复默认",
+        "resetAll": "重置所有快捷键",
+        "recording": "请按快捷键...",
+        "conflict": "与 {{name}} 冲突",
+        "confirmOverride": "仍然应用（清除冲突）",
+        "confirm": "确认",
+        "cancel": "取消",
+        "modified": "已修改"
       },
       "about": {
         "title": "关于",
@@ -237,7 +348,19 @@
       "label": "自动解锁",
       "description": "启动应用时自动解锁"
     },
-    "macOSNote": "在 macOS 上，您可以在钥匙串提示中选择“始终允许”以启用无缝自动解锁。"
+    "macOSNote": "在 macOS 上，您可以在钥匙串提示中选择“始终允许”以启用无缝自动解锁。",
+    "keychainModal": {
+      "title": "授权钥匙串访问",
+      "description": "要启用自动解锁，UniClipboard 需要获得 macOS 钥匙串的永久访问权限。",
+      "step1": "macOS 钥匙串访问提示将会出现",
+      "step2": "在提示中选择「始终允许」",
+      "step3": "输入 macOS 密码确认",
+      "note": "这是 macOS 系统对话框，不是 UniClipboard 的一部分。",
+      "confirm": "我知道了",
+      "cancel": "取消",
+      "verifying": "正在验证访问权限...",
+      "error": "未检测到钥匙串始终允许授权。请重试，并确保在 macOS 钥匙串提示中选择「始终允许」。"
+    }
   },
   "language": {
     "zh-CN": "简体中文",
@@ -297,6 +420,8 @@
     },
     "errors": {
       "copyFailed": "复制到剪贴板失败",
+      "syncFailed": "同步到剪贴板失败",
+      "openLocationFailed": "打开文件位置失败",
       "loadDetailFailed": "加载详情失败",
       "unknown": "发生未知错误"
     },
@@ -339,12 +464,52 @@
       "characters": "字符数",
       "words": "词数",
       "size": "大小",
-      "dimensions": "尺寸"
+      "dimensions": "尺寸",
+      "notDownloaded": "未下载",
+      "sourceDevice": "来源设备"
+    },
+    "contextMenu": {
+      "copy": "复制",
+      "syncToClipboard": "同步到剪贴板",
+      "syncing": "同步中...",
+      "openFileLocation": "打开文件位置",
+      "delete": "删除"
     },
     "actionBar": {
       "title": "剪贴板历史",
       "copy": "复制",
-      "delete": "删除"
+      "delete": "删除",
+      "syncToClipboard": "同步到剪贴板",
+      "syncing": "同步中..."
+    },
+    "notification": {
+      "syncStartSingle": "正在同步文件到 {{device}}",
+      "syncStartBatch": "正在同步 {{count}} 个文件到 {{device}}",
+      "syncCompleteSingle": "文件同步完成",
+      "syncCompleteBatch": "所有 {{count}} 个文件已同步",
+      "syncFailed": "文件同步失败",
+      "syncFailedDetail": "文件同步失败：{{reason}}"
+    },
+    "transfer": {
+      "sending": "发送中",
+      "receiving": "接收中",
+      "progress": "{{transferred}} / {{total}} ({{percent}}%)",
+      "chunks": "{{completed}} / {{total}} 块",
+      "completed": "传输完成",
+      "failed": "传输失败",
+      "pending": "等待传输",
+      "transferring": "传输中...",
+      "statusBadge": {
+        "pending": "文件等待传输",
+        "transferring": "文件传输中",
+        "completed": "文件传输完成",
+        "failed": "文件传输失败"
+      },
+      "copyDisabled": {
+        "pending": "文件等待传输中",
+        "transferring": "文件正在传输中",
+        "failed": "文件传输失败"
+      }
     },
     "confirmDeleteTitle": "确认删除",
     "confirmDeleteDescription_one": "确定要删除选中的项目吗？此操作无法撤销。",
@@ -356,6 +521,16 @@
   "devices": {
     "title": "设备管理",
     "addNew": "添加新设备",
+    "thisDevice": {
+      "title": "本设备"
+    },
+    "pairedDevices": {
+      "title": "已配对设备"
+    },
+    "unpair": {
+      "confirmTitle": "取消配对",
+      "confirmDescription": "确定要取消与 {{deviceName}} 的配对吗？取消后需要重新配对才能同步剪贴板内容。"
+    },
     "tabs": {
       "connected": "已连接设备",
       "requests": "配对请求"
@@ -379,14 +554,22 @@
       "actions": {
         "retry": "重试",
         "unpair": "取消配对",
+        "settings": "设置",
         "addDevice": "添加设备",
         "addAnotherDevice": "添加另一台设备"
       }
     },
+    "syncPaused": {
+      "message": "剪贴板同步已暂停，所有设备当前均不会同步内容。",
+      "goToSettings": "前往设置"
+    },
     "settings": {
       "readOnly": "不可更改",
       "badges": {
-        "mvp": "MVP"
+        "mvp": "MVP",
+        "comingSoon": "即将推出",
+        "notEditable": "不可变更",
+        "globalFileSyncOff": "文件同步已关闭"
       },
       "sync": {
         "title": "同步设置",
@@ -407,6 +590,18 @@
           "syncFile": {
             "title": "同步文件",
             "description": "允许同步文件内容（最大 10MB）"
+          },
+          "syncLink": {
+            "title": "同步链接",
+            "description": "允许同步 URL/链接内容"
+          },
+          "syncCodeSnippet": {
+            "title": "同步代码片段",
+            "description": "允许同步代码片段内容"
+          },
+          "syncRichText": {
+            "title": "同步富文本",
+            "description": "允许同步富文本内容（HTML, RTF）"
           }
         }
       },
@@ -529,6 +724,14 @@
     "retry": "重试",
     "retrying": "重试中..."
   },
+  "previewPanel": {
+    "title": "预览",
+    "error": "加载预览失败",
+    "imageUnavailable": "图片不可用",
+    "empty": "将鼠标悬停在项目上以预览",
+    "imageAlt": "剪贴板图片",
+    "deleteHint": "{{modifier}}⌫ 删除"
+  },
   "setup": {
     "page": {
       "loadingSetupState": "正在加载初始化状态...",
@@ -601,7 +804,8 @@
       "subtitle": "请选择已经加入该加密空间的设备。",
       "scanning": {
         "title": "正在扫描设备...",
-        "description": "正在寻找局域网内的其他设备。"
+        "description": "正在寻找局域网内的其他设备。",
+        "compact": "扫描中..."
       },
       "errors": {
         "timeout": "扫描超时，请稍后重试。",
@@ -613,7 +817,13 @@
       "empty": {
         "title": "没有发现可连接的设备",
         "description": "请确认主设备与本机在同一网络，并已开启配对。",
-        "rescan": "重新扫描"
+        "rescan": "重新扫描",
+        "tips": {
+          "heading": "排查建议",
+          "sameNetwork": "确认两台设备连接到同一 Wi-Fi 或局域网",
+          "pairingEnabled": "确认主设备已开启配对功能",
+          "firewall": "检查防火墙设置是否阻止了局域网连接"
+        }
       },
       "actions": {
         "select": "选择"

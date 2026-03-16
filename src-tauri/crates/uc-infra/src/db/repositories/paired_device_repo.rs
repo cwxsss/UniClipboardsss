@@ -3,6 +3,7 @@ use diesel::prelude::*;
 
 use uc_core::network::{PairedDevice, PairingState};
 use uc_core::ports::{PairedDeviceRepositoryError, PairedDeviceRepositoryPort};
+use uc_core::settings::model::SyncSettings;
 use uc_core::PeerId;
 
 use crate::db::models::{NewPairedDeviceRow, PairedDeviceRow};
@@ -172,6 +173,37 @@ where
 
         Ok(())
     }
+
+    async fn update_sync_settings(
+        &self,
+        peer_id_value: &PeerId,
+        settings: Option<SyncSettings>,
+    ) -> Result<(), PairedDeviceRepositoryError> {
+        let peer_id_str = peer_id_value.as_str().to_string();
+        let json_value = settings
+            .as_ref()
+            .map(|s| serde_json::to_string(s))
+            .transpose()
+            .map_err(|e| {
+                PairedDeviceRepositoryError::Storage(format!("serialize sync_settings: {}", e))
+            })?;
+
+        let affected = self
+            .executor
+            .run(move |conn| {
+                diesel::update(paired_device.filter(peer_id.eq(&peer_id_str)))
+                    .set(sync_settings.eq(json_value))
+                    .execute(conn)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))
+            })
+            .map_err(|e| PairedDeviceRepositoryError::Storage(e.to_string()))?;
+
+        if affected == 0 {
+            return Err(PairedDeviceRepositoryError::NotFound);
+        }
+
+        Ok(())
+    }
 }
 
 fn pairing_state_to_str(state: &PairingState) -> &'static str {
@@ -207,6 +239,7 @@ mod tests {
             paired_at: chrono::Utc::now(),
             last_seen_at: None,
             device_name: "Test Device".to_string(),
+            sync_settings: None,
         };
 
         repo.upsert(device.clone()).await.unwrap();

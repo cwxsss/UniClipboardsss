@@ -1,6 +1,7 @@
 pub mod announce_device_name;
 pub mod events;
 pub mod facade;
+pub mod get_device_sync_settings;
 pub mod get_local_device_info;
 pub mod get_local_peer_id;
 pub mod list_connected_peers;
@@ -15,10 +16,12 @@ pub mod staged_paired_device_store;
 #[cfg(test)]
 mod transport_error_test;
 pub mod unpair_device;
+pub mod update_device_sync_settings;
 
 pub use announce_device_name::AnnounceDeviceName;
 pub use events::{PairingDomainEvent, PairingEventPort};
 pub use facade::PairingFacade;
+pub use get_device_sync_settings::GetDeviceSyncSettings;
 pub use get_local_device_info::{GetLocalDeviceInfo, LocalDeviceInfo};
 pub use get_local_peer_id::GetLocalPeerId;
 pub use list_connected_peers::ListConnectedPeers;
@@ -29,3 +32,4 @@ pub use resolve_connection_policy::ResolveConnectionPolicy;
 pub use set_pairing_state::SetPairingState;
 pub use staged_paired_device_store::StagedPairedDeviceStore;
 pub use unpair_device::UnpairDevice;
+pub use update_device_sync_settings::UpdateDeviceSyncSettings;

@@ -54,7 +54,11 @@ fn tiff_to_png(tiff_bytes: &[u8]) -> Option<Vec<u8>> {
 
 pub struct CommonClipboardImpl;
 
-fn should_skip_raw_format(format_id: &str, image_already_read: bool) -> bool {
+fn should_skip_raw_format(
+    format_id: &str,
+    image_already_read: bool,
+    files_already_read: bool,
+) -> bool {
     // Barrier writes this ownership marker during clipboard handoff.
     // It is not user clipboard content and should never be persisted.
     if format_id.eq_ignore_ascii_case("BarrierOwnership") {
@@ -88,10 +92,21 @@ fn should_skip_raw_format(format_id: &str, image_already_read: bool) -> bool {
                 }
             }
         }
+
+        // Skip macOS file-URL formats in raw fallback when files were already
+        // captured via the high-level ContentFormat::Files path. These raw
+        // formats contain the same file paths, causing duplicate representations
+        // and inflated file_transfer_count.
+        if files_already_read
+            && (format_id == "public.file-url" || format_id == "NSFilenamesPboardType")
+        {
+            return true;
+        }
     }
 
-    // Suppress unused-variable warning on non-macOS.
+    // Suppress unused-variable warnings on non-macOS.
     let _ = image_already_read;
+    let _ = files_already_read;
 
     false
 }
@@ -180,7 +195,16 @@ impl CommonClipboardImpl {
         if ctx.has(ContentFormat::Files) {
             match ctx.get_files() {
                 Ok(files) => {
-                    let bytes = files.join("\n").into_bytes();
+                    // clipboard-rs returns raw OS paths (e.g. "C:\Users\mark\file.jpg" on Windows).
+                    // Normalize to file:// URIs so downstream `extract_file_paths_from_snapshot`
+                    // can parse them on all platforms via url::Url::parse().
+                    let uris: Vec<String> = files
+                        .into_iter()
+                        .filter_map(|path| {
+                            url::Url::from_file_path(&path).ok().map(|u| u.to_string())
+                        })
+                        .collect();
+                    let bytes = uris.join("\n").into_bytes();
                     debug!(
                         format_id = "files",
                         size_bytes = bytes.len(),
@@ -354,12 +378,13 @@ impl CommonClipboardImpl {
         // raw fallback
         use std::collections::HashSet;
         let seen: HashSet<String> = reps.iter().map(|r| r.format_id.to_string()).collect();
+        let files_already_read = seen.contains("files");
 
         for format_id in available {
             if seen.contains(&format_id) {
                 continue;
             }
-            if should_skip_raw_format(&format_id, image_already_read) {
+            if should_skip_raw_format(&format_id, image_already_read, files_already_read) {
                 debug!(format_id = %format_id, "Skipping raw buffer representation");
                 continue;
             }
@@ -461,9 +486,27 @@ impl CommonClipboardImpl {
                 map_clipboard_err(ctx.set_html(String::from_utf8(rep.bytes.clone())?))?;
             }
             Some("text/uri-list") | Some("file/uri-list") => {
-                let files = String::from_utf8(rep.bytes.clone())?
+                // Convert file:// URIs back to raw OS paths for set_files(),
+                // which expects native paths. Also handle raw paths for compatibility
+                // with inbound cache paths that aren't URI-encoded.
+                let files: Vec<String> = String::from_utf8(rep.bytes.clone())?
                     .lines()
-                    .map(|s| s.to_string())
+                    .filter_map(|line| {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            return None;
+                        }
+                        // Try as file:// URI first
+                        if let Ok(url) = url::Url::parse(line) {
+                            if url.scheme() == "file" {
+                                if let Ok(path) = url.to_file_path() {
+                                    return Some(path.to_string_lossy().to_string());
+                                }
+                            }
+                        }
+                        // Fallback: treat as raw path
+                        Some(line.to_string())
+                    })
                     .collect();
                 map_clipboard_err(ctx.set_files(files))?;
             }
@@ -531,9 +574,9 @@ mod tests {
 
     #[test]
     fn should_skip_barrier_ownership_regardless_of_image_flag() {
-        assert!(should_skip_raw_format("BarrierOwnership", false));
-        assert!(should_skip_raw_format("BarrierOwnership", true));
-        assert!(should_skip_raw_format("barrierownership", true));
+        assert!(should_skip_raw_format("BarrierOwnership", false, false));
+        assert!(should_skip_raw_format("BarrierOwnership", true, false));
+        assert!(should_skip_raw_format("barrierownership", true, false));
     }
 
     #[test]
@@ -541,20 +584,22 @@ mod tests {
         // On macOS, TIFF aliases should be skipped when image was already captured.
         #[cfg(target_os = "macos")]
         {
-            assert!(should_skip_raw_format("public.tiff", true));
+            assert!(should_skip_raw_format("public.tiff", true, false));
             assert!(should_skip_raw_format(
                 "NeXT TIFF v4.0 pasteboard type",
-                true
+                true,
+                false
             ));
         }
 
         // On non-macOS, these are never skipped by the TIFF alias logic.
         #[cfg(not(target_os = "macos"))]
         {
-            assert!(!should_skip_raw_format("public.tiff", true));
+            assert!(!should_skip_raw_format("public.tiff", true, false));
             assert!(!should_skip_raw_format(
                 "NeXT TIFF v4.0 pasteboard type",
-                true
+                true,
+                false
             ));
         }
     }
@@ -563,9 +608,10 @@ mod tests {
     fn should_not_skip_tiff_aliases_when_image_not_read() {
         // When no image was captured, TIFF aliases should NOT be skipped
         // (they might be the only representation of image data).
-        assert!(!should_skip_raw_format("public.tiff", false));
+        assert!(!should_skip_raw_format("public.tiff", false, false));
         assert!(!should_skip_raw_format(
             "NeXT TIFF v4.0 pasteboard type",
+            false,
             false
         ));
     }
@@ -574,12 +620,48 @@ mod tests {
     fn should_not_skip_unrelated_formats() {
         assert!(!should_skip_raw_format(
             "org.nspasteboard.AutoGeneratedPasteboard",
+            false,
             false
         ));
         assert!(!should_skip_raw_format(
             "org.nspasteboard.AutoGeneratedPasteboard",
-            true
+            true,
+            false
         ));
-        assert!(!should_skip_raw_format("com.apple.finder.node", true));
+        assert!(!should_skip_raw_format(
+            "com.apple.finder.node",
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn should_skip_file_url_formats_when_files_already_read() {
+        #[cfg(target_os = "macos")]
+        {
+            assert!(should_skip_raw_format("public.file-url", false, true));
+            assert!(should_skip_raw_format("NSFilenamesPboardType", false, true));
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // On non-macOS, these are not skipped by the file-URL logic
+            assert!(!should_skip_raw_format("public.file-url", false, true));
+            assert!(!should_skip_raw_format(
+                "NSFilenamesPboardType",
+                false,
+                true
+            ));
+        }
+    }
+
+    #[test]
+    fn should_not_skip_file_url_formats_when_files_not_read() {
+        assert!(!should_skip_raw_format("public.file-url", false, false));
+        assert!(!should_skip_raw_format(
+            "NSFilenamesPboardType",
+            false,
+            false
+        ));
     }
 }

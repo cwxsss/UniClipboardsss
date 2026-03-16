@@ -37,6 +37,23 @@ pub struct ClipboardEntryProjection {
     pub updated_at: i64,
     /// Timestamp of last access/use
     pub active_time: i64,
+    /// Aggregate file transfer status for file entries (None for non-file entries).
+    /// Values: "pending", "transferring", "completed", "failed".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_transfer_status: Option<String>,
+    /// Failure reason when `file_transfer_status` is "failed" (None otherwise).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_transfer_reason: Option<String>,
+    /// Parsed link URLs (built from full representation data, not preview)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_urls: Option<Vec<String>>,
+    /// Extracted domains for link entries
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_domains: Option<Vec<String>>,
+    /// Per-file sizes in bytes for file (uri-list) entries.
+    /// -1 means the file could not be stat'd.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_sizes: Option<Vec<i64>>,
 }
 
 /// Clipboard entries response with readiness status
@@ -110,7 +127,7 @@ pub struct ClipboardItemDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub link: Option<serde_json::Value>,
+    pub link: Option<ClipboardLinkItemDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +151,14 @@ pub struct ClipboardImageItemDto {
     pub size: i64,
     pub width: i64,
     pub height: i64,
+}
+
+/// Link item DTO for clipboard item response.
+/// 链接条目 DTO。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardLinkItemDto {
+    pub urls: Vec<String>,
+    pub domains: Vec<String>,
 }
 
 /// Response DTO for get_clipboard_item command.
@@ -221,6 +246,11 @@ mod tests {
             is_favorited: false,
             updated_at: 1234567890,
             active_time: 1234567890,
+            file_transfer_status: None,
+            file_transfer_reason: None,
+            link_urls: None,
+            link_domains: None,
+            file_sizes: None,
         };
         let value = serde_json::to_value(&entry).expect("serialize failed");
         // Verify snake_case field names (not camelCase)

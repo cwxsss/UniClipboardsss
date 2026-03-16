@@ -4,9 +4,12 @@ pub mod encryption;
 pub mod error;
 pub mod lifecycle;
 pub mod pairing;
+pub mod preview_panel;
+pub mod quick_panel;
 pub mod settings;
 pub mod setup;
 pub mod startup;
+pub mod storage;
 pub mod tray;
 pub mod updater;
 
@@ -22,6 +25,7 @@ pub use pairing::*;
 pub use settings::*;
 pub use setup::*;
 pub use startup::*;
+pub use storage::*;
 pub use updater::*;
 
 pub use error::CommandError;

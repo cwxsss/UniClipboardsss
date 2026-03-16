@@ -3,6 +3,7 @@
 
 pub mod clipboard_integration_mode;
 pub mod config;
+pub mod file_transfer_wiring;
 pub mod init;
 pub mod logging;
 pub mod run;
@@ -17,6 +18,6 @@ pub use config::load_config;
 pub use init::ensure_default_device_name;
 pub use runtime::{create_app, create_runtime, AppRuntime, SetupRuntimePorts, UseCases};
 pub use wiring::{
-    resolve_pairing_config, resolve_pairing_device_name, start_background_tasks, wire_dependencies,
-    BackgroundRuntimeDeps, WiredDependencies,
+    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, start_background_tasks,
+    wire_dependencies, BackgroundRuntimeDeps, WiredDependencies,
 };
