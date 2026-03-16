@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: completed
-stopped_at: Completed 34-02-PLAN.md (human verify approved)
-last_updated: '2026-03-16T06:25:04.015Z'
+stopped_at: Completed 35-02-PLAN.md
+last_updated: '2026-03-16T08:28:23.136Z'
 last_activity: '2026-03-15 — Completed 33-05 plan: File transfer state UI and Copy gating'
 progress:
-  total_phases: 18
-  completed_phases: 17
-  total_plans: 48
-  completed_plans: 47
+  total_phases: 19
+  completed_phases: 18
+  total_plans: 50
+  completed_plans: 49
   percent: 98
 ---
 
@@ -94,6 +94,8 @@ Progress: [██████████] 98%
   | Phase 33 P05 | 5min | 2 tasks | 7 files |
   | Phase 33 P06 | 5 | 1 tasks | 3 files |
   | Phase 34 P01 | 19 | 3 tasks | 9 files |
+  | Phase 35 P01 | 7min | 1 tasks | 4 files |
+  | Phase 35 P02 | 10min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -200,6 +202,10 @@ Recent decisions affecting current work:
 - [Phase 34]: SetupPage migrated from 3s polling interval to event-driven useDeviceDiscovery hook
 - [Phase 34]: Removed headerRight refresh button from JoinPickDeviceStep -- scanning is automatic, header stays clean
 - [Phase 34]: AnimatePresence mode=wait for clean phase-to-phase transitions in JoinPickDeviceStep
+- [Phase 35]: all_files_excluded guard scoped to file_sync_attempted flag to prevent false suppression when file_sync is disabled
+- [Phase 35]: OutboundSyncPlanner plan() infallible: settings failure returns safe defaults (clipboard: Some, files: [])
+- [Phase 35]: runtime.rs retains extract_file_paths_from_snapshot() + std::fs::metadata() calls (platform layer owns all fs I/O)
+- [Phase 35]: extracted_paths_count captured from resolved_paths.len() BEFORE metadata filter; passed to plan() for all_files_excluded detection
 
 ### Roadmap Evolution
 
@@ -218,6 +224,7 @@ Recent decisions affecting current work:
 - Phase 32.1 inserted after Phase 32: Inbound file sync clipboard integration with persistent file URI list for cross-platform paste (URGENT)
 - Phase 33 added: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
 - Phase 34 added: Optimize JoinPickDevice page: event-driven discovery with scanning UX
+- Phase 35 added: Extract OutboundSyncPlanner to consolidate scattered sync policy checks
 
 ### Pending Todos
 
@@ -237,6 +244,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-16T06:18:27.865Z
-Stopped at: Completed 34-02-PLAN.md (human verify approved)
+Last session: 2026-03-16T08:22:30.633Z
+Stopped at: Completed 35-02-PLAN.md
 Resume file: None
