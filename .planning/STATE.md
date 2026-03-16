@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: completed
-stopped_at: Completed 33-06-PLAN.md
-last_updated: '2026-03-15T04:55:14.835Z'
+stopped_at: Completed 34-02-PLAN.md (human verify approved)
+last_updated: '2026-03-16T06:25:04.015Z'
 last_activity: '2026-03-15 — Completed 33-05 plan: File transfer state UI and Copy gating'
 progress:
-  total_phases: 15
-  completed_phases: 14
-  total_plans: 42
-  completed_plans: 41
+  total_phases: 18
+  completed_phases: 17
+  total_plans: 48
+  completed_plans: 47
   percent: 98
 ---
 
@@ -93,6 +93,7 @@ Progress: [██████████] 98%
   | Phase 33 P04 | 3min | 1 tasks | 5 files |
   | Phase 33 P05 | 5min | 2 tasks | 7 files |
   | Phase 33 P06 | 5 | 1 tasks | 3 files |
+  | Phase 34 P01 | 19 | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -194,6 +195,11 @@ Recent decisions affecting current work:
 - [Phase 33]: Durable entryStatusById takes priority over ephemeral activeTransfers for all UI state decisions
 - [Phase 33]: Hydration dispatch placed inside thunk (not fulfilled reducer) because reducers cannot dispatch actions
 - [Phase 33]: fetchClipboardItems filters file_transfer_status != null before building hydrateEntryTransferStatuses payload to avoid seeding null statuses into entryStatusById
+- [Phase 34]: useDeviceDiscovery stores raw deviceName (string | null) from backend — no fallback mapping in hook
+- [Phase 34]: onError callback stored in useRef synced via useEffect (not during render) to satisfy react-hooks/refs ESLint rule
+- [Phase 34]: SetupPage migrated from 3s polling interval to event-driven useDeviceDiscovery hook
+- [Phase 34]: Removed headerRight refresh button from JoinPickDeviceStep -- scanning is automatic, header stays clean
+- [Phase 34]: AnimatePresence mode=wait for clean phase-to-phase transitions in JoinPickDeviceStep
 
 ### Roadmap Evolution
 
@@ -211,6 +217,7 @@ Recent decisions affecting current work:
 - Phase 32 added: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
 - Phase 32.1 inserted after Phase 32: Inbound file sync clipboard integration with persistent file URI list for cross-platform paste (URGENT)
 - Phase 33 added: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
+- Phase 34 added: Optimize JoinPickDevice page: event-driven discovery with scanning UX
 
 ### Pending Todos
 
@@ -230,6 +237,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-15T04:50:35.378Z
-Stopped at: Completed 33-06-PLAN.md
+Last session: 2026-03-16T06:18:27.865Z
+Stopped at: Completed 34-02-PLAN.md (human verify approved)
 Resume file: None
