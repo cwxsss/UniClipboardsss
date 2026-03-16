@@ -8,10 +8,31 @@
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
+use std::sync::Mutex;
+use std::time::Instant;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{debug, error, info, warn};
+
+/// Timestamp of the last `show()` call. Blur events within
+/// [`BLUR_DEBOUNCE_MS`] of this timestamp are ignored to prevent
+/// the "show → instant blur → hide" race on Windows/Linux.
+static LAST_SHOW_TIME: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// How long (ms) after `show()` to suppress blur events.
+const BLUR_DEBOUNCE_MS: u128 = 300;
+
+/// How long (ms) to wait before verifying focus is actually gone.
+///
+/// When a `Focused(false)` event arrives, we don't hide immediately.
+/// Instead we wait this long and then check `is_focused()`. Spurious
+/// blur events (AttachThreadInput detach, IME popups, Windows system
+/// notifications) are transient and focus returns within a few ms.
+/// A real "user clicked elsewhere" loss persists past this delay.
+const BLUR_VERIFY_DELAY_MS: u64 = 100;
 
 /// Default global shortcut for the quick panel (Tauri format).
 /// macOS: Cmd+Ctrl+V, Windows/Linux: Ctrl+Alt+V
@@ -106,14 +127,50 @@ pub fn pre_create(app: &tauri::AppHandle) {
             let app_for_focus = app.clone();
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::Focused(false) = event {
-                    // If focus transferred to the preview panel, keep quick panel visible
-                    if crate::preview_panel::is_focused(&app_for_focus) {
-                        debug!("Quick panel lost focus to preview panel — not hiding");
-                        return;
+                    // Debounce: ignore blur events shortly after show() to prevent
+                    // the "show → instant blur → hide" race on Windows/Linux.
+                    if let Ok(guard) = LAST_SHOW_TIME.lock() {
+                        if let Some(t) = *guard {
+                            if t.elapsed().as_millis() < BLUR_DEBOUNCE_MS {
+                                debug!(
+                                    elapsed_ms = t.elapsed().as_millis(),
+                                    "Quick panel blur suppressed (within show debounce window)"
+                                );
+                                return;
+                            }
+                        }
                     }
-                    debug!("Quick panel lost focus, hiding");
-                    crate::preview_panel::dismiss(&app_for_focus);
-                    let _ = win_clone.hide();
+
+                    // Verify the focus loss is real, not a transient glitch.
+                    //
+                    // Spurious WM_KILLFOCUS messages arrive from many sources on
+                    // Windows (AttachThreadInput detach, IME composition windows,
+                    // system notifications, WebView2 internal focus shuffles).
+                    // All of them are brief — focus returns within a few ms.
+                    // A genuine "user clicked elsewhere" loss persists.
+                    //
+                    // Strategy: spawn a task, wait BLUR_VERIFY_DELAY_MS, then
+                    // check is_focused(). If focus is back, discard the event.
+                    let win_verify = win_clone.clone();
+                    let app_verify = app_for_focus.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(
+                            BLUR_VERIFY_DELAY_MS,
+                        ))
+                        .await;
+
+                        if win_verify.is_focused().unwrap_or(false) {
+                            debug!("Quick panel focus returned after blur — spurious event, not hiding");
+                            return;
+                        }
+                        if crate::preview_panel::is_focused(&app_verify) {
+                            debug!("Quick panel lost focus to preview panel — not hiding");
+                            return;
+                        }
+                        debug!("Quick panel lost focus (verified), hiding");
+                        crate::preview_panel::dismiss(&app_verify);
+                        let _ = win_verify.hide();
+                    });
                 }
             });
         }
@@ -167,10 +224,24 @@ pub fn show(app: &tauri::AppHandle) {
             warn!(error = %e, "Failed to set quick panel position");
         }
 
+        // Record show timestamp *before* showing so the blur handler can
+        // debounce any spurious Focused(false) events that fire during the
+        // show + focus sequence on Windows/Linux.
+        if let Ok(mut guard) = LAST_SHOW_TIME.lock() {
+            *guard = Some(Instant::now());
+        }
+
         // Show panel without activating the app (macOS uses orderFrontRegardless)
         #[cfg(target_os = "macos")]
         macos::show_panel(&window);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            let _ = window.show();
+            // Use Win32 AttachThreadInput trick to reliably claim foreground,
+            // bypassing SetForegroundWindow restrictions.
+            windows::force_foreground(&window);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = window.show();
             let _ = window.set_focus();
