@@ -1,5 +1,5 @@
 import { AnimatePresence } from 'framer-motion'
-import { Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
@@ -16,7 +16,9 @@ import {
   verifyPassphrase,
   SetupState,
 } from '@/api/setup'
+import FloatingParticles from '@/components/effects/FloatingParticles'
 import { useDeviceDiscovery } from '@/hooks/useDeviceDiscovery'
+import { usePlatform } from '@/hooks/usePlatform'
 import CreatePassphraseStep from '@/pages/setup/CreatePassphraseStep'
 import JoinPickDeviceStep from '@/pages/setup/JoinPickDeviceStep'
 import JoinVerifyPassphraseStep from '@/pages/setup/JoinVerifyPassphraseStep'
@@ -74,6 +76,8 @@ function getStepInfo(
 
 export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
   const { t } = useTranslation(undefined, { keyPrefix: 'setup.page' })
+  const { t: tCommon } = useTranslation(undefined, { keyPrefix: 'setup.common' })
+  const { isMac } = usePlatform()
   const navigate = useNavigate()
   const [setupState, setSetupState] = useState<SetupState | null>(null)
   const [loading, setLoading] = useState(false)
@@ -249,7 +253,6 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
             onSubmit={(pass1: string, pass2: string) =>
               runAction(() => submitPassphrase(pass1, pass2))
             }
-            onBack={() => runAction(() => cancelSetup())}
             error={setupState.CreateSpaceInputPassphrase.error}
             loading={loading}
             direction={direction}
@@ -264,7 +267,6 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
               setSelectedPeerId(peerId)
               runAction(() => selectJoinPeer(peerId))
             }}
-            onBack={() => runAction(() => cancelSetup())}
             onRescan={resetScan}
             peers={peers}
             scanPhase={scanPhase}
@@ -281,7 +283,6 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
           <JoinVerifyPassphraseStep
             peerId={selectedPeerId ?? undefined}
             onSubmit={(passphrase: string) => runAction(() => verifyPassphrase(passphrase))}
-            onBack={() => runAction(() => cancelSetup())}
             onCreateNew={() => runAction(() => startNewSpace())}
             error={error}
             loading={loading}
@@ -343,13 +344,48 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-background">
-      <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-muted/20" />
-        <div className="absolute -top-32 -left-32 h-96 w-96 bg-primary/5 blur-3xl" />
-        <div className="absolute -bottom-32 -right-32 h-96 w-96 bg-emerald-500/5 blur-3xl" />
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-muted/30" />
+        <div
+          className="absolute -top-32 -left-32 h-[28rem] w-[28rem] rounded-full bg-blue-500/25 blur-[6rem] dark:bg-blue-500/15"
+          style={{ animation: 'aurora-drift-1 12s ease-in-out infinite' }}
+        />
+        <div
+          className="absolute -bottom-24 -right-24 h-[24rem] w-[24rem] rounded-full bg-emerald-500/25 blur-[5rem] dark:bg-emerald-500/15"
+          style={{ animation: 'aurora-drift-2 15s ease-in-out infinite' }}
+        />
+        <div
+          className="absolute top-1/3 left-1/2 h-[20rem] w-[20rem] -translate-x-1/2 rounded-full bg-violet-500/20 blur-[5rem] dark:bg-violet-500/12"
+          style={{ animation: 'aurora-drift-3 18s ease-in-out infinite' }}
+        />
+        <FloatingParticles />
       </div>
 
       <div className="relative flex h-full w-full min-h-0 flex-col">
+        {/* Draggable header with back button */}
+        <header
+          data-tauri-drag-region
+          className={`relative z-10 flex h-12 shrink-0 items-center pr-4 ${
+            isMac ? 'pl-20' : 'pl-4'
+          }`}
+        >
+          {setupState &&
+            typeof setupState === 'object' &&
+            ('CreateSpaceInputPassphrase' in setupState ||
+              'JoinSpaceSelectDevice' in setupState ||
+              'JoinSpaceInputPassphrase' in setupState) && (
+              <button
+                type="button"
+                data-tauri-drag-region="false"
+                onClick={() => runAction(() => cancelSetup())}
+                className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                {tCommon('back')}
+              </button>
+            )}
+        </header>
+
         <main
           className={`flex min-h-0 flex-1 items-center px-8 py-4 sm:px-12 sm:py-6 ${
             stepKey === 'Welcome' ? 'overflow-hidden' : 'overflow-y-auto'
