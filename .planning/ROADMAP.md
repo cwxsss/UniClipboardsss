@@ -94,7 +94,14 @@ Plans:
 2. A separate Tauri-specific module owns the Tauri event loop setup, app handle wiring, and command registration; it is the only place that imports tauri types
 3. Existing GUI behavior is unchanged: clipboard sync, pairing, and settings all continue to function after the split
 4. `cargo check` on the pure-assembly module succeeds without tauri in its dependency tree
-   **Plans**: TBD
+
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 37-01-PLAN.md — Define PairingHostEvent, SetupHostEvent, SpaceAccessHostEvent in uc-core; extend TauriEventEmitter + LoggingEventEmitter with contract tests
+- [ ] 37-02-PLAN.md — Migrate all app.emit() calls in wiring.rs and file_transfer_wiring.rs to HostEventEmitterPort
+- [ ] 37-03-PLAN.md — Split wiring.rs into assembly.rs + wiring.rs, move command registration, update ROADMAP
 
 ### Phase 38: CoreRuntime Extraction
 
@@ -160,7 +167,7 @@ Plans:
 | 10-18                            | v0.2.0    | 22/22          | Complete    | 2026-03-09 |
 | 19-35                            | v0.3.0    | 51/51          | Complete    | 2026-03-17 |
 | 36. Event Emitter Abstraction    | 2/2       | Complete       | 2026-03-17  | -          |
-| 37. Wiring Decomposition         | v0.4.0    | 0/?            | Not started | -          |
+| 37. Wiring Decomposition         | v0.4.0    | 0/3            | Not started | -          |
 | 38. CoreRuntime Extraction       | v0.4.0    | 0/?            | Not started | -          |
 | 39. Config Resolution Extraction | v0.4.0    | 0/?            | Not started | -          |
 | 40. uc-bootstrap Crate           | v0.4.0    | 0/?            | Not started | -          |
