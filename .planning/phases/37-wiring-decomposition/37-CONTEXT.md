@@ -6,7 +6,17 @@
 <domain>
 ## Phase Boundary
 
-Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, no Tauri types) and a Tauri-specific event loop module (retains `wiring.rs` name). Migrate ALL remaining `app.emit()` calls in wiring.rs and file_transfer_wiring.rs to `HostEventEmitterPort`, adding new HostEvent domain variants. After migration, `start_background_tasks` loses its `AppHandle<R>` parameter entirely. Move command registration (`invoke_handler` macro) from main.rs into the Tauri-specific module so it owns event loop setup, app handle wiring, AND command registration per ROADMAP SC#2.
+Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, no Tauri types) and a Tauri-specific event loop module (retains `wiring.rs` name). Migrate ALL remaining `app.emit()` calls in wiring.rs and file_transfer_wiring.rs to `HostEventEmitterPort`, adding new HostEvent domain variants. After migration, `start_background_tasks` loses its `AppHandle<R>` parameter entirely. Move command registration (`invoke_handler` macro) from main.rs into the Tauri-specific module so it owns event loop setup, app handle wiring, AND command registration.
+
+**⚠ ROADMAP SC#2 and SC#4 interpretation adjustment (explicit, not silent):**
+
+ROADMAP SC#2 says "it is the only place that imports tauri types." Taken literally across the entire uc-tauri crate, this is unachievable in Phase 37 — commands/, adapters/, events/, preview_panel/, quick_panel/, tray/, services/ all import tauri unconditionally, and uc-tauri's Cargo.toml has `tauri` as a non-optional dependency (Cargo.toml:20). Gating the entire crate would require making tauri optional + `#[cfg(feature)]` on 10+ modules — that is Phase 40 (uc-bootstrap) scope.
+
+**Phase 37 interpretation:** SC#2's "only place" applies **within the bootstrap/ directory** — after the split, assembly.rs has zero tauri imports and wiring.rs is the only bootstrap module that imports tauri types. Commands, adapters, and other uc-tauri modules are out of scope for this constraint.
+
+ROADMAP SC#4 says "`cargo check` on the pure-assembly module succeeds without tauri in its dependency tree." Since assembly.rs lives inside uc-tauri (which unconditionally depends on tauri), a real `cargo check` without tauri requires either crate extraction or crate-wide feature gating — both disproportionate for Phase 37.
+
+**Phase 37 interpretation:** SC#4 is satisfied by structural proof: assembly.rs has zero tauri/tauri-plugin imports (verified by grep + CI lint), and its public API surface uses only types from uc-core, uc-app, uc-infra, uc-platform (all Tauri-free crates). The full `cargo check -p` independence is achieved in Phase 40 when assembly code moves to uc-bootstrap. **The ROADMAP.md Phase 37 SC#4 wording should be updated to reflect this staged approach.**
 
 **In scope:**
 
@@ -17,12 +27,16 @@ Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, 
 - Remove AppHandle<R> parameter from start_background_tasks after all emits migrated
 - Extend TauriEventEmitter with new event → Tauri event name + payload mappings
 - Move command registration (invoke_handler![...] block, currently main.rs:852-927) into Tauri-specific module — wiring.rs or a dedicated commands_registration.rs
-- Cargo feature gate (`tauri-runtime`) to enable `cargo check -p uc-tauri --no-default-features` verification that assembly.rs compiles without tauri in its dependency tree
+- Grep/CI lint rule: assembly.rs must contain zero `tauri::`, `AppHandle`, `Emitter`, `Runtime` imports
+- Update ROADMAP.md Phase 37 SC#2 and SC#4 wording to match the staged interpretation above
 
 **Out of scope:**
 
 - Moving files to other crates (deferred to Phase 38+)
 - Creating independent crate for assembly module (deferred to Phase 40)
+- Crate-wide feature gating of tauri dependency (deferred to Phase 40)
+- Making tauri an optional dependency in uc-tauri/Cargo.toml (deferred to Phase 40)
+- Gating non-bootstrap modules (commands/, adapters/, events/, etc.) behind feature flags (deferred to Phase 40)
 - Commands-layer emits (commands/pairing.rs, commands/clipboard.rs, encryption.rs, tray.rs)
 - emit_to for quick-panel/preview-panel (window-targeted, not broadcast)
 - clipboard monitor heartbeat (clipboard_monitor.rs:43)
@@ -64,17 +78,19 @@ Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, 
 ### Command registration ownership
 
 - ROADMAP SC#2 requires the Tauri-specific module to own "event loop setup, app handle wiring, and command registration"
+- Within bootstrap/, this is achieved: wiring.rs (Tauri module) owns event loops + app handle; command registration moves from main.rs into wiring.rs or a dedicated bootstrap helper
 - Currently command registration lives in main.rs:852-927 (`invoke_handler![...]` macro with ~60 commands)
 - Move the `invoke_handler` generation into the Tauri module (wiring.rs or a dedicated helper function) so main.rs delegates to it
 - main.rs becomes a thin entry point: config → assembly → tauri-module (which provides event loops + command handler)
+- SC#2's "only place that imports tauri types" is scoped to bootstrap/ — see interpretation adjustment in domain section
 
-### Tauri-purity verification (ROADMAP SC#4 — not downgraded)
+### Tauri-purity verification (ROADMAP SC#4 — staged, not downgraded)
 
-- assembly.rs must pass `cargo check` without tauri in its dependency tree — per ROADMAP.md:93,96 verbatim
-- Mechanism: Cargo feature gate in uc-tauri's Cargo.toml (e.g., `tauri-runtime` feature, default-enabled). assembly.rs code is NOT gated behind the feature; wiring.rs and all Tauri-specific code IS gated. `cargo check -p uc-tauri --no-default-features` compiles assembly.rs without tauri deps
-- This is a real `cargo check` verification, NOT a grep-only check
-- The feature gate is the lightest mechanism that satisfies SC#4 without extracting to a separate crate (which happens in Phase 40)
-- grep/CI as supplementary check: also verify assembly.rs has zero `tauri::`, `AppHandle`, `Emitter`, `Runtime` imports as a belt-and-suspenders guard
+- **What Phase 37 achieves:** assembly.rs has zero tauri imports, verified by grep + CI lint rule. Its public API surface (return types, parameter types) uses only types from Tauri-free crates (uc-core, uc-app, uc-infra, uc-platform). This is a structural guarantee that assembly.rs IS extractable to a Tauri-free crate
+- **What Phase 37 does NOT achieve:** `cargo check` on assembly.rs as an independent compilation unit. This requires either crate extraction or making tauri optional + gating all 10+ non-assembly modules behind `#[cfg(feature)]`. Both are disproportionate — that's Phase 40's job when uc-bootstrap is created
+- **Why feature gating is infeasible here:** uc-tauri has `tauri` as unconditional dep (Cargo.toml:20), and lib.rs unconditionally compiles 11 pub modules (commands, events, adapters, preview_panel, quick_panel, tray, services, etc.) that all import tauri. `--no-default-features` would require gating ALL of them — effectively restructuring the entire crate
+- **ROADMAP update required:** Phase 37 SC#4 wording should be amended to: "assembly.rs contains zero tauri imports (verified by CI lint) and its public API is Tauri-type-free, preparing it for independent `cargo check` in Phase 40"
+- The full `cargo check -p uc-bootstrap --no-default-features` independence is the Phase 40 deliverable
 
 ### Commit split strategy (MANDATORY — hex boundary + atomic commit rules)
 
@@ -83,7 +99,8 @@ Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, 
   1. `arch:` New HostEvent sub-enums (PairingHostEvent, SetupHostEvent, SpaceAccessHostEvent) in uc-core — `cargo check -p uc-core` passes
   2. `impl:` TauriEventEmitter + LoggingEventEmitter extended with new variants + contract tests — `cargo check -p uc-tauri` passes
   3. `refactor:` Migrate app.emit() calls + file_transfer_wiring.rs to HostEventEmitterPort, remove AppHandle<R> from start_background_tasks — `cargo test` passes
-  4. `refactor:` Split wiring.rs → assembly.rs + wiring.rs, add feature gate, move command registration — `cargo check -p uc-tauri --no-default-features` passes
+  4. `refactor:` Split wiring.rs → assembly.rs + wiring.rs, move command registration — `cargo check -p uc-tauri` passes + grep lint confirms assembly.rs has zero tauri imports
+  5. `docs:` Update ROADMAP.md Phase 37 SC#2/SC#4 wording to reflect staged interpretation
 - Planner may further split these if individual commits are too large, but must NOT merge uc-core and uc-tauri changes into a single commit
 
 ### Claude's Discretion
@@ -92,7 +109,6 @@ Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, 
 - Internal refactoring of wiring.rs closure patterns to accommodate emitter injection
 - Order of migration (which event domain first)
 - Whether command registration moves into wiring.rs or a separate helper function
-- Exact Cargo feature name and gating pattern
 
 </decisions>
 
@@ -118,12 +134,12 @@ Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, 
 - `src-tauri/crates/uc-tauri/src/bootstrap/file_transfer_wiring.rs` — 5 functions with AppHandle<R> to migrate
 - `src-tauri/crates/uc-tauri/src/bootstrap/mod.rs` — Module declarations and re-exports (needs updating)
 - `src-tauri/src/main.rs` — Lines 852-927: invoke_handler![...] command registration to be moved into Tauri module
-- `src-tauri/crates/uc-tauri/Cargo.toml` — Feature gate (`tauri-runtime`) to be added for assembly purity verification
+- `src-tauri/crates/uc-tauri/src/lib.rs` — Module declarations; lib.rs:8-17 shows 11 pub mod all importing tauri (context for why feature gating is Phase 40 scope)
 
 ### Existing HostEvent implementation (from Phase 36)
 
 - `src-tauri/crates/uc-core/src/ports/host_event_emitter.rs` — HostEvent enum, sub-enums (ClipboardHostEvent, PeerDiscoveryHostEvent, PeerConnectionHostEvent, TransferHostEvent), EmitError
-- `src-tauri/crates/uc-tauri/src/adapters/tauri_event_emitter.rs` — TauriEventEmitter with event name mapping and payload DTOs
+- `src-tauri/crates/uc-tauri/src/adapters/host_event_emitter.rs` — TauriEventEmitter and LoggingEventEmitter with event name mapping and payload DTOs
 
 ### Current event types (to be replaced by HostEvent variants)
 
@@ -165,7 +181,7 @@ Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, 
 - AppRuntime (runtime.rs): May still hold app_handle for commands-layer (out of scope), but event loop code no longer needs it
 - main.rs:852-927: `invoke_handler![...]` macro moved into Tauri module; main.rs calls a function that returns the handler
 - `resolve_pairing_device_name` callers outside event loops: commands/settings.rs:4,140 and adapters/lifecycle.rs:18,148 — these import from bootstrap::assembly after the move
-- uc-tauri/Cargo.toml: `tauri-runtime` feature gate added; `cargo check -p uc-tauri --no-default-features` must pass
+- Grep/CI lint: assembly.rs must pass `grep -c 'tauri::' assembly.rs` == 0; no `AppHandle`, `Emitter`, `Runtime` imports
 
 </code_context>
 
@@ -179,7 +195,9 @@ No specific requirements — open to standard approaches
 <deferred>
 ## Deferred Ideas
 
-- Move assembly.rs to independent crate (uc-bootstrap or similar) — Phase 40
+- Move assembly.rs to independent crate (uc-bootstrap) with real `cargo check -p` independence — Phase 40 (completes ROADMAP SC#4 full intent)
+- Make tauri an optional dependency in uc-tauri + feature-gate all Tauri-heavy modules — Phase 40 prerequisite for crate extraction
+- Enforce SC#2 "only place" constraint across ALL of uc-tauri (not just bootstrap/) — Phase 40
 - Move file_transfer_wiring.rs out of uc-tauri — Phase 38+ when CoreRuntime is extracted
 - Migrate commands-layer emits (pairing.rs, clipboard.rs, encryption.rs, tray.rs) — future phase
 - Migrate emit_to for quick-panel/preview-panel (window-targeted, requires different abstraction) — future phase
