@@ -8,6 +8,19 @@ A cross-platform clipboard synchronization app built with Tauri 2, React, and Ru
 
 Seamless clipboard synchronization across devices — users can copy on one device and paste on another without interrupting their workflow.
 
+## Current Milestone: v0.4.0 Runtime Mode Separation
+
+**Goal:** Extract non-Tauri logic from uc-tauri into shared crates, enabling GUI / CLI / daemon as independent runtime modes.
+
+**Target features:**
+
+- HostEventEmitterPort abstraction replacing hardcoded Tauri AppHandle::emit()
+- wiring.rs decomposition separating pure assembly from Tauri event loops
+- CoreRuntime extraction from AppRuntime (Tauri-free runtime core)
+- Configuration resolution extracted to reusable module
+- uc-bootstrap crate as the sole composition root
+- uc-daemon + uc-cli minimal skeletons with end-to-end path validation
+
 ## Current State
 
 - **Latest shipped milestone:** v0.3.0 Log Observability & Feature Expansion (2026-03-17)
@@ -53,7 +66,13 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 
 ### Active
 
-(None — define with `/gsd:new-milestone`)
+- [ ] HostEventEmitterPort trait abstraction for multi-runtime event delivery
+- [ ] wiring.rs decomposition: pure assembly vs Tauri-specific event loops
+- [ ] CoreRuntime extraction from AppRuntime (Tauri-free)
+- [ ] Configuration resolution extracted to reusable bootstrap module
+- [ ] uc-bootstrap crate as sole composition root with scene-specific builders
+- [ ] uc-daemon skeleton with worker lifecycle and local RPC
+- [ ] uc-cli skeleton with command routing, direct/daemon dispatch, and output rendering
 
 ### Deferred
 
@@ -120,4 +139,4 @@ Structured observability from dual-output logging through Seq cross-device traci
 
 ---
 
-_Last updated: 2026-03-17 after v0.3.0 milestone completion_
+_Last updated: 2026-03-17 after v0.4.0 milestone start_
