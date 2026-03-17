@@ -65,9 +65,10 @@
 
 **AppRuntime restructuring (in-scope):**
 
-- `AppRuntime::app_handle: Arc<RwLock<Option<AppHandle>>>` replaced with `Arc<dyn HostEventEmitterPort>`
-- `set_app_handle()` / `app_handle()` methods removed from AppRuntime
-- Emitter port injected at construction time
+- `AppRuntime` gets a NEW `event_emitter: RwLock<Arc<dyn HostEventEmitterPort>>` field ALONGSIDE the existing `app_handle`
+- `app_handle` field and `set_app_handle()` / `app_handle()` methods are KEPT for out-of-scope callers
+- New `set_event_emitter()` / `event_emitter()` methods added for the port
+- Emitter starts as LoggingEventEmitter at construction, swapped to TauriEventEmitter after setup callback
 - AppRuntime::on_clipboard_changed uses the port instead of direct AppHandle read
 
 **Migration strategy:**
@@ -355,21 +356,23 @@ impl AppRuntime {
 Target state (Phase 36):
 
 ```rust
-// NEW: constructor injection
+// NEW: event_emitter ADDED alongside app_handle (app_handle KEPT)
 pub struct AppRuntime {
-    event_emitter: Arc<dyn uc_core::ports::HostEventEmitterPort>,
-    // app_handle field REMOVED
+    app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,  // KEPT for out-of-scope callers
+    event_emitter: std::sync::RwLock<Arc<dyn uc_core::ports::HostEventEmitterPort>>,  // NEW
     // ...
 }
 impl AppRuntime {
-    // set_app_handle() REMOVED
-    // app_handle() REMOVED
+    pub fn set_app_handle(&self, handle: tauri::AppHandle) { ... }  // KEPT
+    pub fn app_handle(&self) -> ... { ... }  // KEPT
+    pub fn event_emitter(&self) -> Arc<dyn HostEventEmitterPort> { ... }  // NEW
+    pub fn set_event_emitter(&self, emitter: Arc<dyn HostEventEmitterPort>) { ... }  // NEW
 }
 ```
 
-Construction site in `with_setup()` must change: the emitter port is now a required constructor parameter rather than being set post-init. The `build_setup_orchestrator()` call currently passes `app_handle.clone()` into `TauriSessionReadyEmitter::new()` — this is OUT OF SCOPE for Phase 36 (the lifecycle emitter is a different port). Only the `app_handle` used for clipboard emit at line 1189-1205 is migrated.
+The emitter starts as `LoggingEventEmitter` at construction time, then `set_event_emitter()` swaps it to `TauriEventEmitter` after the Tauri setup callback provides the `AppHandle`. The existing `app_handle` field, `set_app_handle()`, and `app_handle()` are preserved for out-of-scope callers (pairing commands, clipboard commands, build_setup_orchestrator, app_lifecycle_coordinator).
 
-**Critical subtlety:** `TauriSessionReadyEmitter` in `build_setup_orchestrator()` (runtime.rs:341-343) still uses the old `Arc<RwLock<Option<AppHandle>>>` pattern. This emitter is NOT migrated in Phase 36 — it remains on a separate port (`SessionReadyEmitter`). Phase 36 only removes the top-level `app_handle` field used for clipboard emit. The `build_setup_orchestrator` signature may still need `Arc<RwLock<Option<AppHandle>>>` temporarily for `TauriSessionReadyEmitter` — this requires careful scoping.
+**Critical subtlety:** `TauriSessionReadyEmitter` in `build_setup_orchestrator()` (runtime.rs:341-343) still uses the old `Arc<RwLock<Option<AppHandle>>>` pattern via `app_handle()`. This is OUT OF SCOPE for Phase 36 and continues working because `app_handle` is kept.
 
 ### Pattern 5: wiring.rs Closure Migration
 
