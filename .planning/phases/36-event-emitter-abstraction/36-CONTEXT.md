@@ -48,7 +48,7 @@ Define `HostEventEmitterPort` trait and two adapters (Tauri, Logging). Migrate *
 
 - **HostEvent is a core semantic model, NOT a frontend protocol DTO**
 - HostEvent uses pure Rust types, no serde annotations, no camelCase rename — uc-core stays clean
-- TauriEventEmitter is solely responsible for converting HostEvent → Tauri event name string + serde-annotated payload struct
+- TauriEventEmitter is solely responsible for converting HostEvent -> Tauri event name string + serde-annotated payload struct
 - This means TauriEventEmitter internally defines its own payload DTOs with `#[serde(rename_all = "camelCase")]` and `#[serde(tag = "type")]` as needed to match current frontend contracts
 
 ### Event type system
@@ -56,7 +56,7 @@ Define `HostEventEmitterPort` trait and two adapters (Tauri, Logging). Migrate *
 - Strong-typed `HostEvent` enum with nested sub-enums per domain: `HostEvent::Clipboard(ClipboardHostEvent)`, `HostEvent::PeerDiscovery(PeerDiscoveryHostEvent)`, `HostEvent::Transfer(TransferHostEvent)`, etc.
 - **Only events for the in-scope components are defined** in Phase 36. No enum variants for setup, pairing-verification, space-access, etc.
 - Event types are newly defined in uc-core — NOT moved from uc-tauri
-- Event name mapping (e.g., `ClipboardHostEvent::NewContent` → `"clipboard://event"`) is the adapter's internal responsibility
+- Event name mapping (e.g., `ClipboardHostEvent::NewContent` -> `"clipboard://event"`) is the adapter's internal responsibility
 
 ### Failure semantics
 
@@ -67,9 +67,11 @@ Define `HostEventEmitterPort` trait and two adapters (Tauri, Logging). Migrate *
 
 ### AppRuntime restructuring (in-scope)
 
-- `AppRuntime::app_handle: Arc<RwLock<Option<AppHandle>>>` is replaced with `Arc<dyn HostEventEmitterPort>`
-- `set_app_handle()` / `app_handle()` methods removed from AppRuntime
-- The emitter port is injected at construction time, not set post-init
+- `AppRuntime` gets a NEW `event_emitter: RwLock<Arc<dyn HostEventEmitterPort>>` field ALONGSIDE the existing `app_handle: Arc<RwLock<Option<AppHandle>>>` field
+- `app_handle` is KEPT — it is still needed by out-of-scope callers (commands/pairing.rs, commands/clipboard.rs, apply_autostart, build_setup_orchestrator, app_lifecycle_coordinator)
+- `set_app_handle()` and `app_handle()` methods are KEPT for those out-of-scope callers
+- NEW `event_emitter()` accessor and `set_event_emitter()` setter are added
+- The emitter starts as LoggingEventEmitter at construction time (before Tauri setup), then is swapped to TauriEventEmitter via `set_event_emitter()` after the AppHandle is available in the setup callback
 - AppRuntime::on_clipboard_changed uses the port instead of direct AppHandle read
 
 ### Migration strategy
@@ -95,7 +97,7 @@ Define `HostEventEmitterPort` trait and two adapters (Tauri, Logging). Migrate *
 ### LoggingEventEmitter behavior
 
 - Logs all events — filtering controlled by tracing level configuration
-- Log levels vary by event type: error events → `warn!`, key business events (clipboard new, transfer complete) → `info!`, discovery changes → `debug!`
+- Log levels vary by event type: error events -> `warn!`, key business events (clipboard new, transfer complete) -> `info!`, discovery changes -> `debug!`
 - Output uses structured tracing fields: `info!(event_type = "clipboard.new_content", entry_id = %id)` — consistent with existing tracing patterns
 - Sensitive field policy: follows AGENTS.md existing rules (no raw keys, passphrases, decrypted content). Current in-scope events only carry IDs/summaries, not raw clipboard content
 
@@ -118,9 +120,9 @@ Define `HostEventEmitterPort` trait and two adapters (Tauri, Logging). Migrate *
 ### Requirements and constraints
 
 - `.planning/REQUIREMENTS.md` — EVNT-01 through EVNT-04 define the four success criteria for this phase
-- `AGENTS.md` §Atomic Commit Rule — Port + adapter split, hex boundary commit rules, revert safety
-- `AGENTS.md` §Tauri Event Payload Serialization — camelCase mandate, known incident reference
-- `AGENTS.md` §Rust Logging — Sensitive field policy, structured tracing conventions
+- `AGENTS.md` Atomic Commit Rule — Port + adapter split, hex boundary commit rules, revert safety
+- `AGENTS.md` Tauri Event Payload Serialization — camelCase mandate, known incident reference
+- `AGENTS.md` Rust Logging — Sensitive field policy, structured tracing conventions
 
 ### Current event implementation (to be partially replaced)
 
@@ -167,12 +169,12 @@ Define `HostEventEmitterPort` trait and two adapters (Tauri, Logging). Migrate *
 - Port injection via `Arc<dyn XxxPort>` through constructors — all infrastructure ports follow this
 - Event payload DTOs in uc-tauri use `#[serde(tag = "type")]` for discriminated unions and `#[serde(rename_all = "camelCase")]` for field names
 - Error types in ports use simple string-based errors or dedicated error enums
-- `AppRuntime::app_handle` currently stored as `Arc<RwLock<Option<AppHandle>>>` set post-init via `set_app_handle()` — this pattern is replaced by constructor injection
+- `AppRuntime::app_handle` currently stored as `Arc<RwLock<Option<AppHandle>>>` set post-init via `set_app_handle()` — this field and its accessors are KEPT alongside the new event_emitter field
 
 ### Integration Points
 
-- wiring.rs: `app.clone()` captured in closures → replaced with `Arc<dyn HostEventEmitterPort>` for in-scope components only
-- `AppRuntime` struct: `app_handle` field replaced with emitter port; `set_app_handle()` removed
+- wiring.rs: `app.clone()` captured in closures -> in-scope emit sites replaced with `Arc<dyn HostEventEmitterPort>`; out-of-scope closures continue to use `app.clone()` as before
+- `AppRuntime` struct: `event_emitter` field ADDED alongside existing `app_handle`; both coexist
 - `AppDeps` domain sub-structs may need to carry the emitter port for components that need it
 - Out-of-scope emit calls in wiring.rs continue to use `app.clone()` as before
 
