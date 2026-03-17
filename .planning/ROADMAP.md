@@ -55,7 +55,7 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 
 #### Phases
 
-- [ ] **Phase 36: Event Emitter Abstraction** - Replace hardcoded AppHandle::emit() with HostEventEmitterPort trait and adapters
+- [x] **Phase 36: Event Emitter Abstraction** - Replace hardcoded AppHandle::emit() with HostEventEmitterPort trait and adapters (completed 2026-03-17)
 - [ ] **Phase 37: Wiring Decomposition** - Split wiring.rs into pure assembly module and Tauri-specific event loop module
 - [ ] **Phase 38: CoreRuntime Extraction** - Extract Tauri-free CoreRuntime and unify SetupOrchestrator into single composition point
 - [ ] **Phase 39: Config Resolution Extraction** - Move path/profile/keyslot resolution from main.rs into reusable bootstrap module
@@ -76,7 +76,7 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 3. LoggingEventEmitter adapter exists and implements HostEventEmitterPort by writing events to tracing output
 4. Clipboard watcher, peer discovery, and sync scheduler accept HostEventEmitterPort instead of AppHandle<R>; the compiler rejects any direct AppHandle use in these components
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
@@ -159,7 +159,7 @@ Plans:
 | 1-9                              | v0.1.0    | 17/17          | Complete    | 2026-03-06 |
 | 10-18                            | v0.2.0    | 22/22          | Complete    | 2026-03-09 |
 | 19-35                            | v0.3.0    | 51/51          | Complete    | 2026-03-17 |
-| 36. Event Emitter Abstraction    | 1/2       | In Progress    |             | -          |
+| 36. Event Emitter Abstraction    | 2/2       | Complete       | 2026-03-17  | -          |
 | 37. Wiring Decomposition         | v0.4.0    | 0/?            | Not started | -          |
 | 38. CoreRuntime Extraction       | v0.4.0    | 0/?            | Not started | -          |
 | 39. Config Resolution Extraction | v0.4.0    | 0/?            | Not started | -          |

@@ -12,7 +12,7 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **EVNT-01**: System can deliver host events through an abstract HostEventEmitterPort trait in uc-core/ports
 - [x] **EVNT-02**: GUI mode can emit events to Tauri frontend via TauriEventEmitter adapter implementing HostEventEmitterPort
 - [x] **EVNT-03**: Non-GUI modes can deliver events to logging output via LoggingEventEmitter adapter
-- [ ] **EVNT-04**: Background tasks (clipboard watcher, peer discovery, sync scheduler) accept HostEventEmitterPort instead of AppHandle<R: Runtime>
+- [x] **EVNT-04**: Background tasks (clipboard watcher, peer discovery, sync scheduler) accept HostEventEmitterPort instead of AppHandle<R: Runtime>
 
 ### Runtime Extraction
 
@@ -79,7 +79,7 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | EVNT-01     | 36    | Complete |
 | EVNT-02     | 36    | Complete |
 | EVNT-03     | 36    | Complete |
-| EVNT-04     | 36    | Pending  |
+| EVNT-04     | 36    | Complete |
 | RNTM-02     | 37    | Pending  |
 | RNTM-01     | 38    | Pending  |
 | RNTM-05     | 38    | Pending  |
