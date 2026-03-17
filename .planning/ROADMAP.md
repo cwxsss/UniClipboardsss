@@ -99,7 +99,7 @@ Plans:
 
 Plans:
 
-- [ ] 37-01-PLAN.md — Define PairingHostEvent, SetupHostEvent, SpaceAccessHostEvent in uc-core; extend TauriEventEmitter + LoggingEventEmitter with contract tests
+- [x] 37-01-PLAN.md — Define PairingHostEvent, SetupHostEvent, SpaceAccessHostEvent in uc-core; extend TauriEventEmitter + LoggingEventEmitter with contract tests
 - [ ] 37-02-PLAN.md — Migrate all app.emit() calls in wiring.rs and file_transfer_wiring.rs to HostEventEmitterPort
 - [ ] 37-03-PLAN.md — Split wiring.rs into assembly.rs + wiring.rs, move command registration, update ROADMAP
 
