@@ -35,6 +35,7 @@ pub mod file_manager;
 pub mod file_transfer_repository;
 pub mod file_transport;
 mod hash;
+pub mod host_event_emitter;
 pub mod network_control;
 pub mod network_events;
 pub mod paired_device_repository;
@@ -74,6 +75,10 @@ pub use file_transfer_repository::{
     TrackedFileTransfer, TrackedFileTransferStatus,
 };
 pub use file_transport::{FileTransportPort, NoopFileTransportPort};
+pub use host_event_emitter::{
+    ClipboardHostEvent, ClipboardOriginKind, EmitError, HostEvent, HostEventEmitterPort,
+    PeerConnectionHostEvent, PeerDiscoveryHostEvent, TransferHostEvent,
+};
 pub use network_control::NetworkControlPort;
 pub use network_events::NetworkEventPort;
 pub use paired_device_repository::PairedDeviceRepositoryPort;
