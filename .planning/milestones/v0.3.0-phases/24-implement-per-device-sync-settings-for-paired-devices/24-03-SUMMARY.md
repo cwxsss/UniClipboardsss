@@ -7,19 +7,19 @@ tags: [react, redux, tauri-commands, per-device-settings, typescript]
 # Dependency graph
 requires:
   - phase: 24-02
-    provides: "Tauri commands get_device_sync_settings and update_device_sync_settings"
+    provides: 'Tauri commands get_device_sync_settings and update_device_sync_settings'
 provides:
-  - "Frontend API functions for per-device sync settings"
-  - "Redux thunks and per-device state management in devicesSlice"
-  - "DeviceSettingsPanel wired to real backend data with controlled components"
+  - 'Frontend API functions for per-device sync settings'
+  - 'Redux thunks and per-device state management in devicesSlice'
+  - 'DeviceSettingsPanel wired to real backend data with controlled components'
 affects: []
 
 # Tech tracking
 tech-stack:
   added: []
   patterns:
-    - "Per-device Redux state using Record<string, T> keyed by peerId"
-    - "Controlled toggle components with optimistic Redux state updates"
+    - 'Per-device Redux state using Record<string, T> keyed by peerId'
+    - 'Controlled toggle components with optimistic Redux state updates'
 
 key-files:
   created: []
@@ -31,11 +31,11 @@ key-files:
     - src/i18n/locales/zh-CN.json
 
 key-decisions:
-  - "Removed permissions section from DeviceSettingsPanel per user feedback"
-  - "Content type toggles made non-editable (label changed from Coming Soon to Not Editable) since content type filtering is not yet wired in sync engine"
+  - 'Removed permissions section from DeviceSettingsPanel per user feedback'
+  - 'Content type toggles made non-editable (label changed from Coming Soon to Not Editable) since content type filtering is not yet wired in sync engine'
 
 patterns-established:
-  - "Per-device settings pattern: fetch on mount via peerId, store in Record<peerId, Settings>"
+  - 'Per-device settings pattern: fetch on mount via peerId, store in Record<peerId, Settings>'
 
 requirements-completed: [DEVSYNC-03, DEVSYNC-04, DEVSYNC-05]
 
@@ -55,6 +55,7 @@ completed: 2026-03-11
 - **Files modified:** 5
 
 ## Accomplishments
+
 - Added TypeScript API functions (getDeviceSyncSettings, updateDeviceSyncSettings) calling Tauri commands
 - Created Redux async thunks with per-device state tracking in devicesSlice
 - Rewired DeviceSettingsPanel from hardcoded placeholders to controlled components backed by real backend data
@@ -70,6 +71,7 @@ Each task was committed atomically:
 3. **Task 3: Verify per-device sync settings end-to-end** - `a6b7021e` (feat - UI refinements from user feedback)
 
 ## Files Created/Modified
+
 - `src/api/p2p.ts` - Added SyncSettings interface, getDeviceSyncSettings and updateDeviceSyncSettings API functions
 - `src/store/slices/devicesSlice.ts` - Added fetchDeviceSyncSettings and updateDeviceSyncSettings thunks, per-device state fields
 - `src/components/device/DeviceSettingsPanel.tsx` - Rewired to real backend data, removed permissions section, content types non-editable
@@ -77,18 +79,21 @@ Each task was committed atomically:
 - `src/i18n/locales/zh-CN.json` - Added device sync settings i18n keys
 
 ## Decisions Made
+
 - Removed permissions section from DeviceSettingsPanel -- user decided it was unnecessary at this stage
 - Changed content type toggles from editable with "Coming Soon" badge to non-editable with "Not Editable" label, since content type filtering is not yet implemented in the sync engine
 
 ## Deviations from Plan
 
 **1. [User Feedback] Removed permissions section**
+
 - **Found during:** Task 3 (human verification)
 - **Issue:** User determined the permissions section was unnecessary
 - **Fix:** Removed the permissions section entirely from DeviceSettingsPanel
 - **Files modified:** src/components/device/DeviceSettingsPanel.tsx
 
 **2. [User Feedback] Content types made non-editable**
+
 - **Found during:** Task 3 (human verification)
 - **Issue:** User preferred content type toggles to be non-editable rather than editable with "Coming Soon" badge
 - **Fix:** Made content type toggles non-editable with "Not Editable" label
@@ -100,16 +105,20 @@ Each task was committed atomically:
 **Impact on plan:** Minor UI adjustments based on user review. No scope creep.
 
 ## Issues Encountered
+
 None
 
 ## User Setup Required
+
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - Per-device sync settings feature is complete end-to-end (domain, DB, use cases, commands, UI)
 - Content type filtering in the sync engine remains deferred for future work
 - Phase 24 is fully complete with all 3 plans executed
 
 ---
-*Phase: 24-implement-per-device-sync-settings-for-paired-devices*
-*Completed: 2026-03-11*
+
+_Phase: 24-implement-per-device-sync-settings-for-paired-devices_
+_Completed: 2026-03-11_

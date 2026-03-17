@@ -14,27 +14,32 @@ Enable users to configure sync settings on a per-device basis for each paired de
 ## Implementation Decisions
 
 ### Per-device settings scope
+
 - Full per-device control: each paired device gets its own complete set of sync settings (auto_sync, content_types, sync_frequency)
 - New devices inherit global settings as default when first paired
 - Users can customize any device independently after pairing
 
 ### Storage approach
+
 - Add a JSON column (`sync_settings`) to the existing `paired_device` database table
 - JSON stores a serialized `DeviceSyncSettings` struct (or null when using global defaults)
 - Diesel migration required to add the column
 
 ### Settings override behavior
+
 - Device settings override global: if a device has custom settings, use those; otherwise fall back to global settings
 - Clear mental model: global = default, per-device = override
 - Users can "reset to global" by clearing per-device settings (setting JSON to null)
 
 ### Sync engine integration
+
 - Runtime check: sync logic queries per-device settings before each sync operation
 - Falls back to global settings when no per-device override exists
 - Settings changes take effect immediately — no restart or reconnect required
 - Settings are loaded from storage (not cached in memory with stale risk)
 
 ### Claude's Discretion
+
 - Exact JSON schema for the sync_settings column
 - Whether to use Option<DeviceSyncSettings> or a separate "use_global" flag
 - Diesel migration strategy details
@@ -51,9 +56,11 @@ No specific requirements — open to standard approaches
 </specifics>
 
 <code_context>
+
 ## Existing Code Insights
 
 ### Reusable Assets
+
 - `DeviceSettingsPanel.tsx`: Already has placeholder UI with hardcoded sync rules (autoSync, syncText, syncImage, syncFile) — needs wiring to real data
 - `PairedDevicesPanel.tsx`: Lists paired devices with expandable settings panel — integration point for per-device settings
 - `SyncSettings` struct in `uc-core/src/settings/model.rs`: Global sync settings model with auto_sync, sync_frequency, content_types, max_file_size_mb
@@ -64,6 +71,7 @@ No specific requirements — open to standard approaches
 - `SettingContext`: Provides global settings with update functions
 
 ### Established Patterns
+
 - Hexagonal architecture: ports in uc-core, implementations in uc-infra, commands in uc-tauri
 - UseCases accessor pattern: `runtime.usecases().xxx()` for Tauri commands
 - Diesel ORM for database operations with schema.rs and mapper patterns
@@ -71,6 +79,7 @@ No specific requirements — open to standard approaches
 - JSON serialization via serde for Rust ↔ frontend data exchange
 
 ### Integration Points
+
 - `paired_device` table in SQLite: Add sync_settings JSON column via Diesel migration
 - `PairedDevice` domain model: Extend with optional sync settings field
 - `DieselPairedDeviceRepository`: Update mapper to handle new JSON column
@@ -89,5 +98,5 @@ None — discussion stayed within phase scope
 
 ---
 
-*Phase: 24-implement-per-device-sync-settings-for-paired-devices*
-*Context gathered: 2026-03-11*
+_Phase: 24-implement-per-device-sync-settings-for-paired-devices_
+_Context gathered: 2026-03-11_

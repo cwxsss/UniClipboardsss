@@ -2,6 +2,66 @@
 
 _A living document updated after each milestone. Lessons feed forward into future planning._
 
+## Milestone: v0.3.0 — Log Observability & Feature Expansion
+
+**Shipped:** 2026-03-17
+**Phases:** 19 | **Plans:** 51
+
+### What Was Built
+
+- uc-observability crate with dual-output tracing (pretty console + JSON), 3 log profiles, and FlowId/stage correlation
+- Flow correlation across clipboard capture (7 stages) and sync (4 stages) with cross-spawn propagation
+- Seq local integration with CLEF format, async batching, device_id injection, and LAN cross-device tracing
+- Per-device sync settings with content type toggles (text/image/link/file) and global master toggle with cascade disable
+- Complete file sync pipeline: libp2p chunked transfer (256KB, Blake3 verification), serial queue, retry, Dashboard UI, clipboard integration, quota enforcement, auto-cleanup, and eventual consistency with durable transfer lifecycle
+- Link content type (MIME + URL detection), macOS keychain modal, event-driven device discovery, keyboard shortcuts settings
+- OutboundSyncPlanner consolidating scattered sync policy checks into single decision point
+
+### What Worked
+
+- Phase chains enabled incremental delivery (19→20→21→22→23 observability, 28→30→31→32→32.1→33 file sync)
+- VERIFICATION.md at each phase caught gaps early and enabled gap closure plans (Phases 20, 30, 32.1, 33)
+- Integration checker at audit time verified all cross-phase wiring was correct
+- Phase splitting (original Phase 28 → 28-32) kept individual phases manageable
+- Decimal phase insertion (32.1) worked well for urgent clipboard integration after file sync
+- Fast plan execution: average ~6 minutes per plan, 51 plans in 8 days
+
+### What Was Inefficient
+
+- Phase 27 executed Plan 01 but Plan 02 was done outside workflow — no SUMMARY or VERIFICATION created
+- REQUIREMENTS.md traceability table went stale (25+ entries showing "Planned" when complete)
+- SUMMARY frontmatter `requirements-completed` field only adopted for Phase 26 — 47/49 files missing it
+- Multiple phase requirement IDs (DEVSYNC, KC, SCAN, SYNCPLAN, FSYNC-\*) never added to REQUIREMENTS.md traceability
+- Nyquist validation only 13/19 phases — 6 phases missing VALIDATION.md entirely
+
+### Patterns Established
+
+- uc-observability as standalone crate with zero app-layer dependencies
+- FlowId + stage span pattern as canonical correlation model for all pipeline flows
+- CLEF format with span field extraction for Seq compatibility
+- ContentTypes model with editable/coming_soon status field for incremental toggle activation
+- OutboundSyncPlanner::plan() as infallible pure function with safe defaults
+- Binary codec pattern for file transfer messages (consistent with V3 clipboard protocol)
+- Durable transfer lifecycle tracking with entryStatusById for UI state that survives restart
+- Event-driven hooks (useDeviceDiscovery) replacing polling patterns
+
+### Key Lessons
+
+1. Update REQUIREMENTS.md checkboxes AND traceability table status in the same session as phase verification — staleness compounds across milestones
+2. Add ALL phase requirement IDs to REQUIREMENTS.md traceability at phase creation time, not just for the original milestone scope
+3. SUMMARY frontmatter fields need enforcement or should be dropped — partial adoption provides false confidence during audit
+4. Phase 27's out-of-workflow execution created the only unverified phase — maintaining workflow discipline matters
+5. Decimal phase insertion (32.1) is effective for urgent cross-cutting work that doesn't fit existing phase scope
+6. Gap closure plans (20-03, 30-04, 32.1-03, 33-06) are lightweight and effective — don't resist creating them
+
+### Cost Observations
+
+- Model mix: ~50% opus, ~40% sonnet, ~10% haiku (estimated)
+- Sessions: ~20+ (estimated across 8 days)
+- Notable: 51 plans across 19 phases in 8 days — highest velocity milestone yet
+
+---
+
 ## Milestone: v0.2.0 — Architecture Remediation
 
 **Shipped:** 2026-03-09
@@ -116,22 +176,26 @@ _A living document updated after each milestone. Lessons feed forward into futur
 
 ### Process Evolution
 
-| Milestone | Phases | Plans | Key Change                                                           |
-| --------- | ------ | ----- | -------------------------------------------------------------------- |
-| v0.1.0    | 3      | 6     | First milestone with GSD workflow (Phase 01 predates it)             |
-| v0.2.0    | 9      | 22    | Full GSD workflow with verification, audit, and integration checking |
+| Milestone | Phases | Plans | Key Change                                                                                           |
+| --------- | ------ | ----- | ---------------------------------------------------------------------------------------------------- |
+| v0.1.0    | 3      | 6     | First milestone with GSD workflow (Phase 01 predates it)                                             |
+| v0.2.0    | 9      | 22    | Full GSD workflow with verification, audit, and integration checking                                 |
+| v0.3.0    | 19     | 51    | Largest milestone; gap closure plans, decimal phases, scope expansion beyond original 5-phase target |
 
 ### Cumulative Quality
 
-| Milestone | Tests Added | VERIFICATION Score   | Known Gaps                       |
-| --------- | ----------- | -------------------- | -------------------------------- |
-| v0.1.0    | ~30+        | 30/30 (Phase 02+03)  | 5 tech debt items                |
-| v0.2.0    | ~40+        | 59/59 (Phases 10-17) | 7 items (3 critical in Phase 18) |
+| Milestone | Tests Added | VERIFICATION Score    | Known Gaps                               |
+| --------- | ----------- | --------------------- | ---------------------------------------- |
+| v0.1.0    | ~30+        | 30/30 (Phase 02+03)   | 5 tech debt items                        |
+| v0.2.0    | ~40+        | 59/59 (Phases 10-17)  | 7 items (3 critical in Phase 18)         |
+| v0.3.0    | ~100+       | 24/25 phases verified | 7 items (KB doc gap, stale traceability) |
 
 ### Top Lessons (Verified Across Milestones)
 
 1. TDD for crypto code catches correctness issues that manual testing misses
 2. Incremental plan chains reduce risk and maintain context continuity
 3. Always maintain REQUIREMENTS.md as the single source of truth — inline/roadmap-only tracking creates audit gaps
-4. Phase verification (VERIFICATION.md) should immediately update REQUIREMENTS.md checkboxes
+4. Phase verification (VERIFICATION.md) should immediately update REQUIREMENTS.md checkboxes AND traceability table
 5. Quick task workflow effectively handles small mid-milestone corrections without disrupting phase flow
+6. Gap closure plans are lightweight and effective — create them as soon as gaps are detected
+7. Decimal phase insertion works well for urgent cross-cutting work

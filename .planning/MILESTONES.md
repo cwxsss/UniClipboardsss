@@ -1,5 +1,43 @@
 # Milestones
 
+## v0.3.0 — Log Observability & Feature Expansion
+
+**Shipped:** 2026-03-17
+**Phases:** 19 (19-35) | **Plans:** 51 | **Tasks:** ~95
+**Timeline:** 8 days (2026-03-09 → 2026-03-17)
+**Files changed:** 594 (+67,065 / -4,804)
+**Commits:** 363
+
+### Delivered
+
+Full observability pipeline from structured dual-output logging through flow correlation, Seq integration, and cross-device distributed tracing. Content type sync filtering with per-device and global master toggle. File sync foundation through chunked libp2p transfer, clipboard integration, UI, settings, quota enforcement, and eventual consistency. Link content type support, macOS keychain auto-unlock modal, event-driven device discovery, and consolidated outbound sync planner.
+
+### Accomplishments
+
+1. Dual-output tracing (pretty console + JSON) with 3 configurable log profiles (dev/prod/debug_clipboard) via uc-observability crate.
+2. Flow correlation with `flow_id` and `stage` spans across all clipboard capture and sync stages, including cross-spawn and cross-layer propagation.
+3. Seq local integration with CLEF format, async batching, device_id injection, and docker-compose for LAN cross-device tracing.
+4. Per-device sync settings with content type toggles (text/image/link/file), global master toggle, cascade disable UX, and OutboundSyncPlanner consolidation.
+5. Complete file sync pipeline: libp2p chunked transfer with Blake3 verification, serial queue, retry logic, Dashboard UI with progress/notifications, clipboard integration, quota enforcement, auto-cleanup, and eventual consistency with durable transfer lifecycle tracking.
+6. Link content type (MIME + URL detection), macOS keychain modal, event-driven device discovery replacing polling, and keyboard shortcuts settings UI.
+
+### Known Gaps
+
+- KB-04 to KB-07: Code implemented (commit a31239c9) but Phase 27 missing VERIFICATION.md and 27-02-SUMMARY.md. REQUIREMENTS.md checkboxes were never updated.
+- CT-06 requirement text stale: says file/link toggles should show "Coming Soon" but both are now interactive (correct behavior post Phase 28/31/32).
+- REQUIREMENTS.md traceability table was stale for 25+ entries at time of archive.
+- SUMMARY frontmatter `requirements-completed` field only populated for Phase 26 (2/49 files).
+- Phase 35: Global auto_sync guard not consolidated into OutboundSyncPlanner (two enforcement points, by design).
+- Windows disk space check uses optimistic fallback in file sync quota enforcement.
+- Nyquist validation partial: 13/19 phases compliant, 6 missing VALIDATION.md.
+
+### Git
+
+- Range: `646be4a5..a6b1d766`
+- Tag: `v0.3.0`
+
+---
+
 ## v0.2.0 — Architecture Remediation
 
 **Shipped:** 2026-03-09

@@ -13,9 +13,11 @@ The implementation spans all layers of the hexagonal architecture: domain model 
 **Primary recommendation:** Use `Option<SyncSettings>` on `PairedDevice` with a nullable JSON column in SQLite. When `None`, fall back to global settings. Reuse the existing `SyncSettings` / `ContentTypes` structs from `uc-core::settings::model` to avoid duplication.
 
 <user_constraints>
+
 ## User Constraints (from CONTEXT.md)
 
 ### Locked Decisions
+
 - Full per-device control: each paired device gets its own complete set of sync settings (auto_sync, content_types, sync_frequency)
 - New devices inherit global settings as default when first paired
 - Users can customize any device independently after pairing
@@ -31,6 +33,7 @@ The implementation spans all layers of the hexagonal architecture: domain model 
 - Settings are loaded from storage (not cached in memory with stale risk)
 
 ### Claude's Discretion
+
 - Exact JSON schema for the sync_settings column
 - Whether to use Option<DeviceSyncSettings> or a separate "use_global" flag
 - Diesel migration strategy details
@@ -38,20 +41,23 @@ The implementation spans all layers of the hexagonal architecture: domain model 
 - Frontend state management approach (extend devicesSlice vs new slice)
 
 ### Deferred Ideas (OUT OF SCOPE)
+
 None -- discussion stayed within phase scope
 </user_constraints>
 
 ## Standard Stack
 
 ### Core (Already in Project)
-| Library | Purpose | Location |
-|---------|---------|----------|
-| `diesel` (SQLite) | ORM + migrations for paired_device table | `uc-infra/src/db/` |
-| `serde` / `serde_json` | JSON serialization for sync_settings column | `uc-core` |
-| Redux Toolkit | Frontend state management for devicesSlice | `src/store/slices/` |
-| Tauri commands | Frontend-backend IPC | `uc-tauri/src/commands/` |
+
+| Library                | Purpose                                     | Location                 |
+| ---------------------- | ------------------------------------------- | ------------------------ |
+| `diesel` (SQLite)      | ORM + migrations for paired_device table    | `uc-infra/src/db/`       |
+| `serde` / `serde_json` | JSON serialization for sync_settings column | `uc-core`                |
+| Redux Toolkit          | Frontend state management for devicesSlice  | `src/store/slices/`      |
+| Tauri commands         | Frontend-backend IPC                        | `uc-tauri/src/commands/` |
 
 ### No New Dependencies Required
+
 This phase uses only existing project dependencies. No new crates or npm packages needed.
 
 ## Architecture Patterns
@@ -100,6 +106,7 @@ pub fn resolve_sync_settings<'a>(
 #### 3. Database: Nullable JSON Column
 
 **Migration SQL:**
+
 ```sql
 ALTER TABLE paired_device ADD COLUMN sync_settings TEXT DEFAULT NULL;
 ```
@@ -146,12 +153,14 @@ Alternative: The existing `upsert` already updates all fields, so `get_sync_sett
 #### 6. Use Cases
 
 Two new use cases:
+
 - `GetDeviceSyncSettings` -- returns resolved settings (per-device or global fallback)
 - `UpdateDeviceSyncSettings` -- updates per-device settings (or clears to null for reset-to-global)
 
 #### 7. Tauri Commands
 
 Two new commands:
+
 - `get_device_sync_settings(peer_id: String)` -> returns resolved `SyncSettings`
 - `update_device_sync_settings(peer_id: String, settings: Option<SyncSettings>)` -> updates or clears
 
@@ -187,6 +196,7 @@ export async function updateDeviceSyncSettings(peerId: string, settings: SyncSet
 #### 10. Frontend Component Wiring
 
 `DeviceSettingsPanel.tsx` currently renders hardcoded sync rules. Wire it to:
+
 1. Load per-device settings via `getDeviceSyncSettings(peerId)` on mount
 2. Use controlled state (not `defaultChecked`) for toggle inputs
 3. Call `updateDeviceSyncSettings` on toggle change
@@ -231,38 +241,44 @@ src/
 
 ## Don't Hand-Roll
 
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| JSON in SQLite | Custom binary encoding | `serde_json` + TEXT column | Standard pattern, human-readable, debuggable |
-| Settings resolution | Complex inheritance chain | Simple `Option::unwrap_or` | The override model is flat (device or global), not hierarchical |
-| Form state management | Manual React state tracking | Redux Toolkit thunks + controlled components | Consistent with project patterns |
+| Problem               | Don't Build                 | Use Instead                                  | Why                                                             |
+| --------------------- | --------------------------- | -------------------------------------------- | --------------------------------------------------------------- |
+| JSON in SQLite        | Custom binary encoding      | `serde_json` + TEXT column                   | Standard pattern, human-readable, debuggable                    |
+| Settings resolution   | Complex inheritance chain   | Simple `Option::unwrap_or`                   | The override model is flat (device or global), not hierarchical |
+| Form state management | Manual React state tracking | Redux Toolkit thunks + controlled components | Consistent with project patterns                                |
 
 ## Common Pitfalls
 
 ### Pitfall 1: Diesel Schema Column Ordering
+
 **What goes wrong:** Diesel `Queryable` derives fields by position, not name. If `sync_settings` is added to the schema but the struct field order doesn't match the column order in `schema.rs`, queries will silently read wrong data or fail.
 **How to avoid:** After running `diesel migration run`, regenerate schema with `diesel print-schema > schema.rs`. Ensure `PairedDeviceRow` field order matches the schema column order exactly. The new column will be last.
 
 ### Pitfall 2: Upsert Overwriting Sync Settings
+
 **What goes wrong:** The existing `upsert` method's `ON CONFLICT DO UPDATE SET` clause will be updated to include `sync_settings`. During pairing flow, `upsert` is called with a new `PairedDevice` that has `sync_settings: None`, which would overwrite any existing custom settings.
 **How to avoid:** Either: (a) make upsert exclude sync_settings from the update set, or (b) ensure pairing code loads existing settings before upserting, or (c) use a separate `update_sync_settings` method that only touches that column.
 **Recommendation:** Option (c) -- keep `upsert` focused on pairing lifecycle fields. Add a dedicated `update_sync_settings` that only touches the sync_settings column.
 
 ### Pitfall 3: SyncSettings PartialEq Derivation
+
 **What goes wrong:** `PairedDevice` derives `PartialEq, Eq`. Adding `Option<SyncSettings>` requires `SyncSettings` to also derive these. `SyncSettings` contains `max_file_size_mb: u32` and enum types which can trivially derive `PartialEq/Eq`, but if any field type changes in the future to f64 or similar, this breaks.
 **How to avoid:** Add `PartialEq, Eq` to `SyncSettings`, `ContentTypes`. Both are safe (only bools, enums, and u32 fields). Also verify `SyncFrequency` already derives it (confirmed: it does).
 
 ### Pitfall 4: Frontend Stale State After Settings Update
+
 **What goes wrong:** User changes per-device settings, but the UI doesn't reflect the change because `DeviceSettingsPanel` uses `defaultChecked` (uncontrolled).
 **How to avoid:** Convert to controlled components with React state. After `updateDeviceSyncSettings` succeeds, update local state or re-fetch.
 
 ### Pitfall 5: Sync Engine Performance
+
 **What goes wrong:** Loading per-device settings from DB for every peer on every clipboard change adds latency.
 **How to avoid:** The user explicitly chose "load from storage, not cached." Accept the DB query cost. SQLite with WAL mode and connection pooling is fast enough for the small number of paired devices (typically 2-5). The `PairedDeviceRepositoryPort::get_by_peer_id` already does a single-row query.
 
 ## Code Examples
 
 ### Diesel Migration
+
 ```sql
 -- up.sql
 ALTER TABLE paired_device ADD COLUMN sync_settings TEXT DEFAULT NULL;
@@ -274,6 +290,7 @@ ALTER TABLE paired_device DROP COLUMN sync_settings;
 ```
 
 ### Mapper JSON Handling
+
 ```rust
 // Source: project pattern from existing mappers
 impl InsertMapper<PairedDevice, NewPairedDeviceRow> for PairedDeviceRowMapper {
@@ -292,6 +309,7 @@ impl InsertMapper<PairedDevice, NewPairedDeviceRow> for PairedDeviceRowMapper {
 ```
 
 ### Settings Resolution in Sync Engine
+
 ```rust
 // In SyncOutboundClipboardUseCase::execute_async, inside the peer loop:
 let device = self.paired_device_repo.get_by_peer_id(&PeerId::from(peer.peer_id.as_str())).await?;
@@ -307,6 +325,7 @@ if !effective_settings.auto_sync {
 ```
 
 ### Frontend API Call Pattern
+
 ```typescript
 // Source: project pattern from existing api/p2p.ts
 export async function getDeviceSyncSettings(peerId: string): Promise<SyncSettings> {
@@ -323,10 +342,10 @@ export async function updateDeviceSyncSettings(
 
 ## State of the Art
 
-| Old Approach | Current Approach | Impact |
-|--------------|------------------|--------|
-| Global sync settings only | Per-device overrides with global fallback | Each paired device can have independent sync behavior |
-| Hardcoded DeviceSettingsPanel UI | Data-driven from backend | Settings actually persist and affect sync behavior |
+| Old Approach                     | Current Approach                          | Impact                                                |
+| -------------------------------- | ----------------------------------------- | ----------------------------------------------------- |
+| Global sync settings only        | Per-device overrides with global fallback | Each paired device can have independent sync behavior |
+| Hardcoded DeviceSettingsPanel UI | Data-driven from backend                  | Settings actually persist and affect sync behavior    |
 
 ## Open Questions
 
@@ -343,6 +362,7 @@ export async function updateDeviceSyncSettings(
 ## Sources
 
 ### Primary (HIGH confidence)
+
 - Project codebase: `uc-core/src/settings/model.rs` -- SyncSettings, ContentTypes, SyncFrequency structs
 - Project codebase: `uc-core/src/network/paired_device.rs` -- PairedDevice domain model
 - Project codebase: `uc-infra/src/db/` -- Diesel schema, models, mappers, repositories
@@ -352,11 +372,13 @@ export async function updateDeviceSyncSettings(
 - Project codebase: `uc-infra/migrations/` -- existing migration structure (8 migrations)
 
 ### Secondary (MEDIUM confidence)
+
 - Diesel documentation for `embed_migrations!` and ALTER TABLE handling with SQLite
 
 ## Metadata
 
 **Confidence breakdown:**
+
 - Standard stack: HIGH -- all components already exist in the project, no new dependencies
 - Architecture: HIGH -- follows established hexagonal architecture patterns exactly
 - Pitfalls: HIGH -- derived from direct codebase analysis (e.g., Diesel column ordering, upsert behavior)

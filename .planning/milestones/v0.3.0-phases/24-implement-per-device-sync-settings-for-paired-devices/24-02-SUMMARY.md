@@ -34,13 +34,13 @@ key-files:
     - src-tauri/crates/uc-app/tests/clipboard_sync_e2e_test.rs
 
 key-decisions:
-  - "Settings loaded from storage each time (not cached) per user decision"
-  - "Peers not in paired_device table proceed with sync as safety fallback"
-  - "Per-device auto_sync filtering happens before ensure_business_path to avoid unnecessary connections"
+  - 'Settings loaded from storage each time (not cached) per user decision'
+  - 'Peers not in paired_device table proceed with sync as safety fallback'
+  - 'Per-device auto_sync filtering happens before ensure_business_path to avoid unnecessary connections'
 
 patterns-established:
-  - "from_ports() constructor pattern for use cases requiring multiple port dependencies"
-  - "filter_by_auto_sync pre-send peer filtering with warn-and-continue error handling"
+  - 'from_ports() constructor pattern for use cases requiring multiple port dependencies'
+  - 'filter_by_auto_sync pre-send peer filtering with warn-and-continue error handling'
 
 requirements-completed: [DEVSYNC-04, DEVSYNC-05]
 
@@ -61,6 +61,7 @@ completed: 2026-03-11
 - **Files modified:** 9
 
 ## Accomplishments
+
 - GetDeviceSyncSettings use case resolves effective settings (per-device override or global fallback)
 - UpdateDeviceSyncSettings use case updates or clears per-device overrides (None resets to global)
 - Both commands registered in main.rs invoke_handler and accessible from frontend
@@ -76,6 +77,7 @@ Each task was committed atomically:
 2. **Task 2: Integrate per-device auto_sync check into outbound sync engine** - `c2e409a9` (feat)
 
 ## Files Created/Modified
+
 - `src-tauri/crates/uc-app/src/usecases/pairing/get_device_sync_settings.rs` - GetDeviceSyncSettings use case with resolve_sync_settings
 - `src-tauri/crates/uc-app/src/usecases/pairing/update_device_sync_settings.rs` - UpdateDeviceSyncSettings use case with None-reset support
 - `src-tauri/crates/uc-app/src/usecases/pairing/mod.rs` - Module exports for new use cases
@@ -87,6 +89,7 @@ Each task was committed atomically:
 - `src-tauri/crates/uc-app/tests/clipboard_sync_e2e_test.rs` - NoopPairedDeviceRepo for e2e tests
 
 ## Decisions Made
+
 - Settings loaded from storage on every call (not cached) -- SQLite + WAL is fast for 2-5 devices
 - Peers not found in paired_device table proceed with sync (safety fallback for peers not yet persisted)
 - Per-device auto_sync filtering applied before ensure_business_path to avoid unnecessary network connections
@@ -97,6 +100,7 @@ Each task was committed atomically:
 ### Auto-fixed Issues
 
 **1. [Rule 3 - Blocking] Updated e2e test file with new constructor parameter**
+
 - **Found during:** Task 2
 - **Issue:** clipboard_sync_e2e_test.rs also constructs SyncOutboundClipboardUseCase and needed the new paired_device_repo parameter
 - **Fix:** Added NoopPairedDeviceRepo and passed it to all 4 constructor calls in e2e test
@@ -110,16 +114,20 @@ Each task was committed atomically:
 **Impact on plan:** Necessary to maintain existing test compatibility after adding new constructor parameter.
 
 ## Issues Encountered
+
 None
 
 ## User Setup Required
+
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - Use cases and commands ready for frontend integration in plan 03
 - Outbound sync engine respects per-device auto_sync toggle
 - resolve_sync_settings fallback chain working: per-device -> global defaults
 
 ---
-*Phase: 24-implement-per-device-sync-settings-for-paired-devices*
-*Completed: 2026-03-11*
+
+_Phase: 24-implement-per-device-sync-settings-for-paired-devices_
+_Completed: 2026-03-11_

@@ -17,7 +17,11 @@ affects: [24-02, 24-03, use-cases, commands, frontend-settings]
 
 tech-stack:
   added: []
-  patterns: [nullable-json-column-for-optional-domain-field, dedicated-update-method-avoiding-upsert-overwrite]
+  patterns:
+    [
+      nullable-json-column-for-optional-domain-field,
+      dedicated-update-method-avoiding-upsert-overwrite,
+    ]
 
 key-files:
   created:
@@ -36,12 +40,12 @@ key-files:
     - src-tauri/crates/uc-core/src/network/pairing_state_machine.rs
 
 key-decisions:
-  - "Upsert ON CONFLICT SET excludes sync_settings to avoid overwriting per-device overrides during pairing"
-  - "serde(default) on sync_settings ensures backward-compatible deserialization for existing data"
+  - 'Upsert ON CONFLICT SET excludes sync_settings to avoid overwriting per-device overrides during pairing'
+  - 'serde(default) on sync_settings ensures backward-compatible deserialization for existing data'
 
 patterns-established:
-  - "Nullable JSON column pattern: Option<T> domain field stored as Nullable<Text> with serde_json ser/de in mapper"
-  - "Dedicated update method pattern: update_sync_settings is independent of upsert to avoid accidental overwrite"
+  - 'Nullable JSON column pattern: Option<T> domain field stored as Nullable<Text> with serde_json ser/de in mapper'
+  - 'Dedicated update method pattern: update_sync_settings is independent of upsert to avoid accidental overwrite'
 
 requirements-completed: [DEVSYNC-01, DEVSYNC-02, DEVSYNC-03]
 
@@ -62,6 +66,7 @@ completed: 2026-03-11
 - **Files modified:** 10
 
 ## Accomplishments
+
 - Extended PairedDevice domain model with optional SyncSettings field and serde(default) for backward compatibility
 - Added resolve_sync_settings pure function returning device override or global default
 - Created Diesel migration adding nullable TEXT column for JSON-serialized sync settings
@@ -76,6 +81,7 @@ Each task was committed atomically:
 2. **Task 2: Database migration, schema, mapper, and repository implementation** - `6a8a5694` (feat)
 
 ## Files Created/Modified
+
 - `src-tauri/crates/uc-core/src/settings/model.rs` - Added PartialEq, Eq derives to ContentTypes and SyncSettings
 - `src-tauri/crates/uc-core/src/network/paired_device.rs` - Added sync_settings field, resolve_sync_settings function, tests
 - `src-tauri/crates/uc-core/src/ports/paired_device_repository.rs` - Added update_sync_settings method to trait
@@ -90,6 +96,7 @@ Each task was committed atomically:
 - `src-tauri/crates/uc-app/src/testing.rs` - NoopPort stub
 
 ## Decisions Made
+
 - Upsert ON CONFLICT SET intentionally excludes sync_settings to prevent overwriting device-specific overrides during pairing upserts
 - Used serde(default) on sync_settings field for zero-cost backward compatibility with existing serialized PairedDevice data
 
@@ -98,6 +105,7 @@ Each task was committed atomically:
 ### Auto-fixed Issues
 
 **1. [Rule 3 - Blocking] Fixed missing sync_settings in pairing_state_machine.rs**
+
 - **Found during:** Task 1 (cargo check)
 - **Issue:** PairedDevice construction in pairing_state_machine.rs missing the new sync_settings field
 - **Fix:** Added `sync_settings: None` to the PairedDevice struct literal
@@ -111,16 +119,20 @@ Each task was committed atomically:
 **Impact on plan:** Necessary fix for compilation. No scope creep.
 
 ## Issues Encountered
+
 None
 
 ## User Setup Required
+
 None - no external service configuration required.
 
 ## Next Phase Readiness
+
 - Data foundation complete: domain model, port, migration, mapper, and repository all wired
 - Ready for Plan 02 (use cases and Tauri commands) to build on update_sync_settings
 - Ready for Plan 03 (frontend UI) to consume the new commands
 
 ---
-*Phase: 24-implement-per-device-sync-settings-for-paired-devices*
-*Completed: 2026-03-11*
+
+_Phase: 24-implement-per-device-sync-settings-for-paired-devices_
+_Completed: 2026-03-11_
