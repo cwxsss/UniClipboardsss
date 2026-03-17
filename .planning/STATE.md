@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: planning
-stopped_at: Phase 36 context gathered
-last_updated: '2026-03-17T06:59:41.523Z'
+stopped_at: Completed 36-01-PLAN.md
+last_updated: '2026-03-17T09:44:14.652Z'
 last_activity: 2026-03-17 — Roadmap created, 6 phases covering 23 requirements
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 2
+  completed_plans: 1
   percent: 0
 ---
 
@@ -47,6 +47,7 @@ Progress: [░░░░░░░░░░] 0%
 | —     | —     | —     | —        |
 
 _Updated after each plan completion_
+| Phase 36-event-emitter-abstraction P01 | 525664min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -58,6 +59,8 @@ Recent decisions affecting current work:
 
 - [v0.3.0]: OutboundSyncPlanner consolidation — single policy decision point, runtime as thin dispatcher
 - [v0.2.0]: Private deps + facade accessors on AppRuntime — compiler-enforced boundary
+- [Phase 36-event-emitter-abstraction]: HostEventEmitterPort synchronous (not async) matching tauri::Emitter::emit() non-async signature
+- [Phase 36-event-emitter-abstraction]: PeerConnectionHostEvent collapses PeerReady/PeerConnected to Connected; PeerNotReady/PeerDisconnected to Disconnected — matching frontend binary connected:bool view
 
 ### Roadmap Evolution
 
@@ -75,6 +78,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-17T06:59:41.520Z
-Stopped at: Phase 36 context gathered
-Resume file: .planning/phases/36-event-emitter-abstraction/36-CONTEXT.md
+Last session: 2026-03-17T09:44:14.650Z
+Stopped at: Completed 36-01-PLAN.md
+Resume file: None
