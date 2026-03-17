@@ -76,37 +76,37 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 | Requirement | Phase | Status  |
 | ----------- | ----- | ------- |
-| EVNT-01     | —     | Pending |
-| EVNT-02     | —     | Pending |
-| EVNT-03     | —     | Pending |
-| EVNT-04     | —     | Pending |
-| RNTM-01     | —     | Pending |
-| RNTM-02     | —     | Pending |
-| RNTM-03     | —     | Pending |
-| RNTM-04     | —     | Pending |
-| RNTM-05     | —     | Pending |
-| BOOT-01     | —     | Pending |
-| BOOT-02     | —     | Pending |
-| BOOT-03     | —     | Pending |
-| BOOT-04     | —     | Pending |
-| BOOT-05     | —     | Pending |
-| DAEM-01     | —     | Pending |
-| DAEM-02     | —     | Pending |
-| DAEM-03     | —     | Pending |
-| DAEM-04     | —     | Pending |
-| CLI-01      | —     | Pending |
-| CLI-02      | —     | Pending |
-| CLI-03      | —     | Pending |
-| CLI-04      | —     | Pending |
-| CLI-05      | —     | Pending |
+| EVNT-01     | 36    | Pending |
+| EVNT-02     | 36    | Pending |
+| EVNT-03     | 36    | Pending |
+| EVNT-04     | 36    | Pending |
+| RNTM-02     | 37    | Pending |
+| RNTM-01     | 38    | Pending |
+| RNTM-05     | 38    | Pending |
+| RNTM-03     | 39    | Pending |
+| BOOT-01     | 40    | Pending |
+| BOOT-02     | 40    | Pending |
+| BOOT-03     | 40    | Pending |
+| BOOT-04     | 40    | Pending |
+| BOOT-05     | 40    | Pending |
+| RNTM-04     | 40    | Pending |
+| DAEM-01     | 41    | Pending |
+| DAEM-02     | 41    | Pending |
+| DAEM-03     | 41    | Pending |
+| DAEM-04     | 41    | Pending |
+| CLI-01      | 41    | Pending |
+| CLI-02      | 41    | Pending |
+| CLI-03      | 41    | Pending |
+| CLI-04      | 41    | Pending |
+| CLI-05      | 41    | Pending |
 
 **Coverage:**
 
 - v0.4.0 requirements: 23 total
-- Mapped to phases: 0
-- Unmapped: 23 ⚠️
+- Mapped to phases: 23
+- Unmapped: 0 ✓
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-17 after initial definition_
+_Last updated: 2026-03-17 after roadmap creation_

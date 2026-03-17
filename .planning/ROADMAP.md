@@ -5,6 +5,7 @@
 - ✅ **v0.1.0 Daily Driver** — Phases 1-9 (shipped 2026-03-06)
 - ✅ **v0.2.0 Architecture Remediation** — Phases 10-18 (shipped 2026-03-09)
 - ✅ **v0.3.0 Log Observability & Feature Expansion** — Phases 19-35 (shipped 2026-03-17)
+- 🚧 **v0.4.0 Runtime Mode Separation** — Phases 36-41 (in progress)
 
 ## Phases
 
@@ -48,10 +49,113 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 
 </details>
 
+### 🚧 v0.4.0 Runtime Mode Separation (In Progress)
+
+**Milestone Goal:** Extract non-Tauri logic from uc-tauri into shared crates, enabling GUI, CLI, and daemon as independent runtime modes with a single composition root.
+
+#### Phases
+
+- [ ] **Phase 36: Event Emitter Abstraction** - Replace hardcoded AppHandle::emit() with HostEventEmitterPort trait and adapters
+- [ ] **Phase 37: Wiring Decomposition** - Split wiring.rs into pure assembly module and Tauri-specific event loop module
+- [ ] **Phase 38: CoreRuntime Extraction** - Extract Tauri-free CoreRuntime and unify SetupOrchestrator into single composition point
+- [ ] **Phase 39: Config Resolution Extraction** - Move path/profile/keyslot resolution from main.rs into reusable bootstrap module
+- [ ] **Phase 40: uc-bootstrap Crate** - Create sole composition root crate with scene-specific builders and unified logging init
+- [ ] **Phase 41: Daemon and CLI Skeletons** - Create uc-daemon and uc-cli crates with end-to-end path validation
+
+## Phase Details
+
+### Phase 36: Event Emitter Abstraction
+
+**Goal**: Background tasks deliver host events through an abstract port, eliminating direct AppHandle coupling
+**Depends on**: Nothing (first phase of v0.4.0)
+**Requirements**: EVNT-01, EVNT-02, EVNT-03, EVNT-04
+**Success Criteria** (what must be TRUE):
+
+1. HostEventEmitterPort trait exists in uc-core/ports and compiles without any Tauri dependency
+2. TauriEventEmitter adapter wraps AppHandle and implements HostEventEmitterPort; GUI app continues to emit clipboard and sync events to the frontend as before
+3. LoggingEventEmitter adapter exists and implements HostEventEmitterPort by writing events to tracing output
+4. Clipboard watcher, peer discovery, and sync scheduler accept HostEventEmitterPort instead of AppHandle<R>; the compiler rejects any direct AppHandle use in these components
+   **Plans**: TBD
+
+### Phase 37: Wiring Decomposition
+
+**Goal**: wiring.rs is split into a pure Rust assembly module (no Tauri types) and a thin Tauri-specific event loop layer
+**Depends on**: Phase 36
+**Requirements**: RNTM-02
+**Success Criteria** (what must be TRUE):
+
+1. A new pure-assembly module exists that constructs application dependencies without importing any tauri crate; it compiles as a library with no Tauri feature flags
+2. A separate Tauri-specific module owns the Tauri event loop setup, app handle wiring, and command registration; it is the only place that imports tauri types
+3. Existing GUI behavior is unchanged: clipboard sync, pairing, and settings all continue to function after the split
+4. `cargo check` on the pure-assembly module succeeds without tauri in its dependency tree
+   **Plans**: TBD
+
+### Phase 38: CoreRuntime Extraction
+
+**Goal**: A Tauri-free CoreRuntime struct holds AppDeps and orchestrators; SetupOrchestrator assembly lives in one composition point
+**Depends on**: Phase 37
+**Requirements**: RNTM-01, RNTM-05
+**Success Criteria** (what must be TRUE):
+
+1. CoreRuntime struct exists in a crate with no Tauri dependency, holds AppDeps and shared orchestrators, and passes `cargo check` independently
+2. AppRuntime wraps CoreRuntime and adds only Tauri-specific handles; no orchestration logic lives in AppRuntime itself
+3. SetupOrchestrator is assembled exactly once in the main composition root; runtime.rs contains no secondary wiring or orchestrator construction
+4. The existing GUI setup flow (first-run setup, encrypted space unlock) continues to work end-to-end
+   **Plans**: TBD
+
+### Phase 39: Config Resolution Extraction
+
+**Goal**: Path resolution, profile suffix derivation, and keyslot directory logic are extracted from main.rs into a reusable, testable module
+**Depends on**: Phase 38
+**Requirements**: RNTM-03
+**Success Criteria** (what must be TRUE):
+
+1. A dedicated config resolution module (not main.rs) owns all path/profile/keyslot resolution functions and is accessible to non-Tauri entry points
+2. main.rs delegates to the module rather than containing inline resolution logic; main.rs shrinks accordingly
+3. The resolution functions are unit-testable without a running Tauri app
+4. GUI app launches and resolves config paths correctly after the extraction
+   **Plans**: TBD
+
+### Phase 40: uc-bootstrap Crate
+
+**Goal**: uc-bootstrap exists as the sole composition root; all entry points depend on it instead of wiring uc-infra and uc-platform directly
+**Depends on**: Phase 39
+**Requirements**: BOOT-01, BOOT-02, BOOT-03, BOOT-04, BOOT-05, RNTM-04
+**Success Criteria** (what must be TRUE):
+
+1. uc-bootstrap crate exists with declared dependencies on uc-core, uc-app, uc-infra, and uc-platform; `cargo check` passes
+2. build_cli_context() function exists in uc-bootstrap and returns a CLI-ready dependency set without starting background workers
+3. build_daemon_app() function exists in uc-bootstrap and returns daemon-ready dependencies with worker handles
+4. uc-tauri's Cargo.toml lists uc-bootstrap as a dependency and no longer directly depends on uc-infra or uc-platform for composition
+5. UseCases accessor is instantiated inside uc-bootstrap and shared to all entry points; no entry point constructs its own UseCases
+6. Logging initialization (init_tracing_subscriber) is called exactly once inside uc-bootstrap; duplicate calls in main.rs or other entry points are removed
+   **Plans**: TBD
+
+### Phase 41: Daemon and CLI Skeletons
+
+**Goal**: uc-daemon and uc-cli crates exist with working startup paths, end-to-end RPC connectivity, and direct command execution validated
+**Depends on**: Phase 40
+**Requirements**: DAEM-01, DAEM-02, DAEM-03, DAEM-04, CLI-01, CLI-02, CLI-03, CLI-04, CLI-05
+**Success Criteria** (what must be TRUE):
+
+1. uc-daemon binary starts, initializes via uc-bootstrap, logs startup, and shuts down gracefully on SIGTERM/Ctrl-C without panicking
+2. Running `uniclipboard-daemon` then `uniclipboard-cli status` returns a JSON response containing uptime and worker health fields
+3. Running `uniclipboard-cli devices` (direct mode via uc-bootstrap) returns a device list without the daemon running
+4. `uniclipboard-cli --json status` outputs valid JSON; `uniclipboard-cli status` (no flag) outputs human-readable text
+5. Exit codes are stable: 0 on success, 1 on error, 5 when daemon is unreachable
+6. DaemonWorker trait exists; placeholder clipboard watcher and peer discovery workers implement it and are registered with DaemonApp
+   **Plans**: TBD
+
 ## Progress
 
-| Phase | Milestone | Plans Complete | Status   | Completed  |
-| ----- | --------- | -------------- | -------- | ---------- |
-| 1-9   | v0.1.0    | 17/17          | Complete | 2026-03-06 |
-| 10-18 | v0.2.0    | 22/22          | Complete | 2026-03-09 |
-| 19-35 | v0.3.0    | 51/51          | Complete | 2026-03-17 |
+| Phase                            | Milestone | Plans Complete | Status      | Completed  |
+| -------------------------------- | --------- | -------------- | ----------- | ---------- |
+| 1-9                              | v0.1.0    | 17/17          | Complete    | 2026-03-06 |
+| 10-18                            | v0.2.0    | 22/22          | Complete    | 2026-03-09 |
+| 19-35                            | v0.3.0    | 51/51          | Complete    | 2026-03-17 |
+| 36. Event Emitter Abstraction    | v0.4.0    | 0/?            | Not started | -          |
+| 37. Wiring Decomposition         | v0.4.0    | 0/?            | Not started | -          |
+| 38. CoreRuntime Extraction       | v0.4.0    | 0/?            | Not started | -          |
+| 39. Config Resolution Extraction | v0.4.0    | 0/?            | Not started | -          |
+| 40. uc-bootstrap Crate           | v0.4.0    | 0/?            | Not started | -          |
+| 41. Daemon and CLI Skeletons     | v0.4.0    | 0/?            | Not started | -          |
