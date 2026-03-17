@@ -406,6 +406,19 @@ async fn cleanup_cached_path(cached_path: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uc_core::ports::host_event_emitter::{EmitError, HostEventEmitterPort};
+
+    #[derive(Default)]
+    struct RecordingEmitter {
+        events: std::sync::Mutex<Vec<HostEvent>>,
+    }
+
+    impl HostEventEmitterPort for RecordingEmitter {
+        fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
 
     #[test]
     fn file_transfer_status_payload_serializes_camel_case() {
@@ -455,6 +468,45 @@ mod tests {
             };
             let json = serde_json::to_value(&payload).unwrap();
             assert_eq!(json["status"], *status);
+        }
+    }
+
+    #[test]
+    fn emit_pending_status_emits_one_status_changed_event_per_transfer() {
+        let emitter = RecordingEmitter::default();
+        let pending_transfers = vec![
+            PendingTransferLinkage {
+                transfer_id: "transfer-1".to_string(),
+                filename: "a.txt".to_string(),
+                cached_path: "/tmp/a.txt".to_string(),
+            },
+            PendingTransferLinkage {
+                transfer_id: "transfer-2".to_string(),
+                filename: "b.txt".to_string(),
+                cached_path: "/tmp/b.txt".to_string(),
+            },
+        ];
+
+        emit_pending_status(&emitter, "entry-77", &pending_transfers);
+
+        let events = emitter.events.lock().unwrap();
+        assert_eq!(events.len(), 2);
+
+        for (event, transfer_id) in events.iter().zip(["transfer-1", "transfer-2"]) {
+            match event {
+                HostEvent::Transfer(TransferHostEvent::StatusChanged {
+                    transfer_id: actual_transfer_id,
+                    entry_id,
+                    status,
+                    reason,
+                }) => {
+                    assert_eq!(actual_transfer_id, transfer_id);
+                    assert_eq!(entry_id, "entry-77");
+                    assert_eq!(status, "pending");
+                    assert!(reason.is_none());
+                }
+                other => panic!("expected transfer status event, got {other:?}"),
+            }
         }
     }
 }

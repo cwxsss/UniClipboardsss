@@ -179,3 +179,98 @@ pub trait HostEventEmitterPort: Send + Sync {
     /// **must not** propagate the error as a business-logic failure.
     fn emit(&self, event: HostEvent) -> Result<(), EmitError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ports::transfer_progress::{TransferDirection, TransferProgress};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingEmitter {
+        events: Mutex<Vec<HostEvent>>,
+    }
+
+    impl HostEventEmitterPort for RecordingEmitter {
+        fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn host_event_port_accepts_all_in_scope_events_without_infra_types() {
+        let emitter = RecordingEmitter::default();
+
+        let events = vec![
+            HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                entry_id: "entry-1".to_string(),
+                preview: "hello".to_string(),
+                origin: ClipboardOriginKind::Local,
+            }),
+            HostEvent::Clipboard(ClipboardHostEvent::InboundError {
+                message_id: "msg-1".to_string(),
+                origin_device_id: "device-1".to_string(),
+                error: "decode failed".to_string(),
+            }),
+            HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeRecovered {
+                recovered_after_attempts: 2,
+            }),
+            HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Discovered {
+                peer_id: "peer-1".to_string(),
+                device_name: Some("Desk".to_string()),
+                addresses: vec!["/ip4/127.0.0.1/tcp/42000".to_string()],
+            }),
+            HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Lost {
+                peer_id: "peer-1".to_string(),
+                device_name: None,
+                addresses: vec![],
+            }),
+            HostEvent::PeerConnection(PeerConnectionHostEvent::Connected {
+                peer_id: "peer-2".to_string(),
+                device_name: Some("Phone".to_string()),
+            }),
+            HostEvent::PeerConnection(PeerConnectionHostEvent::Disconnected {
+                peer_id: "peer-2".to_string(),
+                device_name: None,
+            }),
+            HostEvent::PeerConnection(PeerConnectionHostEvent::NameUpdated {
+                peer_id: "peer-3".to_string(),
+                device_name: "Updated".to_string(),
+            }),
+            HostEvent::Transfer(TransferHostEvent::Progress(TransferProgress {
+                transfer_id: "transfer-1".to_string(),
+                peer_id: "peer-4".to_string(),
+                direction: TransferDirection::Receiving,
+                chunks_completed: 1,
+                total_chunks: 3,
+                bytes_transferred: 512,
+                total_bytes: Some(1_024),
+            })),
+            HostEvent::Transfer(TransferHostEvent::Completed {
+                transfer_id: "transfer-2".to_string(),
+                filename: "note.txt".to_string(),
+                peer_id: "peer-5".to_string(),
+                file_size: 12,
+                auto_pulled: false,
+                file_path: "/tmp/note.txt".to_string(),
+            }),
+            HostEvent::Transfer(TransferHostEvent::StatusChanged {
+                transfer_id: "transfer-3".to_string(),
+                entry_id: "entry-3".to_string(),
+                status: "pending".to_string(),
+                reason: None,
+            }),
+        ];
+
+        for event in events {
+            emitter.emit(event).expect("emit through port");
+        }
+
+        assert_eq!(
+            emitter.events.lock().unwrap().len(),
+            11,
+            "all HostEvent variants should be deliverable through the core port"
+        );
+    }
+}

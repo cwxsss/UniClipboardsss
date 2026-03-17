@@ -1478,7 +1478,7 @@ mod tests {
     use crate::test_utils::noop_network_ports;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio::sync::mpsc;
     use uc_core::clipboard::PolicyError;
@@ -1519,6 +1519,17 @@ mod tests {
     struct MockSpoolQueue {
         enqueue_calls: Arc<AtomicUsize>,
     }
+
+    struct SuccessfulRepresentationPolicy;
+
+    struct SuccessfulNormalizer;
+
+    #[derive(Default)]
+    struct RecordingEmitter {
+        events: Mutex<Vec<HostEvent>>,
+    }
+
+    struct TestWatcherControl;
 
     struct MockDeviceIdentity;
 
@@ -1623,6 +1634,66 @@ mod tests {
     impl SpoolQueuePort for MockSpoolQueue {
         async fn enqueue(&self, _request: SpoolRequest) -> anyhow::Result<()> {
             self.enqueue_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    impl SelectRepresentationPolicyPort for SuccessfulRepresentationPolicy {
+        fn select(
+            &self,
+            snapshot: &SystemClipboardSnapshot,
+        ) -> std::result::Result<uc_core::clipboard::ClipboardSelection, PolicyError> {
+            let rep_id = snapshot
+                .representations
+                .first()
+                .expect("snapshot should contain one representation")
+                .id
+                .clone();
+
+            Ok(uc_core::clipboard::ClipboardSelection {
+                primary_rep_id: rep_id.clone(),
+                secondary_rep_ids: vec![],
+                preview_rep_id: rep_id.clone(),
+                paste_rep_id: rep_id,
+                policy_version: uc_core::clipboard::SelectionPolicyVersion::V1,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ClipboardRepresentationNormalizerPort for SuccessfulNormalizer {
+        async fn normalize(
+            &self,
+            observed: &uc_core::clipboard::ObservedClipboardRepresentation,
+        ) -> anyhow::Result<uc_core::PersistedClipboardRepresentation> {
+            Ok(uc_core::PersistedClipboardRepresentation::new(
+                observed.id.clone(),
+                observed.format_id.clone(),
+                observed.mime.clone(),
+                observed.size_bytes(),
+                Some(observed.bytes.clone()),
+                None,
+            ))
+        }
+    }
+
+    impl HostEventEmitterPort for RecordingEmitter {
+        fn emit(
+            &self,
+            event: HostEvent,
+        ) -> Result<(), uc_core::ports::host_event_emitter::EmitError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl WatcherControlPort for TestWatcherControl {
+        async fn start_watcher(&self) -> Result<(), WatcherControlError> {
+            Ok(())
+        }
+
+        async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
             Ok(())
         }
     }
@@ -2354,5 +2425,217 @@ mod tests {
         assert_eq!(normalize_calls.load(Ordering::SeqCst), 0);
         assert_eq!(cache_put_calls.load(Ordering::SeqCst), 0);
         assert_eq!(enqueue_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn runtime_emits_clipboard_new_content_via_host_event_emitter() {
+        let save_calls = Arc::new(AtomicUsize::new(0));
+        let insert_calls = Arc::new(AtomicUsize::new(0));
+        let cache_put_calls = Arc::new(AtomicUsize::new(0));
+        let enqueue_calls = Arc::new(AtomicUsize::new(0));
+
+        let origin_port = Arc::new(InMemoryClipboardChangeOrigin::new());
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 123,
+            representations: vec![uc_core::ObservedClipboardRepresentation::new(
+                uc_core::ids::RepresentationId::new(),
+                uc_core::ids::FormatId::from("public.utf8-plain-text"),
+                Some(uc_core::MimeType::text_plain()),
+                b"hello from remote".to_vec(),
+            )],
+        };
+        origin_port
+            .set_next_origin(
+                ClipboardChangeOrigin::RemotePush,
+                std::time::Duration::from_secs(1),
+            )
+            .await;
+
+        let (worker_tx, _worker_rx) = mpsc::channel(1);
+        let deps = AppDeps {
+            clipboard: uc_app::ClipboardPorts {
+                clipboard: Arc::new(NoopClipboard),
+                system_clipboard: Arc::new(NoopClipboard),
+                clipboard_entry_repo: Arc::new(MockEntryRepository {
+                    save_calls: save_calls.clone(),
+                }),
+                clipboard_event_repo: Arc::new(MockEventWriter {
+                    insert_calls: insert_calls.clone(),
+                }),
+                representation_repo: Arc::new(NoopPort),
+                representation_normalizer: Arc::new(SuccessfulNormalizer),
+                selection_repo: Arc::new(NoopPort),
+                representation_policy: Arc::new(SuccessfulRepresentationPolicy),
+                representation_cache: Arc::new(MockRepresentationCache {
+                    put_calls: cache_put_calls.clone(),
+                }),
+                spool_queue: Arc::new(MockSpoolQueue {
+                    enqueue_calls: enqueue_calls.clone(),
+                }),
+                worker_tx,
+                clipboard_change_origin: origin_port,
+            },
+            security: uc_app::SecurityPorts {
+                encryption: Arc::new(NoopPort),
+                encryption_session: Arc::new(NoopPort),
+                encryption_state: Arc::new(NoopPort),
+                key_scope: Arc::new(NoopPort),
+                secure_storage: Arc::new(NoopPort),
+                key_material: Arc::new(NoopPort),
+            },
+            device: uc_app::DevicePorts {
+                device_repo: Arc::new(NoopPort),
+                device_identity: Arc::new(MockDeviceIdentity),
+                paired_device_repo: Arc::new(NoopPort),
+            },
+            network_ports: noop_network_ports(),
+            network_control: Arc::new(NoopPort),
+            setup_status: Arc::new(NoopPort),
+            storage: uc_app::StoragePorts {
+                blob_store: Arc::new(NoopPort),
+                blob_repository: Arc::new(NoopPort),
+                blob_writer: Arc::new(NoopPort),
+                thumbnail_repo: Arc::new(NoopPort),
+                thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
+            },
+            settings: Arc::new(NoopPort),
+            system: uc_app::SystemPorts {
+                clock: Arc::new(NoopPort),
+                hash: Arc::new(NoopPort),
+                file_manager: Arc::new(NoopPort),
+                cache_fs: Arc::new(NoopPort),
+            },
+        };
+        let setup_ports = SetupRuntimePorts::placeholder(&deps);
+        let emitter = Arc::new(RecordingEmitter::default());
+        let runtime = AppRuntime::with_setup(
+            deps,
+            setup_ports,
+            Arc::new(TestWatcherControl),
+            test_storage_paths(),
+            emitter.clone(),
+        );
+
+        runtime
+            .on_clipboard_changed(snapshot)
+            .await
+            .expect("clipboard change should succeed");
+
+        assert_eq!(save_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(insert_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(cache_put_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(enqueue_calls.load(Ordering::SeqCst), 0);
+
+        let events = emitter.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                entry_id,
+                preview,
+                origin,
+            }) => {
+                assert!(
+                    !entry_id.is_empty(),
+                    "capture should persist a non-empty entry id"
+                );
+                assert_eq!(preview, "New clipboard content");
+                assert!(matches!(origin, ClipboardOriginKind::Remote));
+            }
+            other => panic!("expected clipboard new content event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn runtime_event_emitter_can_be_swapped_after_setup() {
+        let deps = AppDeps {
+            clipboard: uc_app::ClipboardPorts {
+                clipboard: Arc::new(NoopClipboard),
+                system_clipboard: Arc::new(NoopClipboard),
+                clipboard_entry_repo: Arc::new(MockEntryRepository {
+                    save_calls: Arc::new(AtomicUsize::new(0)),
+                }),
+                clipboard_event_repo: Arc::new(MockEventWriter {
+                    insert_calls: Arc::new(AtomicUsize::new(0)),
+                }),
+                representation_repo: Arc::new(NoopPort),
+                representation_normalizer: Arc::new(MockNormalizer {
+                    normalize_calls: Arc::new(AtomicUsize::new(0)),
+                }),
+                selection_repo: Arc::new(NoopPort),
+                representation_policy: Arc::new(MockRepresentationPolicy {
+                    select_calls: Arc::new(AtomicUsize::new(0)),
+                }),
+                representation_cache: Arc::new(MockRepresentationCache {
+                    put_calls: Arc::new(AtomicUsize::new(0)),
+                }),
+                spool_queue: Arc::new(MockSpoolQueue {
+                    enqueue_calls: Arc::new(AtomicUsize::new(0)),
+                }),
+                worker_tx: mpsc::channel(1).0,
+                clipboard_change_origin: Arc::new(InMemoryClipboardChangeOrigin::new()),
+            },
+            security: uc_app::SecurityPorts {
+                encryption: Arc::new(NoopPort),
+                encryption_session: Arc::new(NoopPort),
+                encryption_state: Arc::new(NoopPort),
+                key_scope: Arc::new(NoopPort),
+                secure_storage: Arc::new(NoopPort),
+                key_material: Arc::new(NoopPort),
+            },
+            device: uc_app::DevicePorts {
+                device_repo: Arc::new(NoopPort),
+                device_identity: Arc::new(MockDeviceIdentity),
+                paired_device_repo: Arc::new(NoopPort),
+            },
+            network_ports: noop_network_ports(),
+            network_control: Arc::new(NoopPort),
+            setup_status: Arc::new(NoopPort),
+            storage: uc_app::StoragePorts {
+                blob_store: Arc::new(NoopPort),
+                blob_repository: Arc::new(NoopPort),
+                blob_writer: Arc::new(NoopPort),
+                thumbnail_repo: Arc::new(NoopPort),
+                thumbnail_generator: Arc::new(NoopPort),
+                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
+            },
+            settings: Arc::new(NoopPort),
+            system: uc_app::SystemPorts {
+                clock: Arc::new(NoopPort),
+                hash: Arc::new(NoopPort),
+                file_manager: Arc::new(NoopPort),
+                cache_fs: Arc::new(NoopPort),
+            },
+        };
+        let setup_ports = SetupRuntimePorts::placeholder(&deps);
+        let initial_emitter = Arc::new(RecordingEmitter::default());
+        let swapped_emitter = Arc::new(RecordingEmitter::default());
+        let runtime = AppRuntime::with_setup(
+            deps,
+            setup_ports,
+            Arc::new(TestWatcherControl),
+            test_storage_paths(),
+            initial_emitter.clone(),
+        );
+
+        runtime.set_event_emitter(swapped_emitter.clone());
+        runtime
+            .event_emitter()
+            .emit(HostEvent::Clipboard(
+                ClipboardHostEvent::InboundSubscribeRecovered {
+                    recovered_after_attempts: 2,
+                },
+            ))
+            .expect("emit through swapped emitter");
+
+        assert!(initial_emitter.events.lock().unwrap().is_empty());
+        let swapped_events = swapped_emitter.events.lock().unwrap();
+        assert_eq!(swapped_events.len(), 1);
+        match &swapped_events[0] {
+            HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeRecovered {
+                recovered_after_attempts,
+            }) => assert_eq!(*recovered_after_attempts, 2),
+            other => panic!("expected recovered event on swapped emitter, got {other:?}"),
+        }
     }
 }

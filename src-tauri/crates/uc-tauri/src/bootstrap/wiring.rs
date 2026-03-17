@@ -3363,9 +3363,24 @@ mod tests {
         close_calls: Arc<Mutex<Vec<(String, Option<String>)>>>,
     }
 
+    #[derive(Default)]
+    struct RecordingEmitter {
+        events: Arc<Mutex<Vec<HostEvent>>>,
+    }
+
     struct OfferRecordingNetwork {
         base: BaseNetwork,
         sent_messages: Arc<Mutex<Vec<(String, PairingMessage)>>>,
+    }
+
+    impl HostEventEmitterPort for RecordingEmitter {
+        fn emit(
+            &self,
+            event: HostEvent,
+        ) -> Result<(), uc_core::ports::host_event_emitter::EmitError> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
     }
 
     struct SuccessSpaceAccessCrypto;
@@ -4338,6 +4353,75 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn clipboard_receive_loop_emits_inbound_error_via_host_event_emitter() {
+        let usecase = SyncInboundClipboardUseCase::new(
+            uc_core::clipboard::ClipboardIntegrationMode::Full,
+            Arc::new(NoopSystemClipboard),
+            Arc::new(NoopClipboardChangeOrigin),
+            Arc::new(FixedMasterKeyEncryptionSession::new(
+                MasterKey::from_bytes(&[7; 32]).expect("master key"),
+            )),
+            Arc::new(NoopEncryptionPort),
+            Arc::new(StaticDeviceIdentity {
+                id: uc_core::DeviceId::new("local-device".to_string()),
+            }),
+            Arc::new(NoopTransferDecryptor),
+            Arc::new(NoopSettings),
+        )
+        .expect("usecase should build in Full mode");
+
+        let (tx, rx) = mpsc::channel(1);
+        tx.send((
+            ClipboardMessage {
+                id: "msg-inbound-error".to_string(),
+                content_hash: "hash".to_string(),
+                encrypted_content: vec![1, 2, 3],
+                timestamp: Utc::now(),
+                origin_device_id: "remote-device".to_string(),
+                origin_device_name: "Remote".to_string(),
+                payload_version: uc_core::network::protocol::ClipboardPayloadVersion::V3,
+                origin_flow_id: Some("flow-1".to_string()),
+                file_transfers: vec![],
+            },
+            None,
+        ))
+        .await
+        .expect("send clipboard message");
+        drop(tx);
+
+        let emitter = Arc::new(RecordingEmitter::default());
+        run_clipboard_receive_loop::<tauri::test::MockRuntime>(
+            rx,
+            &usecase,
+            None,
+            emitter.clone(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let events = emitter.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            HostEvent::Clipboard(ClipboardHostEvent::InboundError {
+                message_id,
+                origin_device_id,
+                error,
+            }) => {
+                assert_eq!(message_id, "msg-inbound-error");
+                assert_eq!(origin_device_id, "remote-device");
+                assert!(
+                    error.contains("failed to decode binary payload")
+                        || error.contains("failed to decrypt chunked payload"),
+                    "unexpected error payload: {error}"
+                );
+            }
+            other => panic!("expected inbound error event, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn pairing_event_loop_registers_session_on_request() {
         let (event_tx, event_rx) = mpsc::channel(1);
@@ -5032,6 +5116,159 @@ mod tests {
 
         drop(event_tx);
         let _ = tokio::time::timeout(Duration::from_secs(1), loop_handle).await;
+    }
+
+    #[tokio::test]
+    async fn peer_connection_events_emit_via_host_event_emitter() {
+        let (event_tx, event_rx) = mpsc::channel(4);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
+        let (orchestrator, _action_rx) = PairingOrchestrator::new(
+            PairingConfig::default(),
+            device_repo,
+            "LocalDevice".to_string(),
+            "device-123".to_string(),
+            "peer-local".to_string(),
+            vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
+        );
+        let orchestrator = Arc::new(orchestrator);
+        let network = Arc::new(TestNetwork {
+            discovered: vec![DiscoveredPeer {
+                peer_id: "peer-1".to_string(),
+                device_name: Some("Desk".to_string()),
+                device_id: None,
+                addresses: vec![],
+                discovered_at: Utc::now(),
+                last_seen: Utc::now(),
+                is_paired: true,
+            }],
+        });
+        let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
+        let runtime_ports =
+            test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
+        let emitter = Arc::new(RecordingEmitter::default());
+
+        let loop_handle = tokio::spawn(run_pairing_event_loop::<tauri::test::MockRuntime>(
+            event_rx,
+            orchestrator,
+            None,
+            emitter.clone(),
+            network.clone() as Arc<dyn PeerDirectoryPort>,
+            space_access_orchestrator,
+            runtime_ports,
+            Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
+            PathBuf::from("/tmp/test-file-cache"),
+            Arc::new(NoopSystemClipboard) as Arc<dyn SystemClipboardPort>,
+            Arc::new(NoopClipboardChangeOrigin) as Arc<dyn ClipboardChangeOriginPort>,
+            Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
+                as Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
+            Arc::new(uc_infra::SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+            Arc::new(crate::bootstrap::file_transfer_wiring::EarlyCompletionCache::default()),
+        ));
+
+        event_tx
+            .send(NetworkEvent::PeerReady {
+                peer_id: "peer-1".to_string(),
+            })
+            .await
+            .expect("send peer ready event");
+        event_tx
+            .send(NetworkEvent::PeerDisconnected("peer-1".to_string()))
+            .await
+            .expect("send peer disconnected event");
+        drop(event_tx);
+        let _ = tokio::time::timeout(Duration::from_secs(1), loop_handle).await;
+
+        let events = emitter.events.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            HostEvent::PeerConnection(PeerConnectionHostEvent::Connected {
+                peer_id,
+                device_name,
+            }) => {
+                assert_eq!(peer_id, "peer-1");
+                assert_eq!(device_name.as_deref(), Some("Desk"));
+            }
+            other => panic!("expected connected event, got {other:?}"),
+        }
+        match &events[1] {
+            HostEvent::PeerConnection(PeerConnectionHostEvent::Disconnected {
+                peer_id,
+                device_name,
+            }) => {
+                assert_eq!(peer_id, "peer-1");
+                assert_eq!(device_name.as_deref(), Some("Desk"));
+            }
+            other => panic!("expected disconnected event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn transfer_progress_events_emit_via_host_event_emitter() {
+        let (event_tx, event_rx) = mpsc::channel(1);
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
+        let (orchestrator, _action_rx) = PairingOrchestrator::new(
+            PairingConfig::default(),
+            device_repo,
+            "LocalDevice".to_string(),
+            "device-123".to_string(),
+            "peer-local".to_string(),
+            vec![9; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
+        );
+        let orchestrator = Arc::new(orchestrator);
+        let network = Arc::new(TestNetwork { discovered: vec![] });
+        let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
+        let runtime_ports =
+            test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
+        let emitter = Arc::new(RecordingEmitter::default());
+
+        let loop_handle = tokio::spawn(run_pairing_event_loop::<tauri::test::MockRuntime>(
+            event_rx,
+            orchestrator,
+            None,
+            emitter.clone(),
+            network.clone() as Arc<dyn PeerDirectoryPort>,
+            space_access_orchestrator,
+            runtime_ports,
+            Arc::new(NoopSettings) as Arc<dyn SettingsPort>,
+            PathBuf::from("/tmp/test-file-cache"),
+            Arc::new(NoopSystemClipboard) as Arc<dyn SystemClipboardPort>,
+            Arc::new(NoopClipboardChangeOrigin) as Arc<dyn ClipboardChangeOriginPort>,
+            Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
+                as Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
+            Arc::new(uc_infra::SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+            Arc::new(crate::bootstrap::file_transfer_wiring::EarlyCompletionCache::default()),
+        ));
+
+        event_tx
+            .send(NetworkEvent::TransferProgress(
+                uc_core::ports::TransferProgress {
+                    transfer_id: "transfer-1".to_string(),
+                    peer_id: "peer-2".to_string(),
+                    direction: uc_core::ports::TransferDirection::Receiving,
+                    chunks_completed: 1,
+                    total_chunks: 4,
+                    bytes_transferred: 1024,
+                    total_bytes: Some(4096),
+                },
+            ))
+            .await
+            .expect("send transfer progress event");
+        drop(event_tx);
+        let _ = tokio::time::timeout(Duration::from_secs(1), loop_handle).await;
+
+        let events = emitter.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            HostEvent::Transfer(TransferHostEvent::Progress(progress)) => {
+                assert_eq!(progress.transfer_id, "transfer-1");
+                assert_eq!(progress.peer_id, "peer-2");
+                assert_eq!(progress.chunks_completed, 1);
+                assert_eq!(progress.total_chunks, 4);
+            }
+            other => panic!("expected transfer progress event, got {other:?}"),
+        }
     }
 
     #[tokio::test]

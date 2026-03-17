@@ -527,8 +527,46 @@ impl HostEventEmitterPort for LoggingEventEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::sync::{Arc, Mutex};
     use tauri::Listener;
     use uc_core::ports::transfer_progress::{TransferDirection, TransferProgress};
+
+    #[derive(Clone, Default)]
+    struct TestLogBuffer {
+        inner: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl TestLogBuffer {
+        fn content(&self) -> String {
+            String::from_utf8(self.inner.lock().unwrap().clone()).unwrap_or_default()
+        }
+    }
+
+    struct TestLogWriter {
+        inner: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl io::Write for TestLogWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.inner.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::writer::MakeWriter<'a> for TestLogBuffer {
+        type Writer = TestLogWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            TestLogWriter {
+                inner: self.inner.clone(),
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Contract test 1: clipboard new content — snake_case fields, type tag
@@ -927,5 +965,50 @@ mod tests {
             let result = emitter.emit(event);
             assert!(result.is_ok(), "LoggingEventEmitter must always return Ok");
         }
+    }
+
+    #[test]
+    fn test_logging_emitter_writes_structured_tracing_fields() {
+        let log_buffer = TestLogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(log_buffer.clone())
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let emitter = LoggingEventEmitter;
+        emitter
+            .emit(HostEvent::Clipboard(ClipboardHostEvent::InboundError {
+                message_id: "msg-42".to_string(),
+                origin_device_id: "device-7".to_string(),
+                error: "decrypt failed".to_string(),
+            }))
+            .expect("emit should succeed");
+        emitter
+            .emit(HostEvent::Transfer(TransferHostEvent::Completed {
+                transfer_id: "transfer-9".to_string(),
+                filename: "report.pdf".to_string(),
+                peer_id: "peer-11".to_string(),
+                file_size: 4096,
+                auto_pulled: true,
+                file_path: "/tmp/report.pdf".to_string(),
+            }))
+            .expect("emit should succeed");
+
+        let logs = log_buffer.content();
+        assert!(logs.contains("event_type=\"clipboard.inbound_error\""));
+        assert!(logs.contains("message_id=msg-42"));
+        assert!(logs.contains("origin_device_id=device-7"));
+        assert!(logs.contains("error=decrypt failed"));
+        assert!(logs.contains("WARN"));
+        assert!(logs.contains("event_type=\"transfer.completed\""));
+        assert!(logs.contains("transfer_id=transfer-9"));
+        assert!(logs.contains("filename=report.pdf"));
+        assert!(logs.contains("peer_id=peer-11"));
+        assert!(logs.contains("file_size=4096"));
+        assert!(logs.contains("auto_pulled=true"));
+        assert!(logs.contains("INFO"));
     }
 }
