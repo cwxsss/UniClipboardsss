@@ -10,9 +10,9 @@ Split `wiring.rs` (6328 lines) into a pure Rust assembly module (`assembly.rs`, 
 
 **⚠ ROADMAP SC#2 and SC#4 interpretation adjustment (explicit, not silent):**
 
-ROADMAP SC#2 says "it is the only place that imports tauri types." Taken literally across the entire uc-tauri crate, this is unachievable in Phase 37 — commands/, adapters/, events/, preview_panel/, quick_panel/, tray/, services/ all import tauri unconditionally, and uc-tauri's Cargo.toml has `tauri` as a non-optional dependency (Cargo.toml:20). Gating the entire crate would require making tauri optional + `#[cfg(feature)]` on 10+ modules — that is Phase 40 (uc-bootstrap) scope.
+ROADMAP SC#2 says "it is the only place that imports tauri types." Taken literally across the entire uc-tauri crate, this is unachievable in Phase 37 — commands/, adapters/, events/, preview_panel/, quick_panel/, tray/, services/ all import tauri unconditionally, and uc-tauri's Cargo.toml has `tauri` as a non-optional dependency (Cargo.toml:20). Gating the entire crate would require making tauri optional + `#[cfg(feature)]` on most of the 10 pub modules in lib.rs — that is Phase 40 (uc-bootstrap) scope.
 
-**Phase 37 interpretation:** SC#2's "only place" applies **within the bootstrap/ directory** — after the split, assembly.rs has zero tauri imports and wiring.rs is the only bootstrap module that imports tauri types. Commands, adapters, and other uc-tauri modules are out of scope for this constraint.
+**Phase 37 interpretation:** SC#2's "only place" applies **within the wiring split pair only** — after the split, assembly.rs has zero tauri imports and wiring.rs is the Tauri-side counterpart. Other bootstrap/ modules (runtime.rs holds `AppHandle`, run.rs uses `tauri::AppHandle`) are NOT changed in this phase and continue to import tauri. Commands, adapters, and other uc-tauri modules are also out of scope for this constraint.
 
 ROADMAP SC#4 says "`cargo check` on the pure-assembly module succeeds without tauri in its dependency tree." Since assembly.rs lives inside uc-tauri (which unconditionally depends on tauri), a real `cargo check` without tauri requires either crate extraction or crate-wide feature gating — both disproportionate for Phase 37.
 
@@ -78,11 +78,11 @@ ROADMAP SC#4 says "`cargo check` on the pure-assembly module succeeds without ta
 ### Command registration ownership
 
 - ROADMAP SC#2 requires the Tauri-specific module to own "event loop setup, app handle wiring, and command registration"
-- Within bootstrap/, this is achieved: wiring.rs (Tauri module) owns event loops + app handle; command registration moves from main.rs into wiring.rs or a dedicated bootstrap helper
+- Within the wiring split pair, this is achieved: wiring.rs (Tauri-side) owns event loops + app handle; command registration moves from main.rs into wiring.rs or a dedicated bootstrap helper
 - Currently command registration lives in main.rs:852-927 (`invoke_handler![...]` macro with ~60 commands)
 - Move the `invoke_handler` generation into the Tauri module (wiring.rs or a dedicated helper function) so main.rs delegates to it
 - main.rs becomes a thin entry point: config → assembly → tauri-module (which provides event loops + command handler)
-- SC#2's "only place that imports tauri types" is scoped to bootstrap/ — see interpretation adjustment in domain section
+- SC#2's "only place that imports tauri types" is scoped to the wiring split pair (assembly.rs vs wiring.rs) — see interpretation adjustment in domain section. Other bootstrap/ modules (runtime.rs, run.rs) still import tauri
 
 ### Tauri-purity verification (ROADMAP SC#4 — staged, not downgraded)
 
@@ -134,7 +134,7 @@ ROADMAP SC#4 says "`cargo check` on the pure-assembly module succeeds without ta
 - `src-tauri/crates/uc-tauri/src/bootstrap/file_transfer_wiring.rs` — 5 functions with AppHandle<R> to migrate
 - `src-tauri/crates/uc-tauri/src/bootstrap/mod.rs` — Module declarations and re-exports (needs updating)
 - `src-tauri/src/main.rs` — Lines 852-927: invoke_handler![...] command registration to be moved into Tauri module
-- `src-tauri/crates/uc-tauri/src/lib.rs` — Module declarations; lib.rs:8-17 shows 11 pub mod all importing tauri (context for why feature gating is Phase 40 scope)
+- `src-tauri/crates/uc-tauri/src/lib.rs` — Module declarations; lib.rs:8-17 declares 10 unconditional pub mod; most (commands, bootstrap, events, preview_panel, quick_panel, tray, services) import tauri directly or transitively — context for why crate-wide feature gating is Phase 40 scope
 
 ### Existing HostEvent implementation (from Phase 36)
 
