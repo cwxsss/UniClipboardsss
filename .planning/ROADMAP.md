@@ -75,7 +75,13 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 2. TauriEventEmitter adapter wraps AppHandle and implements HostEventEmitterPort; GUI app continues to emit clipboard and sync events to the frontend as before
 3. LoggingEventEmitter adapter exists and implements HostEventEmitterPort by writing events to tracing output
 4. Clipboard watcher, peer discovery, and sync scheduler accept HostEventEmitterPort instead of AppHandle<R>; the compiler rejects any direct AppHandle use in these components
-   **Plans**: TBD
+
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 36-01-PLAN.md — Define HostEventEmitterPort trait, HostEvent type system, TauriEventEmitter and LoggingEventEmitter adapters with contract tests
+- [ ] 36-02-PLAN.md — Wire emitter port into AppRuntime, wiring.rs, and file_transfer_wiring.rs; delete obsolete event types
 
 ### Phase 37: Wiring Decomposition
 
@@ -153,7 +159,7 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 | 1-9                              | v0.1.0    | 17/17          | Complete    | 2026-03-06 |
 | 10-18                            | v0.2.0    | 22/22          | Complete    | 2026-03-09 |
 | 19-35                            | v0.3.0    | 51/51          | Complete    | 2026-03-17 |
-| 36. Event Emitter Abstraction    | v0.4.0    | 0/?            | Not started | -          |
+| 36. Event Emitter Abstraction    | v0.4.0    | 0/2            | Planning    | -          |
 | 37. Wiring Decomposition         | v0.4.0    | 0/?            | Not started | -          |
 | 38. CoreRuntime Extraction       | v0.4.0    | 0/?            | Not started | -          |
 | 39. Config Resolution Extraction | v0.4.0    | 0/?            | Not started | -          |
