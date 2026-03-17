@@ -6,7 +6,30 @@
 <domain>
 ## Phase Boundary
 
-Replace hardcoded `AppHandle::emit()` calls in uc-tauri with an abstract `HostEventEmitterPort` trait and adapter implementations. Background tasks deliver host events through the abstract port, eliminating direct AppHandle coupling. GUI behavior remains unchanged.
+Define `HostEventEmitterPort` trait and two adapters (Tauri, Logging). Migrate **only** the three EVNT-04 component categories (clipboard watcher, peer discovery, sync scheduler) **plus** `AppRuntime`'s clipboard emit path to use the new port. All other `app.emit()` call sites in wiring.rs (setup-state-changed, space-access, pairing-verification, setting-changed, etc.) remain untouched and are **out of scope** for this phase.
+
+**In-scope emit sites (exhaustive):**
+
+- Clipboard watcher emit in `AppRuntime::on_clipboard_changed` (runtime.rs:1189-1205)
+- Peer discovery changed events (wiring.rs:2336, 2364)
+- Peer connection changed events (wiring.rs:2379, 2391, 2404)
+- Peer name updated events (wiring.rs:2418)
+- Sync/inbound clipboard events (wiring.rs:1376, 1860)
+- File transfer completed (wiring.rs:2546)
+- File transfer status changed (wiring.rs:1774, file_transfer_wiring.rs:85)
+- Transfer progress (transfer_progress.rs:42)
+
+**Out-of-scope emit sites (remain as direct app.emit()):**
+
+- setup-state-changed (wiring.rs:204)
+- space-access-completed / p2p-space-access-completed (wiring.rs:2115, 2119)
+- pairing-verification (wiring.rs:2671, 3110, 3124, 3241, 3249, 3272)
+- pairing-events-subscribe-failure/recovered (wiring.rs:3300, 3314)
+- inbound-clipboard-subscribe-error/retry (wiring.rs:1418, 1434)
+- emit_to for quick-panel/preview-panel (quick_panel/mod.rs, preview_panel/mod.rs)
+- Commands-layer emits (encryption.rs, pairing.rs, tray.rs)
+- libp2p start-failed (events/mod.rs:48)
+- clipboard monitor heartbeat (clipboard_monitor.rs:43)
 
 </domain>
 
@@ -19,33 +42,69 @@ Replace hardcoded `AppHandle::emit()` calls in uc-tauri with an abstract `HostEv
 - Trait name: `HostEventEmitterPort`
 - Trait and all event types live in `uc-core/ports/`
 - Components receive the port via `Arc<dyn HostEventEmitterPort>` constructor injection (consistent with existing port patterns like `Arc<dyn SettingsPort>`)
+- Trait is `Send + Sync` (required for async contexts)
+
+### Event model identity
+
+- **HostEvent is a core semantic model, NOT a frontend protocol DTO**
+- HostEvent uses pure Rust types, no serde annotations, no camelCase rename — uc-core stays clean
+- TauriEventEmitter is solely responsible for converting HostEvent → Tauri event name string + serde-annotated payload struct
+- This means TauriEventEmitter internally defines its own payload DTOs with `#[serde(rename_all = "camelCase")]` and `#[serde(tag = "type")]` as needed to match current frontend contracts
 
 ### Event type system
 
-- Strong-typed `HostEvent` enum with nested sub-enums per domain: `HostEvent::Clipboard(ClipboardHostEvent)`, `HostEvent::Pairing(PairingHostEvent)`, `HostEvent::Transfer(TransferHostEvent)`, etc.
-- Event types are newly defined in uc-core — NOT moved from uc-tauri. TauriEventEmitter converts HostEvent variants to Tauri-specific event name strings and payload types internally
-- Event name mapping (e.g., `ClipboardHostEvent::NewContent` → `"clipboard://event"`) is the adapter's responsibility — uc-core knows nothing about event name strings
-- Directed events (`emit_to` for quick-panel/preview-panel) are excluded from the trait — they remain uc-tauri internal as pure GUI behavior
+- Strong-typed `HostEvent` enum with nested sub-enums per domain: `HostEvent::Clipboard(ClipboardHostEvent)`, `HostEvent::PeerDiscovery(PeerDiscoveryHostEvent)`, `HostEvent::Transfer(TransferHostEvent)`, etc.
+- **Only events for the in-scope components are defined** in Phase 36. No enum variants for setup, pairing-verification, space-access, etc.
+- Event types are newly defined in uc-core — NOT moved from uc-tauri
+- Event name mapping (e.g., `ClipboardHostEvent::NewContent` → `"clipboard://event"`) is the adapter's internal responsibility
+
+### Failure semantics
+
+- **Best-effort: warn + continue.** Emit failure must never interrupt business flow
+- Trait returns `Result<(), EmitError>` for observability, but the **mandatory calling convention** is: log the error, then continue
+- Non-GUI mode (LoggingEventEmitter) is infallible by design — Result is always Ok
+- No buffering, backpressure, or noop mode needed in Phase 36
+
+### AppRuntime restructuring (in-scope)
+
+- `AppRuntime::app_handle: Arc<RwLock<Option<AppHandle>>>` is replaced with `Arc<dyn HostEventEmitterPort>`
+- `set_app_handle()` / `app_handle()` methods removed from AppRuntime
+- The emitter port is injected at construction time, not set post-init
+- AppRuntime::on_clipboard_changed uses the port instead of direct AppHandle read
 
 ### Migration strategy
 
-- One-shot replacement: create trait + TauriEventEmitter + LoggingEventEmitter + replace all 30+ emit calls in a single atomic migration
-- Clipboard watcher, peer discovery, and sync scheduler accept `Arc<dyn HostEventEmitterPort>` instead of `AppHandle<R>`
-- Existing `uc-tauri/events/mod.rs` forward\_\* functions and old event types (ClipboardEvent, EncryptionEvent, SettingChangedEvent) are deleted after migration — TauriEventEmitter fully replaces them
-- The compiler must reject any direct `AppHandle` use in clipboard watcher, peer discovery, and sync scheduler components
+- **Strict EVNT-04 scope** — only the three component categories + AppRuntime clipboard emit
+- All other wiring.rs emit calls remain as direct `app.emit()` (deferred to Phase 37+)
+- Existing `uc-tauri/events/` types that are referenced ONLY by in-scope sites are deleted; types still used by out-of-scope sites are preserved
+
+### Commit split strategy (MANDATORY — satisfies AGENTS.md hex boundary + atomic commit rules)
+
+1. `arch:` HostEventEmitterPort trait + HostEvent enums + EmitError (uc-core only) — `cargo check -p uc-core` passes
+2. `impl:` TauriEventEmitter adapter + event contract tests (uc-tauri only) — `cargo check -p uc-tauri` passes
+3. `impl:` LoggingEventEmitter adapter (uc-tauri or uc-infra) — `cargo check` passes
+4. `refactor:` Wire emitter port into in-scope components + AppRuntime restructuring + delete obsolete code — `cargo test` passes
+
+### Frontend compatibility verification
+
+- **Event contract tests are mandatory** for every migrated event
+- Each test asserts: exact event name string, JSON key naming (camelCase), required fields, tag values
+- Tests live in TauriEventEmitter module (commit 2)
+- Reference pattern: existing `test_setting_changed_event_camelcase_serialization` in events/mod.rs
 
 ### LoggingEventEmitter behavior
 
 - Logs all events — filtering controlled by tracing level configuration
-- Log levels vary by event type: error events → `warn!`, key business events → `info!`, discovery changes → `debug!`
+- Log levels vary by event type: error events → `warn!`, key business events (clipboard new, transfer complete) → `info!`, discovery changes → `debug!`
 - Output uses structured tracing fields: `info!(event_type = "clipboard.new_content", entry_id = %id)` — consistent with existing tracing patterns
+- Sensitive field policy: follows AGENTS.md existing rules (no raw keys, passphrases, decrypted content). Current in-scope events only carry IDs/summaries, not raw clipboard content
 
 ### Claude's Discretion
 
 - Exact HostEvent sub-enum variant names and field structures
 - EmitError type design (simple string vs structured)
 - Internal implementation of TauriEventEmitter's event name mapping (match arms, const table, etc.)
-- How to handle the transition of existing tests in events/mod.rs
+- Whether LoggingEventEmitter lives in uc-tauri/adapters or uc-infra
 - Specific tracing level assignment per event variant in LoggingEventEmitter
 
 </decisions>
@@ -56,32 +115,40 @@ Replace hardcoded `AppHandle::emit()` calls in uc-tauri with an abstract `HostEv
 
 **Downstream agents MUST read these before planning or implementing.**
 
-### Event abstraction requirements
+### Requirements and constraints
 
 - `.planning/REQUIREMENTS.md` — EVNT-01 through EVNT-04 define the four success criteria for this phase
+- `AGENTS.md` §Atomic Commit Rule — Port + adapter split, hex boundary commit rules, revert safety
+- `AGENTS.md` §Tauri Event Payload Serialization — camelCase mandate, known incident reference
+- `AGENTS.md` §Rust Logging — Sensitive field policy, structured tracing conventions
 
-### Current event implementation
+### Current event implementation (to be partially replaced)
 
-- `src-tauri/crates/uc-tauri/src/events/mod.rs` — Existing event types (ClipboardEvent, EncryptionEvent, SettingChangedEvent) and forward\_\* functions to be replaced
-- `src-tauri/crates/uc-tauri/src/events/transfer_progress.rs` — Transfer progress event forwarding
+- `src-tauri/crates/uc-tauri/src/events/mod.rs` — ClipboardEvent, EncryptionEvent, SettingChangedEvent, forward\_\* functions
+- `src-tauri/crates/uc-tauri/src/events/transfer_progress.rs` — TransferProgressEvent and forward function
 - `src-tauri/crates/uc-tauri/src/events/p2p_pairing.rs` — P2P pairing event types
 - `src-tauri/crates/uc-tauri/src/events/p2p_peer.rs` — P2P peer discovery/connection event types
 
-### Primary emit call sites
+### Primary emit call sites (in-scope)
 
-- `src-tauri/crates/uc-tauri/src/bootstrap/wiring.rs` — Main wiring with 30+ emit calls across clipboard, pairing, transfer, discovery, and sync domains
-- `src-tauri/crates/uc-tauri/src/bootstrap/runtime.rs` — AppRuntime clipboard event emission
-- `src-tauri/crates/uc-tauri/src/bootstrap/file_transfer_wiring.rs` — File transfer status emit calls
+- `src-tauri/crates/uc-tauri/src/bootstrap/wiring.rs` — Lines 1376, 1774, 1860, 2336, 2364, 2379, 2391, 2404, 2418, 2546
+- `src-tauri/crates/uc-tauri/src/bootstrap/runtime.rs` — Lines 1189-1205 (AppRuntime clipboard emit), lines 99-123 (AppRuntime struct with app_handle field)
+- `src-tauri/crates/uc-tauri/src/bootstrap/file_transfer_wiring.rs` — Line 85
 
 ### Port patterns (reference for trait design)
 
-- `src-tauri/crates/uc-core/src/ports/mod.rs` — Existing port trait registry, injection patterns
-- `src-tauri/crates/uc-core/src/ports/setup_event_port.rs` — Similar event port pattern (SetupEventPort)
+- `src-tauri/crates/uc-core/src/ports/mod.rs` — Existing port registry, Arc<dyn Port> injection pattern
+- `src-tauri/crates/uc-core/src/ports/setup_event_port.rs` — Similar event port pattern
 - `src-tauri/crates/uc-core/src/ports/transfer_progress.rs` — TransferProgressPort as event delivery precedent
 
 ### Logging patterns
 
 - `src-tauri/crates/uc-observability/` — Tracing configuration, structured logging patterns
+
+### Crate-level rules
+
+- `src-tauri/crates/uc-core/AGENTS.md` — No Tauri/system imports, port conventions
+- `src-tauri/crates/uc-tauri/AGENTS.md` — Bootstrap editing rules, event payload conventions
 
 </canonical_refs>
 
@@ -91,21 +158,23 @@ Replace hardcoded `AppHandle::emit()` calls in uc-tauri with an abstract `HostEv
 
 ### Reusable Assets
 
-- `SetupEventPort` in uc-core/ports: Existing event port pattern — can serve as structural reference for HostEventEmitterPort
-- `TransferProgressPort`: Another event delivery port with structured data — validates the Arc<dyn Port> injection pattern
-- `uc-observability` crate: Dual-output tracing already configured — LoggingEventEmitter can use tracing macros directly
+- `SetupEventPort` in uc-core/ports: Existing event port pattern — structural reference for HostEventEmitterPort
+- `TransferProgressPort`: Event delivery port with structured data — validates Arc<dyn Port> injection pattern
+- `uc-observability` crate: Dual-output tracing already configured — LoggingEventEmitter uses tracing macros directly
 
 ### Established Patterns
 
-- Port injection via `Arc<dyn XxxPort>` through constructors — all infrastructure ports follow this pattern
-- Event types use `#[serde(tag = "type")]` for discriminated union serialization — TauriEventEmitter should maintain this for frontend compatibility
+- Port injection via `Arc<dyn XxxPort>` through constructors — all infrastructure ports follow this
+- Event payload DTOs in uc-tauri use `#[serde(tag = "type")]` for discriminated unions and `#[serde(rename_all = "camelCase")]` for field names
 - Error types in ports use simple string-based errors or dedicated error enums
+- `AppRuntime::app_handle` currently stored as `Arc<RwLock<Option<AppHandle>>>` set post-init via `set_app_handle()` — this pattern is replaced by constructor injection
 
 ### Integration Points
 
-- `wiring.rs` is the main site where `app.clone()` is captured and `app.emit()` is called — this is where HostEventEmitterPort injection replaces AppHandle
-- `AppRuntime::set_app_handle()` currently stores AppHandle for event emission — will need restructuring to use HostEventEmitterPort instead
+- wiring.rs: `app.clone()` captured in closures → replaced with `Arc<dyn HostEventEmitterPort>` for in-scope components only
+- `AppRuntime` struct: `app_handle` field replaced with emitter port; `set_app_handle()` removed
 - `AppDeps` domain sub-structs may need to carry the emitter port for components that need it
+- Out-of-scope emit calls in wiring.rs continue to use `app.clone()` as before
 
 </code_context>
 
@@ -119,7 +188,9 @@ No specific requirements — open to standard approaches
 <deferred>
 ## Deferred Ideas
 
-None — discussion stayed within phase scope
+- Migrate remaining wiring.rs emit calls (setup, pairing-verification, space-access, setting-changed) to HostEventEmitterPort — Phase 37 (wiring decomposition) is the natural home
+- Define HostEvent variants for out-of-scope event domains — add when those components are migrated
+- Event buffering/backpressure for daemon mode — future daemon milestone if needed
 
 </deferred>
 
