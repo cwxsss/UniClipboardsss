@@ -15,7 +15,7 @@ use uc_core::ports::{PeerDirectoryPort, SettingsPort};
 
 use std::sync::Arc;
 
-use crate::bootstrap::wiring::resolve_pairing_device_name;
+use crate::bootstrap::resolve_pairing_device_name;
 
 // ---------------------------------------------------------------------------
 // InMemoryLifecycleStatus

@@ -37,125 +37,56 @@ use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{async_runtime, AppHandle, Runtime};
+use tauri::async_runtime;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use super::task_registry::TaskRegistry;
 
-use uc_app::deps::NetworkPorts;
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::space_access::{
     HmacProofAdapter, SpaceAccessCompletedEvent, SpaceAccessContext, SpaceAccessEventPort,
     SpaceAccessJoinerOffer, SpaceAccessNetworkAdapter, SpaceAccessOrchestrator,
     SpaceAccessPersistenceAdapter,
 };
-use uc_app::usecases::{
-    PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, StagedPairedDeviceStore,
-};
-use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
-use uc_core::clipboard::SelectRepresentationPolicyV1;
-use uc_core::config::AppConfig;
+use uc_app::usecases::{PairingOrchestrator, StagedPairedDeviceStore};
+use uc_app::AppDeps;
 use uc_core::ids::RepresentationId;
 use uc_core::network::pairing_state_machine::{PairingAction, PairingRole};
 use uc_core::network::{ClipboardMessage, NetworkEvent, PairingMessage};
-use uc_core::ports::clipboard::{
-    ClipboardChangeOriginPort, ClipboardRepresentationNormalizerPort, RepresentationCachePort,
-    SpoolQueuePort, SpoolRequest,
-};
+use uc_core::ports::clipboard::{ClipboardChangeOriginPort, SpoolRequest};
 use uc_core::ports::host_event_emitter::{
     ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort, PairingHostEvent,
-    PairingVerificationKind, PeerConnectionHostEvent, PeerDiscoveryHostEvent, SetupHostEvent,
-    SpaceAccessHostEvent, TransferHostEvent,
+    PairingVerificationKind, PeerConnectionHostEvent, PeerDiscoveryHostEvent, SpaceAccessHostEvent,
+    TransferHostEvent,
 };
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::*;
 use uc_core::security::model::{KeySlot, KeySlotFile};
 use uc_core::security::space_access::event::SpaceAccessEvent;
 use uc_core::security::space_access::{deny_reason_from_code, DENY_REASON_INVALID_PROOF};
-use uc_core::settings::model::Settings;
-use uc_core::setup::SetupState;
-use uc_infra::blob::BlobWriter;
 use uc_infra::clipboard::{
-    BackgroundBlobWorker, ClipboardRepresentationNormalizer, InMemoryClipboardChangeOrigin,
-    InfraThumbnailGenerator, MpscSpoolQueue, RepresentationCache, SpoolJanitor, SpoolManager,
-    SpoolScanner, SpoolerTask,
+    BackgroundBlobWorker, RepresentationCache, SpoolJanitor, SpoolManager, SpoolScanner,
+    SpoolerTask,
 };
-use uc_infra::config::ClipboardStorageConfig;
-use uc_infra::db::executor::DieselSqliteExecutor;
-use uc_infra::db::mappers::{
-    blob_mapper::BlobRowMapper, clipboard_entry_mapper::ClipboardEntryRowMapper,
-    clipboard_event_mapper::ClipboardEventRowMapper,
-    clipboard_selection_mapper::ClipboardSelectionRowMapper, device_mapper::DeviceRowMapper,
-    paired_device_mapper::PairedDeviceRowMapper,
-    snapshot_representation_mapper::RepresentationRowMapper,
+use uc_infra::fs::key_slot_store::KeySlotStore;
+use uc_infra::Timer;
+use uc_platform::adapters::Libp2pNetworkAdapter;
+
+// Re-export assembly types for backward compatibility.
+// Types moved to assembly.rs but callers of this module (via mod.rs re-exports) are unaffected.
+pub use super::assembly::{
+    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
+    wire_dependencies_with_identity_store, HostEventSetupPort, WiredDependencies, WiringError,
+    WiringResult,
 };
-use uc_infra::db::pool::{init_db_pool, DbPool};
-use uc_infra::db::repositories::{
-    DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
-    DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselDeviceRepository, DieselFileTransferRepository, DieselPairedDeviceRepository,
-    DieselThumbnailRepository,
+
+// Re-export private assembly helpers for test access (tests in this module use `use super::*`).
+#[cfg(test)]
+pub(crate) use super::assembly::{
+    apply_profile_suffix, create_db_pool, create_platform_layer, get_default_app_dirs,
+    resolve_app_dirs, resolve_app_paths,
 };
-use uc_infra::device::LocalDeviceIdentity;
-use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
-use uc_infra::security::{
-    Blake3Hasher, DecryptingClipboardRepresentationRepository, DefaultKeyMaterialService,
-    EncryptedBlobStore, EncryptingClipboardEventWriter, EncryptionRepository,
-    FileEncryptionStateRepository,
-};
-use uc_infra::settings::repository::FileSettingsRepository;
-use uc_infra::{FileSetupStatusRepository, SystemClock, Timer};
-
-use uc_platform::adapters::{
-    FilesystemBlobStore, InMemoryEncryptionSessionPort, InMemoryWatcherControl,
-    Libp2pNetworkAdapter,
-};
-use uc_platform::app_dirs::DirsAppDirsAdapter;
-use uc_platform::clipboard::LocalClipboard;
-use uc_platform::identity_store::FileIdentityStore;
-use uc_platform::ports::{AppDirsPort, IdentityStorePort, WatcherControlPort};
-use uc_platform::runtime::event_bus::PlatformCommandSender;
-
-/// Result type for wiring operations
-pub type WiringResult<T> = Result<T, WiringError>;
-
-/// Errors during dependency injection
-/// 依赖注入错误（基础设施初始化失败）
-#[derive(Debug, thiserror::Error)]
-pub enum WiringError {
-    #[error("Database initialization failed: {0}")]
-    DatabaseInit(String),
-
-    #[error("Secure storage initialization failed: {0}")]
-    SecureStorageInit(String),
-
-    #[error("Clipboard initialization failed: {0}")]
-    ClipboardInit(String),
-
-    #[error("Network initialization failed: {0}")]
-    NetworkInit(String),
-
-    #[error("Blob storage initialization failed: {0}")]
-    BlobStorageInit(String),
-
-    #[error("Settings repository initialization failed: {0}")]
-    SettingsInit(String),
-
-    #[error("Configuration initialization failed: {0}")]
-    ConfigInit(String),
-
-    #[error("Thumbnail generator initialization failed: {0}")]
-    ThumbnailInit(String),
-}
-
-/// Fully wired dependencies plus background runtime components.
-/// 已完成依赖连接与后台运行组件的组合。
-pub struct WiredDependencies {
-    pub deps: AppDeps,
-    pub background: BackgroundRuntimeDeps,
-    pub watcher_control: Arc<dyn WatcherControlPort>,
-}
 
 /// Background runtime components that must be started after async runtime is ready.
 /// 需要在异步运行时就绪后启动的后台组件。
@@ -170,33 +101,6 @@ pub struct BackgroundRuntimeDeps {
     pub spool_ttl_days: u64,
     pub worker_retry_max_attempts: u32,
     pub worker_retry_backoff_ms: u64,
-}
-
-/// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
-#[derive(Clone)]
-pub struct HostEventSetupPort {
-    emitter: Arc<dyn HostEventEmitterPort>,
-}
-
-impl HostEventSetupPort {
-    pub fn new(emitter: Arc<dyn HostEventEmitterPort>) -> Self {
-        Self { emitter }
-    }
-}
-
-#[async_trait::async_trait]
-impl SetupEventPort for HostEventSetupPort {
-    async fn emit_setup_state_changed(&self, state: SetupState, session_id: Option<String>) {
-        if let Err(err) = self
-            .emitter
-            .emit(HostEvent::Setup(SetupHostEvent::StateChanged {
-                state,
-                session_id,
-            }))
-        {
-            warn!(error = %err, "Failed to emit setup-state-changed");
-        }
-    }
 }
 
 const SPOOL_JANITOR_INTERVAL_SECS: u64 = 60 * 60;
@@ -221,887 +125,14 @@ fn pairing_events_subscribe_backoff_ms(attempt: u32) -> u64 {
         .min(PAIRING_EVENTS_SUBSCRIBE_BACKOFF_MAX_MS)
 }
 
-/// Create SQLite database connection pool
-/// 创建 SQLite 数据库连接池
-///
-/// # Arguments / 参数
-///
-/// * `db_path` - Path to the SQLite database file / SQLite 数据库文件路径
-///
-/// # Returns / 返回
-///
-/// * `WiringResult<DbPool>` - The connection pool on success / 成功时返回连接池
-///
-/// # Errors / 错误
-///
-/// Returns `WiringError::DatabaseInit` if:
-/// 如果以下情况返回 `WiringError::DatabaseInit`：
-/// - Parent directory creation fails / 父目录创建失败
-/// - Database pool creation fails / 数据库池创建失败
-/// - Migration fails / 迁移失败
-fn create_db_pool(db_path: &PathBuf) -> WiringResult<DbPool> {
-    // Ensure parent directory exists (skip for in-memory databases)
-    // 确保父目录存在（跳过内存数据库）
-    if db_path.as_os_str() != ":memory:" {
-        if let Some(parent) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                WiringError::DatabaseInit(format!("Failed to create DB directory: {}", e))
-            })?;
-        }
-    }
-
-    // Convert PathBuf to string for database URL
-    // 将 PathBuf 转换为字符串作为数据库 URL
-    let db_url = db_path
-        .to_str()
-        .ok_or_else(|| WiringError::DatabaseInit("Invalid database path".to_string()))?;
-
-    // Create connection pool and run migrations
-    // 创建连接池并运行迁移
-    init_db_pool(db_url)
-        .map_err(|e| WiringError::DatabaseInit(format!("Failed to initialize DB: {}", e)))
-}
-
-/// Infrastructure layer implementations / 基础设施层实现
-///
-/// This struct holds all infrastructure implementations (database repositories,
-/// encryption, settings, etc.) that will be injected into the application.
-///
-/// 此结构体保存所有基础设施实现（数据库仓库、加密、设置等），将被注入到应用程序中。
-struct InfraLayer {
-    // Clipboard repositories / 剪贴板仓库
-    #[allow(dead_code)]
-    clipboard_entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
-    clipboard_event_repo: Arc<dyn ClipboardEventWriterPort>,
-    representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-    selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
-
-    // Device repository / 设备仓库
-    device_repo: Arc<dyn DeviceRepositoryPort>,
-
-    // Pairing repository / 配对仓库
-    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
-
-    // Blob storage / Blob 存储
-    blob_repository: Arc<dyn BlobRepositoryPort>,
-    thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
-    thumbnail_generator: Arc<dyn ThumbnailGeneratorPort>,
-
-    // Security services / 安全服务
-    key_material: Arc<dyn KeyMaterialPort>,
-    encryption: Arc<dyn EncryptionPort>,
-    encryption_state: Arc<dyn uc_core::ports::security::encryption_state::EncryptionStatePort>,
-
-    // Settings / 设置
-    settings_repo: Arc<dyn SettingsPort>,
-
-    // Setup status / 设置状态
-    setup_status: Arc<dyn SetupStatusPort>,
-
-    // System services / 系统服务
-    clock: Arc<dyn ClockPort>,
-    hash: Arc<dyn ContentHashPort>,
-
-    // File transfer tracking / 文件传输追踪
-    file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
-}
-
-/// Platform layer implementations / 平台层实现
-///
-/// This struct holds all platform-specific implementations (clipboard, secure storage, etc.)
-/// that will be injected into the application.
-///
-/// 此结构体保存所有平台特定实现（剪贴板、密钥环等），将被注入到应用程序中。
-struct PlatformLayer {
-    // System clipboard / 系统剪贴板
-    clipboard: Arc<dyn PlatformClipboardPort>,
-    system_clipboard: Arc<dyn SystemClipboardPort>,
-
-    // Secure storage / 安全存储
-    secure_storage: Arc<dyn SecureStoragePort>,
-
-    // Network operations / 网络操作（占位符）
-    network_ports: Arc<NetworkPorts>,
-
-    // libp2p network adapter (concrete)
-    libp2p_network: Arc<Libp2pNetworkAdapter>,
-
-    // Device identity / 设备身份（占位符）
-    device_identity: Arc<dyn DeviceIdentityPort>,
-
-    // Clipboard representation normalizer / 剪贴板表示规范化器
-    representation_normalizer: Arc<dyn ClipboardRepresentationNormalizerPort>,
-
-    // Blob writer / Blob 写入器
-    blob_writer: Arc<dyn BlobWriterPort>,
-
-    // Blob store / Blob 存储（加密装饰后）
-    blob_store: Arc<dyn BlobStorePort>,
-
-    // Encryption session / 加密会话（占位符）
-    encryption_session: Arc<dyn EncryptionSessionPort>,
-
-    // Watcher control / 监控器控制
-    watcher_control: Arc<dyn WatcherControlPort>,
-
-    // Key scope / 密钥范围
-    key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort>,
-}
-
-/// Create infrastructure layer implementations
-/// 创建基础设施层实现
-///
-/// This function creates all infrastructure implementations including:
-/// 此函数创建所有基础设施实现，包括：
-/// - Database repositories (clipboard, device, blob) / 数据库仓库（剪贴板、设备、blob）
-/// - Encryption services (key material, encryption) / 加密服务（密钥材料、加密）
-/// - Settings repository / 设置仓库
-/// - System services (clock, hash) / 系统服务（时钟、哈希）
-///
-/// # Arguments / 参数
-///
-/// * `db_pool` - Database connection pool / 数据库连接池
-/// * `vault_path` - Path to encryption vault / 加密保管库路径
-/// * `settings_path` - Path to settings file / 设置文件路径
-///
-/// # Returns / 返回
-///
-/// * `WiringResult<InfraLayer>` - The infrastructure layer on success / 成功时返回基础设施层
-///
-/// # Errors / 错误
-///
-/// Returns `WiringError` if any infrastructure component fails to initialize.
-/// 如果任何基础设施组件初始化失败，返回 `WiringError`。
-fn create_infra_layer(
-    db_pool: DbPool,
-    vault_path: &PathBuf,
-    settings_path: &PathBuf,
-    secure_storage: Arc<dyn SecureStoragePort>,
-) -> WiringResult<InfraLayer> {
-    // Create database executor and wrap in Arc for cloning
-    // 创建数据库执行器并包装在 Arc 中以供克隆
-    let db_executor = Arc::new(DieselSqliteExecutor::new(db_pool));
-
-    // Create mappers (zero-sized structs, no new() needed)
-    // 创建映射器（零大小类型，无需 new()）
-    let entry_row_mapper = ClipboardEntryRowMapper;
-    let selection_row_mapper = ClipboardSelectionRowMapper;
-    let device_row_mapper = DeviceRowMapper;
-    let paired_device_row_mapper = PairedDeviceRowMapper;
-    let blob_row_mapper = BlobRowMapper;
-    let _representation_row_mapper = RepresentationRowMapper;
-
-    // Create clipboard repositories
-    // 创建剪贴板仓库
-    let entry_repo = DieselClipboardEntryRepository::new(
-        Arc::clone(&db_executor),
-        entry_row_mapper,
-        selection_row_mapper,
-        ClipboardEntryRowMapper, // ZST - can instantiate again
-    );
-    let clipboard_entry_repo: Arc<dyn ClipboardEntryRepositoryPort> = Arc::new(entry_repo);
-
-    // Create clipboard event repository
-    // 创建剪贴板事件仓库
-    let event_row_mapper = ClipboardEventRowMapper;
-    let clipboard_event_repo_impl = DieselClipboardEventRepository::new(
-        Arc::clone(&db_executor),
-        event_row_mapper,
-        RepresentationRowMapper,
-    );
-    let clipboard_event_repo: Arc<dyn ClipboardEventWriterPort> =
-        Arc::new(clipboard_event_repo_impl);
-
-    let rep_repo = DieselClipboardRepresentationRepository::new(Arc::clone(&db_executor));
-    let representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort> = Arc::new(rep_repo);
-
-    // Create device repository
-    // 创建设备仓库
-    let dev_repo = DieselDeviceRepository::new(Arc::clone(&db_executor), device_row_mapper);
-    let device_repo: Arc<dyn DeviceRepositoryPort> = Arc::new(dev_repo);
-
-    // Create paired device repository
-    // 创建配对设备仓库
-    let paired_repo =
-        DieselPairedDeviceRepository::new(Arc::clone(&db_executor), paired_device_row_mapper);
-    let paired_device_repo: Arc<dyn PairedDeviceRepositoryPort> = Arc::new(paired_repo);
-
-    // Create blob repository
-    // 创建 blob 仓库
-    let blob_repo = DieselBlobRepository::new(
-        Arc::clone(&db_executor),
-        blob_row_mapper,
-        BlobRowMapper, // ZST - can instantiate again
-    );
-    let blob_repository: Arc<dyn BlobRepositoryPort> = Arc::new(blob_repo);
-
-    // Create thumbnail repository and generator
-    // 创建缩略图仓库与生成器
-    let thumbnail_repo_impl = DieselThumbnailRepository::new(Arc::clone(&db_executor));
-    let thumbnail_repo: Arc<dyn ThumbnailRepositoryPort> = Arc::new(thumbnail_repo_impl);
-    let thumbnail_generator =
-        InfraThumbnailGenerator::new(128).map_err(|e| WiringError::ThumbnailInit(e.to_string()))?;
-    let thumbnail_generator: Arc<dyn ThumbnailGeneratorPort> = Arc::new(thumbnail_generator);
-
-    let secure_storage_for_key_material = Arc::clone(&secure_storage);
-
-    // Create key slot store
-    // 创建密钥槽存储
-    let keyslot_store = JsonKeySlotStore::new(vault_path.clone());
-    let keyslot_store: Arc<dyn KeySlotStore> = Arc::new(keyslot_store);
-
-    // Create key material service
-    // 创建密钥材料服务
-    let key_material_service =
-        DefaultKeyMaterialService::new(secure_storage_for_key_material, keyslot_store);
-    let key_material: Arc<dyn KeyMaterialPort> = Arc::new(key_material_service);
-
-    // Create encryption service
-    // 创建加密服务
-    let encryption: Arc<dyn EncryptionPort> = Arc::new(EncryptionRepository);
-
-    // Create encryption state repository
-    // 创建加密状态仓库
-    let encryption_state: Arc<dyn uc_core::ports::security::encryption_state::EncryptionStatePort> =
-        Arc::new(FileEncryptionStateRepository::new(vault_path.clone()));
-
-    // Create settings repository
-    // 创建设置仓库
-    let settings_repo: Arc<dyn SettingsPort> = Arc::new(FileSettingsRepository::new(settings_path));
-
-    // Create setup status repository
-    // 创建设置状态仓库
-    let setup_status: Arc<dyn SetupStatusPort> =
-        Arc::new(FileSetupStatusRepository::with_defaults(vault_path.clone()));
-
-    // Create system services
-    // 创建系统服务
-    let clock: Arc<dyn ClockPort> = Arc::new(SystemClock);
-    let hash: Arc<dyn ContentHashPort> = Arc::new(Blake3Hasher);
-
-    // Create clipboard selection repository
-    // 创建剪贴板选择仓库
-    let selection_repo_impl = DieselClipboardSelectionRepository::new(Arc::clone(&db_executor));
-    let selection_repo: Arc<dyn ClipboardSelectionRepositoryPort> = Arc::new(selection_repo_impl);
-
-    // Create file transfer repository
-    // 创建文件传输仓库
-    let file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort> =
-        Arc::new(DieselFileTransferRepository::new(Arc::clone(&db_executor)));
-
-    let infra = InfraLayer {
-        clipboard_entry_repo,
-        clipboard_event_repo,
-        representation_repo,
-        selection_repo,
-        device_repo,
-        paired_device_repo,
-        blob_repository,
-        thumbnail_repo,
-        thumbnail_generator,
-        key_material,
-        encryption,
-        encryption_state,
-        settings_repo,
-        setup_status,
-        clock,
-        hash,
-        file_transfer_repo,
-    };
-
-    Ok(infra)
-}
-
-/// Check if a file starts with the UCBL binary format magic bytes.
-/// V2 blobs use magic [0x55, 0x43, 0x42, 0x4C] ("UCBL").
-fn is_v2_blob(path: &std::path::Path) -> bool {
-    const UCBL_MAGIC: [u8; 4] = [0x55, 0x43, 0x42, 0x4C];
-    std::fs::File::open(path)
-        .and_then(|mut f| {
-            use std::io::Read;
-            let mut buf = [0u8; 4];
-            f.read_exact(&mut buf)?;
-            Ok(buf == UCBL_MAGIC)
-        })
-        .unwrap_or(false)
-}
-
-/// Create platform layer implementations
-/// 创建平台层实现
-///
-/// This function creates all platform-specific implementations including:
-/// 此函数创建所有平台特定实现，包括：
-/// - System clipboard (platform-specific: macOS/Windows/Linux) / 系统剪贴板（平台特定：macOS/Windows/Linux）
-/// - Device identity (filesystem-backed UUID) / 设备身份（基于文件系统的 UUID）
-/// - Placeholder implementations for unimplemented ports / 未实现端口的占位符实现
-///
-/// # Arguments / 参数
-///
-/// * `secure_storage` - Secure storage instance / 安全存储实例
-/// * `config_dir` - Configuration directory for device identity storage / 用于存储设备身份的配置目录
-/// * `platform_cmd_tx` - Command sender for platform runtime / 平台运行时命令发送器
-/// * `encryption` - Encryption service for blob store decorator / Blob 存储加密服务
-/// * `blob_repository` - Blob repository for BlobWriter / BlobWriter 依赖的仓库
-/// * `clock` - Clock service for BlobWriter timestamps / BlobWriter 时间戳服务
-/// * `storage_config` - Clipboard storage configuration / 剪贴板存储配置
-/// * `identity_store` - Identity store for libp2p keypair persistence / libp2p 身份持久化存储
-///
-/// # Note / 注意
-///
-/// - Secure storage is passed in as parameter for key material + identity usage
-/// - 安全存储作为参数传入（供密钥材料与身份使用）
-/// - Device identity uses LocalDeviceIdentity with UUID v4 persistence
-/// - 设备身份使用 LocalDeviceIdentity 持久化 UUID v4
-/// - Most implementations are placeholders and will be replaced in future tasks
-/// - 大多数实现是占位符，将在未来任务中替换
-fn create_platform_layer(
-    secure_storage: Arc<dyn SecureStoragePort>,
-    config_dir: &PathBuf,
-    platform_cmd_tx: PlatformCommandSender,
-    encryption: Arc<dyn EncryptionPort>,
-    blob_repository: Arc<dyn BlobRepositoryPort>,
-    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
-    clock: Arc<dyn ClockPort>,
-    storage_config: Arc<ClipboardStorageConfig>,
-    identity_store: Arc<dyn IdentityStorePort>,
-    file_cache_dir: PathBuf,
-) -> WiringResult<PlatformLayer> {
-    // Create system clipboard implementation (platform-specific)
-    // 创建系统剪贴板实现（平台特定）
-    let clipboard_impl = LocalClipboard::new()
-        .map_err(|e| WiringError::ClipboardInit(format!("Failed to create clipboard: {}", e)))?;
-    let clipboard_impl = Arc::new(clipboard_impl);
-    let clipboard: Arc<dyn PlatformClipboardPort> = clipboard_impl.clone();
-    let system_clipboard: Arc<dyn SystemClipboardPort> = clipboard_impl;
-
-    // Create device identity (filesystem-backed UUID)
-    // 创建设备身份（基于文件系统的 UUID）
-    let device_identity = LocalDeviceIdentity::load_or_create(config_dir.clone()).map_err(|e| {
-        WiringError::SettingsInit(format!("Failed to create device identity: {}", e))
-    })?;
-    let device_identity: Arc<dyn DeviceIdentityPort> = Arc::new(device_identity);
-
-    // Create blob store (filesystem-based)
-    // 创建 blob 存储（基于文件系统）
-    let blob_store_dir = config_dir.join("blobs");
-
-    // Purge old blob files after V2 migration (old JSON format files are incompatible
-    // with the new UCBL binary format). Uses a sentinel file so this only runs once.
-    let sentinel = blob_store_dir.join(".v2_migrated");
-    if blob_store_dir.exists() && !sentinel.exists() {
-        match std::fs::read_dir(&blob_store_dir) {
-            Ok(entries) => {
-                let mut purged = 0u64;
-                let mut errors = 0u64;
-                for entry_result in entries {
-                    let entry = match entry_result {
-                        Ok(e) => e,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to read directory entry during V2 migration");
-                            errors += 1;
-                            continue;
-                        }
-                    };
-                    if entry.path().is_file() {
-                        let path = entry.path();
-                        // Skip the sentinel file and valid V2 blobs
-                        if path.file_name().map_or(false, |n| n == ".v2_migrated") {
-                            continue;
-                        }
-                        if is_v2_blob(&path) {
-                            continue;
-                        }
-                        if let Err(e) = std::fs::remove_file(&path) {
-                            tracing::warn!(
-                                path = %path.display(),
-                                error = %e,
-                                "Failed to purge old blob file"
-                            );
-                            errors += 1;
-                        } else {
-                            purged += 1;
-                        }
-                    }
-                }
-                if purged > 0 {
-                    tracing::info!(
-                        count = purged,
-                        "Purged old blob files (V2 format migration)"
-                    );
-                }
-
-                // Only mark migration complete when ALL files were handled successfully.
-                if errors == 0 {
-                    if let Err(e) = std::fs::File::create(&sentinel) {
-                        tracing::warn!(error = %e, "Failed to create V2 migration sentinel");
-                    }
-                } else {
-                    tracing::warn!(
-                        errors = errors,
-                        "Skipping V2 migration sentinel: {} errors during cleanup, will retry next startup",
-                        errors
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to read blob directory for cleanup");
-            }
-        }
-    }
-
-    let blob_store: Arc<dyn BlobStorePort> = Arc::new(FilesystemBlobStore::new(blob_store_dir));
-
-    // Create clipboard representation normalizer (real implementation)
-    // 创建剪贴板表示规范化器（真实实现）
-    let representation_normalizer: Arc<dyn ClipboardRepresentationNormalizerPort> =
-        Arc::new(ClipboardRepresentationNormalizer::new(storage_config));
-
-    let encryption_session: Arc<dyn EncryptionSessionPort> =
-        Arc::new(InMemoryEncryptionSessionPort::new());
-    let policy_resolver = Arc::new(ResolveConnectionPolicy::new(paired_device_repo.clone()));
-    let transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort> =
-        Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter);
-    let transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort> =
-        Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter);
-    let libp2p_network = Arc::new(
-        Libp2pNetworkAdapter::new(
-            identity_store,
-            policy_resolver,
-            encryption_session.clone(),
-            transfer_decryptor,
-            transfer_encryptor,
-            file_cache_dir,
-        )
-        .map_err(|e| {
-            WiringError::NetworkInit(format!("Failed to initialize libp2p identity: {e}"))
-        })?,
-    );
-    info!(peer_id = %libp2p_network.local_peer_id(), "Loaded libp2p identity");
-    let network_ports = Arc::new(NetworkPorts {
-        clipboard: libp2p_network.clone(),
-        peers: libp2p_network.clone(),
-        pairing: libp2p_network.clone(),
-        events: libp2p_network.clone(),
-        file_transfer: libp2p_network.clone(),
-    });
-
-    // Wrap blob_store with encryption decorator
-    // 用加密装饰器包装 blob_store
-    let encrypted_blob_store: Arc<dyn BlobStorePort> = Arc::new(EncryptedBlobStore::new(
-        blob_store.clone(),
-        encryption,
-        encryption_session.clone(),
-    ));
-
-    // Create blob writer using encrypted blob store
-    // 使用加密 blob 存储创建 blob 写入器
-    let blob_writer: Arc<dyn BlobWriterPort> = Arc::new(BlobWriter::new(
-        encrypted_blob_store.clone(),
-        blob_repository,
-        clock,
-    ));
-
-    // Create watcher control
-    // 创建监控器控制
-    let watcher_control: Arc<dyn WatcherControlPort> =
-        Arc::new(InMemoryWatcherControl::new(platform_cmd_tx));
-
-    // Create key scope
-    // 创建密钥范围
-    let key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort> =
-        Arc::new(uc_platform::key_scope::DefaultKeyScope::new());
-
-    Ok(PlatformLayer {
-        clipboard,
-        system_clipboard,
-        secure_storage,
-        network_ports,
-        libp2p_network,
-        device_identity,
-        representation_normalizer,
-        blob_writer,
-        blob_store: encrypted_blob_store,
-        encryption_session,
-        watcher_control,
-        key_scope,
-    })
-}
-
-/// Resolves the application's default directories for storing data and configuration.
-///
-/// Returns an AppDirs adapter populated with platform-appropriate paths for the application.
-///
-/// # Errors
-///
-/// Returns `WiringError::ConfigInit` if the platform adapter fails to determine the directories.
-///
-/// # Examples
-///
-/// ```ignore
-/// use uc_tauri::bootstrap::wiring::get_default_app_dirs;
-///
-/// let dirs = get_default_app_dirs().expect("failed to get app dirs");
-/// // `dirs` contains platform-specific paths such as config, data, and cache roots
-/// assert!(!dirs.app_name.is_empty());
-/// ```
-fn get_default_app_dirs() -> WiringResult<uc_core::app_dirs::AppDirs> {
-    let adapter = DirsAppDirsAdapter::new();
-    adapter
-        .get_app_dirs()
-        .map_err(|e| WiringError::ConfigInit(e.to_string()))
-}
-
-/// Get resolved storage paths from configuration.
-///
-/// Builds `AppPaths` through a single construction path:
-/// 1. `resolve_app_dirs()` adjusts both roots together based on config
-/// 2. `AppPaths::from_app_dirs()` defines all subdirectories (single source of truth)
-/// 3. Individual path overrides (db_path, vault_dir) applied on top
-///
-/// # Errors
-///
-/// Returns `WiringError::ConfigInit` if the platform adapter fails to determine the directories.
-pub fn get_storage_paths(
-    config: &uc_core::config::AppConfig,
-) -> WiringResult<uc_app::app_paths::AppPaths> {
-    let platform_dirs = get_default_app_dirs()?;
-    resolve_app_paths(&platform_dirs, config)
-}
-
-/// Resolve the effective `AppDirs` by applying config overrides.
-///
-/// When config specifies a `database_path`, its parent becomes the new `app_data_root`,
-/// and `app_cache_root` is co-located under it as `app_data_root/cache`.
-/// This ensures dev mode (with `config.toml`) keeps all data in one place.
-///
-/// When config is empty (production), platform defaults are used unchanged.
-fn resolve_app_dirs(
-    platform_dirs: &uc_core::app_dirs::AppDirs,
-    config: &AppConfig,
-) -> uc_core::app_dirs::AppDirs {
-    let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
-    let config_overrides_root = !config.database_path.as_os_str().is_empty() && !is_in_memory_db;
-
-    if config_overrides_root {
-        let raw_root = config
-            .database_path
-            .parent()
-            .unwrap_or(&config.database_path)
-            .to_path_buf();
-        // Ensure the data root is absolute — relative paths break clipboard
-        // file writes (CF_HDROP on Windows and NSPasteboard on macOS require
-        // absolute paths).
-        let abs_root = if raw_root.is_relative() {
-            std::env::current_dir().unwrap_or_default().join(&raw_root)
-        } else {
-            raw_root
-        };
-        let app_data_root = apply_profile_suffix(abs_root);
-        // When config overrides the data root, co-locate cache under it.
-        // This ensures dev mode keeps all data in one place (e.g. .app_data/).
-        let app_cache_root = app_data_root.join("cache");
-        uc_core::app_dirs::AppDirs {
-            app_data_root,
-            app_cache_root,
-        }
-    } else {
-        platform_dirs.clone()
-    }
-}
-
-/// Build `AppPaths` from platform dirs and config overrides.
-///
-/// Always builds through `AppPaths::from_app_dirs()` (single construction path),
-/// then applies individual field overrides for db_path and vault_dir if config
-/// specifies custom values.
-fn resolve_app_paths(
-    platform_dirs: &uc_core::app_dirs::AppDirs,
-    config: &AppConfig,
-) -> WiringResult<uc_app::app_paths::AppPaths> {
-    let resolved_dirs = resolve_app_dirs(platform_dirs, config);
-    let mut paths = uc_app::app_paths::AppPaths::from_app_dirs(&resolved_dirs);
-
-    // Apply individual path overrides from config
-    let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
-
-    if is_in_memory_db {
-        paths.db_path = config.database_path.clone();
-    } else if !config.database_path.as_os_str().is_empty() {
-        let db_file_name = config
-            .database_path
-            .file_name()
-            .map(|name| name.to_os_string())
-            .unwrap_or_else(|| std::ffi::OsString::from("uniclipboard.db"));
-        paths.db_path = paths.app_data_root.join(db_file_name);
-    }
-
-    // Vault dir override
-    if !config.vault_key_path.as_os_str().is_empty() {
-        let configured_vault_root = config
-            .vault_key_path
-            .parent()
-            .unwrap_or(&config.vault_key_path)
-            .to_path_buf();
-
-        if config.database_path.as_os_str().is_empty() {
-            paths.vault_dir = apply_profile_suffix(configured_vault_root);
-        } else {
-            let configured_db_root = config
-                .database_path
-                .parent()
-                .unwrap_or(&config.database_path)
-                .to_path_buf();
-
-            if configured_vault_root.starts_with(&configured_db_root) {
-                let relative = configured_vault_root
-                    .strip_prefix(&configured_db_root)
-                    .unwrap_or(std::path::Path::new(""));
-                paths.vault_dir = paths.app_data_root.join(relative);
-            } else {
-                paths.vault_dir = apply_profile_suffix(configured_vault_root);
-            }
-        }
-    }
-
-    Ok(paths)
-}
-
-fn apply_profile_suffix(path: PathBuf) -> PathBuf {
-    let profile = match std::env::var("UC_PROFILE") {
-        Ok(value) if !value.is_empty() => value.replace('/', "_").replace('\\', "_"),
-        _ => return path,
-    };
-
-    let file_name = match path.file_name().and_then(|name| name.to_str()) {
-        Some(name) => name.to_string(),
-        None => return path,
-    };
-
-    let mut updated = path;
-    updated.set_file_name(format!("{file_name}_{profile}"));
-    updated
-}
-
-/// Wires and constructs the application's dependency graph, returning ready-to-use dependencies.
-///
-/// On success returns `WiredDependencies` containing AppDeps plus background runtime components.
-/// AppDeps includes all infrastructure and platform components
-/// (database pool, repositories, security, platform adapters, materializers, settings, etc.)
-/// wrapped for shared use.
-///
-/// # Errors
-///
-/// Returns a `WiringError` when any required dependency cannot be constructed, for example:
-/// - `WiringError::DatabaseInit` for database/pool initialization failures
-/// - `WiringError::SecureStorageInit` for secure storage creation failures
-/// - `WiringError::ClipboardInit` for clipboard adapter failures
-/// - `WiringError::NetworkInit` for network adapter failures
-/// - `WiringError::BlobStorageInit` for blob store initialization failures
-/// - `WiringError::SettingsInit` for settings repository failures
-/// - `WiringError::ConfigInit` for application directory / configuration discovery failures
-///
-/// # Examples
-///
-/// ```ignore
-/// use uc_core::config::AppConfig;
-/// use uc_tauri::bootstrap::wiring::wire_dependencies;
-///
-/// // The function will either return fully wired dependencies or a WiringError describing
-/// // what failed during construction.
-/// let config = AppConfig::empty();
-/// let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(10);
-/// match wire_dependencies(&config, cmd_tx) {
-///     Ok(_wired) => { /* ready to run the application */ }
-///     Err(_err) => { /* handle initialization failure */ }
-/// }
-/// ```
-pub fn wire_dependencies(
-    config: &AppConfig,
-    platform_cmd_tx: PlatformCommandSender,
-) -> WiringResult<WiredDependencies> {
-    wire_dependencies_with_identity_store(config, platform_cmd_tx, None)
-}
-
-/// Wires dependencies with a caller-provided identity store.
-///
-/// This is primarily intended for tests or environments without system secure storage.
-pub fn wire_dependencies_with_identity_store(
-    config: &AppConfig,
-    platform_cmd_tx: PlatformCommandSender,
-    identity_store: Option<Arc<dyn IdentityStorePort>>,
-) -> WiringResult<WiredDependencies> {
-    // Step 1: Create database connection pool
-    // 步骤 1：创建数据库连接池
-    //
-    // Defensive: Use system default if database_path is empty
-    // 防御性编程：如果 database_path 为空，使用系统默认值
-    let platform_dirs = get_default_app_dirs()?;
-    let paths = resolve_app_paths(&platform_dirs, config)?;
-
-    let db_path = paths.db_path;
-
-    let db_pool = create_db_pool(&db_path)?;
-
-    // Step 2: Create infrastructure layer implementations
-    // 步骤 2：创建基础设施层实现
-    //
-    // Create vault path from config (use vault_key_path parent directory)
-    // If config path is empty, use system config directory as fallback
-    // 从配置创建 vault 路径（使用 vault_key_path 的父目录）
-    // 如果配置路径为空，使用系统配置目录作为后备
-    let vault_path = paths.vault_dir;
-
-    let settings_path = paths.settings_path;
-
-    let secure_storage =
-        uc_platform::secure_storage::create_default_secure_storage_in_app_data_root(
-            paths.app_data_root.clone(),
-        )
-        .map_err(|e| WiringError::SecureStorageInit(e.to_string()))?;
-
-    let identity_store = identity_store.unwrap_or_else(|| {
-        Arc::new(FileIdentityStore::new(paths.app_data_root.clone())) as Arc<dyn IdentityStorePort>
-    });
-
-    let infra = create_infra_layer(db_pool, &vault_path, &settings_path, secure_storage.clone())?;
-
-    // Step 3: Create platform layer implementations
-    // 步骤 3：创建平台层实现
-    let storage_config = Arc::new(ClipboardStorageConfig::defaults());
-    let platform = create_platform_layer(
-        secure_storage,
-        &vault_path,
-        platform_cmd_tx,
-        infra.encryption.clone(),
-        infra.blob_repository.clone(),
-        infra.paired_device_repo.clone(),
-        infra.clock.clone(),
-        storage_config.clone(),
-        identity_store,
-        paths.file_cache_dir.clone(),
-    )?;
-
-    // Step 3.5: Wrap ports with encryption decorators
-    // 步骤 3.5：用加密装饰器包装端口
-
-    // Wrap clipboard_event_repo with encryption decorator
-    let encrypting_event_writer: Arc<dyn ClipboardEventWriterPort> =
-        Arc::new(EncryptingClipboardEventWriter::new(
-            infra.clipboard_event_repo.clone(),
-            infra.encryption.clone(),
-            platform.encryption_session.clone(),
-        ));
-
-    // Wrap representation_repo with decryption decorator
-    let decrypting_rep_repo: Arc<dyn ClipboardRepresentationRepositoryPort> =
-        Arc::new(DecryptingClipboardRepresentationRepository::new(
-            infra.representation_repo.clone(),
-            infra.encryption.clone(),
-            platform.encryption_session.clone(),
-        ));
-
-    // Step 3.6: Create background processing components
-    // 步骤 3.6：创建后台处理组件
-
-    // Create representation cache
-    let representation_cache = Arc::new(RepresentationCache::new(
-        storage_config.cache_max_entries,
-        storage_config.cache_max_bytes,
-    ));
-    let representation_cache_port: Arc<dyn RepresentationCachePort> = representation_cache.clone();
-
-    // Create spool manager
-    let spool_dir = paths.spool_dir.clone();
-    let spool_manager = Arc::new(
-        SpoolManager::new(spool_dir.clone(), storage_config.spool_max_bytes)
-            .map_err(|e| WiringError::BlobStorageInit(format!("Failed to create spool: {}", e)))?,
-    );
-
-    // Create channels for background processing
-    let (spool_tx, spool_rx) = mpsc::channel::<SpoolRequest>(100);
-    let spool_queue: Arc<dyn SpoolQueuePort> = Arc::new(MpscSpoolQueue::new(spool_tx));
-    let (worker_tx, worker_rx) = mpsc::channel::<RepresentationId>(100);
-
-    let clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort> =
-        Arc::new(InMemoryClipboardChangeOrigin::new());
-
-    // Step 4: Construct AppDeps with all dependencies
-    // 步骤 4：使用所有依赖构造 AppDeps
-    let deps = AppDeps {
-        clipboard: ClipboardPorts {
-            clipboard: platform.clipboard,
-            system_clipboard: platform.system_clipboard,
-            clipboard_entry_repo: infra.clipboard_entry_repo,
-            clipboard_event_repo: encrypting_event_writer,
-            representation_repo: decrypting_rep_repo,
-            representation_normalizer: platform.representation_normalizer,
-            selection_repo: infra.selection_repo,
-            representation_policy: Arc::new(SelectRepresentationPolicyV1::new()),
-            representation_cache: representation_cache_port,
-            spool_queue,
-            clipboard_change_origin,
-            worker_tx,
-        },
-        security: SecurityPorts {
-            encryption: infra.encryption,
-            encryption_session: platform.encryption_session,
-            encryption_state: infra.encryption_state,
-            key_scope: platform.key_scope,
-            secure_storage: platform.secure_storage,
-            key_material: infra.key_material,
-        },
-        device: DevicePorts {
-            device_repo: infra.device_repo,
-            device_identity: platform.device_identity,
-            paired_device_repo: infra.paired_device_repo,
-        },
-        network_ports: platform.network_ports,
-        network_control: platform.libp2p_network.clone(),
-        setup_status: infra.setup_status,
-        storage: StoragePorts {
-            blob_store: platform.blob_store,
-            blob_repository: infra.blob_repository,
-            blob_writer: platform.blob_writer,
-            thumbnail_repo: infra.thumbnail_repo,
-            thumbnail_generator: infra.thumbnail_generator,
-            file_transfer_repo: infra.file_transfer_repo,
-        },
-        settings: infra.settings_repo,
-        system: SystemPorts {
-            clock: infra.clock,
-            hash: infra.hash,
-            file_manager: Arc::new(uc_platform::file_manager::NativeFileManagerAdapter::new()),
-            cache_fs: Arc::new(uc_infra::fs::TokioCacheFsAdapter::new()),
-        },
-    };
-
-    Ok(WiredDependencies {
-        deps,
-        background: BackgroundRuntimeDeps {
-            libp2p_network: platform.libp2p_network.clone(),
-            representation_cache,
-            spool_manager,
-            spool_rx,
-            worker_rx,
-            spool_dir,
-            file_cache_dir: paths.file_cache_dir.clone(),
-            spool_ttl_days: storage_config.spool_ttl_days,
-            worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
-            worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
-        },
-        watcher_control: platform.watcher_control,
-    })
-}
-
 /// Start background spooler and blob worker tasks.
 /// 启动后台假脱机写入和 blob 物化任务。
 ///
 /// All long-lived tasks are spawned through the `TaskRegistry` for centralized
 /// lifecycle management and graceful shutdown via cooperative cancellation.
-pub fn start_background_tasks<R: Runtime>(
+pub fn start_background_tasks(
     background: BackgroundRuntimeDeps,
     deps: &AppDeps,
-    app_handle: Option<AppHandle<R>>,
     event_emitter: Arc<dyn HostEventEmitterPort>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
     pairing_action_rx: mpsc::Receiver<PairingAction>,
@@ -1125,8 +156,6 @@ pub fn start_background_tasks<R: Runtime>(
 
     info!("Starting background clipboard spooler and blob worker");
 
-    let pairing_app_handle = app_handle.clone();
-    let clipboard_app_handle = app_handle.clone();
     let clipboard_emitter = event_emitter.clone();
     let pairing_emitter = event_emitter.clone();
     let space_access_emitter = event_emitter.clone();
@@ -1338,7 +367,6 @@ pub fn start_background_tasks<R: Runtime>(
                                 run_clipboard_receive_loop(
                                     clipboard_rx,
                                     &sync_inbound_usecase,
-                                    clipboard_app_handle.clone(),
                                     clipboard_emitter.clone(),
                                     Some(clipboard_transfer_tracker.clone()),
                                     Some(clipboard_clock.clone()),
@@ -1407,7 +435,6 @@ pub fn start_background_tasks<R: Runtime>(
 
         // --- Pairing action loop (long-lived, channel-driven) ---
         let action_network = pairing_transport.clone();
-        let action_app_handle = pairing_app_handle.clone();
         let action_emitter = pairing_emitter.clone();
         let action_orchestrator = pairing_orchestrator.clone();
         let action_space_access_orchestrator = pairing_space_access_orchestrator.clone();
@@ -1418,7 +445,6 @@ pub fn start_background_tasks<R: Runtime>(
                 run_pairing_action_loop(
                     pairing_action_rx,
                     action_network,
-                    action_app_handle,
                     action_emitter,
                     action_orchestrator,
                     action_space_access_orchestrator,
@@ -1460,7 +486,6 @@ pub fn start_background_tasks<R: Runtime>(
                             run_pairing_event_loop(
                                 event_rx,
                                 pairing_orchestrator.clone(),
-                                pairing_app_handle.clone(),
                                 pairing_emitter.clone(),
                                 peer_directory.clone(),
                                 pairing_space_access_orchestrator.clone(),
@@ -1622,10 +647,9 @@ fn new_sync_inbound_clipboard_usecase(
     )
 }
 
-async fn run_clipboard_receive_loop<R: Runtime>(
+async fn run_clipboard_receive_loop(
     mut clipboard_rx: mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>,
     usecase: &SyncInboundClipboardUseCase,
-    _app_handle: Option<AppHandle<R>>,
     event_emitter: Arc<dyn HostEventEmitterPort>,
     transfer_tracker: Option<Arc<uc_app::usecases::file_sync::TrackInboundTransfersUseCase>>,
     clock: Option<Arc<dyn uc_core::ports::ClockPort>>,
@@ -2063,35 +1087,6 @@ async fn run_space_access_completion_loop(
     }
 }
 
-const DEFAULT_PAIRING_DEVICE_NAME: &str = "Uniclipboard Device";
-
-pub async fn resolve_pairing_device_name(settings: Arc<dyn SettingsPort>) -> String {
-    match settings.load().await {
-        Ok(settings) => {
-            let name = settings.general.device_name.unwrap_or_default();
-            if name.trim().is_empty() {
-                DEFAULT_PAIRING_DEVICE_NAME.to_string()
-            } else {
-                name
-            }
-        }
-        Err(err) => {
-            warn!(error = %err, "Failed to load settings for pairing device name");
-            DEFAULT_PAIRING_DEVICE_NAME.to_string()
-        }
-    }
-}
-
-pub async fn resolve_pairing_config(settings: Arc<dyn SettingsPort>) -> PairingConfig {
-    match settings.load().await {
-        Ok(settings) => PairingConfig::from_settings(&settings),
-        Err(err) => {
-            warn!(error = %err, "Failed to load settings for pairing config");
-            PairingConfig::from_settings(&Settings::default())
-        }
-    }
-}
-
 async fn resolve_device_name_for_peer(
     network: &Arc<dyn PeerDirectoryPort>,
     peer_id: &str,
@@ -2210,10 +1205,9 @@ async fn restore_file_to_clipboard_after_transfer(
     }
 }
 
-async fn run_pairing_event_loop<R: Runtime>(
+async fn run_pairing_event_loop(
     mut event_rx: mpsc::Receiver<NetworkEvent>,
     orchestrator: Arc<PairingOrchestrator>,
-    app_handle: Option<AppHandle<R>>,
     event_emitter: Arc<dyn HostEventEmitterPort>,
     peer_directory: Arc<dyn PeerDirectoryPort>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
@@ -2244,7 +1238,6 @@ async fn run_pairing_event_loop<R: Runtime>(
                     &space_access_runtime_ports,
                     peer_id,
                     message,
-                    app_handle.as_ref(),
                     event_emitter.as_ref(),
                 )
                 .await;
@@ -2409,7 +1402,6 @@ async fn run_pairing_event_loop<R: Runtime>(
                 let early_cache_for_spawn = early_completion_cache.clone();
 
                 // Clone values before spawn takes ownership
-                let _app_handle_clone = app_handle.clone();
                 let emitter_for_spawn = event_emitter.clone();
                 let span_transfer_id = transfer_id.clone();
                 let system_clipboard_clone = system_clipboard.clone();
@@ -2591,13 +1583,12 @@ async fn run_pairing_event_loop<R: Runtime>(
     }
 }
 
-async fn handle_pairing_message<R: Runtime>(
+async fn handle_pairing_message(
     orchestrator: &PairingOrchestrator,
     space_access_orchestrator: &SpaceAccessOrchestrator,
     space_access_runtime_ports: &RuntimeSpaceAccessPorts,
     peer_id: String,
     message: PairingMessage,
-    _app_handle: Option<&AppHandle<R>>, // TODO(plan-03): remove after file split
     emitter: &dyn HostEventEmitterPort,
 ) {
     match message {
@@ -2949,10 +1940,9 @@ async fn handle_pairing_message<R: Runtime>(
     }
 }
 
-async fn run_pairing_action_loop<R: Runtime>(
+async fn run_pairing_action_loop(
     mut action_rx: mpsc::Receiver<PairingAction>,
     network: Arc<dyn PairingTransportPort>,
-    _app_handle: Option<AppHandle<R>>, // TODO(plan-03): remove after file split
     emitter: Arc<dyn HostEventEmitterPort>,
     orchestrator: Arc<PairingOrchestrator>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
@@ -3287,7 +2277,9 @@ mod tests {
     use tauri::{Emitter, Listener, Wry};
     use tokio::sync::{mpsc, Mutex as TokioMutex};
     use tracing_subscriber::fmt::writer::MakeWriter;
+    // Types from assembly.rs that are needed for tests in this module
     use uc_app::usecases::PairingConfig;
+    use uc_app::NetworkPorts;
     use uc_core::network::paired_device::{PairedDevice, PairingState};
     use uc_core::network::protocol::{PairingChallenge, PairingRequest};
     use uc_core::network::{ConnectedPeer, DiscoveredPeer, PairingMessage};
@@ -3296,8 +2288,18 @@ mod tests {
         PeerDirectoryPort, TransferCryptoError,
     };
     use uc_core::security::model::{EncryptionError, MasterKey};
+    use uc_core::AppConfig;
     use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+    use uc_infra::config::ClipboardStorageConfig;
+    use uc_infra::db::executor::DieselSqliteExecutor;
+    use uc_infra::db::mappers::blob_mapper::BlobRowMapper;
+    use uc_infra::db::mappers::paired_device_mapper::PairedDeviceRowMapper;
+    use uc_infra::db::pool::init_db_pool;
+    use uc_infra::db::repositories::{DieselBlobRepository, DieselPairedDeviceRepository};
+    use uc_infra::security::EncryptionRepository;
+    use uc_infra::SystemClock;
     use uc_platform::ports::IdentityStoreError;
+    use uc_platform::ports::{IdentityStorePort, WatcherControlPort};
     use uc_platform::test_support::with_uc_profile;
 
     #[test]
@@ -4322,10 +3324,9 @@ mod tests {
         .expect("send clipboard message");
         drop(tx);
 
-        run_clipboard_receive_loop::<tauri::test::MockRuntime>(
+        run_clipboard_receive_loop(
             rx,
             &usecase,
-            None,
             Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter),
             None,
             None,
@@ -4378,16 +3379,7 @@ mod tests {
         drop(tx);
 
         let emitter = Arc::new(RecordingEmitter::default());
-        run_clipboard_receive_loop::<tauri::test::MockRuntime>(
-            rx,
-            &usecase,
-            None,
-            emitter.clone(),
-            None,
-            None,
-            None,
-        )
-        .await;
+        run_clipboard_receive_loop(rx, &usecase, emitter.clone(), None, None, None).await;
 
         let events = emitter.events.lock().unwrap();
         assert_eq!(events.len(), 1);
@@ -4428,10 +3420,9 @@ mod tests {
         let runtime_ports =
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
 
-        let loop_handle = tokio::spawn(run_pairing_event_loop::<Wry>(
+        let loop_handle = tokio::spawn(run_pairing_event_loop(
             event_rx,
             orchestrator.clone(),
-            None,
             Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter),
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
@@ -4495,7 +3486,7 @@ mod tests {
         })
         .to_string();
 
-        handle_pairing_message::<Wry>(
+        handle_pairing_message(
             orchestrator.as_ref(),
             space_access_orchestrator.as_ref(),
             &runtime_ports,
@@ -4504,7 +3495,6 @@ mod tests {
                 session_id: "session-offer-route".to_string(),
                 reason: Some(reason),
             }),
-            None,
             &NoopEmitter,
         )
         .await;
@@ -4545,7 +3535,7 @@ mod tests {
         })
         .to_string();
 
-        handle_pairing_message::<Wry>(
+        handle_pairing_message(
             orchestrator.as_ref(),
             space_access_orchestrator.as_ref(),
             &runtime_ports,
@@ -4554,7 +3544,6 @@ mod tests {
                 session_id: "session-offer-waiting".to_string(),
                 reason: Some(reason),
             }),
-            None,
             &NoopEmitter,
         )
         .await;
@@ -4599,7 +3588,7 @@ mod tests {
         })
         .to_string();
 
-        handle_pairing_message::<Wry>(
+        handle_pairing_message(
             orchestrator.as_ref(),
             space_access_orchestrator.as_ref(),
             &runtime_ports,
@@ -4608,7 +3597,6 @@ mod tests {
                 session_id: "session-proof-route".to_string(),
                 reason: Some(invalid_nonce_reason),
             }),
-            None,
             &NoopEmitter,
         )
         .await;
@@ -4628,7 +3616,7 @@ mod tests {
         })
         .to_string();
 
-        handle_pairing_message::<Wry>(
+        handle_pairing_message(
             orchestrator.as_ref(),
             space_access_orchestrator.as_ref(),
             &runtime_ports,
@@ -4637,7 +3625,6 @@ mod tests {
                 session_id: "session-proof-route".to_string(),
                 reason: Some(valid_nonce_reason),
             }),
-            None,
             &NoopEmitter,
         )
         .await;
@@ -4716,7 +3703,7 @@ mod tests {
         })
         .to_string();
 
-        handle_pairing_message::<Wry>(
+        handle_pairing_message(
             orchestrator.as_ref(),
             space_access_orchestrator.as_ref(),
             &runtime_ports,
@@ -4725,7 +3712,6 @@ mod tests {
                 session_id: "session-proof-valid".to_string(),
                 reason: Some(reason),
             }),
-            None,
             &NoopEmitter,
         )
         .await;
@@ -4770,7 +3756,7 @@ mod tests {
         })
         .to_string();
 
-        handle_pairing_message::<Wry>(
+        handle_pairing_message(
             orchestrator.as_ref(),
             space_access_orchestrator.as_ref(),
             &runtime_ports,
@@ -4779,7 +3765,6 @@ mod tests {
                 session_id: "session-result-route".to_string(),
                 reason: Some(reason),
             }),
-            None,
             &NoopEmitter,
         )
         .await;
@@ -4827,7 +3812,7 @@ mod tests {
         })
         .to_string();
 
-        handle_pairing_message::<Wry>(
+        handle_pairing_message(
             orchestrator.as_ref(),
             space_access_orchestrator.as_ref(),
             &runtime_ports,
@@ -4836,7 +3821,6 @@ mod tests {
                 session_id: "session-result-granted".to_string(),
                 reason: Some(reason),
             }),
-            None,
             &NoopEmitter,
         )
         .await;
@@ -4969,10 +3953,9 @@ mod tests {
         let runtime_ports =
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
 
-        let loop_handle = tokio::spawn(run_pairing_event_loop::<tauri::test::MockRuntime>(
+        let loop_handle = tokio::spawn(run_pairing_event_loop(
             event_rx,
             orchestrator,
-            Some(app_handle.clone()),
             Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
                 app_handle.clone(),
             )),
@@ -5042,10 +4025,9 @@ mod tests {
         let runtime_ports =
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
 
-        let loop_handle = tokio::spawn(run_pairing_event_loop::<tauri::test::MockRuntime>(
+        let loop_handle = tokio::spawn(run_pairing_event_loop(
             event_rx,
             orchestrator,
-            Some(app_handle.clone()),
             Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
                 app_handle.clone(),
             )),
@@ -5142,10 +4124,9 @@ mod tests {
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
         let emitter = Arc::new(RecordingEmitter::default());
 
-        let loop_handle = tokio::spawn(run_pairing_event_loop::<tauri::test::MockRuntime>(
+        let loop_handle = tokio::spawn(run_pairing_event_loop(
             event_rx,
             orchestrator,
-            None,
             emitter.clone(),
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
@@ -5217,10 +4198,9 @@ mod tests {
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
         let emitter = Arc::new(RecordingEmitter::default());
 
-        let loop_handle = tokio::spawn(run_pairing_event_loop::<tauri::test::MockRuntime>(
+        let loop_handle = tokio::spawn(run_pairing_event_loop(
             event_rx,
             orchestrator,
-            None,
             emitter.clone(),
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
@@ -5408,10 +4388,9 @@ mod tests {
         let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
             app_handle.clone(),
         ));
-        let loop_handle = tokio::spawn(run_pairing_action_loop::<tauri::test::MockRuntime>(
+        let loop_handle = tokio::spawn(run_pairing_action_loop(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
-            Some(app_handle.clone()),
             emitter,
             orchestrator.clone(),
             space_access_orchestrator,
@@ -5486,10 +4465,9 @@ mod tests {
         let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
             app_handle.clone(),
         ));
-        let loop_handle = tokio::spawn(run_pairing_action_loop::<tauri::test::MockRuntime>(
+        let loop_handle = tokio::spawn(run_pairing_action_loop(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
-            Some(app_handle.clone()),
             emitter,
             orchestrator.clone(),
             space_access_orchestrator,
@@ -5553,10 +4531,9 @@ mod tests {
         let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
             app_handle.clone(),
         ));
-        let loop_handle = tokio::spawn(run_pairing_action_loop::<tauri::test::MockRuntime>(
+        let loop_handle = tokio::spawn(run_pairing_action_loop(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
-            Some(app_handle.clone()),
             emitter,
             orchestrator.clone(),
             space_access_orchestrator,
@@ -5620,10 +4597,9 @@ mod tests {
         let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
             app_handle.clone(),
         ));
-        let loop_handle = tokio::spawn(run_pairing_action_loop::<tauri::test::MockRuntime>(
+        let loop_handle = tokio::spawn(run_pairing_action_loop(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
-            Some(app_handle.clone()),
             emitter,
             orchestrator.clone(),
             space_access_orchestrator,
@@ -5695,10 +4671,9 @@ mod tests {
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
 
         let (action_tx, action_rx) = mpsc::channel(4);
-        let loop_handle = tokio::spawn(run_pairing_action_loop::<Wry>(
+        let loop_handle = tokio::spawn(run_pairing_action_loop(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
-            None,
             Arc::new(NoopEmitter),
             orchestrator,
             space_access_orchestrator,
@@ -5776,10 +4751,9 @@ mod tests {
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
 
         let (action_tx, action_rx) = mpsc::channel(2);
-        let loop_handle = tokio::spawn(run_pairing_action_loop::<Wry>(
+        let loop_handle = tokio::spawn(run_pairing_action_loop(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
-            None,
             Arc::new(NoopEmitter),
             orchestrator,
             space_access_orchestrator,

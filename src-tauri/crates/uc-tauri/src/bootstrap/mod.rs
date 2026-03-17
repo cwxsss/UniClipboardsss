@@ -1,6 +1,7 @@
 //! Bootstrap module - Application initialization and wiring
 //! Bootstrap 模块 - 应用初始化和连接
 
+pub mod assembly;
 pub mod clipboard_integration_mode;
 pub mod config;
 pub mod file_transfer_wiring;
@@ -17,7 +18,10 @@ pub use clipboard_integration_mode::resolve_clipboard_integration_mode;
 pub use config::load_config;
 pub use init::ensure_default_device_name;
 pub use runtime::{create_app, create_runtime, AppRuntime, SetupRuntimePorts, UseCases};
-pub use wiring::{
-    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, start_background_tasks,
-    wire_dependencies, BackgroundRuntimeDeps, WiredDependencies,
+// assembly.rs re-exports (pure dependency construction — zero tauri imports)
+pub use assembly::{
+    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
+    WiredDependencies,
 };
+// wiring.rs re-exports (Tauri event loops and background task management)
+pub use wiring::{start_background_tasks, BackgroundRuntimeDeps};

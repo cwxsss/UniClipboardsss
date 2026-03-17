@@ -753,7 +753,6 @@ fn run_app(config: AppConfig) {
             start_background_tasks(
                 background,
                 runtime_for_handler.wiring_deps(),
-                Some(app.handle().clone()),
                 runtime_for_handler.event_emitter(),
                 pairing_orchestrator.clone(),
                 pairing_action_rx,
