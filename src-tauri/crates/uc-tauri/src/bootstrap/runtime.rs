@@ -217,6 +217,7 @@ impl AppRuntime {
             &lifecycle_status,
             &setup_ports,
             app_handle.clone(),
+            event_emitter.clone(),
             clipboard_integration_mode,
             watcher_control.clone(),
         );
@@ -354,6 +355,7 @@ impl AppRuntime {
         lifecycle_status: &Arc<dyn uc_app::usecases::LifecycleStatusPort>,
         setup_ports: &SetupRuntimePorts,
         app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,
+        event_emitter: Arc<dyn uc_core::ports::host_event_emitter::HostEventEmitterPort>,
         clipboard_integration_mode: uc_core::clipboard::ClipboardIntegrationMode,
         watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
     ) -> Arc<SetupOrchestrator> {
@@ -415,8 +417,8 @@ impl AppRuntime {
             deps.device.paired_device_repo.clone(),
             Arc::new(StagedPairedDeviceStore::new()),
         )));
-        let setup_event_port = Arc::new(crate::bootstrap::wiring::TauriSetupEventPort::new(
-            app_handle,
+        let setup_event_port = Arc::new(crate::bootstrap::wiring::HostEventSetupPort::new(
+            event_emitter,
         ));
 
         Arc::new(SetupOrchestrator::new(

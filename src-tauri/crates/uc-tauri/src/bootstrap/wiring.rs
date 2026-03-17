@@ -37,13 +37,12 @@ use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{async_runtime, AppHandle, Emitter, Runtime};
+use tauri::{async_runtime, AppHandle, Runtime};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use super::task_registry::TaskRegistry;
 
-use crate::events::P2PPairingVerificationEvent;
 use uc_app::deps::NetworkPorts;
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::space_access::{
@@ -65,8 +64,9 @@ use uc_core::ports::clipboard::{
     SpoolQueuePort, SpoolRequest,
 };
 use uc_core::ports::host_event_emitter::{
-    ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort,
-    PeerConnectionHostEvent, PeerDiscoveryHostEvent, TransferHostEvent,
+    ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort, PairingHostEvent,
+    PairingVerificationKind, PeerConnectionHostEvent, PeerDiscoveryHostEvent, SetupHostEvent,
+    SpaceAccessHostEvent, TransferHostEvent,
 };
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::*;
@@ -172,38 +172,29 @@ pub struct BackgroundRuntimeDeps {
     pub worker_retry_backoff_ms: u64,
 }
 
-/// Tauri adapter that emits setup state changes to frontend listeners.
+/// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
 #[derive(Clone)]
-pub struct TauriSetupEventPort {
-    app_handle: Arc<std::sync::RwLock<Option<AppHandle>>>,
+pub struct HostEventSetupPort {
+    emitter: Arc<dyn HostEventEmitterPort>,
 }
 
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SetupStateChangedPayload {
-    state: SetupState,
-    session_id: Option<String>,
-}
-
-impl TauriSetupEventPort {
-    pub fn new(app_handle: Arc<std::sync::RwLock<Option<AppHandle>>>) -> Self {
-        Self { app_handle }
+impl HostEventSetupPort {
+    pub fn new(emitter: Arc<dyn HostEventEmitterPort>) -> Self {
+        Self { emitter }
     }
 }
 
 #[async_trait::async_trait]
-impl SetupEventPort for TauriSetupEventPort {
+impl SetupEventPort for HostEventSetupPort {
     async fn emit_setup_state_changed(&self, state: SetupState, session_id: Option<String>) {
-        let guard = self.app_handle.read().unwrap_or_else(|poisoned| {
-            error!("RwLock poisoned in setup event emission, recovering from poisoned state");
-            poisoned.into_inner()
-        });
-
-        if let Some(app) = guard.as_ref() {
-            let payload = SetupStateChangedPayload { state, session_id };
-            if let Err(err) = app.emit("setup-state-changed", payload) {
-                warn!(error = %err, "Failed to emit setup-state-changed event");
-            }
+        if let Err(err) = self
+            .emitter
+            .emit(HostEvent::Setup(SetupHostEvent::StateChanged {
+                state,
+                session_id,
+            }))
+        {
+            warn!(error = %err, "Failed to emit setup-state-changed");
         }
     }
 }
@@ -214,41 +205,12 @@ const CLIPBOARD_SUBSCRIBE_BACKOFF_MAX_MS: u64 = 30_000;
 const PAIRING_EVENTS_SUBSCRIBE_BACKOFF_INITIAL_MS: u64 = 250;
 const PAIRING_EVENTS_SUBSCRIBE_BACKOFF_MAX_MS: u64 = 30_000;
 
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct InboundClipboardSubscribeErrorPayload {
-    attempt: u32,
-    error: String,
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct InboundClipboardSubscribeRetryPayload {
-    attempt: u32,
-    retry_in_ms: u64,
-    error: String,
-}
-
 fn subscribe_backoff_ms(attempt: u32) -> u64 {
     let exponent = attempt.saturating_sub(1).min(16);
     let factor = 1u64 << exponent;
     CLIPBOARD_SUBSCRIBE_BACKOFF_INITIAL_MS
         .saturating_mul(factor)
         .min(CLIPBOARD_SUBSCRIBE_BACKOFF_MAX_MS)
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PairingEventsSubscribeFailurePayload {
-    attempt: u32,
-    retry_in_ms: u64,
-    error: String,
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PairingEventsSubscribeRecoveredPayload {
-    recovered_after_attempts: u32,
 }
 
 fn pairing_events_subscribe_backoff_ms(attempt: u32) -> u64 {
@@ -1164,10 +1126,10 @@ pub fn start_background_tasks<R: Runtime>(
     info!("Starting background clipboard spooler and blob worker");
 
     let pairing_app_handle = app_handle.clone();
-    let space_access_app_handle = app_handle.clone();
     let clipboard_app_handle = app_handle.clone();
     let clipboard_emitter = event_emitter.clone();
     let pairing_emitter = event_emitter.clone();
+    let space_access_emitter = event_emitter.clone();
     let pairing_space_access_orchestrator = space_access_orchestrator.clone();
     let representation_repo = deps.clipboard.representation_repo.clone();
     let worker_tx = deps.clipboard.worker_tx.clone();
@@ -1213,7 +1175,7 @@ pub fn start_background_tasks<R: Runtime>(
     let cleanup_file_cache_dir = inbound_file_cache_dir.clone();
     let reconcile_file_transfer_repo = deps.storage.file_transfer_repo.clone();
     let reconcile_clock = deps.system.clock.clone();
-    let reconcile_app_handle = app_handle.clone();
+    let reconcile_emitter = event_emitter.clone();
 
     // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
     // We use a single orchestration spawn to set up all registry tasks, since
@@ -1300,7 +1262,8 @@ pub fn start_background_tasks<R: Runtime>(
         registry
             .spawn("space_access_completion", |token| async move {
                 let completion_rx =
-                    match SpaceAccessEventPort::subscribe(space_access_orchestrator.as_ref()).await {
+                    match SpaceAccessEventPort::subscribe(space_access_orchestrator.as_ref()).await
+                    {
                         Ok(rx) => rx,
                         Err(err) => {
                             warn!(
@@ -1315,7 +1278,7 @@ pub fn start_background_tasks<R: Runtime>(
                     _ = token.cancelled() => {
                         info!("Space access completion loop shutting down");
                     }
-                    _ = run_space_access_completion_loop(completion_rx, space_access_app_handle) => {
+                    _ = run_space_access_completion_loop(completion_rx, space_access_emitter) => {
                         warn!("Space access completion loop stopped");
                     }
                 }
@@ -1394,36 +1357,36 @@ pub fn start_background_tasks<R: Runtime>(
                                     "Failed to subscribe to clipboard messages"
                                 );
 
-                                if let Some(app) = clipboard_app_handle.as_ref() {
-                                    if !first_subscribe_failure_emitted {
-                                        let payload = InboundClipboardSubscribeErrorPayload {
-                                            attempt: subscribe_attempt,
-                                            error: err.to_string(),
-                                        };
-                                        if let Err(emit_err) = app
-                                            .emit("inbound-clipboard-subscribe-error", payload)
-                                        {
-                                            warn!(
-                                                error = %emit_err,
-                                                "Failed to emit inbound clipboard subscribe error event"
-                                            );
-                                        }
-                                        first_subscribe_failure_emitted = true;
-                                    }
-
-                                    let retry_payload = InboundClipboardSubscribeRetryPayload {
-                                        attempt: subscribe_attempt,
-                                        retry_in_ms,
-                                        error: err.to_string(),
-                                    };
-                                    if let Err(emit_err) = app
-                                        .emit("inbound-clipboard-subscribe-retry", retry_payload)
+                                if !first_subscribe_failure_emitted {
+                                    if let Err(emit_err) =
+                                        clipboard_emitter.emit(HostEvent::Clipboard(
+                                            ClipboardHostEvent::InboundSubscribeError {
+                                                attempt: subscribe_attempt,
+                                                error: err.to_string(),
+                                            },
+                                        ))
                                     {
                                         warn!(
                                             error = %emit_err,
-                                            "Failed to emit inbound clipboard subscribe retry event"
+                                            "Failed to emit inbound clipboard subscribe error event"
                                         );
                                     }
+                                    first_subscribe_failure_emitted = true;
+                                }
+
+                                if let Err(emit_err) =
+                                    clipboard_emitter.emit(HostEvent::Clipboard(
+                                        ClipboardHostEvent::InboundSubscribeRetry {
+                                            attempt: subscribe_attempt,
+                                            retry_in_ms,
+                                            error: err.to_string(),
+                                        },
+                                    ))
+                                {
+                                    warn!(
+                                        error = %emit_err,
+                                        "Failed to emit inbound clipboard subscribe retry event"
+                                    );
                                 }
 
                                 let backoff = Duration::from_millis(retry_in_ms);
@@ -1445,6 +1408,7 @@ pub fn start_background_tasks<R: Runtime>(
         // --- Pairing action loop (long-lived, channel-driven) ---
         let action_network = pairing_transport.clone();
         let action_app_handle = pairing_app_handle.clone();
+        let action_emitter = pairing_emitter.clone();
         let action_orchestrator = pairing_orchestrator.clone();
         let action_space_access_orchestrator = pairing_space_access_orchestrator.clone();
         let action_key_slot_store = key_slot_store.clone();
@@ -1455,6 +1419,7 @@ pub fn start_background_tasks<R: Runtime>(
                     pairing_action_rx,
                     action_network,
                     action_app_handle,
+                    action_emitter,
                     action_orchestrator,
                     action_space_access_orchestrator,
                     action_key_slot_store,
@@ -1485,7 +1450,7 @@ pub fn start_background_tasks<R: Runtime>(
                                     "Recovered pairing network event subscription"
                                 );
                                 emit_pairing_events_subscribe_recovered(
-                                    pairing_app_handle.as_ref(),
+                                    &*pairing_emitter,
                                     subscribe_attempt,
                                 );
                             }
@@ -1521,7 +1486,7 @@ pub fn start_background_tasks<R: Runtime>(
                                 "Pairing event loop stopped unexpectedly; restarting"
                             );
                             emit_pairing_events_subscribe_failure(
-                                pairing_app_handle.as_ref(),
+                                &*pairing_emitter,
                                 subscribe_attempt,
                                 retry_in_ms,
                                 err.to_string(),
@@ -1538,7 +1503,7 @@ pub fn start_background_tasks<R: Runtime>(
                                 "Failed to subscribe to network events for pairing"
                             );
                             emit_pairing_events_subscribe_failure(
-                                pairing_app_handle.as_ref(),
+                                &*pairing_emitter,
                                 subscribe_attempt,
                                 retry_in_ms,
                                 err.to_string(),
@@ -1592,7 +1557,7 @@ pub fn start_background_tasks<R: Runtime>(
         {
             let reconcile_repo = reconcile_file_transfer_repo.clone();
             let reconcile_clk = reconcile_clock.clone();
-            let reconcile_app = reconcile_app_handle.clone();
+            let reconcile_emit = reconcile_emitter.clone();
             registry
                 .spawn("file_transfer_reconcile", |_token| async move {
                     let tracker = uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
@@ -1601,7 +1566,7 @@ pub fn start_background_tasks<R: Runtime>(
                     let now_ms = reconcile_clk.now_ms();
                     super::file_transfer_wiring::reconcile_on_startup(
                         &tracker,
-                        reconcile_app.as_ref(),
+                        &*reconcile_emit,
                         now_ms,
                     )
                     .await;
@@ -1613,14 +1578,14 @@ pub fn start_background_tasks<R: Runtime>(
         {
             let sweep_repo = reconcile_file_transfer_repo;
             let sweep_clock = reconcile_clock;
-            let sweep_app = reconcile_app_handle;
+            let sweep_emitter = reconcile_emitter;
             let sweep_tracker = Arc::new(
                 uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(sweep_repo),
             );
             let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
             let _sweep_handle = super::file_transfer_wiring::spawn_timeout_sweep(
                 sweep_tracker,
-                sweep_app,
+                sweep_emitter,
                 sweep_clock,
                 cancel_rx,
             );
@@ -1886,16 +1851,6 @@ async fn dispatch_space_access_busy_event(
         .map(|_| ())
 }
 
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SpaceAccessCompletedPayload {
-    session_id: String,
-    peer_id: String,
-    success: bool,
-    reason: Option<String>,
-    ts: i64,
-}
-
 const BUSY_PAYLOAD_PREVIEW_MAX_CHARS: usize = 256;
 
 #[allow(dead_code)]
@@ -2081,27 +2036,29 @@ impl uc_core::ports::space::CryptoPort for LoadedKeyslotSpaceAccessCrypto {
     }
 }
 
-async fn run_space_access_completion_loop<R: Runtime>(
+async fn run_space_access_completion_loop(
     mut event_rx: mpsc::Receiver<SpaceAccessCompletedEvent>,
-    app_handle: Option<AppHandle<R>>,
+    emitter: Arc<dyn HostEventEmitterPort>,
 ) {
     while let Some(event) = event_rx.recv().await {
-        if let Some(app) = app_handle.as_ref() {
-            let payload = SpaceAccessCompletedPayload {
-                session_id: event.session_id,
-                peer_id: event.peer_id,
-                success: event.success,
-                reason: event.reason,
-                ts: event.ts,
-            };
+        if let Err(err) = emitter.emit(HostEvent::SpaceAccess(SpaceAccessHostEvent::Completed {
+            session_id: event.session_id.clone(),
+            peer_id: event.peer_id.clone(),
+            success: event.success,
+            reason: event.reason.clone(),
+            ts: event.ts,
+        })) {
+            warn!(error = %err, "Failed to emit space-access-completed event");
+        }
 
-            if let Err(err) = app.emit("space-access-completed", &payload) {
-                warn!(error = %err, "Failed to emit space-access-completed event");
-            }
-
-            if let Err(err) = app.emit("p2p-space-access-completed", &payload) {
-                warn!(error = %err, "Failed to emit p2p-space-access-completed event");
-            }
+        if let Err(err) = emitter.emit(HostEvent::SpaceAccess(SpaceAccessHostEvent::P2PCompleted {
+            session_id: event.session_id,
+            peer_id: event.peer_id,
+            success: event.success,
+            reason: event.reason,
+            ts: event.ts,
+        })) {
+            warn!(error = %err, "Failed to emit p2p-space-access-completed event");
         }
     }
 }
@@ -2288,6 +2245,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                     peer_id,
                     message,
                     app_handle.as_ref(),
+                    event_emitter.as_ref(),
                 )
                 .await;
             }
@@ -2407,7 +2365,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                 let now_ms = clock.now_ms();
                 super::file_transfer_wiring::handle_transfer_progress(
                     transfer_tracker.as_ref(),
-                    app_handle.as_ref(),
+                    event_emitter.as_ref(),
                     &progress.transfer_id,
                     progress.direction.clone(),
                     progress.chunks_completed,
@@ -2451,7 +2409,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                 let early_cache_for_spawn = early_completion_cache.clone();
 
                 // Clone values before spawn takes ownership
-                let app_handle_clone = app_handle.clone();
+                let _app_handle_clone = app_handle.clone();
                 let emitter_for_spawn = event_emitter.clone();
                 let span_transfer_id = transfer_id.clone();
                 let system_clipboard_clone = system_clipboard.clone();
@@ -2475,7 +2433,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                                 let now_ms = clock_for_spawn.now_ms();
                                 super::file_transfer_wiring::handle_transfer_failed(
                                     tracker_for_spawn.as_ref(),
-                                    app_handle_clone.as_ref(),
+                                    emitter_for_spawn.as_ref(),
                                     &transfer_id_for_spawn,
                                     &format!("Failed to read file: {}", err),
                                     now_ms,
@@ -2507,7 +2465,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                                 let now_ms = clock_for_spawn.now_ms();
                                 super::file_transfer_wiring::handle_transfer_completed(
                                     tracker_for_spawn.as_ref(),
-                                    app_handle_clone.as_ref(),
+                                    emitter_for_spawn.as_ref(),
                                     &result.transfer_id,
                                     Some(&expected_hash),
                                     now_ms,
@@ -2554,7 +2512,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                                 let now_ms = clock_for_spawn.now_ms();
                                 super::file_transfer_wiring::handle_transfer_failed(
                                     tracker_for_spawn.as_ref(),
-                                    app_handle_clone.as_ref(),
+                                    emitter_for_spawn.as_ref(),
                                     &transfer_id_for_spawn,
                                     &format!("Inbound file sync failed: {}", err),
                                     now_ms,
@@ -2621,7 +2579,7 @@ async fn run_pairing_event_loop<R: Runtime>(
                 let now_ms = clock.now_ms();
                 super::file_transfer_wiring::handle_transfer_failed(
                     transfer_tracker.as_ref(),
-                    app_handle.as_ref(),
+                    event_emitter.as_ref(),
                     &transfer_id,
                     &error_msg,
                     now_ms,
@@ -2639,19 +2597,22 @@ async fn handle_pairing_message<R: Runtime>(
     space_access_runtime_ports: &RuntimeSpaceAccessPorts,
     peer_id: String,
     message: PairingMessage,
-    app_handle: Option<&AppHandle<R>>,
+    _app_handle: Option<&AppHandle<R>>, // TODO(plan-03): remove after file split
+    emitter: &dyn HostEventEmitterPort,
 ) {
     match message {
         PairingMessage::Request(request) => {
-            if let Some(app) = app_handle {
-                let payload = P2PPairingVerificationEvent::request(
-                    &request.session_id,
-                    peer_id.clone(),
-                    Some(request.device_name.clone()),
-                );
-                if let Err(err) = app.emit("p2p-pairing-verification", payload) {
-                    warn!(error = %err, "Failed to emit pairing verification event");
-                }
+            if let Err(err) = emitter.emit(HostEvent::Pairing(PairingHostEvent::Verification {
+                session_id: request.session_id.clone(),
+                kind: PairingVerificationKind::Request,
+                peer_id: Some(peer_id.clone()),
+                device_name: Some(request.device_name.clone()),
+                code: None,
+                local_fingerprint: None,
+                peer_fingerprint: None,
+                error: None,
+            })) {
+                warn!(error = %err, "Failed to emit pairing verification event");
             }
             if let Err(err) = orchestrator.handle_incoming_request(peer_id, request).await {
                 error!(error = %err, "Failed to handle pairing request");
@@ -2991,7 +2952,8 @@ async fn handle_pairing_message<R: Runtime>(
 async fn run_pairing_action_loop<R: Runtime>(
     mut action_rx: mpsc::Receiver<PairingAction>,
     network: Arc<dyn PairingTransportPort>,
-    app_handle: Option<AppHandle<R>>,
+    _app_handle: Option<AppHandle<R>>, // TODO(plan-03): remove after file split
+    emitter: Arc<dyn HostEventEmitterPort>,
     orchestrator: Arc<PairingOrchestrator>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
@@ -3031,7 +2993,7 @@ async fn run_pairing_action_loop<R: Runtime>(
                         "Failed to open pairing session"
                     );
                     signal_pairing_transport_failure(
-                        app_handle.as_ref(),
+                        emitter.as_ref(),
                         orchestrator.as_ref(),
                         &session_id,
                         &peer_id,
@@ -3063,7 +3025,7 @@ async fn run_pairing_action_loop<R: Runtime>(
                             "Failed to send pairing message"
                         );
                         signal_pairing_transport_failure(
-                            app_handle.as_ref(),
+                            emitter.as_ref(),
                             orchestrator.as_ref(),
                             &session_id,
                             &peer_id,
@@ -3080,31 +3042,34 @@ async fn run_pairing_action_loop<R: Runtime>(
                 peer_fingerprint,
                 peer_display_name,
             } => {
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = P2PPairingVerificationEvent::verification(
-                        &session_id,
-                        Some(peer_display_name),
-                        short_code,
-                        local_fingerprint,
-                        peer_fingerprint,
-                    );
-                    if let Err(err) = app.emit("p2p-pairing-verification", payload) {
-                        warn!(error = %err, "Failed to emit pairing verification event");
-                    }
+                if let Err(err) = emitter.emit(HostEvent::Pairing(PairingHostEvent::Verification {
+                    session_id,
+                    kind: PairingVerificationKind::Verification,
+                    peer_id: None,
+                    device_name: Some(peer_display_name),
+                    code: Some(short_code),
+                    local_fingerprint: Some(local_fingerprint),
+                    peer_fingerprint: Some(peer_fingerprint),
+                    error: None,
+                })) {
+                    warn!(error = %err, "Failed to emit pairing verification event");
                 }
             }
             PairingAction::ShowVerifying {
                 session_id,
                 peer_display_name,
             } => {
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = P2PPairingVerificationEvent::verifying(
-                        &session_id,
-                        Some(peer_display_name),
-                    );
-                    if let Err(err) = app.emit("p2p-pairing-verification", payload) {
-                        warn!(error = %err, "Failed to emit pairing verification event");
-                    }
+                if let Err(err) = emitter.emit(HostEvent::Pairing(PairingHostEvent::Verification {
+                    session_id,
+                    kind: PairingVerificationKind::Verifying,
+                    peer_id: None,
+                    device_name: Some(peer_display_name),
+                    code: None,
+                    local_fingerprint: None,
+                    peer_fingerprint: None,
+                    error: None,
+                })) {
+                    warn!(error = %err, "Failed to emit pairing verification event");
                 }
             }
             PairingAction::EmitResult {
@@ -3203,33 +3168,44 @@ async fn run_pairing_action_loop<R: Runtime>(
                     }
                 }
 
-                if let Some(app) = app_handle.as_ref() {
-                    if success {
-                        let (peer_id, device_name) = match peer_info {
-                            Some(info) => {
-                                let name = info
-                                    .device_name
-                                    .unwrap_or_else(|| "Unknown Device".to_string());
-                                (info.peer_id, name)
-                            }
-                            None => ("unknown".to_string(), "Unknown Device".to_string()),
-                        };
-                        let payload = P2PPairingVerificationEvent::complete(
-                            &session_id,
-                            peer_id,
-                            Some(device_name),
-                        );
-                        if let Err(err) = app.emit("p2p-pairing-verification", payload) {
-                            warn!(error = %err, "Failed to emit pairing verification event");
+                if success {
+                    let (peer_id, device_name) = match peer_info {
+                        Some(info) => {
+                            let name = info
+                                .device_name
+                                .unwrap_or_else(|| "Unknown Device".to_string());
+                            (info.peer_id, name)
                         }
-                    } else {
-                        let payload = P2PPairingVerificationEvent::failed(
-                            &session_id,
-                            error.unwrap_or_else(|| "Pairing failed".to_string()),
-                        );
-                        if let Err(err) = app.emit("p2p-pairing-verification", payload) {
-                            warn!(error = %err, "Failed to emit pairing verification event");
-                        }
+                        None => ("unknown".to_string(), "Unknown Device".to_string()),
+                    };
+                    if let Err(err) =
+                        emitter.emit(HostEvent::Pairing(PairingHostEvent::Verification {
+                            session_id,
+                            kind: PairingVerificationKind::Complete,
+                            peer_id: Some(peer_id),
+                            device_name: Some(device_name),
+                            code: None,
+                            local_fingerprint: None,
+                            peer_fingerprint: None,
+                            error: None,
+                        }))
+                    {
+                        warn!(error = %err, "Failed to emit pairing verification event");
+                    }
+                } else {
+                    if let Err(err) =
+                        emitter.emit(HostEvent::Pairing(PairingHostEvent::Verification {
+                            session_id,
+                            kind: PairingVerificationKind::Failed,
+                            peer_id: None,
+                            device_name: None,
+                            code: None,
+                            local_fingerprint: None,
+                            peer_fingerprint: None,
+                            error: Some(error.unwrap_or_else(|| "Pairing failed".to_string())),
+                        }))
+                    {
+                        warn!(error = %err, "Failed to emit pairing verification event");
                     }
                 }
             }
@@ -3241,18 +3217,24 @@ async fn run_pairing_action_loop<R: Runtime>(
     warn!("Pairing action loop stopped");
 }
 
-async fn signal_pairing_transport_failure<R: Runtime>(
-    app_handle: Option<&AppHandle<R>>,
+async fn signal_pairing_transport_failure(
+    emitter: &dyn HostEventEmitterPort,
     orchestrator: &PairingOrchestrator,
     session_id: &str,
     peer_id: &str,
     reason: String,
 ) {
-    if let Some(app) = app_handle {
-        let payload = P2PPairingVerificationEvent::failed(session_id, reason.clone());
-        if let Err(emit_err) = app.emit("p2p-pairing-verification", payload) {
-            warn!(error = %emit_err, "Failed to emit pairing verification event");
-        }
+    if let Err(emit_err) = emitter.emit(HostEvent::Pairing(PairingHostEvent::Verification {
+        session_id: session_id.to_string(),
+        kind: PairingVerificationKind::Failed,
+        peer_id: None,
+        device_name: None,
+        code: None,
+        local_fingerprint: None,
+        peer_fingerprint: None,
+        error: Some(reason.clone()),
+    })) {
+        warn!(error = %emit_err, "Failed to emit pairing verification event");
     }
     if let Err(handle_err) = orchestrator
         .handle_transport_error(session_id, peer_id, reason)
@@ -3266,35 +3248,29 @@ async fn signal_pairing_transport_failure<R: Runtime>(
     }
 }
 
-fn emit_pairing_events_subscribe_failure<R: Runtime>(
-    app_handle: Option<&AppHandle<R>>,
+fn emit_pairing_events_subscribe_failure(
+    emitter: &dyn HostEventEmitterPort,
     attempt: u32,
     retry_in_ms: u64,
     error: String,
 ) {
-    if let Some(app) = app_handle {
-        let payload = PairingEventsSubscribeFailurePayload {
-            attempt,
-            retry_in_ms,
-            error,
-        };
-        if let Err(emit_err) = app.emit("pairing-events-subscribe-failure", payload) {
-            warn!(error = %emit_err, "Failed to emit pairing events subscribe failure event");
-        }
+    if let Err(emit_err) = emitter.emit(HostEvent::Pairing(PairingHostEvent::SubscribeFailure {
+        attempt,
+        retry_in_ms,
+        error,
+    })) {
+        warn!(error = %emit_err, "Failed to emit pairing events subscribe failure event");
     }
 }
 
-fn emit_pairing_events_subscribe_recovered<R: Runtime>(
-    app_handle: Option<&AppHandle<R>>,
+fn emit_pairing_events_subscribe_recovered(
+    emitter: &dyn HostEventEmitterPort,
     recovered_after_attempts: u32,
 ) {
-    if let Some(app) = app_handle {
-        let payload = PairingEventsSubscribeRecoveredPayload {
-            recovered_after_attempts,
-        };
-        if let Err(emit_err) = app.emit("pairing-events-subscribe-recovered", payload) {
-            warn!(error = %emit_err, "Failed to emit pairing events subscribe recovered event");
-        }
+    if let Err(emit_err) = emitter.emit(HostEvent::Pairing(PairingHostEvent::SubscribeRecovered {
+        recovered_after_attempts,
+    })) {
+        warn!(error = %emit_err, "Failed to emit pairing events subscribe recovered event");
     }
 }
 
@@ -3308,7 +3284,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     use std::time::Duration;
-    use tauri::{Listener, Wry};
+    use tauri::{Emitter, Listener, Wry};
     use tokio::sync::{mpsc, Mutex as TokioMutex};
     use tracing_subscriber::fmt::writer::MakeWriter;
     use uc_app::usecases::PairingConfig;
@@ -3329,6 +3305,17 @@ mod tests {
         let err = WiringError::DatabaseInit("connection failed".to_string());
         assert!(err.to_string().contains("Database initialization"));
         assert!(err.to_string().contains("connection failed"));
+    }
+
+    struct NoopEmitter;
+
+    impl HostEventEmitterPort for NoopEmitter {
+        fn emit(
+            &self,
+            _event: HostEvent,
+        ) -> Result<(), uc_core::ports::host_event_emitter::EmitError> {
+            Ok(())
+        }
     }
 
     struct NoopPairedDeviceRepository;
@@ -4518,6 +4505,7 @@ mod tests {
                 reason: Some(reason),
             }),
             None,
+            &NoopEmitter,
         )
         .await;
 
@@ -4567,6 +4555,7 @@ mod tests {
                 reason: Some(reason),
             }),
             None,
+            &NoopEmitter,
         )
         .await;
 
@@ -4620,6 +4609,7 @@ mod tests {
                 reason: Some(invalid_nonce_reason),
             }),
             None,
+            &NoopEmitter,
         )
         .await;
 
@@ -4648,6 +4638,7 @@ mod tests {
                 reason: Some(valid_nonce_reason),
             }),
             None,
+            &NoopEmitter,
         )
         .await;
 
@@ -4735,6 +4726,7 @@ mod tests {
                 reason: Some(reason),
             }),
             None,
+            &NoopEmitter,
         )
         .await;
 
@@ -4788,6 +4780,7 @@ mod tests {
                 reason: Some(reason),
             }),
             None,
+            &NoopEmitter,
         )
         .await;
 
@@ -4844,6 +4837,7 @@ mod tests {
                 reason: Some(reason),
             }),
             None,
+            &NoopEmitter,
         )
         .await;
 
@@ -5282,12 +5276,10 @@ mod tests {
         });
 
         let (event_tx, event_rx) = mpsc::channel(1);
-        let loop_handle = tokio::spawn(
-            run_space_access_completion_loop::<tauri::test::MockRuntime>(
-                event_rx,
-                Some(app_handle.clone()),
-            ),
-        );
+        let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
+            app_handle.clone(),
+        ));
+        let loop_handle = tokio::spawn(run_space_access_completion_loop(event_rx, emitter));
 
         event_tx
             .send(SpaceAccessCompletedEvent {
@@ -5328,12 +5320,10 @@ mod tests {
         });
 
         let (event_tx, event_rx) = mpsc::channel(1);
-        let loop_handle = tokio::spawn(
-            run_space_access_completion_loop::<tauri::test::MockRuntime>(
-                event_rx,
-                Some(app_handle.clone()),
-            ),
-        );
+        let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
+            app_handle.clone(),
+        ));
+        let loop_handle = tokio::spawn(run_space_access_completion_loop(event_rx, emitter));
 
         event_tx
             .send(SpaceAccessCompletedEvent {
@@ -5371,7 +5361,11 @@ mod tests {
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
-        let probe = P2PPairingVerificationEvent::failed("probe", "probe".to_string());
+        let probe = serde_json::json!({
+            "sessionId": "probe",
+            "kind": "failed",
+            "error": "probe"
+        });
         app_handle
             .emit("p2p-pairing-verification", probe)
             .expect("emit probe");
@@ -5411,10 +5405,14 @@ mod tests {
         let key_slot_store = Arc::new(NoopKeySlotStore);
         let runtime_ports =
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
+        let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
+            app_handle.clone(),
+        ));
         let loop_handle = tokio::spawn(run_pairing_action_loop::<tauri::test::MockRuntime>(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
             Some(app_handle.clone()),
+            emitter,
             orchestrator.clone(),
             space_access_orchestrator,
             key_slot_store,
@@ -5485,10 +5483,14 @@ mod tests {
         let key_slot_store = Arc::new(NoopKeySlotStore);
         let runtime_ports =
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
+        let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
+            app_handle.clone(),
+        ));
         let loop_handle = tokio::spawn(run_pairing_action_loop::<tauri::test::MockRuntime>(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
             Some(app_handle.clone()),
+            emitter,
             orchestrator.clone(),
             space_access_orchestrator,
             key_slot_store,
@@ -5548,10 +5550,14 @@ mod tests {
         let key_slot_store = Arc::new(NoopKeySlotStore);
         let runtime_ports =
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
+        let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
+            app_handle.clone(),
+        ));
         let loop_handle = tokio::spawn(run_pairing_action_loop::<tauri::test::MockRuntime>(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
             Some(app_handle.clone()),
+            emitter,
             orchestrator.clone(),
             space_access_orchestrator,
             key_slot_store,
@@ -5611,10 +5617,14 @@ mod tests {
         });
         let runtime_ports =
             test_runtime_space_access_ports(network.clone(), space_access_orchestrator.clone());
+        let emitter = Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
+            app_handle.clone(),
+        ));
         let loop_handle = tokio::spawn(run_pairing_action_loop::<tauri::test::MockRuntime>(
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
             Some(app_handle.clone()),
+            emitter,
             orchestrator.clone(),
             space_access_orchestrator,
             key_slot_store,
@@ -5689,6 +5699,7 @@ mod tests {
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
             None,
+            Arc::new(NoopEmitter),
             orchestrator,
             space_access_orchestrator,
             Arc::new(NoopKeySlotStore),
@@ -5769,6 +5780,7 @@ mod tests {
             action_rx,
             network.clone() as Arc<dyn PairingTransportPort>,
             None,
+            Arc::new(NoopEmitter),
             orchestrator,
             space_access_orchestrator,
             Arc::new(StaticKeySlotStore {
