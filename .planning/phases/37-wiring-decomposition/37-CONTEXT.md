@@ -88,7 +88,7 @@ ROADMAP SC#4 says "`cargo check` on the pure-assembly module succeeds without ta
 
 - **What Phase 37 achieves:** assembly.rs has zero tauri imports, verified by grep + CI lint rule. Its public API surface (return types, parameter types) uses only types from Tauri-free crates (uc-core, uc-app, uc-infra, uc-platform). This is a structural guarantee that assembly.rs IS extractable to a Tauri-free crate
 - **What Phase 37 does NOT achieve:** `cargo check` on assembly.rs as an independent compilation unit. This requires either crate extraction or making tauri optional + gating all 10+ non-assembly modules behind `#[cfg(feature)]`. Both are disproportionate — that's Phase 40's job when uc-bootstrap is created
-- **Why feature gating is infeasible here:** uc-tauri has `tauri` as unconditional dep (Cargo.toml:20), and lib.rs unconditionally compiles 11 pub modules (commands, events, adapters, preview_panel, quick_panel, tray, services, etc.) that all import tauri. `--no-default-features` would require gating ALL of them — effectively restructuring the entire crate
+- **Why feature gating is infeasible here:** uc-tauri has `tauri` as unconditional dep (Cargo.toml:20), and lib.rs unconditionally compiles 10 pub modules (commands, events, adapters, preview_panel, quick_panel, tray, services, etc.) that all import tauri. `--no-default-features` would require gating ALL of them — effectively restructuring the entire crate
 - **ROADMAP update required:** Phase 37 SC#4 wording should be amended to: "assembly.rs contains zero tauri imports (verified by CI lint) and its public API is Tauri-type-free, preparing it for independent `cargo check` in Phase 40"
 - The full `cargo check -p uc-bootstrap --no-default-features` independence is the Phase 40 deliverable
 
