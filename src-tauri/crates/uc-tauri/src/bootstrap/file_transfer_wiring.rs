@@ -1,3 +1,9 @@
+// NOTE: handle_transfer_progress, handle_transfer_completed, handle_transfer_failed,
+// spawn_timeout_sweep, and reconcile_on_startup still use AppHandle<R> for event emission.
+// These will be migrated to HostEventEmitterPort in Phase 37 (wiring decomposition)
+// when the closure capture pattern in wiring.rs is restructured.
+// Only emit_pending_status was migrated in Phase 36 as it is a standalone helper.
+
 //! File transfer event-loop orchestration for durable status transitions.
 //!
 //! Handles pending/transferring/completed/failed lifecycle through the
@@ -11,6 +17,8 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tracing::{info, info_span, warn, Instrument};
+
+use uc_core::ports::host_event_emitter::{HostEvent, HostEventEmitterPort, TransferHostEvent};
 
 use uc_app::usecases::clipboard::sync_inbound::PendingTransferLinkage;
 use uc_app::usecases::file_sync::TrackInboundTransfersUseCase;
@@ -70,19 +78,21 @@ pub struct FileTransferStatusPayload {
 
 /// Emit `file-transfer://status-changed` for each pending transfer
 /// after inbound clipboard metadata is applied.
-pub fn emit_pending_status<R: tauri::Runtime>(
-    app: &AppHandle<R>,
+///
+/// Uses [`HostEventEmitterPort`] so this helper is not tied to a Tauri AppHandle.
+/// This is the only emit function in this module that has been migrated in Phase 36.
+pub fn emit_pending_status(
+    emitter: &dyn HostEventEmitterPort,
     entry_id: &str,
     pending_transfers: &[PendingTransferLinkage],
 ) {
     for t in pending_transfers {
-        let payload = FileTransferStatusPayload {
+        if let Err(err) = emitter.emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
             transfer_id: t.transfer_id.clone(),
             entry_id: entry_id.to_string(),
             status: "pending".to_string(),
             reason: None,
-        };
-        if let Err(err) = app.emit("file-transfer://status-changed", payload) {
+        })) {
             warn!(
                 error = %err,
                 transfer_id = %t.transfer_id,

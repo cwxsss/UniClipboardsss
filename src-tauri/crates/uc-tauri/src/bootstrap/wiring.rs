@@ -43,11 +43,7 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use super::task_registry::TaskRegistry;
 
-use crate::events::{
-    forward_clipboard_event, forward_transfer_progress_event, ClipboardEvent,
-    P2PPairingVerificationEvent, P2PPeerConnectionEvent, P2PPeerDiscoveryEvent,
-    P2PPeerNameUpdatedEvent,
-};
+use crate::events::P2PPairingVerificationEvent;
 use uc_app::deps::NetworkPorts;
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::space_access::{
@@ -67,6 +63,10 @@ use uc_core::network::{ClipboardMessage, NetworkEvent, PairingMessage};
 use uc_core::ports::clipboard::{
     ClipboardChangeOriginPort, ClipboardRepresentationNormalizerPort, RepresentationCachePort,
     SpoolQueuePort, SpoolRequest,
+};
+use uc_core::ports::host_event_emitter::{
+    ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort,
+    PeerConnectionHostEvent, PeerDiscoveryHostEvent, TransferHostEvent,
 };
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::*;
@@ -216,14 +216,6 @@ const PAIRING_EVENTS_SUBSCRIBE_BACKOFF_MAX_MS: u64 = 30_000;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct InboundClipboardErrorPayload {
-    message_id: String,
-    origin_device_id: String,
-    error: String,
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
 struct InboundClipboardSubscribeErrorPayload {
     attempt: u32,
     error: String,
@@ -235,12 +227,6 @@ struct InboundClipboardSubscribeRetryPayload {
     attempt: u32,
     retry_in_ms: u64,
     error: String,
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct InboundClipboardSubscribeRecoveredPayload {
-    recovered_after_attempts: u32,
 }
 
 fn subscribe_backoff_ms(attempt: u32) -> u64 {
@@ -1154,6 +1140,7 @@ pub fn start_background_tasks<R: Runtime>(
     background: BackgroundRuntimeDeps,
     deps: &AppDeps,
     app_handle: Option<AppHandle<R>>,
+    event_emitter: Arc<dyn HostEventEmitterPort>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
     pairing_action_rx: mpsc::Receiver<PairingAction>,
     staged_store: Arc<StagedPairedDeviceStore>,
@@ -1179,6 +1166,8 @@ pub fn start_background_tasks<R: Runtime>(
     let pairing_app_handle = app_handle.clone();
     let space_access_app_handle = app_handle.clone();
     let clipboard_app_handle = app_handle.clone();
+    let clipboard_emitter = event_emitter.clone();
+    let pairing_emitter = event_emitter.clone();
     let pairing_space_access_orchestrator = space_access_orchestrator.clone();
     let representation_repo = deps.clipboard.representation_repo.clone();
     let worker_tx = deps.clipboard.worker_tx.clone();
@@ -1369,19 +1358,15 @@ pub fn start_background_tasks<R: Runtime>(
                                         "Recovered clipboard subscription"
                                     );
 
-                                    if let Some(app) = clipboard_app_handle.as_ref() {
-                                        let payload = InboundClipboardSubscribeRecoveredPayload {
+                                    if let Err(err) = clipboard_emitter.emit(HostEvent::Clipboard(
+                                        ClipboardHostEvent::InboundSubscribeRecovered {
                                             recovered_after_attempts: subscribe_attempt,
-                                        };
-                                        if let Err(err) = app.emit(
-                                            "inbound-clipboard-subscribe-recovered",
-                                            payload,
-                                        ) {
-                                            warn!(
-                                                error = %err,
-                                                "Failed to emit inbound clipboard subscribe recovered event"
-                                            );
-                                        }
+                                        },
+                                    )) {
+                                        warn!(
+                                            error = %err,
+                                            "Failed to emit inbound clipboard subscribe recovered event"
+                                        );
                                     }
                                 }
 
@@ -1391,6 +1376,7 @@ pub fn start_background_tasks<R: Runtime>(
                                     clipboard_rx,
                                     &sync_inbound_usecase,
                                     clipboard_app_handle.clone(),
+                                    clipboard_emitter.clone(),
                                     Some(clipboard_transfer_tracker.clone()),
                                     Some(clipboard_clock.clone()),
                                     Some(early_completion_cache.clone()),
@@ -1510,6 +1496,7 @@ pub fn start_background_tasks<R: Runtime>(
                                 event_rx,
                                 pairing_orchestrator.clone(),
                                 pairing_app_handle.clone(),
+                                pairing_emitter.clone(),
                                 peer_directory.clone(),
                                 pairing_space_access_orchestrator.clone(),
                                 space_access_runtime_ports.clone(),
@@ -1673,7 +1660,8 @@ fn new_sync_inbound_clipboard_usecase(
 async fn run_clipboard_receive_loop<R: Runtime>(
     mut clipboard_rx: mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>,
     usecase: &SyncInboundClipboardUseCase,
-    app_handle: Option<AppHandle<R>>,
+    _app_handle: Option<AppHandle<R>>,
+    event_emitter: Arc<dyn HostEventEmitterPort>,
     transfer_tracker: Option<Arc<uc_app::usecases::file_sync::TrackInboundTransfersUseCase>>,
     clock: Option<Arc<dyn uc_core::ports::ClockPort>>,
     early_completion_cache: Option<Arc<super::file_transfer_wiring::EarlyCompletionCache>>,
@@ -1763,18 +1751,17 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                                         .await
                                     {
                                         Ok(_) => {
-                                            if let Some(app) = app_handle.as_ref() {
-                                                let payload = super::file_transfer_wiring::FileTransferStatusPayload {
-                                                    transfer_id: tid.clone(),
-                                                    entry_id: entry_id.to_string(),
-                                                    status: "completed".to_string(),
-                                                    reason: None,
-                                                };
-                                                if let Err(err) = app
-                                                    .emit("file-transfer://status-changed", payload)
-                                                {
-                                                    warn!(error = %err, "Failed to emit reconciled completion status");
-                                                }
+                                            if let Err(err) =
+                                                event_emitter.emit(HostEvent::Transfer(
+                                                    TransferHostEvent::StatusChanged {
+                                                        transfer_id: tid.clone(),
+                                                        entry_id: entry_id.to_string(),
+                                                        status: "completed".to_string(),
+                                                        reason: None,
+                                                    },
+                                                ))
+                                            {
+                                                warn!(error = %err, "Failed to emit reconciled completion status");
                                             }
                                         }
                                         Err(err) => {
@@ -1790,13 +1777,11 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                         }
 
                         // Emit pending status events to frontend
-                        if let Some(app) = app_handle.as_ref() {
-                            super::file_transfer_wiring::emit_pending_status(
-                                app,
-                                &entry_id.to_string(),
-                                pending_transfers,
-                            );
-                        }
+                        super::file_transfer_wiring::emit_pending_status(
+                            event_emitter.as_ref(),
+                            &entry_id.to_string(),
+                            pending_transfers,
+                        );
                     }
                 }
 
@@ -1817,15 +1802,14 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                         // Passive mode always needs explicit event (no ClipboardWatcher).
                         // Full mode with file transfers also needs it (write_snapshot is skipped).
                         if is_passive || has_file_transfers {
-                            if let Some(app) = app_handle.as_ref() {
-                                let event = ClipboardEvent::NewContent {
+                            if let Err(emit_err) = event_emitter.emit(HostEvent::Clipboard(
+                                ClipboardHostEvent::NewContent {
                                     entry_id: entry_id.to_string(),
                                     preview: "Remote clipboard content applied".to_string(),
-                                    origin: "remote".to_string(),
-                                };
-                                if let Err(emit_err) = forward_clipboard_event(app, event) {
-                                    warn!(error = %emit_err, message_id = %message_id, "Failed to emit clipboard event after inbound apply");
-                                }
+                                    origin: ClipboardOriginKind::Remote,
+                                },
+                            )) {
+                                warn!(error = %emit_err, message_id = %message_id, "Failed to emit clipboard event after inbound apply");
                             }
                         }
                     }
@@ -1851,15 +1835,14 @@ async fn run_clipboard_receive_loop<R: Runtime>(
                     "Failed to apply inbound clipboard message"
                 );
 
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = InboundClipboardErrorPayload {
+                if let Err(emit_err) =
+                    event_emitter.emit(HostEvent::Clipboard(ClipboardHostEvent::InboundError {
                         message_id: message_id.clone(),
                         origin_device_id: origin_device_id.clone(),
                         error: err.to_string(),
-                    };
-                    if let Err(emit_err) = app.emit("inbound-clipboard-error", payload) {
-                        warn!(error = %emit_err, "Failed to emit inbound clipboard error event");
-                    }
+                    }))
+                {
+                    warn!(error = %emit_err, "Failed to emit inbound clipboard error event");
                 }
             }
         }
@@ -2274,6 +2257,7 @@ async fn run_pairing_event_loop<R: Runtime>(
     mut event_rx: mpsc::Receiver<NetworkEvent>,
     orchestrator: Arc<PairingOrchestrator>,
     app_handle: Option<AppHandle<R>>,
+    event_emitter: Arc<dyn HostEventEmitterPort>,
     peer_directory: Arc<dyn PeerDirectoryPort>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     space_access_runtime_ports: RuntimeSpaceAccessPorts,
@@ -2326,16 +2310,14 @@ async fn run_pairing_event_loop<R: Runtime>(
                     is_paired = peer.is_paired,
                     "Pairing loop received peer discovered event"
                 );
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = P2PPeerDiscoveryEvent {
+                if let Err(err) = event_emitter.emit(HostEvent::PeerDiscovery(
+                    PeerDiscoveryHostEvent::Discovered {
                         peer_id: peer.peer_id.clone(),
                         device_name: peer.device_name,
                         addresses: peer.addresses,
-                        discovered: true,
-                    };
-                    if let Err(err) = app.emit("p2p-peer-discovery-changed", payload) {
-                        warn!(error = %err, "Failed to emit peer discovery changed event");
-                    }
+                    },
+                )) {
+                    warn!(error = %err, "Failed to emit peer discovery changed event");
                 }
 
                 // Announce our device name so the remote peer can display it
@@ -2354,70 +2336,70 @@ async fn run_pairing_event_loop<R: Runtime>(
                     "Pairing loop received peer lost event"
                 );
                 let device_name = resolve_device_name_for_peer(&peer_directory, &peer_id).await;
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = P2PPeerDiscoveryEvent {
+                if let Err(err) =
+                    event_emitter.emit(HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Lost {
                         peer_id,
                         device_name,
                         addresses: vec![],
-                        discovered: false,
-                    };
-                    if let Err(err) = app.emit("p2p-peer-discovery-changed", payload) {
-                        warn!(error = %err, "Failed to emit peer discovery changed event");
-                    }
+                    }))
+                {
+                    warn!(error = %err, "Failed to emit peer discovery changed event");
                 }
             }
             NetworkEvent::PeerReady { ref peer_id }
             | NetworkEvent::PeerNotReady { ref peer_id } => {
                 let connected = matches!(event, NetworkEvent::PeerReady { .. });
                 let device_name = resolve_device_name_for_peer(&peer_directory, peer_id).await;
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = P2PPeerConnectionEvent {
-                        peer_id: peer_id.clone(),
-                        device_name,
-                        connected,
-                    };
-                    if let Err(err) = app.emit("p2p-peer-connection-changed", payload) {
+                if connected {
+                    if let Err(err) = event_emitter.emit(HostEvent::PeerConnection(
+                        PeerConnectionHostEvent::Connected {
+                            peer_id: peer_id.clone(),
+                            device_name,
+                        },
+                    )) {
                         warn!(error = %err, "Failed to emit peer connection event");
                     }
+                } else if let Err(err) = event_emitter.emit(HostEvent::PeerConnection(
+                    PeerConnectionHostEvent::Disconnected {
+                        peer_id: peer_id.clone(),
+                        device_name,
+                    },
+                )) {
+                    warn!(error = %err, "Failed to emit peer connection event");
                 }
             }
             NetworkEvent::PeerConnected(peer) => {
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = P2PPeerConnectionEvent {
+                if let Err(err) = event_emitter.emit(HostEvent::PeerConnection(
+                    PeerConnectionHostEvent::Connected {
                         peer_id: peer.peer_id,
                         device_name: Some(peer.device_name),
-                        connected: true,
-                    };
-                    if let Err(err) = app.emit("p2p-peer-connection-changed", payload) {
-                        warn!(error = %err, "Failed to emit peer connection event");
-                    }
+                    },
+                )) {
+                    warn!(error = %err, "Failed to emit peer connection event");
                 }
             }
             NetworkEvent::PeerDisconnected(peer_id) => {
                 let device_name = resolve_device_name_for_peer(&peer_directory, &peer_id).await;
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = P2PPeerConnectionEvent {
+                if let Err(err) = event_emitter.emit(HostEvent::PeerConnection(
+                    PeerConnectionHostEvent::Disconnected {
                         peer_id,
                         device_name,
-                        connected: false,
-                    };
-                    if let Err(err) = app.emit("p2p-peer-connection-changed", payload) {
-                        warn!(error = %err, "Failed to emit peer connection event");
-                    }
+                    },
+                )) {
+                    warn!(error = %err, "Failed to emit peer connection event");
                 }
             }
             NetworkEvent::PeerNameUpdated {
                 peer_id,
                 device_name,
             } => {
-                if let Some(app) = app_handle.as_ref() {
-                    let payload = P2PPeerNameUpdatedEvent {
+                if let Err(err) = event_emitter.emit(HostEvent::PeerConnection(
+                    PeerConnectionHostEvent::NameUpdated {
                         peer_id,
                         device_name,
-                    };
-                    if let Err(err) = app.emit("p2p-peer-name-updated", payload) {
-                        warn!(error = %err, "Failed to emit peer name updated event");
-                    }
+                    },
+                )) {
+                    warn!(error = %err, "Failed to emit peer name updated event");
                 }
             }
             NetworkEvent::TransferProgress(progress) => {
@@ -2434,10 +2416,10 @@ async fn run_pairing_event_loop<R: Runtime>(
                 .await;
 
                 // Forward the transient progress event to frontend
-                if let Some(app) = app_handle.as_ref() {
-                    if let Err(err) = forward_transfer_progress_event(app, progress) {
-                        warn!(error = %err, "Failed to emit transfer progress event");
-                    }
+                if let Err(err) =
+                    event_emitter.emit(HostEvent::Transfer(TransferHostEvent::Progress(progress)))
+                {
+                    warn!(error = %err, "Failed to emit transfer progress event");
                 }
             }
             NetworkEvent::FileTransferCompleted {
@@ -2470,6 +2452,7 @@ async fn run_pairing_event_loop<R: Runtime>(
 
                 // Clone values before spawn takes ownership
                 let app_handle_clone = app_handle.clone();
+                let emitter_for_spawn = event_emitter.clone();
                 let span_transfer_id = transfer_id.clone();
                 let system_clipboard_clone = system_clipboard.clone();
                 let clipboard_change_origin_clone = clipboard_change_origin.clone();
@@ -2534,22 +2517,20 @@ async fn run_pairing_event_loop<R: Runtime>(
 
                                 // Emit the existing file-transfer://completed event
                                 // (UI code depends on it; status-changed is the durable authority)
-                                if let Some(app) = app_handle_clone.as_ref() {
-                                    let payload = serde_json::json!({
-                                        "transfer_id": result.transfer_id,
-                                        "filename": filename_for_spawn,
-                                        "peer_id": peer_id_for_spawn,
-                                        "file_size": result.file_size,
-                                        "auto_pulled": result.auto_pulled,
-                                        "file_path": result.file_path.to_string_lossy(),
-                                    });
-                                    if let Err(err) = app.emit("file-transfer://completed", payload)
-                                    {
-                                        warn!(
-                                            error = %err,
-                                            "Failed to emit file transfer completed event"
-                                        );
-                                    }
+                                if let Err(err) = emitter_for_spawn.emit(HostEvent::Transfer(
+                                    TransferHostEvent::Completed {
+                                        transfer_id: result.transfer_id,
+                                        filename: filename_for_spawn,
+                                        peer_id: peer_id_for_spawn,
+                                        file_size: result.file_size,
+                                        auto_pulled: result.auto_pulled,
+                                        file_path: result.file_path.to_string_lossy().to_string(),
+                                    },
+                                )) {
+                                    warn!(
+                                        error = %err,
+                                        "Failed to emit file transfer completed event"
+                                    );
                                 }
 
                                 // Restore single file to clipboard only if NOT part of a batch
@@ -4340,7 +4321,13 @@ mod tests {
         drop(tx);
 
         run_clipboard_receive_loop::<tauri::test::MockRuntime>(
-            rx, &usecase, None, None, None, None,
+            rx,
+            &usecase,
+            None,
+            Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter),
+            None,
+            None,
+            None,
         )
         .await;
 
@@ -4374,6 +4361,7 @@ mod tests {
             event_rx,
             orchestrator.clone(),
             None,
+            Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter),
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
@@ -4907,6 +4895,9 @@ mod tests {
             event_rx,
             orchestrator,
             Some(app_handle.clone()),
+            Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
+                app_handle.clone(),
+            )),
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
@@ -4977,6 +4968,9 @@ mod tests {
             event_rx,
             orchestrator,
             Some(app_handle.clone()),
+            Arc::new(crate::adapters::host_event_emitter::TauriEventEmitter::new(
+                app_handle.clone(),
+            )),
             network.clone() as Arc<dyn PeerDirectoryPort>,
             space_access_orchestrator,
             runtime_ports,
