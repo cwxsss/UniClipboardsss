@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
 use tracing::{info, info_span, warn, Instrument};
 
 use uc_core::ports::host_event_emitter::{HostEvent, HostEventEmitterPort, TransferHostEvent};
@@ -108,9 +107,9 @@ pub fn emit_pending_status(
 /// On subsequent chunks, refreshes durable liveness.
 ///
 /// Returns `true` if promoted to `transferring` (first time).
-pub async fn handle_transfer_progress<R: tauri::Runtime>(
+pub async fn handle_transfer_progress(
     tracker: &TrackInboundTransfersUseCase,
-    app: Option<&AppHandle<R>>,
+    emitter: &dyn HostEventEmitterPort,
     transfer_id: &str,
     direction: TransferDirection,
     chunks_completed: u32,
@@ -127,19 +126,17 @@ pub async fn handle_transfer_progress<R: tauri::Runtime>(
             Ok(true) => {
                 info!(transfer_id, "Transfer promoted to transferring");
                 // We need the entry_id to emit status. The tracker can look it up.
-                if let Some(app) = app {
-                    if let Ok(Some(summary)) =
-                        tracker.get_entry_summary_by_transfer(transfer_id).await
-                    {
-                        let payload = FileTransferStatusPayload {
+                if let Ok(Some(entry_id)) = tracker.get_entry_summary_by_transfer(transfer_id).await
+                {
+                    if let Err(err) =
+                        emitter.emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
                             transfer_id: transfer_id.to_string(),
-                            entry_id: summary,
+                            entry_id,
                             status: "transferring".to_string(),
                             reason: None,
-                        };
-                        if let Err(err) = app.emit("file-transfer://status-changed", payload) {
-                            warn!(error = %err, "Failed to emit transferring status");
-                        }
+                        }))
+                    {
+                        warn!(error = %err, "Failed to emit transferring status");
                     }
                 }
                 return true;
@@ -167,9 +164,9 @@ pub async fn handle_transfer_progress<R: tauri::Runtime>(
 /// Marks the transfer row as completed before emitting the status event.
 /// If the pending record hasn't been seeded yet (race condition), stores
 /// the completion in `early_cache` for later reconciliation.
-pub async fn handle_transfer_completed<R: tauri::Runtime>(
+pub async fn handle_transfer_completed(
     tracker: &TrackInboundTransfersUseCase,
-    app: Option<&AppHandle<R>>,
+    emitter: &dyn HostEventEmitterPort,
     transfer_id: &str,
     content_hash: Option<&str>,
     now_ms: i64,
@@ -208,17 +205,14 @@ pub async fn handle_transfer_completed<R: tauri::Runtime>(
     }
 
     // Emit status-changed for completed
-    if let Some(app) = app {
-        if let Ok(Some(entry_id)) = tracker.get_entry_summary_by_transfer(transfer_id).await {
-            let payload = FileTransferStatusPayload {
-                transfer_id: transfer_id.to_string(),
-                entry_id,
-                status: "completed".to_string(),
-                reason: None,
-            };
-            if let Err(err) = app.emit("file-transfer://status-changed", payload) {
-                warn!(error = %err, "Failed to emit completed status");
-            }
+    if let Ok(Some(entry_id)) = tracker.get_entry_summary_by_transfer(transfer_id).await {
+        if let Err(err) = emitter.emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
+            transfer_id: transfer_id.to_string(),
+            entry_id,
+            status: "completed".to_string(),
+            reason: None,
+        })) {
+            warn!(error = %err, "Failed to emit completed status");
         }
     }
 }
@@ -227,9 +221,9 @@ pub async fn handle_transfer_completed<R: tauri::Runtime>(
 ///
 /// Marks the durable row failed with the error reason, cleans partial cache,
 /// and emits `file-transfer://status-changed`.
-pub async fn handle_transfer_failed<R: tauri::Runtime>(
+pub async fn handle_transfer_failed(
     tracker: &TrackInboundTransfersUseCase,
-    app: Option<&AppHandle<R>>,
+    emitter: &dyn HostEventEmitterPort,
     transfer_id: &str,
     error_reason: &str,
     now_ms: i64,
@@ -241,17 +235,14 @@ pub async fn handle_transfer_failed<R: tauri::Runtime>(
     }
 
     // Emit status-changed for failed
-    if let Some(app) = app {
-        if let Ok(Some(entry_id)) = tracker.get_entry_summary_by_transfer(transfer_id).await {
-            let payload = FileTransferStatusPayload {
-                transfer_id: transfer_id.to_string(),
-                entry_id,
-                status: "failed".to_string(),
-                reason: Some(error_reason.to_string()),
-            };
-            if let Err(err) = app.emit("file-transfer://status-changed", payload) {
-                warn!(error = %err, "Failed to emit failed status");
-            }
+    if let Ok(Some(entry_id)) = tracker.get_entry_summary_by_transfer(transfer_id).await {
+        if let Err(err) = emitter.emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
+            transfer_id: transfer_id.to_string(),
+            entry_id,
+            status: "failed".to_string(),
+            reason: Some(error_reason.to_string()),
+        })) {
+            warn!(error = %err, "Failed to emit failed status");
         }
     }
 }
@@ -260,9 +251,9 @@ pub async fn handle_transfer_failed<R: tauri::Runtime>(
 ///
 /// Runs every 15 seconds. Fails stalled pending (>60s) and transferring (>5min)
 /// rows, emits status-changed events, and cleans partial cache artifacts.
-pub fn spawn_timeout_sweep<R: tauri::Runtime + 'static>(
+pub fn spawn_timeout_sweep(
     tracker: Arc<TrackInboundTransfersUseCase>,
-    app_handle: Option<AppHandle<R>>,
+    emitter: Arc<dyn HostEventEmitterPort>,
     clock: Arc<dyn uc_core::ports::ClockPort>,
     cancel: tokio::sync::watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
@@ -312,16 +303,15 @@ pub fn spawn_timeout_sweep<R: tauri::Runtime + 'static>(
                         cleanup_cached_path(&t.cached_path).await;
 
                         // Emit status-changed
-                        if let Some(app) = app_handle.as_ref() {
-                            let payload = FileTransferStatusPayload {
+                        if let Err(err) = emitter.emit(HostEvent::Transfer(
+                            TransferHostEvent::StatusChanged {
                                 transfer_id: t.transfer_id.clone(),
                                 entry_id: t.entry_id.clone(),
                                 status: "failed".to_string(),
                                 reason: Some(reason.to_string()),
-                            };
-                            if let Err(err) = app.emit("file-transfer://status-changed", payload) {
-                                warn!(error = %err, "Failed to emit timeout failure status");
-                            }
+                            },
+                        )) {
+                            warn!(error = %err, "Failed to emit timeout failure status");
                         }
                     }
                 }
@@ -337,9 +327,9 @@ pub fn spawn_timeout_sweep<R: tauri::Runtime + 'static>(
 /// and clean their cache artifacts.
 ///
 /// Non-blocking and non-fatal: errors are logged as warnings.
-pub async fn reconcile_on_startup<R: tauri::Runtime>(
+pub async fn reconcile_on_startup(
     tracker: &TrackInboundTransfersUseCase,
-    app: Option<&AppHandle<R>>,
+    emitter: &dyn HostEventEmitterPort,
     now_ms: i64,
 ) {
     match tracker
@@ -358,18 +348,17 @@ pub async fn reconcile_on_startup<R: tauri::Runtime>(
                 cleanup_cached_path(&t.cached_path).await;
 
                 // Emit status-changed for reconciled entries
-                if let Some(app) = app {
-                    let payload = FileTransferStatusPayload {
+                if let Err(err) =
+                    emitter.emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
                         transfer_id: t.transfer_id.clone(),
                         entry_id: t.entry_id.clone(),
                         status: "failed".to_string(),
                         reason: Some(
                             "orphaned: app restarted while transfer was in-flight".to_string(),
                         ),
-                    };
-                    if let Err(err) = app.emit("file-transfer://status-changed", payload) {
-                        warn!(error = %err, "Failed to emit reconciliation status");
-                    }
+                    }))
+                {
+                    warn!(error = %err, "Failed to emit reconciliation status");
                 }
             }
         }
