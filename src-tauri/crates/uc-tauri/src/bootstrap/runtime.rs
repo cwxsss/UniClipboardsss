@@ -32,7 +32,6 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::Emitter;
 use tokio::sync::Mutex;
 use tracing::Instrument;
 
@@ -57,7 +56,9 @@ use uc_core::security::state::EncryptionState;
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_infra::time::Timer;
 
-use crate::events::ClipboardEvent;
+use uc_core::ports::host_event_emitter::{
+    ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort,
+};
 
 /// Application runtime with dependencies.
 ///
@@ -102,6 +103,10 @@ pub struct AppRuntime {
     /// Tauri AppHandle for emitting events (optional, set after Tauri setup)
     /// Uses RwLock for interior mutability since Arc<AppRuntime> is shared
     app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,
+    /// Abstract event emitter port for delivering events to the host environment.
+    /// Starts as LoggingEventEmitter during early bootstrap, swapped to TauriEventEmitter
+    /// after the Tauri setup callback provides an AppHandle.
+    event_emitter: std::sync::RwLock<Arc<dyn HostEventEmitterPort>>,
     /// Shared lifecycle status port – stored here so that every call to
     /// `usecases().app_lifecycle_coordinator()` shares the same state.
     lifecycle_status: Arc<dyn uc_app::usecases::LifecycleStatusPort>,
@@ -182,7 +187,15 @@ impl AppRuntime {
         let setup_ports = SetupRuntimePorts::placeholder(&deps);
         let watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort> =
             Arc::new(NoopWatcherControl);
-        Self::with_setup(deps, setup_ports, watcher_control, storage_paths)
+        let event_emitter: Arc<dyn HostEventEmitterPort> =
+            Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter);
+        Self::with_setup(
+            deps,
+            setup_ports,
+            watcher_control,
+            storage_paths,
+            event_emitter,
+        )
     }
 
     /// Create a new AppRuntime with explicit setup orchestrator dependencies.
@@ -191,6 +204,7 @@ impl AppRuntime {
         setup_ports: SetupRuntimePorts,
         watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
         storage_paths: uc_app::app_paths::AppPaths,
+        event_emitter: Arc<dyn HostEventEmitterPort>,
     ) -> Self {
         let lifecycle_status: Arc<dyn uc_app::usecases::LifecycleStatusPort> =
             Arc::new(crate::adapters::lifecycle::InMemoryLifecycleStatus::new());
@@ -210,6 +224,7 @@ impl AppRuntime {
         Self {
             deps,
             app_handle,
+            event_emitter: std::sync::RwLock::new(event_emitter),
             lifecycle_status,
             setup_orchestrator,
             clipboard_integration_mode,
@@ -242,6 +257,38 @@ impl AppRuntime {
             tracing::error!("RwLock poisoned in app_handle, recovering from poisoned state");
             poisoned.into_inner()
         })
+    }
+
+    /// Get the current event emitter (clones the inner Arc).
+    ///
+    /// Returns the active [`HostEventEmitterPort`] implementation. During early bootstrap,
+    /// this is a [`LoggingEventEmitter`]; after setup, a `TauriEventEmitter`.
+    pub fn event_emitter(&self) -> Arc<dyn HostEventEmitterPort> {
+        self.event_emitter
+            .read()
+            .unwrap_or_else(|poisoned| {
+                tracing::error!("RwLock poisoned in event_emitter, recovering from poisoned state");
+                poisoned.into_inner()
+            })
+            .clone()
+    }
+
+    /// Swap the event emitter. Called from setup callback to replace the
+    /// initial [`LoggingEventEmitter`] with a [`TauriEventEmitter`] once the
+    /// Tauri `AppHandle` is available.
+    pub fn set_event_emitter(&self, emitter: Arc<dyn HostEventEmitterPort>) {
+        match self.event_emitter.write() {
+            Ok(mut guard) => {
+                *guard = emitter;
+            }
+            Err(poisoned) => {
+                tracing::error!(
+                    "RwLock poisoned in set_event_emitter, recovering from poisoned state"
+                );
+                let mut guard = poisoned.into_inner();
+                *guard = emitter;
+            }
+        }
     }
 
     /// Get use cases accessor.
@@ -1178,33 +1225,24 @@ impl ClipboardChangeHandler for AppRuntime {
                         "Successfully captured clipboard"
                     );
 
-                    // Emit event to frontend if AppHandle is available
+                    // Emit event to frontend via HostEventEmitterPort
                     {
-                        let app_handle_guard = self.app_handle.read().unwrap_or_else(|poisoned| {
-                            tracing::error!(
-                                "RwLock poisoned in on_clipboard_changed, recovering from poisoned state"
-                            );
-                            poisoned.into_inner()
-                        });
-                        if let Some(app) = app_handle_guard.as_ref() {
-                            let origin_str = match origin {
-                                ClipboardChangeOrigin::LocalCapture
-                                | ClipboardChangeOrigin::LocalRestore => "local",
-                                ClipboardChangeOrigin::RemotePush => "remote",
-                            };
-                            let event = ClipboardEvent::NewContent {
+                        let origin_kind = match origin {
+                            ClipboardChangeOrigin::LocalCapture
+                            | ClipboardChangeOrigin::LocalRestore => ClipboardOriginKind::Local,
+                            ClipboardChangeOrigin::RemotePush => ClipboardOriginKind::Remote,
+                        };
+                        let emitter = self.event_emitter();
+                        if let Err(e) = emitter.emit(HostEvent::Clipboard(
+                            ClipboardHostEvent::NewContent {
                                 entry_id: entry_id.to_string(),
                                 preview: "New clipboard content".to_string(),
-                                origin: origin_str.to_string(),
-                            };
-
-                            if let Err(e) = app.emit("clipboard://event", event) {
-                                tracing::warn!("Failed to emit clipboard event to frontend: {}", e);
-                            } else {
-                                tracing::debug!("Successfully emitted clipboard://event to frontend");
-                            }
+                                origin: origin_kind,
+                            },
+                        )) {
+                            tracing::warn!("Failed to emit clipboard event to frontend: {}", e);
                         } else {
-                            tracing::debug!("AppHandle not available, skipping event emission");
+                            tracing::debug!("Successfully emitted clipboard://event to frontend");
                         }
                     }
 

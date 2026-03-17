@@ -556,6 +556,8 @@ fn run_app(config: AppConfig) {
     // Get resolved storage paths with profile suffix and config overrides applied
     let storage_paths = get_storage_paths(&config).expect("failed to get storage paths");
 
+    let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
+        std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::LoggingEventEmitter);
     let runtime = AppRuntime::with_setup(
         deps,
         SetupRuntimePorts::from_network(
@@ -565,6 +567,7 @@ fn run_app(config: AppConfig) {
         ),
         watcher_control,
         storage_paths,
+        event_emitter,
     );
 
     // Wrap runtime in Arc for clipboard handler (PlatformRuntime needs Arc<dyn ClipboardChangeHandler>)
@@ -664,6 +667,15 @@ fn run_app(config: AppConfig) {
             // In Tauri 2, use app.handle() to get the AppHandle
             runtime_for_handler.set_app_handle(app.handle().clone());
             info!("AppHandle set on AppRuntime for event emission");
+
+            // Swap event emitter from LoggingEventEmitter to TauriEventEmitter
+            // now that AppHandle is available
+            let tauri_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
+                std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::TauriEventEmitter::new(
+                    app.handle().clone(),
+                ));
+            runtime_for_handler.set_event_emitter(tauri_emitter);
+            info!("Event emitter swapped to TauriEventEmitter");
 
             // Load startup settings for tray and silent start
             let (silent_start, initial_language) = {
