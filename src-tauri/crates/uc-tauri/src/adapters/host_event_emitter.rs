@@ -17,8 +17,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use uc_core::ports::host_event_emitter::{
     ClipboardHostEvent, ClipboardOriginKind, EmitError, HostEvent, HostEventEmitterPort,
-    PeerConnectionHostEvent, PeerDiscoveryHostEvent, TransferHostEvent,
+    PairingHostEvent, PairingVerificationKind, PeerConnectionHostEvent, PeerDiscoveryHostEvent,
+    SetupHostEvent, SpaceAccessHostEvent, TransferHostEvent,
 };
+use uc_core::setup::SetupState;
 
 // ---------------------------------------------------------------------------
 // Internal payload DTOs (module-private)
@@ -132,6 +134,96 @@ struct TransferStatusChangedPayload {
     reason: Option<String>,
 }
 
+/// Inbound clipboard subscribe error payload — camelCase fields.
+/// Matches InboundClipboardSubscribeErrorPayload at wiring.rs:217-222.
+/// JSON: { "attempt": 1, "error": "..." }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundClipboardSubscribeErrorPayload {
+    attempt: u32,
+    error: String,
+}
+
+/// Inbound clipboard subscribe retry payload — camelCase fields.
+/// Matches InboundClipboardSubscribeRetryPayload at wiring.rs:224-230.
+/// JSON: { "attempt": 2, "retryInMs": 500, "error": "..." }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InboundClipboardSubscribeRetryPayload {
+    attempt: u32,
+    retry_in_ms: u64,
+    error: String,
+}
+
+/// Pairing verification payload — camelCase fields, kind as lowercase string.
+/// Matches P2PPairingVerificationEvent in events/p2p_pairing.rs.
+/// JSON: { "sessionId": "...", "kind": "request", "peerId": null, ... }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingVerificationPayload {
+    session_id: String,
+    kind: String, // "request"|"verification"|"verifying"|"complete"|"failed"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Pairing subscribe failure payload — camelCase fields.
+/// JSON: { "attempt": 1, "retryInMs": 250, "error": "..." }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingSubscribeFailurePayload {
+    attempt: u32,
+    retry_in_ms: u64,
+    error: String,
+}
+
+/// Pairing subscribe recovered payload — camelCase fields.
+/// JSON: { "recoveredAfterAttempts": 3 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingSubscribeRecoveredPayload {
+    recovered_after_attempts: u32,
+}
+
+/// Setup state changed payload — camelCase fields.
+/// IMPORTANT: `state` carries the full SetupState enum (not a String).
+/// This preserves data-carrying variants like JoinSpaceConfirmPeer { short_code, ... }.
+/// Matches SetupStateChangedPayload at wiring.rs:181-186.
+/// JSON: { "state": { ... }, "sessionId": "..." }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupStateChangedPayload {
+    state: SetupState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+}
+
+/// Space access completed payload — camelCase fields.
+/// IMPORTANT: `peer_id` is String (non-optional) matching the existing wire contract
+/// and SpaceAccessCompletedEvent.peer_id: String.
+/// Matches SpaceAccessCompletedPayload at wiring.rs:1889-1897.
+/// JSON: { "sessionId": "...", "peerId": "...", "success": true, ... }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpaceAccessCompletedPayload {
+    session_id: String,
+    peer_id: String, // MUST be String (non-optional) — matches existing wire contract
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    ts: i64,
+}
+
 // ---------------------------------------------------------------------------
 // A helper enum so map_event can return heterogeneous payloads.
 // We use erased serialization via serde_json::Value to avoid boxing.
@@ -162,6 +254,20 @@ impl<R: Runtime> HostEventEmitterPort for TauriEventEmitter<R> {
         self.app
             .emit(event_name, payload)
             .map_err(|e| EmitError::Failed(e.to_string()))
+    }
+}
+
+/// Map a [`PairingVerificationKind`] to its lowercase string representation.
+///
+/// Matches the existing `P2PPairingVerificationKind` serde `rename_all = "camelCase"` output
+/// in events/p2p_pairing.rs — kind variants are all single words so camelCase = lowercase.
+fn kind_to_str(kind: &PairingVerificationKind) -> &'static str {
+    match kind {
+        PairingVerificationKind::Request => "request",
+        PairingVerificationKind::Verification => "verification",
+        PairingVerificationKind::Verifying => "verifying",
+        PairingVerificationKind::Complete => "complete",
+        PairingVerificationKind::Failed => "failed",
     }
 }
 
@@ -363,6 +469,144 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
                 serde_json::to_value(payload).unwrap_or_default(),
             )
         }
+
+        // -----------------------------------------------------------------------
+        // Clipboard subscribe events (new variants added in Phase 37)
+        // -----------------------------------------------------------------------
+        HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeError { attempt, error }) => {
+            let payload = InboundClipboardSubscribeErrorPayload { attempt, error };
+            (
+                "inbound-clipboard-subscribe-error",
+                serde_json::to_value(payload).unwrap_or_default(),
+            )
+        }
+
+        HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeRetry {
+            attempt,
+            retry_in_ms,
+            error,
+        }) => {
+            let payload = InboundClipboardSubscribeRetryPayload {
+                attempt,
+                retry_in_ms,
+                error,
+            };
+            (
+                "inbound-clipboard-subscribe-retry",
+                serde_json::to_value(payload).unwrap_or_default(),
+            )
+        }
+
+        // -----------------------------------------------------------------------
+        // Pairing events
+        // -----------------------------------------------------------------------
+        HostEvent::Pairing(PairingHostEvent::Verification {
+            session_id,
+            kind,
+            peer_id,
+            device_name,
+            code,
+            local_fingerprint,
+            peer_fingerprint,
+            error,
+        }) => {
+            let payload = PairingVerificationPayload {
+                session_id,
+                kind: kind_to_str(&kind).to_string(),
+                peer_id,
+                device_name,
+                code,
+                local_fingerprint,
+                peer_fingerprint,
+                error,
+            };
+            (
+                "p2p-pairing-verification",
+                serde_json::to_value(payload).unwrap_or_default(),
+            )
+        }
+
+        HostEvent::Pairing(PairingHostEvent::SubscribeFailure {
+            attempt,
+            retry_in_ms,
+            error,
+        }) => {
+            let payload = PairingSubscribeFailurePayload {
+                attempt,
+                retry_in_ms,
+                error,
+            };
+            (
+                "pairing-events-subscribe-failure",
+                serde_json::to_value(payload).unwrap_or_default(),
+            )
+        }
+
+        HostEvent::Pairing(PairingHostEvent::SubscribeRecovered {
+            recovered_after_attempts,
+        }) => {
+            let payload = PairingSubscribeRecoveredPayload {
+                recovered_after_attempts,
+            };
+            (
+                "pairing-events-subscribe-recovered",
+                serde_json::to_value(payload).unwrap_or_default(),
+            )
+        }
+
+        // -----------------------------------------------------------------------
+        // Setup events
+        // -----------------------------------------------------------------------
+        HostEvent::Setup(SetupHostEvent::StateChanged { state, session_id }) => {
+            let payload = SetupStateChangedPayload { state, session_id };
+            (
+                "setup-state-changed",
+                serde_json::to_value(payload).unwrap_or_default(),
+            )
+        }
+
+        // -----------------------------------------------------------------------
+        // SpaceAccess events
+        // -----------------------------------------------------------------------
+        HostEvent::SpaceAccess(SpaceAccessHostEvent::Completed {
+            session_id,
+            peer_id,
+            success,
+            reason,
+            ts,
+        }) => {
+            let payload = SpaceAccessCompletedPayload {
+                session_id,
+                peer_id,
+                success,
+                reason,
+                ts,
+            };
+            (
+                "space-access-completed",
+                serde_json::to_value(payload).unwrap_or_default(),
+            )
+        }
+
+        HostEvent::SpaceAccess(SpaceAccessHostEvent::P2PCompleted {
+            session_id,
+            peer_id,
+            success,
+            reason,
+            ts,
+        }) => {
+            let payload = SpaceAccessCompletedPayload {
+                session_id,
+                peer_id,
+                success,
+                reason,
+                ts,
+            };
+            (
+                "p2p-space-access-completed",
+                serde_json::to_value(payload).unwrap_or_default(),
+            )
+        }
     }
 }
 
@@ -513,6 +757,105 @@ impl HostEventEmitterPort for LoggingEventEmitter {
                     transfer_id = %transfer_id,
                     entry_id = %entry_id,
                     status = %status,
+                );
+            }
+
+            HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeError {
+                attempt,
+                ref error,
+            }) => {
+                tracing::warn!(
+                    event_type = "clipboard.inbound_subscribe_error",
+                    attempt = attempt,
+                    error = %error,
+                );
+            }
+
+            HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeRetry {
+                attempt,
+                retry_in_ms,
+                ref error,
+            }) => {
+                tracing::warn!(
+                    event_type = "clipboard.inbound_subscribe_retry",
+                    attempt = attempt,
+                    retry_in_ms = retry_in_ms,
+                    error = %error,
+                );
+            }
+
+            HostEvent::Pairing(PairingHostEvent::Verification {
+                ref session_id,
+                ref kind,
+                ref peer_id,
+                ..
+            }) => {
+                tracing::debug!(
+                    event_type = "pairing.verification",
+                    session_id = %session_id,
+                    kind = %kind_to_str(kind),
+                    peer_id = ?peer_id,
+                );
+            }
+
+            HostEvent::Pairing(PairingHostEvent::SubscribeFailure {
+                attempt,
+                retry_in_ms,
+                ref error,
+            }) => {
+                tracing::warn!(
+                    event_type = "pairing.subscribe_failure",
+                    attempt = attempt,
+                    retry_in_ms = retry_in_ms,
+                    error = %error,
+                );
+            }
+
+            HostEvent::Pairing(PairingHostEvent::SubscribeRecovered {
+                recovered_after_attempts,
+            }) => {
+                tracing::info!(
+                    event_type = "pairing.subscribe_recovered",
+                    recovered_after_attempts = recovered_after_attempts,
+                );
+            }
+
+            HostEvent::Setup(SetupHostEvent::StateChanged {
+                ref state,
+                ref session_id,
+            }) => {
+                tracing::info!(
+                    event_type = "setup.state_changed",
+                    state = ?state,
+                    session_id = ?session_id,
+                );
+            }
+
+            HostEvent::SpaceAccess(SpaceAccessHostEvent::Completed {
+                ref session_id,
+                ref peer_id,
+                success,
+                ..
+            }) => {
+                tracing::info!(
+                    event_type = "space_access.completed",
+                    session_id = %session_id,
+                    peer_id = %peer_id,
+                    success = success,
+                );
+            }
+
+            HostEvent::SpaceAccess(SpaceAccessHostEvent::P2PCompleted {
+                ref session_id,
+                ref peer_id,
+                success,
+                ..
+            }) => {
+                tracing::info!(
+                    event_type = "space_access.p2p_completed",
+                    session_id = %session_id,
+                    peer_id = %peer_id,
+                    success = success,
                 );
             }
         }
@@ -898,7 +1241,11 @@ mod tests {
     #[test]
     fn test_logging_emitter_always_returns_ok() {
         let emitter = LoggingEventEmitter;
+        use uc_core::ports::host_event_emitter::{
+            PairingHostEvent, PairingVerificationKind, SetupHostEvent, SpaceAccessHostEvent,
+        };
         use uc_core::ports::transfer_progress::{TransferDirection, TransferProgress};
+        use uc_core::setup::SetupState;
 
         let events = vec![
             HostEvent::Clipboard(ClipboardHostEvent::NewContent {
@@ -913,6 +1260,15 @@ mod tests {
             }),
             HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeRecovered {
                 recovered_after_attempts: 2,
+            }),
+            HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeError {
+                attempt: 1,
+                error: "sub error".to_string(),
+            }),
+            HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeRetry {
+                attempt: 2,
+                retry_in_ms: 500,
+                error: "sub retry".to_string(),
             }),
             HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Discovered {
                 peer_id: "p1".to_string(),
@@ -958,6 +1314,42 @@ mod tests {
                 entry_id: "e2".to_string(),
                 status: "pending".to_string(),
                 reason: None,
+            }),
+            HostEvent::Pairing(PairingHostEvent::Verification {
+                session_id: "s1".to_string(),
+                kind: PairingVerificationKind::Request,
+                peer_id: Some("p8".to_string()),
+                device_name: None,
+                code: None,
+                local_fingerprint: None,
+                peer_fingerprint: None,
+                error: None,
+            }),
+            HostEvent::Pairing(PairingHostEvent::SubscribeFailure {
+                attempt: 1,
+                retry_in_ms: 250,
+                error: "pairing sub fail".to_string(),
+            }),
+            HostEvent::Pairing(PairingHostEvent::SubscribeRecovered {
+                recovered_after_attempts: 2,
+            }),
+            HostEvent::Setup(SetupHostEvent::StateChanged {
+                state: SetupState::Welcome,
+                session_id: None,
+            }),
+            HostEvent::SpaceAccess(SpaceAccessHostEvent::Completed {
+                session_id: "sa1".to_string(),
+                peer_id: "p9".to_string(),
+                success: true,
+                reason: None,
+                ts: 1_700_000_000,
+            }),
+            HostEvent::SpaceAccess(SpaceAccessHostEvent::P2PCompleted {
+                session_id: "sa2".to_string(),
+                peer_id: "p10".to_string(),
+                success: false,
+                reason: Some("timeout".to_string()),
+                ts: 1_700_000_001,
             }),
         ];
 
@@ -1010,5 +1402,290 @@ mod tests {
         assert!(logs.contains("file_size=4096"));
         assert!(logs.contains("auto_pulled=true"));
         assert!(logs.contains("INFO"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Contract test 11: pairing verification request — camelCase, kind="request"
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_pairing_verification_request_event_contract() {
+        use uc_core::ports::host_event_emitter::{PairingHostEvent, PairingVerificationKind};
+
+        let app = tauri::test::mock_app();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
+
+        app.handle()
+            .listen("p2p-pairing-verification", move |event: tauri::Event| {
+                let _ = tx.try_send(event.payload().to_string());
+            });
+
+        let emitter = TauriEventEmitter::new(app.handle().clone());
+        emitter
+            .emit(HostEvent::Pairing(PairingHostEvent::Verification {
+                session_id: "session-42".to_string(),
+                kind: PairingVerificationKind::Request,
+                peer_id: Some("peer-a".to_string()),
+                device_name: Some("Desktop A".to_string()),
+                code: None,
+                local_fingerprint: None,
+                peer_fingerprint: None,
+                error: None,
+            }))
+            .expect("emit");
+
+        let payload = rx.recv().await.expect("event payload");
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+
+        // camelCase keys
+        assert_eq!(json["sessionId"], "session-42");
+        assert_eq!(json["kind"], "request");
+        assert_eq!(json["peerId"], "peer-a");
+        assert_eq!(json["deviceName"], "Desktop A");
+        // snake_case must be absent
+        assert!(json.get("session_id").is_none());
+        assert!(json.get("peer_id").is_none());
+        assert!(json.get("device_name").is_none());
+        // Optional None fields must be absent (skip_serializing_if)
+        assert!(json.get("code").is_none());
+        assert!(json.get("localFingerprint").is_none());
+        assert!(json.get("peerFingerprint").is_none());
+        assert!(json.get("error").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Contract test 12: pairing verification failed — error field present
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_pairing_verification_failed_event_contract() {
+        use uc_core::ports::host_event_emitter::{PairingHostEvent, PairingVerificationKind};
+
+        let app = tauri::test::mock_app();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
+
+        app.handle()
+            .listen("p2p-pairing-verification", move |event: tauri::Event| {
+                let _ = tx.try_send(event.payload().to_string());
+            });
+
+        let emitter = TauriEventEmitter::new(app.handle().clone());
+        emitter
+            .emit(HostEvent::Pairing(PairingHostEvent::Verification {
+                session_id: "session-43".to_string(),
+                kind: PairingVerificationKind::Failed,
+                peer_id: None,
+                device_name: None,
+                code: None,
+                local_fingerprint: None,
+                peer_fingerprint: None,
+                error: Some("verification timed out".to_string()),
+            }))
+            .expect("emit");
+
+        let payload = rx.recv().await.expect("event payload");
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+
+        assert_eq!(json["sessionId"], "session-43");
+        assert_eq!(json["kind"], "failed");
+        assert_eq!(json["error"], "verification timed out");
+        // peerId absent when None
+        assert!(json.get("peerId").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Contract test 13: pairing subscribe failure — camelCase, retryInMs
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_pairing_subscribe_failure_event_contract() {
+        use uc_core::ports::host_event_emitter::PairingHostEvent;
+
+        let app = tauri::test::mock_app();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
+
+        app.handle().listen(
+            "pairing-events-subscribe-failure",
+            move |event: tauri::Event| {
+                let _ = tx.try_send(event.payload().to_string());
+            },
+        );
+
+        let emitter = TauriEventEmitter::new(app.handle().clone());
+        emitter
+            .emit(HostEvent::Pairing(PairingHostEvent::SubscribeFailure {
+                attempt: 3,
+                retry_in_ms: 2000,
+                error: "connection refused".to_string(),
+            }))
+            .expect("emit");
+
+        let payload = rx.recv().await.expect("event payload");
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+
+        assert_eq!(json["attempt"], 3);
+        assert_eq!(json["retryInMs"], 2000);
+        assert_eq!(json["error"], "connection refused");
+        // snake_case must be absent
+        assert!(json.get("retry_in_ms").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Contract test 14: pairing subscribe recovered — camelCase, recoveredAfterAttempts
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_pairing_subscribe_recovered_event_contract() {
+        use uc_core::ports::host_event_emitter::PairingHostEvent;
+
+        let app = tauri::test::mock_app();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
+
+        app.handle().listen(
+            "pairing-events-subscribe-recovered",
+            move |event: tauri::Event| {
+                let _ = tx.try_send(event.payload().to_string());
+            },
+        );
+
+        let emitter = TauriEventEmitter::new(app.handle().clone());
+        emitter
+            .emit(HostEvent::Pairing(PairingHostEvent::SubscribeRecovered {
+                recovered_after_attempts: 5,
+            }))
+            .expect("emit");
+
+        let payload = rx.recv().await.expect("event payload");
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+
+        assert_eq!(json["recoveredAfterAttempts"], 5);
+        assert!(json.get("recovered_after_attempts").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Contract test 15: setup state changed — state is object (not string), sessionId camelCase
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_setup_state_changed_event_contract() {
+        use uc_core::ports::host_event_emitter::SetupHostEvent;
+        use uc_core::setup::SetupState;
+
+        let app = tauri::test::mock_app();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
+
+        app.handle()
+            .listen("setup-state-changed", move |event: tauri::Event| {
+                let _ = tx.try_send(event.payload().to_string());
+            });
+
+        let emitter = TauriEventEmitter::new(app.handle().clone());
+        // Use data-carrying variant to verify object serialization (not just string)
+        emitter
+            .emit(HostEvent::Setup(SetupHostEvent::StateChanged {
+                state: SetupState::JoinSpaceConfirmPeer {
+                    short_code: "1234".to_string(),
+                    peer_fingerprint: Some("fp-abc".to_string()),
+                    error: None,
+                },
+                session_id: Some("session-setup-1".to_string()),
+            }))
+            .expect("emit");
+
+        let payload = rx.recv().await.expect("event payload");
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+
+        // state must be a JSON object (not a plain string)
+        assert!(
+            json["state"].is_object(),
+            "state field must be a JSON object, got: {:?}",
+            json["state"]
+        );
+        // sessionId must be camelCase
+        assert_eq!(json["sessionId"], "session-setup-1");
+        assert!(json.get("session_id").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Contract test 16: space-access-completed — peerId is String (not null), camelCase
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_space_access_completed_event_contract() {
+        use uc_core::ports::host_event_emitter::SpaceAccessHostEvent;
+
+        let app = tauri::test::mock_app();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
+
+        app.handle()
+            .listen("space-access-completed", move |event: tauri::Event| {
+                let _ = tx.try_send(event.payload().to_string());
+            });
+
+        let emitter = TauriEventEmitter::new(app.handle().clone());
+        emitter
+            .emit(HostEvent::SpaceAccess(SpaceAccessHostEvent::Completed {
+                session_id: "sa-session-1".to_string(),
+                peer_id: "peer-xyz".to_string(),
+                success: true,
+                reason: None,
+                ts: 1_700_000_000,
+            }))
+            .expect("emit");
+
+        let payload = rx.recv().await.expect("event payload");
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+
+        assert_eq!(json["sessionId"], "sa-session-1");
+        // peerId MUST be a string value (non-null) — preserves existing wire contract
+        assert!(
+            json["peerId"].is_string(),
+            "peerId must be a string, got: {:?}",
+            json["peerId"]
+        );
+        assert_eq!(json["peerId"], "peer-xyz");
+        assert_eq!(json["success"], true);
+        assert_eq!(json["ts"], 1_700_000_000_i64);
+        // reason is None — should be absent (skip_serializing_if)
+        assert!(json.get("reason").is_none());
+        // snake_case must be absent
+        assert!(json.get("session_id").is_none());
+        assert!(json.get("peer_id").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Contract test 17: p2p-space-access-completed — correct event name
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_p2p_space_access_completed_event_contract() {
+        use uc_core::ports::host_event_emitter::SpaceAccessHostEvent;
+
+        let app = tauri::test::mock_app();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
+
+        app.handle()
+            .listen("p2p-space-access-completed", move |event: tauri::Event| {
+                let _ = tx.try_send(event.payload().to_string());
+            });
+
+        let emitter = TauriEventEmitter::new(app.handle().clone());
+        emitter
+            .emit(HostEvent::SpaceAccess(SpaceAccessHostEvent::P2PCompleted {
+                session_id: "sa-p2p-1".to_string(),
+                peer_id: "peer-p2p".to_string(),
+                success: false,
+                reason: Some("peer rejected".to_string()),
+                ts: 1_700_000_002,
+            }))
+            .expect("emit");
+
+        let payload = rx.recv().await.expect("event payload");
+        let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+
+        assert_eq!(json["sessionId"], "sa-p2p-1");
+        assert_eq!(json["peerId"], "peer-p2p");
+        assert_eq!(json["success"], false);
+        assert_eq!(json["reason"], "peer rejected");
     }
 }
