@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 38-02-PLAN.md
-last_updated: '2026-03-18T06:08:12.622Z'
+stopped_at: Completed 38-03-PLAN.md
+last_updated: '2026-03-18T06:30:20.003Z'
 last_activity: 2026-03-17 — Plan 37-03 complete (wiring.rs split into assembly.rs; AppHandle removed from start_background_tasks)
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
   percent: 0
 ---
 
@@ -55,6 +55,7 @@ _Updated after each plan completion_
 | Phase 37-wiring-decomposition P05 | 55 | 3 tasks | 3 files |
 | Phase 38-coreruntime-extraction P01 | 18 | 2 tasks | 9 files |
 | Phase 38 P02 | 11 | 2 tasks | 4 files |
+| Phase 38-coreruntime-extraction P03 | 60 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,9 @@ Recent decisions affecting current work:
 - [Phase 38-coreruntime-extraction]: uc-tauri re-export pattern used for TaskRegistry (pub use uc_app::task_registry::TaskRegistry) for backward compatibility
 - [Phase 38]: CoreRuntime::new() accepts pre-built Arc<RwLock<Arc<dyn HostEventEmitterPort>>> — caller creates the cell, CoreRuntime never wraps internally
 - [Phase 38]: emitter_cell created once in with_setup() and shared with both build_setup_orchestrator and CoreRuntime::new() — same Arc, no copies
+- [Phase 38-coreruntime-extraction]: AppUseCases wraps CoreUseCases via Deref<Target=CoreUseCases> — all ~35 pure domain accessors transparent without duplication
+- [Phase 38-coreruntime-extraction]: build_setup_orchestrator extracted to assembly.rs as standalone pub fn — satisfies RNTM-05 single composition point, eliminating secondary wiring in runtime.rs
+- [Phase 38-coreruntime-extraction]: SetupAssemblyPorts contains only 5 external adapter ports; shared-cell params (emitter_cell, lifecycle_status, watcher_control, session_ready_emitter, clipboard_integration_mode) are separate build_setup_orchestrator params
 
 ### Roadmap Evolution
 
@@ -102,6 +106,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18T06:08:05.964Z
-Stopped at: Completed 38-02-PLAN.md
+Last session: 2026-03-18T06:30:20.002Z
+Stopped at: Completed 38-03-PLAN.md
 Resume file: None
