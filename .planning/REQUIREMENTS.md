@@ -20,7 +20,7 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **RNTM-02**: wiring.rs is decomposed into pure assembly module (Tauri-free) and Tauri-specific event loop module
 - [ ] **RNTM-03**: Configuration resolution functions (path resolve, profile suffix, keyslot dir) extracted from main.rs to reusable module
 - [ ] **RNTM-04**: UseCases accessor is shared across all entry points (not duplicated per runtime mode)
-- [ ] **RNTM-05**: SetupOrchestrator assembly unified into main composition root (no secondary wiring in runtime.rs)
+- [x] **RNTM-05**: SetupOrchestrator assembly unified into main composition root (no secondary wiring in runtime.rs)
 
 ### Bootstrap Crate
 
@@ -82,7 +82,7 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | EVNT-04     | 36    | Complete |
 | RNTM-02     | 37    | Complete |
 | RNTM-01     | 38    | Complete |
-| RNTM-05     | 38    | Pending  |
+| RNTM-05     | 38    | Complete |
 | RNTM-03     | 39    | Pending  |
 | BOOT-01     | 40    | Pending  |
 | BOOT-02     | 40    | Pending  |
