@@ -135,7 +135,7 @@ Plans:
 3. The resolution functions are unit-testable without a running Tauri app
 4. GUI app launches and resolves config paths correctly after the extraction
 
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 
@@ -182,6 +182,6 @@ Plans:
 | 36. Event Emitter Abstraction    | 2/2       | Complete       | 2026-03-17  | -          |
 | 37. Wiring Decomposition         | 5/5       | Complete       | 2026-03-18  | 2026-03-17 |
 | 38. CoreRuntime Extraction       | 3/3       | Complete       | 2026-03-18  | -          |
-| 39. Config Resolution Extraction | v0.4.0    | 0/2            | Not started | -          |
+| 39. Config Resolution Extraction | 1/2       | In Progress    |             | -          |
 | 40. uc-bootstrap Crate           | v0.4.0    | 0/?            | Not started | -          |
 | 41. Daemon and CLI Skeletons     | v0.4.0    | 0/?            | Not started | -          |
