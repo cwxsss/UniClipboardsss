@@ -96,16 +96,16 @@ impl SpaceAccessOrchestrator {
         async {
             let current = self.state.lock().await.clone();
 
-            // When re-entering from a terminal state (e.g. sponsor handling a
-            // second joiner after the first completed), clear stale context so
+            // When re-entering from any non-Idle state (e.g. sponsor handling a
+            // second joiner after the first completed, or a stale
+            // WaitingJoinerProof from a failed pairing), clear stale context so
             // the new session starts with a clean slate.
-            let restarting_from_terminal = matches!(
-                current,
-                SpaceAccessState::Granted { .. }
-                    | SpaceAccessState::Denied { .. }
-                    | SpaceAccessState::Cancelled { .. }
-            );
-            if restarting_from_terminal {
+            let restarting = !matches!(current, SpaceAccessState::Idle)
+                && matches!(
+                    event,
+                    SpaceAccessEvent::SponsorAuthorizationRequested { .. }
+                );
+            if restarting {
                 let mut context = self.context.lock().await;
                 context.prepared_offer = None;
                 context.joiner_offer = None;
