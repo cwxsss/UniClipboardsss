@@ -124,14 +124,18 @@ pub struct WiredDependencies {
 }
 
 /// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
+///
+/// Uses Arc<RwLock<...>> shared cell so that HostEventSetupPort always reads the
+/// current emitter after bootstrap swaps it from LoggingEventEmitter to TauriEventEmitter.
+/// This eliminates the stale emitter bug described in STATE.md Known Bugs.
 #[derive(Clone)]
 pub struct HostEventSetupPort {
-    emitter: Arc<dyn HostEventEmitterPort>,
+    emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
 }
 
 impl HostEventSetupPort {
-    pub fn new(emitter: Arc<dyn HostEventEmitterPort>) -> Self {
-        Self { emitter }
+    pub fn new(emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>) -> Self {
+        Self { emitter_cell }
     }
 }
 
@@ -142,13 +146,15 @@ impl SetupEventPort for HostEventSetupPort {
         state: uc_core::setup::SetupState,
         session_id: Option<String>,
     ) {
-        if let Err(err) = self
-            .emitter
-            .emit(HostEvent::Setup(SetupHostEvent::StateChanged {
-                state,
-                session_id,
-            }))
-        {
+        let emitter = self
+            .emitter_cell
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Err(err) = emitter.emit(HostEvent::Setup(SetupHostEvent::StateChanged {
+            state,
+            session_id,
+        })) {
             warn!(error = %err, "Failed to emit setup-state-changed");
         }
     }
