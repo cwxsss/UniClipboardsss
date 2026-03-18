@@ -72,10 +72,16 @@ export function PairingNotificationProvider() {
             action: {
               label: t('common.accept', { defaultValue: 'Accept' }),
               onClick: () => {
+                // Synchronously establish the active session ref BEFORE calling
+                // acceptP2PPairing, so that any verification event that arrives
+                // immediately after acceptance is not dropped by the session guard.
+                activeSessionIdRef.current = event.sessionId
                 setActiveSessionId(event.sessionId)
                 acceptP2PPairing(event.sessionId).catch(err => {
                   console.error(err)
                   toast.error(t('pairing.failed', { defaultValue: 'Pairing failed' }))
+                  // Roll back both ref and state on failure to avoid a stale session.
+                  activeSessionIdRef.current = null
                   setActiveSessionId(null)
                 })
               },
