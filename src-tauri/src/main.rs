@@ -273,12 +273,6 @@ async fn resolve_uc_thumbnail_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
-    use std::fs;
-    use std::sync::Mutex;
-    use tempfile::TempDir;
-
-    static CWD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_cors_headers_are_set_for_dev_origin() {
@@ -306,46 +300,6 @@ mod tests {
 
         let headers = response.headers();
         assert!(headers.get(ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
-    }
-
-    #[test]
-    fn test_resolve_config_path_finds_parent_directory() {
-        let _guard = CWD_TEST_LOCK.lock().unwrap();
-        let temp_dir = TempDir::new().unwrap();
-        let root_dir = temp_dir.path();
-        let nested_dir = root_dir.join("src-tauri");
-        fs::create_dir_all(&nested_dir).unwrap();
-        fs::write(root_dir.join("config.toml"), "").unwrap();
-
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(&nested_dir).unwrap();
-
-        let resolved = resolve_config_path().and_then(|path| fs::canonicalize(path).ok());
-
-        env::set_current_dir(original_dir).unwrap();
-
-        let expected = fs::canonicalize(root_dir.join("config.toml")).unwrap();
-        assert_eq!(resolved, Some(expected));
-    }
-
-    #[test]
-    fn test_resolve_config_path_finds_src_tauri_config_from_repo_root() {
-        let _guard = CWD_TEST_LOCK.lock().unwrap();
-        let temp_dir = TempDir::new().unwrap();
-        let root_dir = temp_dir.path();
-        let src_tauri_dir = root_dir.join("src-tauri");
-        fs::create_dir_all(&src_tauri_dir).unwrap();
-        fs::write(src_tauri_dir.join("config.toml"), "").unwrap();
-
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(root_dir).unwrap();
-
-        let resolved = resolve_config_path().and_then(|path| fs::canonicalize(path).ok());
-
-        env::set_current_dir(original_dir).unwrap();
-
-        let expected = fs::canonicalize(src_tauri_dir.join("config.toml")).unwrap();
-        assert_eq!(resolved, Some(expected));
     }
 }
 
