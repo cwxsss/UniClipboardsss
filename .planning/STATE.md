@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 37-04-PLAN.md
-last_updated: '2026-03-18T02:28:16.437Z'
+stopped_at: Completed 37-05-PLAN.md
+last_updated: '2026-03-18T02:46:11.759Z'
 last_activity: 2026-03-17 — Plan 37-03 complete (wiring.rs split into assembly.rs; AppHandle removed from start_background_tasks)
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
   percent: 0
 ---
 
@@ -52,6 +52,7 @@ _Updated after each plan completion_
 | Phase 37-wiring-decomposition P02 | 35 | 2 tasks | 3 files |
 | Phase 37-wiring-decomposition P03 | 24 | 2 tasks | 6 files |
 | Phase 37-wiring-decomposition P04 | 15 | 2 tasks | 2 files |
+| Phase 37-wiring-decomposition P05 | 55 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,8 @@ Recent decisions affecting current work:
 - [Phase 37-wiring-decomposition]: app.emit() calls replaced with HostEventEmitterPort; TauriSetupEventPort replaced by HostEventSetupPort; \_app_handle params deferred to Plan 03
 - [Phase 37-wiring-decomposition P03]: assembly.rs created with zero tauri imports; BackgroundRuntimeDeps stays in wiring.rs; PlatformLayer made pub(crate) for test access; invoke_handler stays in main.rs (generate_handler! macro constraint)
 - [Phase 37-wiring-decomposition]: Synchronously write activeSessionIdRef.current before calling acceptP2PPairing to close verification event race window — useEffect-based ref sync is too late when backend emits immediately
+- [Phase 37-wiring-decomposition]: Subscribe before initiate: pairing event subscription moved before initiate_pairing in ensure_pairing_session to eliminate race window
+- [Phase 37-wiring-decomposition]: app_closed_tx flag guards StreamClosedByPeer->PairingFailed bridge from firing on explicit application-initiated session closes
 
 ### Roadmap Evolution
 
@@ -88,6 +91,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18T02:28:16.405Z
-Stopped at: Completed 37-04-PLAN.md
+Last session: 2026-03-18T02:46:11.758Z
+Stopped at: Completed 37-05-PLAN.md
 Resume file: None
