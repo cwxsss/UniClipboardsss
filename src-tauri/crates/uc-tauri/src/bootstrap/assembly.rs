@@ -825,3 +825,273 @@ pub async fn resolve_pairing_config(settings: Arc<dyn SettingsPort>) -> PairingC
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// SetupAssemblyPorts — network/external adapter ports for SetupOrchestrator
+// ---------------------------------------------------------------------------
+
+use tokio::sync::Mutex as TokioMutex;
+use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+use uc_app::usecases::{
+    DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, PairingOrchestrator,
+    SessionReadyEmitter, SetupOrchestrator, StartClipboardWatcherPort,
+};
+use uc_core::clipboard::ClipboardIntegrationMode;
+use uc_core::ports::space::SpaceAccessTransportPort;
+use uc_core::ports::{DiscoveryPort, TimerPort};
+
+/// Bundle of network/external adapter ports needed to assemble the SetupOrchestrator.
+///
+/// Replaces SetupRuntimePorts from runtime.rs. Contains ONLY network/external
+/// adapter ports that the caller (main.rs/wiring.rs) provides and that are NOT
+/// shared with AppRuntime or CoreRuntime. All shared/dual-use values
+/// (watcher_control, emitter_cell, lifecycle_status, clipboard_integration_mode,
+/// session_ready_emitter) are separate parameters to build_setup_orchestrator(),
+/// ensuring with_setup() can pass the SAME instance to both the orchestrator
+/// and AppRuntime/CoreRuntime.
+pub struct SetupAssemblyPorts {
+    pub pairing_orchestrator: Arc<PairingOrchestrator>,
+    pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    pub discovery_port: Arc<dyn DiscoveryPort>,
+    pub device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
+    pub lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
+}
+
+impl SetupAssemblyPorts {
+    /// Create a bundle using the peer-directory port as the discovery adapter.
+    pub fn from_network(
+        pairing_orchestrator: Arc<PairingOrchestrator>,
+        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+        peers: Arc<dyn uc_core::ports::PeerDirectoryPort>,
+        device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
+        lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
+    ) -> Self {
+        struct NetworkDiscoveryPort {
+            peers: Arc<dyn uc_core::ports::PeerDirectoryPort>,
+        }
+        #[async_trait::async_trait]
+        impl DiscoveryPort for NetworkDiscoveryPort {
+            async fn list_discovered_peers(
+                &self,
+            ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>> {
+                self.peers.get_discovered_peers().await
+            }
+        }
+        Self {
+            pairing_orchestrator,
+            space_access_orchestrator,
+            discovery_port: Arc::new(NetworkDiscoveryPort { peers }),
+            device_announcer,
+            lifecycle_emitter,
+        }
+    }
+
+    /// Create placeholder ports for tests. All ports are noop implementations.
+    /// Used by AppRuntime::new() for command tests that don't exercise setup flow.
+    ///
+    /// NOTE: Shared state (emitter_cell, lifecycle_status, clipboard_integration_mode)
+    /// and with_setup()-constructed adapters (session_ready_emitter) are NOT created
+    /// here — they are created by AppRuntime::new() / with_setup() and passed
+    /// separately to build_setup_orchestrator().
+    pub fn placeholder(deps: &uc_app::AppDeps) -> Self {
+        struct EmptyDiscoveryPort;
+        #[async_trait::async_trait]
+        impl DiscoveryPort for EmptyDiscoveryPort {
+            async fn list_discovered_peers(
+                &self,
+            ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>> {
+                Ok(Vec::new())
+            }
+        }
+
+        let (orchestrator, _rx) = PairingOrchestrator::new(
+            uc_app::usecases::PairingConfig::default(),
+            deps.device.paired_device_repo.clone(),
+            "setup-placeholder-device".to_string(),
+            "setup-placeholder-device-id".to_string(),
+            "setup-placeholder-peer-id".to_string(),
+            vec![],
+            Arc::new(uc_app::usecases::StagedPairedDeviceStore::new()),
+        );
+        Self {
+            pairing_orchestrator: Arc::new(orchestrator),
+            space_access_orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
+            discovery_port: Arc::new(EmptyDiscoveryPort),
+            device_announcer: None,
+            lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
+        }
+    }
+}
+
+/// Build the SetupOrchestrator with all required adapters.
+///
+/// This is the single composition point for SetupOrchestrator (RNTM-05).
+/// Network/external adapters come via `ports`. Shared state (emitter_cell,
+/// lifecycle_status, clipboard_integration_mode) and with_setup()-constructed
+/// adapters (session_ready_emitter) come as separate parameters — the caller
+/// (with_setup) passes the SAME instances to both this function and
+/// CoreRuntime::new(), guaranteeing a single source of truth and preventing
+/// the stale-emitter bug.
+///
+/// Separate parameters (not in SetupAssemblyPorts) ensure with_setup() can
+/// pass the SAME watcher_control to both this function and AppRuntime, the
+/// SAME emitter_cell to both this function and CoreRuntime, etc.
+///
+/// `watcher_control` + `clipboard_integration_mode` are combined here into
+/// `StartClipboardWatcherPort` (the use-case wrapper).
+/// `session_ready_emitter` is constructed from `app_handle` in with_setup().
+pub fn build_setup_orchestrator(
+    deps: &uc_app::AppDeps,
+    ports: SetupAssemblyPorts,
+    lifecycle_status: Arc<dyn LifecycleStatusPort>,
+    emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
+    clipboard_integration_mode: ClipboardIntegrationMode,
+    session_ready_emitter: Arc<dyn SessionReadyEmitter>,
+    watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
+) -> Arc<SetupOrchestrator> {
+    use uc_app::usecases::{
+        AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, InitializeEncryption,
+        MarkSetupComplete, StagedPairedDeviceStore, StartNetworkAfterUnlock,
+    };
+
+    let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
+        deps.security.encryption.clone(),
+        deps.security.key_material.clone(),
+        deps.security.key_scope.clone(),
+        deps.security.encryption_state.clone(),
+        deps.security.encryption_session.clone(),
+    ));
+    let mark_setup_complete = Arc::new(MarkSetupComplete::from_ports(deps.setup_status.clone()));
+
+    // Wrap raw WatcherControlPort into StartClipboardWatcherPort using clipboard_integration_mode.
+    // Both are separate parameters (not in SetupAssemblyPorts) so with_setup() can pass the
+    // SAME watcher_control Arc to both this function and AppRuntime.
+    let start_watcher: Arc<dyn StartClipboardWatcherPort> =
+        Arc::new(uc_platform::usecases::StartClipboardWatcher::from_port(
+            watcher_control,            // separate param — same Arc as AppRuntime holds
+            clipboard_integration_mode, // separate param — same value as CoreRuntime holds
+        ));
+    let start_network = Arc::new(StartNetworkAfterUnlock::from_port(
+        deps.network_control.clone(),
+    ));
+    let app_lifecycle = Arc::new(AppLifecycleCoordinator::from_deps(
+        AppLifecycleCoordinatorDeps {
+            watcher: start_watcher,
+            network: start_network,
+            announcer: ports.device_announcer,
+            emitter: session_ready_emitter, // from separate parameter, NOT ports
+            status: lifecycle_status,       // from separate parameter, NOT ports
+            lifecycle_emitter: ports.lifecycle_emitter,
+        },
+    ));
+    let crypto_factory = Arc::new(
+        uc_app::usecases::space_access::DefaultSpaceAccessCryptoFactory::new(
+            deps.security.encryption.clone(),
+            deps.security.key_material.clone(),
+            deps.security.key_scope.clone(),
+            deps.security.encryption_state.clone(),
+            deps.security.encryption_session.clone(),
+        ),
+    );
+    let transport_port: Arc<TokioMutex<dyn SpaceAccessTransportPort>> = Arc::new(TokioMutex::new(
+        uc_app::usecases::space_access::SpaceAccessNetworkAdapter::new(
+            deps.network_ports.pairing.clone(),
+            ports.space_access_orchestrator.context(),
+        ),
+    ));
+    let proof_port: Arc<dyn uc_core::ports::space::ProofPort> = Arc::new(
+        uc_app::usecases::space_access::HmacProofAdapter::new_with_encryption_session(
+            deps.security.encryption_session.clone(),
+        ),
+    );
+    let timer_port: Arc<TokioMutex<dyn TimerPort>> =
+        Arc::new(TokioMutex::new(uc_infra::time::Timer::new()));
+    let persistence_port = Arc::new(TokioMutex::new(
+        uc_app::usecases::space_access::SpaceAccessPersistenceAdapter::new(
+            deps.security.encryption_state.clone(),
+            deps.device.paired_device_repo.clone(),
+            Arc::new(StagedPairedDeviceStore::new()),
+        ),
+    ));
+    let setup_event_port = Arc::new(HostEventSetupPort::new(emitter_cell)); // from separate parameter, NOT ports
+
+    Arc::new(SetupOrchestrator::new(
+        initialize_encryption,
+        mark_setup_complete,
+        deps.setup_status.clone(),
+        app_lifecycle,
+        ports.pairing_orchestrator,
+        setup_event_port,
+        ports.space_access_orchestrator,
+        ports.discovery_port,
+        deps.network_control.clone(),
+        crypto_factory,
+        deps.network_ports.pairing.clone(),
+        transport_port,
+        proof_port,
+        timer_port,
+        persistence_port,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+    use uc_core::ports::host_event_emitter::{EmitError, HostEvent};
+    use uc_core::ports::SetupEventPort;
+
+    struct RecordingEmitter {
+        events: Arc<StdMutex<Vec<String>>>,
+    }
+
+    impl HostEventEmitterPort for RecordingEmitter {
+        fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
+            self.events.lock().unwrap().push(format!("{:?}", event));
+            Ok(())
+        }
+    }
+
+    /// SC#4: HostEventSetupPort read-through test.
+    ///
+    /// Validates that HostEventSetupPort, when given a shared cell, sees a swapped emitter.
+    /// This test directly constructs HostEventSetupPort — it does NOT exercise
+    /// build_setup_orchestrator() wiring. The wiring correctness is verified structurally
+    /// by the acceptance_criteria checks ensuring build_setup_orchestrator receives
+    /// emitter_cell as a parameter and passes it to HostEventSetupPort::new().
+    #[tokio::test]
+    async fn setup_state_emission_survives_emitter_swap() {
+        // 1. Create cell with initial logging emitter
+        let initial: Arc<dyn HostEventEmitterPort> =
+            Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter);
+        let cell = Arc::new(std::sync::RwLock::new(initial));
+
+        // 2. Create HostEventSetupPort with the cell
+        let setup_port = HostEventSetupPort::new(cell.clone());
+
+        // 3. Swap emitter to recording emitter
+        let events = Arc::new(StdMutex::new(vec![]));
+        let recording: Arc<dyn HostEventEmitterPort> = Arc::new(RecordingEmitter {
+            events: events.clone(),
+        });
+        *cell.write().unwrap() = recording;
+
+        // 4. Emit through setup_port — should reach recording emitter
+        setup_port
+            .emit_setup_state_changed(uc_core::setup::SetupState::Welcome, None)
+            .await;
+
+        // 5. Verify event reached new emitter
+        let recorded = events.lock().unwrap();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "Setup event should reach the new emitter after swap"
+        );
+        assert!(
+            recorded[0].contains("Welcome"),
+            "Event should contain Welcome state, got: {}",
+            recorded[0]
+        );
+    }
+}

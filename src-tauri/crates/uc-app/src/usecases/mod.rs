@@ -68,3 +68,335 @@ pub use file_sync::{
 pub use sync_planner::{
     ClipboardSyncIntent, FileCandidate, FileSyncIntent, OutboundSyncPlan, OutboundSyncPlanner,
 };
+
+use crate::runtime::CoreRuntime;
+use std::sync::Arc;
+
+/// Pure domain use case accessors bound to CoreRuntime.
+///
+/// All methods return use case instances wired with ports from AppDeps.
+/// No Tauri dependency. For Tauri-specific accessors (apply_autostart,
+/// start_clipboard_watcher, app_lifecycle_coordinator) and uc-infra-dependent
+/// accessors (sync_inbound_clipboard, sync_outbound_clipboard), see AppUseCases
+/// in uc-tauri.
+pub struct CoreUseCases<'a> {
+    pub(crate) runtime: &'a CoreRuntime,
+}
+
+impl<'a> CoreUseCases<'a> {
+    pub fn new(runtime: &'a CoreRuntime) -> Self {
+        Self { runtime }
+    }
+
+    /// Accesses the use case for querying clipboard history.
+    pub fn list_clipboard_entries(&self) -> crate::usecases::ListClipboardEntries {
+        crate::usecases::ListClipboardEntries::from_arc(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+        )
+    }
+
+    /// Create a `DeleteClipboardEntry` use case.
+    pub fn delete_clipboard_entry(&self) -> crate::usecases::DeleteClipboardEntry {
+        crate::usecases::DeleteClipboardEntry::from_ports(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+        )
+        .with_file_cache_dir(self.runtime.storage_paths.file_cache_dir.clone())
+    }
+
+    /// Create a `ClearClipboardHistory` use case.
+    pub fn clear_clipboard_history(&self) -> crate::usecases::clipboard::ClearClipboardHistory {
+        crate::usecases::clipboard::ClearClipboardHistory::from_ports(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.clipboard_event_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+        )
+    }
+
+    /// Get the GetEntryDetail use case.
+    pub fn get_entry_detail(
+        &self,
+    ) -> crate::usecases::clipboard::get_entry_detail::GetEntryDetailUseCase {
+        crate::usecases::clipboard::get_entry_detail::GetEntryDetailUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.storage.blob_store.clone(),
+        )
+    }
+
+    /// Get the GetEntryResource use case.
+    pub fn get_entry_resource(
+        &self,
+    ) -> crate::usecases::clipboard::get_entry_resource::GetEntryResourceUseCase {
+        crate::usecases::clipboard::get_entry_resource::GetEntryResourceUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+        )
+    }
+
+    /// Resolve blob resource content by blob id.
+    pub fn resolve_blob_resource(
+        &self,
+    ) -> crate::usecases::clipboard::resolve_blob_resource::ResolveBlobResourceUseCase {
+        crate::usecases::clipboard::resolve_blob_resource::ResolveBlobResourceUseCase::new(
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.storage.blob_store.clone(),
+        )
+    }
+
+    /// Get storage statistics use case.
+    pub fn get_storage_stats(&self) -> crate::usecases::storage::GetStorageStats {
+        crate::usecases::storage::GetStorageStats::new(self.runtime.storage_paths.clone())
+    }
+
+    /// Clear cache use case.
+    pub fn clear_cache(&self) -> crate::usecases::storage::ClearCache {
+        crate::usecases::storage::ClearCache::new(
+            self.runtime.storage_paths.clone(),
+            self.runtime.deps.system.cache_fs.clone(),
+        )
+    }
+
+    /// Open data directory use case.
+    pub fn open_data_directory(&self) -> crate::usecases::storage::OpenDataDirectory {
+        crate::usecases::storage::OpenDataDirectory::new(
+            self.runtime.storage_paths.clone(),
+            self.runtime.deps.system.file_manager.clone(),
+        )
+    }
+
+    /// List paired devices from repository.
+    pub fn list_paired_devices(&self) -> crate::usecases::ListPairedDevices {
+        crate::usecases::ListPairedDevices::new(self.runtime.deps.device.paired_device_repo.clone())
+    }
+
+    /// Get local peer id from network port.
+    pub fn get_local_peer_id(&self) -> crate::usecases::GetLocalPeerId {
+        crate::usecases::GetLocalPeerId::new(self.runtime.deps.network_ports.peers.clone())
+    }
+
+    /// Get local device info (peer id + device name).
+    pub fn get_local_device_info(&self) -> crate::usecases::GetLocalDeviceInfo {
+        crate::usecases::GetLocalDeviceInfo::new(
+            self.runtime.deps.network_ports.peers.clone(),
+            self.runtime.deps.settings.clone(),
+        )
+    }
+
+    /// Announce local device name through the network port.
+    pub fn announce_device_name(&self) -> crate::usecases::AnnounceDeviceName {
+        crate::usecases::AnnounceDeviceName::new(self.runtime.deps.network_ports.peers.clone())
+    }
+
+    /// List discovered peers from network.
+    pub fn list_discovered_peers(&self) -> crate::usecases::ListDiscoveredPeers {
+        crate::usecases::ListDiscoveredPeers::new(self.runtime.deps.network_ports.peers.clone())
+    }
+
+    /// List connected peers from network.
+    pub fn list_connected_peers(&self) -> crate::usecases::ListConnectedPeers {
+        crate::usecases::ListConnectedPeers::new(self.runtime.deps.network_ports.peers.clone())
+    }
+
+    /// Update pairing state for a peer.
+    pub fn set_pairing_state(&self) -> crate::usecases::SetPairingState {
+        crate::usecases::SetPairingState::new(self.runtime.deps.device.paired_device_repo.clone())
+    }
+
+    /// Get resolved sync settings for a specific device.
+    pub fn get_device_sync_settings(&self) -> crate::usecases::GetDeviceSyncSettings {
+        crate::usecases::GetDeviceSyncSettings::from_ports(
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.settings.clone(),
+        )
+    }
+
+    /// Update or clear per-device sync settings.
+    pub fn update_device_sync_settings(&self) -> crate::usecases::UpdateDeviceSyncSettings {
+        crate::usecases::UpdateDeviceSyncSettings::from_ports(
+            self.runtime.deps.device.paired_device_repo.clone(),
+        )
+    }
+
+    /// Unpair device and remove from repository.
+    pub fn unpair_device(&self) -> crate::usecases::UnpairDevice {
+        crate::usecases::UnpairDevice::new(
+            self.runtime.deps.network_ports.pairing.clone(),
+            self.runtime.deps.device.paired_device_repo.clone(),
+        )
+    }
+
+    /// Resolve thumbnail resource content by representation id.
+    pub fn resolve_thumbnail_resource(
+        &self,
+    ) -> crate::usecases::clipboard::resolve_thumbnail_resource::ResolveThumbnailResourceUseCase
+    {
+        crate::usecases::clipboard::resolve_thumbnail_resource::ResolveThumbnailResourceUseCase::new(
+            self.runtime.deps.storage.thumbnail_repo.clone(),
+            self.runtime.deps.storage.blob_store.clone(),
+        )
+    }
+
+    /// Get the InitializeEncryption use case.
+    pub fn initialize_encryption(&self) -> crate::usecases::InitializeEncryption {
+        crate::usecases::InitializeEncryption::from_ports(
+            self.runtime.deps.security.encryption.clone(),
+            self.runtime.deps.security.key_material.clone(),
+            self.runtime.deps.security.key_scope.clone(),
+            self.runtime.deps.security.encryption_state.clone(),
+            self.runtime.deps.security.encryption_session.clone(),
+        )
+    }
+
+    /// Get the VerifyKeychainAccess use case.
+    pub fn verify_keychain_access(
+        &self,
+    ) -> crate::usecases::verify_keychain_access::VerifyKeychainAccess {
+        crate::usecases::verify_keychain_access::VerifyKeychainAccess::from_ports(
+            self.runtime.deps.security.key_scope.clone(),
+            self.runtime.deps.security.key_material.clone(),
+        )
+    }
+
+    /// Get the AutoUnlockEncryptionSession use case.
+    pub fn auto_unlock_encryption_session(&self) -> crate::usecases::AutoUnlockEncryptionSession {
+        crate::usecases::AutoUnlockEncryptionSession::from_ports(
+            self.runtime.deps.security.encryption_state.clone(),
+            self.runtime.deps.security.key_scope.clone(),
+            self.runtime.deps.security.key_material.clone(),
+            self.runtime.deps.security.encryption.clone(),
+            self.runtime.deps.security.encryption_session.clone(),
+        )
+    }
+
+    /// Get the SetupOrchestrator.
+    pub fn setup_orchestrator(&self) -> Arc<crate::usecases::SetupOrchestrator> {
+        self.runtime.setup_orchestrator().clone()
+    }
+
+    /// Get application settings.
+    pub fn get_settings(&self) -> crate::usecases::GetSettings {
+        crate::usecases::GetSettings::new(self.runtime.deps.settings.clone())
+    }
+
+    /// Update application settings.
+    pub fn update_settings(&self) -> crate::usecases::UpdateSettings {
+        crate::usecases::UpdateSettings::new(self.runtime.deps.settings.clone())
+    }
+
+    /// Start the network runtime.
+    pub fn start_network(&self) -> crate::usecases::StartNetwork {
+        crate::usecases::StartNetwork::from_port(self.runtime.deps.network_control.clone())
+    }
+
+    /// Start the network runtime after unlock.
+    pub fn start_network_after_unlock(&self) -> crate::usecases::StartNetworkAfterUnlock {
+        crate::usecases::StartNetworkAfterUnlock::from_port(
+            self.runtime.deps.network_control.clone(),
+        )
+    }
+
+    /// List clipboard entry projections.
+    pub fn list_entry_projections(&self) -> crate::usecases::ListClipboardEntryProjections {
+        crate::usecases::ListClipboardEntryProjections::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.storage.thumbnail_repo.clone(),
+            self.runtime.deps.storage.file_transfer_repo.clone(),
+        )
+    }
+
+    /// Restore clipboard selection to system clipboard.
+    pub fn restore_clipboard_selection(
+        &self,
+    ) -> crate::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase
+    {
+        crate::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.system_clipboard.clone(),
+            self.runtime.deps.clipboard.selection_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.storage.blob_store.clone(),
+            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
+            self.runtime.clipboard_integration_mode,
+        )
+    }
+
+    /// Touch clipboard entry active time.
+    pub fn touch_clipboard_entry(
+        &self,
+    ) -> crate::usecases::clipboard::touch_clipboard_entry::TouchClipboardEntryUseCase {
+        crate::usecases::clipboard::touch_clipboard_entry::TouchClipboardEntryUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.system.clock.clone(),
+        )
+    }
+
+    /// Toggle favorite state for a clipboard entry.
+    pub fn toggle_favorite_clipboard_entry(
+        &self,
+    ) -> crate::usecases::clipboard::toggle_favorite_clipboard_entry::ToggleFavoriteClipboardEntryUseCase{
+        crate::usecases::clipboard::toggle_favorite_clipboard_entry::ToggleFavoriteClipboardEntryUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+        )
+    }
+
+    /// Get the lifecycle status port directly (for status queries).
+    pub fn get_lifecycle_status(&self) -> Arc<dyn crate::usecases::LifecycleStatusPort> {
+        self.runtime.lifecycle_status().clone()
+    }
+
+    /// Create a `TrackInboundTransfersUseCase`.
+    pub fn track_inbound_transfers(
+        &self,
+    ) -> crate::usecases::file_sync::TrackInboundTransfersUseCase {
+        crate::usecases::file_sync::TrackInboundTransfersUseCase::new(
+            self.runtime.deps.storage.file_transfer_repo.clone(),
+        )
+    }
+
+    /// Create a `SyncOutboundFileUseCase`.
+    pub fn sync_outbound_file(&self) -> crate::usecases::file_sync::SyncOutboundFileUseCase {
+        crate::usecases::file_sync::SyncOutboundFileUseCase::new(
+            self.runtime.deps.settings.clone(),
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.network_ports.peers.clone(),
+            self.runtime.deps.network_ports.file_transfer.clone(),
+        )
+    }
+
+    /// Create a `SyncInboundFileUseCase`.
+    pub fn sync_inbound_file(&self) -> crate::usecases::file_sync::SyncInboundFileUseCase {
+        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
+        crate::usecases::file_sync::SyncInboundFileUseCase::new(
+            self.runtime.deps.settings.clone(),
+            file_cache_dir,
+        )
+    }
+
+    /// Create a `CopyFileToClipboardUseCase`.
+    pub fn copy_file_to_clipboard(&self) -> crate::usecases::file_sync::CopyFileToClipboardUseCase {
+        crate::usecases::file_sync::CopyFileToClipboardUseCase::new(
+            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
+            self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.clipboard.system_clipboard.clone(),
+            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
+            self.runtime.clipboard_integration_mode,
+        )
+    }
+
+    /// Create a `CleanupExpiredFilesUseCase`.
+    pub fn cleanup_expired_files(&self) -> crate::usecases::file_sync::CleanupExpiredFilesUseCase {
+        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
+        crate::usecases::file_sync::CleanupExpiredFilesUseCase::new(
+            self.runtime.deps.settings.clone(),
+            file_cache_dir,
+        )
+    }
+}

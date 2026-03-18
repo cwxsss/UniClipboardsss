@@ -17,6 +17,7 @@ pub use deps::{
     AppDeps, ClipboardPorts, DevicePorts, NetworkPorts, SecurityPorts, StoragePorts, SystemPorts,
 };
 pub use runtime::CoreRuntime;
+pub use usecases::CoreUseCases;
 
 /// The application runtime.
 pub struct App {

@@ -14,14 +14,15 @@ pub mod tracing;
 pub mod wiring;
 
 // Re-export commonly used bootstrap functions
+pub use assembly::SetupAssemblyPorts;
 pub use clipboard_integration_mode::resolve_clipboard_integration_mode;
 pub use config::load_config;
 pub use init::ensure_default_device_name;
-pub use runtime::{create_app, create_runtime, AppRuntime, SetupRuntimePorts, UseCases};
+pub use runtime::{create_app, create_runtime, AppRuntime, AppUseCases};
 // assembly.rs re-exports (pure dependency construction — zero tauri imports)
 pub use assembly::{
-    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
-    WiredDependencies,
+    build_setup_orchestrator, get_storage_paths, resolve_pairing_config,
+    resolve_pairing_device_name, wire_dependencies, WiredDependencies,
 };
 // wiring.rs re-exports (Tauri event loops and background task management)
 pub use wiring::{start_background_tasks, BackgroundRuntimeDeps};

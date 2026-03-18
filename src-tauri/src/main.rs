@@ -36,7 +36,7 @@ use uc_tauri::bootstrap::tracing as bootstrap_tracing;
 use uc_tauri::bootstrap::{
     ensure_default_device_name, get_storage_paths, load_config, resolve_pairing_config,
     resolve_pairing_device_name, start_background_tasks, wire_dependencies, AppRuntime,
-    SetupRuntimePorts,
+    SetupAssemblyPorts,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -558,12 +558,22 @@ fn run_app(config: AppConfig) {
 
     let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
         std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::LoggingEventEmitter);
+    let device_announcer: Option<std::sync::Arc<dyn uc_app::usecases::DeviceAnnouncer>> = Some(
+        std::sync::Arc::new(uc_app::usecases::DeviceNameAnnouncer::new(
+            deps.network_ports.peers.clone(),
+            deps.settings.clone(),
+        )),
+    );
+    let lifecycle_emitter: std::sync::Arc<dyn uc_app::usecases::LifecycleEventEmitter> =
+        std::sync::Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter);
     let runtime = AppRuntime::with_setup(
         deps,
-        SetupRuntimePorts::from_network(
+        SetupAssemblyPorts::from_network(
             pairing_orchestrator.clone(),
             space_access_orchestrator.clone(),
             discovery_network,
+            device_announcer,
+            lifecycle_emitter,
         ),
         watcher_control,
         storage_paths,

@@ -29,33 +29,16 @@
 //! 2. Add a method to `UseCases` that calls `new()` with deps
 //! 3. Commands can now call `runtime.usecases().your_use_case()`
 
-use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::Instrument;
 
 use super::task_registry::TaskRegistry;
-use uc_app::{
-    runtime::CoreRuntime,
-    usecases::{
-        space_access::{
-            DefaultSpaceAccessCryptoFactory, HmacProofAdapter, SpaceAccessNetworkAdapter,
-            SpaceAccessOrchestrator, SpaceAccessPersistenceAdapter,
-        },
-        PairingConfig, PairingOrchestrator, SetupOrchestrator, StagedPairedDeviceStore,
-    },
-    App, AppDeps,
-};
+use uc_app::{runtime::CoreRuntime, App, AppDeps};
 use uc_core::config::AppConfig;
-use uc_core::network::DiscoveredPeer;
-use uc_core::ports::space::SpaceAccessTransportPort;
-use uc_core::ports::{
-    ClipboardChangeHandler, DiscoveryPort, PeerDirectoryPort, SettingsPort, TimerPort,
-};
+use uc_core::ports::{ClipboardChangeHandler, SettingsPort};
 use uc_core::security::state::EncryptionState;
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
-use uc_infra::time::Timer;
 
 use uc_core::ports::host_event_emitter::{
     ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort,
@@ -108,49 +91,6 @@ pub struct AppRuntime {
     watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
 }
 
-/// Setup wiring dependencies for runtime-level orchestrators.
-pub struct SetupRuntimePorts {
-    pairing_orchestrator: Arc<PairingOrchestrator>,
-    space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
-    discovery_port: Arc<dyn DiscoveryPort>,
-}
-
-impl SetupRuntimePorts {
-    /// Create a new SetupRuntimePorts bundle.
-    pub fn new(
-        pairing_orchestrator: Arc<PairingOrchestrator>,
-        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
-        discovery_port: Arc<dyn DiscoveryPort>,
-    ) -> Self {
-        Self {
-            pairing_orchestrator,
-            space_access_orchestrator,
-            discovery_port,
-        }
-    }
-
-    /// Create a bundle using the peer-directory port as the discovery adapter.
-    pub fn from_network(
-        pairing_orchestrator: Arc<PairingOrchestrator>,
-        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
-        peers: Arc<dyn PeerDirectoryPort>,
-    ) -> Self {
-        Self::new(
-            pairing_orchestrator,
-            space_access_orchestrator,
-            Arc::new(NetworkDiscoveryPort { peers }),
-        )
-    }
-
-    fn placeholder(deps: &AppDeps) -> Self {
-        Self::new(
-            AppRuntime::placeholder_pairing_orchestrator(deps),
-            Arc::new(SpaceAccessOrchestrator::new()),
-            Arc::new(EmptyDiscoveryPort),
-        )
-    }
-}
-
 impl AppRuntime {
     /// Create a new AppRuntime from dependencies.
     /// 从依赖创建新的 AppRuntime。
@@ -165,7 +105,7 @@ impl AppRuntime {
                 Ok(())
             }
         }
-        let setup_ports = SetupRuntimePorts::placeholder(&deps);
+        let setup_ports = super::assembly::SetupAssemblyPorts::placeholder(&deps);
         let watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort> =
             Arc::new(NoopWatcherControl);
         let event_emitter: Arc<dyn HostEventEmitterPort> =
@@ -182,7 +122,7 @@ impl AppRuntime {
     /// Create a new AppRuntime with explicit setup orchestrator dependencies.
     pub fn with_setup(
         deps: AppDeps,
-        setup_ports: SetupRuntimePorts,
+        setup_ports: super::assembly::SetupAssemblyPorts,
         watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
         storage_paths: uc_app::app_paths::AppPaths,
         event_emitter: Arc<dyn HostEventEmitterPort>,
@@ -198,14 +138,21 @@ impl AppRuntime {
         // so that HostEventSetupPort reads the current emitter after swap.
         let emitter_cell = Arc::new(std::sync::RwLock::new(event_emitter));
 
-        let setup_orchestrator = Self::build_setup_orchestrator(
+        // Build session_ready_emitter from app_handle BEFORE build_setup_orchestrator.
+        let session_ready_emitter: Arc<dyn uc_app::usecases::SessionReadyEmitter> = Arc::new(
+            crate::adapters::lifecycle::TauriSessionReadyEmitter::new(app_handle.clone()),
+        );
+
+        // Pass shared state + adapters to build_setup_orchestrator as SEPARATE params.
+        // watcher_control.clone() ensures the orchestrator and AppRuntime hold the SAME Arc.
+        let setup_orchestrator = super::assembly::build_setup_orchestrator(
             &deps,
-            &lifecycle_status,
-            &setup_ports,
-            app_handle.clone(),
-            emitter_cell.clone(), // shared cell
-            clipboard_integration_mode,
-            watcher_control.clone(),
+            setup_ports,
+            lifecycle_status.clone(), // same instance goes to CoreRuntime below
+            emitter_cell.clone(),     // same instance goes to CoreRuntime below
+            clipboard_integration_mode, // same value goes to CoreRuntime below
+            session_ready_emitter,    // constructed from app_handle above
+            watcher_control.clone(),  // same Arc stored on AppRuntime below
         );
 
         // Pass the SAME cell to CoreRuntime — no re-wrapping.
@@ -279,8 +226,8 @@ impl AppRuntime {
 
     /// Get use cases accessor.
     /// 获取用例访问器。
-    pub fn usecases(&self) -> UseCases<'_> {
-        UseCases::new(self)
+    pub fn usecases(&self) -> AppUseCases<'_> {
+        AppUseCases::new(self)
     }
 
     /// Returns the current device ID for tracing spans and session context.
@@ -325,570 +272,37 @@ impl AppRuntime {
     pub fn task_registry(&self) -> &Arc<TaskRegistry> {
         self.core.task_registry()
     }
-
-    fn build_setup_orchestrator(
-        deps: &AppDeps,
-        lifecycle_status: &Arc<dyn uc_app::usecases::LifecycleStatusPort>,
-        setup_ports: &SetupRuntimePorts,
-        app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,
-        emitter_cell: Arc<
-            std::sync::RwLock<Arc<dyn uc_core::ports::host_event_emitter::HostEventEmitterPort>>,
-        >,
-        clipboard_integration_mode: uc_core::clipboard::ClipboardIntegrationMode,
-        watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
-    ) -> Arc<SetupOrchestrator> {
-        let initialize_encryption = Arc::new(uc_app::usecases::InitializeEncryption::from_ports(
-            deps.security.encryption.clone(),
-            deps.security.key_material.clone(),
-            deps.security.key_scope.clone(),
-            deps.security.encryption_state.clone(),
-            deps.security.encryption_session.clone(),
-        ));
-        let mark_setup_complete = Arc::new(uc_app::usecases::MarkSetupComplete::from_ports(
-            deps.setup_status.clone(),
-        ));
-
-        let announcer = Arc::new(uc_app::usecases::DeviceNameAnnouncer::new(
-            deps.network_ports.peers.clone(),
-            deps.settings.clone(),
-        ));
-        let start_watcher: Arc<dyn uc_app::usecases::StartClipboardWatcherPort> =
-            Arc::new(uc_platform::usecases::StartClipboardWatcher::from_port(
-                watcher_control,
-                clipboard_integration_mode,
-            ));
-        let start_network = Arc::new(uc_app::usecases::StartNetworkAfterUnlock::from_port(
-            deps.network_control.clone(),
-        ));
-        let app_lifecycle = Arc::new(uc_app::usecases::AppLifecycleCoordinator::from_deps(
-            uc_app::usecases::AppLifecycleCoordinatorDeps {
-                watcher: start_watcher,
-                network: start_network,
-                announcer: Some(announcer),
-                emitter: Arc::new(crate::adapters::lifecycle::TauriSessionReadyEmitter::new(
-                    app_handle.clone(),
-                )),
-                status: lifecycle_status.clone(),
-                lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
-            },
-        ));
-        let crypto_factory = Arc::new(DefaultSpaceAccessCryptoFactory::new(
-            deps.security.encryption.clone(),
-            deps.security.key_material.clone(),
-            deps.security.key_scope.clone(),
-            deps.security.encryption_state.clone(),
-            deps.security.encryption_session.clone(),
-        ));
-        let transport_port: Arc<Mutex<dyn SpaceAccessTransportPort>> =
-            Arc::new(Mutex::new(SpaceAccessNetworkAdapter::new(
-                deps.network_ports.pairing.clone(),
-                setup_ports.space_access_orchestrator.context(),
-            )));
-        let proof_port: Arc<dyn uc_core::ports::space::ProofPort> = Arc::new(
-            HmacProofAdapter::new_with_encryption_session(deps.security.encryption_session.clone()),
-        );
-        let timer_port: Arc<Mutex<dyn TimerPort>> = Arc::new(Mutex::new(Timer::new()));
-        let persistence_port = Arc::new(Mutex::new(SpaceAccessPersistenceAdapter::new(
-            deps.security.encryption_state.clone(),
-            deps.device.paired_device_repo.clone(),
-            Arc::new(StagedPairedDeviceStore::new()),
-        )));
-        let setup_event_port = Arc::new(crate::bootstrap::wiring::HostEventSetupPort::new(
-            emitter_cell, // pass shared cell instead of snapshot
-        ));
-
-        Arc::new(SetupOrchestrator::new(
-            initialize_encryption,
-            mark_setup_complete,
-            deps.setup_status.clone(),
-            app_lifecycle,
-            setup_ports.pairing_orchestrator.clone(),
-            setup_event_port,
-            setup_ports.space_access_orchestrator.clone(),
-            setup_ports.discovery_port.clone(),
-            deps.network_control.clone(),
-            crypto_factory,
-            deps.network_ports.pairing.clone(),
-            transport_port,
-            proof_port,
-            timer_port,
-            persistence_port,
-        ))
-    }
-
-    fn placeholder_pairing_orchestrator(deps: &AppDeps) -> Arc<PairingOrchestrator> {
-        let (orchestrator, _rx) = PairingOrchestrator::new(
-            PairingConfig::default(),
-            deps.device.paired_device_repo.clone(),
-            "setup-placeholder-device".to_string(),
-            "setup-placeholder-device-id".to_string(),
-            "setup-placeholder-peer-id".to_string(),
-            vec![],
-            Arc::new(StagedPairedDeviceStore::new()),
-        );
-        Arc::new(orchestrator)
-    }
 }
 
-struct NetworkDiscoveryPort {
-    peers: Arc<dyn PeerDirectoryPort>,
+/// Tauri-aware use case accessors wrapping CoreUseCases.
+///
+/// Provides transparent access to all CoreUseCases methods (via Deref) plus
+/// 5 non-core accessors that cannot live in uc-app:
+/// - apply_autostart (needs AppHandle)
+/// - start_clipboard_watcher (needs WatcherControlPort from uc-platform)
+/// - app_lifecycle_coordinator (needs TauriSessionReadyEmitter)
+/// - sync_inbound_clipboard (needs uc_infra TransferPayloadDecryptorAdapter)
+/// - sync_outbound_clipboard (needs uc_infra TransferPayloadEncryptorAdapter)
+pub struct AppUseCases<'a> {
+    app_runtime: &'a AppRuntime,
+    core: uc_app::usecases::CoreUseCases<'a>,
 }
 
-#[async_trait]
-impl DiscoveryPort for NetworkDiscoveryPort {
-    async fn list_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-        self.peers.get_discovered_peers().await
-    }
-}
-
-struct EmptyDiscoveryPort;
-
-#[async_trait]
-impl DiscoveryPort for EmptyDiscoveryPort {
-    async fn list_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-        Ok(Vec::new())
-    }
-}
-
-/// Use cases accessor for AppRuntime.
-///
-/// This struct provides methods to access all use cases with their dependencies
-/// pre-wired from the AppRuntime's deps.
-///
-/// ## Architecture / 架构
-///
-/// The `UseCases` accessor serves as a factory for creating use case instances.
-/// Each method returns a use case with its dependencies already wired from `AppDeps`.
-///
-/// `UseCases` 访问器作为用例实例的工厂。每个方法返回一个用例，其依赖已从
-/// `AppDeps` 连接。
-///
-/// ## Design Pattern / 设计模式
-///
-/// This implements the Factory pattern for use cases:
-/// - Commands don't need to know which ports a use case needs
-/// - All port-to-use-case wiring is centralized in one place
-/// - Use cases remain pure (no dependency on AppDeps)
-///
-/// 这为用例实现了工厂模式：
-/// - 命令不需要知道用例需要哪些端口
-/// - 所有端口到用例的连接集中在一个地方
-/// - 用例保持纯净（不依赖 AppDeps）
-///
-/// ## Limitations / 限制
-///
-/// Currently, not all use cases are accessible through this accessor due to
-/// architectural constraints with trait objects. Use cases that require
-/// generic type parameters cannot be instantiated with `Arc<dyn Trait>`.
-///
-/// 目前，由于 trait 对象的架构限制，并非所有用例都可以通过此访问器访问。
-/// 需要泛型类型参数的用例无法使用 `Arc<dyn Trait>` 实例化。
-///
-/// AppRuntime 的用例访问器。
-pub struct UseCases<'a> {
-    runtime: &'a AppRuntime,
-}
-
-impl<'a> UseCases<'a> {
-    /// Create a new UseCases accessor from AppRuntime.
-    /// 从 AppRuntime 创建新的 UseCases 访问器。
-    pub fn new(runtime: &'a AppRuntime) -> Self {
-        Self { runtime }
-    }
-
-    /// Accesses the use case for querying clipboard history.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use uc_tauri::bootstrap::AppRuntime;
-    /// # use tauri::State;
-    /// # async fn example(runtime: State<'_, AppRuntime>) -> Result<(), String> {
-    /// let uc = runtime.usecases().list_clipboard_entries();
-    /// let entries = uc.execute(50, 0).await.map_err(|e| e.to_string())?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn list_clipboard_entries(&self) -> uc_app::usecases::ListClipboardEntries {
-        uc_app::usecases::ListClipboardEntries::from_arc(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_entry_repo
-                .clone(),
-        )
-    }
-
-    /// Create a `DeleteClipboardEntry` use case wired with this runtime's clipboard and selection repositories.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// # use uc_tauri::bootstrap::AppRuntime;
-    /// # use tauri::State;
-    /// # use uc_core::ids::EntryId;
-    /// # async fn example(runtime: State<'_, AppRuntime>, entry_id: &EntryId) -> Result<(), String> {
-    /// let uc = runtime.usecases().delete_clipboard_entry();
-    /// uc.execute(entry_id).await.map_err(|e| e.to_string())?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn delete_clipboard_entry(&self) -> uc_app::usecases::DeleteClipboardEntry {
-        uc_app::usecases::DeleteClipboardEntry::from_ports(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_entry_repo
-                .clone(),
-            self.runtime.wiring_deps().clipboard.selection_repo.clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_event_repo
-                .clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .representation_repo
-                .clone(),
-        )
-        .with_file_cache_dir(self.runtime.core.storage_paths().file_cache_dir.clone())
-    }
-
-    /// Create a `ClearClipboardHistory` use case wired with this runtime's clipboard, selection, and event repositories.
-    pub fn clear_clipboard_history(&self) -> uc_app::usecases::clipboard::ClearClipboardHistory {
-        uc_app::usecases::clipboard::ClearClipboardHistory::from_ports(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_entry_repo
-                .clone(),
-            self.runtime.wiring_deps().clipboard.selection_repo.clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_event_repo
-                .clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .representation_repo
-                .clone(),
-        )
-    }
-
-    /// Get the GetEntryDetail use case for fetching full clipboard entry content.
-    ///
-    /// 获取 GetEntryDetail 用例以获取完整剪贴板条目内容。
-    ///
-    /// ## Example / 示例
-    ///
-    /// ```rust,no_run
-    /// # use uc_tauri::bootstrap::AppRuntime;
-    /// # use tauri::State;
-    /// # use uc_core::ids::EntryId;
-    /// # async fn example(runtime: State<'_, AppRuntime>, entry_id: &EntryId) -> Result<uc_app::usecases::clipboard::get_entry_detail::EntryDetailResult, String> {
-    /// let uc = runtime.usecases().get_entry_detail();
-    /// let detail = uc.execute(entry_id).await.map_err(|e| e.to_string())?;
-    /// # Ok(detail)
-    /// # }
-    /// ```
-    pub fn get_entry_detail(
-        &self,
-    ) -> uc_app::usecases::clipboard::get_entry_detail::GetEntryDetailUseCase {
-        uc_app::usecases::clipboard::get_entry_detail::GetEntryDetailUseCase::new(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_entry_repo
-                .clone(),
-            self.runtime.wiring_deps().clipboard.selection_repo.clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .representation_repo
-                .clone(),
-            self.runtime.wiring_deps().storage.blob_store.clone(),
-        )
-    }
-
-    /// Get the GetEntryResource use case for fetching clipboard resource metadata.
-    ///
-    /// 获取 GetEntryResource 用例以获取剪贴板资源元信息。
-    pub fn get_entry_resource(
-        &self,
-    ) -> uc_app::usecases::clipboard::get_entry_resource::GetEntryResourceUseCase {
-        uc_app::usecases::clipboard::get_entry_resource::GetEntryResourceUseCase::new(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_entry_repo
-                .clone(),
-            self.runtime.wiring_deps().clipboard.selection_repo.clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .representation_repo
-                .clone(),
-        )
-    }
-
-    /// Resolve blob resource content by blob id.
-    ///
-    /// 通过 blob id 解析资源内容。
-    pub fn resolve_blob_resource(
-        &self,
-    ) -> uc_app::usecases::clipboard::resolve_blob_resource::ResolveBlobResourceUseCase {
-        uc_app::usecases::clipboard::resolve_blob_resource::ResolveBlobResourceUseCase::new(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .representation_repo
-                .clone(),
-            self.runtime.wiring_deps().storage.blob_store.clone(),
-        )
-    }
-
-    /// Get storage statistics use case.
-    /// 获取存储统计用例。
-    pub fn get_storage_stats(&self) -> uc_app::usecases::storage::GetStorageStats {
-        uc_app::usecases::storage::GetStorageStats::new(self.runtime.core.storage_paths().clone())
-    }
-
-    /// Clear cache use case.
-    /// 清除缓存用例。
-    pub fn clear_cache(&self) -> uc_app::usecases::storage::ClearCache {
-        uc_app::usecases::storage::ClearCache::new(
-            self.runtime.core.storage_paths().clone(),
-            self.runtime.wiring_deps().system.cache_fs.clone(),
-        )
-    }
-
-    /// Open data directory use case.
-    /// 打开数据目录用例。
-    pub fn open_data_directory(&self) -> uc_app::usecases::storage::OpenDataDirectory {
-        uc_app::usecases::storage::OpenDataDirectory::new(
-            self.runtime.core.storage_paths().clone(),
-            self.runtime.wiring_deps().system.file_manager.clone(),
-        )
-    }
-
-    /// List paired devices from repository.
-    ///
-    /// 列出已配对设备。
-    pub fn list_paired_devices(&self) -> uc_app::usecases::ListPairedDevices {
-        uc_app::usecases::ListPairedDevices::new(
-            self.runtime.wiring_deps().device.paired_device_repo.clone(),
-        )
-    }
-
-    /// Get local peer id from network port.
-    ///
-    /// 获取本地 Peer ID。
-    pub fn get_local_peer_id(&self) -> uc_app::usecases::GetLocalPeerId {
-        uc_app::usecases::GetLocalPeerId::new(
-            self.runtime.wiring_deps().network_ports.peers.clone(),
-        )
-    }
-
-    /// Get local device info (peer id + device name).
-    ///
-    /// 获取本地设备信息（Peer ID + 设备名称）。
-    pub fn get_local_device_info(&self) -> uc_app::usecases::GetLocalDeviceInfo {
-        uc_app::usecases::GetLocalDeviceInfo::new(
-            self.runtime.wiring_deps().network_ports.peers.clone(),
-            self.runtime.wiring_deps().settings.clone(),
-        )
-    }
-
-    /// Announce local device name through the network port.
-    ///
-    /// 通过网络端口广播本地设备名称。
-    pub fn announce_device_name(&self) -> uc_app::usecases::AnnounceDeviceName {
-        uc_app::usecases::AnnounceDeviceName::new(
-            self.runtime.wiring_deps().network_ports.peers.clone(),
-        )
-    }
-
-    /// List discovered peers from network.
-    ///
-    /// 列出已发现的对等端。
-    pub fn list_discovered_peers(&self) -> uc_app::usecases::ListDiscoveredPeers {
-        uc_app::usecases::ListDiscoveredPeers::new(
-            self.runtime.wiring_deps().network_ports.peers.clone(),
-        )
-    }
-
-    /// List connected peers from network.
-    ///
-    /// 列出已连接的对等端。
-    pub fn list_connected_peers(&self) -> uc_app::usecases::ListConnectedPeers {
-        uc_app::usecases::ListConnectedPeers::new(
-            self.runtime.wiring_deps().network_ports.peers.clone(),
-        )
-    }
-
-    /// Update pairing state for a peer.
-    ///
-    /// 更新对等端配对状态。
-    pub fn set_pairing_state(&self) -> uc_app::usecases::SetPairingState {
-        uc_app::usecases::SetPairingState::new(
-            self.runtime.wiring_deps().device.paired_device_repo.clone(),
-        )
-    }
-
-    /// Get resolved sync settings for a specific device.
-    ///
-    /// Returns per-device overrides if set, otherwise global defaults.
-    pub fn get_device_sync_settings(&self) -> uc_app::usecases::GetDeviceSyncSettings {
-        uc_app::usecases::GetDeviceSyncSettings::from_ports(
-            self.runtime.wiring_deps().device.paired_device_repo.clone(),
-            self.runtime.wiring_deps().settings.clone(),
-        )
-    }
-
-    /// Update or clear per-device sync settings.
-    ///
-    /// Passing `None` resets to global defaults.
-    pub fn update_device_sync_settings(&self) -> uc_app::usecases::UpdateDeviceSyncSettings {
-        uc_app::usecases::UpdateDeviceSyncSettings::from_ports(
-            self.runtime.wiring_deps().device.paired_device_repo.clone(),
-        )
-    }
-
-    /// Unpair device and remove from repository.
-    ///
-    /// 取消配对并从存储中删除。
-    pub fn unpair_device(&self) -> uc_app::usecases::UnpairDevice {
-        uc_app::usecases::UnpairDevice::new(
-            self.runtime.wiring_deps().network_ports.pairing.clone(),
-            self.runtime.wiring_deps().device.paired_device_repo.clone(),
-        )
-    }
-
-    /// Resolve thumbnail resource content by representation id.
-    ///
-    /// 通过表示 id 解析缩略图资源内容。
-    pub fn resolve_thumbnail_resource(
-        &self,
-    ) -> uc_app::usecases::clipboard::resolve_thumbnail_resource::ResolveThumbnailResourceUseCase
-    {
-        uc_app::usecases::clipboard::resolve_thumbnail_resource::ResolveThumbnailResourceUseCase::new(
-            self.runtime.wiring_deps().storage.thumbnail_repo.clone(),
-            self.runtime.wiring_deps().storage.blob_store.clone(),
-        )
-    }
-
-    /// Security use cases / 安全用例
-    ///
-    /// Get the InitializeEncryption use case for setting up encryption.
-    ///
-    /// 获取 InitializeEncryption 用例以设置加密。
-    ///
-    /// ## Example / 示例
-    ///
-    /// ```rust,no_run
-    /// # use uc_tauri::bootstrap::AppRuntime;
-    /// # use tauri::State;
-    /// # async fn example(runtime: State<'_, AppRuntime>) -> Result<(), String> {
-    /// let uc = runtime.usecases().initialize_encryption();
-    /// uc.execute(uc_core::security::model::Passphrase("my_pass".to_string()))
-    ///     .await
-    ///     .map_err(|e| e.to_string())?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn initialize_encryption(&self) -> uc_app::usecases::InitializeEncryption {
-        uc_app::usecases::InitializeEncryption::from_ports(
-            self.runtime.wiring_deps().security.encryption.clone(),
-            self.runtime.wiring_deps().security.key_material.clone(),
-            self.runtime.wiring_deps().security.key_scope.clone(),
-            self.runtime.wiring_deps().security.encryption_state.clone(),
-            self.runtime
-                .wiring_deps()
-                .security
-                .encryption_session
-                .clone(),
-        )
-    }
-
-    /// Get the VerifyKeychainAccess use case for checking Always Allow permission.
-    pub fn verify_keychain_access(
-        &self,
-    ) -> uc_app::usecases::verify_keychain_access::VerifyKeychainAccess {
-        uc_app::usecases::verify_keychain_access::VerifyKeychainAccess::from_ports(
-            self.runtime.wiring_deps().security.key_scope.clone(),
-            self.runtime.wiring_deps().security.key_material.clone(),
-        )
-    }
-
-    /// Get the AutoUnlockEncryptionSession use case for startup unlock.
-    pub fn auto_unlock_encryption_session(&self) -> uc_app::usecases::AutoUnlockEncryptionSession {
-        uc_app::usecases::AutoUnlockEncryptionSession::from_ports(
-            self.runtime.wiring_deps().security.encryption_state.clone(),
-            self.runtime.wiring_deps().security.key_scope.clone(),
-            self.runtime.wiring_deps().security.key_material.clone(),
-            self.runtime.wiring_deps().security.encryption.clone(),
-            self.runtime
-                .wiring_deps()
-                .security
-                .encryption_session
-                .clone(),
-        )
-    }
-
-    pub fn setup_orchestrator(&self) -> Arc<SetupOrchestrator> {
-        self.runtime.core.setup_orchestrator().clone()
-    }
-
-    /// Settings use cases / 设置用例
-    ///
-    /// Get application settings
-    ///
-    /// ## Example / 示例
-    ///
-    /// ```rust,no_run
-    /// # use uc_tauri::bootstrap::AppRuntime;
-    /// # use tauri::State;
-    /// # async fn example(runtime: State<'_, AppRuntime>) -> Result<uc_core::settings::model::Settings, String> {
-    /// let uc = runtime.usecases().get_settings();
-    /// let settings = uc.execute().await.map_err(|e| e.to_string())?;
-    /// # Ok(settings)
-    /// # }
-    /// ```
-    pub fn get_settings(&self) -> uc_app::usecases::GetSettings {
-        uc_app::usecases::GetSettings::new(self.runtime.wiring_deps().settings.clone())
-    }
-
-    /// Update application settings
-    ///
-    /// ## Example / 示例
-    ///
-    /// ```rust,no_run
-    /// # use uc_tauri::bootstrap::AppRuntime;
-    /// # use tauri::State;
-    /// # use uc_core::settings::model::Settings;
-    /// # async fn example(runtime: State<'_, AppRuntime>, settings: Settings) -> Result<(), String> {
-    /// let uc = runtime.usecases().update_settings();
-    /// uc.execute(settings).await.map_err(|e| e.to_string())?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn update_settings(&self) -> uc_app::usecases::UpdateSettings {
-        uc_app::usecases::UpdateSettings::new(self.runtime.wiring_deps().settings.clone())
+impl<'a> AppUseCases<'a> {
+    pub fn new(app_runtime: &'a AppRuntime) -> Self {
+        let core = uc_app::usecases::CoreUseCases::new(&app_runtime.core);
+        Self { app_runtime, core }
     }
 
     /// Apply OS-level autostart setting.
     ///
     /// Requires AppHandle to be set (returns None during early bootstrap).
-    ///
-    /// 应用 OS 级别的自启动设置。需要 AppHandle 已设置。
     pub fn apply_autostart(
         &self,
     ) -> Option<
         uc_platform::usecases::ApplyAutostartSetting<crate::adapters::autostart::TauriAutostart>,
     > {
-        let guard = self.runtime.app_handle();
+        let guard = self.app_runtime.app_handle();
         let handle = guard.as_ref()?;
         let adapter = Arc::new(crate::adapters::autostart::TauriAutostart::new(
             handle.clone(),
@@ -896,117 +310,33 @@ impl<'a> UseCases<'a> {
         Some(uc_platform::usecases::ApplyAutostartSetting::new(adapter))
     }
 
-    /// Start the clipboard watcher
-    ///
-    /// ## Example / 示例
-    ///
-    /// ```rust,no_run
-    /// # use uc_tauri::bootstrap::AppRuntime;
-    /// # use tauri::State;
-    /// # async fn example(runtime: State<'_, AppRuntime>) -> Result<(), String> {
-    /// let uc = runtime.usecases().start_clipboard_watcher();
-    /// uc.execute().await.map_err(|e| e.to_string())?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Start the clipboard watcher.
     pub fn start_clipboard_watcher(&self) -> uc_platform::usecases::StartClipboardWatcher {
         uc_platform::usecases::StartClipboardWatcher::from_port(
-            self.runtime.watcher_control.clone(),
-            self.runtime.core.clipboard_integration_mode(),
+            self.app_runtime.watcher_control.clone(),
+            self.app_runtime.core.clipboard_integration_mode(),
         )
     }
 
-    /// Start the network runtime
-    pub fn start_network(&self) -> uc_app::usecases::StartNetwork {
-        uc_app::usecases::StartNetwork::from_port(
-            self.runtime.wiring_deps().network_control.clone(),
-        )
-    }
-
-    /// Start the network runtime after unlock
-    pub fn start_network_after_unlock(&self) -> uc_app::usecases::StartNetworkAfterUnlock {
-        uc_app::usecases::StartNetworkAfterUnlock::from_port(
-            self.runtime.wiring_deps().network_control.clone(),
-        )
-    }
-
-    /// List clipboard entry projections (with cross-repo aggregation)
-    ///
-    /// ## Example / 示例
-    ///
-    /// ```rust,no_run
-    /// # use uc_tauri::bootstrap::AppRuntime;
-    /// # use tauri::State;
-    /// # async fn example(runtime: State<'_, AppRuntime>) -> Result<Vec<uc_app::usecases::EntryProjectionDto>, String> {
-    /// let uc = runtime.usecases().list_entry_projections();
-    /// let projections = uc.execute(50, 0).await.map_err(|e| e.to_string())?;
-    /// # Ok(projections)
-    /// # }
-    /// ```
-    pub fn list_entry_projections(&self) -> uc_app::usecases::ListClipboardEntryProjections {
-        uc_app::usecases::ListClipboardEntryProjections::new(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_entry_repo
-                .clone(),
-            self.runtime.wiring_deps().clipboard.selection_repo.clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .representation_repo
-                .clone(),
-            self.runtime.wiring_deps().storage.thumbnail_repo.clone(),
-            self.runtime
-                .wiring_deps()
-                .storage
-                .file_transfer_repo
-                .clone(),
-        )
-    }
-
-    /// Restore clipboard selection to system clipboard.
-    ///
-    /// 将历史剪贴板条目恢复到系统剪贴板。
-    pub fn restore_clipboard_selection(
-        &self,
-    ) -> uc_app::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase
-    {
-        uc_app::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase::new(
-            self.runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-            self.runtime.wiring_deps().clipboard.system_clipboard.clone(),
-            self.runtime.wiring_deps().clipboard.selection_repo.clone(),
-            self.runtime.wiring_deps().clipboard.representation_repo.clone(),
-            self.runtime.wiring_deps().storage.blob_store.clone(),
-            self.runtime.wiring_deps().clipboard.clipboard_change_origin.clone(),
-            self.runtime.core.clipboard_integration_mode(),
-        )
-    }
-
-    /// Touch clipboard entry active time.
-    ///
-    /// 更新剪贴板条目活跃时间。
-    pub fn touch_clipboard_entry(
-        &self,
-    ) -> uc_app::usecases::clipboard::touch_clipboard_entry::TouchClipboardEntryUseCase {
-        uc_app::usecases::clipboard::touch_clipboard_entry::TouchClipboardEntryUseCase::new(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_entry_repo
-                .clone(),
-            self.runtime.wiring_deps().system.clock.clone(),
-        )
-    }
-
-    /// Toggle favorite state for a clipboard entry.
-    ///
-    /// 切换剪贴板条目的收藏状态。
-    pub fn toggle_favorite_clipboard_entry(
-        &self,
-    ) -> uc_app::usecases::clipboard::toggle_favorite_clipboard_entry::ToggleFavoriteClipboardEntryUseCase{
-        uc_app::usecases::clipboard::toggle_favorite_clipboard_entry::ToggleFavoriteClipboardEntryUseCase::new(
-            self.runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+    /// Get the AppLifecycleCoordinator use case for orchestrating
+    /// clipboard watcher, network startup, and session readiness.
+    pub fn app_lifecycle_coordinator(&self) -> uc_app::usecases::AppLifecycleCoordinator {
+        let announcer = Arc::new(uc_app::usecases::DeviceNameAnnouncer::new(
+            self.app_runtime.wiring_deps().network_ports.peers.clone(),
+            self.app_runtime.wiring_deps().settings.clone(),
+        ));
+        uc_app::usecases::AppLifecycleCoordinator::from_deps(
+            uc_app::usecases::AppLifecycleCoordinatorDeps {
+                watcher: Arc::new(self.start_clipboard_watcher())
+                    as Arc<dyn uc_app::usecases::StartClipboardWatcherPort>,
+                network: Arc::new(self.core.start_network_after_unlock()),
+                announcer: Some(announcer),
+                emitter: Arc::new(crate::adapters::lifecycle::TauriSessionReadyEmitter::new(
+                    self.app_runtime.app_handle_cell(),
+                )),
+                status: self.app_runtime.core.lifecycle_status().clone(),
+                lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
+            },
         )
     }
 
@@ -1014,21 +344,21 @@ impl<'a> UseCases<'a> {
         &self,
     ) -> uc_app::usecases::clipboard::sync_inbound::SyncInboundClipboardUseCase {
         uc_app::usecases::clipboard::sync_inbound::SyncInboundClipboardUseCase::with_capture_dependencies(
-            self.runtime.core.clipboard_integration_mode(),
-            self.runtime.wiring_deps().clipboard.system_clipboard.clone(),
-            self.runtime.wiring_deps().clipboard.clipboard_change_origin.clone(),
-            self.runtime.wiring_deps().security.encryption_session.clone(),
-            self.runtime.wiring_deps().security.encryption.clone(),
-            self.runtime.wiring_deps().device.device_identity.clone(),
+            self.app_runtime.core.clipboard_integration_mode(),
+            self.app_runtime.wiring_deps().clipboard.system_clipboard.clone(),
+            self.app_runtime.wiring_deps().clipboard.clipboard_change_origin.clone(),
+            self.app_runtime.wiring_deps().security.encryption_session.clone(),
+            self.app_runtime.wiring_deps().security.encryption.clone(),
+            self.app_runtime.wiring_deps().device.device_identity.clone(),
             Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter),
-            self.runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-            self.runtime.wiring_deps().clipboard.clipboard_event_repo.clone(),
-            self.runtime.wiring_deps().clipboard.representation_policy.clone(),
-            self.runtime.wiring_deps().clipboard.representation_normalizer.clone(),
-            self.runtime.wiring_deps().clipboard.representation_cache.clone(),
-            self.runtime.wiring_deps().clipboard.spool_queue.clone(),
-            Some(self.runtime.core.storage_paths().file_cache_dir.clone()),
-            self.runtime.wiring_deps().settings.clone(),
+            self.app_runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+            self.app_runtime.wiring_deps().clipboard.clipboard_event_repo.clone(),
+            self.app_runtime.wiring_deps().clipboard.representation_policy.clone(),
+            self.app_runtime.wiring_deps().clipboard.representation_normalizer.clone(),
+            self.app_runtime.wiring_deps().clipboard.representation_cache.clone(),
+            self.app_runtime.wiring_deps().clipboard.spool_queue.clone(),
+            Some(self.app_runtime.core.storage_paths().file_cache_dir.clone()),
+            self.app_runtime.wiring_deps().settings.clone(),
         )
     }
 
@@ -1036,151 +366,44 @@ impl<'a> UseCases<'a> {
         &self,
     ) -> uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase {
         uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase::new(
-            self.runtime
+            self.app_runtime
                 .wiring_deps()
                 .clipboard
                 .system_clipboard
                 .clone(),
-            self.runtime.wiring_deps().network_ports.clipboard.clone(),
-            self.runtime.wiring_deps().network_ports.peers.clone(),
-            self.runtime
+            self.app_runtime
+                .wiring_deps()
+                .network_ports
+                .clipboard
+                .clone(),
+            self.app_runtime.wiring_deps().network_ports.peers.clone(),
+            self.app_runtime
                 .wiring_deps()
                 .security
                 .encryption_session
                 .clone(),
-            self.runtime.wiring_deps().device.device_identity.clone(),
-            self.runtime.wiring_deps().settings.clone(),
+            self.app_runtime
+                .wiring_deps()
+                .device
+                .device_identity
+                .clone(),
+            self.app_runtime.wiring_deps().settings.clone(),
             Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter),
-            self.runtime.wiring_deps().device.paired_device_repo.clone(),
-        )
-    }
-
-    /// Get the lifecycle status port directly (for status queries).
-    ///
-    /// 直接获取生命周期状态端口（用于状态查询）。
-    pub fn get_lifecycle_status(&self) -> Arc<dyn uc_app::usecases::LifecycleStatusPort> {
-        self.runtime.core.lifecycle_status().clone()
-    }
-
-    /// Get the AppLifecycleCoordinator use case for orchestrating
-    /// clipboard watcher, network startup, and session readiness.
-    ///
-    /// 获取 AppLifecycleCoordinator 用例以编排剪贴板监视器、网络启动和会话就绪。
-    pub fn app_lifecycle_coordinator(&self) -> uc_app::usecases::AppLifecycleCoordinator {
-        let announcer = Arc::new(uc_app::usecases::DeviceNameAnnouncer::new(
-            self.runtime.wiring_deps().network_ports.peers.clone(),
-            self.runtime.wiring_deps().settings.clone(),
-        ));
-        uc_app::usecases::AppLifecycleCoordinator::from_deps(
-            uc_app::usecases::AppLifecycleCoordinatorDeps {
-                watcher: Arc::new(self.start_clipboard_watcher())
-                    as Arc<dyn uc_app::usecases::StartClipboardWatcherPort>,
-                network: Arc::new(self.start_network_after_unlock()),
-                announcer: Some(announcer),
-                emitter: Arc::new(crate::adapters::lifecycle::TauriSessionReadyEmitter::new(
-                    self.runtime.app_handle_cell(),
-                )),
-                status: self.runtime.core.lifecycle_status().clone(),
-                lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
-            },
-        )
-    }
-
-    /// Create a `TrackInboundTransfersUseCase` wired with the file transfer repository.
-    ///
-    /// Used by wiring code for event-loop status transitions, timeout sweeps,
-    /// and startup reconciliation.
-    pub fn track_inbound_transfers(
-        &self,
-    ) -> uc_app::usecases::file_sync::TrackInboundTransfersUseCase {
-        uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
-            self.runtime
+            self.app_runtime
                 .wiring_deps()
-                .storage
-                .file_transfer_repo
+                .device
+                .paired_device_repo
                 .clone(),
         )
     }
+}
 
-    /// Create a `SyncOutboundFileUseCase` wired with this runtime's settings,
-    /// device repo, peer directory, and file transport port.
-    ///
-    /// 创建使用此运行时的设置、设备仓库、对等目录和文件传输端口的 SyncOutboundFileUseCase。
-    pub fn sync_outbound_file(&self) -> uc_app::usecases::file_sync::SyncOutboundFileUseCase {
-        uc_app::usecases::file_sync::SyncOutboundFileUseCase::new(
-            self.runtime.wiring_deps().settings.clone(),
-            self.runtime.wiring_deps().device.paired_device_repo.clone(),
-            self.runtime.wiring_deps().network_ports.peers.clone(),
-            self.runtime
-                .wiring_deps()
-                .network_ports
-                .file_transfer
-                .clone(),
-        )
+impl<'a> std::ops::Deref for AppUseCases<'a> {
+    type Target = uc_app::usecases::CoreUseCases<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
     }
-
-    /// Create a `SyncInboundFileUseCase` wired with this runtime's settings
-    /// and file cache directory.
-    ///
-    /// 创建使用此运行时设置和文件缓存目录的 SyncInboundFileUseCase。
-    pub fn sync_inbound_file(&self) -> uc_app::usecases::file_sync::SyncInboundFileUseCase {
-        let file_cache_dir = self.runtime.core.storage_paths().file_cache_dir.clone();
-        uc_app::usecases::file_sync::SyncInboundFileUseCase::new(
-            self.runtime.wiring_deps().settings.clone(),
-            file_cache_dir,
-        )
-    }
-
-    /// Create a `CopyFileToClipboardUseCase` wired with this runtime's
-    /// entry repo, representation repo, system clipboard, and clipboard change origin.
-    ///
-    /// 创建使用此运行时的条目仓库、表示仓库、系统剪贴板和剪贴板变更来源的 CopyFileToClipboardUseCase。
-    pub fn copy_file_to_clipboard(
-        &self,
-    ) -> uc_app::usecases::file_sync::CopyFileToClipboardUseCase {
-        uc_app::usecases::file_sync::CopyFileToClipboardUseCase::new(
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_entry_repo
-                .clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .representation_repo
-                .clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .system_clipboard
-                .clone(),
-            self.runtime
-                .wiring_deps()
-                .clipboard
-                .clipboard_change_origin
-                .clone(),
-            self.runtime.core.clipboard_integration_mode(),
-        )
-    }
-
-    /// Create a `CleanupExpiredFilesUseCase` wired with this runtime's settings
-    /// and file cache directory.
-    ///
-    /// 创建使用此运行时设置和文件缓存目录的 CleanupExpiredFilesUseCase。
-    pub fn cleanup_expired_files(&self) -> uc_app::usecases::file_sync::CleanupExpiredFilesUseCase {
-        let file_cache_dir = self.runtime.core.storage_paths().file_cache_dir.clone();
-        uc_app::usecases::file_sync::CleanupExpiredFilesUseCase::new(
-            self.runtime.wiring_deps().settings.clone(),
-            file_cache_dir,
-        )
-    }
-
-    // NOTE: Other use case methods will be added as the use case design evolves
-    // to support trait object instantiation. Currently, use cases with generic
-    // type parameters cannot be instantiated through this accessor.
-    //
-    // 注意：随着用例设计的演进，将添加其他用例方法以支持 trait 对象实例化。
-    // 目前，具有泛型类型参数的用例无法通过此访问器实例化。
 }
 
 /// Seed for creating the application runtime.
@@ -2599,7 +1822,7 @@ mod tests {
                 cache_fs: Arc::new(NoopPort),
             },
         };
-        let setup_ports = SetupRuntimePorts::placeholder(&deps);
+        let setup_ports = super::super::assembly::SetupAssemblyPorts::placeholder(&deps);
         let emitter = Arc::new(RecordingEmitter::default());
         let runtime = AppRuntime::with_setup(
             deps,
@@ -2699,7 +1922,7 @@ mod tests {
                 cache_fs: Arc::new(NoopPort),
             },
         };
-        let setup_ports = SetupRuntimePorts::placeholder(&deps);
+        let setup_ports = super::super::assembly::SetupAssemblyPorts::placeholder(&deps);
         let initial_emitter = Arc::new(RecordingEmitter::default());
         let swapped_emitter = Arc::new(RecordingEmitter::default());
         let runtime = AppRuntime::with_setup(
