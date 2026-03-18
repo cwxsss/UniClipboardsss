@@ -115,7 +115,7 @@ Plans:
 3. SetupOrchestrator is assembled exactly once in the main composition root; runtime.rs contains no secondary wiring or orchestrator construction
 4. The existing GUI setup flow (first-run setup, encrypted space unlock) continues to work end-to-end
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 
@@ -175,7 +175,7 @@ Plans:
 | 19-35                            | v0.3.0    | 51/51          | Complete    | 2026-03-17 |
 | 36. Event Emitter Abstraction    | 2/2       | Complete       | 2026-03-17  | -          |
 | 37. Wiring Decomposition         | 5/5       | Complete       | 2026-03-18  | 2026-03-17 |
-| 38. CoreRuntime Extraction       | 1/3       | In Progress    |             | -          |
+| 38. CoreRuntime Extraction       | 2/3       | In Progress    |             | -          |
 | 39. Config Resolution Extraction | v0.4.0    | 0/?            | Not started | -          |
 | 40. uc-bootstrap Crate           | v0.4.0    | 0/?            | Not started | -          |
 | 41. Daemon and CLI Skeletons     | v0.4.0    | 0/?            | Not started | -          |
