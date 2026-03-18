@@ -77,6 +77,11 @@ struct SessionHandle {
     peer_id: String,
     write_tx: mpsc::Sender<PairingMessage>,
     shutdown_tx: watch::Sender<bool>,
+    /// Set to `true` when the application explicitly closes the session via
+    /// `close_pairing_session`.  The `run_session` task reads this flag to
+    /// decide whether a `StreamClosedByPeer` shutdown should be bridged to a
+    /// `PairingFailed` event.
+    app_closed_tx: watch::Sender<bool>,
     _global_permit: OwnedSemaphorePermit,
     _peer_permit: OwnedSemaphorePermit,
 }
@@ -251,6 +256,10 @@ impl PairingStreamService {
             sessions.remove(&session_id)
         };
         if let Some(handle) = handle {
+            // Mark session as application-initiated close BEFORE sending the
+            // shutdown signal so that run_session can observe the flag when it
+            // decides whether to bridge StreamClosedByPeer into PairingFailed.
+            let _ = handle.app_closed_tx.send(true);
             if let Err(err) = handle.shutdown_tx.send(true) {
                 warn!("pairing session shutdown send failed: {err}");
             }
@@ -293,10 +302,12 @@ impl PairingStreamService {
         self.ensure_session_slot(&session_id).await?;
         let (write_tx, write_rx) = mpsc::channel(self.inner.config.outbound_queue_depth);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (app_closed_tx, app_closed_rx) = watch::channel(false);
         let handle = SessionHandle {
             peer_id: peer_id.clone(),
             write_tx: write_tx.clone(),
             shutdown_tx: shutdown_tx.clone(),
+            app_closed_tx,
             _global_permit: permits.global,
             _peer_permit: permits.peer,
         };
@@ -325,6 +336,7 @@ impl PairingStreamService {
                     write_rx,
                     shutdown_tx,
                     shutdown_rx,
+                    app_closed_rx,
                 )
                 .await;
                 let mut sessions = inner.sessions.lock().await;
@@ -395,6 +407,7 @@ async fn run_session<S>(
     write_rx: mpsc::Receiver<PairingMessage>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
+    app_closed_rx: watch::Receiver<bool>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -461,10 +474,50 @@ where
                 CompletedTask::Read => "read_loop",
                 CompletedTask::Write => "write_loop",
             };
-            info!(
-                "pairing session ended cleanly: peer_id={} session_id={} source={} reason={}",
-                peer_id, session_id, source, reason
-            );
+            // A clean close initiated by the remote peer (EOF / stream dropped)
+            // while no explicit application-level shutdown was signalled means
+            // the session ended without the pairing protocol completing
+            // normally.  Bridge this to a PairingFailed event so that the
+            // joiner side does not stall silently in ProcessingJoinSpace when
+            // the responder drops the connection after sending (or failing to
+            // send) a Reject frame.
+            //
+            // We only emit the fallback when:
+            //   1. The read side reported StreamClosedByPeer (remote-initiated EOF), AND
+            //   2. The application did NOT explicitly close the session via
+            //      `close_pairing_session` (app_closed flag not set).
+            //
+            // The `app_closed` flag is set BEFORE the shutdown signal is sent,
+            // so even in the race where the read loop sees EOF before the
+            // shutdown signal, we can still detect the application intent.
+            let is_app_closed = *app_closed_rx.borrow();
+            if matches!(
+                (reason, &completed),
+                (ShutdownReason::StreamClosedByPeer, CompletedTask::Read)
+            ) && !is_app_closed
+            {
+                warn!(
+                    "pairing session closed by peer without explicit protocol termination: \
+                     peer_id={} session_id={} — bridging to PairingFailed",
+                    peer_id, session_id
+                );
+                if let Err(e) = inner
+                    .event_tx
+                    .send(NetworkEvent::PairingFailed {
+                        session_id: session_id.clone(),
+                        peer_id: peer_id.clone(),
+                        error: "stream_closed_by_peer".to_string(),
+                    })
+                    .await
+                {
+                    warn!("failed to emit pairing failed event on peer close: {}", e);
+                }
+            } else {
+                info!(
+                    "pairing session ended cleanly: peer_id={} session_id={} source={} reason={}",
+                    peer_id, session_id, source, reason
+                );
+            }
         }
         Err(err) => {
             let source = match completed {
@@ -680,10 +733,12 @@ mod tests {
         let permits = service.acquire_permits(&peer_id).await.expect("permits");
         let (write_tx, _write_rx) = mpsc::channel(1);
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let (app_closed_tx, _app_closed_rx) = watch::channel(false);
         let handle = super::SessionHandle {
             peer_id: peer_id.clone(),
             write_tx,
             shutdown_tx,
+            app_closed_tx,
             _global_permit: permits.global,
             _peer_permit: permits.peer,
         };
@@ -723,10 +778,13 @@ mod tests {
 
         let (target_write_tx_a, _target_write_rx_a) = mpsc::channel(1);
         let (target_shutdown_tx_a, _target_shutdown_rx_a) = watch::channel(false);
+        let (target_app_closed_tx_a, _target_app_closed_rx_a) = watch::channel(false);
         let (target_write_tx_b, _target_write_rx_b) = mpsc::channel(1);
         let (target_shutdown_tx_b, _target_shutdown_rx_b) = watch::channel(false);
+        let (target_app_closed_tx_b, _target_app_closed_rx_b) = watch::channel(false);
         let (other_write_tx, _other_write_rx) = mpsc::channel(1);
         let (other_shutdown_tx, _other_shutdown_rx) = watch::channel(false);
+        let (other_app_closed_tx, _other_app_closed_rx) = watch::channel(false);
 
         {
             let mut sessions = service.inner.sessions.lock().await;
@@ -736,6 +794,7 @@ mod tests {
                     peer_id: target_peer.clone(),
                     write_tx: target_write_tx_a,
                     shutdown_tx: target_shutdown_tx_a,
+                    app_closed_tx: target_app_closed_tx_a,
                     _global_permit: target_permits_a.global,
                     _peer_permit: target_permits_a.peer,
                 },
@@ -746,6 +805,7 @@ mod tests {
                     peer_id: target_peer.clone(),
                     write_tx: target_write_tx_b,
                     shutdown_tx: target_shutdown_tx_b,
+                    app_closed_tx: target_app_closed_tx_b,
                     _global_permit: target_permits_b.global,
                     _peer_permit: target_permits_b.peer,
                 },
@@ -756,6 +816,7 @@ mod tests {
                     peer_id: other_peer.clone(),
                     write_tx: other_write_tx,
                     shutdown_tx: other_shutdown_tx,
+                    app_closed_tx: other_app_closed_tx,
                     _global_permit: other_permits.global,
                     _peer_permit: other_permits.peer,
                 },
@@ -827,5 +888,151 @@ mod tests {
         assert!(logs
             .iter()
             .any(|entry| entry.contains("pairing session shutdown send failed")));
+    }
+
+    /// Simulate EOF after an established session: the peer sends the initial
+    /// PairingRequest but then closes the connection without sending a Reject
+    /// frame.  The session should emit a PairingFailed event so that the
+    /// join-space listener can exit ProcessingJoinSpace instead of stalling.
+    #[tokio::test]
+    async fn pairing_stream_clean_close_without_protocol_termination_emits_pairing_failed() {
+        use super::super::framing::write_length_prefixed;
+        use uc_core::network::protocol::PairingRequest;
+        use uc_core::network::PairingMessage;
+
+        let (event_tx, mut event_rx) = mpsc::channel(16);
+        let service = PairingStreamService::for_tests(
+            event_tx,
+            PairingStreamConfig {
+                idle_timeout: Duration::from_secs(5),
+                ..Default::default()
+            },
+        );
+
+        let peer_id = PeerId::random().to_string();
+        let session_id = "sess-eof-after-request".to_string();
+
+        let (mut server_tx, client_rx) = tokio::io::duplex(4096);
+
+        // Write an initial PairingRequest frame so the session is established.
+        let request = PairingMessage::Request(PairingRequest {
+            session_id: session_id.clone(),
+            peer_id: peer_id.clone(),
+            device_name: "test-device".to_string(),
+            device_id: "test-device-id".to_string(),
+            identity_pubkey: vec![1; 32],
+            nonce: vec![2; 16],
+        });
+        let payload = serde_json::to_vec(&request).expect("encode request");
+        write_length_prefixed(&mut server_tx, &payload)
+            .await
+            .expect("write initial frame");
+
+        // Drop server_tx immediately after writing — this causes EOF on client_rx
+        // after the initial frame is read, simulating the peer closing the
+        // connection without sending a Reject.
+        drop(server_tx);
+
+        let task = service.handle_incoming_stream(peer_id.clone(), client_rx);
+
+        // Wait for the session to complete.
+        let _ = timeout(Duration::from_secs(2), task)
+            .await
+            .expect("session task timed out");
+
+        // Give the event a moment to propagate.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Should see a PairingFailed event for the established session.
+        let mut found_failed = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if let uc_core::network::NetworkEvent::PairingFailed {
+                session_id: ref sid,
+                ..
+            } = event
+            {
+                if sid == &session_id {
+                    found_failed = true;
+                }
+            }
+        }
+        assert!(
+            found_failed,
+            "expected PairingFailed event when peer closes connection after sending initial frame \
+             but before completing the pairing protocol"
+        );
+    }
+
+    /// When close_pairing_session is called explicitly (application-initiated
+    /// shutdown), the session should NOT emit a spurious PairingFailed event.
+    #[tokio::test]
+    async fn explicit_session_close_does_not_emit_pairing_failed() {
+        use super::super::framing::write_length_prefixed;
+        use uc_core::network::protocol::PairingRequest;
+        use uc_core::network::PairingMessage;
+
+        let (event_tx, mut event_rx) = mpsc::channel(8);
+        let service = PairingStreamService::for_tests(
+            event_tx,
+            PairingStreamConfig {
+                idle_timeout: Duration::from_secs(5),
+                ..Default::default()
+            },
+        );
+
+        let peer_id = PeerId::random().to_string();
+        let session_id = "sess-explicit-close".to_string();
+
+        // Set up a duplex stream where we send an initial PairingRequest so the
+        // session is registered, then close via close_pairing_session.
+        let (mut server_tx, client_rx) = tokio::io::duplex(4096);
+
+        // Write an initial PairingRequest frame.
+        let request = PairingMessage::Request(PairingRequest {
+            session_id: session_id.clone(),
+            peer_id: peer_id.clone(),
+            device_name: "test-device".to_string(),
+            device_id: "test-device-id".to_string(),
+            identity_pubkey: vec![1; 32],
+            nonce: vec![2; 16],
+        });
+        let payload = serde_json::to_vec(&request).expect("encode request");
+        write_length_prefixed(&mut server_tx, &payload)
+            .await
+            .expect("write frame");
+
+        let service_clone = service.clone();
+        let session_id_clone = session_id.clone();
+        // Give session time to start and register.
+        let task = service.handle_incoming_stream(peer_id.clone(), client_rx);
+
+        // Wait a moment for the session to be registered.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Explicitly close the session from the application side.
+        service_clone
+            .close_pairing_session(session_id_clone, Some("test explicit close".to_string()))
+            .await
+            .expect("close session");
+
+        // Drop server_tx so read_loop gets EOF after shutdown.
+        drop(server_tx);
+
+        timeout(Duration::from_secs(2), task)
+            .await
+            .expect("session task timed out")
+            .ok(); // Task result doesn't matter.
+
+        // Drain events: should NOT contain PairingFailed.
+        let mut found_failed = false;
+        while let Ok(event) = event_rx.try_recv() {
+            if matches!(event, uc_core::network::NetworkEvent::PairingFailed { .. }) {
+                found_failed = true;
+            }
+        }
+        assert!(
+            !found_failed,
+            "should not emit PairingFailed when session is closed explicitly by the application"
+        );
     }
 }
