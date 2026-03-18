@@ -1,7 +1,6 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::http::header::{
     HeaderValue, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
@@ -14,7 +13,7 @@ use tauri_plugin_global_shortcut;
 use tauri_plugin_single_instance;
 use tauri_plugin_stronghold;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use uc_app::usecases::{
     pairing::{PairingOrchestrator, StagedPairedDeviceStore},
@@ -24,9 +23,7 @@ use uc_core::config::AppConfig;
 use uc_core::ports::ClipboardChangeHandler;
 use uc_core::ports::PeerDirectoryPort;
 use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
-use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::ipc::PlatformCommand;
-use uc_platform::ports::AppDirsPort;
 use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::event_bus::{
     PlatformCommandReceiver, PlatformEventReceiver, PlatformEventSender,
@@ -34,7 +31,7 @@ use uc_platform::runtime::event_bus::{
 use uc_platform::runtime::runtime::PlatformRuntime;
 use uc_tauri::bootstrap::tracing as bootstrap_tracing;
 use uc_tauri::bootstrap::{
-    ensure_default_device_name, get_storage_paths, load_config, resolve_pairing_config,
+    ensure_default_device_name, get_storage_paths, resolve_app_config, resolve_pairing_config,
     resolve_pairing_device_name, start_background_tasks, wire_dependencies, AppRuntime,
     SetupAssemblyPorts,
 };
@@ -303,133 +300,20 @@ mod tests {
     }
 }
 
-fn resolve_config_path() -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var("UC_CONFIG_PATH") {
-        let explicit_path = PathBuf::from(explicit);
-        if explicit_path.is_file() {
-            return Some(explicit_path);
-        }
-    }
-
-    let current_dir = std::env::current_dir().ok()?;
-
-    for ancestor in current_dir.ancestors() {
-        let candidate = ancestor.join("config.toml");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-
-        let src_tauri_candidate = ancestor.join("src-tauri").join("config.toml");
-        if src_tauri_candidate.is_file() {
-            return Some(src_tauri_candidate);
-        }
-    }
-
-    None
-}
-
-fn apply_profile_suffix(path: PathBuf) -> PathBuf {
-    let profile = match std::env::var("UC_PROFILE") {
-        Ok(value) if !value.is_empty() => value,
-        _ => return path,
-    };
-
-    let file_name = match path.file_name().and_then(|name| name.to_str()) {
-        Some(name) => name.to_string(),
-        None => return path,
-    };
-
-    let mut updated = path;
-    updated.set_file_name(format!("{file_name}_{profile}"));
-    updated
-}
-
-fn resolve_keyslot_store_vault_dir(config: &AppConfig, app_data_root: PathBuf) -> PathBuf {
-    if config.vault_key_path.as_os_str().is_empty() {
-        return app_data_root.join("vault");
-    }
-
-    let configured_vault_root = config
-        .vault_key_path
-        .parent()
-        .unwrap_or(&config.vault_key_path)
-        .to_path_buf();
-
-    if config.database_path.as_os_str().is_empty() {
-        return apply_profile_suffix(configured_vault_root);
-    }
-
-    let configured_db_root = config
-        .database_path
-        .parent()
-        .unwrap_or(&config.database_path)
-        .to_path_buf();
-
-    if configured_vault_root.starts_with(&configured_db_root) {
-        let relative = configured_vault_root
-            .strip_prefix(&configured_db_root)
-            .unwrap_or(Path::new(""));
-        app_data_root.join(relative)
-    } else {
-        apply_profile_suffix(configured_vault_root)
-    }
-}
-
-/// Starts the application.
-///
-/// Initializes tracing, attempts to load `config.toml` (development mode), falls back to system
-/// defaults using the platform app-data directory when no config file is present, and then runs
-/// the Tauri application. On fatal initialization failures (tracing or app-data resolution) the
-/// process exits with code 1.
-///
-/// # Examples
-///
-/// ```no_run
-/// // Running the application (example; do not run in doctests)
-/// crate::main();
-/// ```
 fn main() {
-    // Initialize tracing subscriber FIRST (before any logging)
-    // This sets up the tracing infrastructure and enables log-tracing bridge
     if let Err(e) = bootstrap_tracing::init_tracing_subscriber() {
         eprintln!("Failed to initialize tracing: {}", e);
         std::process::exit(1);
     }
 
-    // NOTE: config.toml is optional and intended for development use only
-    // Production environment uses system-default paths automatically
-
-    let config_path = resolve_config_path().unwrap_or_else(|| PathBuf::from("config.toml"));
-
-    // Load configuration using the new bootstrap flow
-    let config = match load_config(config_path.clone()) {
-        Ok(config) => {
-            info!(
-                "Loaded config from {} (development mode)",
-                config_path.display()
-            );
-            config
-        }
+    let config = match resolve_app_config() {
+        Ok(config) => config,
         Err(e) => {
-            debug!("No config.toml found, using system defaults: {}", e);
-
-            let app_dirs = match uc_platform::app_dirs::DirsAppDirsAdapter::new().get_app_dirs() {
-                Ok(dirs) => dirs,
-                Err(err) => {
-                    error!("Failed to determine system data directory: {}", err);
-                    error!("Please ensure your platform's data directory is accessible");
-                    error!("macOS: ~/Library/Application Support/");
-                    error!("Linux: ~/.local/share/");
-                    error!("Windows: %LOCALAPPDATA%");
-                    std::process::exit(1);
-                }
-            };
-
-            AppConfig::with_system_defaults(app_dirs.app_data_root)
+            error!("Configuration resolution failed: {}", e);
+            std::process::exit(1);
         }
     };
 
-    // Run the application with the loaded config
     run_app(config);
 }
 
@@ -482,33 +366,11 @@ fn run_app(config: AppConfig) {
     );
     let pairing_orchestrator = Arc::new(pairing_orchestrator);
     let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
-    // Resolve app directories once for reuse across wiring
-    let app_dirs = match DirsAppDirsAdapter::new().get_app_dirs() {
-        Ok(dirs) => dirs,
-        Err(err) => {
-            error!(error = %err, "Failed to determine app directories");
-            panic!("Failed to determine app directories: {}", err);
-        }
-    };
-
-    let key_slot_store: Arc<dyn KeySlotStore> = {
-        let app_data_root = if config.database_path.as_os_str().is_empty() {
-            app_dirs.app_data_root.clone()
-        } else {
-            let configured_db_root = config
-                .database_path
-                .parent()
-                .unwrap_or(&config.database_path)
-                .to_path_buf();
-            apply_profile_suffix(configured_db_root)
-        };
-
-        let vault_dir = resolve_keyslot_store_vault_dir(&config, app_data_root);
-        Arc::new(JsonKeySlotStore::new(vault_dir))
-    };
 
     // Get resolved storage paths with profile suffix and config overrides applied
     let storage_paths = get_storage_paths(&config).expect("failed to get storage paths");
+    let key_slot_store: Arc<dyn KeySlotStore> =
+        Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
 
     let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
         std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::LoggingEventEmitter);
