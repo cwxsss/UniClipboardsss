@@ -2047,4 +2047,198 @@ mod tests {
         assert!(orchestrator.selected_peer_id.lock().await.is_none());
         assert!(orchestrator.pairing_session_id.lock().await.is_none());
     }
+
+    /// Verify that when peerA rejects the initial pairing request, peerB
+    /// (the joiner) transitions back to JoinSpaceSelectDevice with
+    /// error=PairingRejected.
+    ///
+    /// This covers UAT Test 4: "peerA clicks reject → peerB sees an error
+    /// instead of staying on the spinning ProcessingJoinSpace screen."
+    #[tokio::test]
+    async fn join_space_initial_request_rejected_by_peer_returns_pairing_rejected_error() {
+        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
+        let setup_event_port = Arc::new(MockSetupEventPort::default());
+        let (pairing_orchestrator, action_rx) = build_pairing_orchestrator_with_actions();
+        let orchestrator = SetupOrchestrator::new(
+            build_initialize_encryption(),
+            mark_setup_complete,
+            setup_status,
+            build_mock_lifecycle(),
+            pairing_orchestrator,
+            setup_event_port.clone(),
+            build_space_access_orchestrator(),
+            build_discovery_port(),
+            build_network_control(),
+            build_crypto_factory(),
+            build_pairing_transport(),
+            build_transport_port(),
+            build_proof_port(),
+            build_timer_port(),
+            build_persistence_port(),
+        );
+
+        // Start join flow and select device (which also initiates pairing).
+        orchestrator.join_space().await.unwrap();
+        orchestrator
+            .select_device("peer-reject".to_string())
+            .await
+            .unwrap();
+
+        // Consume the initial Send action queued by the state machine.
+        {
+            let mut rx = action_rx.lock().await;
+            assert!(
+                rx.try_recv().is_ok(),
+                "pairing orchestrator should queue initial send action"
+            );
+        }
+
+        // Wait for the session id to be stored by the setup listener.
+        let session_deadline = Instant::now() + Duration::from_secs(1);
+        let session_id = loop {
+            if let Some(sid) = orchestrator.pairing_session_id.lock().await.clone() {
+                break sid;
+            }
+            assert!(
+                Instant::now() < session_deadline,
+                "pairing session id was not set after select_device"
+            );
+            sleep(Duration::from_millis(10)).await;
+        };
+
+        // Simulate peerA sending a Reject on the initial request.
+        // The pairing state machine is in RequestSent state, which accepts RecvReject.
+        orchestrator
+            .action_executor
+            .pairing_orchestrator
+            .handle_reject(&session_id, "peer-reject")
+            .await
+            .unwrap();
+
+        // The setup pairing listener should receive PairingFailed with a
+        // "rejected" reason and drive setup to JoinSpaceSelectDevice with
+        // error=PairingRejected.
+        let emit_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let emitted = setup_event_port.snapshot().await;
+            let found = emitted.iter().any(|(state, sid)| {
+                matches!(
+                    state,
+                    SetupState::JoinSpaceSelectDevice {
+                        error: Some(SetupDomainError::PairingRejected)
+                    }
+                ) && sid.as_ref() == Some(&session_id)
+            });
+            if found {
+                break;
+            }
+            assert!(
+                Instant::now() < emit_deadline,
+                "expected JoinSpaceSelectDevice(PairingRejected) event within 1s after reject"
+            );
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    /// Verify that a low-latency PairingVerificationRequired event (arriving
+    /// immediately after initiate_pairing) is not missed by the setup listener
+    /// because of the subscribe-before-initiate ordering fix.
+    ///
+    /// This covers UAT Test 2: "ProcessingJoinSpace no longer stalls when the
+    /// verification event arrives before the listener was subscribed."
+    #[tokio::test]
+    async fn join_space_low_latency_verification_advances_to_confirm_peer() {
+        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
+        let setup_event_port = Arc::new(MockSetupEventPort::default());
+        let (pairing_orchestrator, action_rx) = build_pairing_orchestrator_with_actions();
+        let orchestrator = SetupOrchestrator::new(
+            build_initialize_encryption(),
+            mark_setup_complete,
+            setup_status,
+            build_mock_lifecycle(),
+            pairing_orchestrator,
+            setup_event_port.clone(),
+            build_space_access_orchestrator(),
+            build_discovery_port(),
+            build_network_control(),
+            build_crypto_factory(),
+            build_pairing_transport(),
+            build_transport_port(),
+            build_proof_port(),
+            build_timer_port(),
+            build_persistence_port(),
+        );
+
+        // Start join flow and select device.
+        orchestrator.join_space().await.unwrap();
+        orchestrator
+            .select_device("peer-low-latency".to_string())
+            .await
+            .unwrap();
+
+        // Consume the initial Send action.
+        {
+            let mut rx = action_rx.lock().await;
+            assert!(
+                rx.try_recv().is_ok(),
+                "pairing orchestrator should queue initial send action"
+            );
+        }
+
+        // Wait for the session id to be captured.
+        let session_deadline = Instant::now() + Duration::from_secs(1);
+        let session_id = loop {
+            if let Some(sid) = orchestrator.pairing_session_id.lock().await.clone() {
+                break sid;
+            }
+            assert!(
+                Instant::now() < session_deadline,
+                "pairing session id was not set after select_device"
+            );
+            sleep(Duration::from_millis(10)).await;
+        };
+
+        // Immediately deliver a PairingChallenge — this is the low-latency
+        // path where the remote responds with a challenge before the listener
+        // had a chance to subscribe in the old (buggy) ordering.  With the
+        // subscribe-before-initiate fix, the listener is already active.
+        orchestrator
+            .action_executor
+            .pairing_orchestrator
+            .handle_challenge(
+                &session_id,
+                "peer-low-latency",
+                uc_core::network::protocol::PairingChallenge {
+                    session_id: session_id.clone(),
+                    pin: "111-222".to_string(),
+                    device_name: "remote-ll".to_string(),
+                    device_id: "remote-ll-id".to_string(),
+                    identity_pubkey: vec![5; 32],
+                    nonce: vec![6; 32],
+                },
+            )
+            .await
+            .unwrap();
+
+        // Setup state should advance to JoinSpaceConfirmPeer.
+        let emit_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let emitted = setup_event_port.snapshot().await;
+            let found = emitted.iter().any(|(state, sid)| {
+                matches!(state, SetupState::JoinSpaceConfirmPeer { .. })
+                    && sid.as_ref() == Some(&session_id)
+            });
+            if found {
+                break;
+            }
+            assert!(
+                Instant::now() < emit_deadline,
+                "expected JoinSpaceConfirmPeer event within 1s \
+                 — low-latency verification event was missed"
+            );
+            sleep(Duration::from_millis(10)).await;
+        }
+    }
 }
