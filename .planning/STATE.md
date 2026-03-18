@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Phase 38 context gathered
-last_updated: '2026-03-17T16:21:59.551Z'
+stopped_at: Completed 37-04-PLAN.md
+last_updated: '2026-03-18T02:28:16.437Z'
 last_activity: 2026-03-17 — Plan 37-03 complete (wiring.rs split into assembly.rs; AppHandle removed from start_background_tasks)
 progress:
   total_phases: 6
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  completed_phases: 1
+  total_plans: 7
+  completed_plans: 6
   percent: 0
 ---
 
@@ -51,6 +51,7 @@ _Updated after each plan completion_
 | Phase 36-event-emitter-abstraction P02 | 60 | 2 tasks | 6 files |
 | Phase 37-wiring-decomposition P02 | 35 | 2 tasks | 3 files |
 | Phase 37-wiring-decomposition P03 | 24 | 2 tasks | 6 files |
+| Phase 37-wiring-decomposition P04 | 15 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,7 @@ Recent decisions affecting current work:
 - [Phase 36-event-emitter-abstraction]: file_transfer_wiring.rs handle_transfer_progress/completed/failed/spawn_timeout_sweep/reconcile_on_startup deferred to Phase 37 wiring decomposition
 - [Phase 37-wiring-decomposition]: app.emit() calls replaced with HostEventEmitterPort; TauriSetupEventPort replaced by HostEventSetupPort; \_app_handle params deferred to Plan 03
 - [Phase 37-wiring-decomposition P03]: assembly.rs created with zero tauri imports; BackgroundRuntimeDeps stays in wiring.rs; PlatformLayer made pub(crate) for test access; invoke_handler stays in main.rs (generate_handler! macro constraint)
+- [Phase 37-wiring-decomposition]: Synchronously write activeSessionIdRef.current before calling acceptP2PPairing to close verification event race window — useEffect-based ref sync is too late when backend emits immediately
 
 ### Roadmap Evolution
 
@@ -86,6 +88,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-17T16:21:59.549Z
-Stopped at: Phase 38 context gathered
-Resume file: .planning/phases/38-coreruntime-extraction/38-CONTEXT.md
+Last session: 2026-03-18T02:28:16.405Z
+Stopped at: Completed 37-04-PLAN.md
+Resume file: None

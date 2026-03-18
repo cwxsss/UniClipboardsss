@@ -95,7 +95,7 @@ Plans:
 3. Existing GUI behavior is unchanged: clipboard sync, pairing, and settings all continue to function after the split
 4. assembly.rs contains zero tauri imports (verified by CI lint) and its public API is Tauri-type-free, preparing it for independent `cargo check` in Phase 40 when uc-bootstrap crate is created
 
-**Plans:** 3/3 plans complete
+**Plans:** 4/5 plans executed
 
 Plans:
 
@@ -167,7 +167,7 @@ Plans:
 | 10-18                            | v0.2.0    | 22/22          | Complete    | 2026-03-09 |
 | 19-35                            | v0.3.0    | 51/51          | Complete    | 2026-03-17 |
 | 36. Event Emitter Abstraction    | 2/2       | Complete       | 2026-03-17  | -          |
-| 37. Wiring Decomposition         | v0.4.0    | Complete       | 2026-03-17  | 2026-03-17 |
+| 37. Wiring Decomposition         | 4/5       | In Progress    |             | 2026-03-17 |
 | 38. CoreRuntime Extraction       | v0.4.0    | 0/?            | Not started | -          |
 | 39. Config Resolution Extraction | v0.4.0    | 0/?            | Not started | -          |
 | 40. uc-bootstrap Crate           | v0.4.0    | 0/?            | Not started | -          |
