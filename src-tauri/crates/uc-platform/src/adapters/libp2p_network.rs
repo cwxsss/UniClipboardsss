@@ -43,8 +43,6 @@ const NETWORK_CHUNK_SIZE: usize = 256 * 1024;
 /// Maximum allowed ciphertext length per chunk (plaintext chunk + encryption overhead).
 const MAX_CHUNK_CIPHERTEXT_SIZE: usize = NETWORK_CHUNK_SIZE + 256;
 const BUSINESS_READ_TIMEOUT: Duration = Duration::from_secs(120);
-const PRESENCE_STALENESS_THRESHOLD: Duration = Duration::from_secs(20);
-const PRESENCE_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
 const BUSINESS_STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
 const BUSINESS_STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const BUSINESS_STREAM_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -202,23 +200,6 @@ impl PeerCaches {
     pub fn is_reachable(&self, peer_id: &str) -> bool {
         self.reachable_peers.contains(peer_id)
     }
-
-    /// Remove peers whose `last_seen` is older than `threshold` and return their IDs.
-    pub fn sweep_stale_peers(&mut self, threshold: DateTime<Utc>) -> Vec<String> {
-        let stale: Vec<String> = self
-            .discovered_peers
-            .iter()
-            .filter(|(_, peer)| peer.last_seen < threshold)
-            .map(|(peer_id, _)| peer_id.clone())
-            .collect();
-        let mut evicted = Vec::new();
-        for peer_id in stale {
-            if self.remove_discovered(&peer_id).is_some() {
-                evicted.push(peer_id);
-            }
-        }
-        evicted
-    }
 }
 
 #[derive(NetworkBehaviour)]
@@ -249,7 +230,6 @@ impl From<()> for Libp2pBehaviourEvent {
 fn build_mdns_config() -> mdns::Config {
     let mut config = mdns::Config::default();
     config.query_interval = Duration::from_secs(5);
-    config.ttl = Duration::from_secs(30);
     config
 }
 
@@ -1472,9 +1452,6 @@ async fn run_swarm(
     let mut next_business_command_id: u64 = 1;
     let business_command_semaphore = Arc::new(Semaphore::new(MAX_IN_FLIGHT_BUSINESS_COMMANDS));
     let mut pending_business_command: Option<(u64, BusinessCommand)> = None;
-    let mut presence_sweep = tokio::time::interval(PRESENCE_SWEEP_INTERVAL);
-    presence_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut pending_presence_evictions: Vec<String> = Vec::new();
 
     loop {
         tokio::select! {
@@ -1710,36 +1687,6 @@ async fn run_swarm(
                     )
                     .await;
                 });
-            }
-            _ = presence_sweep.tick() => {
-                // Retry any PeerLost events that failed to send on a previous sweep
-                pending_presence_evictions.retain(|peer_id| {
-                    try_send_event(
-                        &event_tx,
-                        NetworkEvent::PeerLost(peer_id.clone()),
-                        "PeerLost(stale-retry)",
-                    )
-                    .is_err()
-                });
-
-                let threshold = Utc::now() - chrono::Duration::from_std(PRESENCE_STALENESS_THRESHOLD)
-                    .unwrap_or_else(|_| chrono::Duration::seconds(20));
-                let evicted = {
-                    let mut caches = caches.write().await;
-                    caches.sweep_stale_peers(threshold)
-                };
-                for peer_id in evicted {
-                    if try_send_event(
-                        &event_tx,
-                        NetworkEvent::PeerLost(peer_id.clone()),
-                        "PeerLost(stale)",
-                    )
-                    .is_err()
-                    {
-                        pending_presence_evictions.push(peer_id.clone());
-                    }
-                    info!(peer_id = %peer_id, "peer evicted due to presence staleness");
-                }
             }
         }
     }
@@ -2650,34 +2597,6 @@ mod tests {
             NetworkEvent::PeerLost(peer_id) if peer_id == "peer-1"
         ));
         assert!(!caches.discovered_peers.contains_key("peer-1"));
-    }
-
-    #[test]
-    fn sweep_stale_peers_evicts_old_entries() {
-        let mut caches = PeerCaches::new();
-        let now = Utc::now();
-        let old = now - chrono::Duration::seconds(60);
-
-        // Insert a stale peer (last_seen 60s ago)
-        caches.upsert_discovered(
-            "stale-peer".to_string(),
-            vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
-            old,
-        );
-        // Insert a fresh peer (last_seen = now)
-        caches.upsert_discovered(
-            "fresh-peer".to_string(),
-            vec!["/ip4/192.168.1.3/tcp/4001".to_string()],
-            now,
-        );
-
-        // Sweep with threshold = 20s ago
-        let threshold = now - chrono::Duration::seconds(20);
-        let evicted = caches.sweep_stale_peers(threshold);
-
-        assert_eq!(evicted, vec!["stale-peer".to_string()]);
-        assert!(!caches.discovered_peers.contains_key("stale-peer"));
-        assert!(caches.discovered_peers.contains_key("fresh-peer"));
     }
 
     #[derive(Default)]
@@ -3600,5 +3519,167 @@ mod tests {
         assert_eq!(addresses[0], "/ip4/10.0.0.2/udp/2000/quic-v1");
         assert_eq!(addresses[1], "/ip4/10.0.0.1/tcp/1000");
         assert_eq!(addresses[2], "/ip4/10.0.0.3/tcp/3000");
+    }
+
+    // ── Regression tests: staleness must never break sync ────────────────
+    //
+    // Context: commit 62320c21 introduced a presence staleness sweep that
+    // *removed* peers from `discovered_peers` after 20s of no mDNS heartbeat.
+    // This broke clipboard sync after pairing (which takes >20s) because
+    // `list_sendable_peers` reads from `discovered_peers`.
+    //
+    // These tests encode the invariant:
+    //   "Only mDNS Expired events may remove a peer from discovered_peers."
+    // Any future staleness/offline logic must mark peers (not remove them).
+
+    /// Regression: a peer whose `last_seen` is older than any staleness
+    /// threshold must remain in `discovered_peers` so that `list_sendable_peers`
+    /// can still reach it.  Only `apply_mdns_expired` should remove peers.
+    #[tokio::test]
+    async fn regression_stale_peer_remains_sendable_after_long_idle() {
+        let adapter = Libp2pNetworkAdapter::new(
+            Arc::new(TestIdentityStore::default()),
+            Arc::new(FakeResolver),
+            Arc::new(InMemoryEncryptionSessionPort::default()),
+            Arc::new(PassthroughTransferPayloadDecryptor),
+            Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
+        )
+        .expect("create adapter");
+
+        // Insert a peer that was discovered 5 minutes ago and never refreshed
+        let stale_time = Utc::now() - chrono::Duration::seconds(300);
+        {
+            let mut caches = adapter.caches.write().await;
+            caches.upsert_discovered(
+                "peer-stale".to_string(),
+                vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+                stale_time,
+            );
+        }
+
+        // Peer must still be sendable despite being "stale"
+        let peers = adapter
+            .list_sendable_peers()
+            .await
+            .expect("list sendable peers");
+        assert_eq!(peers.len(), 1, "stale peer must still be sendable");
+        assert_eq!(peers[0].peer_id, "peer-stale");
+    }
+
+    /// Regression: only `apply_mdns_expired` may remove peers from
+    /// `discovered_peers`.  `remove_discovered` is available but must only be
+    /// called from the mDNS expiry path.  This test documents the invariant.
+    #[test]
+    fn regression_only_mdns_expired_removes_discovered_peer() {
+        let mut caches = PeerCaches::new();
+        let now = Utc::now();
+        let stale_time = now - chrono::Duration::seconds(300);
+
+        caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+            stale_time,
+        );
+
+        // Peer must persist regardless of last_seen age
+        assert!(
+            caches.discovered_peers.contains_key("peer-1"),
+            "peer must exist in discovered_peers even when last_seen is very old"
+        );
+
+        // Only mDNS expired should remove it
+        let mut expired = HashSet::new();
+        expired.insert("peer-1".to_string());
+        let events = apply_mdns_expired(&mut caches, expired);
+
+        assert_eq!(events.len(), 1);
+        assert!(!caches.discovered_peers.contains_key("peer-1"));
+    }
+
+    /// Regression: simulates the exact bug scenario — pair takes >20s, peer goes
+    /// stale, then clipboard sync must still find the peer.
+    #[tokio::test]
+    async fn regression_pairing_delay_does_not_break_sync() {
+        let adapter = Libp2pNetworkAdapter::new(
+            Arc::new(TestIdentityStore::default()),
+            Arc::new(FakeResolver),
+            Arc::new(InMemoryEncryptionSessionPort::default()),
+            Arc::new(PassthroughTransferPayloadDecryptor),
+            Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
+        )
+        .expect("create adapter");
+
+        // Step 1: peer discovered (mDNS)
+        let discovered_time = Utc::now() - chrono::Duration::seconds(60);
+        {
+            let mut caches = adapter.caches.write().await;
+            caches.upsert_discovered(
+                "peer-paired".to_string(),
+                vec!["/ip4/192.168.1.5/tcp/4001".to_string()],
+                discovered_time,
+            );
+        }
+
+        // Step 2: 30s pass (pairing completes), peer's last_seen is now stale.
+        // In the real system, mDNS may not re-emit Discovered for peers still
+        // in its internal cache (TTL 30s), so last_seen stays old.
+        // The FakeResolver returns Trusted, simulating completed pairing.
+
+        // Step 3: verify peer is still sendable
+        let peers = adapter
+            .list_sendable_peers()
+            .await
+            .expect("list sendable peers");
+
+        assert_eq!(
+            peers.len(),
+            1,
+            "paired peer must be sendable even when last_seen is old (pairing delay scenario)"
+        );
+        assert_eq!(peers[0].peer_id, "peer-paired");
+        assert!(
+            peers[0].is_paired,
+            "peer must be marked as paired after pairing completes"
+        );
+    }
+
+    /// Regression: verifies that `discovered_peers` count is not reduced by any
+    /// non-mDNS mechanism.  If a future PR adds a cleanup/sweep, this test
+    /// ensures it does not shrink the map.
+    #[test]
+    fn regression_discovered_peers_count_stable_without_mdns_expiry() {
+        let mut caches = PeerCaches::new();
+        let old = Utc::now() - chrono::Duration::seconds(600);
+        let now = Utc::now();
+
+        caches.upsert_discovered(
+            "very-old-peer".to_string(),
+            vec!["/ip4/10.0.0.1/tcp/4001".to_string()],
+            old,
+        );
+        caches.upsert_discovered(
+            "fresh-peer".to_string(),
+            vec!["/ip4/10.0.0.2/tcp/4001".to_string()],
+            now,
+        );
+
+        assert_eq!(caches.discovered_peers.len(), 2);
+
+        // mark_unreachable must NOT remove from discovered_peers
+        caches.mark_reachable("very-old-peer", old);
+        caches.mark_unreachable("very-old-peer");
+        assert_eq!(
+            caches.discovered_peers.len(),
+            2,
+            "mark_unreachable must not remove peer from discovered_peers"
+        );
+
+        // Only mDNS expiry should reduce count
+        let mut expired = HashSet::new();
+        expired.insert("very-old-peer".to_string());
+        apply_mdns_expired(&mut caches, expired);
+        assert_eq!(caches.discovered_peers.len(), 1);
     }
 }
