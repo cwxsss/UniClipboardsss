@@ -155,7 +155,14 @@ Plans:
 4. uc-tauri's Cargo.toml lists uc-bootstrap as a dependency and no longer directly depends on uc-infra or uc-platform for composition
 5. UseCases accessor is instantiated inside uc-bootstrap and shared to all entry points; no entry point constructs its own UseCases
 6. Logging initialization (init_tracing_subscriber) is called exactly once inside uc-bootstrap; duplicate calls in main.rs or other entry points are removed
-   **Plans**: TBD
+
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 40-01-PLAN.md — Create uc-bootstrap crate, move assembly/config/tracing/init modules, make tracing idempotent, wire uc-tauri re-exports
+- [ ] 40-02-PLAN.md — Create scene-specific builders (build_gui_app, build_cli_context, build_daemon_app) with shared build_core helper
+- [ ] 40-03-PLAN.md — Migrate main.rs to use build_gui_app(), update root Cargo.toml, verify GUI app functions correctly
 
 ### Phase 41: Daemon and CLI Skeletons
 
@@ -183,5 +190,5 @@ Plans:
 | 37. Wiring Decomposition         | 5/5       | Complete       | 2026-03-18  | 2026-03-17 |
 | 38. CoreRuntime Extraction       | 3/3       | Complete       | 2026-03-18  | -          |
 | 39. Config Resolution Extraction | 2/2       | Complete       | 2026-03-18  | -          |
-| 40. uc-bootstrap Crate           | v0.4.0    | 0/?            | Not started | -          |
+| 40. uc-bootstrap Crate           | v0.4.0    | 0/3            | Planning    | -          |
 | 41. Daemon and CLI Skeletons     | v0.4.0    | 0/?            | Not started | -          |
