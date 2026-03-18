@@ -58,7 +58,7 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 - [x] **Phase 36: Event Emitter Abstraction** - Replace hardcoded AppHandle::emit() with HostEventEmitterPort trait and adapters (completed 2026-03-17)
 - [x] **Phase 37: Wiring Decomposition** - Split wiring.rs into pure assembly module and Tauri-specific event loop module (completed 2026-03-17)
 - [x] **Phase 38: CoreRuntime Extraction** - Extract Tauri-free CoreRuntime and unify SetupOrchestrator into single composition point (completed 2026-03-18)
-- [ ] **Phase 39: Config Resolution Extraction** - Move path/profile/keyslot resolution from main.rs into reusable bootstrap module
+- [x] **Phase 39: Config Resolution Extraction** - Move path/profile/keyslot resolution from main.rs into reusable bootstrap module (completed 2026-03-18)
 - [ ] **Phase 40: uc-bootstrap Crate** - Create sole composition root crate with scene-specific builders and unified logging init
 - [ ] **Phase 41: Daemon and CLI Skeletons** - Create uc-daemon and uc-cli crates with end-to-end path validation
 
@@ -135,7 +135,7 @@ Plans:
 3. The resolution functions are unit-testable without a running Tauri app
 4. GUI app launches and resolves config paths correctly after the extraction
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
@@ -182,6 +182,6 @@ Plans:
 | 36. Event Emitter Abstraction    | 2/2       | Complete       | 2026-03-17  | -          |
 | 37. Wiring Decomposition         | 5/5       | Complete       | 2026-03-18  | 2026-03-17 |
 | 38. CoreRuntime Extraction       | 3/3       | Complete       | 2026-03-18  | -          |
-| 39. Config Resolution Extraction | 1/2       | In Progress    |             | -          |
+| 39. Config Resolution Extraction | 2/2       | Complete       | 2026-03-18  | -          |
 | 40. uc-bootstrap Crate           | v0.4.0    | 0/?            | Not started | -          |
 | 41. Daemon and CLI Skeletons     | v0.4.0    | 0/?            | Not started | -          |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 39-01-PLAN.md
-last_updated: '2026-03-18T09:17:04.961Z'
+stopped_at: Completed 39-02-PLAN.md
+last_updated: '2026-03-18T09:22:29.703Z'
 last_activity: 2026-03-17 — Plan 37-03 complete (wiring.rs split into assembly.rs; AppHandle removed from start_background_tasks)
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 12
-  completed_plans: 11
+  completed_plans: 12
   percent: 0
 ---
 
@@ -57,6 +57,7 @@ _Updated after each plan completion_
 | Phase 38 P02 | 11 | 2 tasks | 4 files |
 | Phase 38-coreruntime-extraction P03 | 60 | 2 tasks | 6 files |
 | Phase 39-config-resolution-extraction P01 | 4 | 2 tasks | 3 files |
+| Phase 39-config-resolution-extraction P02 | 3 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,7 @@ Recent decisions affecting current work:
 - [Phase 38-coreruntime-extraction]: SetupAssemblyPorts contains only 5 external adapter ports; shared-cell params (emitter_cell, lifecycle_status, watcher_control, session_ready_emitter, clipboard_integration_mode) are separate build_setup_orchestrator params
 - [Phase 39]: config_resolution.rs in uc-tauri/bootstrap/ (not uc-app) — DirsAppDirsAdapter (uc-platform) cannot be a prod dep of uc-app
 - [Phase 39]: resolve_app_config() returns Result<AppConfig, ConfigResolutionError> with typed enum variants for InvalidConfig and PlatformDirsFailed
+- [Phase 39]: main.rs imports uc_tauri::bootstrap::resolve_app_config via bootstrap/mod.rs re-export; storage_paths moved before key_slot_store construction so vault_dir is available
 
 ### Roadmap Evolution
 
@@ -109,6 +111,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-18T09:17:04.957Z
-Stopped at: Completed 39-01-PLAN.md
+Last session: 2026-03-18T09:22:29.701Z
+Stopped at: Completed 39-02-PLAN.md
 Resume file: None
