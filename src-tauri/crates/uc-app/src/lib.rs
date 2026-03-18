@@ -8,6 +8,7 @@ pub use tracing;
 pub mod app_paths;
 pub mod deps;
 pub mod models;
+pub mod runtime;
 pub mod task_registry;
 pub mod testing;
 pub mod usecases;
@@ -15,6 +16,7 @@ pub mod usecases;
 pub use deps::{
     AppDeps, ClipboardPorts, DevicePorts, NetworkPorts, SecurityPorts, StoragePorts, SystemPorts,
 };
+pub use runtime::CoreRuntime;
 
 /// The application runtime.
 pub struct App {
