@@ -35,8 +35,10 @@ pub mod update_settings;
 pub mod verify_keychain_access;
 
 pub use app_lifecycle::{
-    AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, DeviceAnnouncer, LifecycleEvent,
-    LifecycleEventEmitter, LifecycleState, LifecycleStatusPort, SessionReadyEmitter,
+    AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, DeviceAnnouncer, DeviceNameAnnouncer,
+    InMemoryLifecycleStatus, LifecycleEvent, LifecycleEventEmitter, LifecycleState,
+    LifecycleStatusPort, LoggingLifecycleEventEmitter, LoggingSessionReadyEmitter,
+    SessionReadyEmitter,
 };
 pub use auto_unlock_encryption_session::AutoUnlockEncryptionSession;
 pub use clipboard::list_entry_projections::{

@@ -1,3 +1,9 @@
+pub mod adapters;
+pub use adapters::{
+    DeviceNameAnnouncer, InMemoryLifecycleStatus, LoggingLifecycleEventEmitter,
+    LoggingSessionReadyEmitter,
+};
+
 use std::sync::Arc;
 
 use anyhow::Result;

@@ -207,7 +207,7 @@ impl AppRuntime {
         event_emitter: Arc<dyn HostEventEmitterPort>,
     ) -> Self {
         let lifecycle_status: Arc<dyn uc_app::usecases::LifecycleStatusPort> =
-            Arc::new(crate::adapters::lifecycle::InMemoryLifecycleStatus::new());
+            Arc::new(uc_app::usecases::InMemoryLifecycleStatus::new());
         let app_handle = Arc::new(std::sync::RwLock::new(None));
         let clipboard_integration_mode = super::resolve_clipboard_integration_mode();
         let task_registry = Arc::new(TaskRegistry::new());
@@ -370,7 +370,7 @@ impl AppRuntime {
             deps.setup_status.clone(),
         ));
 
-        let announcer = Arc::new(crate::adapters::lifecycle::DeviceNameAnnouncer::new(
+        let announcer = Arc::new(uc_app::usecases::DeviceNameAnnouncer::new(
             deps.network_ports.peers.clone(),
             deps.settings.clone(),
         ));
@@ -391,9 +391,7 @@ impl AppRuntime {
                     app_handle.clone(),
                 )),
                 status: lifecycle_status.clone(),
-                lifecycle_emitter: Arc::new(
-                    crate::adapters::lifecycle::LoggingLifecycleEventEmitter,
-                ),
+                lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
             },
         ));
         let crypto_factory = Arc::new(DefaultSpaceAccessCryptoFactory::new(
@@ -999,7 +997,7 @@ impl<'a> UseCases<'a> {
     ///
     /// 获取 AppLifecycleCoordinator 用例以编排剪贴板监视器、网络启动和会话就绪。
     pub fn app_lifecycle_coordinator(&self) -> uc_app::usecases::AppLifecycleCoordinator {
-        let announcer = Arc::new(crate::adapters::lifecycle::DeviceNameAnnouncer::new(
+        let announcer = Arc::new(uc_app::usecases::DeviceNameAnnouncer::new(
             self.runtime.deps.network_ports.peers.clone(),
             self.runtime.deps.settings.clone(),
         ));
@@ -1013,9 +1011,7 @@ impl<'a> UseCases<'a> {
                     self.runtime.app_handle.clone(),
                 )),
                 status: self.runtime.lifecycle_status.clone(),
-                lifecycle_emitter: Arc::new(
-                    crate::adapters::lifecycle::LoggingLifecycleEventEmitter,
-                ),
+                lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
             },
         )
     }
