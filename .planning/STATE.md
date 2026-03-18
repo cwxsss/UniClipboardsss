@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 37-05-PLAN.md
-last_updated: '2026-03-18T02:46:11.759Z'
+stopped_at: Completed 38-01-PLAN.md
+last_updated: '2026-03-18T05:53:20.563Z'
 last_activity: 2026-03-17 — Plan 37-03 complete (wiring.rs split into assembly.rs; AppHandle removed from start_background_tasks)
 progress:
   total_phases: 6
   completed_phases: 2
-  total_plans: 7
-  completed_plans: 7
+  total_plans: 10
+  completed_plans: 8
   percent: 0
 ---
 
@@ -53,6 +53,7 @@ _Updated after each plan completion_
 | Phase 37-wiring-decomposition P03 | 24 | 2 tasks | 6 files |
 | Phase 37-wiring-decomposition P04 | 15 | 2 tasks | 2 files |
 | Phase 37-wiring-decomposition P05 | 55 | 3 tasks | 3 files |
+| Phase 38-coreruntime-extraction P01 | 18 | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Recent decisions affecting current work:
 - [Phase 37-wiring-decomposition]: Synchronously write activeSessionIdRef.current before calling acceptP2PPairing to close verification event race window — useEffect-based ref sync is too late when backend emits immediately
 - [Phase 37-wiring-decomposition]: Subscribe before initiate: pairing event subscription moved before initiate_pairing in ensure_pairing_session to eliminate race window
 - [Phase 37-wiring-decomposition]: app_closed_tx flag guards StreamClosedByPeer->PairingFailed bridge from firing on explicit application-initiated session closes
+- [Phase 38-coreruntime-extraction]: tokio-util added to uc-app without 'sync' feature — locked version 0.7.17 includes CancellationToken in default features
+- [Phase 38-coreruntime-extraction]: resolve_pairing_device_name inlined into uc-app/adapters.rs to keep uc-app free of uc-tauri dependency
+- [Phase 38-coreruntime-extraction]: uc-tauri re-export pattern used for TaskRegistry (pub use uc_app::task_registry::TaskRegistry) for backward compatibility
 
 ### Roadmap Evolution
 
@@ -89,8 +93,12 @@ None.
 - Phase 40 (uc-bootstrap) is high risk: crate extraction touches dependency graph across uc-tauri, uc-infra, uc-platform. Verify cargo workspace configuration before planning.
 - Phase 41 (daemon/CLI) depends on all prior phases being stable. Plan only after Phase 40 is complete.
 
+### Known Bugs (deferred to future phases)
+
+- **[Phase 38] setup_event_port holds stale LoggingEventEmitter**: `HostEventSetupPort` captures the initial `LoggingEventEmitter` Arc at `AppRuntime::with_setup` creation time (runtime.rs:420-422). When `set_event_emitter` swaps to `TauriEventEmitter` (main.rs:673-677), the swap does NOT propagate to `SetupOrchestrator`'s internal `setup_event_port`. Result: state changes emitted from spawned listener tasks (e.g. `ProcessingJoinSpace → JoinSpaceConfirmPeer` via `start_pairing_verification_listener_with_rx`) only log to console but never reach the frontend. Orchestrator dispatch-driven transitions work because the Tauri command return value carries the state directly. **Fix**: Phase 38 unifies SetupOrchestrator assembly into a single composition point, eliminating the two-phase emitter swap problem. **UAT impact**: PeerB setup UI does not advance from ProcessingJoinSpace to JoinSpaceConfirmPeer (PIN confirm screen) even though backend state is correct.
+
 ## Session Continuity
 
-Last session: 2026-03-18T02:46:11.758Z
-Stopped at: Completed 37-05-PLAN.md
+Last session: 2026-03-18T05:53:20.560Z
+Stopped at: Completed 38-01-PLAN.md
 Resume file: None
