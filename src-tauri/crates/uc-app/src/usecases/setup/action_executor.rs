@@ -507,6 +507,25 @@ impl SetupActionExecutor {
             SetupError::PairingFailed
         })?;
 
+        // Subscribe to pairing domain events BEFORE initiating the session.
+        //
+        // `initiate_pairing` may emit `PairingVerificationRequired` or
+        // `PairingFailed` synchronously (e.g. on the same device / low latency
+        // path).  If we subscribed after the initiation we would miss those
+        // first events and the setup state machine would stall forever in
+        // `ProcessingJoinSpace`.
+        let event_rx = match self.pairing_orchestrator.subscribe().await {
+            Ok(rx) => rx,
+            Err(err) => {
+                error!(
+                    error = %err,
+                    peer_id = %peer_id,
+                    "failed to subscribe pairing events before initiating pairing"
+                );
+                return Err(SetupError::PairingFailed);
+            }
+        };
+
         let session_id = self
             .pairing_orchestrator
             .initiate_pairing(peer_id.clone())
@@ -521,8 +540,9 @@ impl SetupActionExecutor {
             *guard = Some(session_id.clone());
         }
 
-        self.start_pairing_verification_listener(
+        self.start_pairing_verification_listener_with_rx(
             session_id,
+            event_rx,
             pairing_session_id,
             joiner_offer,
             context,
@@ -588,24 +608,20 @@ impl SetupActionExecutor {
         }
     }
 
-    async fn start_pairing_verification_listener(
+    /// Start listening for pairing domain events using a pre-subscribed receiver.
+    ///
+    /// The caller must subscribe to pairing events **before** calling
+    /// `initiate_pairing` to avoid missing events that are emitted in the
+    /// same async cycle as the initiation (low-latency / same-device scenario).
+    async fn start_pairing_verification_listener_with_rx(
         &self,
         session_id: String,
+        event_rx: tokio::sync::mpsc::Receiver<PairingDomainEvent>,
         pairing_session_id: &Arc<Mutex<Option<String>>>,
         joiner_offer: &Arc<Mutex<Option<SpaceAccessJoinerOffer>>>,
         context: &Arc<SetupContext>,
     ) {
-        let mut event_rx = match self.pairing_orchestrator.subscribe().await {
-            Ok(rx) => rx,
-            Err(err) => {
-                error!(
-                    error = %err,
-                    session_id = %session_id,
-                    "failed to subscribe pairing events"
-                );
-                return;
-            }
-        };
+        let mut event_rx = event_rx;
         let context = Arc::clone(context);
         let pairing_session_id = Arc::clone(pairing_session_id);
         let joiner_offer = Arc::clone(joiner_offer);
