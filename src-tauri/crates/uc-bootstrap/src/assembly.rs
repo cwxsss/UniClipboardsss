@@ -36,8 +36,8 @@ use uc_core::ports::*;
 use uc_core::settings::model::Settings;
 use uc_infra::blob::BlobWriter;
 use uc_infra::clipboard::{
-    ClipboardRepresentationNormalizer, InMemoryClipboardChangeOrigin, InfraThumbnailGenerator,
-    MpscSpoolQueue, RepresentationCache, SpoolManager,
+    ClipboardPayloadResolver, ClipboardRepresentationNormalizer, InMemoryClipboardChangeOrigin,
+    InfraThumbnailGenerator, MpscSpoolQueue, RepresentationCache, SpoolManager,
 };
 use uc_infra::config::ClipboardStorageConfig;
 use uc_infra::db::executor::DieselSqliteExecutor;
@@ -736,6 +736,14 @@ pub fn wire_dependencies_with_identity_store(
     let clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort> =
         Arc::new(InMemoryClipboardChangeOrigin::new());
 
+    // Create payload resolver for resolving staged/processing payloads
+    let payload_resolver: Arc<dyn ClipboardPayloadResolverPort> =
+        Arc::new(ClipboardPayloadResolver::new(
+            representation_cache.clone(),
+            spool_manager.clone(),
+            worker_tx.clone(),
+        ));
+
     let deps = AppDeps {
         clipboard: ClipboardPorts {
             clipboard: platform.clipboard,
@@ -750,6 +758,7 @@ pub fn wire_dependencies_with_identity_store(
             spool_queue,
             clipboard_change_origin,
             worker_tx,
+            payload_resolver,
         },
         security: SecurityPorts {
             encryption: infra.encryption,
