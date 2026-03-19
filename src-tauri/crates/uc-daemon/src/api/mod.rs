@@ -2,4 +2,6 @@
 
 pub mod auth;
 pub mod query;
+pub mod routes;
+pub mod server;
 pub mod types;

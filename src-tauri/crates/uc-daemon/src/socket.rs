@@ -1,10 +1,12 @@
-//! Shared daemon socket path resolution.
+//! Shared daemon socket and loopback address resolution.
 
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 const SOCKET_NAME: &str = "uniclipboard-daemon.sock";
 const TOKEN_FILE_NAME: &str = "uniclipboard-daemon.token";
 pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
+pub const DEFAULT_HTTP_PORT: u16 = 42715;
 
 #[cfg(unix)]
 const MAX_SOCKET_PATH_BYTES: usize = 103;
@@ -26,6 +28,11 @@ pub fn resolve_daemon_socket_path() -> PathBuf {
 /// Resolve a daemon-local token file path within the provided base directory.
 pub fn resolve_daemon_token_path_from(base: &Path) -> PathBuf {
     base.join(TOKEN_FILE_NAME)
+}
+
+/// Resolve the loopback-only daemon HTTP listen address.
+pub fn resolve_daemon_http_addr() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), DEFAULT_HTTP_PORT)
 }
 
 #[cfg(unix)]
@@ -90,6 +97,13 @@ mod tests {
             path.file_name().and_then(|name| name.to_str()),
             Some(TOKEN_FILE_NAME)
         );
+    }
+
+    #[test]
+    fn test_http_addr_is_loopback() {
+        let addr = resolve_daemon_http_addr();
+        assert_eq!(addr.ip().to_string(), DEFAULT_HTTP_HOST);
+        assert_eq!(addr.port(), DEFAULT_HTTP_PORT);
     }
 
     #[cfg(unix)]

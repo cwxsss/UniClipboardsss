@@ -12,7 +12,11 @@ use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+use uc_app::runtime::CoreRuntime;
 
+use crate::api::auth::{load_or_create_auth_token, resolve_daemon_token_path};
+use crate::api::query::DaemonQueryService;
+use crate::api::server::{run_http_server, DaemonApiState};
 use crate::rpc::server::{check_or_remove_stale_socket, run_rpc_accept_loop};
 use crate::state::{DaemonWorkerSnapshot, RuntimeState};
 use crate::worker::{DaemonWorker, WorkerHealth};
@@ -24,6 +28,7 @@ use crate::worker::{DaemonWorker, WorkerHealth};
 /// for `tokio::spawn` `'static` requirement.
 pub struct DaemonApp {
     workers: Vec<Arc<dyn DaemonWorker>>,
+    runtime: Arc<CoreRuntime>,
     state: Arc<RwLock<RuntimeState>>,
     socket_path: PathBuf,
     cancel: CancellationToken,
@@ -31,7 +36,11 @@ pub struct DaemonApp {
 
 impl DaemonApp {
     /// Create a new DaemonApp with the given workers and socket path.
-    pub fn new(workers: Vec<Arc<dyn DaemonWorker>>, socket_path: PathBuf) -> Self {
+    pub fn new(
+        workers: Vec<Arc<dyn DaemonWorker>>,
+        runtime: Arc<CoreRuntime>,
+        socket_path: PathBuf,
+    ) -> Self {
         let initial_statuses: Vec<DaemonWorkerSnapshot> = workers
             .iter()
             .map(|w| DaemonWorkerSnapshot {
@@ -42,6 +51,7 @@ impl DaemonApp {
 
         Self {
             workers,
+            runtime,
             state: Arc::new(RwLock::new(RuntimeState::new(initial_statuses))),
             socket_path,
             cancel: CancellationToken::new(),
@@ -55,6 +65,17 @@ impl DaemonApp {
         // 1. Bind RPC socket FIRST (fail-fast before starting workers)
         check_or_remove_stale_socket(&self.socket_path).await?;
         let listener = UnixListener::bind(&self.socket_path)?;
+        let token_base_dir = self
+            .socket_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/tmp"));
+        let token_path = resolve_daemon_token_path(token_base_dir);
+        let auth_token = load_or_create_auth_token(&token_path)?;
+        let query_service = Arc::new(DaemonQueryService::new(
+            self.runtime.clone(),
+            self.state.clone(),
+        ));
+        let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()));
 
         info!("uniclipboard-daemon running, RPC at {:?}", self.socket_path);
 
@@ -70,6 +91,8 @@ impl DaemonApp {
         let rpc_state = self.state.clone();
         let rpc_cancel = self.cancel.child_token();
         let mut rpc_handle = tokio::spawn(run_rpc_accept_loop(listener, rpc_state, rpc_cancel));
+        let http_cancel = self.cancel.child_token();
+        let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
 
         tokio::select! {
             _ = wait_for_shutdown_signal() => {
@@ -77,6 +100,9 @@ impl DaemonApp {
             }
             result = &mut rpc_handle => {
                 warn!("RPC accept loop exited unexpectedly: {:?}", result);
+            }
+            result = &mut http_handle => {
+                warn!("HTTP server exited unexpectedly: {:?}", result);
             }
             Some(result) = worker_tasks.join_next() => {
                 warn!("worker task exited unexpectedly: {:?}", result);
@@ -98,6 +124,9 @@ impl DaemonApp {
 
         // Await RPC accept loop with timeout
         tokio::time::timeout(Duration::from_secs(5), rpc_handle)
+            .await
+            .ok();
+        tokio::time::timeout(Duration::from_secs(5), http_handle)
             .await
             .ok();
 

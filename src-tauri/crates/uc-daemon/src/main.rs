@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use uc_bootstrap::build_non_gui_runtime;
 use uc_bootstrap::builders::build_daemon_app;
 use uc_daemon::app::DaemonApp;
 use uc_daemon::socket::resolve_daemon_socket_path;
@@ -15,7 +16,8 @@ use uc_daemon::workers::peer_discovery::PeerDiscoveryWorker;
 fn main() -> anyhow::Result<()> {
     // build_daemon_app() calls build_core() which inits tracing + wires deps.
     // Safe to call outside tokio (no internal block_on in daemon path).
-    let _ctx = build_daemon_app()?;
+    let ctx = build_daemon_app()?;
+    let runtime = Arc::new(build_non_gui_runtime(ctx.deps, ctx.storage_paths.clone())?);
 
     let socket_path = resolve_daemon_socket_path();
 
@@ -26,7 +28,7 @@ fn main() -> anyhow::Result<()> {
     ];
 
     // Create and run daemon app
-    let daemon = DaemonApp::new(workers, socket_path);
+    let daemon = DaemonApp::new(workers, runtime, socket_path);
 
     // Use explicit runtime construction (consistent with uc-bootstrap pattern,
     // avoids potential conflicts with tracing init's internal runtime for Seq)
