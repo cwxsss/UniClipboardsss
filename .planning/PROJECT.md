@@ -24,8 +24,8 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 ## Current State
 
 - **Latest shipped milestone:** v0.3.0 Log Observability & Feature Expansion (2026-03-17)
-- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control
-- **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner
+- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear)
+- **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established
 - **LOC:** ~135K Rust + ~20K TypeScript (estimated)
 - **Supported content types:** Text, Image, Link, File (all with per-device sync toggles)
 
@@ -73,6 +73,7 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - [ ] uc-bootstrap crate as sole composition root with scene-specific builders
 - [ ] uc-daemon skeleton with worker lifecycle and local RPC
 - [ ] uc-cli skeleton with command routing, direct/daemon dispatch, and output rendering
+- [x] CLI clipboard list/get/clear commands with direct-mode bootstrap — Validated in Phase 42
 
 ### Deferred
 
@@ -139,4 +140,4 @@ Structured observability from dual-output logging through Seq cross-device traci
 
 ---
 
-_Last updated: 2026-03-17 after v0.4.0 milestone start_
+_Last updated: 2026-03-19 after Phase 42 completion_
