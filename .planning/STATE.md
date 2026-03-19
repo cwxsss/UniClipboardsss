@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 45-03-PLAN.md
-last_updated: '2026-03-19T11:32:05Z'
+stopped_at: Completed 46-01-PLAN.md
+last_updated: '2026-03-19T15:56:11Z'
 progress:
   total_phases: 13
   completed_phases: 8
-  total_plans: 25
-  completed_plans: 24
+  total_plans: 28
+  completed_plans: 25
 ---
 
 # Project State
@@ -19,20 +19,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 45 — daemon-api-foundation-add-local-http-and-websocket-transport-with-read-only-runtime-queries
+**Current focus:** Phase 46 — daemon-pairing-host-migration-move-pairing-orchestrator-action-loops-and-network-event-handling-out-of-tauri
 
 ## Current Position
 
-Phase: 45 (daemon-api-foundation-add-local-http-and-websocket-transport-with-read-only-runtime-queries) — COMPLETE
-Plan: 3 of 3 (completed)
+Phase: 46 (daemon-pairing-host-migration-move-pairing-orchestrator-action-loops-and-network-event-handling-out-of-tauri) — IN PROGRESS
+Plan: 1 of 3 (completed)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0 (this milestone)
-- Average duration: —
-- Total execution time: —
+- Total plans completed: 1 (this milestone)
+- Average duration: 10min
+- Total execution time: 10min
 
 **By Phase:**
 
@@ -63,6 +63,7 @@ _Updated after each plan completion_
 | Phase 45-daemon-api-foundation P01 | 18 | 3 tasks | 10 files |
 | Phase 45 P02 | 9 | 2 tasks | 13 files |
 | Phase 45 P03 | 18 | 2 tasks | 12 files |
+| Phase 46-daemon-pairing-host-migration P01 | 10 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -118,6 +119,8 @@ Recent decisions affecting current work:
 - [Phase 45]: Pairing websocket payloads stay metadata-only and never serialize keyslot files or raw challenge bytes before the daemon becomes the pairing host.
 - [Phase 45]: CLI daemon reads now share one reqwest client that resolves daemon URL/token via uc-daemon helpers and preserves exit code 5 when the daemon or token file is absent.
 - [Phase 45]: Tauri shell stores daemon connection info only in managed in-memory state and emits `daemon://connection-info` after the main webview finishes loading; no token persistence in browser storage or query strings.
+- [Phase 46]: DaemonApp starts a single daemon-owned PairingHost alongside RPC and HTTP, making pairing session lifetime independent from Tauri/webview disconnects.
+- [Phase 46]: RuntimeState now stores metadata-only DaemonPairingSessionSnapshot records for daemon-owned pairing session inspection without leaking verification secrets.
 
 ### Roadmap Evolution
 
@@ -146,6 +149,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-19T11:32:05Z
-Stopped at: Completed 45-03-PLAN.md
+Last session: 2026-03-19T15:56:11Z
+Stopped at: Completed 46-01-PLAN.md
 Resume file: None

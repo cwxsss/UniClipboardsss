@@ -191,18 +191,19 @@ Plans:
 
 ## Progress
 
-| Phase                            | Milestone | Plans Complete | Status     | Completed  |
-| -------------------------------- | --------- | -------------- | ---------- | ---------- |
-| 1-9                              | v0.1.0    | 17/17          | Complete   | 2026-03-06 |
-| 10-18                            | v0.2.0    | 22/22          | Complete   | 2026-03-09 |
-| 19-35                            | v0.3.0    | 51/51          | Complete   | 2026-03-17 |
-| 36. Event Emitter Abstraction    | 2/2       | Complete       | 2026-03-17 | -          |
-| 37. Wiring Decomposition         | 5/5       | Complete       | 2026-03-18 | 2026-03-17 |
-| 38. CoreRuntime Extraction       | 3/3       | Complete       | 2026-03-18 | -          |
-| 39. Config Resolution Extraction | 2/2       | Complete       | 2026-03-18 | -          |
-| 40. uc-bootstrap Crate           | 2/3       | In Progress    |            | -          |
-| 41. Daemon and CLI Skeletons     | 4/4       | Complete       | 2026-03-18 | -          |
-| 45. Daemon API Foundation        | 3/3       | Complete       | 2026-03-19 | -          |
+| Phase                             | Milestone | Plans Complete | Status     | Completed  |
+| --------------------------------- | --------- | -------------- | ---------- | ---------- |
+| 1-9                               | v0.1.0    | 17/17          | Complete   | 2026-03-06 |
+| 10-18                             | v0.2.0    | 22/22          | Complete   | 2026-03-09 |
+| 19-35                             | v0.3.0    | 51/51          | Complete   | 2026-03-17 |
+| 36. Event Emitter Abstraction     | 2/2       | Complete       | 2026-03-17 | -          |
+| 37. Wiring Decomposition          | 5/5       | Complete       | 2026-03-18 | 2026-03-17 |
+| 38. CoreRuntime Extraction        | 3/3       | Complete       | 2026-03-18 | -          |
+| 39. Config Resolution Extraction  | 2/2       | Complete       | 2026-03-18 | -          |
+| 40. uc-bootstrap Crate            | 2/3       | In Progress    |            | -          |
+| 41. Daemon and CLI Skeletons      | 4/4       | Complete       | 2026-03-18 | -          |
+| 45. Daemon API Foundation         | 3/3       | Complete       | 2026-03-19 | -          |
+| 46. Daemon Pairing Host Migration | 1/3       | In Progress    |            | -          |
 
 ### Phase 42: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
 
@@ -260,14 +261,16 @@ Plans:
 
 ### Phase 46: Daemon Pairing Host Migration — move pairing orchestrator, action loops, and network event handling out of Tauri
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Move pairing host ownership, action/event loops, and session projection into `uc-daemon` while keeping Tauri as a compatibility bridge.
+**Requirements**: PH46-01, PH46-01A, PH46-01B, PH46-02, PH46-03, PH46-03A, PH46-04, PH46-05, PH46-05A, PH46-06
 **Depends on:** Phase 45
-**Plans:** 0 plans
+**Plans:** 1/3 plans complete
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 46 to break down)
+- [x] 46-01-PLAN.md — Daemon Pairing Host Ownership And Runtime Projection (completed 2026-03-19)
+- [ ] 46-02-PLAN.md — Daemon Pairing Control Surface And Realtime Contract
+- [ ] 46-03-PLAN.md — Tauri Compatibility Bridge For Existing Pairing Contract
 
 ### Phase 47: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 
