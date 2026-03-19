@@ -53,21 +53,23 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
     };
 
     let usecases = uc_app::usecases::CoreUseCases::new(&runtime);
-    let devices = match usecases.list_paired_devices().execute().await {
-        Ok(d) => d,
+    let snapshot = match usecases.get_p2p_peers_snapshot().execute().await {
+        Ok(s) => s,
         Err(e) => {
-            eprintln!("Error: failed to list paired devices: {}", e);
+            eprintln!("Error: failed to get p2p peers snapshot: {}", e);
             return exit_codes::EXIT_ERROR;
         }
     };
 
-    let device_infos: Vec<DeviceInfo> = devices
+    // Filter to paired devices only, preserve original CLI output behavior
+    let device_infos: Vec<DeviceInfo> = snapshot
         .into_iter()
-        .map(|d| DeviceInfo {
-            peer_id: d.peer_id.to_string(),
-            name: d.device_name,
-            pairing_state: format!("{:?}", d.pairing_state),
-            identity_fingerprint: d.identity_fingerprint,
+        .filter(|p| p.is_paired)
+        .map(|p| DeviceInfo {
+            peer_id: p.peer_id,
+            name: p.device_name.unwrap_or_else(|| "Unknown".to_string()),
+            pairing_state: p.pairing_state,
+            identity_fingerprint: p.identity_fingerprint,
         })
         .collect();
 
