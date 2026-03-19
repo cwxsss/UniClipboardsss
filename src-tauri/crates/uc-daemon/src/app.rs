@@ -93,15 +93,16 @@ impl DaemonApp {
             self.runtime.clone(),
             self.state.clone(),
         ));
-        let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()));
-        let pairing_host = DaemonPairingHost::new(
+        let pairing_host = Arc::new(DaemonPairingHost::new(
             self.runtime.clone(),
             self.pairing_orchestrator.clone(),
             self.pairing_action_rx,
             self.state.clone(),
             self.space_access_orchestrator.clone(),
             self.key_slot_store.clone(),
-        );
+        ));
+        let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()))
+            .with_pairing_host(Arc::clone(&pairing_host));
 
         info!("uniclipboard-daemon running, RPC at {:?}", self.socket_path);
 
@@ -120,7 +121,7 @@ impl DaemonApp {
         let http_cancel = self.cancel.child_token();
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
         let pairing_cancel = self.cancel.child_token();
-        let mut pairing_handle = tokio::spawn(pairing_host.run(pairing_cancel));
+        let mut pairing_handle = tokio::spawn(Arc::clone(&pairing_host).run(pairing_cancel));
 
         tokio::select! {
             _ = wait_for_shutdown_signal() => {

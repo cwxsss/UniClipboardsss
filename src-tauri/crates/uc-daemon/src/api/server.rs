@@ -17,6 +17,7 @@ use crate::api::query::DaemonQueryService;
 use crate::api::routes;
 use crate::api::types::DaemonWsEvent;
 use crate::api::ws;
+use crate::pairing::host::DaemonPairingHost;
 use crate::socket::{resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
 
 #[derive(Clone)]
@@ -24,6 +25,7 @@ pub struct DaemonApiState {
     pub query_service: Arc<DaemonQueryService>,
     pub auth_token: DaemonAuthToken,
     pub runtime: Option<Arc<CoreRuntime>>,
+    pub pairing_host: Option<Arc<DaemonPairingHost>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
 }
 
@@ -38,8 +40,14 @@ impl DaemonApiState {
             query_service,
             auth_token,
             runtime,
+            pairing_host: None,
             event_tx,
         }
+    }
+
+    pub fn with_pairing_host(mut self, pairing_host: Arc<DaemonPairingHost>) -> Self {
+        self.pairing_host = Some(pairing_host);
+        self
     }
 
     pub fn connection_info_for_addr(&self, listen_addr: SocketAddr) -> DaemonConnectionInfo {

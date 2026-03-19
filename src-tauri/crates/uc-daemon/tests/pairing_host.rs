@@ -73,6 +73,10 @@ fn inbound_request(session_id: &str, local_peer_id: &str) -> PairingRequest {
 #[tokio::test]
 async fn daemon_pairing_host_enforces_single_active_session() {
     let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
+    host.set_discoverability("cli".to_string(), true, Some(60_000))
+        .await;
+    host.set_participant_ready("cli".to_string(), true, Some(60_000))
+        .await;
 
     let first = host.initiate_pairing("peer-a".to_string()).await.unwrap();
     let second = host.initiate_pairing("peer-b".to_string()).await;
@@ -87,19 +91,21 @@ async fn daemon_pairing_host_enforces_single_active_session() {
     );
 }
 
-#[test]
-fn daemon_pairing_host_starts_non_discoverable_in_headless_mode() {
-    let (host, _state, _orchestrator, _local_peer_id) = build_host();
+#[tokio::test]
+async fn daemon_pairing_host_starts_non_discoverable_in_headless_mode() {
+    let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
 
-    assert!(!host.discoverable());
-    assert!(!host.participant_ready());
+    assert!(!host.discoverable().await);
+    assert!(!host.participant_ready().await);
 }
 
 #[tokio::test]
 async fn daemon_pairing_host_rejects_inbound_without_ready_participant() {
     let (host, state, _orchestrator, local_peer_id) = build_host_async().await;
-    host.set_discoverable(true);
-    host.set_participant_ready(false);
+    host.set_discoverability("cli".to_string(), true, Some(60_000))
+        .await;
+    host.set_participant_ready("cli".to_string(), false, None)
+        .await;
 
     let result = host
         .handle_incoming_request(
@@ -122,18 +128,22 @@ async fn daemon_pairing_host_rejects_inbound_without_ready_participant() {
 #[tokio::test]
 async fn daemon_pairing_host_survives_client_disconnect() {
     let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
+    let host = Arc::new(host);
     let cancel = CancellationToken::new();
-    let task = tokio::spawn(host.run(cancel.child_token()));
+    let task = tokio::spawn(Arc::clone(&host).run(cancel.child_token()));
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let (host, state, _orchestrator, _local_peer_id) = build_host_async().await;
+    host.set_participant_ready("gui".to_string(), true, Some(60_000))
+        .await;
+    host.set_discoverability("gui".to_string(), true, Some(60_000))
+        .await;
     let session_id = host.initiate_pairing("peer-a".to_string()).await.unwrap();
-    host.set_participant_ready(true);
-    host.set_discoverable(true);
-
-    host.set_participant_ready(false);
-    host.set_discoverable(false);
+    host.set_participant_ready("gui".to_string(), false, None)
+        .await;
+    host.set_discoverability("gui".to_string(), false, None)
+        .await;
 
     let snapshot = state.read().await.pairing_session(&session_id).cloned();
     cancel.cancel();
