@@ -1,4 +1,5 @@
 mod commands;
+mod daemon_client;
 mod exit_codes;
 mod output;
 
@@ -27,7 +28,7 @@ struct Cli {
 enum Commands {
     /// Show daemon status
     Status,
-    /// List paired devices (direct mode, no daemon required)
+    /// List paired devices via the daemon API
     Devices,
     /// Show space and encryption status (direct mode, no daemon required)
     SpaceStatus,

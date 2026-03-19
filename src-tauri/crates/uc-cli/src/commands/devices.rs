@@ -1,87 +1,117 @@
-//! Devices command -- lists paired devices via direct bootstrap (no daemon required).
+//! Devices command -- lists paired devices via daemon HTTP API via `GET /paired-devices`.
 
-use serde::Serialize;
-use std::fmt;
-
+use crate::daemon_client::{DaemonClientError, DaemonHttpClient};
 use crate::exit_codes;
-use crate::output;
-
-#[derive(Serialize)]
-struct DeviceInfo {
-    peer_id: String,
-    name: String,
-    pairing_state: String,
-    identity_fingerprint: String,
-}
-
-#[derive(Serialize)]
-struct DeviceListOutput {
-    devices: Vec<DeviceInfo>,
-    count: usize,
-}
-
-impl fmt::Display for DeviceListOutput {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.devices.is_empty() {
-            return write!(f, "No paired devices found.");
-        }
-        writeln!(f, "Paired devices: {}", self.count)?;
-        for d in &self.devices {
-            writeln!(f, "  {} (id: {})", d.name, d.peer_id)?;
-        }
-        Ok(())
-    }
-}
+use uc_daemon::api::types::PairedDeviceDto;
 
 /// Run the devices command.
 ///
-/// Uses `build_cli_runtime()` to query the device list directly from the
-/// database without requiring the daemon to be running.
 pub async fn run(json: bool, verbose: bool) -> i32 {
-    let profile = if verbose {
-        Some(uc_observability::LogProfile::Dev)
+    let _ = verbose;
+
+    let client = match DaemonHttpClient::new() {
+        Ok(client) => client,
+        Err(error) => return print_client_error(error),
+    };
+
+    let devices = match client.get_paired_devices().await {
+        Ok(devices) => devices,
+        Err(error) => return print_client_error(error),
+    };
+
+    if json {
+        match serde_json::to_string_pretty(&devices) {
+            Ok(value) => println!("{value}"),
+            Err(error) => {
+                eprintln!("Error: failed to serialize paired devices: {error}");
+                return exit_codes::EXIT_ERROR;
+            }
+        }
     } else {
-        Some(uc_observability::LogProfile::Cli)
-    };
-
-    let runtime = match uc_bootstrap::build_cli_runtime(profile) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error: failed to build CLI runtime: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let usecases = uc_app::usecases::CoreUseCases::new(&runtime);
-    let snapshot = match usecases.get_p2p_peers_snapshot().execute().await {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: failed to get p2p peers snapshot: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    // Filter to paired devices only, preserve original CLI output behavior
-    let device_infos: Vec<DeviceInfo> = snapshot
-        .into_iter()
-        .filter(|p| p.is_paired)
-        .map(|p| DeviceInfo {
-            peer_id: p.peer_id,
-            name: p.device_name.unwrap_or_else(|| "Unknown".to_string()),
-            pairing_state: p.pairing_state,
-            identity_fingerprint: p.identity_fingerprint,
-        })
-        .collect();
-
-    let result = DeviceListOutput {
-        count: device_infos.len(),
-        devices: device_infos,
-    };
-
-    if let Err(e) = output::print_result(&result, json) {
-        eprintln!("Error: {}", e);
-        return exit_codes::EXIT_ERROR;
+        println!("{}", render_devices_output(&devices));
     }
 
     exit_codes::EXIT_SUCCESS
+}
+
+fn render_devices_output(devices: &[PairedDeviceDto]) -> String {
+    let mut lines = vec![format!("Paired devices: {}", devices.len())];
+    lines.extend(
+        devices
+            .iter()
+            .map(|device| format!("  {} (id: {})", device.device_name, device.peer_id)),
+    );
+    lines.join("\n")
+}
+
+fn print_client_error(error: DaemonClientError) -> i32 {
+    match error {
+        DaemonClientError::Unreachable(_) => {
+            eprintln!("Error: daemon unreachable (is uniclipboard-daemon running?)");
+            exit_codes::EXIT_DAEMON_UNREACHABLE
+        }
+        DaemonClientError::Unauthorized => {
+            eprintln!("Error: daemon rejected request: invalid or missing auth token");
+            exit_codes::EXIT_ERROR
+        }
+        DaemonClientError::Initialization(_)
+        | DaemonClientError::UnexpectedStatus { .. }
+        | DaemonClientError::InvalidResponse(_) => {
+            eprintln!("Error: {error}");
+            exit_codes::EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_devices_from_http_fixture() {
+        let devices = vec![
+            PairedDeviceDto {
+                peer_id: "peer-a".to_string(),
+                device_name: "Alice Mac".to_string(),
+                pairing_state: "Paired".to_string(),
+                last_seen_at_ms: None,
+                connected: true,
+            },
+            PairedDeviceDto {
+                peer_id: "peer-b".to_string(),
+                device_name: "Bob PC".to_string(),
+                pairing_state: "Paired".to_string(),
+                last_seen_at_ms: Some(42),
+                connected: false,
+            },
+        ];
+
+        let rendered = render_devices_output(&devices);
+
+        assert_eq!(
+            rendered,
+            [
+                "Paired devices: 2",
+                "  Alice Mac (id: peer-a)",
+                "  Bob PC (id: peer-b)",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn json_output_serializes_daemon_device_dtos() {
+        let devices = vec![PairedDeviceDto {
+            peer_id: "peer-a".to_string(),
+            device_name: "Alice Mac".to_string(),
+            pairing_state: "Paired".to_string(),
+            last_seen_at_ms: Some(7),
+            connected: true,
+        }];
+
+        let value = serde_json::to_value(&devices).unwrap();
+        assert_eq!(value[0]["peerId"], "peer-a");
+        assert_eq!(value[0]["deviceName"], "Alice Mac");
+        assert!(value[0].get("peer_id").is_none());
+    }
 }

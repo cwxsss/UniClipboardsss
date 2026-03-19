@@ -1,6 +1,8 @@
-//! Status command — connects to daemon via Unix socket RPC.
+//! Status command -- queries daemon runtime status over HTTP via `GET /status`.
 
+use crate::daemon_client::{DaemonClientError, DaemonHttpClient};
 use crate::exit_codes;
+use uc_daemon::api::types::{StatusResponse, WorkerStatusDto};
 
 /// Format an uptime duration in human-readable form.
 ///
@@ -31,149 +33,140 @@ fn format_uptime(seconds: u64) -> String {
     parts.join(" ")
 }
 
-/// Run the status command (Unix platforms).
-///
-/// Connects to the daemon via Unix domain socket, sends a JSON-RPC `status`
-/// request, and prints the response.
-#[cfg(unix)]
+/// Run the status command.
 pub async fn run(json: bool, _verbose: bool) -> i32 {
-    use std::time::Duration;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::UnixStream;
-    use uc_daemon::rpc::types::{RpcRequest, RpcResponse, StatusResponse};
-    use uc_daemon::socket::resolve_daemon_socket_path;
-
-    let socket_path = resolve_daemon_socket_path();
-
-    // Connect with 2-second timeout
-    let stream =
-        match tokio::time::timeout(Duration::from_secs(2), UnixStream::connect(&socket_path)).await
-        {
-            Ok(Ok(stream)) => stream,
-            Ok(Err(_)) | Err(_) => {
-                eprintln!("Error: daemon unreachable (is uniclipboard-daemon running?)");
-                return exit_codes::EXIT_DAEMON_UNREACHABLE;
-            }
-        };
-
-    let (reader, mut writer) = stream.into_split();
-
-    // Build and send RPC request
-    let request = RpcRequest {
-        jsonrpc: "2.0".to_string(),
-        method: "status".to_string(),
-        id: Some(1),
+    let client = match DaemonHttpClient::new() {
+        Ok(client) => client,
+        Err(error) => return print_client_error(error),
     };
 
-    let request_json = match serde_json::to_string(&request) {
-        Ok(j) => j,
-        Err(e) => {
-            eprintln!("Error: failed to serialize request: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
+    let status = match client.get_status().await {
+        Ok(status) => status,
+        Err(error) => return print_client_error(error),
     };
 
-    if let Err(e) = writer
-        .write_all(format!("{}\n", request_json).as_bytes())
-        .await
-    {
-        eprintln!("Error: failed to write to socket: {}", e);
-        return exit_codes::EXIT_ERROR;
-    }
-
-    if let Err(e) = writer.flush().await {
-        eprintln!("Error: failed to flush socket: {}", e);
-        return exit_codes::EXIT_ERROR;
-    }
-
-    // Read response
-    let mut buf_reader = BufReader::new(reader);
-    let mut response_line = String::new();
-    if let Err(e) = buf_reader.read_line(&mut response_line).await {
-        eprintln!("Error: failed to read response: {}", e);
-        return exit_codes::EXIT_ERROR;
-    }
-
-    let response: RpcResponse = match serde_json::from_str(&response_line) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error: failed to parse response: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    // Check for RPC error
-    if let Some(err) = response.error {
-        eprintln!(
-            "Error: daemon returned error: {} (code {})",
-            err.message, err.code
-        );
-        return exit_codes::EXIT_ERROR;
-    }
-
-    // Extract result
-    let result_value = match response.result {
-        Some(v) => v,
-        None => {
-            eprintln!("Error: daemon returned empty result");
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let status: StatusResponse = match serde_json::from_value(result_value) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: failed to parse status response: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    // Print output
-    if json {
+    let output = if json {
         match serde_json::to_string_pretty(&status) {
-            Ok(s) => println!("{}", s),
-            Err(e) => {
-                eprintln!("Error: failed to serialize status: {}", e);
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("Error: failed to serialize status: {error}");
                 return exit_codes::EXIT_ERROR;
             }
         }
     } else {
-        let healthy_count = status
-            .workers
-            .iter()
-            .filter(|w| matches!(w.health, uc_daemon::worker::WorkerHealth::Healthy))
-            .count();
-        let total_count = status.workers.len();
+        render_status_output(&status)
+    };
 
-        println!("Status: running");
-        println!("Uptime: {}", format_uptime(status.uptime_seconds));
-        println!("Version: {}", status.version);
-        println!("Workers: {}/{} healthy", healthy_count, total_count);
-        for w in &status.workers {
-            let health_str = match &w.health {
-                uc_daemon::worker::WorkerHealth::Healthy => "healthy".to_string(),
-                uc_daemon::worker::WorkerHealth::Degraded(reason) => {
-                    format!("degraded ({})", reason)
-                }
-                uc_daemon::worker::WorkerHealth::Stopped => "stopped".to_string(),
-            };
-            println!("  {}: {}", w.name, health_str);
-        }
-        let peers_str = status
-            .connected_peers
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-        println!("Connected peers: {}", peers_str);
-    }
-
+    println!("{output}");
     exit_codes::EXIT_SUCCESS
 }
 
-/// Run the status command (non-Unix platforms).
-///
-/// Unix socket RPC is not supported on non-Unix platforms.
-#[cfg(not(unix))]
-pub async fn run(_json: bool, _verbose: bool) -> i32 {
-    eprintln!("Unix socket RPC not supported on this platform");
-    exit_codes::EXIT_ERROR
+fn render_status_output(status: &StatusResponse) -> String {
+    let healthy_count = status
+        .workers
+        .iter()
+        .filter(|worker| worker.health == "healthy")
+        .count();
+    let total_count = status.workers.len();
+
+    let mut lines = vec![
+        "Status: running".to_string(),
+        format!("Uptime: {}", format_uptime(status.uptime_seconds)),
+        format!("Version: {}", status.version),
+        format!("Workers: {healthy_count}/{total_count} healthy"),
+    ];
+
+    lines.extend(status.workers.iter().map(render_worker_line));
+    lines.push(format!("Connected peers: {}", status.connected_peers));
+
+    lines.join("\n")
+}
+
+fn render_worker_line(worker: &WorkerStatusDto) -> String {
+    format!("  {}: {}", worker.name, worker.health)
+}
+
+fn print_client_error(error: DaemonClientError) -> i32 {
+    match error {
+        DaemonClientError::Unreachable(_) => {
+            eprintln!("Error: daemon unreachable (is uniclipboard-daemon running?)");
+            exit_codes::EXIT_DAEMON_UNREACHABLE
+        }
+        DaemonClientError::Unauthorized => {
+            eprintln!("Error: daemon rejected request: invalid or missing auth token");
+            exit_codes::EXIT_ERROR
+        }
+        DaemonClientError::Initialization(_)
+        | DaemonClientError::UnexpectedStatus { .. }
+        | DaemonClientError::InvalidResponse(_) => {
+            eprintln!("Error: {error}");
+            exit_codes::EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unreachable_maps_to_daemon_unreachable_exit_code() {
+        let code = print_client_error(DaemonClientError::Unreachable(anyhow::anyhow!(
+            "connection refused"
+        )));
+        assert_eq!(code, exit_codes::EXIT_DAEMON_UNREACHABLE);
+    }
+
+    #[test]
+    fn renders_human_output_from_http_fixture() {
+        let status = StatusResponse {
+            version: "0.1.0".to_string(),
+            uptime_seconds: 3723,
+            workers: vec![
+                WorkerStatusDto {
+                    name: "network".to_string(),
+                    health: "healthy".to_string(),
+                },
+                WorkerStatusDto {
+                    name: "sync".to_string(),
+                    health: "degraded (retrying)".to_string(),
+                },
+            ],
+            connected_peers: 2,
+        };
+
+        let rendered = render_status_output(&status);
+
+        assert_eq!(
+            rendered,
+            [
+                "Status: running",
+                "Uptime: 1h 2m",
+                "Version: 0.1.0",
+                "Workers: 1/2 healthy",
+                "  network: healthy",
+                "  sync: degraded (retrying)",
+                "Connected peers: 2",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn json_output_serializes_daemon_status_dto() {
+        let status = StatusResponse {
+            version: "0.1.0".to_string(),
+            uptime_seconds: 10,
+            workers: vec![WorkerStatusDto {
+                name: "network".to_string(),
+                health: "healthy".to_string(),
+            }],
+            connected_peers: 1,
+        };
+
+        let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["uptimeSeconds"], 10);
+        assert_eq!(value["workers"][0]["name"], "network");
+        assert!(value.get("uptime_seconds").is_none());
+    }
 }
