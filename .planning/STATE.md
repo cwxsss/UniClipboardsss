@@ -110,6 +110,7 @@ v0.3.0 phases (19-35) completed and archived.
 v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 - Phase 42 added: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
+- Phase 42.1 inserted after Phase 42: Refactor CLI bootstrap to extract shared runtime initialization (URGENT)
 - Phase 43 added: CLI Daemon Management — start, stop, restart daemon and view logs from CLI
 - Phase 44 added: CLI Settings Commands — get, set, and list configuration values via CLI
 - Phase 45 added: CLI Sync Commands — force sync, pause, resume, and show sync status via CLI

@@ -217,6 +217,17 @@ Plans:
 
 - [x] TBD (run /gsd:plan-phase 42 to break down) (completed 2026-03-19)
 
+### Phase 42.1: Refactor CLI bootstrap to extract shared runtime initialization (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 42
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 42.1 to break down)
+
 ### Phase 43: CLI Daemon Management — start, stop, restart daemon and view logs from CLI
 
 **Goal:** [To be planned]
