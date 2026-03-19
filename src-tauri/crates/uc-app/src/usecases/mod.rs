@@ -50,9 +50,9 @@ pub use initialize_encryption::InitializeEncryption;
 pub use list_clipboard_entries::ListClipboardEntries;
 pub use pairing::{
     AnnounceDeviceName, GetDeviceSyncSettings, GetLocalDeviceInfo, GetLocalPeerId,
-    ListConnectedPeers, ListDiscoveredPeers, ListPairedDevices, LocalDeviceInfo, PairingConfig,
-    PairingOrchestrator, ResolveConnectionPolicy, SetPairingState, StagedPairedDeviceStore,
-    UnpairDevice, UpdateDeviceSyncSettings,
+    GetP2pPeersSnapshot, ListConnectedPeers, ListDiscoveredPeers, ListPairedDevices,
+    LocalDeviceInfo, PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, SetPairingState,
+    StagedPairedDeviceStore, UnpairDevice, UpdateDeviceSyncSettings,
 };
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator};
 pub use start_network::StartNetwork;
@@ -201,6 +201,14 @@ impl<'a> CoreUseCases<'a> {
     /// List connected peers from network.
     pub fn list_connected_peers(&self) -> crate::usecases::ListConnectedPeers {
         crate::usecases::ListConnectedPeers::new(self.runtime.deps.network_ports.peers.clone())
+    }
+
+    /// Get unified P2P peer snapshot combining discovered, connected, and paired peers.
+    pub fn get_p2p_peers_snapshot(&self) -> crate::usecases::GetP2pPeersSnapshot {
+        crate::usecases::GetP2pPeersSnapshot::new(
+            self.runtime.deps.network_ports.peers.clone(),
+            self.runtime.deps.device.paired_device_repo.clone(),
+        )
     }
 
     /// Update pairing state for a peer.
