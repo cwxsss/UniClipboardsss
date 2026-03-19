@@ -87,6 +87,14 @@ impl RuntimeState {
         self.pairing_sessions
             .insert(snapshot.session_id.clone(), snapshot);
     }
+
+    /// Remove a daemon-owned pairing session summary.
+    pub fn remove_pairing_session(
+        &mut self,
+        session_id: &str,
+    ) -> Option<DaemonPairingSessionSnapshot> {
+        self.pairing_sessions.remove(session_id)
+    }
 }
 
 #[cfg(test)]
@@ -128,5 +136,22 @@ mod tests {
     fn test_pairing_session_lookup_defaults_to_none() {
         let state = RuntimeState::new(vec![]);
         assert!(state.pairing_session("missing").is_none());
+    }
+
+    #[test]
+    fn test_remove_pairing_session_removes_snapshot() {
+        let mut state = RuntimeState::new(vec![]);
+        state.upsert_pairing_session(DaemonPairingSessionSnapshot {
+            session_id: "session-1".to_string(),
+            peer_id: Some("peer-1".to_string()),
+            device_name: Some("Desk".to_string()),
+            state: "request".to_string(),
+            updated_at_ms: 1,
+        });
+
+        let removed = state.remove_pairing_session("session-1");
+
+        assert!(removed.is_some());
+        assert!(state.pairing_session("session-1").is_none());
     }
 }

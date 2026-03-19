@@ -47,7 +47,6 @@ fn main() -> anyhow::Result<()> {
         runtime,
         ctx.pairing_orchestrator,
         ctx.pairing_action_rx,
-        ctx.staged_store,
         ctx.space_access_orchestrator,
         ctx.key_slot_store,
         socket_path,

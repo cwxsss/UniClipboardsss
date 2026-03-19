@@ -15,13 +15,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
-use uc_app::usecases::{PairingOrchestrator, StagedPairedDeviceStore};
+use uc_app::usecases::PairingOrchestrator;
 use uc_core::network::pairing_state_machine::PairingAction;
 use uc_infra::fs::key_slot_store::KeySlotStore;
 
 use crate::api::auth::{load_or_create_auth_token, resolve_daemon_token_path};
 use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
+use crate::pairing::host::DaemonPairingHost;
 use crate::rpc::server::{check_or_remove_stale_socket, run_rpc_accept_loop};
 use crate::state::{DaemonWorkerSnapshot, RuntimeState};
 use crate::worker::{DaemonWorker, WorkerHealth};
@@ -37,7 +38,6 @@ pub struct DaemonApp {
     state: Arc<RwLock<RuntimeState>>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
     pairing_action_rx: mpsc::Receiver<PairingAction>,
-    staged_store: Arc<StagedPairedDeviceStore>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
     socket_path: PathBuf,
@@ -51,7 +51,6 @@ impl DaemonApp {
         runtime: Arc<CoreRuntime>,
         pairing_orchestrator: Arc<PairingOrchestrator>,
         pairing_action_rx: mpsc::Receiver<PairingAction>,
-        staged_store: Arc<StagedPairedDeviceStore>,
         space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
         key_slot_store: Arc<dyn KeySlotStore>,
         socket_path: PathBuf,
@@ -70,7 +69,6 @@ impl DaemonApp {
             state: Arc::new(RwLock::new(RuntimeState::new(initial_statuses))),
             pairing_orchestrator,
             pairing_action_rx,
-            staged_store,
             space_access_orchestrator,
             key_slot_store,
             socket_path,
@@ -79,7 +77,7 @@ impl DaemonApp {
     }
 
     /// Run the daemon: bind RPC socket, start workers, wait for shutdown, cleanup.
-    pub async fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(self) -> anyhow::Result<()> {
         info!("uniclipboard-daemon starting");
 
         // 1. Bind RPC socket FIRST (fail-fast before starting workers)
@@ -96,6 +94,14 @@ impl DaemonApp {
             self.state.clone(),
         ));
         let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()));
+        let pairing_host = DaemonPairingHost::new(
+            self.runtime.clone(),
+            self.pairing_orchestrator.clone(),
+            self.pairing_action_rx,
+            self.state.clone(),
+            self.space_access_orchestrator.clone(),
+            self.key_slot_store.clone(),
+        );
 
         info!("uniclipboard-daemon running, RPC at {:?}", self.socket_path);
 
@@ -113,6 +119,8 @@ impl DaemonApp {
         let mut rpc_handle = tokio::spawn(run_rpc_accept_loop(listener, rpc_state, rpc_cancel));
         let http_cancel = self.cancel.child_token();
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
+        let pairing_cancel = self.cancel.child_token();
+        let mut pairing_handle = tokio::spawn(pairing_host.run(pairing_cancel));
 
         tokio::select! {
             _ = wait_for_shutdown_signal() => {
@@ -123,6 +131,9 @@ impl DaemonApp {
             }
             result = &mut http_handle => {
                 warn!("HTTP server exited unexpectedly: {:?}", result);
+            }
+            result = &mut pairing_handle => {
+                warn!("pairing host exited unexpectedly: {:?}", result);
             }
             Some(result) = worker_tasks.join_next() => {
                 warn!("worker task exited unexpectedly: {:?}", result);
@@ -147,6 +158,9 @@ impl DaemonApp {
             .await
             .ok();
         tokio::time::timeout(Duration::from_secs(5), http_handle)
+            .await
+            .ok();
+        tokio::time::timeout(Duration::from_secs(5), pairing_handle)
             .await
             .ok();
 
