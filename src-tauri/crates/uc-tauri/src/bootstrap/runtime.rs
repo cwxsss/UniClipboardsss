@@ -548,6 +548,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.representation_repo.clone(),
             self.runtime.deps.storage.blob_store.clone(),
+            self.runtime.deps.clipboard.payload_resolver.clone(),
         )
     }
 
@@ -561,6 +562,7 @@ impl<'a> UseCases<'a> {
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.representation_repo.clone(),
+            self.runtime.deps.clipboard.payload_resolver.clone(),
         )
     }
 
@@ -1444,7 +1446,10 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::mpsc;
     use uc_core::clipboard::PolicyError;
-    use uc_core::ports::clipboard::{RepresentationCachePort, SpoolQueuePort, SpoolRequest};
+    use uc_core::ports::clipboard::{
+        ClipboardPayloadResolverPort, RepresentationCachePort, ResolvedClipboardPayload,
+        SpoolQueuePort, SpoolRequest,
+    };
     use uc_core::ports::security::encryption_state::EncryptionStatePort;
     use uc_core::ports::security::key_scope::KeyScopePort;
     use uc_core::ports::*;
@@ -1586,6 +1591,16 @@ mod tests {
         async fn enqueue(&self, _request: SpoolRequest) -> anyhow::Result<()> {
             self.enqueue_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl ClipboardPayloadResolverPort for NoopPort {
+        async fn resolve(
+            &self,
+            _representation: &uc_core::clipboard::PersistedClipboardRepresentation,
+        ) -> anyhow::Result<ResolvedClipboardPayload> {
+            Err(anyhow::anyhow!("NoopPayloadResolver"))
         }
     }
 
@@ -2268,6 +2283,7 @@ mod tests {
                 }),
                 worker_tx,
                 clipboard_change_origin: origin_port,
+                payload_resolver: Arc::new(NoopPort),
             },
             security: uc_app::SecurityPorts {
                 encryption: Arc::new(NoopPort),
