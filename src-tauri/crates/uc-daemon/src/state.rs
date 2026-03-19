@@ -4,9 +4,19 @@
 //! worker health statuses. Does NOT own workers — `DaemonApp` owns workers
 //! and periodically updates this snapshot.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::rpc::types::WorkerStatus;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonPairingSessionSnapshot {
+    pub session_id: String,
+    pub peer_id: Option<String>,
+    pub device_name: Option<String>,
+    pub state: String,
+    pub updated_at_ms: i64,
+}
 
 /// Runtime state snapshot for the daemon.
 ///
@@ -16,6 +26,8 @@ use crate::rpc::types::WorkerStatus;
 pub struct RuntimeState {
     start_time: Instant,
     worker_statuses: Vec<WorkerStatus>,
+    connected_peer_count: u32,
+    pairing_sessions: HashMap<String, DaemonPairingSessionSnapshot>,
 }
 
 impl RuntimeState {
@@ -24,6 +36,8 @@ impl RuntimeState {
         Self {
             start_time: Instant::now(),
             worker_statuses: initial_statuses,
+            connected_peer_count: 0,
+            pairing_sessions: HashMap::new(),
         }
     }
 
@@ -40,6 +54,27 @@ impl RuntimeState {
     /// Replace the cached worker statuses with a fresh snapshot.
     pub fn update_worker_statuses(&mut self, statuses: Vec<WorkerStatus>) {
         self.worker_statuses = statuses;
+    }
+
+    /// Current connected peer count tracked by the daemon runtime.
+    pub fn connected_peer_count(&self) -> u32 {
+        self.connected_peer_count
+    }
+
+    /// Replace the cached connected peer count with a fresh summary.
+    pub fn update_connected_peer_count(&mut self, count: u32) {
+        self.connected_peer_count = count;
+    }
+
+    /// Lookup a daemon-owned pairing session summary.
+    pub fn pairing_session(&self, session_id: &str) -> Option<&DaemonPairingSessionSnapshot> {
+        self.pairing_sessions.get(session_id)
+    }
+
+    /// Replace a daemon-owned pairing session summary.
+    pub fn upsert_pairing_session(&mut self, snapshot: DaemonPairingSessionSnapshot) {
+        self.pairing_sessions
+            .insert(snapshot.session_id.clone(), snapshot);
     }
 }
 
@@ -77,5 +112,11 @@ mod tests {
         assert_eq!(state.worker_statuses().len(), 2);
         assert_eq!(state.worker_statuses()[0].name, "clipboard-watcher");
         assert_eq!(state.worker_statuses()[1].health, WorkerHealth::Stopped);
+    }
+
+    #[test]
+    fn test_pairing_session_lookup_defaults_to_none() {
+        let state = RuntimeState::new(vec![]);
+        assert!(state.pairing_session("missing").is_none());
     }
 }
