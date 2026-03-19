@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::rpc::types::{RpcRequest, RpcResponse, StatusResponse};
-use crate::state::RuntimeState;
+use crate::rpc::types::{RpcRequest, RpcResponse, StatusResponse, WorkerStatus};
+use crate::state::{DaemonWorkerSnapshot, RuntimeState};
 
 /// Dispatch a JSON-RPC request to the appropriate handler.
 pub async fn handle_request(
@@ -32,8 +32,8 @@ async fn handle_status(id: Option<u64>, state: &Arc<RwLock<RuntimeState>>) -> Rp
     let status = StatusResponse {
         uptime_seconds: state.uptime_seconds(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        workers: state.worker_statuses().to_vec(),
-        connected_peers: None, // Placeholder — PeerDirectoryPort query deferred
+        workers: worker_statuses(state.worker_statuses()),
+        connected_peers: Some(state.connected_peer_count()),
     };
     match serde_json::to_value(&status) {
         Ok(value) => RpcResponse::success(id, value),
@@ -50,10 +50,20 @@ fn handle_device_list(id: Option<u64>) -> RpcResponse {
     )
 }
 
+fn worker_statuses(snapshots: &[DaemonWorkerSnapshot]) -> Vec<WorkerStatus> {
+    snapshots
+        .iter()
+        .map(|worker| WorkerStatus {
+            name: worker.name.clone(),
+            health: worker.health.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::types::WorkerStatus;
+    use crate::state::DaemonWorkerSnapshot;
     use crate::worker::WorkerHealth;
 
     fn make_request(method: &str, id: Option<u64>) -> RpcRequest {
@@ -77,7 +87,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_status_returns_uptime_and_version() {
-        let workers = vec![WorkerStatus {
+        let workers = vec![DaemonWorkerSnapshot {
             name: "clipboard-watcher".to_string(),
             health: WorkerHealth::Healthy,
         }];

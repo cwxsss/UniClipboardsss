@@ -1,17 +1,18 @@
 use std::sync::Arc;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 use tokio::sync::RwLock;
 use uc_core::network::{PairedDevice, PairingState};
 use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::types::{DaemonWsEvent, PairedDeviceDto, PeerSnapshotDto};
-use uc_daemon::state::RuntimeState;
+use uc_daemon::state::{DaemonWorkerSnapshot, RuntimeState};
 use uc_daemon::worker::WorkerHealth;
 
 fn build_runtime() -> Arc<uc_app::runtime::CoreRuntime> {
-    static RUNTIME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let _guard = RUNTIME_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-    Arc::new(uc_bootstrap::build_cli_runtime(None).unwrap())
+    static RUNTIME: OnceLock<Arc<uc_app::runtime::CoreRuntime>> = OnceLock::new();
+    RUNTIME
+        .get_or_init(|| Arc::new(uc_bootstrap::build_cli_runtime(None).unwrap()))
+        .clone()
 }
 
 #[tokio::test]
@@ -67,12 +68,10 @@ fn paired_devices_query_does_not_expose_identity_fingerprint() {
 #[tokio::test]
 async fn pairing_session_query_returns_none_when_no_daemon_side_record_exists() {
     let runtime = build_runtime();
-    let state = Arc::new(RwLock::new(RuntimeState::new(vec![
-        uc_daemon::rpc::types::WorkerStatus {
-            name: "rpc".to_string(),
-            health: WorkerHealth::Healthy,
-        },
-    ])));
+    let state = Arc::new(RwLock::new(RuntimeState::new(vec![DaemonWorkerSnapshot {
+        name: "rpc".to_string(),
+        health: WorkerHealth::Healthy,
+    }])));
     let service = DaemonQueryService::new(runtime, state);
 
     let session = service.pairing_session("missing-session").await.unwrap();

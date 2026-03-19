@@ -14,8 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::rpc::server::{check_or_remove_stale_socket, run_rpc_accept_loop};
-use crate::rpc::types::WorkerStatus;
-use crate::state::RuntimeState;
+use crate::state::{DaemonWorkerSnapshot, RuntimeState};
 use crate::worker::{DaemonWorker, WorkerHealth};
 
 /// Main daemon application.
@@ -33,9 +32,9 @@ pub struct DaemonApp {
 impl DaemonApp {
     /// Create a new DaemonApp with the given workers and socket path.
     pub fn new(workers: Vec<Arc<dyn DaemonWorker>>, socket_path: PathBuf) -> Self {
-        let initial_statuses: Vec<WorkerStatus> = workers
+        let initial_statuses: Vec<DaemonWorkerSnapshot> = workers
             .iter()
-            .map(|w| WorkerStatus {
+            .map(|w| DaemonWorkerSnapshot {
                 name: w.name().to_string(),
                 health: WorkerHealth::Healthy,
             })

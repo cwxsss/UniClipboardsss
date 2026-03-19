@@ -13,7 +13,7 @@ use crate::api::types::{
     HealthResponse, PairedDeviceDto, PairingSessionSummaryDto, PeerSnapshotDto, StatusResponse,
     WorkerStatusDto,
 };
-use crate::state::RuntimeState;
+use crate::state::{DaemonWorkerSnapshot, RuntimeState};
 use crate::worker::WorkerHealth;
 
 pub struct DaemonQueryService {
@@ -34,19 +34,18 @@ impl DaemonQueryService {
     }
 
     pub async fn status(&self) -> Result<StatusResponse> {
+        let connected_peers = self
+            .peers()
+            .await?
+            .into_iter()
+            .filter(|peer| peer.connected)
+            .count() as u32;
         let state = self.state.read().await;
         Ok(StatusResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
             uptime_seconds: state.uptime_seconds(),
-            workers: state
-                .worker_statuses()
-                .iter()
-                .map(|worker| WorkerStatusDto {
-                    name: worker.name.clone(),
-                    health: worker_health_label(&worker.health),
-                })
-                .collect(),
-            connected_peers: state.connected_peer_count(),
+            workers: worker_statuses(state.worker_statuses()),
+            connected_peers,
         })
     }
 
@@ -100,4 +99,14 @@ fn worker_health_label(health: &WorkerHealth) -> String {
         WorkerHealth::Degraded(reason) => format!("degraded ({reason})"),
         WorkerHealth::Stopped => "stopped".to_string(),
     }
+}
+
+fn worker_statuses(snapshots: &[DaemonWorkerSnapshot]) -> Vec<WorkerStatusDto> {
+    snapshots
+        .iter()
+        .map(|worker| WorkerStatusDto {
+            name: worker.name.clone(),
+            health: worker_health_label(&worker.health),
+        })
+        .collect()
 }

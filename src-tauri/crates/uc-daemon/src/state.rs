@@ -7,7 +7,13 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::rpc::types::WorkerStatus;
+use crate::worker::WorkerHealth;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DaemonWorkerSnapshot {
+    pub name: String,
+    pub health: WorkerHealth,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonPairingSessionSnapshot {
@@ -25,14 +31,14 @@ pub struct DaemonPairingSessionSnapshot {
 /// contend with worker lifecycle because this is a snapshot, not a live view.
 pub struct RuntimeState {
     start_time: Instant,
-    worker_statuses: Vec<WorkerStatus>,
+    worker_statuses: Vec<DaemonWorkerSnapshot>,
     connected_peer_count: u32,
     pairing_sessions: HashMap<String, DaemonPairingSessionSnapshot>,
 }
 
 impl RuntimeState {
     /// Create a new RuntimeState with the given initial worker statuses.
-    pub fn new(initial_statuses: Vec<WorkerStatus>) -> Self {
+    pub fn new(initial_statuses: Vec<DaemonWorkerSnapshot>) -> Self {
         Self {
             start_time: Instant::now(),
             worker_statuses: initial_statuses,
@@ -47,12 +53,12 @@ impl RuntimeState {
     }
 
     /// Current cached worker statuses.
-    pub fn worker_statuses(&self) -> &[WorkerStatus] {
+    pub fn worker_statuses(&self) -> &[DaemonWorkerSnapshot] {
         &self.worker_statuses
     }
 
     /// Replace the cached worker statuses with a fresh snapshot.
-    pub fn update_worker_statuses(&mut self, statuses: Vec<WorkerStatus>) {
+    pub fn update_worker_statuses(&mut self, statuses: Vec<DaemonWorkerSnapshot>) {
         self.worker_statuses = statuses;
     }
 
@@ -81,7 +87,6 @@ impl RuntimeState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::WorkerHealth;
 
     #[test]
     fn test_uptime_is_non_zero() {
@@ -100,11 +105,11 @@ mod tests {
         assert_eq!(state.worker_statuses().len(), 0);
 
         state.update_worker_statuses(vec![
-            WorkerStatus {
+            DaemonWorkerSnapshot {
                 name: "clipboard-watcher".to_string(),
                 health: WorkerHealth::Healthy,
             },
-            WorkerStatus {
+            DaemonWorkerSnapshot {
                 name: "peer-discovery".to_string(),
                 health: WorkerHealth::Stopped,
             },
