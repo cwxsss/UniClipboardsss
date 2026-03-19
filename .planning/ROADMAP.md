@@ -61,7 +61,7 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 - [x] **Phase 39: Config Resolution Extraction** - Move path/profile/keyslot resolution from main.rs into reusable bootstrap module (completed 2026-03-18)
 - [ ] **Phase 40: uc-bootstrap Crate** - Create sole composition root crate with scene-specific builders and unified logging init
 - [x] **Phase 41: Daemon and CLI Skeletons** - Create uc-daemon and uc-cli crates with end-to-end path validation (completed 2026-03-18)
-- [ ] **Phase 42: CLI Clipboard Commands** - list, get, and clear clipboard entries via CLI
+- [x] **Phase 42: CLI Clipboard Commands** - list, get, and clear clipboard entries via CLI (completed 2026-03-19)
 - [ ] **Phase 43: CLI Daemon Management** - start, stop, restart daemon and view logs from CLI
 - [ ] **Phase 44: CLI Settings Commands** - get, set, and list configuration values via CLI
 - [ ] **Phase 45: CLI Sync Commands** - force sync, pause, resume, and show sync status via CLI
@@ -211,7 +211,7 @@ Plans:
 **Goal:** [To be planned]
 **Requirements**: TBD
 **Depends on:** Phase 41
-**Plans:** 0 plans
+**Plans:** 1/1 plans complete
 
 Plans:
 
