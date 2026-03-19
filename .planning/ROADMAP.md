@@ -62,7 +62,7 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 - [ ] **Phase 40: uc-bootstrap Crate** - Create sole composition root crate with scene-specific builders and unified logging init
 - [x] **Phase 41: Daemon and CLI Skeletons** - Create uc-daemon and uc-cli crates with end-to-end path validation (completed 2026-03-18)
 - [x] **Phase 42: CLI Clipboard Commands** - list, get, and clear clipboard entries via CLI (completed 2026-03-19)
-- [ ] **Phase 43: Unify GUI and CLI Business Flows** - eliminate per-entrypoint feature adaptation by routing both surfaces through the same application flow
+- [x] **Phase 43: Unify GUI and CLI Business Flows** - eliminate per-entrypoint feature adaptation by routing both surfaces through the same application flow (completed 2026-03-19)
 
 ## Phase Details
 
@@ -219,7 +219,7 @@ Plans:
 **Goal:** Unify GUI and CLI business flows by creating shared app-layer entrypoints, eliminating duplicated bootstrap code in CLI and cross-use-case aggregation in Tauri commands.
 **Requirements**: PH43-01, PH43-02, PH43-03, PH43-04
 **Depends on:** Phase 42
-**Plans:** 1/2 plans
+**Plans:** 2/2 plans complete
 
 **Success Criteria** (what must be TRUE):
 
