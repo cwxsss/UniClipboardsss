@@ -62,10 +62,7 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 - [ ] **Phase 40: uc-bootstrap Crate** - Create sole composition root crate with scene-specific builders and unified logging init
 - [x] **Phase 41: Daemon and CLI Skeletons** - Create uc-daemon and uc-cli crates with end-to-end path validation (completed 2026-03-18)
 - [x] **Phase 42: CLI Clipboard Commands** - list, get, and clear clipboard entries via CLI (completed 2026-03-19)
-- [ ] **Phase 43: CLI Daemon Management** - start, stop, restart daemon and view logs from CLI
-- [ ] **Phase 44: CLI Settings Commands** - get, set, and list configuration values via CLI
-- [ ] **Phase 45: CLI Sync Commands** - force sync, pause, resume, and show sync status via CLI
-- [ ] **Phase 46: Daemon Clipboard Capture** - wire real clipboard watcher worker in daemon mode so clipboard changes are captured and logged
+- [ ] **Phase 43: Unify GUI and CLI Business Flows** - eliminate per-entrypoint feature adaptation by routing both surfaces through the same application flow
 
 ## Phase Details
 
@@ -217,18 +214,7 @@ Plans:
 
 - [x] TBD (run /gsd:plan-phase 42 to break down) (completed 2026-03-19)
 
-### Phase 42.1: Refactor CLI bootstrap to extract shared runtime initialization (INSERTED)
-
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
-**Depends on:** Phase 42
-**Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (run /gsd:plan-phase 42.1 to break down)
-
-### Phase 43: CLI Daemon Management — start, stop, restart daemon and view logs from CLI
+### Phase 43: Unify GUI and CLI business flows to eliminate per-entrypoint feature adaptation
 
 **Goal:** [To be planned]
 **Requirements**: TBD
@@ -238,36 +224,3 @@ Plans:
 Plans:
 
 - [ ] TBD (run /gsd:plan-phase 43 to break down)
-
-### Phase 44: CLI Settings Commands — get, set, and list configuration values via CLI
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 43
-**Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (run /gsd:plan-phase 44 to break down)
-
-### Phase 45: CLI Sync Commands — force sync, pause, resume, and show sync status via CLI
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 44
-**Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (run /gsd:plan-phase 45 to break down)
-
-### Phase 46: Daemon Clipboard Capture — wire real clipboard watcher worker in daemon mode so clipboard changes are captured and logged
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 45
-**Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (run /gsd:plan-phase 46 to break down)

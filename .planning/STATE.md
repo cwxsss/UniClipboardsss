@@ -4,11 +4,11 @@ milestone: v0.1
 milestone_name: milestone
 status: unknown
 stopped_at: Completed 41-04-PLAN.md
-last_updated: '2026-03-19T05:10:49.017Z'
+last_updated: '2026-03-19T06:18:00.000Z'
 progress:
-  total_phases: 12
+  total_phases: 8
   completed_phases: 6
-  total_plans: 23
+  total_plans: 20
   completed_plans: 19
 ---
 
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 42 — cli-clipboard-commands-list-get-and-clear-clipboard-entries-via-cli
+**Current focus:** Phase 43 — unify-gui-and-cli-business-flows-to-eliminate-per-entrypoint-feature-adaptation
 
 ## Current Position
 
-Phase: 42 (cli-clipboard-commands-list-get-and-clear-clipboard-entries-via-cli) — EXECUTING
-Plan: 1 of 1
+Phase: 43 (unify-gui-and-cli-business-flows-to-eliminate-per-entrypoint-feature-adaptation) — READY FOR PLANNING
+Plan: 0 of 0
 
 ## Performance Metrics
 
@@ -110,11 +110,7 @@ v0.3.0 phases (19-35) completed and archived.
 v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 - Phase 42 added: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
-- Phase 42.1 inserted after Phase 42: Refactor CLI bootstrap to extract shared runtime initialization (URGENT)
-- Phase 43 added: CLI Daemon Management — start, stop, restart daemon and view logs from CLI
-- Phase 44 added: CLI Settings Commands — get, set, and list configuration values via CLI
-- Phase 45 added: CLI Sync Commands — force sync, pause, resume, and show sync status via CLI
-- Phase 46 added: Daemon Clipboard Capture — wire real clipboard watcher worker in daemon mode so clipboard changes are captured and logged
+- Phase 43 added: Unify GUI and CLI business flows to eliminate per-entrypoint feature adaptation
 
 ### Pending Todos
 
