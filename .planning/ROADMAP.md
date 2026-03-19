@@ -249,12 +249,12 @@ Plans:
 **Goal:** Add the daemon-facing HTTP/WebSocket contract foundation, including local auth, read-only DTOs, and runtime query services
 **Requirements**: PH45-01, PH45-02
 **Depends on:** Phase 44
-**Plans:** 1/3 plans complete
+**Plans:** 2/3 plans executed
 
 Plans:
 
 - [x] 45-01-PLAN.md — Daemon API Contract And Auth Foundation (completed 2026-03-19)
-- [ ] 45-02-PLAN.md — Add loopback HTTP + WebSocket server and serve read-only daemon routes
+- [x] 45-02-PLAN.md — Add loopback HTTP + WebSocket server and serve read-only daemon routes (completed 2026-03-19)
 - [ ] 45-03-PLAN.md — Add shared daemon client usage for CLI/Tauri bootstrap without frontend cutover
 
 ### Phase 46: Daemon Pairing Host Migration — move pairing orchestrator, action loops, and network event handling out of Tauri
