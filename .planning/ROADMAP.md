@@ -219,7 +219,7 @@ Plans:
 **Goal:** Unify GUI and CLI business flows by creating shared app-layer entrypoints, eliminating duplicated bootstrap code in CLI and cross-use-case aggregation in Tauri commands.
 **Requirements**: PH43-01, PH43-02, PH43-03, PH43-04
 **Depends on:** Phase 42
-**Plans:** 2/2 plans
+**Plans:** 1/2 plans
 
 **Success Criteria** (what must be TRUE):
 
@@ -230,5 +230,5 @@ Plans:
 
 Plans:
 
-- [ ] 43-01-PLAN.md — Unify CLI bootstrap: add build_cli_runtime() helper
+- [x] 43-01-PLAN.md — Unify CLI bootstrap: add build_cli_runtime() helper (completed 2026-03-19)
 - [ ] 43-02-PLAN.md — Unify pairing aggregation: add GetP2pPeersSnapshot use case
