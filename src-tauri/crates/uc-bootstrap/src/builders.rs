@@ -88,6 +88,11 @@ pub struct DaemonBootstrapContext {
     pub platform_cmd_rx: PlatformCommandReceiver,
     pub platform_event_tx: PlatformEventSender,
     pub platform_event_rx: PlatformEventReceiver,
+    pub pairing_orchestrator: Arc<PairingOrchestrator>,
+    pub pairing_action_rx: mpsc::Receiver<PairingAction>,
+    pub staged_store: Arc<StagedPairedDeviceStore>,
+    pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    pub key_slot_store: Arc<dyn KeySlotStore>,
     pub storage_paths: AppPaths,
     pub config: AppConfig,
 }
@@ -248,15 +253,54 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
 
     let (config, wired) = build_core(platform_cmd_tx.clone(), None)?;
     let storage_paths = get_storage_paths(&config)?;
+    let deps = wired.deps;
+    let background = wired.background;
+    let watcher_control = wired.watcher_control;
+
+    let pairing_device_repo = deps.device.paired_device_repo.clone();
+    let pairing_device_identity = deps.device.device_identity.clone();
+    let pairing_settings = deps.settings.clone();
+    let pairing_peer_id = background.libp2p_network.local_peer_id();
+    let pairing_identity_pubkey = background.libp2p_network.local_identity_pubkey();
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let (pairing_device_name, pairing_config) = rt.block_on(async {
+        let device_name = resolve_pairing_device_name(pairing_settings.clone()).await;
+        let config = resolve_pairing_config(pairing_settings).await;
+        (device_name, config)
+    });
+
+    let pairing_device_id = pairing_device_identity.current_device_id().to_string();
+    let staged_store = Arc::new(StagedPairedDeviceStore::new());
+    let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
+        pairing_config,
+        pairing_device_repo,
+        pairing_device_name,
+        pairing_device_id,
+        pairing_peer_id,
+        pairing_identity_pubkey,
+        staged_store.clone(),
+    );
+    let pairing_orchestrator = Arc::new(pairing_orchestrator);
+    let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
+    let key_slot_store: Arc<dyn KeySlotStore> =
+        Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
 
     Ok(DaemonBootstrapContext {
-        deps: wired.deps,
-        background: wired.background,
-        watcher_control: wired.watcher_control,
+        deps,
+        background,
+        watcher_control,
         platform_cmd_tx,
         platform_cmd_rx,
         platform_event_tx,
         platform_event_rx,
+        pairing_orchestrator,
+        pairing_action_rx,
+        staged_store,
+        space_access_orchestrator,
+        key_slot_store,
         storage_paths,
         config,
     })

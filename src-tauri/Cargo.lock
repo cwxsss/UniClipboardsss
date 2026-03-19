@@ -9159,6 +9159,7 @@ dependencies = [
  "uc-app",
  "uc-bootstrap",
  "uc-core",
+ "uc-infra",
 ]
 
 [[package]]

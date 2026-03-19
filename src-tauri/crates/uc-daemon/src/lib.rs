@@ -8,6 +8,7 @@
 
 pub mod api;
 pub mod app;
+pub mod pairing;
 pub mod rpc;
 pub mod socket;
 pub mod state;

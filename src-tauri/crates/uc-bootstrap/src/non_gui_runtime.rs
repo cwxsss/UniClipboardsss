@@ -100,15 +100,28 @@ pub fn build_non_gui_runtime(
     deps: AppDeps,
     storage_paths: AppPaths,
 ) -> anyhow::Result<CoreRuntime> {
+    let watcher_control: Arc<dyn WatcherControlPort> = Arc::new(NoopWatcherControl);
+    let setup_ports = SetupAssemblyPorts::placeholder(&deps);
+    build_non_gui_runtime_with_setup(deps, storage_paths, setup_ports, watcher_control)
+}
+
+/// Construct a [`CoreRuntime`] for non-GUI entry points with explicit setup ports.
+///
+/// Daemon startup uses this path so the runtime owns the real pairing/setup adapters
+/// rather than the placeholder bundle used by CLI tests and fallback call sites.
+pub fn build_non_gui_runtime_with_setup(
+    deps: AppDeps,
+    storage_paths: AppPaths,
+    setup_ports: SetupAssemblyPorts,
+    watcher_control: Arc<dyn WatcherControlPort>,
+) -> anyhow::Result<CoreRuntime> {
     let emitter: Arc<dyn HostEventEmitterPort> = Arc::new(LoggingHostEventEmitter);
     let emitter_cell = Arc::new(std::sync::RwLock::new(emitter));
 
     let lifecycle_status = Arc::new(InMemoryLifecycleStatus::new());
     let task_registry = Arc::new(TaskRegistry::new());
 
-    let setup_ports = SetupAssemblyPorts::placeholder(&deps);
     let session_ready_emitter: Arc<dyn SessionReadyEmitter> = Arc::new(LoggingSessionReadyEmitter);
-    let watcher_control: Arc<dyn WatcherControlPort> = Arc::new(NoopWatcherControl);
 
     let setup_orchestrator = build_setup_orchestrator(
         &deps,

@@ -16,6 +16,7 @@ path = "src/lib.rs"
 uc-bootstrap = { path = "../uc-bootstrap" }
 uc-app = { path = "../uc-app" }
 uc-core = { path = "../uc-core" }
+uc-infra = { path = "../uc-infra" }
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"

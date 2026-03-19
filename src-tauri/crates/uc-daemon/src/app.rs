@@ -8,11 +8,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::net::UnixListener;
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uc_app::runtime::CoreRuntime;
+use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+use uc_app::usecases::{PairingOrchestrator, StagedPairedDeviceStore};
+use uc_core::network::pairing_state_machine::PairingAction;
+use uc_infra::fs::key_slot_store::KeySlotStore;
 
 use crate::api::auth::{load_or_create_auth_token, resolve_daemon_token_path};
 use crate::api::query::DaemonQueryService;
@@ -30,6 +35,11 @@ pub struct DaemonApp {
     workers: Vec<Arc<dyn DaemonWorker>>,
     runtime: Arc<CoreRuntime>,
     state: Arc<RwLock<RuntimeState>>,
+    pairing_orchestrator: Arc<PairingOrchestrator>,
+    pairing_action_rx: mpsc::Receiver<PairingAction>,
+    staged_store: Arc<StagedPairedDeviceStore>,
+    space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    key_slot_store: Arc<dyn KeySlotStore>,
     socket_path: PathBuf,
     cancel: CancellationToken,
 }
@@ -39,6 +49,11 @@ impl DaemonApp {
     pub fn new(
         workers: Vec<Arc<dyn DaemonWorker>>,
         runtime: Arc<CoreRuntime>,
+        pairing_orchestrator: Arc<PairingOrchestrator>,
+        pairing_action_rx: mpsc::Receiver<PairingAction>,
+        staged_store: Arc<StagedPairedDeviceStore>,
+        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+        key_slot_store: Arc<dyn KeySlotStore>,
         socket_path: PathBuf,
     ) -> Self {
         let initial_statuses: Vec<DaemonWorkerSnapshot> = workers
@@ -53,6 +68,11 @@ impl DaemonApp {
             workers,
             runtime,
             state: Arc::new(RwLock::new(RuntimeState::new(initial_statuses))),
+            pairing_orchestrator,
+            pairing_action_rx,
+            staged_store,
+            space_access_orchestrator,
+            key_slot_store,
             socket_path,
             cancel: CancellationToken::new(),
         }
