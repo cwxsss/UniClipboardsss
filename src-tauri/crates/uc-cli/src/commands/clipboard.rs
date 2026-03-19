@@ -92,26 +92,10 @@ pub async fn run_list(json: bool, verbose: bool, limit: usize, offset: usize) ->
         Some(uc_observability::LogProfile::Cli)
     };
 
-    let ctx = match uc_bootstrap::build_cli_context_with_profile(profile) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: failed to initialize CLI context: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let storage_paths = match uc_bootstrap::get_storage_paths(&ctx.config) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: failed to resolve storage paths: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let runtime = match uc_bootstrap::build_non_gui_runtime(ctx.deps, storage_paths) {
+    let runtime = match uc_bootstrap::build_cli_runtime(profile) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: failed to build runtime: {}", e);
+            eprintln!("Error: failed to build CLI runtime: {}", e);
             return exit_codes::EXIT_ERROR;
         }
     };
@@ -166,26 +150,10 @@ pub async fn run_get(json: bool, verbose: bool, id: String) -> i32 {
         Some(uc_observability::LogProfile::Cli)
     };
 
-    let ctx = match uc_bootstrap::build_cli_context_with_profile(profile) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: failed to initialize CLI context: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let storage_paths = match uc_bootstrap::get_storage_paths(&ctx.config) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: failed to resolve storage paths: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let runtime = match uc_bootstrap::build_non_gui_runtime(ctx.deps, storage_paths) {
+    let runtime = match uc_bootstrap::build_cli_runtime(profile) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: failed to build runtime: {}", e);
+            eprintln!("Error: failed to build CLI runtime: {}", e);
             return exit_codes::EXIT_ERROR;
         }
     };
@@ -229,26 +197,10 @@ pub async fn run_clear(json: bool, verbose: bool) -> i32 {
         Some(uc_observability::LogProfile::Cli)
     };
 
-    let ctx = match uc_bootstrap::build_cli_context_with_profile(profile) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: failed to initialize CLI context: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let storage_paths = match uc_bootstrap::get_storage_paths(&ctx.config) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: failed to resolve storage paths: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let runtime = match uc_bootstrap::build_non_gui_runtime(ctx.deps, storage_paths) {
+    let runtime = match uc_bootstrap::build_cli_runtime(profile) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: failed to build runtime: {}", e);
+            eprintln!("Error: failed to build CLI runtime: {}", e);
             return exit_codes::EXIT_ERROR;
         }
     };
