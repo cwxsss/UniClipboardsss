@@ -66,6 +66,8 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 - [x] **PH45-01**: Daemon auth token and local connection metadata are persisted outside frontend storage and reusable by local daemon clients
 - [x] **PH45-02**: Daemon exposes read-only transport DTOs and query helpers for status, peers, paired devices, and pairing-session summaries without leaking secrets
+- [x] **PH45-05**: CLI status and paired-device reads use a shared daemon HTTP client and preserve stable exit semantics for unreachable daemon scenarios
+- [x] **PH45-06**: Tauri shell can probe or start the daemon, keep connection info in memory, and emit runtime-only connection metadata without persisting the bearer token in frontend storage
 
 ## Out of Scope
 
@@ -106,14 +108,16 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | CLI-05      | 41    | Complete |
 | PH45-01     | 45    | Complete |
 | PH45-02     | 45    | Complete |
+| PH45-05     | 45    | Complete |
+| PH45-06     | 45    | Complete |
 
 **Coverage:**
 
-- v0.4.0 requirements: 25 total
-- Mapped to phases: 25
+- v0.4.0 requirements: 27 total
+- Mapped to phases: 27
 - Unmapped: 0 ✓
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-19 after Phase 45 Plan 01 execution_
+_Last updated: 2026-03-19 after Phase 45 Plan 03 execution_

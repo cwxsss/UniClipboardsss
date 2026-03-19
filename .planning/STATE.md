@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: executing
-stopped_at: Completed 45-02-PLAN.md
-last_updated: '2026-03-19T11:14:07.040Z'
+stopped_at: Completed 45-03-PLAN.md
+last_updated: '2026-03-19T11:32:05Z'
 progress:
   total_phases: 13
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 25
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 
 ## Current Position
 
-Phase: 45 (daemon-api-foundation-add-local-http-and-websocket-transport-with-read-only-runtime-queries) — EXECUTING
-Plan: 3 of 3
+Phase: 45 (daemon-api-foundation-add-local-http-and-websocket-transport-with-read-only-runtime-queries) — COMPLETE
+Plan: 3 of 3 (completed)
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ _Updated after each plan completion_
 | Phase 41-daemon-and-cli-skeletons P04 | 8 | 2 tasks | 4 files |
 | Phase 45-daemon-api-foundation P01 | 18 | 3 tasks | 10 files |
 | Phase 45 P02 | 9 | 2 tasks | 13 files |
+| Phase 45 P03 | 18 | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -115,6 +116,8 @@ Recent decisions affecting current work:
 - [Phase 45]: WebSocket auth now reuses the daemon HTTP bearer-token check during upgrade so protected transport behavior stays aligned across routes and subscriptions.
 - [Phase 45]: Phase 45 websocket topics emit snapshot-first events in client subscription order and reserve stable incremental event-type strings for later runtime fanout.
 - [Phase 45]: Pairing websocket payloads stay metadata-only and never serialize keyslot files or raw challenge bytes before the daemon becomes the pairing host.
+- [Phase 45]: CLI daemon reads now share one reqwest client that resolves daemon URL/token via uc-daemon helpers and preserves exit code 5 when the daemon or token file is absent.
+- [Phase 45]: Tauri shell stores daemon connection info only in managed in-memory state and emits `daemon://connection-info` after the main webview finishes loading; no token persistence in browser storage or query strings.
 
 ### Roadmap Evolution
 
@@ -143,6 +146,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-19T11:14:07.035Z
-Stopped at: Completed 45-02-PLAN.md
+Last session: 2026-03-19T11:32:05Z
+Stopped at: Completed 45-03-PLAN.md
 Resume file: None

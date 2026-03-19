@@ -202,6 +202,7 @@ Plans:
 | 39. Config Resolution Extraction | 2/2       | Complete       | 2026-03-18 | -          |
 | 40. uc-bootstrap Crate           | 2/3       | In Progress    |            | -          |
 | 41. Daemon and CLI Skeletons     | 4/4       | Complete       | 2026-03-18 | -          |
+| 45. Daemon API Foundation        | 3/3       | Complete       | 2026-03-19 | -          |
 
 ### Phase 42: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
 
@@ -247,15 +248,15 @@ Plans:
 ### Phase 45: Daemon API Foundation — add local HTTP and WebSocket transport with read-only runtime queries
 
 **Goal:** Add the daemon-facing HTTP/WebSocket contract foundation, including local auth, read-only DTOs, and runtime query services
-**Requirements**: PH45-01, PH45-02
+**Requirements**: PH45-01, PH45-02, PH45-05, PH45-06
 **Depends on:** Phase 44
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
 - [x] 45-01-PLAN.md — Daemon API Contract And Auth Foundation (completed 2026-03-19)
 - [x] 45-02-PLAN.md — Add loopback HTTP + WebSocket server and serve read-only daemon routes (completed 2026-03-19)
-- [ ] 45-03-PLAN.md — Add shared daemon client usage for CLI/Tauri bootstrap without frontend cutover
+- [x] 45-03-PLAN.md — Add shared daemon client usage for CLI/Tauri bootstrap without frontend cutover (completed 2026-03-19)
 
 ### Phase 46: Daemon Pairing Host Migration — move pairing orchestrator, action loops, and network event handling out of Tauri
 
