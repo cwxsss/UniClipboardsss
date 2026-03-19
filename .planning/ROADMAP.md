@@ -61,6 +61,11 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 - [x] **Phase 39: Config Resolution Extraction** - Move path/profile/keyslot resolution from main.rs into reusable bootstrap module (completed 2026-03-18)
 - [ ] **Phase 40: uc-bootstrap Crate** - Create sole composition root crate with scene-specific builders and unified logging init
 - [x] **Phase 41: Daemon and CLI Skeletons** - Create uc-daemon and uc-cli crates with end-to-end path validation (completed 2026-03-18)
+- [ ] **Phase 42: CLI Clipboard Commands** - list, get, and clear clipboard entries via CLI
+- [ ] **Phase 43: CLI Daemon Management** - start, stop, restart daemon and view logs from CLI
+- [ ] **Phase 44: CLI Settings Commands** - get, set, and list configuration values via CLI
+- [ ] **Phase 45: CLI Sync Commands** - force sync, pause, resume, and show sync status via CLI
+- [ ] **Phase 46: Daemon Clipboard Capture** - wire real clipboard watcher worker in daemon mode so clipboard changes are captured and logged
 
 ## Phase Details
 
@@ -200,3 +205,58 @@ Plans:
 | 39. Config Resolution Extraction | 2/2       | Complete       | 2026-03-18 | -          |
 | 40. uc-bootstrap Crate           | 2/3       | In Progress    |            | -          |
 | 41. Daemon and CLI Skeletons     | 4/4       | Complete       | 2026-03-18 | -          |
+
+### Phase 42: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 41
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 42 to break down)
+
+### Phase 43: CLI Daemon Management — start, stop, restart daemon and view logs from CLI
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 42
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 43 to break down)
+
+### Phase 44: CLI Settings Commands — get, set, and list configuration values via CLI
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 43
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 44 to break down)
+
+### Phase 45: CLI Sync Commands — force sync, pause, resume, and show sync status via CLI
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 44
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 45 to break down)
+
+### Phase 46: Daemon Clipboard Capture — wire real clipboard watcher worker in daemon mode so clipboard changes are captured and logged
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 45
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 46 to break down)

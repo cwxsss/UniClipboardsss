@@ -115,6 +115,12 @@ Recent decisions affecting current work:
 v0.3.0 phases (19-35) completed and archived.
 v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
+- Phase 42 added: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
+- Phase 43 added: CLI Daemon Management — start, stop, restart daemon and view logs from CLI
+- Phase 44 added: CLI Settings Commands — get, set, and list configuration values via CLI
+- Phase 45 added: CLI Sync Commands — force sync, pause, resume, and show sync status via CLI
+- Phase 46 added: Daemon Clipboard Capture — wire real clipboard watcher worker in daemon mode so clipboard changes are captured and logged
+
 ### Pending Todos
 
 None.
