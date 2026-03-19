@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 
 const SOCKET_NAME: &str = "uniclipboard-daemon.sock";
+const TOKEN_FILE_NAME: &str = "uniclipboard-daemon.token";
+pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
 
 #[cfg(unix)]
 const MAX_SOCKET_PATH_BYTES: usize = 103;
@@ -19,6 +21,11 @@ pub fn resolve_daemon_socket_path() -> PathBuf {
 #[cfg(not(unix))]
 pub fn resolve_daemon_socket_path() -> PathBuf {
     std::env::temp_dir().join(SOCKET_NAME)
+}
+
+/// Resolve a daemon-local token file path within the provided base directory.
+pub fn resolve_daemon_token_path_from(base: &Path) -> PathBuf {
+    base.join(TOKEN_FILE_NAME)
 }
 
 #[cfg(unix)]
@@ -73,6 +80,15 @@ mod tests {
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
             Some(SOCKET_NAME)
+        );
+    }
+
+    #[test]
+    fn test_token_path_ends_with_token() {
+        let path = resolve_daemon_token_path_from(Path::new("/tmp/uniclipboard"));
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(TOKEN_FILE_NAME)
         );
     }
 
