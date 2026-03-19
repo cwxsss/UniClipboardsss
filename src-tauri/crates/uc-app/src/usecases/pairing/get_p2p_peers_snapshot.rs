@@ -127,7 +127,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use chrono::Utc;
-    use uc_core::ports::paired_device_repository::PairedDeviceRepositoryError;
+    use uc_core::network::{ConnectedPeer, DiscoveredPeer, PairedDevice, PairingState};
+    use uc_core::ports::{PairedDeviceRepositoryError, PairedDeviceRepositoryPort};
     use uc_core::PeerId;
 
     struct MockPeerDirectory {
@@ -137,15 +138,11 @@ mod tests {
 
     #[async_trait]
     impl PeerDirectoryPort for MockPeerDirectory {
-        async fn get_discovered_peers(
-            &self,
-        ) -> Result<Vec<DiscoveredPeer>, uc_core::ports::PortError> {
+        async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
             Ok(self.discovered.clone())
         }
 
-        async fn get_connected_peers(
-            &self,
-        ) -> Result<Vec<ConnectedPeer>, uc_core::ports::PortError> {
+        async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
             Ok(self.connected.clone())
         }
 
@@ -153,10 +150,7 @@ mod tests {
             "local-peer".to_string()
         }
 
-        async fn announce_device_name(
-            &self,
-            _device_name: String,
-        ) -> Result<(), uc_core::ports::PortError> {
+        async fn announce_device_name(&self, _device_name: String) -> anyhow::Result<()> {
             Ok(())
         }
     }
