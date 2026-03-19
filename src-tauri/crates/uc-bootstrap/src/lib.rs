@@ -27,5 +27,5 @@ pub use builders::{
 pub use config::load_config;
 pub use config_resolution::{resolve_app_config, resolve_config_path, ConfigResolutionError};
 pub use init::ensure_default_device_name;
-pub use non_gui_runtime::{build_non_gui_runtime, LoggingHostEventEmitter};
+pub use non_gui_runtime::{build_cli_runtime, build_non_gui_runtime, LoggingHostEventEmitter};
 pub use tracing::init_tracing_subscriber;

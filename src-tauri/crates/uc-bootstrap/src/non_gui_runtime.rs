@@ -131,6 +131,31 @@ pub fn build_non_gui_runtime(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// build_cli_runtime
+// ---------------------------------------------------------------------------
+
+/// Construct a [`CoreRuntime`] for CLI entry points with a single function call.
+///
+/// This helper combines the common 4-step bootstrap sequence used by CLI commands:
+/// 1. Build CLI context via `build_cli_context_with_profile()`
+/// 2. Get storage paths via `get_storage_paths()`
+/// 3. Build non-GUI runtime via `build_non_gui_runtime()`
+///
+/// Callers then create `CoreUseCases::new(&runtime)` to access use cases.
+///
+/// # Arguments
+///
+/// * `log_profile` — Log profile override (e.g., `Some(LogProfile::Cli)` or `Some(LogProfile::Dev)`)
+pub fn build_cli_runtime(
+    log_profile: Option<uc_observability::LogProfile>,
+) -> anyhow::Result<CoreRuntime> {
+    let ctx = crate::builders::build_cli_context_with_profile(log_profile)?;
+    let storage_paths = crate::assembly::get_storage_paths(&ctx.config)?;
+    let runtime = build_non_gui_runtime(ctx.deps, storage_paths)?;
+    Ok(runtime)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
