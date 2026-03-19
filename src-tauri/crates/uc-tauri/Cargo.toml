@@ -12,6 +12,7 @@ uc-infra = { path = "../uc-infra" }
 uc-platform = { path = "../uc-platform" }
 uc-observability = { path = "../uc-observability" }
 uc-bootstrap = { path = "../uc-bootstrap" }
+uc-daemon = { path = "../uc-daemon" }
 
 # System utilities
 gethostname = "1.1"
@@ -28,6 +29,7 @@ url = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

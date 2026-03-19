@@ -19,7 +19,10 @@ use uc_core::ports::ClipboardChangeHandler;
 use uc_platform::ipc::PlatformCommand;
 use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::runtime::PlatformRuntime;
-use uc_tauri::bootstrap::{ensure_default_device_name, start_background_tasks, AppRuntime};
+use uc_tauri::bootstrap::{
+    bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
+    start_background_tasks, AppRuntime, DaemonConnectionState,
+};
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
 use uc_tauri::tray::TrayState;
@@ -339,6 +342,7 @@ fn run_app(ctx: GuiBootstrapContext) {
 
     // Startup barrier used to coordinate backend readiness and main window show timing.
     let startup_barrier = Arc::new(uc_tauri::commands::startup::StartupBarrier::default());
+    let daemon_connection_state = DaemonConnectionState::default();
 
     // Create clipboard handler from runtime (AppRuntime implements ClipboardChangeHandler)
     let clipboard_handler: Arc<dyn ClipboardChangeHandler> = runtime_for_handler.clone();
@@ -352,10 +356,13 @@ fn run_app(ctx: GuiBootstrapContext) {
 
     // Store TaskRegistry reference for exit hook registration
     let task_registry = runtime_for_handler.task_registry().clone();
+    let startup_barrier_for_page_load = startup_barrier.clone();
+    let daemon_connection_state_for_page_load = daemon_connection_state.clone();
 
     let builder = Builder::default()
         // Register AppRuntime for Tauri commands
         .manage(runtime_for_tauri)
+        .manage(DaemonConnectionState::clone(&daemon_connection_state))
         .manage(pairing_orchestrator.clone())
         .manage(TrayState::default())
         .manage(task_registry.clone())
@@ -372,7 +379,7 @@ fn run_app(ctx: GuiBootstrapContext) {
                 }
             }
         })
-        .on_page_load(|webview, payload| {
+        .on_page_load(move |webview, payload| {
             if webview.label() != "main" {
                 return;
             }
@@ -388,6 +395,20 @@ fn run_app(ctx: GuiBootstrapContext) {
                 url = %payload.url(),
                 "[StartupTiming] main webview page load"
             );
+
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                startup_barrier_for_page_load.mark_frontend_ready();
+                if let Err(error) = emit_daemon_connection_info_if_ready(
+                    &webview.app_handle(),
+                    &daemon_connection_state_for_page_load,
+                    &startup_barrier_for_page_load,
+                ) {
+                    error!(
+                        error = %error,
+                        "Failed to emit daemon connection info after main webview load"
+                    );
+                }
+            }
         })
         .register_asynchronous_uri_scheme_protocol("uc", move |ctx, request, responder| {
             let app_handle = ctx.app_handle().clone();
@@ -437,6 +458,26 @@ fn run_app(ctx: GuiBootstrapContext) {
                 ));
             runtime_for_handler.set_event_emitter(tauri_emitter);
             info!("Event emitter swapped to TauriEventEmitter");
+
+            let daemon_connection_state_for_setup = daemon_connection_state.clone();
+            let startup_barrier_for_daemon = startup_barrier.clone();
+            let app_handle_for_daemon = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match bootstrap_daemon_connection(&daemon_connection_state_for_setup).await {
+                    Ok(_connection_info) => {
+                        if let Err(error) = emit_daemon_connection_info_if_ready(
+                            &app_handle_for_daemon,
+                            &daemon_connection_state_for_setup,
+                            &startup_barrier_for_daemon,
+                        ) {
+                            warn!(error = %error, "Failed to deliver daemon connection info to main webview");
+                        }
+                    }
+                    Err(error) => {
+                        error!(error = %error, "Daemon startup/probe failed during Tauri bootstrap");
+                    }
+                }
+            });
 
             // Load startup settings for tray and silent start
             let (silent_start, initial_language) = {

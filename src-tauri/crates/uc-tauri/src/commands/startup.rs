@@ -19,6 +19,8 @@ use crate::tray::show_main_window;
 pub struct StartupBarrier {
     backend_ready: AtomicBool,
     finished: AtomicBool,
+    frontend_ready: AtomicBool,
+    daemon_connection_emitted: AtomicBool,
 }
 
 impl StartupBarrier {
@@ -27,6 +29,26 @@ impl StartupBarrier {
     /// 标记后端已就绪。
     pub fn mark_backend_ready(&self) {
         self.backend_ready.store(true, Ordering::SeqCst);
+    }
+
+    /// Mark the main webview as ready for runtime event delivery.
+    pub fn mark_frontend_ready(&self) {
+        self.frontend_ready.store(true, Ordering::SeqCst);
+    }
+
+    pub fn frontend_ready(&self) -> bool {
+        self.frontend_ready.load(Ordering::SeqCst)
+    }
+
+    pub fn try_begin_daemon_connection_emit(&self) -> bool {
+        self.daemon_connection_emitted
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    pub fn release_daemon_connection_emit(&self) {
+        self.daemon_connection_emitted
+            .store(false, Ordering::SeqCst);
     }
 
     /// Try to finish startup once (idempotent).
