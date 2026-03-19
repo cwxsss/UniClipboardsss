@@ -216,6 +216,17 @@ Plans:
 
 ### Phase 43: Unify GUI and CLI business flows to eliminate per-entrypoint feature adaptation
 
+### Phase 44: CLI Pairing and Sync Commands
+
+**Goal:** [To be planned]
+**Requirements:** TBD
+**Depends on:** Phase 43
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 44 to break down)
+
 **Goal:** Unify GUI and CLI business flows by creating shared app-layer entrypoints, eliminating duplicated bootstrap code in CLI and cross-use-case aggregation in Tauri commands.
 **Requirements**: PH43-01, PH43-02, PH43-03, PH43-04
 **Depends on:** Phase 42

@@ -116,6 +116,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 - Phase 42 added: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
 - Phase 43 added: Unify GUI and CLI business flows to eliminate per-entrypoint feature adaptation
+- Phase 44 added: CLI Pairing and Sync Commands — add CLI commands for device pairing and manual sync
 
 ### Pending Todos
 
