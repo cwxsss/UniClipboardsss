@@ -23,8 +23,8 @@ impl fmt::Display for SpaceStatusOutput {
 
 /// Run the space-status command.
 ///
-/// Uses `build_cli_context()` + `build_non_gui_runtime()` to query encryption
-/// state directly without requiring the daemon to be running.
+/// Uses `build_cli_runtime()` to query encryption state directly without
+/// requiring the daemon to be running.
 pub async fn run(json: bool, verbose: bool) -> i32 {
     let profile = if verbose {
         Some(uc_observability::LogProfile::Dev)
@@ -32,26 +32,10 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         Some(uc_observability::LogProfile::Cli)
     };
 
-    let ctx = match uc_bootstrap::build_cli_context_with_profile(profile) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: failed to initialize CLI context: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let storage_paths = match uc_bootstrap::get_storage_paths(&ctx.config) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Error: failed to resolve storage paths: {}", e);
-            return exit_codes::EXIT_ERROR;
-        }
-    };
-
-    let runtime = match uc_bootstrap::build_non_gui_runtime(ctx.deps, storage_paths) {
+    let runtime = match uc_bootstrap::build_cli_runtime(profile) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: failed to build runtime: {}", e);
+            eprintln!("Error: failed to build CLI runtime: {}", e);
             return exit_codes::EXIT_ERROR;
         }
     };
