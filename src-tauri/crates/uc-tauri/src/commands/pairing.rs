@@ -151,43 +151,31 @@ pub async fn get_p2p_peers(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let discovered = runtime
+        let snapshot = runtime
             .usecases()
-            .list_discovered_peers()
+            .get_p2p_peers_snapshot()
             .execute()
             .await
             .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list discovered peers");
-                let message = format!("list_discovered_peers: {}", e);
+                tracing::error!(error = %e, "Failed to get p2p peers snapshot");
+                let message = format!("get_p2p_peers_snapshot: {}", e);
                 emit_command_error(&runtime, "get_p2p_peers", &message);
                 CommandError::InternalError(e.to_string())
             })?;
-        let connected = runtime
-            .usecases()
-            .list_connected_peers()
-            .execute()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list connected peers");
-                let message = format!("list_connected_peers: {}", e);
-                emit_command_error(&runtime, "get_p2p_peers", &message);
-                CommandError::InternalError(e.to_string())
-            })?;
-        let connected_map = connected_peer_ids(&connected);
+
         tracing::info!(
-            discovered_peer_count = discovered.len(),
-            connected_peer_count = connected_map.len(),
-            "assembled p2p peer snapshot"
+            peer_count = snapshot.len(),
+            "assembled p2p peer snapshot from shared use case"
         );
 
-        Ok(discovered
+        Ok(snapshot
             .into_iter()
-            .map(|peer| P2PPeerInfo {
-                peer_id: peer.peer_id.clone(),
-                device_name: peer.device_name,
-                addresses: peer.addresses,
-                is_paired: peer.is_paired,
-                connected: connected_map.contains_key(&peer.peer_id),
+            .map(|p| P2PPeerInfo {
+                peer_id: p.peer_id,
+                device_name: p.device_name,
+                addresses: p.addresses,
+                is_paired: p.is_paired,
+                connected: p.is_connected,
             })
             .collect())
     }
@@ -215,55 +203,36 @@ pub async fn get_paired_peers_with_status(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let paired_devices = runtime
+        let snapshot = runtime
             .usecases()
-            .list_paired_devices()
+            .get_p2p_peers_snapshot()
             .execute()
             .await
             .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list paired devices");
-                let message = format!("list_paired_devices: {}", e);
+                tracing::error!(error = %e, "Failed to get p2p peers snapshot");
+                let message = format!("get_p2p_peers_snapshot: {}", e);
                 emit_command_error(&runtime, "get_paired_peers_with_status", &message);
                 CommandError::InternalError(e.to_string())
             })?;
-        let discovered = runtime
-            .usecases()
-            .list_discovered_peers()
-            .execute()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list discovered peers");
-                let message = format!("list_discovered_peers: {}", e);
-                emit_command_error(&runtime, "get_paired_peers_with_status", &message);
-                CommandError::InternalError(e.to_string())
-            })?;
-        let connected = runtime
-            .usecases()
-            .list_connected_peers()
-            .execute()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list connected peers");
-                let message = format!("list_connected_peers: {}", e);
-                emit_command_error(&runtime, "get_paired_peers_with_status", &message);
-                CommandError::InternalError(e.to_string())
-            })?;
-        let discovered_map = discovered_peer_map(&discovered);
-        let connected_map = connected_peer_ids(&connected);
+
         tracing::info!(
-            paired_device_count = paired_devices.len(),
-            discovered_peer_count = discovered_map.len(),
-            connected_peer_count = connected_map.len(),
-            "assembled paired peers with status"
+            paired_peer_count = snapshot.iter().filter(|p| p.is_paired).count(),
+            "assembled paired peers with status from shared use case"
         );
 
-        Ok(paired_devices
+        Ok(snapshot
             .into_iter()
-            .map(|device| {
-                let peer_id = device.peer_id.as_str().to_string();
-                let discovered_peer = discovered_map.get(&peer_id);
-                let connected = connected_map.contains_key(&peer_id);
-                map_paired_device_to_peer(device, discovered_peer, connected)
+            .filter(|p| p.is_paired)
+            .map(|p| PairedPeer {
+                peer_id: p.peer_id,
+                device_name: p
+                    .device_name
+                    .unwrap_or_else(|| "Unknown Device".to_string()),
+                shared_secret: vec![],
+                paired_at: "".to_string(), // Not available in snapshot
+                last_seen: None,
+                last_known_addresses: p.addresses,
+                connected: p.is_connected,
             })
             .collect())
     }
