@@ -2,14 +2,16 @@
 //! 配对相关的 Tauri 命令
 
 use crate::bootstrap::AppRuntime;
+use crate::bootstrap::DaemonConnectionState;
 use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
+use crate::daemon_client::TauriDaemonPairingClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, State};
 use tracing::{info_span, Instrument};
-use uc_app::usecases::{LocalDeviceInfo, PairingOrchestrator};
+use uc_app::usecases::LocalDeviceInfo;
 use uc_core::network::{ConnectedPeer, DiscoveredPeer, PairedDevice, PairingState};
 use uc_core::PeerId;
 use uc_platform::ports::observability::TraceMetadata;
@@ -306,7 +308,7 @@ pub async fn set_pairing_state(
 #[tauri::command]
 pub async fn initiate_p2p_pairing(
     request: P2PPairingRequest,
-    orchestrator: State<'_, Arc<PairingOrchestrator>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<P2PPairingResponse, CommandError> {
     let span = info_span!(
@@ -317,7 +319,7 @@ pub async fn initiate_p2p_pairing(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let session_id = orchestrator
+        let response = TauriDaemonPairingClient::new(daemon_connection.inner().clone())
             .initiate_pairing(request.peer_id)
             .await
             .map_err(|e| {
@@ -325,9 +327,9 @@ pub async fn initiate_p2p_pairing(
                 CommandError::InternalError(e.to_string())
             })?;
         Ok(P2PPairingResponse {
-            session_id,
-            success: true,
-            error: None,
+            session_id: response.session_id,
+            success: response.accepted,
+            error: response.error,
         })
     }
     .instrument(span)
@@ -337,7 +339,7 @@ pub async fn initiate_p2p_pairing(
 #[tauri::command]
 pub async fn accept_p2p_pairing(
     session_id: String,
-    orchestrator: State<'_, Arc<PairingOrchestrator>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
     let span = info_span!(
@@ -348,13 +350,14 @@ pub async fn accept_p2p_pairing(
     );
     record_trace_fields(&span, &_trace);
     async {
-        orchestrator
-            .user_accept_pairing(&session_id)
+        TauriDaemonPairingClient::new(daemon_connection.inner().clone())
+            .accept_pairing(&session_id)
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, session_id = %session_id, "Failed to accept P2P pairing");
                 CommandError::InternalError(e.to_string())
-            })
+            })?;
+        Ok(())
     }
     .instrument(span)
     .await
@@ -363,7 +366,7 @@ pub async fn accept_p2p_pairing(
 #[tauri::command]
 pub async fn reject_p2p_pairing(
     session_id: String,
-    orchestrator: State<'_, Arc<PairingOrchestrator>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
     let span = info_span!(
@@ -374,13 +377,14 @@ pub async fn reject_p2p_pairing(
     );
     record_trace_fields(&span, &_trace);
     async {
-        orchestrator
-            .user_reject_pairing(&session_id)
+        TauriDaemonPairingClient::new(daemon_connection.inner().clone())
+            .reject_pairing(&session_id)
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, session_id = %session_id, "Failed to reject P2P pairing");
                 CommandError::InternalError(e.to_string())
-            })
+            })?;
+        Ok(())
     }
     .instrument(span)
     .await
@@ -389,7 +393,7 @@ pub async fn reject_p2p_pairing(
 #[tauri::command]
 pub async fn verify_p2p_pairing_pin(
     request: P2PPinVerifyRequest,
-    orchestrator: State<'_, Arc<PairingOrchestrator>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
     let span = info_span!(
@@ -400,31 +404,19 @@ pub async fn verify_p2p_pairing_pin(
     );
     record_trace_fields(&span, &_trace);
     async {
-        if request.pin_matches {
-            orchestrator
-                .user_accept_pairing(&request.session_id)
-                .await
-                .map_err(|e| {
-                    tracing::error!(
-                        error = %e,
-                        session_id = %request.session_id,
-                        "Failed to accept P2P pairing (pin verify)"
-                    );
-                    CommandError::InternalError(e.to_string())
-                })
-        } else {
-            orchestrator
-                .user_reject_pairing(&request.session_id)
-                .await
-                .map_err(|e| {
-                    tracing::error!(
-                        error = %e,
-                        session_id = %request.session_id,
-                        "Failed to reject P2P pairing (pin verify)"
-                    );
-                    CommandError::InternalError(e.to_string())
-                })
-        }
+        TauriDaemonPairingClient::new(daemon_connection.inner().clone())
+            .verify_pairing(&request.session_id, request.pin_matches)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    error = %e,
+                    session_id = %request.session_id,
+                    pin_matches = request.pin_matches,
+                    "Failed to verify P2P pairing PIN"
+                );
+                CommandError::InternalError(e.to_string())
+            })?;
+        Ok(())
     }
     .instrument(span)
     .await
