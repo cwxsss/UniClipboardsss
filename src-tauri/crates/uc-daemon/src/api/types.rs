@@ -63,6 +63,68 @@ pub struct PairingSessionSummaryDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PairingSessionChangedPayload {
+    pub session_id: String,
+    pub state: String,
+    pub peer_id: Option<String>,
+    pub device_name: Option<String>,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingVerificationPayload {
+    pub session_id: String,
+    pub peer_id: String,
+    pub device_name: Option<String>,
+    pub code: String,
+    pub local_fingerprint: String,
+    pub peer_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingFailurePayload {
+    pub session_id: String,
+    pub peer_id: Option<String>,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerChangedPayload {
+    pub peer_id: String,
+    pub device_name: Option<String>,
+    pub addresses: Vec<String>,
+    pub discovered: bool,
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerNameUpdatedPayload {
+    pub peer_id: String,
+    pub device_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerConnectionChangedPayload {
+    pub peer_id: String,
+    pub device_name: Option<String>,
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairedDevicesChangedPayload {
+    pub peer_id: String,
+    pub device_name: Option<String>,
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DaemonWsSubscribeRequest {
     pub action: String,
     pub topics: Vec<String>,

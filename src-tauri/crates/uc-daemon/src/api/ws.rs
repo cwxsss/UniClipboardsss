@@ -17,8 +17,10 @@ use tracing::{debug, warn};
 
 use crate::api::server::DaemonApiState;
 use crate::api::types::{
-    DaemonWsEvent, DaemonWsSubscribeRequest, PairedDeviceDto, PairingSessionSummaryDto,
-    PeerSnapshotDto, StatusResponse,
+    DaemonWsEvent, DaemonWsSubscribeRequest, PairedDeviceDto, PairedDevicesChangedPayload,
+    PairingFailurePayload, PairingSessionChangedPayload, PairingSessionSummaryDto,
+    PairingVerificationPayload, PeerChangedPayload, PeerConnectionChangedPayload,
+    PeerNameUpdatedPayload, PeerSnapshotDto, StatusResponse,
 };
 
 const TOPIC_STATUS: &str = "status";
@@ -33,8 +35,13 @@ const PAIRING_SNAPSHOT_EVENT: &str = "pairing.snapshot";
 
 const STATUS_UPDATED_EVENT: &str = "status.updated";
 const PEERS_CHANGED_EVENT: &str = "peers.changed";
+const PEERS_NAME_UPDATED_EVENT: &str = "peers.name_updated";
+const PEERS_CONNECTION_CHANGED_EVENT: &str = "peers.connection_changed";
 const PAIRED_DEVICES_CHANGED_EVENT: &str = "paired-devices.changed";
 const PAIRING_UPDATED_EVENT: &str = "pairing.updated";
+const PAIRING_VERIFICATION_REQUIRED_EVENT: &str = "pairing.verification_required";
+const PAIRING_COMPLETE_EVENT: &str = "pairing.complete";
+const PAIRING_FAILED_EVENT: &str = "pairing.failed";
 
 type ClientTopics = Arc<RwLock<HashSet<String>>>;
 
@@ -238,11 +245,68 @@ fn _event_type_markers(
     _: Vec<PeerSnapshotDto>,
     _: Vec<PairedDeviceDto>,
     _: Vec<PairingSessionSummaryDto>,
-) -> [&'static str; 4] {
-    [
-        STATUS_UPDATED_EVENT,
-        PEERS_CHANGED_EVENT,
-        PAIRED_DEVICES_CHANGED_EVENT,
-        PAIRING_UPDATED_EVENT,
-    ]
+) -> (
+    [&'static str; 9],
+    PairingSessionChangedPayload,
+    PairingVerificationPayload,
+    PairingFailurePayload,
+    PeerChangedPayload,
+    PeerNameUpdatedPayload,
+    PeerConnectionChangedPayload,
+    PairedDevicesChangedPayload,
+) {
+    (
+        [
+            STATUS_UPDATED_EVENT,
+            PEERS_CHANGED_EVENT,
+            PEERS_NAME_UPDATED_EVENT,
+            PEERS_CONNECTION_CHANGED_EVENT,
+            PAIRED_DEVICES_CHANGED_EVENT,
+            PAIRING_UPDATED_EVENT,
+            PAIRING_VERIFICATION_REQUIRED_EVENT,
+            PAIRING_COMPLETE_EVENT,
+            PAIRING_FAILED_EVENT,
+        ],
+        PairingSessionChangedPayload {
+            session_id: String::new(),
+            state: String::new(),
+            peer_id: None,
+            device_name: None,
+            updated_at_ms: 0,
+        },
+        PairingVerificationPayload {
+            session_id: String::new(),
+            peer_id: String::new(),
+            device_name: None,
+            code: String::new(),
+            local_fingerprint: String::new(),
+            peer_fingerprint: String::new(),
+        },
+        PairingFailurePayload {
+            session_id: String::new(),
+            peer_id: None,
+            error: String::new(),
+        },
+        PeerChangedPayload {
+            peer_id: String::new(),
+            device_name: None,
+            addresses: vec![],
+            discovered: false,
+            connected: false,
+        },
+        PeerNameUpdatedPayload {
+            peer_id: String::new(),
+            device_name: String::new(),
+        },
+        PeerConnectionChangedPayload {
+            peer_id: String::new(),
+            device_name: None,
+            connected: false,
+        },
+        PairedDevicesChangedPayload {
+            peer_id: String::new(),
+            device_name: None,
+            connected: false,
+        },
+    )
 }
