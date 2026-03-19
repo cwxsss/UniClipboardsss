@@ -216,11 +216,19 @@ Plans:
 
 ### Phase 43: Unify GUI and CLI business flows to eliminate per-entrypoint feature adaptation
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Unify GUI and CLI business flows by creating shared app-layer entrypoints, eliminating duplicated bootstrap code in CLI and cross-use-case aggregation in Tauri commands.
+**Requirements**: PH43-01, PH43-02, PH43-03, PH43-04
 **Depends on:** Phase 42
-**Plans:** 0 plans
+**Plans:** 2/2 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. CLI commands acquire runtime context through one shared path (`build_cli_runtime`) instead of repeating bootstrap sequence
+2. GUI and CLI clipboard flows call the same app-layer entrypoint (`CoreUseCases`)
+3. Pairing peer aggregation is a shared app-layer flow, not scattered in Tauri commands
+4. Both Tauri commands and CLI use the same shared pairing snapshot use case
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 43 to break down)
+- [ ] 43-01-PLAN.md — Unify CLI bootstrap: add build_cli_runtime() helper
+- [ ] 43-02-PLAN.md — Unify pairing aggregation: add GetP2pPeersSnapshot use case
