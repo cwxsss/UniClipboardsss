@@ -77,6 +77,11 @@ impl RuntimeState {
         self.pairing_sessions.get(session_id)
     }
 
+    /// Return all daemon-owned pairing session summaries.
+    pub fn pairing_sessions(&self) -> Vec<DaemonPairingSessionSnapshot> {
+        self.pairing_sessions.values().cloned().collect()
+    }
+
     /// Replace a daemon-owned pairing session summary.
     pub fn upsert_pairing_session(&mut self, snapshot: DaemonPairingSessionSnapshot) {
         self.pairing_sessions

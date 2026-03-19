@@ -7,7 +7,6 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
 
-use crate::api::auth::parse_bearer_token;
 use crate::api::server::DaemonApiState;
 
 pub fn router() -> Router<DaemonApiState> {
@@ -24,7 +23,7 @@ async fn health(State(state): State<DaemonApiState>) -> impl IntoResponse {
 }
 
 async fn status(State(state): State<DaemonApiState>, headers: HeaderMap) -> impl IntoResponse {
-    if !is_authorized(&state, &headers) {
+    if !state.is_authorized(&headers) {
         return unauthorized().into_response();
     }
 
@@ -35,7 +34,7 @@ async fn status(State(state): State<DaemonApiState>, headers: HeaderMap) -> impl
 }
 
 async fn peers(State(state): State<DaemonApiState>, headers: HeaderMap) -> impl IntoResponse {
-    if !is_authorized(&state, &headers) {
+    if !state.is_authorized(&headers) {
         return unauthorized().into_response();
     }
 
@@ -49,7 +48,7 @@ async fn paired_devices(
     State(state): State<DaemonApiState>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if !is_authorized(&state, &headers) {
+    if !state.is_authorized(&headers) {
         return unauthorized().into_response();
     }
 
@@ -64,7 +63,7 @@ async fn pairing_session(
     headers: HeaderMap,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    if !is_authorized(&state, &headers) {
+    if !state.is_authorized(&headers) {
         return unauthorized().into_response();
     }
 
@@ -77,15 +76,6 @@ async fn pairing_session(
             .into_response(),
         Err(error) => internal_error(error).into_response(),
     }
-}
-
-fn is_authorized(state: &DaemonApiState, headers: &HeaderMap) -> bool {
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(parse_bearer_token)
-        .map(|token| token == state.auth_token.as_str())
-        .unwrap_or(false)
 }
 
 fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {

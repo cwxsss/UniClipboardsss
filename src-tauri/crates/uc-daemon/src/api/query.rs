@@ -81,6 +81,15 @@ impl DaemonQueryService {
             .cloned()
             .map(PairingSessionSummaryDto::from))
     }
+
+    pub async fn pairing_sessions(&self) -> Vec<PairingSessionSummaryDto> {
+        let state = self.state.read().await;
+        state
+            .pairing_sessions()
+            .into_iter()
+            .map(PairingSessionSummaryDto::from)
+            .collect()
+    }
 }
 
 fn map_paired_device(

@@ -1,18 +1,23 @@
 //! HTTP server bootstrap for the daemon API.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::http::HeaderMap;
 use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
 
-use crate::api::auth::{build_connection_info, DaemonAuthToken, DaemonConnectionInfo};
+use crate::api::auth::{
+    build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
+};
 use crate::api::query::DaemonQueryService;
 use crate::api::routes;
 use crate::api::types::DaemonWsEvent;
-use crate::socket::resolve_daemon_http_addr;
+use crate::api::ws;
+use crate::socket::{resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
 
 #[derive(Clone)]
 pub struct DaemonApiState {
@@ -37,14 +42,25 @@ impl DaemonApiState {
         }
     }
 
-    pub fn connection_info(&self) -> DaemonConnectionInfo {
-        let addr = resolve_daemon_http_addr();
-        build_connection_info("127.0.0.1", addr.port(), &self.auth_token)
+    pub fn connection_info_for_addr(&self, listen_addr: SocketAddr) -> DaemonConnectionInfo {
+        build_connection_info(DEFAULT_HTTP_HOST, listen_addr.port(), &self.auth_token)
+    }
+
+    pub fn is_authorized(&self, headers: &HeaderMap) -> bool {
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_bearer_token)
+            .map(|token| token == self.auth_token.as_str())
+            .unwrap_or(false)
     }
 }
 
 pub fn build_router(state: DaemonApiState) -> Router {
-    Router::new().merge(routes::router()).with_state(state)
+    Router::new()
+        .merge(routes::router())
+        .merge(ws::router())
+        .with_state(state)
 }
 
 pub async fn run_http_server(
@@ -53,7 +69,8 @@ pub async fn run_http_server(
 ) -> anyhow::Result<()> {
     let addr = resolve_daemon_http_addr();
     let listener = TcpListener::bind(addr).await?;
-    let connection_info = state.connection_info();
+    let listen_addr = listener.local_addr()?;
+    let connection_info = state.connection_info_for_addr(listen_addr);
     tracing::info!(
         base_url = %connection_info.base_url,
         ws_url = %connection_info.ws_url,
