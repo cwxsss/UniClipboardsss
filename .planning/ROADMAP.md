@@ -243,3 +243,49 @@ Plans:
 
 - [x] 43-01-PLAN.md — Unify CLI bootstrap: add build_cli_runtime() helper (completed 2026-03-19)
 - [ ] 43-02-PLAN.md — Unify pairing aggregation: add GetP2pPeersSnapshot use case
+
+### Phase 45: Daemon API Foundation — add local HTTP and WebSocket transport with read-only runtime queries
+
+**Goal:** Add the daemon-facing HTTP/WebSocket contract foundation, including local auth, read-only DTOs, and runtime query services
+**Requirements**: PH45-01, PH45-02
+**Depends on:** Phase 44
+**Plans:** 1/3 plans complete
+
+Plans:
+
+- [x] 45-01-PLAN.md — Daemon API Contract And Auth Foundation (completed 2026-03-19)
+- [ ] 45-02-PLAN.md — Add loopback HTTP + WebSocket server and serve read-only daemon routes
+- [ ] 45-03-PLAN.md — Add shared daemon client usage for CLI/Tauri bootstrap without frontend cutover
+
+### Phase 46: Daemon Pairing Host Migration — move pairing orchestrator, action loops, and network event handling out of Tauri
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 45
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 46 to break down)
+
+### Phase 47: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 46
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 47 to break down)
+
+### Phase 48: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 47
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 48 to break down)

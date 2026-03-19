@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: unknown
-stopped_at: Completed 43-02-PLAN.md
-last_updated: '2026-03-19T07:43:15.308Z'
+status: executing
+stopped_at: Completed 45-01-PLAN.md
+last_updated: '2026-03-19T10:16:02Z'
 progress:
-  total_phases: 8
+  total_phases: 13
   completed_phases: 7
-  total_plans: 22
-  completed_plans: 21
+  total_plans: 25
+  completed_plans: 22
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 43 — unify-gui-and-cli-business-flows-to-eliminate-per-entrypoint-feature-adaptation
+**Current focus:** Phase 45 — daemon-api-foundation-add-local-http-and-websocket-transport-with-read-only-runtime-queries
 
 ## Current Position
 
-Phase: 43 (unify-gui-and-cli-business-flows-to-eliminate-per-entrypoint-feature-adaptation) — COMPLETED
-Plan: 2 of 2
+Phase: 45 (daemon-api-foundation-add-local-http-and-websocket-transport-with-read-only-runtime-queries) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ _Updated after each plan completion_
 | Phase 41-daemon-and-cli-skeletons P02 | 4 | 2 tasks | 7 files |
 | Phase 41-daemon-and-cli-skeletons P03 | 3 | 3 tasks | 10 files |
 | Phase 41-daemon-and-cli-skeletons P04 | 8 | 2 tasks | 4 files |
+| Phase 45-daemon-api-foundation P01 | 18 | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,8 @@ Recent decisions affecting current work:
 - [Phase 43]: GetP2pPeersSnapshot uses both PeerDirectoryPort AND PairedDeviceRepositoryPort - cross-port aggregation in app layer
 - [Phase 43]: P2pPeerSnapshot preserves pairing_state and identity_fingerprint for CLI output compatibility
 - [Phase 43]: Aggregation logic extracted from Tauri commands into shared uc-app use case - GUI and CLI now share same business logic
+- [Phase 45]: Daemon auth uses a dedicated local token file with restricted permissions and runtime-injected connection info rather than URL/query-string auth
+- [Phase 45]: RuntimeState now stores daemon-owned worker snapshots so JSON-RPC and HTTP/WebSocket transports map from one internal runtime source
 
 ### Roadmap Evolution
 
@@ -117,6 +120,10 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 42 added: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
 - Phase 43 added: Unify GUI and CLI business flows to eliminate per-entrypoint feature adaptation
 - Phase 44 added: CLI Pairing and Sync Commands — add CLI commands for device pairing and manual sync
+- Phase 45 added: Daemon API Foundation — add local HTTP and WebSocket transport with read-only runtime queries
+- Phase 46 added: Daemon Pairing Host Migration — move pairing orchestrator, action loops, and network event handling out of Tauri
+- Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
+- Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
 
 ### Pending Todos
 
@@ -132,6 +139,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-19T07:30:00.000Z
-Stopped at: Completed 43-02-PLAN.md
+Last session: 2026-03-19T10:16:02Z
+Stopped at: Completed 45-01-PLAN.md
 Resume file: None

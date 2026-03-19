@@ -62,6 +62,11 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - **CLI-F03**: CLI transfer list/show commands
 - **CLI-F04**: CLI daemon start/stop commands with process management
 
+### Daemon API Foundation
+
+- [x] **PH45-01**: Daemon auth token and local connection metadata are persisted outside frontend storage and reusable by local daemon clients
+- [x] **PH45-02**: Daemon exposes read-only transport DTOs and query helpers for status, peers, paired devices, and pairing-session summaries without leaking secrets
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -99,14 +104,16 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | CLI-03      | 41    | Complete |
 | CLI-04      | 41    | Complete |
 | CLI-05      | 41    | Complete |
+| PH45-01     | 45    | Complete |
+| PH45-02     | 45    | Complete |
 
 **Coverage:**
 
-- v0.4.0 requirements: 23 total
-- Mapped to phases: 23
+- v0.4.0 requirements: 25 total
+- Mapped to phases: 25
 - Unmapped: 0 ✓
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-17 after roadmap creation_
+_Last updated: 2026-03-19 after Phase 45 Plan 01 execution_
