@@ -41,6 +41,7 @@ pub mod network_events;
 pub mod paired_device_repository;
 pub mod pairing_transport;
 pub mod peer_directory;
+pub mod realtime;
 pub mod security;
 pub mod settings;
 pub mod setup;
