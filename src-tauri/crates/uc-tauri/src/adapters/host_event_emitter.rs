@@ -1667,7 +1667,10 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         app.handle()
-            .listen("setup-state-changed", move |event: tauri::Event| {
+            .listen(FRONTEND_REALTIME_EVENT, move |event: tauri::Event| {
+                if !event.payload().contains("\"type\":\"setup.stateChanged\"") {
+                    return;
+                }
                 let _ = tx.try_send(event.payload().to_string());
             });
 
@@ -1687,15 +1690,11 @@ mod tests {
         let payload = rx.recv().await.expect("event payload");
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
-        // state must be a JSON object (not a plain string)
-        assert!(
-            json["state"].is_object(),
-            "state field must be a JSON object, got: {:?}",
-            json["state"]
-        );
-        // sessionId must be camelCase
-        assert_eq!(json["sessionId"], "session-setup-1");
-        assert!(json.get("session_id").is_none());
+        assert_eq!(json["topic"], "setup");
+        assert_eq!(json["type"], "setup.stateChanged");
+        assert!(json["payload"]["state"].is_object());
+        assert_eq!(json["payload"]["sessionId"], "session-setup-1");
+        assert!(json["payload"].get("session_id").is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -1710,7 +1709,13 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         app.handle()
-            .listen("space-access-completed", move |event: tauri::Event| {
+            .listen(FRONTEND_REALTIME_EVENT, move |event: tauri::Event| {
+                if !event
+                    .payload()
+                    .contains("\"type\":\"setup.spaceAccessCompleted\"")
+                {
+                    return;
+                }
                 let _ = tx.try_send(event.payload().to_string());
             });
 
@@ -1728,21 +1733,16 @@ mod tests {
         let payload = rx.recv().await.expect("event payload");
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
-        assert_eq!(json["sessionId"], "sa-session-1");
-        // peerId MUST be a string value (non-null) — preserves existing wire contract
-        assert!(
-            json["peerId"].is_string(),
-            "peerId must be a string, got: {:?}",
-            json["peerId"]
-        );
-        assert_eq!(json["peerId"], "peer-xyz");
-        assert_eq!(json["success"], true);
+        assert_eq!(json["topic"], "setup");
+        assert_eq!(json["type"], "setup.spaceAccessCompleted");
+        assert_eq!(json["payload"]["sessionId"], "sa-session-1");
+        assert!(json["payload"]["peerId"].is_string());
+        assert_eq!(json["payload"]["peerId"], "peer-xyz");
+        assert_eq!(json["payload"]["success"], true);
         assert_eq!(json["ts"], 1_700_000_000_i64);
-        // reason is None — should be absent (skip_serializing_if)
-        assert!(json.get("reason").is_none());
-        // snake_case must be absent
-        assert!(json.get("session_id").is_none());
-        assert!(json.get("peer_id").is_none());
+        assert!(json["payload"].get("reason").is_none());
+        assert!(json["payload"].get("session_id").is_none());
+        assert!(json["payload"].get("peer_id").is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -1757,7 +1757,13 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         app.handle()
-            .listen("p2p-space-access-completed", move |event: tauri::Event| {
+            .listen(FRONTEND_REALTIME_EVENT, move |event: tauri::Event| {
+                if !event
+                    .payload()
+                    .contains("\"type\":\"setup.spaceAccessCompleted\"")
+                {
+                    return;
+                }
                 let _ = tx.try_send(event.payload().to_string());
             });
 
@@ -1775,9 +1781,11 @@ mod tests {
         let payload = rx.recv().await.expect("event payload");
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
-        assert_eq!(json["sessionId"], "sa-p2p-1");
-        assert_eq!(json["peerId"], "peer-p2p");
-        assert_eq!(json["success"], false);
-        assert_eq!(json["reason"], "peer rejected");
+        assert_eq!(json["topic"], "setup");
+        assert_eq!(json["type"], "setup.spaceAccessCompleted");
+        assert_eq!(json["payload"]["sessionId"], "sa-p2p-1");
+        assert_eq!(json["payload"]["peerId"], "peer-p2p");
+        assert_eq!(json["payload"]["success"], false);
+        assert_eq!(json["payload"]["reason"], "peer rejected");
     }
 }
