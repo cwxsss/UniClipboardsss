@@ -8,8 +8,10 @@ pub mod config_resolution;
 pub mod file_transfer_wiring;
 pub mod init;
 pub mod logging;
+pub mod pairing_bridge;
 pub mod run;
 pub mod runtime;
+pub mod setup_pairing_bridge;
 pub mod task_registry;
 pub mod tracing;
 pub mod wiring;
@@ -20,8 +22,12 @@ pub use clipboard_integration_mode::resolve_clipboard_integration_mode;
 pub use config::load_config;
 pub use config_resolution::{resolve_app_config, resolve_config_path, ConfigResolutionError};
 pub use init::ensure_default_device_name;
+pub use pairing_bridge::PairingBridge;
 pub use run::{bootstrap_daemon_connection, emit_daemon_connection_info_if_ready};
 pub use runtime::{create_app, create_runtime, AppRuntime, AppUseCases, DaemonConnectionState};
+pub use setup_pairing_bridge::{
+    build_setup_pairing_facade, DaemonBackedSetupPairingFacade, SetupPairingFacadePort,
+};
 // assembly.rs re-exports (pure dependency construction — zero tauri imports)
 pub use assembly::{
     build_setup_orchestrator, get_storage_paths, resolve_pairing_config,

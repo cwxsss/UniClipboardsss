@@ -551,6 +551,10 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             app.manage(PendingUpdate(Mutex::new(None)));
 
+            // Create pairing bridge for daemon event subscription (None - will be set up after app handle is available)
+            // Note: The actual bridge will be created in the async startup block below where app.handle() is available.
+            let pairing_bridge = None;
+
             // Start background spooler and blob worker tasks
             start_background_tasks(
                 background,
@@ -562,6 +566,7 @@ fn run_app(ctx: GuiBootstrapContext) {
                 space_access_orchestrator.clone(),
                 key_slot_store.clone(),
                 runtime_for_handler.task_registry(),
+                pairing_bridge,
             );
 
             // Clone handles for async blocks
