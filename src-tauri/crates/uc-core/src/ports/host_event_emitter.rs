@@ -14,6 +14,7 @@
 //! - Emit failures are best-effort: callers log the error and continue.
 //! - [`TransferProgress`] is reused from [`crate::ports::transfer_progress`].
 
+use crate::ports::realtime::RealtimeFrontendEvent;
 use crate::ports::transfer_progress::TransferProgress;
 use crate::setup::SetupState;
 
@@ -250,6 +251,7 @@ pub enum HostEvent {
     PeerConnection(PeerConnectionHostEvent),
     Transfer(TransferHostEvent),
     Pairing(PairingHostEvent),
+    Realtime(RealtimeFrontendEvent),
     Setup(SetupHostEvent),
     SpaceAccess(SpaceAccessHostEvent),
 }

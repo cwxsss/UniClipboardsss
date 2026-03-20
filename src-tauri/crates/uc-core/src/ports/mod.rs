@@ -85,6 +85,13 @@ pub use network_events::NetworkEventPort;
 pub use paired_device_repository::PairedDeviceRepositoryPort;
 pub use pairing_transport::PairingTransportPort;
 pub use peer_directory::PeerDirectoryPort;
+pub use realtime::{
+    PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
+    PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
+    PeerNameUpdatedEvent, RealtimeEvent, RealtimeFrontendEvent, RealtimeFrontendPayload,
+    RealtimePairedDeviceSummary, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
+    FRONTEND_REALTIME_EVENT,
+};
 pub use security::encryption::EncryptionPort;
 pub use security::encryption_session::EncryptionSessionPort;
 pub use security::key_material::KeyMaterialPort;

@@ -8,32 +8,104 @@ pub enum RealtimeTopic {
     PairedDevices,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PlaceholderPayload;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingUpdatedEvent {
+    pub session_id: String,
+    pub status: String,
+    pub peer_id: Option<String>,
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingVerificationRequiredEvent {
+    pub session_id: String,
+    pub peer_id: Option<String>,
+    pub device_name: Option<String>,
+    pub code: Option<String>,
+    pub local_fingerprint: Option<String>,
+    pub peer_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingFailedEvent {
+    pub session_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingCompleteEvent {
+    pub session_id: String,
+    pub peer_id: Option<String>,
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RealtimePeerSummary {
+    pub peer_id: String,
+    pub device_name: Option<String>,
+    pub connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerChangedEvent {
+    pub peers: Vec<RealtimePeerSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerNameUpdatedEvent {
+    pub peer_id: String,
+    pub device_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerConnectionChangedEvent {
+    pub peer_id: String,
+    pub connected: bool,
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RealtimePairedDeviceSummary {
+    pub device_id: String,
+    pub device_name: String,
+    pub last_seen_ts: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairedDevicesChangedEvent {
+    pub devices: Vec<RealtimePairedDeviceSummary>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RealtimeEvent {
-    PairingUpdated(PlaceholderPayload),
-    PairingVerificationRequired(PlaceholderPayload),
-    PairingFailed(PlaceholderPayload),
-    PairingComplete(PlaceholderPayload),
-    PeersChanged(PlaceholderPayload),
-    PeersNameUpdated(PlaceholderPayload),
-    PeersConnectionChanged(PlaceholderPayload),
-    PairedDevicesChanged(PlaceholderPayload),
+    PairingUpdated(PairingUpdatedEvent),
+    PairingVerificationRequired(PairingVerificationRequiredEvent),
+    PairingFailed(PairingFailedEvent),
+    PairingComplete(PairingCompleteEvent),
+    PeersChanged(PeerChangedEvent),
+    PeersNameUpdated(PeerNameUpdatedEvent),
+    PeersConnectionChanged(PeerConnectionChangedEvent),
+    PairedDevicesChanged(PairedDevicesChangedEvent),
 }
 
-pub const FRONTEND_REALTIME_EVENT: &str = "daemon://stub";
+pub const FRONTEND_REALTIME_EVENT: &str = "daemon://realtime";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RealtimeFrontendPayload {
-    Placeholder(PlaceholderPayload),
+    PairingUpdated(PairingUpdatedEvent),
+    PairingVerificationRequired(PairingVerificationRequiredEvent),
+    PairingFailed(PairingFailedEvent),
+    PairingComplete(PairingCompleteEvent),
+    PeersChanged(PeerChangedEvent),
+    PeersNameUpdated(PeerNameUpdatedEvent),
+    PeersConnectionChanged(PeerConnectionChangedEvent),
+    PairedDevicesChanged(PairedDevicesChangedEvent),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RealtimeFrontendEvent {
     pub topic: RealtimeTopic,
-    pub event_type: &'static str,
+    pub r#type: &'static str,
     pub ts: i64,
     pub payload: RealtimeFrontendPayload,
 }
@@ -47,14 +119,14 @@ impl RealtimeFrontendEvent {
     ) -> Self {
         Self {
             topic,
-            event_type,
+            r#type: event_type,
             ts,
             payload,
         }
     }
 
     pub fn event_type(&self) -> &'static str {
-        self.event_type
+        self.r#type
     }
 }
 
