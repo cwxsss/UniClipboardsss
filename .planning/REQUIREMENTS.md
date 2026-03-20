@@ -69,6 +69,19 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH45-05**: CLI status and paired-device reads use a shared daemon HTTP client and preserve stable exit semantics for unreachable daemon scenarios
 - [x] **PH45-06**: Tauri shell can probe or start the daemon, keep connection info in memory, and emit runtime-only connection metadata without persisting the bearer token in frontend storage
 
+### Daemon Pairing Host Migration
+
+- [x] **PH46-01**: daemon owns pairing orchestrator/session lifecycle
+- [x] **PH46-01A**: discoverability and participant readiness are separately controlled
+- [x] **PH46-01B**: headless/CLI daemon remains non-discoverable until explicit opt-in
+- [x] **PH46-02**: pairing action execution/event handling run daemon-side and survive Tauri/webview disconnects
+- [x] **PH46-03**: daemon exposes pairing mutation surface (initiate/accept/reject/cancel/verify) with sessionId follow-up semantics
+- [x] **PH46-03A**: discoverability/readiness mutation APIs support explicit lease semantics
+- [x] **PH46-04**: read models remain metadata-only; verification secrets remain authenticated realtime-only
+- [x] **PH46-05**: Tauri remains a compatibility bridge that forwards daemon pairing/peer updates into existing frontend event contract
+- [x] **PH46-05A**: GUI-hosted daemon is discoverable by default while readiness stays flow-scoped
+- [x] **PH46-06**: regression tests validate daemon continuity and setup compatibility
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -110,6 +123,16 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH45-02     | 45    | Complete |
 | PH45-05     | 45    | Complete |
 | PH45-06     | 45    | Complete |
+| PH46-01     | 46    | Complete |
+| PH46-01A    | 46    | Complete |
+| PH46-01B    | 46    | Complete |
+| PH46-02     | 46    | Complete |
+| PH46-03     | 46    | Complete |
+| PH46-03A    | 46    | Complete |
+| PH46-04     | 46    | Complete |
+| PH46-05     | 46    | Complete |
+| PH46-05A    | 46    | Complete |
+| PH46-06     | 46    | Complete |
 
 **Coverage:**
 
