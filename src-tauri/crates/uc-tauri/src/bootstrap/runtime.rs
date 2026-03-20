@@ -840,7 +840,10 @@ mod tests {
     };
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::PeerId;
-    use uc_core::{Blob, BlobId, ClipboardChangeOrigin, ContentHash, DeviceId};
+    use uc_core::{
+        Blob, BlobId, ClipboardChangeOrigin, ContentHash, DeviceId,
+        PersistedClipboardRepresentation,
+    };
     use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
     use uc_platform::ports::{AutostartPort, UiPort, WatcherControlError, WatcherControlPort};
 
@@ -1122,6 +1125,16 @@ mod tests {
             _last_error: Option<&str>,
         ) -> anyhow::Result<uc_core::ports::clipboard::ProcessingUpdateOutcome> {
             Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
+        }
+    }
+
+    #[async_trait]
+    impl ClipboardPayloadResolverPort for NoopPort {
+        async fn resolve(
+            &self,
+            _representation: &PersistedClipboardRepresentation,
+        ) -> anyhow::Result<ResolvedClipboardPayload> {
+            Err(anyhow::anyhow!("noop payload resolver"))
         }
     }
 
@@ -1725,6 +1738,7 @@ mod tests {
                 }),
                 worker_tx,
                 clipboard_change_origin: origin_port,
+                payload_resolver: Arc::new(NoopPort),
             },
             security: uc_app::SecurityPorts {
                 encryption: Arc::new(NoopPort),
@@ -1822,6 +1836,7 @@ mod tests {
                 }),
                 worker_tx,
                 clipboard_change_origin: origin_port,
+                payload_resolver: Arc::new(NoopPort),
             },
             security: uc_app::SecurityPorts {
                 encryption: Arc::new(NoopPort),
@@ -1922,6 +1937,7 @@ mod tests {
                 }),
                 worker_tx: mpsc::channel(1).0,
                 clipboard_change_origin: Arc::new(InMemoryClipboardChangeOrigin::new()),
+                payload_resolver: Arc::new(NoopPort),
             },
             security: uc_app::SecurityPorts {
                 encryption: Arc::new(NoopPort),
