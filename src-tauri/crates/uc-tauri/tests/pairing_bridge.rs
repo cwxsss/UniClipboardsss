@@ -87,28 +87,57 @@ fn test_bridge_reports_lease_loss_without_dropping_active_session() {
 }
 
 #[test]
-fn test_bridge_feeds_setup_with_setup_pairing_facade() {
-    // Verify that the setup pairing facade is available
-    // The facade provides:
-    // - subscribe() for domain events
-    // - initiate_pairing()
-    // - accept_pairing()
-    // - reject_pairing()
+fn bridge_feeds_setup_with_setup_pairing_facade() {
+    fn assert_setup_pairing_facade<T: uc_app::usecases::setup::SetupPairingFacadePort>() {}
+
     use uc_tauri::bootstrap::setup_pairing_bridge::DaemonBackedSetupPairingFacade;
     use uc_tauri::bootstrap::DaemonConnectionState;
 
-    // Verify the facade type exists
+    assert_setup_pairing_facade::<DaemonBackedSetupPairingFacade>();
     let _facade: DaemonBackedSetupPairingFacade =
         DaemonBackedSetupPairingFacade::new(DaemonConnectionState::default());
 }
 
 #[test]
-fn test_bridge_keeps_setup_flow_semantics() {
-    // Verify setup flow semantics are preserved:
-    // - Setup receives verification/failure/keyslot events
-    // - Setup does not depend on frontend event listeners
-    // - Daemon-authenticated realtime pairing updates are mapped
+fn bridge_keeps_setup_flow_semantics() {
+    let verification = serde_json::json!({
+        "topic": "pairing",
+        "type": "pairing.verification_required",
+        "sessionId": "session-1",
+        "ts": 1,
+        "payload": {
+            "sessionId": "session-1",
+            "peerId": "peer-1",
+            "deviceName": "Phone",
+            "code": "123456",
+            "localFingerprint": "local-fp",
+            "peerFingerprint": "peer-fp"
+        }
+    });
+    let failed = serde_json::json!({
+        "topic": "pairing",
+        "type": "pairing.failed",
+        "sessionId": "session-1",
+        "ts": 2,
+        "payload": {
+            "sessionId": "session-1",
+            "peerId": "peer-1",
+            "error": "pairing failed"
+        }
+    });
 
-    // The setup facade should provide the necessary methods
-    // Trait verification through compilation is sufficient for this test
+    let verification_event =
+        serde_json::from_value::<uc_daemon::api::types::DaemonWsEvent>(verification)
+            .expect("verification event should parse");
+    assert_eq!(
+        verification_event.event_type,
+        "pairing.verification_required"
+    );
+    assert_eq!(verification_event.payload["code"], "123456");
+    assert_eq!(verification_event.payload["peerFingerprint"], "peer-fp");
+
+    let failed_event = serde_json::from_value::<uc_daemon::api::types::DaemonWsEvent>(failed)
+        .expect("failed event should parse");
+    assert_eq!(failed_event.event_type, "pairing.failed");
+    assert_eq!(failed_event.payload["error"], "pairing failed");
 }

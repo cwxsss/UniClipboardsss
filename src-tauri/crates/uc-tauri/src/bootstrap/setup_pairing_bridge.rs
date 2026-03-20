@@ -6,38 +6,17 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
-use tracing::error;
+use anyhow::{Context, Result};
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::{http::Request, Message};
+use tracing::{debug, error, warn};
 
 use crate::bootstrap::DaemonConnectionState;
 use crate::daemon_client::TauriDaemonPairingClient;
-
-/// Port trait for setup pairing facade operations.
-///
-/// This trait defines the interface needed by the setup flow for pairing operations.
-#[async_trait::async_trait]
-pub trait SetupPairingFacadePort: Send + Sync {
-    /// Subscribe to pairing domain events.
-    /// Returns a channel receiver for receiving pairing events.
-    async fn subscribe(
-        &self,
-    ) -> Result<tokio::sync::mpsc::Receiver<uc_app::usecases::pairing::PairingDomainEvent>>;
-
-    /// Initiate pairing with a peer.
-    async fn initiate_pairing(&self, peer_id: String) -> Result<String>;
-
-    /// Accept an incoming pairing request.
-    async fn accept_pairing(&self, session_id: &str) -> Result<()>;
-
-    /// Reject an incoming pairing request.
-    async fn reject_pairing(&self, session_id: &str) -> Result<()>;
-
-    /// Cancel an active pairing session.
-    async fn cancel_pairing(&self, session_id: &str) -> Result<()>;
-
-    /// Verify pairing PIN.
-    async fn verify_pairing(&self, session_id: &str, pin_matches: bool) -> Result<()>;
-}
+use uc_app::usecases::pairing::PairingDomainEvent;
+use uc_app::usecases::setup::SetupPairingFacadePort;
+use uc_core::network::pairing_state_machine::FailureReason;
 
 /// Daemon-backed setup pairing facade.
 ///
@@ -65,13 +44,52 @@ impl DaemonBackedSetupPairingFacade {
     /// Subscribe to pairing domain events from the daemon.
     ///
     /// Returns a receiver channel for receiving pairing events.
-    /// Note: This is a placeholder - full implementation would connect to daemon WebSocket.
-    pub async fn subscribe(
-        &self,
-    ) -> Result<tokio::sync::mpsc::Receiver<uc_app::usecases::pairing::PairingDomainEvent>> {
-        // For now, we return a disconnected channel. Full implementation would
-        // connect to the daemon WebSocket and translate events.
-        let (_tx, rx) = tokio::sync::mpsc::channel(32);
+    pub async fn subscribe(&self) -> Result<mpsc::Receiver<PairingDomainEvent>> {
+        let connection = self
+            .connection_state
+            .get()
+            .context("daemon connection not available for setup pairing subscription")?;
+        let request = Request::builder()
+            .uri(connection.ws_url)
+            .header("Authorization", format!("Bearer {}", connection.token))
+            .body(())?;
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .context("failed to connect setup pairing websocket")?;
+        let (mut write, mut read) = ws_stream.split();
+        let subscribe_request = serde_json::json!({
+            "action": "subscribe",
+            "topics": ["pairing"]
+        });
+
+        write
+            .send(Message::Text(subscribe_request.to_string().into()))
+            .await
+            .context("failed to subscribe to pairing websocket topic")?;
+
+        let (tx, rx) = mpsc::channel(32);
+        tokio::spawn(async move {
+            while let Some(message) = read.next().await {
+                match message {
+                    Ok(Message::Text(text)) => {
+                        if let Some(event) = map_daemon_ws_event(&text) {
+                            if tx.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok(Message::Close(_)) => break,
+                    Ok(_) => {}
+                    Err(err) => {
+                        warn!(error = %err, "setup pairing websocket receive failed");
+                        break;
+                    }
+                }
+            }
+            debug!("setup pairing websocket listener stopped");
+        });
+
         Ok(rx)
     }
 
@@ -160,9 +178,7 @@ impl Drop for DaemonBackedSetupPairingFacade {
 
 #[async_trait::async_trait]
 impl SetupPairingFacadePort for DaemonBackedSetupPairingFacade {
-    async fn subscribe(
-        &self,
-    ) -> Result<tokio::sync::mpsc::Receiver<uc_app::usecases::pairing::PairingDomainEvent>> {
+    async fn subscribe(&self) -> Result<mpsc::Receiver<PairingDomainEvent>> {
         self.subscribe().await
     }
 
@@ -192,4 +208,67 @@ pub fn build_setup_pairing_facade(
     connection_state: DaemonConnectionState,
 ) -> Arc<dyn SetupPairingFacadePort> {
     Arc::new(DaemonBackedSetupPairingFacade::new(connection_state))
+}
+
+fn map_daemon_ws_event(text: &str) -> Option<PairingDomainEvent> {
+    let event: uc_daemon::api::types::DaemonWsEvent = match serde_json::from_str(text) {
+        Ok(event) => event,
+        Err(err) => {
+            warn!(error = %err, "failed to parse setup pairing websocket event");
+            return None;
+        }
+    };
+
+    match event.event_type.as_str() {
+        "pairing.verification_required" => {
+            let payload: uc_daemon::api::types::PairingVerificationPayload =
+                match serde_json::from_value(event.payload) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warn!(error = %err, "failed to decode pairing verification payload");
+                        return None;
+                    }
+                };
+
+            Some(PairingDomainEvent::PairingVerificationRequired {
+                session_id: payload.session_id,
+                peer_id: payload.peer_id,
+                short_code: payload.code,
+                local_fingerprint: payload.local_fingerprint,
+                peer_fingerprint: payload.peer_fingerprint,
+            })
+        }
+        "pairing.complete" => {
+            let payload: uc_daemon::api::types::PairingSessionChangedPayload =
+                match serde_json::from_value(event.payload) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warn!(error = %err, "failed to decode pairing complete payload");
+                        return None;
+                    }
+                };
+
+            Some(PairingDomainEvent::PairingSucceeded {
+                session_id: payload.session_id,
+                peer_id: payload.peer_id.unwrap_or_default(),
+            })
+        }
+        "pairing.failed" => {
+            let payload: uc_daemon::api::types::PairingFailurePayload =
+                match serde_json::from_value(event.payload) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warn!(error = %err, "failed to decode pairing failed payload");
+                        return None;
+                    }
+                };
+
+            Some(PairingDomainEvent::PairingFailed {
+                session_id: payload.session_id,
+                peer_id: payload.peer_id.unwrap_or_default(),
+                reason: FailureReason::Other(payload.error),
+            })
+        }
+        _ => None,
+    }
 }
