@@ -49,6 +49,9 @@ impl HostEventEmitterPort for LoggingHostEventEmitter {
             HostEvent::Pairing(_) => {
                 tracing::debug!(event_type = "pairing", "host event (non-gui)");
             }
+            HostEvent::Realtime(_) => {
+                tracing::debug!(event_type = "realtime", "host event (non-gui)");
+            }
             HostEvent::Setup(_) => {
                 tracing::debug!(event_type = "setup", "host event (non-gui)");
             }
@@ -173,6 +176,9 @@ pub fn build_cli_runtime(
 mod tests {
     use super::*;
     use uc_core::ports::host_event_emitter::*;
+    use uc_core::ports::realtime::{
+        PeerChangedEvent, RealtimeFrontendEvent, RealtimeFrontendPayload, RealtimeTopic,
+    };
     use uc_core::ports::transfer_progress::{TransferDirection, TransferProgress};
     use uc_core::setup::SetupState;
 
@@ -214,6 +220,12 @@ mod tests {
                 peer_fingerprint: None,
                 error: None,
             }),
+            HostEvent::Realtime(RealtimeFrontendEvent::new(
+                RealtimeTopic::Peers,
+                "peers.changed",
+                0,
+                RealtimeFrontendPayload::PeersChanged(PeerChangedEvent { peers: vec![] }),
+            )),
             HostEvent::Setup(SetupHostEvent::StateChanged {
                 state: SetupState::Welcome,
                 session_id: None,
