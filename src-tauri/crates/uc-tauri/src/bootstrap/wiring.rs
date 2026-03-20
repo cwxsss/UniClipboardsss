@@ -4121,7 +4121,13 @@ mod tests {
         let app_handle = app.handle();
         let (payload_tx, mut payload_rx) = mpsc::channel::<String>(1);
         let payload_tx_clone = payload_tx.clone();
-        app_handle.listen("space-access-completed", move |event: tauri::Event| {
+        app_handle.listen("daemon://realtime", move |event: tauri::Event| {
+            if !event
+                .payload()
+                .contains("\"type\":\"setup.spaceAccessCompleted\"")
+            {
+                return;
+            }
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
@@ -4147,13 +4153,15 @@ mod tests {
             .expect("timeout waiting for payload")
             .expect("payload received");
         let value: serde_json::Value = serde_json::from_str(&payload).expect("payload json");
-        assert_eq!(value["sessionId"], "session-space-1");
-        assert_eq!(value["peerId"], "peer-space-1");
-        assert_eq!(value["success"], false);
-        assert_eq!(value["reason"], "timeout");
+        assert_eq!(value["topic"], "setup");
+        assert_eq!(value["type"], "setup.spaceAccessCompleted");
+        assert_eq!(value["payload"]["sessionId"], "session-space-1");
+        assert_eq!(value["payload"]["peerId"], "peer-space-1");
+        assert_eq!(value["payload"]["success"], false);
+        assert_eq!(value["payload"]["reason"], "timeout");
         assert_eq!(value["ts"], 1735689600000_i64);
-        assert!(value.get("session_id").is_none());
-        assert!(value.get("peer_id").is_none());
+        assert!(value["payload"].get("session_id").is_none());
+        assert!(value["payload"].get("peer_id").is_none());
 
         drop(event_tx);
         let _ = tokio::time::timeout(Duration::from_secs(1), loop_handle).await;
@@ -4165,7 +4173,13 @@ mod tests {
         let app_handle = app.handle();
         let (payload_tx, mut payload_rx) = mpsc::channel::<String>(1);
         let payload_tx_clone = payload_tx.clone();
-        app_handle.listen("p2p-space-access-completed", move |event: tauri::Event| {
+        app_handle.listen("daemon://realtime", move |event: tauri::Event| {
+            if !event
+                .payload()
+                .contains("\"type\":\"setup.spaceAccessCompleted\"")
+            {
+                return;
+            }
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
@@ -4191,10 +4205,12 @@ mod tests {
             .expect("timeout waiting for payload")
             .expect("payload received");
         let value: serde_json::Value = serde_json::from_str(&payload).expect("payload json");
-        assert_eq!(value["sessionId"], "session-space-p2p");
-        assert_eq!(value["peerId"], "peer-space-p2p");
-        assert_eq!(value["success"], true);
-        assert_eq!(value["reason"], serde_json::Value::Null);
+        assert_eq!(value["topic"], "setup");
+        assert_eq!(value["type"], "setup.spaceAccessCompleted");
+        assert_eq!(value["payload"]["sessionId"], "session-space-p2p");
+        assert_eq!(value["payload"]["peerId"], "peer-space-p2p");
+        assert_eq!(value["payload"]["success"], true);
+        assert_eq!(value["payload"]["reason"], serde_json::Value::Null);
         assert_eq!(value["ts"], 1735689600999_i64);
 
         drop(event_tx);
