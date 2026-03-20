@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 46-06-PLAN.md
-last_updated: '2026-03-20T05:07:52.500Z'
+stopped_at: Completed 46.1-01-PLAN.md
+last_updated: '2026-03-20T09:40:15.796Z'
 progress:
-  total_phases: 13
+  total_phases: 14
   completed_phases: 9
-  total_plans: 31
-  completed_plans: 30
+  total_plans: 36
+  completed_plans: 31
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46 — daemon-pairing-host-migration-move-pairing-orchestrator-action-loops-and-network-event-handling-out-of-tauri
+**Current focus:** Phase 46.1 — unify-realtime-subscriptions-on-single-daemonwsbridge
 
 ## Current Position
 
-Phase: 46 (daemon-pairing-host-migration-move-pairing-orchestrator-action-loops-and-network-event-handling-out-of-tauri) — COMPLETE
-Plan: 6 of 6
+Phase: 46.1 (unify-realtime-subscriptions-on-single-daemonwsbridge) — EXECUTING
+Plan: 2 of 5
 
 ## Performance Metrics
 
@@ -68,6 +68,7 @@ _Updated after each plan completion_
 | Phase 46 P4 | 11 | 1 tasks | 6 files |
 | Phase 46 P05 | 13 | 2 tasks | 8 files |
 | Phase 46 P06 | 2 min | 2 tasks | 3 files |
+| Phase 46.1 P01 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -134,6 +135,8 @@ Recent decisions affecting current work:
 - [Phase 46]: Bridge payload translation stays locked to the existing frontend event contract, including code/localFingerprint/deviceName fields and peer discovery delta payloads.
 - [Phase 46]: Use broadcast::channel::<DaemonWsEvent>(128) in daemon regression fixtures so DaemonPairingHost::new signature stays aligned without runtime behavior changes.
 - [Phase 46]: Define PH46-01..PH46-06 explicitly in REQUIREMENTS.md and map each ID to phase 46 for audit traceability.
+- [Phase 46.1]: RealtimeFrontendEvent preserves the frontend wire key name type via a raw identifier and accessor in uc-core.
+- [Phase 46.1]: HostEvent adds Realtime(RealtimeFrontendEvent) while keeping legacy domain variants until the Phase 46.1 frontend cutover completes.
 
 ### Roadmap Evolution
 
@@ -145,6 +148,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 44 added: CLI Pairing and Sync Commands — add CLI commands for device pairing and manual sync
 - Phase 45 added: Daemon API Foundation — add local HTTP and WebSocket transport with read-only runtime queries
 - Phase 46 added: Daemon Pairing Host Migration — move pairing orchestrator, action loops, and network event handling out of Tauri
+- Phase 46.1 inserted after Phase 46: Unify realtime subscriptions on single DaemonWsBridge (URGENT)
 - Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 - Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
 
@@ -162,6 +166,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T05:07:52.495Z
-Stopped at: Completed 46-06-PLAN.md
+Last session: 2026-03-20T09:40:15.793Z
+Stopped at: Completed 46.1-01-PLAN.md
 Resume file: None

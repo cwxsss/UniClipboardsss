@@ -82,6 +82,15 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH46-05A**: GUI-hosted daemon is discoverable by default while readiness stays flow-scoped
 - [x] **PH46-06**: regression tests validate daemon continuity and setup compatibility
 
+### Unified Realtime Subscriptions On Single DaemonWsBridge
+
+- [ ] **PH461-01**: one authenticated daemon websocket exists per Tauri runtime and is owned only by DaemonWsBridge
+- [x] **PH461-02**: uc-core exposes RealtimeTopicPort and typed RealtimeEvent/RealtimeFrontendEvent contracts without daemon transport DTO dependencies
+- [ ] **PH461-03**: uc-app owns topic consumers for pairing, peers, and setup without consumer-managed websocket lifecycle
+- [ ] **PH461-04**: frontend cuts over in one pass to a single daemon://realtime contract with camelCase payloads and stable ordering
+- [ ] **PH461-05**: reconnect, resubscribe, and bounded backpressure behavior are centralized and regression-tested
+- [ ] **PH461-06**: legacy PairingBridge, setup websocket subscription path, and p2p-\* realtime listeners/emissions are deleted without compatibility flags
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -133,14 +142,20 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH46-05     | 46    | Complete |
 | PH46-05A    | 46    | Complete |
 | PH46-06     | 46    | Complete |
+| PH461-01    | 46.1  | Pending  |
+| PH461-02    | 46.1  | Complete |
+| PH461-03    | 46.1  | Pending  |
+| PH461-04    | 46.1  | Pending  |
+| PH461-05    | 46.1  | Pending  |
+| PH461-06    | 46.1  | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 27 total
-- Mapped to phases: 27
+- v0.4.0 requirements: 33 total
+- Mapped to phases: 33
 - Unmapped: 0 ✓
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-19 after Phase 45 Plan 03 execution_
+_Last updated: 2026-03-20 after Phase 46.1 Plan 01 execution_
