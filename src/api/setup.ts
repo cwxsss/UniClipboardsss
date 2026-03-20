@@ -1,4 +1,4 @@
-import { listen } from '@tauri-apps/api/event'
+import { onDaemonRealtimeEvent } from '@/api/realtime'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
 export type SetupError =
@@ -107,41 +107,41 @@ export async function cancelSetup(): Promise<SetupState> {
 export async function onSetupStateChanged(
   callback: (event: SetupStateChangedEvent) => void
 ): Promise<() => void> {
-  try {
-    let activeSessionId: string | null = null
-    const seenEventKeys = new Set<string>()
+  let activeSessionId: string | null = null
+  const seenEventKeys = new Set<string>()
 
-    const unlisten = await listen<SetupStateChangedEvent>('setup-state-changed', event => {
-      const payload = event.payload
-
-      if (!payload.sessionId) {
-        return
-      }
-
-      if (activeSessionId !== payload.sessionId) {
-        activeSessionId = payload.sessionId
-        seenEventKeys.clear()
-      }
-
-      const dedupeKey = `${payload.sessionId}:${JSON.stringify(payload.state)}:${payload.ts}`
-      if (seenEventKeys.has(dedupeKey)) {
-        return
-      }
-      seenEventKeys.add(dedupeKey)
-
-      callback(payload)
-
-      if (payload.state === 'Completed') {
-        activeSessionId = null
-        seenEventKeys.clear()
-      }
-    })
-
-    return () => {
-      unlisten()
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic !== 'setup' || event.type !== 'setup.stateChanged') {
+      return
     }
-  } catch (error) {
-    console.error('Failed to setup setup state changed listener:', error)
-    return () => {}
-  }
+
+    const payload = event.payload as Omit<SetupStateChangedEvent, 'ts' | 'source'>
+    const enrichedEvent: SetupStateChangedEvent = {
+      ...payload,
+      source: 'realtime',
+      ts: event.ts,
+    }
+
+    if (!enrichedEvent.sessionId) {
+      return
+    }
+
+    if (activeSessionId !== enrichedEvent.sessionId) {
+      activeSessionId = enrichedEvent.sessionId
+      seenEventKeys.clear()
+    }
+
+    const dedupeKey = `${enrichedEvent.sessionId}:${JSON.stringify(enrichedEvent.state)}:${enrichedEvent.ts}`
+    if (seenEventKeys.has(dedupeKey)) {
+      return
+    }
+    seenEventKeys.add(dedupeKey)
+
+    callback(enrichedEvent)
+
+    if (enrichedEvent.state === 'Completed') {
+      activeSessionId = null
+      seenEventKeys.clear()
+    }
+  })
 }

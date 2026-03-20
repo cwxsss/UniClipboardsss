@@ -562,13 +562,15 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
         // -----------------------------------------------------------------------
         // Setup events
         // -----------------------------------------------------------------------
-        HostEvent::Setup(SetupHostEvent::StateChanged { state, session_id }) => {
-            let payload = SetupStateChangedPayload { state, session_id };
-            (
-                "setup-state-changed",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
-        }
+        HostEvent::Setup(SetupHostEvent::StateChanged { state, session_id }) => (
+            FRONTEND_REALTIME_EVENT,
+            serde_json::json!({
+                "topic": "setup",
+                "type": "setup.stateChanged",
+                "ts": 0,
+                "payload": serde_json::to_value(SetupStateChangedPayload { state, session_id }).unwrap_or_default(),
+            }),
+        ),
 
         // -----------------------------------------------------------------------
         // SpaceAccess events
@@ -579,19 +581,21 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
             success,
             reason,
             ts,
-        }) => {
-            let payload = SpaceAccessCompletedPayload {
-                session_id,
-                peer_id,
-                success,
-                reason,
-                ts,
-            };
-            (
-                "space-access-completed",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
-        }
+        }) => (
+            FRONTEND_REALTIME_EVENT,
+            serde_json::json!({
+                "topic": "setup",
+                "type": "setup.spaceAccessCompleted",
+                "ts": ts,
+                "payload": serde_json::to_value(SpaceAccessCompletedPayload {
+                    session_id,
+                    peer_id,
+                    success,
+                    reason,
+                    ts,
+                }).unwrap_or_default(),
+            }),
+        ),
 
         HostEvent::SpaceAccess(SpaceAccessHostEvent::P2PCompleted {
             session_id,
@@ -599,19 +603,21 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
             success,
             reason,
             ts,
-        }) => {
-            let payload = SpaceAccessCompletedPayload {
-                session_id,
-                peer_id,
-                success,
-                reason,
-                ts,
-            };
-            (
-                "p2p-space-access-completed",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
-        }
+        }) => (
+            FRONTEND_REALTIME_EVENT,
+            serde_json::json!({
+                "topic": "setup",
+                "type": "setup.spaceAccessCompleted",
+                "ts": ts,
+                "payload": serde_json::to_value(SpaceAccessCompletedPayload {
+                    session_id,
+                    peer_id,
+                    success,
+                    reason,
+                    ts,
+                }).unwrap_or_default(),
+            }),
+        ),
     }
 }
 

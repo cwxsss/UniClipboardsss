@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  getP2PPeers,
-  onP2PPeerConnectionChanged,
-  onP2PPeerDiscoveryChanged,
-  onP2PPeerNameUpdated,
-} from '@/api/p2p'
+import { getP2PPeers } from '@/api/p2p'
+import { onDaemonRealtimeEvent } from '@/api/realtime'
 
 /**
  * Raw peer data from backend. deviceName is null when backend has not yet
@@ -106,56 +102,43 @@ export function useDeviceDiscovery(
     // Initial peer load
     void loadPeers()
 
-    // --- Event listener 1: peer discovery changes ---
-    const discoveryPromise = onP2PPeerDiscoveryChanged(event => {
-      if (cancelled) return
-      if (event.discovered) {
-        // Add or update peer (upsert by peerId)
+    const realtimePromise = onDaemonRealtimeEvent(event => {
+      if (cancelled || event.topic !== 'peers') return
+
+      if (event.type === 'peers.changed') {
+        const payload = event.payload as {
+          peers: Array<{
+            peerId: string
+            deviceName?: string | null
+            connected: boolean
+          }>
+        }
+
+        const nextPeers: DiscoveredPeer[] = payload.peers.map(peer => ({
+          id: peer.peerId,
+          deviceName: peer.deviceName ?? null,
+          device_type: 'desktop',
+        }))
+        setPeers(nextPeers)
+        setScanPhase(nextPeers.length > 0 ? 'hasDevices' : 'empty')
+        return
+      }
+
+      if (event.type === 'peers.nameUpdated') {
+        const payload = event.payload as { peerId: string; deviceName: string }
         setPeers(prev => {
-          const idx = prev.findIndex(p => p.id === event.peerId)
-          const updated: DiscoveredPeer = {
-            id: event.peerId,
-            deviceName: event.deviceName ?? null,
-            device_type: 'desktop',
-          }
-          if (idx >= 0) {
-            const next = [...prev]
-            next[idx] = updated
-            return next
-          }
-          return [...prev, updated]
-        })
-        setScanPhase('hasDevices')
-      } else {
-        // Remove peer by peerId; transition to empty if list becomes empty
-        setPeers(prev => {
-          const next = prev.filter(p => p.id !== event.peerId)
-          if (next.length === 0) {
-            setScanPhase('empty')
-          }
+          const idx = prev.findIndex(p => p.id === payload.peerId)
+          if (idx < 0) return prev
+          const next = [...prev]
+          next[idx] = { ...next[idx], deviceName: payload.deviceName }
           return next
         })
+        return
       }
-    })
 
-    // --- Event listener 2: peer name updated ---
-    const namePromise = onP2PPeerNameUpdated(event => {
-      if (cancelled) return
-      setPeers(prev => {
-        const idx = prev.findIndex(p => p.id === event.peerId)
-        if (idx < 0) return prev
-        const next = [...prev]
-        next[idx] = { ...next[idx], deviceName: event.deviceName }
-        return next
-      })
-      // No scanPhase change on name update
-    })
-
-    // --- Event listener 3: peer connection changed ---
-    // Per design: do NOT remove devices on disconnect -- silent update only
-    const connectionPromise = onP2PPeerConnectionChanged(_event => {
-      if (cancelled) return
-      // No state change needed for discovery list
+      if (event.type === 'peers.connectionChanged') {
+        // Discovery list stays stable; connection state is consumed elsewhere.
+      }
     })
 
     return () => {
@@ -167,9 +150,7 @@ export function useDeviceDiscovery(
         clearTimeout(timeoutRef.current)
         timeoutRef.current = null
       }
-      discoveryPromise.then(fn => fn())
-      namePromise.then(fn => fn())
-      connectionPromise.then(fn => fn())
+      realtimePromise.then(fn => fn())
     }
   }, [active, startTimeout, loadPeers])
 
