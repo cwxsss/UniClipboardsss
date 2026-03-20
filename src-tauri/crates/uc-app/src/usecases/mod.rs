@@ -54,7 +54,7 @@ pub use pairing::{
     LocalDeviceInfo, PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, SetPairingState,
     StagedPairedDeviceStore, UnpairDevice, UpdateDeviceSyncSettings,
 };
-pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator};
+pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator, SetupPairingFacadePort};
 pub use start_network::StartNetwork;
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
 pub use uc_core::ports::{StartClipboardWatcherError, StartClipboardWatcherPort};

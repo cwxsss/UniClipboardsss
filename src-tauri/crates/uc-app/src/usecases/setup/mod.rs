@@ -5,6 +5,8 @@ mod action_executor;
 mod context;
 mod mark_complete;
 pub mod orchestrator;
+mod pairing_facade;
 
 pub use mark_complete::MarkSetupComplete;
 pub use orchestrator::{SetupError, SetupOrchestrator};
+pub use pairing_facade::SetupPairingFacadePort;

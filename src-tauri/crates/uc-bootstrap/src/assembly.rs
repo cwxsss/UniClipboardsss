@@ -848,7 +848,7 @@ use tokio::sync::Mutex as TokioMutex;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{
     DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, PairingOrchestrator,
-    SessionReadyEmitter, SetupOrchestrator, StartClipboardWatcherPort,
+    SessionReadyEmitter, SetupOrchestrator, SetupPairingFacadePort, StartClipboardWatcherPort,
 };
 use uc_core::clipboard::ClipboardIntegrationMode;
 use uc_core::ports::space::SpaceAccessTransportPort;
@@ -864,7 +864,7 @@ use uc_core::ports::{DiscoveryPort, TimerPort};
 /// ensuring with_setup() can pass the SAME instance to both the orchestrator
 /// and AppRuntime/CoreRuntime.
 pub struct SetupAssemblyPorts {
-    pub pairing_orchestrator: Arc<PairingOrchestrator>,
+    pub setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
     pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     pub discovery_port: Arc<dyn DiscoveryPort>,
     pub device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
@@ -892,7 +892,7 @@ impl SetupAssemblyPorts {
             }
         }
         Self {
-            pairing_orchestrator,
+            setup_pairing_facade: pairing_orchestrator,
             space_access_orchestrator,
             discovery_port: Arc::new(NetworkDiscoveryPort { peers }),
             device_announcer,
@@ -907,7 +907,7 @@ impl SetupAssemblyPorts {
     /// and with_setup()-constructed adapters (session_ready_emitter) are NOT created
     /// here — they are created by AppRuntime::new() / with_setup() and passed
     /// separately to build_setup_orchestrator().
-    pub fn placeholder(deps: &uc_app::AppDeps) -> Self {
+    pub fn placeholder(_deps: &uc_app::AppDeps) -> Self {
         struct EmptyDiscoveryPort;
         #[async_trait::async_trait]
         impl DiscoveryPort for EmptyDiscoveryPort {
@@ -918,17 +918,48 @@ impl SetupAssemblyPorts {
             }
         }
 
-        let (orchestrator, _rx) = PairingOrchestrator::new(
-            uc_app::usecases::PairingConfig::default(),
-            deps.device.paired_device_repo.clone(),
-            "setup-placeholder-device".to_string(),
-            "setup-placeholder-device-id".to_string(),
-            "setup-placeholder-peer-id".to_string(),
-            vec![],
-            Arc::new(uc_app::usecases::StagedPairedDeviceStore::new()),
-        );
+        struct NoopSetupPairingFacade;
+
+        #[async_trait::async_trait]
+        impl SetupPairingFacadePort for NoopSetupPairingFacade {
+            async fn subscribe(
+                &self,
+            ) -> anyhow::Result<
+                tokio::sync::mpsc::Receiver<uc_app::usecases::pairing::PairingDomainEvent>,
+            > {
+                let (_tx, rx) = tokio::sync::mpsc::channel(1);
+                Ok(rx)
+            }
+
+            async fn initiate_pairing(&self, _peer_id: String) -> anyhow::Result<String> {
+                Err(anyhow::anyhow!(
+                    "setup pairing facade placeholder cannot initiate pairing"
+                ))
+            }
+
+            async fn accept_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn reject_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn cancel_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            async fn verify_pairing(
+                &self,
+                _session_id: &str,
+                _pin_matches: bool,
+            ) -> anyhow::Result<()> {
+                Ok(())
+            }
+        }
+
         Self {
-            pairing_orchestrator: Arc::new(orchestrator),
+            setup_pairing_facade: Arc::new(NoopSetupPairingFacade),
             space_access_orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
             discovery_port: Arc::new(EmptyDiscoveryPort),
             device_announcer: None,
@@ -1017,7 +1048,7 @@ pub fn build_setup_orchestrator(
         mark_setup_complete,
         deps.setup_status.clone(),
         app_lifecycle,
-        ports.pairing_orchestrator,
+        ports.setup_pairing_facade,
         setup_event_port,
         ports.space_access_orchestrator,
         ports.discovery_port,
@@ -1035,6 +1066,8 @@ pub fn build_setup_orchestrator(
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+    use tokio::sync::mpsc;
+    use uc_app::usecases::setup::SetupPairingFacadePort;
     use uc_core::ports::host_event_emitter::{EmitError, HostEvent};
     use uc_core::ports::SetupEventPort;
 
@@ -1054,6 +1087,42 @@ mod tests {
 
     impl HostEventEmitterPort for NoopEventEmitter {
         fn emit(&self, _event: HostEvent) -> Result<(), EmitError> {
+            Ok(())
+        }
+    }
+
+    struct RecordingSetupPairingFacade;
+
+    #[async_trait::async_trait]
+    impl SetupPairingFacadePort for RecordingSetupPairingFacade {
+        async fn subscribe(
+            &self,
+        ) -> anyhow::Result<mpsc::Receiver<uc_app::usecases::pairing::PairingDomainEvent>> {
+            let (_tx, rx) = mpsc::channel(1);
+            Ok(rx)
+        }
+
+        async fn initiate_pairing(&self, _peer_id: String) -> anyhow::Result<String> {
+            Ok("session-1".to_string())
+        }
+
+        async fn accept_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn reject_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn cancel_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn verify_pairing(
+            &self,
+            _session_id: &str,
+            _pin_matches: bool,
+        ) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -1094,5 +1163,29 @@ mod tests {
             "Event should contain Welcome state, got: {}",
             recorded[0]
         );
+    }
+
+    #[test]
+    fn setup_assembly_ports_accept_app_layer_pairing_facade() {
+        let ports = SetupAssemblyPorts {
+            setup_pairing_facade: Arc::new(RecordingSetupPairingFacade),
+            space_access_orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
+            discovery_port: Arc::new(EmptyDiscoveryPortForFacadeTest),
+            device_announcer: None,
+            lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
+        };
+
+        let _facade = ports.setup_pairing_facade.clone();
+    }
+
+    struct EmptyDiscoveryPortForFacadeTest;
+
+    #[async_trait::async_trait]
+    impl DiscoveryPort for EmptyDiscoveryPortForFacadeTest {
+        async fn list_discovered_peers(
+            &self,
+        ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>> {
+            Ok(Vec::new())
+        }
     }
 }

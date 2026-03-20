@@ -23,7 +23,7 @@ use uc_core::{
     setup::{SetupAction, SetupError as SetupDomainError, SetupEvent, SetupState},
 };
 
-use crate::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
+use crate::usecases::pairing::PairingDomainEvent;
 use crate::usecases::setup::context::SetupContext;
 use crate::usecases::setup::MarkSetupComplete;
 use crate::usecases::space_access::{
@@ -31,6 +31,7 @@ use crate::usecases::space_access::{
 };
 use crate::usecases::AppLifecycleCoordinator;
 use crate::usecases::InitializeEncryption;
+use crate::usecases::SetupPairingFacadePort;
 
 use super::orchestrator::SetupError;
 
@@ -63,7 +64,7 @@ pub struct SetupActionExecutor {
     pub(super) persistence_port: Arc<Mutex<dyn PersistencePort>>,
 
     // Collaborator orchestrators
-    pub(super) pairing_orchestrator: Arc<PairingOrchestrator>,
+    pub(super) setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
     pub(super) space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
 }
 
@@ -514,7 +515,7 @@ impl SetupActionExecutor {
         // path).  If we subscribed after the initiation we would miss those
         // first events and the setup state machine would stall forever in
         // `ProcessingJoinSpace`.
-        let event_rx = match self.pairing_orchestrator.subscribe().await {
+        let event_rx = match self.setup_pairing_facade.subscribe().await {
             Ok(rx) => rx,
             Err(err) => {
                 error!(
@@ -527,7 +528,7 @@ impl SetupActionExecutor {
         };
 
         let session_id = self
-            .pairing_orchestrator
+            .setup_pairing_facade
             .initiate_pairing(peer_id.clone())
             .await
             .map_err(|err| {
@@ -565,8 +566,8 @@ impl SetupActionExecutor {
             SetupError::PairingFailed
         })?;
 
-        self.pairing_orchestrator
-            .user_accept_pairing(&session_id)
+        self.setup_pairing_facade
+            .accept_pairing(&session_id)
             .await
             .map_err(|err| {
                 error!(error = %err, session_id = %session_id, "failed to accept pairing session");
@@ -593,11 +594,7 @@ impl SetupActionExecutor {
             guard.take()
         };
         if let Some(session_id) = session_id {
-            if let Err(err) = self
-                .pairing_orchestrator
-                .user_reject_pairing(&session_id)
-                .await
-            {
+            if let Err(err) = self.setup_pairing_facade.reject_pairing(&session_id).await {
                 warn!(error = %err, session_id = %session_id, "failed to reject pairing session");
             }
         }

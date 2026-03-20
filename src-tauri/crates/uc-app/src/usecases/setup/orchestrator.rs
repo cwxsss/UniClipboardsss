@@ -21,7 +21,6 @@ use uc_core::{
 };
 
 use crate::usecases::initialize_encryption::InitializeEncryptionError;
-use crate::usecases::pairing::PairingOrchestrator;
 use crate::usecases::setup::action_executor::SetupActionExecutor;
 use crate::usecases::setup::context::SetupContext;
 use crate::usecases::setup::MarkSetupComplete;
@@ -30,6 +29,7 @@ use crate::usecases::space_access::{
 };
 use crate::usecases::AppLifecycleCoordinator;
 use crate::usecases::InitializeEncryption;
+use crate::usecases::SetupPairingFacadePort;
 
 /// Errors produced by the setup orchestrator.
 #[derive(Debug, thiserror::Error)]
@@ -72,7 +72,7 @@ impl SetupOrchestrator {
         mark_setup_complete: Arc<MarkSetupComplete>,
         setup_status: Arc<dyn SetupStatusPort>,
         app_lifecycle: Arc<AppLifecycleCoordinator>,
-        pairing_orchestrator: Arc<PairingOrchestrator>,
+        setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
         setup_event_port: Arc<dyn SetupEventPort>,
         space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
         discovery_port: Arc<dyn DiscoveryPort>,
@@ -97,7 +97,7 @@ impl SetupOrchestrator {
             proof_port,
             timer_port,
             persistence_port,
-            pairing_orchestrator,
+            setup_pairing_facade,
             space_access_orchestrator,
         });
 
@@ -783,7 +783,9 @@ mod tests {
         ))
     }
 
-    fn build_pairing_orchestrator() -> Arc<PairingOrchestrator> {
+    type PairingTestOrchestrator = std::sync::Arc<crate::usecases::pairing::PairingOrchestrator>;
+
+    fn build_pairing_orchestrator() -> PairingTestOrchestrator {
         let repo = Arc::new(NoopPairedDeviceRepository);
         let (orchestrator, _rx) = PairingOrchestrator::new(
             PairingConfig::default(),
@@ -798,7 +800,7 @@ mod tests {
     }
 
     fn build_pairing_orchestrator_with_actions() -> (
-        Arc<PairingOrchestrator>,
+        PairingTestOrchestrator,
         tokio::sync::Mutex<
             tokio::sync::mpsc::Receiver<uc_core::network::pairing_state_machine::PairingAction>,
         >,
@@ -1110,9 +1112,7 @@ mod tests {
             sleep(Duration::from_millis(10)).await;
         };
 
-        orchestrator
-            .action_executor
-            .pairing_orchestrator
+        pairing_orchestrator
             .handle_challenge(
                 &session_id,
                 "peer-verify",
@@ -1196,9 +1196,7 @@ mod tests {
             sleep(Duration::from_millis(10)).await;
         };
 
-        orchestrator
-            .action_executor
-            .pairing_orchestrator
+        pairing_orchestrator
             .handle_challenge(
                 &session_id,
                 "peer-verify",
@@ -1231,9 +1229,7 @@ mod tests {
             sleep(Duration::from_millis(10)).await;
         }
 
-        orchestrator
-            .action_executor
-            .pairing_orchestrator
+        pairing_orchestrator
             .handle_keyslot_offer(
                 &session_id,
                 "peer-verify",
@@ -1309,9 +1305,7 @@ mod tests {
             sleep(Duration::from_millis(10)).await;
         };
 
-        orchestrator
-            .action_executor
-            .pairing_orchestrator
+        pairing_orchestrator
             .handle_transport_error(&session_id, "peer-verify", "stream closed".to_string())
             .await
             .unwrap();
@@ -2109,9 +2103,7 @@ mod tests {
 
         // Simulate peerA sending a Reject on the initial request.
         // The pairing state machine is in RequestSent state, which accepts RecvReject.
-        orchestrator
-            .action_executor
-            .pairing_orchestrator
+        pairing_orchestrator
             .handle_reject(&session_id, "peer-reject")
             .await
             .unwrap();
@@ -2204,9 +2196,7 @@ mod tests {
         // path where the remote responds with a challenge before the listener
         // had a chance to subscribe in the old (buggy) ordering.  With the
         // subscribe-before-initiate fix, the listener is already active.
-        orchestrator
-            .action_executor
-            .pairing_orchestrator
+        pairing_orchestrator
             .handle_challenge(
                 &session_id,
                 "peer-low-latency",
