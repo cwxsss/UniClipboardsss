@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 46.1-02-PLAN.md
-last_updated: '2026-03-20T13:58:31.000Z'
+stopped_at: Completed 46.1-03-PLAN.md
+last_updated: '2026-03-20T14:41:00.000Z'
 progress:
   total_phases: 14
   completed_phases: 9
   total_plans: 36
-  completed_plans: 32
+  completed_plans: 33
 ---
 
 # Project State
@@ -24,15 +24,15 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 ## Current Position
 
 Phase: 46.1 (unify-realtime-subscriptions-on-single-daemonwsbridge) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 3 (this milestone)
-- Average duration: 6min
-- Total execution time: 19min
+- Total plans completed: 4 (this milestone)
+- Average duration: 12min
+- Total execution time: 48min
 
 **By Phase:**
 
@@ -70,6 +70,7 @@ _Updated after each plan completion_
 | Phase 46 P06 | 2 min | 2 tasks | 3 files |
 | Phase 46.1 P01 | 5 | 2 tasks | 4 files |
 | Phase 46.1 P02 | 5 | 2 tasks | 7 files |
+| Phase 46.1 P03 | 29 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -140,6 +141,8 @@ Recent decisions affecting current work:
 - [Phase 46.1]: HostEvent adds Realtime(RealtimeFrontendEvent) while keeping legacy domain variants until the Phase 46.1 frontend cutover completes.
 - [Phase 46.1]: `uc-app` owns pairing, peers, and setup realtime consumers; setup subscriptions now flow through a shared `SetupPairingEventHub` instead of feature-owned websocket logic.
 - [Phase 46.1]: Setup realtime delivery drops regressive per-session events after terminal success/failure so frontend-visible ordering stays monotonic across shared subscriptions.
+- [Phase 46.1]: DaemonWsBridge is now the single active daemon websocket owner and background startup launches it through `start_realtime_runtime`.
+- [Phase 46.1]: Tauri emitters understand `HostEvent::Realtime`, so bridge/runtime verification can compile against the unified realtime envelope.
 
 ### Roadmap Evolution
 
@@ -170,5 +173,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-20T09:40:15.793Z
-Stopped at: Completed 46.1-02-PLAN.md
+Stopped at: Completed 46.1-03-PLAN.md
 Resume file: None
