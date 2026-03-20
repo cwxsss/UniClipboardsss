@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: executing
-stopped_at: Completed 46-03-PLAN.md
-last_updated: '2026-03-20T12:00:00Z'
+status: in_progress
+stopped_at: Completed 46-04-PLAN.md
+last_updated: '2026-03-20T03:04:47.698Z'
 progress:
   total_phases: 13
   completed_phases: 8
-  total_plans: 28
-  completed_plans: 27
+  total_plans: 30
+  completed_plans: 28
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 
 ## Current Position
 
-Phase: 46 (daemon-pairing-host-migration-move-pairing-orchestrator-action-loops-and-network-event-handling-out-of-tauri) — IN PROGRESS
-Plan: 3 of 3 (completed)
+Phase: 46 (daemon-pairing-host-migration-move-pairing-orchestrator-action-loops-and-network-event-handling-out-of-tauri) — EXECUTING
+Plan: 5 of 5
 
 ## Performance Metrics
 
@@ -65,6 +65,7 @@ _Updated after each plan completion_
 | Phase 45 P03 | 18 | 2 tasks | 12 files |
 | Phase 46-daemon-pairing-host-migration P01 | 10 | 2 tasks | 6 files |
 | Phase 46-daemon-pairing-host-migration P02 | 4 | 2 tasks | 11 files |
+| Phase 46 P4 | 11 | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -124,6 +125,8 @@ Recent decisions affecting current work:
 - [Phase 46]: RuntimeState now stores metadata-only DaemonPairingSessionSnapshot records for daemon-owned pairing session inspection without leaking verification secrets.
 - [Phase 46]: DaemonApiState exposes one shared pairing_host facade plus lease-based discoverability/readiness controls, so mutation routes and future bridge code use the same daemon-owned host surface.
 - [Phase 46]: Pairing/discovery websocket incremental payloads are camelCase and use the top-level `type` field; verification secrets only travel over authenticated realtime events, never through snapshots.
+- [Phase 46]: SetupPairingFacadePort lives in uc-app and PairingOrchestrator implements it for bootstrap and non-daemon call sites.
+- [Phase 46]: SetupAssemblyPorts placeholder uses a no-op facade instead of constructing a concrete PairingOrchestrator.
 
 ### Roadmap Evolution
 
@@ -152,6 +155,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-19T16:19:39Z
-Stopped at: Completed 46-02-PLAN.md
+Last session: 2026-03-20T03:04:47.696Z
+Stopped at: Completed 46-04-PLAN.md
 Resume file: None

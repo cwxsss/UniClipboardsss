@@ -203,7 +203,7 @@ Plans:
 | 40. uc-bootstrap Crate            | 2/3       | In Progress    |            | -          |
 | 41. Daemon and CLI Skeletons      | 4/4       | Complete       | 2026-03-18 | -          |
 | 45. Daemon API Foundation         | 3/3       | Complete       | 2026-03-19 | -          |
-| 46. Daemon Pairing Host Migration | 2/3       | In Progress    |            | -          |
+| 46. Daemon Pairing Host Migration | 4/5       | In Progress    |            | -          |
 
 ### Phase 42: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
 
@@ -251,7 +251,7 @@ Plans:
 **Goal:** Add the daemon-facing HTTP/WebSocket contract foundation, including local auth, read-only DTOs, and runtime query services
 **Requirements**: PH45-01, PH45-02, PH45-05, PH45-06
 **Depends on:** Phase 44
-**Plans:** 3/3 plans complete
+**Plans:** 4 plans (3 complete + 1 gap closure)
 
 Plans:
 
@@ -264,13 +264,15 @@ Plans:
 **Goal:** Move pairing host ownership, action/event loops, and session projection into `uc-daemon` while keeping Tauri as a compatibility bridge.
 **Requirements**: PH46-01, PH46-01A, PH46-01B, PH46-02, PH46-03, PH46-03A, PH46-04, PH46-05, PH46-05A, PH46-06
 **Depends on:** Phase 45
-**Plans:** 3/3 plans complete
+**Plans:** 4/5 plans executed
 
 Plans:
 
 - [x] 46-01-PLAN.md — Daemon Pairing Host Ownership And Runtime Projection (completed 2026-03-19)
 - [x] 46-02-PLAN.md — Daemon Pairing Control Surface And Realtime Contract (completed 2026-03-20)
 - [x] 46-03-PLAN.md — Tauri Compatibility Bridge For Existing Pairing Contract (completed 2026-03-20)
+- [ ] 46-04-PLAN.md — Gap Closure For Setup Pairing Facade Extraction
+- [ ] 46-05-PLAN.md — Gap Closure For Live GUI Pairing Bridge Activation
 
 ### Phase 47: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 
