@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: in_progress
-stopped_at: Completed 46-05-PLAN.md
-last_updated: '2026-03-20T03:23:02.701Z'
+status: unknown
+stopped_at: Completed 46-06-PLAN.md
+last_updated: '2026-03-20T05:07:52.500Z'
 progress:
   total_phases: 13
   completed_phases: 9
-  total_plans: 30
-  completed_plans: 29
+  total_plans: 31
+  completed_plans: 30
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 47 — frontend-daemon-cutover-switch-desktop-ui-from-tauri-commands-to-daemon-http-and-websocket-apis
+**Current focus:** Phase 46 — daemon-pairing-host-migration-move-pairing-orchestrator-action-loops-and-network-event-handling-out-of-tauri
 
 ## Current Position
 
 Phase: 46 (daemon-pairing-host-migration-move-pairing-orchestrator-action-loops-and-network-event-handling-out-of-tauri) — COMPLETE
-Plan: 5 of 5 (Complete)
+Plan: 6 of 6
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ _Updated after each plan completion_
 | Phase 46-daemon-pairing-host-migration P02 | 4 | 2 tasks | 11 files |
 | Phase 46 P4 | 11 | 1 tasks | 6 files |
 | Phase 46 P05 | 13 | 2 tasks | 8 files |
+| Phase 46 P06 | 2 min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -131,6 +132,8 @@ Recent decisions affecting current work:
 - [Phase 46]: Phase 46 GUI startup now always constructs PairingBridge; Tauri no longer keeps pairing action/event loops as a hidden fallback host.
 - [Phase 46]: Daemon pairing host now broadcasts live pairing and peer websocket events so Tauri compatibility bridges receive runtime updates, not just snapshots.
 - [Phase 46]: Bridge payload translation stays locked to the existing frontend event contract, including code/localFingerprint/deviceName fields and peer discovery delta payloads.
+- [Phase 46]: Use broadcast::channel::<DaemonWsEvent>(128) in daemon regression fixtures so DaemonPairingHost::new signature stays aligned without runtime behavior changes.
+- [Phase 46]: Define PH46-01..PH46-06 explicitly in REQUIREMENTS.md and map each ID to phase 46 for audit traceability.
 
 ### Roadmap Evolution
 
@@ -159,6 +162,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-20T03:23:02.699Z
-Stopped at: Completed 46-05-PLAN.md
+Last session: 2026-03-20T05:07:52.495Z
+Stopped at: Completed 46-06-PLAN.md
 Resume file: None
