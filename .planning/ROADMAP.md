@@ -279,7 +279,7 @@ Plans:
 **Goal:** Replace the duplicated pairing/setup websocket clients with one `DaemonWsBridge`, move pairing/peers/setup realtime consumption onto shared app-layer consumers, cut the frontend to a single `daemon://realtime` contract, and delete the legacy `p2p-*` bridge path in one breaking switch.
 **Requirements**: PH461-01, PH461-02, PH461-03, PH461-04, PH461-05, PH461-06
 **Depends on:** Phase 46
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans executed
 
 Plans:
 
@@ -287,7 +287,7 @@ Plans:
 - [x] 46.1-02-PLAN.md — App Realtime Consumers And Setup Event Hub (completed 2026-03-20)
 - [x] 46.1-03-PLAN.md — Singleton DaemonWsBridge And Unified Runtime Startup (completed 2026-03-20)
 - [x] 46.1-04-PLAN.md — Frontend Contract Cutover To daemon://realtime (completed 2026-03-20)
-- [ ] 46.1-05-PLAN.md — Legacy Bridge Deletion And Realtime Cleanup
+- [x] 46.1-05-PLAN.md — Legacy Bridge Deletion And Realtime Cleanup (completed 2026-03-20)
 
 ### Phase 47: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 
