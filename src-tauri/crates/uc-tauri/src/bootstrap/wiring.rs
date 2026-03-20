@@ -3792,7 +3792,10 @@ mod tests {
         let app_handle = app.handle();
         let (payload_tx, mut payload_rx) = mpsc::channel::<String>(4);
         let payload_tx_clone = payload_tx.clone();
-        app_handle.listen("p2p-peer-name-updated", move |event: tauri::Event| {
+        app_handle.listen("daemon://realtime", move |event: tauri::Event| {
+            if !event.payload().contains("\"type\":\"peers.nameUpdated\"") {
+                return;
+            }
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
@@ -3851,8 +3854,9 @@ mod tests {
             .expect("send peer name event");
 
         let payload = payload_rx.recv().await.expect("event payload");
-        assert!(payload.contains("peerId"));
-        assert!(payload.contains("deviceName"));
+        assert!(payload.contains("\"type\":\"peers.nameUpdated\""));
+        assert!(payload.contains("\"peerId\""));
+        assert!(payload.contains("\"deviceName\""));
 
         drop(event_tx);
         let _ = tokio::time::timeout(Duration::from_secs(1), loop_handle).await;
@@ -3864,7 +3868,10 @@ mod tests {
         let app_handle = app.handle();
         let (payload_tx, mut payload_rx) = mpsc::channel::<String>(4);
         let payload_tx_clone = payload_tx.clone();
-        app_handle.listen("p2p-peer-discovery-changed", move |event: tauri::Event| {
+        app_handle.listen("daemon://realtime", move |event: tauri::Event| {
+            if !event.payload().contains("\"type\":\"peers.changed\"") {
+                return;
+            }
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
@@ -3938,14 +3945,18 @@ mod tests {
             .expect("discovered payload received");
         let discovered_value: serde_json::Value =
             serde_json::from_str(&discovered_payload).expect("discovered payload json");
-        assert_eq!(discovered_value["peerId"], "peer-1");
-        assert_eq!(discovered_value["deviceName"], "Desk");
-        assert_eq!(discovered_value["discovered"], true);
+        assert_eq!(discovered_value["topic"], "peers");
+        assert_eq!(discovered_value["type"], "peers.changed");
+        assert_eq!(discovered_value["payload"]["peers"][0]["peerId"], "peer-1");
         assert_eq!(
-            discovered_value["addresses"][0],
+            discovered_value["payload"]["peers"][0]["deviceName"],
+            "Desk"
+        );
+        assert_eq!(
+            discovered_value["payload"]["peers"][0]["addresses"][0],
             "/ip4/192.168.1.10/tcp/42000"
         );
-        assert!(discovered_value.get("peer_id").is_none());
+        assert!(discovered_value["payload"].get("peer_id").is_none());
 
         let lost_payload = tokio::time::timeout(Duration::from_secs(1), payload_rx.recv())
             .await
@@ -3953,9 +3964,11 @@ mod tests {
             .expect("lost payload received");
         let lost_value: serde_json::Value =
             serde_json::from_str(&lost_payload).expect("lost payload json");
-        assert_eq!(lost_value["peerId"], "peer-1");
-        assert_eq!(lost_value["discovered"], false);
-        assert!(lost_value["addresses"]
+        assert_eq!(lost_value["topic"], "peers");
+        assert_eq!(lost_value["type"], "peers.changed");
+        assert_eq!(lost_value["payload"]["removedPeer"]["peerId"], "peer-1");
+        assert_eq!(lost_value["payload"]["removedPeer"]["discovered"], false);
+        assert!(lost_value["payload"]["peers"]
             .as_array()
             .expect("addresses array")
             .is_empty());
@@ -4223,17 +4236,24 @@ mod tests {
         let app_handle = app.handle();
         let (payload_tx, mut payload_rx) = mpsc::channel::<String>(1);
         let payload_tx_clone = payload_tx.clone();
-        app_handle.listen("p2p-pairing-verification", move |event: tauri::Event| {
+        app_handle.listen("daemon://realtime", move |event: tauri::Event| {
+            if !event.payload().contains("\"topic\":\"pairing\"") {
+                return;
+            }
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
         let probe = serde_json::json!({
-            "sessionId": "probe",
-            "kind": "failed",
-            "error": "probe"
+            "topic": "pairing",
+            "type": "pairing.failed",
+            "ts": 0,
+            "payload": {
+                "sessionId": "probe",
+                "reason": "probe"
+            }
         });
         app_handle
-            .emit("p2p-pairing-verification", probe)
+            .emit("daemon://realtime", probe)
             .expect("emit probe");
         let _ = tokio::time::timeout(Duration::from_secs(1), payload_rx.recv())
             .await
@@ -4298,10 +4318,11 @@ mod tests {
             .expect("timeout waiting for payload")
             .expect("payload received");
         let value: serde_json::Value = serde_json::from_str(&payload).expect("payload json");
-        assert_eq!(value["sessionId"], "session-1");
-        assert_eq!(value["kind"], "complete");
-        assert_eq!(value["peerId"], "peer-remote");
-        assert_eq!(value["deviceName"], "PeerDevice");
+        assert_eq!(value["topic"], "pairing");
+        assert_eq!(value["type"], "pairing.complete");
+        assert_eq!(value["payload"]["sessionId"], "session-1");
+        assert_eq!(value["payload"]["peerId"], "peer-remote");
+        assert_eq!(value["payload"]["deviceName"], "PeerDevice");
 
         drop(action_tx);
         let _ = tokio::time::timeout(Duration::from_secs(1), loop_handle).await;
@@ -4313,7 +4334,10 @@ mod tests {
         let app_handle = app.handle();
         let (payload_tx, mut payload_rx) = mpsc::channel::<String>(1);
         let payload_tx_clone = payload_tx.clone();
-        app_handle.listen("p2p-pairing-verification", move |event: tauri::Event| {
+        app_handle.listen("daemon://realtime", move |event: tauri::Event| {
+            if !event.payload().contains("\"topic\":\"pairing\"") {
+                return;
+            }
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
@@ -4375,12 +4399,13 @@ mod tests {
             .expect("timeout waiting for payload")
             .expect("payload received");
         let value: serde_json::Value = serde_json::from_str(&payload).expect("payload json");
-        assert!(value.get("sessionId").is_some());
-        assert!(value.get("peerId").is_some());
-        assert!(value.get("deviceName").is_some());
-        assert!(value.get("session_id").is_none());
-        assert!(value.get("peer_id").is_none());
-        assert!(value.get("device_name").is_none());
+        assert_eq!(value["topic"], "pairing");
+        assert!(value["payload"].get("sessionId").is_some());
+        assert!(value["payload"].get("peerId").is_some());
+        assert!(value["payload"].get("deviceName").is_some());
+        assert!(value["payload"].get("session_id").is_none());
+        assert!(value["payload"].get("peer_id").is_none());
+        assert!(value["payload"].get("device_name").is_none());
 
         drop(action_tx);
         let _ = tokio::time::timeout(Duration::from_secs(1), loop_handle).await;
@@ -4392,7 +4417,10 @@ mod tests {
         let app_handle = app.handle();
         let (payload_tx, mut payload_rx) = mpsc::channel::<String>(1);
         let payload_tx_clone = payload_tx.clone();
-        app_handle.listen("p2p-pairing-verification", move |event: tauri::Event| {
+        app_handle.listen("daemon://realtime", move |event: tauri::Event| {
+            if !event.payload().contains("\"topic\":\"pairing\"") {
+                return;
+            }
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
@@ -4440,9 +4468,11 @@ mod tests {
             .expect("timeout waiting for payload")
             .expect("payload received");
         let value: serde_json::Value = serde_json::from_str(&payload).expect("payload json");
-        assert_eq!(value["sessionId"], "session-1");
-        assert_eq!(value["kind"], "verifying");
-        assert_eq!(value["deviceName"], "PeerDevice");
+        assert_eq!(value["topic"], "pairing");
+        assert_eq!(value["type"], "pairing.updated");
+        assert_eq!(value["payload"]["sessionId"], "session-1");
+        assert_eq!(value["payload"]["status"], "verifying");
+        assert_eq!(value["payload"]["deviceName"], "PeerDevice");
 
         drop(action_tx);
         let _ = tokio::time::timeout(Duration::from_secs(1), loop_handle).await;
@@ -4454,7 +4484,10 @@ mod tests {
         let app_handle = app.handle();
         let (payload_tx, mut payload_rx) = mpsc::channel::<String>(1);
         let payload_tx_clone = payload_tx.clone();
-        app_handle.listen("p2p-pairing-verification", move |event: tauri::Event| {
+        app_handle.listen("daemon://realtime", move |event: tauri::Event| {
+            if !event.payload().contains("\"topic\":\"pairing\"") {
+                return;
+            }
             let _ = payload_tx_clone.try_send(event.payload().to_string());
         });
 
@@ -4519,14 +4552,15 @@ mod tests {
                 .expect("timeout waiting for payload")
                 .expect("payload received");
             let value: serde_json::Value = serde_json::from_str(&payload).expect("payload json");
-            if value["kind"] == "failed" {
+            if value["type"] == "pairing.failed" {
                 failed_event = Some(value);
                 break;
             }
         }
         let value = failed_event.expect("failed event");
-        assert_eq!(value["sessionId"], "session-send-fail");
-        assert!(value["error"]
+        assert_eq!(value["topic"], "pairing");
+        assert_eq!(value["payload"]["sessionId"], "session-send-fail");
+        assert!(value["payload"]["reason"]
             .as_str()
             .unwrap_or("")
             .contains("send failed"));

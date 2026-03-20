@@ -337,35 +337,45 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
             peer_id,
             device_name,
             addresses,
-        }) => {
-            let payload = PeerDiscoveryChangedPayload {
-                peer_id,
-                device_name,
-                addresses,
-                discovered: true,
-            };
-            (
-                "p2p-peer-discovery-changed",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
-        }
+        }) => (
+            FRONTEND_REALTIME_EVENT,
+            serde_json::json!({
+                "topic": "peers",
+                "type": "peers.changed",
+                "ts": 0,
+                "payload": {
+                    "peers": [{
+                        "peerId": peer_id,
+                        "deviceName": device_name,
+                        "connected": false,
+                        "addresses": addresses,
+                        "discovered": true
+                    }]
+                }
+            }),
+        ),
 
         HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Lost {
             peer_id,
             device_name,
             addresses,
-        }) => {
-            let payload = PeerDiscoveryChangedPayload {
-                peer_id,
-                device_name,
-                addresses,
-                discovered: false,
-            };
-            (
-                "p2p-peer-discovery-changed",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
-        }
+        }) => (
+            FRONTEND_REALTIME_EVENT,
+            serde_json::json!({
+                "topic": "peers",
+                "type": "peers.changed",
+                "ts": 0,
+                "payload": {
+                    "peers": [],
+                    "removedPeer": {
+                        "peerId": peer_id,
+                        "deviceName": device_name,
+                        "addresses": addresses,
+                        "discovered": false
+                    }
+                }
+            }),
+        ),
 
         // -----------------------------------------------------------------------
         // Peer connection events
@@ -373,46 +383,52 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
         HostEvent::PeerConnection(PeerConnectionHostEvent::Connected {
             peer_id,
             device_name,
-        }) => {
-            let payload = PeerConnectionChangedPayload {
-                peer_id,
-                device_name,
-                connected: true,
-            };
-            (
-                "p2p-peer-connection-changed",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
-        }
+        }) => (
+            FRONTEND_REALTIME_EVENT,
+            serde_json::json!({
+                "topic": "peers",
+                "type": "peers.connectionChanged",
+                "ts": 0,
+                "payload": {
+                    "peerId": peer_id,
+                    "deviceName": device_name,
+                    "connected": true
+                }
+            }),
+        ),
 
         HostEvent::PeerConnection(PeerConnectionHostEvent::Disconnected {
             peer_id,
             device_name,
-        }) => {
-            let payload = PeerConnectionChangedPayload {
-                peer_id,
-                device_name,
-                connected: false,
-            };
-            (
-                "p2p-peer-connection-changed",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
-        }
+        }) => (
+            FRONTEND_REALTIME_EVENT,
+            serde_json::json!({
+                "topic": "peers",
+                "type": "peers.connectionChanged",
+                "ts": 0,
+                "payload": {
+                    "peerId": peer_id,
+                    "deviceName": device_name,
+                    "connected": false
+                }
+            }),
+        ),
 
         HostEvent::PeerConnection(PeerConnectionHostEvent::NameUpdated {
             peer_id,
             device_name,
-        }) => {
-            let payload = PeerNameUpdatedPayload {
-                peer_id,
-                device_name,
-            };
-            (
-                "p2p-peer-name-updated",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
-        }
+        }) => (
+            FRONTEND_REALTIME_EVENT,
+            serde_json::json!({
+                "topic": "peers",
+                "type": "peers.nameUpdated",
+                "ts": 0,
+                "payload": {
+                    "peerId": peer_id,
+                    "deviceName": device_name
+                }
+            }),
+        ),
 
         // -----------------------------------------------------------------------
         // Transfer events
@@ -523,10 +539,63 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
                 peer_fingerprint,
                 error,
             };
-            (
-                "p2p-pairing-verification",
-                serde_json::to_value(payload).unwrap_or_default(),
-            )
+            match kind {
+                PairingVerificationKind::Request | PairingVerificationKind::Verifying => (
+                    FRONTEND_REALTIME_EVENT,
+                    serde_json::json!({
+                        "topic": "pairing",
+                        "type": "pairing.updated",
+                        "ts": 0,
+                        "payload": {
+                            "sessionId": payload.session_id,
+                            "status": payload.kind,
+                            "peerId": payload.peer_id,
+                            "deviceName": payload.device_name
+                        }
+                    }),
+                ),
+                PairingVerificationKind::Verification => (
+                    FRONTEND_REALTIME_EVENT,
+                    serde_json::json!({
+                        "topic": "pairing",
+                        "type": "pairing.verificationRequired",
+                        "ts": 0,
+                        "payload": {
+                            "sessionId": payload.session_id,
+                            "peerId": payload.peer_id,
+                            "deviceName": payload.device_name,
+                            "code": payload.code,
+                            "localFingerprint": payload.local_fingerprint,
+                            "peerFingerprint": payload.peer_fingerprint
+                        }
+                    }),
+                ),
+                PairingVerificationKind::Complete => (
+                    FRONTEND_REALTIME_EVENT,
+                    serde_json::json!({
+                        "topic": "pairing",
+                        "type": "pairing.complete",
+                        "ts": 0,
+                        "payload": {
+                            "sessionId": payload.session_id,
+                            "peerId": payload.peer_id,
+                            "deviceName": payload.device_name
+                        }
+                    }),
+                ),
+                PairingVerificationKind::Failed => (
+                    FRONTEND_REALTIME_EVENT,
+                    serde_json::json!({
+                        "topic": "pairing",
+                        "type": "pairing.failed",
+                        "ts": 0,
+                        "payload": {
+                            "sessionId": payload.session_id,
+                            "reason": payload.error
+                        }
+                    }),
+                ),
+            }
         }
 
         HostEvent::Pairing(PairingHostEvent::SubscribeFailure {
@@ -1116,7 +1185,10 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         app.handle()
-            .listen("p2p-peer-discovery-changed", move |event: tauri::Event| {
+            .listen(FRONTEND_REALTIME_EVENT, move |event: tauri::Event| {
+                if !event.payload().contains("\"type\":\"peers.changed\"") {
+                    return;
+                }
                 let _ = tx.try_send(event.payload().to_string());
             });
 
@@ -1134,11 +1206,14 @@ mod tests {
         let payload = rx.recv().await.expect("event payload");
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
-        assert_eq!(json["peerId"], "peer-1");
-        assert_eq!(json["deviceName"], "My Device");
-        assert_eq!(json["addresses"][0], "192.168.1.1:8080");
-        assert_eq!(json["discovered"], true);
-        assert!(json.get("peer_id").is_none());
+        assert_eq!(json["topic"], "peers");
+        assert_eq!(json["type"], "peers.changed");
+        assert_eq!(json["payload"]["peers"][0]["peerId"], "peer-1");
+        assert_eq!(json["payload"]["peers"][0]["deviceName"], "My Device");
+        assert_eq!(
+            json["payload"]["peers"][0]["addresses"][0],
+            "192.168.1.1:8080"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1151,7 +1226,13 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         app.handle()
-            .listen("p2p-peer-connection-changed", move |event: tauri::Event| {
+            .listen(FRONTEND_REALTIME_EVENT, move |event: tauri::Event| {
+                if !event
+                    .payload()
+                    .contains("\"type\":\"peers.connectionChanged\"")
+                {
+                    return;
+                }
                 let _ = tx.try_send(event.payload().to_string());
             });
 
@@ -1169,13 +1250,12 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
         // camelCase
-        assert_eq!(json["peerId"], "peer-2");
-        assert_eq!(json["deviceName"], "Laptop");
-        assert_eq!(json["connected"], true);
-        // Must NOT have "ready" field
-        assert!(json.get("ready").is_none());
-        // Must NOT have "type" discriminator
-        assert!(json.get("type").is_none());
+        assert_eq!(json["topic"], "peers");
+        assert_eq!(json["type"], "peers.connectionChanged");
+        assert_eq!(json["payload"]["peerId"], "peer-2");
+        assert_eq!(json["payload"]["deviceName"], "Laptop");
+        assert_eq!(json["payload"]["connected"], true);
+        assert!(json["payload"].get("ready").is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -1188,7 +1268,10 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         app.handle()
-            .listen("p2p-peer-name-updated", move |event: tauri::Event| {
+            .listen(FRONTEND_REALTIME_EVENT, move |event: tauri::Event| {
+                if !event.payload().contains("\"type\":\"peers.nameUpdated\"") {
+                    return;
+                }
                 let _ = tx.try_send(event.payload().to_string());
             });
 
@@ -1205,9 +1288,11 @@ mod tests {
         let payload = rx.recv().await.expect("event payload");
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
-        assert_eq!(json["peerId"], "peer-3");
-        assert_eq!(json["deviceName"], "New Name");
-        assert!(json.get("peer_id").is_none());
+        assert_eq!(json["topic"], "peers");
+        assert_eq!(json["type"], "peers.nameUpdated");
+        assert_eq!(json["payload"]["peerId"], "peer-3");
+        assert_eq!(json["payload"]["deviceName"], "New Name");
+        assert!(json["payload"].get("peer_id").is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -1508,7 +1593,10 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         app.handle()
-            .listen("p2p-pairing-verification", move |event: tauri::Event| {
+            .listen(FRONTEND_REALTIME_EVENT, move |event: tauri::Event| {
+                if !event.payload().contains("\"topic\":\"pairing\"") {
+                    return;
+                }
                 let _ = tx.try_send(event.payload().to_string());
             });
 
@@ -1530,19 +1618,19 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
         // camelCase keys
-        assert_eq!(json["sessionId"], "session-42");
-        assert_eq!(json["kind"], "request");
-        assert_eq!(json["peerId"], "peer-a");
-        assert_eq!(json["deviceName"], "Desktop A");
-        // snake_case must be absent
-        assert!(json.get("session_id").is_none());
-        assert!(json.get("peer_id").is_none());
-        assert!(json.get("device_name").is_none());
-        // Optional None fields must be absent (skip_serializing_if)
-        assert!(json.get("code").is_none());
-        assert!(json.get("localFingerprint").is_none());
-        assert!(json.get("peerFingerprint").is_none());
-        assert!(json.get("error").is_none());
+        assert_eq!(json["topic"], "pairing");
+        assert_eq!(json["type"], "pairing.updated");
+        assert_eq!(json["payload"]["sessionId"], "session-42");
+        assert_eq!(json["payload"]["status"], "request");
+        assert_eq!(json["payload"]["peerId"], "peer-a");
+        assert_eq!(json["payload"]["deviceName"], "Desktop A");
+        assert!(json["payload"].get("session_id").is_none());
+        assert!(json["payload"].get("peer_id").is_none());
+        assert!(json["payload"].get("device_name").is_none());
+        assert!(json["payload"].get("code").is_none());
+        assert!(json["payload"].get("localFingerprint").is_none());
+        assert!(json["payload"].get("peerFingerprint").is_none());
+        assert!(json["payload"].get("error").is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -1557,7 +1645,10 @@ mod tests {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(1);
 
         app.handle()
-            .listen("p2p-pairing-verification", move |event: tauri::Event| {
+            .listen(FRONTEND_REALTIME_EVENT, move |event: tauri::Event| {
+                if !event.payload().contains("\"type\":\"pairing.failed\"") {
+                    return;
+                }
                 let _ = tx.try_send(event.payload().to_string());
             });
 
@@ -1578,11 +1669,11 @@ mod tests {
         let payload = rx.recv().await.expect("event payload");
         let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
 
-        assert_eq!(json["sessionId"], "session-43");
-        assert_eq!(json["kind"], "failed");
-        assert_eq!(json["error"], "verification timed out");
-        // peerId absent when None
-        assert!(json.get("peerId").is_none());
+        assert_eq!(json["topic"], "pairing");
+        assert_eq!(json["type"], "pairing.failed");
+        assert_eq!(json["payload"]["sessionId"], "session-43");
+        assert_eq!(json["payload"]["reason"], "verification timed out");
+        assert!(json["payload"].get("peerId").is_none());
     }
 
     // -----------------------------------------------------------------------

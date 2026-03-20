@@ -6,8 +6,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex as TokioMutex, Notify};
 use tokio::time::sleep;
+use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -256,14 +258,24 @@ impl DaemonWsBridge {
             format!("Bearer {}", connection.token).parse()?,
         );
 
-        let (stream, _) = tokio_tungstenite::connect_async(request)
+        let ws_url = url::Url::parse(&connection.ws_url)
+            .with_context(|| format!("invalid daemon websocket url {}", connection.ws_url))?;
+        let host = ws_url
+            .host_str()
+            .context("daemon websocket url missing host")?;
+        let port = ws_url
+            .port_or_known_default()
+            .context("daemon websocket url missing port")?;
+        let tcp_stream = TcpStream::connect((host, port))
             .await
-            .with_context(|| {
-                format!(
-                    "failed to connect daemon websocket at {}",
-                    connection.ws_url
-                )
-            })?;
+            .with_context(|| format!("failed to open daemon tcp socket {host}:{port}"))?;
+
+        let (stream, _) = client_async(request, tcp_stream).await.with_context(|| {
+            format!(
+                "failed to connect daemon websocket at {}",
+                connection.ws_url
+            )
+        })?;
         let (mut write, mut read) = stream.split();
 
         self.set_state(BridgeState::Subscribing);
