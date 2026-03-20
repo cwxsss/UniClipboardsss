@@ -1,5 +1,6 @@
 use anyhow::Result;
 
+use crate::realtime::SetupPairingEventHub;
 use crate::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
 
 #[async_trait::async_trait]
@@ -11,6 +12,9 @@ pub trait SetupPairingFacadePort: Send + Sync {
     async fn cancel_pairing(&self, session_id: &str) -> Result<()>;
     async fn verify_pairing(&self, session_id: &str, pin_matches: bool) -> Result<()>;
 }
+
+#[allow(dead_code)]
+pub type SetupPairingSubscriptionHub = SetupPairingEventHub;
 
 #[async_trait::async_trait]
 impl SetupPairingFacadePort for PairingOrchestrator {
