@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uc_app::usecases::PairingOrchestrator;
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::{build_non_gui_runtime_with_setup, builders::build_daemon_app};
 use uc_core::network::protocol::PairingRequest;
-use uc_daemon::api::types::PairingSessionSummaryDto;
+use uc_daemon::api::types::{DaemonWsEvent, PairingSessionSummaryDto};
 use uc_daemon::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
 use uc_daemon::pairing::session_projection::upsert_pairing_snapshot;
 use uc_daemon::state::RuntimeState;
@@ -37,6 +37,7 @@ fn build_host() -> (
     );
     let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
     let orchestrator = ctx.pairing_orchestrator.clone();
+    let (event_tx, _event_rx) = broadcast::channel::<DaemonWsEvent>(128);
     let host = DaemonPairingHost::new(
         runtime,
         ctx.pairing_orchestrator,
@@ -44,6 +45,7 @@ fn build_host() -> (
         state.clone(),
         ctx.space_access_orchestrator,
         ctx.key_slot_store,
+        event_tx,
     );
     (host, state, orchestrator, local_peer_id)
 }

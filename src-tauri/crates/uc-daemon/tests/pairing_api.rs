@@ -4,13 +4,14 @@ use std::sync::{Mutex, OnceLock};
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tower::ServiceExt;
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::{build_non_gui_runtime_with_setup, builders::build_daemon_app};
 use uc_daemon::api::auth::load_or_create_auth_token;
 use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::server::{build_router, DaemonApiState};
+use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::pairing::host::DaemonPairingHost;
 use uc_daemon::state::RuntimeState;
 
@@ -44,6 +45,7 @@ fn build_api_router() -> (axum::Router, String) {
     let token_path = tempdir.path().join("daemon.token");
     let token = load_or_create_auth_token(&token_path).unwrap();
     let token_value = std::fs::read_to_string(&token_path).unwrap();
+    let (event_tx, _event_rx) = broadcast::channel::<DaemonWsEvent>(128);
     let pairing_host = Arc::new(DaemonPairingHost::new(
         runtime,
         ctx.pairing_orchestrator,
@@ -51,6 +53,7 @@ fn build_api_router() -> (axum::Router, String) {
         state,
         ctx.space_access_orchestrator,
         ctx.key_slot_store,
+        event_tx,
     ));
     let api_state = DaemonApiState::new(query_service, token, None).with_pairing_host(pairing_host);
     (build_router(api_state), token_value)
