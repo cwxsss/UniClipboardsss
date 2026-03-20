@@ -21,7 +21,7 @@ use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::runtime::PlatformRuntime;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
-    start_background_tasks, AppRuntime, DaemonConnectionState, PairingBridge,
+    start_background_tasks, AppRuntime, DaemonConnectionState,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -551,21 +551,18 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             app.manage(PendingUpdate(Mutex::new(None)));
 
-            let pairing_bridge =
-                PairingBridge::new(app.handle().clone(), daemon_connection_state.clone());
-
             // Start background spooler and blob worker tasks
             start_background_tasks(
                 background,
                 runtime_for_handler.wiring_deps(),
                 runtime_for_handler.event_emitter(),
+                daemon_connection_state.clone(),
                 pairing_orchestrator.clone(),
                 pairing_action_rx,
                 staged_store,
                 space_access_orchestrator.clone(),
                 key_slot_store.clone(),
                 runtime_for_handler.task_registry(),
-                pairing_bridge,
             );
 
             // Clone handles for async blocks

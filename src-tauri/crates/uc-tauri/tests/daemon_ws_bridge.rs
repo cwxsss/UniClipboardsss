@@ -255,7 +255,7 @@ async fn daemon_ws_bridge_fans_out_to_multiple_consumers() {
 
     assert!(matches!(
         a,
-        RealtimeEvent::PairingComplete(PairingCompleteEvent { session_id, peer_id, .. })
+        RealtimeEvent::PairingComplete(PairingCompleteEvent { ref session_id, ref peer_id, .. })
             if session_id == "session-fanout" && peer_id.as_deref() == Some("peer-fanout")
     ));
     assert_eq!(a, b);

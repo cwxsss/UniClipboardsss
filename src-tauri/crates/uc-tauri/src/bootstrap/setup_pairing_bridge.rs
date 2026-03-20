@@ -14,6 +14,7 @@ use tracing::{debug, error, warn};
 
 use crate::bootstrap::DaemonConnectionState;
 use crate::daemon_client::TauriDaemonPairingClient;
+use uc_app::realtime::SetupPairingEventHub;
 use uc_app::usecases::pairing::PairingDomainEvent;
 use uc_app::usecases::setup::SetupPairingFacadePort;
 use uc_core::network::pairing_state_machine::FailureReason;
@@ -28,6 +29,8 @@ use uc_core::network::pairing_state_machine::FailureReason;
 pub struct DaemonBackedSetupPairingFacade {
     /// Daemon connection state.
     connection_state: DaemonConnectionState,
+    /// Shared setup realtime hub fed by the unified daemon bridge when available.
+    event_hub: Option<Arc<SetupPairingEventHub>>,
     /// Flag indicating if participant-ready is active.
     participant_ready: bool,
 }
@@ -35,8 +38,16 @@ pub struct DaemonBackedSetupPairingFacade {
 impl DaemonBackedSetupPairingFacade {
     /// Create a new daemon-backed setup pairing facade.
     pub fn new(connection_state: DaemonConnectionState) -> Self {
+        Self::with_event_hub(connection_state, None)
+    }
+
+    pub fn with_event_hub(
+        connection_state: DaemonConnectionState,
+        event_hub: Option<Arc<SetupPairingEventHub>>,
+    ) -> Self {
         Self {
             connection_state,
+            event_hub,
             participant_ready: false,
         }
     }
@@ -45,6 +56,14 @@ impl DaemonBackedSetupPairingFacade {
     ///
     /// Returns a receiver channel for receiving pairing events.
     pub async fn subscribe(&self) -> Result<mpsc::Receiver<PairingDomainEvent>> {
+        if let Some(event_hub) = &self.event_hub {
+            return event_hub.subscribe().await;
+        }
+
+        self.subscribe_via_websocket().await
+    }
+
+    async fn subscribe_via_websocket(&self) -> Result<mpsc::Receiver<PairingDomainEvent>> {
         let connection = self
             .connection_state
             .get()

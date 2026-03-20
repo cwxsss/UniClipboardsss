@@ -41,6 +41,7 @@ use tauri::async_runtime;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
+use super::start_realtime_runtime;
 use super::task_registry::TaskRegistry;
 
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
@@ -115,13 +116,13 @@ pub fn start_background_tasks(
     background: BackgroundRuntimeDeps,
     deps: &AppDeps,
     event_emitter: Arc<dyn HostEventEmitterPort>,
+    daemon_connection_state: crate::bootstrap::DaemonConnectionState,
     pairing_orchestrator: Arc<PairingOrchestrator>,
     pairing_action_rx: mpsc::Receiver<PairingAction>,
     staged_store: Arc<StagedPairedDeviceStore>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
     task_registry: &Arc<TaskRegistry>,
-    pairing_bridge: Option<crate::bootstrap::PairingBridge>,
 ) {
     let BackgroundRuntimeDeps {
         libp2p_network: _,
@@ -415,13 +416,9 @@ pub fn start_background_tasks(
             })
             .await;
 
-        // --- Pairing bridge (daemon WebSocket subscription and event translation) ---
-        if let Some(mut bridge) = pairing_bridge {
-            bridge.start().await;
-            info!("Started pairing bridge for daemon event subscription");
-        } else {
-            warn!("Pairing bridge unavailable; daemon pairing compatibility events disabled");
-        }
+        // --- Unified realtime runtime (daemon WebSocket bridge + app consumers) ---
+        start_realtime_runtime(daemon_connection_state, event_emitter.clone(), &registry).await;
+        info!("Started unified daemon realtime runtime");
 
         // --- File cache cleanup (runs once at startup, fire-and-forget) ---
         {
