@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -15,6 +15,10 @@ use uc_core::network::pairing_state_machine::{CancellationBy, PairingAction, Pai
 use uc_core::network::{NetworkEvent, PairingBusy, PairingCancel, PairingMessage, PairingRequest};
 use uc_infra::fs::key_slot_store::KeySlotStore;
 
+use crate::api::types::{
+    DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
+    PeerChangedPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
+};
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
 use crate::state::RuntimeState;
 
@@ -94,6 +98,7 @@ pub struct DaemonPairingHost {
     discoverability: Arc<LeaseRegistry>,
     participant_readiness: Arc<LeaseRegistry>,
     active_session_id: Arc<RwLock<Option<String>>>,
+    event_tx: broadcast::Sender<DaemonWsEvent>,
 }
 
 impl DaemonPairingHost {
@@ -104,6 +109,7 @@ impl DaemonPairingHost {
         state: Arc<RwLock<RuntimeState>>,
         space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
         key_slot_store: Arc<dyn KeySlotStore>,
+        event_tx: broadcast::Sender<DaemonWsEvent>,
     ) -> Self {
         Self {
             runtime,
@@ -115,6 +121,7 @@ impl DaemonPairingHost {
             discoverability: Arc::new(LeaseRegistry::default()),
             participant_readiness: Arc::new(LeaseRegistry::default()),
             active_session_id: Arc::new(RwLock::new(None)),
+            event_tx,
         }
     }
 
@@ -332,6 +339,7 @@ impl DaemonPairingHost {
             self.state.clone(),
             self.active_session_id.clone(),
             domain_events,
+            self.event_tx.clone(),
             cancel.child_token(),
         ));
 
@@ -342,6 +350,7 @@ impl DaemonPairingHost {
             self.active_session_id.clone(),
             self.discoverability.clone(),
             self.participant_readiness.clone(),
+            self.event_tx.clone(),
             cancel.child_token(),
         ));
 
@@ -636,6 +645,7 @@ async fn run_pairing_domain_event_loop(
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
     mut domain_events: mpsc::Receiver<PairingDomainEvent>,
+    event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     loop {
@@ -650,14 +660,28 @@ async fn run_pairing_domain_event_loop(
                     PairingDomainEvent::PairingVerificationRequired {
                         session_id,
                         peer_id,
-                        short_code: _,
-                        local_fingerprint: _,
-                        peer_fingerprint: _,
+                        short_code,
+                        local_fingerprint,
+                        peer_fingerprint,
                     } => {
                         let device_name = pairing_orchestrator
                             .get_session_peer(&session_id)
                             .await
                             .and_then(|peer| peer.device_name);
+                        emit_ws_event(
+                            &event_tx,
+                            "pairing",
+                            "pairing.verification_required",
+                            Some(session_id.clone()),
+                            PairingVerificationPayload {
+                                session_id: session_id.clone(),
+                                peer_id: peer_id.clone(),
+                                device_name: device_name.clone(),
+                                code: short_code,
+                                local_fingerprint,
+                                peer_fingerprint,
+                            },
+                        );
                         upsert_pairing_snapshot(
                             &state,
                             session_id,
@@ -674,6 +698,19 @@ async fn run_pairing_domain_event_loop(
                         keyslot_file: _,
                         challenge: _,
                     } => {
+                        emit_ws_event(
+                            &event_tx,
+                            "pairing",
+                            "pairing.updated",
+                            Some(session_id.clone()),
+                            PairingSessionChangedPayload {
+                                session_id: session_id.clone(),
+                                state: "verifying".to_string(),
+                                peer_id: Some(peer_id.clone()),
+                                device_name: None,
+                                updated_at_ms: now_ms(),
+                            },
+                        );
                         upsert_pairing_snapshot(
                             &state,
                             session_id,
@@ -689,6 +726,19 @@ async fn run_pairing_domain_event_loop(
                             .get_session_peer(&session_id)
                             .await
                             .and_then(|peer| peer.device_name);
+                        emit_ws_event(
+                            &event_tx,
+                            "pairing",
+                            "pairing.complete",
+                            Some(session_id.clone()),
+                            PairingSessionChangedPayload {
+                                session_id: session_id.clone(),
+                                state: "complete".to_string(),
+                                peer_id: Some(peer_id.clone()),
+                                device_name: device_name.clone(),
+                                updated_at_ms: now_ms(),
+                            },
+                        );
                         mark_pairing_session_terminal(
                             &state,
                             session_id.clone(),
@@ -703,12 +753,23 @@ async fn run_pairing_domain_event_loop(
                     PairingDomainEvent::PairingFailed {
                         session_id,
                         peer_id,
-                        reason: _,
+                        reason,
                     } => {
                         let device_name = pairing_orchestrator
                             .get_session_peer(&session_id)
                             .await
                             .and_then(|peer| peer.device_name);
+                        emit_ws_event(
+                            &event_tx,
+                            "pairing",
+                            "pairing.failed",
+                            Some(session_id.clone()),
+                            PairingFailurePayload {
+                                session_id: session_id.clone(),
+                                peer_id: Some(peer_id.clone()),
+                                error: format!("{reason:?}"),
+                            },
+                        );
                         mark_pairing_session_terminal(
                             &state,
                             session_id.clone(),
@@ -733,6 +794,7 @@ async fn run_pairing_network_event_loop(
     active_session_id: Arc<RwLock<Option<String>>>,
     discoverability: Arc<LeaseRegistry>,
     participant_readiness: Arc<LeaseRegistry>,
+    event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let network_events = runtime.wiring_deps().network_ports.events.clone();
@@ -757,6 +819,71 @@ async fn run_pairing_network_event_loop(
                             };
 
                             match event {
+                                NetworkEvent::PeerDiscovered(peer) => {
+                                    emit_ws_event(
+                                        &event_tx,
+                                        "peers",
+                                        "peers.changed",
+                                        None,
+                                        PeerChangedPayload {
+                                            peer_id: peer.peer_id,
+                                            device_name: peer.device_name,
+                                            addresses: peer.addresses,
+                                            discovered: true,
+                                            connected: false,
+                                        },
+                                    );
+                                }
+                                NetworkEvent::PeerLost(peer_id) => {
+                                    emit_ws_event(
+                                        &event_tx,
+                                        "peers",
+                                        "peers.changed",
+                                        None,
+                                        PeerChangedPayload {
+                                            peer_id,
+                                            device_name: None,
+                                            addresses: Vec::new(),
+                                            discovered: false,
+                                            connected: false,
+                                        },
+                                    );
+                                }
+                                NetworkEvent::PeerNameUpdated { peer_id, device_name } => {
+                                    emit_ws_event(
+                                        &event_tx,
+                                        "peers",
+                                        "peers.name_updated",
+                                        None,
+                                        PeerNameUpdatedPayload { peer_id, device_name },
+                                    );
+                                }
+                                NetworkEvent::PeerConnected(peer) => {
+                                    emit_ws_event(
+                                        &event_tx,
+                                        "peers",
+                                        "peers.connection_changed",
+                                        None,
+                                        PeerConnectionChangedPayload {
+                                            peer_id: peer.peer_id,
+                                            device_name: Some(peer.device_name),
+                                            connected: true,
+                                        },
+                                    );
+                                }
+                                NetworkEvent::PeerDisconnected(peer_id) => {
+                                    emit_ws_event(
+                                        &event_tx,
+                                        "peers",
+                                        "peers.connection_changed",
+                                        None,
+                                        PeerConnectionChangedPayload {
+                                            peer_id,
+                                            device_name: None,
+                                            connected: false,
+                                        },
+                                    );
+                                }
                                 NetworkEvent::PairingMessageReceived { peer_id, message } => {
                                     handle_pairing_message(
                                         pairing_orchestrator.as_ref(),
@@ -765,6 +892,7 @@ async fn run_pairing_network_event_loop(
                                         &pairing_transport,
                                         &discoverability,
                                         &participant_readiness,
+                                        &event_tx,
                                         peer_id,
                                         message,
                                     )
@@ -834,6 +962,7 @@ async fn handle_pairing_message(
     pairing_transport: &Arc<dyn uc_core::ports::PairingTransportPort>,
     discoverability: &Arc<LeaseRegistry>,
     participant_readiness: &Arc<LeaseRegistry>,
+    event_tx: &broadcast::Sender<DaemonWsEvent>,
     peer_id: String,
     message: PairingMessage,
 ) -> anyhow::Result<()> {
@@ -888,6 +1017,19 @@ async fn handle_pairing_message(
                 now_ms(),
             )
             .await;
+            emit_ws_event(
+                event_tx,
+                "pairing",
+                "pairing.updated",
+                Some(request.session_id.clone()),
+                PairingSessionChangedPayload {
+                    session_id: request.session_id.clone(),
+                    state: "request".to_string(),
+                    peer_id: Some(peer_id.clone()),
+                    device_name: Some(request.device_name.clone()),
+                    updated_at_ms: now_ms(),
+                },
+            );
 
             pairing_orchestrator
                 .handle_incoming_request(peer_id, request)
@@ -969,6 +1111,30 @@ async fn reject_inbound_request(
     {
         debug!(error = %err, peer_id = %peer_id, session_id = %session_id, "failed to send busy pairing message");
     }
+}
+
+fn emit_ws_event<T: serde::Serialize>(
+    event_tx: &broadcast::Sender<DaemonWsEvent>,
+    topic: &str,
+    event_type: &str,
+    session_id: Option<String>,
+    payload: T,
+) {
+    let payload = match serde_json::to_value(payload) {
+        Ok(payload) => payload,
+        Err(err) => {
+            warn!(error = %err, topic, event_type, "failed to encode daemon websocket payload");
+            return;
+        }
+    };
+
+    let _ = event_tx.send(DaemonWsEvent {
+        topic: topic.to_string(),
+        event_type: event_type.to_string(),
+        session_id,
+        ts: now_ms(),
+        payload,
+    });
 }
 
 async fn signal_pairing_transport_failure(

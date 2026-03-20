@@ -21,7 +21,7 @@ use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::runtime::PlatformRuntime;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
-    start_background_tasks, AppRuntime, DaemonConnectionState,
+    start_background_tasks, AppRuntime, DaemonConnectionState, PairingBridge,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -551,9 +551,8 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             app.manage(PendingUpdate(Mutex::new(None)));
 
-            // Create pairing bridge for daemon event subscription (None - will be set up after app handle is available)
-            // Note: The actual bridge will be created in the async startup block below where app.handle() is available.
-            let pairing_bridge = None;
+            let pairing_bridge =
+                PairingBridge::new(app.handle().clone(), daemon_connection_state.clone());
 
             // Start background spooler and blob worker tasks
             start_background_tasks(

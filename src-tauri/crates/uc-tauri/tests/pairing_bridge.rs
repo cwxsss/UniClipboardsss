@@ -38,7 +38,7 @@ fn test_bridge_removes_peer_when_discovered_false() {
 }
 
 #[test]
-fn test_bridge_registers_gui_client_as_discoverable_by_default() {
+fn bridge_registers_gui_client_as_discoverable_by_default() {
     // The bridge should register the GUI as discoverable when started.
     // This is done via set_pairing_discoverability("gui", true, lease_ttl_ms).
     let client_kind = "gui";
@@ -52,7 +52,7 @@ fn test_bridge_registers_gui_client_as_discoverable_by_default() {
 }
 
 #[test]
-fn test_bridge_sets_participant_ready_only_when_pairing_flow_is_active() {
+fn bridge_sets_participant_ready_only_when_pairing_flow_is_active() {
     // The bridge should only set participant-ready when:
     // - Setup pairing flow is active
     // - Pairing dialog is open
@@ -65,7 +65,7 @@ fn test_bridge_sets_participant_ready_only_when_pairing_flow_is_active() {
 }
 
 #[test]
-fn test_bridge_revokes_discoverability_and_ready_on_shutdown() {
+fn bridge_revokes_discoverability_and_ready_on_shutdown() {
     // On bridge shutdown, lease loss, or daemon disconnect:
     // - Revoke discoverability
     // - Revoke participant-ready
@@ -76,7 +76,7 @@ fn test_bridge_revokes_discoverability_and_ready_on_shutdown() {
 }
 
 #[test]
-fn test_bridge_reports_lease_loss_without_dropping_active_session() {
+fn bridge_reports_lease_loss_without_dropping_active_session() {
     // When lease is lost:
     // - Prevent new inbound pairing admission
     // - Allow active session to continue to terminal result

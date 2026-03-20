@@ -93,6 +93,7 @@ impl DaemonApp {
             self.runtime.clone(),
             self.state.clone(),
         ));
+        let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()));
         let pairing_host = Arc::new(DaemonPairingHost::new(
             self.runtime.clone(),
             self.pairing_orchestrator.clone(),
@@ -100,9 +101,9 @@ impl DaemonApp {
             self.state.clone(),
             self.space_access_orchestrator.clone(),
             self.key_slot_store.clone(),
+            api_state.event_tx.clone(),
         ));
-        let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()))
-            .with_pairing_host(Arc::clone(&pairing_host));
+        let api_state = api_state.with_pairing_host(Arc::clone(&pairing_host));
 
         info!("uniclipboard-daemon running, RPC at {:?}", self.socket_path);
 

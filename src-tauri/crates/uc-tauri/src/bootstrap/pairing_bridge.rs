@@ -12,7 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, RwLock};
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{http::Request, Message};
 use tracing::{debug, error, info, warn};
 
 use crate::bootstrap::DaemonConnectionState;
@@ -75,7 +75,9 @@ pub struct P2PPairingVerificationEvent {
     pub kind: P2PPairingVerificationKind,
     pub session_id: Option<String>,
     pub peer_id: Option<String>,
-    pub short_code: Option<String>,
+    pub device_name: Option<String>,
+    pub code: Option<String>,
+    pub local_fingerprint: Option<String>,
     pub peer_fingerprint: Option<String>,
     pub error: Option<String>,
 }
@@ -84,7 +86,10 @@ pub struct P2PPairingVerificationEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct P2PPeerDiscoveryChangedEvent {
-    pub peers: Vec<P2PPeerInfo>,
+    pub peer_id: String,
+    pub device_name: Option<String>,
+    pub addresses: Vec<String>,
+    pub discovered: bool,
 }
 
 /// Frontend peer name updated event payload.
@@ -100,6 +105,7 @@ pub struct P2PPeerNameUpdatedEvent {
 #[serde(rename_all = "camelCase")]
 pub struct P2PPeerConnectionChangedEvent {
     pub peer_id: String,
+    pub device_name: Option<String>,
     pub connected: bool,
 }
 
@@ -168,6 +174,12 @@ impl PairingBridge {
                 // Connect to WebSocket.
                 let ws_url = connection.ws_url.clone();
                 let token = connection.token.clone();
+                if let Err(err) =
+                    Self::set_discoverable_with_client(&connection_state, true, Some(300_000)).await
+                {
+                    warn!(error = %err, "failed to register GUI discoverability for pairing bridge");
+                    Self::emit_lease_lost(&app_handle, "discoverability_registration_failed", true);
+                }
 
                 match Self::connect_and_subscribe(
                     &app_handle,
@@ -181,9 +193,23 @@ impl PairingBridge {
                 {
                     Ok(_) => {
                         info!("Daemon WebSocket connection closed normally");
+                        Self::handle_bridge_degradation(
+                            &app_handle,
+                            &connection_state,
+                            "websocket_closed",
+                            true,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         error!(error = %e, "Daemon WebSocket connection failed, retrying in 2s");
+                        Self::handle_bridge_degradation(
+                            &app_handle,
+                            &connection_state,
+                            "websocket_connect_failed",
+                            true,
+                        )
+                        .await;
                         tokio::time::sleep(Duration::from_secs(2)).await;
                     }
                 }
@@ -195,8 +221,13 @@ impl PairingBridge {
                 }
             }
 
-            // On shutdown, revoke discoverability and participant-ready.
-            Self::revoke_all(&app_handle, &connection_state).await;
+            Self::handle_bridge_degradation(
+                &app_handle,
+                &connection_state,
+                "bridge_shutdown",
+                false,
+            )
+            .await;
         });
     }
 
@@ -243,13 +274,16 @@ impl PairingBridge {
     async fn connect_and_subscribe(
         app_handle: &AppHandle,
         ws_url: &str,
-        _token: &str,
+        token: &str,
         _participant_ready: Arc<RwLock<bool>>,
         _discoverable: Arc<RwLock<bool>>,
         shutdown_rx: &mut mpsc::Receiver<()>,
     ) -> Result<()> {
-        let url = format!("{}ws", ws_url.trim_end_matches('/'));
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
+        let request = Request::builder()
+            .uri(ws_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .body(())?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async(request)
             .await
             .context("failed to connect to daemon WebSocket")?;
 
@@ -333,44 +367,75 @@ impl PairingBridge {
     /// Handle pairing-related events.
     async fn handle_pairing_event(app_handle: &AppHandle, event: &DaemonWsEvent) -> Result<()> {
         match event.event_type.as_str() {
-            EVENT_PAIRING_VERIFICATION_REQUIRED => {
-                let payload = event.payload.clone();
-                let session_id = payload
-                    .get("sessionId")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let peer_id = payload
-                    .get("peerId")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let short_code = payload
-                    .get("shortCode")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                let peer_fingerprint = payload
-                    .get("peerFingerprint")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-
-                // Determine kind based on session state.
-                let state = payload
+            "pairing.updated" => {
+                let state = event
+                    .payload
                     .get("state")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("request");
-
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
                 let kind = match state {
-                    "request" => P2PPairingVerificationKind::Request,
-                    "verification" => P2PPairingVerificationKind::Verification,
-                    "verifying" => P2PPairingVerificationKind::Verifying,
-                    _ => P2PPairingVerificationKind::Verification,
+                    "request" => Some(P2PPairingVerificationKind::Request),
+                    "verifying" => Some(P2PPairingVerificationKind::Verifying),
+                    _ => None,
                 };
 
+                if let Some(kind) = kind {
+                    let frontend_event = P2PPairingVerificationEvent {
+                        kind,
+                        session_id: event
+                            .payload
+                            .get("sessionId")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        peer_id: event
+                            .payload
+                            .get("peerId")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        device_name: event
+                            .payload
+                            .get("deviceName")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        code: None,
+                        local_fingerprint: None,
+                        peer_fingerprint: None,
+                        error: None,
+                    };
+
+                    app_handle
+                        .emit(EVENT_P2P_PAIRING_VERIFICATION, frontend_event)
+                        .map_err(|e| anyhow!("failed to emit p2p-pairing-verification: {}", e))?;
+                }
+            }
+            EVENT_PAIRING_VERIFICATION_REQUIRED => {
+                let payload = event.payload.clone();
                 let frontend_event = P2PPairingVerificationEvent {
-                    kind,
-                    session_id,
-                    peer_id,
-                    short_code,
-                    peer_fingerprint,
+                    kind: P2PPairingVerificationKind::Verification,
+                    session_id: payload
+                        .get("sessionId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    peer_id: payload
+                        .get("peerId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    device_name: payload
+                        .get("deviceName")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    code: payload
+                        .get("code")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    local_fingerprint: payload
+                        .get("localFingerprint")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    peer_fingerprint: payload
+                        .get("peerFingerprint")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
                     error: None,
                 };
 
@@ -393,7 +458,12 @@ impl PairingBridge {
                     kind: P2PPairingVerificationKind::Complete,
                     session_id,
                     peer_id,
-                    short_code: None,
+                    device_name: payload
+                        .get("deviceName")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    code: None,
+                    local_fingerprint: None,
                     peer_fingerprint: None,
                     error: None,
                 };
@@ -416,8 +486,13 @@ impl PairingBridge {
                 let frontend_event = P2PPairingVerificationEvent {
                     kind: P2PPairingVerificationKind::Failed,
                     session_id,
-                    peer_id: None,
-                    short_code: None,
+                    peer_id: payload
+                        .get("peerId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    device_name: None,
+                    code: None,
+                    local_fingerprint: None,
                     peer_fingerprint: None,
                     error,
                 };
@@ -439,42 +514,30 @@ impl PairingBridge {
         match event.event_type.as_str() {
             EVENT_PEERS_CHANGED => {
                 let payload = event.payload.clone();
-                let peers: Vec<P2PPeerInfo> = payload
-                    .get("peers")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|p| {
-                                Some(P2PPeerInfo {
-                                    peer_id: p.get("peerId")?.as_str()?.to_string(),
-                                    device_name: p
-                                        .get("deviceName")
-                                        .and_then(|v| v.as_str())
-                                        .map(String::from),
-                                    addresses: p
-                                        .get("addresses")
-                                        .and_then(|v| v.as_array())
-                                        .map(|arr| {
-                                            arr.iter()
-                                                .filter_map(|a| a.as_str().map(String::from))
-                                                .collect()
-                                        })
-                                        .unwrap_or_default(),
-                                    is_paired: p
-                                        .get("isPaired")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(false),
-                                    connected: p
-                                        .get("connected")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(false),
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let frontend_event = P2PPeerDiscoveryChangedEvent { peers };
+                let frontend_event = P2PPeerDiscoveryChangedEvent {
+                    peer_id: payload
+                        .get("peerId")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                        .unwrap_or_default(),
+                    device_name: payload
+                        .get("deviceName")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    addresses: payload
+                        .get("addresses")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|a| a.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    discovered: payload
+                        .get("discovered")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                };
                 app_handle
                     .emit(EVENT_P2P_PEER_DISCOVERY_CHANGED, frontend_event)
                     .map_err(|e| anyhow!("failed to emit p2p-peer-discovery-changed: {}", e))?;
@@ -512,7 +575,14 @@ impl PairingBridge {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
 
-                let frontend_event = P2PPeerConnectionChangedEvent { peer_id, connected };
+                let frontend_event = P2PPeerConnectionChangedEvent {
+                    peer_id,
+                    device_name: payload
+                        .get("deviceName")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    connected,
+                };
                 app_handle
                     .emit(EVENT_P2P_PEER_CONNECTION_CHANGED, frontend_event)
                     .map_err(|e| anyhow!("failed to emit p2p-peer-connection-changed: {}", e))?;
@@ -526,7 +596,7 @@ impl PairingBridge {
     }
 
     /// Revoke all discoverability and participant-ready on shutdown.
-    async fn revoke_all(app_handle: &AppHandle, connection_state: &DaemonConnectionState) {
+    async fn revoke_all(connection_state: &DaemonConnectionState) {
         let client = crate::daemon_client::TauriDaemonPairingClient::new(connection_state.clone());
 
         // Revoke discoverability.
@@ -541,11 +611,34 @@ impl PairingBridge {
         {
             warn!(error = %e, "failed to revoke participant-ready on bridge shutdown");
         }
+    }
 
-        // Emit lease lost event.
+    async fn set_discoverable_with_client(
+        connection_state: &DaemonConnectionState,
+        discoverable: bool,
+        lease_ttl_ms: Option<u64>,
+    ) -> Result<()> {
+        let client = crate::daemon_client::TauriDaemonPairingClient::new(connection_state.clone());
+        client
+            .set_pairing_discoverability("gui", discoverable, lease_ttl_ms)
+            .await?;
+        Ok(())
+    }
+
+    async fn handle_bridge_degradation(
+        app_handle: &AppHandle,
+        connection_state: &DaemonConnectionState,
+        reason: &str,
+        can_recover: bool,
+    ) {
+        Self::revoke_all(connection_state).await;
+        Self::emit_lease_lost(app_handle, reason, can_recover);
+    }
+
+    fn emit_lease_lost(app_handle: &AppHandle, reason: &str, can_recover: bool) {
         let event = PairingBridgeLeaseLostEvent {
-            reason: "bridge_shutdown".to_string(),
-            can_recover: false,
+            reason: reason.to_string(),
+            can_recover,
         };
         let _ = app_handle.emit(EVENT_PAIRING_BRIDGE_LEASE_LOST, event);
     }
