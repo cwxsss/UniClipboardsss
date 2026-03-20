@@ -20,6 +20,9 @@ use uc_core::ports::host_event_emitter::{
     PairingHostEvent, PairingVerificationKind, PeerConnectionHostEvent, PeerDiscoveryHostEvent,
     SetupHostEvent, SpaceAccessHostEvent, TransferHostEvent,
 };
+use uc_core::ports::realtime::{
+    RealtimeFrontendEvent, RealtimeFrontendPayload, RealtimeTopic, FRONTEND_REALTIME_EVENT,
+};
 use uc_core::setup::SetupState;
 
 // ---------------------------------------------------------------------------
@@ -554,6 +557,8 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
             )
         }
 
+        HostEvent::Realtime(event) => (FRONTEND_REALTIME_EVENT, realtime_event_to_json(event)),
+
         // -----------------------------------------------------------------------
         // Setup events
         // -----------------------------------------------------------------------
@@ -820,6 +825,19 @@ impl HostEventEmitterPort for LoggingEventEmitter {
                 );
             }
 
+            HostEvent::Realtime(RealtimeFrontendEvent {
+                ref topic,
+                ts,
+                payload: _,
+                ..
+            }) => {
+                tracing::debug!(
+                    event_type = "realtime.event",
+                    topic = %realtime_topic_to_str(topic),
+                    ts = ts,
+                );
+            }
+
             HostEvent::Setup(SetupHostEvent::StateChanged {
                 ref state,
                 ref session_id,
@@ -860,6 +878,74 @@ impl HostEventEmitterPort for LoggingEventEmitter {
             }
         }
         Ok(())
+    }
+}
+
+fn realtime_event_to_json(event: RealtimeFrontendEvent) -> serde_json::Value {
+    serde_json::json!({
+        "topic": realtime_topic_to_str(&event.topic),
+        "type": event.event_type(),
+        "ts": event.ts,
+        "payload": realtime_payload_to_json(event.payload),
+    })
+}
+
+fn realtime_topic_to_str(topic: &RealtimeTopic) -> &'static str {
+    match topic {
+        RealtimeTopic::Pairing => "pairing",
+        RealtimeTopic::Peers => "peers",
+        RealtimeTopic::PairedDevices => "pairedDevices",
+    }
+}
+
+fn realtime_payload_to_json(payload: RealtimeFrontendPayload) -> serde_json::Value {
+    match payload {
+        RealtimeFrontendPayload::PairingUpdated(payload) => serde_json::json!({
+            "sessionId": payload.session_id,
+            "status": payload.status,
+            "peerId": payload.peer_id,
+            "deviceName": payload.device_name,
+        }),
+        RealtimeFrontendPayload::PairingVerificationRequired(payload) => serde_json::json!({
+            "sessionId": payload.session_id,
+            "peerId": payload.peer_id,
+            "deviceName": payload.device_name,
+            "code": payload.code,
+            "localFingerprint": payload.local_fingerprint,
+            "peerFingerprint": payload.peer_fingerprint,
+        }),
+        RealtimeFrontendPayload::PairingFailed(payload) => serde_json::json!({
+            "sessionId": payload.session_id,
+            "reason": payload.reason,
+        }),
+        RealtimeFrontendPayload::PairingComplete(payload) => serde_json::json!({
+            "sessionId": payload.session_id,
+            "peerId": payload.peer_id,
+            "deviceName": payload.device_name,
+        }),
+        RealtimeFrontendPayload::PeersChanged(payload) => serde_json::json!({
+            "peers": payload.peers.into_iter().map(|peer| serde_json::json!({
+                "peerId": peer.peer_id,
+                "deviceName": peer.device_name,
+                "connected": peer.connected,
+            })).collect::<Vec<_>>(),
+        }),
+        RealtimeFrontendPayload::PeersNameUpdated(payload) => serde_json::json!({
+            "peerId": payload.peer_id,
+            "deviceName": payload.device_name,
+        }),
+        RealtimeFrontendPayload::PeersConnectionChanged(payload) => serde_json::json!({
+            "peerId": payload.peer_id,
+            "deviceName": payload.device_name,
+            "connected": payload.connected,
+        }),
+        RealtimeFrontendPayload::PairedDevicesChanged(payload) => serde_json::json!({
+            "devices": payload.devices.into_iter().map(|device| serde_json::json!({
+                "deviceId": device.device_id,
+                "deviceName": device.device_name,
+                "lastSeenTs": device.last_seen_ts,
+            })).collect::<Vec<_>>(),
+        }),
     }
 }
 
