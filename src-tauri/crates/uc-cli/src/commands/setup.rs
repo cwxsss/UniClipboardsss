@@ -17,7 +17,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SetupStatusOutput {
+pub(crate) struct SetupStatusOutput {
     state: Value,
     session_id: Option<String>,
     next_step_hint: String,
@@ -238,14 +238,9 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
                     }
                 }
             }
-        } else if state.next_step_hint == "join-enter-passphrase"
-            || matches!(
-                setup_state_variant(&state.state),
-                Some("JoinSpaceInputPassphrase")
-            )
-        {
-            if setup_state_error_code(&state.state) == Some("PassphraseInvalidOrMismatch") {
-                println!("Passphrase invalid or mismatched. Try again.");
+        } else if should_prompt_for_join_passphrase(&state) {
+            if let Some(message) = join_retry_message(&state) {
+                println!("{message}");
             }
             let passphrase = match prompt_hidden("Passphrase: ") {
                 Ok(passphrase) if passphrase.trim().is_empty() => {
@@ -310,10 +305,10 @@ pub async fn run_reset(json: bool, _verbose: bool) -> i32 {
         Err(error) => return print_client_error(error),
     };
 
-    println!("Reset complete for profile {}", response.profile);
-    if response.daemon_kept_running {
-        println!("Daemon kept running");
-    }
+    println!(
+        "{}",
+        render_reset_output(&response.profile, response.daemon_kept_running)
+    );
 
     exit_codes::EXIT_SUCCESS
 }
@@ -369,6 +364,14 @@ fn state_signature(state: &SetupStateResponse) -> String {
     )
 }
 
+pub(crate) fn should_prompt_for_join_passphrase(state: &SetupStateResponse) -> bool {
+    state.next_step_hint == "join-enter-passphrase"
+        || matches!(
+            setup_state_variant(&state.state),
+            Some("JoinSpaceInputPassphrase")
+        )
+}
+
 fn setup_state_variant(state: &Value) -> Option<&str> {
     match state {
         Value::String(value) => Some(value.as_str()),
@@ -384,6 +387,22 @@ fn setup_state_error_code(state: &Value) -> Option<&str> {
         _ => return None,
     };
     payload.get("error")?.as_str()
+}
+
+pub(crate) fn join_retry_message(state: &SetupStateResponse) -> Option<&'static str> {
+    if setup_state_error_code(&state.state) == Some("PassphraseInvalidOrMismatch") {
+        Some("Passphrase rejected; retrying current join session")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn render_reset_output(profile: &str, daemon_kept_running: bool) -> String {
+    let mut lines = vec![format!("Reset complete for profile {profile}")];
+    if daemon_kept_running {
+        lines.push("Daemon kept running".to_string());
+    }
+    lines.join("\n")
 }
 
 fn prompt_new_space_passphrase() -> Result<String, String> {
