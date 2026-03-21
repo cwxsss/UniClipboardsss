@@ -20,6 +20,9 @@ use uc_platform::ports::WatcherControlPort;
 
 use crate::assembly::{build_setup_orchestrator, SetupAssemblyPorts};
 
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
+
 // ---------------------------------------------------------------------------
 // LoggingHostEventEmitter
 // ---------------------------------------------------------------------------
@@ -91,8 +94,8 @@ impl WatcherControlPort for NoopWatcherControl {
 /// Construct a [`CoreRuntime`] for non-GUI entry points (daemon, CLI).
 ///
 /// Uses [`LoggingHostEventEmitter`] as the permanent emitter (no swap needed
-/// in non-GUI modes), `InMemoryLifecycleStatus`, and
-/// `ClipboardIntegrationMode::Passive`.
+/// in non-GUI modes), `InMemoryLifecycleStatus`, and the
+/// `UC_CLIPBOARD_MODE` environment override.
 ///
 /// # Arguments
 ///
@@ -123,6 +126,7 @@ pub fn build_non_gui_runtime_with_setup(
 
     let lifecycle_status = Arc::new(InMemoryLifecycleStatus::new());
     let task_registry = Arc::new(TaskRegistry::new());
+    let clipboard_integration_mode = resolve_clipboard_integration_mode();
 
     let session_ready_emitter: Arc<dyn SessionReadyEmitter> = Arc::new(LoggingSessionReadyEmitter);
 
@@ -131,7 +135,7 @@ pub fn build_non_gui_runtime_with_setup(
         setup_ports,
         lifecycle_status.clone(),
         emitter_cell.clone(),
-        ClipboardIntegrationMode::Passive,
+        clipboard_integration_mode,
         session_ready_emitter,
         watcher_control,
     );
@@ -141,7 +145,7 @@ pub fn build_non_gui_runtime_with_setup(
         emitter_cell,
         lifecycle_status,
         setup_orchestrator,
-        ClipboardIntegrationMode::Passive,
+        clipboard_integration_mode,
         task_registry,
         storage_paths,
     ))
@@ -172,6 +176,31 @@ pub fn build_cli_runtime(
     Ok(runtime)
 }
 
+fn parse_clipboard_integration_mode(raw: Option<&str>) -> ClipboardIntegrationMode {
+    let Some(raw_value) = raw else {
+        return ClipboardIntegrationMode::Full;
+    };
+
+    let normalized = raw_value.trim();
+    if normalized.eq_ignore_ascii_case("passive") {
+        return ClipboardIntegrationMode::Passive;
+    }
+    if normalized.eq_ignore_ascii_case("full") {
+        return ClipboardIntegrationMode::Full;
+    }
+
+    tracing::warn!(
+        uc_clipboard_mode = %raw_value,
+        "Invalid UC_CLIPBOARD_MODE value; falling back to full integration"
+    );
+    ClipboardIntegrationMode::Full
+}
+
+fn resolve_clipboard_integration_mode() -> ClipboardIntegrationMode {
+    let raw = std::env::var("UC_CLIPBOARD_MODE").ok();
+    parse_clipboard_integration_mode(raw.as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +210,11 @@ mod tests {
     };
     use uc_core::ports::transfer_progress::{TransferDirection, TransferProgress};
     use uc_core::setup::SetupState;
+
+    fn clipboard_mode_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_logging_emitter_returns_ok() {
@@ -244,6 +278,65 @@ mod tests {
                 emitter.emit(event).is_ok(),
                 "LoggingHostEventEmitter should always return Ok"
             );
+        }
+    }
+
+    #[test]
+    fn parse_clipboard_integration_mode_table_driven() {
+        let cases = [
+            (
+                "none defaults to full",
+                None,
+                ClipboardIntegrationMode::Full,
+            ),
+            (
+                "mixed case passive",
+                Some("PaSsIvE"),
+                ClipboardIntegrationMode::Passive,
+            ),
+            (
+                "trimmed full",
+                Some(" full "),
+                ClipboardIntegrationMode::Full,
+            ),
+            (
+                "whitespace only falls back to full",
+                Some("   "),
+                ClipboardIntegrationMode::Full,
+            ),
+            (
+                "invalid falls back to full",
+                Some("definitely-invalid"),
+                ClipboardIntegrationMode::Full,
+            ),
+        ];
+
+        for (name, raw, expected) in cases {
+            assert_eq!(parse_clipboard_integration_mode(raw), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn resolve_clipboard_integration_mode_reads_env_override() {
+        let _guard = clipboard_mode_env_lock().lock().expect("env lock");
+        let key = "UC_CLIPBOARD_MODE";
+        let original = std::env::var(key).ok();
+
+        std::env::set_var(key, "full");
+        assert_eq!(
+            resolve_clipboard_integration_mode(),
+            ClipboardIntegrationMode::Full
+        );
+
+        std::env::set_var(key, "passive");
+        assert_eq!(
+            resolve_clipboard_integration_mode(),
+            ClipboardIntegrationMode::Passive
+        );
+
+        match original {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
         }
     }
 }
