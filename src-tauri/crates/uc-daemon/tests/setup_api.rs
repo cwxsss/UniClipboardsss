@@ -19,7 +19,9 @@ use uc_app::usecases::pairing::PairingDomainEvent;
 use uc_app::usecases::setup::{MarkSetupComplete, SetupPairingFacadePort};
 use uc_app::usecases::space_access::{SpaceAccessCryptoFactory, SpaceAccessOrchestrator};
 use uc_app::usecases::{InitializeEncryption, SetupOrchestrator, StartClipboardWatcherPort};
+use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_cli_runtime;
+use uc_bootstrap::{build_non_gui_runtime_with_setup, builders::build_daemon_app};
 use uc_core::ports::space::CryptoPort;
 use uc_core::ports::SetupStatusPort;
 use uc_core::security::model::{KeySlot, MasterKey};
@@ -27,6 +29,8 @@ use uc_core::setup::SetupStatus;
 use uc_daemon::api::auth::load_or_create_auth_token;
 use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::server::{build_router, DaemonApiState};
+use uc_daemon::api::types::DaemonWsEvent;
+use uc_daemon::pairing::host::DaemonPairingHost;
 use uc_daemon::state::RuntimeState;
 
 fn build_runtime() -> Arc<CoreRuntime> {
@@ -53,6 +57,102 @@ async fn build_setup_router() -> (axum::Router, String) {
     let setup_orchestrator = build_setup_orchestrator(runtime);
     let api_state = DaemonApiState::new(query_service, token, None).with_setup(setup_orchestrator);
     (build_router(api_state), token_value)
+}
+
+fn with_profile_env<T>(
+    profile: &str,
+    xdg_runtime_dir: &std::path::Path,
+    f: impl FnOnce() -> T,
+) -> T {
+    static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let _guard = ENV_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let previous_profile = std::env::var("UC_PROFILE").ok();
+    let previous_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+
+    std::env::set_var("UC_PROFILE", profile);
+    std::env::set_var("XDG_RUNTIME_DIR", xdg_runtime_dir);
+
+    let result = f();
+
+    match previous_profile {
+        Some(value) => std::env::set_var("UC_PROFILE", value),
+        None => std::env::remove_var("UC_PROFILE"),
+    }
+    match previous_xdg_runtime_dir {
+        Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
+        None => std::env::remove_var("XDG_RUNTIME_DIR"),
+    }
+
+    result
+}
+
+fn build_reset_router() -> (axum::Router, String) {
+    static RUNTIME_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let _guard = RUNTIME_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let profile = format!(
+        "setup-api-reset-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos()
+    );
+
+    with_profile_env(&profile, tempdir.path(), || {
+        let ctx = build_daemon_app().expect("build daemon app");
+        let setup_ports = SetupAssemblyPorts::from_network(
+            ctx.pairing_orchestrator.clone(),
+            ctx.space_access_orchestrator.clone(),
+            ctx.deps.network_ports.peers.clone(),
+            None,
+            Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
+        );
+        let runtime = Arc::new(
+            build_non_gui_runtime_with_setup(
+                ctx.deps,
+                ctx.storage_paths.clone(),
+                setup_ports,
+                ctx.watcher_control.clone(),
+            )
+            .expect("build non-gui runtime with setup"),
+        );
+        let setup_orchestrator = runtime.setup_orchestrator().clone();
+        let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
+        let query_service = Arc::new(DaemonQueryService::new(runtime.clone(), state.clone()));
+        let token_dir = tempfile::tempdir().expect("token tempdir");
+        let token_path = token_dir.path().join("daemon.token");
+        let token = load_or_create_auth_token(&token_path).expect("load auth token");
+        let token_value = std::fs::read_to_string(&token_path).expect("read auth token");
+        let (event_tx, _event_rx) = tokio::sync::broadcast::channel::<DaemonWsEvent>(128);
+        let pairing_host = Arc::new(DaemonPairingHost::new(
+            runtime.clone(),
+            ctx.pairing_orchestrator,
+            ctx.pairing_action_rx,
+            state,
+            ctx.space_access_orchestrator,
+            ctx.key_slot_store,
+            event_tx,
+        ));
+        let api_state = DaemonApiState::new(query_service, token, Some(runtime))
+            .with_setup(setup_orchestrator)
+            .with_pairing_host(pairing_host);
+        (build_router(api_state), token_value)
+    })
+}
+
+async fn build_reset_router_async() -> (axum::Router, String) {
+    tokio::task::spawn_blocking(build_reset_router)
+        .await
+        .expect("setup reset fixture join failed")
 }
 
 fn build_setup_orchestrator(runtime: Arc<CoreRuntime>) -> Arc<SetupOrchestrator> {
@@ -138,6 +238,19 @@ async fn get_setup_state(app: &axum::Router, token: &str) -> Value {
 
     assert_eq!(response.status(), StatusCode::OK);
     json_body(response).await
+}
+
+async fn reset_setup(app: &axum::Router, token: &str) -> axum::response::Response {
+    app.clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/reset",
+            token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .unwrap()
 }
 
 fn assert_setup_state_metadata_shape(body: &Value) {
@@ -449,4 +562,150 @@ async fn setup_cancel_route_returns_idle_or_select_state_without_500() {
         body["nextStepHint"] == Value::String("join-select-peer".to_string())
             || body["nextStepHint"] == Value::String("idle".to_string())
     );
+}
+
+#[tokio::test]
+async fn setup_reset_clears_active_setup_state() {
+    let (app, token) = build_reset_router_async().await;
+
+    let host_response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/host",
+            &token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(host_response.status(), StatusCode::OK);
+
+    let before_reset = get_setup_state(&app, &token).await;
+    assert_eq!(before_reset["nextStepHint"], "create-space-passphrase");
+
+    let reset_response = reset_setup(&app, &token).await;
+    assert_eq!(reset_response.status(), StatusCode::OK);
+    let reset_body = json_body(reset_response).await;
+    assert!(reset_body["profile"].as_str().is_some());
+    assert_eq!(reset_body["daemonKeptRunning"], Value::Bool(true));
+
+    let after_reset = get_setup_state(&app, &token).await;
+    assert_eq!(after_reset["state"], Value::String("Welcome".to_string()));
+    assert_eq!(after_reset["nextStepHint"], "idle");
+}
+
+#[tokio::test]
+async fn setup_reset_releases_pairing_host_leases() {
+    let (app, token) = build_reset_router_async().await;
+
+    let discoverability_response = app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            "/pairing/discoverability/current",
+            &token,
+            Body::from(
+                json!({
+                    "clientKind": "setup-cli",
+                    "discoverable": true,
+                    "leaseTtlMs": 60_000
+                })
+                .to_string(),
+            ),
+            Some("application/json"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(discoverability_response.status(), StatusCode::ACCEPTED);
+
+    let participant_response = app
+        .clone()
+        .oneshot(authed_request(
+            "PUT",
+            "/pairing/participants/current",
+            &token,
+            Body::from(
+                json!({
+                    "clientKind": "setup-cli",
+                    "ready": true,
+                    "leaseTtlMs": 60_000
+                })
+                .to_string(),
+            ),
+            Some("application/json"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(participant_response.status(), StatusCode::ACCEPTED);
+
+    let reset_response = reset_setup(&app, &token).await;
+    assert_eq!(reset_response.status(), StatusCode::OK);
+
+    let initiate_response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/pairing/sessions",
+            &token,
+            Body::from(json!({ "peerId": "peer-after-reset" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(initiate_response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(initiate_response).await;
+    assert!(
+        body["error"] == Value::String("host_not_discoverable".to_string())
+            || body["code"] == Value::String("host_not_discoverable".to_string())
+    );
+}
+
+#[tokio::test]
+async fn setup_reset_allows_second_host_start_without_manual_cleanup() {
+    let (app, token) = build_reset_router_async().await;
+
+    let first_host = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/host",
+            &token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first_host.status(), StatusCode::OK);
+
+    let first_passphrase = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/submit-passphrase",
+            &token,
+            Body::from(json!({ "passphrase": "secret-passphrase" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first_passphrase.status(), StatusCode::OK);
+
+    let reset_response = reset_setup(&app, &token).await;
+    assert_eq!(reset_response.status(), StatusCode::OK);
+
+    let second_host = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/host",
+            &token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second_host.status(), StatusCode::OK);
+    let second_body = json_body(second_host).await;
+    assert_eq!(second_body["nextStepHint"], "create-space-passphrase");
 }
