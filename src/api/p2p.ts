@@ -4,6 +4,7 @@
  * 提供 libp2p 设备发现、配对和剪贴板同步功能
  */
 
+import { listen } from '@tauri-apps/api/event'
 import { onDaemonRealtimeEvent } from '@/api/realtime'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
@@ -89,6 +90,141 @@ export type P2PPairingVerificationKind =
   | 'verifying'
   | 'complete'
   | 'failed'
+
+export type PairingErrorKind =
+  | 'active_session_exists'
+  | 'no_local_participant'
+  | 'session_not_found'
+  | 'daemon_unavailable'
+  | 'unknown'
+
+interface P2PCommandErrorEvent {
+  command: string
+  message: string
+}
+
+const bufferedCommandErrors = new Map<string, string[]>()
+const pendingCommandErrorResolvers = new Map<string, Array<(message: string) => void>>()
+let commandErrorListenerPromise: Promise<void> | null = null
+
+function queueCommandError(command: string, message: string) {
+  const pendingResolvers = pendingCommandErrorResolvers.get(command)
+  if (pendingResolvers && pendingResolvers.length > 0) {
+    const resolver = pendingResolvers.shift()
+    if (pendingResolvers.length === 0) {
+      pendingCommandErrorResolvers.delete(command)
+    }
+    resolver?.(message)
+    return
+  }
+
+  const buffered = bufferedCommandErrors.get(command) ?? []
+  buffered.push(message)
+  bufferedCommandErrors.set(command, buffered)
+}
+
+async function ensureCommandErrorListener() {
+  if (!commandErrorListenerPromise) {
+    commandErrorListenerPromise = listen<P2PCommandErrorEvent>('p2p-command-error', event => {
+      queueCommandError(event.payload.command, event.payload.message)
+    })
+      .then(() => undefined)
+      .catch(error => {
+        console.error('Failed to listen for p2p-command-error:', error)
+      })
+  }
+
+  await commandErrorListenerPromise
+}
+
+function stringifyPairingError(error: unknown): string {
+  if (typeof error === 'string') {
+    return error
+  }
+  if (error instanceof Error) {
+    return error.message
+  }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message
+  }
+  return String(error)
+}
+
+async function resolveCommandErrorMessage(command: string, error: unknown): Promise<string> {
+  const buffered = bufferedCommandErrors.get(command)
+  if (buffered && buffered.length > 0) {
+    const message = buffered.shift()
+    if (buffered.length === 0) {
+      bufferedCommandErrors.delete(command)
+    }
+    return message ?? stringifyPairingError(error)
+  }
+
+  const fallbackMessage = stringifyPairingError(error)
+  return new Promise(resolve => {
+    const timeoutId = globalThis.setTimeout(() => {
+      const pending = pendingCommandErrorResolvers.get(command) ?? []
+      pendingCommandErrorResolvers.set(
+        command,
+        pending.filter(candidate => candidate !== resolver)
+      )
+      resolve(fallbackMessage)
+    }, 50)
+
+    const resolver = (message: string) => {
+      globalThis.clearTimeout(timeoutId)
+      resolve(message)
+    }
+
+    const pending = pendingCommandErrorResolvers.get(command) ?? []
+    pending.push(resolver)
+    pendingCommandErrorResolvers.set(command, pending)
+  })
+}
+
+export function classifyPairingError(rawError?: string | null): PairingErrorKind {
+  const normalized = rawError?.toLowerCase() ?? ''
+
+  if (
+    normalized.includes('active pairing session exists') ||
+    normalized.includes('active_session_exists')
+  ) {
+    return 'active_session_exists'
+  }
+
+  if (
+    normalized.includes('no local pairing participant ready') ||
+    normalized.includes('no_local_participant')
+  ) {
+    return 'no_local_participant'
+  }
+
+  if (
+    normalized.includes('pairing session not found') ||
+    normalized.includes('session_not_found') ||
+    normalized.includes('session expired')
+  ) {
+    return 'session_not_found'
+  }
+
+  if (
+    normalized.includes('daemon connection info is not available') ||
+    normalized.includes('connection refused') ||
+    normalized.includes('failed to call daemon pairing route') ||
+    normalized.includes('failed to open daemon tcp socket') ||
+    normalized.includes('failed to connect daemon websocket') ||
+    normalized.includes('pairing_host_unavailable')
+  ) {
+    return 'daemon_unavailable'
+  }
+
+  return 'unknown'
+}
 
 /**
  * P2P 配对验证事件数据
@@ -246,13 +382,18 @@ export async function getP2PPeers(): Promise<P2PPeerInfo[]> {
  * 发起 P2P 配对请求
  */
 export async function initiateP2PPairing(request: P2PPairingRequest): Promise<P2PPairingResponse> {
+  await ensureCommandErrorListener()
   try {
     return await invokeWithTrace<P2PPairingResponse>('initiate_p2p_pairing', {
       request,
     })
   } catch (error) {
     console.error('Failed to initiate P2P pairing:', error)
-    throw error
+    return {
+      sessionId: '',
+      success: false,
+      error: await resolveCommandErrorMessage('initiate_p2p_pairing', error),
+    }
   }
 }
 
@@ -260,13 +401,14 @@ export async function initiateP2PPairing(request: P2PPairingRequest): Promise<P2
  * 验证 PIN 并完成配对
  */
 export async function verifyP2PPairingPin(request: P2PPinVerifyRequest): Promise<void> {
+  await ensureCommandErrorListener()
   try {
     await invokeWithTrace('verify_p2p_pairing_pin', {
       request,
     })
   } catch (error) {
     console.error('Failed to verify P2P pairing PIN:', error)
-    throw error
+    throw new Error(await resolveCommandErrorMessage('verify_p2p_pairing_pin', error))
   }
 }
 
@@ -274,6 +416,7 @@ export async function verifyP2PPairingPin(request: P2PPinVerifyRequest): Promise
  * 拒绝 P2P 配对请求
  */
 export async function rejectP2PPairing(sessionId: string, peerId: string): Promise<void> {
+  await ensureCommandErrorListener()
   try {
     await invokeWithTrace('reject_p2p_pairing', {
       sessionId,
@@ -281,7 +424,7 @@ export async function rejectP2PPairing(sessionId: string, peerId: string): Promi
     })
   } catch (error) {
     console.error('Failed to reject P2P pairing:', error)
-    throw error
+    throw new Error(await resolveCommandErrorMessage('reject_p2p_pairing', error))
   }
 }
 
@@ -303,13 +446,14 @@ export async function unpairP2PDevice(peerId: string): Promise<void> {
  * 接受 P2P 配对请求（接收方）
  */
 export async function acceptP2PPairing(sessionId: string): Promise<void> {
+  await ensureCommandErrorListener()
   try {
     await invokeWithTrace('accept_p2p_pairing', {
       sessionId,
     })
   } catch (error) {
     console.error('Failed to accept P2P pairing:', error)
-    throw error
+    throw new Error(await resolveCommandErrorMessage('accept_p2p_pairing', error))
   }
 }
 

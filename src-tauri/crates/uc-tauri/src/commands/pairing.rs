@@ -5,12 +5,12 @@ use crate::bootstrap::AppRuntime;
 use crate::bootstrap::DaemonConnectionState;
 use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
-use crate::daemon_client::TauriDaemonPairingClient;
+use crate::daemon_client::{DaemonPairingRequestError, TauriDaemonPairingClient};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, State};
-use tracing::{info_span, Instrument};
+use tracing::{error, info_span, warn, Instrument};
 use uc_app::usecases::LocalDeviceInfo;
 use uc_core::network::{ConnectedPeer, DiscoveredPeer, PairedDevice, PairingState};
 use uc_core::PeerId;
@@ -64,6 +64,13 @@ pub struct P2PPinVerifyRequest {
 struct P2PCommandErrorEvent {
     command: String,
     message: String,
+}
+
+#[derive(Debug, Clone)]
+struct PairingCommandErrorContext {
+    code: String,
+    message: String,
+    user_message: String,
 }
 
 /// List paired devices
@@ -330,13 +337,13 @@ pub async fn initiate_p2p_pairing(
                 error: None,
             }),
             Err(error) => {
-                tracing::error!(error = %error, "Failed to initiate P2P pairing");
-                let message = error.to_string();
-                emit_command_error(&runtime, "initiate_p2p_pairing", &message);
+                let mapped = map_pairing_command_error(&error);
+                log_pairing_command_error("initiate_p2p_pairing", &mapped);
+                emit_command_error(&runtime, "initiate_p2p_pairing", &mapped.user_message);
                 Ok(P2PPairingResponse {
                     session_id: String::new(),
                     success: false,
-                    error: Some(message),
+                    error: Some(mapped.user_message),
                 })
             }
         }
@@ -363,11 +370,11 @@ pub async fn accept_p2p_pairing(
         TauriDaemonPairingClient::new(daemon_connection.inner().clone())
             .accept_pairing(&session_id)
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, session_id = %session_id, "Failed to accept P2P pairing");
-                let message = e.to_string();
-                emit_command_error(&runtime, "accept_p2p_pairing", &message);
-                CommandError::InternalError(message)
+            .map_err(|error| {
+                let mapped = map_pairing_command_error(&error);
+                log_pairing_command_error("accept_p2p_pairing", &mapped);
+                emit_command_error(&runtime, "accept_p2p_pairing", &mapped.user_message);
+                CommandError::InternalError(mapped.user_message)
             })?;
         Ok(())
     }
@@ -393,11 +400,11 @@ pub async fn reject_p2p_pairing(
         TauriDaemonPairingClient::new(daemon_connection.inner().clone())
             .reject_pairing(&session_id)
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, session_id = %session_id, "Failed to reject P2P pairing");
-                let message = e.to_string();
-                emit_command_error(&runtime, "reject_p2p_pairing", &message);
-                CommandError::InternalError(message)
+            .map_err(|error| {
+                let mapped = map_pairing_command_error(&error);
+                log_pairing_command_error("reject_p2p_pairing", &mapped);
+                emit_command_error(&runtime, "reject_p2p_pairing", &mapped.user_message);
+                CommandError::InternalError(mapped.user_message)
             })?;
         Ok(())
     }
@@ -423,16 +430,11 @@ pub async fn verify_p2p_pairing_pin(
         TauriDaemonPairingClient::new(daemon_connection.inner().clone())
             .verify_pairing(&request.session_id, request.pin_matches)
             .await
-            .map_err(|e| {
-                tracing::error!(
-                    error = %e,
-                    session_id = %request.session_id,
-                    pin_matches = request.pin_matches,
-                    "Failed to verify P2P pairing PIN"
-                );
-                let message = e.to_string();
-                emit_command_error(&runtime, "verify_p2p_pairing_pin", &message);
-                CommandError::InternalError(message)
+            .map_err(|error| {
+                let mapped = map_pairing_command_error(&error);
+                log_pairing_command_error("verify_p2p_pairing_pin", &mapped);
+                emit_command_error(&runtime, "verify_p2p_pairing_pin", &mapped.user_message);
+                CommandError::InternalError(mapped.user_message)
             })?;
         Ok(())
     }
@@ -541,6 +543,53 @@ fn emit_command_error(runtime: &AppRuntime, command: &str, message: &str) {
             command = %command,
             "AppHandle not available, skipping p2p command error emission"
         );
+    }
+}
+
+fn map_pairing_command_error(error: &anyhow::Error) -> PairingCommandErrorContext {
+    if let Some(pairing_error) = error.downcast_ref::<DaemonPairingRequestError>() {
+        let code = pairing_error
+            .code
+            .clone()
+            .unwrap_or_else(|| "internal".to_string());
+        let user_message = match code.as_str() {
+            "active_session_exists" => "active pairing session exists".to_string(),
+            "no_local_participant" => "no local pairing participant ready".to_string(),
+            "host_not_discoverable" => "host not discoverable".to_string(),
+            "session_not_found" => "pairing session not found".to_string(),
+            _ => pairing_error.message.clone(),
+        };
+        return PairingCommandErrorContext {
+            code,
+            message: pairing_error.message.clone(),
+            user_message,
+        };
+    }
+
+    PairingCommandErrorContext {
+        code: "internal".to_string(),
+        message: error.to_string(),
+        user_message: error.to_string(),
+    }
+}
+
+fn log_pairing_command_error(command: &'static str, mapped: &PairingCommandErrorContext) {
+    match mapped.code.as_str() {
+        "active_session_exists"
+        | "no_local_participant"
+        | "host_not_discoverable"
+        | "session_not_found" => warn!(
+            command,
+            code = %mapped.code,
+            message = %mapped.message,
+            "daemon pairing command returned handled error"
+        ),
+        _ => error!(
+            command,
+            code = %mapped.code,
+            message = %mapped.message,
+            "daemon pairing command failed"
+        ),
     }
 }
 

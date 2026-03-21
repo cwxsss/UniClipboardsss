@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::header::AUTHORIZATION;
-use reqwest::{Method, RequestBuilder};
+use reqwest::{Method, RequestBuilder, StatusCode};
 
 use crate::bootstrap::DaemonConnectionState;
 use uc_daemon::api::pairing::{
@@ -14,6 +14,34 @@ pub struct TauriDaemonPairingClient {
     http: reqwest::Client,
     connection_state: DaemonConnectionState,
 }
+
+#[derive(Debug, Clone)]
+pub struct DaemonPairingRequestError {
+    pub path: String,
+    pub status: StatusCode,
+    pub code: Option<String>,
+    pub message: String,
+}
+
+impl std::fmt::Display for DaemonPairingRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(code) = self.code.as_deref() {
+            write!(
+                f,
+                "daemon pairing request {} failed with status {} [{}]: {}",
+                self.path, self.status, code, self.message
+            )
+        } else {
+            write!(
+                f,
+                "daemon pairing request {} failed with status {}: {}",
+                self.path, self.status, self.message
+            )
+        }
+    }
+}
+
+impl std::error::Error for DaemonPairingRequestError {}
 
 impl TauriDaemonPairingClient {
     pub fn new(connection_state: DaemonConnectionState) -> Self {
@@ -207,22 +235,14 @@ impl TauriDaemonPairingClient {
             .await
             .unwrap_or_else(|_| "<unreadable response body>".to_string());
         let maybe_error = serde_json::from_str::<PairingApiErrorResponse>(&body).ok();
-        if let Some(error) = maybe_error {
-            return anyhow!(
-                "daemon pairing request {} failed with status {} [{}]: {}",
-                path,
-                status,
-                error.code,
-                error.message
-            );
-        }
-
-        anyhow!(
-            "daemon pairing request {} failed with status {}: {}",
-            path,
+        let error = DaemonPairingRequestError {
+            path: path.to_string(),
             status,
-            body
-        )
+            code: maybe_error.as_ref().map(|error| error.code.clone()),
+            message: maybe_error.map(|error| error.message).unwrap_or(body),
+        };
+
+        anyhow!(error)
     }
 }
 

@@ -8,6 +8,21 @@ const rejectP2PPairingMock = vi.fn(() => Promise.resolve())
 const toastMock = Object.assign(vi.fn(), { error: vi.fn() })
 const onP2PPairingVerificationMock = vi.fn()
 const onSpaceAccessCompletedMock = vi.fn()
+
+const classifyPairingError = (error?: string | null) => {
+  const normalized = error?.toLowerCase() ?? ''
+  if (normalized.includes('active pairing session exists')) {
+    return 'active_session_exists'
+  }
+  if (normalized.includes('pairing session not found')) {
+    return 'session_not_found'
+  }
+  if (normalized.includes('connection refused') || normalized.includes('daemon connection info')) {
+    return 'daemon_unavailable'
+  }
+  return 'unknown'
+}
+
 type PairingRealtimeEvent = {
   kind: string
   sessionId: string
@@ -30,6 +45,7 @@ vi.mock('@/api/p2p', () => ({
   rejectP2PPairing: rejectP2PPairingMock,
   onP2PPairingVerification: onP2PPairingVerificationMock,
   onSpaceAccessCompleted: onSpaceAccessCompletedMock,
+  classifyPairingError,
 }))
 
 vi.mock('sonner', () => ({
@@ -38,8 +54,20 @@ vi.mock('sonner', () => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (_key: string, options?: { defaultValue?: string; device?: string }) =>
-      options?.device ?? options?.defaultValue ?? '',
+    t: (key: string, options?: { defaultValue?: string; device?: string }) => {
+      if (options?.device) return options.device
+      if (options?.defaultValue) return options.defaultValue
+
+      const messages: Record<string, string> = {
+        'pairing.failed.title': 'Pairing failed',
+        'pairing.failed.errors.activeSession': 'Another pairing session is already in progress',
+        'pairing.failed.errors.sessionExpired': 'The pairing session expired or was already closed',
+        'pairing.failed.errors.daemonUnavailable':
+          'The pairing daemon is unavailable. Start the desktop service and try again',
+      }
+
+      return messages[key] ?? key
+    },
   }),
 }))
 
@@ -107,5 +135,55 @@ describe('PairingNotificationProvider realtime', () => {
 
     expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"open":true')
     expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"pinCode":"123456"')
+  })
+
+  it('shows specific toast copy when accept pairing fails', async () => {
+    acceptP2PPairingMock.mockRejectedValue(new Error('active pairing session exists'))
+
+    const { PairingNotificationProvider } = await import('@/components/PairingNotificationProvider')
+    render(<PairingNotificationProvider />)
+
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'request',
+        sessionId: 'session-accept-error',
+        peerId: 'peer-1',
+        deviceName: 'Desk',
+      })
+    })
+
+    const toastOptions = toastMock.mock.calls[0]?.[1]
+    await act(async () => {
+      await toastOptions?.action?.onClick()
+    })
+
+    expect(toastMock.error).toHaveBeenCalledWith('Pairing failed', {
+      description: 'Another pairing session is already in progress',
+    })
+  })
+
+  it('shows specific toast copy when reject pairing fails', async () => {
+    rejectP2PPairingMock.mockRejectedValue(new Error('pairing session not found'))
+
+    const { PairingNotificationProvider } = await import('@/components/PairingNotificationProvider')
+    render(<PairingNotificationProvider />)
+
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'request',
+        sessionId: 'session-reject-error',
+        peerId: 'peer-1',
+        deviceName: 'Desk',
+      })
+    })
+
+    const toastOptions = toastMock.mock.calls[0]?.[1]
+    await act(async () => {
+      await toastOptions?.cancel?.onClick()
+    })
+
+    expect(toastMock.error).toHaveBeenCalledWith('Pairing failed', {
+      description: 'The pairing session expired or was already closed',
+    })
   })
 })

@@ -17,6 +17,23 @@ let verificationHandler:
   | ((event: { kind: string; sessionId: string; code?: string }) => void)
   | null = null
 
+const classifyPairingErrorMock = vi.hoisted(() => (error?: string | null) => {
+  const normalized = error?.toLowerCase() ?? ''
+  if (normalized.includes('active pairing session exists')) {
+    return 'active_session_exists'
+  }
+  if (
+    normalized.includes('pairing session not found') ||
+    normalized.includes('session_not_found')
+  ) {
+    return 'session_not_found'
+  }
+  if (normalized.includes('connection refused') || normalized.includes('daemon connection info')) {
+    return 'daemon_unavailable'
+  }
+  return 'unknown'
+})
+
 vi.mock('@/api/p2p', () => ({
   getP2PPeers: getP2PPeersMock,
   initiateP2PPairing: initiateP2PPairingMock,
@@ -25,6 +42,7 @@ vi.mock('@/api/p2p', () => ({
   acceptP2PPairing: acceptP2PPairingMock,
   rejectP2PPairing: rejectP2PPairingMock,
   onSpaceAccessCompleted: onSpaceAccessCompletedMock,
+  classifyPairingError: classifyPairingErrorMock,
 }))
 
 // Mock sonner toast so we can capture action handlers without needing a Toaster.
@@ -84,6 +102,83 @@ describe('PairingDialog', () => {
     })
     expect(confirmButton).toBeDisabled()
     expect(confirmButton).toHaveTextContent(/正在验证|Verifying/i)
+  })
+})
+
+describe('PairingDialog failure states', () => {
+  beforeEach(() => {
+    verificationHandler = null
+    getP2PPeersMock.mockResolvedValue([
+      {
+        peerId: 'peer-1',
+        deviceName: 'Desk',
+        addresses: [],
+        isPaired: false,
+        connected: true,
+      },
+    ])
+    onP2PPairingVerificationMock.mockImplementation(async callback => {
+      verificationHandler = callback
+      return vi.fn()
+    })
+  })
+
+  it('shows localized active session error for initiator failures', async () => {
+    const user = userEvent.setup()
+    initiateP2PPairingMock.mockResolvedValue({
+      success: false,
+      sessionId: '',
+      error: 'active pairing session exists',
+    })
+
+    render(<PairingDialog open onClose={vi.fn()} />)
+
+    await act(async () => {})
+    await user.click(screen.getByText('Desk').closest('button')!)
+
+    expect(
+      await screen.findAllByText(
+        /已有正在进行的配对，请稍后再试|Another pairing session is already in progress/i
+      )
+    ).toHaveLength(2)
+  })
+
+  it('shows localized session expired error for missing sessions', async () => {
+    const user = userEvent.setup()
+    initiateP2PPairingMock.mockResolvedValue({
+      success: false,
+      sessionId: '',
+      error: 'pairing session not found',
+    })
+
+    render(<PairingDialog open onClose={vi.fn()} />)
+
+    await act(async () => {})
+    await user.click(screen.getByText('Desk').closest('button')!)
+
+    expect(
+      await screen.findAllByText(
+        /配对会话已过期或已关闭|The pairing session expired or was already closed/i
+      )
+    ).toHaveLength(2)
+  })
+
+  it('shows localized daemon unavailable error when initiate throws', async () => {
+    const user = userEvent.setup()
+    initiateP2PPairingMock.mockRejectedValue(
+      new Error('failed to call daemon pairing route /pairing/initiate: connection refused')
+    )
+
+    render(<PairingDialog open onClose={vi.fn()} />)
+
+    await act(async () => {})
+    await user.click(screen.getByText('Desk').closest('button')!)
+
+    expect(
+      await screen.findAllByText(
+        /配对 daemon 不可用，请启动桌面服务后重试|The pairing daemon is unavailable. Start the desktop service and try again/i
+      )
+    ).toHaveLength(2)
   })
 })
 

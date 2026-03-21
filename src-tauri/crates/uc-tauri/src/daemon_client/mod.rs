@@ -1,3 +1,3 @@
 pub mod pairing;
 
-pub use pairing::TauriDaemonPairingClient;
+pub use pairing::{DaemonPairingRequestError, TauriDaemonPairingClient};

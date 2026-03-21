@@ -1,8 +1,13 @@
+use std::io::Write;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::time::sleep;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+use tracing_subscriber::fmt::MakeWriter;
 use uc_app::testing::{NoopDiscoveryPort, NoopLifecycleEventEmitter};
 use uc_app::usecases::pairing::PairingDomainEvent;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
@@ -25,6 +30,16 @@ fn connection_state() -> DaemonConnectionState {
     state.set(DaemonConnectionInfo {
         base_url: "http://127.0.0.1:43123".into(),
         ws_url: "ws://127.0.0.1:43123/ws".into(),
+        token: "test-token".into(),
+    });
+    state
+}
+
+fn unavailable_connection_state() -> DaemonConnectionState {
+    let state = DaemonConnectionState::default();
+    state.set(DaemonConnectionInfo {
+        base_url: "http://127.0.0.1:9".into(),
+        ws_url: "ws://127.0.0.1:9/ws".into(),
         token: "test-token".into(),
     });
     state
@@ -90,6 +105,46 @@ fn pairing_failed(session_id: &str, reason: &str) -> DaemonWsEvent {
         }
     }))
     .expect("pairing failed fixture should parse")
+}
+
+#[derive(Clone, Default)]
+struct TestLogBuffer {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+struct TestLogWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl TestLogBuffer {
+    fn content(&self) -> String {
+        String::from_utf8(self.buffer.lock().expect("buffer lock").clone())
+            .expect("log output should be utf8")
+    }
+}
+
+impl<'a> MakeWriter<'a> for TestLogBuffer {
+    type Writer = TestLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        TestLogWriter {
+            buffer: self.buffer.clone(),
+        }
+    }
+}
+
+impl Write for TestLogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buffer
+            .lock()
+            .expect("buffer lock")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 struct InitialSetupPairingFacade;
@@ -262,6 +317,63 @@ async fn daemon_ws_bridge_backpressure() {
     assert!(
         third.is_err(),
         "ordinary events should drop under backpressure while terminal events get one retry"
+    );
+}
+
+#[tokio::test]
+async fn daemon_ws_bridge_logs_daemon_unavailable_without_panicking() {
+    let log_buffer = TestLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(log_buffer.clone())
+        .with_max_level(tracing::Level::WARN)
+        .with_ansi(false)
+        .without_time()
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let bridge = Arc::new(DaemonWsBridge::new(
+        unavailable_connection_state(),
+        bridge_config(4),
+    ));
+    let _rx = bridge
+        .subscribe("pairing_consumer", &[RealtimeTopic::Pairing])
+        .await
+        .expect("subscription should succeed");
+    let cancel = CancellationToken::new();
+
+    let task = tokio::spawn({
+        let bridge = bridge.clone();
+        let token = cancel.child_token();
+        async move { bridge.run(token).await }
+    });
+
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if bridge.state() == BridgeState::Degraded {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("bridge should report degraded state for unavailable daemon");
+
+    cancel.cancel();
+
+    let result = timeout(Duration::from_secs(1), task)
+        .await
+        .expect("bridge task should stop after cancellation")
+        .expect("bridge join should succeed");
+    assert!(
+        result.is_ok(),
+        "bridge should not panic on daemon unavailability"
+    );
+
+    let logs = log_buffer.content();
+    assert!(
+        logs.contains("daemon websocket bridge cycle failed"),
+        "expected bridge failure log, got: {}",
+        logs
     );
 }
 

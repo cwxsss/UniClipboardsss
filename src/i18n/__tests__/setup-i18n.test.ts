@@ -36,4 +36,28 @@ describe('setup i18n keys', () => {
     expect(i18n.t('setup.welcome.title')).toBe('Welcome to UniClipboard')
     expect(i18n.t('setup.page.loadingSetupState')).toBe('Loading setup state...')
   })
+
+  it('contains pairing failure copy in both locales', async () => {
+    await i18n.changeLanguage('zh-CN')
+    expect(i18n.t('pairing.failed.errors.activeSession')).toBe('已有正在进行的配对，请稍后再试')
+    expect(i18n.t('pairing.failed.errors.noParticipant')).toBe('本地没有可确认配对的设备参与者')
+    expect(i18n.t('pairing.failed.errors.sessionExpired')).toBe('配对会话已过期或已关闭')
+    expect(i18n.t('pairing.failed.errors.daemonUnavailable')).toBe(
+      '配对 daemon 不可用，请启动桌面服务后重试'
+    )
+
+    await i18n.changeLanguage('en-US')
+    expect(i18n.t('pairing.failed.errors.activeSession')).toBe(
+      'Another pairing session is already in progress'
+    )
+    expect(i18n.t('pairing.failed.errors.noParticipant')).toBe(
+      'No local device is ready to confirm pairing'
+    )
+    expect(i18n.t('pairing.failed.errors.sessionExpired')).toBe(
+      'The pairing session expired or was already closed'
+    )
+    expect(i18n.t('pairing.failed.errors.daemonUnavailable')).toBe(
+      'The pairing daemon is unavailable. Start the desktop service and try again'
+    )
+  })
 })

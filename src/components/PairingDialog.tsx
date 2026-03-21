@@ -14,6 +14,7 @@ import {
   initiateP2PPairing,
   verifyP2PPairingPin,
   onP2PPairingVerification,
+  classifyPairingError,
   type P2PPeerInfo,
 } from '@/api/p2p'
 import { Button } from '@/components/ui/button'
@@ -49,6 +50,24 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
   const [pinCode, setPinCode] = useState<string>('')
   const [errorMsg, setErrorMsg] = useState<string>('')
   const [isPinVerifying, setIsPinVerifying] = useState(false)
+
+  const localizePairingError = React.useCallback(
+    (error?: string | null) => {
+      switch (classifyPairingError(error)) {
+        case 'active_session_exists':
+          return t('pairing.failed.errors.activeSession')
+        case 'no_local_participant':
+          return t('pairing.failed.errors.noParticipant')
+        case 'session_not_found':
+          return t('pairing.failed.errors.sessionExpired')
+        case 'daemon_unavailable':
+          return t('pairing.failed.errors.daemonUnavailable')
+        default:
+          return error || t('pairing.failed.errors.initiate')
+      }
+    },
+    [t]
+  )
 
   // Cleanup refs
   const cleanupRefs = React.useRef<(() => void)[]>([])
@@ -95,11 +114,12 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
 
         if (event.kind === 'failed') {
           console.error('[PairingDialog] Failed event:', event)
-          setErrorMsg(event.error ?? '')
+          const message = localizePairingError(event.error)
+          setErrorMsg(message)
           setStep('failed')
           setIsPinVerifying(false)
           toast.error(t('pairing.failed.title'), {
-            description: event.error ?? '',
+            description: message,
           })
         }
       })
@@ -174,12 +194,12 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
         setPairingSessionId(response.sessionId)
         // Wait for PIN ready event...
       } else {
-        setErrorMsg(response.error || t('pairing.failed.errors.reject'))
+        setErrorMsg(localizePairingError(response.error))
         setStep('failed')
       }
     } catch (err) {
       console.error('Failed to initiate pairing:', err)
-      setErrorMsg(t('pairing.failed.errors.initiate'))
+      setErrorMsg(localizePairingError(err instanceof Error ? err.message : String(err)))
       setStep('failed')
     }
   }

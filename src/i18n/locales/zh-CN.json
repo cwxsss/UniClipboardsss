@@ -677,7 +677,11 @@
         "loadPeers": "无法获取设备列表",
         "reject": "连接请求被拒绝",
         "initiate": "发起配对失败",
-        "verifyPin": "验证 PIN 失败"
+        "verifyPin": "验证 PIN 失败",
+        "activeSession": "已有正在进行的配对，请稍后再试",
+        "noParticipant": "本地没有可确认配对的设备参与者",
+        "sessionExpired": "配对会话已过期或已关闭",
+        "daemonUnavailable": "配对 daemon 不可用，请启动桌面服务后重试"
       }
     }
   },
