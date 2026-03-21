@@ -91,6 +91,17 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [ ] **PH461-05**: reconnect, resubscribe, and bounded backpressure behavior are centralized and regression-tested
 - [ ] **PH461-06**: legacy PairingBridge, setup websocket subscription path, and p2p-\* realtime listeners/emissions are deleted without compatibility flags
 
+### Daemon Pairing Hard Cutover
+
+- [x] **R46.2-1**: all pairing business logic and session lifecycle execute on the daemon, not in `uc-tauri`
+- [x] **R46.2-2**: any Tauri-owned pairing hosts or loops are removed or neutralized while GUI flow semantics stay unchanged
+- [x] **R46.2-3**: the user-visible pairing flow remains behaviorally equivalent as `request -> verification -> verifying -> complete/failed`
+- [x] **R46.2-4**: GUI pairing entrypoints (`PairingDialog`, passive accept/reject, setup flows) route through daemon APIs and realtime topics
+- [x] **R46.2-5**: metadata and sensitivity boundaries from Phases 46/46.1 are preserved, with verification data only on authenticated realtime and not in generic read models
+- [x] **R46.2-6**: admission, concurrency, and participant-readiness rules remain daemon-owned, including single-session and no headless auto-pairing behavior
+- [x] **R46.2-7**: `DaemonWsBridge` remains the single realtime path for pairing topics
+- [x] **R46.2-8**: regression coverage proves the daemon-based pairing flow is feature-complete versus the legacy Tauri host across API, websocket, setup, and GUI flows
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -148,14 +159,22 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH461-04    | 46.1  | Pending  |
 | PH461-05    | 46.1  | Pending  |
 | PH461-06    | 46.1  | Pending  |
+| R46.2-1     | 46.2  | Complete |
+| R46.2-2     | 46.2  | Complete |
+| R46.2-3     | 46.2  | Complete |
+| R46.2-4     | 46.2  | Complete |
+| R46.2-5     | 46.2  | Complete |
+| R46.2-6     | 46.2  | Complete |
+| R46.2-7     | 46.2  | Complete |
+| R46.2-8     | 46.2  | Complete |
 
 **Coverage:**
 
-- v0.4.0 requirements: 33 total
-- Mapped to phases: 33
+- v0.4.0 requirements: 41 total
+- Mapped to phases: 41
 - Unmapped: 0 ✓
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-20 after Phase 46.1 Plan 01 execution_
+_Last updated: 2026-03-21 after Phase 46.2 execution_
