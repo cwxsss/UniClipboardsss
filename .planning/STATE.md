@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.2-01-PLAN.md
-last_updated: '2026-03-21T01:35:12.267Z'
+stopped_at: Completed 46.2-02-PLAN.md
+last_updated: '2026-03-21T01:52:32.334Z'
 progress:
   total_phases: 15
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 38
-  completed_plans: 36
+  completed_plans: 37
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 
 ## Current Position
 
-Phase: 46.2 (daemon-tauri-daemon) — IN PROGRESS
-Plan: 1 of 2
+Phase: 46.2 (daemon-tauri-daemon) — COMPLETE
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -74,6 +74,7 @@ _Updated after each plan completion_
 | Phase 46.1 P04 | 9 | 2 tasks | 9 files |
 | Phase 46.1 P05 | 56 | 2 tasks | 7 files |
 | Phase 46.2-daemon-tauri-daemon P01 | 15 | 2 tasks | 20 files |
+| Phase 46.2-daemon-tauri-daemon P02 | 14 | 2 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -153,6 +154,8 @@ Recent decisions affecting current work:
 - [Phase 46.2-daemon-tauri-daemon]: GUI pairing lease renewal now uses /pairing/gui/lease so discoverability and participant readiness stay daemon-owned behind one bridge call.
 - [Phase 46.2-daemon-tauri-daemon]: Daemon pairing websocket payloads carry kind/stage metadata and DaemonWsBridge translates them back into the existing frontend pairing event contract.
 - [Phase 46.2-daemon-tauri-daemon]: Legacy Tauri pairing host loops and direct PairingOrchestrator state were removed from uc-tauri; bridge regression coverage now lives in daemon_ws_bridge and frontend tests.
+- [Phase 46.2-daemon-tauri-daemon]: Use a typed DaemonPairingRequestError in uc-tauri so daemon error code/message data survives into Tauri command mapping without brittle string parsing.
+- [Phase 46.2-daemon-tauri-daemon]: Install a single frontend p2p-command-error listener in src/api/p2p.ts and classify pairing failures once so initiator and passive UX stay aligned.
 
 ### Roadmap Evolution
 
@@ -183,6 +186,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T01:35:12.265Z
-Stopped at: Completed 46.2-01-PLAN.md
+Last session: 2026-03-21T01:52:32.332Z
+Stopped at: Completed 46.2-02-PLAN.md
 Resume file: None

@@ -279,12 +279,12 @@ Plans:
 **Goal:** Complete the daemon-only pairing hard cutover for desktop pairing flows while preserving the existing user-visible UX and stage semantics.
 **Requirements**: R46.2-1, R46.2-2, R46.2-3, R46.2-4, R46.2-5, R46.2-6, R46.2-7, R46.2-8
 **Depends on:** Phase 46
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
 - [x] 46.2-01-PLAN.md — Daemon Pairing Flow Hard Cutover For GUI Bridge (completed 2026-03-21)
-- [ ] 46.2-02-PLAN.md — Error Handling, Security Boundary, And Observability Hardening
+- [x] 46.2-02-PLAN.md — Error Handling, Security Boundary, And Observability Hardening (completed 2026-03-21)
 
 ### Phase 46.1: Unify realtime subscriptions on single DaemonWsBridge (INSERTED)
 
