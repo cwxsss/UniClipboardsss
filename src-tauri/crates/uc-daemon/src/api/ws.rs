@@ -27,6 +27,8 @@ const TOPIC_STATUS: &str = "status";
 const TOPIC_PEERS: &str = "peers";
 const TOPIC_PAIRED_DEVICES: &str = "paired-devices";
 const TOPIC_PAIRING: &str = "pairing";
+const TOPIC_PAIRING_SESSION: &str = "pairing/session";
+const TOPIC_PAIRING_VERIFICATION: &str = "pairing/verification";
 
 const STATUS_SNAPSHOT_EVENT: &str = "status.snapshot";
 const PEERS_SNAPSHOT_EVENT: &str = "peers.snapshot";
@@ -62,7 +64,7 @@ async fn websocket_upgrade(
 }
 
 async fn handle_connection(socket: WebSocket, state: DaemonApiState) {
-    let topics = Arc::new(RwLock::new(HashSet::new()));
+    let topics = Arc::new(RwLock::new(HashSet::<String>::new()));
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<DaemonWsEvent>(32);
     let mut broadcast_rx = state.event_tx.subscribe();
     let fanout_topics = Arc::clone(&topics);
@@ -74,7 +76,9 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState) {
                 Ok(event) => {
                     let should_deliver = {
                         let guard = fanout_topics.read().await;
-                        guard.contains(event.topic.as_str())
+                        guard
+                            .iter()
+                            .any(|topic| topic_matches(topic, event.topic.as_str()))
                     };
 
                     if should_deliver && fanout_tx.send(event).await.is_err() {
@@ -155,9 +159,10 @@ async fn handle_client_message(
     }
 
     for topic in normalized_topics {
-        let snapshot = build_snapshot_event(state, &topic).await?;
-        if outbound_tx.send(snapshot).await.is_err() {
-            break;
+        if let Some(snapshot) = build_snapshot_event(state, &topic).await? {
+            if outbound_tx.send(snapshot).await.is_err() {
+                break;
+            }
         }
     }
 
@@ -183,36 +188,61 @@ fn normalize_topics(topics: Vec<String>) -> Vec<String> {
 fn is_supported_topic(topic: &str) -> bool {
     matches!(
         topic,
-        TOPIC_STATUS | TOPIC_PEERS | TOPIC_PAIRED_DEVICES | TOPIC_PAIRING
+        TOPIC_STATUS
+            | TOPIC_PEERS
+            | TOPIC_PAIRED_DEVICES
+            | TOPIC_PAIRING
+            | TOPIC_PAIRING_SESSION
+            | TOPIC_PAIRING_VERIFICATION
     )
 }
 
-async fn build_snapshot_event(state: &DaemonApiState, topic: &str) -> Result<DaemonWsEvent> {
+fn topic_matches(subscription: &str, event_topic: &str) -> bool {
+    subscription == event_topic
+        || (subscription == TOPIC_PAIRING && event_topic.starts_with("pairing/"))
+}
+
+async fn build_snapshot_event(
+    state: &DaemonApiState,
+    topic: &str,
+) -> Result<Option<DaemonWsEvent>> {
     match topic {
         TOPIC_STATUS => snapshot_event(
             TOPIC_STATUS,
             STATUS_SNAPSHOT_EVENT,
             None,
             state.query_service.status().await?,
-        ),
+        )
+        .map(Some),
         TOPIC_PEERS => snapshot_event(
             TOPIC_PEERS,
             PEERS_SNAPSHOT_EVENT,
             None,
             state.query_service.peers().await?,
-        ),
+        )
+        .map(Some),
         TOPIC_PAIRED_DEVICES => snapshot_event(
             TOPIC_PAIRED_DEVICES,
             PAIRED_DEVICES_SNAPSHOT_EVENT,
             None,
             state.query_service.paired_devices().await?,
-        ),
+        )
+        .map(Some),
         TOPIC_PAIRING => snapshot_event(
             TOPIC_PAIRING,
             PAIRING_SNAPSHOT_EVENT,
             None,
             state.query_service.pairing_sessions().await,
-        ),
+        )
+        .map(Some),
+        TOPIC_PAIRING_SESSION => snapshot_event(
+            TOPIC_PAIRING_SESSION,
+            PAIRING_SNAPSHOT_EVENT,
+            None,
+            state.query_service.pairing_sessions().await,
+        )
+        .map(Some),
+        TOPIC_PAIRING_VERIFICATION => Ok(None),
         unsupported => anyhow::bail!("unsupported websocket topic: {unsupported}"),
     }
 }
@@ -270,22 +300,27 @@ fn _event_type_markers(
         PairingSessionChangedPayload {
             session_id: String::new(),
             state: String::new(),
+            stage: String::new(),
             peer_id: None,
             device_name: None,
             updated_at_ms: 0,
+            ts: 0,
         },
         PairingVerificationPayload {
             session_id: String::new(),
-            peer_id: String::new(),
+            kind: String::new(),
+            peer_id: None,
             device_name: None,
-            code: String::new(),
-            local_fingerprint: String::new(),
-            peer_fingerprint: String::new(),
+            code: None,
+            error: None,
+            local_fingerprint: None,
+            peer_fingerprint: None,
         },
         PairingFailurePayload {
             session_id: String::new(),
             peer_id: None,
             error: String::new(),
+            reason: String::new(),
         },
         PeerChangedPayload {
             peer_id: String::new(),

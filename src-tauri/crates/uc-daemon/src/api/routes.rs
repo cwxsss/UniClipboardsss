@@ -11,8 +11,9 @@ use axum::{Json, Router};
 use serde_json::json;
 
 use crate::api::pairing::{
-    AckedPairingCommandResponse, InitiatePairingRequest, SetPairingDiscoverabilityRequest,
-    SetPairingParticipantRequest, VerifyPairingRequest,
+    AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
+    PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
+    SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, VerifyPairingRequest,
 };
 use crate::api::server::DaemonApiState;
 use crate::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
@@ -23,6 +24,11 @@ pub fn router() -> Router<DaemonApiState> {
         .route("/status", get(status))
         .route("/peers", get(peers))
         .route("/paired-devices", get(paired_devices))
+        .route("/pairing/initiate", post(handle_initiate_pairing))
+        .route("/pairing/accept", post(handle_accept_pairing))
+        .route("/pairing/reject", post(handle_reject_pairing))
+        .route("/pairing/cancel", post(handle_cancel_pairing))
+        .route("/pairing/gui/lease", post(handle_pairing_gui_lease))
         .route(
             "/pairing/discoverability/current",
             put(set_pairing_discoverability),
@@ -176,6 +182,37 @@ async fn initiate_pairing(
     }
 }
 
+async fn handle_initiate_pairing(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+    payload: Result<Json<InitiatePairingRequest>, JsonRejection>,
+) -> impl IntoResponse {
+    if !state.is_authorized(&headers) {
+        return unauthorized().into_response();
+    }
+    let Some(pairing_host) = pairing_host(&state).into_response_ok() else {
+        return daemon_pairing_unavailable().into_response();
+    };
+    let Json(payload) = match payload {
+        Ok(payload) => payload,
+        Err(_) => {
+            return pairing_api_error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "malformed request body",
+            )
+            .into_response();
+        }
+    };
+
+    match pairing_host.initiate_pairing(payload.peer_id).await {
+        Ok(session_id) => {
+            (StatusCode::OK, Json(InitiatePairingResponse { session_id })).into_response()
+        }
+        Err(error) => pairing_http_error(error).into_response(),
+    }
+}
+
 async fn accept_pairing(
     State(state): State<DaemonApiState>,
     headers: HeaderMap,
@@ -192,6 +229,20 @@ async fn accept_pairing(
         Ok(()) => acknowledged(session_id, true, "verifying").into_response(),
         Err(error) => pairing_command_error(error).into_response(),
     }
+}
+
+async fn handle_accept_pairing(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+    payload: Result<Json<PairingSessionCommandRequest>, JsonRejection>,
+) -> impl IntoResponse {
+    handle_session_command(
+        state,
+        headers,
+        payload,
+        |pairing_host, session_id| async move { pairing_host.accept_pairing(&session_id).await },
+    )
+    .await
 }
 
 async fn reject_pairing(
@@ -212,6 +263,20 @@ async fn reject_pairing(
     }
 }
 
+async fn handle_reject_pairing(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+    payload: Result<Json<PairingSessionCommandRequest>, JsonRejection>,
+) -> impl IntoResponse {
+    handle_session_command(
+        state,
+        headers,
+        payload,
+        |pairing_host, session_id| async move { pairing_host.reject_pairing(&session_id).await },
+    )
+    .await
+}
+
 async fn cancel_pairing(
     State(state): State<DaemonApiState>,
     headers: HeaderMap,
@@ -228,6 +293,20 @@ async fn cancel_pairing(
         Ok(()) => acknowledged(session_id, true, "failed").into_response(),
         Err(error) => pairing_command_error(error).into_response(),
     }
+}
+
+async fn handle_cancel_pairing(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+    payload: Result<Json<PairingSessionCommandRequest>, JsonRejection>,
+) -> impl IntoResponse {
+    handle_session_command(
+        state,
+        headers,
+        payload,
+        |pairing_host, session_id| async move { pairing_host.cancel_pairing(&session_id).await },
+    )
+    .await
 }
 
 async fn verify_pairing(
@@ -265,8 +344,71 @@ async fn verify_pairing(
     }
 }
 
+async fn handle_pairing_gui_lease(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+    payload: Result<Json<PairingGuiLeaseRequest>, JsonRejection>,
+) -> impl IntoResponse {
+    if !state.is_authorized(&headers) {
+        return unauthorized().into_response();
+    }
+    let Some(pairing_host) = pairing_host(&state).into_response_ok() else {
+        return daemon_pairing_unavailable().into_response();
+    };
+    let Json(payload) = match payload {
+        Ok(payload) => payload,
+        Err(_) => {
+            return pairing_api_error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "malformed request body",
+            )
+            .into_response();
+        }
+    };
+
+    match pairing_host.register_gui_participant(payload.enabled).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => pairing_http_error(error).into_response(),
+    }
+}
+
 fn pairing_host(state: &DaemonApiState) -> Result<Arc<DaemonPairingHost>, ()> {
-    state.pairing_host.clone().ok_or(())
+    state.pairing_host().ok_or(())
+}
+
+async fn handle_session_command<F, Fut>(
+    state: DaemonApiState,
+    headers: HeaderMap,
+    payload: Result<Json<PairingSessionCommandRequest>, JsonRejection>,
+    handler: F,
+) -> axum::response::Response
+where
+    F: FnOnce(Arc<DaemonPairingHost>, String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), DaemonPairingHostError>>,
+{
+    if !state.is_authorized(&headers) {
+        return unauthorized().into_response();
+    }
+    let Some(pairing_host) = pairing_host(&state).into_response_ok() else {
+        return daemon_pairing_unavailable().into_response();
+    };
+    let Json(payload) = match payload {
+        Ok(payload) => payload,
+        Err(_) => {
+            return pairing_api_error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "malformed request body",
+            )
+            .into_response();
+        }
+    };
+
+    match handler(pairing_host, payload.session_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => pairing_http_error(error).into_response(),
+    }
 }
 
 fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {
@@ -321,6 +463,57 @@ fn pairing_command_error(error: DaemonPairingHostError) -> (StatusCode, Json<ser
             )
         }
     }
+}
+
+fn pairing_http_error(
+    error: DaemonPairingHostError,
+) -> (StatusCode, Json<PairingApiErrorResponse>) {
+    match error {
+        DaemonPairingHostError::ActivePairingSessionExists => pairing_api_error(
+            StatusCode::CONFLICT,
+            "active_session_exists",
+            "active pairing session exists",
+        ),
+        DaemonPairingHostError::HostNotDiscoverable => pairing_api_error(
+            StatusCode::BAD_REQUEST,
+            "host_not_discoverable",
+            "host not discoverable",
+        ),
+        DaemonPairingHostError::NoLocalPairingParticipantReady => pairing_api_error(
+            StatusCode::BAD_REQUEST,
+            "no_local_participant",
+            "no local pairing participant ready",
+        ),
+        DaemonPairingHostError::SessionNotFound(_) => pairing_api_error(
+            StatusCode::NOT_FOUND,
+            "session_not_found",
+            "pairing session not found",
+        ),
+        DaemonPairingHostError::Internal(message) => {
+            tracing::error!(error = %message, "daemon pairing command failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(PairingApiErrorResponse {
+                    code: "internal".to_string(),
+                    message,
+                }),
+            )
+        }
+    }
+}
+
+fn pairing_api_error(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+) -> (StatusCode, Json<PairingApiErrorResponse>) {
+    (
+        status,
+        Json(PairingApiErrorResponse {
+            code: code.to_string(),
+            message: message.to_string(),
+        }),
+    )
 }
 
 fn acknowledged(

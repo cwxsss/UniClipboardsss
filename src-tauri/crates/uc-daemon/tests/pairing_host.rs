@@ -186,3 +186,69 @@ async fn daemon_pairing_projection_omits_verification_secrets() {
     assert!(json.get("peerFingerprint").is_none());
     assert!(json.get("challenge").is_none());
 }
+
+#[tokio::test]
+async fn daemon_pairing_host_accepts_when_orchestrator_has_session_before_snapshot_projection() {
+    let (host, state, orchestrator, local_peer_id) = build_host_async().await;
+
+    orchestrator
+        .handle_incoming_request(
+            "peer-remote".to_string(),
+            inbound_request("session-orchestrator-only", &local_peer_id),
+        )
+        .await
+        .expect("orchestrator should register inbound session");
+
+    assert!(state
+        .read()
+        .await
+        .pairing_session("session-orchestrator-only")
+        .is_none());
+
+    let result = host.accept_pairing("session-orchestrator-only").await;
+
+    assert!(
+        !matches!(result, Err(DaemonPairingHostError::SessionNotFound(_))),
+        "daemon host should not treat orchestrator-owned sessions as not_found"
+    );
+}
+
+#[tokio::test]
+async fn daemon_pairing_host_register_gui_participant_updates_both_leases() {
+    let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
+
+    host.register_gui_participant(true).await.unwrap();
+
+    assert!(host.discoverable().await);
+    assert!(host.participant_ready().await);
+
+    host.register_gui_participant(false).await.unwrap();
+
+    assert!(!host.discoverable().await);
+    assert!(!host.participant_ready().await);
+}
+
+#[tokio::test]
+async fn daemon_pairing_host_accept_pairing_projects_verifying_stage() {
+    let (host, state, orchestrator, local_peer_id) = build_host_async().await;
+
+    orchestrator
+        .handle_incoming_request(
+            "peer-remote".to_string(),
+            inbound_request("session-verifying", &local_peer_id),
+        )
+        .await
+        .expect("orchestrator should register inbound session");
+
+    host.accept_pairing("session-verifying")
+        .await
+        .expect("accept should succeed");
+
+    let snapshot = state
+        .read()
+        .await
+        .pairing_session("session-verifying")
+        .cloned()
+        .expect("snapshot should exist");
+    assert_eq!(snapshot.state, "verifying");
+}

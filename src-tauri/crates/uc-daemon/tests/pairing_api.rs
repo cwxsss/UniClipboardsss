@@ -154,6 +154,36 @@ async fn initiate_pairing(
         .unwrap()
 }
 
+async fn initiate_pairing_v2(
+    app: &axum::Router,
+    token: &str,
+    peer_id: &str,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(authed_request(
+            "POST",
+            "/pairing/initiate",
+            token,
+            Body::from(json!({ "peerId": peer_id }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .unwrap()
+}
+
+async fn gui_lease(app: &axum::Router, token: &str, enabled: bool) -> axum::response::Response {
+    app.clone()
+        .oneshot(authed_request(
+            "POST",
+            "/pairing/gui/lease",
+            token,
+            Body::from(json!({ "enabled": enabled }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
 async fn pairing_api_returns_409_active_pairing_session_exists() {
     let (app, token) = build_api_router_async().await;
@@ -283,4 +313,63 @@ async fn pairing_api_expires_discoverability_lease() {
         json_body(response).await["error"],
         Value::String("host_not_discoverable".to_string())
     );
+}
+
+#[tokio::test]
+async fn pairing_api_v2_initiate_returns_session_id_body() {
+    let (app, token) = build_api_router_async().await;
+
+    assert_eq!(
+        gui_lease(&app, &token, true).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let response = initiate_pairing_v2(&app, &token, "peer-a").await;
+    let body = json_body(response).await;
+
+    assert_eq!(
+        body.get("sessionId").and_then(Value::as_str).is_some(),
+        true
+    );
+}
+
+#[tokio::test]
+async fn pairing_api_v2_maps_no_local_participant_error_to_400_code() {
+    let (app, token) = build_api_router_async().await;
+    assert_eq!(
+        set_discoverability(&app, &token, true, Some(60_000))
+            .await
+            .status(),
+        StatusCode::ACCEPTED
+    );
+
+    let response = initiate_pairing_v2(&app, &token, "peer-a").await;
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "no_local_participant");
+    assert_eq!(body["message"], "no local pairing participant ready");
+}
+
+#[tokio::test]
+async fn pairing_api_v2_returns_404_for_unknown_accept_session() {
+    let (app, token) = build_api_router_async().await;
+
+    let response = app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/pairing/accept",
+            &token,
+            Body::from(json!({ "sessionId": "missing-session" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = json_body(response).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "session_not_found");
 }

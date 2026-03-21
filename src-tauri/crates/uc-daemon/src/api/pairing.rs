@@ -16,6 +16,18 @@ pub struct VerifyPairingRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PairingSessionCommandRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingGuiLeaseRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetPairingDiscoverabilityRequest {
     pub client_kind: String,
     pub discoverable: bool,
@@ -37,4 +49,17 @@ pub struct AckedPairingCommandResponse {
     pub accepted: bool,
     pub state: String,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitiatePairingResponse {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingApiErrorResponse {
+    pub code: String,
+    pub message: String,
 }

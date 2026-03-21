@@ -66,20 +66,24 @@ pub struct PairingSessionSummaryDto {
 pub struct PairingSessionChangedPayload {
     pub session_id: String,
     pub state: String,
+    pub stage: String,
     pub peer_id: Option<String>,
     pub device_name: Option<String>,
     pub updated_at_ms: i64,
+    pub ts: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingVerificationPayload {
     pub session_id: String,
-    pub peer_id: String,
+    pub kind: String,
+    pub peer_id: Option<String>,
     pub device_name: Option<String>,
-    pub code: String,
-    pub local_fingerprint: String,
-    pub peer_fingerprint: String,
+    pub code: Option<String>,
+    pub error: Option<String>,
+    pub local_fingerprint: Option<String>,
+    pub peer_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +92,7 @@ pub struct PairingFailurePayload {
     pub session_id: String,
     pub peer_id: Option<String>,
     pub error: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

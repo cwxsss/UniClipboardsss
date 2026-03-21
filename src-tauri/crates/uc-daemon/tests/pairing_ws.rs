@@ -152,17 +152,19 @@ async fn incremental_verification_event_contains_code_and_fingerprints() {
     harness
         .event_tx
         .send(DaemonWsEvent {
-            topic: "pairing".to_string(),
+            topic: "pairing/verification".to_string(),
             event_type: "pairing.verification_required".to_string(),
             session_id: Some("session-2".to_string()),
             ts: 1_742_371_200_123,
             payload: serde_json::to_value(PairingVerificationPayload {
                 session_id: "session-2".to_string(),
-                peer_id: "peer-2".to_string(),
+                kind: "verification".to_string(),
+                peer_id: Some("peer-2".to_string()),
                 device_name: Some("Laptop".to_string()),
-                code: "123456".to_string(),
-                local_fingerprint: "local-fp".to_string(),
-                peer_fingerprint: "peer-fp".to_string(),
+                code: Some("123456".to_string()),
+                error: None,
+                local_fingerprint: Some("local-fp".to_string()),
+                peer_fingerprint: Some("peer-fp".to_string()),
             })
             .unwrap(),
         })
@@ -172,6 +174,7 @@ async fn incremental_verification_event_contains_code_and_fingerprints() {
     harness.handle.abort();
 
     assert_eq!(event["type"], "pairing.verification_required");
+    assert_eq!(event["payload"]["kind"], "verification");
     assert_eq!(event["payload"]["code"], "123456");
     assert_eq!(event["payload"]["localFingerprint"], "local-fp");
     assert_eq!(event["payload"]["peerFingerprint"], "peer-fp");
@@ -289,7 +292,7 @@ async fn websocket_event_uses_type_not_event_type() {
     harness
         .event_tx
         .send(DaemonWsEvent {
-            topic: "pairing".to_string(),
+            topic: "pairing/verification".to_string(),
             event_type: "pairing.failed".to_string(),
             session_id: Some("session-3".to_string()),
             ts: 5,
@@ -297,6 +300,7 @@ async fn websocket_event_uses_type_not_event_type() {
                 session_id: "session-3".to_string(),
                 peer_id: Some("peer-3".to_string()),
                 error: "transport_failed".to_string(),
+                reason: "transport_failed".to_string(),
             })
             .unwrap(),
         })
@@ -329,17 +333,19 @@ async fn pairing_session_http_response_omits_verification_secrets_even_with_real
     harness
         .event_tx
         .send(DaemonWsEvent {
-            topic: "pairing".to_string(),
+            topic: "pairing/verification".to_string(),
             event_type: "pairing.verification_required".to_string(),
             session_id: Some("session-4".to_string()),
             ts: 6,
             payload: serde_json::to_value(PairingVerificationPayload {
                 session_id: "session-4".to_string(),
-                peer_id: "peer-4".to_string(),
+                kind: "verification".to_string(),
+                peer_id: Some("peer-4".to_string()),
                 device_name: Some("Phone".to_string()),
-                code: "654321".to_string(),
-                local_fingerprint: "local-secret".to_string(),
-                peer_fingerprint: "peer-secret".to_string(),
+                code: Some("654321".to_string()),
+                error: None,
+                local_fingerprint: Some("local-secret".to_string()),
+                peer_fingerprint: Some("peer-secret".to_string()),
             })
             .unwrap(),
         })
@@ -366,4 +372,38 @@ async fn pairing_session_http_response_omits_verification_secrets_even_with_real
     assert!(json.get("peerFingerprint").is_none());
     assert!(json.get("keyslotFile").is_none());
     assert!(json.get("challenge").is_none());
+}
+
+#[tokio::test]
+async fn granular_pairing_topic_subscription_receives_session_events() {
+    let harness = spawn_server().await;
+    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    subscribe(&mut socket, &["pairing/session"]).await;
+    let _snapshot = next_json(&mut socket).await;
+
+    harness
+        .event_tx
+        .send(DaemonWsEvent {
+            topic: "pairing/session".to_string(),
+            event_type: "pairing.updated".to_string(),
+            session_id: Some("session-5".to_string()),
+            ts: 7,
+            payload: serde_json::json!({
+                "sessionId": "session-5",
+                "state": "request",
+                "stage": "request",
+                "peerId": "peer-5",
+                "deviceName": "Desk",
+                "updatedAtMs": 7,
+                "ts": 7
+            }),
+        })
+        .unwrap();
+
+    let event = next_json(&mut socket).await;
+    harness.handle.abort();
+
+    assert_eq!(event["type"], "pairing.updated");
+    assert_eq!(event["payload"]["stage"], "request");
+    assert_eq!(event["payload"]["peerId"], "peer-5");
 }

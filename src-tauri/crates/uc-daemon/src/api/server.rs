@@ -18,7 +18,7 @@ use crate::api::routes;
 use crate::api::types::DaemonWsEvent;
 use crate::api::ws;
 use crate::pairing::host::DaemonPairingHost;
-use crate::socket::{resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
+use crate::socket::{try_resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
 
 #[derive(Clone)]
 pub struct DaemonApiState {
@@ -50,6 +50,10 @@ impl DaemonApiState {
         self
     }
 
+    pub fn pairing_host(&self) -> Option<Arc<DaemonPairingHost>> {
+        self.pairing_host.clone()
+    }
+
     pub fn connection_info_for_addr(&self, listen_addr: SocketAddr) -> DaemonConnectionInfo {
         build_connection_info(DEFAULT_HTTP_HOST, listen_addr.port(), &self.auth_token)
     }
@@ -75,7 +79,7 @@ pub async fn run_http_server(
     state: DaemonApiState,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
-    let addr = resolve_daemon_http_addr();
+    let addr = try_resolve_daemon_http_addr()?;
     let listener = TcpListener::bind(addr).await?;
     let listen_addr = listener.local_addr()?;
     let connection_info = state.connection_info_for_addr(listen_addr);
