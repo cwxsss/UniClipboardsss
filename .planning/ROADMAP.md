@@ -78,7 +78,7 @@ See: `.planning/milestones/v0.3.0-ROADMAP.md`
 3. LoggingEventEmitter adapter exists and implements HostEventEmitterPort by writing events to tracing output
 4. Clipboard watcher, peer discovery, and sync scheduler accept HostEventEmitterPort instead of AppHandle<R>; the compiler rejects any direct AppHandle use in these components
 
-**Plans:** 2/2 plans complete
+**Plans:** 3/3 plans complete
 
 Plans:
 
@@ -137,7 +137,7 @@ Plans:
 3. The resolution functions are unit-testable without a running Tauri app
 4. GUI app launches and resolves config paths correctly after the extraction
 
-**Plans:** 2/2 plans complete
+**Plans:** 3/3 plans complete
 
 Plans:
 
@@ -232,7 +232,7 @@ Plans:
 **Goal:** Unify GUI and CLI business flows by creating shared app-layer entrypoints, eliminating duplicated bootstrap code in CLI and cross-use-case aggregation in Tauri commands.
 **Requirements**: PH43-01, PH43-02, PH43-03, PH43-04
 **Depends on:** Phase 42
-**Plans:** 2/2 plans complete
+**Plans:** 3/3 plans complete
 
 **Success Criteria** (what must be TRUE):
 
@@ -274,17 +274,32 @@ Plans:
 - [x] 46-04-PLAN.md — Gap Closure For Setup Pairing Facade Extraction (completed 2026-03-20)
 - [x] 46-05-PLAN.md — Gap Closure For Live GUI Pairing Bridge Activation (completed 2026-03-20)
 
+### Phase 46.3: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (INSERTED)
+
+**Goal:** Gate GUI startup on a compatible local UniClipboard daemon, boundedly replace incompatible daemons on the expected local endpoint, and surface a deterministic startup failure/recovery path instead of silently entering the main app.
+**Requirements**: GUI-DMN-01, GUI-DMN-02, GUI-DMN-03, GUI-DMN-04, GUI-DMN-05
+**Depends on:** Phase 46
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 46.3-01-PLAN.md — Shared release version contract and daemon compatibility probe classification
+- [ ] 46.3-02-PLAN.md — Narrow local daemon PID metadata and bounded incompatible-daemon replacement
+- [ ] 46.3-03-PLAN.md — Startup state contract, window gating, and traced startup status/retry commands
+- [ ] 46.3-04-PLAN.md — Frontend startup error page, polling recovery hook, and top-level app gating
+
 ### Phase 46.2: 彻底打通基于 daemon 的配对流程, 完全移除原 tauri 中相关的配对流程. 期望: 在不改变用户配对流程的情况下,内部替换成基于 daemon 的配对流程实现 (INSERTED)
 
 **Goal:** Complete the daemon-only pairing hard cutover for desktop pairing flows while preserving the existing user-visible UX and stage semantics.
 **Requirements**: R46.2-1, R46.2-2, R46.2-3, R46.2-4, R46.2-5, R46.2-6, R46.2-7, R46.2-8
 **Depends on:** Phase 46
-**Plans:** 2/2 plans complete
+**Plans:** 3/3 plans complete
 
 Plans:
 
-- [x] 46.2-01-PLAN.md — Daemon Pairing Flow Hard Cutover For GUI Bridge (completed 2026-03-21)
-- [x] 46.2-02-PLAN.md — Error Handling, Security Boundary, And Observability Hardening (completed 2026-03-21)
+- [x] 46.2-01-PLAN.md — Daemon Pairing Host Contract And Metadata Boundary (completed 2026-03-21)
+- [x] 46.2-02-PLAN.md — Requirements Traceability And Tauri Shell Cutover (completed 2026-03-21)
+- [x] 46.2-03-PLAN.md — Frontend Pairing Flow Parity And Regression Coverage (completed 2026-03-21)
 
 ### Phase 46.1: Unify realtime subscriptions on single DaemonWsBridge (INSERTED)
 

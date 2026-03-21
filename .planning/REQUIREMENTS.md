@@ -102,6 +102,14 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **R46.2-7**: `DaemonWsBridge` remains the single realtime path for pairing topics
 - [x] **R46.2-8**: regression coverage proves the daemon-based pairing flow is feature-complete versus the legacy Tauri host across API, websocket, setup, and GUI flows
 
+### GUI Daemon Startup Compatibility And Recovery
+
+- [ ] **GUI-DMN-01**: GUI startup must classify the expected local UniClipboard daemon endpoint as absent, compatible, or incompatible before deciding to continue or replace it
+- [ ] **GUI-DMN-02**: when the expected local daemon is incompatible, GUI may terminate that local daemon once and replace it with the current bundled daemon, with bounded retry and deterministic failure
+- [ ] **GUI-DMN-03**: GUI must not silently enter the main interface unless daemon bootstrap reaches compatible-ready; failed bootstrap must land in a dedicated startup failure state
+- [ ] **GUI-DMN-04**: startup failure must expose both bounded automatic recovery polling and a user-triggered retry path, and automatically resume normal startup once daemon becomes compatible-ready
+- [ ] **GUI-DMN-05**: daemon `/health` and `/status` must expose shared `packageVersion` and `apiRevision` metadata that come from the same release contract as the GUI bundle
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -167,6 +175,11 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | R46.2-6     | 46.2  | Complete |
 | R46.2-7     | 46.2  | Complete |
 | R46.2-8     | 46.2  | Complete |
+| GUI-DMN-01  | 46.3  | Pending  |
+| GUI-DMN-02  | 46.3  | Pending  |
+| GUI-DMN-03  | 46.3  | Pending  |
+| GUI-DMN-04  | 46.3  | Pending  |
+| GUI-DMN-05  | 46.3  | Pending  |
 
 **Coverage:**
 
@@ -177,4 +190,4 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-21 after Phase 46.2 execution_
+_Last updated: 2026-03-21 after Phase 46.3 planning_
