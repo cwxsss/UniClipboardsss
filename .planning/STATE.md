@@ -175,7 +175,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ### Pending Todos
 
-None.
+- `2026-03-21-fix-setup-pairing-confirmation-toast-missing.md` — 修复 setup 中选择设备后未出现配对确认提示的问题
 
 ### Blockers/Concerns
 
