@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::json;
 use serde_json::Value;
 use tokio::sync::RwLock;
 use uc_app::runtime::CoreRuntime;
@@ -106,7 +107,7 @@ impl DaemonQueryService {
         let active_snapshot = active_pairing_snapshot(&self.state, pairing_host).await;
 
         Ok(SetupStateResponse {
-            state: setup_state_payload(&setup_state),
+            state: setup_state_payload(&setup_state, active_snapshot.as_ref()),
             session_id: active_snapshot
                 .as_ref()
                 .map(|snapshot| snapshot.session_id.clone()),
@@ -176,8 +177,38 @@ async fn active_pairing_snapshot(
     guard.pairing_session(&session_id).cloned()
 }
 
-fn setup_state_payload(state: &SetupState) -> Value {
+fn setup_state_payload(
+    state: &SetupState,
+    active_snapshot: Option<&DaemonPairingSessionSnapshot>,
+) -> Value {
+    if let Some(value) = synthesized_host_verification_state(state, active_snapshot) {
+        return value;
+    }
+
     serde_json::to_value(state).unwrap_or_else(|_| Value::String(format!("{state:?}")))
+}
+
+fn synthesized_host_verification_state(
+    state: &SetupState,
+    active_snapshot: Option<&DaemonPairingSessionSnapshot>,
+) -> Option<Value> {
+    if !matches!(state, SetupState::Completed) {
+        return None;
+    }
+
+    let snapshot = active_snapshot?;
+    if snapshot.state != "verification" {
+        return None;
+    }
+
+    let short_code = snapshot.short_code.clone()?;
+    Some(json!({
+        "JoinSpaceConfirmPeer": {
+            "short_code": short_code,
+            "peer_fingerprint": snapshot.peer_fingerprint.clone(),
+            "error": Value::Null
+        }
+    }))
 }
 
 fn resolved_profile() -> String {
@@ -217,12 +248,53 @@ fn next_step_hint(
         SetupState::Completed => {
             if matches!(
                 active_snapshot.map(|snapshot| snapshot.state.as_str()),
-                Some("request")
+                Some("request" | "verification")
             ) {
                 "host-confirm-peer"
             } else {
                 "completed"
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_snapshot(state: &str) -> DaemonPairingSessionSnapshot {
+        DaemonPairingSessionSnapshot {
+            session_id: "session-1".to_string(),
+            peer_id: Some("peer-1".to_string()),
+            device_name: Some("Peer".to_string()),
+            state: state.to_string(),
+            updated_at_ms: 1,
+            short_code: Some("5D2KNRNX".to_string()),
+            peer_fingerprint: Some("peer-fingerprint".to_string()),
+        }
+    }
+
+    #[test]
+    fn completed_host_with_verification_snapshot_projects_confirm_peer_state() {
+        let payload = setup_state_payload(
+            &SetupState::Completed,
+            Some(&sample_snapshot("verification")),
+        );
+
+        assert_eq!(payload["JoinSpaceConfirmPeer"]["short_code"], "5D2KNRNX");
+        assert_eq!(
+            payload["JoinSpaceConfirmPeer"]["peer_fingerprint"],
+            "peer-fingerprint"
+        );
+        assert!(payload["JoinSpaceConfirmPeer"]["error"].is_null());
+    }
+
+    #[test]
+    fn completed_host_with_verification_snapshot_keeps_host_confirm_hint() {
+        let hint = next_step_hint(
+            &SetupState::Completed,
+            Some(&sample_snapshot("verification")),
+        );
+        assert_eq!(hint, "host-confirm-peer");
     }
 }

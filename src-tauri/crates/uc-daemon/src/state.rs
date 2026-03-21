@@ -25,6 +25,10 @@ pub struct DaemonPairingSessionSnapshot {
     pub device_name: Option<String>,
     pub state: String,
     pub updated_at_ms: i64,
+    #[serde(skip_serializing)]
+    pub short_code: Option<String>,
+    #[serde(skip_serializing)]
+    pub peer_fingerprint: Option<String>,
 }
 
 /// Runtime state snapshot for the daemon.
@@ -150,6 +154,8 @@ mod tests {
             device_name: Some("Desk".to_string()),
             state: "request".to_string(),
             updated_at_ms: 1,
+            short_code: None,
+            peer_fingerprint: None,
         });
 
         let removed = state.remove_pairing_session("session-1");
@@ -166,6 +172,8 @@ mod tests {
             device_name: Some("Desk".to_string()),
             state: "verification".to_string(),
             updated_at_ms: 123,
+            short_code: Some("12345678".to_string()),
+            peer_fingerprint: Some("fingerprint".to_string()),
         };
 
         let json = serde_json::to_string(&snapshot).expect("snapshot should serialize");

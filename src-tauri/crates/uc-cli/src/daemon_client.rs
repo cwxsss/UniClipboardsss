@@ -6,13 +6,18 @@ use anyhow::Result;
 use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use uc_daemon::api::auth::resolve_daemon_token_path;
+use uc_daemon::api::pairing::{
+    AckedPairingCommandResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
+    VerifyPairingRequest,
+};
 use uc_daemon::api::types::{
     PairedDeviceDto, PeerSnapshotDto, SetupActionAckResponse, SetupResetResponse,
     SetupSelectPeerRequest, SetupStateResponse, SetupSubmitPassphraseRequest, StatusResponse,
 };
 use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr};
 
-const DEFAULT_TIMEOUT_SECS: u64 = 2;
+const DEFAULT_QUERY_TIMEOUT_SECS: u64 = 2;
+const SETUP_ACTION_TIMEOUT_SECS: u64 = 15;
 const ENV_BASE_URL: &str = "UNICLIPBOARD_DAEMON_BASE_URL";
 const ENV_TOKEN_PATH: &str = "UNICLIPBOARD_DAEMON_TOKEN_PATH";
 
@@ -95,23 +100,55 @@ impl DaemonHttpClient {
     }
 
     pub async fn start_setup_host(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
-        self.post_without_body("/setup/host").await
+        self.post_without_body("/setup/host", setup_action_timeout())
+            .await
     }
 
     pub async fn start_setup_join(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
-        self.post_without_body("/setup/join").await
+        self.post_without_body("/setup/join", setup_action_timeout())
+            .await
     }
 
     pub async fn select_setup_peer(
         &self,
         peer_id: String,
     ) -> Result<SetupActionAckResponse, DaemonClientError> {
-        self.post_json("/setup/select-peer", &SetupSelectPeerRequest { peer_id })
-            .await
+        self.post_json(
+            "/setup/select-peer",
+            &SetupSelectPeerRequest { peer_id },
+            setup_action_timeout(),
+        )
+        .await
     }
 
     pub async fn confirm_setup_peer(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
-        self.post_without_body("/setup/confirm-peer").await
+        self.post_without_body("/setup/confirm-peer", setup_action_timeout())
+            .await
+    }
+
+    pub async fn accept_pairing_session(
+        &self,
+        session_id: String,
+    ) -> Result<AckedPairingCommandResponse, DaemonClientError> {
+        self.post_json(
+            "/pairing/accept",
+            &PairingSessionCommandRequest { session_id },
+            setup_action_timeout(),
+        )
+        .await
+    }
+
+    pub async fn verify_pairing_session(
+        &self,
+        session_id: String,
+        pin_matches: bool,
+    ) -> Result<AckedPairingCommandResponse, DaemonClientError> {
+        self.post_json(
+            &format!("/pairing/sessions/{session_id}/verify"),
+            &VerifyPairingRequest { pin_matches },
+            setup_action_timeout(),
+        )
+        .await
     }
 
     pub async fn submit_setup_passphrase(
@@ -121,21 +158,41 @@ impl DaemonHttpClient {
         self.post_json(
             "/setup/submit-passphrase",
             &SetupSubmitPassphraseRequest { passphrase },
+            setup_action_timeout(),
         )
         .await
     }
 
     pub async fn cancel_setup(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
-        self.post_without_body("/setup/cancel").await
+        self.post_without_body("/setup/cancel", setup_action_timeout())
+            .await
     }
 
     pub async fn reset_setup(&self) -> Result<SetupResetResponse, DaemonClientError> {
-        self.post_without_body("/setup/reset").await
+        self.post_without_body("/setup/reset", setup_action_timeout())
+            .await
+    }
+
+    pub async fn set_pairing_gui_lease(&self, enabled: bool) -> Result<(), DaemonClientError> {
+        let response = self
+            .http
+            .post(format!("{}{}", self.base_url, "/pairing/gui/lease"))
+            .timeout(setup_action_timeout())
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", self.token),
+            )
+            .json(&PairingGuiLeaseRequest { enabled })
+            .send()
+            .await
+            .map_err(map_reqwest_error)?;
+
+        decode_empty_response(response).await
     }
 
     fn from_parts(base_url: String, token: String) -> Result<Self, DaemonClientError> {
         let http = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS))
             .build()
             .map_err(|error| {
                 DaemonClientError::Initialization(
@@ -168,13 +225,18 @@ impl DaemonHttpClient {
         decode_json_response(response).await
     }
 
-    async fn post_without_body<T>(&self, path: &str) -> Result<T, DaemonClientError>
+    async fn post_without_body<T>(
+        &self,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<T, DaemonClientError>
     where
         T: DeserializeOwned,
     {
         let response = self
             .http
             .post(format!("{}{}", self.base_url, path))
+            .timeout(timeout)
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bearer {}", self.token),
@@ -186,7 +248,12 @@ impl DaemonHttpClient {
         decode_json_response(response).await
     }
 
-    async fn post_json<T, B>(&self, path: &str, body: &B) -> Result<T, DaemonClientError>
+    async fn post_json<T, B>(
+        &self,
+        path: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<T, DaemonClientError>
     where
         T: DeserializeOwned,
         B: Serialize + ?Sized,
@@ -194,6 +261,7 @@ impl DaemonHttpClient {
         let response = self
             .http
             .post(format!("{}{}", self.base_url, path))
+            .timeout(timeout)
             .header(
                 reqwest::header::AUTHORIZATION,
                 format!("Bearer {}", self.token),
@@ -228,6 +296,24 @@ where
     serde_json::from_str(&body).map_err(|error| {
         DaemonClientError::InvalidResponse(anyhow::Error::new(error).context(body))
     })
+}
+
+async fn decode_empty_response(response: reqwest::Response) -> Result<(), DaemonClientError> {
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| DaemonClientError::InvalidResponse(error.into()))?;
+
+    if status == StatusCode::UNAUTHORIZED {
+        return Err(DaemonClientError::Unauthorized);
+    }
+
+    if !status.is_success() {
+        return Err(DaemonClientError::UnexpectedStatus { status, body });
+    }
+
+    Ok(())
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -273,12 +359,18 @@ fn map_reqwest_error(error: reqwest::Error) -> DaemonClientError {
     DaemonClientError::InvalidResponse(error.into())
 }
 
+fn setup_action_timeout() -> Duration {
+    Duration::from_secs(SETUP_ACTION_TIMEOUT_SECS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     struct TestTempDir {
         path: PathBuf,
@@ -463,5 +555,52 @@ mod tests {
         assert_eq!(select_peer["peerId"], "peer-a");
         assert!(select_peer.get("peer_id").is_none());
         assert_eq!(submit_passphrase["passphrase"], "secret");
+    }
+
+    #[tokio::test]
+    async fn submit_setup_passphrase_tolerates_slow_success_response() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener should expose addr");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("connection should arrive");
+            let mut buffer = vec![0; 4096];
+            let _ = stream
+                .read(&mut buffer)
+                .await
+                .expect("request should be readable");
+
+            tokio::time::sleep(Duration::from_secs(3)).await;
+
+            let body =
+                r#"{"state":"ProcessingCreateSpace","sessionId":null,"nextStepHint":"completed"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should be writable");
+        });
+
+        let client = DaemonHttpClient::from_parts(format!("http://{addr}"), "test-token".into())
+            .expect("client should build");
+
+        let ack = client
+            .submit_setup_passphrase("secret".to_string())
+            .await
+            .expect("slow setup response should not time out");
+
+        assert_eq!(ack.next_step_hint, "completed");
+        assert_eq!(
+            ack.state,
+            serde_json::Value::String("ProcessingCreateSpace".to_string())
+        );
+
+        server.await.expect("server should finish");
     }
 }

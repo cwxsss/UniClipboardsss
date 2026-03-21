@@ -36,6 +36,7 @@ mod local_daemon {
 
 mod daemon_client {
     use reqwest::StatusCode;
+    use uc_daemon::api::pairing::AckedPairingCommandResponse;
     use uc_daemon::api::types::{
         PeerSnapshotDto, SetupActionAckResponse, SetupResetResponse, SetupStateResponse,
     };
@@ -85,6 +86,21 @@ mod daemon_client {
             unreachable!("stub")
         }
 
+        pub async fn accept_pairing_session(
+            &self,
+            _session_id: String,
+        ) -> Result<AckedPairingCommandResponse, DaemonClientError> {
+            unreachable!("stub")
+        }
+
+        pub async fn verify_pairing_session(
+            &self,
+            _session_id: String,
+            _pin_matches: bool,
+        ) -> Result<AckedPairingCommandResponse, DaemonClientError> {
+            unreachable!("stub")
+        }
+
         pub async fn cancel_setup(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
             unreachable!("stub")
         }
@@ -107,6 +123,10 @@ mod daemon_client {
         pub async fn reset_setup(&self) -> Result<SetupResetResponse, DaemonClientError> {
             unreachable!("stub")
         }
+
+        pub async fn set_pairing_gui_lease(&self, _enabled: bool) -> Result<(), DaemonClientError> {
+            unreachable!("stub")
+        }
     }
 }
 
@@ -114,7 +134,9 @@ mod daemon_client {
 mod setup;
 
 use setup::{
-    join_retry_message, render_reset_output, should_prompt_for_join_passphrase, SetupStatusOutput,
+    host_flow_completed, join_retry_message, render_reset_output,
+    should_enable_host_pairing_presence, should_prompt_for_host_verification,
+    should_prompt_for_join_passphrase, should_prompt_for_join_peer_confirmation, SetupStatusOutput,
 };
 use uc_daemon::api::types::SetupStateResponse;
 
@@ -174,6 +196,31 @@ fn setup_join_reports_passphrase_retry_without_exiting() {
 }
 
 #[test]
+fn setup_join_prompts_for_peer_confirmation_before_passphrase() {
+    let state = SetupStateResponse {
+        state: json!({
+            "JoinSpaceConfirmPeer": {
+                "short_code": "123-456",
+                "peer_fingerprint": "peer-fingerprint",
+                "error": serde_json::Value::Null
+            }
+        }),
+        session_id: Some("session-join".to_string()),
+        next_step_hint: "host-confirm-peer".to_string(),
+        profile: "peerB".to_string(),
+        clipboard_mode: "passive".to_string(),
+        device_name: "Peer B".to_string(),
+        peer_id: "peer-b-id".to_string(),
+        selected_peer_id: Some("peer-a-id".to_string()),
+        selected_peer_name: Some("Peer A".to_string()),
+        has_completed: false,
+    };
+
+    assert!(should_prompt_for_join_peer_confirmation(&state));
+    assert!(!should_prompt_for_join_passphrase(&state));
+}
+
+#[test]
 fn setup_reset_reports_daemon_kept_running() {
     let rendered = render_reset_output("peerA", true);
 
@@ -181,4 +228,70 @@ fn setup_reset_reports_daemon_kept_running() {
         rendered,
         ["Reset complete for profile peerA", "Daemon kept running"].join("\n")
     );
+}
+
+#[test]
+fn setup_host_enables_pairing_presence_when_waiting_for_join_request() {
+    let state = SetupStateResponse {
+        state: json!("Completed"),
+        session_id: None,
+        next_step_hint: "completed".to_string(),
+        profile: "peerA".to_string(),
+        clipboard_mode: "passive".to_string(),
+        device_name: "Peer A".to_string(),
+        peer_id: "peer-a-id".to_string(),
+        selected_peer_id: None,
+        selected_peer_name: None,
+        has_completed: true,
+    };
+
+    assert!(should_enable_host_pairing_presence(&state, false));
+    assert!(!should_enable_host_pairing_presence(&state, true));
+}
+
+#[test]
+fn setup_host_prompts_for_verification_after_accept() {
+    let state = SetupStateResponse {
+        state: json!({
+            "JoinSpaceConfirmPeer": {
+                "short_code": "123-456",
+                "peer_fingerprint": "peer-fingerprint",
+                "error": serde_json::Value::Null
+            }
+        }),
+        session_id: Some("session-host".to_string()),
+        next_step_hint: "host-confirm-peer".to_string(),
+        profile: "peerA".to_string(),
+        clipboard_mode: "full".to_string(),
+        device_name: "Peer A".to_string(),
+        peer_id: "peer-a-id".to_string(),
+        selected_peer_id: Some("peer-b-id".to_string()),
+        selected_peer_name: Some("Peer B".to_string()),
+        has_completed: true,
+    };
+
+    assert!(should_prompt_for_host_verification(&state));
+}
+
+#[test]
+fn host_flow_only_exits_after_active_session_clears() {
+    let active = SetupStateResponse {
+        state: json!("Completed"),
+        session_id: Some("session-host".to_string()),
+        next_step_hint: "completed".to_string(),
+        profile: "peerA".to_string(),
+        clipboard_mode: "full".to_string(),
+        device_name: "Peer A".to_string(),
+        peer_id: "peer-a-id".to_string(),
+        selected_peer_id: None,
+        selected_peer_name: None,
+        has_completed: true,
+    };
+    let cleared = SetupStateResponse {
+        session_id: None,
+        ..active.clone()
+    };
+
+    assert!(!host_flow_completed(&active, true));
+    assert!(host_flow_completed(&cleared, true));
 }

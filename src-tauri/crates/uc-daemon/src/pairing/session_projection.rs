@@ -18,6 +18,8 @@ pub async fn upsert_pairing_snapshot(
         device_name,
         state: lifecycle_state.into(),
         updated_at_ms,
+        short_code: None,
+        peer_fingerprint: None,
     };
 
     state.write().await.upsert_pairing_session(snapshot);

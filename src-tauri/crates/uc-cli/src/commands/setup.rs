@@ -14,6 +14,7 @@ use crate::local_daemon::{ensure_local_daemon_running, LocalDaemonError};
 use crate::output;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
+const HOST_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +100,8 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
     let mut last_signature = String::new();
     let mut handled_peer_request = false;
     let mut waiting_for_peer_banner_printed = false;
+    let mut host_pairing_presence_enabled = false;
+    let mut last_host_lease_refresh = std::time::Instant::now();
 
     loop {
         let state = match client.get_setup_state().await {
@@ -112,17 +115,58 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
             last_signature = signature;
         }
 
-        if state.next_step_hint == "host-confirm-peer"
-            || matches!(
-                setup_state_variant(&state.state),
-                Some("JoinSpaceConfirmPeer")
-            )
-        {
+        if should_prompt_for_host_verification(&state) {
+            handled_peer_request = true;
+            waiting_for_peer_banner_printed = false;
+            let session_id = match state.session_id.clone() {
+                Some(session_id) => session_id,
+                None => {
+                    eprintln!("Error: missing pairing session id for host verification");
+                    return exit_codes::EXIT_ERROR;
+                }
+            };
+            match prompt_host_verification(&state) {
+                Ok(HostVerificationDecision::Confirm) => {
+                    if let Err(error) = client.verify_pairing_session(session_id, true).await {
+                        return print_client_error(error);
+                    }
+                }
+                Ok(HostVerificationDecision::Cancel) => {
+                    if let Err(error) = client.verify_pairing_session(session_id, false).await {
+                        return print_client_error(error);
+                    }
+                    println!("Host pairing canceled.");
+                    return exit_codes::EXIT_SUCCESS;
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return exit_codes::EXIT_ERROR;
+                }
+            }
+        } else if state.next_step_hint == "host-confirm-peer" {
             handled_peer_request = true;
             waiting_for_peer_banner_printed = false;
             match prompt_host_decision(&state) {
                 Ok(HostDecision::Accept) => {
-                    if let Err(error) = client.confirm_setup_peer().await {
+                    let accept_result = match client.confirm_setup_peer().await {
+                        Ok(_) => Ok(()),
+                        Err(DaemonClientError::UnexpectedStatus { status, .. })
+                            if status == reqwest::StatusCode::CONFLICT && state.has_completed =>
+                        {
+                            match state.session_id.clone() {
+                                Some(session_id) => {
+                                    client.accept_pairing_session(session_id).await.map(|_| ())
+                                }
+                                None => Err(DaemonClientError::UnexpectedStatus {
+                                    status,
+                                    body: "missing setup session id for pairing accept fallback"
+                                        .to_string(),
+                                }),
+                            }
+                        }
+                        Err(error) => Err(error),
+                    };
+                    if let Err(error) = accept_result {
                         return print_client_error(error);
                     }
                 }
@@ -130,6 +174,9 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
                     if let Err(error) = client.cancel_setup().await {
                         return print_client_error(error);
                     }
+                    let _ =
+                        disable_host_pairing_presence(&client, &mut host_pairing_presence_enabled)
+                            .await;
                     println!("Host setup canceled.");
                     return exit_codes::EXIT_SUCCESS;
                 }
@@ -139,14 +186,32 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
                 }
             }
         } else if state.next_step_hint == "completed" && !handled_peer_request {
+            if should_enable_host_pairing_presence(&state, host_pairing_presence_enabled) {
+                if let Err(error) = client.set_pairing_gui_lease(true).await {
+                    return print_client_error(error);
+                }
+                host_pairing_presence_enabled = true;
+                last_host_lease_refresh = std::time::Instant::now();
+            } else if host_pairing_presence_enabled
+                && last_host_lease_refresh.elapsed() >= HOST_LEASE_REFRESH_INTERVAL
+            {
+                if let Err(error) = client.set_pairing_gui_lease(true).await {
+                    return print_client_error(error);
+                }
+                last_host_lease_refresh = std::time::Instant::now();
+            }
             if !waiting_for_peer_banner_printed {
                 println!("Host ready. Waiting for a join request...");
                 waiting_for_peer_banner_printed = true;
             }
-        } else if state.has_completed && handled_peer_request {
+        } else if host_flow_completed(&state, handled_peer_request) {
+            let _ =
+                disable_host_pairing_presence(&client, &mut host_pairing_presence_enabled).await;
             println!("Setup host flow completed.");
             return exit_codes::EXIT_SUCCESS;
         } else if state.next_step_hint == "idle" && handled_peer_request {
+            let _ =
+                disable_host_pairing_presence(&client, &mut host_pairing_presence_enabled).await;
             println!("Host setup returned to idle.");
             return exit_codes::EXIT_SUCCESS;
         }
@@ -236,6 +301,25 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
                         eprintln!("Error: {error}");
                         return exit_codes::EXIT_ERROR;
                     }
+                }
+            }
+        } else if should_prompt_for_join_peer_confirmation(&state) {
+            match prompt_join_peer_confirmation(&state) {
+                Ok(JoinPeerDecision::Confirm) => {
+                    if let Err(error) = client.confirm_setup_peer().await {
+                        return print_client_error(error);
+                    }
+                }
+                Ok(JoinPeerDecision::Cancel) => {
+                    if let Err(error) = client.cancel_setup().await {
+                        return print_client_error(error);
+                    }
+                    println!("Join setup canceled.");
+                    return exit_codes::EXIT_SUCCESS;
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return exit_codes::EXIT_ERROR;
                 }
             }
         } else if should_prompt_for_join_passphrase(&state) {
@@ -332,6 +416,16 @@ enum HostDecision {
     Reject,
 }
 
+enum HostVerificationDecision {
+    Confirm,
+    Cancel,
+}
+
+enum JoinPeerDecision {
+    Confirm,
+    Cancel,
+}
+
 fn stdin_is_terminal() -> bool {
     io::stdin().is_terminal()
 }
@@ -354,6 +448,13 @@ fn print_state_progress(role: &str, state: &SetupStateResponse) {
     );
 }
 
+pub(crate) fn should_enable_host_pairing_presence(
+    state: &SetupStateResponse,
+    already_enabled: bool,
+) -> bool {
+    !already_enabled && state.next_step_hint == "completed"
+}
+
 fn state_signature(state: &SetupStateResponse) -> String {
     format!(
         "{}:{}:{}:{}",
@@ -370,6 +471,28 @@ pub(crate) fn should_prompt_for_join_passphrase(state: &SetupStateResponse) -> b
             setup_state_variant(&state.state),
             Some("JoinSpaceInputPassphrase")
         )
+}
+
+pub(crate) fn should_prompt_for_join_peer_confirmation(state: &SetupStateResponse) -> bool {
+    matches!(
+        setup_state_variant(&state.state),
+        Some("JoinSpaceConfirmPeer")
+    )
+}
+
+pub(crate) fn should_prompt_for_host_verification(state: &SetupStateResponse) -> bool {
+    state.has_completed
+        && matches!(
+            setup_state_variant(&state.state),
+            Some("JoinSpaceConfirmPeer")
+        )
+}
+
+pub(crate) fn host_flow_completed(state: &SetupStateResponse, handled_peer_request: bool) -> bool {
+    handled_peer_request
+        && state.has_completed
+        && state.next_step_hint == "completed"
+        && state.session_id.is_none()
 }
 
 fn setup_state_variant(state: &Value) -> Option<&str> {
@@ -403,6 +526,19 @@ pub(crate) fn render_reset_output(profile: &str, daemon_kept_running: bool) -> S
         lines.push("Daemon kept running".to_string());
     }
     lines.join("\n")
+}
+
+async fn disable_host_pairing_presence(
+    client: &DaemonHttpClient,
+    host_pairing_presence_enabled: &mut bool,
+) -> Result<(), DaemonClientError> {
+    if !*host_pairing_presence_enabled {
+        return Ok(());
+    }
+
+    client.set_pairing_gui_lease(false).await?;
+    *host_pairing_presence_enabled = false;
+    Ok(())
 }
 
 fn prompt_new_space_passphrase() -> Result<String, String> {
@@ -443,6 +579,50 @@ fn prompt_host_decision(state: &SetupStateResponse) -> Result<HostDecision, Stri
             "accept" => return Ok(HostDecision::Accept),
             "reject" => return Ok(HostDecision::Reject),
             _ => eprintln!("Please enter `accept` or `reject`."),
+        }
+    }
+}
+
+fn prompt_host_verification(
+    state: &SetupStateResponse,
+) -> Result<HostVerificationDecision, String> {
+    let peer_name = state
+        .selected_peer_name
+        .as_deref()
+        .or(state.selected_peer_id.as_deref())
+        .unwrap_or("selected peer");
+    println!("Confirm peer trust for {peer_name}");
+    if let Some(short_code) = setup_state_short_code(&state.state) {
+        println!("Verification code: {short_code}");
+    }
+
+    loop {
+        let input = prompt_line("confirm / cancel: ")?;
+        match input.trim().to_ascii_lowercase().as_str() {
+            "confirm" => return Ok(HostVerificationDecision::Confirm),
+            "cancel" => return Ok(HostVerificationDecision::Cancel),
+            _ => eprintln!("Please enter `confirm` or `cancel`."),
+        }
+    }
+}
+
+fn prompt_join_peer_confirmation(state: &SetupStateResponse) -> Result<JoinPeerDecision, String> {
+    let peer_name = state
+        .selected_peer_name
+        .as_deref()
+        .or(state.selected_peer_id.as_deref())
+        .unwrap_or("selected peer");
+    println!("Confirm peer trust for {peer_name}");
+    if let Some(short_code) = setup_state_short_code(&state.state) {
+        println!("Verification code: {short_code}");
+    }
+
+    loop {
+        let input = prompt_line("confirm / cancel: ")?;
+        match input.trim().to_ascii_lowercase().as_str() {
+            "confirm" => return Ok(JoinPeerDecision::Confirm),
+            "cancel" => return Ok(JoinPeerDecision::Cancel),
+            _ => eprintln!("Please enter `confirm` or `cancel`."),
         }
     }
 }
@@ -641,5 +821,52 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].peer_id, "peer-a");
+    }
+
+    #[test]
+    fn setup_host_prompts_for_verification_after_accept() {
+        let state = SetupStateResponse {
+            state: json!({
+                "JoinSpaceConfirmPeer": {
+                    "short_code": "123-456",
+                    "peer_fingerprint": "peer-fingerprint",
+                    "error": serde_json::Value::Null
+                }
+            }),
+            session_id: Some("session-host".to_string()),
+            next_step_hint: "host-confirm-peer".to_string(),
+            profile: "peerA".to_string(),
+            clipboard_mode: "full".to_string(),
+            device_name: "Peer A".to_string(),
+            peer_id: "peer-a-id".to_string(),
+            selected_peer_id: Some("peer-b-id".to_string()),
+            selected_peer_name: Some("Peer B".to_string()),
+            has_completed: true,
+        };
+
+        assert!(should_prompt_for_host_verification(&state));
+    }
+
+    #[test]
+    fn host_flow_only_exits_after_active_session_clears() {
+        let active = SetupStateResponse {
+            state: json!("Completed"),
+            session_id: Some("session-host".to_string()),
+            next_step_hint: "completed".to_string(),
+            profile: "peerA".to_string(),
+            clipboard_mode: "full".to_string(),
+            device_name: "Peer A".to_string(),
+            peer_id: "peer-a-id".to_string(),
+            selected_peer_id: None,
+            selected_peer_name: None,
+            has_completed: true,
+        };
+        let cleared = SetupStateResponse {
+            session_id: None,
+            ..active.clone()
+        };
+
+        assert!(!host_flow_completed(&active, true));
+        assert!(host_flow_completed(&cleared, true));
     }
 }
