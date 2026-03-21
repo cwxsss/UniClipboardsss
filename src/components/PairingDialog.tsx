@@ -50,6 +50,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
   const [pinCode, setPinCode] = useState<string>('')
   const [errorMsg, setErrorMsg] = useState<string>('')
   const [isPinVerifying, setIsPinVerifying] = useState(false)
+  const pairingSessionIdRef = React.useRef<string | null>(null)
 
   const localizePairingError = React.useCallback(
     (error?: string | null) => {
@@ -73,6 +74,10 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
   const cleanupRefs = React.useRef<(() => void)[]>([])
   const listenerRegistered = React.useRef(false)
 
+  useEffect(() => {
+    pairingSessionIdRef.current = pairingSessionId
+  }, [pairingSessionId])
+
   // Reset state when dialog opens
   const setupListeners = React.useCallback(async () => {
     // 防止重复注册
@@ -91,7 +96,13 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
         })
 
         if (event.kind === 'verification') {
+          const currentSessionId = pairingSessionIdRef.current
+          if (currentSessionId && event.sessionId !== currentSessionId) {
+            return
+          }
+
           console.log('[PairingDialog] Verification event:', event)
+          pairingSessionIdRef.current = event.sessionId
           setPairingSessionId(event.sessionId)
           setPinCode(event.code ?? '')
           setStep('pin-verify')
@@ -99,9 +110,19 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
           return
         }
 
+        if (!pairingSessionIdRef.current || event.sessionId !== pairingSessionIdRef.current) {
+          return
+        }
+
+        if (event.kind === 'verifying') {
+          setIsPinVerifying(true)
+          return
+        }
+
         if (event.kind === 'complete') {
           console.log('[PairingDialog] Complete event:', event)
           console.trace('[PairingDialog] Toast success triggered from:')
+          pairingSessionIdRef.current = null
           setStep('success')
           setIsPinVerifying(false)
           toast.success(t('pairing.success.title'))
@@ -115,6 +136,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
         if (event.kind === 'failed') {
           console.error('[PairingDialog] Failed event:', event)
           const message = localizePairingError(event.error)
+          pairingSessionIdRef.current = null
           setErrorMsg(message)
           setStep('failed')
           setIsPinVerifying(false)
@@ -129,7 +151,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
     } catch (err) {
       console.error('[PairingDialog] Failed to setup listeners:', err)
     }
-  }, [onClose, onPairingSuccess, t])
+  }, [localizePairingError, onClose, onPairingSuccess, t])
 
   const loadPeers = React.useCallback(async () => {
     setLoading(true)
@@ -164,6 +186,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
       setPeers([])
       setSelectedPeer(null)
       setPairingSessionId(null)
+      pairingSessionIdRef.current = null
       setPinCode('')
       setErrorMsg('')
       setIsPinVerifying(false)
@@ -181,6 +204,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
       })
       cleanupRefs.current = []
       listenerRegistered.current = false
+      pairingSessionIdRef.current = null
     }
   }, [open, loadPeers, setupListeners])
 
@@ -191,6 +215,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
     try {
       const response = await initiateP2PPairing({ peerId: peer.peerId })
       if (response.success) {
+        pairingSessionIdRef.current = response.sessionId
         setPairingSessionId(response.sessionId)
         // Wait for PIN ready event...
       } else {
@@ -214,6 +239,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
       })
       if (!matches) {
         setIsPinVerifying(false)
+        pairingSessionIdRef.current = null
         onClose() // User rejected
       }
       // If matches, wait for 'success' or 'failed' event
@@ -411,7 +437,14 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
                 <h3 className="font-medium text-destructive">{t('pairing.failed.title')}</h3>
                 <p className="text-sm text-muted-foreground">{errorMsg}</p>
               </div>
-              <Button onClick={() => setStep('discovery')} className="w-full">
+              <Button
+                onClick={() => {
+                  pairingSessionIdRef.current = null
+                  setPairingSessionId(null)
+                  setStep('discovery')
+                }}
+                className="w-full"
+              >
                 {t('pairing.failed.retry')}
               </Button>
             </div>
