@@ -486,8 +486,16 @@ impl SetupActionExecutor {
                 if message_lower.contains("timeout") {
                     return SetupDomainError::NetworkTimeout;
                 }
+                if message_lower.contains("host_not_discoverable")
+                    || message_lower.contains("no_local_pairing_participant_ready")
+                    || message_lower == "busy"
+                    || message_lower.contains("peer unavailable")
+                {
+                    return SetupDomainError::PeerUnavailable;
+                }
                 SetupDomainError::PairingFailed
             }
+            FailureReason::PeerBusy => SetupDomainError::PeerUnavailable,
             _ => SetupDomainError::PairingFailed,
         }
     }

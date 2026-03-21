@@ -203,7 +203,10 @@ pub enum PairingEvent {
     RecvCancel { session_id: SessionId },
 
     /// 收到忙碌响应
-    RecvBusy { session_id: SessionId },
+    RecvBusy {
+        session_id: SessionId,
+        reason: Option<String>,
+    },
 
     /// 用户接受配对 (确认短码匹配)
     UserAccept { session_id: SessionId },
@@ -514,7 +517,7 @@ impl PairingStateMachine {
             PairingEvent::RecvConfirm { session_id, .. } => session_id.clone(),
             PairingEvent::RecvReject { session_id } => session_id.clone(),
             PairingEvent::RecvCancel { session_id } => session_id.clone(),
-            PairingEvent::RecvBusy { session_id } => session_id.clone(),
+            PairingEvent::RecvBusy { session_id, .. } => session_id.clone(),
             PairingEvent::UserAccept { session_id } => session_id.clone(),
             PairingEvent::UserReject { session_id } => session_id.clone(),
             PairingEvent::UserCancel { session_id } => session_id.clone(),
@@ -862,8 +865,8 @@ impl PairingStateMachine {
             ),
             (
                 PairingState::AwaitingUserConfirm { session_id, .. },
-                PairingEvent::RecvBusy { .. },
-            ) => self.fail_with_reason(session_id, FailureReason::PeerBusy),
+                PairingEvent::RecvBusy { reason, .. },
+            ) => self.fail_with_reason(session_id, busy_failure_reason(reason)),
             (
                 PairingState::RequestSent { session_id },
                 PairingEvent::Timeout {
@@ -890,8 +893,8 @@ impl PairingStateMachine {
                     None,
                     Some(TimeoutKind::WaitingChallenge),
                 ),
-            (PairingState::RequestSent { session_id }, PairingEvent::RecvBusy { .. }) => {
-                self.fail_with_reason(session_id, FailureReason::PeerBusy)
+            (PairingState::RequestSent { session_id }, PairingEvent::RecvBusy { reason, .. }) => {
+                self.fail_with_reason(session_id, busy_failure_reason(reason))
             }
             (PairingState::RequestSent { session_id }, PairingEvent::UserReject { .. }) => self
                 .cancel_with_reason(
@@ -1001,8 +1004,8 @@ impl PairingStateMachine {
                     None,
                     Some(TimeoutKind::WaitingConfirm),
                 ),
-            (PairingState::ResponseSent { session_id }, PairingEvent::RecvBusy { .. }) => {
-                self.fail_with_reason(session_id, FailureReason::PeerBusy)
+            (PairingState::ResponseSent { session_id }, PairingEvent::RecvBusy { reason, .. }) => {
+                self.fail_with_reason(session_id, busy_failure_reason(reason))
             }
             (
                 PairingState::AwaitingUserApproval { session_id },
@@ -1216,9 +1219,10 @@ impl PairingStateMachine {
                 None,
                 Some(TimeoutKind::UserApproval),
             ),
-            (PairingState::AwaitingUserApproval { session_id }, PairingEvent::RecvBusy { .. }) => {
-                self.fail_with_reason(session_id, FailureReason::PeerBusy)
-            }
+            (
+                PairingState::AwaitingUserApproval { session_id },
+                PairingEvent::RecvBusy { reason, .. },
+            ) => self.fail_with_reason(session_id, busy_failure_reason(reason)),
             (
                 PairingState::ChallengeSent { session_id },
                 PairingEvent::RecvResponse { response, .. },
@@ -1370,8 +1374,8 @@ impl PairingStateMachine {
                     None,
                     Some(TimeoutKind::WaitingResponse),
                 ),
-            (PairingState::ChallengeSent { session_id }, PairingEvent::RecvBusy { .. }) => {
-                self.fail_with_reason(session_id, FailureReason::PeerBusy)
+            (PairingState::ChallengeSent { session_id }, PairingEvent::RecvBusy { reason, .. }) => {
+                self.fail_with_reason(session_id, busy_failure_reason(reason))
             }
             (
                 PairingState::Finalizing { session_id, .. },
@@ -1436,9 +1440,10 @@ impl PairingStateMachine {
                     None,
                     Some(TimeoutKind::Persist),
                 ),
-            (PairingState::Finalizing { session_id, .. }, PairingEvent::RecvBusy { .. }) => {
-                self.fail_with_reason(session_id, FailureReason::PeerBusy)
-            }
+            (
+                PairingState::Finalizing { session_id, .. },
+                PairingEvent::RecvBusy { reason, .. },
+            ) => self.fail_with_reason(session_id, busy_failure_reason(reason)),
             (state, PairingEvent::TransportError { error, .. })
                 if !matches!(
                     state,
@@ -1465,7 +1470,7 @@ impl PairingStateMachine {
         session_id: SessionId,
         reason: FailureReason,
     ) -> (PairingState, Vec<PairingAction>) {
-        let error_msg = format!("{:?}", reason);
+        let error_msg = pairing_failure_message(&reason);
         (
             PairingState::Failed {
                 session_id: session_id.clone(),
@@ -1537,6 +1542,26 @@ impl PairingStateMachine {
             device_name,
             sync_settings: None,
         })
+    }
+}
+
+fn busy_failure_reason(reason: Option<String>) -> FailureReason {
+    match reason {
+        Some(reason) if !reason.trim().is_empty() => FailureReason::Other(reason),
+        _ => FailureReason::PeerBusy,
+    }
+}
+
+fn pairing_failure_message(reason: &FailureReason) -> String {
+    match reason {
+        FailureReason::Other(message)
+        | FailureReason::TransportError(message)
+        | FailureReason::MessageParseError(message)
+        | FailureReason::PersistenceError(message)
+        | FailureReason::CryptoError(message) => message.clone(),
+        FailureReason::Timeout(kind) => format!("timeout:{kind:?}"),
+        FailureReason::RetryExhausted => "retry_exhausted".to_string(),
+        FailureReason::PeerBusy => "busy".to_string(),
     }
 }
 

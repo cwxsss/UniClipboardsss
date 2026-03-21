@@ -109,7 +109,6 @@ impl SpaceAccessTransportPort for SpaceAccessNetworkAdapter {
             serde_json::json!({
                 "kind": "space_access_result",
                 "space_id": space_id,
-                "sponsor_peer_id": context.sponsor_peer_id.clone(),
                 "success": success,
                 "deny_reason": deny_reason,
             })
@@ -122,5 +121,83 @@ impl SpaceAccessTransportPort for SpaceAccessNetworkAdapter {
                 reason: Some(payload),
             }))
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use uc_core::network::{PairingBusy, PairingMessage};
+
+    struct RecordingPairingTransport {
+        messages: Arc<Mutex<Vec<PairingMessage>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl PairingTransportPort for RecordingPairingTransport {
+        async fn open_pairing_session(
+            &self,
+            _peer_id: String,
+            _session_id: SessionId,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn send_pairing_on_session(&self, message: PairingMessage) -> anyhow::Result<()> {
+            self.messages.lock().await.push(message);
+            Ok(())
+        }
+
+        async fn close_pairing_session(
+            &self,
+            _session_id: SessionId,
+            _reason: Option<String>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn unpair_device(&self, _peer_id: String) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn send_result_omits_sponsor_peer_id_and_relies_on_sender_identity() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let transport = Arc::new(RecordingPairingTransport {
+            messages: Arc::clone(&messages),
+        });
+        let context = Arc::new(Mutex::new(SpaceAccessContext {
+            sponsor_peer_id: Some("peer-remote-joiner".to_string()),
+            result_success: Some(true),
+            joiner_offer: Some(super::super::context::SpaceAccessJoinerOffer {
+                space_id: uc_core::ids::SpaceId::from("default"),
+                keyslot_blob: vec![1, 2, 3],
+                challenge_nonce: [7; 32],
+            }),
+            ..SpaceAccessContext::default()
+        }));
+
+        let mut adapter = SpaceAccessNetworkAdapter::new(transport, context);
+        adapter
+            .send_result(&"session-1".to_string())
+            .await
+            .expect("send result");
+
+        let message = messages.lock().await.pop().expect("recorded message");
+        let PairingMessage::Busy(PairingBusy {
+            reason: Some(payload),
+            ..
+        }) = message
+        else {
+            panic!("expected busy pairing payload");
+        };
+
+        let payload: serde_json::Value =
+            serde_json::from_str(&payload).expect("valid json payload");
+        assert_eq!(payload["kind"], "space_access_result");
+        assert!(payload.get("sponsor_peer_id").is_none());
     }
 }

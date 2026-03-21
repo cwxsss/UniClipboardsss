@@ -7,16 +7,27 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use rand::RngCore;
 use tokio::sync::Mutex;
 use tracing::{error, info, info_span, warn, Instrument};
 
 use uc_core::{
+    ids::SpaceId,
+    ports::space::CryptoPort,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
     ports::{
         DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, SetupStatusPort,
         TimerPort,
     },
     security::{model::Passphrase, SecretString},
+    security::{
+        model::{KeySlot, KeySlotFile},
+        space_access::{
+            event::SpaceAccessEvent,
+            state::{DenyReason, SpaceAccessState},
+            SpaceAccessProofArtifact,
+        },
+    },
     setup::{SetupEvent, SetupState, SetupStateMachine, SetupStatus},
 };
 
@@ -25,7 +36,7 @@ use crate::usecases::setup::action_executor::SetupActionExecutor;
 use crate::usecases::setup::context::SetupContext;
 use crate::usecases::setup::MarkSetupComplete;
 use crate::usecases::space_access::{
-    SpaceAccessCryptoFactory, SpaceAccessJoinerOffer, SpaceAccessOrchestrator,
+    SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessJoinerOffer, SpaceAccessOrchestrator,
 };
 use crate::usecases::AppLifecycleCoordinator;
 use crate::usecases::InitializeEncryption;
@@ -66,6 +77,58 @@ pub struct SetupOrchestrator {
 
     // Action executor handles all side-effect execution
     pub(super) action_executor: Arc<SetupActionExecutor>,
+}
+
+struct LoadedKeyslotSpaceAccessCrypto {
+    keyslot_file: KeySlotFile,
+}
+
+#[async_trait::async_trait]
+impl CryptoPort for LoadedKeyslotSpaceAccessCrypto {
+    async fn generate_nonce32(&self) -> [u8; 32] {
+        let mut nonce = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        nonce
+    }
+
+    async fn export_keyslot_blob(&self, _space_id: &SpaceId) -> anyhow::Result<KeySlot> {
+        Ok(self.keyslot_file.clone().into())
+    }
+
+    async fn derive_master_key_from_keyslot(
+        &self,
+        _keyslot_blob: &[u8],
+        _passphrase: SecretString,
+    ) -> anyhow::Result<uc_core::security::MasterKey> {
+        Err(anyhow::anyhow!(
+            "loaded keyslot crypto cannot derive master key in sponsor flow"
+        ))
+    }
+}
+
+struct NoopRuntimeSpaceAccessCrypto;
+
+#[async_trait::async_trait]
+impl CryptoPort for NoopRuntimeSpaceAccessCrypto {
+    async fn generate_nonce32(&self) -> [u8; 32] {
+        [0u8; 32]
+    }
+
+    async fn export_keyslot_blob(&self, _space_id: &SpaceId) -> anyhow::Result<KeySlot> {
+        Err(anyhow::anyhow!(
+            "noop runtime space access crypto cannot export keyslot"
+        ))
+    }
+
+    async fn derive_master_key_from_keyslot(
+        &self,
+        _keyslot_blob: &[u8],
+        _passphrase: SecretString,
+    ) -> anyhow::Result<uc_core::security::MasterKey> {
+        Err(anyhow::anyhow!(
+            "noop runtime space access crypto cannot derive master key"
+        ))
+    }
 }
 
 impl SetupOrchestrator {
@@ -202,6 +265,141 @@ impl SetupOrchestrator {
         self.context.get_state().await
     }
 
+    pub async fn start_completed_host_sponsor_authorization(
+        &self,
+        pairing_session_id: String,
+        sponsor_peer_id: String,
+        keyslot_file: KeySlotFile,
+    ) -> Result<SpaceAccessState, SetupError> {
+        let current_state = self.get_state().await;
+        if !matches!(current_state, SetupState::Completed) {
+            return Err(SetupError::PairingFailed);
+        }
+
+        {
+            let context = self.action_executor.space_access_orchestrator.context();
+            let mut guard = context.lock().await;
+            guard.sponsor_peer_id = Some(sponsor_peer_id);
+        }
+
+        let space_id = SpaceId::from(keyslot_file.scope.profile_id.as_str());
+        self.dispatch_space_access_event_with_crypto(
+            LoadedKeyslotSpaceAccessCrypto { keyslot_file },
+            SpaceAccessEvent::SponsorAuthorizationRequested {
+                pairing_session_id: pairing_session_id.clone(),
+                space_id,
+                ttl_secs: 60,
+            },
+            pairing_session_id,
+        )
+        .await
+    }
+
+    pub async fn resolve_host_space_access_proof(
+        &self,
+        proof: SpaceAccessProofArtifact,
+        sponsor_peer_id: Option<String>,
+    ) -> Result<SpaceAccessState, SetupError> {
+        let current_pairing_session_id = match self
+            .action_executor
+            .space_access_orchestrator
+            .get_state()
+            .await
+        {
+            SpaceAccessState::WaitingJoinerProof {
+                pairing_session_id, ..
+            } => pairing_session_id,
+            _ => return Err(SetupError::PairingFailed),
+        };
+
+        let expected = {
+            let context = self.action_executor.space_access_orchestrator.context();
+            let mut guard = context.lock().await;
+            if let Some(peer_id) = sponsor_peer_id {
+                guard.sponsor_peer_id = Some(peer_id);
+            }
+            let Some(offer) = guard.prepared_offer.clone() else {
+                return Err(SetupError::PairingFailed);
+            };
+            offer
+        };
+
+        let event = if proof.pairing_session_id.as_str() != current_pairing_session_id {
+            SpaceAccessEvent::ProofRejected {
+                pairing_session_id: proof.pairing_session_id.as_str().to_string(),
+                space_id: proof.space_id.clone(),
+                reason: DenyReason::SessionMismatch,
+            }
+        } else if proof.space_id != expected.space_id {
+            SpaceAccessEvent::ProofRejected {
+                pairing_session_id: proof.pairing_session_id.as_str().to_string(),
+                space_id: proof.space_id.clone(),
+                reason: DenyReason::SpaceMismatch,
+            }
+        } else {
+            let verified = self
+                .action_executor
+                .proof_port
+                .verify_proof(&proof, expected.nonce)
+                .await
+                .map_err(|_| SetupError::PairingFailed)?;
+
+            if verified {
+                SpaceAccessEvent::ProofVerified {
+                    pairing_session_id: proof.pairing_session_id.as_str().to_string(),
+                    space_id: proof.space_id.clone(),
+                }
+            } else {
+                SpaceAccessEvent::ProofRejected {
+                    pairing_session_id: proof.pairing_session_id.as_str().to_string(),
+                    space_id: proof.space_id.clone(),
+                    reason: DenyReason::InvalidProof,
+                }
+            }
+        };
+
+        self.dispatch_space_access_event_with_crypto(
+            NoopRuntimeSpaceAccessCrypto,
+            event,
+            proof.pairing_session_id.as_str().to_string(),
+        )
+        .await
+    }
+
+    pub async fn apply_joiner_space_access_result(
+        &self,
+        pairing_session_id: String,
+        space_id: SpaceId,
+        sponsor_peer_id: Option<String>,
+        success: bool,
+        deny_reason: Option<DenyReason>,
+    ) -> Result<SpaceAccessState, SetupError> {
+        if let Some(peer_id) = sponsor_peer_id {
+            let context = self.action_executor.space_access_orchestrator.context();
+            context.lock().await.sponsor_peer_id = Some(peer_id);
+        }
+
+        let event = if success {
+            SpaceAccessEvent::AccessGranted {
+                pairing_session_id: pairing_session_id.clone(),
+                space_id,
+            }
+        } else {
+            SpaceAccessEvent::AccessDenied {
+                pairing_session_id: pairing_session_id.clone(),
+                space_id,
+                reason: deny_reason.unwrap_or(DenyReason::InternalError),
+            }
+        };
+
+        self.dispatch_space_access_event_with_crypto(
+            NoopRuntimeSpaceAccessCrypto,
+            event,
+            pairing_session_id,
+        )
+        .await
+    }
+
     async fn dispatch(&self, event: SetupEvent) -> Result<SetupState, SetupError> {
         let event = self.capture_context(event).await;
         let _dispatch_guard = self.context.acquire_dispatch_lock().await;
@@ -266,6 +464,33 @@ impl SetupOrchestrator {
             }
             other => other,
         }
+    }
+
+    async fn dispatch_space_access_event_with_crypto<C>(
+        &self,
+        crypto: C,
+        event: SpaceAccessEvent,
+        pairing_session_id: String,
+    ) -> Result<SpaceAccessState, SetupError>
+    where
+        C: CryptoPort,
+    {
+        let mut transport = self.action_executor.transport_port.lock().await;
+        let mut timer = self.action_executor.timer_port.lock().await;
+        let mut store = self.action_executor.persistence_port.lock().await;
+        let mut executor = SpaceAccessExecutor {
+            crypto: &crypto,
+            transport: &mut *transport,
+            proof: self.action_executor.proof_port.as_ref(),
+            timer: &mut *timer,
+            store: &mut *store,
+        };
+
+        self.action_executor
+            .space_access_orchestrator
+            .dispatch(&mut executor, event, Some(pairing_session_id))
+            .await
+            .map_err(|_| SetupError::PairingFailed)
     }
 
     fn split_passphrase(passphrase: SecretString) -> (SecretString, Passphrase) {
@@ -906,6 +1131,103 @@ mod tests {
         Arc::new(Mutex::new(NoopSpaceAccessPersistence))
     }
 
+    #[derive(Default)]
+    struct RecordingSpaceAccessTransportState {
+        offers: Vec<String>,
+        proofs: Vec<String>,
+        results: Vec<String>,
+    }
+
+    struct RecordingSpaceAccessTransport {
+        state: Arc<std::sync::Mutex<RecordingSpaceAccessTransportState>>,
+    }
+
+    impl RecordingSpaceAccessTransport {
+        fn new() -> (
+            Self,
+            Arc<std::sync::Mutex<RecordingSpaceAccessTransportState>>,
+        ) {
+            let state = Arc::new(std::sync::Mutex::new(
+                RecordingSpaceAccessTransportState::default(),
+            ));
+            (
+                Self {
+                    state: state.clone(),
+                },
+                state,
+            )
+        }
+    }
+
+    #[async_trait]
+    impl SpaceAccessTransportPort for RecordingSpaceAccessTransport {
+        async fn send_offer(
+            &mut self,
+            session_id: &uc_core::network::SessionId,
+        ) -> anyhow::Result<()> {
+            self.state
+                .lock()
+                .expect("lock recording transport")
+                .offers
+                .push(session_id.clone());
+            Ok(())
+        }
+
+        async fn send_proof(
+            &mut self,
+            session_id: &uc_core::network::SessionId,
+        ) -> anyhow::Result<()> {
+            self.state
+                .lock()
+                .expect("lock recording transport")
+                .proofs
+                .push(session_id.clone());
+            Ok(())
+        }
+
+        async fn send_result(
+            &mut self,
+            session_id: &uc_core::network::SessionId,
+        ) -> anyhow::Result<()> {
+            self.state
+                .lock()
+                .expect("lock recording transport")
+                .results
+                .push(session_id.clone());
+            Ok(())
+        }
+    }
+
+    struct ConfigurableProofPort {
+        verify_ok: bool,
+    }
+
+    #[async_trait]
+    impl ProofPort for ConfigurableProofPort {
+        async fn build_proof(
+            &self,
+            pairing_session_id: &uc_core::SessionId,
+            space_id: &uc_core::ids::SpaceId,
+            challenge_nonce: [u8; 32],
+            _master_key: &MasterKey,
+        ) -> anyhow::Result<uc_core::security::space_access::SpaceAccessProofArtifact> {
+            Ok(uc_core::security::space_access::SpaceAccessProofArtifact {
+                pairing_session_id: pairing_session_id.clone(),
+                space_id: space_id.clone(),
+                challenge_nonce,
+                proof_bytes: vec![1, 2, 3],
+            })
+        }
+
+        async fn verify_proof(
+            &self,
+            _proof: &uc_core::security::space_access::SpaceAccessProofArtifact,
+            _expected_nonce: [u8; 32],
+        ) -> anyhow::Result<bool> {
+            Ok(self.verify_ok)
+        }
+    }
+
     fn build_setup_event_port() -> Arc<dyn SetupEventPort> {
         Arc::new(MockSetupEventPort::default())
     }
@@ -951,6 +1273,32 @@ mod tests {
         build_orchestrator_with_initialize_encryption(setup_status, build_initialize_encryption())
     }
 
+    fn build_orchestrator_with_space_access_runtime(
+        setup_status: Arc<dyn SetupStatusPort>,
+        transport_port: Arc<Mutex<dyn SpaceAccessTransportPort>>,
+        proof_port: Arc<dyn ProofPort>,
+    ) -> SetupOrchestrator {
+        let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
+
+        SetupOrchestrator::new(
+            build_initialize_encryption(),
+            mark_setup_complete,
+            setup_status,
+            build_mock_lifecycle(),
+            build_pairing_orchestrator(),
+            build_setup_event_port(),
+            build_space_access_orchestrator(),
+            build_discovery_port(),
+            build_network_control(),
+            build_crypto_factory(),
+            build_pairing_transport(),
+            transport_port,
+            proof_port,
+            build_timer_port(),
+            build_persistence_port(),
+        )
+    }
+
     fn sample_keyslot_file(profile_id: &str) -> KeySlotFile {
         KeySlotFile {
             version: KeySlotVersion::V1,
@@ -976,6 +1324,191 @@ mod tests {
             created_at: None,
             updated_at: None,
         }
+    }
+
+    #[tokio::test]
+    async fn completed_host_sponsor_authorization_sends_offer_from_loaded_keyslot() {
+        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus {
+            has_completed: true,
+        }));
+        let (transport, transport_state) = RecordingSpaceAccessTransport::new();
+        let orchestrator = build_orchestrator_with_space_access_runtime(
+            setup_status,
+            Arc::new(Mutex::new(transport)),
+            Arc::new(ConfigurableProofPort { verify_ok: true }),
+        );
+
+        let keyslot_file = sample_keyslot_file("space-host-offer");
+        let state = orchestrator
+            .start_completed_host_sponsor_authorization(
+                "session-host-offer".to_string(),
+                "peer-host".to_string(),
+                keyslot_file,
+            )
+            .await
+            .expect("host sponsor authorization should start");
+
+        assert!(matches!(
+            state,
+            uc_core::security::space_access::state::SpaceAccessState::WaitingJoinerProof { .. }
+        ));
+
+        let guard = transport_state.lock().expect("lock recording transport");
+        assert_eq!(guard.offers, vec!["session-host-offer".to_string()]);
+        drop(guard);
+
+        let context = orchestrator
+            .action_executor
+            .space_access_orchestrator
+            .context();
+        let guard = context.lock().await;
+        assert_eq!(guard.sponsor_peer_id.as_deref(), Some("peer-host"));
+        let offer = guard
+            .prepared_offer
+            .as_ref()
+            .expect("prepared offer should exist");
+        assert_eq!(offer.space_id.as_ref(), "space-host-offer");
+    }
+
+    #[tokio::test]
+    async fn host_space_access_proof_verification_sends_result() {
+        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus {
+            has_completed: true,
+        }));
+        let (transport, transport_state) = RecordingSpaceAccessTransport::new();
+        let orchestrator = build_orchestrator_with_space_access_runtime(
+            setup_status,
+            Arc::new(Mutex::new(transport)),
+            Arc::new(ConfigurableProofPort { verify_ok: true }),
+        );
+
+        orchestrator
+            .start_completed_host_sponsor_authorization(
+                "session-host-proof".to_string(),
+                "peer-proof".to_string(),
+                sample_keyslot_file("space-host-proof"),
+            )
+            .await
+            .expect("host sponsor authorization should start");
+
+        let proof = uc_core::security::space_access::SpaceAccessProofArtifact {
+            pairing_session_id: uc_core::ids::SessionId::from("session-host-proof"),
+            space_id: uc_core::ids::SpaceId::from("space-host-proof"),
+            challenge_nonce: [0u8; 32],
+            proof_bytes: vec![7, 7, 7],
+        };
+
+        let state = orchestrator
+            .resolve_host_space_access_proof(proof, Some("peer-proof".to_string()))
+            .await
+            .expect("proof verification should succeed");
+
+        assert!(matches!(
+            state,
+            uc_core::security::space_access::state::SpaceAccessState::Granted { .. }
+        ));
+
+        let guard = transport_state.lock().expect("lock recording transport");
+        assert_eq!(guard.results, vec!["session-host-proof".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn joiner_space_access_result_advances_waiting_decision_to_granted() {
+        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (transport, _transport_state) = RecordingSpaceAccessTransport::new();
+        let orchestrator = build_orchestrator_with_space_access_runtime(
+            setup_status,
+            Arc::new(Mutex::new(transport)),
+            Arc::new(ConfigurableProofPort { verify_ok: true }),
+        );
+
+        let session_id = "session-join-result".to_string();
+        let space_id = uc_core::ids::SpaceId::from("space-join-result");
+
+        {
+            let context = orchestrator
+                .action_executor
+                .space_access_orchestrator
+                .context();
+            let mut guard = context.lock().await;
+            guard.joiner_offer = Some(SpaceAccessJoinerOffer {
+                space_id: space_id.clone(),
+                keyslot_blob: vec![1, 2, 3],
+                challenge_nonce: [4u8; 32],
+            });
+            guard.joiner_passphrase = Some(SecretString::new("join-secret".to_string()));
+            guard.sponsor_peer_id = Some("peer-host".to_string());
+        }
+
+        let crypto = SucceedSpaceAccessCrypto;
+        let mut transport = orchestrator.action_executor.transport_port.lock().await;
+        let mut timer = orchestrator.action_executor.timer_port.lock().await;
+        let mut store = orchestrator.action_executor.persistence_port.lock().await;
+        let mut executor = SpaceAccessExecutor {
+            crypto: &crypto,
+            transport: &mut *transport,
+            proof: orchestrator.action_executor.proof_port.as_ref(),
+            timer: &mut *timer,
+            store: &mut *store,
+        };
+
+        orchestrator
+            .action_executor
+            .space_access_orchestrator
+            .dispatch(
+                &mut executor,
+                SpaceAccessEvent::JoinRequested {
+                    pairing_session_id: session_id.clone(),
+                    ttl_secs: 60,
+                },
+                Some(session_id.clone()),
+            )
+            .await
+            .expect("join requested");
+        orchestrator
+            .action_executor
+            .space_access_orchestrator
+            .dispatch(
+                &mut executor,
+                SpaceAccessEvent::OfferAccepted {
+                    pairing_session_id: session_id.clone(),
+                    space_id: space_id.clone(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::seconds(60),
+                },
+                Some(session_id.clone()),
+            )
+            .await
+            .expect("offer accepted");
+        orchestrator
+            .action_executor
+            .space_access_orchestrator
+            .dispatch(
+                &mut executor,
+                SpaceAccessEvent::PassphraseSubmitted,
+                Some(session_id.clone()),
+            )
+            .await
+            .expect("passphrase submitted");
+        drop(executor);
+        drop(store);
+        drop(timer);
+        drop(transport);
+
+        let state = orchestrator
+            .apply_joiner_space_access_result(
+                session_id,
+                space_id,
+                Some("peer-host".to_string()),
+                true,
+                None,
+            )
+            .await
+            .expect("joiner result should apply");
+
+        assert!(matches!(
+            state,
+            uc_core::security::space_access::state::SpaceAccessState::Granted { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1400,7 +1933,7 @@ mod tests {
     }
 
     #[test]
-    fn map_pairing_failure_reason_maps_rejected_and_timeout() {
+    fn map_pairing_failure_reason_maps_rejected_timeout_and_peer_unavailable() {
         let rejected = SetupActionExecutor::map_pairing_failure_reason(&FailureReason::Other(
             "Peer rejected pairing".to_string(),
         ));
@@ -1415,6 +1948,14 @@ mod tests {
             "stream closed".to_string(),
         ));
         assert_eq!(generic, SetupDomainError::PairingFailed);
+
+        let unavailable = SetupActionExecutor::map_pairing_failure_reason(&FailureReason::Other(
+            "no_local_pairing_participant_ready".to_string(),
+        ));
+        assert_eq!(unavailable, SetupDomainError::PeerUnavailable);
+
+        let busy = SetupActionExecutor::map_pairing_failure_reason(&FailureReason::PeerBusy);
+        assert_eq!(busy, SetupDomainError::PeerUnavailable);
     }
 
     #[tokio::test]

@@ -124,18 +124,24 @@ impl DaemonApp {
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
         let pairing_cancel = self.cancel.child_token();
         let mut pairing_handle = tokio::spawn(Arc::clone(&pairing_host).run(pairing_cancel));
+        let mut completed_rpc_handle = false;
+        let mut completed_http_handle = false;
+        let mut completed_pairing_handle = false;
 
         tokio::select! {
             _ = wait_for_shutdown_signal() => {
                 info!("shutdown signal received");
             }
             result = &mut rpc_handle => {
+                completed_rpc_handle = true;
                 warn!("RPC accept loop exited unexpectedly: {:?}", result);
             }
             result = &mut http_handle => {
+                completed_http_handle = true;
                 warn!("HTTP server exited unexpectedly: {:?}", result);
             }
             result = &mut pairing_handle => {
+                completed_pairing_handle = true;
                 warn!("pairing host exited unexpectedly: {:?}", result);
             }
             Some(result) = worker_tasks.join_next() => {
@@ -157,15 +163,21 @@ impl DaemonApp {
         .ok();
 
         // Await RPC accept loop with timeout
-        tokio::time::timeout(Duration::from_secs(5), rpc_handle)
-            .await
-            .ok();
-        tokio::time::timeout(Duration::from_secs(5), http_handle)
-            .await
-            .ok();
-        tokio::time::timeout(Duration::from_secs(5), pairing_handle)
-            .await
-            .ok();
+        if !completed_rpc_handle {
+            tokio::time::timeout(Duration::from_secs(5), rpc_handle)
+                .await
+                .ok();
+        }
+        if !completed_http_handle {
+            tokio::time::timeout(Duration::from_secs(5), http_handle)
+                .await
+                .ok();
+        }
+        if !completed_pairing_handle {
+            tokio::time::timeout(Duration::from_secs(5), pairing_handle)
+                .await
+                .ok();
+        }
 
         // Stop workers in reverse order
         for worker in self.workers.iter().rev() {

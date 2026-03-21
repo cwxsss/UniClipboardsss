@@ -11,8 +11,14 @@ use tracing::{debug, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+use uc_app::usecases::SetupOrchestrator;
 use uc_core::network::pairing_state_machine::{CancellationBy, PairingAction, PairingRole};
-use uc_core::network::{NetworkEvent, PairingBusy, PairingCancel, PairingMessage, PairingRequest};
+use uc_core::network::{
+    protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingCancel, PairingMessage,
+    PairingRequest,
+};
+use uc_core::security::model::{KeySlot, KeySlotFile};
+use uc_core::security::space_access::{deny_reason_from_code, SpaceAccessProofArtifact};
 use uc_infra::fs::key_slot_store::KeySlotStore;
 
 use crate::api::types::{
@@ -20,7 +26,7 @@ use crate::api::types::{
     PeerChangedPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
 };
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
-use crate::state::RuntimeState;
+use crate::state::{DaemonPairingSessionSnapshot, RuntimeState};
 
 const PAIRING_EVENTS_SUBSCRIBE_BACKOFF_INITIAL_MS: u64 = 250;
 const PAIRING_EVENTS_SUBSCRIBE_BACKOFF_MAX_MS: u64 = 30_000;
@@ -454,6 +460,7 @@ impl DaemonPairingHost {
 
         tasks.spawn(run_pairing_action_loop(
             self.runtime.clone(),
+            self.runtime.setup_orchestrator().clone(),
             self.pairing_orchestrator.clone(),
             self.space_access_orchestrator.clone(),
             self.key_slot_store.clone(),
@@ -475,6 +482,7 @@ impl DaemonPairingHost {
 
         tasks.spawn(run_pairing_network_event_loop(
             self.runtime.clone(),
+            self.runtime.setup_orchestrator().clone(),
             self.pairing_orchestrator.clone(),
             self.state.clone(),
             self.active_session_id.clone(),
@@ -635,6 +643,7 @@ impl DaemonPairingHost {
 
 async fn run_pairing_action_loop(
     runtime: Arc<CoreRuntime>,
+    setup_orchestrator: Arc<SetupOrchestrator>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
@@ -737,14 +746,37 @@ async fn run_pairing_action_loop(
                             if let Some(peer) = peer_info.as_ref() {
                                 let context = space_access_orchestrator.context();
                                 context.lock().await.sponsor_peer_id = Some(peer.peer_id.clone());
-                            }
-
-                            if let Err(err) = key_slot_store.load().await {
-                                debug!(
-                                    error = %err,
-                                    session_id = %session_id,
-                                    "key slot store unavailable for responder-side follow-up"
-                                );
+                                match key_slot_store.load().await {
+                                    Ok(keyslot_file) => {
+                                        if matches!(
+                                            setup_orchestrator.get_state().await,
+                                            uc_core::setup::SetupState::Completed
+                                        ) {
+                                            if let Err(err) = setup_orchestrator
+                                                .start_completed_host_sponsor_authorization(
+                                                    session_id.clone(),
+                                                    peer.peer_id.clone(),
+                                                    keyslot_file,
+                                                )
+                                                .await
+                                            {
+                                                warn!(
+                                                    error = %err,
+                                                    session_id = %session_id,
+                                                    peer_id = %peer.peer_id,
+                                                    "failed to start completed-host sponsor authorization"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        debug!(
+                                            error = %err,
+                                            session_id = %session_id,
+                                            "key slot store unavailable for responder-side follow-up"
+                                        );
+                                    }
+                                }
                             }
                         }
 
@@ -803,15 +835,15 @@ async fn run_pairing_domain_event_loop(
                             .await
                             .and_then(|peer| peer.device_name);
                         let ts = now_ms();
-                        upsert_pairing_snapshot(
-                            &state,
-                            session_id.clone(),
-                            Some(peer_id.clone()),
-                            device_name.clone(),
-                            "verification",
-                            ts,
-                        )
-                        .await;
+                        state.write().await.upsert_pairing_session(DaemonPairingSessionSnapshot {
+                            session_id: session_id.clone(),
+                            peer_id: Some(peer_id.clone()),
+                            device_name: device_name.clone(),
+                            state: "verification".to_string(),
+                            updated_at_ms: ts,
+                            short_code: Some(short_code.clone()),
+                            peer_fingerprint: Some(peer_fingerprint.clone()),
+                        });
                         emit_pairing_session_changed(
                             &event_tx,
                             &session_id,
@@ -960,6 +992,7 @@ async fn run_pairing_domain_event_loop(
 
 async fn run_pairing_network_event_loop(
     runtime: Arc<CoreRuntime>,
+    setup_orchestrator: Arc<SetupOrchestrator>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
@@ -1057,6 +1090,7 @@ async fn run_pairing_network_event_loop(
                                 }
                                 NetworkEvent::PairingMessageReceived { peer_id, message } => {
                                     handle_pairing_message(
+                                        setup_orchestrator.as_ref(),
                                         pairing_orchestrator.as_ref(),
                                         &state,
                                         &active_session_id,
@@ -1128,6 +1162,7 @@ async fn run_pairing_session_sweep_loop(
 }
 
 async fn handle_pairing_message(
+    setup_orchestrator: &SetupOrchestrator,
     pairing_orchestrator: &PairingOrchestrator,
     state: &Arc<RwLock<RuntimeState>>,
     active_session_id: &Arc<RwLock<Option<String>>>,
@@ -1253,6 +1288,95 @@ async fn handle_pairing_message(
                 .await?;
         }
         PairingMessage::Busy(busy) => {
+            if let Some(reason) = busy.reason.as_deref() {
+                match parse_space_access_busy_payload(reason) {
+                    Ok(SpaceAccessBusyPayload::Offer(payload)) => {
+                        let keyslot_file = match KeySlotFile::try_from(&payload.keyslot) {
+                            Ok(keyslot_file) => keyslot_file,
+                            Err(err) => {
+                                warn!(
+                                    error = %err,
+                                    session_id = %busy.session_id,
+                                    peer_id = %peer_id,
+                                    "space access offer missing wrapped keyslot payload"
+                                );
+                                return Ok(());
+                            }
+                        };
+                        pairing_orchestrator
+                            .handle_keyslot_offer(
+                                &busy.session_id,
+                                &peer_id,
+                                PairingKeyslotOffer {
+                                    session_id: busy.session_id.clone(),
+                                    keyslot_file: Some(keyslot_file),
+                                    challenge: Some(payload.nonce),
+                                },
+                            )
+                            .await?;
+                        return Ok(());
+                    }
+                    Ok(SpaceAccessBusyPayload::Proof(payload)) => {
+                        let challenge_len = payload.challenge_nonce.len();
+                        let challenge_nonce: [u8; 32] = match payload.challenge_nonce.try_into() {
+                            Ok(nonce) => nonce,
+                            Err(_) => {
+                                warn!(
+                                    session_id = %busy.session_id,
+                                    peer_id = %peer_id,
+                                    challenge_len,
+                                    "invalid space access proof nonce length"
+                                );
+                                return Ok(());
+                            }
+                        };
+                        setup_orchestrator
+                            .resolve_host_space_access_proof(
+                                SpaceAccessProofArtifact {
+                                    pairing_session_id: uc_core::SessionId::from(
+                                        payload.pairing_session_id.as_str(),
+                                    ),
+                                    space_id: uc_core::ids::SpaceId::from(
+                                        payload.space_id.as_str(),
+                                    ),
+                                    challenge_nonce,
+                                    proof_bytes: payload.proof_bytes,
+                                },
+                                Some(peer_id.clone()),
+                            )
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+                        return Ok(());
+                    }
+                    Ok(SpaceAccessBusyPayload::Result(payload)) => {
+                        let deny_reason = payload
+                            .deny_reason
+                            .as_deref()
+                            .and_then(deny_reason_from_code);
+                        setup_orchestrator
+                            .apply_joiner_space_access_result(
+                                busy.session_id.clone(),
+                                uc_core::ids::SpaceId::from(payload.space_id.as_str()),
+                                Some(peer_id.clone()),
+                                payload.success,
+                                deny_reason,
+                            )
+                            .await
+                            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+                        return Ok(());
+                    }
+                    Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload) => {}
+                    Err(error) => {
+                        warn!(
+                            error = %error,
+                            session_id = %busy.session_id,
+                            peer_id = %peer_id,
+                            "failed to parse space access busy payload"
+                        );
+                        return Ok(());
+                    }
+                }
+            }
             let session_id = busy.session_id.clone();
             pairing_orchestrator
                 .handle_busy(&session_id, &peer_id, busy.reason.clone())
@@ -1484,6 +1608,93 @@ fn pairing_failure_message(
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpaceAccessBusyOfferPayload {
+    kind: String,
+    space_id: String,
+    nonce: Vec<u8>,
+    keyslot: KeySlot,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpaceAccessBusyProofPayload {
+    kind: String,
+    pairing_session_id: String,
+    space_id: String,
+    challenge_nonce: Vec<u8>,
+    proof_bytes: Vec<u8>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpaceAccessBusyResultPayload {
+    kind: String,
+    space_id: String,
+    #[serde(default)]
+    sponsor_peer_id: Option<String>,
+    success: bool,
+    #[serde(default)]
+    deny_reason: Option<String>,
+}
+
+enum SpaceAccessBusyPayload {
+    Offer(SpaceAccessBusyOfferPayload),
+    Proof(SpaceAccessBusyProofPayload),
+    Result(SpaceAccessBusyResultPayload),
+}
+
+#[derive(Debug)]
+enum ParseSpaceAccessBusyPayloadError {
+    NotSpaceAccessPayload,
+    InvalidJson(serde_json::Error),
+}
+
+impl std::fmt::Display for ParseSpaceAccessBusyPayloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotSpaceAccessPayload => {
+                f.write_str("busy payload is not a space access payload")
+            }
+            Self::InvalidJson(error) => write!(f, "busy payload is not valid json: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ParseSpaceAccessBusyPayloadError {}
+
+impl From<serde_json::Error> for ParseSpaceAccessBusyPayloadError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::InvalidJson(value)
+    }
+}
+
+fn parse_space_access_busy_payload(
+    json: &str,
+) -> Result<SpaceAccessBusyPayload, ParseSpaceAccessBusyPayloadError> {
+    let payload: serde_json::Value = serde_json::from_str(json)?;
+    let Some(kind) = payload.get("kind").and_then(serde_json::Value::as_str) else {
+        return Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload);
+    };
+
+    match kind {
+        "space_access_offer" => Ok(SpaceAccessBusyPayload::Offer(serde_json::from_value(
+            payload,
+        )?)),
+        "space_access_proof" => Ok(SpaceAccessBusyPayload::Proof(serde_json::from_value(
+            payload,
+        )?)),
+        "space_access_result" => Ok(SpaceAccessBusyPayload::Result(serde_json::from_value(
+            payload,
+        )?)),
+        _ => Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload),
+    }
 }
 
 #[cfg(test)]

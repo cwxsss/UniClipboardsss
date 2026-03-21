@@ -175,13 +175,47 @@ async fn setup_confirm_peer(
     State(state): State<DaemonApiState>,
     headers: HeaderMap,
 ) -> axum::response::Response {
-    setup_action_without_body(
-        state,
-        headers,
-        SetupRouteAction::ConfirmPeer,
-        |setup_orchestrator| async move { setup_orchestrator.confirm_peer_trust().await },
-    )
-    .await
+    if !state.is_authorized(&headers) {
+        return unauthorized().into_response();
+    }
+    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
+        return setup_failed("setup orchestrator unavailable").into_response();
+    };
+
+    let current_state = setup_orchestrator.get_state().await;
+    let current_hint = match state
+        .query_service
+        .setup_state(setup_orchestrator.as_ref(), state.pairing_host().as_deref())
+        .await
+    {
+        Ok(response) => response.next_step_hint,
+        Err(error) => return setup_internal_error(error).into_response(),
+    };
+
+    if !is_confirm_peer_transition_allowed(&current_state, &current_hint) {
+        return invalid_setup_transition("current setup state does not allow this action")
+            .into_response();
+    }
+
+    if should_delegate_host_confirmation_to_pairing_host(&current_state, &current_hint) {
+        let Some(pairing_host) = pairing_host(&state).into_response_ok() else {
+            return daemon_pairing_unavailable().into_response();
+        };
+        let Some(session_id) = pairing_host.active_session_id().await else {
+            return invalid_setup_transition("no active pairing session to confirm")
+                .into_response();
+        };
+
+        return match pairing_host.accept_pairing(&session_id).await {
+            Ok(()) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
+            Err(error) => pairing_command_error(error).into_response(),
+        };
+    }
+
+    match setup_orchestrator.confirm_peer_trust().await {
+        Ok(_) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
+        Err(error) => setup_failed(format!("setup action failed: {error}")).into_response(),
+    }
 }
 
 async fn setup_submit_passphrase(
@@ -238,6 +272,29 @@ async fn setup_cancel(
     let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
         return setup_failed("setup orchestrator unavailable").into_response();
     };
+    let current_state = setup_orchestrator.get_state().await;
+    let current_hint = match state
+        .query_service
+        .setup_state(setup_orchestrator.as_ref(), state.pairing_host().as_deref())
+        .await
+    {
+        Ok(response) => response.next_step_hint,
+        Err(error) => return setup_internal_error(error).into_response(),
+    };
+
+    if should_delegate_host_confirmation_to_pairing_host(&current_state, &current_hint) {
+        let Some(pairing_host) = pairing_host(&state).into_response_ok() else {
+            return daemon_pairing_unavailable().into_response();
+        };
+        let Some(session_id) = pairing_host.active_session_id().await else {
+            return invalid_setup_transition("no active pairing session to cancel").into_response();
+        };
+
+        return match pairing_host.reject_pairing(&session_id).await {
+            Ok(()) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
+            Err(error) => pairing_command_error(error).into_response(),
+        };
+    }
 
     match setup_orchestrator.cancel_setup().await {
         Ok(_) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
@@ -778,15 +835,25 @@ enum SetupRouteAction {
     Host,
     Join,
     SelectPeer,
-    ConfirmPeer,
 }
 
 fn is_transition_allowed(action: SetupRouteAction, state: &SetupState) -> bool {
     match action {
         SetupRouteAction::Host | SetupRouteAction::Join => matches!(state, SetupState::Welcome),
         SetupRouteAction::SelectPeer => matches!(state, SetupState::JoinSpaceSelectDevice { .. }),
-        SetupRouteAction::ConfirmPeer => matches!(state, SetupState::JoinSpaceConfirmPeer { .. }),
     }
+}
+
+fn is_confirm_peer_transition_allowed(state: &SetupState, next_step_hint: &str) -> bool {
+    matches!(state, SetupState::JoinSpaceConfirmPeer { .. })
+        || matches!(state, SetupState::Completed) && next_step_hint == "host-confirm-peer"
+}
+
+fn should_delegate_host_confirmation_to_pairing_host(
+    state: &SetupState,
+    next_step_hint: &str,
+) -> bool {
+    matches!(state, SetupState::Completed) && next_step_hint == "host-confirm-peer"
 }
 
 async fn setup_action_without_body<F, Fut>(
@@ -860,4 +927,21 @@ fn _route_markers() -> [&'static str; 19] {
 #[allow(dead_code)]
 fn _response_marker(_: AckedPairingCommandResponse) -> StatusCode {
     StatusCode::ACCEPTED
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirm_peer_transition_accepts_completed_state_when_hint_requests_host_confirmation() {
+        assert!(is_confirm_peer_transition_allowed(
+            &SetupState::Completed,
+            "host-confirm-peer"
+        ));
+        assert!(!is_confirm_peer_transition_allowed(
+            &SetupState::Completed,
+            "completed"
+        ));
+    }
 }
