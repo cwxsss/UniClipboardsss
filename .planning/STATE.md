@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: unknown
-stopped_at: Phase 46.2 context gathered
-last_updated: '2026-03-21T00:29:41.412Z'
+status: in_progress
+stopped_at: Completed 46.2-01-PLAN.md
+last_updated: '2026-03-21T01:35:12.267Z'
 progress:
   total_phases: 15
   completed_phases: 10
-  total_plans: 36
-  completed_plans: 35
+  total_plans: 38
+  completed_plans: 36
 ---
 
 # Project State
@@ -19,20 +19,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46.1 — unify-realtime-subscriptions-on-single-daemonwsbridge
+**Current focus:** Phase 46.2 — daemon-tauri-daemon
 
 ## Current Position
 
-Phase: 46.1 (unify-realtime-subscriptions-on-single-daemonwsbridge) — COMPLETE
-Plan: 5 of 5
+Phase: 46.2 (daemon-tauri-daemon) — IN PROGRESS
+Plan: 1 of 2
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 6 (this milestone)
-- Average duration: 11min
-- Total execution time: 113min
+- Total plans completed: 7 (this milestone)
+- Average duration: 12min
+- Total execution time: 128min
 
 **By Phase:**
 
@@ -73,6 +73,7 @@ _Updated after each plan completion_
 | Phase 46.1 P03 | 29 | 2 tasks | 7 files |
 | Phase 46.1 P04 | 9 | 2 tasks | 9 files |
 | Phase 46.1 P05 | 56 | 2 tasks | 7 files |
+| Phase 46.2-daemon-tauri-daemon P01 | 15 | 2 tasks | 20 files |
 
 ## Accumulated Context
 
@@ -149,6 +150,9 @@ Recent decisions affecting current work:
 - [Phase 46.1]: Frontend contract verification must run through the repository’s vitest script entrypoint rather than Bun’s native test runner to preserve jsdom/mock behavior.
 - [Phase 46.1]: PairingBridge and its compatibility tests are deleted; daemon realtime now has no second Tauri-owned websocket host path.
 - [Phase 46.1]: Setup pairing facade subscriptions are hub-only; legacy setup websocket subscription markers are fully removed from runtime code.
+- [Phase 46.2-daemon-tauri-daemon]: GUI pairing lease renewal now uses /pairing/gui/lease so discoverability and participant readiness stay daemon-owned behind one bridge call.
+- [Phase 46.2-daemon-tauri-daemon]: Daemon pairing websocket payloads carry kind/stage metadata and DaemonWsBridge translates them back into the existing frontend pairing event contract.
+- [Phase 46.2-daemon-tauri-daemon]: Legacy Tauri pairing host loops and direct PairingOrchestrator state were removed from uc-tauri; bridge regression coverage now lives in daemon_ws_bridge and frontend tests.
 
 ### Roadmap Evolution
 
@@ -179,6 +183,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T00:29:41.409Z
-Stopped at: Phase 46.2 context gathered
-Resume file: .planning/phases/46.2-daemon-tauri-daemon/46.2-CONTEXT.md
+Last session: 2026-03-21T01:35:12.265Z
+Stopped at: Completed 46.2-01-PLAN.md
+Resume file: None

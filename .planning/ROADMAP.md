@@ -274,6 +274,18 @@ Plans:
 - [x] 46-04-PLAN.md — Gap Closure For Setup Pairing Facade Extraction (completed 2026-03-20)
 - [x] 46-05-PLAN.md — Gap Closure For Live GUI Pairing Bridge Activation (completed 2026-03-20)
 
+### Phase 46.2: 彻底打通基于 daemon 的配对流程, 完全移除原 tauri 中相关的配对流程. 期望: 在不改变用户配对流程的情况下,内部替换成基于 daemon 的配对流程实现 (INSERTED)
+
+**Goal:** Complete the daemon-only pairing hard cutover for desktop pairing flows while preserving the existing user-visible UX and stage semantics.
+**Requirements**: R46.2-1, R46.2-2, R46.2-3, R46.2-4, R46.2-5, R46.2-6, R46.2-7, R46.2-8
+**Depends on:** Phase 46
+**Plans:** 1/2 plans executed
+
+Plans:
+
+- [x] 46.2-01-PLAN.md — Daemon Pairing Flow Hard Cutover For GUI Bridge (completed 2026-03-21)
+- [ ] 46.2-02-PLAN.md — Error Handling, Security Boundary, And Observability Hardening
+
 ### Phase 46.1: Unify realtime subscriptions on single DaemonWsBridge (INSERTED)
 
 **Goal:** Replace the duplicated pairing/setup websocket clients with one `DaemonWsBridge`, move pairing/peers/setup realtime consumption onto shared app-layer consumers, cut the frontend to a single `daemon://realtime` contract, and delete the legacy `p2p-*` bridge path in one breaking switch.
