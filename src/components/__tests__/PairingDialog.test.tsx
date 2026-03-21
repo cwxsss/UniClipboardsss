@@ -103,6 +103,95 @@ describe('PairingDialog', () => {
     expect(confirmButton).toBeDisabled()
     expect(confirmButton).toHaveTextContent(/正在验证|Verifying/i)
   })
+
+  it('keeps initiator flow on the active session until completion', async () => {
+    const user = userEvent.setup()
+
+    render(<PairingDialog open onClose={vi.fn()} />)
+
+    await act(async () => {})
+
+    act(() => {
+      verificationHandler?.({
+        kind: 'verification',
+        sessionId: 'session-1',
+        code: '123456',
+      })
+    })
+
+    const confirmButton = await screen.findByRole('button', {
+      name: /确认匹配|Confirm Match/i,
+    })
+    await user.click(confirmButton)
+
+    act(() => {
+      verificationHandler?.({
+        kind: 'verifying',
+        sessionId: 'other-session',
+      })
+    })
+
+    expect(confirmButton).toHaveTextContent(/正在验证|Verifying/i)
+
+    act(() => {
+      verificationHandler?.({
+        kind: 'complete',
+        sessionId: 'other-session',
+      })
+    })
+
+    expect(screen.queryByText(/配对成功|Pairing Successful/i)).not.toBeInTheDocument()
+
+    act(() => {
+      verificationHandler?.({
+        kind: 'complete',
+        sessionId: 'session-1',
+      })
+    })
+
+    expect(await screen.findAllByText(/配对成功|Pairing Successful/i)).toHaveLength(2)
+  })
+
+  it('shows localized failure only for the active initiator session', async () => {
+    render(<PairingDialog open onClose={vi.fn()} />)
+
+    await act(async () => {})
+
+    act(() => {
+      verificationHandler?.({
+        kind: 'verification',
+        sessionId: 'session-1',
+        code: '123456',
+      })
+    })
+
+    expect(await screen.findByText('123456')).toBeInTheDocument()
+
+    act(() => {
+      verificationHandler?.({
+        kind: 'failed',
+        sessionId: 'other-session',
+        error: 'pairing session not found',
+      })
+    })
+
+    expect(screen.queryByText(/配对失败|Pairing Failed/i)).not.toBeInTheDocument()
+
+    act(() => {
+      verificationHandler?.({
+        kind: 'failed',
+        sessionId: 'session-1',
+        error: 'pairing session not found',
+      })
+    })
+
+    expect(await screen.findAllByText(/配对失败|Pairing Failed/i)).toHaveLength(2)
+    expect(
+      await screen.findAllByText(
+        /配对会话已过期或已关闭|The pairing session expired or was already closed/i
+      )
+    ).toHaveLength(2)
+  })
 })
 
 describe('PairingDialog failure states', () => {

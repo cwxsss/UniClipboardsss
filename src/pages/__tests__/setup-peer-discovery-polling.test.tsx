@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Tests for event-driven device discovery replacing the old 3-second polling approach
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { HTMLAttributes, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { getP2PPeers } from '@/api/p2p'
@@ -154,6 +154,54 @@ describe('setup event-driven device discovery', () => {
 
     // Device card should appear with the device name
     expect(view.getByText('Test Device')).toBeTruthy()
+  })
+
+  it('selects a discovered device and advances join pairing progression', async () => {
+    let realtimeCallback:
+      | ((event: { topic: string; type: string; payload: unknown }) => void)
+      | null = null
+
+    ;(selectJoinPeer as Mock).mockResolvedValue({
+      ProcessingJoinSpace: { message: 'waiting for pairing verification' },
+    })
+    ;(onDaemonRealtimeEvent as Mock).mockImplementation((cb: typeof realtimeCallback) => {
+      realtimeCallback = cb
+      return Promise.resolve(() => {})
+    })
+
+    render(<SetupPage />)
+    await act(async () => {})
+
+    await vi.waitFor(() => {
+      expect(realtimeCallback).not.toBeNull()
+    })
+
+    await act(async () => {
+      realtimeCallback!({
+        topic: 'peers',
+        type: 'peers.changed',
+        payload: {
+          peers: [
+            {
+              peerId: 'peer-join-1',
+              deviceName: 'Pairing Host',
+              connected: false,
+            },
+          ],
+        },
+      })
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'setup.joinPickDevice.actions.select' }))
+    })
+
+    expect(selectJoinPeer).toHaveBeenCalledWith('peer-join-1')
+    await vi.waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'setup.joinPickDevice.actions.select' })
+      ).toBeNull()
+    })
   })
 
   it('cleans up event listeners on unmount', async () => {

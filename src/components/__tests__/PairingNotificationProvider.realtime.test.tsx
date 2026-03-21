@@ -38,7 +38,7 @@ type SpaceAccessEvent = {
 }
 
 let capturedVerificationCallback: ((event: PairingRealtimeEvent) => void) | null = null
-let _capturedSpaceAccessCallback: ((event: SpaceAccessEvent) => void) | null = null
+let capturedSpaceAccessCallback: ((event: SpaceAccessEvent) => void) | null = null
 
 vi.mock('@/api/p2p', () => ({
   acceptP2PPairing: acceptP2PPairingMock,
@@ -88,7 +88,7 @@ describe('PairingNotificationProvider realtime', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     capturedVerificationCallback = null
-    _capturedSpaceAccessCallback = null
+    capturedSpaceAccessCallback = null
     onP2PPairingVerificationMock.mockImplementation(
       (callback: (event: PairingRealtimeEvent) => void) => {
         capturedVerificationCallback = callback
@@ -96,7 +96,7 @@ describe('PairingNotificationProvider realtime', () => {
       }
     )
     onSpaceAccessCompletedMock.mockImplementation((callback: (event: SpaceAccessEvent) => void) => {
-      _capturedSpaceAccessCallback = callback
+      capturedSpaceAccessCallback = callback
       return Promise.resolve(() => {})
     })
   })
@@ -135,6 +135,82 @@ describe('PairingNotificationProvider realtime', () => {
 
     expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"open":true')
     expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"pinCode":"123456"')
+  })
+
+  it('keeps passive flow on verification -> verifying -> success for the active session only', async () => {
+    vi.useFakeTimers()
+
+    const { PairingNotificationProvider } = await import('@/components/PairingNotificationProvider')
+    render(<PairingNotificationProvider />)
+
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'request',
+        sessionId: 'session-1',
+        peerId: 'peer-1',
+        deviceName: 'Desk',
+      })
+    })
+
+    const toastOptions = toastMock.mock.calls[0]?.[1]
+    await act(async () => {
+      await toastOptions?.action?.onClick()
+    })
+
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'verification',
+        sessionId: 'session-1',
+        peerId: 'peer-1',
+        deviceName: 'Desk',
+        code: '123456',
+      })
+    })
+
+    expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"display"')
+
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'complete',
+        sessionId: 'other-session',
+      })
+    })
+
+    expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"display"')
+
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'verifying',
+        sessionId: 'session-1',
+      })
+    })
+
+    expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"verifying"')
+
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'complete',
+        sessionId: 'session-1',
+      })
+    })
+
+    expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"verifying"')
+
+    act(() => {
+      capturedSpaceAccessCallback?.({
+        sessionId: 'session-1',
+        success: true,
+      })
+    })
+
+    expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"success"')
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
+    })
+
+    expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"open":false')
+    vi.useRealTimers()
   })
 
   it('shows specific toast copy when accept pairing fails', async () => {
