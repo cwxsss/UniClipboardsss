@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: in_progress
-stopped_at: Completed 46.2-02-PLAN.md
-last_updated: '2026-03-21T01:52:32.334Z'
+status: unknown
+stopped_at: Phase 46.3 context gathered
+last_updated: '2026-03-21T10:23:05.127Z'
 progress:
-  total_phases: 15
+  total_phases: 16
   completed_phases: 11
-  total_plans: 38
-  completed_plans: 37
+  total_plans: 39
+  completed_plans: 38
 ---
 
 # Project State
@@ -169,6 +169,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 46 added: Daemon Pairing Host Migration — move pairing orchestrator, action loops, and network event handling out of Tauri
 - Phase 46.1 inserted after Phase 46: Unify realtime subscriptions on single DaemonWsBridge (URGENT)
 - Phase 46.2 inserted after Phase 46: 彻底打通基于 daemon 的配对流程, 完全移除原 tauri 中相关的配对流程. 期望: 在不改变用户配对流程的情况下,内部替换成基于 daemon 的配对流程实现 (URGENT)
+- Phase 46.3 inserted after Phase 46: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (URGENT)
 - Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 - Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
 
@@ -186,6 +187,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-21T01:52:32.332Z
-Stopped at: Completed 46.2-02-PLAN.md
-Resume file: None
+Last session: 2026-03-21T10:23:05.124Z
+Stopped at: Phase 46.3 context gathered
+Resume file: .planning/phases/46.3-gui-daemon/46.3-CONTEXT.md
