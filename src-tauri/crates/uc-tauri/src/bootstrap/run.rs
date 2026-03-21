@@ -26,6 +26,8 @@ pub enum DaemonBootstrapError {
     Client(anyhow::Error),
     #[error("failed to probe daemon health: {0}")]
     Probe(anyhow::Error),
+    #[error("incompatible daemon is already running: {details}")]
+    IncompatibleDaemon { details: String },
     #[error("failed to spawn uniclipboard-daemon: {0}")]
     Spawn(anyhow::Error),
     #[error("daemon startup timed out after {timeout_ms}ms")]

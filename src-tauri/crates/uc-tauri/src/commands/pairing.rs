@@ -5,7 +5,9 @@ use crate::bootstrap::AppRuntime;
 use crate::bootstrap::DaemonConnectionState;
 use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
-use crate::daemon_client::{DaemonPairingRequestError, TauriDaemonPairingClient};
+use crate::daemon_client::{
+    DaemonPairingRequestError, TauriDaemonPairingClient, TauriDaemonQueryClient,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -151,6 +153,7 @@ pub async fn get_local_device_info(
 #[tauri::command]
 pub async fn get_p2p_peers(
     runtime: State<'_, Arc<AppRuntime>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<Vec<P2PPeerInfo>, CommandError> {
     let span = info_span!(
@@ -160,21 +163,19 @@ pub async fn get_p2p_peers(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let snapshot = runtime
-            .usecases()
-            .get_p2p_peers_snapshot()
-            .execute()
+        let snapshot = TauriDaemonQueryClient::new(daemon_connection.inner().clone())
+            .get_peers()
             .await
             .map_err(|e| {
-                tracing::error!(error = %e, "Failed to get p2p peers snapshot");
-                let message = format!("get_p2p_peers_snapshot: {}", e);
+                tracing::error!(error = %e, "Failed to query daemon peers snapshot");
+                let message = format!("daemon peers query failed: {}", e);
                 emit_command_error(&runtime, "get_p2p_peers", &message);
                 CommandError::InternalError(e.to_string())
             })?;
 
         tracing::info!(
             peer_count = snapshot.len(),
-            "assembled p2p peer snapshot from shared use case"
+            "assembled p2p peer snapshot from daemon query"
         );
 
         Ok(snapshot
@@ -184,7 +185,7 @@ pub async fn get_p2p_peers(
                 device_name: p.device_name,
                 addresses: p.addresses,
                 is_paired: p.is_paired,
-                connected: p.is_connected,
+                connected: p.connected,
             })
             .collect())
     }

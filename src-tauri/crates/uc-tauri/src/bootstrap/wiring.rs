@@ -53,7 +53,7 @@ use uc_core::network::NetworkEvent;
 use uc_core::ports::clipboard::ClipboardChangeOriginPort;
 use uc_core::ports::host_event_emitter::{
     ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort,
-    PeerConnectionHostEvent, PeerDiscoveryHostEvent, SpaceAccessHostEvent, TransferHostEvent,
+    PeerConnectionHostEvent, SpaceAccessHostEvent, TransferHostEvent,
 };
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::*;
@@ -1189,21 +1189,12 @@ async fn run_network_realtime_loop(
                 debug!("Ignoring local pairing network event; daemon owns pairing runtime");
             }
             NetworkEvent::PeerDiscovered(peer) => {
-                info!(
+                debug!(
                     peer_id = %peer.peer_id,
                     address_count = peer.addresses.len(),
                     is_paired = peer.is_paired,
-                    "Pairing loop received peer discovered event"
+                    "Ignoring local peer discovered event; daemon owns frontend peer discovery"
                 );
-                if let Err(err) = event_emitter.emit(HostEvent::PeerDiscovery(
-                    PeerDiscoveryHostEvent::Discovered {
-                        peer_id: peer.peer_id.clone(),
-                        device_name: peer.device_name,
-                        addresses: peer.addresses,
-                    },
-                )) {
-                    warn!(error = %err, "Failed to emit peer discovery changed event");
-                }
 
                 // Announce our device name so the remote peer can display it
                 // in its device-selection UI (before pairing begins).
@@ -1216,20 +1207,10 @@ async fn run_network_realtime_loop(
                 }
             }
             NetworkEvent::PeerLost(peer_id) => {
-                info!(
+                debug!(
                     peer_id = %peer_id,
-                    "Pairing loop received peer lost event"
+                    "Ignoring local peer lost event; daemon owns frontend peer discovery"
                 );
-                let device_name = resolve_device_name_for_peer(&peer_directory, &peer_id).await;
-                if let Err(err) =
-                    event_emitter.emit(HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Lost {
-                        peer_id,
-                        device_name,
-                        addresses: vec![],
-                    }))
-                {
-                    warn!(error = %err, "Failed to emit peer discovery changed event");
-                }
             }
             NetworkEvent::PeerReady { ref peer_id }
             | NetworkEvent::PeerNotReady { ref peer_id } => {

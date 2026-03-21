@@ -1,26 +1,20 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { useDeviceDiscovery } from '../useDeviceDiscovery'
-import * as p2pApi from '@/api/p2p'
 
 // Mock the p2p API module
 const mockGetP2PPeers = vi.fn()
-const mockDiscoveryUnlisten = vi.fn()
-const mockConnectionUnlisten = vi.fn()
-const mockNameUnlisten = vi.fn()
-let capturedDiscoveryCb: (event: unknown) => void
+const mockRealtimeUnlisten = vi.fn()
+let capturedRealtimeCb: ((event: unknown) => void) | null = null
 
 vi.mock('@/api/p2p', () => ({
   getP2PPeers: (...args: unknown[]) => mockGetP2PPeers(...args),
-  onP2PPeerDiscoveryChanged: vi.fn((cb: (event: unknown) => void) => {
-    capturedDiscoveryCb = cb
-    return Promise.resolve(mockDiscoveryUnlisten)
-  }),
-  onP2PPeerConnectionChanged: vi.fn((_cb: (event: unknown) => void) => {
-    return Promise.resolve(mockConnectionUnlisten)
-  }),
-  onP2PPeerNameUpdated: vi.fn((_cb: (event: unknown) => void) => {
-    return Promise.resolve(mockNameUnlisten)
+}))
+
+vi.mock('@/api/realtime', () => ({
+  onDaemonRealtimeEvent: vi.fn((cb: (event: unknown) => void) => {
+    capturedRealtimeCb = cb
+    return Promise.resolve(mockRealtimeUnlisten)
   }),
 }))
 
@@ -30,23 +24,22 @@ describe('useDeviceDiscovery', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockGetP2PPeers.mockResolvedValue([])
+    capturedRealtimeCb = null
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('Test 1: initial load calls getP2PPeers and sets up three event listeners when active=true', async () => {
+  it('Test 1: initial load calls getP2PPeers and sets up daemon realtime listener when active=true', async () => {
     const { unmount } = renderHook(() => useDeviceDiscovery(true))
 
     await waitFor(() => {
       expect(mockGetP2PPeers).toHaveBeenCalledTimes(1)
     })
 
-    // Three event listener registrations should have happened
-    expect(p2pApi.onP2PPeerDiscoveryChanged).toHaveBeenCalledTimes(1)
-    expect(p2pApi.onP2PPeerConnectionChanged).toHaveBeenCalledTimes(1)
-    expect(p2pApi.onP2PPeerNameUpdated).toHaveBeenCalledTimes(1)
+    const { onDaemonRealtimeEvent } = await import('@/api/realtime')
+    expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
 
     unmount()
   })
@@ -98,24 +91,25 @@ describe('useDeviceDiscovery', () => {
     expect(result.current.scanPhase).toBe('empty')
   })
 
-  it('Test 4: discovery event with discovered=true adds peer and transitions to hasDevices', async () => {
+  it('Test 4: peers.changed event adds peer and transitions to hasDevices', async () => {
     mockGetP2PPeers.mockResolvedValue([])
 
     const { result } = renderHook(() => useDeviceDiscovery(true))
 
-    // Wait for listeners to be registered
+    const { onDaemonRealtimeEvent } = await import('@/api/realtime')
     await waitFor(() => {
-      expect(p2pApi.onP2PPeerDiscoveryChanged).toHaveBeenCalledTimes(1)
+      expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
     })
 
     expect(result.current.scanPhase).toBe('scanning')
 
     act(() => {
-      capturedDiscoveryCb({
-        peerId: 'peer-2',
-        deviceName: 'iPhone',
-        addresses: [],
-        discovered: true,
+      capturedRealtimeCb?.({
+        topic: 'peers',
+        type: 'peers.changed',
+        payload: {
+          peers: [{ peerId: 'peer-2', deviceName: 'iPhone', connected: false }],
+        },
       })
     })
 
@@ -144,11 +138,12 @@ describe('useDeviceDiscovery', () => {
 
     // Device appears
     act(() => {
-      capturedDiscoveryCb({
-        peerId: 'peer-3',
-        deviceName: 'Windows PC',
-        addresses: [],
-        discovered: true,
+      capturedRealtimeCb?.({
+        topic: 'peers',
+        type: 'peers.changed',
+        payload: {
+          peers: [{ peerId: 'peer-3', deviceName: 'Windows PC', connected: false }],
+        },
       })
     })
 
@@ -249,13 +244,14 @@ describe('useDeviceDiscovery', () => {
     consoleErrorSpy.mockRestore()
   })
 
-  it('Test 9: cleanup on unmount calls all three unlisten functions and clears timeout', async () => {
+  it('Test 9: cleanup on unmount calls realtime unlisten and clears timeout', async () => {
     mockGetP2PPeers.mockResolvedValue([])
 
     const { unmount } = renderHook(() => useDeviceDiscovery(true))
 
+    const { onDaemonRealtimeEvent } = await import('@/api/realtime')
     await waitFor(() => {
-      expect(p2pApi.onP2PPeerDiscoveryChanged).toHaveBeenCalledTimes(1)
+      expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
     })
 
     unmount()
@@ -266,9 +262,7 @@ describe('useDeviceDiscovery', () => {
       await Promise.resolve()
     })
 
-    expect(mockDiscoveryUnlisten).toHaveBeenCalledTimes(1)
-    expect(mockConnectionUnlisten).toHaveBeenCalledTimes(1)
-    expect(mockNameUnlisten).toHaveBeenCalledTimes(1)
+    expect(mockRealtimeUnlisten).toHaveBeenCalledTimes(1)
   })
 
   it('Test 10: anonymous peer from getP2PPeers has deviceName: null (hook stores raw value, no fallback)', async () => {
