@@ -19,6 +19,10 @@ fn main() -> anyhow::Result<()> {
     // build_daemon_app() calls build_core() which inits tracing + wires deps.
     // Safe to call outside tokio (no internal block_on in daemon path).
     let ctx = build_daemon_app()?;
+    let daemon_network_control = ctx.deps.network_control.clone();
+    let daemon_network_events = ctx.deps.network_ports.events.clone();
+    let daemon_peer_directory = ctx.deps.network_ports.peers.clone();
+    let daemon_settings = ctx.deps.settings.clone();
     let setup_ports = SetupAssemblyPorts::from_network(
         ctx.pairing_orchestrator.clone(),
         ctx.space_access_orchestrator.clone(),
@@ -38,7 +42,12 @@ fn main() -> anyhow::Result<()> {
     // Create workers (Arc-wrapped for tokio::spawn compatibility)
     let workers: Vec<Arc<dyn DaemonWorker>> = vec![
         Arc::new(ClipboardWatcherWorker),
-        Arc::new(PeerDiscoveryWorker),
+        Arc::new(PeerDiscoveryWorker::new(
+            daemon_network_control,
+            daemon_network_events,
+            daemon_peer_directory,
+            daemon_settings,
+        )),
     ];
 
     // Create and run daemon app
