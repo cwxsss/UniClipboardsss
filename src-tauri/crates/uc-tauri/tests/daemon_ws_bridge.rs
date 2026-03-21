@@ -1,6 +1,11 @@
+use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tokio::time::timeout;
+use uc_app::testing::{NoopDiscoveryPort, NoopLifecycleEventEmitter};
+use uc_app::usecases::pairing::PairingDomainEvent;
+use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_core::ports::{
     PairingCompleteEvent, PairingFailedEvent, PairingVerificationRequiredEvent, RealtimeEvent,
     RealtimeTopic,
@@ -10,7 +15,10 @@ use uc_daemon::api::types::DaemonWsEvent;
 use uc_tauri::bootstrap::daemon_ws_bridge::{
     BridgeState, DaemonWsBridge, DaemonWsBridgeConfig, ScriptedDaemonWsConnector,
 };
-use uc_tauri::bootstrap::DaemonConnectionState;
+use uc_tauri::bootstrap::{
+    install_daemon_setup_pairing_facade, DaemonConnectionState, SetupAssemblyPorts,
+    SetupPairingFacadePort,
+};
 
 fn connection_state() -> DaemonConnectionState {
     let state = DaemonConnectionState::default();
@@ -32,12 +40,13 @@ fn bridge_config(queue_capacity: usize) -> DaemonWsBridgeConfig {
 
 fn pairing_verification_required(session_id: &str, code: &str) -> DaemonWsEvent {
     serde_json::from_value(serde_json::json!({
-        "topic": "pairing",
+        "topic": "pairing/verification",
         "type": "pairing.verification_required",
         "sessionId": session_id,
         "ts": 1,
         "payload": {
             "sessionId": session_id,
+            "kind": "verification",
             "peerId": "peer-1",
             "deviceName": "Desk",
             "code": code,
@@ -50,16 +59,18 @@ fn pairing_verification_required(session_id: &str, code: &str) -> DaemonWsEvent 
 
 fn pairing_complete(session_id: &str, peer_id: &str) -> DaemonWsEvent {
     serde_json::from_value(serde_json::json!({
-        "topic": "pairing",
+        "topic": "pairing/session",
         "type": "pairing.complete",
         "sessionId": session_id,
         "ts": 2,
         "payload": {
             "sessionId": session_id,
-            "state": "completed",
+            "state": "complete",
+            "stage": "complete",
             "peerId": peer_id,
             "deviceName": "Desk",
-            "updatedAtMs": 2
+            "updatedAtMs": 2,
+            "ts": 2
         }
     }))
     .expect("pairing complete fixture should parse")
@@ -67,17 +78,50 @@ fn pairing_complete(session_id: &str, peer_id: &str) -> DaemonWsEvent {
 
 fn pairing_failed(session_id: &str, reason: &str) -> DaemonWsEvent {
     serde_json::from_value(serde_json::json!({
-        "topic": "pairing",
+        "topic": "pairing/verification",
         "type": "pairing.failed",
         "sessionId": session_id,
         "ts": 3,
         "payload": {
             "sessionId": session_id,
             "peerId": "peer-1",
-            "error": reason
+            "error": reason,
+            "reason": reason
         }
     }))
     .expect("pairing failed fixture should parse")
+}
+
+struct InitialSetupPairingFacade;
+
+#[async_trait]
+impl SetupPairingFacadePort for InitialSetupPairingFacade {
+    async fn subscribe(&self) -> anyhow::Result<tokio::sync::mpsc::Receiver<PairingDomainEvent>> {
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        Ok(rx)
+    }
+
+    async fn initiate_pairing(&self, _peer_id: String) -> anyhow::Result<String> {
+        Err(anyhow::anyhow!(
+            "initial setup pairing facade should be replaced"
+        ))
+    }
+
+    async fn accept_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn reject_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn cancel_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn verify_pairing(&self, _session_id: &str, _pin_matches: bool) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 #[tokio::test]
@@ -259,4 +303,73 @@ async fn daemon_ws_bridge_fans_out_to_multiple_consumers() {
             if session_id == "session-fanout" && peer_id.as_deref() == Some("peer-fanout")
     ));
     assert_eq!(a, b);
+}
+
+#[tokio::test]
+async fn install_daemon_setup_pairing_facade_routes_bridge_events_into_setup_subscription() {
+    let connector = ScriptedDaemonWsConnector::new();
+    connector
+        .queue_connection(vec![pairing_verification_required(
+            "session-setup",
+            "654321",
+        )])
+        .await
+        .expect("scripted connection should queue");
+
+    let bridge = Arc::new(DaemonWsBridge::new_for_test(
+        connection_state(),
+        connector,
+        bridge_config(4),
+    ));
+    let mut setup_ports = SetupAssemblyPorts {
+        setup_pairing_facade: Arc::new(InitialSetupPairingFacade),
+        space_access_orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
+        discovery_port: Arc::new(NoopDiscoveryPort),
+        device_announcer: None,
+        lifecycle_emitter: Arc::new(NoopLifecycleEventEmitter),
+    };
+
+    let setup_hub = install_daemon_setup_pairing_facade(&mut setup_ports, connection_state());
+    let mut setup_rx = setup_ports
+        .setup_pairing_facade
+        .subscribe()
+        .await
+        .expect("setup facade subscription should succeed");
+
+    let consumer_bridge = bridge.clone();
+    let consumer_hub = setup_hub.clone();
+    let consumer_task = tokio::spawn(async move {
+        uc_app::realtime::run_setup_realtime_consumer(consumer_bridge, consumer_hub)
+            .await
+            .expect("setup realtime consumer should stay healthy");
+    });
+    tokio::task::yield_now().await;
+
+    bridge
+        .run_until_idle()
+        .await
+        .expect("bridge should drain scripted connection");
+
+    let event = timeout(Duration::from_secs(1), setup_rx.recv())
+        .await
+        .expect("setup subscription should receive a verification event")
+        .expect("setup subscription channel should stay open");
+
+    consumer_task.abort();
+
+    assert!(matches!(
+        event,
+        PairingDomainEvent::PairingVerificationRequired {
+            session_id,
+            peer_id,
+            short_code,
+            local_fingerprint,
+            peer_fingerprint,
+        }
+            if session_id == "session-setup"
+                && peer_id == "peer-1"
+                && short_code == "654321"
+                && local_fingerprint == "local-fingerprint"
+                && peer_fingerprint == "peer-fingerprint"
+    ));
 }

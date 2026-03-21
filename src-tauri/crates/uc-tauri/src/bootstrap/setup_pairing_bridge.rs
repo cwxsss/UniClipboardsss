@@ -40,17 +40,7 @@ impl DaemonBackedSetupPairingFacade {
     pub async fn initiate_pairing(&self, peer_id: String) -> Result<String> {
         let client = TauriDaemonPairingClient::new(self.connection_state.clone());
         let response = client.initiate_pairing(peer_id).await?;
-
-        if response.accepted {
-            Ok(response.session_id)
-        } else {
-            Err(anyhow::anyhow!(
-                "failed to initiate pairing: {}",
-                response
-                    .error
-                    .unwrap_or_else(|| "unknown error".to_string())
-            ))
-        }
+        Ok(response.session_id)
     }
 
     pub async fn accept_pairing(&self, session_id: &str) -> Result<()> {

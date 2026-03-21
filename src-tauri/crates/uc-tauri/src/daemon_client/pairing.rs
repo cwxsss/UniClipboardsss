@@ -4,11 +4,10 @@ use reqwest::{Method, RequestBuilder};
 
 use crate::bootstrap::DaemonConnectionState;
 use uc_daemon::api::pairing::{
-    AckedPairingCommandResponse, InitiatePairingRequest, SetPairingDiscoverabilityRequest,
-    SetPairingParticipantRequest, VerifyPairingRequest,
+    AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
+    PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
+    SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, VerifyPairingRequest,
 };
-
-const AUTHORIZATION_HEADER_NAME: &str = "Authorization";
 
 #[derive(Clone)]
 pub struct TauriDaemonPairingClient {
@@ -24,35 +23,44 @@ impl TauriDaemonPairingClient {
         }
     }
 
-    pub async fn initiate_pairing(&self, peer_id: String) -> Result<AckedPairingCommandResponse> {
+    pub async fn initiate_pairing(&self, peer_id: String) -> Result<InitiatePairingResponse> {
         self.send_json(
             Method::POST,
-            "/pairing/sessions",
+            "/pairing/initiate",
             Some(&InitiatePairingRequest { peer_id }),
         )
         .await
     }
 
-    pub async fn accept_pairing(&self, session_id: &str) -> Result<AckedPairingCommandResponse> {
-        self.send_empty(
+    pub async fn accept_pairing(&self, session_id: &str) -> Result<()> {
+        self.send_json_no_content(
             Method::POST,
-            &format!("/pairing/sessions/{session_id}/accept"),
+            "/pairing/accept",
+            &PairingSessionCommandRequest {
+                session_id: session_id.to_string(),
+            },
         )
         .await
     }
 
-    pub async fn reject_pairing(&self, session_id: &str) -> Result<AckedPairingCommandResponse> {
-        self.send_empty(
+    pub async fn reject_pairing(&self, session_id: &str) -> Result<()> {
+        self.send_json_no_content(
             Method::POST,
-            &format!("/pairing/sessions/{session_id}/reject"),
+            "/pairing/reject",
+            &PairingSessionCommandRequest {
+                session_id: session_id.to_string(),
+            },
         )
         .await
     }
 
-    pub async fn cancel_pairing(&self, session_id: &str) -> Result<AckedPairingCommandResponse> {
-        self.send_empty(
+    pub async fn cancel_pairing(&self, session_id: &str) -> Result<()> {
+        self.send_json_no_content(
             Method::POST,
-            &format!("/pairing/sessions/{session_id}/cancel"),
+            "/pairing/cancel",
+            &PairingSessionCommandRequest {
+                session_id: session_id.to_string(),
+            },
         )
         .await
     }
@@ -66,6 +74,15 @@ impl TauriDaemonPairingClient {
             Method::POST,
             &format!("/pairing/sessions/{session_id}/verify"),
             Some(&VerifyPairingRequest { pin_matches }),
+        )
+        .await
+    }
+
+    pub async fn register_gui_participant(&self, enabled: bool) -> Result<()> {
+        self.send_json_no_content(
+            Method::POST,
+            "/pairing/gui/lease",
+            &PairingGuiLeaseRequest { enabled },
         )
         .await
     }
@@ -112,29 +129,22 @@ impl TauriDaemonPairingClient {
             .get()
             .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
         let url = format!("{}{}", connection.base_url, path);
-        debug_assert_eq!(AUTHORIZATION_HEADER_NAME, AUTHORIZATION.as_str());
         Ok(self
             .http
             .request(method, url)
             .header(AUTHORIZATION, format!("Bearer {}", connection.token)))
     }
 
-    async fn send_empty(&self, method: Method, path: &str) -> Result<AckedPairingCommandResponse> {
-        let response = self
-            .authorized_request(method, path)?
-            .send()
-            .await
-            .with_context(|| format!("failed to call daemon pairing route {path}"))?;
-
-        Self::decode_response(response, path).await
-    }
-
-    async fn send_json<T: serde::Serialize + ?Sized>(
+    async fn send_json<TReq, TResp>(
         &self,
         method: Method,
         path: &str,
-        payload: Option<&T>,
-    ) -> Result<AckedPairingCommandResponse> {
+        payload: Option<&TReq>,
+    ) -> Result<TResp>
+    where
+        TReq: serde::Serialize + ?Sized,
+        TResp: serde::de::DeserializeOwned,
+    {
         let request = self.authorized_request(method, path)?;
         let request = if let Some(payload) = payload {
             request.json(payload)
@@ -147,30 +157,102 @@ impl TauriDaemonPairingClient {
             .await
             .with_context(|| format!("failed to call daemon pairing route {path}"))?;
 
-        Self::decode_response(response, path).await
+        Self::decode_json_response(response, path).await
     }
 
-    async fn decode_response(
+    async fn send_json_no_content<T: serde::Serialize + ?Sized>(
+        &self,
+        method: Method,
+        path: &str,
+        payload: &T,
+    ) -> Result<()> {
+        let request = self.authorized_request(method, path)?;
+        let response = request
+            .json(payload)
+            .send()
+            .await
+            .with_context(|| format!("failed to call daemon pairing route {path}"))?;
+
+        Self::decode_no_content_response(response, path).await
+    }
+
+    async fn decode_json_response<T: serde::de::DeserializeOwned>(
         response: reqwest::Response,
         path: &str,
-    ) -> Result<AckedPairingCommandResponse> {
+    ) -> Result<T> {
         let status = response.status();
         if status.is_success() {
             return response
-                .json::<AckedPairingCommandResponse>()
+                .json::<T>()
                 .await
                 .with_context(|| format!("failed to decode daemon pairing response for {path}"));
         }
 
+        Err(Self::decode_error_response(response, path).await)
+    }
+
+    async fn decode_no_content_response(response: reqwest::Response, path: &str) -> Result<()> {
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+
+        Err(Self::decode_error_response(response, path).await)
+    }
+
+    async fn decode_error_response(response: reqwest::Response, path: &str) -> anyhow::Error {
+        let status = response.status();
         let body = response
             .text()
             .await
             .unwrap_or_else(|_| "<unreadable response body>".to_string());
-        Err(anyhow!(
+        let maybe_error = serde_json::from_str::<PairingApiErrorResponse>(&body).ok();
+        if let Some(error) = maybe_error {
+            return anyhow!(
+                "daemon pairing request {} failed with status {} [{}]: {}",
+                path,
+                status,
+                error.code,
+                error.message
+            );
+        }
+
+        anyhow!(
             "daemon pairing request {} failed with status {}: {}",
             path,
             status,
             body
-        ))
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uc_daemon::api::auth::DaemonConnectionInfo;
+
+    #[test]
+    fn authorized_request_builds_bearer_header() {
+        let connection_state = DaemonConnectionState::default();
+        connection_state.set(DaemonConnectionInfo {
+            base_url: "http://127.0.0.1:42715".to_string(),
+            ws_url: "ws://127.0.0.1:42715/ws".to_string(),
+            token: "test-token".to_string(),
+        });
+        let client = TauriDaemonPairingClient::new(connection_state);
+
+        let request = client
+            .authorized_request(Method::POST, "/pairing/initiate")
+            .expect("request should build")
+            .build()
+            .expect("request should be valid");
+
+        let auth_header = request
+            .headers()
+            .get(AUTHORIZATION)
+            .expect("authorization header should exist")
+            .to_str()
+            .expect("authorization header should be utf-8");
+        assert_eq!(auth_header, "Bearer test-token");
     }
 }

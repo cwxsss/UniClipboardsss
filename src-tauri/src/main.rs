@@ -21,7 +21,7 @@ use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::runtime::PlatformRuntime;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
-    start_background_tasks, AppRuntime, DaemonConnectionState,
+    install_daemon_setup_pairing_facade, start_background_tasks, AppRuntime, DaemonConnectionState,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -316,13 +316,18 @@ fn run_app(ctx: GuiBootstrapContext) {
         platform_event_rx,
         platform_cmd_tx: _,
         platform_cmd_rx,
-        pairing_orchestrator,
-        pairing_action_rx,
-        staged_store,
+        pairing_orchestrator: _pairing_orchestrator,
+        pairing_action_rx: _pairing_action_rx,
+        staged_store: _staged_store,
         space_access_orchestrator,
-        key_slot_store,
+        key_slot_store: _key_slot_store,
         config: _config,
     } = ctx;
+
+    let daemon_connection_state = DaemonConnectionState::default();
+    let mut setup_ports = setup_ports;
+    let setup_pairing_event_hub =
+        install_daemon_setup_pairing_facade(&mut setup_ports, daemon_connection_state.clone());
 
     let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
         std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::LoggingEventEmitter);
@@ -342,7 +347,6 @@ fn run_app(ctx: GuiBootstrapContext) {
 
     // Startup barrier used to coordinate backend readiness and main window show timing.
     let startup_barrier = Arc::new(uc_tauri::commands::startup::StartupBarrier::default());
-    let daemon_connection_state = DaemonConnectionState::default();
 
     // Create clipboard handler from runtime (AppRuntime implements ClipboardChangeHandler)
     let clipboard_handler: Arc<dyn ClipboardChangeHandler> = runtime_for_handler.clone();
@@ -363,7 +367,6 @@ fn run_app(ctx: GuiBootstrapContext) {
         // Register AppRuntime for Tauri commands
         .manage(runtime_for_tauri)
         .manage(DaemonConnectionState::clone(&daemon_connection_state))
-        .manage(pairing_orchestrator.clone())
         .manage(TrayState::default())
         .manage(task_registry.clone())
         .on_window_event(|window, event| {
@@ -557,11 +560,8 @@ fn run_app(ctx: GuiBootstrapContext) {
                 runtime_for_handler.wiring_deps(),
                 runtime_for_handler.event_emitter(),
                 daemon_connection_state.clone(),
-                pairing_orchestrator.clone(),
-                pairing_action_rx,
-                staged_store,
+                setup_pairing_event_hub.clone(),
                 space_access_orchestrator.clone(),
-                key_slot_store.clone(),
                 runtime_for_handler.task_registry(),
             );
 

@@ -508,7 +508,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
             .map(|payload| {
                 RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
                     session_id: payload.session_id,
-                    status: payload.state,
+                    status: payload.stage,
                     peer_id: payload.peer_id,
                     device_name: payload.device_name,
                 })
@@ -516,15 +516,37 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
         "pairing.verification_required" => {
             serde_json::from_value::<PairingVerificationPayload>(event.payload)
                 .ok()
-                .map(|payload| {
-                    RealtimeEvent::PairingVerificationRequired(PairingVerificationRequiredEvent {
+                .and_then(|payload| match payload.kind.as_str() {
+                    "verification" => Some(RealtimeEvent::PairingVerificationRequired(
+                        PairingVerificationRequiredEvent {
+                            session_id: payload.session_id,
+                            peer_id: payload.peer_id,
+                            device_name: payload.device_name,
+                            code: payload.code,
+                            local_fingerprint: payload.local_fingerprint,
+                            peer_fingerprint: payload.peer_fingerprint,
+                        },
+                    )),
+                    "verifying" | "request" => {
+                        Some(RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
+                            session_id: payload.session_id,
+                            status: payload.kind,
+                            peer_id: payload.peer_id,
+                            device_name: payload.device_name,
+                        }))
+                    }
+                    "complete" => Some(RealtimeEvent::PairingComplete(PairingCompleteEvent {
                         session_id: payload.session_id,
-                        peer_id: Some(payload.peer_id),
+                        peer_id: payload.peer_id,
                         device_name: payload.device_name,
-                        code: Some(payload.code),
-                        local_fingerprint: Some(payload.local_fingerprint),
-                        peer_fingerprint: Some(payload.peer_fingerprint),
-                    })
+                    })),
+                    "failed" => Some(RealtimeEvent::PairingFailed(PairingFailedEvent {
+                        session_id: payload.session_id,
+                        reason: payload
+                            .error
+                            .unwrap_or_else(|| "pairing failed".to_string()),
+                    })),
+                    _ => None,
                 })
         }
         "pairing.complete" => serde_json::from_value::<PairingSessionChangedPayload>(event.payload)
@@ -541,7 +563,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
             .map(|payload| {
                 RealtimeEvent::PairingFailed(PairingFailedEvent {
                     session_id: payload.session_id,
-                    reason: payload.error,
+                    reason: payload.reason,
                 })
             }),
         "peers.changed" => serde_json::from_value::<PeerChangedPayload>(event.payload)

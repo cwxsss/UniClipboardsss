@@ -308,6 +308,7 @@ pub async fn set_pairing_state(
 #[tauri::command]
 pub async fn initiate_p2p_pairing(
     request: P2PPairingRequest,
+    runtime: State<'_, Arc<AppRuntime>>,
     daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<P2PPairingResponse, CommandError> {
@@ -319,18 +320,26 @@ pub async fn initiate_p2p_pairing(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let response = TauriDaemonPairingClient::new(daemon_connection.inner().clone())
+        match TauriDaemonPairingClient::new(daemon_connection.inner().clone())
             .initiate_pairing(request.peer_id)
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to initiate P2P pairing");
-                CommandError::InternalError(e.to_string())
-            })?;
-        Ok(P2PPairingResponse {
-            session_id: response.session_id,
-            success: response.accepted,
-            error: response.error,
-        })
+        {
+            Ok(response) => Ok(P2PPairingResponse {
+                session_id: response.session_id,
+                success: true,
+                error: None,
+            }),
+            Err(error) => {
+                tracing::error!(error = %error, "Failed to initiate P2P pairing");
+                let message = error.to_string();
+                emit_command_error(&runtime, "initiate_p2p_pairing", &message);
+                Ok(P2PPairingResponse {
+                    session_id: String::new(),
+                    success: false,
+                    error: Some(message),
+                })
+            }
+        }
     }
     .instrument(span)
     .await
@@ -339,6 +348,7 @@ pub async fn initiate_p2p_pairing(
 #[tauri::command]
 pub async fn accept_p2p_pairing(
     session_id: String,
+    runtime: State<'_, Arc<AppRuntime>>,
     daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
@@ -355,7 +365,9 @@ pub async fn accept_p2p_pairing(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, session_id = %session_id, "Failed to accept P2P pairing");
-                CommandError::InternalError(e.to_string())
+                let message = e.to_string();
+                emit_command_error(&runtime, "accept_p2p_pairing", &message);
+                CommandError::InternalError(message)
             })?;
         Ok(())
     }
@@ -366,6 +378,7 @@ pub async fn accept_p2p_pairing(
 #[tauri::command]
 pub async fn reject_p2p_pairing(
     session_id: String,
+    runtime: State<'_, Arc<AppRuntime>>,
     daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
@@ -382,7 +395,9 @@ pub async fn reject_p2p_pairing(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, session_id = %session_id, "Failed to reject P2P pairing");
-                CommandError::InternalError(e.to_string())
+                let message = e.to_string();
+                emit_command_error(&runtime, "reject_p2p_pairing", &message);
+                CommandError::InternalError(message)
             })?;
         Ok(())
     }
@@ -393,6 +408,7 @@ pub async fn reject_p2p_pairing(
 #[tauri::command]
 pub async fn verify_p2p_pairing_pin(
     request: P2PPinVerifyRequest,
+    runtime: State<'_, Arc<AppRuntime>>,
     daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
@@ -414,7 +430,9 @@ pub async fn verify_p2p_pairing_pin(
                     pin_matches = request.pin_matches,
                     "Failed to verify P2P pairing PIN"
                 );
-                CommandError::InternalError(e.to_string())
+                let message = e.to_string();
+                emit_command_error(&runtime, "verify_p2p_pairing_pin", &message);
+                CommandError::InternalError(message)
             })?;
         Ok(())
     }

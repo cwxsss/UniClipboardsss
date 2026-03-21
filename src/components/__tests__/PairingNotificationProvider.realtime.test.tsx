@@ -6,18 +6,30 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const acceptP2PPairingMock = vi.fn(() => Promise.resolve())
 const rejectP2PPairingMock = vi.fn(() => Promise.resolve())
 const toastMock = Object.assign(vi.fn(), { error: vi.fn() })
-let capturedRealtimeCallback: ((event: any) => void) | null = null
+const onP2PPairingVerificationMock = vi.fn()
+const onSpaceAccessCompletedMock = vi.fn()
+type PairingRealtimeEvent = {
+  kind: string
+  sessionId: string
+  peerId?: string
+  deviceName?: string
+  code?: string
+}
+
+type SpaceAccessEvent = {
+  sessionId: string
+  success: boolean
+  reason?: string
+}
+
+let capturedVerificationCallback: ((event: PairingRealtimeEvent) => void) | null = null
+let _capturedSpaceAccessCallback: ((event: SpaceAccessEvent) => void) | null = null
 
 vi.mock('@/api/p2p', () => ({
   acceptP2PPairing: acceptP2PPairingMock,
   rejectP2PPairing: rejectP2PPairingMock,
-}))
-
-vi.mock('@/api/realtime', () => ({
-  onDaemonRealtimeEvent: vi.fn((callback: (event: any) => void) => {
-    capturedRealtimeCallback = callback
-    return Promise.resolve(() => {})
-  }),
+  onP2PPairingVerification: onP2PPairingVerificationMock,
+  onSpaceAccessCompleted: onSpaceAccessCompletedMock,
 }))
 
 vi.mock('sonner', () => ({
@@ -32,7 +44,7 @@ vi.mock('react-i18next', () => ({
 }))
 
 vi.mock('@/components/PairingPinDialog', () => ({
-  default: (props: any) => (
+  default: (props: { open: boolean; pinCode: string; phase?: string; peerDeviceName?: string }) => (
     <div data-testid="pairing-pin-dialog">
       {JSON.stringify({
         open: props.open,
@@ -47,7 +59,18 @@ vi.mock('@/components/PairingPinDialog', () => ({
 describe('PairingNotificationProvider realtime', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    capturedRealtimeCallback = null
+    capturedVerificationCallback = null
+    _capturedSpaceAccessCallback = null
+    onP2PPairingVerificationMock.mockImplementation(
+      (callback: (event: PairingRealtimeEvent) => void) => {
+        capturedVerificationCallback = callback
+        return Promise.resolve(() => {})
+      }
+    )
+    onSpaceAccessCompletedMock.mockImplementation((callback: (event: SpaceAccessEvent) => void) => {
+      _capturedSpaceAccessCallback = callback
+      return Promise.resolve(() => {})
+    })
   })
 
   it('routes request and verification events through daemon realtime envelopes', async () => {
@@ -55,16 +78,11 @@ describe('PairingNotificationProvider realtime', () => {
     render(<PairingNotificationProvider />)
 
     act(() => {
-      capturedRealtimeCallback?.({
-        topic: 'pairing',
-        type: 'pairing.updated',
-        ts: 1,
-        payload: {
-          sessionId: 'session-1',
-          status: 'request',
-          peerId: 'peer-1',
-          deviceName: 'Desk',
-        },
+      capturedVerificationCallback?.({
+        kind: 'request',
+        sessionId: 'session-1',
+        peerId: 'peer-1',
+        deviceName: 'Desk',
       })
     })
 
@@ -78,16 +96,12 @@ describe('PairingNotificationProvider realtime', () => {
     expect(acceptP2PPairingMock).toHaveBeenCalledWith('session-1')
 
     act(() => {
-      capturedRealtimeCallback?.({
-        topic: 'pairing',
-        type: 'pairing.verificationRequired',
-        ts: 2,
-        payload: {
-          sessionId: 'session-1',
-          peerId: 'peer-1',
-          deviceName: 'Desk',
-          code: '123456',
-        },
+      capturedVerificationCallback?.({
+        kind: 'verification',
+        sessionId: 'session-1',
+        peerId: 'peer-1',
+        deviceName: 'Desk',
+        code: '123456',
       })
     })
 
