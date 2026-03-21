@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use uc_app::usecases::PairingOrchestrator;
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::{build_non_gui_runtime_with_setup, builders::build_daemon_app};
@@ -73,14 +74,16 @@ fn inbound_request(session_id: &str, local_peer_id: &str) -> PairingRequest {
 }
 
 #[tokio::test]
-async fn daemon_pairing_host_enforces_single_active_session() {
+async fn daemon_initiate_pairing_returns_busy_when_active_session_exists() {
     let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
     host.set_discoverability("cli".to_string(), true, Some(60_000))
         .await;
     host.set_participant_ready("cli".to_string(), true, Some(60_000))
         .await;
 
+    info!("initiating first pairing session to reserve active slot");
     let first = host.initiate_pairing("peer-a".to_string()).await.unwrap();
+    info!("initiating second pairing session to confirm busy error");
     let second = host.initiate_pairing("peer-b".to_string()).await;
 
     assert_eq!(
@@ -125,6 +128,24 @@ async fn daemon_pairing_host_rejects_inbound_without_ready_participant() {
         .await
         .pairing_session("session-inbound")
         .is_none());
+}
+
+#[tokio::test]
+async fn daemon_initiate_pairing_returns_no_local_participant_when_not_ready() {
+    let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
+    host.set_discoverability("cli".to_string(), true, Some(60_000))
+        .await;
+    host.set_participant_ready("cli".to_string(), false, None)
+        .await;
+
+    info!("initiating pairing without a ready local participant");
+    let result = host.initiate_pairing("peer-a".to_string()).await;
+
+    assert_eq!(
+        result.unwrap_err(),
+        DaemonPairingHostError::NoLocalPairingParticipantReady
+    );
+    assert!(host.active_session_id().await.is_none());
 }
 
 #[tokio::test]
@@ -251,4 +272,23 @@ async fn daemon_pairing_host_accept_pairing_projects_verifying_stage() {
         .cloned()
         .expect("snapshot should exist");
     assert_eq!(snapshot.state, "verifying");
+}
+
+#[tokio::test]
+async fn daemon_accept_reject_require_existing_session() {
+    let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
+
+    info!("accepting nonexistent pairing session should fail with not found");
+    let accept = host.accept_pairing("missing-session").await;
+    info!("rejecting nonexistent pairing session should fail with not found");
+    let reject = host.reject_pairing("missing-session").await;
+
+    assert_eq!(
+        accept.unwrap_err(),
+        DaemonPairingHostError::SessionNotFound("missing-session".to_string())
+    );
+    assert_eq!(
+        reject.unwrap_err(),
+        DaemonPairingHostError::SessionNotFound("missing-session".to_string())
+    );
 }

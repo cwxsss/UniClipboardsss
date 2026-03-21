@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
+use axum::http::StatusCode;
 use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
@@ -13,11 +14,12 @@ use uc_app::runtime::CoreRuntime;
 use crate::api::auth::{
     build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
 };
+use crate::api::pairing::PairingApiErrorResponse;
 use crate::api::query::DaemonQueryService;
 use crate::api::routes;
 use crate::api::types::DaemonWsEvent;
 use crate::api::ws;
-use crate::pairing::host::DaemonPairingHost;
+use crate::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
 use crate::socket::{try_resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
 
 #[derive(Clone)]
@@ -73,6 +75,51 @@ pub fn build_router(state: DaemonApiState) -> Router {
         .merge(routes::router())
         .merge(ws::router())
         .with_state(state)
+}
+
+pub(crate) fn map_daemon_pairing_error(
+    error: DaemonPairingHostError,
+) -> (StatusCode, PairingApiErrorResponse) {
+    match error {
+        DaemonPairingHostError::ActivePairingSessionExists => (
+            StatusCode::CONFLICT,
+            PairingApiErrorResponse {
+                code: "active_session_exists".to_string(),
+                message: "active pairing session exists".to_string(),
+            },
+        ),
+        DaemonPairingHostError::HostNotDiscoverable => (
+            StatusCode::BAD_REQUEST,
+            PairingApiErrorResponse {
+                code: "host_not_discoverable".to_string(),
+                message: "host not discoverable".to_string(),
+            },
+        ),
+        DaemonPairingHostError::NoLocalPairingParticipantReady => (
+            StatusCode::BAD_REQUEST,
+            PairingApiErrorResponse {
+                code: "no_local_participant".to_string(),
+                message: "no local pairing participant ready".to_string(),
+            },
+        ),
+        DaemonPairingHostError::SessionNotFound(_) => (
+            StatusCode::NOT_FOUND,
+            PairingApiErrorResponse {
+                code: "session_not_found".to_string(),
+                message: "pairing session not found".to_string(),
+            },
+        ),
+        DaemonPairingHostError::Internal(message) => {
+            tracing::error!(error = %message, "daemon pairing command failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                PairingApiErrorResponse {
+                    code: "internal".to_string(),
+                    message,
+                },
+            )
+        }
+    }
 }
 
 pub async fn run_http_server(

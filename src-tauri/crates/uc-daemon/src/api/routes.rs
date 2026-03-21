@@ -15,7 +15,7 @@ use crate::api::pairing::{
     PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
     SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, VerifyPairingRequest,
 };
-use crate::api::server::DaemonApiState;
+use crate::api::server::{map_daemon_pairing_error, DaemonApiState};
 use crate::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
 
 pub fn router() -> Router<DaemonApiState> {
@@ -438,68 +438,21 @@ fn internal_error(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>)
 }
 
 fn pairing_command_error(error: DaemonPairingHostError) -> (StatusCode, Json<serde_json::Value>) {
-    match error {
-        DaemonPairingHostError::ActivePairingSessionExists => (
-            StatusCode::CONFLICT,
-            Json(json!({"error": "active_pairing_session_exists"})),
-        ),
-        DaemonPairingHostError::HostNotDiscoverable => (
-            StatusCode::CONFLICT,
-            Json(json!({"error": "host_not_discoverable"})),
-        ),
-        DaemonPairingHostError::NoLocalPairingParticipantReady => (
-            StatusCode::PRECONDITION_FAILED,
-            Json(json!({"error": "no_local_pairing_participant_ready"})),
-        ),
-        DaemonPairingHostError::SessionNotFound(session_id) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "not_found", "sessionId": session_id})),
-        ),
-        DaemonPairingHostError::Internal(message) => {
-            tracing::error!(error = %message, "daemon pairing command failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "internal_error"})),
-            )
-        }
-    }
+    let (status, body) = map_daemon_pairing_error(error);
+    (
+        status,
+        Json(json!({
+            "code": body.code,
+            "message": body.message,
+        })),
+    )
 }
 
 fn pairing_http_error(
     error: DaemonPairingHostError,
 ) -> (StatusCode, Json<PairingApiErrorResponse>) {
-    match error {
-        DaemonPairingHostError::ActivePairingSessionExists => pairing_api_error(
-            StatusCode::CONFLICT,
-            "active_session_exists",
-            "active pairing session exists",
-        ),
-        DaemonPairingHostError::HostNotDiscoverable => pairing_api_error(
-            StatusCode::BAD_REQUEST,
-            "host_not_discoverable",
-            "host not discoverable",
-        ),
-        DaemonPairingHostError::NoLocalPairingParticipantReady => pairing_api_error(
-            StatusCode::BAD_REQUEST,
-            "no_local_participant",
-            "no local pairing participant ready",
-        ),
-        DaemonPairingHostError::SessionNotFound(_) => pairing_api_error(
-            StatusCode::NOT_FOUND,
-            "session_not_found",
-            "pairing session not found",
-        ),
-        DaemonPairingHostError::Internal(message) => {
-            tracing::error!(error = %message, "daemon pairing command failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PairingApiErrorResponse {
-                    code: "internal".to_string(),
-                    message,
-                }),
-            )
-        }
-    }
+    let (status, body) = map_daemon_pairing_error(error);
+    (status, Json(body))
 }
 
 fn pairing_api_error(
@@ -552,8 +505,8 @@ fn _route_markers() -> [&'static str; 10] {
         "/pairing/sessions/:session_id/reject",
         "/pairing/sessions/:session_id/cancel",
         "/pairing/sessions/:session_id/verify",
-        "active_pairing_session_exists",
-        "no_local_pairing_participant_ready",
+        "active_session_exists",
+        "no_local_participant",
         "host_not_discoverable",
     ]
 }

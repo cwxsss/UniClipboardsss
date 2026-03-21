@@ -7,6 +7,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use serde::Serialize;
+
 use crate::worker::WorkerHealth;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,7 +17,8 @@ pub struct DaemonWorkerSnapshot {
     pub health: WorkerHealth,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DaemonPairingSessionSnapshot {
     pub session_id: String,
     pub peer_id: Option<String>,
@@ -153,5 +156,25 @@ mod tests {
 
         assert!(removed.is_some());
         assert!(state.pairing_session("session-1").is_none());
+    }
+
+    #[test]
+    fn pairing_session_snapshot_does_not_serialize_sensitive_fields() {
+        let snapshot = DaemonPairingSessionSnapshot {
+            session_id: "session-1".to_string(),
+            peer_id: Some("peer-1".to_string()),
+            device_name: Some("Desk".to_string()),
+            state: "verification".to_string(),
+            updated_at_ms: 123,
+        };
+
+        let json = serde_json::to_string(&snapshot).expect("snapshot should serialize");
+
+        assert!(json.contains("\"sessionId\":\"session-1\""));
+        assert!(json.contains("\"state\":\"verification\""));
+        assert!(!json.contains("\"code\""));
+        assert!(!json.contains("fingerprint"));
+        assert!(!json.contains("KeySlotFile"));
+        assert!(!json.contains("challenge"));
     }
 }
