@@ -274,6 +274,19 @@ Plans:
 - [x] 46-04-PLAN.md — Gap Closure For Setup Pairing Facade Extraction (completed 2026-03-20)
 - [x] 46-05-PLAN.md — Gap Closure For Live GUI Pairing Bridge Activation (completed 2026-03-20)
 
+### Phase 46.4: 当前基于 daemon 重构后的 setup 流程还没有跑通(GUI), 为了加快开发和调试,我考虑先实现 cli 版本的 setup 流程, 理论上 cli 和 gui 都走的同一个流程,只是不同的入口,所以我考虑先将 cli +daemon 的方式给打通. 端到端将如何进行测试,你需要在两个终端中,分别起一个 peerA (full mode), 另一个是 peerB (passive mode), 然后让 peerB 成功与peerA 进行配对,也就是说, peerA 先新建加密空间, B 需要发现 A,B 请求A,A确认, B 输入加密口令, A 验证加密口令, 最终B成功加入 A; 对于 A 和 B 查询已配对设备都应该能看到对方. (INSERTED)
+
+**Goal:** Expose the daemon-backed setup flow through CLI and validate a repeatable two-terminal `peerA` / `peerB` operator workflow
+**Requirements**: PH46-01, PH46-03, PH46-04, PH46-06, PH46-01A, PH45-05, CLI-01, CLI-04, CLI-05
+**Depends on:** Phase 46
+**Plans:** 1/3 plans executed
+
+Plans:
+
+- [x] 46.4-01-PLAN.md — Daemon setup transport foundation (completed 2026-03-21)
+- [ ] 46.4-02-PLAN.md — CLI setup command family over daemon transport
+- [ ] 46.4-03-PLAN.md — Reset/repeatability and acceptance proof
+
 ### Phase 46.3: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (INSERTED)
 
 **Goal:** Gate GUI startup on a compatible local UniClipboard daemon, boundedly replace incompatible daemons on the expected local endpoint, and surface a deterministic startup failure/recovery path instead of silently entering the main app.

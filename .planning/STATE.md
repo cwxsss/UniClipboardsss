@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-status: unknown
-stopped_at: Phase 46.3 context gathered
-last_updated: '2026-03-21T10:23:05.127Z'
+status: in_progress
+stopped_at: Completed 46.4-01-PLAN.md
+last_updated: '2026-03-21T12:15:00.025Z'
 progress:
-  total_phases: 16
+  total_phases: 17
   completed_phases: 11
-  total_plans: 39
-  completed_plans: 38
+  total_plans: 46
+  completed_plans: 39
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46.2 — daemon-tauri-daemon
+**Current focus:** Phase 46.4 — daemon-backed setup CLI flow
 
 ## Current Position
 
-Phase: 46.2 (daemon-tauri-daemon) — COMPLETE
-Plan: 2 of 2
+Phase: 46.4 (daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b) — IN PROGRESS
+Plan: 1 of 3 complete
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ _Updated after each plan completion_
 | Phase 46.1 P05 | 56 | 2 tasks | 7 files |
 | Phase 46.2-daemon-tauri-daemon P01 | 15 | 2 tasks | 20 files |
 | Phase 46.2-daemon-tauri-daemon P02 | 14 | 2 tasks | 16 files |
+| Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b P01 | 24min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -156,6 +157,9 @@ Recent decisions affecting current work:
 - [Phase 46.2-daemon-tauri-daemon]: Legacy Tauri pairing host loops and direct PairingOrchestrator state were removed from uc-tauri; bridge regression coverage now lives in daemon_ws_bridge and frontend tests.
 - [Phase 46.2-daemon-tauri-daemon]: Use a typed DaemonPairingRequestError in uc-tauri so daemon error code/message data survives into Tauri command mapping without brittle string parsing.
 - [Phase 46.2-daemon-tauri-daemon]: Install a single frontend p2p-command-error listener in src/api/p2p.ts and classify pairing failures once so initiator and passive UX stay aligned.
+- [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: DaemonApiState now carries a direct SetupOrchestrator handle so setup routes stay daemon-owned.
+- [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: Setup HTTP state responses use serialized SetupState plus fixed nextStepHint and local identity metadata.
+- [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: setup_api HTTP regressions use a controlled fake SetupPairingFacade fixture to keep transport tests deterministic.
 
 ### Roadmap Evolution
 
@@ -170,6 +174,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 46.1 inserted after Phase 46: Unify realtime subscriptions on single DaemonWsBridge (URGENT)
 - Phase 46.2 inserted after Phase 46: 彻底打通基于 daemon 的配对流程, 完全移除原 tauri 中相关的配对流程. 期望: 在不改变用户配对流程的情况下,内部替换成基于 daemon 的配对流程实现 (URGENT)
 - Phase 46.3 inserted after Phase 46: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (URGENT)
+- Phase 46.4 inserted after Phase 46: 当前基于 daemon 重构后的 setup 流程还没有跑通(GUI), 为了加快开发和调试,我考虑先实现 cli 版本的 setup 流程, 理论上 cli 和 gui 都走的同一个流程,只是不同的入口,所以我考虑先将 cli +daemon 的方式给打通. 端到端将如何进行测试,你需要在两个终端中,分别起一个 peerA (full mode), 另一个是 peerB (passive mode), 然后让 peerB 成功与peerA 进行配对,也就是说, peerA 先新建加密空间, B 需要发现 A,B 请求A,A确认, B 输入加密口令, A 验证加密口令, 最终B成功加入 A; 对于 A 和 B 查询已配对设备都应该能看到对方. (URGENT)
 - Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 - Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
 
@@ -187,6 +192,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-21T10:23:05.124Z
-Stopped at: Phase 46.3 context gathered
-Resume file: .planning/phases/46.3-gui-daemon/46.3-CONTEXT.md
+Last session: 2026-03-21T12:15:00.022Z
+Stopped at: Completed 46.4-01-PLAN.md
+Resume file: None
