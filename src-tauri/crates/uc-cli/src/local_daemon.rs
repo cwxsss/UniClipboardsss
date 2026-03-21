@@ -80,9 +80,10 @@ pub async fn ensure_local_daemon_running() -> Result<LocalDaemonSession, LocalDa
         .build()
         .map_err(|error| LocalDaemonError::ProbeClient(error.into()))?;
     let base_url = resolve_base_url()?;
+    let probe_base_url = base_url.clone();
 
     ensure_local_daemon_running_with(
-        || probe_daemon_health(&client, &base_url),
+        || probe_daemon_health(&client, &probe_base_url),
         || spawn_daemon_process().map(|_| ()),
         base_url,
         STARTUP_TIMEOUT,

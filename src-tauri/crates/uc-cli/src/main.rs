@@ -1,6 +1,7 @@
 mod commands;
 mod daemon_client;
 mod exit_codes;
+mod local_daemon;
 mod output;
 
 use clap::{Parser, Subcommand};
@@ -28,6 +29,11 @@ struct Cli {
 enum Commands {
     /// Show daemon status
     Status,
+    /// Drive daemon-owned setup flows
+    Setup {
+        #[command(subcommand)]
+        subcommand: SetupCommands,
+    },
     /// List paired devices via the daemon API
     Devices,
     /// Show space and encryption status (direct mode, no daemon required)
@@ -59,6 +65,16 @@ enum ClipboardCommands {
     Clear,
 }
 
+#[derive(Subcommand)]
+enum SetupCommands {
+    /// Create a new space and wait for inbound join requests
+    Host,
+    /// Join an existing space through an interactive operator flow
+    Join,
+    /// Inspect daemon-owned setup state
+    Status,
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -69,6 +85,11 @@ fn main() -> anyhow::Result<()> {
     let exit_code = rt.block_on(async {
         match cli.command {
             Commands::Status => commands::status::run(cli.json, cli.verbose).await,
+            Commands::Setup { subcommand } => match subcommand {
+                SetupCommands::Host => commands::setup::run_host(cli.json, cli.verbose).await,
+                SetupCommands::Join => commands::setup::run_join(cli.json, cli.verbose).await,
+                SetupCommands::Status => commands::setup::run_status(cli.json, cli.verbose).await,
+            },
             Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
             Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,
             Commands::Clipboard { subcommand } => match subcommand {
