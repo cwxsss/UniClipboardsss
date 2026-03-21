@@ -60,6 +60,12 @@ impl LeaseRegistry {
         self.active.store(active, Ordering::SeqCst);
         active
     }
+
+    async fn clear(&self) {
+        let mut leases = self.leases.write().await;
+        leases.clear();
+        self.active.store(false, Ordering::SeqCst);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +183,26 @@ impl DaemonPairingHost {
         )
         .await;
         Ok(())
+    }
+
+    pub async fn reset_setup_state(&self) {
+        if let Some(session_id) = self.active_session_id().await {
+            if let Err(error) = self
+                .pairing_orchestrator
+                .user_reject_pairing(&session_id)
+                .await
+            {
+                warn!(
+                    error = %error,
+                    session_id = %session_id,
+                    "failed to reject active pairing session during setup reset"
+                );
+            }
+            self.clear_active_session(Some(&session_id)).await;
+        }
+
+        self.discoverability.clear().await;
+        self.participant_readiness.clear().await;
     }
 
     pub async fn initiate_pairing(

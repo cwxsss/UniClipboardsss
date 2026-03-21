@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::{error, info, info_span, Instrument};
+use tracing::{error, info, info_span, warn, Instrument};
 
 use uc_core::{
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
@@ -17,7 +17,7 @@ use uc_core::{
         TimerPort,
     },
     security::{model::Passphrase, SecretString},
-    setup::{SetupEvent, SetupState, SetupStateMachine},
+    setup::{SetupEvent, SetupState, SetupStateMachine, SetupStatus},
 };
 
 use crate::usecases::initialize_encryption::InitializeEncryptionError;
@@ -38,6 +38,8 @@ pub enum SetupError {
     InitializeEncryption(#[from] InitializeEncryptionError),
     #[error("mark setup complete failed: {0}")]
     MarkSetupComplete(#[from] anyhow::Error),
+    #[error("setup reset failed: {0}")]
+    ResetFailed(#[source] anyhow::Error),
     #[error("lifecycle boot failed: {0}")]
     LifecycleFailed(#[source] anyhow::Error),
     #[error("setup action not implemented: {0}")]
@@ -155,6 +157,44 @@ impl SetupOrchestrator {
     pub async fn cancel_setup(&self) -> Result<SetupState, SetupError> {
         let event = SetupEvent::CancelSetup;
         self.dispatch(event).await
+    }
+
+    pub async fn reset(&self) -> Result<SetupState, SetupError> {
+        let _dispatch_guard = self.context.acquire_dispatch_lock().await;
+
+        if let Some(session_id) = self.pairing_session_id.lock().await.take() {
+            if let Err(error) = self
+                .action_executor
+                .setup_pairing_facade
+                .reject_pairing(&session_id)
+                .await
+            {
+                warn!(
+                    error = %error,
+                    session_id = %session_id,
+                    "failed to reject setup pairing session during reset"
+                );
+            }
+        }
+
+        self.selected_peer_id.lock().await.take();
+        self.joiner_offer.lock().await.take();
+        self.passphrase.lock().await.take();
+        self.action_executor.space_access_orchestrator.reset().await;
+        self.setup_status
+            .set_status(&SetupStatus::default())
+            .await
+            .map_err(SetupError::ResetFailed)?;
+        SetupActionExecutor::set_state_and_emit(
+            &self.context,
+            &self.action_executor.setup_event_port,
+            SetupState::Welcome,
+            None,
+        )
+        .await;
+        self.seeded.store(false, Ordering::SeqCst);
+
+        Ok(SetupState::Welcome)
     }
 
     pub async fn get_state(&self) -> SetupState {
@@ -500,6 +540,10 @@ mod tests {
         async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
             Ok(())
         }
+
+        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
+            Ok(())
+        }
     }
 
     struct NoopEncryptionSession;
@@ -634,6 +678,10 @@ mod tests {
         }
 
         async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
+            Ok(())
+        }
+
+        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
             Ok(())
         }
     }

@@ -84,6 +84,12 @@ impl SpaceAccessOrchestrator {
         Arc::clone(&self.context)
     }
 
+    pub async fn reset(&self) {
+        let _dispatch_guard = self.dispatch_lock.lock().await;
+        *self.context.lock().await = SpaceAccessContext::default();
+        *self.state.lock().await = SpaceAccessState::Idle;
+    }
+
     pub async fn dispatch(
         &self,
         executor: &mut SpaceAccessExecutor<'_>,

@@ -37,4 +37,12 @@ impl EncryptionStatePort for FileEncryptionStateRepository {
             .map_err(|e| EncryptionStateError::PersistError(e.to_string()))?;
         Ok(())
     }
+
+    async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
+        match fs::remove_file(&self.state_file).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(EncryptionStateError::PersistError(error.to_string())),
+        }
+    }
 }
