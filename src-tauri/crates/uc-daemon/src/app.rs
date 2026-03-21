@@ -93,7 +93,8 @@ impl DaemonApp {
             self.runtime.clone(),
             self.state.clone(),
         ));
-        let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()));
+        let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()))
+            .with_setup(self.runtime.setup_orchestrator().clone());
         let pairing_host = Arc::new(DaemonPairingHost::new(
             self.runtime.clone(),
             self.pairing_orchestrator.clone(),

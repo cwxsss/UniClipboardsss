@@ -10,6 +10,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
+use uc_app::usecases::SetupOrchestrator;
 
 use crate::api::auth::{
     build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
@@ -28,6 +29,7 @@ pub struct DaemonApiState {
     pub auth_token: DaemonAuthToken,
     pub runtime: Option<Arc<CoreRuntime>>,
     pub pairing_host: Option<Arc<DaemonPairingHost>>,
+    pub setup_orchestrator: Option<Arc<SetupOrchestrator>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
 }
 
@@ -43,6 +45,7 @@ impl DaemonApiState {
             auth_token,
             runtime,
             pairing_host: None,
+            setup_orchestrator: None,
             event_tx,
         }
     }
@@ -54,6 +57,15 @@ impl DaemonApiState {
 
     pub fn pairing_host(&self) -> Option<Arc<DaemonPairingHost>> {
         self.pairing_host.clone()
+    }
+
+    pub fn with_setup(mut self, setup_orchestrator: Arc<SetupOrchestrator>) -> Self {
+        self.setup_orchestrator = Some(setup_orchestrator);
+        self
+    }
+
+    pub fn setup_orchestrator(&self) -> Option<Arc<SetupOrchestrator>> {
+        self.setup_orchestrator.clone()
     }
 
     pub fn connection_info_for_addr(&self, listen_addr: SocketAddr) -> DaemonConnectionInfo {
