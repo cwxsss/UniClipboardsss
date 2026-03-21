@@ -4,10 +4,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::{Client, StatusCode};
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 use uc_daemon::api::auth::resolve_daemon_token_path;
-use uc_daemon::api::types::{PairedDeviceDto, StatusResponse};
-use uc_daemon::socket::{resolve_daemon_http_addr, resolve_daemon_socket_path};
+use uc_daemon::api::types::{
+    PairedDeviceDto, PeerSnapshotDto, SetupActionAckResponse, SetupSelectPeerRequest,
+    SetupStateResponse, SetupSubmitPassphraseRequest, StatusResponse,
+};
+use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 2;
 const ENV_BASE_URL: &str = "UNICLIPBOARD_DAEMON_BASE_URL";
@@ -50,7 +53,7 @@ impl std::error::Error for DaemonClientError {}
 
 impl DaemonHttpClient {
     pub fn new() -> Result<Self, DaemonClientError> {
-        let base_url = resolve_base_url();
+        let base_url = resolve_base_url_for_client()?;
         let token_path = resolve_token_path();
         let token = std::fs::read_to_string(&token_path).map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => {
@@ -79,8 +82,51 @@ impl DaemonHttpClient {
         self.get_json("/status").await
     }
 
+    pub async fn get_peers(&self) -> Result<Vec<PeerSnapshotDto>, DaemonClientError> {
+        self.get_json("/peers").await
+    }
+
     pub async fn get_paired_devices(&self) -> Result<Vec<PairedDeviceDto>, DaemonClientError> {
         self.get_json("/paired-devices").await
+    }
+
+    pub async fn get_setup_state(&self) -> Result<SetupStateResponse, DaemonClientError> {
+        self.get_json("/setup/state").await
+    }
+
+    pub async fn start_setup_host(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
+        self.post_without_body("/setup/host").await
+    }
+
+    pub async fn start_setup_join(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
+        self.post_without_body("/setup/join").await
+    }
+
+    pub async fn select_setup_peer(
+        &self,
+        peer_id: String,
+    ) -> Result<SetupActionAckResponse, DaemonClientError> {
+        self.post_json("/setup/select-peer", &SetupSelectPeerRequest { peer_id })
+            .await
+    }
+
+    pub async fn confirm_setup_peer(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
+        self.post_without_body("/setup/confirm-peer").await
+    }
+
+    pub async fn submit_setup_passphrase(
+        &self,
+        passphrase: String,
+    ) -> Result<SetupActionAckResponse, DaemonClientError> {
+        self.post_json(
+            "/setup/submit-passphrase",
+            &SetupSubmitPassphraseRequest { passphrase },
+        )
+        .await
+    }
+
+    pub async fn cancel_setup(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
+        self.post_without_body("/setup/cancel").await
     }
 
     fn from_parts(base_url: String, token: String) -> Result<Self, DaemonClientError> {
@@ -115,36 +161,91 @@ impl DaemonHttpClient {
             .await
             .map_err(map_reqwest_error)?;
 
-        let status = response.status();
-        let body = response
-            .text()
+        decode_json_response(response).await
+    }
+
+    async fn post_without_body<T>(&self, path: &str) -> Result<T, DaemonClientError>
+    where
+        T: DeserializeOwned,
+    {
+        let response = self
+            .http
+            .post(format!("{}{}", self.base_url, path))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", self.token),
+            )
+            .send()
             .await
-            .map_err(|error| DaemonClientError::InvalidResponse(error.into()))?;
+            .map_err(map_reqwest_error)?;
 
-        if status == StatusCode::UNAUTHORIZED {
-            return Err(DaemonClientError::Unauthorized);
-        }
+        decode_json_response(response).await
+    }
 
-        if !status.is_success() {
-            return Err(DaemonClientError::UnexpectedStatus { status, body });
-        }
+    async fn post_json<T, B>(&self, path: &str, body: &B) -> Result<T, DaemonClientError>
+    where
+        T: DeserializeOwned,
+        B: Serialize + ?Sized,
+    {
+        let response = self
+            .http
+            .post(format!("{}{}", self.base_url, path))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", self.token),
+            )
+            .json(body)
+            .send()
+            .await
+            .map_err(map_reqwest_error)?;
 
-        serde_json::from_str(&body).map_err(|error| {
-            DaemonClientError::InvalidResponse(anyhow::Error::new(error).context(body))
-        })
+        decode_json_response(response).await
     }
 }
 
+async fn decode_json_response<T>(response: reqwest::Response) -> Result<T, DaemonClientError>
+where
+    T: DeserializeOwned,
+{
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| DaemonClientError::InvalidResponse(error.into()))?;
+
+    if status == StatusCode::UNAUTHORIZED {
+        return Err(DaemonClientError::Unauthorized);
+    }
+
+    if !status.is_success() {
+        return Err(DaemonClientError::UnexpectedStatus { status, body });
+    }
+
+    serde_json::from_str(&body).map_err(|error| {
+        DaemonClientError::InvalidResponse(anyhow::Error::new(error).context(body))
+    })
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn resolve_base_url() -> String {
+    resolve_base_url_for_client()
+        .expect("daemon base url resolution should stay within reserved loopback port range")
+}
+
+fn resolve_base_url_for_client() -> Result<String, DaemonClientError> {
     if let Ok(value) = std::env::var(ENV_BASE_URL) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return trimmed.trim_end_matches('/').to_string();
+            return Ok(trimmed.trim_end_matches('/').to_string());
         }
     }
 
-    let addr = resolve_daemon_http_addr();
-    format!("http://{}:{}", addr.ip(), addr.port())
+    let addr = try_resolve_daemon_http_addr().map_err(|error| {
+        DaemonClientError::Initialization(
+            error.context("failed to resolve profile-aware daemon HTTP address"),
+        )
+    })?;
+    Ok(format!("http://{}:{}", addr.ip(), addr.port()))
 }
 
 fn resolve_token_path() -> PathBuf {
@@ -171,21 +272,192 @@ fn map_reqwest_error(error: reqwest::Error) -> DaemonClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestTempDir {
+        path: PathBuf,
+    }
+
+    impl TestTempDir {
+        fn new() -> Self {
+            let unique = format!(
+                "uc-cli-daemon-client-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system time should be after epoch")
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            fs::create_dir_all(&path).expect("test temp dir should be created");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn with_daemon_env<T>(
+        profile: Option<&str>,
+        xdg_runtime_dir: Option<&Path>,
+        base_url: Option<&str>,
+        token_path: Option<&Path>,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_profile = std::env::var("UC_PROFILE").ok();
+        let previous_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+        let previous_base_url = std::env::var(ENV_BASE_URL).ok();
+        let previous_token_path = std::env::var(ENV_TOKEN_PATH).ok();
+
+        match profile {
+            Some(profile) => std::env::set_var("UC_PROFILE", profile),
+            None => std::env::remove_var("UC_PROFILE"),
+        }
+        match xdg_runtime_dir {
+            Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+        match base_url {
+            Some(value) => std::env::set_var(ENV_BASE_URL, value),
+            None => std::env::remove_var(ENV_BASE_URL),
+        }
+        match token_path {
+            Some(path) => std::env::set_var(ENV_TOKEN_PATH, path),
+            None => std::env::remove_var(ENV_TOKEN_PATH),
+        }
+
+        let result = f();
+
+        match previous_profile {
+            Some(profile) => std::env::set_var("UC_PROFILE", profile),
+            None => std::env::remove_var("UC_PROFILE"),
+        }
+        match previous_xdg_runtime_dir {
+            Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+        match previous_base_url {
+            Some(value) => std::env::set_var(ENV_BASE_URL, value),
+            None => std::env::remove_var(ENV_BASE_URL),
+        }
+        match previous_token_path {
+            Some(path) => std::env::set_var(ENV_TOKEN_PATH, path),
+            None => std::env::remove_var(ENV_TOKEN_PATH),
+        }
+
+        result
+    }
 
     #[test]
     fn resolve_base_url_uses_daemon_loopback_helper() {
-        let base_url = resolve_base_url();
-        let addr = resolve_daemon_http_addr();
+        let base_url = with_daemon_env(None, None, None, None, resolve_base_url);
+        let addr = with_daemon_env(None, None, None, None, || {
+            uc_daemon::socket::resolve_daemon_http_addr()
+        });
         assert_eq!(base_url, format!("http://{}:{}", addr.ip(), addr.port()));
     }
 
     #[test]
     fn resolve_token_path_uses_socket_parent_directory() {
-        let token_path = resolve_token_path();
-        let socket_path = resolve_daemon_socket_path();
+        let token_path = with_daemon_env(None, None, None, None, resolve_token_path);
+        let socket_path = with_daemon_env(None, None, None, None, resolve_daemon_socket_path);
         let expected =
             resolve_daemon_token_path(socket_path.parent().unwrap_or_else(|| Path::new("/tmp")));
 
         assert_eq!(token_path, expected);
+    }
+
+    #[test]
+    fn resolve_base_url_is_profile_aware_by_default() {
+        let base_url_a = with_daemon_env(Some("a"), None, None, None, resolve_base_url);
+        let base_url_b = with_daemon_env(Some("b"), None, None, None, resolve_base_url);
+
+        assert_eq!(base_url_a, "http://127.0.0.1:42716");
+        assert_eq!(base_url_b, "http://127.0.0.1:42717");
+        assert_ne!(base_url_a, base_url_b);
+    }
+
+    #[test]
+    fn resolve_token_path_is_profile_aware_by_default() {
+        let tempdir = TestTempDir::new();
+
+        let token_path_a = with_daemon_env(
+            Some("a"),
+            Some(tempdir.path()),
+            None,
+            None,
+            resolve_token_path,
+        );
+        let token_path_b = with_daemon_env(
+            Some("b"),
+            Some(tempdir.path()),
+            None,
+            None,
+            resolve_token_path,
+        );
+
+        assert_eq!(
+            token_path_a.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("uniclipboard-daemon-a.token")
+        );
+        assert_eq!(
+            token_path_b.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("uniclipboard-daemon-b.token")
+        );
+        assert_ne!(token_path_a, token_path_b);
+    }
+
+    #[test]
+    fn explicit_env_overrides_still_take_priority_over_profile_defaults() {
+        let tempdir = TestTempDir::new();
+        let explicit_token_path = tempdir.path().join("explicit.token");
+
+        let base_url = with_daemon_env(
+            Some("a"),
+            Some(tempdir.path()),
+            Some("http://127.0.0.1:49999"),
+            Some(explicit_token_path.as_path()),
+            resolve_base_url,
+        );
+        let token_path = with_daemon_env(
+            Some("a"),
+            Some(tempdir.path()),
+            Some("http://127.0.0.1:49999"),
+            Some(explicit_token_path.as_path()),
+            resolve_token_path,
+        );
+
+        assert_eq!(base_url, "http://127.0.0.1:49999");
+        assert_eq!(token_path, explicit_token_path);
+    }
+
+    #[test]
+    fn setup_request_payloads_serialize_as_camel_case() {
+        let select_peer = serde_json::to_value(SetupSelectPeerRequest {
+            peer_id: "peer-a".to_string(),
+        })
+        .expect("setup select peer request should serialize");
+        let submit_passphrase = serde_json::to_value(SetupSubmitPassphraseRequest {
+            passphrase: "secret".to_string(),
+        })
+        .expect("setup submit passphrase request should serialize");
+
+        assert_eq!(select_peer["peerId"], "peer-a");
+        assert!(select_peer.get("peer_id").is_none());
+        assert_eq!(submit_passphrase["passphrase"], "secret");
     }
 }

@@ -1,13 +1,22 @@
 //! CLI smoke tests — validates binary invocation, help output, exit codes, and version flag.
 
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 fn cli_binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_uniclipboard-cli"))
 }
 
+fn smoke_test_guard() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[test]
 fn test_help_output() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .arg("--help")
         .output()
@@ -44,6 +53,7 @@ fn test_help_output() {
 
 #[test]
 fn test_version_flag() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .arg("--version")
         .output()
@@ -65,6 +75,7 @@ fn test_version_flag() {
 
 #[test]
 fn test_status_daemon_unreachable() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .arg("status")
         .output()
@@ -80,6 +91,7 @@ fn test_status_daemon_unreachable() {
 
 #[test]
 fn test_status_json_daemon_unreachable() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .args(["--json", "status"])
         .output()
@@ -104,6 +116,7 @@ fn test_status_json_daemon_unreachable() {
 
 #[test]
 fn test_clipboard_list_empty_history() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .args(["clipboard", "list"])
         .output()
@@ -125,6 +138,7 @@ fn test_clipboard_list_empty_history() {
 
 #[test]
 fn test_clipboard_list_json_empty_history() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .args(["clipboard", "list", "--json"])
         .output()
@@ -149,6 +163,7 @@ fn test_clipboard_list_json_empty_history() {
 
 #[test]
 fn test_clipboard_get_nonexistent_entry() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .args(["clipboard", "get", "non-existent-id"])
         .output()
@@ -171,6 +186,7 @@ fn test_clipboard_get_nonexistent_entry() {
 
 #[test]
 fn test_clipboard_clear_empty_history() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .args(["clipboard", "clear"])
         .output()
@@ -192,6 +208,7 @@ fn test_clipboard_clear_empty_history() {
 
 #[test]
 fn test_clipboard_clear_json_empty_history() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .args(["clipboard", "clear", "--json"])
         .output()
@@ -211,6 +228,7 @@ fn test_clipboard_clear_json_empty_history() {
 
 #[test]
 fn test_clipboard_list_with_limit_and_offset() {
+    let _guard = smoke_test_guard();
     let output = cli_binary()
         .args(["clipboard", "list", "--limit", "10", "--offset", "0"])
         .output()
