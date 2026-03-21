@@ -73,6 +73,8 @@ enum SetupCommands {
     Join,
     /// Inspect daemon-owned setup state
     Status,
+    /// Reset daemon-owned setup state for repeatable local reruns
+    Reset,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -89,6 +91,7 @@ fn main() -> anyhow::Result<()> {
                 SetupCommands::Host => commands::setup::run_host(cli.json, cli.verbose).await,
                 SetupCommands::Join => commands::setup::run_join(cli.json, cli.verbose).await,
                 SetupCommands::Status => commands::setup::run_status(cli.json, cli.verbose).await,
+                SetupCommands::Reset => commands::setup::run_reset(cli.json, cli.verbose).await,
             },
             Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
             Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,

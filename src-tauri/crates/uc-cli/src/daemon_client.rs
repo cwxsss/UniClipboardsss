@@ -7,8 +7,8 @@ use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use uc_daemon::api::auth::resolve_daemon_token_path;
 use uc_daemon::api::types::{
-    PairedDeviceDto, PeerSnapshotDto, SetupActionAckResponse, SetupSelectPeerRequest,
-    SetupStateResponse, SetupSubmitPassphraseRequest, StatusResponse,
+    PairedDeviceDto, PeerSnapshotDto, SetupActionAckResponse, SetupResetResponse,
+    SetupSelectPeerRequest, SetupStateResponse, SetupSubmitPassphraseRequest, StatusResponse,
 };
 use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr};
 
@@ -127,6 +127,10 @@ impl DaemonHttpClient {
 
     pub async fn cancel_setup(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
         self.post_without_body("/setup/cancel").await
+    }
+
+    pub async fn reset_setup(&self) -> Result<SetupResetResponse, DaemonClientError> {
+        self.post_without_body("/setup/reset").await
     }
 
     fn from_parts(base_url: String, token: String) -> Result<Self, DaemonClientError> {

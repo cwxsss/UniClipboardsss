@@ -98,6 +98,13 @@ pub struct SetupActionAckResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SetupResetResponse {
+    pub profile: String,
+    pub daemon_kept_running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PairingSessionChangedPayload {
     pub session_id: String,
     pub state: String,

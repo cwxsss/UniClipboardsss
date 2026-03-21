@@ -290,6 +290,34 @@ pub async fn run_status(json: bool, _verbose: bool) -> i32 {
     exit_codes::EXIT_SUCCESS
 }
 
+pub async fn run_reset(json: bool, _verbose: bool) -> i32 {
+    if json {
+        eprintln!("Error: `--json` is not supported with `setup reset`");
+        return exit_codes::EXIT_ERROR;
+    }
+
+    if let Err(error) = ensure_local_daemon_running().await {
+        return print_local_daemon_error(error);
+    }
+
+    let client = match DaemonHttpClient::new() {
+        Ok(client) => client,
+        Err(error) => return print_client_error(error),
+    };
+
+    let response = match client.reset_setup().await {
+        Ok(response) => response,
+        Err(error) => return print_client_error(error),
+    };
+
+    println!("Reset complete for profile {}", response.profile);
+    if response.daemon_kept_running {
+        println!("Daemon kept running");
+    }
+
+    exit_codes::EXIT_SUCCESS
+}
+
 impl From<SetupStateResponse> for SetupStatusOutput {
     fn from(value: SetupStateResponse) -> Self {
         Self {

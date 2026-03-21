@@ -9,6 +9,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
+use uc_core::security::model::EncryptionError;
 use uc_core::setup::SetupState;
 
 use crate::api::pairing::{
@@ -17,7 +18,7 @@ use crate::api::pairing::{
     SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, VerifyPairingRequest,
 };
 use crate::api::server::{map_daemon_pairing_error, DaemonApiState};
-use crate::api::types::{SetupSelectPeerRequest, SetupSubmitPassphraseRequest};
+use crate::api::types::{SetupResetResponse, SetupSelectPeerRequest, SetupSubmitPassphraseRequest};
 use crate::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
 
 pub fn router() -> Router<DaemonApiState> {
@@ -33,6 +34,7 @@ pub fn router() -> Router<DaemonApiState> {
         .route("/setup/confirm-peer", post(setup_confirm_peer))
         .route("/setup/submit-passphrase", post(setup_submit_passphrase))
         .route("/setup/cancel", post(setup_cancel))
+        .route("/setup/reset", post(setup_reset))
         .route("/pairing/initiate", post(handle_initiate_pairing))
         .route("/pairing/accept", post(handle_accept_pairing))
         .route("/pairing/reject", post(handle_reject_pairing))
@@ -241,6 +243,83 @@ async fn setup_cancel(
         Ok(_) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
         Err(error) => setup_failed(format!("setup cancel failed: {error}")).into_response(),
     }
+}
+
+async fn setup_reset(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+) -> axum::response::Response {
+    if !state.is_authorized(&headers) {
+        return unauthorized().into_response();
+    }
+    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
+        return setup_failed("setup orchestrator unavailable").into_response();
+    };
+    let Some(runtime) = state.runtime.clone() else {
+        return setup_failed("daemon runtime unavailable").into_response();
+    };
+
+    if let Some(pairing_host) = state.pairing_host() {
+        pairing_host.reset_setup_state().await;
+    }
+
+    if let Err(error) = setup_orchestrator.reset().await {
+        return setup_failed(format!("setup reset failed: {error}")).into_response();
+    }
+
+    let deps = runtime.wiring_deps();
+    let paired_devices = match deps.device.paired_device_repo.list_all().await {
+        Ok(devices) => devices,
+        Err(error) => {
+            return setup_failed(format!("setup reset failed: {error}")).into_response();
+        }
+    };
+    for device in paired_devices {
+        if let Err(error) = deps.device.paired_device_repo.delete(&device.peer_id).await {
+            if !matches!(error, uc_core::ports::PairedDeviceRepositoryError::NotFound) {
+                return setup_failed(format!("setup reset failed: {error}")).into_response();
+            }
+        }
+    }
+
+    let scope = match deps.security.key_scope.current_scope().await {
+        Ok(scope) => scope,
+        Err(error) => {
+            return setup_failed(format!("setup reset failed: {error}")).into_response();
+        }
+    };
+
+    if let Err(error) = deps.security.key_material.delete_keyslot(&scope).await {
+        if !matches!(error, EncryptionError::KeyNotFound) {
+            return setup_failed(format!("setup reset failed: {error}")).into_response();
+        }
+    }
+    if let Err(error) = deps.security.key_material.delete_kek(&scope).await {
+        if !matches!(error, EncryptionError::KeyNotFound) {
+            return setup_failed(format!("setup reset failed: {error}")).into_response();
+        }
+    }
+    if let Err(error) = deps.security.encryption_state.clear_initialized().await {
+        return setup_failed(format!("setup reset failed: {error}")).into_response();
+    }
+    if let Err(error) = deps.security.encryption_session.clear().await {
+        if !matches!(
+            error,
+            EncryptionError::KeyNotFound | EncryptionError::NotInitialized
+        ) {
+            return setup_failed(format!("setup reset failed: {error}")).into_response();
+        }
+    }
+
+    Json(SetupResetResponse {
+        profile: std::env::var("UC_PROFILE")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "default".to_string()),
+        daemon_kept_running: true,
+    })
+    .into_response()
 }
 
 async fn pairing_session(
@@ -754,7 +833,7 @@ async fn setup_action_ack_response(
 }
 
 #[allow(dead_code)]
-fn _route_markers() -> [&'static str; 18] {
+fn _route_markers() -> [&'static str; 19] {
     [
         "/setup/state",
         "/setup/host",
@@ -763,6 +842,7 @@ fn _route_markers() -> [&'static str; 18] {
         "/setup/confirm-peer",
         "/setup/submit-passphrase",
         "/setup/cancel",
+        "/setup/reset",
         "/pairing/discoverability/current",
         "/pairing/participants/current",
         "/pairing/sessions",
