@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.4-01-PLAN.md
-last_updated: '2026-03-21T12:15:00.025Z'
+stopped_at: Completed 46.4-02-PLAN.md
+last_updated: '2026-03-21T12:32:30Z'
 progress:
   total_phases: 17
   completed_phases: 11
   total_plans: 46
-  completed_plans: 39
+  completed_plans: 40
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 ## Current Position
 
 Phase: 46.4 (daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b) — IN PROGRESS
-Plan: 1 of 3 complete
+Plan: 2 of 3 complete
 
 ## Performance Metrics
 
@@ -76,6 +76,7 @@ _Updated after each plan completion_
 | Phase 46.2-daemon-tauri-daemon P01 | 15 | 2 tasks | 20 files |
 | Phase 46.2-daemon-tauri-daemon P02 | 14 | 2 tasks | 16 files |
 | Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b P01 | 24min | 2 tasks | 10 files |
+| Phase 46.4 P02 | 16min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -160,6 +161,9 @@ Recent decisions affecting current work:
 - [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: DaemonApiState now carries a direct SetupOrchestrator handle so setup routes stay daemon-owned.
 - [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: Setup HTTP state responses use serialized SetupState plus fixed nextStepHint and local identity metadata.
 - [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: setup_api HTTP regressions use a controlled fake SetupPairingFacade fixture to keep transport tests deterministic.
+- [Phase 46.4]: CLI setup commands remain thin adapters over daemon /setup and /peers endpoints; uc-cli does not own setup truth.
+- [Phase 46.4]: setup host stays attached after local space creation and only exits after an operator-handled request resolves or the session is canceled.
+- [Phase 46.4]: CLI smoke tests serialize process-level invocations to avoid shared local state races during cargo test.
 
 ### Roadmap Evolution
 
@@ -192,6 +196,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-21T12:15:00.022Z
-Stopped at: Completed 46.4-01-PLAN.md
+Last session: 2026-03-21T12:32:04.773Z
+Stopped at: Completed 46.4-02-PLAN.md
 Resume file: None

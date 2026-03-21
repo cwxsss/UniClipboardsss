@@ -279,12 +279,12 @@ Plans:
 **Goal:** Expose the daemon-backed setup flow through CLI and validate a repeatable two-terminal `peerA` / `peerB` operator workflow
 **Requirements**: PH46-01, PH46-03, PH46-04, PH46-06, PH46-01A, PH45-05, CLI-01, CLI-04, CLI-05
 **Depends on:** Phase 46
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 
 - [x] 46.4-01-PLAN.md — Daemon setup transport foundation (completed 2026-03-21)
-- [ ] 46.4-02-PLAN.md — CLI setup command family over daemon transport
+- [x] 46.4-02-PLAN.md — CLI setup command family over daemon transport (completed 2026-03-21)
 - [ ] 46.4-03-PLAN.md — Reset/repeatability and acceptance proof
 
 ### Phase 46.3: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (INSERTED)
