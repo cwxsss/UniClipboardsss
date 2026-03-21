@@ -279,7 +279,7 @@ Plans:
 **Goal:** Expose the daemon-backed setup flow through CLI and validate a repeatable two-terminal `peerA` / `peerB` operator workflow
 **Requirements**: PH46-01, PH46-03, PH46-04, PH46-06, PH46-01A, PH45-05, CLI-01, CLI-04, CLI-05
 **Depends on:** Phase 46
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
