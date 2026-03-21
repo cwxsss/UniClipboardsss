@@ -12,10 +12,10 @@ use libp2p::{
 use libp2p_stream as stream;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot, RwLock, Semaphore};
+use tokio::sync::{broadcast, mpsc, oneshot, RwLock, Semaphore};
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 use uc_core::network::protocol::ClipboardPayloadVersion;
@@ -257,7 +257,9 @@ pub struct Libp2pNetworkAdapter {
     local_identity_pubkey: Vec<u8>,
     caches: Arc<RwLock<PeerCaches>>,
     event_tx: mpsc::Sender<NetworkEvent>,
-    event_rx: Mutex<Option<mpsc::Receiver<NetworkEvent>>>,
+    event_ingress_rx: Mutex<Option<mpsc::Receiver<NetworkEvent>>>,
+    event_bus_tx: broadcast::Sender<NetworkEvent>,
+    event_fanout_started: AtomicBool,
     clipboard_tx: mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>,
     clipboard_rx: Mutex<Option<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>>>,
     business_tx: mpsc::Sender<BusinessCommand>,
@@ -292,7 +294,8 @@ impl Libp2pNetworkAdapter {
             .map_err(|err| anyhow!("failed to extract ed25519 public key: {err}"))?
             .to_bytes()
             .to_vec();
-        let (event_tx, event_rx) = mpsc::channel(64);
+        let (event_tx, event_ingress_rx) = mpsc::channel(64);
+        let (event_bus_tx, _) = broadcast::channel(64);
         let (clipboard_tx, clipboard_rx) = mpsc::channel(64);
         let (business_tx, business_rx) = mpsc::channel(64);
         let pairing_service = Mutex::new(None);
@@ -302,7 +305,9 @@ impl Libp2pNetworkAdapter {
             local_identity_pubkey,
             caches: Arc::new(RwLock::new(PeerCaches::new())),
             event_tx,
-            event_rx: Mutex::new(Some(event_rx)),
+            event_ingress_rx: Mutex::new(Some(event_ingress_rx)),
+            event_bus_tx,
+            event_fanout_started: AtomicBool::new(false),
             clipboard_tx,
             clipboard_rx: Mutex::new(Some(clipboard_rx)),
             business_tx,
@@ -322,6 +327,32 @@ impl Libp2pNetworkAdapter {
 
     pub fn local_identity_pubkey(&self) -> Vec<u8> {
         self.local_identity_pubkey.clone()
+    }
+
+    async fn ensure_event_fanout_started(&self) -> Result<()> {
+        if self
+            .event_fanout_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Ok(());
+        }
+
+        let mut ingress_rx = self
+            .event_ingress_rx
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| anyhow!("network event ingress receiver missing"))?;
+        let event_bus_tx = self.event_bus_tx.clone();
+
+        tokio::spawn(async move {
+            while let Some(event) = ingress_rx.recv().await {
+                let _ = event_bus_tx.send(event);
+            }
+        });
+
+        Ok(())
     }
 
     pub fn spawn_swarm(&self) -> Result<()> {
@@ -817,7 +848,31 @@ impl PairingTransportPort for Libp2pNetworkAdapter {
 #[async_trait]
 impl NetworkEventPort for Libp2pNetworkAdapter {
     async fn subscribe_events(&self) -> Result<mpsc::Receiver<NetworkEvent>> {
-        Self::take_receiver(&self.event_rx, "network event")
+        self.ensure_event_fanout_started().await?;
+
+        let mut broadcast_rx = self.event_bus_tx.subscribe();
+        let (event_tx, event_rx) = mpsc::channel(64);
+
+        tokio::spawn(async move {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(event) => {
+                        if event_tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(
+                            skipped,
+                            "network event subscriber lagged behind fanout channel"
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+
+        Ok(event_rx)
     }
 }
 
@@ -3421,6 +3476,46 @@ mod tests {
         assert_eq!(received.encrypted_content, expected.encrypted_content);
         assert_eq!(received.origin_device_id, expected.origin_device_id);
         assert_eq!(received.origin_device_name, expected.origin_device_name);
+    }
+
+    #[tokio::test]
+    async fn subscribe_events_allows_multiple_subscribers_on_one_adapter() {
+        let adapter = Libp2pNetworkAdapter::new(
+            Arc::new(TestIdentityStore::default()),
+            Arc::new(FakeResolver),
+            Arc::new(InMemoryEncryptionSessionPort::default()),
+            Arc::new(PassthroughTransferPayloadDecryptor),
+            Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
+        )
+        .expect("create adapter");
+
+        let mut rx_a = adapter
+            .subscribe_events()
+            .await
+            .expect("first subscriber should succeed");
+        let mut rx_b = adapter
+            .subscribe_events()
+            .await
+            .expect("second subscriber should also succeed");
+
+        adapter
+            .event_tx
+            .send(NetworkEvent::Error("fanout".to_string()))
+            .await
+            .expect("event publish should succeed");
+
+        let event_a = rx_a
+            .recv()
+            .await
+            .expect("first subscriber should receive event");
+        let event_b = rx_b
+            .recv()
+            .await
+            .expect("second subscriber should receive event");
+
+        assert!(matches!(event_a, NetworkEvent::Error(ref message) if message == "fanout"));
+        assert!(matches!(event_b, NetworkEvent::Error(ref message) if message == "fanout"));
     }
 
     #[test]
