@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.4-03-PLAN.md
-last_updated: '2026-03-22T03:23:25Z'
+stopped_at: Completed 46.5-02-PLAN.md
+last_updated: '2026-03-22T04:34:46.122Z'
 progress:
-  total_phases: 18
+  total_phases: 19
   completed_phases: 12
-  total_plans: 46
-  completed_plans: 43
+  total_plans: 52
+  completed_plans: 44
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46.3 in progress — GUI daemon startup compatibility and bounded replacement; Phase 46.4 CLI setup flow is complete
+**Current focus:** Phase 46.5 in progress — daemon pairing/setup transport foundation is complete; remaining work is command shell cutover and regression coverage
 
 ## Current Position
 
-Phase: 46.3 (gui-daemon) — IN PROGRESS
-Plan: 2 of 4 complete
+Phase: 46.5 (tauri-daemon) — IN PROGRESS
+Plan: 1 of 4 complete
 
 ## Performance Metrics
 
@@ -80,6 +80,7 @@ _Updated after each plan completion_
 | Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b P03 | 21min | 2 tasks | 13 files |
 | Phase 46.3-gui-daemon P01 | 10min | 2 tasks | 8 files |
 | Phase 46.3-gui-daemon P02 | 12min | 2 tasks | 6 files |
+| Phase 46.5 P02 | 5 | 1 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -172,6 +173,8 @@ Recent decisions affecting current work:
 - [Phase 46.3-gui-daemon]: Bootstrap probing now classifies the expected local daemon endpoint as `Absent`, `Compatible`, or `Incompatible`; malformed or legacy `/health` payloads are incompatible, not absent.
 - [Phase 46.3-gui-daemon]: Daemon now writes profile-aware PID metadata for the expected local endpoint and removes it on shutdown via a dedicated PID guard.
 - [Phase 46.3-gui-daemon]: GUI bootstrap replacement is bounded to one incompatible-daemon terminate attempt plus one spawned-daemon startup wait, with ownership facts tracked separately from connection state.
+- [Phase 46.5]: Shared daemon request authorization lives in uc-tauri daemon_client/mod so setup/query/pairing clients reuse one base_url and bearer-token path.
+- [Phase 46.5]: POST /pairing/unpair executes CoreUseCases::unpair_device() and keeps the existing PairingApiErrorResponse envelope instead of introducing a second pairing error contract.
 
 ### Roadmap Evolution
 
@@ -188,6 +191,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 46.3 inserted after Phase 46: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (URGENT)
 - Phase 46.4 inserted after Phase 46: 当前基于 daemon 重构后的 setup 流程还没有跑通(GUI), 为了加快开发和调试,我考虑先实现 cli 版本的 setup 流程, 理论上 cli 和 gui 都走的同一个流程,只是不同的入口,所以我考虑先将 cli +daemon 的方式给打通. 端到端将如何进行测试,你需要在两个终端中,分别起一个 peerA (full mode), 另一个是 peerB (passive mode), 然后让 peerB 成功与peerA 进行配对,也就是说, peerA 先新建加密空间, B 需要发现 A,B 请求A,A确认, B 输入加密口令, A 验证加密口令, 最终B成功加入 A; 对于 A 和 B 查询已配对设备都应该能看到对方. (URGENT)
 - Phase 46.5 inserted after Phase 46: 将配对业务逻辑从 Tauri 层彻底移除，统一收口到 daemon (URGENT)
+- Phase 46.6 inserted after Phase 46: daemon 需要跟随 tauri 启动和关闭,现在 tauri 关闭后,daemon 完全变成了孤儿进程 (URGENT)
 - Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 - Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
 
@@ -205,6 +209,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-22T02:56:13Z
-Stopped at: Completed 46.3-02-PLAN.md
+Last session: 2026-03-22T04:34:46.119Z
+Stopped at: Completed 46.5-02-PLAN.md
 Resume file: None

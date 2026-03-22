@@ -344,14 +344,15 @@ Plans:
 ### Phase 46.5: 将配对业务逻辑从 Tauri 层彻底移除，统一收口到 daemon (INSERTED)
 
 **Goal:** Remove GUI-owned pairing runtime and keep `uc-tauri` as a thin daemon command/realtime shell for all pairing and setup pairing flows.
-**Requirements**: PH46-05, PH461-06, R46.2-1, R46.2-2, R46.2-4, R46.2-7, R46.2-8
+**Requirements**: R46.2-1, R46.2-2, R46.2-4, R46.2-7, R46.2-8
 **Depends on:** Phase 46
-**Plans:** 3 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 
 - [ ] 46.5-01-PLAN.md — Runtime ownership cutover in `uc-bootstrap` + `uc-platform`
-- [ ] 46.5-02-PLAN.md — Daemon-only pairing/setup command shell cutover in `uc-tauri`
+- [x] 46.5-02-PLAN.md — Daemon pairing/setup transport foundation (completed 2026-03-22)
+- [ ] 46.5-04-PLAN.md — Tauri daemon command shell cutover
 - [ ] 46.5-03-PLAN.md — Regression and contract coverage for daemon-only pairing ownership
 
 ### Phase 47: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
