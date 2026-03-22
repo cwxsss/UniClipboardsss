@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Context, Result};
-use reqwest::header::AUTHORIZATION;
 use reqwest::{Method, RequestBuilder};
 
 use crate::bootstrap::DaemonConnectionState;
-use uc_daemon::api::types::PeerSnapshotDto;
+use crate::daemon_client::authorized_daemon_request;
+use uc_daemon::api::types::{PairedDeviceDto, PeerSnapshotDto};
 
 #[derive(Clone)]
 pub struct TauriDaemonQueryClient {
@@ -23,16 +23,12 @@ impl TauriDaemonQueryClient {
         self.get_json(Method::GET, "/peers").await
     }
 
+    pub async fn get_paired_devices(&self) -> Result<Vec<PairedDeviceDto>> {
+        self.get_json(Method::GET, "/paired-devices").await
+    }
+
     fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
-        let connection = self
-            .connection_state
-            .get()
-            .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
-        let url = format!("{}{}", connection.base_url, path);
-        Ok(self
-            .http
-            .request(method, url)
-            .header(AUTHORIZATION, format!("Bearer {}", connection.token)))
+        authorized_daemon_request(&self.http, &self.connection_state, method, path)
     }
 
     async fn get_json<T>(&self, method: Method, path: &str) -> Result<T>

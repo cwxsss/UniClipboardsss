@@ -9,13 +9,15 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
+use uc_app::usecases::CoreUseCases;
 use uc_core::security::model::EncryptionError;
 use uc_core::setup::SetupState;
 
 use crate::api::pairing::{
     AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
     PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
-    SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, VerifyPairingRequest,
+    SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, UnpairDeviceRequest,
+    VerifyPairingRequest,
 };
 use crate::api::server::{map_daemon_pairing_error, DaemonApiState};
 use crate::api::types::{SetupResetResponse, SetupSelectPeerRequest, SetupSubmitPassphraseRequest};
@@ -39,6 +41,7 @@ pub fn router() -> Router<DaemonApiState> {
         .route("/pairing/accept", post(handle_accept_pairing))
         .route("/pairing/reject", post(handle_reject_pairing))
         .route("/pairing/cancel", post(handle_cancel_pairing))
+        .route("/pairing/unpair", post(handle_unpair_device))
         .route("/pairing/gui/lease", post(handle_pairing_gui_lease))
         .route(
             "/pairing/discoverability/current",
@@ -603,6 +606,46 @@ async fn handle_cancel_pairing(
     .await
 }
 
+async fn handle_unpair_device(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+    payload: Result<Json<UnpairDeviceRequest>, JsonRejection>,
+) -> impl IntoResponse {
+    if !state.is_authorized(&headers) {
+        return unauthorized().into_response();
+    }
+    let Some(runtime) = state.runtime.clone() else {
+        return pairing_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime_unavailable",
+            "daemon runtime unavailable",
+        )
+        .into_response();
+    };
+    let Json(payload) = match payload {
+        Ok(payload) => payload,
+        Err(_) => {
+            return pairing_api_error(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "malformed request body",
+            )
+            .into_response();
+        }
+    };
+
+    let usecases = CoreUseCases::new(runtime.as_ref());
+    match usecases.unpair_device().execute(payload.peer_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            let message = error.to_string();
+            tracing::error!(error = %error, "daemon unpair command failed");
+            pairing_api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal", &message)
+                .into_response()
+        }
+    }
+}
+
 async fn verify_pairing(
     State(state): State<DaemonApiState>,
     headers: HeaderMap,
@@ -900,7 +943,7 @@ async fn setup_action_ack_response(
 }
 
 #[allow(dead_code)]
-fn _route_markers() -> [&'static str; 19] {
+fn _route_markers() -> [&'static str; 20] {
     [
         "/setup/state",
         "/setup/host",
@@ -912,6 +955,7 @@ fn _route_markers() -> [&'static str; 19] {
         "/setup/reset",
         "/pairing/discoverability/current",
         "/pairing/participants/current",
+        "/pairing/unpair",
         "/pairing/sessions",
         "/pairing/sessions/:session_id/accept",
         "/pairing/sessions/:session_id/reject",

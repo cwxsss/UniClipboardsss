@@ -22,6 +22,12 @@ pub struct PairingSessionCommandRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UnpairDeviceRequest {
+    pub peer_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PairingGuiLeaseRequest {
     pub enabled: bool,
 }

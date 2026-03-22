@@ -1,12 +1,13 @@
 use anyhow::{anyhow, Context, Result};
-use reqwest::header::AUTHORIZATION;
 use reqwest::{Method, RequestBuilder, StatusCode};
 
 use crate::bootstrap::DaemonConnectionState;
+use crate::daemon_client::authorized_daemon_request;
 use uc_daemon::api::pairing::{
     AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
     PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
-    SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, VerifyPairingRequest,
+    SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, UnpairDeviceRequest,
+    VerifyPairingRequest,
 };
 
 #[derive(Clone)]
@@ -151,16 +152,17 @@ impl TauriDaemonPairingClient {
         .await
     }
 
+    pub async fn unpair_device(&self, peer_id: String) -> Result<()> {
+        self.send_json_no_content(
+            Method::POST,
+            "/pairing/unpair",
+            &UnpairDeviceRequest { peer_id },
+        )
+        .await
+    }
+
     fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
-        let connection = self
-            .connection_state
-            .get()
-            .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
-        let url = format!("{}{}", connection.base_url, path);
-        Ok(self
-            .http
-            .request(method, url)
-            .header(AUTHORIZATION, format!("Bearer {}", connection.token)))
+        authorized_daemon_request(&self.http, &self.connection_state, method, path)
     }
 
     async fn send_json<TReq, TResp>(
@@ -251,6 +253,7 @@ mod tests {
     use super::*;
     use std::net::SocketAddr;
 
+    use reqwest::header::AUTHORIZATION;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use uc_daemon::api::auth::DaemonConnectionInfo;
