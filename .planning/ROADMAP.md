@@ -376,3 +376,15 @@ Plans:
 Plans:
 
 - [ ] TBD (run /gsd:plan-phase 48 to break down)
+
+### Phase 49: Setup 验证码链路单一化重构
+
+**Goal:** 把"加入空间验证码显示"收成一条唯一链路: setup orchestrator -> daemon websocket -> Tauri bridge -> setup realtime store -> SetupPage
+**Depends on:** Phase 46.5
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 49-01-PLAN.md — Backend integration tests: selectJoinPeer -> JoinSpaceConfirmPeer end-to-end and payload field verification
+- [ ] 49-02-PLAN.md — Frontend store unit tests + SetupPage JoinSpaceConfirmPeer integration test
+- [ ] 49-03-PLAN.md — PairingNotificationProvider regression + App setup gate verification
