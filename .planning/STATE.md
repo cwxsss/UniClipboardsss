@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.3-01-PLAN.md
-last_updated: '2026-03-22T02:44:57Z'
+stopped_at: Completed 46.3-02-PLAN.md
+last_updated: '2026-03-22T02:56:13Z'
 progress:
   total_phases: 18
   completed_phases: 12
   total_plans: 46
-  completed_plans: 42
+  completed_plans: 43
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 ## Current Position
 
 Phase: 46.3 (gui-daemon) — IN PROGRESS
-Plan: 1 of 4 complete
+Plan: 2 of 4 complete
 
 ## Performance Metrics
 
@@ -79,6 +79,7 @@ _Updated after each plan completion_
 | Phase 46.4 P02 | 16min | 2 tasks | 8 files |
 | Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b P03 | 21min | 2 tasks | 13 files |
 | Phase 46.3-gui-daemon P01 | 10min | 2 tasks | 8 files |
+| Phase 46.3-gui-daemon P02 | 12min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -169,6 +170,8 @@ Recent decisions affecting current work:
 - [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: Reset stays daemon-owned and clears setup/session/lease/paired-device/encryption residue through existing runtime ports instead of deleting the whole profile directory.
 - [Phase 46.3-gui-daemon]: GUI and daemon now inherit one workspace package version, and daemon health/status expose `packageVersion` plus `apiRevision` as the compatibility identity contract.
 - [Phase 46.3-gui-daemon]: Bootstrap probing now classifies the expected local daemon endpoint as `Absent`, `Compatible`, or `Incompatible`; malformed or legacy `/health` payloads are incompatible, not absent.
+- [Phase 46.3-gui-daemon]: Daemon now writes profile-aware PID metadata for the expected local endpoint and removes it on shutdown via a dedicated PID guard.
+- [Phase 46.3-gui-daemon]: GUI bootstrap replacement is bounded to one incompatible-daemon terminate attempt plus one spawned-daemon startup wait, with ownership facts tracked separately from connection state.
 
 ### Roadmap Evolution
 
@@ -202,6 +205,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-22T02:44:57Z
-Stopped at: Completed 46.3-01-PLAN.md
+Last session: 2026-03-22T02:56:13Z
+Stopped at: Completed 46.3-02-PLAN.md
 Resume file: None

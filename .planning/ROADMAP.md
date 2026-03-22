@@ -292,12 +292,12 @@ Plans:
 **Goal:** Gate GUI startup on a compatible local UniClipboard daemon, boundedly replace incompatible daemons on the expected local endpoint, and surface a deterministic startup failure/recovery path instead of silently entering the main app.
 **Requirements**: GUI-DMN-01, GUI-DMN-02, GUI-DMN-03, GUI-DMN-04, GUI-DMN-05
 **Depends on:** Phase 46
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 
 - [x] 46.3-01-PLAN.md — Shared release version contract and daemon compatibility probe classification (completed 2026-03-22)
-- [ ] 46.3-02-PLAN.md — Narrow local daemon PID metadata and bounded incompatible-daemon replacement
+- [x] 46.3-02-PLAN.md — Narrow local daemon PID metadata and bounded incompatible-daemon replacement (completed 2026-03-22)
 - [ ] 46.3-03-PLAN.md — Startup state contract, window gating, and traced startup status/retry commands
 - [ ] 46.3-04-PLAN.md — Frontend startup error page, polling recovery hook, and top-level app gating
 
