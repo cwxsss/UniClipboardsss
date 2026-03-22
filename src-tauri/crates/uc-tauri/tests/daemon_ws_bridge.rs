@@ -430,9 +430,13 @@ async fn install_daemon_setup_pairing_facade_routes_bridge_events_into_setup_sub
 
     let bridge = Arc::new(DaemonWsBridge::new_for_test(
         connection_state(),
-        connector,
+        connector.clone(),
         bridge_config(4),
     ));
+    let mut pairing_rx = bridge
+        .subscribe("pairing_consumer", &[RealtimeTopic::Pairing])
+        .await
+        .expect("pairing subscription should succeed");
     let mut setup_ports = SetupAssemblyPorts {
         setup_pairing_facade: Arc::new(InitialSetupPairingFacade),
         space_access_orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
@@ -466,6 +470,10 @@ async fn install_daemon_setup_pairing_facade_routes_bridge_events_into_setup_sub
         .await
         .expect("setup subscription should receive a verification event")
         .expect("setup subscription channel should stay open");
+    let pairing_event = timeout(Duration::from_secs(1), pairing_rx.recv())
+        .await
+        .expect("pairing consumer should receive the same verification event")
+        .expect("pairing consumer channel should stay open");
 
     consumer_task.abort();
 
@@ -484,4 +492,14 @@ async fn install_daemon_setup_pairing_facade_routes_bridge_events_into_setup_sub
                 && local_fingerprint == "local-fingerprint"
                 && peer_fingerprint == "peer-fingerprint"
     ));
+    assert!(matches!(
+        pairing_event,
+        RealtimeEvent::PairingVerificationRequired(PairingVerificationRequiredEvent { session_id, code, .. })
+            if session_id == "session-setup" && code.as_deref() == Some("654321")
+    ));
+    assert_eq!(connector.connect_attempts(), 1);
+    assert_eq!(
+        connector.subscribe_requests(),
+        vec![vec!["pairing".to_string()]]
+    );
 }

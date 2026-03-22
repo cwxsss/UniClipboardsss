@@ -1185,9 +1185,6 @@ async fn run_network_realtime_loop(
 
     while let Some(event) = event_rx.recv().await {
         match event {
-            NetworkEvent::PairingMessageReceived { .. } | NetworkEvent::PairingFailed { .. } => {
-                debug!("Ignoring local pairing network event; daemon owns pairing runtime");
-            }
             NetworkEvent::PeerDiscovered(peer) => {
                 debug!(
                     peer_id = %peer.peer_id,
