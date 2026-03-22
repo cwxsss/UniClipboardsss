@@ -17,12 +17,14 @@ use uc_core::ports::realtime::{
     PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
     PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
     PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
+    SetupSpaceAccessCompletedEvent, SetupStateChangedEvent,
 };
 use uc_daemon::api::auth::DaemonConnectionInfo;
 use uc_daemon::api::types::{
     DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload,
     PairingSessionChangedPayload, PairingVerificationPayload, PeerChangedPayload,
-    PeerConnectionChangedPayload, PeerNameUpdatedPayload,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, SetupSpaceAccessCompletedPayload,
+    SetupStateChangedPayload,
 };
 
 use super::DaemonConnectionState;
@@ -502,62 +504,123 @@ impl Subscriber {
 }
 
 fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
+    let event_type = event.event_type.clone();
+    let topic = event.topic.clone();
+    let session_id = event.session_id.clone();
+
     match event.event_type.as_str() {
-        "pairing.updated" => serde_json::from_value::<PairingSessionChangedPayload>(event.payload)
-            .ok()
-            .map(|payload| {
-                RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
+        "pairing.updated" => {
+            match serde_json::from_value::<PairingSessionChangedPayload>(event.payload) {
+                Ok(payload) => Some(RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
                     session_id: payload.session_id,
                     status: payload.stage,
                     peer_id: payload.peer_id,
                     device_name: payload.device_name,
-                })
-            }),
-        "pairing.verification_required" => {
-            serde_json::from_value::<PairingVerificationPayload>(event.payload)
-                .ok()
-                .and_then(|payload| match payload.kind.as_str() {
-                    "verification" => Some(RealtimeEvent::PairingVerificationRequired(
-                        PairingVerificationRequiredEvent {
-                            session_id: payload.session_id,
-                            peer_id: payload.peer_id,
-                            device_name: payload.device_name,
-                            code: payload.code,
-                            local_fingerprint: payload.local_fingerprint,
-                            peer_fingerprint: payload.peer_fingerprint,
-                        },
-                    )),
-                    "verifying" | "request" => {
-                        Some(RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
-                            session_id: payload.session_id,
-                            status: payload.kind,
-                            peer_id: payload.peer_id,
-                            device_name: payload.device_name,
-                        }))
-                    }
-                    "complete" => Some(RealtimeEvent::PairingComplete(PairingCompleteEvent {
-                        session_id: payload.session_id,
-                        peer_id: payload.peer_id,
-                        device_name: payload.device_name,
-                    })),
-                    "failed" => Some(RealtimeEvent::PairingFailed(PairingFailedEvent {
-                        session_id: payload.session_id,
-                        reason: payload
-                            .error
-                            .unwrap_or_else(|| "pairing failed".to_string()),
-                    })),
-                    _ => None,
-                })
+                })),
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        event_type = %event_type,
+                        topic = %topic,
+                        session_id = ?session_id,
+                        "failed to decode daemon pairing.updated websocket payload"
+                    );
+                    None
+                }
+            }
         }
-        "pairing.complete" => serde_json::from_value::<PairingSessionChangedPayload>(event.payload)
-            .ok()
-            .map(|payload| {
-                RealtimeEvent::PairingComplete(PairingCompleteEvent {
+        "pairing.verification_required" => {
+            match serde_json::from_value::<PairingVerificationPayload>(event.payload) {
+                Ok(payload) => {
+                    let kind = payload.kind.clone();
+                    let has_peer_id = payload.peer_id.is_some();
+                    let has_code = payload.code.is_some();
+                    let has_local_fingerprint = payload.local_fingerprint.is_some();
+                    let has_peer_fingerprint = payload.peer_fingerprint.is_some();
+                    info!(
+                        event_type = %event_type,
+                        topic = %topic,
+                        session_id = %payload.session_id,
+                        kind = %kind,
+                        has_peer_id,
+                        has_code,
+                        has_local_fingerprint,
+                        has_peer_fingerprint,
+                        "decoded daemon pairing verification websocket payload"
+                    );
+                    match payload.kind.as_str() {
+                        "verification" => Some(RealtimeEvent::PairingVerificationRequired(
+                            PairingVerificationRequiredEvent {
+                                session_id: payload.session_id,
+                                peer_id: payload.peer_id,
+                                device_name: payload.device_name,
+                                code: payload.code,
+                                local_fingerprint: payload.local_fingerprint,
+                                peer_fingerprint: payload.peer_fingerprint,
+                            },
+                        )),
+                        "verifying" | "request" => {
+                            Some(RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
+                                session_id: payload.session_id,
+                                status: payload.kind,
+                                peer_id: payload.peer_id,
+                                device_name: payload.device_name,
+                            }))
+                        }
+                        "complete" => Some(RealtimeEvent::PairingComplete(PairingCompleteEvent {
+                            session_id: payload.session_id,
+                            peer_id: payload.peer_id,
+                            device_name: payload.device_name,
+                        })),
+                        "failed" => Some(RealtimeEvent::PairingFailed(PairingFailedEvent {
+                            session_id: payload.session_id,
+                            reason: payload
+                                .error
+                                .unwrap_or_else(|| "pairing failed".to_string()),
+                        })),
+                        _ => {
+                            warn!(
+                                event_type = %event_type,
+                                topic = %topic,
+                                session_id = ?session_id,
+                                kind = %kind,
+                                "ignored daemon pairing verification event with unsupported kind"
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        event_type = %event_type,
+                        topic = %topic,
+                        session_id = ?session_id,
+                        "failed to decode daemon pairing.verification_required websocket payload"
+                    );
+                    None
+                }
+            }
+        }
+        "pairing.complete" => {
+            match serde_json::from_value::<PairingSessionChangedPayload>(event.payload) {
+                Ok(payload) => Some(RealtimeEvent::PairingComplete(PairingCompleteEvent {
                     session_id: payload.session_id,
                     peer_id: payload.peer_id,
                     device_name: payload.device_name,
-                })
-            }),
+                })),
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        event_type = %event_type,
+                        topic = %topic,
+                        session_id = ?session_id,
+                        "failed to decode daemon pairing.complete websocket payload"
+                    );
+                    None
+                }
+            }
+        }
         "pairing.failed" => serde_json::from_value::<PairingFailurePayload>(event.payload)
             .ok()
             .map(|payload| {
@@ -609,6 +672,28 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     })
                 })
         }
+        "setup.state_changed" => serde_json::from_value::<SetupStateChangedPayload>(event.payload)
+            .ok()
+            .map(|payload| {
+                RealtimeEvent::SetupStateChanged(SetupStateChangedEvent {
+                    session_id: payload.session_id,
+                    state: serde_json::from_value(payload.state)
+                        .unwrap_or(uc_core::setup::SetupState::Welcome),
+                })
+            }),
+        "setup.space_access_completed" => {
+            serde_json::from_value::<SetupSpaceAccessCompletedPayload>(event.payload)
+                .ok()
+                .map(|payload| {
+                    RealtimeEvent::SetupSpaceAccessCompleted(SetupSpaceAccessCompletedEvent {
+                        session_id: payload.session_id,
+                        peer_id: payload.peer_id,
+                        success: payload.success,
+                        reason: payload.reason,
+                        ts: payload.ts,
+                    })
+                })
+        }
         _ => None,
     }
 }
@@ -623,6 +708,9 @@ fn event_topic(event: &RealtimeEvent) -> RealtimeTopic {
         | RealtimeEvent::PeersNameUpdated(_)
         | RealtimeEvent::PeersConnectionChanged(_) => RealtimeTopic::Peers,
         RealtimeEvent::PairedDevicesChanged(_) => RealtimeTopic::PairedDevices,
+        RealtimeEvent::SetupStateChanged(_) | RealtimeEvent::SetupSpaceAccessCompleted(_) => {
+            RealtimeTopic::Setup
+        }
     }
 }
 
@@ -631,6 +719,7 @@ fn topic_name(topic: &RealtimeTopic) -> &'static str {
         RealtimeTopic::Pairing => "pairing",
         RealtimeTopic::Peers => "peers",
         RealtimeTopic::PairedDevices => "paired-devices",
+        RealtimeTopic::Setup => "setup",
     }
 }
 

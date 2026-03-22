@@ -15,6 +15,7 @@ use uc_daemon::api::server::{build_router, DaemonApiState};
 use uc_daemon::api::types::{
     DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload, PairingVerificationPayload,
     PeerChangedPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
+    SetupStateChangedPayload,
 };
 use uc_daemon::pairing::session_projection::upsert_pairing_snapshot;
 use uc_daemon::state::RuntimeState;
@@ -406,4 +407,43 @@ async fn granular_pairing_topic_subscription_receives_session_events() {
     assert_eq!(event["type"], "pairing.updated");
     assert_eq!(event["payload"]["stage"], "request");
     assert_eq!(event["payload"]["peerId"], "peer-5");
+}
+
+#[tokio::test]
+async fn setup_topic_subscription_receives_setup_state_changed_events() {
+    let harness = spawn_server().await;
+    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    subscribe(&mut socket, &["setup"]).await;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    harness
+        .event_tx
+        .send(DaemonWsEvent {
+            topic: "setup".to_string(),
+            event_type: "setup.state_changed".to_string(),
+            session_id: Some("session-setup".to_string()),
+            ts: 8,
+            payload: serde_json::to_value(SetupStateChangedPayload {
+                session_id: Some("session-setup".to_string()),
+                state: json!({
+                    "JoinSpaceConfirmPeer": {
+                        "short_code": "123456",
+                        "peer_fingerprint": "peer-fp",
+                        "error": null
+                    }
+                }),
+            })
+            .unwrap(),
+        })
+        .unwrap();
+
+    let event = next_json(&mut socket).await;
+    harness.handle.abort();
+
+    assert_eq!(event["type"], "setup.state_changed");
+    assert_eq!(event["payload"]["sessionId"], "session-setup");
+    assert_eq!(
+        event["payload"]["state"]["JoinSpaceConfirmPeer"]["short_code"],
+        "123456"
+    );
 }

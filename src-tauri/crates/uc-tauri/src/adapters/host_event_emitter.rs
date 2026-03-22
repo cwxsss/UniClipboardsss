@@ -970,6 +970,7 @@ fn realtime_topic_to_str(topic: &RealtimeTopic) -> &'static str {
         RealtimeTopic::Pairing => "pairing",
         RealtimeTopic::Peers => "peers",
         RealtimeTopic::PairedDevices => "pairedDevices",
+        RealtimeTopic::Setup => "setup",
     }
 }
 

@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+use crate::setup::SetupState;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RealtimeTopic {
     Pairing,
     Peers,
     PairedDevices,
+    Setup,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +79,22 @@ pub struct PairedDevicesChangedEvent {
     pub devices: Vec<RealtimePairedDeviceSummary>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetupStateChangedEvent {
+    pub session_id: Option<String>,
+    pub state: SetupState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupSpaceAccessCompletedEvent {
+    pub session_id: String,
+    pub peer_id: String,
+    pub success: bool,
+    pub reason: Option<String>,
+    pub ts: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum RealtimeEvent {
     PairingUpdated(PairingUpdatedEvent),
     PairingVerificationRequired(PairingVerificationRequiredEvent),
@@ -86,6 +104,8 @@ pub enum RealtimeEvent {
     PeersNameUpdated(PeerNameUpdatedEvent),
     PeersConnectionChanged(PeerConnectionChangedEvent),
     PairedDevicesChanged(PairedDevicesChangedEvent),
+    SetupStateChanged(SetupStateChangedEvent),
+    SetupSpaceAccessCompleted(SetupSpaceAccessCompletedEvent),
 }
 
 pub const FRONTEND_REALTIME_EVENT: &str = "daemon://realtime";

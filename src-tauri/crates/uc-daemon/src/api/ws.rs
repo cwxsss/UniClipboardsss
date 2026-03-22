@@ -29,6 +29,7 @@ const TOPIC_PAIRED_DEVICES: &str = "paired-devices";
 const TOPIC_PAIRING: &str = "pairing";
 const TOPIC_PAIRING_SESSION: &str = "pairing/session";
 const TOPIC_PAIRING_VERIFICATION: &str = "pairing/verification";
+const TOPIC_SETUP: &str = "setup";
 
 const STATUS_SNAPSHOT_EVENT: &str = "status.snapshot";
 const PEERS_SNAPSHOT_EVENT: &str = "peers.snapshot";
@@ -194,6 +195,7 @@ fn is_supported_topic(topic: &str) -> bool {
             | TOPIC_PAIRING
             | TOPIC_PAIRING_SESSION
             | TOPIC_PAIRING_VERIFICATION
+            | TOPIC_SETUP
     )
 }
 
@@ -243,6 +245,7 @@ async fn build_snapshot_event(
         )
         .map(Some),
         TOPIC_PAIRING_VERIFICATION => Ok(None),
+        TOPIC_SETUP => Ok(None),
         unsupported => anyhow::bail!("unsupported websocket topic: {unsupported}"),
     }
 }
