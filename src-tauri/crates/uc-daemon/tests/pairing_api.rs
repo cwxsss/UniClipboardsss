@@ -3,11 +3,15 @@ use std::sync::{Mutex, OnceLock};
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+use chrono::Utc;
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, RwLock};
 use tower::ServiceExt;
+use uc_app::runtime::CoreRuntime;
+use uc_app::usecases::CoreUseCases;
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::{build_non_gui_runtime_with_setup, builders::build_daemon_app};
+use uc_core::network::{PairedDevice, PairingState};
 use uc_daemon::api::auth::load_or_create_auth_token;
 use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::server::{build_router, DaemonApiState};
@@ -15,7 +19,13 @@ use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::pairing::host::DaemonPairingHost;
 use uc_daemon::state::RuntimeState;
 
-fn build_api_router() -> (axum::Router, String) {
+struct PairingApiFixture {
+    app: axum::Router,
+    token: String,
+    runtime: Arc<CoreRuntime>,
+}
+
+fn build_api_fixture() -> PairingApiFixture {
     static RUNTIME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let _guard = RUNTIME_LOCK
         .get_or_init(|| Mutex::new(()))
@@ -47,7 +57,7 @@ fn build_api_router() -> (axum::Router, String) {
     let token_value = std::fs::read_to_string(&token_path).unwrap();
     let (event_tx, _event_rx) = broadcast::channel::<DaemonWsEvent>(128);
     let pairing_host = Arc::new(DaemonPairingHost::new(
-        runtime,
+        runtime.clone(),
         ctx.pairing_orchestrator,
         ctx.pairing_action_rx,
         state,
@@ -55,12 +65,28 @@ fn build_api_router() -> (axum::Router, String) {
         ctx.key_slot_store,
         event_tx,
     ));
-    let api_state = DaemonApiState::new(query_service, token, None).with_pairing_host(pairing_host);
-    (build_router(api_state), token_value)
+    let api_state = DaemonApiState::new(query_service, token, Some(runtime.clone()))
+        .with_pairing_host(pairing_host);
+    PairingApiFixture {
+        app: build_router(api_state),
+        token: token_value,
+        runtime,
+    }
+}
+
+fn build_api_router() -> (axum::Router, String) {
+    let fixture = build_api_fixture();
+    (fixture.app, fixture.token)
 }
 
 async fn build_api_router_async() -> (axum::Router, String) {
     tokio::task::spawn_blocking(build_api_router)
+        .await
+        .expect("pairing api fixture join failed")
+}
+
+async fn build_api_fixture_async() -> PairingApiFixture {
+    tokio::task::spawn_blocking(build_api_fixture)
         .await
         .expect("pairing api fixture join failed")
 }
@@ -182,6 +208,18 @@ async fn gui_lease(app: &axum::Router, token: &str, enabled: bool) -> axum::resp
         ))
         .await
         .unwrap()
+}
+
+fn test_paired_device(peer_id: &str) -> PairedDevice {
+    PairedDevice {
+        peer_id: peer_id.into(),
+        pairing_state: PairingState::Trusted,
+        identity_fingerprint: "fingerprint-test".to_string(),
+        paired_at: Utc::now(),
+        last_seen_at: None,
+        device_name: "Remote Device".to_string(),
+        sync_settings: None,
+    }
 }
 
 #[tokio::test]
@@ -372,4 +410,74 @@ async fn pairing_api_v2_returns_404_for_unknown_accept_session() {
 
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["code"], "session_not_found");
+}
+
+#[tokio::test]
+async fn pairing_unpair_route_unpairs_device_via_daemon_usecase() {
+    let fixture = build_api_fixture_async().await;
+    CoreUseCases::new(fixture.runtime.as_ref())
+        .start_network()
+        .execute()
+        .await
+        .expect("start network for unpair route fixture");
+    let local_peer_id = CoreUseCases::new(fixture.runtime.as_ref())
+        .get_local_device_info()
+        .execute()
+        .await
+        .expect("local device info should load")
+        .peer_id;
+    let peer_id = if local_peer_id == "12D3KooWRkw1xHve9tp9KjBKWDC7oMqwY8Y7FuPMBcUvr7G7q42T" {
+        "12D3KooWPNHngjzbB6MkDnLPrm89g43hHZq94zX94dsZAwHrvS2S"
+    } else {
+        "12D3KooWRkw1xHve9tp9KjBKWDC7oMqwY8Y7FuPMBcUvr7G7q42T"
+    };
+    let repo = fixture
+        .runtime
+        .wiring_deps()
+        .device
+        .paired_device_repo
+        .clone();
+    repo.upsert(test_paired_device(peer_id))
+        .await
+        .expect("seed paired device");
+
+    let usecases = CoreUseCases::new(fixture.runtime.as_ref());
+    let before = usecases
+        .list_paired_devices()
+        .execute()
+        .await
+        .expect("list paired devices before unpair");
+    assert!(
+        before
+            .iter()
+            .any(|device| device.peer_id.as_str() == peer_id),
+        "seeded paired device should exist before unpair route"
+    );
+
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/pairing/unpair",
+            &fixture.token,
+            Body::from(json!({ "peerId": peer_id }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("unpair request should complete");
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let after = usecases
+        .list_paired_devices()
+        .execute()
+        .await
+        .expect("list paired devices after unpair");
+    assert!(
+        after
+            .iter()
+            .all(|device| device.peer_id.as_str() != peer_id),
+        "daemon unpair route should remove paired device from runtime state"
+    );
 }

@@ -7,6 +7,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::time::{sleep, Duration, Instant};
 use tower::ServiceExt;
 use uc_app::runtime::CoreRuntime;
 use uc_app::testing::{
@@ -18,13 +19,19 @@ use uc_app::usecases::app_lifecycle::{AppLifecycleCoordinator, AppLifecycleCoord
 use uc_app::usecases::pairing::PairingDomainEvent;
 use uc_app::usecases::setup::{MarkSetupComplete, SetupPairingFacadePort};
 use uc_app::usecases::space_access::{SpaceAccessCryptoFactory, SpaceAccessOrchestrator};
-use uc_app::usecases::{InitializeEncryption, SetupOrchestrator, StartClipboardWatcherPort};
+use uc_app::usecases::{
+    CoreUseCases, InitializeEncryption, SetupOrchestrator, StartClipboardWatcherPort,
+};
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_cli_runtime;
 use uc_bootstrap::{build_non_gui_runtime_with_setup, builders::build_daemon_app};
+use uc_core::network::PairingRequest;
 use uc_core::ports::space::CryptoPort;
 use uc_core::ports::SetupStatusPort;
-use uc_core::security::model::{KeySlot, MasterKey};
+use uc_core::security::model::{
+    EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion, KdfAlgorithm, KdfParams, KdfParamsV1,
+    KeyScope, KeySlot, KeySlotFile, KeySlotVersion, MasterKey,
+};
 use uc_core::setup::SetupStatus;
 use uc_daemon::api::auth::load_or_create_auth_token;
 use uc_daemon::api::query::DaemonQueryService;
@@ -32,6 +39,7 @@ use uc_daemon::api::server::{build_router, DaemonApiState};
 use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::pairing::host::DaemonPairingHost;
 use uc_daemon::state::RuntimeState;
+use uc_platform::ports::{WatcherControlError, WatcherControlPort};
 
 fn build_runtime() -> Arc<CoreRuntime> {
     static RUNTIME: OnceLock<Arc<CoreRuntime>> = OnceLock::new();
@@ -121,7 +129,7 @@ fn build_reset_router() -> (axum::Router, String) {
                 ctx.deps,
                 ctx.storage_paths.clone(),
                 setup_ports,
-                ctx.watcher_control.clone(),
+                Arc::new(NoopWatcherControl),
             )
             .expect("build non-gui runtime with setup"),
         );
@@ -156,6 +164,18 @@ async fn build_reset_router_async() -> (axum::Router, String) {
 }
 
 fn build_setup_orchestrator(runtime: Arc<CoreRuntime>) -> Arc<SetupOrchestrator> {
+    build_setup_orchestrator_with_overrides(
+        runtime,
+        Arc::new(FakeSetupPairingFacade::default()),
+        Arc::new(NoopSpaceAccessCryptoFactory),
+    )
+}
+
+fn build_setup_orchestrator_with_overrides(
+    runtime: Arc<CoreRuntime>,
+    setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
+    crypto_factory: Arc<dyn SpaceAccessCryptoFactory>,
+) -> Arc<SetupOrchestrator> {
     let wiring = runtime.wiring_deps();
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         wiring.security.encryption.clone(),
@@ -172,12 +192,12 @@ fn build_setup_orchestrator(runtime: Arc<CoreRuntime>) -> Arc<SetupOrchestrator>
         mark_setup_complete,
         setup_status,
         build_mock_lifecycle(),
-        Arc::new(FakeSetupPairingFacade::default()),
+        setup_pairing_facade,
         Arc::new(NoopSetupEventPort),
         Arc::new(SpaceAccessOrchestrator::new()),
         Arc::new(NoopDiscoveryPort),
         Arc::new(NoopNetworkControl),
-        Arc::new(NoopSpaceAccessCryptoFactory),
+        crypto_factory,
         Arc::new(NoopPairingTransport),
         Arc::new(Mutex::new(NoopSpaceAccessTransport)),
         Arc::new(NoopProofPort),
@@ -326,6 +346,278 @@ impl SetupPairingFacadePort for FakeSetupPairingFacade {
     }
 }
 
+#[derive(Clone)]
+struct RecordingSetupPairingFacade {
+    session_id: String,
+    tx: mpsc::Sender<PairingDomainEvent>,
+    rx: Arc<Mutex<Option<mpsc::Receiver<PairingDomainEvent>>>>,
+    accepted_sessions: Arc<StdMutex<Vec<String>>>,
+}
+
+impl RecordingSetupPairingFacade {
+    fn new(session_id: &str) -> Self {
+        let (tx, rx) = mpsc::channel(8);
+        Self {
+            session_id: session_id.to_string(),
+            tx,
+            rx: Arc::new(Mutex::new(Some(rx))),
+            accepted_sessions: Arc::new(StdMutex::new(Vec::new())),
+        }
+    }
+
+    async fn emit(&self, event: PairingDomainEvent) {
+        self.tx
+            .send(event)
+            .await
+            .expect("pairing event should send to setup subscriber");
+    }
+
+    fn accepted_sessions(&self) -> Vec<String> {
+        self.accepted_sessions
+            .lock()
+            .expect("accepted sessions lock")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl SetupPairingFacadePort for RecordingSetupPairingFacade {
+    async fn subscribe(&self) -> Result<mpsc::Receiver<PairingDomainEvent>> {
+        self.rx
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("pairing event receiver already taken"))
+    }
+
+    async fn initiate_pairing(&self, _peer_id: String) -> Result<String> {
+        Ok(self.session_id.clone())
+    }
+
+    async fn accept_pairing(&self, session_id: &str) -> Result<()> {
+        self.accepted_sessions
+            .lock()
+            .expect("accepted sessions lock")
+            .push(session_id.to_string());
+        Ok(())
+    }
+
+    async fn reject_pairing(&self, _session_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn cancel_pairing(&self, _session_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn verify_pairing(&self, _session_id: &str, _pin_matches: bool) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct WorkingSpaceAccessCryptoFactory;
+
+impl SpaceAccessCryptoFactory for WorkingSpaceAccessCryptoFactory {
+    fn build(&self, _passphrase: uc_core::security::SecretString) -> Box<dyn CryptoPort> {
+        Box::new(WorkingSpaceAccessCrypto)
+    }
+}
+
+struct WorkingSpaceAccessCrypto;
+
+#[async_trait]
+impl CryptoPort for WorkingSpaceAccessCrypto {
+    async fn generate_nonce32(&self) -> [u8; 32] {
+        [7u8; 32]
+    }
+
+    async fn export_keyslot_blob(&self, _space_id: &uc_core::ids::SpaceId) -> Result<KeySlot> {
+        Err(anyhow::anyhow!(
+            "working test crypto does not export keyslots"
+        ))
+    }
+
+    async fn derive_master_key_from_keyslot(
+        &self,
+        _keyslot_blob: &[u8],
+        _passphrase: uc_core::security::SecretString,
+    ) -> Result<MasterKey> {
+        MasterKey::from_bytes(&[5u8; 32]).map_err(anyhow::Error::from)
+    }
+}
+
+struct JoinSetupFixture {
+    app: axum::Router,
+    token: String,
+    facade: Arc<RecordingSetupPairingFacade>,
+}
+
+struct HostSetupFixture {
+    app: axum::Router,
+    token: String,
+    runtime: Arc<CoreRuntime>,
+    pairing_host: Arc<DaemonPairingHost>,
+    state: Arc<RwLock<RuntimeState>>,
+}
+
+fn sample_keyslot_file(profile_id: &str) -> KeySlotFile {
+    KeySlotFile {
+        version: KeySlotVersion::V1,
+        scope: KeyScope {
+            profile_id: profile_id.to_string(),
+        },
+        kdf: KdfParams {
+            alg: KdfAlgorithm::Argon2id,
+            params: KdfParamsV1 {
+                mem_kib: 1024,
+                iters: 2,
+                parallelism: 1,
+            },
+        },
+        salt: vec![1, 2, 3, 4],
+        wrapped_master_key: EncryptedBlob {
+            version: EncryptionFormatVersion::V1,
+            aead: EncryptionAlgo::XChaCha20Poly1305,
+            nonce: vec![9; 24],
+            ciphertext: vec![7; 32],
+            aad_fingerprint: None,
+        },
+        created_at: None,
+        updated_at: None,
+    }
+}
+
+fn inbound_request(session_id: &str, local_peer_id: &str) -> PairingRequest {
+    PairingRequest {
+        session_id: session_id.to_string(),
+        device_name: "Remote Device".to_string(),
+        device_id: "remote-device-id".to_string(),
+        peer_id: local_peer_id.to_string(),
+        identity_pubkey: vec![1, 2, 3],
+        nonce: vec![7; 32],
+    }
+}
+
+fn build_join_setup_fixture() -> JoinSetupFixture {
+    static TEST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let _guard = TEST_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let runtime = build_runtime();
+    let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
+    let query_service = Arc::new(DaemonQueryService::new(runtime.clone(), state));
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let token_path = tempdir.path().join("daemon.token");
+    let token = load_or_create_auth_token(&token_path).expect("load auth token");
+    let token_value = std::fs::read_to_string(token_path).expect("read auth token");
+    let facade = Arc::new(RecordingSetupPairingFacade::new("session-test"));
+    let setup_orchestrator = build_setup_orchestrator_with_overrides(
+        runtime,
+        facade.clone(),
+        Arc::new(WorkingSpaceAccessCryptoFactory),
+    );
+    let api_state = DaemonApiState::new(query_service, token, None).with_setup(setup_orchestrator);
+
+    JoinSetupFixture {
+        app: build_router(api_state),
+        token: token_value,
+        facade,
+    }
+}
+
+async fn build_join_setup_fixture_async() -> JoinSetupFixture {
+    tokio::task::spawn_blocking(build_join_setup_fixture)
+        .await
+        .expect("join setup fixture join failed")
+}
+
+fn build_host_setup_fixture() -> HostSetupFixture {
+    static RUNTIME_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+    let _guard = RUNTIME_LOCK
+        .get_or_init(|| StdMutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let profile = format!(
+        "setup-api-host-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos()
+    );
+
+    with_profile_env(&profile, tempdir.path(), || {
+        let ctx = build_daemon_app().expect("build daemon app");
+        let setup_ports = SetupAssemblyPorts::from_network(
+            ctx.pairing_orchestrator.clone(),
+            ctx.space_access_orchestrator.clone(),
+            ctx.deps.network_ports.peers.clone(),
+            None,
+            Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
+        );
+        let runtime = Arc::new(
+            build_non_gui_runtime_with_setup(
+                ctx.deps,
+                ctx.storage_paths.clone(),
+                setup_ports,
+                Arc::new(NoopWatcherControl),
+            )
+            .expect("build non-gui runtime with setup"),
+        );
+        let setup_orchestrator = runtime.setup_orchestrator().clone();
+        let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
+        let query_service = Arc::new(DaemonQueryService::new(runtime.clone(), state.clone()));
+        let token_dir = tempfile::tempdir().expect("token tempdir");
+        let token_path = token_dir.path().join("daemon.token");
+        let token = load_or_create_auth_token(&token_path).expect("load auth token");
+        let token_value = std::fs::read_to_string(&token_path).expect("read auth token");
+        let (event_tx, _event_rx) = tokio::sync::broadcast::channel::<DaemonWsEvent>(128);
+        let pairing_host = Arc::new(DaemonPairingHost::new(
+            runtime.clone(),
+            ctx.pairing_orchestrator,
+            ctx.pairing_action_rx,
+            state.clone(),
+            ctx.space_access_orchestrator,
+            ctx.key_slot_store,
+            event_tx,
+        ));
+        let api_state = DaemonApiState::new(query_service, token, Some(runtime.clone()))
+            .with_setup(setup_orchestrator)
+            .with_pairing_host(pairing_host.clone());
+
+        HostSetupFixture {
+            app: build_router(api_state),
+            token: token_value,
+            runtime,
+            pairing_host,
+            state,
+        }
+    })
+}
+
+async fn build_host_setup_fixture_async() -> HostSetupFixture {
+    tokio::task::spawn_blocking(build_host_setup_fixture)
+        .await
+        .expect("host setup fixture join failed")
+}
+
+struct NoopWatcherControl;
+
+#[async_trait]
+impl WatcherControlPort for NoopWatcherControl {
+    async fn start_watcher(&self) -> Result<(), WatcherControlError> {
+        Ok(())
+    }
+
+    async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
+        Ok(())
+    }
+}
+
 struct NoopStartClipboardWatcher;
 
 #[async_trait]
@@ -361,6 +653,46 @@ impl CryptoPort for NoopSpaceAccessCrypto {
         _passphrase: uc_core::security::SecretString,
     ) -> Result<MasterKey> {
         Err(anyhow::anyhow!("noop derive_master_key_from_keyslot"))
+    }
+}
+
+async fn wait_for_setup_state(
+    app: &axum::Router,
+    token: &str,
+    predicate: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let state = get_setup_state(app, token).await;
+        if predicate(&state["state"]) {
+            return state;
+        }
+
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for expected setup state, last state: {state}"
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_setup_response(
+    app: &axum::Router,
+    token: &str,
+    predicate: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let response = get_setup_state(app, token).await;
+        if predicate(&response) {
+            return response;
+        }
+
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for expected setup response, last response: {response}"
+        );
+        sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -508,6 +840,189 @@ async fn setup_submit_passphrase_route_rejects_malformed_payload() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = json_body(response).await;
     assert_eq!(body["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn setup_confirm_peer_routes_host_confirmation_through_daemon_pairing_host() {
+    let fixture = build_host_setup_fixture_async().await;
+
+    let host_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/host",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("setup host request should succeed");
+    assert_eq!(host_response.status(), StatusCode::OK);
+
+    let passphrase_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/submit-passphrase",
+            &fixture.token,
+            Body::from(json!({ "passphrase": "secret-passphrase" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("setup submit passphrase should succeed for host flow");
+    assert_eq!(passphrase_response.status(), StatusCode::OK);
+
+    let local_peer_id = CoreUseCases::new(fixture.runtime.as_ref())
+        .get_local_device_info()
+        .execute()
+        .await
+        .expect("local device info should load")
+        .peer_id;
+    fixture
+        .pairing_host
+        .set_discoverability("gui".to_string(), true, Some(60_000))
+        .await;
+    fixture
+        .pairing_host
+        .set_participant_ready("gui".to_string(), true, Some(60_000))
+        .await;
+    fixture
+        .pairing_host
+        .handle_incoming_request(
+            "peer-remote".to_string(),
+            inbound_request("session-host-confirm", &local_peer_id),
+        )
+        .await
+        .expect("daemon pairing host should accept inbound request fixture");
+
+    let pending_state = wait_for_setup_response(&fixture.app, &fixture.token, |response| {
+        response["nextStepHint"] == Value::String("host-confirm-peer".to_string())
+            && response["sessionId"] == Value::String("session-host-confirm".to_string())
+    })
+    .await;
+    assert_eq!(pending_state["nextStepHint"], "host-confirm-peer");
+
+    let confirm_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/confirm-peer",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("setup confirm peer request should succeed");
+
+    assert_eq!(confirm_response.status(), StatusCode::OK);
+    let body = json_body(confirm_response).await;
+    assert_eq!(body["nextStepHint"], "completed");
+
+    let guard = fixture.state.read().await;
+    let snapshot = guard
+        .pairing_session("session-host-confirm")
+        .expect("pairing snapshot should remain available");
+    assert_eq!(snapshot.state, "verifying");
+}
+
+#[tokio::test]
+async fn setup_submit_passphrase_routes_join_passphrase_through_verify_passphrase() {
+    let fixture = build_join_setup_fixture_async().await;
+
+    let join_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/join",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("setup join request should succeed");
+    assert_eq!(join_response.status(), StatusCode::OK);
+
+    let select_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/select-peer",
+            &fixture.token,
+            Body::from(json!({ "peerId": "peer-remote" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("setup select peer request should succeed");
+    assert_eq!(select_response.status(), StatusCode::OK);
+
+    fixture
+        .facade
+        .emit(PairingDomainEvent::PairingVerificationRequired {
+            session_id: "session-test".to_string(),
+            peer_id: "peer-remote".to_string(),
+            short_code: "123456".to_string(),
+            local_fingerprint: "local-fingerprint".to_string(),
+            peer_fingerprint: "peer-fingerprint".to_string(),
+        })
+        .await;
+
+    wait_for_setup_state(&fixture.app, &fixture.token, |state| {
+        state.get("JoinSpaceConfirmPeer").is_some()
+    })
+    .await;
+
+    let confirm_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/confirm-peer",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("join confirm peer should succeed");
+    assert_eq!(confirm_response.status(), StatusCode::OK);
+    let confirm_body = json_body(confirm_response).await;
+    assert!(confirm_body["state"]["JoinSpaceInputPassphrase"]["error"].is_null());
+    assert_eq!(
+        fixture.facade.accepted_sessions(),
+        vec!["session-test".to_string()]
+    );
+
+    fixture
+        .facade
+        .emit(PairingDomainEvent::KeyslotReceived {
+            session_id: "session-test".to_string(),
+            peer_id: "peer-remote".to_string(),
+            keyslot_file: sample_keyslot_file("join-space"),
+            challenge: vec![3; 32],
+        })
+        .await;
+
+    let submit_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/submit-passphrase",
+            &fixture.token,
+            Body::from(json!({ "passphrase": "secret-passphrase" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("join submit passphrase should succeed");
+
+    assert_eq!(submit_response.status(), StatusCode::OK);
+    let submit_body = json_body(submit_response).await;
+    assert!(submit_body["state"]["ProcessingJoinSpace"]["message"].is_string());
+    assert_eq!(submit_body["nextStepHint"], "join-waiting-for-host");
 }
 
 #[tokio::test]

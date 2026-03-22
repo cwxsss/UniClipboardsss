@@ -30,6 +30,7 @@ tracing = "0.1"
 futures-util = "0.3"
 
 [dev-dependencies]
+uc-platform = { path = "../uc-platform" }
 tempfile = "3"
 chrono = { version = "0.4", default-features = true }
 tower = { version = "0.5", features = ["util"] }
