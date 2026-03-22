@@ -1,3 +1,4 @@
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +10,7 @@ use uc_tauri::bootstrap::run::{
     bootstrap_daemon_connection_with_hooks, DaemonBootstrapError, ProbeOutcome,
 };
 use uc_tauri::bootstrap::runtime::{DaemonBootstrapOwnershipState, DaemonConnectionState};
+use uc_tauri::bootstrap::{GuiOwnedDaemonState, SpawnReason};
 
 fn compatible_health() -> HealthResponse {
     HealthResponse {
@@ -26,10 +28,21 @@ fn fixed_connection_info() -> DaemonConnectionInfo {
     }
 }
 
+fn spawn_test_child() -> Child {
+    Command::new(std::env::current_exe().expect("current test binary"))
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn test child")
+}
+
 #[tokio::test]
 async fn daemon_bootstrap_replaces_incompatible_daemon_once() {
     let state = DaemonConnectionState::default();
     let ownership = DaemonBootstrapOwnershipState::default();
+    let gui_owned_daemon_state = GuiOwnedDaemonState::default();
     let spawn_calls = Arc::new(AtomicUsize::new(0));
     let terminate_calls = Arc::new(AtomicUsize::new(0));
     let probe_step = Arc::new(AtomicUsize::new(0));
@@ -38,11 +51,12 @@ async fn daemon_bootstrap_replaces_incompatible_daemon_once() {
     let result = bootstrap_daemon_connection_with_hooks(
         &state,
         &ownership,
+        &gui_owned_daemon_state,
         {
             let spawn_calls = Arc::clone(&spawn_calls);
             move || {
                 spawn_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(Some(4242))
+                Ok(Some(spawn_test_child()))
             }
         },
         {
@@ -84,28 +98,46 @@ async fn daemon_bootstrap_replaces_incompatible_daemon_once() {
 
     let snapshot = ownership.snapshot();
     assert_eq!(snapshot.replacement_attempt, 1);
-    assert_eq!(snapshot.spawned_child_pid, Some(4242));
+    assert_eq!(
+        snapshot.spawned_child_pid,
+        gui_owned_daemon_state.snapshot_pid()
+    );
     assert_eq!(
         snapshot.last_incompatible_reason.as_deref(),
         Some("stale daemon build")
     );
+
+    let owned_pid = gui_owned_daemon_state
+        .snapshot_pid()
+        .expect("replacement path should register GUI-owned daemon");
+    let owned_child = gui_owned_daemon_state
+        .clear()
+        .expect("replacement child should be stored");
+    assert_eq!(owned_child.pid, owned_pid);
+    assert_eq!(owned_child.spawn_reason, SpawnReason::Replacement);
+
+    let mut child = owned_child.child;
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[tokio::test]
 async fn daemon_bootstrap_fails_after_bounded_replacement_attempt() {
     let state = DaemonConnectionState::default();
     let ownership = DaemonBootstrapOwnershipState::default();
+    let gui_owned_daemon_state = GuiOwnedDaemonState::default();
     let spawn_calls = Arc::new(AtomicUsize::new(0));
     let terminate_calls = Arc::new(AtomicUsize::new(0));
 
     let result = bootstrap_daemon_connection_with_hooks(
         &state,
         &ownership,
+        &gui_owned_daemon_state,
         {
             let spawn_calls = Arc::clone(&spawn_calls);
             move || {
                 spawn_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(Some(5150))
+                Ok(Some(spawn_test_child()))
             }
         },
         move || async {
@@ -145,12 +177,14 @@ async fn daemon_bootstrap_fails_after_bounded_replacement_attempt() {
         snapshot.last_incompatible_reason.as_deref(),
         Some("legacy daemon refused compatibility")
     );
+    assert_eq!(gui_owned_daemon_state.snapshot_pid(), None);
 }
 
 #[tokio::test]
 async fn daemon_bootstrap_does_not_replace_when_probe_is_absent() {
     let state = DaemonConnectionState::default();
     let ownership = DaemonBootstrapOwnershipState::default();
+    let gui_owned_daemon_state = GuiOwnedDaemonState::default();
     let spawn_calls = Arc::new(AtomicUsize::new(0));
     let terminate_calls = Arc::new(AtomicUsize::new(0));
     let probe_step = Arc::new(AtomicUsize::new(0));
@@ -159,11 +193,12 @@ async fn daemon_bootstrap_does_not_replace_when_probe_is_absent() {
     let result = bootstrap_daemon_connection_with_hooks(
         &state,
         &ownership,
+        &gui_owned_daemon_state,
         {
             let spawn_calls = Arc::clone(&spawn_calls);
             move || {
                 spawn_calls.fetch_add(1, Ordering::SeqCst);
-                Ok(Some(9898))
+                Ok(Some(spawn_test_child()))
             }
         },
         {
@@ -199,6 +234,18 @@ async fn daemon_bootstrap_does_not_replace_when_probe_is_absent() {
 
     let snapshot = ownership.snapshot();
     assert_eq!(snapshot.replacement_attempt, 0);
-    assert_eq!(snapshot.spawned_child_pid, Some(9898));
+    assert_eq!(
+        snapshot.spawned_child_pid,
+        gui_owned_daemon_state.snapshot_pid()
+    );
     assert!(snapshot.last_incompatible_reason.is_none());
+
+    let owned_child = gui_owned_daemon_state
+        .clear()
+        .expect("absent path should register GUI-owned daemon");
+    assert_eq!(owned_child.spawn_reason, SpawnReason::Absent);
+
+    let mut child = owned_child.child;
+    let _ = child.kill();
+    let _ = child.wait();
 }

@@ -22,6 +22,7 @@ use uc_platform::runtime::runtime::PlatformRuntime;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
     install_daemon_setup_pairing_facade, start_background_tasks, AppRuntime, DaemonConnectionState,
+    GuiOwnedDaemonState,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -325,6 +326,7 @@ fn run_app(ctx: GuiBootstrapContext) {
     } = ctx;
 
     let daemon_connection_state = DaemonConnectionState::default();
+    let gui_owned_daemon_state = GuiOwnedDaemonState::default();
     let mut setup_ports = setup_ports;
     let setup_pairing_event_hub =
         install_daemon_setup_pairing_facade(&mut setup_ports, daemon_connection_state.clone());
@@ -367,6 +369,7 @@ fn run_app(ctx: GuiBootstrapContext) {
         // Register AppRuntime for Tauri commands
         .manage(runtime_for_tauri)
         .manage(DaemonConnectionState::clone(&daemon_connection_state))
+        .manage(GuiOwnedDaemonState::clone(&gui_owned_daemon_state))
         .manage(TrayState::default())
         .manage(task_registry.clone())
         .on_window_event(|window, event| {
@@ -463,10 +466,16 @@ fn run_app(ctx: GuiBootstrapContext) {
             info!("Event emitter swapped to TauriEventEmitter");
 
             let daemon_connection_state_for_setup = daemon_connection_state.clone();
+            let gui_owned_daemon_state_for_setup = gui_owned_daemon_state.clone();
             let startup_barrier_for_daemon = startup_barrier.clone();
             let app_handle_for_daemon = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match bootstrap_daemon_connection(&daemon_connection_state_for_setup).await {
+                match bootstrap_daemon_connection(
+                    &daemon_connection_state_for_setup,
+                    &gui_owned_daemon_state_for_setup,
+                )
+                .await
+                {
                     Ok(_connection_info) => {
                         if let Err(error) = emit_daemon_connection_info_if_ready(
                             &app_handle_for_daemon,

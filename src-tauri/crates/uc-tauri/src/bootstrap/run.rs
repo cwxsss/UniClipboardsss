@@ -12,6 +12,7 @@ use uc_daemon::process_metadata::read_pid_file;
 use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr};
 use uc_daemon::DAEMON_API_REVISION;
 
+use super::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
 use super::runtime::{DaemonBootstrapOwnershipState, DaemonConnectionState};
 use crate::commands::startup::StartupBarrier;
 
@@ -75,6 +76,7 @@ impl From<&DaemonConnectionInfo> for DaemonConnectionPayload {
 
 pub async fn bootstrap_daemon_connection(
     state: &DaemonConnectionState,
+    gui_owned_daemon_state: &GuiOwnedDaemonState,
 ) -> Result<DaemonConnectionInfo, DaemonBootstrapError> {
     let client = reqwest::Client::builder()
         .timeout(PROBE_TIMEOUT)
@@ -89,7 +91,8 @@ pub async fn bootstrap_daemon_connection(
     bootstrap_daemon_connection_with_hooks(
         state,
         &ownership,
-        || spawn_daemon_process().map(|child| Some(child.id())),
+        gui_owned_daemon_state,
+        || spawn_daemon_process().map(Some),
         || probe_daemon_health(&client),
         load_daemon_connection_info,
         terminate_incompatible_daemon_from_pid_file,
@@ -144,6 +147,7 @@ pub async fn bootstrap_daemon_connection_with_hooks<
 >(
     state: &DaemonConnectionState,
     ownership: &DaemonBootstrapOwnershipState,
+    gui_owned_daemon_state: &GuiOwnedDaemonState,
     mut spawn: Spawn,
     mut probe: Probe,
     load_connection_info: LoadInfo,
@@ -153,27 +157,32 @@ pub async fn bootstrap_daemon_connection_with_hooks<
     poll_interval: Duration,
 ) -> Result<DaemonConnectionInfo, DaemonBootstrapError>
 where
-    Spawn: FnMut() -> Result<Option<u32>, DaemonBootstrapError>,
+    Spawn: FnMut() -> Result<Option<Child>, DaemonBootstrapError>,
     Probe: FnMut() -> ProbeFuture,
     ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
     LoadInfo: Fn() -> Result<DaemonConnectionInfo, DaemonBootstrapError>,
     Terminate: FnMut() -> Result<(), DaemonBootstrapError>,
 {
     match probe().await? {
-        ProbeOutcome::Compatible(_) => {}
+        ProbeOutcome::Compatible(_) => {
+            let _ = gui_owned_daemon_state.clear();
+        }
         ProbeOutcome::Absent => {
             spawn_and_wait_for_compatible(
                 ownership,
+                gui_owned_daemon_state,
                 &mut spawn,
                 &mut probe,
                 timeout,
                 poll_interval,
+                SpawnReason::Absent,
             )
             .await?;
         }
         ProbeOutcome::Incompatible { details, .. } => {
             replace_incompatible_daemon(
                 ownership,
+                gui_owned_daemon_state,
                 details,
                 &mut terminate_incompatible,
                 &mut spawn,
@@ -193,23 +202,41 @@ where
 
 async fn spawn_and_wait_for_compatible<Spawn, Probe, ProbeFuture>(
     ownership: &DaemonBootstrapOwnershipState,
+    gui_owned_daemon_state: &GuiOwnedDaemonState,
     spawn: &mut Spawn,
     probe: &mut Probe,
     timeout: Duration,
     poll_interval: Duration,
+    spawn_reason: SpawnReason,
 ) -> Result<(), DaemonBootstrapError>
 where
-    Spawn: FnMut() -> Result<Option<u32>, DaemonBootstrapError>,
+    Spawn: FnMut() -> Result<Option<Child>, DaemonBootstrapError>,
     Probe: FnMut() -> ProbeFuture,
     ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
 {
-    let child_pid = spawn()?;
-    ownership.record_spawned_child(child_pid);
-    wait_for_daemon_health(probe, timeout, poll_interval).await
+    match spawn()? {
+        Some(child) => {
+            let child_pid = child.id();
+            gui_owned_daemon_state.record_spawned(child, spawn_reason);
+            ownership.record_spawned_child(Some(child_pid));
+        }
+        None => {
+            let _ = gui_owned_daemon_state.clear();
+            ownership.clear_spawned_child();
+        }
+    }
+
+    let wait_result = wait_for_daemon_health(probe, timeout, poll_interval).await;
+    if wait_result.is_err() {
+        let _ = gui_owned_daemon_state.clear();
+        ownership.clear_spawned_child();
+    }
+    wait_result
 }
 
 async fn replace_incompatible_daemon<Terminate, Spawn, Probe, ProbeFuture>(
     ownership: &DaemonBootstrapOwnershipState,
+    gui_owned_daemon_state: &GuiOwnedDaemonState,
     details: String,
     terminate_incompatible: &mut Terminate,
     spawn: &mut Spawn,
@@ -220,7 +247,7 @@ async fn replace_incompatible_daemon<Terminate, Spawn, Probe, ProbeFuture>(
 ) -> Result<(), DaemonBootstrapError>
 where
     Terminate: FnMut() -> Result<(), DaemonBootstrapError>,
-    Spawn: FnMut() -> Result<Option<u32>, DaemonBootstrapError>,
+    Spawn: FnMut() -> Result<Option<Child>, DaemonBootstrapError>,
     Probe: FnMut() -> ProbeFuture,
     ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
 {
@@ -231,8 +258,18 @@ where
     ownership.record_replacement_attempt(details.clone());
     terminate_incompatible()?;
     wait_for_endpoint_absent(probe, incompatible_exit_timeout, poll_interval, &details).await?;
+    let _ = gui_owned_daemon_state.clear();
     ownership.clear_spawned_child();
-    spawn_and_wait_for_compatible(ownership, spawn, probe, timeout, poll_interval).await
+    spawn_and_wait_for_compatible(
+        ownership,
+        gui_owned_daemon_state,
+        spawn,
+        probe,
+        timeout,
+        poll_interval,
+        SpawnReason::Replacement,
+    )
+    .await
 }
 
 async fn wait_for_daemon_health<Probe, ProbeFuture>(
@@ -676,9 +713,11 @@ mod tests {
         let incompatible_outcome = probe_daemon_health_at(&client, addr).await.unwrap();
         let state = DaemonConnectionState::default();
         let ownership = DaemonBootstrapOwnershipState::default();
+        let gui_owned_daemon_state = GuiOwnedDaemonState::default();
         let result = bootstrap_daemon_connection_with_hooks(
             &state,
             &ownership,
+            &gui_owned_daemon_state,
             || panic!("spawn should not run when an incompatible daemon is already listening"),
             || {
                 let incompatible_outcome = incompatible_outcome.clone();
@@ -728,9 +767,11 @@ mod tests {
     async fn startup_helper_treats_spawn_failure_as_error() {
         let state = DaemonConnectionState::default();
         let ownership = DaemonBootstrapOwnershipState::default();
+        let gui_owned_daemon_state = GuiOwnedDaemonState::default();
         let result = bootstrap_daemon_connection_with_hooks(
             &state,
             &ownership,
+            &gui_owned_daemon_state,
             || Err(DaemonBootstrapError::Spawn(anyhow::anyhow!("spawn failed"))),
             || async { Ok(ProbeOutcome::Absent) },
             || unreachable!(),
@@ -750,9 +791,11 @@ mod tests {
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempts_for_probe = attempts.clone();
         let ownership = DaemonBootstrapOwnershipState::default();
+        let gui_owned_daemon_state = GuiOwnedDaemonState::default();
         let result = bootstrap_daemon_connection_with_hooks(
             &state,
             &ownership,
+            &gui_owned_daemon_state,
             || Ok(None),
             move || {
                 let attempts_for_probe = attempts_for_probe.clone();
