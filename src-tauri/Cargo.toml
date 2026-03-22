@@ -89,6 +89,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.4.0-alpha.1"
+
 # Dependencies for workspace crates, mainly for tauri plugins
 [workspace.dependencies]
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }

@@ -20,6 +20,7 @@ use crate::api::types::{
 use crate::pairing::host::DaemonPairingHost;
 use crate::state::{DaemonPairingSessionSnapshot, DaemonWorkerSnapshot, RuntimeState};
 use crate::worker::WorkerHealth;
+use crate::{DAEMON_API_REVISION, DAEMON_VERSION};
 
 pub struct DaemonQueryService {
     runtime: Arc<CoreRuntime>,
@@ -34,7 +35,8 @@ impl DaemonQueryService {
     pub async fn health(&self) -> HealthResponse {
         HealthResponse {
             status: "ok".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            package_version: DAEMON_VERSION.to_string(),
+            api_revision: DAEMON_API_REVISION.to_string(),
         }
     }
 
@@ -47,7 +49,8 @@ impl DaemonQueryService {
             .count() as u32;
         let state = self.state.read().await;
         Ok(StatusResponse {
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            package_version: DAEMON_VERSION.to_string(),
+            api_revision: DAEMON_API_REVISION.to_string(),
             uptime_seconds: state.uptime_seconds(),
             workers: worker_statuses(state.worker_statuses()),
             connected_peers,

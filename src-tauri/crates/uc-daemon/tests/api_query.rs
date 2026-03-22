@@ -25,7 +25,38 @@ async fn empty_status_response() {
 
     assert_eq!(status.connected_peers, 0);
     assert!(status.workers.is_empty());
-    assert!(!status.version.is_empty());
+    assert_eq!(status.package_version, uc_daemon::DAEMON_VERSION);
+    assert_eq!(status.api_revision, uc_daemon::DAEMON_API_REVISION);
+}
+
+#[tokio::test]
+async fn health_response_uses_package_version_and_api_revision_contract() {
+    let runtime = build_runtime();
+    let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
+    let service = DaemonQueryService::new(runtime, state);
+
+    let health = service.health().await;
+    let json = serde_json::to_value(&health).unwrap();
+
+    assert_eq!(health.package_version, uc_daemon::DAEMON_VERSION);
+    assert_eq!(health.api_revision, uc_daemon::DAEMON_API_REVISION);
+    assert_eq!(json["packageVersion"], uc_daemon::DAEMON_VERSION);
+    assert_eq!(json["apiRevision"], uc_daemon::DAEMON_API_REVISION);
+    assert!(json.get("version").is_none());
+}
+
+#[tokio::test]
+async fn status_response_uses_package_version_and_api_revision_contract() {
+    let runtime = build_runtime();
+    let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
+    let service = DaemonQueryService::new(runtime, state);
+
+    let status = service.status().await.unwrap();
+    let json = serde_json::to_value(&status).unwrap();
+
+    assert_eq!(json["packageVersion"], uc_daemon::DAEMON_VERSION);
+    assert_eq!(json["apiRevision"], uc_daemon::DAEMON_API_REVISION);
+    assert!(json.get("version").is_none());
 }
 
 #[test]

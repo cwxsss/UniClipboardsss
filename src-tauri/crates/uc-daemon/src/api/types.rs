@@ -11,13 +11,15 @@ use crate::state::DaemonPairingSessionSnapshot;
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: String,
-    pub version: String,
+    pub package_version: String,
+    pub api_revision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusResponse {
-    pub version: String,
+    pub package_version: String,
+    pub api_revision: String,
     pub uptime_seconds: u64,
     pub workers: Vec<WorkerStatusDto>,
     pub connected_peers: u32,
