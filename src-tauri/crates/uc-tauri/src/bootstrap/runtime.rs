@@ -1214,6 +1214,10 @@ mod tests {
         async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
             Ok(())
         }
+
+        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
+            Ok(())
+        }
     }
 
     #[async_trait]
