@@ -481,7 +481,7 @@ fn terminate_incompatible_daemon_from_pid_file() -> Result<(), DaemonBootstrapEr
     terminate_local_daemon_pid(pid)
 }
 
-fn terminate_local_daemon_pid(pid: u32) -> Result<(), DaemonBootstrapError> {
+pub(crate) fn terminate_local_daemon_pid(pid: u32) -> Result<(), DaemonBootstrapError> {
     #[cfg(unix)]
     let mut command = {
         let mut command = Command::new("kill");

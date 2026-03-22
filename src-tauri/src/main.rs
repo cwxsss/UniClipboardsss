@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::http::header::{
     HeaderValue, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
 };
@@ -33,6 +34,9 @@ mod plugins;
 
 use uc_tauri::preview_panel;
 use uc_tauri::quick_panel;
+
+const DAEMON_EXIT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
+const DAEMON_EXIT_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Simple executor for platform commands
 ///
@@ -437,6 +441,9 @@ fn run_app(ctx: GuiBootstrapContext) {
         builder.plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
     };
 
+    let task_registry_for_run = task_registry.clone();
+    let gui_owned_daemon_state_for_run = gui_owned_daemon_state.clone();
+
     builder
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -738,13 +745,61 @@ fn run_app(ctx: GuiBootstrapContext) {
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")
-        .run(move |_app_handle, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                info!("App exit requested, cancelling all tracked tasks");
-                task_registry.token().cancel();
-            }
-            if let tauri::RunEvent::Exit = event {
-                info!("Application exiting");
+        .run(move |app_handle, event| {
+            match event {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    info!("App exit requested, cancelling all tracked tasks");
+                    task_registry_for_run.token().cancel();
+
+                    if gui_owned_daemon_state_for_run.exit_cleanup_in_progress() {
+                        api.prevent_exit();
+                        info!("GUI-owned daemon exit cleanup already in progress");
+                        return;
+                    }
+
+                    if gui_owned_daemon_state_for_run.snapshot_pid().is_none() {
+                        return;
+                    }
+
+                    if !gui_owned_daemon_state_for_run.begin_exit_cleanup() {
+                        api.prevent_exit();
+                        info!("Skipping duplicate GUI-owned daemon exit cleanup request");
+                        return;
+                    }
+
+                    api.prevent_exit();
+                    let app_handle = app_handle.clone();
+                    let gui_owned_daemon_state = gui_owned_daemon_state_for_run.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match gui_owned_daemon_state
+                            .shutdown_owned_daemon(
+                                DAEMON_EXIT_CLEANUP_TIMEOUT,
+                                DAEMON_EXIT_CLEANUP_POLL_INTERVAL,
+                            )
+                            .await
+                        {
+                            Ok(true) => {
+                                info!("GUI-owned daemon cleaned up before application exit");
+                            }
+                            Ok(false) => {
+                                info!("No GUI-owned daemon cleanup required on application exit");
+                            }
+                            Err(error) => {
+                                error!(
+                                    error = %error,
+                                    "Failed to clean up GUI-owned daemon during application exit"
+                                );
+                            }
+                        }
+
+                        gui_owned_daemon_state.finish_exit_cleanup();
+                        app_handle.exit(0);
+                    });
+                }
+                tauri::RunEvent::Exit => {
+                    info!("Application exiting");
+                }
+                _ => {}
             }
         });
 }
