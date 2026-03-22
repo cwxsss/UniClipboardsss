@@ -285,7 +285,7 @@ Plans:
 
 - [x] 46.4-01-PLAN.md — Daemon setup transport foundation (completed 2026-03-21)
 - [x] 46.4-02-PLAN.md — CLI setup command family over daemon transport (completed 2026-03-21)
-- [ ] 46.4-03-PLAN.md — Reset/repeatability and acceptance proof
+- [x] 46.4-03-PLAN.md — Reset/repeatability and acceptance proof (completed 2026-03-21)
 
 ### Phase 46.3: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (INSERTED)
 
