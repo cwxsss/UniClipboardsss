@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.5-02-PLAN.md
-last_updated: '2026-03-22T04:34:46.122Z'
+stopped_at: Completed 46.5-04-PLAN.md
+last_updated: '2026-03-22T04:52:25.950Z'
 progress:
   total_phases: 19
   completed_phases: 12
   total_plans: 52
-  completed_plans: 44
+  completed_plans: 45
 ---
 
 # Project State
@@ -19,20 +19,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46.5 in progress — daemon pairing/setup transport foundation is complete; remaining work is command shell cutover and regression coverage
+**Current focus:** Phase 46.5 in progress — daemon command shell cutover is complete; remaining work is runtime ownership cutover and daemon-only regression coverage
 
 ## Current Position
 
 Phase: 46.5 (tauri-daemon) — IN PROGRESS
-Plan: 1 of 4 complete
+Plan: 2 of 4 complete
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 7 (this milestone)
-- Average duration: 12min
-- Total execution time: 128min
+- Total plans completed: 8 (this milestone)
+- Average duration: 18min
+- Total execution time: 141min
 
 **By Phase:**
 
@@ -81,6 +81,7 @@ _Updated after each plan completion_
 | Phase 46.3-gui-daemon P01 | 10min | 2 tasks | 8 files |
 | Phase 46.3-gui-daemon P02 | 12min | 2 tasks | 6 files |
 | Phase 46.5 P02 | 5 | 1 tasks | 7 files |
+| Phase 46.5 P04 | 13 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -175,6 +176,9 @@ Recent decisions affecting current work:
 - [Phase 46.3-gui-daemon]: GUI bootstrap replacement is bounded to one incompatible-daemon terminate attempt plus one spawned-daemon startup wait, with ownership facts tracked separately from connection state.
 - [Phase 46.5]: Shared daemon request authorization lives in uc-tauri daemon_client/mod so setup/query/pairing clients reuse one base_url and bearer-token path.
 - [Phase 46.5]: POST /pairing/unpair executes CoreUseCases::unpair_device() and keeps the existing PairingApiErrorResponse envelope instead of introducing a second pairing error contract.
+- [Phase 46.5]: Tauri pairing paired-device reads and unpair now shell directly to daemon `/paired-devices` and `/pairing/unpair` routes instead of local use cases.
+- [Phase 46.5]: Tauri setup commands keep the existing invoke names, but deserialize daemon `state` payloads back into `SetupState` before returning to the frontend.
+- [Phase 46.5]: Local submit_passphrase(passphrase1, passphrase2) mismatch stays in-process and returns SetupError::PassphraseMismatch without any daemon request.
 
 ### Roadmap Evolution
 
@@ -209,6 +213,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-22T04:34:46.119Z
-Stopped at: Completed 46.5-02-PLAN.md
+Last session: 2026-03-22T04:52:09.811Z
+Stopped at: Completed 46.5-04-PLAN.md
 Resume file: None
