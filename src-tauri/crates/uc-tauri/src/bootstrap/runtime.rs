@@ -77,6 +77,66 @@ impl DaemonConnectionState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DaemonBootstrapOwnershipSnapshot {
+    pub replacement_attempt: u8,
+    pub spawned_child_pid: Option<u32>,
+    pub last_incompatible_reason: Option<String>,
+}
+
+#[derive(Clone, Default)]
+pub struct DaemonBootstrapOwnershipState(Arc<RwLock<DaemonBootstrapOwnershipSnapshot>>);
+
+impl DaemonBootstrapOwnershipState {
+    pub fn snapshot(&self) -> DaemonBootstrapOwnershipSnapshot {
+        match self.0.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => {
+                tracing::error!(
+                    "RwLock poisoned in DaemonBootstrapOwnershipState::snapshot, recovering from poisoned state"
+                );
+                poisoned.into_inner().clone()
+            }
+        }
+    }
+
+    pub fn record_spawned_child(&self, pid: Option<u32>) {
+        match self.0.write() {
+            Ok(mut guard) => {
+                guard.spawned_child_pid = pid;
+            }
+            Err(poisoned) => {
+                tracing::error!(
+                    "RwLock poisoned in DaemonBootstrapOwnershipState::record_spawned_child, recovering from poisoned state"
+                );
+                let mut guard = poisoned.into_inner();
+                guard.spawned_child_pid = pid;
+            }
+        }
+    }
+
+    pub fn clear_spawned_child(&self) {
+        self.record_spawned_child(None);
+    }
+
+    pub fn record_replacement_attempt(&self, reason: String) {
+        match self.0.write() {
+            Ok(mut guard) => {
+                guard.replacement_attempt = guard.replacement_attempt.saturating_add(1);
+                guard.last_incompatible_reason = Some(reason);
+            }
+            Err(poisoned) => {
+                tracing::error!(
+                    "RwLock poisoned in DaemonBootstrapOwnershipState::record_replacement_attempt, recovering from poisoned state"
+                );
+                let mut guard = poisoned.into_inner();
+                guard.replacement_attempt = guard.replacement_attempt.saturating_add(1);
+                guard.last_incompatible_reason = Some(reason);
+            }
+        }
+    }
+}
+
 /// Application runtime with dependencies.
 ///
 /// This struct holds all application dependencies and provides
