@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.5-04-PLAN.md
-last_updated: '2026-03-22T04:52:25.950Z'
+stopped_at: Completed 46.5-01-PLAN.md
+last_updated: '2026-03-22T05:08:32.968Z'
 progress:
   total_phases: 19
   completed_phases: 12
   total_plans: 52
-  completed_plans: 45
+  completed_plans: 46
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46.5 in progress — daemon command shell cutover is complete; remaining work is runtime ownership cutover and daemon-only regression coverage
+**Current focus:** Phase 46.5 in progress — daemon command shell and runtime ownership cutovers are complete; remaining work is daemon-only regression coverage
 
 ## Current Position
 
 Phase: 46.5 (tauri-daemon) — IN PROGRESS
-Plan: 2 of 4 complete
+Plan: 3 of 4 complete
 
 ## Performance Metrics
 
@@ -82,6 +82,7 @@ _Updated after each plan completion_
 | Phase 46.3-gui-daemon P02 | 12min | 2 tasks | 6 files |
 | Phase 46.5 P02 | 5 | 1 tasks | 7 files |
 | Phase 46.5 P04 | 13 | 2 tasks | 4 files |
+| Phase 46.5 P01 | 6 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -179,6 +180,8 @@ Recent decisions affecting current work:
 - [Phase 46.5]: Tauri pairing paired-device reads and unpair now shell directly to daemon `/paired-devices` and `/pairing/unpair` routes instead of local use cases.
 - [Phase 46.5]: Tauri setup commands keep the existing invoke names, but deserialize daemon `state` payloads back into `SetupState` before returning to the frontend.
 - [Phase 46.5]: Local submit_passphrase(passphrase1, passphrase2) mismatch stays in-process and returns SetupError::PassphraseMismatch without any daemon request.
+- [Phase 46.5]: Pairing runtime ownership is now an explicit uc-bootstrap input via PairingRuntimeOwner instead of an implicit GUI convention.
+- [Phase 46.5]: GUI and CLI bind NetworkPorts.pairing to DisabledPairingTransport so any residual local pairing path fails fast instead of silently using libp2p transport.
 
 ### Roadmap Evolution
 
@@ -213,6 +216,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-22T04:52:09.811Z
-Stopped at: Completed 46.5-04-PLAN.md
+Last session: 2026-03-22T05:08:32.966Z
+Stopped at: Completed 46.5-01-PLAN.md
 Resume file: None
