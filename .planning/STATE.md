@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.4-03-PLAN.md
-last_updated: '2026-03-21T12:55:24.075Z'
+stopped_at: Completed 46.3-01-PLAN.md
+last_updated: '2026-03-22T02:44:57Z'
 progress:
-  total_phases: 17
+  total_phases: 18
   completed_phases: 12
   total_plans: 46
-  completed_plans: 41
+  completed_plans: 42
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46.4 complete — repeatable daemon-backed setup CLI flow
+**Current focus:** Phase 46.3 in progress — GUI daemon startup compatibility and bounded replacement
 
 ## Current Position
 
-Phase: 46.4 (daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b) — COMPLETE
-Plan: 3 of 3 complete
+Phase: 46.3 (gui-daemon) — IN PROGRESS
+Plan: 1 of 4 complete
 
 ## Performance Metrics
 
@@ -78,6 +78,7 @@ _Updated after each plan completion_
 | Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b P01 | 24min | 2 tasks | 10 files |
 | Phase 46.4 P02 | 16min | 2 tasks | 8 files |
 | Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b P03 | 21min | 2 tasks | 13 files |
+| Phase 46.3-gui-daemon P01 | 10min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -166,6 +167,8 @@ Recent decisions affecting current work:
 - [Phase 46.4]: setup host stays attached after local space creation and only exits after an operator-handled request resolves or the session is canceled.
 - [Phase 46.4]: CLI smoke tests serialize process-level invocations to avoid shared local state races during cargo test.
 - [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: Reset stays daemon-owned and clears setup/session/lease/paired-device/encryption residue through existing runtime ports instead of deleting the whole profile directory.
+- [Phase 46.3-gui-daemon]: GUI and daemon now inherit one workspace package version, and daemon health/status expose `packageVersion` plus `apiRevision` as the compatibility identity contract.
+- [Phase 46.3-gui-daemon]: Bootstrap probing now classifies the expected local daemon endpoint as `Absent`, `Compatible`, or `Incompatible`; malformed or legacy `/health` payloads are incompatible, not absent.
 
 ### Roadmap Evolution
 
@@ -181,6 +184,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 46.2 inserted after Phase 46: 彻底打通基于 daemon 的配对流程, 完全移除原 tauri 中相关的配对流程. 期望: 在不改变用户配对流程的情况下,内部替换成基于 daemon 的配对流程实现 (URGENT)
 - Phase 46.3 inserted after Phase 46: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (URGENT)
 - Phase 46.4 inserted after Phase 46: 当前基于 daemon 重构后的 setup 流程还没有跑通(GUI), 为了加快开发和调试,我考虑先实现 cli 版本的 setup 流程, 理论上 cli 和 gui 都走的同一个流程,只是不同的入口,所以我考虑先将 cli +daemon 的方式给打通. 端到端将如何进行测试,你需要在两个终端中,分别起一个 peerA (full mode), 另一个是 peerB (passive mode), 然后让 peerB 成功与peerA 进行配对,也就是说, peerA 先新建加密空间, B 需要发现 A,B 请求A,A确认, B 输入加密口令, A 验证加密口令, 最终B成功加入 A; 对于 A 和 B 查询已配对设备都应该能看到对方. (URGENT)
+- Phase 46.5 inserted after Phase 46: 将配对业务逻辑从 Tauri 层彻底移除，统一收口到 daemon (URGENT)
 - Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 - Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
 
@@ -198,6 +202,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-21T12:55:24.070Z
-Stopped at: Completed 46.4-03-PLAN.md
+Last session: 2026-03-22T02:44:57Z
+Stopped at: Completed 46.3-01-PLAN.md
 Resume file: None
