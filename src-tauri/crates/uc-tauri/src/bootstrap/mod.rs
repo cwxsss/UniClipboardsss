@@ -34,7 +34,8 @@ pub use uc_app::usecases::setup::SetupPairingFacadePort;
 // assembly.rs re-exports (pure dependency construction — zero tauri imports)
 pub use assembly::{
     build_setup_orchestrator, get_storage_paths, resolve_pairing_config,
-    resolve_pairing_device_name, wire_dependencies, WiredDependencies,
+    resolve_pairing_device_name, wire_dependencies, wire_dependencies_with_identity_store,
+    WiredDependencies,
 };
 // wiring.rs re-exports (Tauri event loops and background task management)
 pub use wiring::{start_background_tasks, BackgroundRuntimeDeps};

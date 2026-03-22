@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use uc_core::config::AppConfig;
+use uc_platform::adapters::PairingRuntimeOwner;
 use uc_platform::ports::{IdentityStoreError, IdentityStorePort};
 use uc_tauri::bootstrap::wiring::wire_dependencies_with_identity_store;
 
@@ -107,7 +108,12 @@ fn seed_old_blobs(blobs_dir: &std::path::Path, names: &[&str]) {
 /// because the cleanup runs before the clipboard init.
 fn trigger_wiring(config: &AppConfig) {
     let (cmd_tx, _cmd_rx) = mpsc::channel(10);
-    let _ = wire_dependencies_with_identity_store(config, cmd_tx, Some(test_identity_store()));
+    let _ = wire_dependencies_with_identity_store(
+        config,
+        cmd_tx,
+        Some(test_identity_store()),
+        PairingRuntimeOwner::ExternalDaemon,
+    );
 }
 
 // ---------------------------------------------------------------------------
