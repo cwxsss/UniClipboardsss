@@ -249,6 +249,10 @@ impl TauriDaemonPairingClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddr;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
     use uc_daemon::api::auth::DaemonConnectionInfo;
 
     #[test]
@@ -274,5 +278,36 @@ mod tests {
             .to_str()
             .expect("authorization header should be utf-8");
         assert_eq!(auth_header, "Bearer test-token");
+    }
+
+    #[tokio::test]
+    async fn daemon_pairing_client_posts_unpair_to_daemon_api() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 4096];
+            let size = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..size]);
+            assert!(request.starts_with("POST /pairing/unpair HTTP/1.1\r\n"));
+            assert!(request.contains("authorization: Bearer test-token\r\n"));
+            assert!(request.contains("\r\n\r\n{\"peerId\":\"peer-daemon\"}"));
+
+            let response = "HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n";
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let connection_state = DaemonConnectionState::default();
+        connection_state.set(DaemonConnectionInfo {
+            base_url: format!("http://{addr}"),
+            ws_url: format!("ws://{addr}/ws"),
+            token: "test-token".to_string(),
+        });
+
+        let client = TauriDaemonPairingClient::new(connection_state);
+        client
+            .unpair_device("peer-daemon".to_string())
+            .await
+            .unwrap();
     }
 }
