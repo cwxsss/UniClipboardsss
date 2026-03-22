@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.5-03-PLAN.md
-last_updated: '2026-03-22T05:31:28Z'
+stopped_at: Completed 46.6-01-PLAN.md
+last_updated: '2026-03-22T05:54:24.558Z'
 progress:
   total_phases: 19
   completed_phases: 13
   total_plans: 52
-  completed_plans: 47
+  completed_plans: 48
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46.6 next — make daemon lifecycle fully follow Tauri startup and shutdown without orphan processes
+**Current focus:** Phase 46.6 Plan 02 next — add real-exit cleanup gating so GUI-owned daemon teardown happens only on real app exit
 
 ## Current Position
 
-Phase: 46.6 (daemon-tauri-tauri-daemon) — READY TO EXECUTE
-Plan: 0 of 2 complete
+Phase: 46.6 (daemon-tauri-tauri-daemon) — IN PROGRESS
+Plan: 1 of 2 complete
 
 ## Performance Metrics
 
@@ -84,6 +84,7 @@ _Updated after each plan completion_
 | Phase 46.5 P04 | 13 | 2 tasks | 4 files |
 | Phase 46.5 P01 | 6 | 2 tasks | 5 files |
 | Phase 46.5 P03 | 24 | 2 tasks | 8 files |
+| Phase 46.6-daemon-tauri-tauri-daemon P01 | 5 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -185,6 +186,8 @@ Recent decisions affecting current work:
 - [Phase 46.5]: GUI and CLI bind NetworkPorts.pairing to DisabledPairingTransport so any residual local pairing path fails fast instead of silently using libp2p transport.
 - [Phase 46.5]: daemon://realtime is the only active frontend pairing listener surface; legacy p2p-command-error fallback is deleted from both backend and frontend active paths.
 - [Phase 46.5]: daemon API regressions must make watcher/network prerequisites explicit in fixtures; host confirm is asserted via response-level `nextStepHint = host-confirm-peer`, not by assuming a join-only state enum.
+- [Phase 46.6-daemon-tauri-tauri-daemon]: Keep DaemonBootstrapOwnershipState as a bootstrap facts snapshot and move live child ownership into a separate GuiOwnedDaemonState. — Bootstrap facts remain cloneable and testable, while live Child handles now persist in managed Tauri state for later exit cleanup.
+- [Phase 46.6-daemon-tauri-tauri-daemon]: Bootstrap clears managed ownership on Compatible probes and records ownership only after actual spawn or replacement paths. — This prevents GUI exit cleanup from targeting independently started compatible daemons while still carrying replacement-owned children forward.
 
 ### Roadmap Evolution
 
@@ -219,6 +222,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-22T05:31:28Z
-Stopped at: Completed 46.5-03-PLAN.md
+Last session: 2026-03-22T05:54:24.555Z
+Stopped at: Completed 46.6-01-PLAN.md
 Resume file: None

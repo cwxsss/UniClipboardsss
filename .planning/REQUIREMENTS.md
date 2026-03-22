@@ -112,10 +112,10 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### GUI-Owned Daemon Exit Lifecycle
 
-- [ ] **P46.6-01**: GUI bootstrap records a live daemon owner contract only when the current GUI process actually spawns the daemon; connecting to an already-compatible daemon must not register exit ownership
+- [x] **P46.6-01**: GUI bootstrap records a live daemon owner contract only when the current GUI process actually spawns the daemon; connecting to an already-compatible daemon must not register exit ownership
 - [ ] **P46.6-02**: on real application exit, GUI must boundedly terminate the GUI-owned daemon exactly once and allow process exit only after cleanup settles
-- [ ] **P46.6-03**: main-window `CloseRequested` must continue to hide to tray and must never trigger daemon cleanup
-- [ ] **P46.6-04**: a daemon spawned after incompatible replacement is treated as GUI-owned for later exit cleanup, while independently started daemons remain non-owned
+- [x] **P46.6-03**: main-window `CloseRequested` must continue to hide to tray and must never trigger daemon cleanup
+- [x] **P46.6-04**: a daemon spawned after incompatible replacement is treated as GUI-owned for later exit cleanup, while independently started daemons remain non-owned
 - [ ] **P46.6-05**: regression coverage must prove spawned-owned, replacement-owned, compatible-existing, and exit-idempotency paths using exact `cargo test --test ...` commands
 
 ## Out of Scope
@@ -188,10 +188,10 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | GUI-DMN-03  | 46.3  | Pending  |
 | GUI-DMN-04  | 46.3  | Pending  |
 | GUI-DMN-05  | 46.3  | Pending  |
-| P46.6-01    | 46.6  | Pending  |
+| P46.6-01    | 46.6  | Complete |
 | P46.6-02    | 46.6  | Pending  |
-| P46.6-03    | 46.6  | Pending  |
-| P46.6-04    | 46.6  | Pending  |
+| P46.6-03    | 46.6  | Complete |
+| P46.6-04    | 46.6  | Complete |
 | P46.6-05    | 46.6  | Pending  |
 
 **Coverage:**
