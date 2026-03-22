@@ -72,7 +72,8 @@ fn render_status_output(status: &StatusResponse) -> String {
     let mut lines = vec![
         "Status: running".to_string(),
         format!("Uptime: {}", format_uptime(status.uptime_seconds)),
-        format!("Version: {}", status.version),
+        format!("Version: {}", status.package_version),
+        format!("API revision: {}", status.api_revision),
         format!("Workers: {healthy_count}/{total_count} healthy"),
     ];
 
@@ -120,7 +121,8 @@ mod tests {
     #[test]
     fn renders_human_output_from_http_fixture() {
         let status = StatusResponse {
-            version: "0.1.0".to_string(),
+            package_version: "0.1.0".to_string(),
+            api_revision: "v1".to_string(),
             uptime_seconds: 3723,
             workers: vec![
                 WorkerStatusDto {
@@ -143,6 +145,7 @@ mod tests {
                 "Status: running",
                 "Uptime: 1h 2m",
                 "Version: 0.1.0",
+                "API revision: v1",
                 "Workers: 1/2 healthy",
                 "  network: healthy",
                 "  sync: degraded (retrying)",
@@ -155,7 +158,8 @@ mod tests {
     #[test]
     fn json_output_serializes_daemon_status_dto() {
         let status = StatusResponse {
-            version: "0.1.0".to_string(),
+            package_version: "0.1.0".to_string(),
+            api_revision: "v1".to_string(),
             uptime_seconds: 10,
             workers: vec![WorkerStatusDto {
                 name: "network".to_string(),
@@ -165,6 +169,8 @@ mod tests {
         };
 
         let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["packageVersion"], "0.1.0");
+        assert_eq!(value["apiRevision"], "v1");
         assert_eq!(value["uptimeSeconds"], 10);
         assert_eq!(value["workers"][0]["name"], "network");
         assert!(value.get("uptime_seconds").is_none());
