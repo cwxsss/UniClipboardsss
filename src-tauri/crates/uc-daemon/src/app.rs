@@ -23,6 +23,7 @@ use crate::api::auth::{load_or_create_auth_token, resolve_daemon_token_path};
 use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
 use crate::pairing::host::DaemonPairingHost;
+use crate::process_metadata::{remove_pid_file, write_current_pid};
 use crate::rpc::server::{check_or_remove_stale_socket, run_rpc_accept_loop};
 use crate::state::{DaemonWorkerSnapshot, RuntimeState};
 use crate::worker::{DaemonWorker, WorkerHealth};
@@ -89,6 +90,7 @@ impl DaemonApp {
             .unwrap_or_else(|| std::path::Path::new("/tmp"));
         let token_path = resolve_daemon_token_path(token_base_dir);
         let auth_token = load_or_create_auth_token(&token_path)?;
+        let _pid_file_guard = DaemonPidFileGuard::activate()?;
         let query_service = Arc::new(DaemonQueryService::new(
             self.runtime.clone(),
             self.state.clone(),
@@ -199,6 +201,24 @@ impl DaemonApp {
     }
 }
 
+struct DaemonPidFileGuard;
+
+impl DaemonPidFileGuard {
+    fn activate() -> anyhow::Result<Self> {
+        let pid = write_current_pid()?;
+        info!(pid, "wrote daemon pid metadata");
+        Ok(Self)
+    }
+}
+
+impl Drop for DaemonPidFileGuard {
+    fn drop(&mut self) {
+        if let Err(error) = remove_pid_file() {
+            warn!(error = %error, "failed to remove daemon pid metadata");
+        }
+    }
+}
+
 /// Wait for either Ctrl-C or SIGTERM (Unix).
 async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
     #[cfg(unix)]
@@ -220,4 +240,71 @@ async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("ctrl_c handler error: {}", e))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::process_metadata::{read_pid_file, resolve_daemon_pid_path};
+    use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
+
+    fn with_daemon_env<T>(
+        profile: Option<&str>,
+        xdg_runtime_dir: Option<&Path>,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_profile = std::env::var("UC_PROFILE").ok();
+        let previous_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+
+        match profile {
+            Some(profile) => std::env::set_var("UC_PROFILE", profile),
+            None => std::env::remove_var("UC_PROFILE"),
+        }
+        match xdg_runtime_dir {
+            Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+
+        let result = f();
+
+        match previous_profile {
+            Some(profile) => std::env::set_var("UC_PROFILE", profile),
+            None => std::env::remove_var("UC_PROFILE"),
+        }
+        match previous_xdg_runtime_dir {
+            Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+
+        result
+    }
+
+    #[test]
+    fn daemon_pid_guard_removes_pid_file_on_drop() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+
+        with_daemon_env(Some("a"), Some(tempdir.path()), || {
+            {
+                let _guard = DaemonPidFileGuard::activate().expect("pid guard should activate");
+                assert_eq!(
+                    read_pid_file()
+                        .expect("pid file should be readable")
+                        .expect("pid file should exist"),
+                    std::process::id()
+                );
+                assert!(resolve_daemon_pid_path().exists());
+            }
+
+            assert!(!resolve_daemon_pid_path().exists());
+            assert!(read_pid_file()
+                .expect("pid file read should succeed")
+                .is_none());
+        });
+    }
 }
