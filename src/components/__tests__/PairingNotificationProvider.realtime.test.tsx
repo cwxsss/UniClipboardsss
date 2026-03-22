@@ -48,6 +48,11 @@ vi.mock('@/api/p2p', () => ({
   classifyPairingError,
 }))
 
+const getSetupStateMock = vi.fn()
+vi.mock('@/api/setup', () => ({
+  getSetupState: getSetupStateMock,
+}))
+
 vi.mock('sonner', () => ({
   toast: toastMock,
 }))
@@ -87,6 +92,8 @@ vi.mock('@/components/PairingPinDialog', () => ({
 describe('PairingNotificationProvider realtime', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    acceptP2PPairingMock.mockImplementation(() => Promise.resolve())
+    rejectP2PPairingMock.mockImplementation(() => Promise.resolve())
     capturedVerificationCallback = null
     capturedSpaceAccessCallback = null
     onP2PPairingVerificationMock.mockImplementation(
@@ -123,7 +130,7 @@ describe('PairingNotificationProvider realtime', () => {
 
     expect(acceptP2PPairingMock).toHaveBeenCalledWith('session-1')
 
-    act(() => {
+    await act(async () => {
       capturedVerificationCallback?.({
         kind: 'verification',
         sessionId: 'session-1',
@@ -157,7 +164,7 @@ describe('PairingNotificationProvider realtime', () => {
       await toastOptions?.action?.onClick()
     })
 
-    act(() => {
+    await act(async () => {
       capturedVerificationCallback?.({
         kind: 'verification',
         sessionId: 'session-1',
@@ -178,7 +185,7 @@ describe('PairingNotificationProvider realtime', () => {
 
     expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"display"')
 
-    act(() => {
+    await act(async () => {
       capturedVerificationCallback?.({
         kind: 'verifying',
         sessionId: 'session-1',
@@ -187,7 +194,7 @@ describe('PairingNotificationProvider realtime', () => {
 
     expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"verifying"')
 
-    act(() => {
+    await act(async () => {
       capturedVerificationCallback?.({
         kind: 'complete',
         sessionId: 'session-1',
@@ -261,5 +268,13 @@ describe('PairingNotificationProvider realtime', () => {
     expect(toastMock.error).toHaveBeenCalledWith('Pairing failed', {
       description: 'The pairing session expired or was already closed',
     })
+  })
+
+  it('does not call getSetupState — PairingNotificationProvider has no setup awareness', async () => {
+    const { PairingNotificationProvider } = await import('@/components/PairingNotificationProvider')
+    render(<PairingNotificationProvider />)
+
+    // getSetupStateMock should never have been called during render
+    expect(getSetupStateMock).not.toHaveBeenCalled()
   })
 })

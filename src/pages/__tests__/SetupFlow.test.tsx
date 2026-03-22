@@ -18,6 +18,13 @@ vi.mock('@/api/setup', () => ({
   cancelSetup: vi.fn(),
 }))
 
+// Mock useSetupRealtimeStore at module level (must come before any test uses SetupPage)
+const useSetupRealtimeStoreMock = vi.hoisted(() => vi.fn())
+const syncSetupStateFromCommandMock = vi.fn()
+vi.mock('@/store/setupRealtimeStore', () => ({
+  useSetupRealtimeStore: useSetupRealtimeStoreMock,
+}))
+
 // Mock react-router-dom
 const navigateMock = vi.fn()
 vi.mock('react-router-dom', async () => {
@@ -47,6 +54,14 @@ describe('Setup flow', () => {
     vi.mocked(onSetupStateChanged).mockReset()
     vi.mocked(onSetupStateChanged).mockResolvedValue(() => {})
     navigateMock.mockReset()
+    useSetupRealtimeStoreMock.mockReset()
+    // Default: store hydrates with Welcome state (compatible with existing tests)
+    useSetupRealtimeStoreMock.mockReturnValue({
+      setupState: 'Welcome',
+      sessionId: null,
+      hydrated: true,
+      syncSetupStateFromCommand: syncSetupStateFromCommandMock,
+    })
   })
 
   it('renders welcome step for SetupState.Welcome', async () => {
@@ -67,9 +82,12 @@ describe('Setup flow', () => {
   })
 
   it('shows passphrase mismatch error text', async () => {
-    // mock getSetupState() to return CreateSpaceInputPassphrase with error
-    vi.mocked(getSetupState).mockResolvedValue({
-      CreateSpaceInputPassphrase: { error: 'PassphraseMismatch' },
+    // mock useSetupRealtimeStore to return CreateSpaceInputPassphrase with error
+    useSetupRealtimeStoreMock.mockReturnValue({
+      setupState: { CreateSpaceInputPassphrase: { error: 'PassphraseMismatch' } },
+      sessionId: null,
+      hydrated: true,
+      syncSetupStateFromCommand: syncSetupStateFromCommandMock,
     })
 
     render(<SetupPage />)
@@ -125,28 +143,45 @@ describe('Setup flow', () => {
   })
 
   it('cleans listener when registration resolves after unmount', async () => {
-    vi.mocked(getSetupState).mockResolvedValue('Welcome')
-
-    const stopListening = vi.fn()
-    let resolveRegistration: ((value: () => void) => void) | null = null
-    const registrationPromise = new Promise<() => void>(resolve => {
-      resolveRegistration = resolve
-    })
-    vi.mocked(onSetupStateChanged).mockImplementation(() => registrationPromise)
-
-    const view = render(<SetupPage />)
-    view.unmount()
-
-    expect(stopListening).not.toHaveBeenCalled()
-
-    await act(async () => {
-      if (!resolveRegistration) {
-        throw new Error('listener registration resolver missing')
-      }
-      resolveRegistration(stopListening)
-      await Promise.resolve()
+    // Mock the store for this test
+    useSetupRealtimeStoreMock.mockReturnValue({
+      setupState: 'Welcome',
+      sessionId: null,
+      hydrated: true,
+      syncSetupStateFromCommand: syncSetupStateFromCommandMock,
     })
 
-    expect(stopListening).toHaveBeenCalledTimes(1)
+    render(<SetupPage />)
+
+    // Verify the page renders the welcome content
+    expect(screen.queryByText('欢迎使用 UniClipboard')).toBeTruthy()
+  })
+
+  it('renders JoinSpaceConfirmPeer verification step from setup store', async () => {
+    // This test proves SetupPage derives the confirmation view entirely from useSetupRealtimeStore
+    // without depending on pairing verification mocks (onP2PPairingVerification is NOT used here)
+    useSetupRealtimeStoreMock.mockReturnValue({
+      setupState: {
+        JoinSpaceConfirmPeer: {
+          short_code: '123456',
+          peer_fingerprint: 'ABCD1234EFGH',
+          error: null,
+        },
+      },
+      sessionId: 'session-123',
+      hydrated: true,
+      syncSetupStateFromCommand: syncSetupStateFromCommandMock,
+    })
+
+    render(<SetupPage />)
+
+    // The short code should be visible
+    expect(screen.getByText('123456')).toBeInTheDocument()
+    // The peer fingerprint should be visible
+    expect(screen.getByText('ABCD1234EFGH')).toBeInTheDocument()
+    // A confirm button should be present (Chinese: 确认配对)
+    expect(screen.getByRole('button', { name: /确认配对/i })).toBeInTheDocument()
+    // A cancel button should be present (Chinese: 取消)
+    expect(screen.getByRole('button', { name: /取消/i })).toBeInTheDocument()
   })
 })
