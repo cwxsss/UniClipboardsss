@@ -8,7 +8,8 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use thiserror::Error;
 use uc_daemon::api::auth::{resolve_daemon_token_path, DaemonConnectionInfo};
 use uc_daemon::api::types::HealthResponse;
-use uc_daemon::socket::{resolve_daemon_http_addr, resolve_daemon_socket_path};
+use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr};
+use uc_daemon::DAEMON_API_REVISION;
 
 use super::runtime::DaemonConnectionState;
 use crate::commands::startup::StartupBarrier;
@@ -19,6 +20,17 @@ const HEALTH_PATH: &str = "/health";
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProbeOutcome {
+    Absent,
+    Compatible(HealthResponse),
+    Incompatible {
+        details: String,
+        observed_package_version: Option<String>,
+        observed_api_revision: Option<String>,
+    },
+}
 
 #[derive(Debug, Error)]
 pub enum DaemonBootstrapError {
@@ -127,12 +139,18 @@ async fn bootstrap_daemon_connection_with<Spawn, Probe, ProbeFuture, LoadInfo>(
 where
     Spawn: FnOnce() -> Result<(), DaemonBootstrapError>,
     Probe: FnMut() -> ProbeFuture,
-    ProbeFuture: Future<Output = Result<bool, DaemonBootstrapError>>,
+    ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
     LoadInfo: Fn() -> Result<DaemonConnectionInfo, DaemonBootstrapError>,
 {
-    if !probe().await? {
-        spawn()?;
-        wait_for_daemon_health(&mut probe, timeout, poll_interval).await?;
+    match probe().await? {
+        ProbeOutcome::Compatible(_) => {}
+        ProbeOutcome::Absent => {
+            spawn()?;
+            wait_for_daemon_health(&mut probe, timeout, poll_interval).await?;
+        }
+        ProbeOutcome::Incompatible { details, .. } => {
+            return Err(DaemonBootstrapError::IncompatibleDaemon { details });
+        }
     }
 
     let connection_info = load_connection_info()?;
@@ -147,12 +165,16 @@ async fn wait_for_daemon_health<Probe, ProbeFuture>(
 ) -> Result<(), DaemonBootstrapError>
 where
     Probe: FnMut() -> ProbeFuture,
-    ProbeFuture: Future<Output = Result<bool, DaemonBootstrapError>>,
+    ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
 {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if probe().await? {
-            return Ok(());
+        match probe().await? {
+            ProbeOutcome::Compatible(_) => return Ok(()),
+            ProbeOutcome::Absent => {}
+            ProbeOutcome::Incompatible { details, .. } => {
+                return Err(DaemonBootstrapError::IncompatibleDaemon { details });
+            }
         }
 
         if tokio::time::Instant::now() >= deadline {
@@ -165,20 +187,26 @@ where
     }
 }
 
-pub async fn probe_daemon_health(client: &reqwest::Client) -> Result<bool, DaemonBootstrapError> {
-    let addr = resolve_daemon_http_addr();
+async fn probe_daemon_health(
+    client: &reqwest::Client,
+) -> Result<ProbeOutcome, DaemonBootstrapError> {
+    let addr = try_resolve_daemon_http_addr().map_err(|error| {
+        DaemonBootstrapError::Probe(
+            error.context("failed to resolve profile-aware daemon HTTP address"),
+        )
+    })?;
     probe_daemon_health_at(client, addr).await
 }
 
 async fn probe_daemon_health_at(
     client: &reqwest::Client,
     addr: std::net::SocketAddr,
-) -> Result<bool, DaemonBootstrapError> {
+) -> Result<ProbeOutcome, DaemonBootstrapError> {
     let url = format!("http://{}:{}{}", addr.ip(), addr.port(), HEALTH_PATH);
 
     let response = match client.get(url).send().await {
         Ok(response) => response,
-        Err(error) if error.is_connect() || error.is_timeout() => return Ok(false),
+        Err(error) if error.is_connect() || error.is_timeout() => return Ok(ProbeOutcome::Absent),
         Err(error) => {
             return Err(DaemonBootstrapError::Probe(
                 anyhow::Error::new(error).context("daemon health probe request failed"),
@@ -187,16 +215,84 @@ async fn probe_daemon_health_at(
     };
 
     if !response.status().is_success() {
-        return Ok(false);
+        return Ok(ProbeOutcome::Incompatible {
+            details: format!("daemon health probe returned HTTP {}", response.status()),
+            observed_package_version: None,
+            observed_api_revision: None,
+        });
     }
 
-    let health = response.json::<HealthResponse>().await.map_err(|error| {
+    let body = response.text().await.map_err(|error| {
         DaemonBootstrapError::Probe(
-            anyhow::Error::new(error).context("failed to decode daemon health response"),
+            anyhow::Error::new(error).context("failed to read daemon health response body"),
         )
     })?;
+    let health = match serde_json::from_str::<HealthResponse>(&body) {
+        Ok(health) => health,
+        Err(error) => {
+            return Ok(ProbeOutcome::Incompatible {
+                details: format!("failed to decode daemon health response: {error}"),
+                observed_package_version: None,
+                observed_api_revision: None,
+            });
+        }
+    };
 
-    Ok(health.status == "ok")
+    Ok(classify_health_response(health))
+}
+
+fn classify_health_response(health: HealthResponse) -> ProbeOutcome {
+    let observed_package_version = Some(health.package_version.clone());
+    let observed_api_revision = Some(health.api_revision.clone());
+
+    if health.status != "ok" {
+        return ProbeOutcome::Incompatible {
+            details: format!("daemon reported unhealthy status {}", health.status),
+            observed_package_version,
+            observed_api_revision,
+        };
+    }
+
+    if health.package_version.trim().is_empty() {
+        return ProbeOutcome::Incompatible {
+            details: "daemon health response missing packageVersion".to_string(),
+            observed_package_version,
+            observed_api_revision,
+        };
+    }
+
+    if health.api_revision.trim().is_empty() {
+        return ProbeOutcome::Incompatible {
+            details: "daemon health response missing apiRevision".to_string(),
+            observed_package_version,
+            observed_api_revision,
+        };
+    }
+
+    if health.package_version != env!("CARGO_PKG_VERSION") {
+        return ProbeOutcome::Incompatible {
+            details: format!(
+                "daemon packageVersion {} does not match GUI packageVersion {}",
+                health.package_version,
+                env!("CARGO_PKG_VERSION")
+            ),
+            observed_package_version,
+            observed_api_revision,
+        };
+    }
+
+    if health.api_revision != DAEMON_API_REVISION {
+        return ProbeOutcome::Incompatible {
+            details: format!(
+                "daemon apiRevision {} does not match required {}",
+                health.api_revision, DAEMON_API_REVISION
+            ),
+            observed_package_version,
+            observed_api_revision,
+        };
+    }
+
+    ProbeOutcome::Compatible(health)
 }
 
 fn load_daemon_connection_info() -> Result<DaemonConnectionInfo, DaemonBootstrapError> {
@@ -215,7 +311,11 @@ fn load_daemon_connection_info() -> Result<DaemonConnectionInfo, DaemonBootstrap
         )));
     }
 
-    let addr = resolve_daemon_http_addr();
+    let addr = try_resolve_daemon_http_addr().map_err(|error| {
+        DaemonBootstrapError::ConnectionInfo(
+            error.context("failed to resolve profile-aware daemon HTTP address"),
+        )
+    })?;
     Ok(DaemonConnectionInfo {
         base_url: format!("http://{}:{}", addr.ip(), addr.port()),
         ws_url: format!("ws://{}:{}/ws", addr.ip(), addr.port()),
@@ -277,34 +377,187 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::{Mutex, OnceLock};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    #[tokio::test]
-    async fn probe_helper_returns_success_on_healthy_health_endpoint() {
+    fn with_daemon_env<T>(
+        profile: Option<&str>,
+        xdg_runtime_dir: Option<&Path>,
+        f: impl FnOnce() -> T,
+    ) -> T {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_profile = std::env::var("UC_PROFILE").ok();
+        let previous_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+
+        match profile {
+            Some(profile) => std::env::set_var("UC_PROFILE", profile),
+            None => std::env::remove_var("UC_PROFILE"),
+        }
+        match xdg_runtime_dir {
+            Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+
+        let result = f();
+
+        match previous_profile {
+            Some(profile) => std::env::set_var("UC_PROFILE", profile),
+            None => std::env::remove_var("UC_PROFILE"),
+        }
+        match previous_xdg_runtime_dir {
+            Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+
+        result
+    }
+
+    async fn spawn_health_server(status_line: &str, body: &str) -> std::net::SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
+        let status_line = status_line.to_string();
+        let body = body.to_string();
+        tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut buffer = [0_u8; 1024];
             let _ = stream.read(&mut buffer).await.unwrap();
-            let body = r#"{"status":"ok","version":"0.1.0"}"#;
             let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                "HTTP/1.1 {status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
                 body.len(),
                 body
             );
             stream.write_all(response.as_bytes()).await.unwrap();
         });
+        addr
+    }
+
+    #[tokio::test]
+    async fn probe_helper_returns_success_on_healthy_health_endpoint() {
+        let body = format!(
+            r#"{{"status":"ok","packageVersion":"{}","apiRevision":"{}"}}"#,
+            env!("CARGO_PKG_VERSION"),
+            DAEMON_API_REVISION
+        );
+        let addr = spawn_health_server("200 OK", &body).await;
 
         let client = reqwest::Client::builder()
             .timeout(PROBE_TIMEOUT)
             .build()
             .unwrap();
-        let is_healthy = probe_daemon_health_at(&client, addr).await.unwrap();
+        let outcome = probe_daemon_health_at(&client, addr).await.unwrap();
 
-        assert!(is_healthy);
-        server.await.unwrap();
+        assert!(matches!(
+            outcome,
+            ProbeOutcome::Compatible(HealthResponse {
+                status,
+                package_version,
+                api_revision,
+            }) if status == "ok"
+                && package_version == env!("CARGO_PKG_VERSION")
+                && api_revision == DAEMON_API_REVISION
+        ));
+    }
+
+    #[tokio::test]
+    async fn startup_helper_treats_http_response_with_503_as_incompatible() {
+        let addr = spawn_health_server("503 Service Unavailable", r#"{"status":"starting"}"#).await;
+        let client = reqwest::Client::builder()
+            .timeout(PROBE_TIMEOUT)
+            .build()
+            .unwrap();
+
+        let outcome = probe_daemon_health_at(&client, addr).await.unwrap();
+
+        assert!(matches!(
+            outcome,
+            ProbeOutcome::Incompatible {
+                observed_package_version: None,
+                observed_api_revision: None,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn startup_helper_treats_malformed_health_payload_as_incompatible() {
+        let addr = spawn_health_server("200 OK", r#"{"status":"ok","version":"0.1.0"}"#).await;
+        let client = reqwest::Client::builder()
+            .timeout(PROBE_TIMEOUT)
+            .build()
+            .unwrap();
+
+        let outcome = probe_daemon_health_at(&client, addr).await.unwrap();
+
+        assert!(matches!(
+            outcome,
+            ProbeOutcome::Incompatible { details, .. }
+                if details.contains("failed to decode daemon health response")
+        ));
+    }
+
+    #[tokio::test]
+    async fn startup_helper_rejects_healthy_but_incompatible_daemon() {
+        let body = format!(
+            r#"{{"status":"ok","packageVersion":"{}-stale","apiRevision":"{}"}}"#,
+            env!("CARGO_PKG_VERSION"),
+            DAEMON_API_REVISION
+        );
+        let addr = spawn_health_server("200 OK", &body).await;
+        let client = reqwest::Client::builder()
+            .timeout(PROBE_TIMEOUT)
+            .build()
+            .unwrap();
+
+        let incompatible_outcome = probe_daemon_health_at(&client, addr).await.unwrap();
+        let state = DaemonConnectionState::default();
+        let result = bootstrap_daemon_connection_with(
+            &state,
+            || panic!("spawn should not run when an incompatible daemon is already listening"),
+            || {
+                let incompatible_outcome = incompatible_outcome.clone();
+                async move { Ok(incompatible_outcome) }
+            },
+            || unreachable!(),
+            Duration::from_millis(10),
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(DaemonBootstrapError::IncompatibleDaemon { details })
+                if details.contains("does not match GUI packageVersion")
+        ));
+    }
+
+    #[tokio::test]
+    async fn startup_helper_rejects_healthy_but_api_incompatible_daemon() {
+        let body = format!(
+            r#"{{"status":"ok","packageVersion":"{}","apiRevision":"legacy-v0"}}"#,
+            env!("CARGO_PKG_VERSION")
+        );
+        let addr = spawn_health_server("200 OK", &body).await;
+        let client = reqwest::Client::builder()
+            .timeout(PROBE_TIMEOUT)
+            .build()
+            .unwrap();
+
+        let outcome = probe_daemon_health_at(&client, addr).await.unwrap();
+
+        assert!(matches!(
+            outcome,
+            ProbeOutcome::Incompatible {
+                observed_package_version: Some(observed_package_version),
+                observed_api_revision: Some(observed_api_revision),
+                ..
+            } if observed_package_version == env!("CARGO_PKG_VERSION")
+                && observed_api_revision == "legacy-v0"
+        ));
     }
 
     #[tokio::test]
@@ -313,7 +566,7 @@ mod tests {
         let result = bootstrap_daemon_connection_with(
             &state,
             || Err(DaemonBootstrapError::Spawn(anyhow::anyhow!("spawn failed"))),
-            || async { Ok(false) },
+            || async { Ok(ProbeOutcome::Absent) },
             || unreachable!(),
             Duration::from_millis(10),
             Duration::from_millis(1),
@@ -335,7 +588,7 @@ mod tests {
                 let attempts_for_probe = attempts_for_probe.clone();
                 async move {
                     attempts_for_probe.fetch_add(1, Ordering::SeqCst);
-                    Ok(false)
+                    Ok(ProbeOutcome::Absent)
                 }
             },
             || unreachable!(),
@@ -366,5 +619,52 @@ mod tests {
         assert_eq!(value["token"], "secret");
         assert!(value.get("base_url").is_none());
         assert!(value.get("ws_url").is_none());
+    }
+
+    #[test]
+    fn resolve_token_path_tracks_uc_profile() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+
+        let token_path_a = with_daemon_env(Some("a"), Some(tempdir.path()), resolve_token_path);
+        let token_path_b = with_daemon_env(Some("b"), Some(tempdir.path()), resolve_token_path);
+
+        assert_eq!(
+            token_path_a.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("uniclipboard-daemon-a.token")
+        );
+        assert_eq!(
+            token_path_b.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("uniclipboard-daemon-b.token")
+        );
+        assert_ne!(token_path_a, token_path_b);
+    }
+
+    #[test]
+    fn load_daemon_connection_info_uses_profile_specific_urls() {
+        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+
+        let connection_a = with_daemon_env(Some("a"), Some(tempdir.path()), || {
+            std::fs::write(
+                tempdir.path().join("uniclipboard-daemon-a.token"),
+                "token-a",
+            )
+            .expect("token fixture should be written");
+            load_daemon_connection_info().expect("profile a connection info should load")
+        });
+        let connection_b = with_daemon_env(Some("b"), Some(tempdir.path()), || {
+            std::fs::write(
+                tempdir.path().join("uniclipboard-daemon-b.token"),
+                "token-b",
+            )
+            .expect("token fixture should be written");
+            load_daemon_connection_info().expect("profile b connection info should load")
+        });
+
+        assert_eq!(connection_a.base_url, "http://127.0.0.1:42716");
+        assert_eq!(connection_a.ws_url, "ws://127.0.0.1:42716/ws");
+        assert_eq!(connection_a.token, "token-a");
+        assert_eq!(connection_b.base_url, "http://127.0.0.1:42717");
+        assert_eq!(connection_b.ws_url, "ws://127.0.0.1:42717/ws");
+        assert_eq!(connection_b.token, "token-b");
     }
 }
