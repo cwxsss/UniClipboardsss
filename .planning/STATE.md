@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
 status: in_progress
-stopped_at: Completed 46.6-01-PLAN.md
-last_updated: '2026-03-22T05:54:24.558Z'
+stopped_at: Completed 46.6-02-PLAN.md
+last_updated: '2026-03-22T06:03:11.914Z'
 progress:
   total_phases: 19
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 52
-  completed_plans: 48
+  completed_plans: 49
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 46.6 Plan 02 next — add real-exit cleanup gating so GUI-owned daemon teardown happens only on real app exit
+**Current focus:** Phase 46.3 Plan 02 next — bounded incompatible-daemon replacement on the expected local endpoint
 
 ## Current Position
 
-Phase: 46.6 (daemon-tauri-tauri-daemon) — IN PROGRESS
-Plan: 1 of 2 complete
+Phase: 46.6 (daemon-tauri-tauri-daemon) — COMPLETE
+Plan: 2 of 2 complete
 
 ## Performance Metrics
 
@@ -85,6 +85,7 @@ _Updated after each plan completion_
 | Phase 46.5 P01 | 6 | 2 tasks | 5 files |
 | Phase 46.5 P03 | 24 | 2 tasks | 8 files |
 | Phase 46.6-daemon-tauri-tauri-daemon P01 | 5 min | 2 tasks | 6 files |
+| Phase 46.6 P02 | 7 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -188,6 +189,8 @@ Recent decisions affecting current work:
 - [Phase 46.5]: daemon API regressions must make watcher/network prerequisites explicit in fixtures; host confirm is asserted via response-level `nextStepHint = host-confirm-peer`, not by assuming a join-only state enum.
 - [Phase 46.6-daemon-tauri-tauri-daemon]: Keep DaemonBootstrapOwnershipState as a bootstrap facts snapshot and move live child ownership into a separate GuiOwnedDaemonState. — Bootstrap facts remain cloneable and testable, while live Child handles now persist in managed Tauri state for later exit cleanup.
 - [Phase 46.6-daemon-tauri-tauri-daemon]: Bootstrap clears managed ownership on Compatible probes and records ownership only after actual spawn or replacement paths. — This prevents GUI exit cleanup from targeting independently started compatible daemons while still carrying replacement-owned children forward.
+- [Phase 46.6]: Real daemon cleanup now runs only from RunEvent::ExitRequested; main-window CloseRequested remains tray-hide and never targets daemon processes.
+- [Phase 46.6]: GuiOwnedDaemonState now owns bounded daemon teardown with exit idempotency guard, restoring child ownership on cleanup failure and force-killing only after graceful timeout.
 
 ### Roadmap Evolution
 
@@ -222,6 +225,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-22T05:54:24.555Z
-Stopped at: Completed 46.6-01-PLAN.md
+Last session: 2026-03-22T06:03:11.911Z
+Stopped at: Completed 46.6-02-PLAN.md
 Resume file: None

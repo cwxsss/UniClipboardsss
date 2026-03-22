@@ -279,12 +279,12 @@ Plans:
 **Goal:** Introduce a separate GUI runtime lifecycle owner contract for live GUI-spawned daemon children, clean them up only on real application exit, preserve close-to-tray semantics, and never terminate independently started daemons.
 **Requirements**: P46.6-01, P46.6-02, P46.6-03, P46.6-04, P46.6-05
 **Depends on:** Phase 46.3
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
 - [x] 46.6-01-PLAN.md — GUI-owned daemon lifecycle contract and spawn/replacement registration (completed 2026-03-22)
-- [ ] 46.6-02-PLAN.md — Real-exit cleanup gate, tray-safe no-op paths, and shutdown regression coverage
+- [x] 46.6-02-PLAN.md — Real-exit cleanup gate, tray-safe no-op paths, and shutdown regression coverage (completed 2026-03-22)
 
 ### Phase 46.1: Unify realtime subscriptions on single DaemonWsBridge (INSERTED)
 
