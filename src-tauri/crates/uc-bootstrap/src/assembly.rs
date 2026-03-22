@@ -65,8 +65,8 @@ use uc_infra::security::{
 use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
 use uc_platform::adapters::{
-    FilesystemBlobStore, InMemoryEncryptionSessionPort, InMemoryWatcherControl,
-    Libp2pNetworkAdapter,
+    DisabledPairingTransport, FilesystemBlobStore, InMemoryEncryptionSessionPort,
+    InMemoryWatcherControl, Libp2pNetworkAdapter, PairingRuntimeOwner,
 };
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::LocalClipboard;
@@ -382,6 +382,24 @@ fn create_infra_layer(
 }
 
 /// Create platform layer implementations
+fn build_network_ports(
+    libp2p_network: Arc<Libp2pNetworkAdapter>,
+    pairing_runtime_owner: PairingRuntimeOwner,
+) -> Arc<NetworkPorts> {
+    let pairing: Arc<dyn PairingTransportPort> = match pairing_runtime_owner {
+        PairingRuntimeOwner::CurrentProcess => libp2p_network.clone(),
+        PairingRuntimeOwner::ExternalDaemon => Arc::new(DisabledPairingTransport),
+    };
+
+    Arc::new(NetworkPorts {
+        clipboard: libp2p_network.clone(),
+        peers: libp2p_network.clone(),
+        pairing,
+        events: libp2p_network.clone(),
+        file_transfer: libp2p_network.clone(),
+    })
+}
+
 pub fn create_platform_layer(
     secure_storage: Arc<dyn SecureStoragePort>,
     config_dir: &PathBuf,
@@ -393,6 +411,7 @@ pub fn create_platform_layer(
     storage_config: Arc<ClipboardStorageConfig>,
     identity_store: Arc<dyn IdentityStorePort>,
     file_cache_dir: PathBuf,
+    pairing_runtime_owner: PairingRuntimeOwner,
 ) -> WiringResult<PlatformLayer> {
     let clipboard_impl = LocalClipboard::new()
         .map_err(|e| WiringError::ClipboardInit(format!("Failed to create clipboard: {}", e)))?;
@@ -489,19 +508,14 @@ pub fn create_platform_layer(
             transfer_decryptor,
             transfer_encryptor,
             file_cache_dir,
+            pairing_runtime_owner,
         )
         .map_err(|e| {
             WiringError::NetworkInit(format!("Failed to initialize libp2p identity: {e}"))
         })?,
     );
     info!(peer_id = %libp2p_network.local_peer_id(), "Loaded libp2p identity");
-    let network_ports = Arc::new(NetworkPorts {
-        clipboard: libp2p_network.clone(),
-        peers: libp2p_network.clone(),
-        pairing: libp2p_network.clone(),
-        events: libp2p_network.clone(),
-        file_transfer: libp2p_network.clone(),
-    });
+    let network_ports = build_network_ports(libp2p_network.clone(), pairing_runtime_owner);
 
     let encrypted_blob_store: Arc<dyn BlobStorePort> = Arc::new(EncryptedBlobStore::new(
         blob_store.clone(),
@@ -654,8 +668,9 @@ pub fn apply_profile_suffix(path: PathBuf) -> PathBuf {
 pub fn wire_dependencies(
     config: &AppConfig,
     platform_cmd_tx: PlatformCommandSender,
+    pairing_runtime_owner: PairingRuntimeOwner,
 ) -> WiringResult<WiredDependencies> {
-    wire_dependencies_with_identity_store(config, platform_cmd_tx, None)
+    wire_dependencies_with_identity_store(config, platform_cmd_tx, None, pairing_runtime_owner)
 }
 
 /// Wires dependencies with a caller-provided identity store.
@@ -665,6 +680,7 @@ pub fn wire_dependencies_with_identity_store(
     config: &AppConfig,
     platform_cmd_tx: PlatformCommandSender,
     identity_store: Option<Arc<dyn IdentityStorePort>>,
+    pairing_runtime_owner: PairingRuntimeOwner,
 ) -> WiringResult<WiredDependencies> {
     let platform_dirs = get_default_app_dirs()?;
     let paths = resolve_app_paths(&platform_dirs, config)?;
@@ -699,6 +715,7 @@ pub fn wire_dependencies_with_identity_store(
         storage_config.clone(),
         identity_store,
         paths.file_cache_dir.clone(),
+        pairing_runtime_owner,
     )?;
 
     // Wrap ports with encryption decorators
@@ -1068,8 +1085,13 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use tokio::sync::mpsc;
     use uc_app::usecases::setup::SetupPairingFacadePort;
+    use uc_core::network::{ConnectionPolicy, PairingState, ResolvedConnectionPolicy};
     use uc_core::ports::host_event_emitter::{EmitError, HostEvent};
-    use uc_core::ports::SetupEventPort;
+    use uc_core::ports::{
+        ConnectionPolicyResolverError, ConnectionPolicyResolverPort, SetupEventPort,
+    };
+    use uc_platform::adapters::{InMemoryEncryptionSessionPort, PairingRuntimeOwner};
+    use uc_platform::ports::IdentityStoreError;
 
     struct RecordingEmitter {
         events: Arc<StdMutex<Vec<String>>>,
@@ -1187,5 +1209,77 @@ mod tests {
         ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>> {
             Ok(Vec::new())
         }
+    }
+
+    #[derive(Default)]
+    struct TestIdentityStore {
+        data: StdMutex<Option<Vec<u8>>>,
+    }
+
+    impl IdentityStorePort for TestIdentityStore {
+        fn load_identity(&self) -> Result<Option<Vec<u8>>, IdentityStoreError> {
+            Ok(self.data.lock().expect("lock test identity store").clone())
+        }
+
+        fn store_identity(&self, identity: &[u8]) -> Result<(), IdentityStoreError> {
+            *self.data.lock().expect("lock test identity store") = Some(identity.to_vec());
+            Ok(())
+        }
+    }
+
+    struct TrustedResolver;
+
+    #[async_trait::async_trait]
+    impl ConnectionPolicyResolverPort for TrustedResolver {
+        async fn resolve_for_peer(
+            &self,
+            _peer_id: &uc_core::PeerId,
+        ) -> Result<ResolvedConnectionPolicy, ConnectionPolicyResolverError> {
+            Ok(ResolvedConnectionPolicy {
+                pairing_state: PairingState::Trusted,
+                allowed: ConnectionPolicy::allowed_protocols(PairingState::Trusted),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn gui_network_ports_pairing_is_disabled_transport() {
+        let libp2p_network = Arc::new(
+            Libp2pNetworkAdapter::new(
+                Arc::new(TestIdentityStore::default()),
+                Arc::new(TrustedResolver),
+                Arc::new(InMemoryEncryptionSessionPort::default()),
+                Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter),
+                Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter),
+                PathBuf::from("/tmp/test-file-cache"),
+                PairingRuntimeOwner::ExternalDaemon,
+            )
+            .expect("create libp2p network"),
+        );
+
+        let gui_ports =
+            build_network_ports(libp2p_network.clone(), PairingRuntimeOwner::ExternalDaemon);
+        let daemon_ports =
+            build_network_ports(libp2p_network.clone(), PairingRuntimeOwner::CurrentProcess);
+
+        let gui_error = gui_ports
+            .pairing
+            .open_pairing_session("peer-1".to_string(), "session-1".to_string())
+            .await
+            .expect_err("gui pairing transport must be disabled");
+        assert_eq!(
+            gui_error.to_string(),
+            "local pairing runtime is disabled in this process"
+        );
+
+        let daemon_error = daemon_ports
+            .pairing
+            .open_pairing_session("peer-1".to_string(), "session-1".to_string())
+            .await
+            .expect_err("daemon pairing transport should use libp2p adapter");
+        assert_ne!(
+            daemon_error.to_string(),
+            "local pairing runtime is disabled in this process"
+        );
     }
 }

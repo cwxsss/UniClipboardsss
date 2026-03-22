@@ -32,6 +32,7 @@ use uc_core::config::AppConfig;
 use uc_core::network::pairing_state_machine::PairingAction;
 use uc_core::ports::PeerDirectoryPort;
 use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
+use uc_platform::adapters::PairingRuntimeOwner;
 use uc_platform::ipc::PlatformCommand;
 use uc_platform::ports::WatcherControlPort;
 use uc_platform::runtime::event_bus::{
@@ -104,6 +105,7 @@ pub struct DaemonBootstrapContext {
 /// before tracing initialization so the subscriber picks up the desired profile.
 fn build_core(
     platform_cmd_tx: mpsc::Sender<PlatformCommand>,
+    pairing_runtime_owner: PairingRuntimeOwner,
     log_profile_override: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<(AppConfig, crate::assembly::WiredDependencies)> {
     // Apply log profile override before tracing init
@@ -116,10 +118,22 @@ fn build_core(
 
     let config = resolve_app_config().map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let wired = wire_dependencies(&config, platform_cmd_tx)
+    let wired = wire_dependencies(&config, platform_cmd_tx, pairing_runtime_owner)
         .map_err(|e| anyhow::anyhow!("Dependency wiring failed: {}", e))?;
 
     Ok((config, wired))
+}
+
+fn gui_pairing_runtime_owner() -> PairingRuntimeOwner {
+    PairingRuntimeOwner::ExternalDaemon
+}
+
+fn cli_pairing_runtime_owner() -> PairingRuntimeOwner {
+    PairingRuntimeOwner::ExternalDaemon
+}
+
+fn daemon_pairing_runtime_owner() -> PairingRuntimeOwner {
+    PairingRuntimeOwner::CurrentProcess
 }
 
 /// Build GUI bootstrap context. Returns raw AppDeps (not CoreRuntime) so that
@@ -136,7 +150,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         PlatformCommandReceiver,
     ) = mpsc::channel(100);
 
-    let (config, wired) = build_core(platform_cmd_tx.clone(), None)?;
+    let (config, wired) = build_core(platform_cmd_tx.clone(), gui_pairing_runtime_owner(), None)?;
 
     let deps = wired.deps;
     let background = wired.background;
@@ -228,7 +242,7 @@ pub fn build_cli_context_with_profile(
     log_profile: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<CliBootstrapContext> {
     let (_platform_cmd_tx, _platform_cmd_rx) = mpsc::channel(100);
-    let (config, wired) = build_core(_platform_cmd_tx, log_profile)?;
+    let (config, wired) = build_core(_platform_cmd_tx, cli_pairing_runtime_owner(), log_profile)?;
 
     // [Codex Review R1] Return AppDeps, not CoreRuntime.
     // CLI entry point constructs CoreRuntime itself with appropriate emitter.
@@ -251,7 +265,11 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         PlatformCommandReceiver,
     ) = mpsc::channel(100);
 
-    let (config, wired) = build_core(platform_cmd_tx.clone(), None)?;
+    let (config, wired) = build_core(
+        platform_cmd_tx.clone(),
+        daemon_pairing_runtime_owner(),
+        None,
+    )?;
     let storage_paths = get_storage_paths(&config)?;
     let deps = wired.deps;
     let background = wired.background;
@@ -304,4 +322,30 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         storage_paths,
         config,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uc_platform::adapters::PairingRuntimeOwner;
+
+    #[test]
+    fn gui_builder_uses_external_daemon_pairing_owner() {
+        assert_eq!(
+            gui_pairing_runtime_owner(),
+            PairingRuntimeOwner::ExternalDaemon
+        );
+        assert_eq!(
+            cli_pairing_runtime_owner(),
+            PairingRuntimeOwner::ExternalDaemon
+        );
+    }
+
+    #[test]
+    fn daemon_builder_uses_current_process_pairing_owner() {
+        assert_eq!(
+            daemon_pairing_runtime_owner(),
+            PairingRuntimeOwner::CurrentProcess
+        );
+    }
 }
