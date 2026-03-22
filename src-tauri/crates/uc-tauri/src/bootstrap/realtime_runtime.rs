@@ -6,11 +6,13 @@ use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uc_app::realtime::{
-    run_pairing_realtime_consumer, run_peers_realtime_consumer, run_setup_realtime_consumer,
-    SetupPairingEventHub,
+    run_pairing_realtime_consumer, run_pairing_realtime_consumer_with_rx,
+    run_peers_realtime_consumer, run_peers_realtime_consumer_with_rx, run_setup_realtime_consumer,
+    run_setup_realtime_consumer_with_rx, run_setup_state_realtime_consumer,
+    run_setup_state_realtime_consumer_with_rx, SetupPairingEventHub,
 };
 use uc_app::task_registry::TaskRegistry;
-use uc_core::ports::HostEventEmitterPort;
+use uc_core::ports::{HostEventEmitterPort, RealtimeTopic};
 
 use super::assembly::SetupAssemblyPorts;
 use super::daemon_ws_bridge::DaemonWsBridgeConfig;
@@ -104,11 +106,61 @@ pub async fn start_realtime_runtime(
         DaemonWsBridgeConfig::default(),
     ));
 
+    let pairing_rx = match bridge
+        .subscribe("pairing_realtime_consumer", &[RealtimeTopic::Pairing])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe pairing realtime consumer");
+            None
+        }
+    };
+
+    let peers_rx = match bridge
+        .subscribe("peers_realtime_consumer", &[RealtimeTopic::Peers])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe peers realtime consumer");
+            None
+        }
+    };
+
+    let setup_rx = match bridge
+        .subscribe("setup_realtime_consumer", &[RealtimeTopic::Pairing])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe setup realtime consumer");
+            None
+        }
+    };
+
+    let setup_state_rx = match bridge
+        .subscribe("setup_state_realtime_consumer", &[RealtimeTopic::Setup])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe setup state realtime consumer");
+            None
+        }
+    };
+
     let pairing_bridge = bridge.clone();
     let pairing_emitter = event_emitter.clone();
     task_registry
         .spawn("realtime_pairing_consumer", |_token| async move {
-            if let Err(err) = run_pairing_realtime_consumer(pairing_bridge, pairing_emitter).await {
+            let result = match pairing_rx {
+                Some(mut rx) => {
+                    run_pairing_realtime_consumer_with_rx(&mut rx, pairing_emitter).await
+                }
+                None => run_pairing_realtime_consumer(pairing_bridge, pairing_emitter).await,
+            };
+            if let Err(err) = result {
                 warn!(error = %err, "pairing realtime consumer stopped");
             }
         })
@@ -118,7 +170,11 @@ pub async fn start_realtime_runtime(
     let peers_emitter = event_emitter.clone();
     task_registry
         .spawn("realtime_peers_consumer", |_token| async move {
-            if let Err(err) = run_peers_realtime_consumer(peers_bridge, peers_emitter).await {
+            let result = match peers_rx {
+                Some(mut rx) => run_peers_realtime_consumer_with_rx(&mut rx, peers_emitter).await,
+                None => run_peers_realtime_consumer(peers_bridge, peers_emitter).await,
+            };
+            if let Err(err) = result {
                 warn!(error = %err, "peers realtime consumer stopped");
             }
         })
@@ -128,8 +184,30 @@ pub async fn start_realtime_runtime(
     let setup_hub_clone = setup_hub.clone();
     task_registry
         .spawn("realtime_setup_consumer", |_token| async move {
-            if let Err(err) = run_setup_realtime_consumer(setup_bridge, setup_hub_clone).await {
+            let result = match setup_rx {
+                Some(mut rx) => run_setup_realtime_consumer_with_rx(&mut rx, setup_hub_clone).await,
+                None => run_setup_realtime_consumer(setup_bridge, setup_hub_clone).await,
+            };
+            if let Err(err) = result {
                 warn!(error = %err, "setup realtime consumer stopped");
+            }
+        })
+        .await;
+
+    let setup_state_bridge = bridge.clone();
+    let setup_state_emitter = event_emitter.clone();
+    task_registry
+        .spawn("realtime_setup_state_consumer", |_token| async move {
+            let result = match setup_state_rx {
+                Some(mut rx) => {
+                    run_setup_state_realtime_consumer_with_rx(&mut rx, setup_state_emitter).await
+                }
+                None => {
+                    run_setup_state_realtime_consumer(setup_state_bridge, setup_state_emitter).await
+                }
+            };
+            if let Err(err) = result {
+                warn!(error = %err, "setup state realtime consumer stopped");
             }
         })
         .await;

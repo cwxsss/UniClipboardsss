@@ -20,6 +20,7 @@ use uc_core::network::pairing_state_machine::PairingAction;
 use uc_infra::fs::key_slot_store::KeySlotStore;
 
 use crate::api::auth::{load_or_create_auth_token, resolve_daemon_token_path};
+use crate::api::event_emitter::DaemonApiEventEmitter;
 use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
 use crate::pairing::host::DaemonPairingHost;
@@ -97,6 +98,10 @@ impl DaemonApp {
         ));
         let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()))
             .with_setup(self.runtime.setup_orchestrator().clone());
+        self.runtime
+            .set_event_emitter(Arc::new(DaemonApiEventEmitter::new(
+                api_state.event_tx.clone(),
+            )));
         let pairing_host = Arc::new(DaemonPairingHost::new(
             self.runtime.clone(),
             self.pairing_orchestrator.clone(),

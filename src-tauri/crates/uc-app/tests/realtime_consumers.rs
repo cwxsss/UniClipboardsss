@@ -7,12 +7,14 @@ use tokio::time::timeout;
 use uc_app::realtime;
 use uc_app::usecases::pairing::PairingDomainEvent;
 use uc_core::network::pairing_state_machine::FailureReason;
+use uc_core::ports::host_event_emitter::SetupHostEvent;
 use uc_core::ports::host_event_emitter::{EmitError, HostEvent, HostEventEmitterPort};
 use uc_core::ports::realtime::{
     PairingCompleteEvent, PairingVerificationRequiredEvent, PeerChangedEvent, RealtimeEvent,
     RealtimeFrontendPayload, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
-    FRONTEND_REALTIME_EVENT,
+    SetupStateChangedEvent, FRONTEND_REALTIME_EVENT,
 };
+use uc_core::setup::SetupState;
 
 struct StubRealtimePort {
     receiver: Mutex<Option<mpsc::Receiver<RealtimeEvent>>>,
@@ -306,10 +308,60 @@ async fn setup_consumer_filters_session_ordering_before_forwarding() {
     assert_setup_consumer_filters_session_ordering_before_forwarding().await;
 }
 
+async fn assert_setup_state_consumer_emits_setup_host_events_to_frontend_adapter() {
+    let (tx, rx) = mpsc::channel(8);
+    let realtime = Arc::new(StubRealtimePort::new(rx));
+    let emitter = Arc::new(RecordingEmitter::default());
+    let consumer_realtime = realtime.clone();
+    let consumer_emitter = emitter.clone();
+
+    let task = tokio::spawn(async move {
+        realtime::run_setup_state_realtime_consumer(consumer_realtime, consumer_emitter).await
+    });
+
+    tx.send(RealtimeEvent::SetupStateChanged(SetupStateChangedEvent {
+        session_id: Some("session-setup".into()),
+        state: SetupState::JoinSpaceConfirmPeer {
+            short_code: "123456".into(),
+            peer_fingerprint: Some("peer-fp".into()),
+            error: None,
+        },
+    }))
+    .await
+    .unwrap();
+    drop(tx);
+
+    task.await.unwrap().unwrap();
+
+    let calls = realtime.subscribe_calls();
+    assert_eq!(
+        calls,
+        vec![("setup_state_realtime_consumer", vec![RealtimeTopic::Setup])]
+    );
+
+    let events = emitter.events();
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        HostEvent::Setup(SetupHostEvent::StateChanged { state, session_id }) => {
+            assert_eq!(session_id.as_deref(), Some("session-setup"));
+            assert!(
+                matches!(state, SetupState::JoinSpaceConfirmPeer { short_code, .. } if short_code == "123456")
+            );
+        }
+        other => panic!("expected HostEvent::Setup, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn setup_state_consumer_emits_setup_host_events_to_frontend_adapter() {
+    assert_setup_state_consumer_emits_setup_host_events_to_frontend_adapter().await;
+}
+
 #[tokio::test]
 async fn realtime_consumer_contract_executes_all_cases() {
     assert_pairing_consumer_maps_typed_realtime_events_to_daemon_realtime_envelope().await;
     assert_peers_consumer_emits_peer_delta_envelopes_without_transport_dto_leakage().await;
     assert_setup_consumer_reuses_shared_realtime_hub().await;
     assert_setup_consumer_filters_session_ordering_before_forwarding().await;
+    assert_setup_state_consumer_emits_setup_host_events_to_frontend_adapter().await;
 }
