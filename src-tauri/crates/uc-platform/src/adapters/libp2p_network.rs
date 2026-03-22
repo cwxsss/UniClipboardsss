@@ -32,6 +32,7 @@ use uc_core::ports::{
 };
 
 use super::file_transfer::service::{FileTransferConfig, FileTransferService};
+use super::network::PairingRuntimeOwner;
 use super::pairing_stream::service::{
     PairingStreamConfig, PairingStreamError, PairingStreamService,
 };
@@ -271,6 +272,7 @@ pub struct Libp2pNetworkAdapter {
     transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
     _transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
     stream_control: Mutex<Option<stream::Control>>,
+    pairing_runtime_owner: PairingRuntimeOwner,
     pairing_service: Mutex<Option<PairingStreamService>>,
     file_transfer_service: Mutex<Option<FileTransferService>>,
     file_cache_dir: PathBuf,
@@ -284,6 +286,7 @@ impl Libp2pNetworkAdapter {
         transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
         transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
         file_cache_dir: PathBuf,
+        pairing_runtime_owner: PairingRuntimeOwner,
     ) -> Result<Self> {
         let keypair = load_or_create_identity(identity_store.as_ref())
             .map_err(|e| anyhow!("failed to load libp2p identity: {e}"))?;
@@ -319,6 +322,7 @@ impl Libp2pNetworkAdapter {
             transfer_decryptor,
             _transfer_encryptor: transfer_encryptor,
             stream_control: Mutex::new(None),
+            pairing_runtime_owner,
             pairing_service,
             file_transfer_service: Mutex::new(None),
             file_cache_dir,
@@ -327,6 +331,10 @@ impl Libp2pNetworkAdapter {
 
     pub fn local_identity_pubkey(&self) -> Vec<u8> {
         self.local_identity_pubkey.clone()
+    }
+
+    pub fn pairing_runtime_owner(&self) -> PairingRuntimeOwner {
+        self.pairing_runtime_owner
     }
 
     async fn ensure_event_fanout_started(&self) -> Result<()> {
@@ -383,12 +391,6 @@ impl Libp2pNetworkAdapter {
             .build();
 
         let stream_control = swarm.behaviour().stream.new_control();
-        let pairing_service = PairingStreamService::new(
-            stream_control.clone(),
-            self.event_tx.clone(),
-            PairingStreamConfig::default(),
-        );
-        pairing_service.spawn_accept_loop();
         {
             let mut guard = self
                 .stream_control
@@ -396,12 +398,24 @@ impl Libp2pNetworkAdapter {
                 .map_err(|_| anyhow!("stream control mutex poisoned"))?;
             *guard = Some(stream_control.clone());
         }
-        {
+        if self.pairing_runtime_owner == PairingRuntimeOwner::CurrentProcess {
+            // CurrentProcess owns local pairing protocol registration and accept loop startup.
+            let pairing_service = PairingStreamService::new(
+                stream_control.clone(),
+                self.event_tx.clone(),
+                PairingStreamConfig::default(),
+            );
+            pairing_service.spawn_accept_loop();
             let mut guard = self
                 .pairing_service
                 .lock()
                 .map_err(|_| anyhow!("pairing service mutex poisoned"))?;
             *guard = Some(pairing_service);
+        } else {
+            info!(
+                local_peer_id = %self.local_peer_id,
+                "skip local pairing runtime initialization and pairing protocol registration; external daemon owns pairing runtime"
+            );
         }
 
         // Construct FileTransferService and spawn accept loop
@@ -2390,7 +2404,7 @@ fn apply_peer_not_ready(caches: &mut PeerCaches, peer_id: &str) -> Option<Networ
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::InMemoryEncryptionSessionPort;
+    use crate::adapters::{InMemoryEncryptionSessionPort, PairingRuntimeOwner};
     use libp2p::futures::{AsyncReadExt, AsyncWriteExt};
     use libp2p::identity;
     use libp2p::Multiaddr;
@@ -2702,6 +2716,19 @@ mod tests {
         }
     }
 
+    fn test_adapter(pairing_runtime_owner: PairingRuntimeOwner) -> Libp2pNetworkAdapter {
+        Libp2pNetworkAdapter::new(
+            Arc::new(TestIdentityStore::default()),
+            Arc::new(FakeResolver),
+            Arc::new(InMemoryEncryptionSessionPort::default()),
+            Arc::new(PassthroughTransferPayloadDecryptor),
+            Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
+            pairing_runtime_owner,
+        )
+        .expect("create adapter")
+    }
+
     #[tokio::test]
     async fn adapter_constructs_with_policy_resolver() {
         let resolver: Arc<dyn ConnectionPolicyResolverPort> = Arc::new(FakeResolver);
@@ -2712,8 +2739,81 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         );
         assert!(adapter.is_ok());
+    }
+
+    #[tokio::test]
+    async fn pairing_runtime_disabled_does_not_initialize_pairing_service() {
+        let adapter = test_adapter(PairingRuntimeOwner::ExternalDaemon);
+
+        adapter.spawn_swarm().expect("start swarm");
+
+        let guard = adapter
+            .pairing_service
+            .lock()
+            .expect("lock pairing service mutex");
+        assert!(guard.is_none(), "pairing service must stay disabled");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pairing_runtime_disabled_does_not_register_pairing_protocol() {
+        let current_process = test_adapter(PairingRuntimeOwner::CurrentProcess);
+        let external_daemon = test_adapter(PairingRuntimeOwner::ExternalDaemon);
+        let rx_a = current_process
+            .subscribe_events()
+            .await
+            .expect("subscribe a");
+        let rx_b = external_daemon
+            .subscribe_events()
+            .await
+            .expect("subscribe b");
+
+        current_process.spawn_swarm().expect("start swarm a");
+        external_daemon.spawn_swarm().expect("start swarm b");
+
+        let peer_a = current_process.local_peer_id();
+        let peer_b = external_daemon.local_peer_id();
+
+        sleep(Duration::from_millis(200)).await;
+
+        if wait_for_mutual_discovery_or_skip(rx_a, rx_b, &peer_a, &peer_b)
+            .await
+            .is_none()
+        {
+            return;
+        }
+
+        let result = timeout(
+            Duration::from_secs(10),
+            PairingTransportPort::open_pairing_session(
+                &current_process,
+                peer_b.clone(),
+                "disabled-pairing-protocol".to_string(),
+            ),
+        )
+        .await
+        .expect("open pairing session timeout")
+        .expect_err("pairing protocol must be unavailable");
+
+        assert!(
+            result.to_string().contains("unsupported"),
+            "expected unsupported protocol error, got: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pairing_runtime_current_process_initializes_pairing_service() {
+        let adapter = test_adapter(PairingRuntimeOwner::CurrentProcess);
+
+        adapter.spawn_swarm().expect("start swarm");
+
+        let guard = adapter
+            .pairing_service
+            .lock()
+            .expect("lock pairing service mutex");
+        assert!(guard.is_some(), "pairing service must be initialized");
     }
 
     #[tokio::test]
@@ -2725,6 +2825,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -2747,6 +2848,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -2870,6 +2972,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -3015,6 +3118,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -3039,6 +3143,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -3065,6 +3170,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
         let local_peer_id = adapter.local_peer_id();
@@ -3148,6 +3254,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
         let payload: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4].into_boxed_slice());
@@ -3197,6 +3304,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -3217,6 +3325,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -3278,6 +3387,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3287,6 +3397,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter b");
         let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
@@ -3316,6 +3427,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3325,6 +3437,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter b");
         let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
@@ -3384,6 +3497,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter a");
         let adapter_b = Libp2pNetworkAdapter::new(
@@ -3393,6 +3507,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter b");
         let rx_a = adapter_a
@@ -3487,6 +3602,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -3639,6 +3755,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 
@@ -3703,6 +3820,7 @@ mod tests {
             Arc::new(PassthroughTransferPayloadDecryptor),
             Arc::new(PassthroughTransferPayloadEncryptor),
             PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::CurrentProcess,
         )
         .expect("create adapter");
 

@@ -25,4 +25,4 @@ pub use blob_store::FilesystemBlobStore;
 pub use encryption::{InMemoryEncryptionSessionPort, PlaceholderEncryptionSessionPort};
 pub use in_memory_watcher_control::InMemoryWatcherControl;
 pub use libp2p_network::Libp2pNetworkAdapter;
-pub use network::PlaceholderNetworkPort;
+pub use network::{DisabledPairingTransport, PairingRuntimeOwner, PlaceholderNetworkPort};
