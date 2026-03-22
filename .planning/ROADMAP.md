@@ -274,45 +274,17 @@ Plans:
 - [x] 46-04-PLAN.md — Gap Closure For Setup Pairing Facade Extraction (completed 2026-03-20)
 - [x] 46-05-PLAN.md — Gap Closure For Live GUI Pairing Bridge Activation (completed 2026-03-20)
 
-### Phase 46.4: 当前基于 daemon 重构后的 setup 流程还没有跑通(GUI), 为了加快开发和调试,我考虑先实现 cli 版本的 setup 流程, 理论上 cli 和 gui 都走的同一个流程,只是不同的入口,所以我考虑先将 cli +daemon 的方式给打通. 端到端将如何进行测试,你需要在两个终端中,分别起一个 peerA (full mode), 另一个是 peerB (passive mode), 然后让 peerB 成功与peerA 进行配对,也就是说, peerA 先新建加密空间, B 需要发现 A,B 请求A,A确认, B 输入加密口令, A 验证加密口令, 最终B成功加入 A; 对于 A 和 B 查询已配对设备都应该能看到对方. (INSERTED)
+### Phase 46.6: daemon 需要跟随 tauri 启动和关闭,现在 tauri 关闭后,daemon 完全变成了孤儿进程 (INSERTED)
 
-**Goal:** Expose the daemon-backed setup flow through CLI and validate a repeatable two-terminal `peerA` / `peerB` operator workflow
-**Requirements**: PH46-01, PH46-03, PH46-04, PH46-06, PH46-01A, PH45-05, CLI-01, CLI-04, CLI-05
-**Depends on:** Phase 46
-**Plans:** 3/3 plans complete
-
-Plans:
-
-- [x] 46.4-01-PLAN.md — Daemon setup transport foundation (completed 2026-03-21)
-- [x] 46.4-02-PLAN.md — CLI setup command family over daemon transport (completed 2026-03-21)
-- [x] 46.4-03-PLAN.md — Reset/repeatability and acceptance proof (completed 2026-03-21)
-
-### Phase 46.3: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (INSERTED)
-
-**Goal:** Gate GUI startup on a compatible local UniClipboard daemon, boundedly replace incompatible daemons on the expected local endpoint, and surface a deterministic startup failure/recovery path instead of silently entering the main app.
-**Requirements**: GUI-DMN-01, GUI-DMN-02, GUI-DMN-03, GUI-DMN-04, GUI-DMN-05
-**Depends on:** Phase 46
-**Plans:** 2/4 plans executed
+**Goal:** Introduce a separate GUI runtime lifecycle owner contract for live GUI-spawned daemon children, clean them up only on real application exit, preserve close-to-tray semantics, and never terminate independently started daemons.
+**Requirements**: P46.6-01, P46.6-02, P46.6-03, P46.6-04, P46.6-05
+**Depends on:** Phase 46.3
+**Plans:** 2 plans
 
 Plans:
 
-- [x] 46.3-01-PLAN.md — Shared release version contract and daemon compatibility probe classification (completed 2026-03-22)
-- [x] 46.3-02-PLAN.md — Narrow local daemon PID metadata and bounded incompatible-daemon replacement (completed 2026-03-22)
-- [ ] 46.3-03-PLAN.md — Startup state contract, window gating, and traced startup status/retry commands
-- [ ] 46.3-04-PLAN.md — Frontend startup error page, polling recovery hook, and top-level app gating
-
-### Phase 46.2: 彻底打通基于 daemon 的配对流程, 完全移除原 tauri 中相关的配对流程. 期望: 在不改变用户配对流程的情况下,内部替换成基于 daemon 的配对流程实现 (INSERTED)
-
-**Goal:** Complete the daemon-only pairing hard cutover for desktop pairing flows while preserving the existing user-visible UX and stage semantics.
-**Requirements**: R46.2-1, R46.2-2, R46.2-3, R46.2-4, R46.2-5, R46.2-6, R46.2-7, R46.2-8
-**Depends on:** Phase 46
-**Plans:** 3/3 plans complete
-
-Plans:
-
-- [x] 46.2-01-PLAN.md — Daemon Pairing Host Contract And Metadata Boundary (completed 2026-03-21)
-- [x] 46.2-02-PLAN.md — Requirements Traceability And Tauri Shell Cutover (completed 2026-03-21)
-- [x] 46.2-03-PLAN.md — Frontend Pairing Flow Parity And Regression Coverage (completed 2026-03-21)
+- [ ] 46.6-01-PLAN.md — GUI-owned daemon lifecycle contract and spawn/replacement registration
+- [ ] 46.6-02-PLAN.md — Real-exit cleanup gate, tray-safe no-op paths, and shutdown regression coverage
 
 ### Phase 46.1: Unify realtime subscriptions on single DaemonWsBridge (INSERTED)
 
@@ -328,6 +300,59 @@ Plans:
 - [x] 46.1-03-PLAN.md — Singleton DaemonWsBridge And Unified Runtime Startup (completed 2026-03-20)
 - [x] 46.1-04-PLAN.md — Frontend Contract Cutover To daemon://realtime (completed 2026-03-20)
 - [x] 46.1-05-PLAN.md — Legacy Bridge Deletion And Realtime Cleanup (completed 2026-03-20)
+
+### Phase 46.2: 彻底打通基于 daemon 的配对流程, 完全移除原 tauri 中相关的配对流程. 期望: 在不改变用户配对流程的情况下,内部替换成基于 daemon 的配对流程实现 (INSERTED)
+
+**Goal:** Complete the daemon-only pairing hard cutover for desktop pairing flows while preserving the existing user-visible UX and stage semantics.
+**Requirements**: R46.2-1, R46.2-2, R46.2-3, R46.2-4, R46.2-5, R46.2-6, R46.2-7, R46.2-8
+**Depends on:** Phase 46
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 46.2-01-PLAN.md — Daemon Pairing Host Contract And Metadata Boundary (completed 2026-03-21)
+- [x] 46.2-02-PLAN.md — Requirements Traceability And Tauri Shell Cutover (completed 2026-03-21)
+- [x] 46.2-03-PLAN.md — Frontend Pairing Flow Parity And Regression Coverage (completed 2026-03-21)
+
+### Phase 46.3: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (INSERTED)
+
+**Goal:** Gate GUI startup on a compatible local UniClipboard daemon, boundedly replace incompatible daemons on the expected local endpoint, and surface a deterministic startup failure/recovery path instead of silently entering the main app.
+**Requirements**: GUI-DMN-01, GUI-DMN-02, GUI-DMN-03, GUI-DMN-04, GUI-DMN-05
+**Depends on:** Phase 46
+**Plans:** 1/4 plans executed
+
+Plans:
+
+- [x] 46.3-01-PLAN.md — Shared release version contract and daemon compatibility probe classification (completed 2026-03-22)
+- [ ] 46.3-02-PLAN.md — Narrow local daemon PID metadata and bounded incompatible-daemon replacement
+- [ ] 46.3-03-PLAN.md — Startup state contract, window gating, and traced startup status/retry commands
+- [ ] 46.3-04-PLAN.md — Frontend startup error page, polling recovery hook, and top-level app gating
+
+### Phase 46.4: 当前基于 daemon 重构后的 setup 流程还没有跑通(GUI), 为了加快开发和调试,我考虑先实现 cli 版本的 setup 流程, 理论上 cli 和 gui 都走的同一个流程,只是不同的入口,所以我考虑先将 cli +daemon 的方式给打通. 端到端将如何进行测试,你需要在两个终端中,分别起一个 peerA (full mode), 另一个是 peerB (passive mode), 然后让 peerB 成功与peerA 进行配对,也就是说, peerA 先新建加密空间, B 需要发现 A,B 请求A,A确认, B 输入加密口令, A 验证加密口令, 最终B成功加入 A; 对于 A 和 B 查询已配对设备都应该能看到对方. (INSERTED)
+
+**Goal:** Expose the daemon-backed setup flow through CLI and validate a repeatable two-terminal `peerA` / `peerB` operator workflow
+**Requirements**: PH46-01, PH46-03, PH46-04, PH46-06, PH46-01A, PH45-05, CLI-01, CLI-04, CLI-05
+**Depends on:** Phase 46
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 46.4-01-PLAN.md — Daemon setup transport foundation (completed 2026-03-21)
+- [x] 46.4-02-PLAN.md — CLI setup command family over daemon transport (completed 2026-03-21)
+- [x] 46.4-03-PLAN.md — Reset/repeatability and acceptance proof (completed 2026-03-21)
+
+### Phase 46.5: 将配对业务逻辑从 Tauri 层彻底移除，统一收口到 daemon (INSERTED)
+
+**Goal:** Remove GUI-owned pairing runtime and keep `uc-tauri` as a thin daemon command/realtime shell for all pairing and setup pairing flows.
+**Requirements**: PH46-05, PH461-06, R46.2-1, R46.2-2, R46.2-4, R46.2-7, R46.2-8
+**Depends on:** Phase 46
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 46.5-01-PLAN.md — Runtime ownership cutover in `uc-bootstrap` + `uc-platform`
+- [ ] 46.5-02-PLAN.md — Daemon-only pairing/setup command shell cutover in `uc-tauri`
+- [ ] 46.5-03-PLAN.md — Regression and contract coverage for daemon-only pairing ownership
 
 ### Phase 47: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 
