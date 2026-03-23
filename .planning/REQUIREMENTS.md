@@ -130,6 +130,15 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [ ] **PH51-02**: daemon `peers.changed` websocket event carries a full peer snapshot list (not a single-peer increment), matching frontend full-replacement semantics
 - [ ] **PH51-03**: `GetP2pPeersSnapshot` use case has defense-in-depth `local_peer_id` exclusion independent of the adapter-level filter
 
+### Daemon Space Access SSOT
+
+- [ ] **PH52-01**: daemon broadcasts `space_access.state_changed` WS event carrying full `SpaceAccessState` snapshot after every orchestrator dispatch
+- [ ] **PH52-02**: daemon exposes `GET /space-access/state` HTTP endpoint returning the current `SpaceAccessState`
+- [ ] **PH52-03**: WS subscribe to `space-access` topic delivers snapshot-first event followed by incremental `state_changed` events
+- [ ] **PH52-04**: GUI process no longer instantiates `SpaceAccessOrchestrator` — `GuiBootstrapContext` has no `space_access_orchestrator` field
+- [ ] **PH52-05**: `DaemonWsBridge` translates `space_access.state_changed` into `RealtimeEvent::SpaceAccessStateChanged` for frontend consumption
+- [ ] **PH52-06**: `wiring.rs` no longer spawns `space_access_completion` background task; space access events flow exclusively through daemon WS
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -211,14 +220,20 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH51-01     | 51    | Pending  |
 | PH51-02     | 51    | Pending  |
 | PH51-03     | 51    | Pending  |
+| PH52-01     | 52    | Pending  |
+| PH52-02     | 52    | Pending  |
+| PH52-03     | 52    | Pending  |
+| PH52-04     | 52    | Pending  |
+| PH52-05     | 52    | Pending  |
+| PH52-06     | 52    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 47 total
-- Mapped to phases: 47
+- v0.4.0 requirements: 53 total
+- Mapped to phases: 53
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-23 after Phase 51 planning_
+_Last updated: 2026-03-23 after Phase 52 planning_

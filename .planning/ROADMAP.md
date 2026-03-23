@@ -413,13 +413,15 @@ Plans:
 
 ### Phase 52: Daemon as single source of truth for space access state
 
-**Goal:** 重设计 daemon ↔ GUI space access 状态同步机制，daemon 作为 space access 唯一状态源，增加持久化层保证重启不丢状态
+**Goal:** Daemon 作为 space access 唯一状态源，移除 GUI 端 SpaceAccessOrchestrator，新增 daemon WS 推送和 HTTP 查询
+**Requirements**: PH52-01, PH52-02, PH52-03, PH52-04, PH52-05, PH52-06
 **Depends on:** Phase 51
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 52 to break down)
+- [ ] 52-01-PLAN.md — Daemon-side space access state broadcasting, HTTP endpoint, and WS topic registration
+- [ ] 52-02-PLAN.md — GUI-side orchestrator removal, DaemonWsBridge event translation, and wiring cleanup
 
 ### Phase 53: End-to-end join space flow verification
 
@@ -430,3 +432,25 @@ Plans:
 Plans:
 
 - [ ] TBD (run /gsd:plan-phase 53 to break down)
+
+### Phase 54: Extract daemon client and realtime infrastructure from uc-tauri
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 53
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 54 to break down)
+
+### Phase 55: Extract daemon lifecycle and setup pairing bridge from uc-tauri
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 54
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 55 to break down)
