@@ -452,6 +452,30 @@ impl PairingOrchestrator {
         .await
     }
 
+    /// User cancels pairing.
+    pub async fn user_cancel_pairing(&self, session_id: &str) -> Result<()> {
+        let span = info_span!("pairing.user_cancel", session_id = %session_id);
+        async {
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
+                    PairingEvent::UserCancel {
+                        session_id: session_id.to_string(),
+                    },
+                )
+                .await?;
+
+            for action in actions {
+                self.execute_action(session_id, "", action).await?;
+            }
+
+            Ok(())
+        }
+        .instrument(span)
+        .await
+    }
+
     /// Handle received Confirm.
     pub async fn handle_confirm(
         &self,

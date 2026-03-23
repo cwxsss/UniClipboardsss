@@ -170,6 +170,27 @@ impl PairingProtocolHandler {
                         session_id: verifying_session_id,
                         peer_display_name,
                     } => {
+                        let peer_id_for_event = {
+                            let peers = session_peers.read().await;
+                            peers
+                                .get(&verifying_session_id)
+                                .map(|info| info.peer_id.clone())
+                        };
+                        if let Some(peer_id) = peer_id_for_event {
+                            tracing::info!(
+                                session_id = %verifying_session_id,
+                                peer_id = %peer_id,
+                                "Emitting pairing verifying domain event"
+                            );
+                            Self::emit_event_to_senders(
+                                event_senders.clone(),
+                                PairingDomainEvent::PairingVerifying {
+                                    session_id: verifying_session_id.clone(),
+                                    peer_id,
+                                },
+                            )
+                            .await;
+                        }
                         tracing::debug!(
                             session_id = %verifying_session_id,
                             action = "ShowVerifying",

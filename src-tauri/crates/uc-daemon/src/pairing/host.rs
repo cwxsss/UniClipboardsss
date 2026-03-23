@@ -14,10 +14,9 @@ use uc_app::usecases::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
 };
 use uc_app::usecases::SetupOrchestrator;
-use uc_core::network::pairing_state_machine::{CancellationBy, PairingAction, PairingRole};
+use uc_core::network::pairing_state_machine::{PairingAction, PairingRole};
 use uc_core::network::{
-    protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingCancel, PairingMessage,
-    PairingRequest,
+    protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
 };
 use uc_core::security::model::{KeySlot, KeySlotFile};
 use uc_core::security::space_access::{deny_reason_from_code, SpaceAccessProofArtifact};
@@ -266,36 +265,6 @@ impl DaemonPairingHost {
             .user_accept_pairing(session_id)
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
-        upsert_pairing_snapshot(
-            &self.state,
-            session_id.to_string(),
-            self.session_peer_id(session_id).await,
-            self.session_device_name(session_id).await,
-            "verifying",
-            now_ms(),
-        )
-        .await;
-        let peer_id = self.session_peer_id(session_id).await;
-        let device_name = self.session_device_name(session_id).await;
-        emit_pairing_session_changed(
-            &self.event_tx,
-            session_id,
-            "verifying",
-            peer_id.clone(),
-            device_name.clone(),
-            now_ms(),
-        );
-        emit_pairing_verification(
-            &self.event_tx,
-            session_id,
-            "verifying",
-            peer_id,
-            device_name,
-            None,
-            None,
-            None,
-            None,
-        );
         Ok(())
     }
 
@@ -305,93 +274,16 @@ impl DaemonPairingHost {
             .user_reject_pairing(session_id)
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
-        mark_pairing_session_terminal(
-            &self.state,
-            session_id.to_string(),
-            self.session_peer_id(session_id).await,
-            self.session_device_name(session_id).await,
-            "failed",
-            now_ms(),
-        )
-        .await;
-        let peer_id = self.session_peer_id(session_id).await;
-        let device_name = self.session_device_name(session_id).await;
-        let reason = "rejected_by_local_user";
-        emit_pairing_session_changed(
-            &self.event_tx,
-            session_id,
-            "failed",
-            peer_id.clone(),
-            device_name.clone(),
-            now_ms(),
-        );
-        emit_pairing_verification(
-            &self.event_tx,
-            session_id,
-            "failed",
-            peer_id.clone(),
-            device_name,
-            None,
-            Some(reason.to_string()),
-            None,
-            None,
-        );
-        emit_pairing_failure(&self.event_tx, session_id, peer_id, reason);
         self.clear_active_session(Some(session_id)).await;
         Ok(())
     }
 
     pub async fn cancel_pairing(&self, session_id: &str) -> Result<(), DaemonPairingHostError> {
-        let peer_id = self
-            .session_peer_id(session_id)
-            .await
-            .ok_or_else(|| DaemonPairingHostError::SessionNotFound(session_id.to_string()))?;
-        let pairing_transport = self.runtime.wiring_deps().network_ports.pairing.clone();
-
-        pairing_transport
-            .open_pairing_session(peer_id.clone(), session_id.to_string())
+        self.require_session(session_id).await?;
+        self.pairing_orchestrator
+            .user_cancel_pairing(session_id)
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
-        pairing_transport
-            .send_pairing_on_session(PairingMessage::Cancel(PairingCancel {
-                session_id: session_id.to_string(),
-                reason: None,
-            }))
-            .await
-            .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
-
-        mark_pairing_session_terminal(
-            &self.state,
-            session_id.to_string(),
-            Some(peer_id),
-            self.session_device_name(session_id).await,
-            cancellation_state_label(CancellationBy::LocalUser),
-            now_ms(),
-        )
-        .await;
-        let peer_id = self.session_peer_id(session_id).await;
-        let device_name = self.session_device_name(session_id).await;
-        let reason = "cancelled_by_local_user";
-        emit_pairing_session_changed(
-            &self.event_tx,
-            session_id,
-            "failed",
-            peer_id.clone(),
-            device_name.clone(),
-            now_ms(),
-        );
-        emit_pairing_verification(
-            &self.event_tx,
-            session_id,
-            "failed",
-            peer_id.clone(),
-            device_name,
-            None,
-            Some(reason.to_string()),
-            None,
-            None,
-        );
-        emit_pairing_failure(&self.event_tx, session_id, peer_id, reason);
         self.clear_active_session(Some(session_id)).await;
         Ok(())
     }
@@ -417,30 +309,32 @@ impl DaemonPairingHost {
         self.ensure_inbound_admitted(&peer_id, &session_id).await?;
         self.bind_active_session(session_id.clone()).await;
 
-        upsert_pairing_snapshot(
-            &self.state,
-            session_id.clone(),
-            Some(peer_id.clone()),
-            Some(request.device_name.clone()),
-            "request",
-            now_ms(),
-        )
-        .await;
-        emit_pairing_session_changed(
-            &self.event_tx,
-            &session_id,
-            "request",
-            Some(peer_id.clone()),
-            Some(request.device_name.clone()),
-            now_ms(),
-        );
-
+        let device_name = request.device_name.clone();
         match self
             .pairing_orchestrator
-            .handle_incoming_request(peer_id, request)
+            .handle_incoming_request(peer_id.clone(), request)
             .await
         {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                upsert_pairing_snapshot(
+                    &self.state,
+                    session_id.clone(),
+                    Some(peer_id.clone()),
+                    Some(device_name.clone()),
+                    "request",
+                    now_ms(),
+                )
+                .await;
+                emit_pairing_session_changed(
+                    &self.event_tx,
+                    &session_id,
+                    "request",
+                    Some(peer_id),
+                    Some(device_name),
+                    now_ms(),
+                );
+                Ok(())
+            }
             Err(err) => {
                 self.clear_active_session(Some(&session_id)).await;
                 Err(DaemonPairingHostError::Internal(err.to_string()))
@@ -960,6 +854,44 @@ async fn run_pairing_domain_event_loop(
                         )
                         .await;
                         clear_active_session_slot(&active_session_id, &session_id).await;
+                    }
+                    PairingDomainEvent::PairingVerifying {
+                        session_id,
+                        peer_id,
+                    } => {
+                        let device_name = pairing_orchestrator
+                            .get_session_peer(&session_id)
+                            .await
+                            .and_then(|peer| peer.device_name);
+                        let ts = now_ms();
+                        upsert_pairing_snapshot(
+                            &state,
+                            session_id.clone(),
+                            Some(peer_id.clone()),
+                            device_name.clone(),
+                            "verifying",
+                            ts,
+                        )
+                        .await;
+                        emit_pairing_session_changed(
+                            &event_tx,
+                            &session_id,
+                            "verifying",
+                            Some(peer_id.clone()),
+                            device_name.clone(),
+                            ts,
+                        );
+                        emit_pairing_verification(
+                            &event_tx,
+                            &session_id,
+                            "verifying",
+                            Some(peer_id),
+                            device_name,
+                            None,
+                            None,
+                            None,
+                            None,
+                        );
                     }
                     PairingDomainEvent::PairingFailed {
                         session_id,
@@ -1591,12 +1523,6 @@ async fn clear_active_session_slot(
 fn prune_expired_leases(leases: &mut HashMap<String, LeaseRegistration>) {
     let now = now_ms();
     leases.retain(|_, lease| lease.expires_at_ms > now);
-}
-
-fn cancellation_state_label(cancelled_by: CancellationBy) -> &'static str {
-    match cancelled_by {
-        CancellationBy::LocalUser | CancellationBy::RemoteUser | CancellationBy::System => "failed",
-    }
 }
 
 fn pairing_events_subscribe_backoff_ms(attempt: u32) -> u64 {

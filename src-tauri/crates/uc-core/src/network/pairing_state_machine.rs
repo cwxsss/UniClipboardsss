@@ -1377,6 +1377,20 @@ impl PairingStateMachine {
             (PairingState::ChallengeSent { session_id }, PairingEvent::RecvBusy { reason, .. }) => {
                 self.fail_with_reason(session_id, busy_failure_reason(reason))
             }
+            (PairingState::ChallengeSent { session_id }, PairingEvent::UserCancel { .. }) => self
+                .cancel_with_reason(
+                    session_id.clone(),
+                    CancellationBy::LocalUser,
+                    Some("User cancelled pairing".to_string()),
+                    Some(PairingAction::Send {
+                        peer_id: self.context.peer_id.clone().unwrap_or_default(),
+                        message: PairingMessage::Cancel(PairingCancel {
+                            session_id: session_id.clone(),
+                            reason: Some("user_cancel".to_string()),
+                        }),
+                    }),
+                    Some(TimeoutKind::WaitingResponse),
+                ),
             (
                 PairingState::Finalizing { session_id, .. },
                 PairingEvent::PersistOk { device_id, .. },
