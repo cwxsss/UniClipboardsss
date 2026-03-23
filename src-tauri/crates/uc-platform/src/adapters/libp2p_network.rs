@@ -949,6 +949,17 @@ impl NetworkControlPort for Libp2pNetworkAdapter {
             }
         }
 
+        if self.pairing_runtime_owner == PairingRuntimeOwner::ExternalDaemon {
+            self.start_state
+                .store(START_STATE_STARTED, Ordering::Release);
+            info!(
+                state = start_state_name(START_STATE_STARTED),
+                local_peer_id = %self.local_peer_id,
+                "start_network skipped because external daemon owns libp2p swarm"
+            );
+            return Ok(());
+        }
+
         match self.spawn_swarm() {
             Ok(()) => {
                 self.start_state
@@ -2836,6 +2847,48 @@ mod tests {
         assert!(
             second.is_ok(),
             "second start should be idempotent: {second:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_network_skips_swarm_when_pairing_runtime_is_external_daemon() {
+        let adapter = Libp2pNetworkAdapter::new(
+            Arc::new(TestIdentityStore::default()),
+            Arc::new(FakeResolver),
+            Arc::new(InMemoryEncryptionSessionPort::default()),
+            Arc::new(PassthroughTransferPayloadDecryptor),
+            Arc::new(PassthroughTransferPayloadEncryptor),
+            PathBuf::from("/tmp/test-file-cache"),
+            PairingRuntimeOwner::ExternalDaemon,
+        )
+        .expect("create adapter");
+
+        let result = NetworkControlPort::start_network(&adapter).await;
+
+        assert!(
+            result.is_ok(),
+            "external daemon start should succeed: {result:?}"
+        );
+        assert_eq!(
+            adapter.start_state.load(Ordering::Acquire),
+            START_STATE_STARTED,
+            "external daemon mode should still mark network as started"
+        );
+        assert!(
+            adapter
+                .stream_control
+                .lock()
+                .expect("lock stream control")
+                .is_none(),
+            "external daemon mode must not spawn a local swarm"
+        );
+        assert!(
+            adapter
+                .pairing_service
+                .lock()
+                .expect("lock pairing service")
+                .is_none(),
+            "external daemon mode must not initialize pairing service"
         );
     }
 
