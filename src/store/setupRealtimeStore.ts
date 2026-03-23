@@ -112,6 +112,12 @@ export async function ensureSetupRealtimeSync(): Promise<void> {
           return
         }
 
+        // Skip if setup is already completed (sponsor role — this event fires on both
+        // sponsor and joiner sides, but only the joiner needs to finalize setup here).
+        if (snapshot.setupState === 'Completed') {
+          return
+        }
+
         try {
           const newState = await handleSpaceAccessCompleted()
           updateSnapshot(newState, event.sessionId)

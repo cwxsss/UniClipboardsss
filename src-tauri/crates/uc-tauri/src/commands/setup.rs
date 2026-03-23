@@ -215,6 +215,10 @@ pub async fn cancel_setup(
 /// the WebSocket bridge. This bridges the gap between the daemon's space access
 /// orchestrator completing and the app's setup orchestrator transitioning to
 /// `Completed`.
+///
+/// Note: `setup.spaceAccessCompleted` fires on both sponsor and joiner sides.
+/// For the sponsor (already Completed), `get_state()` seeds the context from
+/// persisted status and returns `Completed` without dispatching any transition.
 #[tauri::command]
 pub async fn handle_space_access_completed(
     runtime: State<'_, Arc<AppRuntime>>,
@@ -227,9 +231,19 @@ pub async fn handle_space_access_completed(
     );
     record_trace_fields(&span, &_trace);
     async {
-        runtime
-            .usecases()
-            .setup_orchestrator()
+        let orchestrator = runtime.usecases().setup_orchestrator();
+
+        // Seed the in-process orchestrator state from persisted status before
+        // dispatching. This ensures that a sponsor (already Completed) does not
+        // receive an invalid JoinSpaceSucceeded transition that would reset the
+        // frontend to the Welcome screen.
+        let current_state = orchestrator.get_state().await;
+        if matches!(current_state, SetupState::Completed) {
+            tracing::debug!("handle_space_access_completed: setup already completed, returning Completed (sponsor role)");
+            return Ok(SetupState::Completed);
+        }
+
+        orchestrator
             .complete_join_space()
             .await
             .map_err(|e| match e {
