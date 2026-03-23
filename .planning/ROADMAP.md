@@ -405,7 +405,7 @@ Plans:
 **Goal:** 修复 mDNS peer 发现去重 bug: get_discovered_peers 过滤 local_peer_id、daemon peers.changed 改为全量快照语义
 **Requirements**: PH51-01, PH51-02, PH51-03
 **Depends on:** Phase 50
-**Plans:** 1 plans
+**Plans:** 1/1 plans complete
 
 Plans:
 
