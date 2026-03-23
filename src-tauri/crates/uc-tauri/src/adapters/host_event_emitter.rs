@@ -971,6 +971,7 @@ fn realtime_topic_to_str(topic: &RealtimeTopic) -> &'static str {
         RealtimeTopic::Peers => "peers",
         RealtimeTopic::PairedDevices => "pairedDevices",
         RealtimeTopic::Setup => "setup",
+        RealtimeTopic::SpaceAccess => "spaceAccess",
     }
 }
 

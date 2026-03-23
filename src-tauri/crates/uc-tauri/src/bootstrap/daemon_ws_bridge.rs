@@ -17,14 +17,14 @@ use uc_core::ports::realtime::{
     PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
     PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
     PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
-    SetupSpaceAccessCompletedEvent, SetupStateChangedEvent,
+    SetupSpaceAccessCompletedEvent, SetupStateChangedEvent, SpaceAccessStateChangedEvent,
 };
 use uc_daemon::api::auth::DaemonConnectionInfo;
 use uc_daemon::api::types::{
     DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload,
     PairingSessionChangedPayload, PairingVerificationPayload, PeerConnectionChangedPayload,
     PeerNameUpdatedPayload, PeersChangedFullPayload, SetupSpaceAccessCompletedPayload,
-    SetupStateChangedPayload,
+    SetupStateChangedPayload, SpaceAccessStateChangedPayload,
 };
 
 use super::DaemonConnectionState;
@@ -719,6 +719,24 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     })
                 })
         }
+        "space_access.state_changed" => {
+            serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload)
+                .ok()
+                .map(|payload| {
+                    RealtimeEvent::SpaceAccessStateChanged(SpaceAccessStateChangedEvent {
+                        state: payload.state,
+                    })
+                })
+        }
+        "space_access.snapshot" => {
+            serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload)
+                .ok()
+                .map(|payload| {
+                    RealtimeEvent::SpaceAccessStateChanged(SpaceAccessStateChangedEvent {
+                        state: payload.state,
+                    })
+                })
+        }
         _ => None,
     }
 }
@@ -736,6 +754,7 @@ fn event_topic(event: &RealtimeEvent) -> RealtimeTopic {
         RealtimeEvent::SetupStateChanged(_) | RealtimeEvent::SetupSpaceAccessCompleted(_) => {
             RealtimeTopic::Setup
         }
+        RealtimeEvent::SpaceAccessStateChanged(_) => RealtimeTopic::SpaceAccess,
     }
 }
 
@@ -745,6 +764,7 @@ fn topic_name(topic: &RealtimeTopic) -> &'static str {
         RealtimeTopic::Peers => "peers",
         RealtimeTopic::PairedDevices => "paired-devices",
         RealtimeTopic::Setup => "setup",
+        RealtimeTopic::SpaceAccess => "space-access",
     }
 }
 
