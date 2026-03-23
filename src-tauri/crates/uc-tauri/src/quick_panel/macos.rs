@@ -12,8 +12,8 @@ use core_graphics::event::{CGEvent, CGEventFlags, CGKeyCode};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use objc2::ffi::object_setClass;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, ClassType, MainThreadMarker};
-use objc2_app_kit::{NSPanel, NSScreen, NSWindowStyleMask};
+use objc2::{define_class, msg_send, ClassType, MainThreadMarker};
+use objc2_app_kit::{NSColor, NSPanel, NSScreen, NSWindowStyleMask};
 use tauri::WebviewWindow;
 use tracing::{error, info, warn};
 
@@ -69,9 +69,34 @@ pub fn convert_to_panel(window: &WebviewWindow) {
         panel.setFloatingPanel(true); // Float above other windows
         panel.setBecomesKeyOnlyIfNeeded(false); // Accept keyboard input immediately
         panel.setHidesOnDeactivate(false); // Don't auto-hide on app deactivation
+
+        // 5. Window-level transparency (CSS handles rounded corners)
+        make_panel_transparent(panel);
+    }
+
+    // 6. Disable WKWebView background drawing so CSS transparency works
+    if let Err(e) = window.with_webview(|webview| unsafe {
+        let wk: *mut AnyObject = webview.inner().cast();
+        if !wk.is_null() {
+            let _: () = msg_send![&*wk, _setDrawsBackground: false];
+        }
+    }) {
+        warn!(error = %e, "Failed to set webview background transparent");
     }
 
     info!("Converted NSWindow → UCKeyablePanel with NonactivatingPanel");
+}
+
+/// Make a borderless NSPanel fully transparent so CSS handles all visuals.
+///
+/// Only sets window-level transparency. Rounded corners are handled by
+/// CSS `rounded-xl overflow-hidden` on the root container — no native
+/// `cornerRadius`/`masksToBounds` needed. Avoiding `setWantsLayer` on the
+/// contentView prevents WKWebView repaint issues where mouse interaction
+/// would cause the layer-backed compositing to draw an opaque background.
+unsafe fn make_panel_transparent(panel: &NSPanel) {
+    panel.setOpaque(false);
+    panel.setBackgroundColor(Some(&NSColor::clearColor()));
 }
 
 /// Show the panel without activating the app.
