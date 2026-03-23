@@ -457,11 +457,13 @@ Plans:
 
 ### Phase 56: Refactor daemon host architecture — extract peer lifecycle from PairingHost, unify host lifecycle management
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Refactor daemon host architecture so peer lifecycle handling is isolated in `PeerMonitor` and all long-lived daemon components run through one unified service lifecycle without changing the external pairing/setup API contract.
+**Requirements**: PH56-01, PH56-02, PH56-03, PH56-04
 **Depends on:** Phase 55
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 56 to break down)
+- [ ] 56-01-PLAN.md — Rename daemon worker abstractions to service vocabulary without changing transport contracts
+- [ ] 56-02-PLAN.md — Extract `PeerMonitor` and remove peer lifecycle handling from `DaemonPairingHost`
+- [ ] 56-03-PLAN.md — Unify `DaemonApp` service lifecycle management while preserving typed pairing-host API access
