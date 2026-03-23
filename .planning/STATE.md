@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Phase complete — ready for verification
+status: Ready to plan
 stopped_at: Completed 52-02-PLAN.md
-last_updated: "2026-03-23T13:22:39.846Z"
+last_updated: '2026-03-23T13:32:01.013Z'
 progress:
-  total_phases: 26
+  total_phases: 27
   completed_phases: 18
   total_plans: 59
   completed_plans: 56
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 
 ## Current Position
 
-Phase: 52 (daemon-space-access-ssot) — EXECUTING
-Plan: 2 of 2
+Phase: 53
+Plan: Not started
 
 ## Performance Metrics
 
@@ -226,6 +226,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 53 added: End-to-end join space flow verification — 端到端 join space 流程验证
 - Phase 54 added: Extract daemon client and realtime infrastructure from uc-tauri — 将 daemon HTTP 客户端、WebSocket 桥接、realtime 运行时从 uc-tauri 提取到独立 crate
 - Phase 55 added: Extract daemon lifecycle and setup pairing bridge from uc-tauri — 将 daemon 进程生命周期管理和 setup pairing facade 从 uc-tauri 提取到 uc-daemon/uc-daemon-client
+- Phase 56 added: Refactor daemon host architecture — extract peer lifecycle from PairingHost, unify host lifecycle management
 
 ### Pending Todos
 
