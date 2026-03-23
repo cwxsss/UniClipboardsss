@@ -12,9 +12,10 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{error, info, info_span, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+use uc_app::usecases::CoreUseCases;
 use uc_app::usecases::PairingOrchestrator;
 use uc_core::network::pairing_state_machine::PairingAction;
 use uc_infra::fs::key_slot_store::KeySlotStore;
@@ -28,6 +29,32 @@ use crate::process_metadata::{remove_pid_file, write_current_pid};
 use crate::rpc::server::{check_or_remove_stale_socket, run_rpc_accept_loop};
 use crate::state::{DaemonWorkerSnapshot, RuntimeState};
 use crate::worker::{DaemonWorker, WorkerHealth};
+
+/// Recover encryption session from disk/keyring if encryption has been initialized.
+///
+/// Returns Ok(()) on success or if encryption is not initialized (first run).
+/// Returns Err if encryption is initialized but recovery fails (daemon must not start).
+async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result<()> {
+    let usecases = CoreUseCases::new(runtime);
+    let uc = usecases.auto_unlock_encryption_session();
+    match uc.execute().await {
+        Ok(true) => {
+            info!("Encryption session recovered from disk");
+            Ok(())
+        }
+        Ok(false) => {
+            info!("Encryption not initialized, skipping session recovery");
+            Ok(())
+        }
+        Err(e) => {
+            error!(error = %e, "Encryption session recovery failed");
+            anyhow::bail!(
+                "Cannot start daemon: encryption session recovery failed: {}",
+                e
+            )
+        }
+    }
+}
 
 /// Main daemon application.
 ///
@@ -81,6 +108,12 @@ impl DaemonApp {
     /// Run the daemon: bind RPC socket, start workers, wait for shutdown, cleanup.
     pub async fn run(self) -> anyhow::Result<()> {
         info!("uniclipboard-daemon starting");
+
+        // 0.5 Recover encryption session (fail-fast per D-05: must succeed if Initialized)
+        // Runs before resource acquisition so failure exits cleanly (Codex F-4).
+        recover_encryption_session(&self.runtime)
+            .instrument(info_span!("daemon.startup.recover_encryption_session"))
+            .await?;
 
         // 1. Bind RPC socket FIRST (fail-fast before starting workers)
         check_or_remove_stale_socket(&self.socket_path).await?;
@@ -301,10 +334,6 @@ mod tests {
         let full_source = include_str!("app.rs");
         let prod_source = full_source.split("#[cfg(test)]").next().unwrap_or(full_source);
 
-        // 1. run() calls recover_encryption_session helper (Codex R6-F1)
-        let recovery_call_pos = prod_source.find("recover_encryption_session")
-            .expect("DaemonApp::run() must call recover_encryption_session helper");
-
         // 2. Helper function invokes the actual use case with .execute().await (Codex R5-F1)
         assert!(
             prod_source.contains("auto_unlock_encryption_session"),
@@ -321,13 +350,23 @@ mod tests {
             "Recovery must be instrumented with a tracing span"
         );
 
-        // 4. Recovery call appears BEFORE resource acquisition (Codex R2-F2)
-        let socket_bind_pos = prod_source.find("check_or_remove_stale_socket")
-            .expect("DaemonApp::run() must contain socket bind step");
+        // 4. Recovery call appears inside run() BEFORE socket bind (Codex R2-F2)
+        // Strategy: locate the run() method body and check relative positions within it.
+        // We find "pub async fn run" to get the start of the run method, then search within.
+        let run_fn_start = prod_source.find("pub async fn run")
+            .expect("DaemonApp must have a pub async fn run method");
+        let run_fn_body = &prod_source[run_fn_start..];
+
+        // 1. run() calls recover_encryption_session helper inside run() body (Codex R6-F1)
+        let recovery_call_pos = run_fn_body.find("recover_encryption_session")
+            .expect("DaemonApp::run() body must call recover_encryption_session");
+
+        let socket_bind_pos = run_fn_body.find("check_or_remove_stale_socket")
+            .expect("DaemonApp::run() body must contain check_or_remove_stale_socket");
         assert!(
             recovery_call_pos < socket_bind_pos,
             "Encryption recovery must run BEFORE resource acquisition (socket bind). \
-             Recovery at byte {}, socket bind at byte {}",
+             Recovery at byte {}, socket bind at byte {} (both relative to run() body start)",
             recovery_call_pos, socket_bind_pos
         );
     }
