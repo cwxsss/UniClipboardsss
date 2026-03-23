@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Ready to plan
-stopped_at: Phase 52 context gathered
-last_updated: '2026-03-23T12:10:33.379Z'
+status: Executing Phase 52
+stopped_at: Phase 54 context gathered
+last_updated: '2026-03-23T12:59:42.462Z'
 progress:
-  total_phases: 24
+  total_phases: 26
   completed_phases: 17
-  total_plans: 57
+  total_plans: 59
   completed_plans: 54
 ---
 
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 51 — peer-discovery-deduplication
+**Current focus:** Phase 52 — daemon-space-access-ssot
 
 ## Current Position
 
-Phase: 52
-Plan: Not started
+Phase: 52 (daemon-space-access-ssot) — EXECUTING
+Plan: 1 of 2
 
 ## Performance Metrics
 
@@ -218,6 +218,8 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 51 added: Peer discovery deduplication fix — 修复 mDNS 扫描出重复设备
 - Phase 52 added: Daemon as single source of truth for space access state — daemon 作为 space access 唯一状态源
 - Phase 53 added: End-to-end join space flow verification — 端到端 join space 流程验证
+- Phase 54 added: Extract daemon client and realtime infrastructure from uc-tauri — 将 daemon HTTP 客户端、WebSocket 桥接、realtime 运行时从 uc-tauri 提取到独立 crate
+- Phase 55 added: Extract daemon lifecycle and setup pairing bridge from uc-tauri — 将 daemon 进程生命周期管理和 setup pairing facade 从 uc-tauri 提取到 uc-daemon/uc-daemon-client
 
 ### Pending Todos
 
@@ -233,6 +235,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-23T12:10:33.376Z
-Stopped at: Phase 52 context gathered
-Resume file: .planning/phases/52-daemon-space-access-ssot/52-CONTEXT.md
+Last session: 2026-03-23T12:59:42.459Z
+Stopped at: Phase 54 context gathered
+Resume file: .planning/phases/54-extract-daemon-client-and-realtime-infrastructure-from-uc-tauri/54-CONTEXT.md
