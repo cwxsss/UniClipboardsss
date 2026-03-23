@@ -124,6 +124,12 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH50-02**: When EncryptionState is Uninitialized (first run), daemon starts normally without attempting recovery
 - [x] **PH50-03**: When EncryptionState is Initialized but recovery fails (keyslot corrupt, KEK missing, unwrap failure), daemon refuses to start with a descriptive error
 
+### Peer Discovery Deduplication Fix
+
+- [ ] **PH51-01**: `get_discovered_peers()` implementation filters out `local_peer_id` so the local device never appears in its own discovered peer list
+- [ ] **PH51-02**: daemon `peers.changed` websocket event carries a full peer snapshot list (not a single-peer increment), matching frontend full-replacement semantics
+- [ ] **PH51-03**: `GetP2pPeersSnapshot` use case has defense-in-depth `local_peer_id` exclusion independent of the adapter-level filter
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -202,14 +208,17 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH50-01     | 50    | Complete |
 | PH50-02     | 50    | Complete |
 | PH50-03     | 50    | Complete |
+| PH51-01     | 51    | Pending  |
+| PH51-02     | 51    | Pending  |
+| PH51-03     | 51    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 44 total
-- Mapped to phases: 44
+- v0.4.0 requirements: 47 total
+- Mapped to phases: 47
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-23 after Phase 50 planning_
+_Last updated: 2026-03-23 after Phase 51 planning_

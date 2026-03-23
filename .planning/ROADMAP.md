@@ -402,13 +402,14 @@ Plans:
 
 ### Phase 51: Peer discovery deduplication fix
 
-**Goal:** 修复 mDNS 扫描时同一设备出现多次的问题，确保前端按 peer_id 去重
+**Goal:** 修复 mDNS peer 发现去重 bug: get_discovered_peers 过滤 local_peer_id、daemon peers.changed 改为全量快照语义
+**Requirements**: PH51-01, PH51-02, PH51-03
 **Depends on:** Phase 50
-**Plans:** 0 plans
+**Plans:** 1 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 51 to break down)
+- [ ] 51-01-PLAN.md — Filter local_peer_id from get_discovered_peers and emit full-snapshot peers.changed
 
 ### Phase 52: Daemon as single source of truth for space access state
 
