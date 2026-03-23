@@ -120,9 +120,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Daemon Encryption State Recovery
 
-- [ ] **PH50-01**: DaemonApp::run() calls AutoUnlockEncryptionSession before starting workers so encryption session is available immediately after daemon startup
-- [ ] **PH50-02**: When EncryptionState is Uninitialized (first run), daemon starts normally without attempting recovery
-- [ ] **PH50-03**: When EncryptionState is Initialized but recovery fails (keyslot corrupt, KEK missing, unwrap failure), daemon refuses to start with a descriptive error
+- [x] **PH50-01**: DaemonApp::run() calls AutoUnlockEncryptionSession before starting workers so encryption session is available immediately after daemon startup
+- [x] **PH50-02**: When EncryptionState is Uninitialized (first run), daemon starts normally without attempting recovery
+- [x] **PH50-03**: When EncryptionState is Initialized but recovery fails (keyslot corrupt, KEK missing, unwrap failure), daemon refuses to start with a descriptive error
 
 ## Out of Scope
 
@@ -199,9 +199,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | P46.6-03    | 46.6  | Complete |
 | P46.6-04    | 46.6  | Complete |
 | P46.6-05    | 46.6  | Complete |
-| PH50-01     | 50    | Pending  |
-| PH50-02     | 50    | Pending  |
-| PH50-03     | 50    | Pending  |
+| PH50-01     | 50    | Complete |
+| PH50-02     | 50    | Complete |
+| PH50-03     | 50    | Complete |
 
 **Coverage:**
 

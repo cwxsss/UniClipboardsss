@@ -394,11 +394,11 @@ Plans:
 **Goal:** Daemon 启动时从磁盘恢复 master key 到 encryption session，解决 daemon 重启后 proof verification 失败的问题
 **Requirements**: PH50-01, PH50-02, PH50-03
 **Depends on:** Phase 46.6
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 
-- [ ] 50-01-PLAN.md — Wire AutoUnlockEncryptionSession into DaemonApp::run() with fail-fast and regression test
+- [x] 50-01-PLAN.md — Wire AutoUnlockEncryptionSession into DaemonApp::run() with fail-fast and regression test
 
 ### Phase 51: Peer discovery deduplication fix
 
