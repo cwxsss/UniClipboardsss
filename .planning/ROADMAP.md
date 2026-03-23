@@ -416,12 +416,12 @@ Plans:
 **Goal:** Daemon 作为 space access 唯一状态源，移除 GUI 端 SpaceAccessOrchestrator，新增 daemon WS 推送和 HTTP 查询
 **Requirements**: PH52-01, PH52-02, PH52-03, PH52-04, PH52-05, PH52-06
 **Depends on:** Phase 51
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 
 - [x] 52-01-PLAN.md — Daemon-side space access state broadcasting, HTTP endpoint, and WS topic registration
-- [ ] 52-02-PLAN.md — GUI-side orchestrator removal, DaemonWsBridge event translation, and wiring cleanup
+- [x] 52-02-PLAN.md — GUI-side orchestrator removal, DaemonWsBridge event translation, and wiring cleanup
 
 ### Phase 53: End-to-end join space flow verification
 
@@ -454,3 +454,13 @@ Plans:
 Plans:
 
 - [ ] TBD (run /gsd:plan-phase 55 to break down)
+
+### Phase 56: Refactor daemon host architecture — extract peer lifecycle from PairingHost, unify host lifecycle management
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 55
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 56 to break down)

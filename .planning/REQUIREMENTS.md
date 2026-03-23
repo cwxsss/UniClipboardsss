@@ -135,9 +135,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH52-01**: daemon broadcasts `space_access.state_changed` WS event carrying full `SpaceAccessState` snapshot after every orchestrator dispatch
 - [x] **PH52-02**: daemon exposes `GET /space-access/state` HTTP endpoint returning the current `SpaceAccessState`
 - [x] **PH52-03**: WS subscribe to `space-access` topic delivers snapshot-first event followed by incremental `state_changed` events
-- [ ] **PH52-04**: GUI process no longer instantiates `SpaceAccessOrchestrator` — `GuiBootstrapContext` has no `space_access_orchestrator` field
-- [ ] **PH52-05**: `DaemonWsBridge` translates `space_access.state_changed` into `RealtimeEvent::SpaceAccessStateChanged` for frontend consumption
-- [ ] **PH52-06**: `wiring.rs` no longer spawns `space_access_completion` background task; space access events flow exclusively through daemon WS
+- [x] **PH52-04**: GUI process no longer instantiates `SpaceAccessOrchestrator` — `GuiBootstrapContext` has no `space_access_orchestrator` field
+- [x] **PH52-05**: `DaemonWsBridge` translates `space_access.state_changed` into `RealtimeEvent::SpaceAccessStateChanged` for frontend consumption
+- [x] **PH52-06**: `wiring.rs` no longer spawns `space_access_completion` background task; space access events flow exclusively through daemon WS
 
 ## Out of Scope
 
@@ -223,9 +223,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH52-01     | 52    | Complete |
 | PH52-02     | 52    | Complete |
 | PH52-03     | 52    | Complete |
-| PH52-04     | 52    | Pending  |
-| PH52-05     | 52    | Pending  |
-| PH52-06     | 52    | Pending  |
+| PH52-04     | 52    | Complete |
+| PH52-05     | 52    | Complete |
+| PH52-06     | 52    | Complete |
 
 **Coverage:**
 
