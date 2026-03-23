@@ -388,3 +388,44 @@ Plans:
 - [ ] 49-01-PLAN.md — Backend integration tests: selectJoinPeer -> JoinSpaceConfirmPeer end-to-end and payload field verification
 - [ ] 49-02-PLAN.md — Frontend store unit tests + SetupPage JoinSpaceConfirmPeer integration test
 - [ ] 49-03-PLAN.md — PairingNotificationProvider regression + App setup gate verification
+
+### Phase 50: Daemon encryption state recovery on startup
+
+**Goal:** Daemon 启动时从磁盘恢复 master key 到 encryption session，解决 daemon 重启后 proof verification 失败的问题
+**Requirements**: PH50-01, PH50-02, PH50-03
+**Depends on:** Phase 46.6
+**Plans:** 1 plan
+
+Plans:
+
+- [ ] 50-01-PLAN.md — Wire AutoUnlockEncryptionSession into DaemonApp::run() with fail-fast and regression test
+
+### Phase 51: Peer discovery deduplication fix
+
+**Goal:** 修复 mDNS 扫描时同一设备出现多次的问题，确保前端按 peer_id 去重
+**Depends on:** Phase 50
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 51 to break down)
+
+### Phase 52: Daemon as single source of truth for space access state
+
+**Goal:** 重设计 daemon ↔ GUI space access 状态同步机制，daemon 作为 space access 唯一状态源，增加持久化层保证重启不丢状态
+**Depends on:** Phase 51
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 52 to break down)
+
+### Phase 53: End-to-end join space flow verification
+
+**Goal:** 端到端集成测试验证完整 join space 流程：设备发现 → 配对请求 → 确认 → 加密口令验证 → 成功加入
+**Depends on:** Phase 52
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 53 to break down)

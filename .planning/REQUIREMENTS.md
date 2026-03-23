@@ -118,6 +118,12 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **P46.6-04**: a daemon spawned after incompatible replacement is treated as GUI-owned for later exit cleanup, while independently started daemons remain non-owned
 - [x] **P46.6-05**: regression coverage must prove spawned-owned, replacement-owned, compatible-existing, and exit-idempotency paths using exact `cargo test --test ...` commands
 
+### Daemon Encryption State Recovery
+
+- [ ] **PH50-01**: DaemonApp::run() calls AutoUnlockEncryptionSession before starting workers so encryption session is available immediately after daemon startup
+- [ ] **PH50-02**: When EncryptionState is Uninitialized (first run), daemon starts normally without attempting recovery
+- [ ] **PH50-03**: When EncryptionState is Initialized but recovery fails (keyslot corrupt, KEK missing, unwrap failure), daemon refuses to start with a descriptive error
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -193,14 +199,17 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | P46.6-03    | 46.6  | Complete |
 | P46.6-04    | 46.6  | Complete |
 | P46.6-05    | 46.6  | Complete |
+| PH50-01     | 50    | Pending  |
+| PH50-02     | 50    | Pending  |
+| PH50-03     | 50    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 41 total
-- Mapped to phases: 41
-- Unmapped: 0 ✓
+- v0.4.0 requirements: 44 total
+- Mapped to phases: 44
+- Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-22 after Phase 46.6 completion_
+_Last updated: 2026-03-23 after Phase 50 planning_
