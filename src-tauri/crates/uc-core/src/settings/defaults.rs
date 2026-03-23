@@ -216,9 +216,9 @@ impl Default for FileSyncSettings {
     fn default() -> Self {
         Self {
             file_sync_enabled: true,
-            small_file_threshold: 10 * 1024 * 1024,         // 10 MB
-            max_file_size: 5 * 1024 * 1024 * 1024,          // 5 GB
-            file_cache_quota_per_device: 500 * 1024 * 1024,  // 500 MB
+            small_file_threshold: 10 * 1024 * 1024, // 10 MB
+            max_file_size: 5 * 1024 * 1024 * 1024,  // 5 GB
+            file_cache_quota_per_device: 500 * 1024 * 1024, // 500 MB
             file_retention_hours: 24,
             file_auto_cleanup: true,
         }
