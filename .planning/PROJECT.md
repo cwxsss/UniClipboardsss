@@ -104,6 +104,7 @@ Hexagonal boundaries compiler-enforced. All sync policy consolidated into Outbou
 Four content types supported: Text, Image, Link, File — each with per-device toggles.
 Full file sync pipeline from chunked transfer through clipboard integration with eventual consistency.
 Structured observability from dual-output logging through Seq cross-device tracing.
+Phase 52 complete — daemon is now the single source of truth for space access state (WS broadcast + HTTP query), GUI no longer owns SpaceAccessOrchestrator.
 
 ## Key Decisions
 
@@ -140,4 +141,4 @@ Structured observability from dual-output logging through Seq cross-device traci
 
 ---
 
-_Last updated: 2026-03-23 after Phase 51 completion_
+_Last updated: 2026-03-23 after Phase 52 completion_
