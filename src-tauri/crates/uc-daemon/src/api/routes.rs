@@ -20,9 +20,7 @@ use crate::api::pairing::{
     VerifyPairingRequest,
 };
 use crate::api::server::{map_daemon_pairing_error, DaemonApiState};
-use crate::api::types::{
-    SetupResetResponse, SetupSelectPeerRequest, SetupSubmitPassphraseRequest,
-};
+use crate::api::types::{SetupResetResponse, SetupSelectPeerRequest, SetupSubmitPassphraseRequest};
 use crate::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
 
 pub fn router() -> Router<DaemonApiState> {
