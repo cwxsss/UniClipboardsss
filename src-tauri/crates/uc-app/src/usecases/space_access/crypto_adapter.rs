@@ -504,6 +504,10 @@ mod tests {
                 None => Ok(()),
             }
         }
+
+        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
+            Ok(())
+        }
     }
 
     struct EncryptionSessionState {

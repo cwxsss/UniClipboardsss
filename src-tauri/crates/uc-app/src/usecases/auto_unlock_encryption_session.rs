@@ -196,6 +196,10 @@ mod tests {
         async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
             Ok(())
         }
+
+        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
+            Ok(())
+        }
     }
 
     /// Mock KeyScopePort
@@ -527,6 +531,10 @@ mod tests {
             }
 
             async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
+                Ok(())
+            }
+
+            async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
                 Ok(())
             }
         }
