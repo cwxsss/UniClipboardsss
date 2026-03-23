@@ -12,9 +12,9 @@ Daemon 启动时从磁盘恢复 master key 到 encryption session，解决 daemo
 
 本阶段交付：
 
-- 新建 `RecoverEncryptionSession` use case，从 keyslot.json + 系统密钥环恢复 master key
-- daemon 启动时自动调用恢复，如果 EncryptionState::Initialized 但恢复失败则拒绝启动
-- GUI 模式下同样可复用此 use case
+- daemon 启动时自动调用 `AutoUnlockEncryptionSession` use case，从 keyslot.json + 系统密钥环恢复 master key
+- 如果 EncryptionState::Initialized 但恢复失败则拒绝启动
+- GUI 模式下同样可复用此 use case（已有）
 
 本阶段不包括：
 
@@ -44,7 +44,8 @@ Daemon 启动时从磁盘恢复 master key 到 encryption session，解决 daemo
 
 ### 职责分层
 
-- **D-07:** 新建 `RecoverEncryptionSession` use case 在 uc-app 层，组合 EncryptionStatePort + KeyMaterialService + EncryptionPort + EncryptionSessionPort。
+- **D-07:** 直接复用现有 `AutoUnlockEncryptionSession` use case（位于 uc-app 层），不新建 `RecoverEncryptionSession`。研究阶段发现 `AutoUnlockEncryptionSession` 已完整实现所需功能（EncryptionState 检测、KEK 读取、master key 解包、session 设置），且已有 7 个单元测试覆盖所有边界情况。用户已确认批准复用。
+  - _原始决策为"新建 RecoverEncryptionSession use case"，经研究发现功能完全重复后更新。_
 - **D-08:** daemon 的 DaemonApp::run() 在 workers 启动前调用此 use case。如果 EncryptionState::Uninitialized 则跳过恢复（首次运行场景）。
 - **D-09:** use case 放在 uc-app 层以确保 GUI 模式也可以复用同一恢复逻辑。
 
@@ -77,6 +78,10 @@ Daemon 启动时从磁盘恢复 master key 到 encryption session，解决 daemo
 
 - `src-tauri/crates/uc-app/src/usecases/initialize_encryption.rs` — InitializeEncryption use case，恢复流程是其逆操作
 
+### Auto-unlock use case (直接复用)
+
+- `src-tauri/crates/uc-app/src/usecases/auto_unlock_encryption_session.rs` — AutoUnlockEncryptionSession use case，完整实现恢复逻辑
+
 ### Daemon startup
 
 - `src-tauri/crates/uc-daemon/src/app.rs` — DaemonApp::run() 生命周期
@@ -105,20 +110,20 @@ Daemon 启动时从磁盘恢复 master key 到 encryption session，解决 daemo
 
 - use case 模式：`InitializeEncryption` 是同一领域的 use case，恢复流程可参考其结构
 - 端口组合：use case 通过 trait 端口组合多个基础设施能力
-- CoreUseCases accessor：新 use case 需要在 CoreUseCases 中添加 accessor 方法
+- CoreUseCases accessor：`auto_unlock_encryption_session()` accessor 已存在于 CoreUseCases 中
 
 ### Integration Points
 
 - `DaemonApp::run()`: 调用点——workers 启动前
-- `CoreUseCases`: accessor 注册点
-- `assembly.rs build_core()`: 依赖注入点——确保 use case 能获取所需端口
+- `CoreUseCases`: accessor 已注册（`auto_unlock_encryption_session()`）
+- `assembly.rs build_core()`: 依赖注入已配置
 
 </code_context>
 
 <specifics>
 ## Specific Ideas
 
-- 恢复流程本质上是 InitializeEncryption 的逆操作：读 keyslot → 从密钥环读 KEK → 用 KEK 解包 wrapped master key → set_master_key 到 session
+- 恢复流程本质上是 InitializeEncryption 的逆操作：读 keyslot -> 从密钥环读 KEK -> 用 KEK 解包 wrapped master key -> set_master_key 到 session
 - EncryptionState::Uninitialized 时跳过恢复（首次运行，尚未创建加密空间）
 
 </specifics>
