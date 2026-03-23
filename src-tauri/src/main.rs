@@ -22,8 +22,8 @@ use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::runtime::PlatformRuntime;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
-    install_daemon_setup_pairing_facade, start_background_tasks, AppRuntime, DaemonConnectionState,
-    GuiOwnedDaemonState,
+    install_daemon_setup_pairing_facade, start_background_tasks, supervise_daemon, AppRuntime,
+    DaemonConnectionState, GuiOwnedDaemonState,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -324,7 +324,6 @@ fn run_app(ctx: GuiBootstrapContext) {
         pairing_orchestrator: _pairing_orchestrator,
         pairing_action_rx: _pairing_action_rx,
         staged_store: _staged_store,
-        space_access_orchestrator,
         key_slot_store: _key_slot_store,
         config: _config,
     } = ctx;
@@ -476,6 +475,7 @@ fn run_app(ctx: GuiBootstrapContext) {
             let gui_owned_daemon_state_for_setup = gui_owned_daemon_state.clone();
             let startup_barrier_for_daemon = startup_barrier.clone();
             let app_handle_for_daemon = app.handle().clone();
+            let supervisor_token = task_registry.token().clone();
             tauri::async_runtime::spawn(async move {
                 match bootstrap_daemon_connection(
                     &daemon_connection_state_for_setup,
@@ -491,6 +491,18 @@ fn run_app(ctx: GuiBootstrapContext) {
                         ) {
                             warn!(error = %error, "Failed to deliver daemon connection info to main webview");
                         }
+
+                        // Start daemon supervisor to respawn if daemon dies unexpectedly.
+                        let supervisor_state = daemon_connection_state_for_setup.clone();
+                        let supervisor_daemon = gui_owned_daemon_state_for_setup.clone();
+                        tauri::async_runtime::spawn(async move {
+                            supervise_daemon(
+                                &supervisor_state,
+                                &supervisor_daemon,
+                                supervisor_token,
+                            )
+                            .await;
+                        });
                     }
                     Err(error) => {
                         error!(error = %error, "Daemon startup/probe failed during Tauri bootstrap");
@@ -577,7 +589,6 @@ fn run_app(ctx: GuiBootstrapContext) {
                 runtime_for_handler.event_emitter(),
                 daemon_connection_state.clone(),
                 setup_pairing_event_hub.clone(),
-                space_access_orchestrator.clone(),
                 runtime_for_handler.task_registry(),
             );
 

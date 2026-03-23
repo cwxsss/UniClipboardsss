@@ -44,9 +44,7 @@ use super::start_realtime_runtime;
 use super::task_registry::TaskRegistry;
 
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
-use uc_app::usecases::space_access::{
-    SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
-};
+use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::AppDeps;
 use uc_core::network::ClipboardMessage;
 use uc_core::network::NetworkEvent;
@@ -103,7 +101,6 @@ pub fn start_background_tasks(
     event_emitter: Arc<dyn HostEventEmitterPort>,
     daemon_connection_state: crate::bootstrap::DaemonConnectionState,
     setup_pairing_event_hub: Arc<uc_app::realtime::SetupPairingEventHub>,
-    space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     task_registry: &Arc<TaskRegistry>,
 ) {
     let BackgroundRuntimeDeps {
@@ -122,7 +119,6 @@ pub fn start_background_tasks(
     info!("Starting background clipboard spooler and blob worker");
 
     let clipboard_emitter = event_emitter.clone();
-    let space_access_emitter = event_emitter.clone();
     let representation_repo = deps.clipboard.representation_repo.clone();
     let worker_tx = deps.clipboard.worker_tx.clone();
     let blob_writer = deps.storage.blob_writer.clone();
@@ -229,33 +225,6 @@ pub fn start_background_tasks(
                                 }
                             }
                         }
-                    }
-                }
-            })
-            .await;
-
-        // --- Space access completion loop ---
-        let completion_orchestrator = space_access_orchestrator.clone();
-        registry
-            .spawn("space_access_completion", |token| async move {
-                let completion_rx =
-                    match SpaceAccessEventPort::subscribe(completion_orchestrator.as_ref()).await {
-                        Ok(rx) => rx,
-                        Err(err) => {
-                            warn!(
-                                error = %err,
-                                "Failed to subscribe to space access completion events"
-                            );
-                            return;
-                        }
-                    };
-
-                tokio::select! {
-                    _ = token.cancelled() => {
-                        info!("Space access completion loop shutting down");
-                    }
-                    _ = run_space_access_completion_loop(completion_rx, space_access_emitter) => {
-                        warn!("Space access completion loop stopped");
                     }
                 }
             })
@@ -1014,33 +983,6 @@ impl uc_core::ports::space::CryptoPort for LoadedKeyslotSpaceAccessCrypto {
         Err(anyhow::anyhow!(
             "loaded keyslot crypto cannot derive master key in sponsor flow"
         ))
-    }
-}
-
-async fn run_space_access_completion_loop(
-    mut event_rx: mpsc::Receiver<SpaceAccessCompletedEvent>,
-    emitter: Arc<dyn HostEventEmitterPort>,
-) {
-    while let Some(event) = event_rx.recv().await {
-        if let Err(err) = emitter.emit(HostEvent::SpaceAccess(SpaceAccessHostEvent::Completed {
-            session_id: event.session_id.clone(),
-            peer_id: event.peer_id.clone(),
-            success: event.success,
-            reason: event.reason.clone(),
-            ts: event.ts,
-        })) {
-            warn!(error = %err, "Failed to emit space-access-completed event");
-        }
-
-        if let Err(err) = emitter.emit(HostEvent::SpaceAccess(SpaceAccessHostEvent::P2PCompleted {
-            session_id: event.session_id,
-            peer_id: event.peer_id,
-            success: event.success,
-            reason: event.reason,
-            ts: event.ts,
-        })) {
-            warn!(error = %err, "Failed to emit p2p-space-access-completed event");
-        }
     }
 }
 

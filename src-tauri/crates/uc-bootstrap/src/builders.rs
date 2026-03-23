@@ -64,7 +64,6 @@ pub struct GuiBootstrapContext {
     pub pairing_orchestrator: Arc<PairingOrchestrator>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
     pub staged_store: Arc<StagedPairedDeviceStore>,
-    pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     pub key_slot_store: Arc<dyn KeySlotStore>,
     pub config: AppConfig,
 }
@@ -221,7 +220,6 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         pairing_orchestrator,
         pairing_action_rx,
         staged_store,
-        space_access_orchestrator,
         key_slot_store,
         config,
     })
