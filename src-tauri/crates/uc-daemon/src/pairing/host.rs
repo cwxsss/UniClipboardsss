@@ -13,7 +13,7 @@ use uc_app::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrc
 use uc_app::usecases::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
 };
-use uc_app::usecases::SetupOrchestrator;
+use uc_app::usecases::{CoreUseCases, SetupOrchestrator};
 use uc_core::network::pairing_state_machine::{PairingAction, PairingRole};
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
@@ -24,7 +24,7 @@ use uc_infra::fs::key_slot_store::KeySlotStore;
 
 use crate::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
-    PeerChangedPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload, PeerSnapshotDto,
     SetupSpaceAccessCompletedPayload,
 };
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
@@ -977,35 +977,53 @@ async fn run_pairing_network_event_loop(
                             };
 
                             match event {
-                                NetworkEvent::PeerDiscovered(peer) => {
-                                    emit_ws_event(
-                                        &event_tx,
-                                        "peers",
-                                        "peers.changed",
-                                        None,
-                                        PeerChangedPayload {
-                                            peer_id: peer.peer_id,
-                                            device_name: peer.device_name,
-                                            addresses: peer.addresses,
-                                            discovered: true,
-                                            connected: false,
-                                        },
-                                    );
+                                NetworkEvent::PeerDiscovered(_peer) => {
+                                    let usecases = CoreUseCases::new(runtime.as_ref());
+                                    match usecases.get_p2p_peers_snapshot().execute().await {
+                                        Ok(snapshots) => {
+                                            let peers: Vec<PeerSnapshotDto> = snapshots
+                                                .into_iter()
+                                                .map(PeerSnapshotDto::from)
+                                                .collect();
+                                            emit_ws_event(
+                                                &event_tx,
+                                                "peers",
+                                                "peers.changed",
+                                                None,
+                                                PeersChangedFullPayload { peers },
+                                            );
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                error = %e,
+                                                "Failed to fetch peer snapshot on PeerDiscovered"
+                                            );
+                                        }
+                                    }
                                 }
-                                NetworkEvent::PeerLost(peer_id) => {
-                                    emit_ws_event(
-                                        &event_tx,
-                                        "peers",
-                                        "peers.changed",
-                                        None,
-                                        PeerChangedPayload {
-                                            peer_id,
-                                            device_name: None,
-                                            addresses: Vec::new(),
-                                            discovered: false,
-                                            connected: false,
-                                        },
-                                    );
+                                NetworkEvent::PeerLost(_peer_id) => {
+                                    let usecases = CoreUseCases::new(runtime.as_ref());
+                                    match usecases.get_p2p_peers_snapshot().execute().await {
+                                        Ok(snapshots) => {
+                                            let peers: Vec<PeerSnapshotDto> = snapshots
+                                                .into_iter()
+                                                .map(PeerSnapshotDto::from)
+                                                .collect();
+                                            emit_ws_event(
+                                                &event_tx,
+                                                "peers",
+                                                "peers.changed",
+                                                None,
+                                                PeersChangedFullPayload { peers },
+                                            );
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                error = %e,
+                                                "Failed to fetch peer snapshot on PeerLost"
+                                            );
+                                        }
+                                    }
                                 }
                                 NetworkEvent::PeerNameUpdated { peer_id, device_name } => {
                                     emit_ws_event(
@@ -1683,7 +1701,7 @@ fn parse_space_access_busy_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::pairing_failure_message;
+    use super::*;
     use uc_core::network::pairing_state_machine::{FailureReason, TimeoutKind};
 
     #[test]
@@ -1699,5 +1717,77 @@ mod tests {
             "timeout:WaitingChallenge"
         );
         assert_eq!(pairing_failure_message(&FailureReason::PeerBusy), "busy");
+    }
+
+    /// Verifies that `emit_ws_event` with `PeersChangedFullPayload` produces a `DaemonWsEvent`
+    /// whose payload deserializes back to the original full peer list.
+    /// This is the unit-level contract test for the PeerDiscovered/PeerLost emission path.
+    #[tokio::test]
+    async fn peer_discovered_emits_peers_changed_full_payload_with_peer_list() {
+        use crate::api::types::{PeersChangedFullPayload, PeerSnapshotDto};
+
+        let (event_tx, mut event_rx) = broadcast::channel::<DaemonWsEvent>(8);
+
+        let peers = vec![
+            PeerSnapshotDto {
+                peer_id: "peer-alpha".to_string(),
+                device_name: Some("Alpha".to_string()),
+                addresses: vec!["/ip4/192.168.1.1/tcp/4001".to_string()],
+                is_paired: false,
+                connected: true,
+                pairing_state: "NotPaired".to_string(),
+            },
+            PeerSnapshotDto {
+                peer_id: "peer-beta".to_string(),
+                device_name: None,
+                addresses: vec![],
+                is_paired: true,
+                connected: false,
+                pairing_state: "Trusted".to_string(),
+            },
+        ];
+
+        emit_ws_event(
+            &event_tx,
+            "peers",
+            "peers.changed",
+            None,
+            PeersChangedFullPayload { peers: peers.clone() },
+        );
+
+        let event = event_rx.recv().await.expect("event must be received");
+        assert_eq!(event.topic, "peers");
+        assert_eq!(event.event_type, "peers.changed");
+
+        let payload: PeersChangedFullPayload = serde_json::from_value(event.payload)
+            .expect("payload must deserialize to PeersChangedFullPayload");
+        assert_eq!(payload.peers.len(), 2, "all 2 peers must be in payload");
+        assert_eq!(payload.peers[0].peer_id, "peer-alpha");
+        assert_eq!(payload.peers[1].peer_id, "peer-beta");
+    }
+
+    /// Verifies that `PeerLost` path emits `peers.changed` with full snapshot (empty when no peers remain).
+    #[tokio::test]
+    async fn peer_lost_can_emit_peers_changed_with_empty_list() {
+        use crate::api::types::{PeersChangedFullPayload};
+
+        let (event_tx, mut event_rx) = broadcast::channel::<DaemonWsEvent>(8);
+
+        // Emit an empty peer list (as would happen when last peer is lost)
+        emit_ws_event(
+            &event_tx,
+            "peers",
+            "peers.changed",
+            None,
+            PeersChangedFullPayload { peers: vec![] },
+        );
+
+        let event = event_rx.recv().await.expect("event must be received");
+        let payload: PeersChangedFullPayload = serde_json::from_value(event.payload)
+            .expect("payload must deserialize to PeersChangedFullPayload");
+        assert!(
+            payload.peers.is_empty(),
+            "empty peer list must be emitted when no peers remain after PeerLost"
+        );
     }
 }

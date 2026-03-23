@@ -634,11 +634,17 @@ impl ClipboardTransportPort for Libp2pNetworkAdapter {
 impl PeerDirectoryPort for Libp2pNetworkAdapter {
     async fn get_discovered_peers(&self) -> Result<Vec<DiscoveredPeer>> {
         let caches = self.caches.read().await;
-        let peers: Vec<DiscoveredPeer> = caches.discovered_peers.values().cloned().collect();
+        let local_id = &self.local_peer_id;
+        let peers: Vec<DiscoveredPeer> = caches
+            .discovered_peers
+            .values()
+            .filter(|p| p.peer_id != *local_id)
+            .cloned()
+            .collect();
         debug!(
             discovered_peer_count = peers.len(),
             reachable_peer_count = caches.reachable_peers.len(),
-            "snapshot discovered peers"
+            "snapshot discovered peers (local_peer_id filtered)"
         );
         Ok(peers)
     }
@@ -3947,5 +3953,39 @@ mod tests {
         expired.insert("very-old-peer".to_string());
         apply_mdns_expired(&mut caches, expired);
         assert_eq!(caches.discovered_peers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_discovered_peers_excludes_local_peer_id() {
+        let adapter = test_adapter(PairingRuntimeOwner::ExternalDaemon);
+        let local_id = adapter.local_peer_id();
+
+        // Seed caches: local peer + one remote peer
+        {
+            let mut caches = adapter.caches.write().await;
+            caches.upsert_discovered(
+                local_id.clone(),
+                vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
+                Utc::now(),
+            );
+            caches.upsert_discovered(
+                "remote-peer-abc".to_string(),
+                vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+                Utc::now(),
+            );
+        }
+
+        let peers = PeerDirectoryPort::get_discovered_peers(&adapter)
+            .await
+            .expect("get_discovered_peers must succeed");
+
+        // local peer must be excluded
+        assert!(
+            peers.iter().all(|p| p.peer_id != local_id),
+            "local_peer_id must not appear in get_discovered_peers result"
+        );
+        // remote peer must be present
+        assert_eq!(peers.len(), 1, "only remote-peer-abc should be returned");
+        assert_eq!(peers[0].peer_id, "remote-peer-abc");
     }
 }

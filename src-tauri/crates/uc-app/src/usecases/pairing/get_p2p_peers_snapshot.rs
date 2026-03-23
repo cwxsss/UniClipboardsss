@@ -42,12 +42,19 @@ impl GetP2pPeersSnapshot {
 
     /// Execute the use case - fetches and merges all peer data sources.
     pub async fn execute(&self) -> Result<Vec<P2pPeerSnapshot>> {
+        let local_id = self.peer_dir.local_peer_id();
+
         // 1. List discovered peers
         let discovered = self
             .peer_dir
             .get_discovered_peers()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to list discovered peers: {}", e))?;
+        // Defense-in-depth: exclude local peer even if adapter missed it
+        let discovered: Vec<_> = discovered
+            .into_iter()
+            .filter(|p| p.peer_id != local_id)
+            .collect();
 
         // 2. List connected peers
         let connected = self
@@ -279,6 +286,46 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert!(result[0].is_connected);
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_excludes_local_peer() {
+        // local_peer_id() returns "local-peer" per MockPeerDirectory
+        let peer_dir = Arc::new(MockPeerDirectory {
+            discovered: vec![
+                DiscoveredPeer {
+                    peer_id: "local-peer".to_string(), // This is the local peer — must be excluded
+                    device_name: Some("Self".to_string()),
+                    device_id: None,
+                    addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
+                    discovered_at: Utc::now(),
+                    last_seen: Utc::now(),
+                    is_paired: false,
+                },
+                DiscoveredPeer {
+                    peer_id: "remote-peer".to_string(), // This is a remote peer — must be included
+                    device_name: Some("Remote".to_string()),
+                    device_id: None,
+                    addresses: vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+                    discovered_at: Utc::now(),
+                    last_seen: Utc::now(),
+                    is_paired: false,
+                },
+            ],
+            connected: vec![],
+        });
+        let paired_repo = Arc::new(MockPairedRepo { devices: vec![] });
+
+        let use_case = GetP2pPeersSnapshot::new(peer_dir, paired_repo);
+        let result = use_case.execute().await.unwrap();
+
+        // local-peer must be excluded
+        assert_eq!(result.len(), 1, "only remote-peer should be in snapshot");
+        assert_eq!(result[0].peer_id, "remote-peer");
+        assert!(
+            result.iter().all(|p| p.peer_id != "local-peer"),
+            "local-peer must not appear in snapshot"
+        );
     }
 
     #[tokio::test]

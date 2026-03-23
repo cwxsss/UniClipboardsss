@@ -22,8 +22,8 @@ use uc_core::ports::realtime::{
 use uc_daemon::api::auth::DaemonConnectionInfo;
 use uc_daemon::api::types::{
     DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload,
-    PairingSessionChangedPayload, PairingVerificationPayload, PeerChangedPayload,
-    PeerConnectionChangedPayload, PeerNameUpdatedPayload, SetupSpaceAccessCompletedPayload,
+    PairingSessionChangedPayload, PairingVerificationPayload, PeerConnectionChangedPayload,
+    PeerNameUpdatedPayload, PeersChangedFullPayload, SetupSpaceAccessCompletedPayload,
     SetupStateChangedPayload,
 };
 
@@ -629,17 +629,25 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     reason: payload.reason,
                 })
             }),
-        "peers.changed" => serde_json::from_value::<PeerChangedPayload>(event.payload)
-            .ok()
-            .map(|payload| {
-                RealtimeEvent::PeersChanged(PeerChangedEvent {
-                    peers: vec![RealtimePeerSummary {
-                        peer_id: payload.peer_id,
-                        device_name: payload.device_name,
-                        connected: payload.connected,
-                    }],
-                })
-            }),
+        "peers.changed" => {
+            match serde_json::from_value::<PeersChangedFullPayload>(event.payload) {
+                Ok(payload) => Some(RealtimeEvent::PeersChanged(PeerChangedEvent {
+                    peers: payload
+                        .peers
+                        .into_iter()
+                        .map(|p| RealtimePeerSummary {
+                            peer_id: p.peer_id,
+                            device_name: p.device_name,
+                            connected: p.connected,
+                        })
+                        .collect(),
+                })),
+                Err(e) => {
+                    warn!(error = %e, "Failed to deserialize peers.changed payload");
+                    None
+                }
+            }
+        }
         "peers.name_updated" => serde_json::from_value::<PeerNameUpdatedPayload>(event.payload)
             .ok()
             .map(|payload| {
@@ -761,5 +769,84 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uc_daemon::api::types::{PeersChangedFullPayload, PeerSnapshotDto};
+
+    fn make_full_payload_event(peers: Vec<PeerSnapshotDto>) -> DaemonWsEvent {
+        DaemonWsEvent {
+            topic: "peers".to_string(),
+            event_type: "peers.changed".to_string(),
+            session_id: None,
+            ts: 0,
+            payload: serde_json::to_value(PeersChangedFullPayload { peers }).unwrap(),
+        }
+    }
+
+    #[test]
+    fn peers_changed_full_payload_translates_all_peers() {
+        let event = make_full_payload_event(vec![
+            PeerSnapshotDto {
+                peer_id: "peer-1".to_string(),
+                device_name: Some("Laptop".to_string()),
+                addresses: vec![],
+                is_paired: false,
+                connected: true,
+                pairing_state: "NotPaired".to_string(),
+            },
+            PeerSnapshotDto {
+                peer_id: "peer-2".to_string(),
+                device_name: None,
+                addresses: vec![],
+                is_paired: true,
+                connected: false,
+                pairing_state: "Trusted".to_string(),
+            },
+            PeerSnapshotDto {
+                peer_id: "peer-3".to_string(),
+                device_name: Some("Tablet".to_string()),
+                addresses: vec![],
+                is_paired: false,
+                connected: false,
+                pairing_state: "NotPaired".to_string(),
+            },
+        ]);
+
+        let result = map_daemon_ws_event(event);
+
+        let peers_event = match result {
+            Some(RealtimeEvent::PeersChanged(e)) => e,
+            other => panic!("expected PeersChanged, got {:?}", other),
+        };
+
+        assert_eq!(peers_event.peers.len(), 3, "all 3 peers must be preserved");
+
+        let peer1 = peers_event.peers.iter().find(|p| p.peer_id == "peer-1").unwrap();
+        assert_eq!(peer1.device_name, Some("Laptop".to_string()));
+        assert!(peer1.connected);
+
+        let peer2 = peers_event.peers.iter().find(|p| p.peer_id == "peer-2").unwrap();
+        assert_eq!(peer2.device_name, None);
+        assert!(!peer2.connected);
+
+        let peer3 = peers_event.peers.iter().find(|p| p.peer_id == "peer-3").unwrap();
+        assert_eq!(peer3.device_name, Some("Tablet".to_string()));
+    }
+
+    #[test]
+    fn peers_changed_full_payload_empty_list_translates_to_empty_peers() {
+        let event = make_full_payload_event(vec![]);
+        let result = map_daemon_ws_event(event);
+
+        let peers_event = match result {
+            Some(RealtimeEvent::PeersChanged(e)) => e,
+            other => panic!("expected PeersChanged, got {:?}", other),
+        };
+
+        assert_eq!(peers_event.peers.len(), 0, "empty peer list must translate to empty peers");
     }
 }
