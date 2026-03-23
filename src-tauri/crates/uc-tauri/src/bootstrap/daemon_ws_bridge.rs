@@ -629,25 +629,23 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     reason: payload.reason,
                 })
             }),
-        "peers.changed" => {
-            match serde_json::from_value::<PeersChangedFullPayload>(event.payload) {
-                Ok(payload) => Some(RealtimeEvent::PeersChanged(PeerChangedEvent {
-                    peers: payload
-                        .peers
-                        .into_iter()
-                        .map(|p| RealtimePeerSummary {
-                            peer_id: p.peer_id,
-                            device_name: p.device_name,
-                            connected: p.connected,
-                        })
-                        .collect(),
-                })),
-                Err(e) => {
-                    warn!(error = %e, "Failed to deserialize peers.changed payload");
-                    None
-                }
+        "peers.changed" => match serde_json::from_value::<PeersChangedFullPayload>(event.payload) {
+            Ok(payload) => Some(RealtimeEvent::PeersChanged(PeerChangedEvent {
+                peers: payload
+                    .peers
+                    .into_iter()
+                    .map(|p| RealtimePeerSummary {
+                        peer_id: p.peer_id,
+                        device_name: p.device_name,
+                        connected: p.connected,
+                    })
+                    .collect(),
+            })),
+            Err(e) => {
+                warn!(error = %e, "Failed to deserialize peers.changed payload");
+                None
             }
-        }
+        },
         "peers.name_updated" => serde_json::from_value::<PeerNameUpdatedPayload>(event.payload)
             .ok()
             .map(|payload| {
@@ -795,7 +793,7 @@ fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uc_daemon::api::types::{PeersChangedFullPayload, PeerSnapshotDto};
+    use uc_daemon::api::types::{PeerSnapshotDto, PeersChangedFullPayload};
 
     fn make_full_payload_event(peers: Vec<PeerSnapshotDto>) -> DaemonWsEvent {
         DaemonWsEvent {
@@ -845,15 +843,27 @@ mod tests {
 
         assert_eq!(peers_event.peers.len(), 3, "all 3 peers must be preserved");
 
-        let peer1 = peers_event.peers.iter().find(|p| p.peer_id == "peer-1").unwrap();
+        let peer1 = peers_event
+            .peers
+            .iter()
+            .find(|p| p.peer_id == "peer-1")
+            .unwrap();
         assert_eq!(peer1.device_name, Some("Laptop".to_string()));
         assert!(peer1.connected);
 
-        let peer2 = peers_event.peers.iter().find(|p| p.peer_id == "peer-2").unwrap();
+        let peer2 = peers_event
+            .peers
+            .iter()
+            .find(|p| p.peer_id == "peer-2")
+            .unwrap();
         assert_eq!(peer2.device_name, None);
         assert!(!peer2.connected);
 
-        let peer3 = peers_event.peers.iter().find(|p| p.peer_id == "peer-3").unwrap();
+        let peer3 = peers_event
+            .peers
+            .iter()
+            .find(|p| p.peer_id == "peer-3")
+            .unwrap();
         assert_eq!(peer3.device_name, Some("Tablet".to_string()));
     }
 
@@ -867,6 +877,10 @@ mod tests {
             other => panic!("expected PeersChanged, got {:?}", other),
         };
 
-        assert_eq!(peers_event.peers.len(), 0, "empty peer list must translate to empty peers");
+        assert_eq!(
+            peers_event.peers.len(),
+            0,
+            "empty peer list must translate to empty peers"
+        );
     }
 }
