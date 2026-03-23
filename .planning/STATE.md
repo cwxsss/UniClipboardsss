@@ -210,6 +210,7 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 46.6 inserted after Phase 46: daemon 需要跟随 tauri 启动和关闭,现在 tauri 关闭后,daemon 完全变成了孤儿进程 (URGENT)
 - Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 - Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
+- Phase 49 added: Setup 验证码链路单一化重构 — unify setup verification code path: setup orchestrator → daemon ws → Tauri bridge → setup realtime store → SetupPage, cut SetupPage/PairingNotificationProvider dual-source
 
 ### Pending Todos
 

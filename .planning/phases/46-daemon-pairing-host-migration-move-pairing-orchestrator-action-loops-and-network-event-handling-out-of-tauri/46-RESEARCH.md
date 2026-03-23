@@ -84,12 +84,24 @@ It cannot yet:
 - own a `PairingOrchestrator`
 - execute pairing write actions
 - subscribe to pairing network events as the source of truth
+- track discovery visibility separately from pairing readiness
 - track participant readiness
 - emit pairing incremental updates from daemon-owned state
 
 This is the main missing runtime capability for the phase.
 
-### Finding 3: Phase 46 needs a local participant-readiness mechanism, not autonomous daemon pairing
+### Finding 3: Phase 46 needs separate discoverability and participant-readiness controls
+
+The context and current product behavior imply two different gates:
+
+- `discoverable`: whether other devices should see this host in peer discovery at all
+- `participant_ready`: whether a local GUI/CLI user is actively available to handle pairing steps
+
+Those controls must not collapse into one flag. For CLI-driven usage, the daemon should stay non-discoverable until the user explicitly enters pairing mode. For GUI-driven usage, the host may stay discoverable by default because the GUI is the intended human-facing participant.
+
+This means Phase 46 cannot stop at "reject inbound request when nobody is ready." If the host is headless and no CLI pairing mode is active, the better behavior is to keep it out of discovery visibility in the first place. Busy/reject is still needed, but it is the downstream fallback after a host is intentionally discoverable.
+
+### Finding 4: Phase 46 needs a local participant-readiness mechanism, not autonomous daemon pairing
 
 The context explicitly forbids daemon-autonomous completion. The daemon must reject or busy an inbound request when there is no local participant already engaged in the flow.
 
@@ -101,7 +113,7 @@ That means the daemon pairing host needs one explicit readiness model, such as:
 
 What must not happen is implicit “daemon will hold the request until someone opens the UI later.” That would violate the locked decision and hide lifecycle bugs.
 
-### Finding 4: Tauri still has to translate daemon events back into the current frontend contract
+### Finding 5: Tauri still has to translate daemon events back into the current frontend contract
 
 Phase 46 does not permit direct frontend cutover. Therefore Tauri must keep:
 
@@ -115,7 +127,7 @@ But Tauri should no longer be the business host. It should become:
 - a daemon websocket consumer for pairing/discovery updates
 - a translator that re-emits existing frontend-facing event names and payload shapes
 
-### Finding 5: Setup flow compatibility is a hard constraint, not a nice-to-have
+### Finding 6: Setup flow compatibility is a hard constraint, not a nice-to-have
 
 `SetupActionExecutor` already subscribes to pairing domain events and relies on them for `EnsurePairing`, trust confirmation, and join-space progression. If Phase 46 migrates pairing host ownership but does not preserve those semantics through the bridge, setup will regress even if the standalone pairing dialog still works.
 
@@ -130,7 +142,7 @@ daemon
 ├── owns PairingOrchestrator
 ├── owns pairing action loop
 ├── owns pairing network event subscription/retry loop
-├── owns active-session gate + participant-readiness gate
+├── owns discovery-visibility gate + active-session gate + participant-readiness gate
 ├── projects metadata-only session summaries into RuntimeState
 └── fans out authenticated realtime pairing updates
 
@@ -145,21 +157,29 @@ tauri
 
 1. Add a daemon-local pairing host module instead of trying to reuse `uc-tauri::bootstrap::wiring` directly.
 2. Keep `PairingOrchestrator` in `uc-app`, but instantiate and drive it from the daemon host.
-3. Use daemon-owned session projections:
+3. Model daemon host mode explicitly:
+   - non-discoverable by default for daemon-only / ordinary CLI usage
+   - explicit CLI opt-in to become discoverable and pairing-ready
+   - GUI-managed default discoverability for the desktop shell
+4. Use daemon-owned session projections:
    - metadata-only summaries in `RuntimeState`
    - separate authenticated realtime events for short codes/fingerprints
-4. Keep Tauri command shapes stable for Phase 46, but make them daemon clients internally.
-5. Keep websocket snapshot-first behavior and extend it for pairing updates instead of inventing a separate polling path.
+5. Keep Tauri command shapes stable for Phase 46, but make them daemon clients internally.
+6. Keep websocket snapshot-first behavior and extend it for pairing updates instead of inventing a separate polling path.
 
 ## Requirement Recommendations
 
 `ROADMAP.md` still marks Phase 46 requirements as `TBD`, so the plan should use explicit derived IDs:
 
 - `PH46-01`: Daemon becomes the single owner of pairing session lifecycle and enforces one active session globally.
+- `PH46-01A`: Daemon distinguishes discovery visibility from pairing participant readiness instead of treating them as one flag.
+- `PH46-01B`: Daemon-only and ordinary CLI modes are non-discoverable by default until a user explicitly enters pairing mode.
 - `PH46-02`: Pairing action execution and pairing-related network event handling move out of `uc-tauri` and stay alive across Tauri/webview disconnects until timeout or terminal result.
 - `PH46-03`: Daemon exposes the pairing write/control surface needed by the current desktop flow, with `peerId` only for initiate and `sessionId` for follow-up actions, plus explicit cancel.
+- `PH46-03A`: CLI pairing mode explicitly enables discovery visibility and pairing participation; without that opt-in the daemon must stay out of discovery results.
 - `PH46-04`: General pairing read models remain metadata-only; verification codes/fingerprints are delivered only through authenticated realtime updates.
 - `PH46-05`: Tauri preserves the current desktop command/event contract as a compatibility bridge without introducing the Phase 47 frontend API cutover.
+- `PH46-05A`: GUI-hosted daemon remains discoverable by default and registers the desktop shell as the local participant for pairing in Phase 46.
 - `PH46-06`: Test coverage proves busy/no-participant rejection, continuity across Tauri disconnect, and setup-flow compatibility.
 
 ## Recommended Plan Split
@@ -170,6 +190,7 @@ Focus:
 
 - instantiate daemon-owned pairing host runtime
 - move action loop and network event subscription out of `uc-tauri`
+- add daemon-owned discovery-visibility state and default non-discoverable headless behavior
 - enforce active-session and participant-readiness gates
 - project daemon-owned session summaries into `RuntimeState`
 
@@ -184,7 +205,7 @@ Focus:
 
 - add daemon pairing mutation endpoints or equivalent daemon control surface
 - preserve immediate-ack command semantics
-- add pairing incremental websocket events and readiness registration semantics
+- add pairing incremental websocket events plus distinct discoverability/readiness registration semantics
 - keep normal read models metadata-only
 
 Why second:
