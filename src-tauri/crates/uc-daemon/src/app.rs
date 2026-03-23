@@ -291,6 +291,48 @@ mod tests {
     }
 
     #[test]
+    fn run_method_contains_encryption_recovery_call() {
+        // Structural verification split into two concerns (Codex R6-F1):
+        // 1. run() calls the helper function before resource acquisition
+        // 2. The helper function invokes the actual use case
+        //
+        // NOTE: We split at #[cfg(test)] to exclude this test module from the search,
+        // preventing the test from being self-fulfilling (Codex R1-F1).
+        let full_source = include_str!("app.rs");
+        let prod_source = full_source.split("#[cfg(test)]").next().unwrap_or(full_source);
+
+        // 1. run() calls recover_encryption_session helper (Codex R6-F1)
+        let recovery_call_pos = prod_source.find("recover_encryption_session")
+            .expect("DaemonApp::run() must call recover_encryption_session helper");
+
+        // 2. Helper function invokes the actual use case with .execute().await (Codex R5-F1)
+        assert!(
+            prod_source.contains("auto_unlock_encryption_session"),
+            "recover_encryption_session helper must call auto_unlock_encryption_session use case"
+        );
+        assert!(
+            prod_source.contains(".execute().await"),
+            "Recovery must actually call .execute().await on the use case"
+        );
+
+        // 3. Tracing span exists
+        assert!(
+            prod_source.contains("daemon.startup.recover_encryption_session"),
+            "Recovery must be instrumented with a tracing span"
+        );
+
+        // 4. Recovery call appears BEFORE resource acquisition (Codex R2-F2)
+        let socket_bind_pos = prod_source.find("check_or_remove_stale_socket")
+            .expect("DaemonApp::run() must contain socket bind step");
+        assert!(
+            recovery_call_pos < socket_bind_pos,
+            "Encryption recovery must run BEFORE resource acquisition (socket bind). \
+             Recovery at byte {}, socket bind at byte {}",
+            recovery_call_pos, socket_bind_pos
+        );
+    }
+
+    #[test]
     fn daemon_pid_guard_removes_pid_file_on_drop() {
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
 
