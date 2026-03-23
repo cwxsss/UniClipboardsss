@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.1
-milestone_name: milestone
+milestone: v0.4.0
+milestone_name: Runtime Mode Separation
 status: in_progress
-stopped_at: Completed 46.6-02-PLAN.md
-last_updated: '2026-03-22T06:03:11.914Z'
+stopped_at: Phase 50 context gathered
+last_updated: '2026-03-23T05:05:35.777Z'
 progress:
-  total_phases: 19
-  completed_phases: 14
-  total_plans: 52
-  completed_plans: 49
+  total_phases: 24
+  completed_phases: 15
+  total_plans: 55
+  completed_plans: 52
 ---
 
 # Project State
@@ -211,6 +211,10 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
 - Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
 - Phase 49 added: Setup 验证码链路单一化重构 — unify setup verification code path: setup orchestrator → daemon ws → Tauri bridge → setup realtime store → SetupPage, cut SetupPage/PairingNotificationProvider dual-source
+- Phase 50 added: Daemon encryption state recovery on startup — daemon 重启后从磁盘恢复 master key
+- Phase 51 added: Peer discovery deduplication fix — 修复 mDNS 扫描出重复设备
+- Phase 52 added: Daemon as single source of truth for space access state — daemon 作为 space access 唯一状态源
+- Phase 53 added: End-to-end join space flow verification — 端到端 join space 流程验证
 
 ### Pending Todos
 
@@ -226,6 +230,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-22T06:03:11.911Z
-Stopped at: Completed 46.6-02-PLAN.md
-Resume file: None
+Last session: 2026-03-23T05:05:35.774Z
+Stopped at: Phase 50 context gathered
+Resume file: .planning/phases/50-daemon-encryption-state-recovery/50-CONTEXT.md
