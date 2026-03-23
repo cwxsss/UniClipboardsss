@@ -25,7 +25,7 @@ use uc_infra::fs::key_slot_store::KeySlotStore;
 use crate::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
     PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload, PeerSnapshotDto,
-    SetupSpaceAccessCompletedPayload,
+    SetupSpaceAccessCompletedPayload, SpaceAccessStateChangedPayload,
 };
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
 use crate::state::{DaemonPairingSessionSnapshot, RuntimeState};
@@ -211,6 +211,7 @@ impl DaemonPairingHost {
 
         self.discoverability.clear().await;
         self.participant_readiness.clear().await;
+        self.broadcast_space_access_state(&uc_core::security::space_access::state::SpaceAccessState::Idle);
     }
 
     pub async fn initiate_pairing(
@@ -384,6 +385,7 @@ impl DaemonPairingHost {
         tasks.spawn(run_pairing_network_event_loop(
             self.runtime.clone(),
             self.runtime.setup_orchestrator().clone(),
+            self.space_access_orchestrator.clone(),
             self.pairing_orchestrator.clone(),
             self.state.clone(),
             self.active_session_id.clone(),
@@ -525,6 +527,10 @@ impl DaemonPairingHost {
         Ok(())
     }
 
+    fn broadcast_space_access_state(&self, state: &uc_core::security::space_access::state::SpaceAccessState) {
+        broadcast_space_access_state_changed(&self.event_tx, state);
+    }
+
     async fn session_peer_id(&self, session_id: &str) -> Option<String> {
         if let Some(peer) = self.pairing_orchestrator.get_session_peer(session_id).await {
             return Some(peer.peer_id);
@@ -659,7 +665,7 @@ async fn run_pairing_action_loop(
                                             setup_orchestrator.get_state().await,
                                             uc_core::setup::SetupState::Completed
                                         ) {
-                                            if let Err(err) = setup_orchestrator
+                                            match setup_orchestrator
                                                 .start_completed_host_sponsor_authorization(
                                                     session_id.clone(),
                                                     peer.peer_id.clone(),
@@ -667,12 +673,20 @@ async fn run_pairing_action_loop(
                                                 )
                                                 .await
                                             {
-                                                warn!(
-                                                    error = %err,
-                                                    session_id = %session_id,
-                                                    peer_id = %peer.peer_id,
-                                                    "failed to start completed-host sponsor authorization"
-                                                );
+                                                Ok(_) => {
+                                                    broadcast_space_access_state_changed(
+                                                        &event_tx,
+                                                        &space_access_orchestrator.get_state().await,
+                                                    );
+                                                }
+                                                Err(err) => {
+                                                    warn!(
+                                                        error = %err,
+                                                        session_id = %session_id,
+                                                        peer_id = %peer.peer_id,
+                                                        "failed to start completed-host sponsor authorization"
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -947,6 +961,7 @@ async fn run_pairing_domain_event_loop(
 async fn run_pairing_network_event_loop(
     runtime: Arc<CoreRuntime>,
     setup_orchestrator: Arc<SetupOrchestrator>,
+    space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
@@ -1063,6 +1078,7 @@ async fn run_pairing_network_event_loop(
                                 NetworkEvent::PairingMessageReceived { peer_id, message } => {
                                     handle_pairing_message(
                                         setup_orchestrator.as_ref(),
+                                        space_access_orchestrator.as_ref(),
                                         pairing_orchestrator.as_ref(),
                                         &state,
                                         &active_session_id,
@@ -1135,6 +1151,7 @@ async fn run_pairing_session_sweep_loop(
 
 async fn handle_pairing_message(
     setup_orchestrator: &SetupOrchestrator,
+    space_access_orchestrator: &SpaceAccessOrchestrator,
     pairing_orchestrator: &PairingOrchestrator,
     state: &Arc<RwLock<RuntimeState>>,
     active_session_id: &Arc<RwLock<Option<String>>>,
@@ -1318,6 +1335,10 @@ async fn handle_pairing_message(
                             )
                             .await
                             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+                        broadcast_space_access_state_changed(
+                            event_tx,
+                            &space_access_orchestrator.get_state().await,
+                        );
                         return Ok(());
                     }
                     Ok(SpaceAccessBusyPayload::Result(payload)) => {
@@ -1335,6 +1356,10 @@ async fn handle_pairing_message(
                             )
                             .await
                             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+                        broadcast_space_access_state_changed(
+                            event_tx,
+                            &space_access_orchestrator.get_state().await,
+                        );
                         return Ok(());
                     }
                     Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload) => {}
@@ -1382,6 +1407,27 @@ async fn reject_inbound_request(
     {
         debug!(error = %err, peer_id = %peer_id, session_id = %session_id, "failed to send busy pairing message");
     }
+}
+
+fn broadcast_space_access_state_changed(
+    event_tx: &broadcast::Sender<DaemonWsEvent>,
+    state: &uc_core::security::space_access::state::SpaceAccessState,
+) {
+    let payload = SpaceAccessStateChangedPayload { state: state.clone() };
+    let serialized = match serde_json::to_value(&payload) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "failed to serialize space_access.state_changed payload");
+            return;
+        }
+    };
+    let _ = event_tx.send(DaemonWsEvent {
+        topic: "space-access".to_string(),
+        event_type: "space_access.state_changed".to_string(),
+        session_id: None,
+        ts: chrono::Utc::now().timestamp_millis(),
+        payload: serialized,
+    });
 }
 
 fn emit_ws_event<T: serde::Serialize>(

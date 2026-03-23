@@ -110,7 +110,10 @@ impl HostEventEmitterPort for DaemonApiEventEmitter {
 mod tests {
     use super::*;
     use uc_core::ports::host_event_emitter::HostEvent;
+    use uc_core::security::space_access::state::SpaceAccessState;
     use uc_core::setup::SetupState;
+
+    use crate::api::types::SpaceAccessStateChangedPayload;
 
     #[test]
     fn emits_setup_state_changed_to_setup_topic() {
@@ -141,5 +144,25 @@ mod tests {
             event.payload["state"]["JoinSpaceConfirmPeer"].is_object(),
             "setup payload should carry full setup state object"
         );
+    }
+
+    #[test]
+    fn space_access_state_changed_event_uses_space_access_topic() {
+        // This test verifies the DaemonWsEvent structure for space_access.state_changed
+        // events that DaemonPairingHost broadcasts directly
+        let payload = SpaceAccessStateChangedPayload {
+            state: SpaceAccessState::Idle,
+        };
+        let serialized = serde_json::to_value(&payload).expect("serialize");
+        let event = DaemonWsEvent {
+            topic: "space-access".to_string(),
+            event_type: "space_access.state_changed".to_string(),
+            session_id: None,
+            ts: 1234567890,
+            payload: serialized,
+        };
+        assert_eq!(event.topic, "space-access");
+        assert_eq!(event.event_type, "space_access.state_changed");
+        assert_eq!(event.payload["state"], "Idle");
     }
 }

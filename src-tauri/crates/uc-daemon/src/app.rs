@@ -130,7 +130,8 @@ impl DaemonApp {
             self.state.clone(),
         ));
         let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()))
-            .with_setup(self.runtime.setup_orchestrator().clone());
+            .with_setup(self.runtime.setup_orchestrator().clone())
+            .with_space_access(self.space_access_orchestrator.clone());
         self.runtime
             .set_event_emitter(Arc::new(DaemonApiEventEmitter::new(
                 api_state.event_tx.clone(),
