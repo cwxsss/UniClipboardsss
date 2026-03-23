@@ -201,13 +201,12 @@ describe('PairingNotificationProvider realtime', () => {
       })
     })
 
+    // After pairing.complete, stays at verifying — waiting for space access to finish
     expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"verifying"')
 
+    // Space access completes → transitions to success
     act(() => {
-      capturedSpaceAccessCallback?.({
-        sessionId: 'session-1',
-        success: true,
-      })
+      capturedSpaceAccessCallback?.({ sessionId: 'session-1', success: true })
     })
 
     expect(screen.getByTestId('pairing-pin-dialog').textContent).toContain('"phase":"success"')

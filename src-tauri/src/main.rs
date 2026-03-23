@@ -697,6 +697,7 @@ fn run_app(ctx: GuiBootstrapContext) {
             uc_tauri::commands::setup::verify_passphrase,
             uc_tauri::commands::setup::confirm_peer_trust,
             uc_tauri::commands::setup::cancel_setup,
+            uc_tauri::commands::setup::handle_space_access_completed,
             // Pairing commands
             uc_tauri::commands::pairing::get_local_peer_id,
             uc_tauri::commands::pairing::get_p2p_peers,

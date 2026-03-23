@@ -222,6 +222,13 @@ impl SetupOrchestrator {
         self.dispatch(event).await
     }
 
+    /// Complete the join space flow. Called by the frontend when the daemon
+    /// emits `setup.spaceAccessCompleted` via the WebSocket bridge.
+    pub async fn complete_join_space(&self) -> Result<SetupState, SetupError> {
+        let event = SetupEvent::JoinSpaceSucceeded;
+        self.dispatch(event).await
+    }
+
     pub async fn reset(&self) -> Result<SetupState, SetupError> {
         let _dispatch_guard = self.context.acquire_dispatch_lock().await;
 

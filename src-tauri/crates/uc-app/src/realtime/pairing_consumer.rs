@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
 use uc_core::ports::{
     HostEvent, HostEventEmitterPort, RealtimeEvent, RealtimeFrontendEvent, RealtimeFrontendPayload,
     RealtimeTopic, RealtimeTopicPort,
@@ -13,6 +14,13 @@ pub async fn run_pairing_realtime_consumer(
         .subscribe("pairing_realtime_consumer", &[RealtimeTopic::Pairing])
         .await?;
 
+    run_pairing_realtime_consumer_with_rx(&mut rx, emitter).await
+}
+
+pub async fn run_pairing_realtime_consumer_with_rx(
+    rx: &mut mpsc::Receiver<RealtimeEvent>,
+    emitter: Arc<dyn HostEventEmitterPort>,
+) -> anyhow::Result<()> {
     while let Some(event) = rx.recv().await {
         if let Some(event) = map_pairing_event(event) {
             let _ = emitter.emit(HostEvent::Realtime(event));

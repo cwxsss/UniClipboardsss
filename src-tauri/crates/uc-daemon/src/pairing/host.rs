@@ -10,7 +10,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
-use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+use uc_app::usecases::space_access::{
+    SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
+};
 use uc_app::usecases::SetupOrchestrator;
 use uc_core::network::pairing_state_machine::{CancellationBy, PairingAction, PairingRole};
 use uc_core::network::{
@@ -24,6 +26,7 @@ use uc_infra::fs::key_slot_store::KeySlotStore;
 use crate::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
     PeerChangedPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
+    SetupSpaceAccessCompletedPayload,
 };
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
 use crate::state::{DaemonPairingSessionSnapshot, RuntimeState};
@@ -455,6 +458,10 @@ impl DaemonPairingHost {
         let domain_events = PairingEventPort::subscribe(self.pairing_orchestrator.as_ref())
             .await
             .context("failed to subscribe to pairing domain events")?;
+        let space_access_events =
+            SpaceAccessEventPort::subscribe(self.space_access_orchestrator.as_ref())
+                .await
+                .context("failed to subscribe to space access events")?;
 
         let mut tasks = JoinSet::new();
 
@@ -496,6 +503,12 @@ impl DaemonPairingHost {
             self.pairing_orchestrator.clone(),
             self.discoverability.clone(),
             self.participant_readiness.clone(),
+            cancel.child_token(),
+        ));
+
+        tasks.spawn(run_space_access_event_loop(
+            space_access_events,
+            self.event_tx.clone(),
             cancel.child_token(),
         ));
 
@@ -844,6 +857,15 @@ async fn run_pairing_domain_event_loop(
                             short_code: Some(short_code.clone()),
                             peer_fingerprint: Some(peer_fingerprint.clone()),
                         });
+                        info!(
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                            device_name = device_name.as_deref().unwrap_or(""),
+                            has_short_code = !short_code.is_empty(),
+                            has_local_fingerprint = !local_fingerprint.is_empty(),
+                            has_peer_fingerprint = !peer_fingerprint.is_empty(),
+                            "broadcasting pairing verification to daemon websocket subscribers"
+                        );
                         emit_pairing_session_changed(
                             &event_tx,
                             &session_id,
@@ -1583,6 +1605,42 @@ fn pairing_events_subscribe_backoff_ms(attempt: u32) -> u64 {
     PAIRING_EVENTS_SUBSCRIBE_BACKOFF_INITIAL_MS
         .saturating_mul(factor)
         .min(PAIRING_EVENTS_SUBSCRIBE_BACKOFF_MAX_MS)
+}
+
+async fn run_space_access_event_loop(
+    mut event_rx: mpsc::Receiver<SpaceAccessCompletedEvent>,
+    event_tx: broadcast::Sender<DaemonWsEvent>,
+    cancel: CancellationToken,
+) -> anyhow::Result<()> {
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            maybe_event = event_rx.recv() => {
+                let Some(event) = maybe_event else {
+                    return Ok(());
+                };
+                info!(
+                    session_id = %event.session_id,
+                    peer_id = %event.peer_id,
+                    success = event.success,
+                    "daemon emitting space access completed via websocket"
+                );
+                emit_ws_event(
+                    &event_tx,
+                    "setup",
+                    "setup.space_access_completed",
+                    Some(event.session_id.clone()),
+                    SetupSpaceAccessCompletedPayload {
+                        session_id: event.session_id,
+                        peer_id: event.peer_id,
+                        success: event.success,
+                        reason: event.reason,
+                        ts: event.ts,
+                    },
+                );
+            }
+        }
+    }
 }
 
 fn pairing_failure_message(

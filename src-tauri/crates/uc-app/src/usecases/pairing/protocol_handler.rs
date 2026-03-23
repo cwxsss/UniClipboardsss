@@ -125,6 +125,14 @@ impl PairingProtocolHandler {
                                 .map(|info| info.peer_id.clone())
                         };
                         if let Some(peer_id) = peer_id_for_event {
+                            tracing::info!(
+                                session_id = %action_session_id,
+                                peer_id = %peer_id,
+                                has_short_code = !short_code_clone.is_empty(),
+                                has_local_fingerprint = !local_fingerprint_clone.is_empty(),
+                                has_peer_fingerprint = !peer_fingerprint_clone.is_empty(),
+                                "Emitting pairing verification domain event"
+                            );
                             Self::emit_event_to_senders(
                                 event_senders.clone(),
                                 PairingDomainEvent::PairingVerificationRequired {
@@ -139,7 +147,7 @@ impl PairingProtocolHandler {
                         } else {
                             tracing::warn!(
                                 session_id = %action_session_id,
-                                "Pairing verification event missing peer info"
+                                "Pairing verification event missing peer info; domain event not emitted"
                             );
                         }
                         tracing::debug!(

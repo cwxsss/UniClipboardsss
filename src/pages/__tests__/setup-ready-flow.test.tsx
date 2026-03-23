@@ -1,7 +1,6 @@
 import { render, act } from '@testing-library/react'
 import type { HTMLAttributes, ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { getSetupState } from '@/api/setup'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import SetupPage from '@/pages/SetupPage'
 
 if (
@@ -40,16 +39,20 @@ if (typeof globalThis.navigator === 'undefined') {
 
 const loadI18n = await import('@/i18n')
 const i18n = loadI18n.default
+const useSetupRealtimeStoreMock = vi.hoisted(() => vi.fn())
+const syncSetupStateFromCommandMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/setup', () => ({
-  getSetupState: vi.fn(),
-  onSetupStateChanged: vi.fn(() => Promise.resolve(() => {})),
   startNewSpace: vi.fn(),
   startJoinSpace: vi.fn(),
   selectJoinPeer: vi.fn(),
   submitPassphrase: vi.fn(),
   verifyPassphrase: vi.fn(),
   cancelSetup: vi.fn(),
+}))
+
+vi.mock('@/store/setupRealtimeStore', () => ({
+  useSetupRealtimeStore: useSetupRealtimeStoreMock,
 }))
 
 const navigateMock = vi.fn()
@@ -70,13 +73,18 @@ vi.mock('framer-motion', () => ({
 describe('setup-ready-flow', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('zh-CN')
-    ;(getSetupState as Mock).mockReset()
     navigateMock.mockReset()
+    syncSetupStateFromCommandMock.mockReset()
+    useSetupRealtimeStoreMock.mockReturnValue({
+      setupState: 'Completed',
+      sessionId: null,
+      hydrated: true,
+      syncSetupStateFromCommand: syncSetupStateFromCommandMock,
+    })
   })
 
   it('renders SetupDoneStep when setup state is Completed and allows entering app', async () => {
     const onComplete = vi.fn()
-    ;(getSetupState as Mock).mockResolvedValue('Completed')
 
     const view = render(<SetupPage onCompleteSetup={onComplete} />)
 

@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, Mutex};
-use tracing::warn;
+use tracing::{debug, info, warn};
 use uc_core::network::pairing_state_machine::FailureReason;
-use uc_core::ports::{RealtimeEvent, RealtimeTopic, RealtimeTopicPort};
+use uc_core::ports::{
+    PairingVerificationRequiredEvent, RealtimeEvent, RealtimeTopic, RealtimeTopicPort,
+};
 
 use crate::usecases::pairing::PairingDomainEvent;
 
@@ -49,24 +51,71 @@ pub async fn run_setup_realtime_consumer(
     let mut rx = realtime
         .subscribe("setup_realtime_consumer", &[RealtimeTopic::Pairing])
         .await?;
+
+    run_setup_realtime_consumer_with_rx(&mut rx, hub).await
+}
+
+pub async fn run_setup_realtime_consumer_with_rx(
+    rx: &mut mpsc::Receiver<RealtimeEvent>,
+    hub: Arc<SetupPairingEventHub>,
+) -> anyhow::Result<()> {
     let mut session_stages = HashMap::new();
 
     while let Some(event) = rx.recv().await {
-        if let Some((session_id, stage, domain_event)) = map_setup_event(event) {
+        if let Some((session_id, stage, domain_event)) = map_setup_event(event.clone()) {
             if should_forward(&session_stages, &session_id, stage) {
+                info!(
+                    session_id = %session_id,
+                    stage = ?stage,
+                    event = ?domain_event,
+                    "forwarding setup pairing event from realtime consumer"
+                );
                 hub.publish(domain_event).await?;
                 session_stages.insert(session_id, stage);
+            } else {
+                debug!(
+                    session_id = %session_id,
+                    current_stage = ?session_stages.get(&session_id),
+                    next_stage = ?stage,
+                    "dropping out-of-order setup pairing event"
+                );
             }
+        } else if let Some((session_id, reason)) = map_setup_event_rejection(&event) {
+            warn!(
+                session_id = %session_id,
+                rejection_reason = %reason,
+                event = ?event,
+                "setup realtime consumer rejected pairing event"
+            );
         }
     }
 
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum SetupSessionStage {
     VerificationRequired,
     Terminal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum VerificationPayloadRejection {
+    PeerIdMissing,
+    CodeMissing,
+    LocalFingerprintMissing,
+    PeerFingerprintMissing,
+}
+
+impl VerificationPayloadRejection {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PeerIdMissing => "peer_id_missing",
+            Self::CodeMissing => "code_missing",
+            Self::LocalFingerprintMissing => "local_fingerprint_missing",
+            Self::PeerFingerprintMissing => "peer_fingerprint_missing",
+        }
+    }
 }
 
 fn should_forward(
@@ -85,34 +134,11 @@ fn map_setup_event(
 ) -> Option<(String, SetupSessionStage, PairingDomainEvent)> {
     match event {
         RealtimeEvent::PairingVerificationRequired(payload) => {
-            let session_id = payload.session_id;
-            let peer_id = match payload.peer_id {
-                Some(peer_id) => peer_id,
-                None => {
-                    warn!(session_id = %session_id, "dropping setup pairing event without peer_id");
-                    return None;
-                }
-            };
-            let short_code = match payload.code {
-                Some(short_code) => short_code,
-                None => {
-                    warn!(session_id = %session_id, "dropping setup pairing event without code");
-                    return None;
-                }
-            };
-            let local_fingerprint = match payload.local_fingerprint {
-                Some(local_fingerprint) => local_fingerprint,
-                None => {
-                    warn!(session_id = %session_id, "dropping setup pairing event without local_fingerprint");
-                    return None;
-                }
-            };
-            let peer_fingerprint = match payload.peer_fingerprint {
-                Some(peer_fingerprint) => peer_fingerprint,
-                None => {
-                    warn!(session_id = %session_id, "dropping setup pairing event without peer_fingerprint");
-                    return None;
-                }
+            let session_id = payload.session_id.clone();
+            let Ok((peer_id, short_code, local_fingerprint, peer_fingerprint)) =
+                validate_verification_payload(payload)
+            else {
+                return None;
             };
 
             let domain_event = PairingDomainEvent::PairingVerificationRequired {
@@ -150,5 +176,62 @@ fn map_setup_event(
             Some((session_id, SetupSessionStage::Terminal, domain_event))
         }
         _ => None,
+    }
+}
+
+fn map_setup_event_rejection(event: &RealtimeEvent) -> Option<(String, String)> {
+    match event {
+        RealtimeEvent::PairingVerificationRequired(payload) => {
+            validate_verification_payload(payload.clone())
+                .err()
+                .map(|reason| (payload.session_id.clone(), reason.as_str().to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn validate_verification_payload(
+    payload: PairingVerificationRequiredEvent,
+) -> Result<(String, String, String, String), VerificationPayloadRejection> {
+    let peer_id = payload
+        .peer_id
+        .ok_or(VerificationPayloadRejection::PeerIdMissing)?;
+    let short_code = payload
+        .code
+        .ok_or(VerificationPayloadRejection::CodeMissing)?;
+    let local_fingerprint = payload
+        .local_fingerprint
+        .ok_or(VerificationPayloadRejection::LocalFingerprintMissing)?;
+    let peer_fingerprint = payload
+        .peer_fingerprint
+        .ok_or(VerificationPayloadRejection::PeerFingerprintMissing)?;
+
+    Ok((peer_id, short_code, local_fingerprint, peer_fingerprint))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_setup_event_reports_missing_peer_id_for_verification_payload() {
+        let event = RealtimeEvent::PairingVerificationRequired(PairingVerificationRequiredEvent {
+            session_id: "session-missing-peer".into(),
+            peer_id: None,
+            device_name: Some("Desk".into()),
+            code: Some("123456".into()),
+            local_fingerprint: Some("local".into()),
+            peer_fingerprint: Some("peer".into()),
+        });
+
+        let rejection = map_setup_event_rejection(&event);
+
+        assert_eq!(
+            rejection,
+            Some((
+                "session-missing-peer".to_string(),
+                "peer_id_missing".to_string()
+            ))
+        );
     }
 }

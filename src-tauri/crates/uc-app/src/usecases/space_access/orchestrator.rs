@@ -281,6 +281,16 @@ impl SpaceAccessOrchestrator {
                 .unwrap_or_else(|| "unknown".to_string())
         };
 
+        let senders_count = self.event_senders.lock().await.len();
+        tracing::info!(
+            session_id,
+            success,
+            ?reason,
+            peer_id = %peer_id,
+            senders_count,
+            "emit_completion called"
+        );
+
         let event = SpaceAccessCompletedEvent {
             session_id: session_id.to_string(),
             peer_id,

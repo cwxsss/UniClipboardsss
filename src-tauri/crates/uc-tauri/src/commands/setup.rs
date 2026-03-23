@@ -1,13 +1,16 @@
 //! Setup-related Tauri commands
 //! 设置流程相关的 Tauri 命令
 
-use crate::bootstrap::DaemonConnectionState;
+use std::sync::Arc;
+
+use crate::bootstrap::{AppRuntime, DaemonConnectionState};
 use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use crate::daemon_client::TauriDaemonSetupClient;
 use tauri::State;
 use tracing::{info_span, Instrument};
-use uc_core::setup::{SetupError, SetupState};
+use uc_app::usecases::setup::orchestrator::SetupError;
+use uc_core::setup::{SetupError as CoreSetupError, SetupState};
 use uc_platform::ports::observability::TraceMetadata;
 
 fn deserialize_setup_state(value: serde_json::Value) -> Result<SetupState, CommandError> {
@@ -127,7 +130,7 @@ pub async fn submit_passphrase(
     async {
         if passphrase1 != passphrase2 {
             return Ok(SetupState::CreateSpaceInputPassphrase {
-                error: Some(SetupError::PassphraseMismatch),
+                error: Some(CoreSetupError::PassphraseMismatch),
             });
         }
 
@@ -203,6 +206,39 @@ pub async fn cancel_setup(
             .await
             .map_err(CommandError::internal)?;
         deserialize_setup_state(response.state)
+    }
+    .instrument(span)
+    .await
+}
+
+/// Called by the frontend when the daemon emits `setup.spaceAccessCompleted` via
+/// the WebSocket bridge. This bridges the gap between the daemon's space access
+/// orchestrator completing and the app's setup orchestrator transitioning to
+/// `Completed`.
+#[tauri::command]
+pub async fn handle_space_access_completed(
+    runtime: State<'_, Arc<AppRuntime>>,
+    _trace: Option<TraceMetadata>,
+) -> Result<SetupState, CommandError> {
+    let span = info_span!(
+        "command.setup.handle_space_access_completed",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+    );
+    record_trace_fields(&span, &_trace);
+    async {
+        runtime
+            .usecases()
+            .setup_orchestrator()
+            .complete_join_space()
+            .await
+            .map_err(|e| match e {
+                SetupError::ActionNotImplemented(msg) => {
+                    tracing::warn!(msg = %msg, "join space succeeded event not applicable in current state");
+                    CommandError::internal(msg)
+                }
+                other => CommandError::internal(other.to_string()),
+            })
     }
     .instrument(span)
     .await

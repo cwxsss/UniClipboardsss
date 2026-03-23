@@ -5,12 +5,12 @@ import type { HTMLAttributes, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { getP2PPeers } from '@/api/p2p'
 import { onDaemonRealtimeEvent } from '@/api/realtime'
-import { getSetupState, selectJoinPeer } from '@/api/setup'
+import { selectJoinPeer } from '@/api/setup'
 import SetupPage from '@/pages/SetupPage'
+const useSetupRealtimeStoreMock = vi.hoisted(() => vi.fn())
+const syncSetupStateFromCommandMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/setup', () => ({
-  getSetupState: vi.fn(),
-  onSetupStateChanged: vi.fn(() => Promise.resolve(() => {})),
   startNewSpace: vi.fn(),
   startJoinSpace: vi.fn(),
   selectJoinPeer: vi.fn(),
@@ -18,6 +18,10 @@ vi.mock('@/api/setup', () => ({
   verifyPassphrase: vi.fn(),
   cancelSetup: vi.fn(),
   confirmPeerTrust: vi.fn(),
+}))
+
+vi.mock('@/store/setupRealtimeStore', () => ({
+  useSetupRealtimeStore: useSetupRealtimeStoreMock,
 }))
 
 vi.mock('@/api/p2p', () => ({
@@ -62,12 +66,17 @@ vi.mock('framer-motion', () => ({
 describe('setup event-driven device discovery', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    ;(getSetupState as Mock).mockReset()
     ;(getP2PPeers as Mock).mockReset()
     ;(selectJoinPeer as Mock).mockReset()
     ;(onDaemonRealtimeEvent as Mock).mockReset()
     navigateMock.mockReset()
-    ;(getSetupState as Mock).mockResolvedValue({ JoinSpaceSelectDevice: { error: null } })
+    syncSetupStateFromCommandMock.mockReset()
+    useSetupRealtimeStoreMock.mockReturnValue({
+      setupState: { JoinSpaceSelectDevice: { error: null } },
+      sessionId: null,
+      hydrated: true,
+      syncSetupStateFromCommand: syncSetupStateFromCommandMock,
+    })
     ;(getP2PPeers as Mock).mockResolvedValue([])
     ;(onDaemonRealtimeEvent as Mock).mockResolvedValue(() => {})
   })
@@ -198,9 +207,9 @@ describe('setup event-driven device discovery', () => {
 
     expect(selectJoinPeer).toHaveBeenCalledWith('peer-join-1')
     await vi.waitFor(() => {
-      expect(
-        screen.queryByRole('button', { name: 'setup.joinPickDevice.actions.select' })
-      ).toBeNull()
+      expect(syncSetupStateFromCommandMock).toHaveBeenCalledWith({
+        ProcessingJoinSpace: { message: 'waiting for pairing verification' },
+      })
     })
   })
 

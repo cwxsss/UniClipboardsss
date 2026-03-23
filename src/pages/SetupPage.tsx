@@ -1,14 +1,12 @@
 import { AnimatePresence } from 'framer-motion'
 import { ArrowLeft, Loader2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   cancelSetup,
-  getSetupState,
   confirmPeerTrust,
-  onSetupStateChanged,
   selectJoinPeer,
   startJoinSpace,
   startNewSpace,
@@ -27,6 +25,7 @@ import ProcessingJoinStep from '@/pages/setup/ProcessingJoinStep'
 import SetupDoneStep from '@/pages/setup/SetupDoneStep'
 import StepDotIndicator from '@/pages/setup/StepDotIndicator'
 import WelcomeStep from '@/pages/setup/WelcomeStep'
+import { useSetupRealtimeStore } from '@/store/setupRealtimeStore'
 
 type SetupPageProps = {
   onCompleteSetup?: () => void
@@ -79,7 +78,7 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
   const { t: tCommon } = useTranslation(undefined, { keyPrefix: 'setup.common' })
   const { isMac } = usePlatform()
   const navigate = useNavigate()
-  const [setupState, setSetupState] = useState<SetupState | null>(null)
+  const { setupState, hydrated, syncSetupStateFromCommand } = useSetupRealtimeStore()
   const [loading, setLoading] = useState(false)
   const [selectedPeerId, setSelectedPeerId] = useState<string | null>(null)
 
@@ -91,8 +90,6 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
       toast.error(t('errors.refreshPeersFailed'))
     },
   })
-  const activeEventSessionIdRef = useRef<string | null>(null)
-  const setupStateRef = useRef<SetupState | null>(null)
   const prevStateRef = useRef<SetupState | null>(null)
 
   const direction = useMemo(() => {
@@ -109,95 +106,11 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
   // so it still holds the previous state — exactly what getStepInfo needs.
   const stepInfo = useMemo(() => getStepInfo(setupState, prevStateRef.current), [setupState])
 
-  const isSetupFlowActive = useCallback((state: SetupState | null) => {
-    if (!state) return false
-    return state !== 'Welcome' && state !== 'Completed'
-  }, [])
-
-  const syncSetupState = useCallback((nextState: SetupState) => {
-    setSetupState(prevState => {
-      if (JSON.stringify(prevState) === JSON.stringify(nextState)) {
-        return prevState
-      }
-      return nextState
-    })
-  }, [])
-
-  useEffect(() => {
-    const loadState = async () => {
-      try {
-        const state = await getSetupState()
-        syncSetupState(state)
-      } catch (error) {
-        console.error('Failed to load setup state:', error)
-        toast.error(t('errors.loadSetupStateFailed'))
-      }
-    }
-    loadState()
-  }, [syncSetupState, t])
-
-  useEffect(() => {
-    setupStateRef.current = setupState
-  }, [setupState])
-
-  useEffect(() => {
-    let effectActive = true
-    let disposed = false
-    let unlisten: (() => void) | null = null
-
-    const setupListener = async () => {
-      const stopListening = await onSetupStateChanged(event => {
-        if (!effectActive) {
-          return
-        }
-
-        if (!isSetupFlowActive(setupStateRef.current)) {
-          return
-        }
-
-        if (activeEventSessionIdRef.current !== event.sessionId) {
-          activeEventSessionIdRef.current = event.sessionId
-        }
-
-        syncSetupState(event.state)
-
-        if (event.state === 'Completed' || event.state === 'Welcome') {
-          activeEventSessionIdRef.current = null
-        }
-      })
-
-      if (disposed) {
-        stopListening()
-        return
-      }
-
-      unlisten = stopListening
-    }
-
-    void setupListener()
-
-    return () => {
-      effectActive = false
-      disposed = true
-      activeEventSessionIdRef.current = null
-      if (unlisten) {
-        unlisten()
-        unlisten = null
-      }
-    }
-  }, [isSetupFlowActive, syncSetupState])
-
-  useEffect(() => {
-    if (!isSetupFlowActive(setupState)) {
-      activeEventSessionIdRef.current = null
-    }
-  }, [isSetupFlowActive, setupState])
-
   const runAction = async (action: () => Promise<SetupState>) => {
     setLoading(true)
     try {
       const newState = await action()
-      syncSetupState(newState)
+      syncSetupStateFromCommand(newState)
     } catch (error) {
       console.error('Failed to dispatch event:', error)
       toast.error(t('errors.operationFailed'))
@@ -207,7 +120,7 @@ export default function SetupPage({ onCompleteSetup }: SetupPageProps = {}) {
   }
 
   const renderStep = () => {
-    if (!setupState) {
+    if (!hydrated || !setupState) {
       return (
         <div className="flex h-full w-full items-center justify-center">
           <div className="flex items-center gap-3 text-sm text-muted-foreground">

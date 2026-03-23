@@ -672,15 +672,32 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     })
                 })
         }
-        "setup.state_changed" => serde_json::from_value::<SetupStateChangedPayload>(event.payload)
-            .ok()
-            .map(|payload| {
-                RealtimeEvent::SetupStateChanged(SetupStateChangedEvent {
-                    session_id: payload.session_id,
-                    state: serde_json::from_value(payload.state)
-                        .unwrap_or(uc_core::setup::SetupState::Welcome),
-                })
-            }),
+        "setup.state_changed" => {
+            match serde_json::from_value::<SetupStateChangedPayload>(event.payload) {
+                Ok(payload) => match serde_json::from_value(payload.state.clone()) {
+                    Ok(state) => Some(RealtimeEvent::SetupStateChanged(SetupStateChangedEvent {
+                        session_id: payload.session_id,
+                        state,
+                    })),
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            raw_state = %payload.state,
+                            "failed to decode setup state from daemon websocket event, dropping event"
+                        );
+                        None
+                    }
+                },
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        event_type = %event_type,
+                        "failed to decode setup.state_changed websocket payload"
+                    );
+                    None
+                }
+            }
+        }
         "setup.space_access_completed" => {
             serde_json::from_value::<SetupSpaceAccessCompletedPayload>(event.payload)
                 .ok()

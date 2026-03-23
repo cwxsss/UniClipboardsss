@@ -92,12 +92,20 @@ impl ProofPort for HmacProofAdapter {
         challenge_nonce: [u8; 32],
         master_key: &MasterKey,
     ) -> anyhow::Result<SpaceAccessProofArtifact> {
-        let proof_bytes = Self::compute_hmac(
-            pairing_session_id,
-            space_id,
-            challenge_nonce,
-            master_key.as_bytes(),
-        )?;
+        let mk_bytes = master_key.as_bytes();
+        let mk_fingerprint = format!(
+            "{:02x}{:02x}{:02x}{:02x}",
+            mk_bytes[0], mk_bytes[1], mk_bytes[2], mk_bytes[3]
+        );
+        tracing::debug!(
+            session_id = %pairing_session_id,
+            space_id = %space_id,
+            mk_fingerprint,
+            "building HMAC proof"
+        );
+
+        let proof_bytes =
+            Self::compute_hmac(pairing_session_id, space_id, challenge_nonce, mk_bytes)?;
 
         let cache_key = Self::cache_key(pairing_session_id, space_id, challenge_nonce);
         self.key_cache.lock().await.insert(cache_key, master_key.0);
@@ -116,6 +124,11 @@ impl ProofPort for HmacProofAdapter {
         expected_nonce: [u8; 32],
     ) -> anyhow::Result<bool> {
         if proof.challenge_nonce != expected_nonce {
+            tracing::warn!(
+                session_id = %proof.pairing_session_id,
+                space_id = %proof.space_id,
+                "proof verification failed: challenge nonce mismatch"
+            );
             return Ok(false);
         }
 
@@ -129,8 +142,8 @@ impl ProofPort for HmacProofAdapter {
             cache.get(&cache_key).copied()
         };
 
-        let master_key = if let Some(master_key) = master_key {
-            Some(master_key)
+        let (master_key, key_source) = if let Some(master_key) = master_key {
+            (Some(master_key), "cache")
         } else if let Some(encryption_session) = &self.encryption_session {
             match encryption_session.get_master_key().await {
                 Ok(master_key) => {
@@ -140,12 +153,23 @@ impl ProofPort for HmacProofAdapter {
                         .lock()
                         .await
                         .insert(cache_key, master_key_bytes);
-                    Some(master_key_bytes)
+                    (Some(master_key_bytes), "encryption_session")
                 }
-                Err(_) => None,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        session_id = %proof.pairing_session_id,
+                        "proof verification failed: encryption session has no master key"
+                    );
+                    (None, "none")
+                }
             }
         } else {
-            None
+            tracing::warn!(
+                session_id = %proof.pairing_session_id,
+                "proof verification failed: no encryption session configured"
+            );
+            (None, "none")
         };
 
         let Some(master_key) = master_key else {
@@ -159,7 +183,30 @@ impl ProofPort for HmacProofAdapter {
             &master_key,
         )?;
 
-        Ok(recomputed == proof.proof_bytes)
+        let mk_fingerprint = format!(
+            "{:02x}{:02x}{:02x}{:02x}",
+            master_key[0], master_key[1], master_key[2], master_key[3]
+        );
+        let matched = recomputed == proof.proof_bytes;
+        if !matched {
+            tracing::warn!(
+                session_id = %proof.pairing_session_id,
+                space_id = %proof.space_id,
+                key_source,
+                mk_fingerprint,
+                proof_len = proof.proof_bytes.len(),
+                recomputed_len = recomputed.len(),
+                "proof verification failed: HMAC mismatch (master key from {key_source})"
+            );
+        } else {
+            tracing::info!(
+                session_id = %proof.pairing_session_id,
+                key_source,
+                "proof verification succeeded"
+            );
+        }
+
+        Ok(matched)
     }
 }
 

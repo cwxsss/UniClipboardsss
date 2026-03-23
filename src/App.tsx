@@ -1,5 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   BrowserRouter as Router,
   Routes,
@@ -8,8 +8,8 @@ import {
   Outlet,
   useNavigate,
 } from 'react-router-dom'
-import { type EncryptionSessionStatus } from '@/api/security'
-import { getSetupState, type SetupState } from '@/api/setup'
+import { type EncryptionSessionStatus, unlockEncryptionSession } from '@/api/security'
+import { type SetupState } from '@/api/setup'
 import { TitleBar } from '@/components'
 import { GlobalShortcuts } from '@/components/GlobalShortcuts'
 import { PairingNotificationProvider } from '@/components/PairingNotificationProvider'
@@ -28,6 +28,7 @@ import SettingsPage from '@/pages/SettingsPage'
 import SetupPage from '@/pages/SetupPage'
 import UnlockPage from '@/pages/UnlockPage'
 import { useGetEncryptionSessionStatusQuery } from '@/store/api'
+import { useSetupRealtimeStore } from '@/store/setupRealtimeStore'
 import './App.css'
 
 // 认证布局包装器 - 保持 Sidebar 持久化
@@ -37,6 +38,27 @@ const AuthenticatedLayout = () => {
       <Outlet />
     </MainLayout>
   )
+}
+
+export function shouldKeepSetupCompletionStep(
+  previousSetupState: SetupState | null,
+  nextSetupState: SetupState | null,
+  hydrated: boolean
+): boolean {
+  return (
+    hydrated &&
+    previousSetupState !== null &&
+    previousSetupState !== 'Completed' &&
+    nextSetupState === 'Completed'
+  )
+}
+
+export function isSetupGateActive(
+  setupState: SetupState | null,
+  hydrated: boolean,
+  showCompletionStep: boolean
+): boolean {
+  return !hydrated || setupState !== 'Completed' || showCompletionStep
 }
 
 // 主应用程序内容
@@ -49,6 +71,21 @@ const AppContent = ({
 }) => {
   const [encryptionStatus, setEncryptionStatus] = useState<EncryptionSessionStatus | null>(null)
   const [encryptionError, setEncryptionError] = useState<string | null>(null)
+  const wasSetupActiveRef = useRef(isSetupActive)
+
+  // When setup just completed, trigger Tauri-side auto-unlock.
+  // The daemon runs MarkSetupComplete + ensure_ready on its side, but the Tauri-side
+  // encryption session needs its own unlock to become session_ready.
+  // The existing encryption://event SessionReady listener handles the state update.
+  useEffect(() => {
+    const wasActive = wasSetupActiveRef.current
+    wasSetupActiveRef.current = isSetupActive
+
+    if (wasActive && !isSetupActive) {
+      unlockEncryptionSession().catch(err => console.warn('Post-setup auto-unlock failed:', err))
+    }
+  }, [isSetupActive])
+
   const {
     data: encryptionData,
     isLoading: encryptionLoading,
@@ -113,9 +150,16 @@ const AppContent = ({
     )
   }
 
-  // If initialized but not ready, show unlock page
+  // If initialized but not ready, show unlock page.
+  // PairingNotificationProvider is mounted here too so that already-completed
+  // hosts can still receive and display pairing requests while on the unlock screen.
   if (resolvedEncryptionStatus?.initialized && !resolvedEncryptionStatus?.session_ready) {
-    return <UnlockPage />
+    return (
+      <>
+        <UnlockPage />
+        <PairingNotificationProvider />
+      </>
+    )
   }
 
   return (
@@ -171,58 +215,25 @@ const TitleBarWithSearch = ({ isSetupActive }: { isSetupActive: boolean }) => {
 }
 
 // App content with WindowShell structure
-const AppContentWithBar = () => {
+export const AppContentWithBar = () => {
   // WindowShell provides the correct window-level structure:
   // - TitleBar: Window chrome layer (full-width, drag region)
   // - Content: App layout layer (Sidebar + Main via routes)
   const { isMac, isTauri } = usePlatform()
   const showCustomTitleBar = !isTauri || isMac
-  const [setupGate, setSetupGate] = useState<{
-    setupState: SetupState | null
-    showCompletionStep: boolean
-  }>({
-    setupState: null,
-    showCompletionStep: false,
-  })
-
-  const isSetupLoading = setupGate.setupState === null
-  const isSetupActive =
-    isSetupLoading || setupGate.setupState !== 'Completed' || setupGate.showCompletionStep
+  const { hydrated, setupState } = useSetupRealtimeStore()
+  const [showCompletionStep, setShowCompletionStep] = useState(false)
+  const previousSetupStateRef = useRef<SetupState | null>(null)
 
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let isMounted = true
-
-    const loadSetupState = async () => {
-      try {
-        const state = await getSetupState()
-        if (!isMounted) return
-        setSetupGate(prev => {
-          const shouldShowCompletionStep =
-            prev.showCompletionStep ||
-            (prev.setupState !== null && prev.setupState !== 'Completed' && state === 'Completed')
-          return {
-            setupState: state,
-            showCompletionStep: shouldShowCompletionStep,
-          }
-        })
-        if (state !== 'Completed') {
-          timer = setTimeout(loadSetupState, 1000)
-        }
-      } catch (error) {
-        console.error(error)
-        if (!isMounted) return
-        timer = setTimeout(loadSetupState, 2000)
-      }
+    const previousSetupState = previousSetupStateRef.current
+    if (shouldKeepSetupCompletionStep(previousSetupState, setupState, hydrated)) {
+      setShowCompletionStep(true)
     }
+    previousSetupStateRef.current = setupState
+  }, [hydrated, setupState])
 
-    loadSetupState()
-
-    return () => {
-      isMounted = false
-      if (timer) clearTimeout(timer)
-    }
-  }, [])
+  const isSetupActive = isSetupGateActive(setupState, hydrated, showCompletionStep)
 
   const navigate = useNavigate()
   const handleNavigate = useCallback(
@@ -234,7 +245,7 @@ const AppContentWithBar = () => {
   useUINavigateListener(handleNavigate)
 
   const handleSetupComplete = () => {
-    setSetupGate(prev => ({ ...prev, showCompletionStep: false }))
+    setShowCompletionStep(false)
   }
 
   return (

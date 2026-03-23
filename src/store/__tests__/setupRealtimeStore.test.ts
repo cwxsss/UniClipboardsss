@@ -1,11 +1,17 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSetupState, onSetupStateChanged } from '@/api/setup'
-import { resetSetupRealtimeStoreForTests, useSetupRealtimeStore } from '@/store/setupRealtimeStore'
+import { getSetupState, onSetupStateChanged, onSpaceAccessCompleted } from '@/api/setup'
+import {
+  ensureSetupRealtimeSync,
+  resetSetupRealtimeStoreForTests,
+  useSetupRealtimeStore,
+} from '@/store/setupRealtimeStore'
 
 vi.mock('@/api/setup', () => ({
   getSetupState: vi.fn(),
   onSetupStateChanged: vi.fn(),
+  onSpaceAccessCompleted: vi.fn(),
+  handleSpaceAccessCompleted: vi.fn(),
 }))
 
 describe('setupRealtimeStore', () => {
@@ -154,9 +160,10 @@ describe('setupRealtimeStore', () => {
     expect(result.current.sessionId).toBeNull()
   })
 
-  it('resetSetupRealtimeStoreForTests restores default snapshot and re-hydrates', async () => {
-    vi.mocked(getSetupState).mockResolvedValue(null)
+  it('resetSetupRealtimeStoreForTests restores default snapshot and can re-hydrate', async () => {
+    vi.mocked(getSetupState).mockResolvedValue('Welcome')
     vi.mocked(onSetupStateChanged).mockResolvedValue(() => {})
+    vi.mocked(onSpaceAccessCompleted).mockResolvedValue(() => {})
 
     const { result } = renderHook(() => useSetupRealtimeStore())
 
@@ -172,10 +179,14 @@ describe('setupRealtimeStore', () => {
     expect(result.current.setupState).toBeNull()
     expect(result.current.sessionId).toBeNull()
 
-    // After re-hydration from getSetupState(null), hydrated is true again
+    await act(async () => {
+      await ensureSetupRealtimeSync()
+    })
+
     await waitFor(() => {
       expect(result.current.hydrated).toBe(true)
     })
+    expect(result.current.setupState).toBe('Welcome')
   })
 
   it('cleans up the realtime listener when the singleton store resets', async () => {

@@ -1,5 +1,11 @@
 import { useEffect, useSyncExternalStore } from 'react'
-import { getSetupState, onSetupStateChanged, type SetupState } from '@/api/setup'
+import {
+  getSetupState,
+  handleSpaceAccessCompleted,
+  onSetupStateChanged,
+  onSpaceAccessCompleted,
+  type SetupState,
+} from '@/api/setup'
 
 type SetupRealtimeSnapshot = {
   setupState: SetupState | null
@@ -21,6 +27,7 @@ let snapshot: SetupRealtimeSnapshot = {
 
 const listeners = new Set<() => void>()
 let stopListening: (() => void) | null = null
+let stopListeningSpaceAccess: (() => void) | null = null
 let startPromise: Promise<void> | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let syncGeneration = 0
@@ -100,7 +107,27 @@ export async function ensureSetupRealtimeSync(): Promise<void> {
         return
       }
 
+      const unlistenSpaceAccess = await onSpaceAccessCompleted(async event => {
+        if (generation !== syncGeneration) {
+          return
+        }
+
+        try {
+          const newState = await handleSpaceAccessCompleted()
+          updateSnapshot(newState, event.sessionId)
+        } catch (error) {
+          console.error('Failed to handle space access completed:', error)
+        }
+      })
+
+      if (generation !== syncGeneration) {
+        unlisten()
+        unlistenSpaceAccess()
+        return
+      }
+
       stopListening = unlisten
+      stopListeningSpaceAccess = unlistenSpaceAccess
       syncPhase = 'running'
     } catch (error) {
       if (generation !== syncGeneration) {
@@ -159,11 +186,16 @@ export function resetSetupRealtimeStoreForTests() {
     stopListening = null
   }
 
+  if (stopListeningSpaceAccess) {
+    stopListeningSpaceAccess()
+    stopListeningSpaceAccess = null
+  }
+
   snapshot = {
     setupState: null,
     sessionId: null,
     hydrated: false,
   }
 
-  listeners.clear()
+  emitChange()
 }

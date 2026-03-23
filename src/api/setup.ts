@@ -101,6 +101,40 @@ export async function cancelSetup(): Promise<SetupState> {
   return (await invokeWithTrace('cancel_setup')) as SetupState
 }
 
+export interface SpaceAccessCompletedEvent {
+  sessionId: string
+  peerId: string
+  success: boolean
+  reason?: string | null
+  ts: number
+}
+
+/**
+ * Called by the frontend when the daemon emits `setup.spaceAccessCompleted` via
+ * the WebSocket bridge. This bridges the gap between the daemon's space access
+ * orchestrator completing and the app's setup orchestrator transitioning to
+ * `Completed`.
+ */
+export async function handleSpaceAccessCompleted(): Promise<SetupState> {
+  return (await invokeWithTrace('handle_space_access_completed')) as SetupState
+}
+
+/**
+ * Listen for space access completion events from the daemon.
+ * This is used to transition the setup state machine from `ProcessingJoinSpace`
+ * to `Completed` when the daemon's space access flow completes.
+ */
+export async function onSpaceAccessCompleted(
+  callback: (event: SpaceAccessCompletedEvent) => void
+): Promise<() => void> {
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic !== 'setup' || event.type !== 'setup.spaceAccessCompleted') {
+      return
+    }
+    callback(event.payload as SpaceAccessCompletedEvent)
+  })
+}
+
 /**
  * Listen setup state changes with session idempotency.
  */
