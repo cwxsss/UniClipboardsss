@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uc_app::usecases::pairing::get_p2p_peers_snapshot::P2pPeerSnapshot;
 use uc_core::network::PairedDevice;
+use uc_core::security::space_access::state::SpaceAccessState;
 
 use crate::state::DaemonPairingSessionSnapshot;
 
@@ -195,6 +196,18 @@ pub struct PairedDevicesChangedPayload {
     pub peer_id: String,
     pub device_name: Option<String>,
     pub connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceAccessStateChangedPayload {
+    pub state: SpaceAccessState,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceAccessStateResponse {
+    pub state: SpaceAccessState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

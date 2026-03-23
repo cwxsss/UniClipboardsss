@@ -20,7 +20,7 @@ use crate::api::types::{
     DaemonWsEvent, DaemonWsSubscribeRequest, PairedDeviceDto, PairedDevicesChangedPayload,
     PairingFailurePayload, PairingSessionChangedPayload, PairingSessionSummaryDto,
     PairingVerificationPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
-    PeersChangedFullPayload, PeerSnapshotDto, StatusResponse,
+    PeersChangedFullPayload, PeerSnapshotDto, SpaceAccessStateResponse, StatusResponse,
 };
 
 const TOPIC_STATUS: &str = "status";
@@ -30,6 +30,9 @@ const TOPIC_PAIRING: &str = "pairing";
 const TOPIC_PAIRING_SESSION: &str = "pairing/session";
 const TOPIC_PAIRING_VERIFICATION: &str = "pairing/verification";
 const TOPIC_SETUP: &str = "setup";
+pub const TOPIC_SPACE_ACCESS: &str = "space-access";
+
+pub const SPACE_ACCESS_SNAPSHOT_EVENT: &str = "space_access.snapshot";
 
 const STATUS_SNAPSHOT_EVENT: &str = "status.snapshot";
 const PEERS_SNAPSHOT_EVENT: &str = "peers.snapshot";
@@ -196,6 +199,7 @@ fn is_supported_topic(topic: &str) -> bool {
             | TOPIC_PAIRING_SESSION
             | TOPIC_PAIRING_VERIFICATION
             | TOPIC_SETUP
+            | TOPIC_SPACE_ACCESS
     )
 }
 
@@ -246,6 +250,19 @@ async fn build_snapshot_event(
         .map(Some),
         TOPIC_PAIRING_VERIFICATION => Ok(None),
         TOPIC_SETUP => Ok(None),
+        TOPIC_SPACE_ACCESS => {
+            let space_access_state = state
+                .query_service
+                .space_access_state(state.space_access_orchestrator().as_deref())
+                .await;
+            snapshot_event(
+                TOPIC_SPACE_ACCESS,
+                SPACE_ACCESS_SNAPSHOT_EVENT,
+                None,
+                space_access_state,
+            )
+            .map(Some)
+        }
         unsupported => anyhow::bail!("unsupported websocket topic: {unsupported}"),
     }
 }
@@ -272,14 +289,17 @@ fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
+const SPACE_ACCESS_STATE_CHANGED_EVENT: &str = "space_access.state_changed";
+
 #[allow(dead_code)]
 fn _event_type_markers(
     _: StatusResponse,
     _: Vec<PeerSnapshotDto>,
     _: Vec<PairedDeviceDto>,
     _: Vec<PairingSessionSummaryDto>,
+    _: SpaceAccessStateResponse,
 ) -> (
-    [&'static str; 9],
+    [&'static str; 11],
     PairingSessionChangedPayload,
     PairingVerificationPayload,
     PairingFailurePayload,
@@ -299,6 +319,8 @@ fn _event_type_markers(
             PAIRING_VERIFICATION_REQUIRED_EVENT,
             PAIRING_COMPLETE_EVENT,
             PAIRING_FAILED_EVENT,
+            SPACE_ACCESS_SNAPSHOT_EVENT,
+            SPACE_ACCESS_STATE_CHANGED_EVENT,
         ],
         PairingSessionChangedPayload {
             session_id: String::new(),

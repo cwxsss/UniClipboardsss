@@ -8,14 +8,17 @@ use serde_json::json;
 use serde_json::Value;
 use tokio::sync::RwLock;
 use uc_app::runtime::CoreRuntime;
+use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{CoreUseCases, SetupOrchestrator};
 use uc_core::clipboard::ClipboardIntegrationMode;
 use uc_core::network::PairedDevice;
+use uc_core::security::space_access::state::SpaceAccessState;
 use uc_core::setup::SetupState;
 
 use crate::api::types::{
     HealthResponse, PairedDeviceDto, PairingSessionSummaryDto, PeerSnapshotDto,
-    SetupActionAckResponse, SetupStateResponse, StatusResponse, WorkerStatusDto,
+    SetupActionAckResponse, SetupStateResponse, SpaceAccessStateResponse, StatusResponse,
+    WorkerStatusDto,
 };
 use crate::pairing::host::DaemonPairingHost;
 use crate::state::{DaemonPairingSessionSnapshot, DaemonWorkerSnapshot, RuntimeState};
@@ -127,6 +130,17 @@ impl DaemonQueryService {
                 .and_then(|snapshot| snapshot.device_name.clone()),
             has_completed: matches!(setup_state, SetupState::Completed),
         })
+    }
+
+    pub async fn space_access_state(
+        &self,
+        orchestrator: Option<&SpaceAccessOrchestrator>,
+    ) -> SpaceAccessStateResponse {
+        let state = match orchestrator {
+            Some(o) => o.get_state().await,
+            None => SpaceAccessState::Idle,
+        };
+        SpaceAccessStateResponse { state }
     }
 
     pub async fn setup_action_ack(

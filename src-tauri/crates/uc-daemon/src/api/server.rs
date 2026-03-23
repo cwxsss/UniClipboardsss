@@ -12,6 +12,8 @@ use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::SetupOrchestrator;
 
+use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+
 use crate::api::auth::{
     build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
 };
@@ -30,6 +32,7 @@ pub struct DaemonApiState {
     pub runtime: Option<Arc<CoreRuntime>>,
     pub pairing_host: Option<Arc<DaemonPairingHost>>,
     pub setup_orchestrator: Option<Arc<SetupOrchestrator>>,
+    pub space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
 }
 
@@ -46,6 +49,7 @@ impl DaemonApiState {
             runtime,
             pairing_host: None,
             setup_orchestrator: None,
+            space_access_orchestrator: None,
             event_tx,
         }
     }
@@ -66,6 +70,18 @@ impl DaemonApiState {
 
     pub fn setup_orchestrator(&self) -> Option<Arc<SetupOrchestrator>> {
         self.setup_orchestrator.clone()
+    }
+
+    pub fn with_space_access(
+        mut self,
+        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    ) -> Self {
+        self.space_access_orchestrator = Some(space_access_orchestrator);
+        self
+    }
+
+    pub fn space_access_orchestrator(&self) -> Option<Arc<SpaceAccessOrchestrator>> {
+        self.space_access_orchestrator.clone()
     }
 
     pub fn connection_info_for_addr(&self, listen_addr: SocketAddr) -> DaemonConnectionInfo {

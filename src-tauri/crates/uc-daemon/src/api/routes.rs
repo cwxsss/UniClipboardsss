@@ -20,7 +20,9 @@ use crate::api::pairing::{
     VerifyPairingRequest,
 };
 use crate::api::server::{map_daemon_pairing_error, DaemonApiState};
-use crate::api::types::{SetupResetResponse, SetupSelectPeerRequest, SetupSubmitPassphraseRequest};
+use crate::api::types::{
+    SetupResetResponse, SetupSelectPeerRequest, SetupSubmitPassphraseRequest,
+};
 use crate::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
 
 pub fn router() -> Router<DaemonApiState> {
@@ -29,6 +31,7 @@ pub fn router() -> Router<DaemonApiState> {
         .route("/status", get(status))
         .route("/peers", get(peers))
         .route("/paired-devices", get(paired_devices))
+        .route("/space-access/state", get(space_access_state_handler))
         .route("/setup/state", get(setup_state))
         .route("/setup/host", post(setup_host))
         .route("/setup/join", post(setup_join))
@@ -97,6 +100,22 @@ async fn paired_devices(
         Ok(response) => Json(response).into_response(),
         Err(error) => internal_error(error).into_response(),
     }
+}
+
+async fn space_access_state_handler(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !state.is_authorized(&headers) {
+        return unauthorized().into_response();
+    }
+    Json(
+        state
+            .query_service
+            .space_access_state(state.space_access_orchestrator().as_deref())
+            .await,
+    )
+    .into_response()
 }
 
 async fn setup_state(
@@ -943,8 +962,9 @@ async fn setup_action_ack_response(
 }
 
 #[allow(dead_code)]
-fn _route_markers() -> [&'static str; 20] {
+fn _route_markers() -> [&'static str; 21] {
     [
+        "/space-access/state",
         "/setup/state",
         "/setup/host",
         "/setup/join",
