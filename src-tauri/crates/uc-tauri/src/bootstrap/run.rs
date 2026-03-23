@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use uc_daemon::api::auth::{resolve_daemon_token_path, DaemonConnectionInfo};
 use uc_daemon::api::types::HealthResponse;
 use uc_daemon::process_metadata::read_pid_file;
@@ -101,6 +102,110 @@ pub async fn bootstrap_daemon_connection(
         HEALTH_POLL_INTERVAL,
     )
     .await
+}
+
+const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const SUPERVISOR_RESPAWN_BACKOFF_INITIAL: Duration = Duration::from_secs(2);
+const SUPERVISOR_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
+
+/// Continuously monitors the owned daemon process and respawns it if it dies.
+///
+/// Runs until the cancellation token is triggered (app exit). After a successful
+/// respawn, updates `DaemonConnectionState` so the WS bridge can reconnect.
+pub async fn supervise_daemon(
+    state: &DaemonConnectionState,
+    gui_owned_daemon_state: &GuiOwnedDaemonState,
+    token: CancellationToken,
+) {
+    let client = reqwest::Client::builder()
+        .timeout(PROBE_TIMEOUT)
+        .build()
+        .expect("reqwest client should build");
+
+    let mut respawn_backoff = SUPERVISOR_RESPAWN_BACKOFF_INITIAL;
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                tracing::debug!("Daemon supervisor shutting down");
+                return;
+            }
+            _ = tokio::time::sleep(SUPERVISOR_POLL_INTERVAL) => {}
+        }
+
+        if gui_owned_daemon_state.exit_cleanup_in_progress() {
+            continue;
+        }
+
+        // Check if our owned daemon is still alive via health probe.
+        let health = match probe_daemon_health(&client).await {
+            Ok(ProbeOutcome::Compatible(_)) => {
+                respawn_backoff = SUPERVISOR_RESPAWN_BACKOFF_INITIAL;
+                continue;
+            }
+            Ok(outcome) => outcome,
+            Err(err) => {
+                tracing::warn!(error = %err, "Daemon supervisor health probe error");
+                continue;
+            }
+        };
+
+        // Daemon is absent or incompatible — only respawn if we previously owned one.
+        if gui_owned_daemon_state.snapshot_pid().is_none() {
+            continue;
+        }
+
+        tracing::warn!(
+            outcome = ?health,
+            "Daemon supervisor detected owned daemon is gone; attempting respawn"
+        );
+
+        match spawn_daemon_process() {
+            Ok(child) => {
+                let ownership = DaemonBootstrapOwnershipState::default();
+                gui_owned_daemon_state.record_spawned(child, SpawnReason::Replacement);
+                ownership.record_spawned_child(gui_owned_daemon_state.snapshot_pid());
+
+                // Wait for it to become healthy.
+                let mut probe_fn = || probe_daemon_health(&client);
+                match wait_for_daemon_health(
+                    &mut probe_fn,
+                    HEALTH_CHECK_TIMEOUT,
+                    HEALTH_POLL_INTERVAL,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        match load_daemon_connection_info() {
+                            Ok(info) => {
+                                state.set(info);
+                                tracing::info!("Daemon supervisor respawned daemon successfully");
+                            }
+                            Err(err) => {
+                                tracing::error!(error = %err, "Daemon supervisor respawned daemon but failed to load connection info");
+                            }
+                        }
+                        respawn_backoff = SUPERVISOR_RESPAWN_BACKOFF_INITIAL;
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "Daemon supervisor respawned daemon but health check failed");
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    backoff_ms = respawn_backoff.as_millis() as u64,
+                    "Daemon supervisor failed to respawn daemon"
+                );
+                tokio::select! {
+                    _ = token.cancelled() => return,
+                    _ = tokio::time::sleep(respawn_backoff) => {}
+                }
+                respawn_backoff = (respawn_backoff * 2).min(SUPERVISOR_RESPAWN_BACKOFF_MAX);
+            }
+        }
+    }
 }
 
 pub fn emit_daemon_connection_info_if_ready<R: Runtime>(
