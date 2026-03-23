@@ -30,6 +30,7 @@ pub struct UnpairDeviceRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PairingGuiLeaseRequest {
     pub enabled: bool,
+    pub lease_ttl_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -44,7 +44,7 @@ impl DaemonPairingLeasePort {
 impl PairingLeasePort for DaemonPairingLeasePort {
     async fn set_enabled(&self, enabled: bool) -> Result<()> {
         TauriDaemonPairingClient::new(self.connection_state.clone())
-            .register_gui_participant(enabled)
+            .register_gui_participant(enabled, Some(GUI_PAIRING_LEASE_TTL_MS))
             .await?;
         Ok(())
     }

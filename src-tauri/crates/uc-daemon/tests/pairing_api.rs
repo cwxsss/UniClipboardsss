@@ -23,6 +23,7 @@ struct PairingApiFixture {
     app: axum::Router,
     token: String,
     runtime: Arc<CoreRuntime>,
+    pairing_host: Arc<DaemonPairingHost>,
 }
 
 fn build_api_fixture() -> PairingApiFixture {
@@ -66,11 +67,12 @@ fn build_api_fixture() -> PairingApiFixture {
         event_tx,
     ));
     let api_state = DaemonApiState::new(query_service, token, Some(runtime.clone()))
-        .with_pairing_host(pairing_host);
+        .with_pairing_host(pairing_host.clone());
     PairingApiFixture {
         app: build_router(api_state),
         token: token_value,
         runtime,
+        pairing_host,
     }
 }
 
@@ -197,13 +199,24 @@ async fn initiate_pairing_v2(
         .unwrap()
 }
 
-async fn gui_lease(app: &axum::Router, token: &str, enabled: bool) -> axum::response::Response {
+async fn gui_lease(
+    app: &axum::Router,
+    token: &str,
+    enabled: bool,
+    lease_ttl_ms: Option<u64>,
+) -> axum::response::Response {
     app.clone()
         .oneshot(authed_request(
             "POST",
             "/pairing/gui/lease",
             token,
-            Body::from(json!({ "enabled": enabled }).to_string()),
+            Body::from(
+                json!({
+                    "enabled": enabled,
+                    "leaseTtlMs": lease_ttl_ms
+                })
+                .to_string(),
+            ),
             Some("application/json"),
         ))
         .await
@@ -358,7 +371,7 @@ async fn pairing_api_v2_initiate_returns_session_id_body() {
     let (app, token) = build_api_router_async().await;
 
     assert_eq!(
-        gui_lease(&app, &token, true).await.status(),
+        gui_lease(&app, &token, true, None).await.status(),
         StatusCode::NO_CONTENT
     );
 
@@ -368,6 +381,31 @@ async fn pairing_api_v2_initiate_returns_session_id_body() {
     assert_eq!(
         body.get("sessionId").and_then(Value::as_str).is_some(),
         true
+    );
+}
+
+#[tokio::test]
+async fn pairing_api_gui_lease_honors_custom_ttl() {
+    let fixture = build_api_fixture_async().await;
+
+    assert_eq!(
+        gui_lease(&fixture.app, &fixture.token, true, Some(20))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(fixture.pairing_host.discoverable().await);
+    assert!(fixture.pairing_host.participant_ready().await);
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    assert!(
+        !fixture.pairing_host.discoverable().await,
+        "custom gui lease ttl should expire discoverability"
+    );
+    assert!(
+        !fixture.pairing_host.participant_ready().await,
+        "custom gui lease ttl should expire participant readiness"
     );
 }
 

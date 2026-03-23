@@ -723,7 +723,10 @@ async fn handle_pairing_gui_lease(
         }
     };
 
-    match pairing_host.register_gui_participant(payload.enabled).await {
+    match pairing_host
+        .register_gui_participant(payload.enabled, payload.lease_ttl_ms)
+        .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => pairing_http_error(error).into_response(),
     }

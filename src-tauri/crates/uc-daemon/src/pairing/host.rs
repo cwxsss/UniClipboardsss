@@ -177,17 +177,18 @@ impl DaemonPairingHost {
     pub async fn register_gui_participant(
         &self,
         enabled: bool,
+        lease_ttl_ms: Option<u64>,
     ) -> Result<(), DaemonPairingHostError> {
         self.set_discoverability(
             GUI_CLIENT_KIND.to_string(),
             enabled,
-            Some(DEFAULT_CONTROL_LEASE_TTL_MS),
+            lease_ttl_ms,
         )
         .await;
         self.set_participant_ready(
             GUI_CLIENT_KIND.to_string(),
             enabled,
-            Some(DEFAULT_CONTROL_LEASE_TTL_MS),
+            lease_ttl_ms,
         )
         .await;
         Ok(())

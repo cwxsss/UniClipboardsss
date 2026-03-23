@@ -238,12 +238,12 @@ async fn daemon_pairing_host_accepts_when_orchestrator_has_session_before_snapsh
 async fn daemon_pairing_host_register_gui_participant_updates_both_leases() {
     let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
 
-    host.register_gui_participant(true).await.unwrap();
+    host.register_gui_participant(true, None).await.unwrap();
 
     assert!(host.discoverable().await);
     assert!(host.participant_ready().await);
 
-    host.register_gui_participant(false).await.unwrap();
+    host.register_gui_participant(false, None).await.unwrap();
 
     assert!(!host.discoverable().await);
     assert!(!host.participant_ready().await);

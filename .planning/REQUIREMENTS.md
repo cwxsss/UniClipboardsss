@@ -139,6 +139,13 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH52-05**: `DaemonWsBridge` translates `space_access.state_changed` into `RealtimeEvent::SpaceAccessStateChanged` for frontend consumption
 - [x] **PH52-06**: `wiring.rs` no longer spawns `space_access_completion` background task; space access events flow exclusively through daemon WS
 
+### Daemon Host Architecture Refactor
+
+- [ ] **PH56-01**: peer lifecycle websocket emission is owned by a dedicated `PeerMonitor`, not by `DaemonPairingHost`
+- [ ] **PH56-02**: all daemon long-lived components implement one `DaemonService` lifecycle contract instead of `DaemonWorker`
+- [ ] **PH56-03**: `DaemonApp` manages one `services: Vec<Arc<dyn DaemonService>>` list and removes pairing-host-specific spawn/shutdown boilerplate
+- [ ] **PH56-04**: daemon HTTP routes keep typed access to `DaemonPairingHost` control methods after lifecycle unification and do not change the existing external pairing/setup contract
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -226,14 +233,18 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH52-04     | 52    | Complete |
 | PH52-05     | 52    | Complete |
 | PH52-06     | 52    | Complete |
+| PH56-01     | 56    | Pending  |
+| PH56-02     | 56    | Pending  |
+| PH56-03     | 56    | Pending  |
+| PH56-04     | 56    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 53 total
-- Mapped to phases: 53
+- v0.4.0 requirements: 57 total
+- Mapped to phases: 57
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-23 after Phase 52 planning_
+_Last updated: 2026-03-23 after Phase 56 planning_
