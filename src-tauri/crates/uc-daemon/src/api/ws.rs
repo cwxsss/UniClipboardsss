@@ -19,8 +19,8 @@ use crate::api::server::DaemonApiState;
 use crate::api::types::{
     DaemonWsEvent, DaemonWsSubscribeRequest, PairedDeviceDto, PairedDevicesChangedPayload,
     PairingFailurePayload, PairingSessionChangedPayload, PairingSessionSummaryDto,
-    PairingVerificationPayload, PeerChangedPayload, PeerConnectionChangedPayload,
-    PeerNameUpdatedPayload, PeerSnapshotDto, StatusResponse,
+    PairingVerificationPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
+    PeersChangedFullPayload, PeerSnapshotDto, StatusResponse,
 };
 
 const TOPIC_STATUS: &str = "status";
@@ -283,7 +283,7 @@ fn _event_type_markers(
     PairingSessionChangedPayload,
     PairingVerificationPayload,
     PairingFailurePayload,
-    PeerChangedPayload,
+    PeersChangedFullPayload,
     PeerNameUpdatedPayload,
     PeerConnectionChangedPayload,
     PairedDevicesChangedPayload,
@@ -325,13 +325,7 @@ fn _event_type_markers(
             error: String::new(),
             reason: String::new(),
         },
-        PeerChangedPayload {
-            peer_id: String::new(),
-            device_name: None,
-            addresses: vec![],
-            discovered: false,
-            connected: false,
-        },
+        PeersChangedFullPayload { peers: vec![] },
         PeerNameUpdatedPayload {
             peer_id: String::new(),
             device_name: String::new(),

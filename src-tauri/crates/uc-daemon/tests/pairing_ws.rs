@@ -14,7 +14,7 @@ use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::server::{build_router, DaemonApiState};
 use uc_daemon::api::types::{
     DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload, PairingVerificationPayload,
-    PeerChangedPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload, PeerSnapshotDto,
     SetupStateChangedPayload,
 };
 use uc_daemon::pairing::session_projection::upsert_pairing_snapshot;
@@ -196,12 +196,15 @@ async fn peers_and_paired_devices_incremental_events_preserve_bridge_fields() {
             event_type: "peers.changed".to_string(),
             session_id: None,
             ts: 1,
-            payload: serde_json::to_value(PeerChangedPayload {
-                peer_id: "peer-3".to_string(),
-                device_name: Some("Desk".to_string()),
-                addresses: vec!["/ip4/127.0.0.1/tcp/7000".to_string()],
-                discovered: false,
-                connected: true,
+            payload: serde_json::to_value(PeersChangedFullPayload {
+                peers: vec![PeerSnapshotDto {
+                    peer_id: "peer-3".to_string(),
+                    device_name: Some("Desk".to_string()),
+                    addresses: vec!["/ip4/127.0.0.1/tcp/7000".to_string()],
+                    is_paired: false,
+                    connected: true,
+                    pairing_state: "NotPaired".to_string(),
+                }],
             })
             .unwrap(),
         })
@@ -258,14 +261,14 @@ async fn peers_and_paired_devices_incremental_events_preserve_bridge_fields() {
     harness.handle.abort();
 
     assert_eq!(peers_changed["type"], "peers.changed");
-    assert_eq!(peers_changed["payload"]["peerId"], "peer-3");
-    assert_eq!(peers_changed["payload"]["deviceName"], "Desk");
+    // peers.changed now carries a full snapshot via PeersChangedFullPayload { peers: [...] }
+    assert_eq!(peers_changed["payload"]["peers"][0]["peerId"], "peer-3");
+    assert_eq!(peers_changed["payload"]["peers"][0]["deviceName"], "Desk");
     assert_eq!(
-        peers_changed["payload"]["addresses"][0],
+        peers_changed["payload"]["peers"][0]["addresses"][0],
         "/ip4/127.0.0.1/tcp/7000"
     );
-    assert_eq!(peers_changed["payload"]["discovered"], false);
-    assert_eq!(peers_changed["payload"]["connected"], true);
+    assert_eq!(peers_changed["payload"]["peers"][0]["connected"], true);
 
     assert_eq!(peers_name_updated["type"], "peers.name_updated");
     assert_eq!(peers_name_updated["payload"]["peerId"], "peer-3");
