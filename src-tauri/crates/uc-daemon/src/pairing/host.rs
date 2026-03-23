@@ -24,7 +24,7 @@ use uc_infra::fs::key_slot_store::KeySlotStore;
 
 use crate::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
-    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload, PeerSnapshotDto,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeerSnapshotDto, PeersChangedFullPayload,
     SetupSpaceAccessCompletedPayload, SpaceAccessStateChangedPayload,
 };
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
@@ -211,7 +211,9 @@ impl DaemonPairingHost {
 
         self.discoverability.clear().await;
         self.participant_readiness.clear().await;
-        self.broadcast_space_access_state(&uc_core::security::space_access::state::SpaceAccessState::Idle);
+        self.broadcast_space_access_state(
+            &uc_core::security::space_access::state::SpaceAccessState::Idle,
+        );
     }
 
     pub async fn initiate_pairing(
@@ -527,7 +529,10 @@ impl DaemonPairingHost {
         Ok(())
     }
 
-    fn broadcast_space_access_state(&self, state: &uc_core::security::space_access::state::SpaceAccessState) {
+    fn broadcast_space_access_state(
+        &self,
+        state: &uc_core::security::space_access::state::SpaceAccessState,
+    ) {
         broadcast_space_access_state_changed(&self.event_tx, state);
     }
 
@@ -1413,7 +1418,9 @@ fn broadcast_space_access_state_changed(
     event_tx: &broadcast::Sender<DaemonWsEvent>,
     state: &uc_core::security::space_access::state::SpaceAccessState,
 ) {
-    let payload = SpaceAccessStateChangedPayload { state: state.clone() };
+    let payload = SpaceAccessStateChangedPayload {
+        state: state.clone(),
+    };
     let serialized = match serde_json::to_value(&payload) {
         Ok(v) => v,
         Err(e) => {
@@ -1726,6 +1733,10 @@ impl From<serde_json::Error> for ParseSpaceAccessBusyPayloadError {
 fn parse_space_access_busy_payload(
     json: &str,
 ) -> Result<SpaceAccessBusyPayload, ParseSpaceAccessBusyPayloadError> {
+    if !json.trim_start().starts_with('{') {
+        return Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload);
+    }
+
     let payload: serde_json::Value = serde_json::from_str(json)?;
     let Some(kind) = payload.get("kind").and_then(serde_json::Value::as_str) else {
         return Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload);
@@ -1765,12 +1776,37 @@ mod tests {
         assert_eq!(pairing_failure_message(&FailureReason::PeerBusy), "busy");
     }
 
+    #[test]
+    fn parse_space_access_busy_payload_treats_plain_busy_reason_as_non_space_access() {
+        for reason in [
+            "busy",
+            "host_not_discoverable",
+            "no_local_pairing_participant_ready",
+        ] {
+            assert!(
+                matches!(
+                    parse_space_access_busy_payload(reason),
+                    Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload)
+                ),
+                "plain busy reason should fall through to handle_busy: {reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_space_access_busy_payload_keeps_invalid_json_observable() {
+        assert!(matches!(
+            parse_space_access_busy_payload("{\"kind\":"),
+            Err(ParseSpaceAccessBusyPayloadError::InvalidJson(_))
+        ));
+    }
+
     /// Verifies that `emit_ws_event` with `PeersChangedFullPayload` produces a `DaemonWsEvent`
     /// whose payload deserializes back to the original full peer list.
     /// This is the unit-level contract test for the PeerDiscovered/PeerLost emission path.
     #[tokio::test]
     async fn peer_discovered_emits_peers_changed_full_payload_with_peer_list() {
-        use crate::api::types::{PeersChangedFullPayload, PeerSnapshotDto};
+        use crate::api::types::{PeerSnapshotDto, PeersChangedFullPayload};
 
         let (event_tx, mut event_rx) = broadcast::channel::<DaemonWsEvent>(8);
 
@@ -1798,7 +1834,9 @@ mod tests {
             "peers",
             "peers.changed",
             None,
-            PeersChangedFullPayload { peers: peers.clone() },
+            PeersChangedFullPayload {
+                peers: peers.clone(),
+            },
         );
 
         let event = event_rx.recv().await.expect("event must be received");
@@ -1815,7 +1853,7 @@ mod tests {
     /// Verifies that `PeerLost` path emits `peers.changed` with full snapshot (empty when no peers remain).
     #[tokio::test]
     async fn peer_lost_can_emit_peers_changed_with_empty_list() {
-        use crate::api::types::{PeersChangedFullPayload};
+        use crate::api::types::PeersChangedFullPayload;
 
         let (event_tx, mut event_rx) = broadcast::channel::<DaemonWsEvent>(8);
 
