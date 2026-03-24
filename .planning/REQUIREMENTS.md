@@ -146,6 +146,15 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [ ] **PH56-03**: `DaemonApp` manages one `services: Vec<Arc<dyn DaemonService>>` list and removes pairing-host-specific spawn/shutdown boilerplate
 - [ ] **PH56-04**: daemon HTTP routes keep typed access to `DaemonPairingHost` control methods after lifecycle unification and do not change the existing external pairing/setup contract
 
+### Daemon Clipboard Watcher Integration
+
+- [ ] **PH57-01**: `ClipboardWatcherWorker` uses real `clipboard_rs::ClipboardWatcherContext` with `spawn_blocking` and `WatcherShutdown`, not a placeholder
+- [ ] **PH57-02**: daemon constructs `DaemonClipboardChangeHandler` calling `CaptureClipboardUseCase` to persist clipboard entries with `ClipboardChangeOrigin::LocalCapture`
+- [ ] **PH57-03**: daemon broadcasts `clipboard.new_content` WS event carrying entry_id, preview, and origin after each successful clipboard capture
+- [ ] **PH57-04**: `DaemonWsBridge` translates `clipboard.new_content` into `RealtimeEvent::ClipboardNewContent` with `RealtimeTopic::Clipboard`
+- [ ] **PH57-05**: GUI `ClipboardIntegrationMode` is `Passive` so `StartClipboardWatcher` use case is a no-op and daemon is the sole clipboard observer
+- [ ] **PH57-06**: GUI receives daemon clipboard events via `DaemonWsBridge` and emits `clipboard://event` to frontend so `useClipboardEventStream` continues working unchanged
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -237,14 +246,20 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH56-02     | 56    | Pending  |
 | PH56-03     | 56    | Pending  |
 | PH56-04     | 56    | Pending  |
+| PH57-01     | 57    | Pending  |
+| PH57-02     | 57    | Pending  |
+| PH57-03     | 57    | Pending  |
+| PH57-04     | 57    | Pending  |
+| PH57-05     | 57    | Pending  |
+| PH57-06     | 57    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 57 total
-- Mapped to phases: 57
+- v0.4.0 requirements: 63 total
+- Mapped to phases: 63
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-23 after Phase 56 planning_
+_Last updated: 2026-03-25 after Phase 57 planning_

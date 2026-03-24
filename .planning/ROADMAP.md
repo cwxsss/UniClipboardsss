@@ -468,3 +468,15 @@ Plans:
 - [ ] 56-01-PLAN.md — Rename daemon worker abstractions to service vocabulary without changing transport contracts
 - [ ] 56-02-PLAN.md — Extract `PeerMonitor` and remove peer lifecycle handling from `DaemonPairingHost`
 - [ ] 56-03-PLAN.md — Unify `DaemonApp` service lifecycle management while preserving typed pairing-host API access
+
+### Phase 57: Daemon Clipboard Watcher Integration
+
+**Goal:** Migrate clipboard watching from GUI/PlatformRuntime to daemon as the sole clipboard monitor. Daemon captures OS clipboard changes, persists entries, broadcasts WS events; GUI operates in Passive mode receiving updates via DaemonWsBridge.
+**Requirements**: PH57-01, PH57-02, PH57-03, PH57-04, PH57-05, PH57-06
+**Depends on:** Phase 56
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 57-01-PLAN.md — Daemon clipboard watcher implementation, change handler, WS event emission, and bridge translation
+- [ ] 57-02-PLAN.md — GUI Passive mode switch and DaemonWsBridge clipboard subscription wiring
