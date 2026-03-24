@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: unknown
-stopped_at: Phase 55 context gathered
-last_updated: '2026-03-24T10:01:16.765Z'
+stopped_at: Completed 55-01-PLAN.md
+last_updated: '2026-03-24T11:40:00.000Z'
 progress:
   total_phases: 27
   completed_phases: 19
@@ -206,6 +206,8 @@ Recent decisions affecting current work:
 - [Phase 54]: Did not remove reqwest/tokio-tungstenite/tokio-util/futures-util from uc-tauri direct deps — run.rs uses reqwest::Client directly and these deps were primarily consumed by deleted files; removing was deemed scope creep risk
 - [Phase 54]: Inlined DaemonBackedSetupPairingFacade in uc-daemon-client/realtime.rs rather than importing from uc-tauri — avoids a cargo cycle (uc_tauri → uc_daemon_client → uc_tauri). Struct + trait impl duplicated across both crates intentionally (Rust OK since different crate paths).
 - [Phase 54]: Removed install_daemon_setup_pairing_facade re-export from bootstrap/mod.rs — all call sites (main.rs, wiring.rs) now import from uc_daemon_client::realtime directly. D-10 (no re-export stubs) is enforced.
+- [Phase 55]: terminate_local_daemon_pid uses TerminateDaemonError (not DaemonBootstrapError) to avoid coupling uc-daemon-client to uc-tauri error types
+- [Phase 55]: thiserror added to uc-daemon-client since DaemonExitCleanupError uses #[derive(Error)] and was missing from Cargo.toml
 
 ### Roadmap Evolution
 
@@ -248,6 +250,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-24T10:01:16.759Z
-Stopped at: Phase 55 context gathered
-Resume file: .planning/phases/55-extract-daemon-lifecycle-and-setup-pairing-bridge-from-uc-tauri/55-CONTEXT.md
+Last session: 2026-03-24T11:40:00Z
+Stopped at: Completed 55-01-PLAN.md
+Resume file: None
