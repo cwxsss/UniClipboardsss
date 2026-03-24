@@ -11,7 +11,7 @@ use uc_tauri::bootstrap::run::{
     bootstrap_daemon_connection_with_hooks, DaemonBootstrapError, ProbeOutcome,
 };
 use uc_tauri::bootstrap::runtime::DaemonBootstrapOwnershipState;
-use uc_tauri::bootstrap::{GuiOwnedDaemonState, SpawnReason};
+use uc_daemon_client::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
 
 fn compatible_health() -> HealthResponse {
     HealthResponse {

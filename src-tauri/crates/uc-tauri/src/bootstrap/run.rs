@@ -14,7 +14,8 @@ use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr
 use uc_daemon::DAEMON_API_REVISION;
 use uc_daemon_client::DaemonConnectionState;
 
-use super::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
+use uc_daemon_client::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
+pub use uc_daemon_client::daemon_lifecycle::terminate_local_daemon_pid;
 use super::runtime::DaemonBootstrapOwnershipState;
 use crate::commands::startup::StartupBarrier;
 
@@ -584,46 +585,10 @@ fn terminate_incompatible_daemon_from_pid_file() -> Result<(), DaemonBootstrapEr
             details: "expected incompatible daemon pid metadata was missing".to_string(),
         })?;
 
-    terminate_local_daemon_pid(pid)
-}
-
-pub(crate) fn terminate_local_daemon_pid(pid: u32) -> Result<(), DaemonBootstrapError> {
-    #[cfg(unix)]
-    let mut command = {
-        let mut command = Command::new("kill");
-        command.arg("-TERM").arg(pid.to_string());
-        command
-    };
-
-    #[cfg(windows)]
-    let mut command = {
-        let mut command = Command::new("taskkill");
-        command.arg("/PID").arg(pid.to_string()).arg("/T").arg("/F");
-        command
-    };
-
-    let output = command
-        .output()
-        .map_err(|error| DaemonBootstrapError::IncompatibleDaemon {
-            details: format!(
-                "failed to launch incompatible daemon terminator for pid {pid}: {error}"
-            ),
-        })?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Err(DaemonBootstrapError::IncompatibleDaemon {
-        details: format!(
-            "failed to terminate incompatible daemon pid {pid}: status={} stdout={} stderr={}",
-            output.status,
-            stdout.trim(),
-            stderr.trim()
-        ),
-    })
+    terminate_local_daemon_pid(pid).map_err(|e| DaemonBootstrapError::IncompatibleDaemon {
+        details: e.to_string(),
+    })?;
+    Ok(())
 }
 
 fn spawn_daemon_process() -> Result<Child, DaemonBootstrapError> {

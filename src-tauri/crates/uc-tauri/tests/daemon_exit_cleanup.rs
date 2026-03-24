@@ -12,7 +12,7 @@ use std::time::Duration;
 use uc_daemon::api::types::HealthResponse;
 use uc_daemon::DAEMON_API_REVISION;
 use uc_tauri::bootstrap::run::ProbeOutcome;
-use uc_tauri::bootstrap::{GuiOwnedDaemonState, SpawnReason};
+use uc_daemon_client::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
 
 const EXIT_CLEANUP_COMMAND: &str =
     "cargo test -p uc-tauri --test daemon_exit_cleanup -- --test-threads=1";

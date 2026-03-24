@@ -21,9 +21,10 @@ use uc_daemon_client::{realtime::install_daemon_setup_pairing_facade, DaemonConn
 use uc_platform::ipc::PlatformCommand;
 use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::runtime::PlatformRuntime;
+use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
-    start_background_tasks, supervise_daemon, AppRuntime, GuiOwnedDaemonState,
+    start_background_tasks, supervise_daemon, AppRuntime,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};

@@ -23,7 +23,7 @@ impl std::error::Error for TerminateDaemonError {}
 
 /// Terminates a local daemon process by PID using platform-specific commands.
 /// Returns `TerminateDaemonError` on failure.
-pub(crate) fn terminate_local_daemon_pid(pid: u32) -> Result<(), TerminateDaemonError> {
+pub fn terminate_local_daemon_pid(pid: u32) -> Result<(), TerminateDaemonError> {
     #[cfg(unix)]
     let mut command = {
         let mut command = Command::new("kill");
