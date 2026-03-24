@@ -153,7 +153,9 @@ async fn daemon_pairing_host_survives_client_disconnect() {
     let (host, _state, _orchestrator, _local_peer_id) = build_host_async().await;
     let host = Arc::new(host);
     let cancel = CancellationToken::new();
-    let task = tokio::spawn(Arc::clone(&host).run(cancel.child_token()));
+    let host_clone = Arc::clone(&host);
+    let child_token = cancel.child_token();
+    let task = tokio::spawn(async move { host_clone.run(child_token).await });
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
