@@ -13,7 +13,7 @@ use uc_app::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrc
 use uc_app::usecases::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
 };
-use uc_app::usecases::{CoreUseCases, SetupOrchestrator};
+use uc_app::usecases::SetupOrchestrator;
 use uc_core::network::pairing_state_machine::{PairingAction, PairingRole};
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
@@ -24,7 +24,6 @@ use uc_infra::fs::key_slot_store::KeySlotStore;
 
 use crate::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
-    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeerSnapshotDto, PeersChangedFullPayload,
     SetupSpaceAccessCompletedPayload, SpaceAccessStateChangedPayload,
 };
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
@@ -377,7 +376,7 @@ impl DaemonPairingHost {
             cancel.child_token(),
         ));
 
-        tasks.spawn(run_pairing_network_event_loop(
+        tasks.spawn(run_pairing_protocol_loop(
             self.runtime.clone(),
             self.runtime.setup_orchestrator().clone(),
             self.space_access_orchestrator.clone(),
@@ -956,7 +955,7 @@ async fn run_pairing_domain_event_loop(
     }
 }
 
-async fn run_pairing_network_event_loop(
+async fn run_pairing_protocol_loop(
     runtime: Arc<CoreRuntime>,
     setup_orchestrator: Arc<SetupOrchestrator>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
@@ -990,89 +989,6 @@ async fn run_pairing_network_event_loop(
                             };
 
                             match event {
-                                NetworkEvent::PeerDiscovered(_peer) => {
-                                    let usecases = CoreUseCases::new(runtime.as_ref());
-                                    match usecases.get_p2p_peers_snapshot().execute().await {
-                                        Ok(snapshots) => {
-                                            let peers: Vec<PeerSnapshotDto> = snapshots
-                                                .into_iter()
-                                                .map(PeerSnapshotDto::from)
-                                                .collect();
-                                            emit_ws_event(
-                                                &event_tx,
-                                                "peers",
-                                                "peers.changed",
-                                                None,
-                                                PeersChangedFullPayload { peers },
-                                            );
-                                        }
-                                        Err(e) => {
-                                            warn!(
-                                                error = %e,
-                                                "Failed to fetch peer snapshot on PeerDiscovered"
-                                            );
-                                        }
-                                    }
-                                }
-                                NetworkEvent::PeerLost(_peer_id) => {
-                                    let usecases = CoreUseCases::new(runtime.as_ref());
-                                    match usecases.get_p2p_peers_snapshot().execute().await {
-                                        Ok(snapshots) => {
-                                            let peers: Vec<PeerSnapshotDto> = snapshots
-                                                .into_iter()
-                                                .map(PeerSnapshotDto::from)
-                                                .collect();
-                                            emit_ws_event(
-                                                &event_tx,
-                                                "peers",
-                                                "peers.changed",
-                                                None,
-                                                PeersChangedFullPayload { peers },
-                                            );
-                                        }
-                                        Err(e) => {
-                                            warn!(
-                                                error = %e,
-                                                "Failed to fetch peer snapshot on PeerLost"
-                                            );
-                                        }
-                                    }
-                                }
-                                NetworkEvent::PeerNameUpdated { peer_id, device_name } => {
-                                    emit_ws_event(
-                                        &event_tx,
-                                        "peers",
-                                        "peers.name_updated",
-                                        None,
-                                        PeerNameUpdatedPayload { peer_id, device_name },
-                                    );
-                                }
-                                NetworkEvent::PeerConnected(peer) => {
-                                    emit_ws_event(
-                                        &event_tx,
-                                        "peers",
-                                        "peers.connection_changed",
-                                        None,
-                                        PeerConnectionChangedPayload {
-                                            peer_id: peer.peer_id,
-                                            device_name: Some(peer.device_name),
-                                            connected: true,
-                                        },
-                                    );
-                                }
-                                NetworkEvent::PeerDisconnected(peer_id) => {
-                                    emit_ws_event(
-                                        &event_tx,
-                                        "peers",
-                                        "peers.connection_changed",
-                                        None,
-                                        PeerConnectionChangedPayload {
-                                            peer_id,
-                                            device_name: None,
-                                            connected: false,
-                                        },
-                                    );
-                                }
                                 NetworkEvent::PairingMessageReceived { peer_id, message } => {
                                     handle_pairing_message(
                                         setup_orchestrator.as_ref(),
