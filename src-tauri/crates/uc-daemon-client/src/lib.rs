@@ -4,11 +4,15 @@
 //! Zero Tauri dependencies -- usable from any async context.
 
 pub mod connection;
+pub mod daemon_lifecycle;
 pub mod http;
 pub mod realtime;
 pub mod ws_bridge;
 
 pub use connection::DaemonConnectionState;
+pub use daemon_lifecycle::{
+    DaemonExitCleanupError, GuiOwnedDaemonState, OwnedDaemonChild, SpawnReason,
+};
 pub use http::{
     DaemonPairingClient, DaemonPairingRequestError, DaemonQueryClient, DaemonSetupClient,
 };
