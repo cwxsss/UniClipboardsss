@@ -1,6 +1,6 @@
 //! # uc-daemon — Headless Daemon Library
 //!
-//! Provides the [`DaemonWorker`] trait, placeholder workers, shared RPC types,
+//! Provides the [`DaemonService`] trait, placeholder workers, shared RPC types,
 //! and [`RuntimeState`] for the UniClipboard headless daemon.
 //!
 //! This crate is used as both a library (by uc-cli for RPC type sharing) and
@@ -16,5 +16,5 @@ pub mod process_metadata;
 pub mod rpc;
 pub mod socket;
 pub mod state;
-pub mod worker;
+pub mod service;
 pub mod workers;
