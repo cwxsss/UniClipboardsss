@@ -1,17 +1,26 @@
 //! UniClipboard daemon binary entry point.
 //!
-//! Bootstraps via `build_daemon_app()` for config/paths, creates workers,
+//! Bootstraps via `build_daemon_app()` for config/paths, creates services,
 //! and runs `DaemonApp` in a tokio runtime.
+//!
+//! This is the composition root: typed services are built here, then erased
+//! to `Arc<dyn DaemonService>` for uniform lifecycle management by DaemonApp.
 
 use std::sync::Arc;
 
+use tokio::sync::{broadcast, RwLock};
 use uc_app::usecases::LoggingLifecycleEventEmitter;
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_non_gui_runtime_with_setup;
 use uc_bootstrap::builders::build_daemon_app;
+use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::app::DaemonApp;
-use uc_daemon::socket::resolve_daemon_socket_path;
+use uc_daemon::pairing::host::DaemonPairingHost;
+use uc_daemon::peers::monitor::PeerMonitor;
 use uc_daemon::service::DaemonService;
+use uc_daemon::socket::resolve_daemon_socket_path;
+use uc_daemon::state::{DaemonServiceSnapshot, RuntimeState};
+use uc_daemon::service::ServiceHealth;
 use uc_daemon::workers::clipboard_watcher::ClipboardWatcherWorker;
 use uc_daemon::workers::peer_discovery::PeerDiscoveryWorker;
 
@@ -39,25 +48,71 @@ fn main() -> anyhow::Result<()> {
 
     let socket_path = resolve_daemon_socket_path();
 
-    // Create services (Arc-wrapped for tokio::spawn compatibility)
-    let workers: Vec<Arc<dyn DaemonService>> = vec![
-        Arc::new(ClipboardWatcherWorker),
+    // 1. Create the shared broadcast channel for WebSocket events.
+    //    All services that emit WS events write to this same sender.
+    let (event_tx, _) = broadcast::channel::<DaemonWsEvent>(64);
+
+    // 2. Create shared runtime state (used by DaemonPairingHost for session snapshots
+    //    and by DaemonApp for service health reporting).
+    let initial_statuses: Vec<DaemonServiceSnapshot> = vec![
+        DaemonServiceSnapshot {
+            name: "clipboard-watcher".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        DaemonServiceSnapshot {
+            name: "peer-discovery".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        DaemonServiceSnapshot {
+            name: "pairing-host".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        DaemonServiceSnapshot {
+            name: "peer-monitor".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+    ];
+    let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses)));
+
+    // 3. Build typed PairingHost (per D-07: construction before DaemonApp).
+    //    Typed Arc is kept for DaemonApiState so HTTP routes retain typed access (PH56-04).
+    let pairing_host = Arc::new(DaemonPairingHost::new(
+        runtime.clone(),
+        ctx.pairing_orchestrator.clone(),
+        ctx.pairing_action_rx,
+        state.clone(),
+        ctx.space_access_orchestrator.clone(),
+        ctx.key_slot_store.clone(),
+        event_tx.clone(),
+    ));
+
+    // 4. Build PeerMonitor (extracted from PairingHost in Plan 02).
+    let peer_monitor = Arc::new(PeerMonitor::new(runtime.clone(), event_tx.clone()));
+
+    // 5. Assemble services vec — typed services erased to Arc<dyn DaemonService> (per D-05).
+    //    Order matters for shutdown (reversed): peer-monitor and pairing-host stop last.
+    let services: Vec<Arc<dyn DaemonService>> = vec![
+        Arc::new(ClipboardWatcherWorker) as Arc<dyn DaemonService>,
         Arc::new(PeerDiscoveryWorker::new(
             daemon_network_control,
             daemon_network_events,
             daemon_peer_directory,
             daemon_settings,
-        )),
+        )) as Arc<dyn DaemonService>,
+        Arc::clone(&pairing_host) as Arc<dyn DaemonService>,
+        Arc::clone(&peer_monitor) as Arc<dyn DaemonService>,
     ];
 
-    // Create and run daemon app
+    // 6. Create and run daemon app.
+    //    api_pairing_host retains typed access for HTTP routes.
+    //    space_access_orchestrator is passed for API state wiring.
     let daemon = DaemonApp::new(
-        workers,
+        services,
         runtime,
-        ctx.pairing_orchestrator,
-        ctx.pairing_action_rx,
-        ctx.space_access_orchestrator,
-        ctx.key_slot_store,
+        state,
+        event_tx,
+        Some(pairing_host),
+        Some(ctx.space_access_orchestrator),
         socket_path,
     );
 

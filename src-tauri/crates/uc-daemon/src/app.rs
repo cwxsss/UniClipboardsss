@@ -1,6 +1,6 @@
 //! # DaemonApp
 //!
-//! Top-level daemon lifecycle: binds the RPC socket, starts workers,
+//! Top-level daemon lifecycle: binds the RPC socket, starts services,
 //! waits for shutdown signal, and tears down in reverse order.
 
 use std::path::PathBuf;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::net::UnixListener;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -16,19 +16,17 @@ use tracing::{error, info, info_span, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::CoreUseCases;
-use uc_app::usecases::PairingOrchestrator;
-use uc_core::network::pairing_state_machine::PairingAction;
-use uc_infra::fs::key_slot_store::KeySlotStore;
 
 use crate::api::auth::{load_or_create_auth_token, resolve_daemon_token_path};
 use crate::api::event_emitter::DaemonApiEventEmitter;
 use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
+use crate::api::types::DaemonWsEvent;
 use crate::pairing::host::DaemonPairingHost;
 use crate::process_metadata::{remove_pid_file, write_current_pid};
 use crate::rpc::server::{check_or_remove_stale_socket, run_rpc_accept_loop};
-use crate::service::{DaemonService, ServiceHealth};
-use crate::state::{DaemonServiceSnapshot, RuntimeState};
+use crate::service::DaemonService;
+use crate::state::RuntimeState;
 
 /// Recover encryption session from disk/keyring if encryption has been initialized.
 ///
@@ -61,51 +59,51 @@ async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result<()>
 /// Owns the service list, RPC state, and cancellation token.
 /// Services use `Arc<dyn DaemonService>` (not `Box`) to allow cloning
 /// for `tokio::spawn` `'static` requirement.
+///
+/// The `api_pairing_host` field retains typed access to the pairing host for
+/// HTTP routes (PH56-04), while the pairing host is also in the `services` vec
+/// for uniform lifecycle management.
 pub struct DaemonApp {
-    workers: Vec<Arc<dyn DaemonService>>,
+    services: Vec<Arc<dyn DaemonService>>,
     runtime: Arc<CoreRuntime>,
     state: Arc<RwLock<RuntimeState>>,
-    pairing_orchestrator: Arc<PairingOrchestrator>,
-    pairing_action_rx: mpsc::Receiver<PairingAction>,
-    space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
-    key_slot_store: Arc<dyn KeySlotStore>,
+    event_tx: broadcast::Sender<DaemonWsEvent>,
+    api_pairing_host: Option<Arc<DaemonPairingHost>>,
+    space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
     socket_path: PathBuf,
     cancel: CancellationToken,
 }
 
 impl DaemonApp {
     /// Create a new DaemonApp with the given services and socket path.
+    ///
+    /// The `state` is created by the caller (main.rs) so it can be shared
+    /// with `DaemonPairingHost` before DaemonApp is constructed.
+    ///
+    /// The `event_tx` is created by the caller and shared with all services
+    /// that emit WebSocket events, so they all write to the same broadcast channel.
     pub fn new(
-        workers: Vec<Arc<dyn DaemonService>>,
+        services: Vec<Arc<dyn DaemonService>>,
         runtime: Arc<CoreRuntime>,
-        pairing_orchestrator: Arc<PairingOrchestrator>,
-        pairing_action_rx: mpsc::Receiver<PairingAction>,
-        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
-        key_slot_store: Arc<dyn KeySlotStore>,
+        state: Arc<RwLock<RuntimeState>>,
+        event_tx: broadcast::Sender<DaemonWsEvent>,
+        api_pairing_host: Option<Arc<DaemonPairingHost>>,
+        space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
         socket_path: PathBuf,
     ) -> Self {
-        let initial_statuses: Vec<DaemonServiceSnapshot> = workers
-            .iter()
-            .map(|w| DaemonServiceSnapshot {
-                name: w.name().to_string(),
-                health: ServiceHealth::Healthy,
-            })
-            .collect();
-
         Self {
-            workers,
+            services,
             runtime,
-            state: Arc::new(RwLock::new(RuntimeState::new(initial_statuses))),
-            pairing_orchestrator,
-            pairing_action_rx,
+            state,
+            event_tx,
+            api_pairing_host,
             space_access_orchestrator,
-            key_slot_store,
             socket_path,
             cancel: CancellationToken::new(),
         }
     }
 
-    /// Run the daemon: bind RPC socket, start workers, wait for shutdown, cleanup.
+    /// Run the daemon: bind RPC socket, start services, wait for shutdown, cleanup.
     pub async fn run(self) -> anyhow::Result<()> {
         info!("uniclipboard-daemon starting");
 
@@ -115,7 +113,7 @@ impl DaemonApp {
             .instrument(info_span!("daemon.startup.recover_encryption_session"))
             .await?;
 
-        // 1. Bind RPC socket FIRST (fail-fast before starting workers)
+        // 1. Bind RPC socket FIRST (fail-fast before starting services)
         check_or_remove_stale_socket(&self.socket_path).await?;
         let listener = UnixListener::bind(&self.socket_path)?;
         let token_base_dir = self
@@ -129,102 +127,86 @@ impl DaemonApp {
             self.runtime.clone(),
             self.state.clone(),
         ));
-        let api_state = DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()))
-            .with_setup(self.runtime.setup_orchestrator().clone())
-            .with_space_access(self.space_access_orchestrator.clone());
+
+        // 2. Build API state using the shared event_tx (same channel used by all services)
+        let mut api_state =
+            DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()));
+        // Replace the default-created channel with our shared one so all services
+        // emit to the same broadcast channel that WebSocket subscribers receive from.
+        api_state.event_tx = self.event_tx.clone();
+        let api_state = api_state.with_setup(self.runtime.setup_orchestrator().clone());
+        let api_state = match &self.space_access_orchestrator {
+            Some(sao) => api_state.with_space_access(sao.clone()),
+            None => api_state,
+        };
+        let api_state = match &self.api_pairing_host {
+            Some(ph) => api_state.with_pairing_host(Arc::clone(ph)),
+            None => api_state,
+        };
+
+        // 3. Wire the event emitter into the runtime so use cases can emit WS events
         self.runtime
             .set_event_emitter(Arc::new(DaemonApiEventEmitter::new(
-                api_state.event_tx.clone(),
+                self.event_tx.clone(),
             )));
-        let pairing_host = Arc::new(DaemonPairingHost::new(
-            self.runtime.clone(),
-            self.pairing_orchestrator.clone(),
-            self.pairing_action_rx,
-            self.state.clone(),
-            self.space_access_orchestrator.clone(),
-            self.key_slot_store.clone(),
-            api_state.event_tx.clone(),
-        ));
-        let api_state = api_state.with_pairing_host(Arc::clone(&pairing_host));
 
         info!("uniclipboard-daemon running, RPC at {:?}", self.socket_path);
 
-        // 2. Start workers
-        let mut worker_tasks = JoinSet::new();
-        for worker in &self.workers {
-            let w = Arc::clone(worker);
+        // 4. Start ALL services uniformly via JoinSet
+        let mut service_tasks = JoinSet::new();
+        for service in &self.services {
+            let svc = Arc::clone(service);
             let token = self.cancel.child_token();
-            worker_tasks.spawn(async move { w.start(token).await });
+            service_tasks.spawn(async move { svc.start(token).await });
         }
 
-        // 3. Spawn accept loop and wait for shutdown signal, accept loop crash, or worker crash
+        // 5. Spawn RPC accept loop and HTTP server as infrastructure tasks
         let rpc_state = self.state.clone();
         let rpc_cancel = self.cancel.child_token();
         let mut rpc_handle = tokio::spawn(run_rpc_accept_loop(listener, rpc_state, rpc_cancel));
         let http_cancel = self.cancel.child_token();
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
-        let pairing_cancel = self.cancel.child_token();
-        let mut pairing_handle = tokio::spawn(Arc::clone(&pairing_host).run(pairing_cancel));
-        let mut completed_rpc_handle = false;
-        let mut completed_http_handle = false;
-        let mut completed_pairing_handle = false;
 
+        // 6. Wait for shutdown signal, infrastructure crash, or service crash
         tokio::select! {
             _ = wait_for_shutdown_signal() => {
                 info!("shutdown signal received");
             }
             result = &mut rpc_handle => {
-                completed_rpc_handle = true;
                 warn!("RPC accept loop exited unexpectedly: {:?}", result);
             }
             result = &mut http_handle => {
-                completed_http_handle = true;
                 warn!("HTTP server exited unexpectedly: {:?}", result);
             }
-            result = &mut pairing_handle => {
-                completed_pairing_handle = true;
-                warn!("pairing host exited unexpectedly: {:?}", result);
-            }
-            Some(result) = worker_tasks.join_next() => {
-                warn!("worker task exited unexpectedly: {:?}", result);
+            Some(result) = service_tasks.join_next() => {
+                warn!("service task exited unexpectedly: {:?}", result);
             }
         }
 
-        // 4. Shutdown sequence
+        // 7. Shutdown sequence
         info!("shutting down...");
-
-        // Cancel all child tokens
         self.cancel.cancel();
 
-        // Drain worker tasks with timeout
+        // Drain service tasks with timeout
         tokio::time::timeout(Duration::from_secs(5), async {
-            while worker_tasks.join_next().await.is_some() {}
+            while service_tasks.join_next().await.is_some() {}
         })
         .await
         .ok();
 
-        // Await RPC accept loop with timeout
-        if !completed_rpc_handle {
-            tokio::time::timeout(Duration::from_secs(5), rpc_handle)
-                .await
-                .ok();
-        }
-        if !completed_http_handle {
-            tokio::time::timeout(Duration::from_secs(5), http_handle)
-                .await
-                .ok();
-        }
-        if !completed_pairing_handle {
-            tokio::time::timeout(Duration::from_secs(5), pairing_handle)
-                .await
-                .ok();
-        }
+        // Await RPC and HTTP with timeout
+        tokio::time::timeout(Duration::from_secs(5), rpc_handle)
+            .await
+            .ok();
+        tokio::time::timeout(Duration::from_secs(5), http_handle)
+            .await
+            .ok();
 
-        // Stop workers in reverse order
-        for worker in self.workers.iter().rev() {
-            info!(worker = worker.name(), "stopping worker");
-            if let Err(e) = worker.stop().await {
-                warn!(worker = worker.name(), "error stopping worker: {}", e);
+        // Stop services in reverse order
+        for service in self.services.iter().rev() {
+            info!(service = service.name(), "stopping service");
+            if let Err(e) = service.stop().await {
+                warn!(service = service.name(), "error stopping service: {}", e);
             }
         }
 

@@ -27,6 +27,7 @@ use crate::api::types::{
     SetupSpaceAccessCompletedPayload, SpaceAccessStateChangedPayload,
 };
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
+use crate::service::{DaemonService, ServiceHealth};
 use crate::state::{DaemonPairingSessionSnapshot, RuntimeState};
 
 const PAIRING_EVENTS_SUBSCRIBE_BACKOFF_INITIAL_MS: u64 = 250;
@@ -337,7 +338,7 @@ impl DaemonPairingHost {
         }
     }
 
-    pub async fn run(self: Arc<Self>, cancel: CancellationToken) -> anyhow::Result<()> {
+    pub async fn run(&self, cancel: CancellationToken) -> anyhow::Result<()> {
         let pairing_action_rx = self
             .pairing_action_rx
             .lock()
@@ -421,6 +422,28 @@ impl DaemonPairingHost {
         Ok(())
     }
 
+}
+
+#[async_trait::async_trait]
+impl DaemonService for DaemonPairingHost {
+    fn name(&self) -> &str {
+        "pairing-host"
+    }
+
+    async fn start(&self, cancel: CancellationToken) -> anyhow::Result<()> {
+        self.run(cancel).await
+    }
+
+    async fn stop(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn health_check(&self) -> ServiceHealth {
+        ServiceHealth::Healthy
+    }
+}
+
+impl DaemonPairingHost {
     async fn reserve_session_slot(
         &self,
         session_id: Option<&str>,
