@@ -23,6 +23,7 @@ uc-core = { path = "crates/uc-core" }
 uc-platform = { path = "crates/uc-platform" }
 uc-tauri = { path = "crates/uc-tauri" }
 uc-bootstrap = { path = "crates/uc-bootstrap" }
+uc-daemon-client = { path = "crates/uc-daemon-client" }
 
 # ===== Tauri 相关依赖 =====
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
