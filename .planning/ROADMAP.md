@@ -474,9 +474,10 @@ Plans:
 **Goal:** Migrate clipboard watching from GUI/PlatformRuntime to daemon as the sole clipboard monitor. Daemon captures OS clipboard changes, persists entries, broadcasts WS events; GUI operates in Passive mode receiving updates via DaemonWsBridge.
 **Requirements**: PH57-01, PH57-02, PH57-03, PH57-04, PH57-05, PH57-06
 **Depends on:** Phase 56
-**Plans:** 2 plans
+**Plans:** 3 plans
 
 Plans:
 
 - [ ] 57-01-PLAN.md — Daemon clipboard watcher implementation, change handler, WS event emission, and bridge translation
 - [ ] 57-02-PLAN.md — GUI Passive mode switch and DaemonWsBridge clipboard subscription wiring
+- [ ] 57-03-PLAN.md — Daemon inbound clipboard sync (write_snapshot) migration with write-back loop prevention
