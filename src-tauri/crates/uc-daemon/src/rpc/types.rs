@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::worker::WorkerHealth;
+use crate::service::ServiceHealth;
 
 /// JSON-RPC 2.0 request.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ pub struct StatusResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkerStatus {
     pub name: String,
-    pub health: WorkerHealth,
+    pub health: ServiceHealth,
 }
 
 impl RpcResponse {
@@ -123,11 +123,11 @@ mod tests {
             workers: vec![
                 WorkerStatus {
                     name: "clipboard-watcher".to_string(),
-                    health: WorkerHealth::Healthy,
+                    health: ServiceHealth::Healthy,
                 },
                 WorkerStatus {
                     name: "peer-discovery".to_string(),
-                    health: WorkerHealth::Degraded("timeout".to_string()),
+                    health: ServiceHealth::Degraded("timeout".to_string()),
                 },
             ],
             connected_peers: Some(2),

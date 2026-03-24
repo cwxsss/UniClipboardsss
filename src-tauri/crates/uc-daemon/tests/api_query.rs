@@ -5,8 +5,8 @@ use tokio::sync::RwLock;
 use uc_core::network::{PairedDevice, PairingState};
 use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::types::{DaemonWsEvent, PairedDeviceDto, PeerSnapshotDto};
-use uc_daemon::state::{DaemonWorkerSnapshot, RuntimeState};
-use uc_daemon::worker::WorkerHealth;
+use uc_daemon::service::ServiceHealth;
+use uc_daemon::state::{DaemonServiceSnapshot, RuntimeState};
 
 fn build_runtime() -> Arc<uc_app::runtime::CoreRuntime> {
     static RUNTIME: OnceLock<Arc<uc_app::runtime::CoreRuntime>> = OnceLock::new();
@@ -99,9 +99,9 @@ fn paired_devices_query_does_not_expose_identity_fingerprint() {
 #[tokio::test]
 async fn pairing_session_query_returns_none_when_no_daemon_side_record_exists() {
     let runtime = build_runtime();
-    let state = Arc::new(RwLock::new(RuntimeState::new(vec![DaemonWorkerSnapshot {
+    let state = Arc::new(RwLock::new(RuntimeState::new(vec![DaemonServiceSnapshot {
         name: "rpc".to_string(),
-        health: WorkerHealth::Healthy,
+        health: ServiceHealth::Healthy,
     }])));
     let service = DaemonQueryService::new(runtime, state);
 
@@ -118,7 +118,7 @@ fn websocket_dto_serialization_yields_session_id_and_type_keys() {
         session_id: Some("session-1".to_string()),
         ts: 1_742_371_200_000,
         payload: serde_json::json!({
-            "workers": [{"name": "rpc", "health": WorkerHealth::Healthy}]
+            "workers": [{"name": "rpc", "health": ServiceHealth::Healthy}]
         }),
     };
 

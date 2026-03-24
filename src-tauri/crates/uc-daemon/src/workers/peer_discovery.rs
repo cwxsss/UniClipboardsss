@@ -7,7 +7,7 @@ use uc_bootstrap::resolve_pairing_device_name;
 use uc_core::network::NetworkEvent;
 use uc_core::ports::{NetworkControlPort, NetworkEventPort, PeerDirectoryPort, SettingsPort};
 
-use crate::worker::{DaemonWorker, WorkerHealth};
+use crate::service::{DaemonService, ServiceHealth};
 
 pub struct PeerDiscoveryWorker {
     network_control: Arc<dyn NetworkControlPort>,
@@ -33,7 +33,7 @@ impl PeerDiscoveryWorker {
 }
 
 #[async_trait]
-impl DaemonWorker for PeerDiscoveryWorker {
+impl DaemonService for PeerDiscoveryWorker {
     fn name(&self) -> &str {
         "peer-discovery"
     }
@@ -74,8 +74,8 @@ impl DaemonWorker for PeerDiscoveryWorker {
         Ok(())
     }
 
-    fn health_check(&self) -> WorkerHealth {
-        WorkerHealth::Healthy
+    fn health_check(&self) -> ServiceHealth {
+        ServiceHealth::Healthy
     }
 }
 

@@ -11,7 +11,7 @@ use uc_bootstrap::build_non_gui_runtime_with_setup;
 use uc_bootstrap::builders::build_daemon_app;
 use uc_daemon::app::DaemonApp;
 use uc_daemon::socket::resolve_daemon_socket_path;
-use uc_daemon::worker::DaemonWorker;
+use uc_daemon::service::DaemonService;
 use uc_daemon::workers::clipboard_watcher::ClipboardWatcherWorker;
 use uc_daemon::workers::peer_discovery::PeerDiscoveryWorker;
 
@@ -39,8 +39,8 @@ fn main() -> anyhow::Result<()> {
 
     let socket_path = resolve_daemon_socket_path();
 
-    // Create workers (Arc-wrapped for tokio::spawn compatibility)
-    let workers: Vec<Arc<dyn DaemonWorker>> = vec![
+    // Create services (Arc-wrapped for tokio::spawn compatibility)
+    let workers: Vec<Arc<dyn DaemonService>> = vec![
         Arc::new(ClipboardWatcherWorker),
         Arc::new(PeerDiscoveryWorker::new(
             daemon_network_control,

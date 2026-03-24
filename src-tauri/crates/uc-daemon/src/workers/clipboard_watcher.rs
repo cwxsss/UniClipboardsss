@@ -1,18 +1,18 @@
-//! Placeholder clipboard watcher worker.
+//! Placeholder clipboard watcher service.
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::worker::{DaemonWorker, WorkerHealth};
+use crate::service::{DaemonService, ServiceHealth};
 
-/// Placeholder clipboard watcher worker.
+/// Placeholder clipboard watcher service.
 ///
-/// In the skeleton phase this worker does nothing except wait for cancellation.
+/// In the skeleton phase this service does nothing except wait for cancellation.
 /// A future plan will integrate with the platform clipboard watcher.
 pub struct ClipboardWatcherWorker;
 
 #[async_trait]
-impl DaemonWorker for ClipboardWatcherWorker {
+impl DaemonService for ClipboardWatcherWorker {
     fn name(&self) -> &str {
         "clipboard-watcher"
     }
@@ -29,7 +29,7 @@ impl DaemonWorker for ClipboardWatcherWorker {
         Ok(())
     }
 
-    fn health_check(&self) -> WorkerHealth {
-        WorkerHealth::Healthy
+    fn health_check(&self) -> ServiceHealth {
+        ServiceHealth::Healthy
     }
 }

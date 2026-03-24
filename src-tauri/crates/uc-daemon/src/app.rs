@@ -27,8 +27,8 @@ use crate::api::server::{run_http_server, DaemonApiState};
 use crate::pairing::host::DaemonPairingHost;
 use crate::process_metadata::{remove_pid_file, write_current_pid};
 use crate::rpc::server::{check_or_remove_stale_socket, run_rpc_accept_loop};
-use crate::state::{DaemonWorkerSnapshot, RuntimeState};
-use crate::worker::{DaemonWorker, WorkerHealth};
+use crate::service::{DaemonService, ServiceHealth};
+use crate::state::{DaemonServiceSnapshot, RuntimeState};
 
 /// Recover encryption session from disk/keyring if encryption has been initialized.
 ///
@@ -58,11 +58,11 @@ async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result<()>
 
 /// Main daemon application.
 ///
-/// Owns the worker list, RPC state, and cancellation token.
-/// Workers use `Arc<dyn DaemonWorker>` (not `Box`) to allow cloning
+/// Owns the service list, RPC state, and cancellation token.
+/// Services use `Arc<dyn DaemonService>` (not `Box`) to allow cloning
 /// for `tokio::spawn` `'static` requirement.
 pub struct DaemonApp {
-    workers: Vec<Arc<dyn DaemonWorker>>,
+    workers: Vec<Arc<dyn DaemonService>>,
     runtime: Arc<CoreRuntime>,
     state: Arc<RwLock<RuntimeState>>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
@@ -74,9 +74,9 @@ pub struct DaemonApp {
 }
 
 impl DaemonApp {
-    /// Create a new DaemonApp with the given workers and socket path.
+    /// Create a new DaemonApp with the given services and socket path.
     pub fn new(
-        workers: Vec<Arc<dyn DaemonWorker>>,
+        workers: Vec<Arc<dyn DaemonService>>,
         runtime: Arc<CoreRuntime>,
         pairing_orchestrator: Arc<PairingOrchestrator>,
         pairing_action_rx: mpsc::Receiver<PairingAction>,
@@ -84,11 +84,11 @@ impl DaemonApp {
         key_slot_store: Arc<dyn KeySlotStore>,
         socket_path: PathBuf,
     ) -> Self {
-        let initial_statuses: Vec<DaemonWorkerSnapshot> = workers
+        let initial_statuses: Vec<DaemonServiceSnapshot> = workers
             .iter()
-            .map(|w| DaemonWorkerSnapshot {
+            .map(|w| DaemonServiceSnapshot {
                 name: w.name().to_string(),
-                health: WorkerHealth::Healthy,
+                health: ServiceHealth::Healthy,
             })
             .collect();
 

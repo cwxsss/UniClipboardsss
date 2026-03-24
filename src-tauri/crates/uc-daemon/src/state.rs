@@ -1,7 +1,7 @@
 //! # RuntimeState
 //!
 //! Snapshot-only state for the daemon runtime. Tracks uptime and cached
-//! worker health statuses. Does NOT own workers — `DaemonApp` owns workers
+//! service health statuses. Does NOT own services — `DaemonApp` owns services
 //! and periodically updates this snapshot.
 
 use std::collections::HashMap;
@@ -9,12 +9,12 @@ use std::time::Instant;
 
 use serde::Serialize;
 
-use crate::worker::WorkerHealth;
+use crate::service::ServiceHealth;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DaemonWorkerSnapshot {
+pub struct DaemonServiceSnapshot {
     pub name: String,
-    pub health: WorkerHealth,
+    pub health: ServiceHealth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -33,19 +33,19 @@ pub struct DaemonPairingSessionSnapshot {
 
 /// Runtime state snapshot for the daemon.
 ///
-/// This struct holds only pure data (start time + cached worker statuses).
+/// This struct holds only pure data (start time + cached service statuses).
 /// It is fully `Send + Sync` without trait object concerns. RPC reads never
-/// contend with worker lifecycle because this is a snapshot, not a live view.
+/// contend with service lifecycle because this is a snapshot, not a live view.
 pub struct RuntimeState {
     start_time: Instant,
-    worker_statuses: Vec<DaemonWorkerSnapshot>,
+    worker_statuses: Vec<DaemonServiceSnapshot>,
     connected_peer_count: u32,
     pairing_sessions: HashMap<String, DaemonPairingSessionSnapshot>,
 }
 
 impl RuntimeState {
-    /// Create a new RuntimeState with the given initial worker statuses.
-    pub fn new(initial_statuses: Vec<DaemonWorkerSnapshot>) -> Self {
+    /// Create a new RuntimeState with the given initial service statuses.
+    pub fn new(initial_statuses: Vec<DaemonServiceSnapshot>) -> Self {
         Self {
             start_time: Instant::now(),
             worker_statuses: initial_statuses,
@@ -59,13 +59,13 @@ impl RuntimeState {
         self.start_time.elapsed().as_secs()
     }
 
-    /// Current cached worker statuses.
-    pub fn worker_statuses(&self) -> &[DaemonWorkerSnapshot] {
+    /// Current cached service statuses.
+    pub fn worker_statuses(&self) -> &[DaemonServiceSnapshot] {
         &self.worker_statuses
     }
 
-    /// Replace the cached worker statuses with a fresh snapshot.
-    pub fn update_worker_statuses(&mut self, statuses: Vec<DaemonWorkerSnapshot>) {
+    /// Replace the cached service statuses with a fresh snapshot.
+    pub fn update_worker_statuses(&mut self, statuses: Vec<DaemonServiceSnapshot>) {
         self.worker_statuses = statuses;
     }
 
@@ -125,18 +125,18 @@ mod tests {
         assert_eq!(state.worker_statuses().len(), 0);
 
         state.update_worker_statuses(vec![
-            DaemonWorkerSnapshot {
+            DaemonServiceSnapshot {
                 name: "clipboard-watcher".to_string(),
-                health: WorkerHealth::Healthy,
+                health: ServiceHealth::Healthy,
             },
-            DaemonWorkerSnapshot {
+            DaemonServiceSnapshot {
                 name: "peer-discovery".to_string(),
-                health: WorkerHealth::Stopped,
+                health: ServiceHealth::Stopped,
             },
         ]);
         assert_eq!(state.worker_statuses().len(), 2);
         assert_eq!(state.worker_statuses()[0].name, "clipboard-watcher");
-        assert_eq!(state.worker_statuses()[1].health, WorkerHealth::Stopped);
+        assert_eq!(state.worker_statuses()[1].health, ServiceHealth::Stopped);
     }
 
     #[test]

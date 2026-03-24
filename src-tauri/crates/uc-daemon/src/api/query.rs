@@ -21,8 +21,8 @@ use crate::api::types::{
     WorkerStatusDto,
 };
 use crate::pairing::host::DaemonPairingHost;
-use crate::state::{DaemonPairingSessionSnapshot, DaemonWorkerSnapshot, RuntimeState};
-use crate::worker::WorkerHealth;
+use crate::service::ServiceHealth;
+use crate::state::{DaemonPairingSessionSnapshot, DaemonServiceSnapshot, RuntimeState};
 use crate::{DAEMON_API_REVISION, DAEMON_VERSION};
 
 pub struct DaemonQueryService {
@@ -167,15 +167,15 @@ fn map_paired_device(
     dto
 }
 
-fn worker_health_label(health: &WorkerHealth) -> String {
+fn worker_health_label(health: &ServiceHealth) -> String {
     match health {
-        WorkerHealth::Healthy => "healthy".to_string(),
-        WorkerHealth::Degraded(reason) => format!("degraded ({reason})"),
-        WorkerHealth::Stopped => "stopped".to_string(),
+        ServiceHealth::Healthy => "healthy".to_string(),
+        ServiceHealth::Degraded(reason) => format!("degraded ({reason})"),
+        ServiceHealth::Stopped => "stopped".to_string(),
     }
 }
 
-fn worker_statuses(snapshots: &[DaemonWorkerSnapshot]) -> Vec<WorkerStatusDto> {
+fn worker_statuses(snapshots: &[DaemonServiceSnapshot]) -> Vec<WorkerStatusDto> {
     snapshots
         .iter()
         .map(|worker| WorkerStatusDto {

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::rpc::types::{RpcRequest, RpcResponse, StatusResponse, WorkerStatus};
-use crate::state::{DaemonWorkerSnapshot, RuntimeState};
+use crate::state::{DaemonServiceSnapshot, RuntimeState};
 
 /// Dispatch a JSON-RPC request to the appropriate handler.
 pub async fn handle_request(
@@ -50,7 +50,7 @@ fn handle_device_list(id: Option<u64>) -> RpcResponse {
     )
 }
 
-fn worker_statuses(snapshots: &[DaemonWorkerSnapshot]) -> Vec<WorkerStatus> {
+fn worker_statuses(snapshots: &[DaemonServiceSnapshot]) -> Vec<WorkerStatus> {
     snapshots
         .iter()
         .map(|worker| WorkerStatus {
@@ -63,8 +63,8 @@ fn worker_statuses(snapshots: &[DaemonWorkerSnapshot]) -> Vec<WorkerStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::DaemonWorkerSnapshot;
-    use crate::worker::WorkerHealth;
+    use crate::service::ServiceHealth;
+    use crate::state::DaemonServiceSnapshot;
 
     fn make_request(method: &str, id: Option<u64>) -> RpcRequest {
         RpcRequest {
@@ -87,9 +87,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_status_returns_uptime_and_version() {
-        let workers = vec![DaemonWorkerSnapshot {
+        let workers = vec![DaemonServiceSnapshot {
             name: "clipboard-watcher".to_string(),
-            health: WorkerHealth::Healthy,
+            health: ServiceHealth::Healthy,
         }];
         let state = Arc::new(RwLock::new(RuntimeState::new(workers)));
         let req = make_request("status", Some(2));
