@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
 use tracing::{error, info_span, warn, Instrument};
+use uc_app::usecases::pairing::{P2PPeerInfo, PairedPeer};
 use uc_app::usecases::LocalDeviceInfo;
 use uc_core::network::PairingState;
 use uc_core::PeerId;
@@ -16,28 +17,6 @@ use uc_daemon_client::{
     DaemonConnectionState,
 };
 use uc_platform::ports::observability::TraceMetadata;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct P2PPeerInfo {
-    pub peer_id: String,
-    pub device_name: Option<String>,
-    pub addresses: Vec<String>,
-    pub is_paired: bool,
-    pub connected: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PairedPeer {
-    pub peer_id: String,
-    pub device_name: String,
-    pub shared_secret: Vec<u8>,
-    pub paired_at: String,
-    pub last_seen: Option<String>,
-    pub last_known_addresses: Vec<String>,
-    pub connected: bool,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
