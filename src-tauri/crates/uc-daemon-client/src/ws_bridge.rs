@@ -15,10 +15,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uc_core::network::daemon_api_strings::{pairing_stage, ws_event, ws_topic};
 use uc_core::ports::realtime::{
-    PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
-    PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
-    PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
-    SetupSpaceAccessCompletedEvent, SetupStateChangedEvent, SpaceAccessStateChangedEvent,
+    ClipboardNewContentEvent, PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent,
+    PairingUpdatedEvent, PairingVerificationRequiredEvent, PeerChangedEvent,
+    PeerConnectionChangedEvent, PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary,
+    RealtimeTopic, RealtimeTopicPort, SetupSpaceAccessCompletedEvent, SetupStateChangedEvent,
+    SpaceAccessStateChangedEvent,
 };
 use uc_daemon::api::auth::DaemonConnectionInfo;
 use uc_daemon::api::types::{
@@ -632,33 +633,33 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                 }
             }
         }
-        ws_event::PAIRING_FAILED => {
-            serde_json::from_value::<PairingFailurePayload>(event.payload)
-                .ok()
-                .map(|payload| {
-                    RealtimeEvent::PairingFailed(PairingFailedEvent {
-                        session_id: payload.session_id,
-                        reason: payload.reason,
-                    })
+        ws_event::PAIRING_FAILED => serde_json::from_value::<PairingFailurePayload>(event.payload)
+            .ok()
+            .map(|payload| {
+                RealtimeEvent::PairingFailed(PairingFailedEvent {
+                    session_id: payload.session_id,
+                    reason: payload.reason,
                 })
-        }
-        ws_event::PEERS_CHANGED => match serde_json::from_value::<PeersChangedFullPayload>(event.payload) {
-            Ok(payload) => Some(RealtimeEvent::PeersChanged(PeerChangedEvent {
-                peers: payload
-                    .peers
-                    .into_iter()
-                    .map(|p| RealtimePeerSummary {
-                        peer_id: p.peer_id,
-                        device_name: p.device_name,
-                        connected: p.connected,
-                    })
-                    .collect(),
-            })),
-            Err(e) => {
-                warn!(error = %e, "Failed to deserialize peers.changed payload");
-                None
+            }),
+        ws_event::PEERS_CHANGED => {
+            match serde_json::from_value::<PeersChangedFullPayload>(event.payload) {
+                Ok(payload) => Some(RealtimeEvent::PeersChanged(PeerChangedEvent {
+                    peers: payload
+                        .peers
+                        .into_iter()
+                        .map(|p| RealtimePeerSummary {
+                            peer_id: p.peer_id,
+                            device_name: p.device_name,
+                            connected: p.connected,
+                        })
+                        .collect(),
+                })),
+                Err(e) => {
+                    warn!(error = %e, "Failed to deserialize peers.changed payload");
+                    None
+                }
             }
-        },
+        }
         ws_event::PEERS_NAME_UPDATED => {
             serde_json::from_value::<PeerNameUpdatedPayload>(event.payload)
                 .ok()
@@ -750,6 +751,28 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     })
                 })
         }
+        ws_event::CLIPBOARD_NEW_CONTENT => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct ClipboardPayload {
+                entry_id: String,
+                preview: String,
+                origin: String,
+            }
+            match serde_json::from_value::<ClipboardPayload>(event.payload) {
+                Ok(payload) => Some(RealtimeEvent::ClipboardNewContent(
+                    ClipboardNewContentEvent {
+                        entry_id: payload.entry_id,
+                        preview: payload.preview,
+                        origin: payload.origin,
+                    },
+                )),
+                Err(err) => {
+                    warn!(error = %err, "failed to decode clipboard.new_content websocket payload");
+                    None
+                }
+            }
+        }
         _ => None,
     }
 }
@@ -768,6 +791,7 @@ fn event_topic(event: &RealtimeEvent) -> RealtimeTopic {
             RealtimeTopic::Setup
         }
         RealtimeEvent::SpaceAccessStateChanged(_) => RealtimeTopic::SpaceAccess,
+        RealtimeEvent::ClipboardNewContent(_) => RealtimeTopic::Clipboard,
     }
 }
 
@@ -778,6 +802,7 @@ fn topic_name(topic: &RealtimeTopic) -> &'static str {
         RealtimeTopic::PairedDevices => ws_topic::PAIRED_DEVICES,
         RealtimeTopic::Setup => ws_topic::SETUP,
         RealtimeTopic::SpaceAccess => ws_topic::SPACE_ACCESS,
+        RealtimeTopic::Clipboard => ws_topic::CLIPBOARD,
     }
 }
 

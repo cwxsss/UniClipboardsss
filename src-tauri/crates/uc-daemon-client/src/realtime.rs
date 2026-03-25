@@ -14,6 +14,8 @@ use uc_app::realtime::{
 use uc_app::task_registry::TaskRegistry;
 use uc_app::usecases::pairing::PairingDomainEvent;
 use uc_app::usecases::setup::SetupPairingFacadePort;
+use uc_core::ports::host_event_emitter::{ClipboardHostEvent, ClipboardOriginKind, HostEvent};
+use uc_core::ports::realtime::ClipboardNewContentEvent;
 use uc_core::ports::{HostEventEmitterPort, RealtimeTopic};
 
 use crate::http::DaemonPairingClient;
@@ -274,6 +276,17 @@ pub async fn start_realtime_runtime(
         }
     };
 
+    let clipboard_rx = match bridge
+        .subscribe("clipboard_realtime_consumer", &[RealtimeTopic::Clipboard])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe clipboard realtime consumer");
+            None
+        }
+    };
+
     let pairing_bridge = bridge.clone();
     let pairing_emitter = event_emitter.clone();
     task_registry
@@ -336,6 +349,22 @@ pub async fn start_realtime_runtime(
         })
         .await;
 
+    let clipboard_bridge = bridge.clone();
+    let clipboard_emitter = event_emitter.clone();
+    task_registry
+        .spawn("realtime_clipboard_consumer", |_token| async move {
+            let result = match clipboard_rx {
+                Some(mut rx) => {
+                    run_clipboard_realtime_consumer_with_rx(&mut rx, clipboard_emitter).await
+                }
+                None => run_clipboard_realtime_consumer(clipboard_bridge, clipboard_emitter).await,
+            };
+            if let Err(err) = result {
+                warn!(error = %err, "clipboard realtime consumer stopped");
+            }
+        })
+        .await;
+
     task_registry
         .spawn("daemon_ws_bridge", move |token| async move {
             if let Err(err) = bridge.run(token).await {
@@ -352,6 +381,48 @@ pub async fn start_realtime_runtime(
             maintain_gui_pairing_leases(lease_connection_state, lease_port, token).await;
         })
         .await;
+}
+
+async fn run_clipboard_realtime_consumer(
+    bridge: Arc<DaemonWsBridge>,
+    emitter: Arc<dyn HostEventEmitterPort>,
+) -> Result<()> {
+    let mut rx = bridge
+        .subscribe("clipboard_realtime_consumer", &[RealtimeTopic::Clipboard])
+        .await?;
+    run_clipboard_realtime_consumer_with_rx(&mut rx, emitter).await
+}
+
+async fn run_clipboard_realtime_consumer_with_rx(
+    rx: &mut tokio::sync::mpsc::Receiver<uc_core::ports::realtime::RealtimeEvent>,
+    emitter: Arc<dyn HostEventEmitterPort>,
+) -> Result<()> {
+    use uc_core::ports::realtime::RealtimeEvent;
+    while let Some(event) = rx.recv().await {
+        match event {
+            RealtimeEvent::ClipboardNewContent(ClipboardNewContentEvent {
+                entry_id,
+                preview,
+                origin,
+            }) => {
+                let origin_kind = match origin.as_str() {
+                    "remote" => ClipboardOriginKind::Remote,
+                    _ => ClipboardOriginKind::Local,
+                };
+                if let Err(err) =
+                    emitter.emit(HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                        entry_id,
+                        preview,
+                        origin: origin_kind,
+                    }))
+                {
+                    warn!(error = %err, "failed to emit clipboard new content host event");
+                }
+            }
+            _ => {} // ignore non-clipboard events on this subscription
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
