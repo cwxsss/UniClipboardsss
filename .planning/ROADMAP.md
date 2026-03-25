@@ -500,7 +500,7 @@ Plans:
 **Goal:** Unify duplicate clipboard DTOs (add serde to uc-app, delete uc-tauri duplicates), extract pairing aggregation DTOs to uc-app, and delete stale pairing event types. After this phase, uc-tauri has zero duplicate DTO definitions.
 **Requirements**: PH58-01, PH58-02, PH58-03, PH58-04, PH58-05
 **Depends on:** Phase 57
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 **Success Criteria** (what must be TRUE):
 
@@ -513,7 +513,7 @@ Plans:
 Plans:
 
 - [x] 58-01-PLAN.md — Unify clipboard DTOs: add serde to EntryProjectionDto and ClipboardStats in uc-app, delete duplicates from uc-tauri models
-- [ ] 58-02-PLAN.md — Extract pairing DTOs (P2PPeerInfo, PairedPeer) to uc-app and delete stale P2PPairingVerificationEvent types
+- [x] 58-02-PLAN.md — Extract pairing DTOs (P2PPeerInfo, PairedPeer) to uc-app and delete stale P2PPairingVerificationEvent types
 
 ### Phase 59: Extract UC protocol URI routing from uc-tauri to uc-core
 
