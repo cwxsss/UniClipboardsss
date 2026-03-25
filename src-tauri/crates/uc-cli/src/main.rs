@@ -38,31 +38,6 @@ enum Commands {
     Devices,
     /// Show space and encryption status (direct mode, no daemon required)
     SpaceStatus,
-    /// Clipboard history commands (direct mode, no daemon required)
-    Clipboard {
-        #[command(subcommand)]
-        subcommand: ClipboardCommands,
-    },
-}
-
-#[derive(Subcommand)]
-enum ClipboardCommands {
-    /// List clipboard history entries
-    List {
-        /// Maximum number of entries to return (default: 50)
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-        /// Number of entries to skip (default: 0)
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-    },
-    /// Get full detail for a single clipboard entry
-    Get {
-        /// Entry ID
-        id: String,
-    },
-    /// Clear all clipboard history
-    Clear,
 }
 
 #[derive(Subcommand)]
@@ -95,17 +70,6 @@ fn main() -> anyhow::Result<()> {
             },
             Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
             Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,
-            Commands::Clipboard { subcommand } => match subcommand {
-                ClipboardCommands::List { limit, offset } => {
-                    commands::clipboard::run_list(cli.json, cli.verbose, limit, offset).await
-                }
-                ClipboardCommands::Get { id } => {
-                    commands::clipboard::run_get(cli.json, cli.verbose, id).await
-                }
-                ClipboardCommands::Clear => {
-                    commands::clipboard::run_clear(cli.json, cli.verbose).await
-                }
-            },
         }
     });
 
