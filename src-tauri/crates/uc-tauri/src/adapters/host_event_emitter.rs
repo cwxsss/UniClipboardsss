@@ -159,7 +159,6 @@ struct InboundClipboardSubscribeRetryPayload {
 }
 
 /// Pairing verification payload — camelCase fields, kind as lowercase string.
-/// Matches P2PPairingVerificationEvent in events/p2p_pairing.rs.
 /// JSON: { "sessionId": "...", "kind": "request", "peerId": null, ... }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -262,8 +261,7 @@ impl<R: Runtime> HostEventEmitterPort for TauriEventEmitter<R> {
 
 /// Map a [`PairingVerificationKind`] to its lowercase string representation.
 ///
-/// Matches the existing `P2PPairingVerificationKind` serde `rename_all = "camelCase"` output
-/// in events/p2p_pairing.rs — kind variants are all single words so camelCase = lowercase.
+/// Kind variants are all single words so camelCase = lowercase.
 fn kind_to_str(kind: &PairingVerificationKind) -> &'static str {
     match kind {
         PairingVerificationKind::Request => "request",

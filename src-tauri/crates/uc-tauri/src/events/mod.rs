@@ -4,9 +4,6 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-pub mod p2p_pairing;
-pub use p2p_pairing::{P2PPairingVerificationEvent, P2PPairingVerificationKind};
-
 /// Clipboard events emitted to frontend
 /// 发送到前端的剪贴板事件
 #[derive(Debug, Clone, Serialize, Deserialize)]
