@@ -34,7 +34,7 @@ Extract `file_transfer_wiring.rs` (502 lines, zero Tauri dependencies) from `uc-
 
 ### Module organization
 
-- **D-01:** Encapsulate as `FileTransferOrchestrator` struct holding `Arc<TrackInboundTransfersUseCase>` + `Arc<dyn HostEventEmitterPort>` (+ any other shared deps). All 9 functions become methods on this struct.
+- **D-01:** Encapsulate as `FileTransferOrchestrator` struct holding `Arc<TrackInboundTransfersUseCase>` + `Arc<RwLock<Arc<dyn HostEventEmitterPort>>>` (shared emitter cell, same pattern as `HostEventSetupPort`) + `Arc<dyn ClockPort>`. All 9 functions become methods on this struct. The emitter_cell pattern allows construction at wire time — the cell starts with `LoggingEventEmitter` and is hot-swapped to `TauriEventEmitter` after Tauri setup.
 - **D-02:** Place in `uc-app/src/usecases/file_sync/file_transfer_orchestrator.rs`, exported via `uc-app::usecases::file_sync`.
 
 ### Data structure ownership
@@ -45,7 +45,7 @@ Extract `file_transfer_wiring.rs` (502 lines, zero Tauri dependencies) from `uc-
 ### Assembly and integration
 
 - **D-05:** `assembly.rs` constructs `FileTransferOrchestrator` instance (consistent with CoreRuntime/SetupOrchestrator assembly pattern).
-- **D-06:** `FileTransferOrchestrator` passed to `wiring.rs` via `BackgroundRuntimeDeps` struct.
+- **D-06:** `FileTransferOrchestrator` passed to `wiring.rs` via `BackgroundRuntimeDeps` struct as direct `Arc<FileTransferOrchestrator>` (non-Optional). Constructed at `wire_dependencies` time using emitter_cell — no deferred construction needed.
 - **D-07:** `wiring.rs` calls orchestrator methods at existing integration points (clipboard receive loop, network event loop, startup reconciliation, timeout sweep spawn).
 
 ### Migration strategy
