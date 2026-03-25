@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: Milestone complete
-stopped_at: Completed 57-03-PLAN.md
-last_updated: '2026-03-25T05:24:15.862Z'
+stopped_at: Phase 58 context gathered
+last_updated: '2026-03-25T06:39:34.250Z'
 progress:
-  total_phases: 29
+  total_phases: 32
   completed_phases: 23
   total_plans: 72
   completed_plans: 69
@@ -253,6 +253,9 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 55 added: Extract daemon lifecycle and setup pairing bridge from uc-tauri — 将 daemon 进程生命周期管理和 setup pairing facade 从 uc-tauri 提取到 uc-daemon/uc-daemon-client
 - Phase 56 added: Refactor daemon host architecture — extract peer lifecycle from PairingHost, unify host lifecycle management
 - Phase 57 added: Daemon 剪切板监听集成 — 将剪切板监听迁移到 daemon 进程中实现
+- Phase 58 added: Extract DTO models and pairing event types from uc-tauri to uc-app and uc-core
+- Phase 59 added: Extract UC protocol URI routing from uc-tauri to uc-core
+- Phase 60 added: Extract file transfer wiring orchestration from uc-tauri to uc-app
 
 ### Pending Todos
 
@@ -268,6 +271,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-25T05:14:26.329Z
-Stopped at: Completed 57-03-PLAN.md
-Resume file: None
+Last session: 2026-03-25T06:39:34.245Z
+Stopped at: Phase 58 context gathered
+Resume file: .planning/phases/58-extract-dto-models-and-pairing-event-types-from-uc-tauri-to-uc-app-and-uc-core/58-CONTEXT.md
