@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: Ready to execute
-stopped_at: Completed 57-01-PLAN.md
-last_updated: "2026-03-25T04:59:28.035Z"
+stopped_at: Completed 57-02-PLAN.md
+last_updated: '2026-03-25T05:07:50.796Z'
 progress:
   total_phases: 29
   completed_phases: 22
   total_plans: 72
-  completed_plans: 67
+  completed_plans: 68
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 ## Current Position
 
 Phase: 57 (daemon-daemon-daemon-daemon) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -95,6 +95,7 @@ _Updated after each plan completion_
 | Phase 56.1 P03 | 3 | 1 tasks | 1 files |
 | Phase 56.1 P02 | 11min | 2 tasks | 4 files |
 | Phase 57-daemon-daemon-daemon-daemon P01 | 8 | 2 tasks | 4 files |
+| Phase 57-daemon-daemon-daemon-daemon P02 | 5 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -219,6 +220,8 @@ Recent decisions affecting current work:
 - [Phase 57-01]: Use ClipboardChangeOrigin::LocalCapture directly in daemon (write-back loop prevention deferred to Plan 03)
 - [Phase 57-01]: WatcherShutdown stays within start() async fn (is !Send) -- never crosses await boundary
 - [Phase 57-01]: clipboard-rs added as direct runtime dep to uc-daemon (not just transitive via uc-platform)
+- [Phase 57-02]: GUI ClipboardIntegrationMode hardcoded to Passive in AppRuntime::with_setup() — daemon is sole clipboard observer from Phase 57
+- [Phase 57-02]: DaemonWsBridge clipboard consumer follows existing pairing/peers/setup consumer pattern — subscribes eagerly, falls back to late subscribe if eager fails
 
 ### Roadmap Evolution
 
@@ -262,6 +265,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-25T04:59:28.030Z
-Stopped at: Completed 57-01-PLAN.md
+Last session: 2026-03-25T05:07:50.793Z
+Stopped at: Completed 57-02-PLAN.md
 Resume file: None
