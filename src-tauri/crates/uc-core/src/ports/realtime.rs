@@ -11,6 +11,7 @@ pub enum RealtimeTopic {
     PairedDevices,
     Setup,
     SpaceAccess,
+    Clipboard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +102,13 @@ pub struct SpaceAccessStateChangedEvent {
     pub state: SpaceAccessState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardNewContentEvent {
+    pub entry_id: String,
+    pub preview: String,
+    pub origin: String, // "local" or "remote"
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RealtimeEvent {
     PairingUpdated(PairingUpdatedEvent),
@@ -114,6 +122,7 @@ pub enum RealtimeEvent {
     SetupStateChanged(SetupStateChangedEvent),
     SetupSpaceAccessCompleted(SetupSpaceAccessCompletedEvent),
     SpaceAccessStateChanged(SpaceAccessStateChangedEvent),
+    ClipboardNewContent(ClipboardNewContentEvent),
 }
 
 pub const FRONTEND_REALTIME_EVENT: &str = "daemon://realtime";
