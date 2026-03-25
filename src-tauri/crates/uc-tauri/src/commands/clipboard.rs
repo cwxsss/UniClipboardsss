@@ -5,10 +5,11 @@ use crate::bootstrap::AppRuntime;
 use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use crate::models::{
-    ClipboardEntriesResponse, ClipboardEntryDetail, ClipboardEntryProjection,
+    ClipboardEntriesResponse, ClipboardEntryDetail,
     ClipboardEntryResource, ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse,
-    ClipboardLinkItemDto, ClipboardStats, ClipboardTextItemDto,
+    ClipboardLinkItemDto, ClipboardTextItemDto,
 };
+use uc_app::usecases::clipboard::{ClipboardStats, EntryProjectionDto};
 use base64::Engine;
 use std::sync::Arc;
 use tauri::State;
@@ -66,34 +67,14 @@ pub async fn get_clipboard_entries(
                 CommandError::InternalError(e.to_string())
             })?;
 
-        // Map DTOs to command layer models
-        let projections: Vec<ClipboardEntryProjection> = dtos
-            .into_iter()
-            .map(|dto| {
-                let link_domains = dto
-                    .link_urls
-                    .as_ref()
-                    .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
-                ClipboardEntryProjection {
-                    id: dto.id,
-                    preview: dto.preview,
-                    has_detail: dto.has_detail,
-                    size_bytes: dto.size_bytes,
-                    captured_at: dto.captured_at,
-                    content_type: dto.content_type,
-                    thumbnail_url: dto.thumbnail_url,
-                    is_encrypted: dto.is_encrypted,
-                    is_favorited: dto.is_favorited,
-                    updated_at: dto.updated_at,
-                    active_time: dto.active_time,
-                    file_transfer_status: dto.file_transfer_status,
-                    file_transfer_reason: dto.file_transfer_reason,
-                    link_urls: dto.link_urls,
-                    link_domains,
-                    file_sizes: dto.file_sizes,
-                }
-            })
-            .collect();
+        // Populate link_domains on each DTO directly (no separate mapping type needed)
+        let mut projections = dtos;
+        for dto in &mut projections {
+            dto.link_domains = dto
+                .link_urls
+                .as_ref()
+                .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
+        }
 
         tracing::info!(count = projections.len(), "Retrieved clipboard entries");
         Ok(ClipboardEntriesResponse::Ready {
@@ -129,11 +110,7 @@ pub async fn get_clipboard_stats(
             CommandError::InternalError(e.to_string())
         })?;
 
-        let stats = ClipboardUseCases::compute_stats(&dtos);
-        Ok(ClipboardStats {
-            total_items: stats.total_items,
-            total_size: stats.total_size,
-        })
+        Ok(ClipboardUseCases::compute_stats(&dtos))
     }
     .instrument(span)
     .await
@@ -226,30 +203,13 @@ pub async fn get_clipboard_entry(
             CommandError::InternalError(e.to_string())
         })?;
 
-        let entries: Vec<ClipboardEntryProjection> = match projection {
-            Some(dto) => {
-                let link_domains = dto
+        let entries: Vec<EntryProjectionDto> = match projection {
+            Some(mut dto) => {
+                dto.link_domains = dto
                     .link_urls
                     .as_ref()
                     .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
-                vec![ClipboardEntryProjection {
-                    id: dto.id,
-                    preview: dto.preview,
-                    has_detail: dto.has_detail,
-                    size_bytes: dto.size_bytes,
-                    captured_at: dto.captured_at,
-                    content_type: dto.content_type,
-                    thumbnail_url: dto.thumbnail_url,
-                    is_encrypted: dto.is_encrypted,
-                    is_favorited: dto.is_favorited,
-                    updated_at: dto.updated_at,
-                    active_time: dto.active_time,
-                    file_transfer_status: dto.file_transfer_status,
-                    file_transfer_reason: dto.file_transfer_reason,
-                    link_urls: dto.link_urls,
-                    link_domains,
-                    file_sizes: dto.file_sizes,
-                }]
+                vec![dto]
             }
             None => vec![],
         };

@@ -1,10 +1,11 @@
 //! Serialization tests for command-layer DTO models.
 //! 命令层 DTO 模型序列化测试。
 
+use uc_app::usecases::clipboard::EntryProjectionDto;
 use uc_app::usecases::LifecycleState;
 use uc_core::settings::model::Settings;
 use uc_tauri::bootstrap::file_transfer_wiring::FileTransferStatusPayload;
-use uc_tauri::models::{ClipboardEntriesResponse, ClipboardEntryProjection, LifecycleStatusDto};
+use uc_tauri::models::{ClipboardEntriesResponse, LifecycleStatusDto};
 
 #[test]
 fn clipboard_entries_response_ready_serializes_correctly() {
@@ -43,7 +44,7 @@ fn lifecycle_status_dto_serializes_with_camel_case() {
 
 #[test]
 fn clipboard_entry_projection_preserves_snake_case() {
-    let entry = ClipboardEntryProjection {
+    let entry = EntryProjectionDto {
         id: "test-id".to_string(),
         preview: "hello".to_string(),
         has_detail: true,
@@ -57,6 +58,7 @@ fn clipboard_entry_projection_preserves_snake_case() {
         active_time: 1234567890,
         file_transfer_status: None,
         file_transfer_reason: None,
+        file_transfer_ids: vec![],
         link_urls: None,
         link_domains: None,
         file_sizes: None,
@@ -88,11 +90,16 @@ fn clipboard_entry_projection_preserves_snake_case() {
         value.get("sizeBytes").is_none(),
         "unexpected camelCase 'sizeBytes'"
     );
+    // file_transfer_ids must NOT appear in JSON (serde skip)
+    assert!(
+        value.get("file_transfer_ids").is_none(),
+        "file_transfer_ids must not appear in JSON (serde skip)"
+    );
 }
 
 #[test]
 fn clipboard_entry_projection_includes_file_transfer_status_when_present() {
-    let entry = ClipboardEntryProjection {
+    let entry = EntryProjectionDto {
         id: "file-entry-1".to_string(),
         preview: "document.pdf".to_string(),
         has_detail: false,
@@ -106,6 +113,7 @@ fn clipboard_entry_projection_includes_file_transfer_status_when_present() {
         active_time: 1700000000,
         file_transfer_status: Some("pending".to_string()),
         file_transfer_reason: None,
+        file_transfer_ids: vec![],
         link_urls: None,
         link_domains: None,
         file_sizes: None,
@@ -121,7 +129,7 @@ fn clipboard_entry_projection_includes_file_transfer_status_when_present() {
 
 #[test]
 fn clipboard_entry_projection_includes_failure_reason_when_failed() {
-    let entry = ClipboardEntryProjection {
+    let entry = EntryProjectionDto {
         id: "file-entry-2".to_string(),
         preview: "photo.jpg".to_string(),
         has_detail: false,
@@ -135,6 +143,7 @@ fn clipboard_entry_projection_includes_failure_reason_when_failed() {
         active_time: 1700000000,
         file_transfer_status: Some("failed".to_string()),
         file_transfer_reason: Some("hash mismatch".to_string()),
+        file_transfer_ids: vec![],
         link_urls: None,
         link_domains: None,
         file_sizes: None,
@@ -146,7 +155,7 @@ fn clipboard_entry_projection_includes_failure_reason_when_failed() {
 
 #[test]
 fn clipboard_entry_projection_omits_transfer_fields_for_non_file_entry() {
-    let entry = ClipboardEntryProjection {
+    let entry = EntryProjectionDto {
         id: "text-entry-1".to_string(),
         preview: "hello world".to_string(),
         has_detail: true,
@@ -160,6 +169,7 @@ fn clipboard_entry_projection_omits_transfer_fields_for_non_file_entry() {
         active_time: 1700000000,
         file_transfer_status: None,
         file_transfer_reason: None,
+        file_transfer_ids: vec![],
         link_urls: None,
         link_domains: None,
         file_sizes: None,
