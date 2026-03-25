@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: Ready to plan
-stopped_at: Completed 58-01-PLAN.md
-last_updated: '2026-03-25T08:52:33.050Z'
+stopped_at: Phase 59 context gathered
+last_updated: '2026-03-25T09:46:35.133Z'
 progress:
   total_phases: 32
   completed_phases: 24
@@ -277,6 +277,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-25T08:12:04.174Z
-Stopped at: Completed 58-01-PLAN.md
-Resume file: None
+Last session: 2026-03-25T09:46:35.129Z
+Stopped at: Phase 59 context gathered
+Resume file: .planning/phases/59-extract-uc-protocol-uri-routing-from-uc-tauri-to-uc-core/59-CONTEXT.md
