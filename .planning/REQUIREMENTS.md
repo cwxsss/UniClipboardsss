@@ -180,6 +180,13 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH60-04**: `wiring.rs` calls orchestrator methods at all integration points (clipboard receive loop, network event loop, startup reconciliation, timeout sweep) and does not create any standalone `TrackInboundTransfersUseCase` instances
 - [x] **PH60-05**: `file_transfer_wiring.rs` is deleted from `uc-tauri/src/bootstrap/` with no re-export stubs, and all import paths updated directly
 
+### Daemon Outbound Clipboard Sync
+
+- [ ] **PH61-01**: `DaemonClipboardChangeHandler::on_clipboard_changed` calls `OutboundSyncPlanner::plan()` after successful `LocalCapture` capture and dispatches `SyncOutboundClipboardUseCase::execute()` via `tokio::task::spawn_blocking`
+- [ ] **PH61-02**: `RemotePush` origin clipboard changes skip outbound sync entirely (no double-sync loop), guarded by `OutboundSyncPlanner` policy
+- [ ] **PH61-03**: `extract_file_paths_from_snapshot` function exists in `clipboard_watcher.rs` parsing `text/uri-list`, `file/uri-list`, `files`, `public.file-url` representations into `Vec<PathBuf>` with deduplication
+- [ ] **PH61-04**: File clipboard items produce `FileCandidate` vec with `extracted_paths_count` set before metadata filtering, and `SyncOutboundFileUseCase` dispatches for each file intent from the planner
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -293,14 +300,18 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH60-03     | 60    | Complete |
 | PH60-04     | 60    | Complete |
 | PH60-05     | 60    | Complete |
+| PH61-01     | 61    | Pending  |
+| PH61-02     | 61    | Pending  |
+| PH61-03     | 61    | Pending  |
+| PH61-04     | 61    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 79 total
-- Mapped to phases: 79
+- v0.4.0 requirements: 83 total
+- Mapped to phases: 83
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-25 after Phase 60 planning_
+_Last updated: 2026-03-25 after Phase 61 planning_

@@ -545,3 +545,54 @@ Plans:
 
 - [x] 60-01-PLAN.md — Create FileTransferOrchestrator in uc-app and wire into uc-bootstrap assembly
 - [x] 60-02-PLAN.md — Rewire wiring.rs to use FileTransferOrchestrator, delete file_transfer_wiring.rs
+
+### Phase 61: Daemon outbound clipboard sync — trigger sync to peers after local capture
+
+**Goal:** After daemon captures a local clipboard change, trigger OutboundSyncPlanner to decide sync eligibility, then dispatch SyncOutboundClipboardUseCase and SyncOutboundFileUseCase to push content to paired peers — mirroring the AppRuntime::on_clipboard_changed flow.
+**Requirements**: PH61-01, PH61-02, PH61-03, PH61-04
+**Depends on:** Phase 60
+**Plans:** 1 plan
+
+**Success Criteria** (what must be TRUE):
+
+1. DaemonClipboardChangeHandler triggers OutboundSyncPlanner + SyncOutboundClipboardUseCase after successful LocalCapture
+2. RemotePush origin clipboard changes do NOT trigger outbound sync (no double-sync loop)
+3. File clipboard items produce FileCandidate vec with correct extracted_paths_count
+4. SyncOutboundClipboardUseCase::execute() runs via spawn_blocking (not directly in async context)
+
+Plans:
+
+- [ ] 61-01-PLAN.md — Extend DaemonClipboardChangeHandler with outbound sync dispatch (OutboundSyncPlanner + SyncOutboundClipboardUseCase + SyncOutboundFileUseCase)
+
+### Phase 62: Daemon inbound clipboard sync — receive peer clipboard and write to local system
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 61
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 62 to break down)
+
+### Phase 63: Daemon file transfer orchestration — handle file sync lifecycle in daemon
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 62
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 63 to break down)
+
+### Phase 64: Tauri sync retirement — remove sync logic from Tauri, delegate to daemon
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 63
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 64 to break down)
