@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Ready to execute
-stopped_at: Completed 60-01-PLAN.md
-last_updated: "2026-03-25T13:30:06.280Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 60-02-PLAN.md
+last_updated: "2026-03-25T13:44:12.364Z"
 progress:
   total_phases: 32
-  completed_phases: 24
+  completed_phases: 25
   total_plans: 76
-  completed_plans: 72
+  completed_plans: 73
 ---
 
 # Project State
@@ -100,6 +100,7 @@ _Updated after each plan completion_
 | Phase 58 P02 | 27 | 1 tasks | 3 files |
 | Phase 58 P01 | 31min | 2 tasks | 6 files |
 | Phase 60-extract-file-transfer-wiring-orchestration-from-uc-tauri-to-uc-app P01 | 15 | 2 tasks | 6 files |
+| Phase 60-extract-file-transfer-wiring-orchestration-from-uc-tauri-to-uc-app P02 | 9 | 1 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -235,6 +236,8 @@ Recent decisions affecting current work:
 - [Phase Phase 60-01]: FileTransferOrchestrator holds emitter_cell (Arc<RwLock<Arc<dyn HostEventEmitterPort>>>) matching HostEventSetupPort pattern
 - [Phase Phase 60-01]: emitter_cell added to WiredDependencies — created at wire_dependencies time with WireTimeLoggingEmitter placeholder, propagated to BackgroundRuntimeDeps orchestrator and caller reuse
 - [Phase Phase 60-01]: BackgroundRuntimeDeps.file_transfer_orchestrator is Arc (not Option) — emitter_cell pattern makes deferred construction unnecessary
+- [Phase Phase 60-02]: FileTransferOrchestrator::now_ms() accessor added — clipboard receive loop uses orchestrator clock for PendingInboundTransfer timestamps instead of separate clock parameter
+- [Phase Phase 60-02]: file_transfer_wiring.rs deleted with no re-export stubs — D-08/D-09 enforced; FileTransferStatusPayload re-exported directly from uc-app::usecases::file_sync
 
 ### Roadmap Evolution
 
@@ -281,6 +284,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-25T13:30:06.276Z
-Stopped at: Completed 60-01-PLAN.md
+Last session: 2026-03-25T13:44:12.361Z
+Stopped at: Completed 60-02-PLAN.md
 Resume file: None
