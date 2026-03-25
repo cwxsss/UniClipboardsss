@@ -62,7 +62,8 @@ pub use update_settings::UpdateSettings;
 pub use verify_keychain_access::VerifyKeychainAccess;
 
 pub use file_sync::{
-    SyncInboundFileUseCase, SyncOutboundFileUseCase, TrackInboundTransfersUseCase,
+    EarlyCompletionCache, EarlyCompletionInfo, FileTransferOrchestrator, SyncInboundFileUseCase,
+    SyncOutboundFileUseCase, TrackInboundTransfersUseCase,
 };
 
 pub use sync_planner::{
