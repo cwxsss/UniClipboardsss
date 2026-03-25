@@ -469,6 +469,19 @@ Plans:
 - [ ] 56-02-PLAN.md — Extract `PeerMonitor` and remove peer lifecycle handling from `DaemonPairingHost`
 - [ ] 56-03-PLAN.md — Unify `DaemonApp` service lifecycle management while preserving typed pairing-host API access
 
+### Phase 56.1: Eliminate hardcoded strings in pairing/setup flow (INSERTED)
+
+**Goal:** Extract scattered hardcoded string literals (WS topic/event names, session state labels, pairing busy reasons, HTTP API paths) into shared constants in uc-core, eliminating cross-crate duplication and reducing wire-protocol mismatch risk.
+**Requirements**: TBD
+**Depends on:** Phase 56
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 56.1-01-PLAN.md — Define daemon wire-protocol string constants in uc-core daemon_api_strings module
+- [ ] 56.1-02-PLAN.md — Replace hardcoded strings in uc-daemon (server side) with uc-core constants
+- [ ] 56.1-03-PLAN.md — Replace hardcoded strings in uc-daemon-client (client side) with uc-core constants
+
 ### Phase 57: Daemon Clipboard Watcher Integration
 
 **Goal:** Migrate clipboard watching from GUI/PlatformRuntime to daemon as the sole clipboard monitor. Daemon captures OS clipboard changes, persists entries, broadcasts WS events; GUI operates in Passive mode receiving updates via DaemonWsBridge.
