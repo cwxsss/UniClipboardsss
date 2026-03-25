@@ -174,9 +174,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Extract File Transfer Wiring Orchestration
 
-- [ ] **PH60-01**: `FileTransferOrchestrator` struct exists in `uc-app/src/usecases/file_sync/file_transfer_orchestrator.rs` holding `Arc<TrackInboundTransfersUseCase>` + `Arc<dyn HostEventEmitterPort>` + `Arc<dyn ClockPort>` + `EarlyCompletionCache`
-- [ ] **PH60-02**: all 9 standalone functions from `file_transfer_wiring.rs` are methods on `FileTransferOrchestrator` with `now_ms` computed internally via `self.clock`
-- [ ] **PH60-03**: `uc-bootstrap/assembly.rs` provides `build_file_transfer_orchestrator()` builder function following the `build_setup_orchestrator` pattern
+- [x] **PH60-01**: `FileTransferOrchestrator` struct exists in `uc-app/src/usecases/file_sync/file_transfer_orchestrator.rs` holding `Arc<TrackInboundTransfersUseCase>` + `Arc<dyn HostEventEmitterPort>` + `Arc<dyn ClockPort>` + `EarlyCompletionCache`
+- [x] **PH60-02**: all 9 standalone functions from `file_transfer_wiring.rs` are methods on `FileTransferOrchestrator` with `now_ms` computed internally via `self.clock`
+- [x] **PH60-03**: `uc-bootstrap/assembly.rs` provides `build_file_transfer_orchestrator()` builder function following the `build_setup_orchestrator` pattern
 - [ ] **PH60-04**: `wiring.rs` calls orchestrator methods at all integration points (clipboard receive loop, network event loop, startup reconciliation, timeout sweep) and does not create any standalone `TrackInboundTransfersUseCase` instances
 - [ ] **PH60-05**: `file_transfer_wiring.rs` is deleted from `uc-tauri/src/bootstrap/` with no re-export stubs, and all import paths updated directly
 
@@ -288,9 +288,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH58-03     | 58    | Complete |
 | PH58-04     | 58    | Complete |
 | PH58-05     | 58    | Complete |
-| PH60-01     | 60    | Pending  |
-| PH60-02     | 60    | Pending  |
-| PH60-03     | 60    | Pending  |
+| PH60-01     | 60    | Complete |
+| PH60-02     | 60    | Complete |
+| PH60-03     | 60    | Complete |
 | PH60-04     | 60    | Pending  |
 | PH60-05     | 60    | Pending  |
 

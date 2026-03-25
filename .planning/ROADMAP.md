@@ -531,7 +531,7 @@ Plans:
 **Goal:** Extract `file_transfer_wiring.rs` (502 lines, zero Tauri deps) from `uc-tauri/bootstrap/` into a `FileTransferOrchestrator` struct in `uc-app`, making file transfer lifecycle management available to non-Tauri runtimes (daemon, CLI).
 **Requirements**: PH60-01, PH60-02, PH60-03, PH60-04, PH60-05
 **Depends on:** Phase 59
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 **Success Criteria** (what must be TRUE):
 
@@ -543,5 +543,5 @@ Plans:
 
 Plans:
 
-- [ ] 60-01-PLAN.md — Create FileTransferOrchestrator in uc-app and wire into uc-bootstrap assembly
+- [x] 60-01-PLAN.md — Create FileTransferOrchestrator in uc-app and wire into uc-bootstrap assembly
 - [ ] 60-02-PLAN.md — Rewire wiring.rs to use FileTransferOrchestrator, delete file_transfer_wiring.rs
