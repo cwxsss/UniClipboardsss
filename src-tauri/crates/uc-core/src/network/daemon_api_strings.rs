@@ -10,6 +10,7 @@ pub mod ws_topic {
     pub const PAIRING_VERIFICATION: &str = "pairing/verification";
     pub const SETUP: &str = "setup";
     pub const SPACE_ACCESS: &str = "space-access";
+    pub const CLIPBOARD: &str = "clipboard";
 }
 
 /// WebSocket event type names emitted within topics.
@@ -31,6 +32,7 @@ pub mod ws_event {
     pub const SETUP_SPACE_ACCESS_COMPLETED: &str = "setup.space_access_completed";
     pub const SPACE_ACCESS_SNAPSHOT: &str = "space_access.snapshot";
     pub const SPACE_ACCESS_STATE_CHANGED: &str = "space_access.state_changed";
+    pub const CLIPBOARD_NEW_CONTENT: &str = "clipboard.new_content";
 }
 
 /// Pairing stage labels used in pairing session state payloads.
@@ -74,6 +76,7 @@ mod tests {
         assert_eq!(ws_topic::PAIRING_VERIFICATION, "pairing/verification");
         assert_eq!(ws_topic::SETUP, "setup");
         assert_eq!(ws_topic::SPACE_ACCESS, "space-access");
+        assert_eq!(ws_topic::CLIPBOARD, "clipboard");
     }
 
     #[test]
@@ -95,6 +98,7 @@ mod tests {
         assert_eq!(ws_event::SETUP_SPACE_ACCESS_COMPLETED, "setup.space_access_completed");
         assert_eq!(ws_event::SPACE_ACCESS_SNAPSHOT, "space_access.snapshot");
         assert_eq!(ws_event::SPACE_ACCESS_STATE_CHANGED, "space_access.state_changed");
+        assert_eq!(ws_event::CLIPBOARD_NEW_CONTENT, "clipboard.new_content");
     }
 
     #[test]

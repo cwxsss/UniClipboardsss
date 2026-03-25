@@ -17,6 +17,7 @@ uc-bootstrap = { path = "../uc-bootstrap" }
 uc-app = { path = "../uc-app" }
 uc-core = { path = "../uc-core" }
 uc-infra = { path = "../uc-infra" }
+uc-platform = { path = "../uc-platform" }
 axum = { version = "0.7", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
@@ -30,7 +31,6 @@ tracing = "0.1"
 futures-util = "0.3"
 
 [dev-dependencies]
-uc-platform = { path = "../uc-platform" }
 tempfile = "3"
 chrono = { version = "0.4", default-features = true }
 tower = { version = "0.5", features = ["util"] }
