@@ -13,7 +13,6 @@ pub mod models;
 pub mod preview_panel;
 pub mod protocol;
 pub mod quick_panel;
-pub mod services;
 pub mod tray;
 
 #[cfg(test)]
