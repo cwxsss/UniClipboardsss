@@ -5,7 +5,6 @@ pub mod assembly;
 pub mod clipboard_integration_mode;
 pub mod config;
 pub mod config_resolution;
-pub mod file_transfer_wiring;
 pub mod init;
 pub mod logging;
 pub mod run;

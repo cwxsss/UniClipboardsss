@@ -44,18 +44,23 @@ use super::task_registry::TaskRegistry;
 use uc_daemon_client::realtime::start_realtime_runtime;
 
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
-use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+use uc_app::usecases::file_sync::FileTransferOrchestrator;
 use uc_app::AppDeps;
 use uc_core::network::ClipboardMessage;
 use uc_core::network::NetworkEvent;
 use uc_core::ports::clipboard::ClipboardChangeOriginPort;
 use uc_core::ports::host_event_emitter::{
     ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort,
-    PeerConnectionHostEvent, SpaceAccessHostEvent, TransferHostEvent,
+    PeerConnectionHostEvent, TransferHostEvent,
 };
-use uc_core::ports::space::ProofPort;
 use uc_core::ports::*;
+#[cfg(test)]
+use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+#[cfg(test)]
+use uc_core::ports::space::ProofPort;
+#[cfg(test)]
 use uc_core::security::model::{KeySlot, KeySlotFile};
+#[cfg(test)]
 use uc_core::security::space_access::event::SpaceAccessEvent;
 use uc_infra::clipboard::{BackgroundBlobWorker, SpoolJanitor, SpoolScanner, SpoolerTask};
 // Re-export assembly types from uc-bootstrap (via the thin stub in super::assembly).
@@ -114,7 +119,7 @@ pub fn start_background_tasks(
         spool_ttl_days,
         worker_retry_max_attempts,
         worker_retry_backoff_ms,
-        file_transfer_orchestrator: _,
+        file_transfer_orchestrator,
     } = background;
 
     info!("Starting background clipboard spooler and blob worker");
@@ -139,16 +144,9 @@ pub fn start_background_tasks(
     let inbound_system_clipboard = deps.clipboard.system_clipboard.clone();
     let inbound_clipboard_change_origin = deps.clipboard.clipboard_change_origin.clone();
 
-    // File transfer tracking deps
-    let inbound_file_transfer_repo = deps.storage.file_transfer_repo.clone();
-    let inbound_clock = deps.system.clock.clone();
-
     // Clones for file cache cleanup task and startup reconciliation
     let deps_settings = deps.settings.clone();
     let cleanup_file_cache_dir = inbound_file_cache_dir.clone();
-    let reconcile_file_transfer_repo = deps.storage.file_transfer_repo.clone();
-    let reconcile_clock = deps.system.clock.clone();
-    let reconcile_emitter = event_emitter.clone();
 
     // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
     // We use a single orchestration spawn to set up all registry tasks, since
@@ -232,19 +230,6 @@ pub fn start_background_tasks(
             .await;
 
         // --- Clipboard receive loop (replaces ctrl_c with CancellationToken) ---
-        let clipboard_transfer_tracker = Arc::new(
-            uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
-                inbound_file_transfer_repo.clone(),
-            ),
-        );
-        let clipboard_clock = inbound_clock.clone();
-
-        // Shared early-completion cache: captures completions that arrive
-        // before the pending record is seeded (race condition fix).
-        let early_completion_cache =
-            Arc::new(super::file_transfer_wiring::EarlyCompletionCache::default());
-        let pairing_early_completion_cache = early_completion_cache.clone();
-
         register_pairing_background_tasks(
             &registry,
             pairing_events,
@@ -254,12 +239,11 @@ pub fn start_background_tasks(
             inbound_file_cache_dir.clone(),
             inbound_system_clipboard.clone(),
             inbound_clipboard_change_origin.clone(),
-            inbound_file_transfer_repo.clone(),
-            inbound_clock.clone(),
-            pairing_early_completion_cache,
+            file_transfer_orchestrator.clone(),
         )
         .await;
 
+        let clipboard_receive_orchestrator = file_transfer_orchestrator.clone();
         registry
             .spawn("clipboard_receive", |token| {
                 async move {
@@ -301,9 +285,7 @@ pub fn start_background_tasks(
                                     clipboard_rx,
                                     &sync_inbound_usecase,
                                     clipboard_emitter.clone(),
-                                    Some(clipboard_transfer_tracker.clone()),
-                                    Some(clipboard_clock.clone()),
-                                    Some(early_completion_cache.clone()),
+                                    Some(clipboard_receive_orchestrator.clone()),
                                 )
                                 .await;
                             }
@@ -406,40 +388,18 @@ pub fn start_background_tasks(
 
         // --- File transfer startup reconciliation (runs once, fire-and-forget) ---
         {
-            let reconcile_repo = reconcile_file_transfer_repo.clone();
-            let reconcile_clk = reconcile_clock.clone();
-            let reconcile_emit = reconcile_emitter.clone();
+            let orch = file_transfer_orchestrator.clone();
             registry
                 .spawn("file_transfer_reconcile", |_token| async move {
-                    let tracker = uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
-                        reconcile_repo,
-                    );
-                    let now_ms = reconcile_clk.now_ms();
-                    super::file_transfer_wiring::reconcile_on_startup(
-                        &tracker,
-                        &*reconcile_emit,
-                        now_ms,
-                    )
-                    .await;
+                    orch.reconcile_on_startup().await;
                 })
                 .await;
         }
 
         // --- File transfer timeout sweep (long-lived, interval-based) ---
         {
-            let sweep_repo = reconcile_file_transfer_repo;
-            let sweep_clock = reconcile_clock;
-            let sweep_emitter = reconcile_emitter;
-            let sweep_tracker = Arc::new(
-                uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(sweep_repo),
-            );
             let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            let _sweep_handle = super::file_transfer_wiring::spawn_timeout_sweep(
-                sweep_tracker,
-                sweep_emitter,
-                sweep_clock,
-                cancel_rx,
-            );
+            let _sweep_handle = file_transfer_orchestrator.spawn_timeout_sweep(cancel_rx);
             // Cancel sender is dropped when the registry shuts down
             // (the sweep task will terminate when cancel_tx is dropped)
             std::mem::forget(cancel_tx);
@@ -482,9 +442,7 @@ async fn register_pairing_background_tasks(
     inbound_file_cache_dir: PathBuf,
     inbound_system_clipboard: Arc<dyn SystemClipboardPort>,
     inbound_clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
-    inbound_file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
-    inbound_clock: Arc<dyn uc_core::ports::ClockPort>,
-    early_completion_cache: Arc<super::file_transfer_wiring::EarlyCompletionCache>,
+    file_transfer_orchestrator: Arc<FileTransferOrchestrator>,
 ) {
     registry
         .spawn("pairing_events", |token| async move {
@@ -522,9 +480,7 @@ async fn register_pairing_background_tasks(
                                 inbound_file_cache_dir.clone(),
                                 inbound_system_clipboard.clone(),
                                 inbound_clipboard_change_origin.clone(),
-                                inbound_file_transfer_repo.clone(),
-                                inbound_clock.clone(),
-                                early_completion_cache.clone(),
+                                file_transfer_orchestrator.clone(),
                             ) => {
                                 warn!("Pairing event loop stopped");
                             }
@@ -561,9 +517,7 @@ async fn run_clipboard_receive_loop(
     mut clipboard_rx: mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>,
     usecase: &SyncInboundClipboardUseCase,
     event_emitter: Arc<dyn HostEventEmitterPort>,
-    transfer_tracker: Option<Arc<uc_app::usecases::file_sync::TrackInboundTransfersUseCase>>,
-    clock: Option<Arc<dyn uc_core::ports::ClockPort>>,
-    early_completion_cache: Option<Arc<super::file_transfer_wiring::EarlyCompletionCache>>,
+    file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
 ) {
     while let Some((message, pre_decoded)) = clipboard_rx.recv().await {
         let flow_id = uc_observability::FlowId::generate();
@@ -602,10 +556,8 @@ async fn run_clipboard_receive_loop(
                 {
                     if !pending_transfers.is_empty() {
                         // Persist pending records to DB so mark_completed/mark_transferring can find them
-                        if let (Some(tracker), Some(clk)) =
-                            (transfer_tracker.as_ref(), clock.as_ref())
-                        {
-                            let now_ms = clk.now_ms();
+                        if let Some(ref orch) = file_transfer_orchestrator {
+                            let now_ms = orch.now_ms();
                             let db_transfers: Vec<
                                 uc_core::ports::file_transfer_repository::PendingInboundTransfer,
                             > = pending_transfers
@@ -622,26 +574,26 @@ async fn run_clipboard_receive_loop(
                                 })
                                 .collect();
                             if let Err(err) =
-                                tracker.record_pending_from_clipboard(db_transfers).await
+                                orch.tracker().record_pending_from_clipboard(db_transfers).await
                             {
                                 warn!(
                                     error = %err,
                                     message_id = %message_id,
                                     "Failed to persist pending transfer records"
                                 );
-                            } else if let Some(cache) = early_completion_cache.as_ref() {
+                            } else {
                                 // Reconcile early completions that arrived before seeding
                                 let seeded_ids: Vec<String> = pending_transfers
                                     .iter()
                                     .map(|t| t.transfer_id.clone())
                                     .collect();
-                                let early = cache.drain_matching(&seeded_ids);
+                                let early = orch.early_completion_cache().drain_matching(&seeded_ids);
                                 for (tid, info) in &early {
                                     info!(
                                         transfer_id = %tid,
                                         "Reconciling early completion after seeding"
                                     );
-                                    match tracker
+                                    match orch.tracker()
                                         .mark_completed(
                                             tid,
                                             info.content_hash.as_deref(),
@@ -676,11 +628,12 @@ async fn run_clipboard_receive_loop(
                         }
 
                         // Emit pending status events to frontend
-                        super::file_transfer_wiring::emit_pending_status(
-                            event_emitter.as_ref(),
-                            &entry_id.to_string(),
-                            pending_transfers,
-                        );
+                        if let Some(ref orch) = file_transfer_orchestrator {
+                            orch.emit_pending_status(
+                                &entry_id.to_string(),
+                                pending_transfers,
+                            );
+                        }
                     }
                 }
 
@@ -1113,18 +1066,11 @@ async fn run_network_realtime_loop(
     inbound_file_cache_dir: PathBuf,
     system_clipboard: Arc<dyn SystemClipboardPort>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
-    file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
-    clock: Arc<dyn uc_core::ports::ClockPort>,
-    early_completion_cache: Arc<super::file_transfer_wiring::EarlyCompletionCache>,
+    file_transfer_orchestrator: Arc<FileTransferOrchestrator>,
 ) {
     // Batch accumulator: batch_id -> (completed_paths: Vec<PathBuf>, expected_total: u32, peer_id: String)
     let mut batch_accumulator: std::collections::HashMap<String, (Vec<PathBuf>, u32, String)> =
         std::collections::HashMap::new();
-
-    // File transfer tracker for durable status transitions
-    let transfer_tracker = Arc::new(
-        uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(file_transfer_repo),
-    );
 
     while let Some(event) = event_rx.recv().await {
         match event {
@@ -1210,16 +1156,13 @@ async fn run_network_realtime_loop(
             }
             NetworkEvent::TransferProgress(progress) => {
                 // Track durable status transitions (pending->transferring, liveness refresh)
-                let now_ms = clock.now_ms();
-                super::file_transfer_wiring::handle_transfer_progress(
-                    transfer_tracker.as_ref(),
-                    event_emitter.as_ref(),
-                    &progress.transfer_id,
-                    progress.direction.clone(),
-                    progress.chunks_completed,
-                    now_ms,
-                )
-                .await;
+                file_transfer_orchestrator
+                    .handle_transfer_progress(
+                        &progress.transfer_id,
+                        progress.direction.clone(),
+                        progress.chunks_completed,
+                    )
+                    .await;
 
                 // Forward the transient progress event to frontend
                 if let Err(err) =
@@ -1251,10 +1194,8 @@ async fn run_network_realtime_loop(
                     inbound_file_cache_dir.clone(),
                 );
 
-                // Clone tracker for spawn
-                let tracker_for_spawn = transfer_tracker.clone();
-                let clock_for_spawn = clock.clone();
-                let early_cache_for_spawn = early_completion_cache.clone();
+                // Clone orchestrator for spawn
+                let orch_for_spawn = file_transfer_orchestrator.clone();
 
                 // Clone values before spawn takes ownership
                 let emitter_for_spawn = event_emitter.clone();
@@ -1277,15 +1218,12 @@ async fn run_network_realtime_loop(
                                     "Failed to read transferred file for hash verification"
                                 );
                                 // Mark durable failure
-                                let now_ms = clock_for_spawn.now_ms();
-                                super::file_transfer_wiring::handle_transfer_failed(
-                                    tracker_for_spawn.as_ref(),
-                                    emitter_for_spawn.as_ref(),
-                                    &transfer_id_for_spawn,
-                                    &format!("Failed to read file: {}", err),
-                                    now_ms,
-                                )
-                                .await;
+                                orch_for_spawn
+                                    .handle_transfer_failed(
+                                        &transfer_id_for_spawn,
+                                        &format!("Failed to read file: {}", err),
+                                    )
+                                    .await;
                                 return;
                             }
                         };
@@ -1309,16 +1247,12 @@ async fn run_network_realtime_loop(
                                 );
 
                                 // Mark durable completion before emitting events
-                                let now_ms = clock_for_spawn.now_ms();
-                                super::file_transfer_wiring::handle_transfer_completed(
-                                    tracker_for_spawn.as_ref(),
-                                    emitter_for_spawn.as_ref(),
-                                    &result.transfer_id,
-                                    Some(&expected_hash),
-                                    now_ms,
-                                    Some(early_cache_for_spawn.as_ref()),
-                                )
-                                .await;
+                                orch_for_spawn
+                                    .handle_transfer_completed(
+                                        &result.transfer_id,
+                                        Some(&expected_hash),
+                                    )
+                                    .await;
 
                                 // Emit the existing file-transfer://completed event
                                 // (UI code depends on it; status-changed is the durable authority)
@@ -1356,15 +1290,12 @@ async fn run_network_realtime_loop(
                                     "Inbound file sync processing failed"
                                 );
                                 // Mark durable failure
-                                let now_ms = clock_for_spawn.now_ms();
-                                super::file_transfer_wiring::handle_transfer_failed(
-                                    tracker_for_spawn.as_ref(),
-                                    emitter_for_spawn.as_ref(),
-                                    &transfer_id_for_spawn,
-                                    &format!("Inbound file sync failed: {}", err),
-                                    now_ms,
-                                )
-                                .await;
+                                orch_for_spawn
+                                    .handle_transfer_failed(
+                                        &transfer_id_for_spawn,
+                                        &format!("Inbound file sync failed: {}", err),
+                                    )
+                                    .await;
                             }
                         }
                     }
@@ -1423,15 +1354,9 @@ async fn run_network_realtime_loop(
                     "File transfer failed"
                 );
 
-                let now_ms = clock.now_ms();
-                super::file_transfer_wiring::handle_transfer_failed(
-                    transfer_tracker.as_ref(),
-                    event_emitter.as_ref(),
-                    &transfer_id,
-                    &error_msg,
-                    now_ms,
-                )
-                .await;
+                file_transfer_orchestrator
+                    .handle_transfer_failed(&transfer_id, &error_msg)
+                    .await;
             }
             _ => {}
         }

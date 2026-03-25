@@ -120,6 +120,15 @@ impl FileTransferOrchestrator {
         &self.early_completion_cache
     }
 
+    /// Get the current timestamp in milliseconds from the orchestrator's clock.
+    ///
+    /// Exposed for callers (e.g., wiring.rs clipboard receive loop) that need to
+    /// build `PendingInboundTransfer` records with a `created_at_ms` value using
+    /// the same clock instance as the orchestrator.
+    pub fn now_ms(&self) -> i64 {
+        self.clock.now_ms()
+    }
+
     /// Emit `file-transfer://status-changed` for each pending transfer
     /// after inbound clipboard metadata is applied.
     pub fn emit_pending_status(&self, entry_id: &str, pending_transfers: &[PendingTransferLinkage]) {
