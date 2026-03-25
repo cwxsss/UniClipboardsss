@@ -156,9 +156,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Daemon Clipboard Watcher Integration
 
-- [ ] **PH57-01**: `ClipboardWatcherWorker` uses real `clipboard_rs::ClipboardWatcherContext` with `spawn_blocking` and `WatcherShutdown`, not a placeholder
-- [ ] **PH57-02**: daemon constructs `DaemonClipboardChangeHandler` calling `CaptureClipboardUseCase` to persist clipboard entries with `ClipboardChangeOrigin::LocalCapture`
-- [ ] **PH57-03**: daemon broadcasts `clipboard.new_content` WS event carrying entry_id, preview, and origin after each successful clipboard capture
+- [x] **PH57-01**: `ClipboardWatcherWorker` uses real `clipboard_rs::ClipboardWatcherContext` with `spawn_blocking` and `WatcherShutdown`, not a placeholder
+- [x] **PH57-02**: daemon constructs `DaemonClipboardChangeHandler` calling `CaptureClipboardUseCase` to persist clipboard entries with `ClipboardChangeOrigin::LocalCapture`
+- [x] **PH57-03**: daemon broadcasts `clipboard.new_content` WS event carrying entry_id, preview, and origin after each successful clipboard capture
 - [ ] **PH57-04**: `DaemonWsBridge` translates `clipboard.new_content` into `RealtimeEvent::ClipboardNewContent` with `RealtimeTopic::Clipboard`
 - [ ] **PH57-05**: GUI `ClipboardIntegrationMode` is `Passive` so `StartClipboardWatcher` use case is a no-op and daemon is the sole clipboard observer
 - [ ] **PH57-06**: GUI receives daemon clipboard events via `DaemonWsBridge` and emits `clipboard://event` to frontend so `useClipboardEventStream` continues working unchanged
@@ -260,9 +260,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH561-03    | 56.1  | Complete |
 | PH561-04    | 56.1  | Complete |
 | PH561-05    | 56.1  | Complete |
-| PH57-01     | 57    | Pending  |
-| PH57-02     | 57    | Pending  |
-| PH57-03     | 57    | Pending  |
+| PH57-01     | 57    | Complete |
+| PH57-02     | 57    | Complete |
+| PH57-03     | 57    | Complete |
 | PH57-04     | 57    | Pending  |
 | PH57-05     | 57    | Pending  |
 | PH57-06     | 57    | Pending  |
