@@ -472,7 +472,7 @@ Plans:
 ### Phase 56.1: Eliminate hardcoded strings in pairing/setup flow (INSERTED)
 
 **Goal:** Extract scattered hardcoded string literals (WS topic/event names, session state labels, pairing busy reasons, HTTP API paths) into shared constants in uc-core, eliminating cross-crate duplication and reducing wire-protocol mismatch risk.
-**Requirements**: TBD
+**Requirements**: PH561-01, PH561-02, PH561-03, PH561-04, PH561-05
 **Depends on:** Phase 56
 **Plans:** 3 plans
 
