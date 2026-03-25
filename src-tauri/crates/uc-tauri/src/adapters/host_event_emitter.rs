@@ -126,7 +126,7 @@ struct TransferCompletedPayload {
 }
 
 /// Transfer status changed payload — camelCase fields.
-/// Matches FileTransferStatusPayload in bootstrap/file_transfer_wiring.rs.
+/// Matches FileTransferStatusPayload in uc-app/usecases/file_sync/file_transfer_orchestrator.rs.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TransferStatusChangedPayload {

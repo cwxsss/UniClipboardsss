@@ -4,7 +4,7 @@
 use uc_app::usecases::clipboard::EntryProjectionDto;
 use uc_app::usecases::LifecycleState;
 use uc_core::settings::model::Settings;
-use uc_tauri::bootstrap::file_transfer_wiring::FileTransferStatusPayload;
+use uc_app::usecases::file_sync::FileTransferStatusPayload;
 use uc_tauri::models::{ClipboardEntriesResponse, LifecycleStatusDto};
 
 #[test]
