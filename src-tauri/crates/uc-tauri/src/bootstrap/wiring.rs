@@ -114,6 +114,7 @@ pub fn start_background_tasks(
         spool_ttl_days,
         worker_retry_max_attempts,
         worker_retry_backoff_ms,
+        file_transfer_orchestrator: _,
     } = background;
 
     info!("Starting background clipboard spooler and blob worker");

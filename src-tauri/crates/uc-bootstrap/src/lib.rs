@@ -15,10 +15,10 @@ pub mod tracing;
 
 // Re-export primary public items
 pub use assembly::{
-    build_setup_orchestrator, get_storage_paths, resolve_pairing_config,
-    resolve_pairing_device_name, wire_dependencies, wire_dependencies_with_identity_store,
-    BackgroundRuntimeDeps, HostEventSetupPort, SetupAssemblyPorts, WiredDependencies, WiringError,
-    WiringResult,
+    build_file_transfer_orchestrator, build_setup_orchestrator, get_storage_paths,
+    resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
+    wire_dependencies_with_identity_store, BackgroundRuntimeDeps, HostEventSetupPort,
+    SetupAssemblyPorts, WiredDependencies, WiringError, WiringResult,
 };
 pub use builders::{
     build_cli_context, build_cli_context_with_profile, build_daemon_app, build_gui_app,

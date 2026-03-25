@@ -76,6 +76,35 @@ use uc_platform::runtime::event_bus::PlatformCommandSender;
 
 use tokio::sync::mpsc;
 
+/// A minimal logging event emitter used as the initial placeholder inside the shared
+/// emitter cell created at wire time.
+///
+/// Logs event type names only (no payload content, which may be sensitive).
+/// After Tauri setup or non-GUI runtime construction, callers replace this with
+/// a `TauriEventEmitter` or keep it as-is for non-GUI paths.
+struct WireTimeLoggingEmitter;
+
+impl HostEventEmitterPort for WireTimeLoggingEmitter {
+    fn emit(
+        &self,
+        event: uc_core::ports::host_event_emitter::HostEvent,
+    ) -> Result<(), uc_core::ports::host_event_emitter::EmitError> {
+        use uc_core::ports::host_event_emitter::HostEvent;
+        let event_type = match &event {
+            HostEvent::Clipboard(_) => "clipboard",
+            HostEvent::PeerDiscovery(_) => "peer_discovery",
+            HostEvent::PeerConnection(_) => "peer_connection",
+            HostEvent::Transfer(_) => "transfer",
+            HostEvent::Pairing(_) => "pairing",
+            HostEvent::Realtime(_) => "realtime",
+            HostEvent::Setup(_) => "setup",
+            HostEvent::SpaceAccess(_) => "space_access",
+        };
+        tracing::debug!(event_type, "wire-time host event (pre-bootstrap)");
+        Ok(())
+    }
+}
+
 /// Result type for wiring operations
 pub type WiringResult<T> = Result<T, WiringError>;
 
@@ -119,6 +148,9 @@ pub struct BackgroundRuntimeDeps {
     pub spool_ttl_days: u64,
     pub worker_retry_max_attempts: u32,
     pub worker_retry_backoff_ms: u64,
+    /// File transfer lifecycle orchestrator. Holds a clone of the shared emitter_cell so
+    /// it automatically sees emitter swaps (LoggingEventEmitter → TauriEventEmitter).
+    pub file_transfer_orchestrator: Arc<uc_app::usecases::file_sync::FileTransferOrchestrator>,
 }
 
 /// Fully wired dependencies plus background runtime components.
@@ -126,6 +158,11 @@ pub struct WiredDependencies {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
     pub watcher_control: Arc<dyn WatcherControlPort>,
+    /// Shared emitter cell created at wire time with the initial `LoggingHostEventEmitter`.
+    /// Callers (GUI bootstrap, non-GUI bootstrap) use this same cell so that
+    /// all consumers — CoreRuntime, SetupOrchestrator, and FileTransferOrchestrator —
+    /// see the same emitter after any swap.
+    pub emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
 }
 
 /// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
@@ -810,6 +847,19 @@ pub fn wire_dependencies_with_identity_store(
         },
     };
 
+    // Create shared emitter cell at wire time using the logging placeholder.
+    // All consumers (CoreRuntime, SetupOrchestrator, FileTransferOrchestrator)
+    // hold a clone of this cell and automatically see the emitter after any swap.
+    let initial_emitter: Arc<dyn HostEventEmitterPort> = Arc::new(WireTimeLoggingEmitter);
+    let emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>> =
+        Arc::new(std::sync::RwLock::new(initial_emitter));
+
+    let file_transfer_orchestrator = build_file_transfer_orchestrator(
+        deps.storage.file_transfer_repo.clone(),
+        emitter_cell.clone(),
+        deps.system.clock.clone(),
+    );
+
     Ok(WiredDependencies {
         deps,
         background: BackgroundRuntimeDeps {
@@ -823,8 +873,10 @@ pub fn wire_dependencies_with_identity_store(
             spool_ttl_days: storage_config.spool_ttl_days,
             worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
+            file_transfer_orchestrator,
         },
         watcher_control: platform.watcher_control,
+        emitter_cell,
     })
 }
 
@@ -983,6 +1035,25 @@ impl SetupAssemblyPorts {
             lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
         }
     }
+}
+
+/// Constructs a `FileTransferOrchestrator` for file transfer lifecycle management.
+///
+/// Uses the shared `emitter_cell` so the orchestrator automatically sees emitter swaps
+/// (e.g., `LoggingHostEventEmitter` → `TauriEventEmitter` after Tauri setup).
+pub fn build_file_transfer_orchestrator(
+    file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
+    emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
+    clock: Arc<dyn ClockPort>,
+) -> Arc<uc_app::usecases::file_sync::FileTransferOrchestrator> {
+    let tracker = Arc::new(uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
+        file_transfer_repo,
+    ));
+    Arc::new(uc_app::usecases::file_sync::FileTransferOrchestrator::new(
+        tracker,
+        emitter_cell,
+        clock,
+    ))
 }
 
 /// Build the SetupOrchestrator with all required adapters.
