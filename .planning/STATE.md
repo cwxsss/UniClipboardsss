@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Ready to execute
-stopped_at: Completed 56.1-03-PLAN.md
-last_updated: "2026-03-25T03:34:53.922Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 56.1-02-PLAN.md
+last_updated: "2026-03-25T03:42:05.155Z"
 progress:
   total_phases: 29
-  completed_phases: 21
+  completed_phases: 22
   total_plans: 72
-  completed_plans: 65
+  completed_plans: 66
 ---
 
 # Project State
@@ -93,6 +93,7 @@ _Updated after each plan completion_
 | Phase 54 P02 | 1015 | 8 tasks | 16 files |
 | Phase 56.1 P01 | 5 | 1 tasks | 2 files |
 | Phase 56.1 P03 | 3 | 1 tasks | 1 files |
+| Phase 56.1 P02 | 11min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -212,6 +213,8 @@ Recent decisions affecting current work:
 - [Phase 55]: thiserror added to uc-daemon-client since DaemonExitCleanupError uses #[derive(Error)] and was missing from Cargo.toml
 - [Phase 56.1]: 56.1-01: daemon_api_strings uses pub mod submodule pattern (not enum) — simpler import ergonomics
 - [Phase 56.1]: 56.1-03: Test fixture in tests module retains bare string literals for DaemonWsEvent construction — test data is not production wire-protocol dispatch
+- [Phase 56.1]: ws.rs pub re-exports (TOPIC_SPACE_ACCESS, SPACE_ACCESS_SNAPSHOT_EVENT) removed since no other file in uc-daemon imported them
+- [Phase 56.1]: Test assertions in host.rs updated to use pairing_busy_reason constants to eliminate test-level string duplication
 
 ### Roadmap Evolution
 
@@ -255,6 +258,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-25T03:34:53.917Z
-Stopped at: Completed 56.1-03-PLAN.md
+Last session: 2026-03-25T03:42:05.148Z
+Stopped at: Completed 56.1-02-PLAN.md
 Resume file: None
