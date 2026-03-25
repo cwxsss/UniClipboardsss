@@ -9168,6 +9168,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "clipboard-rs",
  "futures-util",
  "rand 0.8.5",
  "serde",

@@ -13,16 +13,18 @@ use uc_app::usecases::LoggingLifecycleEventEmitter;
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_non_gui_runtime_with_setup;
 use uc_bootstrap::builders::build_daemon_app;
+use uc_core::ports::SystemClipboardPort;
 use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::app::DaemonApp;
 use uc_daemon::pairing::host::DaemonPairingHost;
 use uc_daemon::peers::monitor::PeerMonitor;
 use uc_daemon::service::DaemonService;
+use uc_daemon::service::ServiceHealth;
 use uc_daemon::socket::resolve_daemon_socket_path;
 use uc_daemon::state::{DaemonServiceSnapshot, RuntimeState};
-use uc_daemon::service::ServiceHealth;
-use uc_daemon::workers::clipboard_watcher::ClipboardWatcherWorker;
+use uc_daemon::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
 use uc_daemon::workers::peer_discovery::PeerDiscoveryWorker;
+use uc_platform::clipboard::LocalClipboard;
 
 fn main() -> anyhow::Result<()> {
     // build_daemon_app() calls build_core() which inits tracing + wires deps.
@@ -89,10 +91,24 @@ fn main() -> anyhow::Result<()> {
     // 4. Build PeerMonitor (extracted from PairingHost in Plan 02).
     let peer_monitor = Arc::new(PeerMonitor::new(runtime.clone(), event_tx.clone()));
 
+    // 5a. Build LocalClipboard and ClipboardWatcherWorker (per D-02, D-07).
+    let local_clipboard: Arc<dyn SystemClipboardPort> = Arc::new(
+        LocalClipboard::new()
+            .map_err(|e| anyhow::anyhow!("failed to create LocalClipboard: {}", e))?,
+    );
+    let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
+        runtime.clone(),
+        event_tx.clone(),
+    ));
+    let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
+        local_clipboard,
+        clipboard_change_handler,
+    ));
+
     // 5. Assemble services vec — typed services erased to Arc<dyn DaemonService> (per D-05).
     //    Order matters for shutdown (reversed): peer-monitor and pairing-host stop last.
     let services: Vec<Arc<dyn DaemonService>> = vec![
-        Arc::new(ClipboardWatcherWorker) as Arc<dyn DaemonService>,
+        Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
         Arc::new(PeerDiscoveryWorker::new(
             daemon_network_control,
             daemon_network_events,
