@@ -105,6 +105,7 @@ Four content types supported: Text, Image, Link, File — each with per-device t
 Full file sync pipeline from chunked transfer through clipboard integration with eventual consistency.
 Structured observability from dual-output logging through Seq cross-device tracing.
 Phase 52 complete — daemon is now the single source of truth for space access state (WS broadcast + HTTP query), GUI no longer owns SpaceAccessOrchestrator.
+Phase 56.1 complete — all daemon wire-protocol string constants centralized in `uc-core::network::daemon_api_strings`, eliminating hardcoded string drift between uc-daemon and uc-daemon-client.
 
 ## Key Decisions
 
@@ -141,4 +142,4 @@ Phase 52 complete — daemon is now the single source of truth for space access 
 
 ---
 
-_Last updated: 2026-03-23 after Phase 52 completion_
+_Last updated: 2026-03-25 after Phase 56.1 completion_
