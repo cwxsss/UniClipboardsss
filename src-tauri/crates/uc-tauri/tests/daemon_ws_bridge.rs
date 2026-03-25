@@ -11,6 +11,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use uc_app::realtime::run_setup_state_realtime_consumer_with_rx;
 use uc_app::testing::{NoopDiscoveryPort, NoopLifecycleEventEmitter};
 use uc_app::usecases::pairing::PairingDomainEvent;
+use uc_app::usecases::setup::SetupPairingFacadePort;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_core::ports::host_event_emitter::SetupHostEvent;
 use uc_core::ports::{
@@ -24,7 +25,7 @@ use uc_daemon_client::ws_bridge::{
     BridgeState, DaemonWsBridge, DaemonWsBridgeConfig, ScriptedDaemonWsConnector,
 };
 use uc_daemon_client::{realtime::install_daemon_setup_pairing_facade, DaemonConnectionState};
-use uc_tauri::bootstrap::{SetupAssemblyPorts, SetupPairingFacadePort};
+use uc_tauri::bootstrap::SetupAssemblyPorts;
 
 fn connection_state() -> DaemonConnectionState {
     let state = DaemonConnectionState::default();
