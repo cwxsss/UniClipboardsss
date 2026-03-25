@@ -191,6 +191,9 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
             ClipboardChangeOrigin::RemotePush => "remote",
         };
 
+        // 4. Clone snapshot BEFORE execute_with_origin which takes ownership.
+        let outbound_snapshot = snapshot.clone();
+
         match usecase.execute_with_origin(snapshot, origin).await {
             Ok(Some(entry_id)) => {
                 debug!(entry_id = %entry_id, ?origin, "Daemon clipboard capture succeeded");
@@ -220,6 +223,88 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                 // that's expected when no WS clients are connected — log at debug.
                 if let Err(e) = self.event_tx.send(event) {
                     debug!(error = %e, "No WS subscribers for clipboard.new_content");
+                }
+
+                // --- Outbound sync dispatch (mirrors AppRuntime::on_clipboard_changed) ---
+
+                // Extract file paths only for LocalCapture (RemotePush must not re-sync).
+                let resolved_paths = if origin == ClipboardChangeOrigin::LocalCapture {
+                    extract_file_paths_from_snapshot(&outbound_snapshot)
+                } else {
+                    Vec::new()
+                };
+
+                // Capture count BEFORE metadata filtering for all_files_excluded detection.
+                let extracted_paths_count = resolved_paths.len();
+
+                // Build FileCandidate vec by reading metadata per resolved path.
+                let file_candidates: Vec<FileCandidate> = resolved_paths
+                    .into_iter()
+                    .filter_map(|path| {
+                        match std::fs::metadata(&path) {
+                            Ok(meta) => Some(FileCandidate { path, size: meta.len() }),
+                            Err(e) => {
+                                warn!(error = %e, file = %path.display(), "Excluding file from sync: metadata read failed");
+                                None
+                            }
+                        }
+                    })
+                    .collect();
+
+                // Delegate sync policy to OutboundSyncPlanner.
+                let deps = self.runtime.wiring_deps();
+                let planner = OutboundSyncPlanner::new(deps.settings.clone());
+                let plan = planner
+                    .plan(outbound_snapshot, origin, file_candidates, extracted_paths_count)
+                    .await;
+
+                // Dispatch clipboard sync via spawn_blocking (execute() uses executor::block_on internally).
+                if let Some(clipboard_intent) = plan.clipboard {
+                    let outbound_sync_uc = self.build_sync_outbound_clipboard_use_case();
+                    tokio::task::spawn_blocking(move || {
+                        match outbound_sync_uc.execute(
+                            clipboard_intent.snapshot,
+                            origin,
+                            None, // no flow_id in daemon context
+                            clipboard_intent.file_transfers,
+                        ) {
+                            Ok(()) => info!("Daemon outbound clipboard sync completed"),
+                            Err(e) => warn!(error = %e, "Daemon outbound clipboard sync failed"),
+                        }
+                    });
+                }
+
+                // Dispatch file sync for each file intent.
+                if !plan.files.is_empty() {
+                    let outbound_file_uc = {
+                        let deps = self.runtime.wiring_deps();
+                        uc_app::usecases::file_sync::SyncOutboundFileUseCase::new(
+                            deps.settings.clone(),
+                            deps.device.paired_device_repo.clone(),
+                            deps.network_ports.peers.clone(),
+                            deps.network_ports.file_transfer.clone(),
+                        )
+                    };
+                    tokio::spawn(async move {
+                        for file_intent in plan.files {
+                            info!(file = %file_intent.path.display(), transfer_id = %file_intent.transfer_id, "Daemon sending file to peers");
+                            match outbound_file_uc
+                                .execute(file_intent.path.clone(), Some(file_intent.transfer_id))
+                                .await
+                            {
+                                Ok(result) => info!(
+                                    transfer_id = %result.transfer_id,
+                                    peer_count = result.peer_count,
+                                    "Daemon outbound file sync completed"
+                                ),
+                                Err(e) => warn!(
+                                    error = %e,
+                                    file = %file_intent.path.display(),
+                                    "Daemon outbound file sync failed"
+                                ),
+                            }
+                        }
+                    });
                 }
             }
             Ok(None) => {
