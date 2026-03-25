@@ -3,6 +3,7 @@
 //! Monitors OS clipboard changes via clipboard_rs, persists captured entries
 //! via CaptureClipboardUseCase, and broadcasts clipboard.new_content WS events.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -14,16 +15,83 @@ use tracing::{debug, info, warn};
 
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
+use uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
+use uc_app::usecases::sync_planner::{FileCandidate, OutboundSyncPlanner};
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+use uc_infra::clipboard::TransferPayloadEncryptorAdapter;
 use uc_platform::clipboard::watcher::ClipboardWatcher;
 use uc_platform::ipc::PlatformEvent;
 use uc_platform::runtime::event_bus::PlatformEventSender;
 
 use crate::api::types::DaemonWsEvent;
 use crate::service::{DaemonService, ServiceHealth};
+
+// ---------------------------------------------------------------------------
+// File path extraction helper
+// ---------------------------------------------------------------------------
+
+/// On macOS, attempt to resolve APFS file references (e.g. `/.file/id=...`) to real paths.
+/// Currently a no-op stub — APFS resolution deferred to a future phase.
+#[cfg(target_os = "macos")]
+fn resolve_apfs_file_reference(_path: &std::path::Path) -> Option<PathBuf> {
+    None
+}
+
+/// Extract file paths from a clipboard snapshot's representations.
+///
+/// Looks for `text/uri-list` or `file/uri-list` MIME types, or `files` / `public.file-url`
+/// format IDs, and parses `file://` URIs into `PathBuf`s.
+fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for rep in &snapshot.representations {
+        let is_file_rep = rep
+            .mime
+            .as_ref()
+            .map(|m| {
+                let s = m.as_str();
+                s.eq_ignore_ascii_case("text/uri-list") || s.eq_ignore_ascii_case("file/uri-list")
+            })
+            .unwrap_or(false)
+            || rep.format_id.eq_ignore_ascii_case("files")
+            || rep.format_id.eq_ignore_ascii_case("public.file-url");
+
+        if !is_file_rep {
+            continue;
+        }
+
+        // Parse bytes as UTF-8 text containing file:// URIs (one per line)
+        let text = match std::str::from_utf8(&rep.bytes) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Ok(url) = url::Url::parse(line) {
+                if url.scheme() == "file" {
+                    if let Ok(path) = url.to_file_path() {
+                        // On macOS, resolve APFS file references (/.file/id=...) to real paths
+                        #[cfg(target_os = "macos")]
+                        let resolved = resolve_apfs_file_reference(&path).unwrap_or(path);
+                        #[cfg(not(target_os = "macos"))]
+                        let resolved = path;
+                        paths.push(resolved);
+                    }
+                }
+            }
+        }
+    }
+    // Safety net: deduplicate in case multiple representations contain the same path
+    paths.sort();
+    paths.dedup();
+    paths
+}
 
 // ---------------------------------------------------------------------------
 // ClipboardNewContentPayload
@@ -80,6 +148,20 @@ impl DaemonClipboardChangeHandler {
             deps.device.device_identity.clone(),
             deps.clipboard.representation_cache.clone(),
             deps.clipboard.spool_queue.clone(),
+        )
+    }
+
+    fn build_sync_outbound_clipboard_use_case(&self) -> SyncOutboundClipboardUseCase {
+        let deps = self.runtime.wiring_deps();
+        SyncOutboundClipboardUseCase::new(
+            deps.clipboard.system_clipboard.clone(),
+            deps.network_ports.clipboard.clone(),
+            deps.network_ports.peers.clone(),
+            deps.security.encryption_session.clone(),
+            deps.device.device_identity.clone(),
+            deps.settings.clone(),
+            Arc::new(TransferPayloadEncryptorAdapter),
+            deps.device.paired_device_repo.clone(),
         )
     }
 }
@@ -255,5 +337,53 @@ impl DaemonService for ClipboardWatcherWorker {
 
     fn health_check(&self) -> ServiceHealth {
         ServiceHealth::Healthy
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uc_core::{
+        ids::{FormatId, RepresentationId},
+        ObservedClipboardRepresentation, SystemClipboardSnapshot,
+    };
+
+    fn make_snapshot_with_rep(mime: Option<&str>, format_id: &str, bytes: Vec<u8>) -> SystemClipboardSnapshot {
+        SystemClipboardSnapshot {
+            ts_ms: 1_000_000,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from_str(format_id),
+                mime.map(|m| m.parse().unwrap()),
+                bytes,
+            )],
+        }
+    }
+
+    #[test]
+    fn test_extract_file_paths_from_uri_list() {
+        let uris = b"file:///tmp/test.txt\nfile:///tmp/test2.txt\n".to_vec();
+        let snapshot = make_snapshot_with_rep(Some("text/uri-list"), "text/uri-list", uris);
+        let paths = extract_file_paths_from_snapshot(&snapshot);
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&std::path::PathBuf::from("/tmp/test.txt")));
+        assert!(paths.contains(&std::path::PathBuf::from("/tmp/test2.txt")));
+    }
+
+    #[test]
+    fn test_extract_file_paths_empty_for_non_file_rep() {
+        let snapshot = make_snapshot_with_rep(Some("text/plain"), "text/plain", b"hello world".to_vec());
+        let paths = extract_file_paths_from_snapshot(&snapshot);
+        assert!(paths.is_empty(), "Non-file representation should yield no paths");
+    }
+
+    #[test]
+    fn test_extract_file_paths_dedup() {
+        let uris = b"file:///tmp/test.txt\nfile:///tmp/test.txt\nfile:///tmp/other.txt\n".to_vec();
+        let snapshot = make_snapshot_with_rep(Some("text/uri-list"), "text/uri-list", uris);
+        let paths = extract_file_paths_from_snapshot(&snapshot);
+        assert_eq!(paths.len(), 2, "Duplicate paths should be deduplicated");
+        assert!(paths.contains(&std::path::PathBuf::from("/tmp/test.txt")));
+        assert!(paths.contains(&std::path::PathBuf::from("/tmp/other.txt")));
     }
 }
