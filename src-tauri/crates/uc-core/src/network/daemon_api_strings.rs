@@ -1,0 +1,129 @@
+/// Daemon wire-protocol string constants shared between uc-daemon (server) and uc-daemon-client (consumer).
+
+/// WebSocket topic names used to subscribe to event streams.
+pub mod ws_topic {
+    pub const STATUS: &str = "status";
+    pub const PEERS: &str = "peers";
+    pub const PAIRED_DEVICES: &str = "paired-devices";
+    pub const PAIRING: &str = "pairing";
+    pub const PAIRING_SESSION: &str = "pairing/session";
+    pub const PAIRING_VERIFICATION: &str = "pairing/verification";
+    pub const SETUP: &str = "setup";
+    pub const SPACE_ACCESS: &str = "space-access";
+}
+
+/// WebSocket event type names emitted within topics.
+pub mod ws_event {
+    pub const STATUS_SNAPSHOT: &str = "status.snapshot";
+    pub const STATUS_UPDATED: &str = "status.updated";
+    pub const PEERS_SNAPSHOT: &str = "peers.snapshot";
+    pub const PEERS_CHANGED: &str = "peers.changed";
+    pub const PEERS_NAME_UPDATED: &str = "peers.name_updated";
+    pub const PEERS_CONNECTION_CHANGED: &str = "peers.connection_changed";
+    pub const PAIRED_DEVICES_SNAPSHOT: &str = "paired-devices.snapshot";
+    pub const PAIRED_DEVICES_CHANGED: &str = "paired-devices.changed";
+    pub const PAIRING_SNAPSHOT: &str = "pairing.snapshot";
+    pub const PAIRING_UPDATED: &str = "pairing.updated";
+    pub const PAIRING_VERIFICATION_REQUIRED: &str = "pairing.verification_required";
+    pub const PAIRING_COMPLETE: &str = "pairing.complete";
+    pub const PAIRING_FAILED: &str = "pairing.failed";
+    pub const SETUP_STATE_CHANGED: &str = "setup.state_changed";
+    pub const SETUP_SPACE_ACCESS_COMPLETED: &str = "setup.space_access_completed";
+    pub const SPACE_ACCESS_SNAPSHOT: &str = "space_access.snapshot";
+    pub const SPACE_ACCESS_STATE_CHANGED: &str = "space_access.state_changed";
+}
+
+/// Pairing stage labels used in pairing session state payloads.
+pub mod pairing_stage {
+    pub const REQUEST: &str = "request";
+    pub const VERIFICATION: &str = "verification";
+    pub const VERIFYING: &str = "verifying";
+    pub const COMPLETE: &str = "complete";
+    pub const FAILED: &str = "failed";
+}
+
+/// Reasons emitted when a pairing request is rejected because the host is busy.
+pub mod pairing_busy_reason {
+    pub const HOST_NOT_DISCOVERABLE: &str = "host_not_discoverable";
+    pub const NO_LOCAL_PAIRING_PARTICIPANT_READY: &str = "no_local_pairing_participant_ready";
+    pub const BUSY: &str = "busy";
+}
+
+/// HTTP/JSON error codes returned by the daemon pairing API endpoints.
+pub mod pairing_error_code {
+    pub const ACTIVE_SESSION_EXISTS: &str = "active_session_exists";
+    pub const HOST_NOT_DISCOVERABLE: &str = "host_not_discoverable";
+    pub const NO_LOCAL_PARTICIPANT: &str = "no_local_participant";
+    pub const SESSION_NOT_FOUND: &str = "session_not_found";
+    pub const INTERNAL: &str = "internal";
+    pub const BAD_REQUEST: &str = "bad_request";
+    pub const RUNTIME_UNAVAILABLE: &str = "runtime_unavailable";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ws_topic_values_match() {
+        assert_eq!(ws_topic::STATUS, "status");
+        assert_eq!(ws_topic::PEERS, "peers");
+        assert_eq!(ws_topic::PAIRED_DEVICES, "paired-devices");
+        assert_eq!(ws_topic::PAIRING, "pairing");
+        assert_eq!(ws_topic::PAIRING_SESSION, "pairing/session");
+        assert_eq!(ws_topic::PAIRING_VERIFICATION, "pairing/verification");
+        assert_eq!(ws_topic::SETUP, "setup");
+        assert_eq!(ws_topic::SPACE_ACCESS, "space-access");
+    }
+
+    #[test]
+    fn ws_event_values_match() {
+        assert_eq!(ws_event::STATUS_SNAPSHOT, "status.snapshot");
+        assert_eq!(ws_event::STATUS_UPDATED, "status.updated");
+        assert_eq!(ws_event::PEERS_SNAPSHOT, "peers.snapshot");
+        assert_eq!(ws_event::PEERS_CHANGED, "peers.changed");
+        assert_eq!(ws_event::PEERS_NAME_UPDATED, "peers.name_updated");
+        assert_eq!(ws_event::PEERS_CONNECTION_CHANGED, "peers.connection_changed");
+        assert_eq!(ws_event::PAIRED_DEVICES_SNAPSHOT, "paired-devices.snapshot");
+        assert_eq!(ws_event::PAIRED_DEVICES_CHANGED, "paired-devices.changed");
+        assert_eq!(ws_event::PAIRING_SNAPSHOT, "pairing.snapshot");
+        assert_eq!(ws_event::PAIRING_UPDATED, "pairing.updated");
+        assert_eq!(ws_event::PAIRING_VERIFICATION_REQUIRED, "pairing.verification_required");
+        assert_eq!(ws_event::PAIRING_COMPLETE, "pairing.complete");
+        assert_eq!(ws_event::PAIRING_FAILED, "pairing.failed");
+        assert_eq!(ws_event::SETUP_STATE_CHANGED, "setup.state_changed");
+        assert_eq!(ws_event::SETUP_SPACE_ACCESS_COMPLETED, "setup.space_access_completed");
+        assert_eq!(ws_event::SPACE_ACCESS_SNAPSHOT, "space_access.snapshot");
+        assert_eq!(ws_event::SPACE_ACCESS_STATE_CHANGED, "space_access.state_changed");
+    }
+
+    #[test]
+    fn pairing_stage_values_match() {
+        assert_eq!(pairing_stage::REQUEST, "request");
+        assert_eq!(pairing_stage::VERIFICATION, "verification");
+        assert_eq!(pairing_stage::VERIFYING, "verifying");
+        assert_eq!(pairing_stage::COMPLETE, "complete");
+        assert_eq!(pairing_stage::FAILED, "failed");
+    }
+
+    #[test]
+    fn pairing_busy_reason_values_match() {
+        assert_eq!(pairing_busy_reason::HOST_NOT_DISCOVERABLE, "host_not_discoverable");
+        assert_eq!(
+            pairing_busy_reason::NO_LOCAL_PAIRING_PARTICIPANT_READY,
+            "no_local_pairing_participant_ready"
+        );
+        assert_eq!(pairing_busy_reason::BUSY, "busy");
+    }
+
+    #[test]
+    fn pairing_error_code_values_match() {
+        assert_eq!(pairing_error_code::ACTIVE_SESSION_EXISTS, "active_session_exists");
+        assert_eq!(pairing_error_code::HOST_NOT_DISCOVERABLE, "host_not_discoverable");
+        assert_eq!(pairing_error_code::NO_LOCAL_PARTICIPANT, "no_local_participant");
+        assert_eq!(pairing_error_code::SESSION_NOT_FOUND, "session_not_found");
+        assert_eq!(pairing_error_code::INTERNAL, "internal");
+        assert_eq!(pairing_error_code::BAD_REQUEST, "bad_request");
+        assert_eq!(pairing_error_code::RUNTIME_UNAVAILABLE, "runtime_unavailable");
+    }
+}
