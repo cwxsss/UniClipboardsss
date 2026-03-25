@@ -9,10 +9,10 @@ use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INV
 use tauri::webview::{InvokeRequest, WebviewWindowBuilder};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use uc_app::usecases::pairing::PairedPeer;
 use uc_core::setup::{SetupError, SetupState};
 use uc_daemon::api::auth::DaemonConnectionInfo;
 use uc_daemon_client::DaemonConnectionState;
-use uc_tauri::commands::pairing::PairedPeer;
 
 const PAIRING_COMMANDS_SOURCE: &str = include_str!("../src/commands/pairing.rs");
 
