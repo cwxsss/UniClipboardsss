@@ -13,7 +13,9 @@ pub mod touch_clipboard_entry;
 
 pub use clear_history::{ClearClipboardHistory, ClearHistoryResult};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClipboardStats {
     pub total_items: i64,
     pub total_size: i64,

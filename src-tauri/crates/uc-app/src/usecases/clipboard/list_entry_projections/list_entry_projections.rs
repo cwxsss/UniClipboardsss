@@ -2,6 +2,7 @@
 //! 列出剪贴板条目投影的用例
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::warn;
 use uc_core::clipboard::link_utils::{is_all_urls, is_single_url, parse_uri_list};
@@ -14,7 +15,7 @@ use uc_core::ports::{
 
 /// DTO for clipboard entry projection (returned to command layer)
 /// 剪贴板条目投影 DTO（返回给命令层）
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntryProjectionDto {
     pub id: String,
     pub preview: String,
@@ -22,6 +23,7 @@ pub struct EntryProjectionDto {
     pub size_bytes: i64,
     pub captured_at: i64,
     pub content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail_url: Option<String>,
     // TODO: is_encrypted, is_favorited to be implemented later
     pub is_encrypted: bool,
@@ -31,18 +33,27 @@ pub struct EntryProjectionDto {
     /// Aggregate file transfer status (String for serialization-friendly DTO).
     /// Maps from `TrackedFileTransferStatus` enum in the use case.
     /// None for non-file entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub file_transfer_status: Option<String>,
     /// Failure reason when `file_transfer_status` is `"failed"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub file_transfer_reason: Option<String>,
     /// Transfer IDs belonging to this entry (empty for non-file entries).
+    /// Not serialized to JSON — internal field only.
+    #[serde(skip)]
     pub file_transfer_ids: Vec<String>,
     /// Parsed link URLs when content is a link type.
     /// Built from full representation data (not truncated preview).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub link_urls: Option<Vec<String>>,
+    /// Extracted domains for link entries (populated at command layer).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_domains: Option<Vec<String>>,
     /// Per-file sizes in bytes for file (uri-list) entries.
     /// Each element corresponds to a file URI parsed from inline_data.
     /// -1 means the file could not be stat'd (missing or non-local).
     /// None for non-file entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub file_sizes: Option<Vec<i64>>,
 }
 
@@ -326,6 +337,7 @@ impl ListClipboardEntryProjections {
             file_transfer_reason,
             file_transfer_ids,
             link_urls,
+            link_domains: None,
             file_sizes,
         }))
     }
@@ -526,6 +538,7 @@ impl ListClipboardEntryProjections {
                 file_transfer_reason,
                 file_transfer_ids,
                 link_urls,
+                link_domains: None,
                 file_sizes,
             });
         }
@@ -1148,6 +1161,7 @@ mod tests {
                 file_transfer_reason: None,
                 file_transfer_ids: vec![],
                 link_urls: None,
+                link_domains: None,
                 file_sizes: None,
             },
             EntryProjectionDto {
@@ -1166,6 +1180,7 @@ mod tests {
                 file_transfer_reason: None,
                 file_transfer_ids: vec![],
                 link_urls: None,
+                link_domains: None,
                 file_sizes: None,
             },
         ];
