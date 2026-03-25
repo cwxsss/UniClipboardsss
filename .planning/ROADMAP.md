@@ -494,3 +494,45 @@ Plans:
 - [x] 57-01-PLAN.md — Real ClipboardWatcherWorker with DaemonClipboardChangeHandler, CaptureClipboardUseCase, and clipboard.new_content WS event emission
 - [x] 57-02-PLAN.md — DaemonWsBridge clipboard translation, clipboard realtime consumer, and GUI Passive mode switch
 - [x] 57-03-PLAN.md — Write-back loop prevention via shared ClipboardChangeOriginPort in DaemonClipboardChangeHandler
+
+### Phase 58: Extract DTO models and pairing event types from uc-tauri to uc-app and uc-core
+
+**Goal:** Unify duplicate clipboard DTOs (add serde to uc-app, delete uc-tauri duplicates), extract pairing aggregation DTOs to uc-app, and delete stale pairing event types. After this phase, uc-tauri has zero duplicate DTO definitions.
+**Requirements**: PH58-01, PH58-02, PH58-03, PH58-04, PH58-05
+**Depends on:** Phase 57
+**Plans:** 2 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. `EntryProjectionDto` in uc-app has serde derives and is the single source of truth for clipboard entry projections (no duplicate in uc-tauri)
+2. `ClipboardStats` in uc-app has serde derives and is the single source of truth (no duplicate in uc-tauri)
+3. `P2PPeerInfo` and `PairedPeer` live in uc-app alongside `P2pPeerSnapshot` and `LocalDeviceInfo`
+4. `P2PPairingVerificationEvent`/`P2PPairingVerificationKind` are deleted (stale dead code)
+5. Frontend JSON wire contract is preserved (snake_case fields, `file_transfer_ids` absent, `link_domains` present)
+
+Plans:
+
+- [ ] 58-01-PLAN.md — Unify clipboard DTOs: add serde to EntryProjectionDto and ClipboardStats in uc-app, delete duplicates from uc-tauri models
+- [ ] 58-02-PLAN.md — Extract pairing DTOs (P2PPeerInfo, PairedPeer) to uc-app and delete stale P2PPairingVerificationEvent types
+
+### Phase 59: Extract UC protocol URI routing from uc-tauri to uc-core
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 58
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 59 to break down)
+
+### Phase 60: Extract file transfer wiring orchestration from uc-tauri to uc-app
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 59
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 60 to break down)

@@ -164,6 +164,14 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH57-06**: GUI receives daemon clipboard events via `DaemonWsBridge` and emits `clipboard://event` to frontend so `useClipboardEventStream` continues working unchanged
 - [x] **PH57-07**: `DaemonClipboardChangeHandler` integrates `ClipboardChangeOriginPort` for write-back loop prevention, checking origin before capture and sharing the port instance with future inbound sync
 
+### Extract DTO Models And Pairing Event Types
+
+- [ ] **PH58-01**: `EntryProjectionDto` in uc-app has `#[derive(Serialize, Deserialize)]` with `#[serde(skip)]` on `file_transfer_ids` and `#[serde(skip_serializing_if)]` on optional fields, matching the existing frontend wire contract
+- [ ] **PH58-02**: `ClipboardStats` in uc-app has `#[derive(Serialize, Deserialize)]` and the duplicate `ClipboardStats` definition in uc-tauri/models is deleted
+- [ ] **PH58-03**: `P2PPeerInfo` and `PairedPeer` structs live in `uc-app/src/usecases/pairing/dto.rs` with serde derives, exported via `uc-app::usecases::pairing`
+- [ ] **PH58-04**: `P2PPairingVerificationEvent` and `P2PPairingVerificationKind` in `uc-tauri/src/events/p2p_pairing.rs` are deleted (stale dead code with zero consumers)
+- [ ] **PH58-05**: all import paths updated directly (no re-export stubs in uc-tauri per D-05)
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -267,14 +275,19 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH57-05     | 57    | Complete |
 | PH57-06     | 57    | Complete |
 | PH57-07     | 57    | Complete |
+| PH58-01     | 58    | Pending  |
+| PH58-02     | 58    | Pending  |
+| PH58-03     | 58    | Pending  |
+| PH58-04     | 58    | Pending  |
+| PH58-05     | 58    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 69 total
-- Mapped to phases: 69
+- v0.4.0 requirements: 74 total
+- Mapped to phases: 74
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-25 after Phase 56.1 planning_
+_Last updated: 2026-03-25 after Phase 58 planning_
