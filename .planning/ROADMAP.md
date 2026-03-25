@@ -491,6 +491,6 @@ Plans:
 
 Plans:
 
-- [ ] 57-01-PLAN.md — Daemon clipboard watcher implementation, change handler, WS event emission, and bridge translation
-- [ ] 57-02-PLAN.md — GUI Passive mode switch and DaemonWsBridge clipboard subscription wiring
-- [ ] 57-03-PLAN.md — Daemon inbound clipboard sync (write_snapshot) migration with write-back loop prevention
+- [ ] 57-01-PLAN.md — Real ClipboardWatcherWorker with DaemonClipboardChangeHandler, CaptureClipboardUseCase, and clipboard.new_content WS event emission
+- [ ] 57-02-PLAN.md — DaemonWsBridge clipboard translation, clipboard realtime consumer, and GUI Passive mode switch
+- [ ] 57-03-PLAN.md — Write-back loop prevention via shared ClipboardChangeOriginPort in DaemonClipboardChangeHandler

@@ -162,6 +162,7 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [ ] **PH57-04**: `DaemonWsBridge` translates `clipboard.new_content` into `RealtimeEvent::ClipboardNewContent` with `RealtimeTopic::Clipboard`
 - [ ] **PH57-05**: GUI `ClipboardIntegrationMode` is `Passive` so `StartClipboardWatcher` use case is a no-op and daemon is the sole clipboard observer
 - [ ] **PH57-06**: GUI receives daemon clipboard events via `DaemonWsBridge` and emits `clipboard://event` to frontend so `useClipboardEventStream` continues working unchanged
+- [ ] **PH57-07**: `DaemonClipboardChangeHandler` integrates `ClipboardChangeOriginPort` for write-back loop prevention, checking origin before capture and sharing the port instance with future inbound sync
 
 ## Out of Scope
 
@@ -265,11 +266,12 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH57-04     | 57    | Pending  |
 | PH57-05     | 57    | Pending  |
 | PH57-06     | 57    | Pending  |
+| PH57-07     | 57    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 68 total
-- Mapped to phases: 68
+- v0.4.0 requirements: 69 total
+- Mapped to phases: 69
 - Unmapped: 0
 
 ---
