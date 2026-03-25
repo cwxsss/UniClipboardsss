@@ -515,9 +515,9 @@ Plans:
 - [x] 58-01-PLAN.md — Unify clipboard DTOs: add serde to EntryProjectionDto and ClipboardStats in uc-app, delete duplicates from uc-tauri models
 - [x] 58-02-PLAN.md — Extract pairing DTOs (P2PPeerInfo, PairedPeer) to uc-app and delete stale P2PPairingVerificationEvent types
 
-### Phase 59: Extract UC protocol URI routing from uc-tauri to uc-core
+### Phase 59: Secure daemon resource endpoints with scoped token auth
 
-**Goal:** [To be planned]
+**Goal:** Migrate blob/thumbnail resource serving from Tauri's in-process `uc://` protocol handler to daemon HTTP endpoints (`/uc/blob/:id`, `/uc/thumbnail/:id`) with production-grade security designed for future `0.0.0.0` exposure. Multi-layer security: scoped resource tokens (15s TTL, lazy refresh), rate limiting (blob 20 req/s, thumbnail 100 req/s), Origin check, encryption session binding, audit logging. GUI retains `uc://` as transparent proxy via daemon-client; frontend zero changes.
 **Requirements**: TBD
 **Depends on:** Phase 58
 **Plans:** 0 plans
