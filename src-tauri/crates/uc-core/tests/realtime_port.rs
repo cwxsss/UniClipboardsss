@@ -81,6 +81,7 @@ fn realtime_event_variants_cover_pairing_peers_and_paired_devices() {
             RealtimeEvent::PeersNameUpdated(payload) => type_name_of_val(payload),
             RealtimeEvent::PeersConnectionChanged(payload) => type_name_of_val(payload),
             RealtimeEvent::PairedDevicesChanged(payload) => type_name_of_val(payload),
+            other => panic!("unexpected RealtimeEvent variant: {other:?}"),
         })
         .collect::<Vec<_>>();
 
