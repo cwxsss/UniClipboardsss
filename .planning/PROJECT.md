@@ -106,6 +106,7 @@ Full file sync pipeline from chunked transfer through clipboard integration with
 Structured observability from dual-output logging through Seq cross-device tracing.
 Phase 52 complete — daemon is now the single source of truth for space access state (WS broadcast + HTTP query), GUI no longer owns SpaceAccessOrchestrator.
 Phase 56.1 complete — all daemon wire-protocol string constants centralized in `uc-core::network::daemon_api_strings`, eliminating hardcoded string drift between uc-daemon and uc-daemon-client.
+Phase 57 complete — daemon is now the sole clipboard observer via real ClipboardWatcherWorker (clipboard_rs + CaptureClipboardUseCase + WS event broadcast); GUI operates in Passive mode receiving clipboard updates via DaemonWsBridge → RealtimeEvent::ClipboardNewContent → clipboard://event pipeline; write-back loop prevention via ClipboardChangeOriginPort.
 
 ## Key Decisions
 
@@ -142,4 +143,4 @@ Phase 56.1 complete — all daemon wire-protocol string constants centralized in
 
 ---
 
-_Last updated: 2026-03-25 after Phase 56.1 completion_
+_Last updated: 2026-03-25 after Phase 57 completion_
