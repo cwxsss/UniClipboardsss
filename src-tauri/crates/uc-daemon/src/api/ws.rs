@@ -14,6 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, warn};
+use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 
 use crate::api::server::DaemonApiState;
 use crate::api::types::{
@@ -22,32 +23,6 @@ use crate::api::types::{
     PairingVerificationPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
     PeersChangedFullPayload, PeerSnapshotDto, SpaceAccessStateResponse, StatusResponse,
 };
-
-const TOPIC_STATUS: &str = "status";
-const TOPIC_PEERS: &str = "peers";
-const TOPIC_PAIRED_DEVICES: &str = "paired-devices";
-const TOPIC_PAIRING: &str = "pairing";
-const TOPIC_PAIRING_SESSION: &str = "pairing/session";
-const TOPIC_PAIRING_VERIFICATION: &str = "pairing/verification";
-const TOPIC_SETUP: &str = "setup";
-pub const TOPIC_SPACE_ACCESS: &str = "space-access";
-
-pub const SPACE_ACCESS_SNAPSHOT_EVENT: &str = "space_access.snapshot";
-
-const STATUS_SNAPSHOT_EVENT: &str = "status.snapshot";
-const PEERS_SNAPSHOT_EVENT: &str = "peers.snapshot";
-const PAIRED_DEVICES_SNAPSHOT_EVENT: &str = "paired-devices.snapshot";
-const PAIRING_SNAPSHOT_EVENT: &str = "pairing.snapshot";
-
-const STATUS_UPDATED_EVENT: &str = "status.updated";
-const PEERS_CHANGED_EVENT: &str = "peers.changed";
-const PEERS_NAME_UPDATED_EVENT: &str = "peers.name_updated";
-const PEERS_CONNECTION_CHANGED_EVENT: &str = "peers.connection_changed";
-const PAIRED_DEVICES_CHANGED_EVENT: &str = "paired-devices.changed";
-const PAIRING_UPDATED_EVENT: &str = "pairing.updated";
-const PAIRING_VERIFICATION_REQUIRED_EVENT: &str = "pairing.verification_required";
-const PAIRING_COMPLETE_EVENT: &str = "pairing.complete";
-const PAIRING_FAILED_EVENT: &str = "pairing.failed";
 
 type ClientTopics = Arc<RwLock<HashSet<String>>>;
 
@@ -192,20 +167,20 @@ fn normalize_topics(topics: Vec<String>) -> Vec<String> {
 fn is_supported_topic(topic: &str) -> bool {
     matches!(
         topic,
-        TOPIC_STATUS
-            | TOPIC_PEERS
-            | TOPIC_PAIRED_DEVICES
-            | TOPIC_PAIRING
-            | TOPIC_PAIRING_SESSION
-            | TOPIC_PAIRING_VERIFICATION
-            | TOPIC_SETUP
-            | TOPIC_SPACE_ACCESS
+        ws_topic::STATUS
+            | ws_topic::PEERS
+            | ws_topic::PAIRED_DEVICES
+            | ws_topic::PAIRING
+            | ws_topic::PAIRING_SESSION
+            | ws_topic::PAIRING_VERIFICATION
+            | ws_topic::SETUP
+            | ws_topic::SPACE_ACCESS
     )
 }
 
 fn topic_matches(subscription: &str, event_topic: &str) -> bool {
     subscription == event_topic
-        || (subscription == TOPIC_PAIRING && event_topic.starts_with("pairing/"))
+        || (subscription == ws_topic::PAIRING && event_topic.starts_with("pairing/"))
 }
 
 async fn build_snapshot_event(
@@ -213,51 +188,51 @@ async fn build_snapshot_event(
     topic: &str,
 ) -> Result<Option<DaemonWsEvent>> {
     match topic {
-        TOPIC_STATUS => snapshot_event(
-            TOPIC_STATUS,
-            STATUS_SNAPSHOT_EVENT,
+        ws_topic::STATUS => snapshot_event(
+            ws_topic::STATUS,
+            ws_event::STATUS_SNAPSHOT,
             None,
             state.query_service.status().await?,
         )
         .map(Some),
-        TOPIC_PEERS => snapshot_event(
-            TOPIC_PEERS,
-            PEERS_SNAPSHOT_EVENT,
+        ws_topic::PEERS => snapshot_event(
+            ws_topic::PEERS,
+            ws_event::PEERS_SNAPSHOT,
             None,
             state.query_service.peers().await?,
         )
         .map(Some),
-        TOPIC_PAIRED_DEVICES => snapshot_event(
-            TOPIC_PAIRED_DEVICES,
-            PAIRED_DEVICES_SNAPSHOT_EVENT,
+        ws_topic::PAIRED_DEVICES => snapshot_event(
+            ws_topic::PAIRED_DEVICES,
+            ws_event::PAIRED_DEVICES_SNAPSHOT,
             None,
             state.query_service.paired_devices().await?,
         )
         .map(Some),
-        TOPIC_PAIRING => snapshot_event(
-            TOPIC_PAIRING,
-            PAIRING_SNAPSHOT_EVENT,
+        ws_topic::PAIRING => snapshot_event(
+            ws_topic::PAIRING,
+            ws_event::PAIRING_SNAPSHOT,
             None,
             state.query_service.pairing_sessions().await,
         )
         .map(Some),
-        TOPIC_PAIRING_SESSION => snapshot_event(
-            TOPIC_PAIRING_SESSION,
-            PAIRING_SNAPSHOT_EVENT,
+        ws_topic::PAIRING_SESSION => snapshot_event(
+            ws_topic::PAIRING_SESSION,
+            ws_event::PAIRING_SNAPSHOT,
             None,
             state.query_service.pairing_sessions().await,
         )
         .map(Some),
-        TOPIC_PAIRING_VERIFICATION => Ok(None),
-        TOPIC_SETUP => Ok(None),
-        TOPIC_SPACE_ACCESS => {
+        ws_topic::PAIRING_VERIFICATION => Ok(None),
+        ws_topic::SETUP => Ok(None),
+        ws_topic::SPACE_ACCESS => {
             let space_access_state = state
                 .query_service
                 .space_access_state(state.space_access_orchestrator().as_deref())
                 .await;
             snapshot_event(
-                TOPIC_SPACE_ACCESS,
-                SPACE_ACCESS_SNAPSHOT_EVENT,
+                ws_topic::SPACE_ACCESS,
+                ws_event::SPACE_ACCESS_SNAPSHOT,
                 None,
                 space_access_state,
             )
@@ -289,8 +264,6 @@ fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
-const SPACE_ACCESS_STATE_CHANGED_EVENT: &str = "space_access.state_changed";
-
 #[allow(dead_code)]
 fn _event_type_markers(
     _: StatusResponse,
@@ -310,17 +283,17 @@ fn _event_type_markers(
 ) {
     (
         [
-            STATUS_UPDATED_EVENT,
-            PEERS_CHANGED_EVENT,
-            PEERS_NAME_UPDATED_EVENT,
-            PEERS_CONNECTION_CHANGED_EVENT,
-            PAIRED_DEVICES_CHANGED_EVENT,
-            PAIRING_UPDATED_EVENT,
-            PAIRING_VERIFICATION_REQUIRED_EVENT,
-            PAIRING_COMPLETE_EVENT,
-            PAIRING_FAILED_EVENT,
-            SPACE_ACCESS_SNAPSHOT_EVENT,
-            SPACE_ACCESS_STATE_CHANGED_EVENT,
+            ws_event::STATUS_UPDATED,
+            ws_event::PEERS_CHANGED,
+            ws_event::PEERS_NAME_UPDATED,
+            ws_event::PEERS_CONNECTION_CHANGED,
+            ws_event::PAIRED_DEVICES_CHANGED,
+            ws_event::PAIRING_UPDATED,
+            ws_event::PAIRING_VERIFICATION_REQUIRED,
+            ws_event::PAIRING_COMPLETE,
+            ws_event::PAIRING_FAILED,
+            ws_event::SPACE_ACCESS_SNAPSHOT,
+            ws_event::SPACE_ACCESS_STATE_CHANGED,
         ],
         PairingSessionChangedPayload {
             session_id: String::new(),

@@ -13,6 +13,7 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::SetupOrchestrator;
 
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+use uc_core::network::daemon_api_strings::pairing_error_code;
 
 use crate::api::auth::{
     build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
@@ -112,28 +113,28 @@ pub(crate) fn map_daemon_pairing_error(
         DaemonPairingHostError::ActivePairingSessionExists => (
             StatusCode::CONFLICT,
             PairingApiErrorResponse {
-                code: "active_session_exists".to_string(),
+                code: pairing_error_code::ACTIVE_SESSION_EXISTS.to_string(),
                 message: "active pairing session exists".to_string(),
             },
         ),
         DaemonPairingHostError::HostNotDiscoverable => (
             StatusCode::BAD_REQUEST,
             PairingApiErrorResponse {
-                code: "host_not_discoverable".to_string(),
+                code: pairing_error_code::HOST_NOT_DISCOVERABLE.to_string(),
                 message: "host not discoverable".to_string(),
             },
         ),
         DaemonPairingHostError::NoLocalPairingParticipantReady => (
             StatusCode::BAD_REQUEST,
             PairingApiErrorResponse {
-                code: "no_local_participant".to_string(),
+                code: pairing_error_code::NO_LOCAL_PARTICIPANT.to_string(),
                 message: "no local pairing participant ready".to_string(),
             },
         ),
         DaemonPairingHostError::SessionNotFound(_) => (
             StatusCode::NOT_FOUND,
             PairingApiErrorResponse {
-                code: "session_not_found".to_string(),
+                code: pairing_error_code::SESSION_NOT_FOUND.to_string(),
                 message: "pairing session not found".to_string(),
             },
         ),
@@ -142,7 +143,7 @@ pub(crate) fn map_daemon_pairing_error(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 PairingApiErrorResponse {
-                    code: "internal".to_string(),
+                    code: pairing_error_code::INTERNAL.to_string(),
                     message,
                 },
             )
