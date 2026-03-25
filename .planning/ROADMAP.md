@@ -526,7 +526,7 @@ Plans:
 
 - [ ] TBD (run /gsd:plan-phase 59 to break down)
 
-### Phase 60: Extract file transfer wiring orchestration from uc-tauri to uc-app
+### ~~Phase 60: Extract file transfer wiring orchestration from uc-tauri to uc-app~~ ✅ (2026-03-25)
 
 **Goal:** Extract `file_transfer_wiring.rs` (502 lines, zero Tauri deps) from `uc-tauri/bootstrap/` into a `FileTransferOrchestrator` struct in `uc-app`, making file transfer lifecycle management available to non-Tauri runtimes (daemon, CLI).
 **Requirements**: PH60-01, PH60-02, PH60-03, PH60-04, PH60-05
