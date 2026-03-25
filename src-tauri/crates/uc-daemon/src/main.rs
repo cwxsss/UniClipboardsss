@@ -23,6 +23,7 @@ use uc_daemon::service::ServiceHealth;
 use uc_daemon::socket::resolve_daemon_socket_path;
 use uc_daemon::state::{DaemonServiceSnapshot, RuntimeState};
 use uc_daemon::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
+use uc_daemon::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
 use uc_daemon::workers::peer_discovery::PeerDiscoveryWorker;
 use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
 use uc_platform::clipboard::LocalClipboard;
@@ -42,6 +43,8 @@ fn main() -> anyhow::Result<()> {
         None,
         Arc::new(LoggingLifecycleEventEmitter),
     );
+    // Extract file_cache_dir before ctx is consumed by build_non_gui_runtime_with_setup.
+    let file_cache_dir = ctx.storage_paths.file_cache_dir.clone();
     let runtime = Arc::new(build_non_gui_runtime_with_setup(
         ctx.deps,
         ctx.storage_paths.clone(),
@@ -60,6 +63,10 @@ fn main() -> anyhow::Result<()> {
     let initial_statuses: Vec<DaemonServiceSnapshot> = vec![
         DaemonServiceSnapshot {
             name: "clipboard-watcher".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        DaemonServiceSnapshot {
+            name: "inbound-clipboard-sync".to_string(),
             health: ServiceHealth::Healthy,
         },
         DaemonServiceSnapshot {
@@ -114,10 +121,22 @@ fn main() -> anyhow::Result<()> {
         clipboard_change_handler,
     ));
 
+    // InboundClipboardSyncWorker receives clipboard messages from peers and applies them
+    // via SyncInboundClipboardUseCase (Full mode). Emits clipboard.new_content WS events
+    // only for Applied { entry_id: Some(_) } outcomes.
+    // Shares clipboard_change_origin with DaemonClipboardChangeHandler to prevent write-back loops.
+    let inbound_clipboard_sync = Arc::new(InboundClipboardSyncWorker::new(
+        runtime.clone(),
+        event_tx.clone(),
+        clipboard_change_origin.clone(), // SAME Arc as DaemonClipboardChangeHandler
+        Some(file_cache_dir),
+    ));
+
     // 5. Assemble services vec — typed services erased to Arc<dyn DaemonService> (per D-05).
     //    Order matters for shutdown (reversed): peer-monitor and pairing-host stop last.
     let services: Vec<Arc<dyn DaemonService>> = vec![
         Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
+        Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
         Arc::new(PeerDiscoveryWorker::new(
             daemon_network_control,
             daemon_network_events,
