@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: Phase complete — ready for verification
-stopped_at: Completed 60-02-PLAN.md
-last_updated: "2026-03-25T13:44:12.364Z"
+stopped_at: Completed 61-01-PLAN.md
+last_updated: "2026-03-25T15:06:29.022Z"
 progress:
-  total_phases: 32
+  total_phases: 35
   completed_phases: 25
-  total_plans: 76
-  completed_plans: 73
+  total_plans: 75
+  completed_plans: 72
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 60 — extract-file-transfer-wiring-orchestration-from-uc-tauri-to-uc-app
+**Current focus:** Phase 61 — daemon-outbound-clipboard-sync
 
 ## Current Position
 
-Phase: 60 (extract-file-transfer-wiring-orchestration-from-uc-tauri-to-uc-app) — EXECUTING
-Plan: 2 of 2
+Phase: 61 (daemon-outbound-clipboard-sync) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -101,6 +101,7 @@ _Updated after each plan completion_
 | Phase 58 P01 | 31min | 2 tasks | 6 files |
 | Phase 60-extract-file-transfer-wiring-orchestration-from-uc-tauri-to-uc-app P01 | 15 | 2 tasks | 6 files |
 | Phase 60-extract-file-transfer-wiring-orchestration-from-uc-tauri-to-uc-app P02 | 9 | 1 tasks | 6 files |
+| Phase 61-daemon-outbound-clipboard-sync P01 | 8 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -238,6 +239,9 @@ Recent decisions affecting current work:
 - [Phase Phase 60-01]: BackgroundRuntimeDeps.file_transfer_orchestrator is Arc (not Option) — emitter_cell pattern makes deferred construction unnecessary
 - [Phase Phase 60-02]: FileTransferOrchestrator::now_ms() accessor added — clipboard receive loop uses orchestrator clock for PendingInboundTransfer timestamps instead of separate clock parameter
 - [Phase Phase 60-02]: file_transfer_wiring.rs deleted with no re-export stubs — D-08/D-09 enforced; FileTransferStatusPayload re-exported directly from uc-app::usecases::file_sync
+- [Phase 61]: SyncOutboundFileUseCase built inline from wiring_deps (CoreUseCases lifetime complexity in async fn)
+- [Phase 61]: extract_file_paths_from_snapshot duplicated from uc-tauri/runtime.rs into uc-daemon (scope-minimal, shared crate deferred)
+- [Phase 61]: spawn_blocking wraps SyncOutboundClipboardUseCase::execute() which uses executor::block_on internally
 
 ### Roadmap Evolution
 
@@ -269,6 +273,10 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 - Phase 58 added: Extract DTO models and pairing event types from uc-tauri to uc-app and uc-core
 - Phase 59 added: Extract UC protocol URI routing from uc-tauri to uc-core
 - Phase 60 added: Extract file transfer wiring orchestration from uc-tauri to uc-app
+- Phase 61 added: Daemon outbound clipboard sync — trigger sync to peers after local capture
+- Phase 62 added: Daemon inbound clipboard sync — receive peer clipboard and write to local system
+- Phase 63 added: Daemon file transfer orchestration — handle file sync lifecycle in daemon
+- Phase 64 added: Tauri sync retirement — remove sync logic from Tauri, delegate to daemon
 
 ### Pending Todos
 
@@ -284,6 +292,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-25T13:44:12.361Z
-Stopped at: Completed 60-02-PLAN.md
+Last session: 2026-03-25T15:06:29.019Z
+Stopped at: Completed 61-01-PLAN.md
 Resume file: None

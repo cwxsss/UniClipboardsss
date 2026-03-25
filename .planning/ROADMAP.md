@@ -551,7 +551,7 @@ Plans:
 **Goal:** After daemon captures a local clipboard change, trigger OutboundSyncPlanner to decide sync eligibility, then dispatch SyncOutboundClipboardUseCase and SyncOutboundFileUseCase to push content to paired peers — mirroring the AppRuntime::on_clipboard_changed flow.
 **Requirements**: PH61-01, PH61-02, PH61-03, PH61-04
 **Depends on:** Phase 60
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 **Success Criteria** (what must be TRUE):
 
@@ -562,7 +562,7 @@ Plans:
 
 Plans:
 
-- [ ] 61-01-PLAN.md — Extend DaemonClipboardChangeHandler with outbound sync dispatch (OutboundSyncPlanner + SyncOutboundClipboardUseCase + SyncOutboundFileUseCase)
+- [x] 61-01-PLAN.md — Extend DaemonClipboardChangeHandler with outbound sync dispatch (OutboundSyncPlanner + SyncOutboundClipboardUseCase + SyncOutboundFileUseCase)
 
 ### Phase 62: Daemon inbound clipboard sync — receive peer clipboard and write to local system
 
