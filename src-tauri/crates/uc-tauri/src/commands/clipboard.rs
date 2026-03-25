@@ -5,17 +5,16 @@ use crate::bootstrap::AppRuntime;
 use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use crate::models::{
-    ClipboardEntriesResponse, ClipboardEntryDetail,
-    ClipboardEntryResource, ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse,
-    ClipboardLinkItemDto, ClipboardTextItemDto,
+    ClipboardEntriesResponse, ClipboardEntryDetail, ClipboardEntryResource, ClipboardImageItemDto,
+    ClipboardItemDto, ClipboardItemResponse, ClipboardLinkItemDto, ClipboardTextItemDto,
 };
-use uc_app::usecases::clipboard::{ClipboardStats, EntryProjectionDto};
 use base64::Engine;
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info_span, Instrument};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::clipboard::ClipboardUseCases;
+use uc_app::usecases::clipboard::{ClipboardStats, EntryProjectionDto};
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 use uc_core::security::state::EncryptionState;

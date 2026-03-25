@@ -18,9 +18,7 @@ use uc_app::usecases::LifecycleState;
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ClipboardEntriesResponse {
     /// Session is ready; entries are available
-    Ready {
-        entries: Vec<EntryProjectionDto>,
-    },
+    Ready { entries: Vec<EntryProjectionDto> },
     /// Session not ready yet (e.g., awaiting unlock)
     NotReady,
 }
@@ -272,5 +270,4 @@ mod tests {
         assert_eq!(image["thumbnail"], "uc://thumbnail/rep-1");
         assert_eq!(image["size"], 2048);
     }
-
 }

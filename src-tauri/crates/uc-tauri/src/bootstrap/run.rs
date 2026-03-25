@@ -14,10 +14,10 @@ use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr
 use uc_daemon::DAEMON_API_REVISION;
 use uc_daemon_client::DaemonConnectionState;
 
-use uc_daemon_client::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
-pub use uc_daemon_client::daemon_lifecycle::terminate_local_daemon_pid;
 use super::runtime::DaemonBootstrapOwnershipState;
 use crate::commands::startup::StartupBarrier;
+pub use uc_daemon_client::daemon_lifecycle::terminate_local_daemon_pid;
+use uc_daemon_client::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
 
 pub const DAEMON_CONNECTION_EVENT: &str = "daemon://connection-info";
 const DAEMON_BINARY_NAME: &str = "uniclipboard-daemon";
