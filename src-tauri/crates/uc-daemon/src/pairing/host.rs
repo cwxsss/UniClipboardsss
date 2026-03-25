@@ -14,6 +14,7 @@ use uc_app::usecases::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
 };
 use uc_app::usecases::SetupOrchestrator;
+use uc_core::network::daemon_api_strings::{pairing_busy_reason, pairing_stage, ws_event, ws_topic};
 use uc_core::network::pairing_state_machine::{PairingAction, PairingRole};
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
@@ -234,14 +235,14 @@ impl DaemonPairingHost {
                     session_id.clone(),
                     Some(peer_id),
                     None,
-                    "request",
+                    pairing_stage::REQUEST,
                     now_ms(),
                 )
                 .await;
                 emit_pairing_session_changed(
                     &self.event_tx,
                     &session_id,
-                    "request",
+                    pairing_stage::REQUEST,
                     self.session_peer_id(&session_id).await,
                     self.session_device_name(&session_id).await,
                     now_ms(),
@@ -317,14 +318,14 @@ impl DaemonPairingHost {
                     session_id.clone(),
                     Some(peer_id.clone()),
                     Some(device_name.clone()),
-                    "request",
+                    pairing_stage::REQUEST,
                     now_ms(),
                 )
                 .await;
                 emit_pairing_session_changed(
                     &self.event_tx,
                     &session_id,
-                    "request",
+                    pairing_stage::REQUEST,
                     Some(peer_id),
                     Some(device_name),
                     now_ms(),
@@ -484,12 +485,12 @@ impl DaemonPairingHost {
         session_id: &str,
     ) -> Result<(), DaemonPairingHostError> {
         if !self.discoverability.is_active().await {
-            self.reject_inbound_request(peer_id, session_id, "host_not_discoverable")
+            self.reject_inbound_request(peer_id, session_id, pairing_busy_reason::HOST_NOT_DISCOVERABLE)
                 .await;
             return Err(DaemonPairingHostError::HostNotDiscoverable);
         }
         if !self.participant_readiness.is_active().await {
-            self.reject_inbound_request(peer_id, session_id, "no_local_pairing_participant_ready")
+            self.reject_inbound_request(peer_id, session_id, pairing_busy_reason::NO_LOCAL_PAIRING_PARTICIPANT_READY)
                 .await;
             return Err(DaemonPairingHostError::NoLocalPairingParticipantReady);
         }
@@ -641,7 +642,7 @@ async fn run_pairing_action_loop(
                             session_id,
                             None,
                             Some(peer_display_name),
-                            "verification",
+                            pairing_stage::VERIFICATION,
                             now_ms(),
                         )
                         .await;
@@ -655,7 +656,7 @@ async fn run_pairing_action_loop(
                             session_id,
                             None,
                             Some(peer_display_name),
-                            "verifying",
+                            pairing_stage::VERIFYING,
                             now_ms(),
                         )
                         .await;
@@ -726,7 +727,7 @@ async fn run_pairing_action_loop(
                             None => (None, None),
                         };
 
-                        let state_label = if success { "complete" } else { "failed" };
+                        let state_label = if success { pairing_stage::COMPLETE } else { pairing_stage::FAILED };
                         mark_pairing_session_terminal(
                             &state,
                             session_id.clone(),
@@ -780,7 +781,7 @@ async fn run_pairing_domain_event_loop(
                             session_id: session_id.clone(),
                             peer_id: Some(peer_id.clone()),
                             device_name: device_name.clone(),
-                            state: "verification".to_string(),
+                            state: pairing_stage::VERIFICATION.to_string(),
                             updated_at_ms: ts,
                             short_code: Some(short_code.clone()),
                             peer_fingerprint: Some(peer_fingerprint.clone()),
@@ -797,7 +798,7 @@ async fn run_pairing_domain_event_loop(
                         emit_pairing_session_changed(
                             &event_tx,
                             &session_id,
-                            "verification",
+                            pairing_stage::VERIFICATION,
                             Some(peer_id.clone()),
                             device_name.clone(),
                             ts,
@@ -805,7 +806,7 @@ async fn run_pairing_domain_event_loop(
                         emit_pairing_verification(
                             &event_tx,
                             &session_id,
-                            "verification",
+                            pairing_stage::VERIFICATION,
                             Some(peer_id.clone()),
                             device_name.clone(),
                             Some(short_code),
@@ -823,13 +824,13 @@ async fn run_pairing_domain_event_loop(
                         let ts = now_ms();
                         emit_ws_event(
                             &event_tx,
-                            "pairing/session",
-                            "pairing.updated",
+                            ws_topic::PAIRING_SESSION,
+                            ws_event::PAIRING_UPDATED,
                             Some(session_id.clone()),
                             PairingSessionChangedPayload {
                                 session_id: session_id.clone(),
-                                state: "verifying".to_string(),
-                                stage: "verifying".to_string(),
+                                state: pairing_stage::VERIFYING.to_string(),
+                                stage: pairing_stage::VERIFYING.to_string(),
                                 peer_id: Some(peer_id.clone()),
                                 device_name: None,
                                 updated_at_ms: ts,
@@ -841,7 +842,7 @@ async fn run_pairing_domain_event_loop(
                             session_id,
                             Some(peer_id),
                             None,
-                            "verifying",
+                            pairing_stage::VERIFYING,
                             ts,
                         )
                         .await;
@@ -854,13 +855,13 @@ async fn run_pairing_domain_event_loop(
                         let ts = now_ms();
                         emit_ws_event(
                             &event_tx,
-                            "pairing/session",
-                            "pairing.complete",
+                            ws_topic::PAIRING_SESSION,
+                            ws_event::PAIRING_COMPLETE,
                             Some(session_id.clone()),
                             PairingSessionChangedPayload {
                                 session_id: session_id.clone(),
-                                state: "complete".to_string(),
-                                stage: "complete".to_string(),
+                                state: pairing_stage::COMPLETE.to_string(),
+                                stage: pairing_stage::COMPLETE.to_string(),
                                 peer_id: Some(peer_id.clone()),
                                 device_name: device_name.clone(),
                                 updated_at_ms: ts,
@@ -870,7 +871,7 @@ async fn run_pairing_domain_event_loop(
                         emit_pairing_verification(
                             &event_tx,
                             &session_id,
-                            "complete",
+                            pairing_stage::COMPLETE,
                             Some(peer_id.clone()),
                             device_name.clone(),
                             None,
@@ -883,7 +884,7 @@ async fn run_pairing_domain_event_loop(
                             session_id.clone(),
                             Some(peer_id),
                             device_name,
-                            "complete",
+                            pairing_stage::COMPLETE,
                             ts,
                         )
                         .await;
@@ -903,14 +904,14 @@ async fn run_pairing_domain_event_loop(
                             session_id.clone(),
                             Some(peer_id.clone()),
                             device_name.clone(),
-                            "verifying",
+                            pairing_stage::VERIFYING,
                             ts,
                         )
                         .await;
                         emit_pairing_session_changed(
                             &event_tx,
                             &session_id,
-                            "verifying",
+                            pairing_stage::VERIFYING,
                             Some(peer_id.clone()),
                             device_name.clone(),
                             ts,
@@ -918,7 +919,7 @@ async fn run_pairing_domain_event_loop(
                         emit_pairing_verification(
                             &event_tx,
                             &session_id,
-                            "verifying",
+                            pairing_stage::VERIFYING,
                             Some(peer_id),
                             device_name,
                             None,
@@ -940,8 +941,8 @@ async fn run_pairing_domain_event_loop(
                         let ts = now_ms();
                         emit_ws_event(
                             &event_tx,
-                            "pairing/verification",
-                            "pairing.failed",
+                            ws_topic::PAIRING_VERIFICATION,
+                            ws_event::PAIRING_FAILED,
                             Some(session_id.clone()),
                             PairingFailurePayload {
                                 session_id: session_id.clone(),
@@ -953,7 +954,7 @@ async fn run_pairing_domain_event_loop(
                         emit_pairing_verification(
                             &event_tx,
                             &session_id,
-                            "failed",
+                            pairing_stage::FAILED,
                             Some(peer_id.clone()),
                             device_name.clone(),
                             None,
@@ -966,7 +967,7 @@ async fn run_pairing_domain_event_loop(
                             session_id.clone(),
                             Some(peer_id),
                             device_name,
-                            "failed",
+                            pairing_stage::FAILED,
                             ts,
                         )
                         .await;
@@ -1106,7 +1107,7 @@ async fn handle_pairing_message(
                     pairing_transport,
                     &peer_id,
                     &request.session_id,
-                    "host_not_discoverable",
+                    pairing_busy_reason::HOST_NOT_DISCOVERABLE,
                 )
                 .await;
                 return Ok(());
@@ -1117,7 +1118,7 @@ async fn handle_pairing_message(
                     pairing_transport,
                     &peer_id,
                     &request.session_id,
-                    "no_local_pairing_participant_ready",
+                    pairing_busy_reason::NO_LOCAL_PAIRING_PARTICIPANT_READY,
                 )
                 .await;
                 return Ok(());
@@ -1131,7 +1132,7 @@ async fn handle_pairing_message(
                             pairing_transport,
                             &peer_id,
                             &request.session_id,
-                            "busy",
+                            pairing_busy_reason::BUSY,
                         )
                         .await;
                         return Ok(());
@@ -1147,19 +1148,19 @@ async fn handle_pairing_message(
                 request.session_id.clone(),
                 Some(peer_id.clone()),
                 Some(request.device_name.clone()),
-                "request",
+                pairing_stage::REQUEST,
                 ts,
             )
             .await;
             emit_ws_event(
                 event_tx,
-                "pairing/session",
-                "pairing.updated",
+                ws_topic::PAIRING_SESSION,
+                ws_event::PAIRING_UPDATED,
                 Some(request.session_id.clone()),
                 PairingSessionChangedPayload {
                     session_id: request.session_id.clone(),
-                    state: "request".to_string(),
-                    stage: "request".to_string(),
+                    state: pairing_stage::REQUEST.to_string(),
+                    stage: pairing_stage::REQUEST.to_string(),
                     peer_id: Some(peer_id.clone()),
                     device_name: Some(request.device_name.clone()),
                     updated_at_ms: ts,
@@ -1361,8 +1362,8 @@ fn broadcast_space_access_state_changed(
         }
     };
     let _ = event_tx.send(DaemonWsEvent {
-        topic: "space-access".to_string(),
-        event_type: "space_access.state_changed".to_string(),
+        topic: ws_topic::SPACE_ACCESS.to_string(),
+        event_type: ws_event::SPACE_ACCESS_STATE_CHANGED.to_string(),
         session_id: None,
         ts: chrono::Utc::now().timestamp_millis(),
         payload: serialized,
@@ -1403,8 +1404,8 @@ fn emit_pairing_session_changed(
 ) {
     emit_ws_event(
         event_tx,
-        "pairing/session",
-        "pairing.updated",
+        ws_topic::PAIRING_SESSION,
+        ws_event::PAIRING_UPDATED,
         Some(session_id.to_string()),
         PairingSessionChangedPayload {
             session_id: session_id.to_string(),
@@ -1431,8 +1432,8 @@ fn emit_pairing_verification(
 ) {
     emit_ws_event(
         event_tx,
-        "pairing/verification",
-        "pairing.verification_required",
+        ws_topic::PAIRING_VERIFICATION,
+        ws_event::PAIRING_VERIFICATION_REQUIRED,
         Some(session_id.to_string()),
         PairingVerificationPayload {
             session_id: session_id.to_string(),
@@ -1455,8 +1456,8 @@ fn emit_pairing_failure(
 ) {
     emit_ws_event(
         event_tx,
-        "pairing/verification",
-        "pairing.failed",
+        ws_topic::PAIRING_VERIFICATION,
+        ws_event::PAIRING_FAILED,
         Some(session_id.to_string()),
         PairingFailurePayload {
             session_id: session_id.to_string(),
@@ -1482,14 +1483,14 @@ async fn signal_pairing_transport_failure(
         session_id.to_string(),
         Some(peer_id.to_string()),
         None,
-        "failed",
+        pairing_stage::FAILED,
         ts,
     )
     .await;
     emit_pairing_session_changed(
         event_tx,
         session_id,
-        "failed",
+        pairing_stage::FAILED,
         Some(peer_id.to_string()),
         None,
         ts,
@@ -1497,7 +1498,7 @@ async fn signal_pairing_transport_failure(
     emit_pairing_verification(
         event_tx,
         session_id,
-        "failed",
+        pairing_stage::FAILED,
         Some(peer_id.to_string()),
         None,
         None,
@@ -1556,8 +1557,8 @@ async fn run_space_access_event_loop(
                 );
                 emit_ws_event(
                     &event_tx,
-                    "setup",
-                    "setup.space_access_completed",
+                    ws_topic::SETUP,
+                    ws_event::SETUP_SPACE_ACCESS_COMPLETED,
                     Some(event.session_id.clone()),
                     SetupSpaceAccessCompletedPayload {
                         session_id: event.session_id,
@@ -1691,29 +1692,30 @@ fn parse_space_access_busy_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uc_core::network::daemon_api_strings::pairing_busy_reason;
     use uc_core::network::pairing_state_machine::{FailureReason, TimeoutKind};
 
     #[test]
     fn pairing_failure_message_preserves_machine_readable_reason() {
         assert_eq!(
             pairing_failure_message(&FailureReason::Other(
-                "no_local_pairing_participant_ready".to_string(),
+                pairing_busy_reason::NO_LOCAL_PAIRING_PARTICIPANT_READY.to_string(),
             )),
-            "no_local_pairing_participant_ready"
+            pairing_busy_reason::NO_LOCAL_PAIRING_PARTICIPANT_READY
         );
         assert_eq!(
             pairing_failure_message(&FailureReason::Timeout(TimeoutKind::WaitingChallenge)),
             "timeout:WaitingChallenge"
         );
-        assert_eq!(pairing_failure_message(&FailureReason::PeerBusy), "busy");
+        assert_eq!(pairing_failure_message(&FailureReason::PeerBusy), pairing_busy_reason::BUSY);
     }
 
     #[test]
     fn parse_space_access_busy_payload_treats_plain_busy_reason_as_non_space_access() {
         for reason in [
-            "busy",
-            "host_not_discoverable",
-            "no_local_pairing_participant_ready",
+            pairing_busy_reason::BUSY,
+            pairing_busy_reason::HOST_NOT_DISCOVERABLE,
+            pairing_busy_reason::NO_LOCAL_PAIRING_PARTICIPANT_READY,
         ] {
             assert!(
                 matches!(

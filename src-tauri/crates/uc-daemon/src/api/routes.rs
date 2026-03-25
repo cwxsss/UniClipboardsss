@@ -10,6 +10,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
 use uc_app::usecases::CoreUseCases;
+use uc_core::network::daemon_api_strings::{pairing_error_code, pairing_stage};
 use uc_core::security::model::EncryptionError;
 use uc_core::setup::SetupState;
 
@@ -491,7 +492,7 @@ async fn initiate_pairing(
     };
 
     match pairing_host.initiate_pairing(payload.peer_id).await {
-        Ok(session_id) => acknowledged(session_id, true, "request").into_response(),
+        Ok(session_id) => acknowledged(session_id, true, pairing_stage::REQUEST).into_response(),
         Err(error) => pairing_command_error(error).into_response(),
     }
 }
@@ -512,7 +513,7 @@ async fn handle_initiate_pairing(
         Err(_) => {
             return pairing_api_error(
                 StatusCode::BAD_REQUEST,
-                "bad_request",
+                pairing_error_code::BAD_REQUEST,
                 "malformed request body",
             )
             .into_response();
@@ -540,7 +541,7 @@ async fn accept_pairing(
     };
 
     match pairing_host.accept_pairing(&session_id).await {
-        Ok(()) => acknowledged(session_id, true, "verifying").into_response(),
+        Ok(()) => acknowledged(session_id, true, pairing_stage::VERIFYING).into_response(),
         Err(error) => pairing_command_error(error).into_response(),
     }
 }
@@ -572,7 +573,7 @@ async fn reject_pairing(
     };
 
     match pairing_host.reject_pairing(&session_id).await {
-        Ok(()) => acknowledged(session_id, true, "failed").into_response(),
+        Ok(()) => acknowledged(session_id, true, pairing_stage::FAILED).into_response(),
         Err(error) => pairing_command_error(error).into_response(),
     }
 }
@@ -604,7 +605,7 @@ async fn cancel_pairing(
     };
 
     match pairing_host.cancel_pairing(&session_id).await {
-        Ok(()) => acknowledged(session_id, true, "failed").into_response(),
+        Ok(()) => acknowledged(session_id, true, pairing_stage::FAILED).into_response(),
         Err(error) => pairing_command_error(error).into_response(),
     }
 }
@@ -634,7 +635,7 @@ async fn handle_unpair_device(
     let Some(runtime) = state.runtime.clone() else {
         return pairing_api_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "runtime_unavailable",
+            pairing_error_code::RUNTIME_UNAVAILABLE,
             "daemon runtime unavailable",
         )
         .into_response();
@@ -644,7 +645,7 @@ async fn handle_unpair_device(
         Err(_) => {
             return pairing_api_error(
                 StatusCode::BAD_REQUEST,
-                "bad_request",
+                pairing_error_code::BAD_REQUEST,
                 "malformed request body",
             )
             .into_response();
@@ -657,7 +658,7 @@ async fn handle_unpair_device(
         Err(error) => {
             let message = error.to_string();
             tracing::error!(error = %error, "daemon unpair command failed");
-            pairing_api_error(StatusCode::INTERNAL_SERVER_ERROR, "internal", &message)
+            pairing_api_error(StatusCode::INTERNAL_SERVER_ERROR, pairing_error_code::INTERNAL, &message)
                 .into_response()
         }
     }
@@ -688,9 +689,9 @@ async fn verify_pairing(
             session_id,
             true,
             if payload.pin_matches {
-                "verifying"
+                pairing_stage::VERIFYING
             } else {
-                "failed"
+                pairing_stage::FAILED
             },
         )
         .into_response(),
@@ -714,7 +715,7 @@ async fn handle_pairing_gui_lease(
         Err(_) => {
             return pairing_api_error(
                 StatusCode::BAD_REQUEST,
-                "bad_request",
+                pairing_error_code::BAD_REQUEST,
                 "malformed request body",
             )
             .into_response();
@@ -761,7 +762,7 @@ where
         Err(_) => {
             return pairing_api_error(
                 StatusCode::BAD_REQUEST,
-                "bad_request",
+                pairing_error_code::BAD_REQUEST,
                 "malformed request body",
             )
             .into_response();
@@ -982,9 +983,9 @@ fn _route_markers() -> [&'static str; 21] {
         "/pairing/sessions/:session_id/reject",
         "/pairing/sessions/:session_id/cancel",
         "/pairing/sessions/:session_id/verify",
-        "active_session_exists",
-        "no_local_participant",
-        "host_not_discoverable",
+        pairing_error_code::ACTIVE_SESSION_EXISTS,
+        pairing_error_code::NO_LOCAL_PARTICIPANT,
+        pairing_error_code::HOST_NOT_DISCOVERABLE,
         "invalid_setup_transition",
     ]
 }
