@@ -17,11 +17,11 @@ use tracing::{error, info, warn};
 
 use uc_bootstrap::GuiBootstrapContext;
 use uc_core::ports::ClipboardChangeHandler;
+use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
 use uc_daemon_client::{realtime::install_daemon_setup_pairing_facade, DaemonConnectionState};
 use uc_platform::ipc::PlatformCommand;
 use uc_platform::ports::PlatformCommandExecutorPort;
 use uc_platform::runtime::runtime::PlatformRuntime;
-use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
     start_background_tasks, supervise_daemon, AppRuntime,

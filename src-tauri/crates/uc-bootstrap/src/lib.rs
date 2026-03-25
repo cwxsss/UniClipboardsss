@@ -29,6 +29,6 @@ pub use config_resolution::{resolve_app_config, resolve_config_path, ConfigResol
 pub use init::ensure_default_device_name;
 pub use non_gui_runtime::{
     build_cli_runtime, build_non_gui_runtime, build_non_gui_runtime_with_setup,
-    LoggingHostEventEmitter,
+    resolve_clipboard_integration_mode, LoggingHostEventEmitter,
 };
 pub use tracing::init_tracing_subscriber;

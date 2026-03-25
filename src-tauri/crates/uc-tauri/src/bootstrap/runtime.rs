@@ -190,9 +190,11 @@ impl AppRuntime {
         let lifecycle_status: Arc<dyn uc_app::usecases::LifecycleStatusPort> =
             Arc::new(uc_app::usecases::InMemoryLifecycleStatus::new());
         let app_handle = Arc::new(std::sync::RwLock::new(None));
-        // GUI always runs in Passive mode — daemon is the sole clipboard observer (Phase 57, D-01).
-        // The daemon captures clipboard changes and broadcasts them to GUI via DaemonWsBridge.
-        let clipboard_integration_mode = uc_core::clipboard::ClipboardIntegrationMode::Passive;
+        // Clipboard integration mode is resolved from the UC_CLIPBOARD_MODE env var.
+        // Defaults to Full (standalone GUI watches clipboard directly).
+        // Set UC_CLIPBOARD_MODE=passive when a daemon is running and handling
+        // clipboard capture + broadcast via DaemonWsBridge.
+        let clipboard_integration_mode = uc_bootstrap::resolve_clipboard_integration_mode();
         let task_registry = Arc::new(TaskRegistry::new());
 
         // Create the shared emitter cell BEFORE both consumers.

@@ -176,7 +176,11 @@ pub fn build_cli_runtime(
     Ok(runtime)
 }
 
-fn parse_clipboard_integration_mode(raw: Option<&str>) -> ClipboardIntegrationMode {
+/// Parse a raw string into a [`ClipboardIntegrationMode`].
+///
+/// Returns `Full` when `raw` is `None`, empty, or an unrecognized value.
+/// Returns `Passive` only when the value is `"passive"` (case-insensitive).
+pub fn parse_clipboard_integration_mode(raw: Option<&str>) -> ClipboardIntegrationMode {
     let Some(raw_value) = raw else {
         return ClipboardIntegrationMode::Full;
     };
@@ -196,7 +200,11 @@ fn parse_clipboard_integration_mode(raw: Option<&str>) -> ClipboardIntegrationMo
     ClipboardIntegrationMode::Full
 }
 
-fn resolve_clipboard_integration_mode() -> ClipboardIntegrationMode {
+/// Resolve the clipboard integration mode from the `UC_CLIPBOARD_MODE` env var.
+///
+/// Defaults to [`ClipboardIntegrationMode::Full`] when the variable is unset.
+/// Used by both GUI and non-GUI runtimes to determine clipboard behavior.
+pub fn resolve_clipboard_integration_mode() -> ClipboardIntegrationMode {
     let raw = std::env::var("UC_CLIPBOARD_MODE").ok();
     parse_clipboard_integration_mode(raw.as_deref())
 }
