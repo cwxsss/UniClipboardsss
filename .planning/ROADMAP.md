@@ -566,14 +566,22 @@ Plans:
 
 ### Phase 62: Daemon inbound clipboard sync — receive peer clipboard and write to local system
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Daemon receives inbound clipboard messages from peers via ClipboardTransportPort, applies them through SyncInboundClipboardUseCase (Full mode), writes to OS clipboard, and broadcasts clipboard.new_content WS events — mirroring the wiring.rs run_clipboard_receive_loop pattern.
+**Requirements**: PH62-01, PH62-02, PH62-03, PH62-04, PH62-05
 **Depends on:** Phase 61
-**Plans:** 0 plans
+**Plans:** 1 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. InboundClipboardSyncWorker implements DaemonService with subscribe-loop pattern
+2. SyncInboundClipboardUseCase constructed in Full mode via with_capture_dependencies
+3. WS event emitted only for Applied { entry*id: Some(*) } outcomes (not for None or Skipped)
+4. Shared clipboard_change_origin Arc prevents write-back loops between inbound sync and ClipboardWatcher
+5. Full uc-daemon test suite passes
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 62 to break down)
+- [ ] 62-01-PLAN.md — Create InboundClipboardSyncWorker with subscribe-loop, SyncInboundClipboardUseCase (Full mode), conditional WS event emission, and registration in daemon main.rs
 
 ### Phase 63: Daemon file transfer orchestration — handle file sync lifecycle in daemon
 

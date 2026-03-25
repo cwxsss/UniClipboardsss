@@ -182,10 +182,18 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Daemon Outbound Clipboard Sync
 
-- [ ] **PH61-01**: `DaemonClipboardChangeHandler::on_clipboard_changed` calls `OutboundSyncPlanner::plan()` after successful `LocalCapture` capture and dispatches `SyncOutboundClipboardUseCase::execute()` via `tokio::task::spawn_blocking`
-- [ ] **PH61-02**: `RemotePush` origin clipboard changes skip outbound sync entirely (no double-sync loop), guarded by `OutboundSyncPlanner` policy
-- [ ] **PH61-03**: `extract_file_paths_from_snapshot` function exists in `clipboard_watcher.rs` parsing `text/uri-list`, `file/uri-list`, `files`, `public.file-url` representations into `Vec<PathBuf>` with deduplication
-- [ ] **PH61-04**: File clipboard items produce `FileCandidate` vec with `extracted_paths_count` set before metadata filtering, and `SyncOutboundFileUseCase` dispatches for each file intent from the planner
+- [x] **PH61-01**: `DaemonClipboardChangeHandler::on_clipboard_changed` calls `OutboundSyncPlanner::plan()` after successful `LocalCapture` capture and dispatches `SyncOutboundClipboardUseCase::execute()` via `tokio::task::spawn_blocking`
+- [x] **PH61-02**: `RemotePush` origin clipboard changes skip outbound sync entirely (no double-sync loop), guarded by `OutboundSyncPlanner` policy
+- [x] **PH61-03**: `extract_file_paths_from_snapshot` function exists in `clipboard_watcher.rs` parsing `text/uri-list`, `file/uri-list`, `files`, `public.file-url` representations into `Vec<PathBuf>` with deduplication
+- [x] **PH61-04**: File clipboard items produce `FileCandidate` vec with `extracted_paths_count` set before metadata filtering, and `SyncOutboundFileUseCase` dispatches for each file intent from the planner
+
+### Daemon Inbound Clipboard Sync
+
+- [ ] **PH62-01**: `InboundClipboardSyncWorker` implements `DaemonService`, subscribes to `ClipboardTransportPort::subscribe_clipboard()`, and calls `SyncInboundClipboardUseCase::execute_with_outcome()` for each received message
+- [ ] **PH62-02**: Applied outcome with `entry_id: Some(id)` emits `clipboard.new_content` WS event with `origin="remote"` via `broadcast::Sender<DaemonWsEvent>`
+- [ ] **PH62-03**: Applied outcome with `entry_id: None` (Full mode non-file content) does NOT emit WS event — `ClipboardWatcherWorker` fires the event after OS clipboard write triggers capture
+- [ ] **PH62-04**: Skipped outcomes (echo prevention, dedup, encryption not ready) do not emit WS events
+- [ ] **PH62-05**: `InboundClipboardSyncWorker` accepts `clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>` via constructor and passes it to `SyncInboundClipboardUseCase::with_capture_dependencies()`, sharing the same Arc instance as `DaemonClipboardChangeHandler`
 
 ## Out of Scope
 
@@ -300,18 +308,23 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH60-03     | 60    | Complete |
 | PH60-04     | 60    | Complete |
 | PH60-05     | 60    | Complete |
-| PH61-01     | 61    | Pending  |
-| PH61-02     | 61    | Pending  |
-| PH61-03     | 61    | Pending  |
-| PH61-04     | 61    | Pending  |
+| PH61-01     | 61    | Complete |
+| PH61-02     | 61    | Complete |
+| PH61-03     | 61    | Complete |
+| PH61-04     | 61    | Complete |
+| PH62-01     | 62    | Pending  |
+| PH62-02     | 62    | Pending  |
+| PH62-03     | 62    | Pending  |
+| PH62-04     | 62    | Pending  |
+| PH62-05     | 62    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 83 total
-- Mapped to phases: 83
+- v0.4.0 requirements: 88 total
+- Mapped to phases: 88
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-25 after Phase 61 planning_
+_Last updated: 2026-03-25 after Phase 62 planning_
