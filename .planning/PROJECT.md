@@ -24,7 +24,7 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 ## Current State
 
 - **Latest shipped milestone:** v0.3.0 Log Observability & Feature Expansion (2026-03-17)
-- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture
+- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase
 - **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established; daemon encryption state recovery via existing AutoUnlockEncryptionSession use case; peer discovery deduplication fixed (local_peer_id filtering + full-snapshot peers.changed events)
 - **LOC:** ~135K Rust + ~20K TypeScript (estimated)
 - **Supported content types:** Text, Image, Link, File (all with per-device sync toggles)
@@ -107,6 +107,9 @@ Structured observability from dual-output logging through Seq cross-device traci
 Phase 52 complete — daemon is now the single source of truth for space access state (WS broadcast + HTTP query), GUI no longer owns SpaceAccessOrchestrator.
 Phase 56.1 complete — all daemon wire-protocol string constants centralized in `uc-core::network::daemon_api_strings`, eliminating hardcoded string drift between uc-daemon and uc-daemon-client.
 Phase 57 complete — daemon is now the sole clipboard observer via real ClipboardWatcherWorker (clipboard_rs + CaptureClipboardUseCase + WS event broadcast); GUI operates in Passive mode receiving clipboard updates via DaemonWsBridge → RealtimeEvent::ClipboardNewContent → clipboard://event pipeline; write-back loop prevention via ClipboardChangeOriginPort.
+Phase 60 complete — FileTransferOrchestrator extracted from uc-tauri to uc-app, wired into uc-bootstrap assembly; file_transfer_wiring.rs deleted.
+Phase 61 complete — daemon triggers outbound clipboard sync to peers via OutboundSyncPlanner + SyncOutboundClipboardUseCase + SyncOutboundFileUseCase after local capture; ClipboardWatcherWorker delegates to DaemonClipboardChangeHandler.
+Phase 62 complete — daemon receives inbound clipboard from peers via ClipboardTransportPort::subscribe_clipboard(); InboundClipboardSyncWorker applies via SyncInboundClipboardUseCase::with_capture_dependencies(ClipboardIntegrationMode::Full); WS events emitted only for Applied { entry_id: Some } outcomes; shared clipboard_change_origin Arc prevents write-back loops.
 
 ## Key Decisions
 
@@ -143,4 +146,4 @@ Phase 57 complete — daemon is now the sole clipboard observer via real Clipboa
 
 ---
 
-_Last updated: 2026-03-25 after Phase 57 completion_
+_Last updated: 2026-03-26 after Phase 62 completion_
