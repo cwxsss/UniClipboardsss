@@ -569,7 +569,7 @@ Plans:
 **Goal:** Daemon receives inbound clipboard messages from peers via ClipboardTransportPort, applies them through SyncInboundClipboardUseCase (Full mode), writes to OS clipboard, and broadcasts clipboard.new_content WS events — mirroring the wiring.rs run_clipboard_receive_loop pattern.
 **Requirements**: PH62-01, PH62-02, PH62-03, PH62-04, PH62-05
 **Depends on:** Phase 61
-**Plans:** 1 plans
+**Plans:** 1/1 plans complete
 
 **Success Criteria** (what must be TRUE):
 
@@ -581,7 +581,7 @@ Plans:
 
 Plans:
 
-- [ ] 62-01-PLAN.md — Create InboundClipboardSyncWorker with subscribe-loop, SyncInboundClipboardUseCase (Full mode), conditional WS event emission, and registration in daemon main.rs
+- [x] 62-01-PLAN.md — Create InboundClipboardSyncWorker with subscribe-loop, SyncInboundClipboardUseCase (Full mode), conditional WS event emission, and registration in daemon main.rs
 
 ### Phase 63: Daemon file transfer orchestration — handle file sync lifecycle in daemon
 

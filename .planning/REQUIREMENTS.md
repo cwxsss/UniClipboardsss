@@ -189,11 +189,11 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Daemon Inbound Clipboard Sync
 
-- [ ] **PH62-01**: `InboundClipboardSyncWorker` implements `DaemonService`, subscribes to `ClipboardTransportPort::subscribe_clipboard()`, and calls `SyncInboundClipboardUseCase::execute_with_outcome()` for each received message
-- [ ] **PH62-02**: Applied outcome with `entry_id: Some(id)` emits `clipboard.new_content` WS event with `origin="remote"` via `broadcast::Sender<DaemonWsEvent>`
-- [ ] **PH62-03**: Applied outcome with `entry_id: None` (Full mode non-file content) does NOT emit WS event — `ClipboardWatcherWorker` fires the event after OS clipboard write triggers capture
-- [ ] **PH62-04**: Skipped outcomes (echo prevention, dedup, encryption not ready) do not emit WS events
-- [ ] **PH62-05**: `InboundClipboardSyncWorker` accepts `clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>` via constructor and passes it to `SyncInboundClipboardUseCase::with_capture_dependencies()`, sharing the same Arc instance as `DaemonClipboardChangeHandler`
+- [x] **PH62-01**: `InboundClipboardSyncWorker` implements `DaemonService`, subscribes to `ClipboardTransportPort::subscribe_clipboard()`, and calls `SyncInboundClipboardUseCase::execute_with_outcome()` for each received message
+- [x] **PH62-02**: Applied outcome with `entry_id: Some(id)` emits `clipboard.new_content` WS event with `origin="remote"` via `broadcast::Sender<DaemonWsEvent>`
+- [x] **PH62-03**: Applied outcome with `entry_id: None` (Full mode non-file content) does NOT emit WS event — `ClipboardWatcherWorker` fires the event after OS clipboard write triggers capture
+- [x] **PH62-04**: Skipped outcomes (echo prevention, dedup, encryption not ready) do not emit WS events
+- [x] **PH62-05**: `InboundClipboardSyncWorker` accepts `clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>` via constructor and passes it to `SyncInboundClipboardUseCase::with_capture_dependencies()`, sharing the same Arc instance as `DaemonClipboardChangeHandler`
 
 ## Out of Scope
 
@@ -312,11 +312,11 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH61-02     | 61    | Complete |
 | PH61-03     | 61    | Complete |
 | PH61-04     | 61    | Complete |
-| PH62-01     | 62    | Pending  |
-| PH62-02     | 62    | Pending  |
-| PH62-03     | 62    | Pending  |
-| PH62-04     | 62    | Pending  |
-| PH62-05     | 62    | Pending  |
+| PH62-01     | 62    | Complete |
+| PH62-02     | 62    | Complete |
+| PH62-03     | 62    | Complete |
+| PH62-04     | 62    | Complete |
+| PH62-05     | 62    | Complete |
 
 **Coverage:**
 

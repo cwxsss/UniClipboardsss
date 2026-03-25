@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Ready to plan
-stopped_at: Completed 61-01-PLAN.md
-last_updated: '2026-03-25T15:11:36.925Z'
+status: Phase complete — ready for verification
+stopped_at: Completed 62-daemon-inbound-clipboard-sync-01-PLAN.md
+last_updated: "2026-03-25T15:58:53.006Z"
 progress:
   total_phases: 35
-  completed_phases: 25
-  total_plans: 75
-  completed_plans: 72
+  completed_phases: 26
+  total_plans: 76
+  completed_plans: 73
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 61 — daemon-outbound-clipboard-sync
+**Current focus:** Phase 62 — daemon-inbound-clipboard-sync
 
 ## Current Position
 
-Phase: 62
-Plan: Not started
+Phase: 62 (daemon-inbound-clipboard-sync) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -242,6 +242,9 @@ Recent decisions affecting current work:
 - [Phase 61]: SyncOutboundFileUseCase built inline from wiring_deps (CoreUseCases lifetime complexity in async fn)
 - [Phase 61]: extract_file_paths_from_snapshot duplicated from uc-tauri/runtime.rs into uc-daemon (scope-minimal, shared crate deferred)
 - [Phase 61]: spawn_blocking wraps SyncOutboundClipboardUseCase::execute() which uses executor::block_on internally
+- [Phase 62]: Arc<SyncInboundClipboardUseCase> instead of Clone (not implemented)
+- [Phase 62]: TestInboundWorker bypasses CoreRuntime for unit test isolation
+- [Phase 62]: WS event guard: if let Applied { entry_id: Some } only
 
 ### Roadmap Evolution
 
@@ -292,6 +295,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-25T15:06:29.019Z
-Stopped at: Completed 61-01-PLAN.md
+Last session: 2026-03-25T15:58:38.317Z
+Stopped at: Completed 62-daemon-inbound-clipboard-sync-01-PLAN.md
 Resume file: None
