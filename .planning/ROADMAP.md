@@ -474,13 +474,13 @@ Plans:
 **Goal:** Extract scattered hardcoded string literals (WS topic/event names, session state labels, pairing busy reasons, HTTP API paths) into shared constants in uc-core, eliminating cross-crate duplication and reducing wire-protocol mismatch risk.
 **Requirements**: PH561-01, PH561-02, PH561-03, PH561-04, PH561-05
 **Depends on:** Phase 56
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 
 - [x] 56.1-01-PLAN.md — Define daemon wire-protocol string constants in uc-core daemon_api_strings module
 - [ ] 56.1-02-PLAN.md — Replace hardcoded strings in uc-daemon (server side) with uc-core constants
-- [ ] 56.1-03-PLAN.md — Replace hardcoded strings in uc-daemon-client (client side) with uc-core constants
+- [x] 56.1-03-PLAN.md — Replace hardcoded strings in uc-daemon-client (client side) with uc-core constants
 
 ### Phase 57: Daemon Clipboard Watcher Integration
 
