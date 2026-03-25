@@ -24,6 +24,7 @@ use uc_daemon::socket::resolve_daemon_socket_path;
 use uc_daemon::state::{DaemonServiceSnapshot, RuntimeState};
 use uc_daemon::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
 use uc_daemon::workers::peer_discovery::PeerDiscoveryWorker;
+use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
 use uc_platform::clipboard::LocalClipboard;
 
 fn main() -> anyhow::Result<()> {
@@ -96,9 +97,17 @@ fn main() -> anyhow::Result<()> {
         LocalClipboard::new()
             .map_err(|e| anyhow::anyhow!("failed to create LocalClipboard: {}", e))?,
     );
+
+    // Create shared clipboard change origin for write-back loop prevention.
+    // This same Arc will be passed to InboundClipboardSyncWorker when inbound sync is added
+    // (per D-09), so both sides share the same state for origin detection.
+    let clipboard_change_origin: Arc<dyn uc_core::ports::ClipboardChangeOriginPort> =
+        Arc::new(InMemoryClipboardChangeOrigin::new());
+
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
         runtime.clone(),
         event_tx.clone(),
+        clipboard_change_origin.clone(),
     ));
     let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
         local_clipboard,

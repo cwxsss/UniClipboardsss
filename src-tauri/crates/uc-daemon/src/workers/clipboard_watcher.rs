@@ -12,11 +12,11 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use clipboard_rs::{ClipboardWatcherContext, ClipboardWatcher as RSClipboardWatcher};
+use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
-use uc_core::ports::ClipboardChangeHandler;
+use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_platform::clipboard::watcher::ClipboardWatcher;
 use uc_platform::ipc::PlatformEvent;
@@ -47,14 +47,27 @@ struct ClipboardNewContentPayload {
 /// Invoked by ClipboardWatcherWorker for each de-duplicated clipboard change.
 /// Persists entries via CaptureClipboardUseCase and broadcasts a
 /// clipboard.new_content WS event through the shared event broadcast channel.
+///
+/// The shared `clipboard_change_origin` instance is used to detect whether a
+/// clipboard change was triggered by daemon inbound sync (RemotePush) or by
+/// the local user (LocalCapture), preventing write-back loops.
 pub struct DaemonClipboardChangeHandler {
     runtime: Arc<CoreRuntime>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
+    clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
 }
 
 impl DaemonClipboardChangeHandler {
-    pub fn new(runtime: Arc<CoreRuntime>, event_tx: broadcast::Sender<DaemonWsEvent>) -> Self {
-        Self { runtime, event_tx }
+    pub fn new(
+        runtime: Arc<CoreRuntime>,
+        event_tx: broadcast::Sender<DaemonWsEvent>,
+        clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    ) -> Self {
+        Self {
+            runtime,
+            event_tx,
+            clipboard_change_origin,
+        }
     }
 
     fn build_capture_use_case(&self) -> CaptureClipboardUseCase {
@@ -76,19 +89,34 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
     async fn on_clipboard_changed(&self, snapshot: SystemClipboardSnapshot) -> Result<()> {
         let usecase = self.build_capture_use_case();
 
-        // For initial local-capture-only plan, use LocalCapture directly.
-        // Plan 03 will add shared ClipboardChangeOriginPort for write-back loop prevention.
-        match usecase
-            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture)
-            .await
-        {
+        // 1. Compute snapshot hash for write-back loop prevention.
+        let snapshot_hash = snapshot.snapshot_hash().to_string();
+
+        // 2. Check if this clipboard change was triggered by daemon inbound sync (RemotePush)
+        //    or by the local user (LocalCapture). This prevents re-capturing content that
+        //    the daemon itself wrote to the OS clipboard during inbound sync.
+        let origin = self
+            .clipboard_change_origin
+            .consume_origin_for_snapshot_or_default(
+                &snapshot_hash,
+                ClipboardChangeOrigin::LocalCapture,
+            )
+            .await;
+
+        // 3. Determine the origin string for the WS event payload.
+        let origin_str = match origin {
+            ClipboardChangeOrigin::LocalCapture | ClipboardChangeOrigin::LocalRestore => "local",
+            ClipboardChangeOrigin::RemotePush => "remote",
+        };
+
+        match usecase.execute_with_origin(snapshot, origin).await {
             Ok(Some(entry_id)) => {
-                debug!(entry_id = %entry_id, "Daemon clipboard capture succeeded");
+                debug!(entry_id = %entry_id, ?origin, "Daemon clipboard capture succeeded");
 
                 let payload = ClipboardNewContentPayload {
                     entry_id: entry_id.to_string(),
                     preview: "New clipboard content".to_string(),
-                    origin: "local".to_string(),
+                    origin: origin_str.to_string(),
                 };
                 let payload_value = match serde_json::to_value(payload) {
                     Ok(v) => v,
