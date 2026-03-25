@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Milestone complete
-stopped_at: Phase 58 context gathered
-last_updated: '2026-03-25T06:39:34.250Z'
+status: Phase complete — ready for verification
+stopped_at: Completed 58-01-PLAN.md
+last_updated: "2026-03-25T08:12:04.179Z"
 progress:
   total_phases: 32
   completed_phases: 23
-  total_plans: 72
-  completed_plans: 69
+  total_plans: 74
+  completed_plans: 70
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 57 — daemon-daemon-daemon-daemon
+**Current focus:** Phase 58 — extract-dto-models-and-pairing-event-types-from-uc-tauri-to-uc-app-and-uc-core
 
 ## Current Position
 
-Phase: 57
-Plan: Not started
+Phase: 58 (extract-dto-models-and-pairing-event-types-from-uc-tauri-to-uc-app-and-uc-core) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -97,6 +97,8 @@ _Updated after each plan completion_
 | Phase 57-daemon-daemon-daemon-daemon P01 | 8 | 2 tasks | 4 files |
 | Phase 57-daemon-daemon-daemon-daemon P02 | 5 | 2 tasks | 5 files |
 | Phase 57-daemon-daemon-daemon-daemon P03 | 8 | 1 tasks | 2 files |
+| Phase 58 P02 | 27 | 1 tasks | 3 files |
+| Phase 58 P01 | 31min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -225,6 +227,10 @@ Recent decisions affecting current work:
 - [Phase 57-02]: DaemonWsBridge clipboard consumer follows existing pairing/peers/setup consumer pattern — subscribes eagerly, falls back to late subscribe if eager fails
 - [Phase 57-03]: Phase 57-03: Shared clipboard_change_origin Arc created at daemon composition root in main.rs — same instance will be injected into InboundClipboardSyncWorker when D-09 is added
 - [Phase 57-03]: Phase 57-03: WS event origin field is 'remote' when RemotePush, 'local' for LocalCapture/LocalRestore — mirrors AppRuntime GUI pattern
+- [Phase 58]: P2PPeerInfo and PairedPeer moved to uc-app/usecases/pairing/dto.rs; P2PPairingVerificationEvent deletion skipped because research D-02 was incorrect — wiring.rs uses it in 8 active call sites
+- [Phase 58]: EntryProjectionDto gains serde in uc-app; uc-tauri ClipboardEntryProjection deleted with no re-export stub (D-05)
+- [Phase 58]: link_domains populated inline at command layer via mut reference loop, not in a separate mapping step
+- [Phase 58]: file_transfer_ids marked serde(skip) as internal-only field not part of frontend wire contract
 
 ### Roadmap Evolution
 
@@ -271,6 +277,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-25T06:39:34.245Z
-Stopped at: Phase 58 context gathered
-Resume file: .planning/phases/58-extract-dto-models-and-pairing-event-types-from-uc-tauri-to-uc-app-and-uc-core/58-CONTEXT.md
+Last session: 2026-03-25T08:12:04.174Z
+Stopped at: Completed 58-01-PLAN.md
+Resume file: None

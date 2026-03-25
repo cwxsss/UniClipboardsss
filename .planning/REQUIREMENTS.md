@@ -166,11 +166,11 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Extract DTO Models And Pairing Event Types
 
-- [ ] **PH58-01**: `EntryProjectionDto` in uc-app has `#[derive(Serialize, Deserialize)]` with `#[serde(skip)]` on `file_transfer_ids` and `#[serde(skip_serializing_if)]` on optional fields, matching the existing frontend wire contract
-- [ ] **PH58-02**: `ClipboardStats` in uc-app has `#[derive(Serialize, Deserialize)]` and the duplicate `ClipboardStats` definition in uc-tauri/models is deleted
-- [ ] **PH58-03**: `P2PPeerInfo` and `PairedPeer` structs live in `uc-app/src/usecases/pairing/dto.rs` with serde derives, exported via `uc-app::usecases::pairing`
-- [ ] **PH58-04**: `P2PPairingVerificationEvent` and `P2PPairingVerificationKind` in `uc-tauri/src/events/p2p_pairing.rs` are deleted (stale dead code with zero consumers)
-- [ ] **PH58-05**: all import paths updated directly (no re-export stubs in uc-tauri per D-05)
+- [x] **PH58-01**: `EntryProjectionDto` in uc-app has `#[derive(Serialize, Deserialize)]` with `#[serde(skip)]` on `file_transfer_ids` and `#[serde(skip_serializing_if)]` on optional fields, matching the existing frontend wire contract
+- [x] **PH58-02**: `ClipboardStats` in uc-app has `#[derive(Serialize, Deserialize)]` and the duplicate `ClipboardStats` definition in uc-tauri/models is deleted
+- [x] **PH58-03**: `P2PPeerInfo` and `PairedPeer` structs live in `uc-app/src/usecases/pairing/dto.rs` with serde derives, exported via `uc-app::usecases::pairing`
+- [x] **PH58-04**: `P2PPairingVerificationEvent` and `P2PPairingVerificationKind` in `uc-tauri/src/events/p2p_pairing.rs` are deleted (stale dead code with zero consumers)
+- [x] **PH58-05**: all import paths updated directly (no re-export stubs in uc-tauri per D-05)
 
 ## Out of Scope
 
@@ -275,11 +275,11 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH57-05     | 57    | Complete |
 | PH57-06     | 57    | Complete |
 | PH57-07     | 57    | Complete |
-| PH58-01     | 58    | Pending  |
-| PH58-02     | 58    | Pending  |
-| PH58-03     | 58    | Pending  |
-| PH58-04     | 58    | Pending  |
-| PH58-05     | 58    | Pending  |
+| PH58-01     | 58    | Complete |
+| PH58-02     | 58    | Complete |
+| PH58-03     | 58    | Complete |
+| PH58-04     | 58    | Complete |
+| PH58-05     | 58    | Complete |
 
 **Coverage:**
 
