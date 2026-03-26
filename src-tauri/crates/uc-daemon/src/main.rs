@@ -43,8 +43,10 @@ fn main() -> anyhow::Result<()> {
         None,
         Arc::new(LoggingLifecycleEventEmitter),
     );
-    // Extract file_cache_dir before ctx is consumed by build_non_gui_runtime_with_setup.
+    // Extract file_cache_dir and file_transfer_orchestrator before ctx is consumed
+    // by build_non_gui_runtime_with_setup (which moves ctx.deps).
     let file_cache_dir = ctx.storage_paths.file_cache_dir.clone();
+    let file_transfer_orchestrator = ctx.background.file_transfer_orchestrator.clone();
     let runtime = Arc::new(build_non_gui_runtime_with_setup(
         ctx.deps,
         ctx.storage_paths.clone(),
@@ -130,6 +132,7 @@ fn main() -> anyhow::Result<()> {
         event_tx.clone(),
         clipboard_change_origin.clone(), // SAME Arc as DaemonClipboardChangeHandler
         Some(file_cache_dir),
+        Some(file_transfer_orchestrator),
     ));
 
     // 5. Assemble services vec — typed services erased to Arc<dyn DaemonService> (per D-05).

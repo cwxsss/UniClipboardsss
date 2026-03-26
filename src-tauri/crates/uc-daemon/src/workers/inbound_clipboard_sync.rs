@@ -20,8 +20,10 @@ use tracing::{debug, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
+use uc_app::usecases::file_sync::FileTransferOrchestrator;
 use uc_core::network::ClipboardMessage;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
+use uc_core::ports::file_transfer_repository::PendingInboundTransfer;
 use uc_core::ports::ClipboardChangeOriginPort;
 use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
 
@@ -63,6 +65,7 @@ pub struct InboundClipboardSyncWorker {
     /// MUST be the SAME Arc instance used by DaemonClipboardChangeHandler.
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
     file_cache_dir: Option<PathBuf>,
+    file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
 }
 
 impl InboundClipboardSyncWorker {
@@ -77,12 +80,14 @@ impl InboundClipboardSyncWorker {
         event_tx: broadcast::Sender<DaemonWsEvent>,
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
         file_cache_dir: Option<PathBuf>,
+        file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
     ) -> Self {
         Self {
             runtime,
             event_tx,
             clipboard_change_origin,
             file_cache_dir,
+            file_transfer_orchestrator,
         }
     }
 
@@ -119,6 +124,7 @@ impl DaemonService for InboundClipboardSyncWorker {
         let usecase = Arc::new(self.build_sync_inbound_usecase());
         let clipboard_network = self.runtime.wiring_deps().network_ports.clipboard.clone();
         let event_tx = self.event_tx.clone();
+        let orchestrator = self.file_transfer_orchestrator.clone();
 
         loop {
             let subscribe_result = tokio::select! {
@@ -132,7 +138,13 @@ impl DaemonService for InboundClipboardSyncWorker {
             match subscribe_result {
                 Ok(rx) => {
                     let usecase = Arc::clone(&usecase);
-                    tokio::spawn(Self::run_receive_loop(rx, usecase, cancel.clone(), event_tx.clone()));
+                    tokio::spawn(Self::run_receive_loop(
+                        rx,
+                        usecase,
+                        cancel.clone(),
+                        event_tx.clone(),
+                        orchestrator.clone(),
+                    ));
                     // The loop is now running in the background.
                     // When the channel closes (peer disconnects), we re-subscribe.
                     // If cancel fires, the whole start() returns.
@@ -167,6 +179,7 @@ impl InboundClipboardSyncWorker {
         usecase: Arc<SyncInboundClipboardUseCase>,
         cancel: CancellationToken,
         event_tx: broadcast::Sender<DaemonWsEvent>,
+        file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
     ) {
         loop {
             tokio::select! {
@@ -177,6 +190,9 @@ impl InboundClipboardSyncWorker {
                 item = rx.recv() => {
                     match item {
                         Some((message, pre_decoded)) => {
+                            // Capture origin_device_id before message is consumed by execute_with_outcome.
+                            let message_origin_device_id = message.origin_device_id.clone();
+
                             let outcome = match usecase.execute_with_outcome(message, pre_decoded).await {
                                 Ok(o) => o,
                                 Err(e) => {
@@ -191,8 +207,51 @@ impl InboundClipboardSyncWorker {
                             // In Passive mode or file transfers: entry_id is Some, must emit.
                             if let InboundApplyOutcome::Applied {
                                 entry_id: Some(ref entry_id),
-                                pending_transfers: _,
+                                ref pending_transfers,
                             } = outcome {
+                                // Seed pending transfer records for file transfers.
+                                if !pending_transfers.is_empty() {
+                                    if let Some(ref orch) = file_transfer_orchestrator {
+                                        let now_ms = orch.now_ms();
+                                        let db_transfers: Vec<PendingInboundTransfer> =
+                                            pending_transfers.iter().map(|t| PendingInboundTransfer {
+                                                transfer_id: t.transfer_id.clone(),
+                                                entry_id: entry_id.to_string(),
+                                                origin_device_id: message_origin_device_id.clone(),
+                                                filename: t.filename.clone(),
+                                                cached_path: t.cached_path.clone(),
+                                                created_at_ms: now_ms,
+                                            }).collect();
+
+                                        match orch.tracker().record_pending_from_clipboard(db_transfers).await {
+                                            Err(err) => {
+                                                warn!(error = %err, "Failed to persist pending transfer records");
+                                            }
+                                            Ok(()) => {
+                                                // Reconcile early completions that arrived before seeding.
+                                                let seeded_ids: Vec<String> = pending_transfers
+                                                    .iter()
+                                                    .map(|t| t.transfer_id.clone())
+                                                    .collect();
+                                                let early = orch.early_completion_cache().drain_matching(&seeded_ids);
+                                                for (tid, info) in &early {
+                                                    info!(transfer_id = %tid, "Reconciling early completion after seeding");
+                                                    if let Err(err) = orch.tracker().mark_completed(
+                                                        tid,
+                                                        info.content_hash.as_deref(),
+                                                        info.completed_at_ms,
+                                                    ).await {
+                                                        warn!(error = %err, transfer_id = %tid, "Failed to mark early-completed transfer");
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Emit pending status events to frontend.
+                                        orch.emit_pending_status(&entry_id.to_string(), pending_transfers);
+                                    }
+                                }
+
                                 Self::emit_ws_event(&event_tx, entry_id.to_string());
                             }
                             // InboundApplyOutcome::Applied { entry_id: None } — ClipboardWatcher handles it
