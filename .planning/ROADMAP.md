@@ -588,7 +588,7 @@ Plans:
 **Goal:** Wire FileTransferOrchestrator into daemon: extend DaemonApiEventEmitter to forward Transfer StatusChanged WS events, extend InboundClipboardSyncWorker to seed pending transfer records, and create FileSyncOrchestratorWorker that subscribes to network events for transfer lifecycle management (progress, completed, failed), startup reconciliation, timeout sweeps, and clipboard restore.
 **Requirements**: PH63-01, PH63-02, PH63-03, PH63-04, PH63-05, PH63-06, PH63-07
 **Depends on:** Phase 62
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 **Success Criteria** (what must be TRUE):
 
