@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Ready to plan
-stopped_at: Completed 63-02-PLAN.md
-last_updated: '2026-03-26T03:26:43.116Z'
+status: Ready to execute
+stopped_at: Completed 64-01-PLAN.md
+last_updated: "2026-03-26T04:20:17.932Z"
 progress:
   total_phases: 35
   completed_phases: 27
-  total_plans: 78
-  completed_plans: 75
+  total_plans: 80
+  completed_plans: 76
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 63 — daemon-file-transfer-orchestration
+**Current focus:** Phase 64 — tauri-sync-retirement
 
 ## Current Position
 
-Phase: 64
-Plan: Not started
+Phase: 64 (tauri-sync-retirement) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -105,6 +105,7 @@ _Updated after each plan completion_
 | Phase 62-daemon-inbound-clipboard-sync P01 | 60 | 2 tasks | 3 files |
 | Phase 63 P01 | 15 | 2 tasks | 4 files |
 | Phase 63 P02 | 8 | 2 tasks | 4 files |
+| Phase 64 P01 | 7min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -253,6 +254,7 @@ Recent decisions affecting current work:
 - [Phase 63]: [Phase 63]: message_origin_device_id captured before execute_with_outcome for safe async boundary crossing
 - [Phase 63]: FileSyncOrchestratorWorker does not forward transient progress events to WS (deferred Phase 64)
 - [Phase 63]: blake3 = '1' added directly to uc-daemon Cargo.toml for hash verification
+- [Phase 64]: file_transfer_orchestrator field preserved in BackgroundRuntimeDeps with _ prefix in wiring.rs — daemon still uses it via uc-bootstrap
 
 ### Roadmap Evolution
 
@@ -303,6 +305,6 @@ v0.4.0 runs phases 36-41. Phase numbering is continuous.
 
 ## Session Continuity
 
-Last session: 2026-03-26T03:21:36.444Z
-Stopped at: Completed 63-02-PLAN.md
+Last session: 2026-03-26T04:20:17.929Z
+Stopped at: Completed 64-01-PLAN.md
 Resume file: None

@@ -610,7 +610,7 @@ Plans:
 **Goal:** Remove daemon-duplicated sync loops (clipboard receive, network realtime, file transfer reconciliation/sweep) from uc-tauri wiring.rs, gate restore_clipboard_entry outbound sync on Full mode, and clean up dead code and dependencies.
 **Requirements**: PH64-01, PH64-02, PH64-03, PH64-04, PH64-05, PH64-06
 **Depends on:** Phase 63
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 **Success Criteria** (what must be TRUE):
 
@@ -623,5 +623,5 @@ Plans:
 
 Plans:
 
-- [ ] 64-01-PLAN.md — Remove daemon-duplicated sync loops, helpers, constants, and blake3 dep from wiring.rs
+- [x] 64-01-PLAN.md — Remove daemon-duplicated sync loops, helpers, constants, and blake3 dep from wiring.rs
 - [ ] 64-02-PLAN.md — Gate restore_clipboard_entry outbound sync on Full mode, remove dead sync_inbound_clipboard accessor
