@@ -111,6 +111,7 @@ Phase 60 complete — FileTransferOrchestrator extracted from uc-tauri to uc-app
 Phase 61 complete — daemon triggers outbound clipboard sync to peers via OutboundSyncPlanner + SyncOutboundClipboardUseCase + SyncOutboundFileUseCase after local capture; ClipboardWatcherWorker delegates to DaemonClipboardChangeHandler.
 Phase 62 complete — daemon receives inbound clipboard from peers via ClipboardTransportPort::subscribe_clipboard(); InboundClipboardSyncWorker applies via SyncInboundClipboardUseCase::with_capture_dependencies(ClipboardIntegrationMode::Full); WS events emitted only for Applied { entry_id: Some } outcomes; shared clipboard_change_origin Arc prevents write-back loops.
 Phase 63 complete — daemon file transfer orchestration: DaemonApiEventEmitter forwards Transfer StatusChanged as WS events on file-transfer topic; InboundClipboardSyncWorker seeds pending transfer records via FileTransferOrchestrator with early completion cache reconciliation; FileSyncOrchestratorWorker subscribes to network events for transfer lifecycle management (progress/completed/failed), startup reconciliation, timeout sweeps, and clipboard restore.
+Phase 64 complete — Tauri sync retirement: removed 896 lines of daemon-duplicated sync loops from wiring.rs (clipboard_receive, pairing_events, file_transfer_reconcile, timeout_sweep); gated restore_clipboard_entry outbound sync on Full mode to prevent double-sync with daemon; removed dead sync_inbound_clipboard accessor and blake3 dependency from uc-tauri.
 
 ## Key Decisions
 
@@ -147,4 +148,4 @@ Phase 63 complete — daemon file transfer orchestration: DaemonApiEventEmitter 
 
 ---
 
-_Last updated: 2026-03-26 after Phase 63 completion_
+_Last updated: 2026-03-26 after Phase 64 completion_
