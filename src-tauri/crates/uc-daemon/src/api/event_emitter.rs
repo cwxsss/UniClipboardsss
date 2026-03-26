@@ -1,15 +1,24 @@
+use serde::Serialize;
 use tokio::sync::broadcast;
+use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::ports::host_event_emitter::{
     EmitError, HostEvent, HostEventEmitterPort, SetupHostEvent, SpaceAccessHostEvent,
+    TransferHostEvent,
 };
 
 use crate::api::types::{
     DaemonWsEvent, SetupSpaceAccessCompletedPayload, SetupStateChangedPayload,
 };
 
-const TOPIC_SETUP: &str = "setup";
-const SETUP_STATE_CHANGED_EVENT: &str = "setup.state_changed";
-const SETUP_SPACE_ACCESS_COMPLETED_EVENT: &str = "setup.space_access_completed";
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileTransferStatusChangedPayload {
+    transfer_id: String,
+    entry_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
 
 pub struct DaemonApiEventEmitter {
     event_tx: broadcast::Sender<DaemonWsEvent>,
@@ -27,6 +36,7 @@ impl DaemonApiEventEmitter {
     fn emit_ws_event<T: serde::Serialize>(
         &self,
         event_type: &str,
+        topic: &str,
         session_id: Option<String>,
         ts: i64,
         payload: T,
@@ -40,7 +50,7 @@ impl DaemonApiEventEmitter {
         };
 
         let _ = self.event_tx.send(DaemonWsEvent {
-            topic: TOPIC_SETUP.to_string(),
+            topic: topic.to_string(),
             event_type: event_type.to_string(),
             session_id,
             ts,
@@ -58,7 +68,8 @@ impl HostEventEmitterPort for DaemonApiEventEmitter {
         match event {
             HostEvent::Setup(SetupHostEvent::StateChanged { state, session_id }) => {
                 self.emit_ws_event(
-                    SETUP_STATE_CHANGED_EVENT,
+                    ws_event::SETUP_STATE_CHANGED,
+                    ws_topic::SETUP,
                     session_id.clone(),
                     Self::now_ms(),
                     SetupStateChangedPayload {
@@ -82,7 +93,8 @@ impl HostEventEmitterPort for DaemonApiEventEmitter {
                 ts,
             }) => {
                 self.emit_ws_event(
-                    SETUP_SPACE_ACCESS_COMPLETED_EVENT,
+                    ws_event::SETUP_SPACE_ACCESS_COMPLETED,
+                    ws_topic::SETUP,
                     Some(session_id.clone()),
                     ts,
                     SetupSpaceAccessCompletedPayload {
@@ -91,6 +103,25 @@ impl HostEventEmitterPort for DaemonApiEventEmitter {
                         success,
                         reason,
                         ts,
+                    },
+                );
+            }
+            HostEvent::Transfer(TransferHostEvent::StatusChanged {
+                transfer_id,
+                entry_id,
+                status,
+                reason,
+            }) => {
+                self.emit_ws_event(
+                    ws_event::FILE_TRANSFER_STATUS_CHANGED,
+                    ws_topic::FILE_TRANSFER,
+                    None,
+                    Self::now_ms(),
+                    FileTransferStatusChangedPayload {
+                        transfer_id,
+                        entry_id,
+                        status,
+                        reason,
                     },
                 );
             }
@@ -132,8 +163,8 @@ mod tests {
             .expect("daemon api emitter should stay infallible");
 
         let event = rx.try_recv().expect("setup event should be broadcast");
-        assert_eq!(event.topic, TOPIC_SETUP);
-        assert_eq!(event.event_type, SETUP_STATE_CHANGED_EVENT);
+        assert_eq!(event.topic, ws_topic::SETUP);
+        assert_eq!(event.event_type, ws_event::SETUP_STATE_CHANGED);
         assert_eq!(event.session_id.as_deref(), Some("session-1"));
         assert_eq!(
             event.payload["sessionId"].as_str(),
@@ -164,5 +195,28 @@ mod tests {
         assert_eq!(event.topic, "space-access");
         assert_eq!(event.event_type, "space_access.state_changed");
         assert_eq!(event.payload["state"], "Idle");
+    }
+
+    #[test]
+    fn emits_file_transfer_status_changed_to_file_transfer_topic() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let emitter = DaemonApiEventEmitter::new(tx);
+
+        emitter
+            .emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
+                transfer_id: "xfer-42".to_string(),
+                entry_id: "entry-99".to_string(),
+                status: "completed".to_string(),
+                reason: None,
+            }))
+            .expect("emit should succeed");
+
+        let event = rx.try_recv().expect("file-transfer event should be broadcast");
+        assert_eq!(event.topic, ws_topic::FILE_TRANSFER);
+        assert_eq!(event.event_type, ws_event::FILE_TRANSFER_STATUS_CHANGED);
+        assert_eq!(event.payload["transferId"].as_str(), Some("xfer-42"));
+        assert_eq!(event.payload["entryId"].as_str(), Some("entry-99"));
+        assert_eq!(event.payload["status"].as_str(), Some("completed"));
+        assert!(event.payload.get("reason").is_none(), "reason should be omitted when None");
     }
 }
