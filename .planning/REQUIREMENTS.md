@@ -197,9 +197,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Daemon File Transfer Orchestration
 
-- [ ] **PH63-01**: `DaemonApiEventEmitter` handles `HostEvent::Transfer(TransferHostEvent::StatusChanged)` by emitting a `DaemonWsEvent` on the `file-transfer` WS topic with event type `file-transfer.status_changed` instead of silently logging and dropping
-- [ ] **PH63-02**: `daemon_api_strings` module in uc-core has `ws_topic::FILE_TRANSFER = "file-transfer"` and `ws_event::FILE_TRANSFER_STATUS_CHANGED = "file-transfer.status_changed"` constants
-- [ ] **PH63-03**: `InboundClipboardSyncWorker` accepts `Option<Arc<FileTransferOrchestrator>>` via constructor and calls `tracker().record_pending_from_clipboard()` for `Applied { entry_id: Some(_), pending_transfers: non-empty }` outcomes, including early completion cache reconciliation
+- [x] **PH63-01**: `DaemonApiEventEmitter` handles `HostEvent::Transfer(TransferHostEvent::StatusChanged)` by emitting a `DaemonWsEvent` on the `file-transfer` WS topic with event type `file-transfer.status_changed` instead of silently logging and dropping
+- [x] **PH63-02**: `daemon_api_strings` module in uc-core has `ws_topic::FILE_TRANSFER = "file-transfer"` and `ws_event::FILE_TRANSFER_STATUS_CHANGED = "file-transfer.status_changed"` constants
+- [x] **PH63-03**: `InboundClipboardSyncWorker` accepts `Option<Arc<FileTransferOrchestrator>>` via constructor and calls `tracker().record_pending_from_clipboard()` for `Applied { entry_id: Some(_), pending_transfers: non-empty }` outcomes, including early completion cache reconciliation
 - [ ] **PH63-04**: `FileSyncOrchestratorWorker` implements `DaemonService`, subscribes to `NetworkEventPort::subscribe_events()`, and handles `TransferProgress` (pending->transferring promotion), `FileTransferCompleted` (hash verification + clipboard restore), and `FileTransferFailed` (durable failure marking)
 - [ ] **PH63-05**: `FileSyncOrchestratorWorker::start()` calls `FileTransferOrchestrator::reconcile_on_startup()` before entering the network event loop, marking orphaned in-flight transfers as failed
 - [ ] **PH63-06**: `FileSyncOrchestratorWorker::start()` spawns `FileTransferOrchestrator::spawn_timeout_sweep()` with a `watch::channel` cancel signal that is sent `true` when the `CancellationToken` fires
@@ -327,9 +327,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH62-03     | 62    | Complete |
 | PH62-04     | 62    | Complete |
 | PH62-05     | 62    | Complete |
-| PH63-01     | 63    | Pending  |
-| PH63-02     | 63    | Pending  |
-| PH63-03     | 63    | Pending  |
+| PH63-01     | 63    | Complete |
+| PH63-02     | 63    | Complete |
+| PH63-03     | 63    | Complete |
 | PH63-04     | 63    | Pending  |
 | PH63-05     | 63    | Pending  |
 | PH63-06     | 63    | Pending  |

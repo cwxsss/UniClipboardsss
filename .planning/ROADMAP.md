@@ -588,7 +588,7 @@ Plans:
 **Goal:** Wire FileTransferOrchestrator into daemon: extend DaemonApiEventEmitter to forward Transfer StatusChanged WS events, extend InboundClipboardSyncWorker to seed pending transfer records, and create FileSyncOrchestratorWorker that subscribes to network events for transfer lifecycle management (progress, completed, failed), startup reconciliation, timeout sweeps, and clipboard restore.
 **Requirements**: PH63-01, PH63-02, PH63-03, PH63-04, PH63-05, PH63-06, PH63-07
 **Depends on:** Phase 62
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 **Success Criteria** (what must be TRUE):
 
@@ -602,7 +602,7 @@ Plans:
 
 Plans:
 
-- [ ] 63-01-PLAN.md — Add file-transfer WS constants, extend DaemonApiEventEmitter for Transfer StatusChanged, extend InboundClipboardSyncWorker with orchestrator for pending record seeding
+- [x] 63-01-PLAN.md — Add file-transfer WS constants, extend DaemonApiEventEmitter for Transfer StatusChanged, extend InboundClipboardSyncWorker with orchestrator for pending record seeding
 - [ ] 63-02-PLAN.md — Create FileSyncOrchestratorWorker with network event loop, startup reconciliation, timeout sweep, and register in daemon main.rs
 
 ### Phase 64: Tauri sync retirement — remove sync logic from Tauri, delegate to daemon
