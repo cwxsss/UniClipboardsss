@@ -625,3 +625,25 @@ Plans:
 
 - [x] 64-01-PLAN.md — Remove daemon-duplicated sync loops, helpers, constants, and blake3 dep from wiring.rs
 - [x] 64-02-PLAN.md — Gate restore_clipboard_entry outbound sync on Full mode, remove dead sync_inbound_clipboard accessor
+
+### Phase 65: Remove GUI clipboard watcher — delegate clipboard monitoring exclusively to daemon
+
+**Goal:** Remove all GUI-side clipboard monitoring infrastructure (PlatformRuntime, WatcherControlPort, StartClipboardWatcher, platform IPC/event bus) now that daemon is the sole clipboard observer. No user-visible behavior changes.
+**Requirements**: D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10, D-11, D-12, D-13, D-14, D-15
+**Depends on:** Phase 64
+**Plans:** 2 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. PlatformRuntime struct no longer exists in uc-platform
+2. WatcherControlPort, PlatformCommandExecutorPort, ClipboardRuntimePort deleted from uc-platform
+3. StartClipboardWatcherPort deleted from uc-core
+4. AppLifecycleCoordinator state machine simplified to Pending -> Network -> Announce -> Ready
+5. build_setup_orchestrator() no longer accepts watcher_control parameter
+6. main.rs has no PlatformRuntime startup or SimplePlatformCommandExecutor
+7. Full workspace cargo test passes
+
+Plans:
+
+- [ ] 65-01-PLAN.md — Delete uc-platform runtime/ipc/watcher infrastructure and uc-core StartClipboardWatcherPort
+- [ ] 65-02-PLAN.md — Remove watcher from AppLifecycleCoordinator, bootstrap, uc-tauri runtime, and main.rs
