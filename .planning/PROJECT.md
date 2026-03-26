@@ -24,7 +24,7 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 ## Current State
 
 - **Latest shipped milestone:** v0.3.0 Log Observability & Feature Expansion (2026-03-17)
-- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase
+- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase; daemon handles file transfer lifecycle (progress, completion, failure, timeout sweeps, startup reconciliation)
 - **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established; daemon encryption state recovery via existing AutoUnlockEncryptionSession use case; peer discovery deduplication fixed (local_peer_id filtering + full-snapshot peers.changed events)
 - **LOC:** ~135K Rust + ~20K TypeScript (estimated)
 - **Supported content types:** Text, Image, Link, File (all with per-device sync toggles)
@@ -110,6 +110,7 @@ Phase 57 complete — daemon is now the sole clipboard observer via real Clipboa
 Phase 60 complete — FileTransferOrchestrator extracted from uc-tauri to uc-app, wired into uc-bootstrap assembly; file_transfer_wiring.rs deleted.
 Phase 61 complete — daemon triggers outbound clipboard sync to peers via OutboundSyncPlanner + SyncOutboundClipboardUseCase + SyncOutboundFileUseCase after local capture; ClipboardWatcherWorker delegates to DaemonClipboardChangeHandler.
 Phase 62 complete — daemon receives inbound clipboard from peers via ClipboardTransportPort::subscribe_clipboard(); InboundClipboardSyncWorker applies via SyncInboundClipboardUseCase::with_capture_dependencies(ClipboardIntegrationMode::Full); WS events emitted only for Applied { entry_id: Some } outcomes; shared clipboard_change_origin Arc prevents write-back loops.
+Phase 63 complete — daemon file transfer orchestration: DaemonApiEventEmitter forwards Transfer StatusChanged as WS events on file-transfer topic; InboundClipboardSyncWorker seeds pending transfer records via FileTransferOrchestrator with early completion cache reconciliation; FileSyncOrchestratorWorker subscribes to network events for transfer lifecycle management (progress/completed/failed), startup reconciliation, timeout sweeps, and clipboard restore.
 
 ## Key Decisions
 
@@ -146,4 +147,4 @@ Phase 62 complete — daemon receives inbound clipboard from peers via Clipboard
 
 ---
 
-_Last updated: 2026-03-26 after Phase 62 completion_
+_Last updated: 2026-03-26 after Phase 63 completion_
