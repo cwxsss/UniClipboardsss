@@ -200,10 +200,10 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH63-01**: `DaemonApiEventEmitter` handles `HostEvent::Transfer(TransferHostEvent::StatusChanged)` by emitting a `DaemonWsEvent` on the `file-transfer` WS topic with event type `file-transfer.status_changed` instead of silently logging and dropping
 - [x] **PH63-02**: `daemon_api_strings` module in uc-core has `ws_topic::FILE_TRANSFER = "file-transfer"` and `ws_event::FILE_TRANSFER_STATUS_CHANGED = "file-transfer.status_changed"` constants
 - [x] **PH63-03**: `InboundClipboardSyncWorker` accepts `Option<Arc<FileTransferOrchestrator>>` via constructor and calls `tracker().record_pending_from_clipboard()` for `Applied { entry_id: Some(_), pending_transfers: non-empty }` outcomes, including early completion cache reconciliation
-- [ ] **PH63-04**: `FileSyncOrchestratorWorker` implements `DaemonService`, subscribes to `NetworkEventPort::subscribe_events()`, and handles `TransferProgress` (pending->transferring promotion), `FileTransferCompleted` (hash verification + clipboard restore), and `FileTransferFailed` (durable failure marking)
-- [ ] **PH63-05**: `FileSyncOrchestratorWorker::start()` calls `FileTransferOrchestrator::reconcile_on_startup()` before entering the network event loop, marking orphaned in-flight transfers as failed
-- [ ] **PH63-06**: `FileSyncOrchestratorWorker::start()` spawns `FileTransferOrchestrator::spawn_timeout_sweep()` with a `watch::channel` cancel signal that is sent `true` when the `CancellationToken` fires
-- [ ] **PH63-07**: daemon `main.rs` registers `FileSyncOrchestratorWorker` in the services vec with initial health status, and `cargo test -p uc-daemon` passes with all workers
+- [x] **PH63-04**: `FileSyncOrchestratorWorker` implements `DaemonService`, subscribes to `NetworkEventPort::subscribe_events()`, and handles `TransferProgress` (pending->transferring promotion), `FileTransferCompleted` (hash verification + clipboard restore), and `FileTransferFailed` (durable failure marking)
+- [x] **PH63-05**: `FileSyncOrchestratorWorker::start()` calls `FileTransferOrchestrator::reconcile_on_startup()` before entering the network event loop, marking orphaned in-flight transfers as failed
+- [x] **PH63-06**: `FileSyncOrchestratorWorker::start()` spawns `FileTransferOrchestrator::spawn_timeout_sweep()` with a `watch::channel` cancel signal that is sent `true` when the `CancellationToken` fires
+- [x] **PH63-07**: daemon `main.rs` registers `FileSyncOrchestratorWorker` in the services vec with initial health status, and `cargo test -p uc-daemon` passes with all workers
 
 ## Out of Scope
 
@@ -330,10 +330,10 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH63-01     | 63    | Complete |
 | PH63-02     | 63    | Complete |
 | PH63-03     | 63    | Complete |
-| PH63-04     | 63    | Pending  |
-| PH63-05     | 63    | Pending  |
-| PH63-06     | 63    | Pending  |
-| PH63-07     | 63    | Pending  |
+| PH63-04     | 63    | Complete |
+| PH63-05     | 63    | Complete |
+| PH63-06     | 63    | Complete |
+| PH63-07     | 63    | Complete |
 
 **Coverage:**
 
