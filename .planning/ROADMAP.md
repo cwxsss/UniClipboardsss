@@ -585,14 +585,25 @@ Plans:
 
 ### Phase 63: Daemon file transfer orchestration — handle file sync lifecycle in daemon
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Wire FileTransferOrchestrator into daemon: extend DaemonApiEventEmitter to forward Transfer StatusChanged WS events, extend InboundClipboardSyncWorker to seed pending transfer records, and create FileSyncOrchestratorWorker that subscribes to network events for transfer lifecycle management (progress, completed, failed), startup reconciliation, timeout sweeps, and clipboard restore.
+**Requirements**: PH63-01, PH63-02, PH63-03, PH63-04, PH63-05, PH63-06, PH63-07
 **Depends on:** Phase 62
-**Plans:** 0 plans
+**Plans:** 2 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. DaemonApiEventEmitter emits file-transfer.status_changed WS events for Transfer StatusChanged host events (not silently dropped)
+2. InboundClipboardSyncWorker seeds pending transfer DB records when Applied outcome contains file transfers
+3. Early completion cache reconciliation runs after pending records are seeded
+4. FileSyncOrchestratorWorker subscribes to NetworkEventPort and handles TransferProgress, FileTransferCompleted, FileTransferFailed events
+5. Startup reconciliation marks orphaned in-flight transfers as failed before event loop starts
+6. Timeout sweep runs on 15s interval and is cancelled on daemon shutdown
+7. Full uc-daemon test suite passes with all new workers registered
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 63 to break down)
+- [ ] 63-01-PLAN.md — Add file-transfer WS constants, extend DaemonApiEventEmitter for Transfer StatusChanged, extend InboundClipboardSyncWorker with orchestrator for pending record seeding
+- [ ] 63-02-PLAN.md — Create FileSyncOrchestratorWorker with network event loop, startup reconciliation, timeout sweep, and register in daemon main.rs
 
 ### Phase 64: Tauri sync retirement — remove sync logic from Tauri, delegate to daemon
 
