@@ -1,313 +1,251 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.4.0
-milestone_name: Runtime Mode Separation
-status: Milestone complete
-stopped_at: Phase 65 context gathered
-last_updated: '2026-03-26T12:26:27.357Z'
+milestone: v0.3.0
+milestone_name: Log Observability
+status: verifying
+stopped_at: Completed 65-01-PLAN.md
+last_updated: '2026-03-26T13:22:09.136Z'
+last_activity: 2026-03-26
 progress:
-  total_phases: 36
-  completed_phases: 28
-  total_plans: 80
-  completed_plans: 77
+  total_phases: 19
+  completed_phases: 18
+  total_plans: 50
+  completed_plans: 49
+  percent: 98
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-17)
+See: .planning/PROJECT.md (updated 2026-03-09)
 
-**Core value:** Seamless clipboard synchronization across devices — copy on one, paste on another
-**Current focus:** Phase 64 — tauri-sync-retirement
+**Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
+**Current focus:** Phase 33 - Fix file sync eventual consistency
 
 ## Current Position
 
-Phase: 64
-Plan: Not started
+Phase: 32 of 32 (Fix file sync eventual consistency)
+Plan: 5 of 5 complete
+Status: Phase complete — ready for verification
+Last activity: 2026-03-26
+
+Progress: [██████████] 98%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 9 (this milestone)
-- Average duration: 18min
-- Total execution time: 165min
+- Total plans completed: 2
+- Average duration: 6.5min
+- Total execution time: 0.22 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 | ----- | ----- | ----- | -------- |
-| —     | —     | —     | —        |
+| 19    | 2     | 13min | 6.5min   |
 
-_Updated after each plan completion_
-| Phase 43-unify-gui-and-cli-business-flows P01 | 5 | 4 tasks | 5 files |
-| Phase 43-unify-gui-and-cli-business-flows P02 | 5 | 5 tasks | 4 files |
-| Phase 36-event-emitter-abstraction P01 | 525664min | 2 tasks | 4 files |
-| Phase 36-event-emitter-abstraction P02 | 60 | 2 tasks | 6 files |
-| Phase 37-wiring-decomposition P02 | 35 | 2 tasks | 3 files |
-| Phase 37-wiring-decomposition P03 | 24 | 2 tasks | 6 files |
-| Phase 37-wiring-decomposition P04 | 15 | 2 tasks | 2 files |
-| Phase 37-wiring-decomposition P05 | 55 | 3 tasks | 3 files |
-| Phase 38-coreruntime-extraction P01 | 18 | 2 tasks | 9 files |
-| Phase 38 P02 | 11 | 2 tasks | 4 files |
-| Phase 38-coreruntime-extraction P03 | 60 | 2 tasks | 6 files |
-| Phase 39-config-resolution-extraction P01 | 4 | 2 tasks | 3 files |
-| Phase 39-config-resolution-extraction P02 | 3 | 1 tasks | 1 files |
-| Phase 40-uc-bootstrap-crate P01 | 14 | 2 tasks | 16 files |
-| Phase 40-uc-bootstrap-crate P02 | 2 | 1 tasks | 2 files |
-| Phase 41-daemon-and-cli-skeletons P01 | 7 | 3 tasks | 13 files |
-| Phase 41-daemon-and-cli-skeletons P02 | 4 | 2 tasks | 7 files |
-| Phase 41-daemon-and-cli-skeletons P03 | 3 | 3 tasks | 10 files |
-| Phase 41-daemon-and-cli-skeletons P04 | 8 | 2 tasks | 4 files |
-| Phase 45-daemon-api-foundation P01 | 18 | 3 tasks | 10 files |
-| Phase 45 P02 | 9 | 2 tasks | 13 files |
-| Phase 45 P03 | 18 | 2 tasks | 12 files |
-| Phase 46-daemon-pairing-host-migration P01 | 10 | 2 tasks | 6 files |
-| Phase 46-daemon-pairing-host-migration P02 | 4 | 2 tasks | 11 files |
-| Phase 46 P4 | 11 | 1 tasks | 6 files |
-| Phase 46 P05 | 13 | 2 tasks | 8 files |
-| Phase 46 P06 | 2 min | 2 tasks | 3 files |
-| Phase 46.1 P01 | 5 | 2 tasks | 4 files |
-| Phase 46.1 P02 | 5 | 2 tasks | 7 files |
-| Phase 46.1 P03 | 29 | 2 tasks | 7 files |
-| Phase 46.1 P04 | 9 | 2 tasks | 9 files |
-| Phase 46.1 P05 | 56 | 2 tasks | 7 files |
-| Phase 46.2-daemon-tauri-daemon P01 | 15 | 2 tasks | 20 files |
-| Phase 46.2-daemon-tauri-daemon P02 | 14 | 2 tasks | 16 files |
-| Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b P01 | 24min | 2 tasks | 10 files |
-| Phase 46.4 P02 | 16min | 2 tasks | 8 files |
-| Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b P03 | 21min | 2 tasks | 13 files |
-| Phase 46.3-gui-daemon P01 | 10min | 2 tasks | 8 files |
-| Phase 46.3-gui-daemon P02 | 12min | 2 tasks | 6 files |
-| Phase 46.5 P02 | 5 | 1 tasks | 7 files |
-| Phase 46.5 P04 | 13 | 2 tasks | 4 files |
-| Phase 46.5 P01 | 6 | 2 tasks | 5 files |
-| Phase 46.5 P03 | 24 | 2 tasks | 8 files |
-| Phase 46.6-daemon-tauri-tauri-daemon P01 | 5 min | 2 tasks | 6 files |
-| Phase 46.6 P02 | 7 | 2 tasks | 4 files |
-| Phase 50-daemon-encryption-state-recovery P01 | 10 | 3 tasks | 1 files |
-| Phase 52-daemon-space-access-ssot P01 | 15 | 2 tasks | 9 files |
-| Phase 52 P02 | 9 | 2 tasks | 5 files |
-| Phase 54-extract-daemon-client-and-realtime-infrastructure-from-uc-tauri P01 | 831 | 4 tasks | 11 files |
-| Phase 54 P02 | 1015 | 8 tasks | 16 files |
-| Phase 56.1 P01 | 5 | 1 tasks | 2 files |
-| Phase 56.1 P03 | 3 | 1 tasks | 1 files |
-| Phase 56.1 P02 | 11min | 2 tasks | 4 files |
-| Phase 57-daemon-daemon-daemon-daemon P01 | 8 | 2 tasks | 4 files |
-| Phase 57-daemon-daemon-daemon-daemon P02 | 5 | 2 tasks | 5 files |
-| Phase 57-daemon-daemon-daemon-daemon P03 | 8 | 1 tasks | 2 files |
-| Phase 58 P02 | 27 | 1 tasks | 3 files |
-| Phase 58 P01 | 31min | 2 tasks | 6 files |
-| Phase 60-extract-file-transfer-wiring-orchestration-from-uc-tauri-to-uc-app P01 | 15 | 2 tasks | 6 files |
-| Phase 60-extract-file-transfer-wiring-orchestration-from-uc-tauri-to-uc-app P02 | 9 | 1 tasks | 6 files |
-| Phase 61-daemon-outbound-clipboard-sync P01 | 8 | 2 tasks | 2 files |
-| Phase 62-daemon-inbound-clipboard-sync P01 | 60 | 2 tasks | 3 files |
-| Phase 63 P01 | 15 | 2 tasks | 4 files |
-| Phase 63 P02 | 8 | 2 tasks | 4 files |
-| Phase 64 P01 | 7min | 2 tasks | 2 files |
-| Phase 64 P02 | 6min | 2 tasks | 2 files |
+**Recent Trend:**
+
+- Last 5 plans: 4min, 9min, 2min, 3min, 9min
+- Trend: Stable
+  | Phase 20 P01 | 2min | 2 tasks | 5 files |
+  | Phase 20 P02 | 3min | 2 tasks | 2 files |
+  | Phase 20 P03 | 2min | 1 tasks | 2 files |
+  | Phase 21 P01 | 9min | 2 tasks | 6 files |
+  | Phase 21 P02 | 8min | 2 tasks | 6 files |
+  | Phase 22 P01 | 24min | 2 tasks | 8 files |
+  | Phase 22 P02 | 5min | 2 tasks | 4 files |
+  | Phase 24 P01 | 4min | 2 tasks | 10 files |
+  | Phase 24 P02 | 6min | 2 tasks | 9 files |
+  | Phase 24 P03 | 10min | 3 tasks | 5 files |
+  | Phase 25 P01 | 8min | 2 tasks | 5 files |
+  | Phase 25 P02 | 4min | 2 tasks | 4 files |
+  | Phase 25 P01 | 8min | 2 tasks | 5 files |
+  | Phase 26 P01 | 7min | 3 tasks | 4 files |
+  | Phase 26 P02 | 2min | 3 tasks | 3 files |
+  | Phase 27 P01 | 5min | 2 tasks | 13 files |
+  | Phase 28 P01 | 3min | 2 tasks | 4 files |
+  | Phase 28 P02 | 4min | 2 tasks | 4 files |
+  | Phase 28 P03 | 7min | 2 tasks | 12 files |
+  | Phase 28 P01 | 7min | 2 tasks | 6 files |
+  | Phase 28 P02 | 3min | 2 tasks | 6 files |
+  | Phase 29 P01 | 4min | 2 tasks | 5 files |
+  | Phase 29 P02 | 8min | 2 tasks | 4 files |
+  | Phase 30 P01 | -min | - tasks | - files |
+  | Phase 30 P02 | 4min | 1 tasks | 6 files |
+  | Phase 30 P01 | 3min | 2 tasks | 7 files |
+  | Phase 30 P03 | 4min | 3 tasks | 4 files |
+  | Phase 30 P04 | 3 | 2 tasks | 4 files |
+  | Phase 31 P01 | 4min | 2 tasks | 8 files |
+  | Phase 31 P02 | 3 | 2 tasks | 9 files |
+  | Phase 31 P03 | 5min | 2 tasks | 12 files |
+  | Phase 32.1 P01 | 10min | 2 tasks | 11 files |
+  | Phase 32.1 P02 | 11min | 2 tasks | 8 files |
+  | Phase 32.1 P03 | 1min | 1 tasks | 1 files |
+  | Phase 32 P01 | 5min | 2 tasks | 8 files |
+  | Phase 32 P02 | 5 | 2 tasks | 4 files |
+  | Phase 32 P03 | 5min | 2 tasks | 3 files |
+  | Phase 33 P01 | 13min | 2 tasks | 11 files |
+  | Phase 33 P02 | 4min | 2 tasks | 7 files |
+  | Phase 33 P03 | 20min | 2 tasks | 12 files |
+  | Phase 33 P04 | 3min | 1 tasks | 5 files |
+  | Phase 33 P05 | 5min | 2 tasks | 7 files |
+  | Phase 33 P06 | 5 | 1 tasks | 3 files |
+  | Phase 34 P01 | 19 | 3 tasks | 9 files |
+  | Phase 35 P01 | 7min | 1 tasks | 4 files |
+  | Phase 35 P02 | 10min | 2 tasks | 2 files |
+  | Phase 65 P01 | 5min | 2 tasks | 19 files |
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-
 Recent decisions affecting current work:
 
-- [v0.3.0]: OutboundSyncPlanner consolidation — single policy decision point, runtime as thin dispatcher
-- [v0.2.0]: Private deps + facade accessors on AppRuntime — compiler-enforced boundary
-- [Phase 36-event-emitter-abstraction]: HostEventEmitterPort synchronous (not async) matching tauri::Emitter::emit() non-async signature
-- [Phase 36-event-emitter-abstraction]: PeerConnectionHostEvent collapses PeerReady/PeerConnected to Connected; PeerNotReady/PeerDisconnected to Disconnected — matching frontend binary connected:bool view
-- [Phase 36-event-emitter-abstraction]: event_emitter uses RwLock<Arc<dyn Port>> not bare Arc — allows bootstrap swap from LoggingEventEmitter to TauriEventEmitter after AppHandle available
-- [Phase 36-event-emitter-abstraction]: app_handle KEPT alongside event_emitter for out-of-scope callers (commands/pairing.rs, commands/clipboard.rs, apply_autostart, setup orchestrator)
-- [Phase 36-event-emitter-abstraction]: file_transfer_wiring.rs handle_transfer_progress/completed/failed/spawn_timeout_sweep/reconcile_on_startup deferred to Phase 37 wiring decomposition
-- [Phase 37-wiring-decomposition]: app.emit() calls replaced with HostEventEmitterPort; TauriSetupEventPort replaced by HostEventSetupPort; \_app_handle params deferred to Plan 03
-- [Phase 37-wiring-decomposition P03]: assembly.rs created with zero tauri imports; BackgroundRuntimeDeps stays in wiring.rs; PlatformLayer made pub(crate) for test access; invoke_handler stays in main.rs (generate_handler! macro constraint)
-- [Phase 37-wiring-decomposition]: Synchronously write activeSessionIdRef.current before calling acceptP2PPairing to close verification event race window — useEffect-based ref sync is too late when backend emits immediately
-- [Phase 37-wiring-decomposition]: Subscribe before initiate: pairing event subscription moved before initiate_pairing in ensure_pairing_session to eliminate race window
-- [Phase 37-wiring-decomposition]: app_closed_tx flag guards StreamClosedByPeer->PairingFailed bridge from firing on explicit application-initiated session closes
-- [Phase 38-coreruntime-extraction]: tokio-util added to uc-app without 'sync' feature — locked version 0.7.17 includes CancellationToken in default features
-- [Phase 38-coreruntime-extraction]: resolve_pairing_device_name inlined into uc-app/adapters.rs to keep uc-app free of uc-tauri dependency
-- [Phase 38-coreruntime-extraction]: uc-tauri re-export pattern used for TaskRegistry (pub use uc_app::task_registry::TaskRegistry) for backward compatibility
-- [Phase 38]: CoreRuntime::new() accepts pre-built Arc<RwLock<Arc<dyn HostEventEmitterPort>>> — caller creates the cell, CoreRuntime never wraps internally
-- [Phase 38]: emitter_cell created once in with_setup() and shared with both build_setup_orchestrator and CoreRuntime::new() — same Arc, no copies
-- [Phase 38-coreruntime-extraction]: AppUseCases wraps CoreUseCases via Deref<Target=CoreUseCases> — all ~35 pure domain accessors transparent without duplication
-- [Phase 38-coreruntime-extraction]: build_setup_orchestrator extracted to assembly.rs as standalone pub fn — satisfies RNTM-05 single composition point, eliminating secondary wiring in runtime.rs
-- [Phase 38-coreruntime-extraction]: SetupAssemblyPorts contains only 5 external adapter ports; shared-cell params (emitter_cell, lifecycle_status, watcher_control, session_ready_emitter, clipboard_integration_mode) are separate build_setup_orchestrator params
-- [Phase 39]: config_resolution.rs in uc-tauri/bootstrap/ (not uc-app) — DirsAppDirsAdapter (uc-platform) cannot be a prod dep of uc-app
-- [Phase 39]: resolve_app_config() returns Result<AppConfig, ConfigResolutionError> with typed enum variants for InvalidConfig and PlatformDirsFailed
-- [Phase 39]: main.rs imports uc_tauri::bootstrap::resolve_app_config via bootstrap/mod.rs re-export; storage_paths moved before key_slot_store construction so vault_dir is available
-- [Phase 40]: Assembly helpers widened to pub for cross-crate test access; PlatformLayer made pub in uc-bootstrap
-- [Phase 40]: Re-export stub pattern: uc-tauri bootstrap modules become thin pub use uc_bootstrap::module::\* stubs
-- [Phase 40]: Idempotent tracing: TRACING_INITIALIZED OnceLock guard allows safe multiple init_tracing_subscriber calls
-- [Phase 40]: Builders return AppDeps (not CoreRuntime) per Codex Review R1 -- callers construct CoreRuntime with appropriate emitter/lifecycle
-- [Phase 40]: GUI builder uses standalone tokio::runtime::Builder (not tauri::async_runtime) to keep uc-bootstrap tauri-free
-- [Phase 41]: ClipboardIntegrationMode::Passive used for non-GUI modes (Disabled variant does not exist); Passive correctly disables OS clipboard observation
-- [Phase 41]: DaemonWorker trait: async start(CancellationToken), async stop(), sync health_check() -> WorkerHealth; RuntimeState is snapshot-only (no worker ownership)
-- [Phase 41]: Explicit tokio runtime construction (not #[tokio::main]) for daemon to avoid conflicts with tracing init's internal Seq runtime
-- [Phase 41]: DaemonApp binds RPC socket before starting workers for fail-fast on already-running daemon
-- [Phase 41]: Workers stored as Vec<Arc<dyn DaemonWorker>> for tokio::spawn 'static compatibility
-- [Phase 41]: CLI dual-dispatch: status via daemon RPC, devices/space-status via direct bootstrap
-- [Phase 41]: Unix socket path resolution is centralized in uc-daemon so daemon and CLI cannot drift
-- [Phase 41]: On Unix, overlong XDG runtime paths warn and fall back to /tmp to stay under the 103-byte sun_path payload limit
-- [Phase 43]: GetP2pPeersSnapshot uses both PeerDirectoryPort AND PairedDeviceRepositoryPort - cross-port aggregation in app layer
-- [Phase 43]: P2pPeerSnapshot preserves pairing_state and identity_fingerprint for CLI output compatibility
-- [Phase 43]: Aggregation logic extracted from Tauri commands into shared uc-app use case - GUI and CLI now share same business logic
-- [Phase 45]: Daemon auth uses a dedicated local token file with restricted permissions and runtime-injected connection info rather than URL/query-string auth
-- [Phase 45]: RuntimeState now stores daemon-owned worker snapshots so JSON-RPC and HTTP/WebSocket transports map from one internal runtime source
-- [Phase 45]: WebSocket auth now reuses the daemon HTTP bearer-token check during upgrade so protected transport behavior stays aligned across routes and subscriptions.
-- [Phase 45]: Phase 45 websocket topics emit snapshot-first events in client subscription order and reserve stable incremental event-type strings for later runtime fanout.
-- [Phase 45]: Pairing websocket payloads stay metadata-only and never serialize keyslot files or raw challenge bytes before the daemon becomes the pairing host.
-- [Phase 45]: CLI daemon reads now share one reqwest client that resolves daemon URL/token via uc-daemon helpers and preserves exit code 5 when the daemon or token file is absent.
-- [Phase 45]: Tauri shell stores daemon connection info only in managed in-memory state and emits `daemon://connection-info` after the main webview finishes loading; no token persistence in browser storage or query strings.
-- [Phase 46]: DaemonApp starts a single daemon-owned PairingHost alongside RPC and HTTP, making pairing session lifetime independent from Tauri/webview disconnects.
-- [Phase 46]: RuntimeState now stores metadata-only DaemonPairingSessionSnapshot records for daemon-owned pairing session inspection without leaking verification secrets.
-- [Phase 46]: DaemonApiState exposes one shared pairing_host facade plus lease-based discoverability/readiness controls, so mutation routes and future bridge code use the same daemon-owned host surface.
-- [Phase 46]: Pairing/discovery websocket incremental payloads are camelCase and use the top-level `type` field; verification secrets only travel over authenticated realtime events, never through snapshots.
-- [Phase 46]: SetupPairingFacadePort lives in uc-app and PairingOrchestrator implements it for bootstrap and non-daemon call sites.
-- [Phase 46]: SetupAssemblyPorts placeholder uses a no-op facade instead of constructing a concrete PairingOrchestrator.
-- [Phase 46]: Phase 46 GUI startup now always constructs PairingBridge; Tauri no longer keeps pairing action/event loops as a hidden fallback host.
-- [Phase 46]: Daemon pairing host now broadcasts live pairing and peer websocket events so Tauri compatibility bridges receive runtime updates, not just snapshots.
-- [Phase 46]: Bridge payload translation stays locked to the existing frontend event contract, including code/localFingerprint/deviceName fields and peer discovery delta payloads.
-- [Phase 46]: Use broadcast::channel::<DaemonWsEvent>(128) in daemon regression fixtures so DaemonPairingHost::new signature stays aligned without runtime behavior changes.
-- [Phase 46]: Define PH46-01..PH46-06 explicitly in REQUIREMENTS.md and map each ID to phase 46 for audit traceability.
-- [Phase 46.1]: RealtimeFrontendEvent preserves the frontend wire key name type via a raw identifier and accessor in uc-core.
-- [Phase 46.1]: HostEvent adds Realtime(RealtimeFrontendEvent) while keeping legacy domain variants until the Phase 46.1 frontend cutover completes.
-- [Phase 46.1]: `uc-app` owns pairing, peers, and setup realtime consumers; setup subscriptions now flow through a shared `SetupPairingEventHub` instead of feature-owned websocket logic.
-- [Phase 46.1]: Setup realtime delivery drops regressive per-session events after terminal success/failure so frontend-visible ordering stays monotonic across shared subscriptions.
-- [Phase 46.1]: DaemonWsBridge is now the single active daemon websocket owner and background startup launches it through `start_realtime_runtime`.
-- [Phase 46.1]: Tauri emitters understand `HostEvent::Realtime`, so bridge/runtime verification can compile against the unified realtime envelope.
-- [Phase 46.1]: Frontend listeners now consume one `daemon://realtime` helper, and setup / space-access adapter events are serialized onto the same setup topic envelope.
-- [Phase 46.1]: Frontend contract verification must run through the repository’s vitest script entrypoint rather than Bun’s native test runner to preserve jsdom/mock behavior.
-- [Phase 46.1]: PairingBridge and its compatibility tests are deleted; daemon realtime now has no second Tauri-owned websocket host path.
-- [Phase 46.1]: Setup pairing facade subscriptions are hub-only; legacy setup websocket subscription markers are fully removed from runtime code.
-- [Phase 46.2-daemon-tauri-daemon]: GUI pairing lease renewal now uses /pairing/gui/lease so discoverability and participant readiness stay daemon-owned behind one bridge call.
-- [Phase 46.2-daemon-tauri-daemon]: Daemon pairing websocket payloads carry kind/stage metadata and DaemonWsBridge translates them back into the existing frontend pairing event contract.
-- [Phase 46.2-daemon-tauri-daemon]: Legacy Tauri pairing host loops and direct PairingOrchestrator state were removed from uc-tauri; bridge regression coverage now lives in daemon_ws_bridge and frontend tests.
-- [Phase 46.2-daemon-tauri-daemon]: Use a typed DaemonPairingRequestError in uc-tauri so daemon error code/message data survives into Tauri command mapping without brittle string parsing.
-- [Phase 46.2-daemon-tauri-daemon]: Install a single frontend p2p-command-error listener in src/api/p2p.ts and classify pairing failures once so initiator and passive UX stay aligned.
-- [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: DaemonApiState now carries a direct SetupOrchestrator handle so setup routes stay daemon-owned.
-- [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: Setup HTTP state responses use serialized SetupState plus fixed nextStepHint and local identity metadata.
-- [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: setup_api HTTP regressions use a controlled fake SetupPairingFacade fixture to keep transport tests deterministic.
-- [Phase 46.4]: CLI setup commands remain thin adapters over daemon /setup and /peers endpoints; uc-cli does not own setup truth.
-- [Phase 46.4]: setup host stays attached after local space creation and only exits after an operator-handled request resolves or the session is canceled.
-- [Phase 46.4]: CLI smoke tests serialize process-level invocations to avoid shared local state races during cargo test.
-- [Phase 46.4-daemon-setup-gui-cli-setup-cli-gui-cli-daemon-peera-full-mode-peerb-passive-mode-peerb-peera-peera-b-a-b-a-a-b-a-b-a-a-b]: Reset stays daemon-owned and clears setup/session/lease/paired-device/encryption residue through existing runtime ports instead of deleting the whole profile directory.
-- [Phase 46.3-gui-daemon]: GUI and daemon now inherit one workspace package version, and daemon health/status expose `packageVersion` plus `apiRevision` as the compatibility identity contract.
-- [Phase 46.3-gui-daemon]: Bootstrap probing now classifies the expected local daemon endpoint as `Absent`, `Compatible`, or `Incompatible`; malformed or legacy `/health` payloads are incompatible, not absent.
-- [Phase 46.3-gui-daemon]: Daemon now writes profile-aware PID metadata for the expected local endpoint and removes it on shutdown via a dedicated PID guard.
-- [Phase 46.3-gui-daemon]: GUI bootstrap replacement is bounded to one incompatible-daemon terminate attempt plus one spawned-daemon startup wait, with ownership facts tracked separately from connection state.
-- [Phase 46.5]: Shared daemon request authorization lives in uc-tauri daemon_client/mod so setup/query/pairing clients reuse one base_url and bearer-token path.
-- [Phase 46.5]: POST /pairing/unpair executes CoreUseCases::unpair_device() and keeps the existing PairingApiErrorResponse envelope instead of introducing a second pairing error contract.
-- [Phase 46.5]: Tauri pairing paired-device reads and unpair now shell directly to daemon `/paired-devices` and `/pairing/unpair` routes instead of local use cases.
-- [Phase 46.5]: Tauri setup commands keep the existing invoke names, but deserialize daemon `state` payloads back into `SetupState` before returning to the frontend.
-- [Phase 46.5]: Local submit_passphrase(passphrase1, passphrase2) mismatch stays in-process and returns SetupError::PassphraseMismatch without any daemon request.
-- [Phase 46.5]: Pairing runtime ownership is now an explicit uc-bootstrap input via PairingRuntimeOwner instead of an implicit GUI convention.
-- [Phase 46.5]: GUI and CLI bind NetworkPorts.pairing to DisabledPairingTransport so any residual local pairing path fails fast instead of silently using libp2p transport.
-- [Phase 46.5]: daemon://realtime is the only active frontend pairing listener surface; legacy p2p-command-error fallback is deleted from both backend and frontend active paths.
-- [Phase 46.5]: daemon API regressions must make watcher/network prerequisites explicit in fixtures; host confirm is asserted via response-level `nextStepHint = host-confirm-peer`, not by assuming a join-only state enum.
-- [Phase 46.6-daemon-tauri-tauri-daemon]: Keep DaemonBootstrapOwnershipState as a bootstrap facts snapshot and move live child ownership into a separate GuiOwnedDaemonState. — Bootstrap facts remain cloneable and testable, while live Child handles now persist in managed Tauri state for later exit cleanup.
-- [Phase 46.6-daemon-tauri-tauri-daemon]: Bootstrap clears managed ownership on Compatible probes and records ownership only after actual spawn or replacement paths. — This prevents GUI exit cleanup from targeting independently started compatible daemons while still carrying replacement-owned children forward.
-- [Phase 46.6]: Real daemon cleanup now runs only from RunEvent::ExitRequested; main-window CloseRequested remains tray-hide and never targets daemon processes.
-- [Phase 46.6]: GuiOwnedDaemonState now owns bounded daemon teardown with exit idempotency guard, restoring child ownership on cleanup failure and force-killing only after graceful timeout.
-- [Phase 50]: Strategy B behavioral tests: mock AutoUnlockEncryptionSession ports directly to avoid CoreRuntime construction complexity
-- [Phase 50]: recover_encryption_session() placed before check_or_remove_stale_socket for clean fail-fast with no orphaned resources
-- [Phase 52-daemon-space-access-ssot]: broadcast_space_access_state_changed is a free function called by DaemonPairingHost and handle_pairing_message, avoiding code duplication
-- [Phase 52-daemon-space-access-ssot]: Space access broadcasts placed at four transition sites: reset_setup_state, start_completed_host_sponsor_authorization, resolve_host_space_access_proof, apply_joiner_space_access_result
-- [Phase 52]: space_access.snapshot and space_access.state_changed both map to SpaceAccessStateChangedPayload for uniform frontend event type
-- [Phase 52]: SpaceAccessOrchestrator creation kept in build_gui_app for SetupAssemblyPorts internal wiring, not returned in GuiBootstrapContext
-- [Phase 54-extract-daemon-client-and-realtime-infrastructure-from-uc-tauri]: uc-daemon-client added to workspace members in Plan 01 (not deferred to Plan 02) — required for verification to work
-- [Phase 54]: Did not remove reqwest/tokio-tungstenite/tokio-util/futures-util from uc-tauri direct deps — run.rs uses reqwest::Client directly and these deps were primarily consumed by deleted files; removing was deemed scope creep risk
-- [Phase 54]: Inlined DaemonBackedSetupPairingFacade in uc-daemon-client/realtime.rs rather than importing from uc-tauri — avoids a cargo cycle (uc_tauri → uc_daemon_client → uc_tauri). Struct + trait impl duplicated across both crates intentionally (Rust OK since different crate paths).
-- [Phase 54]: Removed install_daemon_setup_pairing_facade re-export from bootstrap/mod.rs — all call sites (main.rs, wiring.rs) now import from uc_daemon_client::realtime directly. D-10 (no re-export stubs) is enforced.
-- [Phase 55]: terminate_local_daemon_pid uses TerminateDaemonError (not DaemonBootstrapError) to avoid coupling uc-daemon-client to uc-tauri error types
-- [Phase 55]: thiserror added to uc-daemon-client since DaemonExitCleanupError uses #[derive(Error)] and was missing from Cargo.toml
-- [Phase 56.1]: 56.1-01: daemon_api_strings uses pub mod submodule pattern (not enum) — simpler import ergonomics
-- [Phase 56.1]: 56.1-03: Test fixture in tests module retains bare string literals for DaemonWsEvent construction — test data is not production wire-protocol dispatch
-- [Phase 56.1]: ws.rs pub re-exports (TOPIC_SPACE_ACCESS, SPACE_ACCESS_SNAPSHOT_EVENT) removed since no other file in uc-daemon imported them
-- [Phase 56.1]: Test assertions in host.rs updated to use pairing_busy_reason constants to eliminate test-level string duplication
-- [Phase 57-01]: Use ClipboardChangeOrigin::LocalCapture directly in daemon (write-back loop prevention deferred to Plan 03)
-- [Phase 57-01]: WatcherShutdown stays within start() async fn (is !Send) -- never crosses await boundary
-- [Phase 57-01]: clipboard-rs added as direct runtime dep to uc-daemon (not just transitive via uc-platform)
-- [Phase 57-02]: GUI ClipboardIntegrationMode hardcoded to Passive in AppRuntime::with_setup() — daemon is sole clipboard observer from Phase 57
-- [Phase 57-02]: DaemonWsBridge clipboard consumer follows existing pairing/peers/setup consumer pattern — subscribes eagerly, falls back to late subscribe if eager fails
-- [Phase 57-03]: Phase 57-03: Shared clipboard_change_origin Arc created at daemon composition root in main.rs — same instance will be injected into InboundClipboardSyncWorker when D-09 is added
-- [Phase 57-03]: Phase 57-03: WS event origin field is 'remote' when RemotePush, 'local' for LocalCapture/LocalRestore — mirrors AppRuntime GUI pattern
-- [Phase 58]: P2PPeerInfo and PairedPeer moved to uc-app/usecases/pairing/dto.rs; P2PPairingVerificationEvent deletion skipped because research D-02 was incorrect — wiring.rs uses it in 8 active call sites
-- [Phase 58]: EntryProjectionDto gains serde in uc-app; uc-tauri ClipboardEntryProjection deleted with no re-export stub (D-05)
-- [Phase 58]: link_domains populated inline at command layer via mut reference loop, not in a separate mapping step
-- [Phase 58]: file_transfer_ids marked serde(skip) as internal-only field not part of frontend wire contract
-- [Phase Phase 60-01]: FileTransferOrchestrator holds emitter_cell (Arc<RwLock<Arc<dyn HostEventEmitterPort>>>) matching HostEventSetupPort pattern
-- [Phase Phase 60-01]: emitter_cell added to WiredDependencies — created at wire_dependencies time with WireTimeLoggingEmitter placeholder, propagated to BackgroundRuntimeDeps orchestrator and caller reuse
-- [Phase Phase 60-01]: BackgroundRuntimeDeps.file_transfer_orchestrator is Arc (not Option) — emitter_cell pattern makes deferred construction unnecessary
-- [Phase Phase 60-02]: FileTransferOrchestrator::now_ms() accessor added — clipboard receive loop uses orchestrator clock for PendingInboundTransfer timestamps instead of separate clock parameter
-- [Phase Phase 60-02]: file_transfer_wiring.rs deleted with no re-export stubs — D-08/D-09 enforced; FileTransferStatusPayload re-exported directly from uc-app::usecases::file_sync
-- [Phase 61]: SyncOutboundFileUseCase built inline from wiring_deps (CoreUseCases lifetime complexity in async fn)
-- [Phase 61]: extract_file_paths_from_snapshot duplicated from uc-tauri/runtime.rs into uc-daemon (scope-minimal, shared crate deferred)
-- [Phase 61]: spawn_blocking wraps SyncOutboundClipboardUseCase::execute() which uses executor::block_on internally
-- [Phase 62]: Arc<SyncInboundClipboardUseCase> instead of Clone (not implemented)
-- [Phase 62]: TestInboundWorker bypasses CoreRuntime for unit test isolation
-- [Phase 62]: WS event guard: if let Applied { entry_id: Some } only
-- [Phase 63]: emit_ws_event refactored to accept topic parameter so any WS topic can be targeted (was hardcoded to SETUP)
-- [Phase 63]: [Phase 63]: file_transfer_orchestrator field is Option<Arc<...>> in worker to allow None in test contexts
-- [Phase 63]: [Phase 63]: message_origin_device_id captured before execute_with_outcome for safe async boundary crossing
-- [Phase 63]: FileSyncOrchestratorWorker does not forward transient progress events to WS (deferred Phase 64)
-- [Phase 63]: blake3 = '1' added directly to uc-daemon Cargo.toml for hash verification
-- [Phase 64]: file*transfer_orchestrator field preserved in BackgroundRuntimeDeps with * prefix in wiring.rs — daemon still uses it via uc-bootstrap
-- [Phase 64]: restore_clipboard_entry outbound sync skipped in Passive mode; daemon ClipboardWatcherWorker owns it after detecting OS clipboard write
+- 19-02: Used generic impl Layer<S> return types for builder functions to enable caller composition without Box<dyn> type issues.
+- 19-02: Re-exported WorkerGuard from uc-observability to avoid adding tracing-appender as direct dependency.
+- 19-01: Used JsonFields as field formatter so FlatJsonFormat can extract structured span data from extensions.
+- 19-01: Sentry integration excluded from uc-observability to keep zero app-layer dependencies.
+- Phase 19: Start observability work by refactoring the tracing subscriber into dual-output profile-driven logging.
+- Phase 20: Capture observability uses `flow_id` and `stage` as the canonical clipboard pipeline correlation fields.
+- Phase 21: Sync observability must reuse the same flow model as local capture rather than inventing a second tracing pattern.
+- Phase 22: Seq remains local and configuration-driven for this milestone; full OTel and multi-backend support stay deferred.
+- [Phase 20]: UUID v7 chosen for FlowId (time-ordered) over v4 (random)
+- [Phase 20]: Stage constant values are lowercase snake_case matching const names for queryability
+- 20-02: Replaced #[tracing::instrument] with manual span to support runtime-computed flow_id field
+- 20-02: outbound_sync span carries flow_id but no stage field (Phase 21 adds publish stage)
+- [Phase 20]: Split cache_representations into two sequential stage spans (cache_representations + spool_blobs) for distinct observability
+- 21-01: origin_flow_id uses serde(default) + skip_serializing_if for zero-cost backward compatibility with older peers
+- 22-01: SeqGuard drop uses std::thread::spawn for block_on to avoid runtime-in-runtime panic
+- 22-01: SeqLayer implements Layer trait directly rather than using FormatEvent through fmt::layer()
+- 22-01: CLEF format has no conflict resolution (simpler than FlatJsonFormat) since it targets Seq only
+- 22-02: Seq layer uses Option<Layer> pattern for zero-overhead when disabled
+- 22-02: hyper=info and hyper_util=info added to NOISE_FILTERS to suppress Seq HTTP client debug noise
+- [Phase 24]: Upsert ON CONFLICT SET excludes sync_settings to avoid overwriting per-device overrides during pairing
+- [Phase 24]: serde(default) on sync_settings for backward-compatible deserialization of existing PairedDevice data
+- [Phase 24]: Settings loaded from storage each time (not cached) -- SQLite + WAL fast for 2-5 devices
+- [Phase 24]: Peers not in paired_device table proceed with sync as safety fallback
+- [Phase 24]: Per-device auto_sync filtering applied before ensure_business_path to avoid unnecessary connections
+- 24-03: Removed permissions section from DeviceSettingsPanel per user feedback
+- 24-03: Content type toggles made non-editable since sync engine filtering not yet implemented
+- 25-02: Editable vs coming_soon status field on contentTypeEntries drives badge and interactivity
+- 25-02: All-disabled warning uses Object.values().every() on content_types for computed state
+- [Phase 25]: ContentTypes::default() fix from derive(Default) all-false to explicit all-true impl
+- [Phase 25]: Classify snapshot once before peer loop for efficiency (not per-peer)
+- [Phase 25]: Only Text and Image are filterable; unimplemented types always sync
+- [Phase 26]: Exposed apply_sync_policy as pub for integration tests in tests/ to validate policy logic directly
+- [Phase 26]: Global auto_sync guard executes before per-device evaluation and does not mutate per-device sync settings
+- [Phase 26]: Global auto_sync off UX remains explicit-only (auto_sync === false) for banner visibility and disable cascade.
+- [Phase 26]: Settings navigation category state is one-shot and cleared after consumption to prevent stale tab forcing.
+- [Phase 27]: Used HashMap<String, serde_json::Value> for keyboard_shortcuts for flexible override storage
+- [Phase 27]: Used mod prefix for all shortcut definitions for cross-platform compatibility (mod = Cmd on Mac, Ctrl on others)
+- [Phase 28]: Used same binary codec pattern as clipboard_payload_v3.rs for FileTransferMessage consistency
+- [Phase 28]: Extracted write_string_u16/read_string_u16 helpers for reuse across message variants
+- [Phase 28]: Rejected filenames containing '..' anywhere (not just as path component) for extra safety
+- [Phase 28]: First non-comment URI line determines file vs link classification per RFC 2483
+- [Phase 28]: File category now filterable via ct.file toggle (was always-true)
+- [Phase 28]: NoopFileTransportPort stub pattern used at NetworkPorts construction sites for pre-adapter compilation
+- [Phase 28]: Manual schema.rs update for file_transfer table since diesel CLI not available
+- [Phase 28]: url crate v2 for URL parsing validation instead of regex
+- [Phase 28]: ClipboardItemDto.link changed from serde_json::Value to ClipboardLinkItemDto for type safety
+- [Phase 28]: URL regex heuristic checks http/https/ftp/ftps/mailto with no-whitespace for text/plain link detection
+- [Phase 29]: VerifyKeychainAccess use case takes only KeyScopePort + KeyMaterialPort (lighter than AutoUnlock's 5 ports)
+- [Phase 29]: KeyringError mapped to Ok(false) to treat keyring issues as not-granted rather than hard failure
+- 29-02: Used regular Button instead of AlertDialogAction for confirm to prevent auto-close on verification failure
+- 29-02: Confirm button text changed to "I understand" per user feedback during verification
+- [Phase 30]: Used libc::statvfs directly for disk space check instead of adding fs2 dependency
+- [Phase 30]: Hash verification failure deletes temp file immediately with no retry policy
+- [Phase 30]: Shared sync policy module extracted for reuse between clipboard and file sync
+- [Phase 30]: Binary chunk frame format: 4-byte header-length prefix + JSON header + raw chunk data for efficient binary transfer
+- [Phase 30]: Queue and retry modules co-created since queue.rs depends on retry.rs
+- [Phase 30]: File cache directory derived from storage_paths.cache_dir.join('file-cache') rather than adding to AppConfig
+- [Phase 30]: Clone FileTransferService (Arc<Inner>) out of Mutex before await to avoid holding lock across async boundary
+- [Phase 30]: Per-peer send failures logged as warnings without aborting transfers to remaining peers
+- [Phase 31]: FileContextMenu uses ContextMenuTrigger asChild for zero extra DOM wrappers
+- [Phase 31]: Transfer tracking uses Set<string> in ClipboardContent state for transferringEntries
+- [Phase 31]: TransferProgressBar uses two variants (compact/detailed) instead of separate components
+- [Phase 31]: Transfer-to-entry mapping uses dual Record maps for O(1) lookup in both directions
+- [Phase 31]: Notification batching uses 500ms window to coalesce multi-file sync notifications
+- [Phase 31]: Error notifications fire immediately without batching for prompt user feedback
+- [Phase 31]: Clipboard race handled by cancelClipboardWrite reducer dispatched on clipboard://new-content event
+- [Phase 32.1]: CopyFileToClipboardUseCase takes entry_id only, looks up event_id via ClipboardEntryRepositoryPort
+- [Phase 32.1]: Batch accumulator lives in event loop outside tokio::spawn for cross-event state coordination
+- [Phase 32.1]: Entry persistence always via CaptureClipboardUseCase::execute_with_origin(RemotePush) regardless of clipboard race
+- [Phase 32.1]: Added get_representations_for_event to ClipboardRepresentationRepositoryPort with default empty impl
+- [Phase 32.1]: Extension-based file icon map uses constant Record lookup for ESLint static-components compliance
+- [Phase 32.1]: Lazy stale detection -- staleness only discovered when copyFileToClipboard returns error, not on startup
+- [Phase 32.1]: Delete cascade parses inline_data of text/uri-list representations to find and remove cache files
+- [Phase 32.1]: ClearClipboardHistory updated with representation_repo for consistent delete cascade
+- [Phase 32.1]: Pre-write race check uses consume_origin_or_default(LocalCapture) to detect clipboard activity during transfer
+- [Phase 32]: Used separate updateFileSyncSetting context method matching existing FileSyncSettings type at Settings.file_sync
+- [Phase 32]: Filesystem-based cleanup instead of DB repository: no FileEntryRepository port exists yet, file-cache directory is source of truth
+- [Phase 32]: Cleanup module placed in file_sync/ (not file/) to match existing module naming
+- [Phase 32]: Guards return Result errors (not events) since use cases have no event channel access; callers handle event emission
+- [Phase 32]: transfer_errors module provides constants and formatters for consistent user-facing error messages
+- [Phase 33]: Arc<TrackInboundTransfersUseCase> shared across spawned tasks for durable marking inside async spawns
+- [Phase 33]: get_entry_id_for_transfer added to port for transfer_id-only context resolution in progress events
+- [Phase 33]: file-transfer:// namespace prefix unifies all file transfer events
+- [Phase 33]: tokio::watch for timeout sweep cancellation to keep it simpler than TaskRegistry token
+- [Phase 33]: String-based entry_id in FileTransferRepositoryPort to avoid coupling to uc_ids across crate boundaries
+- [Phase 33]: NoopFileTransferRepositoryPort stub for compilation before infra adapter lands
+- [Phase 33]: Aggregate transfer status priority: failed > transferring > pending > completed
+- [Phase 33]: PendingTransferLinkage returned from InboundApplyOutcome for platform layer status emission
+- [Phase 33]: Durable entryStatusById separate from ephemeral activeTransfers to survive progress cleanup
+- [Phase 33]: Old transfer://progress and transfer://error channels replaced with file-transfer:// namespace
+- [Phase 33]: Durable entryStatusById takes priority over ephemeral activeTransfers for all UI state decisions
+- [Phase 33]: Hydration dispatch placed inside thunk (not fulfilled reducer) because reducers cannot dispatch actions
+- [Phase 33]: fetchClipboardItems filters file_transfer_status != null before building hydrateEntryTransferStatuses payload to avoid seeding null statuses into entryStatusById
+- [Phase 34]: useDeviceDiscovery stores raw deviceName (string | null) from backend — no fallback mapping in hook
+- [Phase 34]: onError callback stored in useRef synced via useEffect (not during render) to satisfy react-hooks/refs ESLint rule
+- [Phase 34]: SetupPage migrated from 3s polling interval to event-driven useDeviceDiscovery hook
+- [Phase 34]: Removed headerRight refresh button from JoinPickDeviceStep -- scanning is automatic, header stays clean
+- [Phase 34]: AnimatePresence mode=wait for clean phase-to-phase transitions in JoinPickDeviceStep
+- [Phase 35]: all_files_excluded guard scoped to file_sync_attempted flag to prevent false suppression when file_sync is disabled
+- [Phase 35]: OutboundSyncPlanner plan() infallible: settings failure returns safe defaults (clipboard: Some, files: [])
+- [Phase 35]: runtime.rs retains extract_file_paths_from_snapshot() + std::fs::metadata() calls (platform layer owns all fs I/O)
+- [Phase 35]: extracted_paths_count captured from resolved_paths.len() BEFORE metadata filter; passed to plan() for all_files_excluded detection
+- [Phase 65]: Inlined PlatformEvent (ClipboardChanged only) into clipboard/watcher.rs rather than keeping separate ipc module
 
 ### Roadmap Evolution
 
-v0.3.0 phases (19-35) completed and archived.
-v0.4.0 runs phases 36-41. Phase numbering is continuous.
-
-- Phase 42 added: CLI Clipboard Commands — list, get, and clear clipboard entries via CLI
-- Phase 43 added: Unify GUI and CLI business flows to eliminate per-entrypoint feature adaptation
-- Phase 44 added: CLI Pairing and Sync Commands — add CLI commands for device pairing and manual sync
-- Phase 45 added: Daemon API Foundation — add local HTTP and WebSocket transport with read-only runtime queries
-- Phase 46 added: Daemon Pairing Host Migration — move pairing orchestrator, action loops, and network event handling out of Tauri
-- Phase 46.1 inserted after Phase 46: Unify realtime subscriptions on single DaemonWsBridge (URGENT)
-- Phase 46.2 inserted after Phase 46: 彻底打通基于 daemon 的配对流程, 完全移除原 tauri 中相关的配对流程. 期望: 在不改变用户配对流程的情况下,内部替换成基于 daemon 的配对流程实现 (URGENT)
-- Phase 46.3 inserted after Phase 46: 修复 GUI 启动 daemon 的生命周期托管与版本不匹配静默替换 (URGENT)
-- Phase 46.4 inserted after Phase 46: 当前基于 daemon 重构后的 setup 流程还没有跑通(GUI), 为了加快开发和调试,我考虑先实现 cli 版本的 setup 流程, 理论上 cli 和 gui 都走的同一个流程,只是不同的入口,所以我考虑先将 cli +daemon 的方式给打通. 端到端将如何进行测试,你需要在两个终端中,分别起一个 peerA (full mode), 另一个是 peerB (passive mode), 然后让 peerB 成功与peerA 进行配对,也就是说, peerA 先新建加密空间, B 需要发现 A,B 请求A,A确认, B 输入加密口令, A 验证加密口令, 最终B成功加入 A; 对于 A 和 B 查询已配对设备都应该能看到对方. (URGENT)
-- Phase 46.5 inserted after Phase 46: 将配对业务逻辑从 Tauri 层彻底移除，统一收口到 daemon (URGENT)
-- Phase 46.6 inserted after Phase 46: daemon 需要跟随 tauri 启动和关闭,现在 tauri 关闭后,daemon 完全变成了孤儿进程 (URGENT)
-- Phase 47 added: Frontend Daemon Cutover — switch desktop UI from Tauri commands to daemon HTTP and WebSocket APIs
-- Phase 48 added: Daemon-Only Application Host Cleanup — remove legacy Tauri business entrypoints and consolidate runtime ownership
-- Phase 49 added: Setup 验证码链路单一化重构 — unify setup verification code path: setup orchestrator → daemon ws → Tauri bridge → setup realtime store → SetupPage, cut SetupPage/PairingNotificationProvider dual-source
-- Phase 50 added: Daemon encryption state recovery on startup — daemon 重启后从磁盘恢复 master key
-- Phase 51 added: Peer discovery deduplication fix — 修复 mDNS 扫描出重复设备
-- Phase 52 added: Daemon as single source of truth for space access state — daemon 作为 space access 唯一状态源
-- Phase 53 added: End-to-end join space flow verification — 端到端 join space 流程验证
-- Phase 54 added: Extract daemon client and realtime infrastructure from uc-tauri — 将 daemon HTTP 客户端、WebSocket 桥接、realtime 运行时从 uc-tauri 提取到独立 crate
-- Phase 55 added: Extract daemon lifecycle and setup pairing bridge from uc-tauri — 将 daemon 进程生命周期管理和 setup pairing facade 从 uc-tauri 提取到 uc-daemon/uc-daemon-client
-- Phase 56 added: Refactor daemon host architecture — extract peer lifecycle from PairingHost, unify host lifecycle management
-- Phase 57 added: Daemon 剪切板监听集成 — 将剪切板监听迁移到 daemon 进程中实现
-- Phase 58 added: Extract DTO models and pairing event types from uc-tauri to uc-app and uc-core
-- Phase 59 added: Extract UC protocol URI routing from uc-tauri to uc-core
-- Phase 60 added: Extract file transfer wiring orchestration from uc-tauri to uc-app
-- Phase 61 added: Daemon outbound clipboard sync — trigger sync to peers after local capture
-- Phase 62 added: Daemon inbound clipboard sync — receive peer clipboard and write to local system
-- Phase 63 added: Daemon file transfer orchestration — handle file sync lifecycle in daemon
-- Phase 64 added: Tauri sync retirement — remove sync logic from Tauri, delegate to daemon
-- Phase 65 added: Remove GUI clipboard watcher — delegate clipboard monitoring exclusively to daemon
+- Phase 23 added: Distributed tracing with trace view visualization for cross-device observability
+- Phase 24 added: Implement per-device sync settings for paired devices
+- Phase 25 added: Implement per-device sync content type toggles
+- Phase 26 added: Implement global sync master toggle and improve sync UX
+- Phase 27 added: 支持快捷键设置在 settings page 中
+- Phase 28 split: Original monolithic file sync phase split into 4 phases (28-31)
+- Phase 28 updated: File sync foundation — message types, ports, classification fix, schema, settings
+- Phase 28 added: Support link content type (MIME link and URL-detected plain text)
+- Phase 29 added: Add macOS auto-unlock keychain Always Allow confirmation modal on UnlockPage
+- Phase 30 added: File transfer service — chunked protocol, use cases, retry logic
+- Phase 31 added: File sync UI — Dashboard file entries, context menu, progress, notifications
+- Phase 32 added: File sync settings and polish — settings UI, quota enforcement, auto-cleanup
+- Phase 32.1 inserted after Phase 32: Inbound file sync clipboard integration with persistent file URI list for cross-platform paste (URGENT)
+- Phase 33 added: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
+- Phase 34 added: Optimize JoinPickDevice page: event-driven discovery with scanning UX
+- Phase 35 added: Extract OutboundSyncPlanner to consolidate scattered sync policy checks
 
 ### Pending Todos
 
-- `2026-03-21-fix-setup-pairing-confirmation-toast-missing.md` — 修复 setup 中选择设备后未出现配对确认提示的问题
+None yet.
 
 ### Blockers/Concerns
 
-- Phase 40 (uc-bootstrap) is high risk: crate extraction touches dependency graph across uc-tauri, uc-infra, uc-platform. Verify cargo workspace configuration before planning.
+- Phase 22 likely needs extra validation around CLEF field mapping and Seq waterfall/query behavior.
+- Existing `log::*` and `tracing::*` coexistence may need an audit during Phase 19 to avoid mixed-output surprises.
 
-### Known Bugs (deferred to future phases)
+### Quick Tasks Completed
 
-- **[Phase 38] setup_event_port holds stale LoggingEventEmitter**: `HostEventSetupPort` captures the initial `LoggingEventEmitter` Arc at `AppRuntime::with_setup` creation time (runtime.rs:420-422). When `set_event_emitter` swaps to `TauriEventEmitter` (main.rs:673-677), the swap does NOT propagate to `SetupOrchestrator`'s internal `setup_event_port`. Result: state changes emitted from spawned listener tasks (e.g. `ProcessingJoinSpace → JoinSpaceConfirmPeer` via `start_pairing_verification_listener_with_rx`) only log to console but never reach the frontend. Orchestrator dispatch-driven transitions work because the Tauri command return value carries the state directly. **Fix**: Phase 38 unifies SetupOrchestrator assembly into a single composition point, eliminating the two-phase emitter swap problem. **UAT impact**: PeerB setup UI does not advance from ProcessingJoinSpace to JoinSpaceConfirmPeer (PIN confirm screen) even though backend state is correct.
+| #   | Description                                                 | Date       | Commit   | Directory                                                                                         |
+| --- | ----------------------------------------------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------- |
+| 8   | Fix Vite chunk size warning by code-splitting large bundles | 2026-03-12 | 06d711af | [8-fix-vite-chunk-size-warning-by-code-spli](./quick/8-fix-vite-chunk-size-warning-by-code-spli/) |
+| 9   | Optimize stale relative timestamps on clipboard items       | 2026-03-12 | 8a079cb7 | [9-optimize-stale-relative-timestamps-on-cl](./quick/9-optimize-stale-relative-timestamps-on-cl/) |
 
 ## Session Continuity
 
-Last session: 2026-03-26T12:26:27.350Z
-Stopped at: Phase 65 context gathered
-Resume file: .planning/phases/65-remove-gui-clipboard-watcher-delegate-clipboard-monitoring-exclusively-to-daemon/65-CONTEXT.md
+Last session: 2026-03-26T13:22:09.125Z
+Stopped at: Completed 65-01-PLAN.md
+Resume file: None
