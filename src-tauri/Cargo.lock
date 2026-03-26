@@ -9306,7 +9306,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
- "blake3",
  "chrono",
  "core-foundation 0.10.1",
  "core-graphics",
