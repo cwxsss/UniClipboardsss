@@ -23,6 +23,7 @@ use uc_daemon::service::ServiceHealth;
 use uc_daemon::socket::resolve_daemon_socket_path;
 use uc_daemon::state::{DaemonServiceSnapshot, RuntimeState};
 use uc_daemon::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
+use uc_daemon::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
 use uc_daemon::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
 use uc_daemon::workers::peer_discovery::PeerDiscoveryWorker;
 use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
@@ -69,6 +70,10 @@ fn main() -> anyhow::Result<()> {
         },
         DaemonServiceSnapshot {
             name: "inbound-clipboard-sync".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        DaemonServiceSnapshot {
+            name: "file-sync-orchestrator".to_string(),
             health: ServiceHealth::Healthy,
         },
         DaemonServiceSnapshot {
@@ -119,7 +124,7 @@ fn main() -> anyhow::Result<()> {
         clipboard_change_origin.clone(),
     ));
     let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
-        local_clipboard,
+        local_clipboard.clone(), // clone — FileSyncOrchestratorWorker also needs this for clipboard restore
         clipboard_change_handler,
     ));
 
@@ -131,8 +136,21 @@ fn main() -> anyhow::Result<()> {
         runtime.clone(),
         event_tx.clone(),
         clipboard_change_origin.clone(), // SAME Arc as DaemonClipboardChangeHandler
-        Some(file_cache_dir),
-        Some(file_transfer_orchestrator),
+        Some(file_cache_dir.clone()),
+        Some(file_transfer_orchestrator.clone()),
+    ));
+
+    // FileSyncOrchestratorWorker subscribes to network events for file transfer lifecycle.
+    // Handles TransferProgress, FileTransferCompleted, FileTransferFailed events,
+    // runs startup reconciliation, periodic timeout sweeps, and restores completed
+    // files to the OS clipboard.
+    let file_sync_orchestrator_worker = Arc::new(FileSyncOrchestratorWorker::new(
+        file_transfer_orchestrator,
+        daemon_network_events.clone(), // clone — PeerDiscoveryWorker also needs this
+        local_clipboard.clone(),
+        clipboard_change_origin.clone(),
+        file_cache_dir,
+        daemon_settings.clone(), // clone — PeerDiscoveryWorker also needs this
     ));
 
     // 5. Assemble services vec — typed services erased to Arc<dyn DaemonService> (per D-05).
@@ -140,6 +158,7 @@ fn main() -> anyhow::Result<()> {
     let services: Vec<Arc<dyn DaemonService>> = vec![
         Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
         Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
+        Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
         Arc::new(PeerDiscoveryWorker::new(
             daemon_network_control,
             daemon_network_events,
