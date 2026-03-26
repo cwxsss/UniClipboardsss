@@ -57,7 +57,6 @@ pub use pairing::{
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator, SetupPairingFacadePort};
 pub use start_network::StartNetwork;
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
-pub use uc_core::ports::{StartClipboardWatcherError, StartClipboardWatcherPort};
 pub use update_settings::UpdateSettings;
 pub use verify_keychain_access::VerifyKeychainAccess;
 
