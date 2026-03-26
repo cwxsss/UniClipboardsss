@@ -341,11 +341,10 @@ impl AppRuntime {
 /// Tauri-aware use case accessors wrapping CoreUseCases.
 ///
 /// Provides transparent access to all CoreUseCases methods (via Deref) plus
-/// 5 non-core accessors that cannot live in uc-app:
+/// 4 non-core accessors that cannot live in uc-app:
 /// - apply_autostart (needs AppHandle)
 /// - start_clipboard_watcher (needs WatcherControlPort from uc-platform)
 /// - app_lifecycle_coordinator (needs TauriSessionReadyEmitter)
-/// - sync_inbound_clipboard (needs uc_infra TransferPayloadDecryptorAdapter)
 /// - sync_outbound_clipboard (needs uc_infra TransferPayloadEncryptorAdapter)
 pub struct AppUseCases<'a> {
     app_runtime: &'a AppRuntime,
@@ -401,28 +400,6 @@ impl<'a> AppUseCases<'a> {
                 status: self.app_runtime.core.lifecycle_status().clone(),
                 lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
             },
-        )
-    }
-
-    pub fn sync_inbound_clipboard(
-        &self,
-    ) -> uc_app::usecases::clipboard::sync_inbound::SyncInboundClipboardUseCase {
-        uc_app::usecases::clipboard::sync_inbound::SyncInboundClipboardUseCase::with_capture_dependencies(
-            self.app_runtime.core.clipboard_integration_mode(),
-            self.app_runtime.wiring_deps().clipboard.system_clipboard.clone(),
-            self.app_runtime.wiring_deps().clipboard.clipboard_change_origin.clone(),
-            self.app_runtime.wiring_deps().security.encryption_session.clone(),
-            self.app_runtime.wiring_deps().security.encryption.clone(),
-            self.app_runtime.wiring_deps().device.device_identity.clone(),
-            Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter),
-            self.app_runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-            self.app_runtime.wiring_deps().clipboard.clipboard_event_repo.clone(),
-            self.app_runtime.wiring_deps().clipboard.representation_policy.clone(),
-            self.app_runtime.wiring_deps().clipboard.representation_normalizer.clone(),
-            self.app_runtime.wiring_deps().clipboard.representation_cache.clone(),
-            self.app_runtime.wiring_deps().clipboard.spool_queue.clone(),
-            Some(self.app_runtime.core.storage_paths().file_cache_dir.clone()),
-            self.app_runtime.wiring_deps().settings.clone(),
         )
     }
 
