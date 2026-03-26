@@ -570,24 +570,31 @@ async fn restore_clipboard_entry_impl(
             return Err(CommandError::NotFound("Entry not found".to_string()));
         }
 
-        let outbound_snapshot = snapshot.clone();
-        restore_uc.restore_snapshot(snapshot).await.map_err(|err| {
+        restore_uc.restore_snapshot(snapshot.clone()).await.map_err(|err| {
             tracing::error!(error = %err, entry_id = %entry_id, "Failed to write restore snapshot");
             CommandError::InternalError(err.to_string())
         })?;
 
-        let outbound_sync_uc = runtime.usecases().sync_outbound_clipboard();
-        match tokio::task::spawn_blocking(move || {
-            outbound_sync_uc.execute(outbound_snapshot, uc_core::ClipboardChangeOrigin::LocalRestore, None, vec![])
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                tracing::warn!(error = %err, entry_id = %entry_id, "Restore outbound sync failed");
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, entry_id = %entry_id, "Restore outbound sync task join failed");
+        // In Passive mode, daemon's ClipboardWatcherWorker handles outbound sync
+        // after detecting the OS clipboard write. Skip direct sync to avoid double-send.
+        if !matches!(
+            runtime.clipboard_integration_mode(),
+            ClipboardIntegrationMode::Passive
+        ) {
+            let outbound_snapshot = snapshot;
+            let outbound_sync_uc = runtime.usecases().sync_outbound_clipboard();
+            match tokio::task::spawn_blocking(move || {
+                outbound_sync_uc.execute(outbound_snapshot, uc_core::ClipboardChangeOrigin::LocalRestore, None, vec![])
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(error = %err, entry_id = %entry_id, "Restore outbound sync failed");
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, entry_id = %entry_id, "Restore outbound sync task join failed");
+                }
             }
         }
 
