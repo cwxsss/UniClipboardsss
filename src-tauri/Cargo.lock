@@ -9167,6 +9167,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "blake3",
  "chrono",
  "clipboard-rs",
  "futures-util",
@@ -9184,6 +9185,7 @@ dependencies = [
  "uc-core",
  "uc-infra",
  "uc-platform",
+ "url",
 ]
 
 [[package]]

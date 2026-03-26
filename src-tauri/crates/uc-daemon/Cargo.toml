@@ -28,6 +28,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
+blake3 = "1"
 tracing = "0.1"
 futures-util = "0.3"
 url = "2"
