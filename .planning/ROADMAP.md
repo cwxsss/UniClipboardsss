@@ -607,11 +607,21 @@ Plans:
 
 ### Phase 64: Tauri sync retirement — remove sync logic from Tauri, delegate to daemon
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Remove daemon-duplicated sync loops (clipboard receive, network realtime, file transfer reconciliation/sweep) from uc-tauri wiring.rs, gate restore_clipboard_entry outbound sync on Full mode, and clean up dead code and dependencies.
+**Requirements**: PH64-01, PH64-02, PH64-03, PH64-04, PH64-05, PH64-06
 **Depends on:** Phase 63
-**Plans:** 0 plans
+**Plans:** 2 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. wiring.rs no longer spawns clipboard_receive, pairing_events, file_transfer_reconcile, or file_transfer_timeout_sweep tasks
+2. All dead helper functions, backoff constants, and backoff utilities are removed from wiring.rs
+3. restore_clipboard_entry skips direct outbound sync in Passive mode (daemon handles via ClipboardWatcherWorker)
+4. sync_inbound_clipboard accessor removed from AppUseCases (zero callers)
+5. blake3 dependency removed from uc-tauri Cargo.toml
+6. Full uc-tauri and uc-daemon test suites pass
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 64 to break down)
+- [ ] 64-01-PLAN.md — Remove daemon-duplicated sync loops, helpers, constants, and blake3 dep from wiring.rs
+- [ ] 64-02-PLAN.md — Gate restore_clipboard_entry outbound sync on Full mode, remove dead sync_inbound_clipboard accessor
