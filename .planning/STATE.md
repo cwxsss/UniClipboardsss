@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Phase complete — ready for verification
+status: Milestone complete
 stopped_at: Completed 64-02-PLAN.md
-last_updated: "2026-03-26T04:25:21.789Z"
+last_updated: '2026-03-26T04:29:37.710Z'
 progress:
   total_phases: 35
   completed_phases: 28
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 
 ## Current Position
 
-Phase: 64 (tauri-sync-retirement) — EXECUTING
-Plan: 2 of 2
+Phase: 64
+Plan: Not started
 
 ## Performance Metrics
 
@@ -255,7 +255,7 @@ Recent decisions affecting current work:
 - [Phase 63]: [Phase 63]: message_origin_device_id captured before execute_with_outcome for safe async boundary crossing
 - [Phase 63]: FileSyncOrchestratorWorker does not forward transient progress events to WS (deferred Phase 64)
 - [Phase 63]: blake3 = '1' added directly to uc-daemon Cargo.toml for hash verification
-- [Phase 64]: file_transfer_orchestrator field preserved in BackgroundRuntimeDeps with _ prefix in wiring.rs — daemon still uses it via uc-bootstrap
+- [Phase 64]: file*transfer_orchestrator field preserved in BackgroundRuntimeDeps with * prefix in wiring.rs — daemon still uses it via uc-bootstrap
 - [Phase 64]: restore_clipboard_entry outbound sync skipped in Passive mode; daemon ClipboardWatcherWorker owns it after detecting OS clipboard write
 
 ### Roadmap Evolution
