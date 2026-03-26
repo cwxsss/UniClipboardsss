@@ -66,13 +66,12 @@ use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
 use uc_platform::adapters::{
     DisabledPairingTransport, FilesystemBlobStore, InMemoryEncryptionSessionPort,
-    InMemoryWatcherControl, Libp2pNetworkAdapter, PairingRuntimeOwner,
+    Libp2pNetworkAdapter, PairingRuntimeOwner,
 };
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::LocalClipboard;
 use uc_platform::identity_store::FileIdentityStore;
-use uc_platform::ports::{AppDirsPort, IdentityStorePort, WatcherControlPort};
-use uc_platform::runtime::event_bus::PlatformCommandSender;
+use uc_platform::ports::{AppDirsPort, IdentityStorePort};
 
 use tokio::sync::mpsc;
 
@@ -157,7 +156,6 @@ pub struct BackgroundRuntimeDeps {
 pub struct WiredDependencies {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
-    pub watcher_control: Arc<dyn WatcherControlPort>,
     /// Shared emitter cell created at wire time with the initial `LoggingHostEventEmitter`.
     /// Callers (GUI bootstrap, non-GUI bootstrap) use this same cell so that
     /// all consumers — CoreRuntime, SetupOrchestrator, and FileTransferOrchestrator —
@@ -270,9 +268,6 @@ pub struct PlatformLayer {
 
     // Encryption session
     pub encryption_session: Arc<dyn EncryptionSessionPort>,
-
-    // Watcher control
-    pub watcher_control: Arc<dyn WatcherControlPort>,
 
     // Key scope
     pub key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort>,
@@ -440,7 +435,6 @@ fn build_network_ports(
 pub fn create_platform_layer(
     secure_storage: Arc<dyn SecureStoragePort>,
     config_dir: &PathBuf,
-    platform_cmd_tx: PlatformCommandSender,
     encryption: Arc<dyn EncryptionPort>,
     blob_repository: Arc<dyn BlobRepositoryPort>,
     paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
@@ -566,9 +560,6 @@ pub fn create_platform_layer(
         clock,
     ));
 
-    let watcher_control: Arc<dyn WatcherControlPort> =
-        Arc::new(InMemoryWatcherControl::new(platform_cmd_tx));
-
     let key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort> =
         Arc::new(uc_platform::key_scope::DefaultKeyScope::new());
 
@@ -583,7 +574,6 @@ pub fn create_platform_layer(
         blob_writer,
         blob_store: encrypted_blob_store,
         encryption_session,
-        watcher_control,
         key_scope,
     })
 }
@@ -704,10 +694,9 @@ pub fn apply_profile_suffix(path: PathBuf) -> PathBuf {
 /// Wires and constructs the application's dependency graph, returning ready-to-use dependencies.
 pub fn wire_dependencies(
     config: &AppConfig,
-    platform_cmd_tx: PlatformCommandSender,
     pairing_runtime_owner: PairingRuntimeOwner,
 ) -> WiringResult<WiredDependencies> {
-    wire_dependencies_with_identity_store(config, platform_cmd_tx, None, pairing_runtime_owner)
+    wire_dependencies_with_identity_store(config, None, pairing_runtime_owner)
 }
 
 /// Wires dependencies with a caller-provided identity store.
@@ -715,7 +704,6 @@ pub fn wire_dependencies(
 /// This is primarily intended for tests or environments without system secure storage.
 pub fn wire_dependencies_with_identity_store(
     config: &AppConfig,
-    platform_cmd_tx: PlatformCommandSender,
     identity_store: Option<Arc<dyn IdentityStorePort>>,
     pairing_runtime_owner: PairingRuntimeOwner,
 ) -> WiringResult<WiredDependencies> {
@@ -744,7 +732,6 @@ pub fn wire_dependencies_with_identity_store(
     let platform = create_platform_layer(
         secure_storage,
         &vault_path,
-        platform_cmd_tx,
         infra.encryption.clone(),
         infra.blob_repository.clone(),
         infra.paired_device_repo.clone(),
@@ -875,7 +862,6 @@ pub fn wire_dependencies_with_identity_store(
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
             file_transfer_orchestrator,
         },
-        watcher_control: platform.watcher_control,
         emitter_cell,
     })
 }
@@ -917,9 +903,8 @@ use tokio::sync::Mutex as TokioMutex;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{
     DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, PairingOrchestrator,
-    SessionReadyEmitter, SetupOrchestrator, SetupPairingFacadePort, StartClipboardWatcherPort,
+    SessionReadyEmitter, SetupOrchestrator, SetupPairingFacadePort,
 };
-use uc_core::clipboard::ClipboardIntegrationMode;
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{DiscoveryPort, TimerPort};
 
@@ -928,10 +913,9 @@ use uc_core::ports::{DiscoveryPort, TimerPort};
 /// Replaces SetupRuntimePorts from runtime.rs. Contains ONLY network/external
 /// adapter ports that the caller (main.rs/wiring.rs) provides and that are NOT
 /// shared with AppRuntime or CoreRuntime. All shared/dual-use values
-/// (watcher_control, emitter_cell, lifecycle_status, clipboard_integration_mode,
-/// session_ready_emitter) are separate parameters to build_setup_orchestrator(),
-/// ensuring with_setup() can pass the SAME instance to both the orchestrator
-/// and AppRuntime/CoreRuntime.
+/// (emitter_cell, lifecycle_status, session_ready_emitter) are separate
+/// parameters to build_setup_orchestrator(), ensuring with_setup() can pass
+/// the SAME instance to both the orchestrator and AppRuntime/CoreRuntime.
 pub struct SetupAssemblyPorts {
     pub setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
     pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
@@ -1046,9 +1030,9 @@ pub fn build_file_transfer_orchestrator(
     emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
     clock: Arc<dyn ClockPort>,
 ) -> Arc<uc_app::usecases::file_sync::FileTransferOrchestrator> {
-    let tracker = Arc::new(uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(
-        file_transfer_repo,
-    ));
+    let tracker = Arc::new(
+        uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(file_transfer_repo),
+    );
     Arc::new(uc_app::usecases::file_sync::FileTransferOrchestrator::new(
         tracker,
         emitter_cell,
@@ -1064,9 +1048,7 @@ pub fn build_setup_orchestrator(
     ports: SetupAssemblyPorts,
     lifecycle_status: Arc<dyn LifecycleStatusPort>,
     emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-    clipboard_integration_mode: ClipboardIntegrationMode,
     session_ready_emitter: Arc<dyn SessionReadyEmitter>,
-    watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
 ) -> Arc<SetupOrchestrator> {
     use uc_app::usecases::{
         AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, InitializeEncryption,
@@ -1082,17 +1064,11 @@ pub fn build_setup_orchestrator(
     ));
     let mark_setup_complete = Arc::new(MarkSetupComplete::from_ports(deps.setup_status.clone()));
 
-    let start_watcher: Arc<dyn StartClipboardWatcherPort> =
-        Arc::new(uc_platform::usecases::StartClipboardWatcher::from_port(
-            watcher_control,
-            clipboard_integration_mode,
-        ));
     let start_network = Arc::new(StartNetworkAfterUnlock::from_port(
         deps.network_control.clone(),
     ));
     let app_lifecycle = Arc::new(AppLifecycleCoordinator::from_deps(
         AppLifecycleCoordinatorDeps {
-            watcher: start_watcher,
             network: start_network,
             announcer: ports.device_announcer,
             emitter: session_ready_emitter,

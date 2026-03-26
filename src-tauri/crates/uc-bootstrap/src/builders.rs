@@ -33,11 +33,6 @@ use uc_core::network::pairing_state_machine::PairingAction;
 use uc_core::ports::PeerDirectoryPort;
 use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
 use uc_platform::adapters::PairingRuntimeOwner;
-use uc_platform::ipc::PlatformCommand;
-use uc_platform::ports::WatcherControlPort;
-use uc_platform::runtime::event_bus::{
-    PlatformCommandReceiver, PlatformEventReceiver, PlatformEventSender,
-};
 
 use crate::assembly::{
     get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
@@ -54,13 +49,8 @@ use crate::config_resolution::resolve_app_config;
 pub struct GuiBootstrapContext {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
-    pub watcher_control: Arc<dyn WatcherControlPort>,
     pub setup_ports: SetupAssemblyPorts,
     pub storage_paths: AppPaths,
-    pub platform_event_tx: PlatformEventSender,
-    pub platform_event_rx: PlatformEventReceiver,
-    pub platform_cmd_tx: mpsc::Sender<PlatformCommand>,
-    pub platform_cmd_rx: PlatformCommandReceiver,
     pub pairing_orchestrator: Arc<PairingOrchestrator>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
     pub staged_store: Arc<StagedPairedDeviceStore>,
@@ -75,19 +65,11 @@ pub struct CliBootstrapContext {
     pub config: AppConfig,
 }
 
-/// Context for daemon entry point. AppDeps + background deps + platform channels,
+/// Context for daemon entry point. AppDeps + background deps,
 /// workers not started. Caller constructs CoreRuntime and starts background workers.
-///
-/// [Codex Review R2] Includes platform_cmd_rx and platform_event channels so
-/// WatcherControlPort is wired to a live channel (not a dropped receiver).
 pub struct DaemonBootstrapContext {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
-    pub watcher_control: Arc<dyn WatcherControlPort>,
-    pub platform_cmd_tx: mpsc::Sender<PlatformCommand>,
-    pub platform_cmd_rx: PlatformCommandReceiver,
-    pub platform_event_tx: PlatformEventSender,
-    pub platform_event_rx: PlatformEventReceiver,
     pub pairing_orchestrator: Arc<PairingOrchestrator>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
     pub staged_store: Arc<StagedPairedDeviceStore>,
@@ -103,7 +85,6 @@ pub struct DaemonBootstrapContext {
 /// If `log_profile_override` is `Some`, the `UC_LOG_PROFILE` env var is set
 /// before tracing initialization so the subscriber picks up the desired profile.
 fn build_core(
-    platform_cmd_tx: mpsc::Sender<PlatformCommand>,
     pairing_runtime_owner: PairingRuntimeOwner,
     log_profile_override: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<(AppConfig, crate::assembly::WiredDependencies)> {
@@ -117,7 +98,7 @@ fn build_core(
 
     let config = resolve_app_config().map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    let wired = wire_dependencies(&config, platform_cmd_tx, pairing_runtime_owner)
+    let wired = wire_dependencies(&config, pairing_runtime_owner)
         .map_err(|e| anyhow::anyhow!("Dependency wiring failed: {}", e))?;
 
     Ok((config, wired))
@@ -142,18 +123,10 @@ fn daemon_pairing_runtime_owner() -> PairingRuntimeOwner {
 /// MUST be called outside any Tokio runtime (panics otherwise due to internal
 /// `tokio::runtime::Builder::new_current_thread().block_on()`).
 pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
-    let (platform_event_tx, platform_event_rx): (PlatformEventSender, PlatformEventReceiver) =
-        mpsc::channel(100);
-    let (platform_cmd_tx, platform_cmd_rx): (
-        mpsc::Sender<PlatformCommand>,
-        PlatformCommandReceiver,
-    ) = mpsc::channel(100);
-
-    let (config, wired) = build_core(platform_cmd_tx.clone(), gui_pairing_runtime_owner(), None)?;
+    let (config, wired) = build_core(gui_pairing_runtime_owner(), None)?;
 
     let deps = wired.deps;
     let background = wired.background;
-    let watcher_control = wired.watcher_control;
 
     let pairing_device_repo = deps.device.paired_device_repo.clone();
     let pairing_device_identity = deps.device.device_identity.clone();
@@ -210,13 +183,8 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     Ok(GuiBootstrapContext {
         deps,
         background,
-        watcher_control,
         setup_ports,
         storage_paths,
-        platform_event_tx,
-        platform_event_rx,
-        platform_cmd_tx,
-        platform_cmd_rx,
         pairing_orchestrator,
         pairing_action_rx,
         staged_store,
@@ -239,8 +207,7 @@ pub fn build_cli_context() -> anyhow::Result<CliBootstrapContext> {
 pub fn build_cli_context_with_profile(
     log_profile: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<CliBootstrapContext> {
-    let (_platform_cmd_tx, _platform_cmd_rx) = mpsc::channel(100);
-    let (config, wired) = build_core(_platform_cmd_tx, cli_pairing_runtime_owner(), log_profile)?;
+    let (config, wired) = build_core(cli_pairing_runtime_owner(), log_profile)?;
 
     // [Codex Review R1] Return AppDeps, not CoreRuntime.
     // CLI entry point constructs CoreRuntime itself with appropriate emitter.
@@ -250,28 +217,13 @@ pub fn build_cli_context_with_profile(
     })
 }
 
-/// Build daemon bootstrap context. Returns AppDeps + background deps + live platform channels.
+/// Build daemon bootstrap context. Returns AppDeps + background deps.
 /// Caller constructs CoreRuntime and starts background workers.
-///
-/// [Codex Review R2] Unlike CLI, daemon keeps platform channels alive so
-/// WatcherControlPort works correctly at runtime.
 pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
-    let (platform_event_tx, platform_event_rx): (PlatformEventSender, PlatformEventReceiver) =
-        mpsc::channel(100);
-    let (platform_cmd_tx, platform_cmd_rx): (
-        mpsc::Sender<PlatformCommand>,
-        PlatformCommandReceiver,
-    ) = mpsc::channel(100);
-
-    let (config, wired) = build_core(
-        platform_cmd_tx.clone(),
-        daemon_pairing_runtime_owner(),
-        None,
-    )?;
+    let (config, wired) = build_core(daemon_pairing_runtime_owner(), None)?;
     let storage_paths = get_storage_paths(&config)?;
     let deps = wired.deps;
     let background = wired.background;
-    let watcher_control = wired.watcher_control;
 
     let pairing_device_repo = deps.device.paired_device_repo.clone();
     let pairing_device_identity = deps.device.device_identity.clone();
@@ -307,11 +259,6 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     Ok(DaemonBootstrapContext {
         deps,
         background,
-        watcher_control,
-        platform_cmd_tx,
-        platform_cmd_rx,
-        platform_event_tx,
-        platform_event_rx,
         pairing_orchestrator,
         pairing_action_rx,
         staged_store,

@@ -22,9 +22,7 @@ use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_infra::clipboard::TransferPayloadEncryptorAdapter;
-use uc_platform::clipboard::watcher::ClipboardWatcher;
-use uc_platform::ipc::PlatformEvent;
-use uc_platform::runtime::event_bus::PlatformEventSender;
+use uc_platform::clipboard::watcher::{ClipboardWatcher, PlatformEvent, PlatformEventSender};
 
 use crate::api::types::DaemonWsEvent;
 use crate::service::{DaemonService, ServiceHealth};
@@ -255,7 +253,12 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                 let deps = self.runtime.wiring_deps();
                 let planner = OutboundSyncPlanner::new(deps.settings.clone());
                 let plan = planner
-                    .plan(outbound_snapshot, origin, file_candidates, extracted_paths_count)
+                    .plan(
+                        outbound_snapshot,
+                        origin,
+                        file_candidates,
+                        extracted_paths_count,
+                    )
                     .await;
 
                 // Dispatch clipboard sync via spawn_blocking (execute() uses executor::block_on internally).
@@ -398,9 +401,6 @@ impl DaemonService for ClipboardWatcherWorker {
                                 warn!(error = %e, "Failed to handle clipboard change in daemon");
                             }
                         }
-                        Some(_) => {
-                            // Other PlatformEvent variants are not relevant here.
-                        }
                         None => {
                             // Channel closed (watcher thread exited).
                             info!("Clipboard watcher platform channel closed");
@@ -433,7 +433,11 @@ mod tests {
         ObservedClipboardRepresentation, SystemClipboardSnapshot,
     };
 
-    fn make_snapshot_with_rep(mime: Option<&str>, format_id: &str, bytes: Vec<u8>) -> SystemClipboardSnapshot {
+    fn make_snapshot_with_rep(
+        mime: Option<&str>,
+        format_id: &str,
+        bytes: Vec<u8>,
+    ) -> SystemClipboardSnapshot {
         SystemClipboardSnapshot {
             ts_ms: 1_000_000,
             representations: vec![ObservedClipboardRepresentation::new(
@@ -457,9 +461,13 @@ mod tests {
 
     #[test]
     fn test_extract_file_paths_empty_for_non_file_rep() {
-        let snapshot = make_snapshot_with_rep(Some("text/plain"), "text/plain", b"hello world".to_vec());
+        let snapshot =
+            make_snapshot_with_rep(Some("text/plain"), "text/plain", b"hello world".to_vec());
         let paths = extract_file_paths_from_snapshot(&snapshot);
-        assert!(paths.is_empty(), "Non-file representation should yield no paths");
+        assert!(
+            paths.is_empty(),
+            "Non-file representation should yield no paths"
+        );
     }
 
     #[test]

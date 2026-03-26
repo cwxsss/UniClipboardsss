@@ -553,6 +553,7 @@ mod tests {
     use crate::usecases::pairing::{PairingConfig, PairingOrchestrator};
     use crate::usecases::setup::action_executor::SetupActionExecutor;
     use crate::usecases::space_access::{SpaceAccessExecutor, SpaceAccessOrchestrator};
+    use crate::usecases::{AppLifecycleCoordinatorDeps, StartNetworkAfterUnlock};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
@@ -574,11 +575,6 @@ mod tests {
     use uc_core::security::space_access::event::SpaceAccessEvent;
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::setup::{SetupError as SetupDomainError, SetupStatus};
-    use uc_platform::ports::{WatcherControlError, WatcherControlPort};
-
-    use crate::usecases::clipboard::ClipboardIntegrationMode;
-    use crate::usecases::{AppLifecycleCoordinatorDeps, StartNetworkAfterUnlock};
-    use uc_platform::usecases::StartClipboardWatcher;
 
     struct MockSetupStatusPort {
         status: StdMutex<SetupStatus>,
@@ -943,21 +939,6 @@ mod tests {
     // NoopNetworkControl, NoopSessionReadyEmitter, NoopLifecycleStatus,
     // NoopLifecycleEventEmitter, NoopPairedDeviceRepository, NoopDiscoveryPort
     // — imported from crate::testing.
-    // NoopWatcherControl stays inline (WatcherControlPort is in uc-platform, a dev-dep).
-
-    struct NoopWatcherControl;
-
-    #[async_trait]
-    impl WatcherControlPort for NoopWatcherControl {
-        async fn start_watcher(&self) -> Result<(), WatcherControlError> {
-            Ok(())
-        }
-
-        async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
-            Ok(())
-        }
-    }
-
     struct NoopSpaceAccessCrypto;
 
     #[async_trait]
@@ -1030,10 +1011,6 @@ mod tests {
     fn build_mock_lifecycle() -> Arc<AppLifecycleCoordinator> {
         Arc::new(AppLifecycleCoordinator::from_deps(
             AppLifecycleCoordinatorDeps {
-                watcher: Arc::new(StartClipboardWatcher::new(
-                    Arc::new(NoopWatcherControl),
-                    ClipboardIntegrationMode::Full,
-                )),
                 network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(NoopNetworkControl))),
                 announcer: None,
                 emitter: Arc::new(NoopSessionReadyEmitter),

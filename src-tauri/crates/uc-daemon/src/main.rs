@@ -52,7 +52,6 @@ fn main() -> anyhow::Result<()> {
         ctx.deps,
         ctx.storage_paths.clone(),
         setup_ports,
-        ctx.watcher_control.clone(),
     )?);
 
     let socket_path = resolve_daemon_socket_path();

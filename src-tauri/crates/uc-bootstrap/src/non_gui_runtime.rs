@@ -16,7 +16,6 @@ use uc_app::usecases::{InMemoryLifecycleStatus, LoggingSessionReadyEmitter, Sess
 use uc_app::AppDeps;
 use uc_core::clipboard::ClipboardIntegrationMode;
 use uc_core::ports::host_event_emitter::{EmitError, HostEvent, HostEventEmitterPort};
-use uc_platform::ports::WatcherControlPort;
 
 use crate::assembly::{build_setup_orchestrator, SetupAssemblyPorts};
 
@@ -67,27 +66,6 @@ impl HostEventEmitterPort for LoggingHostEventEmitter {
 }
 
 // ---------------------------------------------------------------------------
-// NoopWatcherControl (for non-GUI modes)
-// ---------------------------------------------------------------------------
-
-/// No-op watcher control for non-GUI runtimes.
-///
-/// Daemon/CLI placeholder workers manage clipboard watching independently
-/// through the DaemonWorker trait, so the setup orchestrator's watcher control
-/// is unused.
-struct NoopWatcherControl;
-
-#[async_trait::async_trait]
-impl WatcherControlPort for NoopWatcherControl {
-    async fn start_watcher(&self) -> Result<(), uc_platform::ports::WatcherControlError> {
-        Ok(())
-    }
-    async fn stop_watcher(&self) -> Result<(), uc_platform::ports::WatcherControlError> {
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
 // build_non_gui_runtime
 // ---------------------------------------------------------------------------
 
@@ -106,9 +84,8 @@ pub fn build_non_gui_runtime(
     deps: AppDeps,
     storage_paths: AppPaths,
 ) -> anyhow::Result<CoreRuntime> {
-    let watcher_control: Arc<dyn WatcherControlPort> = Arc::new(NoopWatcherControl);
     let setup_ports = SetupAssemblyPorts::placeholder(&deps);
-    build_non_gui_runtime_with_setup(deps, storage_paths, setup_ports, watcher_control)
+    build_non_gui_runtime_with_setup(deps, storage_paths, setup_ports)
 }
 
 /// Construct a [`CoreRuntime`] for non-GUI entry points with explicit setup ports.
@@ -119,7 +96,6 @@ pub fn build_non_gui_runtime_with_setup(
     deps: AppDeps,
     storage_paths: AppPaths,
     setup_ports: SetupAssemblyPorts,
-    watcher_control: Arc<dyn WatcherControlPort>,
 ) -> anyhow::Result<CoreRuntime> {
     let emitter: Arc<dyn HostEventEmitterPort> = Arc::new(LoggingHostEventEmitter);
     let emitter_cell = Arc::new(std::sync::RwLock::new(emitter));
@@ -135,9 +111,7 @@ pub fn build_non_gui_runtime_with_setup(
         setup_ports,
         lifecycle_status.clone(),
         emitter_cell.clone(),
-        clipboard_integration_mode,
         session_ready_emitter,
-        watcher_control,
     );
 
     Ok(CoreRuntime::new(
