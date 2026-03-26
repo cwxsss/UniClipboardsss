@@ -4,10 +4,20 @@ use tracing::{debug, warn};
 
 use clipboard_rs::ClipboardHandler;
 
-use crate::ipc::PlatformEvent;
-use crate::runtime::event_bus::PlatformEventSender;
 use uc_core::clipboard::SystemClipboardSnapshot;
 use uc_core::ports::SystemClipboardPort;
+
+/// Minimal platform event type retained for clipboard watcher channel.
+/// Full PlatformEvent (ipc module) was removed in Phase 65; only the
+/// ClipboardChanged variant is needed by the watcher.
+#[derive(Debug, Clone)]
+pub enum PlatformEvent {
+    /// Local clipboard content changed.
+    ClipboardChanged { snapshot: SystemClipboardSnapshot },
+}
+
+/// Channel sender for platform events emitted by the clipboard watcher.
+pub type PlatformEventSender = tokio::sync::mpsc::Sender<PlatformEvent>;
 
 /// Time window to suppress rapid consecutive file clipboard events.
 /// macOS fires multiple events when copying files (e.g. APFS→resolved path transition)
