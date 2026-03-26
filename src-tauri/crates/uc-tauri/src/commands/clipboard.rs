@@ -665,7 +665,6 @@ mod tests {
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::{Blob, BlobId, ContentHash, DeviceId};
     use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
-    use uc_platform::ports::{WatcherControlError, WatcherControlPort};
 
     struct MockEntryRepository {
         entry: Option<ClipboardEntry>,
@@ -1037,17 +1036,6 @@ mod tests {
         }
 
         async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl WatcherControlPort for NoopPort {
-        async fn start_watcher(&self) -> Result<(), WatcherControlError> {
-            Ok(())
-        }
-
-        async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
             Ok(())
         }
     }
