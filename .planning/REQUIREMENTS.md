@@ -210,9 +210,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH64-01**: `wiring.rs` no longer spawns `clipboard_receive` or `pairing_events` background tasks — daemon `InboundClipboardSyncWorker` and `PeerDiscoveryWorker`/`PeerMonitor` own these responsibilities
 - [x] **PH64-02**: `wiring.rs` no longer spawns `file_transfer_reconcile` or `file_transfer_timeout_sweep` tasks — daemon `FileSyncOrchestratorWorker` owns startup reconciliation and timeout sweeps
 - [x] **PH64-03**: All dead helper functions (`register_pairing_background_tasks`, `run_clipboard_receive_loop`, `run_network_realtime_loop`, `new_sync_inbound_clipboard_usecase`, `restore_file_to_clipboard_after_transfer`, `resolve_device_name_for_peer`), backoff constants, and backoff utility functions are removed from `wiring.rs`
-- [ ] **PH64-04**: `restore_clipboard_entry` command gates outbound sync on `ClipboardIntegrationMode::Full` — in Passive mode (daemon running), daemon's `ClipboardWatcherWorker` handles outbound sync after OS clipboard write, preventing double-sync
+- [x] **PH64-04**: `restore_clipboard_entry` command gates outbound sync on `ClipboardIntegrationMode::Full` — in Passive mode (daemon running), daemon's `ClipboardWatcherWorker` handles outbound sync after OS clipboard write, preventing double-sync
 - [x] **PH64-05**: `blake3` dependency removed from `uc-tauri/Cargo.toml` (only consumer was hash verification in deleted `run_network_realtime_loop`)
-- [ ] **PH64-06**: `sync_inbound_clipboard()` accessor removed from `AppUseCases` in `runtime.rs` (zero callers after clipboard_receive loop deletion)
+- [x] **PH64-06**: `sync_inbound_clipboard()` accessor removed from `AppUseCases` in `runtime.rs` (zero callers after clipboard_receive loop deletion)
 
 ## Out of Scope
 
@@ -346,9 +346,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH64-01     | 64    | Complete |
 | PH64-02     | 64    | Complete |
 | PH64-03     | 64    | Complete |
-| PH64-04     | 64    | Pending  |
+| PH64-04     | 64    | Complete |
 | PH64-05     | 64    | Complete |
-| PH64-06     | 64    | Pending  |
+| PH64-06     | 64    | Complete |
 
 **Coverage:**
 
