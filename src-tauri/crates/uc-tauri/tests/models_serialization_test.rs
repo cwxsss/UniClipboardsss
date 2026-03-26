@@ -37,9 +37,10 @@ fn lifecycle_status_dto_serializes_with_camel_case() {
     let idle_json = serde_json::to_value(&idle).expect("serialize failed");
     assert_eq!(idle_json["state"], serde_json::json!("Idle"));
 
-    let watcher_failed = LifecycleStatusDto::from_state(LifecycleState::WatcherFailed);
-    let wf_json = serde_json::to_value(&watcher_failed).expect("serialize failed");
-    assert_eq!(wf_json["state"], serde_json::json!("WatcherFailed"));
+    // WatcherFailed variant removed — clipboard monitoring handled by daemon only
+    let network_failed = LifecycleStatusDto::from_state(LifecycleState::NetworkFailed);
+    let nf_json = serde_json::to_value(&network_failed).expect("serialize failed");
+    assert_eq!(nf_json["state"], serde_json::json!("NetworkFailed"));
 }
 
 #[test]

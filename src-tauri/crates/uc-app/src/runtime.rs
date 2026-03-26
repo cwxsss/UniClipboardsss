@@ -4,7 +4,7 @@
 //!
 //! This struct is the central artifact of RNTM-01: it compiles in uc-app without
 //! any Tauri dependency. AppRuntime (in uc-tauri) wraps this and adds only
-//! Tauri-specific handles (app_handle, watcher_control).
+//! Tauri-specific handles (app_handle).
 
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ use crate::usecases::LifecycleStatusPort;
 ///
 /// This struct is the core of RNTM-01: it compiles in uc-app without
 /// any Tauri dependency. AppRuntime (in uc-tauri) wraps this and adds
-/// only Tauri-specific handles (app_handle, watcher_control).
+/// only Tauri-specific handles (app_handle).
 pub struct CoreRuntime {
     pub(crate) deps: AppDeps,
     /// Shared cell for event emitter. Uses Arc<RwLock<Arc<...>>> so that

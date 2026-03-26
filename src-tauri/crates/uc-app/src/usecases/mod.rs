@@ -76,7 +76,7 @@ use std::sync::Arc;
 ///
 /// All methods return use case instances wired with ports from AppDeps.
 /// No Tauri dependency. For Tauri-specific accessors (apply_autostart,
-/// start_clipboard_watcher, app_lifecycle_coordinator) and uc-infra-dependent
+/// app_lifecycle_coordinator) and uc-infra-dependent
 /// accessors (sync_inbound_clipboard, sync_outbound_clipboard), see AppUseCases
 /// in uc-tauri.
 pub struct CoreUseCases<'a> {

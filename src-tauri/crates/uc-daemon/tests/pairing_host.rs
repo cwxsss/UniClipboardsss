@@ -32,7 +32,6 @@ fn build_host() -> (
             ctx.deps,
             ctx.storage_paths.clone(),
             setup_ports,
-            ctx.watcher_control.clone(),
         )
         .unwrap(),
     );

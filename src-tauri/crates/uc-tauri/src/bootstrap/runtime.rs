@@ -29,20 +29,15 @@
 //! 2. Add a method to `UseCases` that calls `new()` with deps
 //! 3. Commands can now call `runtime.usecases().your_use_case()`
 
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tracing::Instrument;
 
 use super::task_registry::TaskRegistry;
 use uc_app::{runtime::CoreRuntime, App, AppDeps};
 use uc_core::config::AppConfig;
-use uc_core::ports::{ClipboardChangeHandler, SettingsPort};
+use uc_core::ports::SettingsPort;
 use uc_core::security::state::EncryptionState;
-use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 
-use uc_core::ports::host_event_emitter::{
-    ClipboardHostEvent, ClipboardOriginKind, HostEvent, HostEventEmitterPort,
-};
+use uc_core::ports::host_event_emitter::HostEventEmitterPort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DaemonBootstrapOwnershipSnapshot {
@@ -147,43 +142,22 @@ pub struct AppRuntime {
     /// Tauri AppHandle for event emission (optional, set after Tauri setup).
     /// Uses RwLock for interior mutability since Arc<AppRuntime> is shared.
     app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,
-    /// Platform clipboard watcher control (evicted from uc-core).
-    watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
 }
 
 impl AppRuntime {
     /// Create a new AppRuntime from dependencies.
     /// 从依赖创建新的 AppRuntime。
     pub fn new(deps: AppDeps, storage_paths: uc_app::app_paths::AppPaths) -> Self {
-        struct NoopWatcherControl;
-        #[async_trait::async_trait]
-        impl uc_platform::ports::WatcherControlPort for NoopWatcherControl {
-            async fn start_watcher(&self) -> Result<(), uc_platform::ports::WatcherControlError> {
-                Ok(())
-            }
-            async fn stop_watcher(&self) -> Result<(), uc_platform::ports::WatcherControlError> {
-                Ok(())
-            }
-        }
         let setup_ports = super::assembly::SetupAssemblyPorts::placeholder(&deps);
-        let watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort> =
-            Arc::new(NoopWatcherControl);
         let event_emitter: Arc<dyn HostEventEmitterPort> =
             Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter);
-        Self::with_setup(
-            deps,
-            setup_ports,
-            watcher_control,
-            storage_paths,
-            event_emitter,
-        )
+        Self::with_setup(deps, setup_ports, storage_paths, event_emitter)
     }
 
     /// Create a new AppRuntime with explicit setup orchestrator dependencies.
     pub fn with_setup(
         deps: AppDeps,
         setup_ports: super::assembly::SetupAssemblyPorts,
-        watcher_control: Arc<dyn uc_platform::ports::WatcherControlPort>,
         storage_paths: uc_app::app_paths::AppPaths,
         event_emitter: Arc<dyn HostEventEmitterPort>,
     ) -> Self {
@@ -208,15 +182,12 @@ impl AppRuntime {
         );
 
         // Pass shared state + adapters to build_setup_orchestrator as SEPARATE params.
-        // watcher_control.clone() ensures the orchestrator and AppRuntime hold the SAME Arc.
         let setup_orchestrator = super::assembly::build_setup_orchestrator(
             &deps,
             setup_ports,
             lifecycle_status.clone(), // same instance goes to CoreRuntime below
             emitter_cell.clone(),     // same instance goes to CoreRuntime below
-            clipboard_integration_mode, // same value goes to CoreRuntime below
             session_ready_emitter,    // constructed from app_handle above
-            watcher_control.clone(),  // same Arc stored on AppRuntime below
         );
 
         // Pass the SAME cell to CoreRuntime — no re-wrapping.
@@ -233,7 +204,6 @@ impl AppRuntime {
         Self {
             core,
             app_handle,
-            watcher_control,
         }
     }
 
@@ -341,9 +311,8 @@ impl AppRuntime {
 /// Tauri-aware use case accessors wrapping CoreUseCases.
 ///
 /// Provides transparent access to all CoreUseCases methods (via Deref) plus
-/// 4 non-core accessors that cannot live in uc-app:
+/// 3 non-core accessors that cannot live in uc-app:
 /// - apply_autostart (needs AppHandle)
-/// - start_clipboard_watcher (needs WatcherControlPort from uc-platform)
 /// - app_lifecycle_coordinator (needs TauriSessionReadyEmitter)
 /// - sync_outbound_clipboard (needs uc_infra TransferPayloadEncryptorAdapter)
 pub struct AppUseCases<'a> {
@@ -373,16 +342,8 @@ impl<'a> AppUseCases<'a> {
         Some(uc_platform::usecases::ApplyAutostartSetting::new(adapter))
     }
 
-    /// Start the clipboard watcher.
-    pub fn start_clipboard_watcher(&self) -> uc_platform::usecases::StartClipboardWatcher {
-        uc_platform::usecases::StartClipboardWatcher::from_port(
-            self.app_runtime.watcher_control.clone(),
-            self.app_runtime.core.clipboard_integration_mode(),
-        )
-    }
-
     /// Get the AppLifecycleCoordinator use case for orchestrating
-    /// clipboard watcher, network startup, and session readiness.
+    /// network startup and session readiness.
     pub fn app_lifecycle_coordinator(&self) -> uc_app::usecases::AppLifecycleCoordinator {
         let announcer = Arc::new(uc_app::usecases::DeviceNameAnnouncer::new(
             self.app_runtime.wiring_deps().network_ports.peers.clone(),
@@ -390,8 +351,6 @@ impl<'a> AppUseCases<'a> {
         ));
         uc_app::usecases::AppLifecycleCoordinator::from_deps(
             uc_app::usecases::AppLifecycleCoordinatorDeps {
-                watcher: Arc::new(self.start_clipboard_watcher())
-                    as Arc<dyn uc_app::usecases::StartClipboardWatcherPort>,
                 network: Arc::new(self.core.start_network_after_unlock()),
                 announcer: Some(announcer),
                 emitter: Arc::new(crate::adapters::lifecycle::TauriSessionReadyEmitter::new(
@@ -536,298 +495,6 @@ pub fn create_app(deps: AppDeps) -> App {
     App::new(deps)
 }
 
-/// Implement ClipboardChangeHandler for AppRuntime.
-///
-/// This allows AppRuntime to be used as a callback for clipboard change events
-/// from the platform layer.
-#[async_trait::async_trait]
-impl ClipboardChangeHandler for AppRuntime {
-    async fn on_clipboard_changed(&self, snapshot: SystemClipboardSnapshot) -> anyhow::Result<()> {
-        let flow_id = uc_observability::FlowId::generate();
-        let span = tracing::info_span!(
-            "runtime.on_clipboard_changed",
-            %flow_id,
-            stage = uc_observability::stages::DETECT,
-        );
-        async move {
-            let snapshot_hash = snapshot.snapshot_hash().to_string();
-            let origin = self
-                .wiring_deps()
-                .clipboard
-                .clipboard_change_origin
-                .consume_origin_for_snapshot_or_default(
-                    &snapshot_hash,
-                    ClipboardChangeOrigin::LocalCapture,
-                )
-                .await;
-            let outbound_snapshot = snapshot.clone();
-
-            // Create CaptureClipboardUseCase with dependencies
-            let usecase = uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase::new(
-                self.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-                self.wiring_deps().clipboard.clipboard_event_repo.clone(),
-                self.wiring_deps().clipboard.representation_policy.clone(),
-                self.wiring_deps().clipboard.representation_normalizer.clone(),
-                self.wiring_deps().device.device_identity.clone(),
-                self.wiring_deps().clipboard.representation_cache.clone(),
-                self.wiring_deps().clipboard.spool_queue.clone(),
-            );
-
-            // Execute capture with the provided snapshot
-            match usecase.execute_with_origin(snapshot, origin).await {
-                Ok(Some(entry_id)) => {
-                    tracing::debug!(
-                        entry_id = %entry_id,
-                        "Successfully captured clipboard"
-                    );
-
-                    // Emit event to frontend via HostEventEmitterPort
-                    {
-                        let origin_kind = match origin {
-                            ClipboardChangeOrigin::LocalCapture
-                            | ClipboardChangeOrigin::LocalRestore => ClipboardOriginKind::Local,
-                            ClipboardChangeOrigin::RemotePush => ClipboardOriginKind::Remote,
-                        };
-                        let emitter = self.event_emitter();
-                        if let Err(e) = emitter.emit(HostEvent::Clipboard(
-                            ClipboardHostEvent::NewContent {
-                                entry_id: entry_id.to_string(),
-                                preview: "New clipboard content".to_string(),
-                                origin: origin_kind,
-                            },
-                        )) {
-                            tracing::warn!("Failed to emit clipboard event to frontend: {}", e);
-                        } else {
-                            tracing::debug!("Successfully emitted clipboard://event to frontend");
-                        }
-                    }
-
-                    // Extract file paths from snapshot (APFS resolution happens here, in platform layer).
-                    // Only LocalCapture events produce file candidates; all others pass empty vec.
-                    let resolved_paths = if origin == ClipboardChangeOrigin::LocalCapture {
-                        extract_file_paths_from_snapshot(&outbound_snapshot)
-                    } else {
-                        Vec::new()
-                    };
-
-                    // Capture count BEFORE metadata filtering so the planner can detect
-                    // the all_files_excluded case even when file_candidates is empty.
-                    let extracted_paths_count = resolved_paths.len();
-
-                    // Build FileCandidate vec by reading metadata for each resolved path.
-                    // All filesystem I/O stays in the platform layer (uc-tauri); the planner
-                    // in uc-app is a pure function with zero filesystem dependencies.
-                    let file_candidates: Vec<uc_app::usecases::sync_planner::FileCandidate> =
-                        resolved_paths
-                            .into_iter()
-                            .filter_map(|path| {
-                                match std::fs::metadata(&path) {
-                                    Ok(meta) => {
-                                        Some(uc_app::usecases::sync_planner::FileCandidate {
-                                            path,
-                                            size: meta.len(),
-                                        })
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            error = %e,
-                                            file = %path.display(),
-                                            "Excluding file from sync: failed to read metadata"
-                                        );
-                                        None
-                                    }
-                                }
-                            })
-                            .collect();
-
-                    // Delegate all sync policy decisions to OutboundSyncPlanner.
-                    let planner = uc_app::usecases::sync_planner::OutboundSyncPlanner::new(
-                        self.wiring_deps().settings.clone(),
-                    );
-                    let plan = planner
-                        .plan(outbound_snapshot, origin, file_candidates, extracted_paths_count)
-                        .await;
-
-                    // Dispatch clipboard sync from plan.clipboard.
-                    if let Some(clipboard_intent) = plan.clipboard {
-                        let outbound_sync_uc = self.usecases().sync_outbound_clipboard();
-                        let flow_id_for_sync = flow_id.clone();
-                        let flow_id_str = flow_id_for_sync.to_string();
-                        tauri::async_runtime::spawn(
-                            async move {
-                                match tokio::task::spawn_blocking(move || {
-                                    outbound_sync_uc.execute(
-                                        clipboard_intent.snapshot,
-                                        origin,
-                                        Some(flow_id_str),
-                                        clipboard_intent.file_transfers,
-                                    )
-                                })
-                                .await
-                                {
-                                    Ok(Ok(())) => {
-                                        tracing::info!("Outbound clipboard sync completed");
-                                    }
-                                    Ok(Err(err)) => {
-                                        tracing::warn!(error = %err, "Outbound clipboard sync failed");
-                                    }
-                                    Err(err) => {
-                                        tracing::warn!(error = %err, "Outbound clipboard sync task join failed");
-                                    }
-                                }
-                            }
-                            .instrument(tracing::info_span!("outbound_sync", %flow_id_for_sync)),
-                        );
-                    }
-
-                    // Dispatch file sync from plan.files (paths already resolved, sizes already checked).
-                    if !plan.files.is_empty() {
-                        let outbound_file_uc = self.usecases().sync_outbound_file();
-                        tauri::async_runtime::spawn(
-                            async move {
-                                for file_intent in plan.files {
-                                    tracing::info!(
-                                        file = %file_intent.path.display(),
-                                        transfer_id = %file_intent.transfer_id,
-                                        "Sending file to peers"
-                                    );
-                                    match outbound_file_uc
-                                        .execute(file_intent.path.clone(), Some(file_intent.transfer_id))
-                                        .await
-                                    {
-                                        Ok(result) => {
-                                            tracing::info!(
-                                                transfer_id = %result.transfer_id,
-                                                peer_count = result.peer_count,
-                                                file = %file_intent.path.display(),
-                                                "Outbound file sync completed"
-                                            );
-                                        }
-                                        Err(err) => {
-                                            tracing::warn!(
-                                                error = %err,
-                                                file = %file_intent.path.display(),
-                                                "Outbound file sync failed"
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            .instrument(tracing::info_span!("outbound_file_sync")),
-                        );
-                    }
-
-                    Ok(())
-                }
-                Ok(None) => {
-                    tracing::debug!(origin = ?origin, "Clipboard capture skipped for current origin");
-                    Ok(())
-                }
-                Err(e) => {
-                    tracing::error!("Failed to capture clipboard: {:?}", e);
-                    Err(e)
-                }
-            }
-        }
-        .instrument(span)
-        .await
-    }
-}
-
-/// Resolve macOS APFS file references (`/.file/id=<CNID>.<volumeID>`) to real file paths.
-///
-/// When files are copied in Finder, macOS may place APFS Catalog Node ID references
-/// on the clipboard instead of standard paths. These must be resolved via CoreFoundation.
-#[cfg(target_os = "macos")]
-fn resolve_apfs_file_reference(path: &std::path::Path) -> Option<std::path::PathBuf> {
-    use core_foundation::string::CFString;
-    use core_foundation::url::{kCFURLPOSIXPathStyle, CFURL};
-
-    let path_str = path.to_str()?;
-    if !path_str.starts_with("/.file/id=") {
-        return None;
-    }
-
-    // CFURLCreateWithFileSystemPath automatically resolves APFS file references
-    let cf_path = CFString::new(path_str);
-    let url = CFURL::from_file_system_path(cf_path, kCFURLPOSIXPathStyle, false);
-
-    // Extract the resolved path
-    let resolved = url.get_file_system_path(kCFURLPOSIXPathStyle);
-    let resolved_str = resolved.to_string();
-
-    // If still unresolved, return None
-    if resolved_str.starts_with("/.file/") {
-        tracing::warn!(
-            original = %path_str,
-            "Failed to resolve APFS file reference"
-        );
-        return None;
-    }
-
-    tracing::debug!(
-        original = %path_str,
-        resolved = %resolved_str,
-        "Resolved APFS file reference"
-    );
-    Some(std::path::PathBuf::from(resolved_str))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn resolve_apfs_file_reference(_path: &std::path::Path) -> Option<std::path::PathBuf> {
-    None
-}
-
-/// Extract file paths from a clipboard snapshot's representations.
-///
-/// Looks for `text/uri-list` or `file/uri-list` MIME types, or `files` / `public.file-url`
-/// format IDs, and parses `file://` URIs into `PathBuf`s.
-fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for rep in &snapshot.representations {
-        let is_file_rep = rep
-            .mime
-            .as_ref()
-            .map(|m| {
-                let s = m.as_str();
-                s.eq_ignore_ascii_case("text/uri-list") || s.eq_ignore_ascii_case("file/uri-list")
-            })
-            .unwrap_or(false)
-            || rep.format_id.eq_ignore_ascii_case("files")
-            || rep.format_id.eq_ignore_ascii_case("public.file-url");
-
-        if !is_file_rep {
-            continue;
-        }
-
-        // Parse bytes as UTF-8 text containing file:// URIs (one per line)
-        let text = match std::str::from_utf8(&rep.bytes) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Ok(url) = url::Url::parse(line) {
-                if url.scheme() == "file" {
-                    if let Ok(path) = url.to_file_path() {
-                        // On macOS, resolve APFS file references (/.file/id=...) to real paths
-                        let resolved = resolve_apfs_file_reference(&path).unwrap_or(path);
-                        paths.push(resolved);
-                    }
-                }
-            }
-        }
-    }
-    // Safety net: deduplicate in case multiple representations contain the same path
-    paths.sort();
-    paths.dedup();
-    paths
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -835,7 +502,6 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
     use tokio::sync::mpsc;
     use uc_core::clipboard::PolicyError;
     use uc_core::ports::clipboard::{RepresentationCachePort, SpoolQueuePort, SpoolRequest};
@@ -849,11 +515,12 @@ mod tests {
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::PeerId;
     use uc_core::{
-        Blob, BlobId, ClipboardChangeOrigin, ContentHash, DeviceId,
-        PersistedClipboardRepresentation,
+        Blob, BlobId, ContentHash, DeviceId, PersistedClipboardRepresentation,
+        SystemClipboardSnapshot,
     };
+    use uc_core::ports::host_event_emitter::{ClipboardHostEvent, HostEvent};
     use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
-    use uc_platform::ports::{AutostartPort, UiPort, WatcherControlError, WatcherControlPort};
+    use uc_platform::ports::{AutostartPort, UiPort};
 
     struct MockEntryRepository {
         save_calls: Arc<AtomicUsize>,
@@ -887,8 +554,6 @@ mod tests {
     struct RecordingEmitter {
         events: Mutex<Vec<HostEvent>>,
     }
-
-    struct TestWatcherControl;
 
     struct MockDeviceIdentity;
 
@@ -1042,17 +707,6 @@ mod tests {
             event: HostEvent,
         ) -> Result<(), uc_core::ports::host_event_emitter::EmitError> {
             self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl WatcherControlPort for TestWatcherControl {
-        async fn start_watcher(&self) -> Result<(), WatcherControlError> {
-            Ok(())
-        }
-
-        async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
             Ok(())
         }
     }
@@ -1260,17 +914,6 @@ mod tests {
         }
 
         async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl WatcherControlPort for NoopPort {
-        async fn start_watcher(&self) -> Result<(), WatcherControlError> {
-            Ok(())
-        }
-
-        async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
             Ok(())
         }
     }
@@ -1641,286 +1284,6 @@ mod tests {
         }
     }
 
-    /// Verify the integration boundary: when file paths are extracted from the snapshot
-    /// but ALL `std::fs::metadata()` calls fail (e.g. APFS path already deleted),
-    /// `extracted_paths_count` is still captured correctly (> 0), and the planner
-    /// receives empty `file_candidates` with that non-zero count.
-    ///
-    /// The planner's `test_all_files_excluded_by_metadata_failure` covers that this
-    /// combination correctly returns `clipboard: None`.  This test covers the runtime's
-    /// responsibility: that `extracted_paths_count` is captured BEFORE the metadata
-    /// filter rather than after.
-    #[test]
-    fn runtime_captured_count_before_metadata_filter() {
-        use uc_app::usecases::sync_planner::FileCandidate;
-        use uc_core::{ids::FormatId, ObservedClipboardRepresentation, SystemClipboardSnapshot};
-
-        // Build a snapshot with a text/uri-list representation referencing a
-        // non-existent path so that metadata() will fail.
-        let uri_list = "file:///nonexistent/path/that/does/not/exist/test_file.txt\n";
-        let snapshot = SystemClipboardSnapshot {
-            ts_ms: 0,
-            representations: vec![ObservedClipboardRepresentation::new(
-                uc_core::ids::RepresentationId::new(),
-                FormatId::from_str("text/uri-list"),
-                Some("text/uri-list".parse().unwrap()),
-                uri_list.as_bytes().to_vec(),
-            )],
-        };
-
-        // Step 1: extract paths (mirrors runtime code for LocalCapture).
-        let resolved_paths = extract_file_paths_from_snapshot(&snapshot);
-
-        // Step 2: capture count BEFORE metadata filtering.
-        let extracted_paths_count = resolved_paths.len();
-
-        // The non-existent URI should have produced exactly 1 resolved path.
-        assert_eq!(
-            extracted_paths_count, 1,
-            "expected 1 path extracted from the URI-list snapshot"
-        );
-
-        // Step 3: build FileCandidate vec — all metadata() calls will fail for the
-        // non-existent path.
-        let file_candidates: Vec<FileCandidate> = resolved_paths
-            .into_iter()
-            .filter_map(|path| match std::fs::metadata(&path) {
-                Ok(meta) => Some(FileCandidate {
-                    path,
-                    size: meta.len(),
-                }),
-                Err(_) => None, // metadata failed — excluded
-            })
-            .collect();
-
-        // The non-existent path produces NO candidates.
-        assert!(
-            file_candidates.is_empty(),
-            "expected no file candidates since the path does not exist"
-        );
-
-        // Key invariant: extracted_paths_count (captured before filtering) is still 1,
-        // so passing (file_candidates=[], extracted_paths_count=1) to the planner triggers
-        // the all_files_excluded guard → clipboard: None.
-        assert_eq!(
-            extracted_paths_count, 1,
-            "extracted_paths_count must reflect pre-filter count, not post-filter count"
-        );
-    }
-
-    #[tokio::test]
-    async fn runtime_consumes_origin() {
-        let save_calls = Arc::new(AtomicUsize::new(0));
-        let insert_calls = Arc::new(AtomicUsize::new(0));
-        let select_calls = Arc::new(AtomicUsize::new(0));
-        let normalize_calls = Arc::new(AtomicUsize::new(0));
-        let cache_put_calls = Arc::new(AtomicUsize::new(0));
-        let enqueue_calls = Arc::new(AtomicUsize::new(0));
-
-        let origin_port = Arc::new(InMemoryClipboardChangeOrigin::new());
-        origin_port
-            .set_next_origin(ClipboardChangeOrigin::LocalRestore, Duration::from_secs(1))
-            .await;
-
-        let (worker_tx, _worker_rx) = mpsc::channel(1);
-
-        let deps = AppDeps {
-            clipboard: uc_app::ClipboardPorts {
-                clipboard: Arc::new(NoopClipboard),
-                system_clipboard: Arc::new(NoopClipboard),
-                clipboard_entry_repo: Arc::new(MockEntryRepository {
-                    save_calls: save_calls.clone(),
-                }),
-                clipboard_event_repo: Arc::new(MockEventWriter {
-                    insert_calls: insert_calls.clone(),
-                }),
-                representation_repo: Arc::new(NoopPort),
-                representation_normalizer: Arc::new(MockNormalizer {
-                    normalize_calls: normalize_calls.clone(),
-                }),
-                selection_repo: Arc::new(NoopPort),
-                representation_policy: Arc::new(MockRepresentationPolicy {
-                    select_calls: select_calls.clone(),
-                }),
-                representation_cache: Arc::new(MockRepresentationCache {
-                    put_calls: cache_put_calls.clone(),
-                }),
-                spool_queue: Arc::new(MockSpoolQueue {
-                    enqueue_calls: enqueue_calls.clone(),
-                }),
-                worker_tx,
-                clipboard_change_origin: origin_port,
-                payload_resolver: Arc::new(NoopPort),
-            },
-            security: uc_app::SecurityPorts {
-                encryption: Arc::new(NoopPort),
-                encryption_session: Arc::new(NoopPort),
-                encryption_state: Arc::new(NoopPort),
-                key_scope: Arc::new(NoopPort),
-                secure_storage: Arc::new(NoopPort),
-                key_material: Arc::new(NoopPort),
-            },
-            device: uc_app::DevicePorts {
-                device_repo: Arc::new(NoopPort),
-                device_identity: Arc::new(MockDeviceIdentity),
-                paired_device_repo: Arc::new(NoopPort),
-            },
-            network_ports: noop_network_ports(),
-            network_control: Arc::new(NoopPort),
-            setup_status: Arc::new(NoopPort),
-            storage: uc_app::StoragePorts {
-                blob_store: Arc::new(NoopPort),
-                blob_repository: Arc::new(NoopPort),
-                blob_writer: Arc::new(NoopPort),
-                thumbnail_repo: Arc::new(NoopPort),
-                thumbnail_generator: Arc::new(NoopPort),
-                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
-            },
-            settings: Arc::new(NoopPort),
-            system: uc_app::SystemPorts {
-                clock: Arc::new(NoopPort),
-                hash: Arc::new(NoopPort),
-                file_manager: Arc::new(NoopPort),
-                cache_fs: Arc::new(NoopPort),
-            },
-        };
-
-        let runtime = AppRuntime::new(deps, test_storage_paths());
-        let snapshot = SystemClipboardSnapshot {
-            ts_ms: 0,
-            representations: vec![],
-        };
-
-        let result = runtime.on_clipboard_changed(snapshot).await;
-        assert!(result.is_ok());
-        assert_eq!(save_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(insert_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(select_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(normalize_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(cache_put_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(enqueue_calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
-    async fn runtime_emits_clipboard_new_content_via_host_event_emitter() {
-        let save_calls = Arc::new(AtomicUsize::new(0));
-        let insert_calls = Arc::new(AtomicUsize::new(0));
-        let cache_put_calls = Arc::new(AtomicUsize::new(0));
-        let enqueue_calls = Arc::new(AtomicUsize::new(0));
-
-        let origin_port = Arc::new(InMemoryClipboardChangeOrigin::new());
-        let snapshot = SystemClipboardSnapshot {
-            ts_ms: 123,
-            representations: vec![uc_core::ObservedClipboardRepresentation::new(
-                uc_core::ids::RepresentationId::new(),
-                uc_core::ids::FormatId::from("public.utf8-plain-text"),
-                Some(uc_core::MimeType::text_plain()),
-                b"hello from remote".to_vec(),
-            )],
-        };
-        origin_port
-            .set_next_origin(
-                ClipboardChangeOrigin::RemotePush,
-                std::time::Duration::from_secs(1),
-            )
-            .await;
-
-        let (worker_tx, _worker_rx) = mpsc::channel(1);
-        let deps = AppDeps {
-            clipboard: uc_app::ClipboardPorts {
-                clipboard: Arc::new(NoopClipboard),
-                system_clipboard: Arc::new(NoopClipboard),
-                clipboard_entry_repo: Arc::new(MockEntryRepository {
-                    save_calls: save_calls.clone(),
-                }),
-                clipboard_event_repo: Arc::new(MockEventWriter {
-                    insert_calls: insert_calls.clone(),
-                }),
-                representation_repo: Arc::new(NoopPort),
-                representation_normalizer: Arc::new(SuccessfulNormalizer),
-                selection_repo: Arc::new(NoopPort),
-                representation_policy: Arc::new(SuccessfulRepresentationPolicy),
-                representation_cache: Arc::new(MockRepresentationCache {
-                    put_calls: cache_put_calls.clone(),
-                }),
-                spool_queue: Arc::new(MockSpoolQueue {
-                    enqueue_calls: enqueue_calls.clone(),
-                }),
-                worker_tx,
-                clipboard_change_origin: origin_port,
-                payload_resolver: Arc::new(NoopPort),
-            },
-            security: uc_app::SecurityPorts {
-                encryption: Arc::new(NoopPort),
-                encryption_session: Arc::new(NoopPort),
-                encryption_state: Arc::new(NoopPort),
-                key_scope: Arc::new(NoopPort),
-                secure_storage: Arc::new(NoopPort),
-                key_material: Arc::new(NoopPort),
-            },
-            device: uc_app::DevicePorts {
-                device_repo: Arc::new(NoopPort),
-                device_identity: Arc::new(MockDeviceIdentity),
-                paired_device_repo: Arc::new(NoopPort),
-            },
-            network_ports: noop_network_ports(),
-            network_control: Arc::new(NoopPort),
-            setup_status: Arc::new(NoopPort),
-            storage: uc_app::StoragePorts {
-                blob_store: Arc::new(NoopPort),
-                blob_repository: Arc::new(NoopPort),
-                blob_writer: Arc::new(NoopPort),
-                thumbnail_repo: Arc::new(NoopPort),
-                thumbnail_generator: Arc::new(NoopPort),
-                file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
-            },
-            settings: Arc::new(NoopPort),
-            system: uc_app::SystemPorts {
-                clock: Arc::new(NoopPort),
-                hash: Arc::new(NoopPort),
-                file_manager: Arc::new(NoopPort),
-                cache_fs: Arc::new(NoopPort),
-            },
-        };
-        let setup_ports = super::super::assembly::SetupAssemblyPorts::placeholder(&deps);
-        let emitter = Arc::new(RecordingEmitter::default());
-        let runtime = AppRuntime::with_setup(
-            deps,
-            setup_ports,
-            Arc::new(TestWatcherControl),
-            test_storage_paths(),
-            emitter.clone(),
-        );
-
-        runtime
-            .on_clipboard_changed(snapshot)
-            .await
-            .expect("clipboard change should succeed");
-
-        assert_eq!(save_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(insert_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(cache_put_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(enqueue_calls.load(Ordering::SeqCst), 0);
-
-        let events = emitter.events.lock().unwrap();
-        assert_eq!(events.len(), 1);
-        match &events[0] {
-            HostEvent::Clipboard(ClipboardHostEvent::NewContent {
-                entry_id,
-                preview,
-                origin,
-            }) => {
-                assert!(
-                    !entry_id.is_empty(),
-                    "capture should persist a non-empty entry id"
-                );
-                assert_eq!(preview, "New clipboard content");
-                assert!(matches!(origin, ClipboardOriginKind::Remote));
-            }
-            other => panic!("expected clipboard new content event, got {other:?}"),
-        }
-    }
-
     #[test]
     fn runtime_event_emitter_can_be_swapped_after_setup() {
         let deps = AppDeps {
@@ -1989,7 +1352,6 @@ mod tests {
         let runtime = AppRuntime::with_setup(
             deps,
             setup_ports,
-            Arc::new(TestWatcherControl),
             test_storage_paths(),
             initial_emitter.clone(),
         );

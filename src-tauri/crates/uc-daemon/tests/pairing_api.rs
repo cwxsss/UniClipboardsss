@@ -46,7 +46,6 @@ fn build_api_fixture() -> PairingApiFixture {
             ctx.deps,
             ctx.storage_paths.clone(),
             setup_ports,
-            ctx.watcher_control.clone(),
         )
         .unwrap(),
     );

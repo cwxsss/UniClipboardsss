@@ -306,10 +306,8 @@ fn test_bootstrap_wire_dependencies_creates_app_deps() {
         file.write_all(toml_content.as_bytes()).unwrap();
 
         let config = load_config(config_path).unwrap();
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let deps_result = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         );
@@ -368,10 +366,8 @@ fn wiring_exposes_secure_storage_not_keyring() {
     run_with_tokio(|| {
         let mut config = AppConfig::empty();
         config.database_path = PathBuf::from(":memory:");
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let result = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         );
@@ -536,10 +532,8 @@ fn test_bootstrap_full_flow() {
 
         // Step 2: Wire dependencies
         // 步骤 2：连接依赖
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let deps = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         )
@@ -577,10 +571,8 @@ fn test_bootstrap_database_pool_real_filesystem() {
 
         // Wire dependencies (this will create the database)
         // 连接依赖（这将创建数据库）
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let deps_result = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         );
@@ -620,10 +612,8 @@ fn test_bootstrap_database_pool_invalid_path() {
         let mut config = AppConfig::empty();
         config.database_path = db_path;
 
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let deps_result = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         );
@@ -684,10 +674,8 @@ fn test_bootstrap_wire_dependencies_with_empty_config() {
         let mut config = AppConfig::empty();
         config.database_path = PathBuf::from(":memory:");
 
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let deps_result = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         );
@@ -725,10 +713,8 @@ fn test_bootstrap_wire_dependencies_creates_real_repositories() {
         let mut config = AppConfig::empty();
         config.database_path = PathBuf::from(":memory:");
 
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let deps = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         )
@@ -768,10 +754,8 @@ fn test_bootstrap_wire_dependencies_creates_platform_adapters() {
         let mut config = AppConfig::empty();
         config.database_path = PathBuf::from(":memory:");
 
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let deps = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         )
@@ -816,10 +800,8 @@ fn test_bootstrap_settings_repository_initialization() {
         config.vault_snapshot_path = vault_path.join("snapshot.json");
         config.database_path = PathBuf::from(":memory:");
 
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let deps = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         )
@@ -854,10 +836,8 @@ fn test_bootstrap_wire_dependencies_error_propagation() {
         let mut config = AppConfig::empty();
         config.database_path = PathBuf::from("/nonexistent/with/invalid/permissions/db/test.db");
 
-        let (cmd_tx, _cmd_rx) = mpsc::channel(10);
         let result = wire_dependencies_with_identity_store(
             &config,
-            cmd_tx,
             Some(test_identity_store()),
             PairingRuntimeOwner::ExternalDaemon,
         );

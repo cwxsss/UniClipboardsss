@@ -19,9 +19,7 @@ use uc_app::usecases::app_lifecycle::{AppLifecycleCoordinator, AppLifecycleCoord
 use uc_app::usecases::pairing::PairingDomainEvent;
 use uc_app::usecases::setup::{MarkSetupComplete, SetupPairingFacadePort};
 use uc_app::usecases::space_access::{SpaceAccessCryptoFactory, SpaceAccessOrchestrator};
-use uc_app::usecases::{
-    CoreUseCases, InitializeEncryption, SetupOrchestrator, StartClipboardWatcherPort,
-};
+use uc_app::usecases::{CoreUseCases, InitializeEncryption, SetupOrchestrator};
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_cli_runtime;
 use uc_bootstrap::{build_non_gui_runtime_with_setup, builders::build_daemon_app};
@@ -39,7 +37,6 @@ use uc_daemon::api::server::{build_router, DaemonApiState};
 use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::pairing::host::DaemonPairingHost;
 use uc_daemon::state::RuntimeState;
-use uc_platform::ports::{WatcherControlError, WatcherControlPort};
 
 fn build_runtime() -> Arc<CoreRuntime> {
     static RUNTIME: OnceLock<Arc<CoreRuntime>> = OnceLock::new();
@@ -129,7 +126,6 @@ fn build_reset_router() -> (axum::Router, String) {
                 ctx.deps,
                 ctx.storage_paths.clone(),
                 setup_ports,
-                Arc::new(NoopWatcherControl),
             )
             .expect("build non-gui runtime with setup"),
         );
@@ -209,7 +205,6 @@ fn build_setup_orchestrator_with_overrides(
 fn build_mock_lifecycle() -> Arc<AppLifecycleCoordinator> {
     Arc::new(AppLifecycleCoordinator::from_deps(
         AppLifecycleCoordinatorDeps {
-            watcher: Arc::new(NoopStartClipboardWatcher),
             network: Arc::new(uc_app::usecases::StartNetworkAfterUnlock::new(Arc::new(
                 NoopNetworkControl,
             ))),
@@ -564,7 +559,6 @@ fn build_host_setup_fixture() -> HostSetupFixture {
                 ctx.deps,
                 ctx.storage_paths.clone(),
                 setup_ports,
-                Arc::new(NoopWatcherControl),
             )
             .expect("build non-gui runtime with setup"),
         );
@@ -603,28 +597,6 @@ async fn build_host_setup_fixture_async() -> HostSetupFixture {
     tokio::task::spawn_blocking(build_host_setup_fixture)
         .await
         .expect("host setup fixture join failed")
-}
-
-struct NoopWatcherControl;
-
-#[async_trait]
-impl WatcherControlPort for NoopWatcherControl {
-    async fn start_watcher(&self) -> Result<(), WatcherControlError> {
-        Ok(())
-    }
-
-    async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
-        Ok(())
-    }
-}
-
-struct NoopStartClipboardWatcher;
-
-#[async_trait]
-impl StartClipboardWatcherPort for NoopStartClipboardWatcher {
-    async fn execute(&self) -> Result<(), uc_core::ports::StartClipboardWatcherError> {
-        Ok(())
-    }
 }
 
 struct NoopSpaceAccessCryptoFactory;

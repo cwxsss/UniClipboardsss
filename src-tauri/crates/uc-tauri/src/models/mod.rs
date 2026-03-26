@@ -124,7 +124,7 @@ pub struct ClipboardItemResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LifecycleStatusDto {
-    /// Current lifecycle state (e.g. "Idle", "Ready", "WatcherFailed", etc.)
+    /// Current lifecycle state (e.g. "Idle", "Ready", "NetworkFailed", etc.)
     pub state: LifecycleState,
 }
 
@@ -171,9 +171,6 @@ mod tests {
         let idle_json = serde_json::to_value(&idle).expect("serialize failed");
         assert_eq!(idle_json["state"], serde_json::json!("Idle"));
 
-        let watcher_failed = LifecycleStatusDto::from_state(LifecycleState::WatcherFailed);
-        let wf_json = serde_json::to_value(&watcher_failed).expect("serialize failed");
-        assert_eq!(wf_json["state"], serde_json::json!("WatcherFailed"));
     }
 
     #[test]
