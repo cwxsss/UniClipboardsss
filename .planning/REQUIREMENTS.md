@@ -222,6 +222,16 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH66-04**: `DaemonWsBridge` state monitor task detects `Degraded -> Ready` transitions and emits `HostEvent::Clipboard(ClipboardHostEvent::DaemonReconnected)` (not on initial startup)
 - [x] **PH66-05**: Frontend `useClipboardEventStream` listens for `daemon://ws-reconnected` Tauri event and triggers `onRemoteInvalidate` to refetch clipboard list
 
+### Setup Filter — Prevent Pre-Setup Device Discovery
+
+- [ ] **PH67-01**: `recover_encryption_session()` returns `anyhow::Result<bool>` distinguishing Initialized+unlocked (true) from Uninitialized (false)
+- [ ] **PH67-02**: `DaemonApp` accepts optional deferred `DaemonService` and `oneshot::Receiver<()>` for post-setup PeerDiscoveryWorker start
+- [ ] **PH67-03**: `SetupCompletionEmitter` implements `SessionReadyEmitter` by firing a oneshot channel sender on `emit_ready()`
+- [ ] **PH67-04**: `build_non_gui_runtime_with_emitter()` exists in uc-bootstrap accepting a custom `SessionReadyEmitter` for daemon injection
+- [ ] **PH67-05**: daemon `main.rs` conditionally excludes `PeerDiscoveryWorker` from initial services when encryption is `Uninitialized`
+- [ ] **PH67-06**: daemon `main.rs` wires `SetupCompletionEmitter` as the `SessionReadyEmitter` into `CoreRuntime` via `build_non_gui_runtime_with_emitter`
+- [ ] **PH67-07**: peer-discovery initial health status is `ServiceHealth::Stopped` when encryption is uninitialized, `Healthy` when initialized
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -362,14 +372,21 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH66-03     | 66    | Complete |
 | PH66-04     | 66    | Complete |
 | PH66-05     | 66    | Complete |
+| PH67-01     | 67    | Pending  |
+| PH67-02     | 67    | Pending  |
+| PH67-03     | 67    | Pending  |
+| PH67-04     | 67    | Pending  |
+| PH67-05     | 67    | Pending  |
+| PH67-06     | 67    | Pending  |
+| PH67-07     | 67    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 106 total
-- Mapped to phases: 106
+- v0.4.0 requirements: 113 total
+- Mapped to phases: 113
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-27 after Phase 66 planning_
+_Last updated: 2026-03-27 after Phase 67 planning_
