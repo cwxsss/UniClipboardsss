@@ -77,13 +77,20 @@ export function useClipboardEventStream({
       }
     })
 
+    // Reconnect compensation: refetch clipboard list when daemon WS bridge recovers (D-05, D-06)
+    const unlistenReconnectPromise = listen('daemon://ws-reconnected', () => {
+      if (cancelled) return
+      onRemoteInvalidateRef.current()
+    })
+
     return () => {
       cancelled = true
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
         timeoutRef.current = null
       }
-      unlistenPromise.then(fn => fn())
+      void unlistenPromise.then(fn => fn())
+      void unlistenReconnectPromise.then(unlisten => unlisten())
     }
   }, [enabled, throttleMs])
 }
