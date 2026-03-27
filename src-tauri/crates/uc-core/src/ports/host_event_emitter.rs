@@ -64,6 +64,9 @@ pub enum ClipboardHostEvent {
         retry_in_ms: u64,
         error: String,
     },
+    /// Daemon WS bridge reconnected after degraded state — consumers should refetch stale data.
+    /// Maps to Tauri event "daemon://ws-reconnected".
+    DaemonReconnected,
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +339,7 @@ mod tests {
                 retry_in_ms: 500,
                 error: "subscribe retry".to_string(),
             }),
+            HostEvent::Clipboard(ClipboardHostEvent::DaemonReconnected),
             // --- PeerDiscovery (2 variants) ---
             HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Discovered {
                 peer_id: "peer-1".to_string(),
@@ -431,7 +435,7 @@ mod tests {
 
         assert_eq!(
             emitter.events.lock().unwrap().len(),
-            19,
+            20,
             "all HostEvent variants should be deliverable through the core port"
         );
     }

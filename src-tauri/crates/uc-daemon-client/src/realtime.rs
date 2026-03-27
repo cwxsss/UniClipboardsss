@@ -365,6 +365,14 @@ pub async fn start_realtime_runtime(
         })
         .await;
 
+    let monitor_bridge = bridge.clone();
+    let monitor_emitter = event_emitter.clone();
+    task_registry
+        .spawn("bridge_state_monitor", move |token| async move {
+            bridge_state_monitor(monitor_bridge, monitor_emitter, token).await;
+        })
+        .await;
+
     task_registry
         .spawn("daemon_ws_bridge", move |token| async move {
             if let Err(err) = bridge.run(token).await {
@@ -423,6 +431,48 @@ async fn run_clipboard_realtime_consumer_with_rx(
         }
     }
     Ok(())
+}
+
+async fn bridge_state_monitor(
+    bridge: Arc<DaemonWsBridge>,
+    emitter: Arc<dyn HostEventEmitterPort>,
+    token: CancellationToken,
+) {
+    use crate::ws_bridge::BridgeState;
+
+    let mut has_been_ready = false;
+    let mut was_degraded = false;
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => return,
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+        }
+
+        let current = bridge.state();
+
+        match current {
+            BridgeState::Ready if !has_been_ready => {
+                // First-ever Ready — record it, do NOT emit reconnect
+                has_been_ready = true;
+                was_degraded = false;
+            }
+            BridgeState::Degraded => {
+                was_degraded = true;
+            }
+            BridgeState::Ready if was_degraded && has_been_ready => {
+                was_degraded = false;
+                if let Err(err) = emitter.emit(HostEvent::Clipboard(
+                    ClipboardHostEvent::DaemonReconnected,
+                )) {
+                    warn!(error = %err, "failed to emit daemon reconnected event");
+                }
+            }
+            _ => {
+                // Disconnected, Connecting, Subscribing, or Ready without prior Degraded — no-op
+            }
+        }
+    }
 }
 
 #[cfg(test)]

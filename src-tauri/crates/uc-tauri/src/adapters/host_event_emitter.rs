@@ -487,6 +487,10 @@ fn map_event_to_json(event: HostEvent) -> (&'static str, serde_json::Value) {
             )
         }
 
+        HostEvent::Clipboard(ClipboardHostEvent::DaemonReconnected) => {
+            ("daemon://ws-reconnected", serde_json::json!({}))
+        }
+
         // -----------------------------------------------------------------------
         // Clipboard subscribe events (new variants added in Phase 37)
         // -----------------------------------------------------------------------
@@ -836,6 +840,10 @@ impl HostEventEmitterPort for LoggingEventEmitter {
                     entry_id = %entry_id,
                     status = %status,
                 );
+            }
+
+            HostEvent::Clipboard(ClipboardHostEvent::DaemonReconnected) => {
+                tracing::debug!(event_type = "daemon.ws_reconnected");
             }
 
             HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeError {
@@ -1448,6 +1456,7 @@ mod tests {
                 retry_in_ms: 500,
                 error: "sub retry".to_string(),
             }),
+            HostEvent::Clipboard(ClipboardHostEvent::DaemonReconnected),
             HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Discovered {
                 peer_id: "p1".to_string(),
                 device_name: None,
