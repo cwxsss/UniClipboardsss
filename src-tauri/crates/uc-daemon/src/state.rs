@@ -69,6 +69,17 @@ impl RuntimeState {
         self.worker_statuses = statuses;
     }
 
+    /// Update the health of a single named service in the cached snapshot (Phase 67).
+    ///
+    /// Used to transition peer-discovery from `Stopped` → `Healthy` when the deferred
+    /// `PeerDiscoveryWorker` starts after setup completes on an uninitialized device.
+    /// No-op if the named service is not found.
+    pub fn update_service_health(&mut self, name: &str, health: ServiceHealth) {
+        if let Some(snapshot) = self.worker_statuses.iter_mut().find(|s| s.name == name) {
+            snapshot.health = health;
+        }
+    }
+
     /// Current connected peer count tracked by the daemon runtime.
     pub fn connected_peer_count(&self) -> u32 {
         self.connected_peer_count

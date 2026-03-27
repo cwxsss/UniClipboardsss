@@ -10,12 +10,13 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, RwLock};
 use uc_app::usecases::LoggingLifecycleEventEmitter;
+use uc_app::usecases::SessionReadyEmitter;
 use uc_bootstrap::assembly::SetupAssemblyPorts;
-use uc_bootstrap::build_non_gui_runtime_with_setup;
+use uc_bootstrap::build_non_gui_runtime_with_emitter;
 use uc_bootstrap::builders::build_daemon_app;
 use uc_core::ports::SystemClipboardPort;
 use uc_daemon::api::types::DaemonWsEvent;
-use uc_daemon::app::DaemonApp;
+use uc_daemon::app::{DaemonApp, SetupCompletionEmitter};
 use uc_daemon::pairing::host::DaemonPairingHost;
 use uc_daemon::peers::monitor::PeerMonitor;
 use uc_daemon::service::DaemonService;
@@ -45,13 +46,22 @@ fn main() -> anyhow::Result<()> {
         Arc::new(LoggingLifecycleEventEmitter),
     );
     // Extract file_cache_dir and file_transfer_orchestrator before ctx is consumed
-    // by build_non_gui_runtime_with_setup (which moves ctx.deps).
+    // by build_non_gui_runtime_with_emitter (which moves ctx.deps).
     let file_cache_dir = ctx.storage_paths.file_cache_dir.clone();
     let file_transfer_orchestrator = ctx.background.file_transfer_orchestrator.clone();
-    let runtime = Arc::new(build_non_gui_runtime_with_setup(
+
+    // Phase 67: Create oneshot channel for deferred PeerDiscoveryWorker start.
+    // SetupCompletionEmitter fires when AppLifecycleCoordinator::ensure_ready() calls
+    // emit_ready() (i.e., when the setup flow completes on an uninitialized device).
+    let (setup_complete_tx, setup_complete_rx) = tokio::sync::oneshot::channel::<()>();
+    let setup_completion_emitter: Arc<dyn SessionReadyEmitter> =
+        Arc::new(SetupCompletionEmitter::new(setup_complete_tx));
+
+    let runtime = Arc::new(build_non_gui_runtime_with_emitter(
         ctx.deps,
         ctx.storage_paths.clone(),
         setup_ports,
+        setup_completion_emitter,
     )?);
 
     let socket_path = resolve_daemon_socket_path();
@@ -60,51 +70,18 @@ fn main() -> anyhow::Result<()> {
     //    All services that emit WS events write to this same sender.
     let (event_tx, _) = broadcast::channel::<DaemonWsEvent>(64);
 
-    // 2. Create shared runtime state (used by DaemonPairingHost for session snapshots
-    //    and by DaemonApp for service health reporting).
-    let initial_statuses: Vec<DaemonServiceSnapshot> = vec![
-        DaemonServiceSnapshot {
-            name: "clipboard-watcher".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-        DaemonServiceSnapshot {
-            name: "inbound-clipboard-sync".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-        DaemonServiceSnapshot {
-            name: "file-sync-orchestrator".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-        DaemonServiceSnapshot {
-            name: "peer-discovery".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-        DaemonServiceSnapshot {
-            name: "pairing-host".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-        DaemonServiceSnapshot {
-            name: "peer-monitor".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-    ];
-    let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses)));
-
     // 3. Build typed PairingHost (per D-07: construction before DaemonApp).
     //    Typed Arc is kept for DaemonApiState so HTTP routes retain typed access (PH56-04).
-    let pairing_host = Arc::new(DaemonPairingHost::new(
-        runtime.clone(),
-        ctx.pairing_orchestrator.clone(),
-        ctx.pairing_action_rx,
-        state.clone(),
-        ctx.space_access_orchestrator.clone(),
-        ctx.key_slot_store.clone(),
-        event_tx.clone(),
-    ));
+    // NOTE: state is built AFTER recover_encryption_session (see below), so we need
+    // a temporary state here just for PairingHost construction.
+    // Actually, PairingHost receives state by Arc and DaemonPairingHost::new() stores it.
+    // We create state before PairingHost and update initial_statuses later — but state is
+    // an Arc<RwLock<RuntimeState>> so the actual snapshot is set at construction.
+    // Solution: build PairingHost before state; it takes state by Arc so we build state
+    // first with placeholder, then rebuild after encryption check. HOWEVER, the simpler
+    // approach: build the tokio runtime, run encryption check, THEN build state and services.
 
-    // 4. Build PeerMonitor (extracted from PairingHost in Plan 02).
-    let peer_monitor = Arc::new(PeerMonitor::new(runtime.clone(), event_tx.clone()));
-
+    // Build typed workers that don't depend on encryption state first.
     // 5a. Build LocalClipboard and ClipboardWatcherWorker (per D-02, D-07).
     let local_clipboard: Arc<dyn SystemClipboardPort> = Arc::new(
         LocalClipboard::new()
@@ -152,26 +129,110 @@ fn main() -> anyhow::Result<()> {
         daemon_settings.clone(), // clone — PeerDiscoveryWorker also needs this
     ));
 
-    // 5. Assemble services vec — typed services erased to Arc<dyn DaemonService> (per D-05).
-    //    Order matters for shutdown (reversed): peer-monitor and pairing-host stop last.
-    let services: Vec<Arc<dyn DaemonService>> = vec![
-        Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
-        Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
-        Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
-        Arc::new(PeerDiscoveryWorker::new(
-            daemon_network_control,
-            daemon_network_events,
-            daemon_peer_directory,
-            daemon_settings,
-        )) as Arc<dyn DaemonService>,
-        Arc::clone(&pairing_host) as Arc<dyn DaemonService>,
-        Arc::clone(&peer_monitor) as Arc<dyn DaemonService>,
-    ];
+    // Build PeerDiscoveryWorker unconditionally (cheap to construct).
+    // Whether it's included in initial services depends on encryption state (Phase 67 D-01/D-06).
+    let peer_discovery_worker: Arc<dyn DaemonService> = Arc::new(PeerDiscoveryWorker::new(
+        daemon_network_control,
+        daemon_network_events,
+        daemon_peer_directory,
+        daemon_settings,
+    ));
 
-    // 6. Create and run daemon app.
+    // Use explicit runtime construction (consistent with uc-bootstrap pattern,
+    // avoids potential conflicts with tracing init's internal runtime for Seq)
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    // Phase 67: Recover encryption session BEFORE building services.
+    // The result determines whether PeerDiscoveryWorker starts immediately or is deferred (per D-01, D-02, D-06, D-07).
+    let encryption_unlocked = rt.block_on(async {
+        use tracing::{info_span, Instrument};
+        uc_daemon::app::recover_encryption_session(&runtime)
+            .instrument(info_span!("daemon.startup.recover_encryption_session"))
+            .await
+    })?;
+
+    // Phase 67: Build initial_statuses AFTER encryption check so peer-discovery
+    // health reflects actual state (Stopped when uninitialized, Healthy when initialized).
+    let initial_statuses: Vec<DaemonServiceSnapshot> = vec![
+        DaemonServiceSnapshot {
+            name: "clipboard-watcher".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        DaemonServiceSnapshot {
+            name: "inbound-clipboard-sync".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        DaemonServiceSnapshot {
+            name: "file-sync-orchestrator".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        // Phase 67 D-01/D-06: peer-discovery is Stopped when encryption is uninitialized;
+        // it will be started dynamically after setup completes.
+        DaemonServiceSnapshot {
+            name: "peer-discovery".to_string(),
+            health: if encryption_unlocked {
+                ServiceHealth::Healthy
+            } else {
+                ServiceHealth::Stopped
+            },
+        },
+        DaemonServiceSnapshot {
+            name: "pairing-host".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+        DaemonServiceSnapshot {
+            name: "peer-monitor".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+    ];
+    let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses)));
+
+    // 2. Build typed PairingHost (per D-07: construction before DaemonApp).
+    //    Typed Arc is kept for DaemonApiState so HTTP routes retain typed access (PH56-04).
+    let pairing_host = Arc::new(DaemonPairingHost::new(
+        runtime.clone(),
+        ctx.pairing_orchestrator.clone(),
+        ctx.pairing_action_rx,
+        state.clone(),
+        ctx.space_access_orchestrator.clone(),
+        ctx.key_slot_store.clone(),
+        event_tx.clone(),
+    ));
+
+    // 4. Build PeerMonitor (extracted from PairingHost in Plan 02).
+    let peer_monitor = Arc::new(PeerMonitor::new(runtime.clone(), event_tx.clone()));
+
+    // Phase 67: Conditional PeerDiscoveryWorker registration (per D-01, D-06, D-11).
+    // D-02/D-07: Encryption initialized and unlocked — start PeerDiscoveryWorker immediately.
+    // D-01/D-06: Encryption uninitialized — defer PeerDiscoveryWorker until setup completes.
+    let (services, deferred_peer_discovery, setup_complete_rx_opt) = if encryption_unlocked {
+        let services: Vec<Arc<dyn DaemonService>> = vec![
+            Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
+            Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
+            Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
+            Arc::clone(&peer_discovery_worker) as Arc<dyn DaemonService>,
+            Arc::clone(&pairing_host) as Arc<dyn DaemonService>,
+            Arc::clone(&peer_monitor) as Arc<dyn DaemonService>,
+        ];
+        (services, None, None)
+    } else {
+        let services: Vec<Arc<dyn DaemonService>> = vec![
+            Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
+            Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
+            Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
+            // PeerDiscoveryWorker NOT included — will start after setup completes
+            Arc::clone(&pairing_host) as Arc<dyn DaemonService>,
+            Arc::clone(&peer_monitor) as Arc<dyn DaemonService>,
+        ];
+        (services, Some(peer_discovery_worker), Some(setup_complete_rx))
+    };
+
+    // 5. Assemble and run daemon app.
     //    api_pairing_host retains typed access for HTTP routes.
     //    space_access_orchestrator is passed for API state wiring.
-    let daemon = DaemonApp::new(
+    let daemon = DaemonApp::new_with_deferred(
         services,
         runtime,
         state,
@@ -179,12 +240,10 @@ fn main() -> anyhow::Result<()> {
         Some(pairing_host),
         Some(ctx.space_access_orchestrator),
         socket_path,
+        encryption_unlocked,
+        deferred_peer_discovery,
+        setup_complete_rx_opt,
     );
 
-    // Use explicit runtime construction (consistent with uc-bootstrap pattern,
-    // avoids potential conflicts with tracing init's internal runtime for Seq)
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
     rt.block_on(daemon.run())
 }
