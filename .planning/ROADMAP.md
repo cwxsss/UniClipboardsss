@@ -667,3 +667,14 @@ Plans:
 
 - [x] 66-01-PLAN.md — Fix WS topic registration: add clipboard and file-transfer to is_supported_topic with unit tests
 - [x] 66-02-PLAN.md — Add WS reconnect compensation: bridge state monitor, DaemonReconnected event, frontend reconnect listener
+
+### Phase 67: 设备在 setup 完成前不应被其他设备发现，需要在业务层进行过滤
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 66
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 67 to break down)
