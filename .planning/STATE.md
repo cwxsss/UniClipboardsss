@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Executing Phase 67
-stopped_at: Phase 67 context gathered
-last_updated: "2026-03-27T13:29:49.531Z"
+status: Ready to execute
+stopped_at: Completed 67-02-PLAN.md
+last_updated: "2026-03-27T13:48:49.321Z"
 progress:
   total_phases: 38
-  completed_phases: 30
+  completed_phases: 31
   total_plans: 86
-  completed_plans: 81
+  completed_plans: 83
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 67 (setup-filter) — EXECUTING
-Plan: 1 of 2
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -93,6 +93,7 @@ Plan: 1 of 2
   | Phase 65 P01 | 5min | 2 tasks | 19 files |
   | Phase 66 P01 | 5 | 1 tasks | 1 files |
   | Phase 66-daemon-dashboard P02 | 18 | 2 tasks | 4 files |
+| Phase 67-setup-filter P02 | 8 | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -208,6 +209,9 @@ Recent decisions affecting current work:
 - [Phase 66-daemon-dashboard]: bridge_state_monitor uses two boolean flags (has_been_ready, was_degraded) so startup path does not emit reconnect even if it briefly passes through Degraded
 - [Phase 66-daemon-dashboard]: DaemonReconnected is ClipboardHostEvent variant (not HostEvent top-level) matching existing clipboard subsystem grouping
 - [Phase 66-daemon-dashboard]: daemon://ws-reconnected is a dedicated Tauri channel separate from clipboard://event to avoid conflating reconnect signal with content events
+- [Phase 67-setup-filter]: recover_encryption_session made pub so main.rs can call it before DaemonApp construction
+- [Phase 67-setup-filter]: Removed recover_encryption_session from DaemonApp::run() — Phase 67 moved it to main.rs for deferred-start logic
+- [Phase 67-setup-filter]: RuntimeState::update_service_health() added for single-entry Stopped→Healthy mutation when deferred worker starts
 
 ### Roadmap Evolution
 
@@ -248,6 +252,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T10:00:57.726Z
-Stopped at: Phase 67 context gathered
-Resume file: .planning/phases/67-setup-filter/67-CONTEXT.md
+Last session: 2026-03-27T13:48:49.317Z
+Stopped at: Completed 67-02-PLAN.md
+Resume file: None

@@ -229,8 +229,8 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH67-03**: `SetupCompletionEmitter` implements `SessionReadyEmitter` by firing a oneshot channel sender on `emit_ready()`
 - [x] **PH67-04**: `build_non_gui_runtime_with_emitter()` exists in uc-bootstrap accepting a custom `SessionReadyEmitter` for daemon injection
 - [x] **PH67-05**: daemon `main.rs` conditionally excludes `PeerDiscoveryWorker` from initial services when encryption is `Uninitialized`
-- [ ] **PH67-06**: daemon `main.rs` wires `SetupCompletionEmitter` as the `SessionReadyEmitter` into `CoreRuntime` via `build_non_gui_runtime_with_emitter`
-- [ ] **PH67-07**: peer-discovery initial health status is `ServiceHealth::Stopped` when encryption is uninitialized, `Healthy` when initialized
+- [x] **PH67-06**: daemon `main.rs` wires `SetupCompletionEmitter` as the `SessionReadyEmitter` into `CoreRuntime` via `build_non_gui_runtime_with_emitter`
+- [x] **PH67-07**: peer-discovery initial health status is `ServiceHealth::Stopped` when encryption is uninitialized, `Healthy` when initialized
 
 ## Out of Scope
 
@@ -377,8 +377,8 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH67-03     | 67    | Complete |
 | PH67-04     | 67    | Complete |
 | PH67-05     | 67    | Complete |
-| PH67-06     | 67    | Pending  |
-| PH67-07     | 67    | Pending  |
+| PH67-06     | 67    | Complete |
+| PH67-07     | 67    | Complete |
 
 **Coverage:**
 
