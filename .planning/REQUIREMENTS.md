@@ -216,9 +216,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Daemon Dashboard Clipboard Refresh Fix
 
-- [ ] **PH66-01**: `is_supported_topic()` in `uc-daemon/src/api/ws.rs` includes `ws_topic::CLIPBOARD` so daemon WS server accepts clipboard topic subscriptions
-- [ ] **PH66-02**: `is_supported_topic()` includes `ws_topic::FILE_TRANSFER` so daemon WS server accepts file-transfer topic subscriptions
-- [ ] **PH66-03**: `build_snapshot_event()` returns `Ok(None)` for clipboard and file-transfer topics without bailing
+- [x] **PH66-01**: `is_supported_topic()` in `uc-daemon/src/api/ws.rs` includes `ws_topic::CLIPBOARD` so daemon WS server accepts clipboard topic subscriptions
+- [x] **PH66-02**: `is_supported_topic()` includes `ws_topic::FILE_TRANSFER` so daemon WS server accepts file-transfer topic subscriptions
+- [x] **PH66-03**: `build_snapshot_event()` returns `Ok(None)` for clipboard and file-transfer topics without bailing
 - [ ] **PH66-04**: `DaemonWsBridge` state monitor task detects `Degraded -> Ready` transitions and emits `HostEvent::Clipboard(ClipboardHostEvent::DaemonReconnected)` (not on initial startup)
 - [ ] **PH66-05**: Frontend `useClipboardEventStream` listens for `daemon://ws-reconnected` Tauri event and triggers `onRemoteInvalidate` to refetch clipboard list
 
@@ -357,9 +357,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH64-04     | 64    | Complete |
 | PH64-05     | 64    | Complete |
 | PH64-06     | 64    | Complete |
-| PH66-01     | 66    | Pending  |
-| PH66-02     | 66    | Pending  |
-| PH66-03     | 66    | Pending  |
+| PH66-01     | 66    | Complete |
+| PH66-02     | 66    | Complete |
+| PH66-03     | 66    | Complete |
 | PH66-04     | 66    | Pending  |
 | PH66-05     | 66    | Pending  |
 
