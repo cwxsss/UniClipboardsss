@@ -673,7 +673,7 @@ Plans:
 **Goal:** Prevent uninitialized devices from advertising on the network by gating PeerDiscoveryWorker startup on encryption session state, with deferred start after setup completes
 **Requirements**: PH67-01, PH67-02, PH67-03, PH67-04, PH67-05, PH67-06, PH67-07
 **Depends on:** Phase 66
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 **Success Criteria** (what must be TRUE):
 
@@ -686,5 +686,5 @@ Plans:
 
 Plans:
 
-- [ ] 67-01-PLAN.md — Add deferred PeerDiscoveryWorker infrastructure: recover_encryption_session returns bool, SetupCompletionEmitter, DaemonApp deferred worker support, build_non_gui_runtime_with_emitter
+- [x] 67-01-PLAN.md — Add deferred PeerDiscoveryWorker infrastructure: recover_encryption_session returns bool, SetupCompletionEmitter, DaemonApp deferred worker support, build_non_gui_runtime_with_emitter
 - [ ] 67-02-PLAN.md — Wire conditional PeerDiscoveryWorker registration in daemon main.rs with oneshot channel and SetupCompletionEmitter

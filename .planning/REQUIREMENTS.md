@@ -224,11 +224,11 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### Setup Filter — Prevent Pre-Setup Device Discovery
 
-- [ ] **PH67-01**: `recover_encryption_session()` returns `anyhow::Result<bool>` distinguishing Initialized+unlocked (true) from Uninitialized (false)
-- [ ] **PH67-02**: `DaemonApp` accepts optional deferred `DaemonService` and `oneshot::Receiver<()>` for post-setup PeerDiscoveryWorker start
-- [ ] **PH67-03**: `SetupCompletionEmitter` implements `SessionReadyEmitter` by firing a oneshot channel sender on `emit_ready()`
-- [ ] **PH67-04**: `build_non_gui_runtime_with_emitter()` exists in uc-bootstrap accepting a custom `SessionReadyEmitter` for daemon injection
-- [ ] **PH67-05**: daemon `main.rs` conditionally excludes `PeerDiscoveryWorker` from initial services when encryption is `Uninitialized`
+- [x] **PH67-01**: `recover_encryption_session()` returns `anyhow::Result<bool>` distinguishing Initialized+unlocked (true) from Uninitialized (false)
+- [x] **PH67-02**: `DaemonApp` accepts optional deferred `DaemonService` and `oneshot::Receiver<()>` for post-setup PeerDiscoveryWorker start
+- [x] **PH67-03**: `SetupCompletionEmitter` implements `SessionReadyEmitter` by firing a oneshot channel sender on `emit_ready()`
+- [x] **PH67-04**: `build_non_gui_runtime_with_emitter()` exists in uc-bootstrap accepting a custom `SessionReadyEmitter` for daemon injection
+- [x] **PH67-05**: daemon `main.rs` conditionally excludes `PeerDiscoveryWorker` from initial services when encryption is `Uninitialized`
 - [ ] **PH67-06**: daemon `main.rs` wires `SetupCompletionEmitter` as the `SessionReadyEmitter` into `CoreRuntime` via `build_non_gui_runtime_with_emitter`
 - [ ] **PH67-07**: peer-discovery initial health status is `ServiceHealth::Stopped` when encryption is uninitialized, `Healthy` when initialized
 
@@ -372,11 +372,11 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH66-03     | 66    | Complete |
 | PH66-04     | 66    | Complete |
 | PH66-05     | 66    | Complete |
-| PH67-01     | 67    | Pending  |
-| PH67-02     | 67    | Pending  |
-| PH67-03     | 67    | Pending  |
-| PH67-04     | 67    | Pending  |
-| PH67-05     | 67    | Pending  |
+| PH67-01     | 67    | Complete |
+| PH67-02     | 67    | Complete |
+| PH67-03     | 67    | Complete |
+| PH67-04     | 67    | Complete |
+| PH67-05     | 67    | Complete |
 | PH67-06     | 67    | Pending  |
 | PH67-07     | 67    | Pending  |
 
