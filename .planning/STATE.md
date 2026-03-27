@@ -227,6 +227,7 @@ Recent decisions affecting current work:
 - Phase 33 added: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
 - Phase 34 added: Optimize JoinPickDevice page: event-driven discovery with scanning UX
 - Phase 35 added: Extract OutboundSyncPlanner to consolidate scattered sync policy checks
+- Phase 66 added: 修复 daemon 剪切板监听导致前端 dashboard 不会自动刷新剪切板历史的问题
 
 ### Pending Todos
 

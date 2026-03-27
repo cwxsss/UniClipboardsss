@@ -647,3 +647,14 @@ Plans:
 
 - [ ] 65-01-PLAN.md — Delete uc-platform runtime/ipc/watcher infrastructure and uc-core StartClipboardWatcherPort
 - [ ] 65-02-PLAN.md — Remove watcher from AppLifecycleCoordinator, bootstrap, uc-tauri runtime, and main.rs
+
+### Phase 66: 修复 daemon 剪切板监听导致前端 dashboard 不会自动刷新剪切板历史的问题
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 65
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 66 to break down)
