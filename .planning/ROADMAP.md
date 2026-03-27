@@ -650,11 +650,20 @@ Plans:
 
 ### Phase 66: 修复 daemon 剪切板监听导致前端 dashboard 不会自动刷新剪切板历史的问题
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Fix the broken WS topic registration that prevents clipboard events from reaching the GUI, complete a full RealtimeEvent chain audit, fix all missing topic registrations, and add WS reconnection compensation for Dashboard refresh.
+**Requirements**: PH66-01, PH66-02, PH66-03, PH66-04, PH66-05
 **Depends on:** Phase 65
-**Plans:** 0 plans
+**Plans:** 2 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. `is_supported_topic("clipboard")` returns true in daemon WS server
+2. `is_supported_topic("file-transfer")` returns true in daemon WS server
+3. All 12 RealtimeEvent variants have verified end-to-end event chains (audit per D-01)
+4. Dashboard clipboard list auto-refreshes when daemon captures new clipboard content
+5. Dashboard clipboard list auto-refreshes after WS reconnection from degraded state
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 66 to break down)
+- [ ] 66-01-PLAN.md — Fix WS topic registration: add clipboard and file-transfer to is_supported_topic with unit tests
+- [ ] 66-02-PLAN.md — Add WS reconnect compensation: bridge state monitor, DaemonReconnected event, frontend reconnect listener

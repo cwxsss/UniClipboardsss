@@ -214,6 +214,14 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH64-05**: `blake3` dependency removed from `uc-tauri/Cargo.toml` (only consumer was hash verification in deleted `run_network_realtime_loop`)
 - [x] **PH64-06**: `sync_inbound_clipboard()` accessor removed from `AppUseCases` in `runtime.rs` (zero callers after clipboard_receive loop deletion)
 
+### Daemon Dashboard Clipboard Refresh Fix
+
+- [ ] **PH66-01**: `is_supported_topic()` in `uc-daemon/src/api/ws.rs` includes `ws_topic::CLIPBOARD` so daemon WS server accepts clipboard topic subscriptions
+- [ ] **PH66-02**: `is_supported_topic()` includes `ws_topic::FILE_TRANSFER` so daemon WS server accepts file-transfer topic subscriptions
+- [ ] **PH66-03**: `build_snapshot_event()` returns `Ok(None)` for clipboard and file-transfer topics without bailing
+- [ ] **PH66-04**: `DaemonWsBridge` state monitor task detects `Degraded -> Ready` transitions and emits `HostEvent::Clipboard(ClipboardHostEvent::DaemonReconnected)` (not on initial startup)
+- [ ] **PH66-05**: Frontend `useClipboardEventStream` listens for `daemon://ws-reconnected` Tauri event and triggers `onRemoteInvalidate` to refetch clipboard list
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -349,14 +357,19 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH64-04     | 64    | Complete |
 | PH64-05     | 64    | Complete |
 | PH64-06     | 64    | Complete |
+| PH66-01     | 66    | Pending  |
+| PH66-02     | 66    | Pending  |
+| PH66-03     | 66    | Pending  |
+| PH66-04     | 66    | Pending  |
+| PH66-05     | 66    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 101 total
-- Mapped to phases: 101
+- v0.4.0 requirements: 106 total
+- Mapped to phases: 106
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-26 after Phase 64 planning_
+_Last updated: 2026-03-27 after Phase 66 planning_
