@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: Milestone complete
-stopped_at: Completed 66-02-PLAN.md
-last_updated: '2026-03-27T08:26:32.729Z'
+stopped_at: Phase 67 context gathered
+last_updated: '2026-03-27T10:00:57.729Z'
 progress:
-  total_phases: 37
+  total_phases: 38
   completed_phases: 30
   total_plans: 84
   completed_plans: 81
@@ -228,6 +228,7 @@ Recent decisions affecting current work:
 - Phase 34 added: Optimize JoinPickDevice page: event-driven discovery with scanning UX
 - Phase 35 added: Extract OutboundSyncPlanner to consolidate scattered sync policy checks
 - Phase 66 added: 修复 daemon 剪切板监听导致前端 dashboard 不会自动刷新剪切板历史的问题
+- Phase 67 added: 设备在 setup 完成前不应被其他设备发现，需要在业务层进行过滤
 
 ### Pending Todos
 
@@ -247,6 +248,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T08:19:45.474Z
-Stopped at: Completed 66-02-PLAN.md
-Resume file: None
+Last session: 2026-03-27T10:00:57.726Z
+Stopped at: Phase 67 context gathered
+Resume file: .planning/phases/67-setup-filter/67-CONTEXT.md
