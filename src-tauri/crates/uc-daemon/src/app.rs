@@ -7,15 +7,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tokio::net::UnixListener;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, info_span, warn, Instrument};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
-use uc_app::usecases::CoreUseCases;
+use uc_app::usecases::{CoreUseCases, SessionReadyEmitter};
 
 use crate::api::auth::{load_or_create_auth_token, resolve_daemon_token_path};
 use crate::api::event_emitter::DaemonApiEventEmitter;
@@ -30,19 +31,20 @@ use crate::state::RuntimeState;
 
 /// Recover encryption session from disk/keyring if encryption has been initialized.
 ///
-/// Returns Ok(()) on success or if encryption is not initialized (first run).
+/// Returns Ok(true) when encryption is Initialized and the session was successfully unlocked.
+/// Returns Ok(false) when encryption is Uninitialized (first run — no recovery needed).
 /// Returns Err if encryption is initialized but recovery fails (daemon must not start).
-async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result<()> {
+async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result<bool> {
     let usecases = CoreUseCases::new(runtime);
     let uc = usecases.auto_unlock_encryption_session();
     match uc.execute().await {
         Ok(true) => {
             info!("Encryption session recovered from disk");
-            Ok(())
+            Ok(true)
         }
         Ok(false) => {
             info!("Encryption not initialized, skipping session recovery");
-            Ok(())
+            Ok(false)
         }
         Err(e) => {
             error!(error = %e, "Encryption session recovery failed");
@@ -51,6 +53,37 @@ async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result<()>
                 e
             )
         }
+    }
+}
+
+/// Fires a oneshot signal when the setup flow completes (per D-09/D-10).
+///
+/// Used as the daemon's `SessionReadyEmitter` so that when
+/// `AppLifecycleCoordinator::ensure_ready()` fires `emit_ready()`,
+/// the daemon can dynamically start `PeerDiscoveryWorker`.
+pub struct SetupCompletionEmitter {
+    tx: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl SetupCompletionEmitter {
+    pub fn new(tx: tokio::sync::oneshot::Sender<()>) -> Self {
+        Self {
+            tx: tokio::sync::Mutex::new(Some(tx)),
+        }
+    }
+}
+
+#[async_trait]
+impl SessionReadyEmitter for SetupCompletionEmitter {
+    async fn emit_ready(&self) -> anyhow::Result<()> {
+        if let Some(tx) = self.tx.lock().await.take() {
+            if tx.send(()).is_err() {
+                debug!("setup completion signal: receiver already dropped (worker may have started via other path)");
+            }
+        } else {
+            debug!("setup completion signal already consumed (duplicate emit_ready call)");
+        }
+        Ok(())
     }
 }
 
@@ -72,6 +105,9 @@ pub struct DaemonApp {
     space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
     socket_path: PathBuf,
     cancel: CancellationToken,
+    // Phase 67: deferred PeerDiscoveryWorker for uninitialized devices
+    deferred_peer_discovery: Option<Arc<dyn DaemonService>>,
+    setup_complete_rx: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 impl DaemonApp {
@@ -100,16 +136,61 @@ impl DaemonApp {
             space_access_orchestrator,
             socket_path,
             cancel: CancellationToken::new(),
+            deferred_peer_discovery: None,
+            setup_complete_rx: None,
+        }
+    }
+
+    /// Construct a DaemonApp with deferred PeerDiscoveryWorker support (Phase 67).
+    ///
+    /// `encryption_unlocked` is a required parameter to enforce the invariant that
+    /// the caller MUST have completed encryption recovery before constructing DaemonApp.
+    /// This prevents future callers from accidentally skipping the recovery check.
+    pub fn new_with_deferred(
+        services: Vec<Arc<dyn DaemonService>>,
+        runtime: Arc<CoreRuntime>,
+        state: Arc<RwLock<RuntimeState>>,
+        event_tx: broadcast::Sender<DaemonWsEvent>,
+        api_pairing_host: Option<Arc<DaemonPairingHost>>,
+        space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
+        socket_path: PathBuf,
+        encryption_unlocked: bool,
+        deferred_peer_discovery: Option<Arc<dyn DaemonService>>,
+        setup_complete_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    ) -> Self {
+        // Validate invariant: deferred_peer_discovery and setup_complete_rx must both be
+        // Some (uninitialized) or both None (initialized+unlocked). Half-configured state
+        // would silently prevent the worker from ever starting.
+        debug_assert_eq!(
+            deferred_peer_discovery.is_some(),
+            setup_complete_rx.is_some(),
+            "deferred_peer_discovery and setup_complete_rx must both be Some or both None"
+        );
+        debug_assert!(
+            encryption_unlocked || deferred_peer_discovery.is_some(),
+            "If encryption is not unlocked, deferred_peer_discovery must be provided"
+        );
+        Self {
+            services,
+            runtime,
+            state,
+            event_tx,
+            api_pairing_host,
+            space_access_orchestrator,
+            socket_path,
+            cancel: CancellationToken::new(),
+            deferred_peer_discovery,
+            setup_complete_rx,
         }
     }
 
     /// Run the daemon: bind RPC socket, start services, wait for shutdown, cleanup.
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         info!("uniclipboard-daemon starting");
 
         // 0.5 Recover encryption session (fail-fast per D-05: must succeed if Initialized)
         // Runs before resource acquisition so failure exits cleanly (Codex F-4).
-        recover_encryption_session(&self.runtime)
+        let _encryption_unlocked = recover_encryption_session(&self.runtime)
             .instrument(info_span!("daemon.startup.recover_encryption_session"))
             .await?;
 
@@ -167,19 +248,54 @@ impl DaemonApp {
         let http_cancel = self.cancel.child_token();
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
 
-        // 6. Wait for shutdown signal, infrastructure crash, or service crash
-        tokio::select! {
-            _ = wait_for_shutdown_signal() => {
-                info!("shutdown signal received");
-            }
-            result = &mut rpc_handle => {
-                warn!("RPC accept loop exited unexpectedly: {:?}", result);
-            }
-            result = &mut http_handle => {
-                warn!("HTTP server exited unexpectedly: {:?}", result);
-            }
-            Some(result) = service_tasks.join_next() => {
-                warn!("service task exited unexpectedly: {:?}", result);
+        // Phase 67: prepare deferred PeerDiscoveryWorker start
+        let mut deferred_worker = self.deferred_peer_discovery.take();
+        let mut setup_rx = self.setup_complete_rx.take();
+
+        // 6. Wait for shutdown signal, infrastructure crash, service crash, or deferred start
+        loop {
+            tokio::select! {
+                _ = wait_for_shutdown_signal() => {
+                    info!("shutdown signal received");
+                    break;
+                }
+                result = &mut rpc_handle => {
+                    warn!("RPC accept loop exited unexpectedly: {:?}", result);
+                    break;
+                }
+                result = &mut http_handle => {
+                    warn!("HTTP server exited unexpectedly: {:?}", result);
+                    break;
+                }
+                Some(result) = service_tasks.join_next() => {
+                    warn!("service task exited unexpectedly: {:?}", result);
+                    break;
+                }
+                result = async {
+                    match &mut setup_rx {
+                        Some(rx) => rx.await.map_err(|_| ()),
+                        None => std::future::pending::<Result<(), ()>>().await,
+                    }
+                }, if deferred_worker.is_some() => {
+                    match result {
+                        Ok(()) => {
+                            if let Some(worker) = deferred_worker.take() {
+                                info!("setup complete — starting deferred peer discovery worker");
+                                let worker_for_shutdown = Arc::clone(&worker);
+                                let token = self.cancel.child_token();
+                                service_tasks.spawn(async move { worker.start(token).await });
+                                // Register for managed shutdown so stop() is called
+                                self.services.push(worker_for_shutdown);
+                            }
+                        }
+                        Err(()) => {
+                            warn!("setup completion channel dropped — deferred peer discovery will NOT start");
+                            deferred_worker = None; // disarm: no point retrying
+                        }
+                    }
+                    setup_rx = None;
+                    // continue loop — don't break, daemon keeps running
+                }
             }
         }
 
@@ -556,6 +672,23 @@ mod tests {
             "error must indicate KEK load failure, got: {}",
             err
         );
+    }
+
+    #[tokio::test]
+    async fn setup_completion_emitter_fires_oneshot() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let emitter = SetupCompletionEmitter::new(tx);
+        emitter.emit_ready().await.unwrap();
+        assert!(rx.await.is_ok(), "receiver should get Ok(())");
+    }
+
+    #[tokio::test]
+    async fn setup_completion_emitter_double_call_is_noop() {
+        let (tx, _rx) = tokio::sync::oneshot::channel::<()>();
+        let emitter = SetupCompletionEmitter::new(tx);
+        emitter.emit_ready().await.unwrap();
+        // Second call should not panic
+        emitter.emit_ready().await.unwrap();
     }
 
     #[test]
