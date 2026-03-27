@@ -175,6 +175,8 @@ fn is_supported_topic(topic: &str) -> bool {
             | ws_topic::PAIRING_VERIFICATION
             | ws_topic::SETUP
             | ws_topic::SPACE_ACCESS
+            | ws_topic::CLIPBOARD
+            | ws_topic::FILE_TRANSFER
     )
 }
 
@@ -225,6 +227,8 @@ async fn build_snapshot_event(
         .map(Some),
         ws_topic::PAIRING_VERIFICATION => Ok(None),
         ws_topic::SETUP => Ok(None),
+        ws_topic::CLIPBOARD => Ok(None),
+        ws_topic::FILE_TRANSFER => Ok(None),
         ws_topic::SPACE_ACCESS => {
             let space_access_state = state
                 .query_service
@@ -262,6 +266,64 @@ fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {
         StatusCode::UNAUTHORIZED,
         Json(serde_json::json!({"error": "unauthorized"})),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_supported_topic_includes_clipboard() {
+        assert!(is_supported_topic(ws_topic::CLIPBOARD));
+    }
+
+    #[test]
+    fn is_supported_topic_includes_file_transfer() {
+        assert!(is_supported_topic(ws_topic::FILE_TRANSFER));
+    }
+
+    #[test]
+    fn is_supported_topic_rejects_unknown() {
+        assert!(!is_supported_topic("unknown-topic"));
+        assert!(!is_supported_topic(""));
+    }
+
+    #[test]
+    fn is_supported_topic_includes_all_known_topics() {
+        let known = [
+            ws_topic::STATUS,
+            ws_topic::PEERS,
+            ws_topic::PAIRED_DEVICES,
+            ws_topic::PAIRING,
+            ws_topic::PAIRING_SESSION,
+            ws_topic::PAIRING_VERIFICATION,
+            ws_topic::SETUP,
+            ws_topic::SPACE_ACCESS,
+            ws_topic::CLIPBOARD,
+            ws_topic::FILE_TRANSFER,
+        ];
+        for topic in known {
+            assert!(is_supported_topic(topic), "expected {topic} to be supported");
+        }
+    }
+
+    #[test]
+    fn normalize_topics_keeps_clipboard_and_file_transfer() {
+        let topics = vec![
+            "clipboard".to_string(),
+            "file-transfer".to_string(),
+            "unknown".to_string(),
+        ];
+        let result = normalize_topics(topics);
+        assert_eq!(result, vec!["clipboard", "file-transfer"]);
+    }
+
+    #[test]
+    fn normalize_topics_deduplicates() {
+        let topics = vec!["clipboard".to_string(), "clipboard".to_string()];
+        let result = normalize_topics(topics);
+        assert_eq!(result, vec!["clipboard"]);
+    }
 }
 
 #[allow(dead_code)]
