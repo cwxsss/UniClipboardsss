@@ -653,7 +653,7 @@ Plans:
 **Goal:** Fix the broken WS topic registration that prevents clipboard events from reaching the GUI, complete a full RealtimeEvent chain audit, fix all missing topic registrations, and add WS reconnection compensation for Dashboard refresh.
 **Requirements**: PH66-01, PH66-02, PH66-03, PH66-04, PH66-05
 **Depends on:** Phase 65
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 **Success Criteria** (what must be TRUE):
 
@@ -666,4 +666,4 @@ Plans:
 Plans:
 
 - [x] 66-01-PLAN.md — Fix WS topic registration: add clipboard and file-transfer to is_supported_topic with unit tests
-- [ ] 66-02-PLAN.md — Add WS reconnect compensation: bridge state monitor, DaemonReconnected event, frontend reconnect listener
+- [x] 66-02-PLAN.md — Add WS reconnect compensation: bridge state monitor, DaemonReconnected event, frontend reconnect listener

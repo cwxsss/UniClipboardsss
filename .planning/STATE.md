@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Ready to execute
-stopped_at: Completed 66-01-PLAN.md
-last_updated: "2026-03-27T07:58:10.827Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 66-02-PLAN.md
+last_updated: "2026-03-27T08:19:45.480Z"
 progress:
   total_phases: 37
-  completed_phases: 29
+  completed_phases: 30
   total_plans: 84
-  completed_plans: 80
+  completed_plans: 81
 ---
 
 # Project State
@@ -92,6 +92,7 @@ Plan: 2 of 2
   | Phase 35 P02 | 10min | 2 tasks | 2 files |
   | Phase 65 P01 | 5min | 2 tasks | 19 files |
 | Phase 66 P01 | 5 | 1 tasks | 1 files |
+| Phase 66-daemon-dashboard P02 | 18 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -204,6 +205,9 @@ Recent decisions affecting current work:
 - [Phase 35]: extracted_paths_count captured from resolved_paths.len() BEFORE metadata filter; passed to plan() for all_files_excluded detection
 - [Phase 65]: Inlined PlatformEvent (ClipboardChanged only) into clipboard/watcher.rs rather than keeping separate ipc module
 - [Phase 66]: clipboard and file-transfer WS topics return Ok(None) from build_snapshot_event — no initial snapshot, matching PAIRING_VERIFICATION/SETUP pattern
+- [Phase 66-daemon-dashboard]: bridge_state_monitor uses two boolean flags (has_been_ready, was_degraded) so startup path does not emit reconnect even if it briefly passes through Degraded
+- [Phase 66-daemon-dashboard]: DaemonReconnected is ClipboardHostEvent variant (not HostEvent top-level) matching existing clipboard subsystem grouping
+- [Phase 66-daemon-dashboard]: daemon://ws-reconnected is a dedicated Tauri channel separate from clipboard://event to avoid conflating reconnect signal with content events
 
 ### Roadmap Evolution
 
@@ -243,6 +247,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T07:58:10.811Z
-Stopped at: Completed 66-01-PLAN.md
+Last session: 2026-03-27T08:19:45.474Z
+Stopped at: Completed 66-02-PLAN.md
 Resume file: None
