@@ -730,11 +730,19 @@ Plans:
 
 ### Phase 70: CLI start/stop commands for daemon lifecycle management
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Add `start` and `stop` CLI subcommands for daemon lifecycle management. `start` launches daemon (background by default, foreground with `--foreground`/`-f`). `stop` sends SIGTERM to daemon PID and polls for exit. Both commands are idempotent and support `--json` output.
+**Requirements**: PH70-01, PH70-02, PH70-03, PH70-04
 **Depends on:** Phase 69
-**Plans:** 0 plans
+**Plans:** 1 plan
+
+**Success Criteria** (what must be TRUE):
+
+1. `uniclipboard-cli start` launches daemon in background via `ensure_local_daemon_running()`, prints pid on success
+2. `uniclipboard-cli start --foreground` spawns daemon with inherited stdio, CLI waits for daemon exit
+3. `uniclipboard-cli stop` reads PID file, sends SIGTERM, polls for process exit with timeout
+4. Both commands are idempotent: already-running/not-running returns exit 0
+5. Both commands support `--json` for structured output
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 70 to break down)
+- [ ] 70-01-PLAN.md — Implement start and stop commands with background/foreground modes, PID-based SIGTERM, and idempotent behavior
