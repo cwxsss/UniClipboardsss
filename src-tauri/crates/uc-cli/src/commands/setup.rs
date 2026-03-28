@@ -7,6 +7,8 @@ use std::time::Duration;
 use console::style;
 use serde::Serialize;
 use serde_json::Value;
+use uc_app::usecases::CoreUseCases;
+use uc_core::security::model::Passphrase;
 use uc_core::security::state::EncryptionState;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
 
@@ -68,84 +70,68 @@ pub fn new_space_encryption_guard(state: EncryptionState) -> Result<(), i32> {
 }
 
 async fn run_new_space() -> i32 {
-    let spinner = ui::spinner("Starting daemon…");
-    if let Err(error) = ensure_local_daemon_running().await {
-        ui::spinner_finish_error(&spinner, &format!("{error}"));
-        return exit_codes::EXIT_DAEMON_UNREACHABLE;
-    }
-
-    let client = match DaemonHttpClient::new() {
-        Ok(client) => client,
-        Err(error) => {
-            ui::spinner_finish_error(&spinner, &format!("{error}"));
-            return print_client_error(error);
+    // 1. Build CLI runtime directly (no daemon needed for encryption init)
+    let runtime = match uc_bootstrap::build_cli_runtime(Some(uc_observability::LogProfile::Cli)) {
+        Ok(r) => r,
+        Err(e) => {
+            ui::error(&format!("Failed to initialize: {e}"));
+            return exit_codes::EXIT_ERROR;
         }
     };
-    ui::spinner_finish_success(&spinner, "Daemon ready");
 
-    // Transition state machine to CreateSpaceInputPassphrase
-    let ack = match client.start_setup_host().await {
-        Ok(ack) => ack,
-        Err(error) => return print_client_error(error),
+    // 2. Check encryption state — reject if already initialized
+    let state = match runtime.encryption_state().await {
+        Ok(s) => s,
+        Err(e) => {
+            ui::error(&format!("Failed to check encryption state: {e}"));
+            return exit_codes::EXIT_ERROR;
+        }
     };
 
-    if ack.next_step_hint != "create-space-passphrase"
-        && !matches!(
-            setup_state_variant(&ack.state),
-            Some("CreateSpaceInputPassphrase" | "ProcessingCreateSpace")
-        )
-    {
-        ui::error("Unexpected setup state — space may already be created");
-        ui::info("Hint", "run `setup reset` first if you want to start over");
-        return exit_codes::EXIT_ERROR;
+    if let Err(code) = new_space_encryption_guard(state) {
+        ui::error("Space already initialized.");
+        ui::info(
+            "Hint",
+            "run `uniclipboard-daemon` to start the daemon, then `setup host` to begin pairing",
+        );
+        return code;
     }
 
-    // Prompt for passphrase
-    let passphrase = match prompt_new_space_passphrase() {
+    // 3. Prompt for passphrase
+    let passphrase_str = match prompt_new_space_passphrase() {
         Ok(p) => p,
-        Err(error) => {
-            ui::error(&error);
+        Err(e) => {
+            ui::error(&e);
             return exit_codes::EXIT_ERROR;
         }
     };
 
-    // Submit passphrase — daemon creates encrypted space
-    let spinner = ui::spinner("Creating encrypted space…");
-    if let Err(error) = client.submit_setup_passphrase(passphrase).await {
-        ui::spinner_finish_error(&spinner, "Failed to create space");
-        return print_client_error(error);
-    }
-
-    // Poll until state reaches Completed
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let state = match client.get_setup_state().await {
-            Ok(s) => s,
-            Err(error) => {
-                ui::spinner_finish_error(&spinner, "Failed to check setup state");
-                return print_client_error(error);
-            }
-        };
-
-        if state.has_completed || state.next_step_hint == "completed" {
+    // 4. Initialize encryption locally (no daemon involved)
+    let spinner = ui::spinner("Creating encrypted space...");
+    let uc = CoreUseCases::new(&runtime);
+    match uc
+        .initialize_encryption()
+        .execute(Passphrase(passphrase_str))
+        .await
+    {
+        Ok(()) => {
             ui::spinner_finish_success(&spinner, "Encrypted space created");
-            ui::bar();
-            ui::success("Setup complete! Your space is ready.");
-            ui::info(
-                "Next step",
-                "run `setup host` on this device, then `setup join` on another device to pair",
-            );
-            ui::end("");
-            return exit_codes::EXIT_SUCCESS;
         }
-
-        if std::time::Instant::now() >= deadline {
-            ui::spinner_finish_error(&spinner, "Timed out waiting for space creation");
+        Err(e) => {
+            ui::spinner_finish_error(&spinner, &format!("Failed to create space: {e}"));
             return exit_codes::EXIT_ERROR;
         }
-
-        tokio::time::sleep(POLL_INTERVAL).await;
     }
+
+    // 5. Success — guide user to next step
+    ui::bar();
+    ui::success("Setup complete! Your space is ready.");
+    ui::info(
+        "Next step",
+        "run `uniclipboard-daemon` to start the daemon, then `setup host` to begin pairing",
+    );
+    ui::end("");
+    exit_codes::EXIT_SUCCESS
 }
 
 // ── Host flow ───────────────────────────────────────────────────────
