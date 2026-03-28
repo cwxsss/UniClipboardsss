@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Phase complete — ready for verification
+status: Milestone complete
 stopped_at: Completed 70-01-PLAN.md
-last_updated: "2026-03-28T10:10:03.075Z"
+last_updated: '2026-03-28T10:15:15.549Z'
 progress:
   total_phases: 41
   completed_phases: 34
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 70 (cli-start-stop-commands-for-daemon-lifecycle-management) — EXECUTING
-Plan: 1 of 1
+Phase: 70
+Plan: Not started
 
 ## Performance Metrics
 
@@ -97,7 +97,7 @@ Plan: 1 of 1
   | Phase 68-adopt-tauri-sidecar-for-daemon P01 | 5 | 2 tasks | 6 files |
   | Phase 68 P02 | 20 | 2 tasks | 6 files |
   | Phase 69 P01 | 4 | 3 tasks | 2 files |
-| Phase 70 P01 | 8 | 2 tasks | 6 files |
+  | Phase 70 P01 | 8 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
