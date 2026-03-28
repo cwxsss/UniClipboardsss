@@ -252,6 +252,11 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
+    /// Mark setup as complete (persists `.setup_status` flag).
+    pub fn mark_setup_complete(&self) -> crate::usecases::MarkSetupComplete {
+        crate::usecases::MarkSetupComplete::from_ports(self.runtime.deps.setup_status.clone())
+    }
+
     /// Get the InitializeEncryption use case.
     pub fn initialize_encryption(&self) -> crate::usecases::InitializeEncryption {
         crate::usecases::InitializeEncryption::from_ports(

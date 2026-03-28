@@ -99,6 +99,7 @@ pub fn resolve_app_config() -> Result<AppConfig, ConfigResolutionError> {
                 "Loaded config from {} (development mode)",
                 config_path.display()
             );
+            let config = resolve_relative_paths(config, &config_path);
             Ok(config)
         }
         Err(e) => {
@@ -117,6 +118,34 @@ pub fn resolve_app_config() -> Result<AppConfig, ConfigResolutionError> {
             Ok(AppConfig::with_system_defaults(app_dirs.app_data_root))
         }
     }
+}
+
+/// Resolve relative paths in AppConfig relative to the config file's parent directory.
+///
+/// When `config.toml` contains relative paths like `.app_data/uniclipboard.db`, they must
+/// be resolved relative to the config file location — not `current_dir()`. Otherwise CLI
+/// (running from `src-tauri/`) and GUI (running from project root) resolve to different
+/// directories despite sharing the same `config.toml`.
+fn resolve_relative_paths(mut config: AppConfig, config_path: &std::path::Path) -> AppConfig {
+    let base_dir = match config_path.parent() {
+        Some(dir) if dir.as_os_str().is_empty() => std::env::current_dir().unwrap_or_default(),
+        Some(dir) => dir.to_path_buf(),
+        None => std::env::current_dir().unwrap_or_default(),
+    };
+
+    if config.database_path.is_relative() && !config.database_path.as_os_str().is_empty() {
+        config.database_path = base_dir.join(&config.database_path);
+    }
+    if config.vault_key_path.is_relative() && !config.vault_key_path.as_os_str().is_empty() {
+        config.vault_key_path = base_dir.join(&config.vault_key_path);
+    }
+    if config.vault_snapshot_path.is_relative()
+        && !config.vault_snapshot_path.as_os_str().is_empty()
+    {
+        config.vault_snapshot_path = base_dir.join(&config.vault_snapshot_path);
+    }
+
+    config
 }
 
 #[cfg(test)]
@@ -165,6 +194,60 @@ mod tests {
 
         let expected = fs::canonicalize(src_tauri_dir.join("config.toml")).unwrap();
         assert_eq!(resolved, Some(expected));
+    }
+
+    #[test]
+    fn test_resolve_relative_paths_uses_config_dir_not_cwd() {
+        let config = AppConfig {
+            database_path: PathBuf::from(".app_data/uniclipboard.db"),
+            vault_key_path: PathBuf::from(".app_data/vault/key"),
+            vault_snapshot_path: PathBuf::from(".app_data/vault/snapshot"),
+            ..AppConfig::empty()
+        };
+
+        let config_path = PathBuf::from("/projects/myapp/src-tauri/config.toml");
+        let resolved = resolve_relative_paths(config, &config_path);
+
+        assert_eq!(
+            resolved.database_path,
+            PathBuf::from("/projects/myapp/src-tauri/.app_data/uniclipboard.db")
+        );
+        assert_eq!(
+            resolved.vault_key_path,
+            PathBuf::from("/projects/myapp/src-tauri/.app_data/vault/key")
+        );
+        assert_eq!(
+            resolved.vault_snapshot_path,
+            PathBuf::from("/projects/myapp/src-tauri/.app_data/vault/snapshot")
+        );
+    }
+
+    #[test]
+    fn test_resolve_relative_paths_preserves_absolute_paths() {
+        let config = AppConfig {
+            database_path: PathBuf::from("/absolute/path/uniclipboard.db"),
+            vault_key_path: PathBuf::from("/absolute/vault/key"),
+            vault_snapshot_path: PathBuf::from("/absolute/vault/snapshot"),
+            ..AppConfig::empty()
+        };
+
+        let config_path = PathBuf::from("/projects/myapp/src-tauri/config.toml");
+        let resolved = resolve_relative_paths(config.clone(), &config_path);
+
+        assert_eq!(resolved.database_path, config.database_path);
+        assert_eq!(resolved.vault_key_path, config.vault_key_path);
+        assert_eq!(resolved.vault_snapshot_path, config.vault_snapshot_path);
+    }
+
+    #[test]
+    fn test_resolve_relative_paths_skips_empty_paths() {
+        let config = AppConfig::empty();
+        let config_path = PathBuf::from("/projects/myapp/src-tauri/config.toml");
+        let resolved = resolve_relative_paths(config, &config_path);
+
+        assert!(resolved.database_path.as_os_str().is_empty());
+        assert!(resolved.vault_key_path.as_os_str().is_empty());
+        assert!(resolved.vault_snapshot_path.as_os_str().is_empty());
     }
 
     #[test]
