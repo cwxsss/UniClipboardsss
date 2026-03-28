@@ -733,7 +733,7 @@ Plans:
 **Goal:** Add `start` and `stop` CLI subcommands for daemon lifecycle management. `start` launches daemon (background by default, foreground with `--foreground`/`-f`). `stop` sends SIGTERM to daemon PID and polls for exit. Both commands are idempotent and support `--json` output.
 **Requirements**: PH70-01, PH70-02, PH70-03, PH70-04
 **Depends on:** Phase 69
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 **Success Criteria** (what must be TRUE):
 
@@ -745,4 +745,4 @@ Plans:
 
 Plans:
 
-- [ ] 70-01-PLAN.md — Implement start and stop commands with background/foreground modes, PID-based SIGTERM, and idempotent behavior
+- [x] 70-01-PLAN.md — Implement start and stop commands with background/foreground modes, PID-based SIGTERM, and idempotent behavior

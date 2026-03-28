@@ -249,10 +249,10 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### CLI Start/Stop Commands For Daemon Lifecycle
 
-- [ ] **PH70-01**: `uniclipboard-cli start` launches daemon in background via `ensure_local_daemon_running()`, prints pid on success, and exits 0 if daemon is already running (idempotent)
-- [ ] **PH70-02**: `uniclipboard-cli start --foreground` spawns daemon with inherited stdout/stderr (no `--gui-managed`), CLI process waits for daemon exit or Ctrl+C
-- [ ] **PH70-03**: `uniclipboard-cli stop` reads PID from profile-aware PID file, sends SIGTERM (Unix) / TerminateProcess (Windows), polls for process exit with timeout, and exits 0 if daemon is not running (idempotent)
-- [ ] **PH70-04**: Both `start` and `stop` commands support `--json` for structured output (`{"status": "started", "pid": ...}` / `{"status": "stopped"}`) and human-readable Display output
+- [x] **PH70-01**: `uniclipboard-cli start` launches daemon in background via `ensure_local_daemon_running()`, prints pid on success, and exits 0 if daemon is already running (idempotent)
+- [x] **PH70-02**: `uniclipboard-cli start --foreground` spawns daemon with inherited stdout/stderr (no `--gui-managed`), CLI process waits for daemon exit or Ctrl+C
+- [x] **PH70-03**: `uniclipboard-cli stop` reads PID from profile-aware PID file, sends SIGTERM (Unix) / TerminateProcess (Windows), polls for process exit with timeout, and exits 0 if daemon is not running (idempotent)
+- [x] **PH70-04**: Both `start` and `stop` commands support `--json` for structured output (`{"status": "started", "pid": ...}` / `{"status": "stopped"}`) and human-readable Display output
 
 ## Out of Scope
 
@@ -410,10 +410,10 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH69-01     | 69    | Complete |
 | PH69-02     | 69    | Complete |
 | PH69-03     | 69    | Complete |
-| PH70-01     | 70    | Pending  |
-| PH70-02     | 70    | Pending  |
-| PH70-03     | 70    | Pending  |
-| PH70-04     | 70    | Pending  |
+| PH70-01     | 70    | Complete |
+| PH70-02     | 70    | Complete |
+| PH70-03     | 70    | Complete |
+| PH70-04     | 70    | Complete |
 
 **Coverage:**
 

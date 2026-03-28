@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Milestone complete
-stopped_at: Phase 70 context gathered
-last_updated: '2026-03-28T09:45:11.357Z'
+status: Phase complete — ready for verification
+stopped_at: Completed 70-01-PLAN.md
+last_updated: "2026-03-28T10:10:03.075Z"
 progress:
   total_phases: 41
-  completed_phases: 33
-  total_plans: 89
-  completed_plans: 86
+  completed_phases: 34
+  total_plans: 90
+  completed_plans: 87
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 69 — cli-setup-flow-first-time-encryption-init-before-daemon-spawn
+**Current focus:** Phase 70 — cli-start-stop-commands-for-daemon-lifecycle-management
 
 ## Current Position
 
-Phase: 69
-Plan: Not started
+Phase: 70 (cli-start-stop-commands-for-daemon-lifecycle-management) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -97,6 +97,7 @@ Plan: Not started
   | Phase 68-adopt-tauri-sidecar-for-daemon P01 | 5 | 2 tasks | 6 files |
   | Phase 68 P02 | 20 | 2 tasks | 6 files |
   | Phase 69 P01 | 4 | 3 tasks | 2 files |
+| Phase 70 P01 | 8 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -222,6 +223,9 @@ Recent decisions affecting current work:
 - [Phase 68]: Sidecar rx Receiver drained in background task — must not be dropped immediately or pipe blocks
 - [Phase 69]: run_new_space() uses build_cli_runtime() directly (no daemon) for first-time encryption init, matching space_status.rs pattern
 - [Phase 69]: new_space_encryption_guard() extracted as pub fn for behavioral testability without async runtime
+- [Phase 70]: Background start reuses ensure_local_daemon_running() for probe-spawn-poll pattern consistency
+- [Phase 70]: SIGKILL not used -- user warned if daemon does not stop within 10s timeout
+- [Phase 70]: libc added directly to uc-cli (not workspace) since no other crate needs it
 
 ### Roadmap Evolution
 
@@ -265,6 +269,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T09:45:11.352Z
-Stopped at: Phase 70 context gathered
-Resume file: .planning/phases/70-cli-start-stop-commands-for-daemon-lifecycle-management/70-CONTEXT.md
+Last session: 2026-03-28T10:10:03.072Z
+Stopped at: Completed 70-01-PLAN.md
+Resume file: None
