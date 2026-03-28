@@ -49,12 +49,12 @@ pub async fn run(foreground: bool, json: bool, verbose: bool) -> i32 {
 ///
 /// Returns `Some(exit_code)` if start should be blocked, `None` if ok to proceed.
 fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
-    let app_data_root = match resolve_app_data_root() {
-        Some(dir) => dir,
+    let paths = match resolve_lightweight_app_paths() {
+        Some(p) => p,
         None => return None, // Can't resolve — let daemon handle it
     };
 
-    let marker_file = app_data_root.join(".initialized_encryption");
+    let marker_file = paths.encryption_marker_path();
     if marker_file.exists() {
         return None; // Setup complete — proceed
     }
@@ -75,15 +75,15 @@ fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
     Some(exit_codes::EXIT_ERROR)
 }
 
-/// Resolve the app data root directory without building a full runtime.
+/// Resolve application paths without building a full runtime.
 ///
 /// Uses `resolve_app_config()` which reads config.toml (dev mode) or falls
-/// back to platform-specific app data directory. The `database_path` parent
-/// is the app data root where `.initialized_encryption` marker lives.
-fn resolve_app_data_root() -> Option<std::path::PathBuf> {
-    uc_bootstrap::config_resolution::resolve_app_config()
-        .ok()
-        .and_then(|config| config.database_path.parent().map(|p| p.to_path_buf()))
+/// back to platform-specific app data directory, then builds `AppPaths`
+/// for consistent path resolution.
+fn resolve_lightweight_app_paths() -> Option<uc_app::app_paths::AppPaths> {
+    let config = uc_bootstrap::config_resolution::resolve_app_config().ok()?;
+    let platform_dirs = uc_bootstrap::assembly::get_default_app_dirs().ok()?;
+    uc_bootstrap::assembly::resolve_app_paths(&platform_dirs, &config).ok()
 }
 
 async fn run_background(json: bool) -> i32 {

@@ -38,6 +38,11 @@ impl AppPaths {
     /// assert_eq!(paths.settings_path, PathBuf::from("/tmp/uniclipboard/settings.json"));
     /// assert_eq!(paths.logs_dir, PathBuf::from("/tmp/uniclipboard/logs"));
     /// ```
+    /// Returns the path to the encryption initialization marker file.
+    pub fn encryption_marker_path(&self) -> PathBuf {
+        self.vault_dir.join(".initialized_encryption")
+    }
+
     /// Single source of truth for all application paths.
     /// All subdirectory names are defined here — consumers must use these
     /// fields instead of calling `.join("...")` with hardcoded names.
