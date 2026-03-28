@@ -21,8 +21,8 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::file_sync::FileTransferOrchestrator;
-use uc_core::network::ClipboardMessage;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
+use uc_core::network::ClipboardMessage;
 use uc_core::ports::file_transfer_repository::PendingInboundTransfer;
 use uc_core::ports::ClipboardChangeOriginPort;
 use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
@@ -137,17 +137,20 @@ impl DaemonService for InboundClipboardSyncWorker {
 
             match subscribe_result {
                 Ok(rx) => {
-                    let usecase = Arc::clone(&usecase);
-                    tokio::spawn(Self::run_receive_loop(
+                    // Run receive loop inline (not spawned) so we block until
+                    // the channel closes. subscribe_clipboard() uses take-once
+                    // semantics — calling it again after take would always fail
+                    // with "clipboard receiver already taken".
+                    Self::run_receive_loop(
                         rx,
-                        usecase,
+                        Arc::clone(&usecase),
                         cancel.clone(),
                         event_tx.clone(),
                         orchestrator.clone(),
-                    ));
-                    // The loop is now running in the background.
-                    // When the channel closes (peer disconnects), we re-subscribe.
-                    // If cancel fires, the whole start() returns.
+                    )
+                    .await;
+                    info!("inbound clipboard receive loop ended, service will exit");
+                    return Ok(());
                 }
                 Err(e) => {
                     warn!(error = %e, "inbound clipboard subscribe failed; retrying in 2s");
@@ -310,13 +313,14 @@ mod tests {
     use chrono::Utc;
     use uc_app::usecases::clipboard::ClipboardIntegrationMode;
     use uc_core::ids::{EntryId, FormatId, RepresentationId};
-    use uc_core::network::protocol::{BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion};
+    use uc_core::network::protocol::{
+        BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion,
+    };
     use uc_core::network::ClipboardMessage;
     use uc_core::security::model::{EncryptionError, KdfParams, Kek, MasterKey, Passphrase};
     use uc_core::{
-        ClipboardChangeOrigin, ClipboardEntry, ClipboardEvent,
-        ClipboardSelectionDecision, DeviceId, MimeType,
-        ObservedClipboardRepresentation, PersistedClipboardRepresentation,
+        ClipboardChangeOrigin, ClipboardEntry, ClipboardEvent, ClipboardSelectionDecision,
+        DeviceId, MimeType, ObservedClipboardRepresentation, PersistedClipboardRepresentation,
         SystemClipboardSnapshot,
     };
     use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
@@ -349,44 +353,82 @@ mod tests {
     #[async_trait]
     impl uc_core::ports::ClipboardChangeOriginPort for MockChangeOrigin {
         async fn set_next_origin(&self, _: ClipboardChangeOrigin, _: std::time::Duration) {}
-        async fn consume_origin_or_default(&self, default: ClipboardChangeOrigin) -> ClipboardChangeOrigin { default }
+        async fn consume_origin_or_default(
+            &self,
+            default: ClipboardChangeOrigin,
+        ) -> ClipboardChangeOrigin {
+            default
+        }
         async fn remember_remote_snapshot_hash(&self, _: String, _: std::time::Duration) {}
         async fn consume_origin_for_snapshot_or_default(
             &self,
             _: &str,
             default: ClipboardChangeOrigin,
-        ) -> ClipboardChangeOrigin { default }
+        ) -> ClipboardChangeOrigin {
+            default
+        }
     }
 
     struct MockEncryptionSession;
 
     #[async_trait]
     impl uc_core::ports::EncryptionSessionPort for MockEncryptionSession {
-        async fn is_ready(&self) -> bool { true }
+        async fn is_ready(&self) -> bool {
+            true
+        }
         async fn get_master_key(&self) -> std::result::Result<MasterKey, EncryptionError> {
             Ok(MasterKey([3; 32]))
         }
-        async fn set_master_key(&self, _: MasterKey) -> std::result::Result<(), EncryptionError> { Ok(()) }
-        async fn clear(&self) -> std::result::Result<(), EncryptionError> { Ok(()) }
+        async fn set_master_key(&self, _: MasterKey) -> std::result::Result<(), EncryptionError> {
+            Ok(())
+        }
+        async fn clear(&self) -> std::result::Result<(), EncryptionError> {
+            Ok(())
+        }
     }
 
     struct MockEncryption;
 
     #[async_trait]
     impl uc_core::ports::EncryptionPort for MockEncryption {
-        async fn derive_kek(&self, _: &Passphrase, _: &[u8], _: &KdfParams) -> std::result::Result<Kek, EncryptionError> {
+        async fn derive_kek(
+            &self,
+            _: &Passphrase,
+            _: &[u8],
+            _: &KdfParams,
+        ) -> std::result::Result<Kek, EncryptionError> {
             Err(EncryptionError::UnsupportedKdfAlgorithm)
         }
-        async fn wrap_master_key(&self, _: &Kek, _: &MasterKey, _: uc_core::security::model::EncryptionAlgo) -> std::result::Result<uc_core::security::model::EncryptedBlob, EncryptionError> {
+        async fn wrap_master_key(
+            &self,
+            _: &Kek,
+            _: &MasterKey,
+            _: uc_core::security::model::EncryptionAlgo,
+        ) -> std::result::Result<uc_core::security::model::EncryptedBlob, EncryptionError> {
             Err(EncryptionError::EncryptFailed)
         }
-        async fn unwrap_master_key(&self, _: &Kek, _: &uc_core::security::model::EncryptedBlob) -> std::result::Result<MasterKey, EncryptionError> {
+        async fn unwrap_master_key(
+            &self,
+            _: &Kek,
+            _: &uc_core::security::model::EncryptedBlob,
+        ) -> std::result::Result<MasterKey, EncryptionError> {
             Err(EncryptionError::WrongPassphrase)
         }
-        async fn encrypt_blob(&self, _: &MasterKey, _: &[u8], _: &[u8], _: uc_core::security::model::EncryptionAlgo) -> std::result::Result<uc_core::security::model::EncryptedBlob, EncryptionError> {
+        async fn encrypt_blob(
+            &self,
+            _: &MasterKey,
+            _: &[u8],
+            _: &[u8],
+            _: uc_core::security::model::EncryptionAlgo,
+        ) -> std::result::Result<uc_core::security::model::EncryptedBlob, EncryptionError> {
             Err(EncryptionError::EncryptFailed)
         }
-        async fn decrypt_blob(&self, _: &MasterKey, encrypted: &uc_core::security::model::EncryptedBlob, _: &[u8]) -> std::result::Result<Vec<u8>, EncryptionError> {
+        async fn decrypt_blob(
+            &self,
+            _: &MasterKey,
+            encrypted: &uc_core::security::model::EncryptedBlob,
+            _: &[u8],
+        ) -> std::result::Result<Vec<u8>, EncryptionError> {
             Ok(encrypted.ciphertext.clone())
         }
     }
@@ -394,7 +436,9 @@ mod tests {
     struct MockDeviceIdentity;
 
     impl uc_core::ports::DeviceIdentityPort for MockDeviceIdentity {
-        fn current_device_id(&self) -> DeviceId { DeviceId::new("local-device-id") }
+        fn current_device_id(&self) -> DeviceId {
+            DeviceId::new("local-device-id")
+        }
     }
 
     struct MockEntryRepo {
@@ -403,13 +447,23 @@ mod tests {
 
     #[async_trait]
     impl uc_core::ports::ClipboardEntryRepositoryPort for MockEntryRepo {
-        async fn save_entry_and_selection(&self, _: &ClipboardEntry, _: &ClipboardSelectionDecision) -> Result<()> {
+        async fn save_entry_and_selection(
+            &self,
+            _: &ClipboardEntry,
+            _: &ClipboardSelectionDecision,
+        ) -> Result<()> {
             self.save_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
-        async fn get_entry(&self, _: &EntryId) -> Result<Option<ClipboardEntry>> { Ok(None) }
-        async fn list_entries(&self, _: usize, _: usize) -> Result<Vec<ClipboardEntry>> { Ok(vec![]) }
-        async fn delete_entry(&self, _: &EntryId) -> Result<()> { Ok(()) }
+        async fn get_entry(&self, _: &EntryId) -> Result<Option<ClipboardEntry>> {
+            Ok(None)
+        }
+        async fn list_entries(&self, _: usize, _: usize) -> Result<Vec<ClipboardEntry>> {
+            Ok(vec![])
+        }
+        async fn delete_entry(&self, _: &EntryId) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockEventWriter {
@@ -420,7 +474,11 @@ mod tests {
 
     #[async_trait]
     impl uc_core::ports::ClipboardEventWriterPort for MockEventWriter {
-        async fn insert_event(&self, _: &ClipboardEvent, _: &Vec<PersistedClipboardRepresentation>) -> Result<()> {
+        async fn insert_event(
+            &self,
+            _: &ClipboardEvent,
+            _: &Vec<PersistedClipboardRepresentation>,
+        ) -> Result<()> {
             self.insert_calls.fetch_add(1, Ordering::SeqCst);
             if let Some(ref counter) = self.error_on_nth_call {
                 let n = counter.fetch_add(1, Ordering::SeqCst);
@@ -430,14 +488,25 @@ mod tests {
             }
             Ok(())
         }
-        async fn delete_event_and_representations(&self, _: &uc_core::ids::EventId) -> Result<()> { Ok(()) }
+        async fn delete_event_and_representations(&self, _: &uc_core::ids::EventId) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockRepresentationPolicy;
 
     impl uc_core::ports::SelectRepresentationPolicyPort for MockRepresentationPolicy {
-        fn select(&self, snapshot: &SystemClipboardSnapshot) -> std::result::Result<uc_core::clipboard::ClipboardSelection, uc_core::clipboard::PolicyError> {
-            let rep = snapshot.representations.first().ok_or(uc_core::clipboard::PolicyError::NoUsableRepresentation)?;
+        fn select(
+            &self,
+            snapshot: &SystemClipboardSnapshot,
+        ) -> std::result::Result<
+            uc_core::clipboard::ClipboardSelection,
+            uc_core::clipboard::PolicyError,
+        > {
+            let rep = snapshot
+                .representations
+                .first()
+                .ok_or(uc_core::clipboard::PolicyError::NoUsableRepresentation)?;
             Ok(uc_core::clipboard::ClipboardSelection {
                 primary_rep_id: rep.id.clone(),
                 secondary_rep_ids: vec![],
@@ -452,7 +521,10 @@ mod tests {
 
     #[async_trait]
     impl uc_core::ports::ClipboardRepresentationNormalizerPort for MockNormalizer {
-        async fn normalize(&self, observed: &ObservedClipboardRepresentation) -> Result<PersistedClipboardRepresentation> {
+        async fn normalize(
+            &self,
+            observed: &ObservedClipboardRepresentation,
+        ) -> Result<PersistedClipboardRepresentation> {
             Ok(PersistedClipboardRepresentation::new(
                 observed.id.clone(),
                 observed.format_id.clone(),
@@ -469,7 +541,9 @@ mod tests {
     #[async_trait]
     impl uc_core::ports::clipboard::RepresentationCachePort for MockRepresentationCache {
         async fn put(&self, _: &RepresentationId, _: Vec<u8>) {}
-        async fn get(&self, _: &RepresentationId) -> Option<Vec<u8>> { None }
+        async fn get(&self, _: &RepresentationId) -> Option<Vec<u8>> {
+            None
+        }
         async fn mark_completed(&self, _: &RepresentationId) {}
         async fn mark_spooling(&self, _: &RepresentationId) {}
         async fn remove(&self, _: &RepresentationId) {}
@@ -479,7 +553,9 @@ mod tests {
 
     #[async_trait]
     impl uc_core::ports::clipboard::SpoolQueuePort for MockSpoolQueue {
-        async fn enqueue(&self, _: uc_core::ports::clipboard::SpoolRequest) -> Result<()> { Ok(()) }
+        async fn enqueue(&self, _: uc_core::ports::clipboard::SpoolRequest) -> Result<()> {
+            Ok(())
+        }
     }
 
     struct MockSettings;
@@ -489,7 +565,9 @@ mod tests {
         async fn load(&self) -> Result<uc_core::settings::model::Settings> {
             Ok(uc_core::settings::model::Settings::default())
         }
-        async fn save(&self, _: &uc_core::settings::model::Settings) -> Result<()> { Ok(()) }
+        async fn save(&self, _: &uc_core::settings::model::Settings) -> Result<()> {
+            Ok(())
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -597,7 +675,9 @@ mod tests {
             Arc::new(MockSystemClipboard {
                 writes: Arc::new(Mutex::new(vec![])),
             }),
-            Arc::new(MockChangeOrigin { _calls: Arc::new(Mutex::new(vec![])) }),
+            Arc::new(MockChangeOrigin {
+                _calls: Arc::new(Mutex::new(vec![])),
+            }),
             Arc::new(MockEncryptionSession),
             Arc::new(MockEncryption),
             Arc::new(MockDeviceIdentity),
@@ -625,7 +705,9 @@ mod tests {
             Arc::new(MockSystemClipboard {
                 writes: Arc::new(Mutex::new(vec![])),
             }),
-            Arc::new(MockChangeOrigin { _calls: Arc::new(Mutex::new(vec![])) }),
+            Arc::new(MockChangeOrigin {
+                _calls: Arc::new(Mutex::new(vec![])),
+            }),
             Arc::new(MockEncryptionSession),
             Arc::new(MockEncryption),
             Arc::new(MockDeviceIdentity),
@@ -694,13 +776,16 @@ mod tests {
 
         let worker = TestInboundWorker::new(event_tx.clone(), usecase);
 
-        let (message, plaintext) = make_v3_message("hello full mode", "remote-peer-2", "msg-remote-2");
+        let (message, plaintext) =
+            make_v3_message("hello full mode", "remote-peer-2", "msg-remote-2");
         let outcome = worker.process_one(message, Some(plaintext)).await;
 
         // Should be Applied with None entry_id (Full mode non-file)
         match outcome {
             InboundApplyOutcome::Applied { entry_id: None, .. } => {}
-            InboundApplyOutcome::Applied { entry_id: Some(_), .. } => {
+            InboundApplyOutcome::Applied {
+                entry_id: Some(_), ..
+            } => {
                 panic!("Full mode non-file should not return Some entry_id")
             }
             InboundApplyOutcome::Skipped => panic!("expected Applied, got Skipped"),
@@ -735,7 +820,9 @@ mod tests {
 
         // First message — should be Applied
         let (message, plaintext) = make_v3_message("duplicate", "remote-peer-3", "msg-dup-1");
-        let _ = worker.process_one(message.clone(), Some(plaintext.clone())).await;
+        let _ = worker
+            .process_one(message.clone(), Some(plaintext.clone()))
+            .await;
 
         // Drain the Applied event from the first message (expected)
         loop {
@@ -797,13 +884,16 @@ mod tests {
             let _ = &worker.clipboard_change_origin;
             // The type of worker.clipboard_change_origin must be exactly
             // Arc<dyn ClipboardChangeOriginPort> for this to type-check.
-            let _: &Arc<dyn uc_core::ports::ClipboardChangeOriginPort> = &worker.clipboard_change_origin;
+            let _: &Arc<dyn uc_core::ports::ClipboardChangeOriginPort> =
+                &worker.clipboard_change_origin;
         }
 
         // Verify the assertion compiles (it does because the field type matches).
         fn _type_check() {
             let origin: Arc<dyn uc_core::ports::ClipboardChangeOriginPort> =
-                Arc::new(MockChangeOrigin { _calls: Arc::new(Mutex::new(vec![])) });
+                Arc::new(MockChangeOrigin {
+                    _calls: Arc::new(Mutex::new(vec![])),
+                });
             let _ = origin;
         }
     }
