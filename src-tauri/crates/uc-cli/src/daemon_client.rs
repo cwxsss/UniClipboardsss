@@ -182,7 +182,10 @@ impl DaemonHttpClient {
                 reqwest::header::AUTHORIZATION,
                 format!("Bearer {}", self.token),
             )
-            .json(&PairingGuiLeaseRequest { enabled })
+            .json(&PairingGuiLeaseRequest {
+                enabled,
+                lease_ttl_ms: None,
+            })
             .send()
             .await
             .map_err(map_reqwest_error)?;
@@ -458,6 +461,10 @@ mod tests {
         result
     }
 
+    fn find_header_end(buffer: &[u8]) -> Option<usize> {
+        buffer.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
     #[test]
     fn resolve_base_url_uses_daemon_loopback_helper() {
         let base_url = with_daemon_env(None, None, None, None, resolve_base_url);
@@ -555,6 +562,92 @@ mod tests {
         assert_eq!(select_peer["peerId"], "peer-a");
         assert!(select_peer.get("peer_id").is_none());
         assert_eq!(submit_passphrase["passphrase"], "secret");
+    }
+
+    #[tokio::test]
+    async fn set_pairing_gui_lease_sends_default_ttl_field() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener should expose addr");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("connection should arrive");
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            let mut expected_total_len = None;
+
+            loop {
+                let read = stream
+                    .read(&mut buffer)
+                    .await
+                    .expect("request should be readable");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+
+                if expected_total_len.is_none() {
+                    if let Some(header_end) = find_header_end(&request) {
+                        let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
+                        let content_length = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.trim()
+                                    .eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap_or(0);
+                        expected_total_len = Some(header_end + 4 + content_length);
+                    }
+                }
+
+                if let Some(expected_total_len) = expected_total_len {
+                    if request.len() >= expected_total_len {
+                        break;
+                    }
+                }
+            }
+
+            let header_end = find_header_end(&request).expect("request should include headers");
+            let request_text =
+                String::from_utf8(request).expect("request bytes should be valid utf-8");
+            let request_lower = request_text.to_ascii_lowercase();
+            let body = &request_text[header_end + 4..];
+            let payload: serde_json::Value =
+                serde_json::from_str(body).expect("request body should be valid json");
+
+            assert!(
+                request_text.starts_with("POST /pairing/gui/lease HTTP/1.1\r\n"),
+                "unexpected request line: {request_text}"
+            );
+            assert!(
+                request_lower.contains("\r\nauthorization: bearer test-token\r\n"),
+                "authorization header should be present: {request_text}"
+            );
+            assert_eq!(payload["enabled"], true);
+            assert!(payload["leaseTtlMs"].is_null());
+            assert!(payload.get("lease_ttl_ms").is_none());
+
+            stream
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                )
+                .await
+                .expect("response should be writable");
+        });
+
+        let client = DaemonHttpClient::from_parts(format!("http://{addr}"), "test-token".into())
+            .expect("client should build");
+
+        client
+            .set_pairing_gui_lease(true)
+            .await
+            .expect("request should succeed");
+
+        server.await.expect("server should finish");
     }
 
     #[tokio::test]
