@@ -123,13 +123,9 @@ async fn run_new_space() -> i32 {
         }
     }
 
-    // 5. Success — guide user to next step
+    // 5. Success
     ui::bar();
     ui::success("Setup complete! Your space is ready.");
-    ui::info(
-        "Next step",
-        "run `uniclipboard-daemon` to start the daemon, then `setup host` to begin pairing",
-    );
     ui::end("");
     exit_codes::EXIT_SUCCESS
 }
