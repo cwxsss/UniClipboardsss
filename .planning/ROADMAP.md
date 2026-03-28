@@ -722,8 +722,8 @@ Plans:
 2. Already-initialized encryption state is detected and returns EXIT_ERROR with clear user message
 3. Successful initialization displays next-step guidance to start daemon
 
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 
-- [ ] 69-01-PLAN.md — Rewrite run_new_space() to use local CLI runtime for daemon-free encryption initialization
+- [x] 69-01-PLAN.md — Rewrite run_new_space() to use local CLI runtime for daemon-free encryption initialization

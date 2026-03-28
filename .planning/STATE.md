@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Milestone complete
-stopped_at: Completed 68-02-PLAN.md
-last_updated: '2026-03-28T04:50:34.488Z'
+status: Phase complete — ready for verification
+stopped_at: Completed 69-01-PLAN.md
+last_updated: "2026-03-28T09:23:01.309Z"
 progress:
-  total_phases: 39
-  completed_phases: 32
-  total_plans: 88
-  completed_plans: 85
+  total_phases: 40
+  completed_phases: 33
+  total_plans: 89
+  completed_plans: 86
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 68 — adopt-tauri-sidecar-for-daemon
+**Current focus:** Phase 69 — cli-setup-flow-first-time-encryption-init-before-daemon-spawn
 
 ## Current Position
 
-Phase: 68
-Plan: Not started
+Phase: 69 (cli-setup-flow-first-time-encryption-init-before-daemon-spawn) — EXECUTING
+Plan: 1 of 1
 
 ## Performance Metrics
 
@@ -96,6 +96,7 @@ Plan: Not started
   | Phase 67-setup-filter P02 | 8 | 1 tasks | 3 files |
   | Phase 68-adopt-tauri-sidecar-for-daemon P01 | 5 | 2 tasks | 6 files |
   | Phase 68 P02 | 20 | 2 tasks | 6 files |
+| Phase 69 P01 | 4 | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -219,6 +220,8 @@ Recent decisions affecting current work:
 - [Phase 68]: CommandChild from sidecar spawn maintains stdin tether (D-06): drop sends EOF to daemon's --gui-managed stdin monitor
 - [Phase 68]: shutdown_owned_daemon uses terminate_local_daemon_pid + libc::kill(0) polling instead of Child::try_wait/kill/wait
 - [Phase 68]: Sidecar rx Receiver drained in background task — must not be dropped immediately or pipe blocks
+- [Phase 69]: run_new_space() uses build_cli_runtime() directly (no daemon) for first-time encryption init, matching space_status.rs pattern
+- [Phase 69]: new_space_encryption_guard() extracted as pub fn for behavioral testability without async runtime
 
 ### Roadmap Evolution
 
@@ -241,6 +244,7 @@ Recent decisions affecting current work:
 - Phase 66 added: 修复 daemon 剪切板监听导致前端 dashboard 不会自动刷新剪切板历史的问题
 - Phase 67 added: 设备在 setup 完成前不应被其他设备发现，需要在业务层进行过滤
 - Phase 68 added: Adopt Tauri Sidecar for daemon binary management (dev build, bundling, and path resolution)
+- Phase 69 added: CLI setup flow: first-time encryption init before daemon spawn
 
 ### Pending Todos
 
@@ -260,6 +264,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T04:46:43.611Z
-Stopped at: Completed 68-02-PLAN.md
+Last session: 2026-03-28T09:23:01.305Z
+Stopped at: Completed 69-01-PLAN.md
 Resume file: None

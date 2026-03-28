@@ -243,9 +243,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 
 ### CLI Setup Flow — First-Time Encryption Init
 
-- [ ] **PH69-01**: `run_new_space()` uses `build_cli_runtime()` and `CoreUseCases::initialize_encryption().execute(Passphrase(...))` for local encryption init without starting daemon
-- [ ] **PH69-02**: `run_new_space()` checks `runtime.encryption_state()` and returns `EXIT_ERROR` with clear message when encryption is already `Initialized`
-- [ ] **PH69-03**: Successful encryption initialization displays next-step guidance to start daemon and begin pairing
+- [x] **PH69-01**: `run_new_space()` uses `build_cli_runtime()` and `CoreUseCases::initialize_encryption().execute(Passphrase(...))` for local encryption init without starting daemon
+- [x] **PH69-02**: `run_new_space()` checks `runtime.encryption_state()` and returns `EXIT_ERROR` with clear message when encryption is already `Initialized`
+- [x] **PH69-03**: Successful encryption initialization displays next-step guidance to start daemon and begin pairing
 
 ## Out of Scope
 
@@ -400,9 +400,9 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH68-04     | 68    | Complete |
 | PH68-05     | 68    | Complete |
 | PH68-06     | 68    | Complete |
-| PH69-01     | 69    | Pending  |
-| PH69-02     | 69    | Pending  |
-| PH69-03     | 69    | Pending  |
+| PH69-01     | 69    | Complete |
+| PH69-02     | 69    | Complete |
+| PH69-03     | 69    | Complete |
 
 **Coverage:**
 
