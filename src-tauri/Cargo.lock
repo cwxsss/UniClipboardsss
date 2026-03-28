@@ -9205,6 +9205,7 @@ dependencies = [
  "console",
  "dialoguer",
  "indicatif",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",
