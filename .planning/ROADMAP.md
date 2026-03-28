@@ -727,3 +727,14 @@ Plans:
 Plans:
 
 - [x] 69-01-PLAN.md — Rewrite run_new_space() to use local CLI runtime for daemon-free encryption initialization
+
+### Phase 70: CLI start/stop commands for daemon lifecycle management
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 69
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 70 to break down)
