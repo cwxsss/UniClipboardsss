@@ -15,6 +15,7 @@ use uc_app::usecases::SessionReadyEmitter;
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_non_gui_runtime_with_emitter;
 use uc_bootstrap::builders::build_daemon_app;
+use uc_bootstrap::BlobProcessingPorts;
 use uc_core::ports::SystemClipboardPort;
 use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::app::{DaemonApp, SetupCompletionEmitter};
@@ -70,6 +71,10 @@ fn main() -> anyhow::Result<()> {
     // by build_non_gui_runtime_with_emitter (which moves ctx.deps).
     let file_cache_dir = ctx.storage_paths.file_cache_dir.clone();
     let file_transfer_orchestrator = ctx.background.file_transfer_orchestrator.clone();
+
+    // Extract blob processing ports before ctx.deps is moved.
+    let blob_ports = BlobProcessingPorts::from_app_deps(&ctx.deps);
+    let background = ctx.background;
 
     // Phase 67: Create oneshot channel for deferred PeerDiscoveryWorker start.
     // SetupCompletionEmitter fires when AppLifecycleCoordinator::ensure_ready() calls
@@ -173,6 +178,14 @@ fn main() -> anyhow::Result<()> {
             .instrument(info_span!("daemon.startup.recover_encryption_session"))
             .await
     })?;
+
+    // Start background clipboard processing tasks (SpoolScanner, SpoolerTask,
+    // BackgroundBlobWorker, SpoolJanitor) via shared bootstrap function.
+    // Uses the runtime's TaskRegistry for lifecycle management.
+    let task_registry = runtime.task_registry().clone();
+    rt.spawn(async move {
+        uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &task_registry).await;
+    });
 
     // Phase 67: Build initial_statuses AFTER encryption check so peer-discovery
     // health reflects actual state (Stopped when uninitialized, Healthy when initialized).

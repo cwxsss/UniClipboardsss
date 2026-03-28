@@ -31,7 +31,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use super::task_registry::TaskRegistry;
+use uc_app::task_registry::TaskRegistry;
 use uc_app::{runtime::CoreRuntime, App, AppDeps};
 use uc_core::config::AppConfig;
 use uc_core::ports::SettingsPort;
@@ -148,7 +148,7 @@ impl AppRuntime {
     /// Create a new AppRuntime from dependencies.
     /// 从依赖创建新的 AppRuntime。
     pub fn new(deps: AppDeps, storage_paths: uc_app::app_paths::AppPaths) -> Self {
-        let setup_ports = super::assembly::SetupAssemblyPorts::placeholder(&deps);
+        let setup_ports = uc_bootstrap::assembly::SetupAssemblyPorts::placeholder(&deps);
         let event_emitter: Arc<dyn HostEventEmitterPort> =
             Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter);
         Self::with_setup(deps, setup_ports, storage_paths, event_emitter)
@@ -157,7 +157,7 @@ impl AppRuntime {
     /// Create a new AppRuntime with explicit setup orchestrator dependencies.
     pub fn with_setup(
         deps: AppDeps,
-        setup_ports: super::assembly::SetupAssemblyPorts,
+        setup_ports: uc_bootstrap::assembly::SetupAssemblyPorts,
         storage_paths: uc_app::app_paths::AppPaths,
         event_emitter: Arc<dyn HostEventEmitterPort>,
     ) -> Self {
@@ -182,7 +182,7 @@ impl AppRuntime {
         );
 
         // Pass shared state + adapters to build_setup_orchestrator as SEPARATE params.
-        let setup_orchestrator = super::assembly::build_setup_orchestrator(
+        let setup_orchestrator = uc_bootstrap::assembly::build_setup_orchestrator(
             &deps,
             setup_ports,
             lifecycle_status.clone(), // same instance goes to CoreRuntime below
@@ -201,10 +201,7 @@ impl AppRuntime {
             storage_paths,
         ));
 
-        Self {
-            core,
-            app_handle,
-        }
+        Self { core, app_handle }
     }
 
     /// Set the Tauri AppHandle for event emission.
@@ -505,6 +502,7 @@ mod tests {
     use tokio::sync::mpsc;
     use uc_core::clipboard::PolicyError;
     use uc_core::ports::clipboard::{RepresentationCachePort, SpoolQueuePort, SpoolRequest};
+    use uc_core::ports::host_event_emitter::{ClipboardHostEvent, HostEvent};
     use uc_core::ports::security::encryption_state::EncryptionStatePort;
     use uc_core::ports::security::key_scope::KeyScopePort;
     use uc_core::ports::*;
@@ -518,7 +516,6 @@ mod tests {
         Blob, BlobId, ContentHash, DeviceId, PersistedClipboardRepresentation,
         SystemClipboardSnapshot,
     };
-    use uc_core::ports::host_event_emitter::{ClipboardHostEvent, HostEvent};
     use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
     use uc_platform::ports::{AutostartPort, UiPort};
 
@@ -1346,7 +1343,7 @@ mod tests {
                 cache_fs: Arc::new(NoopPort),
             },
         };
-        let setup_ports = super::super::assembly::SetupAssemblyPorts::placeholder(&deps);
+        let setup_ports = uc_bootstrap::assembly::SetupAssemblyPorts::placeholder(&deps);
         let initial_emitter = Arc::new(RecordingEmitter::default());
         let swapped_emitter = Arc::new(RecordingEmitter::default());
         let runtime = AppRuntime::with_setup(

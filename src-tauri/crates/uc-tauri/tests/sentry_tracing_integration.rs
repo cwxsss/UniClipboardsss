@@ -1,5 +1,5 @@
 use sentry::Level;
-use uc_tauri::bootstrap::tracing::init_tracing_subscriber;
+use uc_bootstrap::tracing::init_tracing_subscriber;
 
 #[test]
 fn test_sentry_tracing_integration() {

@@ -34,11 +34,10 @@
 //! > 但这种特权仅用于"组装"，不用于"决策"。
 
 use std::sync::Arc;
-use std::time::Duration;
 use tauri::async_runtime;
-use tracing::{info, warn};
+use tracing::info;
 
-use super::task_registry::TaskRegistry;
+use uc_app::task_registry::TaskRegistry;
 use uc_daemon_client::realtime::start_realtime_runtime;
 
 #[cfg(test)]
@@ -53,9 +52,8 @@ use uc_core::ports::*;
 use uc_core::security::model::{KeySlot, KeySlotFile};
 #[cfg(test)]
 use uc_core::security::space_access::event::SpaceAccessEvent;
-use uc_infra::clipboard::{BackgroundBlobWorker, SpoolJanitor, SpoolScanner, SpoolerTask};
-// Re-export assembly types from uc-bootstrap (via the thin stub in super::assembly).
-pub use super::assembly::{
+// Re-export assembly types from uc-bootstrap.
+pub use uc_bootstrap::assembly::{
     get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
     wire_dependencies_with_identity_store, HostEventSetupPort, WiredDependencies, WiringError,
     WiringResult,
@@ -63,8 +61,6 @@ pub use super::assembly::{
 
 // Re-export BackgroundRuntimeDeps from uc-bootstrap (definition moved in Phase 40).
 pub use uc_bootstrap::BackgroundRuntimeDeps;
-
-const SPOOL_JANITOR_INTERVAL_SECS: u64 = 60 * 60;
 
 /// Start background spooler and blob worker tasks.
 /// 启动后台假脱机写入和 blob 物化任务。
@@ -79,115 +75,18 @@ pub fn start_background_tasks(
     setup_pairing_event_hub: Arc<uc_app::realtime::SetupPairingEventHub>,
     task_registry: &Arc<TaskRegistry>,
 ) {
-    let BackgroundRuntimeDeps {
-        libp2p_network: _,
-        representation_cache,
-        spool_manager,
-        spool_tx: _spool_tx, // Kept alive so SpoolerTask does not exit immediately
-        spool_rx,
-        worker_rx,
-        spool_dir,
-        file_cache_dir,
-        spool_ttl_days,
-        worker_retry_max_attempts,
-        worker_retry_backoff_ms,
-        file_transfer_orchestrator: _file_transfer_orchestrator,
-    } = background;
-
-    info!("Starting background clipboard spooler and blob worker");
-
-    let representation_repo = deps.clipboard.representation_repo.clone();
-    let worker_tx = deps.clipboard.worker_tx.clone();
-    let blob_writer = deps.storage.blob_writer.clone();
-    let hasher = deps.system.hash.clone();
-    let clock = deps.system.clock.clone();
-    let thumbnail_repo = deps.storage.thumbnail_repo.clone();
-    let thumbnail_generator = deps.storage.thumbnail_generator.clone();
-
-    // Clones for file cache cleanup task
+    // Clones for GUI-only tasks
     let deps_settings = deps.settings.clone();
-    let cleanup_file_cache_dir = file_cache_dir.clone();
+    let cleanup_file_cache_dir = background.file_cache_dir.clone();
+    let blob_ports = uc_bootstrap::BlobProcessingPorts::from_app_deps(deps);
 
     // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
     // We use a single orchestration spawn to set up all registry tasks, since
     // registry.spawn() is async and start_background_tasks is sync.
     let registry = task_registry.clone();
     async_runtime::spawn(async move {
-        // --- Spool scanner (runs once at startup, then spawns long-lived sub-tasks) ---
-        let scanner = SpoolScanner::new(spool_dir, representation_repo.clone(), worker_tx.clone());
-        match scanner.scan_and_recover().await {
-            Ok(recovered) => info!("Recovered {} representations from spool", recovered),
-            Err(err) => warn!(error = %err, "Spool scan failed; continuing startup"),
-        }
-
-        // --- Spooler task (long-lived, channel-driven) ---
-        let spooler = SpoolerTask::new(
-            spool_rx,
-            spool_manager.clone(),
-            worker_tx,
-            representation_cache.clone(),
-        );
-        registry
-            .spawn("spooler", |_token| async move {
-                spooler.run().await;
-                warn!("SpoolerTask stopped");
-            })
-            .await;
-
-        // --- Background blob worker (long-lived, channel-driven) ---
-        let worker = BackgroundBlobWorker::new(
-            worker_rx,
-            representation_cache,
-            spool_manager.clone(),
-            representation_repo.clone(),
-            blob_writer,
-            hasher,
-            thumbnail_repo,
-            thumbnail_generator,
-            clock.clone(),
-            worker_retry_max_attempts,
-            Duration::from_millis(worker_retry_backoff_ms),
-        );
-        registry
-            .spawn("blob_worker", |_token| async move {
-                worker.run().await;
-                warn!("BackgroundBlobWorker stopped");
-            })
-            .await;
-
-        // --- Spool janitor (long-lived, interval-based loop with cooperative cancellation) ---
-        let janitor = SpoolJanitor::new(
-            spool_manager.clone(),
-            representation_repo.clone(),
-            clock,
-            spool_ttl_days,
-        );
-        registry
-            .spawn("spool_janitor", |token| async move {
-                let mut interval =
-                    tokio::time::interval(Duration::from_secs(SPOOL_JANITOR_INTERVAL_SECS));
-                loop {
-                    tokio::select! {
-                        _ = token.cancelled() => {
-                            info!("Spool janitor shutting down");
-                            return;
-                        }
-                        _ = interval.tick() => {
-                            match janitor.run_once().await {
-                                Ok(removed) => {
-                                    if removed > 0 {
-                                        info!("Spool janitor removed {} expired entries", removed);
-                                    }
-                                }
-                                Err(err) => {
-                                    warn!(error = %err, "Spool janitor run failed");
-                                }
-                            }
-                        }
-                    }
-                }
-            })
-            .await;
+        // --- Shared blob processing tasks (SpoolScanner + SpoolerTask + BackgroundBlobWorker + SpoolJanitor) ---
+        uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &registry).await;
 
         // --- Unified realtime runtime (daemon WebSocket bridge + app consumers) ---
         start_realtime_runtime(
@@ -201,6 +100,7 @@ pub fn start_background_tasks(
 
         // --- File cache cleanup (runs once at startup, fire-and-forget) ---
         {
+            use tracing::warn;
             let cleanup_settings = deps_settings.clone();
             let cleanup_cache_dir = cleanup_file_cache_dir.clone();
             registry

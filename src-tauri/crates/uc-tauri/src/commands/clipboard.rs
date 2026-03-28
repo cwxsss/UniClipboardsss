@@ -666,6 +666,11 @@ mod tests {
     use uc_core::{Blob, BlobId, ContentHash, DeviceId};
     use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
 
+    fn clipboard_mode_env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     struct MockEntryRepository {
         entry: Option<ClipboardEntry>,
         touch_result: bool,
@@ -1485,9 +1490,7 @@ mod tests {
 
     #[tokio::test]
     async fn sync_clipboard_items_returns_error_in_passive_mode() {
-        let _guard = crate::bootstrap::clipboard_integration_mode::clipboard_mode_env_lock()
-            .lock()
-            .expect("env lock");
+        let _guard = clipboard_mode_env_lock().lock().expect("env lock");
         let _mode_guard = EnvVarGuard::set("UC_CLIPBOARD_MODE", "passive");
 
         let (worker_tx, _worker_rx) = mpsc::channel(1);

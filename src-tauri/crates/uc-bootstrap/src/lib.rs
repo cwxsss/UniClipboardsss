@@ -6,6 +6,7 @@
 //! for dependency wiring and initialization.
 
 pub mod assembly;
+pub mod background_tasks;
 pub mod builders;
 pub mod config;
 pub mod config_resolution;
@@ -20,6 +21,7 @@ pub use assembly::{
     wire_dependencies_with_identity_store, BackgroundRuntimeDeps, HostEventSetupPort,
     SetupAssemblyPorts, WiredDependencies, WiringError, WiringResult,
 };
+pub use background_tasks::{spawn_blob_processing_tasks, BlobProcessingPorts};
 pub use builders::{
     build_cli_context, build_cli_context_with_profile, build_daemon_app, build_gui_app,
     CliBootstrapContext, DaemonBootstrapContext, GuiBootstrapContext,
