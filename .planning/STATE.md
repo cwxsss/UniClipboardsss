@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: Milestone complete
-stopped_at: Completed 67-02-PLAN.md
-last_updated: '2026-03-27T13:53:50.638Z'
+stopped_at: Completed 68-02-PLAN.md
+last_updated: '2026-03-28T04:50:34.488Z'
 progress:
-  total_phases: 38
-  completed_phases: 31
-  total_plans: 86
-  completed_plans: 83
+  total_phases: 39
+  completed_phases: 32
+  total_plans: 88
+  completed_plans: 85
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 67 — setup-filter
+**Current focus:** Phase 68 — adopt-tauri-sidecar-for-daemon
 
 ## Current Position
 
-Phase: 67
+Phase: 68
 Plan: Not started
 
 ## Performance Metrics
@@ -94,6 +94,8 @@ Plan: Not started
   | Phase 66 P01 | 5 | 1 tasks | 1 files |
   | Phase 66-daemon-dashboard P02 | 18 | 2 tasks | 4 files |
   | Phase 67-setup-filter P02 | 8 | 1 tasks | 3 files |
+  | Phase 68-adopt-tauri-sidecar-for-daemon P01 | 5 | 2 tasks | 6 files |
+  | Phase 68 P02 | 20 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -212,6 +214,11 @@ Recent decisions affecting current work:
 - [Phase 67-setup-filter]: recover_encryption_session made pub so main.rs can call it before DaemonApp construction
 - [Phase 67-setup-filter]: Removed recover_encryption_session from DaemonApp::run() — Phase 67 moved it to main.rs for deferred-start logic
 - [Phase 67-setup-filter]: RuntimeState::update_service_health() added for single-entry Stopped→Healthy mutation when deferred worker starts
+- [Phase 68]: Copy daemon binary before tauri_build::build() so externalBin path validation succeeds at check time
+- [Phase 68]: tauri-plugin-shell in workspace.dependencies; build.rs in src-tauri/ (main crate) for TAURI_ENV_TARGET_TRIPLE access
+- [Phase 68]: CommandChild from sidecar spawn maintains stdin tether (D-06): drop sends EOF to daemon's --gui-managed stdin monitor
+- [Phase 68]: shutdown_owned_daemon uses terminate_local_daemon_pid + libc::kill(0) polling instead of Child::try_wait/kill/wait
+- [Phase 68]: Sidecar rx Receiver drained in background task — must not be dropped immediately or pipe blocks
 
 ### Roadmap Evolution
 
@@ -233,6 +240,7 @@ Recent decisions affecting current work:
 - Phase 35 added: Extract OutboundSyncPlanner to consolidate scattered sync policy checks
 - Phase 66 added: 修复 daemon 剪切板监听导致前端 dashboard 不会自动刷新剪切板历史的问题
 - Phase 67 added: 设备在 setup 完成前不应被其他设备发现，需要在业务层进行过滤
+- Phase 68 added: Adopt Tauri Sidecar for daemon binary management (dev build, bundling, and path resolution)
 
 ### Pending Todos
 
@@ -252,6 +260,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-27T13:48:49.317Z
-Stopped at: Completed 67-02-PLAN.md
+Last session: 2026-03-28T04:46:43.611Z
+Stopped at: Completed 68-02-PLAN.md
 Resume file: None
