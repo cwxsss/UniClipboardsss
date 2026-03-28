@@ -1,6 +1,7 @@
 //! HTTP server bootstrap for the daemon API.
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
@@ -35,6 +36,11 @@ pub struct DaemonApiState {
     pub setup_orchestrator: Option<Arc<SetupOrchestrator>>,
     pub space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
+    /// Gate controlling clipboard capture in the daemon.
+    /// When set to true, clipboard monitoring becomes active.
+    pub clipboard_capture_gate: Option<Arc<AtomicBool>>,
+    /// Notify to trigger deferred service startup (clipboard-watcher, etc.)
+    pub deferred_ready_notify: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl DaemonApiState {
@@ -52,6 +58,8 @@ impl DaemonApiState {
             setup_orchestrator: None,
             space_access_orchestrator: None,
             event_tx,
+            clipboard_capture_gate: None,
+            deferred_ready_notify: None,
         }
     }
 
@@ -83,6 +91,16 @@ impl DaemonApiState {
 
     pub fn space_access_orchestrator(&self) -> Option<Arc<SpaceAccessOrchestrator>> {
         self.space_access_orchestrator.clone()
+    }
+
+    pub fn with_clipboard_gate(mut self, gate: Arc<AtomicBool>) -> Self {
+        self.clipboard_capture_gate = Some(gate);
+        self
+    }
+
+    pub fn with_deferred_ready_notify(mut self, notify: Arc<tokio::sync::Notify>) -> Self {
+        self.deferred_ready_notify = Some(notify);
+        self
     }
 
     pub fn connection_info_for_addr(&self, listen_addr: SocketAddr) -> DaemonConnectionInfo {

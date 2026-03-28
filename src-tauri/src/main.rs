@@ -567,6 +567,7 @@ fn run_app(ctx: GuiBootstrapContext) {
                 // 1. Auto-unlock (non-blocking) if enabled in settings
                 let runtime_for_auto_unlock = runtime.clone();
                 let app_handle_for_unlock = app_handle_for_startup.clone();
+                let daemon_conn_for_unlock = daemon_connection_state.clone();
                 tauri::async_runtime::spawn(async move {
                     let auto_unlock_enabled =
                         match runtime_for_auto_unlock.settings_port().load().await {
@@ -587,6 +588,7 @@ fn run_app(ctx: GuiBootstrapContext) {
                             &runtime_for_auto_unlock,
                             &app_handle_for_unlock,
                             None,
+                            Some(&daemon_conn_for_unlock),
                         )
                         .await
                     {

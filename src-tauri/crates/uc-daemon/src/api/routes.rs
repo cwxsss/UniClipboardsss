@@ -1,5 +1,6 @@
 //! HTTP route handlers for the daemon API.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
@@ -59,10 +60,41 @@ pub fn router() -> Router<DaemonApiState> {
         .route("/pairing/sessions/:session_id/reject", post(reject_pairing))
         .route("/pairing/sessions/:session_id/cancel", post(cancel_pairing))
         .route("/pairing/sessions/:session_id/verify", post(verify_pairing))
+        .route("/lifecycle/ready", post(lifecycle_ready))
 }
 
 async fn health(State(state): State<DaemonApiState>) -> impl IntoResponse {
     Json(state.query_service.health().await)
+}
+
+/// Signal that the GUI has unlocked and clipboard capture can begin.
+///
+/// In `--gui-managed` mode, clipboard capture is gated until the GUI
+/// explicitly signals readiness (after the user unlocks the app).
+/// This endpoint opens that gate.
+async fn lifecycle_ready(
+    State(state): State<DaemonApiState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if !state.is_authorized(&headers) {
+        return unauthorized().into_response();
+    }
+
+    if let Some(gate) = &state.clipboard_capture_gate {
+        let was_closed = !gate.swap(true, Ordering::SeqCst);
+        if was_closed {
+            tracing::info!("Clipboard capture gate opened by GUI lifecycle/ready signal");
+        } else {
+            tracing::debug!("Clipboard capture gate already open (duplicate lifecycle/ready call)");
+        }
+    }
+
+    // Trigger deferred services start (clipboard-watcher, inbound-clipboard-sync, etc.)
+    if let Some(notify) = &state.deferred_ready_notify {
+        notify.notify_one();
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn status(State(state): State<DaemonApiState>, headers: HeaderMap) -> impl IntoResponse {
@@ -658,8 +690,12 @@ async fn handle_unpair_device(
         Err(error) => {
             let message = error.to_string();
             tracing::error!(error = %error, "daemon unpair command failed");
-            pairing_api_error(StatusCode::INTERNAL_SERVER_ERROR, pairing_error_code::INTERNAL, &message)
-                .into_response()
+            pairing_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                pairing_error_code::INTERNAL,
+                &message,
+            )
+            .into_response()
         }
     }
 }

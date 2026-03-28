@@ -76,12 +76,13 @@ fn main() -> anyhow::Result<()> {
     let blob_ports = BlobProcessingPorts::from_app_deps(&ctx.deps);
     let background = ctx.background;
 
-    // Phase 67: Create oneshot channel for deferred PeerDiscoveryWorker start.
-    // SetupCompletionEmitter fires when AppLifecycleCoordinator::ensure_ready() calls
-    // emit_ready() (i.e., when the setup flow completes on an uninitialized device).
-    let (setup_complete_tx, setup_complete_rx) = tokio::sync::oneshot::channel::<()>();
+    // Create Notify for deferred service startup.
+    // This is triggered by either:
+    // - SetupCompletionEmitter (setup flow completes on uninitialized device)
+    // - /lifecycle/ready API endpoint (GUI signals unlock)
+    let deferred_ready_notify = Arc::new(tokio::sync::Notify::new());
     let setup_completion_emitter: Arc<dyn SessionReadyEmitter> =
-        Arc::new(SetupCompletionEmitter::new(setup_complete_tx));
+        Arc::new(SetupCompletionEmitter::new(deferred_ready_notify.clone()));
 
     let runtime = Arc::new(build_non_gui_runtime_with_emitter(
         ctx.deps,
@@ -120,10 +121,17 @@ fn main() -> anyhow::Result<()> {
     let clipboard_change_origin: Arc<dyn uc_core::ports::ClipboardChangeOriginPort> =
         Arc::new(InMemoryClipboardChangeOrigin::new());
 
+    // Clipboard capture gate: controls whether clipboard changes are processed.
+    // In standalone CLI mode, capture is always enabled.
+    // In GUI-managed mode, capture is disabled until the GUI signals readiness
+    // (after the user unlocks), preventing clipboard monitoring before unlock.
+    let clipboard_capture_gate = Arc::new(std::sync::atomic::AtomicBool::new(!gui_managed));
+
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
         runtime.clone(),
         event_tx.clone(),
         clipboard_change_origin.clone(),
+        clipboard_capture_gate.clone(),
     ));
     let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
         local_clipboard.clone(), // clone — FileSyncOrchestratorWorker also needs this for clipboard restore
@@ -187,23 +195,33 @@ fn main() -> anyhow::Result<()> {
         uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &task_registry).await;
     });
 
-    // Phase 67: Build initial_statuses AFTER encryption check so peer-discovery
-    // health reflects actual state (Stopped when uninitialized, Healthy when initialized).
+    // Clipboard services are deferred when:
+    // - GUI-managed: wait for GUI unlock signal via /lifecycle/ready
+    // - Encryption uninitialized: wait for setup completion
+    let should_defer_clipboard = gui_managed || !encryption_unlocked;
+
+    // Build initial_statuses AFTER encryption check so service health reflects actual state.
     let initial_statuses: Vec<DaemonServiceSnapshot> = vec![
         DaemonServiceSnapshot {
             name: "clipboard-watcher".to_string(),
-            health: ServiceHealth::Healthy,
+            health: if should_defer_clipboard {
+                ServiceHealth::Stopped
+            } else {
+                ServiceHealth::Healthy
+            },
         },
         DaemonServiceSnapshot {
             name: "inbound-clipboard-sync".to_string(),
-            health: ServiceHealth::Healthy,
+            health: if should_defer_clipboard {
+                ServiceHealth::Stopped
+            } else {
+                ServiceHealth::Healthy
+            },
         },
         DaemonServiceSnapshot {
             name: "file-sync-orchestrator".to_string(),
             health: ServiceHealth::Healthy,
         },
-        // Phase 67 D-01/D-06: peer-discovery is Stopped when encryption is uninitialized;
-        // it will be started dynamically after setup completes.
         DaemonServiceSnapshot {
             name: "peer-discovery".to_string(),
             health: if encryption_unlocked {
@@ -238,33 +256,37 @@ fn main() -> anyhow::Result<()> {
     // 4. Build PeerMonitor (extracted from PairingHost in Plan 02).
     let peer_monitor = Arc::new(PeerMonitor::new(runtime.clone(), event_tx.clone()));
 
-    // Phase 67: Conditional PeerDiscoveryWorker registration (per D-01, D-06, D-11).
-    // D-02/D-07: Encryption initialized and unlocked — start PeerDiscoveryWorker immediately.
-    // D-01/D-06: Encryption uninitialized — defer PeerDiscoveryWorker until setup completes.
-    let (services, deferred_peer_discovery, setup_complete_rx_opt) = if encryption_unlocked {
-        let services: Vec<Arc<dyn DaemonService>> = vec![
-            Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
-            Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
+    // Conditional service registration:
+    // - Clipboard services are deferred when gui_managed or encryption uninitialized
+    // - PeerDiscoveryWorker is deferred when encryption is uninitialized
+    let (services, deferred_services) = {
+        let mut initial: Vec<Arc<dyn DaemonService>> = vec![
             Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
-            Arc::clone(&peer_discovery_worker) as Arc<dyn DaemonService>,
             Arc::clone(&pairing_host) as Arc<dyn DaemonService>,
             Arc::clone(&peer_monitor) as Arc<dyn DaemonService>,
         ];
-        (services, None, None)
+        let mut deferred: Vec<Arc<dyn DaemonService>> = Vec::new();
+
+        if should_defer_clipboard {
+            deferred.push(Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>);
+            deferred.push(Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>);
+        } else {
+            initial.push(Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>);
+            initial.push(Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>);
+        }
+
+        if encryption_unlocked {
+            initial.push(Arc::clone(&peer_discovery_worker) as Arc<dyn DaemonService>);
+        } else {
+            deferred.push(peer_discovery_worker);
+        }
+
+        (initial, deferred)
+    };
+    let deferred_notify_opt = if deferred_services.is_empty() {
+        None
     } else {
-        let services: Vec<Arc<dyn DaemonService>> = vec![
-            Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
-            Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
-            Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
-            // PeerDiscoveryWorker NOT included — will start after setup completes
-            Arc::clone(&pairing_host) as Arc<dyn DaemonService>,
-            Arc::clone(&peer_monitor) as Arc<dyn DaemonService>,
-        ];
-        (
-            services,
-            Some(peer_discovery_worker),
-            Some(setup_complete_rx),
-        )
+        Some(deferred_ready_notify.clone())
     };
 
     // 5. Assemble and run daemon app.
@@ -279,9 +301,10 @@ fn main() -> anyhow::Result<()> {
         Some(ctx.space_access_orchestrator),
         socket_path,
         encryption_unlocked,
-        deferred_peer_discovery,
-        setup_complete_rx_opt,
+        deferred_services,
+        deferred_notify_opt,
         external_shutdown,
+        Some(clipboard_capture_gate),
     );
 
     rt.block_on(daemon.run())

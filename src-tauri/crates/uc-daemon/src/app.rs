@@ -4,6 +4,7 @@
 //! waits for shutdown signal, and tears down in reverse order.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -59,33 +60,31 @@ pub async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result
     }
 }
 
-/// Fires a oneshot signal when the setup flow completes (per D-09/D-10).
+/// Fires a notification when the setup/unlock flow completes.
 ///
 /// Used as the daemon's `SessionReadyEmitter` so that when
 /// `AppLifecycleCoordinator::ensure_ready()` fires `emit_ready()`,
-/// the daemon can dynamically start `PeerDiscoveryWorker`.
+/// the daemon can dynamically start deferred services (clipboard-watcher,
+/// inbound-clipboard-sync, peer-discovery).
+///
+/// Uses `Notify` instead of a oneshot so that multiple sources can trigger it:
+/// - Setup flow completion (uninitialized encryption)
+/// - `/lifecycle/ready` API endpoint (GUI unlock)
 pub struct SetupCompletionEmitter {
-    tx: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    notify: Arc<tokio::sync::Notify>,
 }
 
 impl SetupCompletionEmitter {
-    pub fn new(tx: tokio::sync::oneshot::Sender<()>) -> Self {
-        Self {
-            tx: tokio::sync::Mutex::new(Some(tx)),
-        }
+    pub fn new(notify: Arc<tokio::sync::Notify>) -> Self {
+        Self { notify }
     }
 }
 
 #[async_trait]
 impl SessionReadyEmitter for SetupCompletionEmitter {
     async fn emit_ready(&self) -> anyhow::Result<()> {
-        if let Some(tx) = self.tx.lock().await.take() {
-            if tx.send(()).is_err() {
-                debug!("setup completion signal: receiver already dropped (worker may have started via other path)");
-            }
-        } else {
-            debug!("setup completion signal already consumed (duplicate emit_ready call)");
-        }
+        self.notify.notify_one();
+        debug!("setup completion signal sent via Notify");
         Ok(())
     }
 }
@@ -108,12 +107,17 @@ pub struct DaemonApp {
     space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
     socket_path: PathBuf,
     cancel: CancellationToken,
-    // Phase 67: deferred PeerDiscoveryWorker for uninitialized devices
-    deferred_peer_discovery: Option<Arc<dyn DaemonService>>,
-    setup_complete_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    // Deferred services: clipboard-watcher, inbound-clipboard-sync, and peer-discovery
+    // are deferred until the GUI signals ready (--gui-managed) or setup completes (uninitialized).
+    deferred_services: Vec<Arc<dyn DaemonService>>,
+    /// Notify triggered by either SetupCompletionEmitter or /lifecycle/ready API.
+    deferred_ready_notify: Option<Arc<tokio::sync::Notify>>,
     /// External shutdown signal (e.g., from stdin pipe tether when GUI-managed).
     /// When cancelled, the daemon performs a graceful shutdown identical to SIGTERM.
     external_shutdown: Option<CancellationToken>,
+    /// Gate that controls clipboard capture. Passed to DaemonApiState so the
+    /// `/lifecycle/ready` endpoint can open it when the GUI signals readiness.
+    clipboard_capture_gate: Option<Arc<AtomicBool>>,
 }
 
 impl DaemonApp {
@@ -142,17 +146,22 @@ impl DaemonApp {
             space_access_orchestrator,
             socket_path,
             cancel: CancellationToken::new(),
-            deferred_peer_discovery: None,
-            setup_complete_rx: None,
+            deferred_services: Vec::new(),
+            deferred_ready_notify: None,
             external_shutdown: None,
+            clipboard_capture_gate: None,
         }
     }
 
-    /// Construct a DaemonApp with deferred PeerDiscoveryWorker support (Phase 67).
+    /// Construct a DaemonApp with deferred services support.
+    ///
+    /// Services in `deferred_services` will only start when `setup_complete_rx` fires.
+    /// This is used for:
+    /// - `--gui-managed` mode: clipboard services are deferred until the GUI signals unlock
+    /// - Uninitialized encryption: peer-discovery is deferred until setup completes
     ///
     /// `encryption_unlocked` is a required parameter to enforce the invariant that
     /// the caller MUST have completed encryption recovery before constructing DaemonApp.
-    /// This prevents future callers from accidentally skipping the recovery check.
     pub fn new_with_deferred(
         services: Vec<Arc<dyn DaemonService>>,
         runtime: Arc<CoreRuntime>,
@@ -161,22 +170,17 @@ impl DaemonApp {
         api_pairing_host: Option<Arc<DaemonPairingHost>>,
         space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
         socket_path: PathBuf,
-        encryption_unlocked: bool,
-        deferred_peer_discovery: Option<Arc<dyn DaemonService>>,
-        setup_complete_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+        _encryption_unlocked: bool,
+        deferred_services: Vec<Arc<dyn DaemonService>>,
+        deferred_ready_notify: Option<Arc<tokio::sync::Notify>>,
         external_shutdown: Option<CancellationToken>,
+        clipboard_capture_gate: Option<Arc<AtomicBool>>,
     ) -> Self {
-        // Validate invariant: deferred_peer_discovery and setup_complete_rx must both be
-        // Some (uninitialized) or both None (initialized+unlocked). Half-configured state
-        // would silently prevent the worker from ever starting.
-        debug_assert_eq!(
-            deferred_peer_discovery.is_some(),
-            setup_complete_rx.is_some(),
-            "deferred_peer_discovery and setup_complete_rx must both be Some or both None"
-        );
+        // Validate invariant: deferred_services and deferred_ready_notify must be
+        // consistent. If there are deferred services, there must be a Notify to trigger them.
         debug_assert!(
-            encryption_unlocked || deferred_peer_discovery.is_some(),
-            "If encryption is not unlocked, deferred_peer_discovery must be provided"
+            deferred_services.is_empty() || deferred_ready_notify.is_some(),
+            "deferred_services is non-empty but deferred_ready_notify is None — services would never start"
         );
         Self {
             services,
@@ -187,9 +191,10 @@ impl DaemonApp {
             space_access_orchestrator,
             socket_path,
             cancel: CancellationToken::new(),
-            deferred_peer_discovery,
-            setup_complete_rx,
+            deferred_services,
+            deferred_ready_notify,
             external_shutdown,
+            clipboard_capture_gate,
         }
     }
 
@@ -230,6 +235,14 @@ impl DaemonApp {
             Some(ph) => api_state.with_pairing_host(Arc::clone(ph)),
             None => api_state,
         };
+        let api_state = match &self.clipboard_capture_gate {
+            Some(gate) => api_state.with_clipboard_gate(Arc::clone(gate)),
+            None => api_state,
+        };
+        let api_state = match &self.deferred_ready_notify {
+            Some(notify) => api_state.with_deferred_ready_notify(Arc::clone(notify)),
+            None => api_state,
+        };
 
         // 3. Wire the event emitter into the runtime so use cases can emit WS events
         self.runtime
@@ -252,9 +265,9 @@ impl DaemonApp {
         let http_cancel = self.cancel.child_token();
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
 
-        // Phase 67: prepare deferred PeerDiscoveryWorker start
-        let mut deferred_worker = self.deferred_peer_discovery.take();
-        let mut setup_rx = self.setup_complete_rx.take();
+        // Prepare deferred services start
+        let mut deferred = std::mem::take(&mut self.deferred_services);
+        let ready_notify = self.deferred_ready_notify.take();
 
         // 6. Wait for shutdown signal, infrastructure crash, service crash, or deferred start
         loop {
@@ -284,34 +297,28 @@ impl DaemonApp {
                     warn!("service task exited unexpectedly: {:?}", result);
                     break;
                 }
-                result = async {
-                    match &mut setup_rx {
-                        Some(rx) => rx.await.map_err(|_| ()),
-                        None => std::future::pending::<Result<(), ()>>().await,
+                _ = async {
+                    match &ready_notify {
+                        Some(n) => n.notified().await,
+                        None => std::future::pending::<()>().await,
                     }
-                }, if deferred_worker.is_some() => {
-                    match result {
-                        Ok(()) => {
-                            if let Some(worker) = deferred_worker.take() {
-                                info!("setup complete — starting deferred peer discovery worker");
-                                let worker_for_shutdown = Arc::clone(&worker);
-                                let token = self.cancel.child_token();
-                                service_tasks.spawn(async move { worker.start(token).await });
-                                // Register for managed shutdown so stop() is called
-                                self.services.push(worker_for_shutdown);
-                                // Update health status from Stopped → Healthy (per Phase 67 D-11)
-                                {
-                                    let mut state = self.state.write().await;
-                                    state.update_service_health("peer-discovery", crate::service::ServiceHealth::Healthy);
-                                }
-                            }
-                        }
-                        Err(()) => {
-                            warn!("setup completion channel dropped — deferred peer discovery will NOT start");
-                            deferred_worker = None; // disarm: no point retrying
+                }, if !deferred.is_empty() => {
+                    info!(
+                        count = deferred.len(),
+                        "ready signal received — starting deferred services"
+                    );
+                    for worker in deferred.drain(..) {
+                        let name = worker.name().to_string();
+                        info!(service = %name, "starting deferred service");
+                        let worker_for_shutdown: Arc<dyn DaemonService> = Arc::clone(&worker);
+                        let token = self.cancel.child_token();
+                        service_tasks.spawn(async move { worker.start(token).await });
+                        self.services.push(worker_for_shutdown);
+                        {
+                            let mut state = self.state.write().await;
+                            state.update_service_health(&name, crate::service::ServiceHealth::Healthy);
                         }
                     }
-                    setup_rx = None;
                     // continue loop — don't break, daemon keeps running
                 }
             }
@@ -468,8 +475,7 @@ mod tests {
         );
     }
 
-    /// Verifies that main.rs calls recover_encryption_session before DaemonApp construction
-    /// and passes encryption_unlocked as a required parameter.
+    /// Verifies that main.rs calls recover_encryption_session before DaemonApp construction.
     #[test]
     fn main_calls_recovery_before_daemon_construction() {
         let main_source = include_str!("main.rs");
@@ -482,10 +488,6 @@ mod tests {
         assert!(
             recovery_pos < daemon_new_pos,
             "recover_encryption_session must be called BEFORE DaemonApp::new_with_deferred"
-        );
-        assert!(
-            main_source.contains("encryption_unlocked"),
-            "main.rs must pass encryption_unlocked to DaemonApp (type-level invariant)"
         );
     }
 
@@ -812,17 +814,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_completion_emitter_fires_oneshot() {
-        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let emitter = SetupCompletionEmitter::new(tx);
+    async fn setup_completion_emitter_fires_notify() {
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let emitter = SetupCompletionEmitter::new(notify.clone());
         emitter.emit_ready().await.unwrap();
-        assert!(rx.await.is_ok(), "receiver should get Ok(())");
+        // After emit_ready, the next notified() should return immediately
+        tokio::time::timeout(std::time::Duration::from_millis(100), notify.notified())
+            .await
+            .expect("notified() should return immediately after emit_ready");
     }
 
     #[tokio::test]
-    async fn setup_completion_emitter_double_call_is_noop() {
-        let (tx, _rx) = tokio::sync::oneshot::channel::<()>();
-        let emitter = SetupCompletionEmitter::new(tx);
+    async fn setup_completion_emitter_double_call_is_safe() {
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let emitter = SetupCompletionEmitter::new(notify);
         emitter.emit_ready().await.unwrap();
         // Second call should not panic
         emitter.emit_ready().await.unwrap();

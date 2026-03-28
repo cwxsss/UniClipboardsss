@@ -27,6 +27,29 @@ impl DaemonQueryClient {
         self.get_json(Method::GET, "/paired-devices").await
     }
 
+    /// Signal the daemon that the GUI has unlocked and clipboard capture can begin.
+    pub async fn signal_lifecycle_ready(&self) -> Result<()> {
+        let response = self
+            .authorized_request(Method::POST, "/lifecycle/ready")?
+            .send()
+            .await
+            .with_context(|| "failed to call daemon /lifecycle/ready")?;
+
+        if response.status().is_success() {
+            return Ok(());
+        }
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed to read body>".to_string());
+        Err(anyhow!(
+            "daemon /lifecycle/ready failed with status {}: {}",
+            status,
+            body,
+        ))
+    }
+
     fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
         authorized_daemon_request(&self.http, &self.connection_state, method, path)
     }

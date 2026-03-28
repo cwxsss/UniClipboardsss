@@ -4,6 +4,7 @@
 //! via CaptureClipboardUseCase, and broadcasts clipboard.new_content WS events.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -121,6 +122,11 @@ pub struct DaemonClipboardChangeHandler {
     runtime: Arc<CoreRuntime>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    /// Gate that controls whether clipboard capture is active.
+    /// When false, clipboard change events are silently dropped.
+    /// Used in `--gui-managed` mode to defer clipboard capture until
+    /// the GUI user explicitly unlocks the app.
+    capture_gate: Arc<AtomicBool>,
 }
 
 impl DaemonClipboardChangeHandler {
@@ -128,11 +134,13 @@ impl DaemonClipboardChangeHandler {
         runtime: Arc<CoreRuntime>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+        capture_gate: Arc<AtomicBool>,
     ) -> Self {
         Self {
             runtime,
             event_tx,
             clipboard_change_origin,
+            capture_gate,
         }
     }
 
@@ -167,6 +175,10 @@ impl DaemonClipboardChangeHandler {
 #[async_trait]
 impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
     async fn on_clipboard_changed(&self, snapshot: SystemClipboardSnapshot) -> Result<()> {
+        if !self.capture_gate.load(Ordering::Relaxed) {
+            debug!("Clipboard capture gate closed, skipping clipboard change");
+            return Ok(());
+        }
         let usecase = self.build_capture_use_case();
 
         // 1. Compute snapshot hash for write-back loop prevention.
