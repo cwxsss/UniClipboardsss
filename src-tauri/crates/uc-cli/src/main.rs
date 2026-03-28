@@ -22,6 +22,11 @@ struct Cli {
     #[arg(long, short, global = true)]
     verbose: bool,
 
+    /// Run in development mode (use file-based secure storage instead of system keychain)
+    #[cfg_attr(not(debug_assertions), arg(long, global = true, hide = true))]
+    #[cfg_attr(debug_assertions, arg(long, global = true))]
+    dev: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -31,7 +36,11 @@ enum Commands {
     /// Start the daemon (background by default, use --foreground for log streaming)
     Start {
         /// Run daemon in foreground (log output to terminal)
-        #[arg(long, short = 'f', help = "Run daemon in foreground (log output to terminal)")]
+        #[arg(
+            long,
+            short = 'f',
+            help = "Run daemon in foreground (log output to terminal)"
+        )]
         foreground: bool,
     },
     /// Stop the running daemon
@@ -63,6 +72,10 @@ enum SetupCommands {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    if cli.dev {
+        std::env::set_var("UNICLIPBOARD_ENV", "development");
+    }
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
