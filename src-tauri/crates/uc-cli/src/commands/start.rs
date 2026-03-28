@@ -108,29 +108,20 @@ async fn run_background(json: bool) -> i32 {
 }
 
 async fn run_foreground(json: bool, _verbose: bool) -> i32 {
-    // Check if daemon is already running before attempting foreground spawn.
-    match local_daemon::ensure_local_daemon_running().await {
-        Ok(session) if !session.spawned => {
-            // Daemon was already running -- report and exit 0.
-            let pid = uc_daemon::process_metadata::read_pid_file().ok().flatten();
-            let out = StartOutput {
-                status: "already_running",
-                pid,
-            };
-            if let Err(e) = output::print_result(&out, json) {
-                eprintln!("Error: {}", e);
-                return exit_codes::EXIT_ERROR;
-            }
-            return exit_codes::EXIT_SUCCESS;
+    // Check if daemon is already running using probe-only (no spawn).
+    // We must NOT use ensure_local_daemon_running() here because it would
+    // spawn a background daemon, conflicting with the foreground spawn below.
+    if let Ok(true) = local_daemon::probe_running().await {
+        let pid = uc_daemon::process_metadata::read_pid_file().ok().flatten();
+        let out = StartOutput {
+            status: "already_running",
+            pid,
+        };
+        if let Err(e) = output::print_result(&out, json) {
+            eprintln!("Error: {}", e);
+            return exit_codes::EXIT_ERROR;
         }
-        Ok(_) => {
-            // ensure_local_daemon_running() already spawned a background daemon.
-            // For foreground we want to spawn directly with inherited stdio.
-            // Fall through to spawn a new one -- this path is unusual but handled.
-        }
-        Err(_) => {
-            // Daemon is not running; we'll spawn in foreground mode below.
-        }
+        return exit_codes::EXIT_SUCCESS;
     }
 
     let daemon_binary = match local_daemon::resolve_daemon_binary_path() {

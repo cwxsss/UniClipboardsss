@@ -74,6 +74,17 @@ impl fmt::Display for LocalDaemonError {
 
 impl std::error::Error for LocalDaemonError {}
 
+/// Probe-only check: returns Ok(true) if the daemon is already healthy, Ok(false) otherwise.
+/// Does NOT spawn a daemon process.
+pub async fn probe_running() -> Result<bool, LocalDaemonError> {
+    let client = Client::builder()
+        .timeout(PROBE_TIMEOUT)
+        .build()
+        .map_err(|error| LocalDaemonError::ProbeClient(error.into()))?;
+    let base_url = resolve_base_url()?;
+    probe_daemon_health(&client, &base_url).await
+}
+
 pub async fn ensure_local_daemon_running() -> Result<LocalDaemonSession, LocalDaemonError> {
     let client = Client::builder()
         .timeout(PROBE_TIMEOUT)
