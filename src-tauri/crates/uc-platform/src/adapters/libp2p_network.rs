@@ -511,9 +511,17 @@ impl Libp2pNetworkAdapter {
         let mut guard = mutex
             .lock()
             .map_err(|_| anyhow!("{name} receiver mutex poisoned"))?;
-        guard
-            .take()
-            .ok_or_else(|| anyhow!("{name} receiver already taken"))
+        match guard.take() {
+            Some(rx) => {
+                tracing::info!("{name} receiver taken successfully");
+                Ok(rx)
+            }
+            None => {
+                let bt = std::backtrace::Backtrace::force_capture();
+                tracing::error!("{name} receiver already taken — backtrace:\n{bt}");
+                Err(anyhow!("{name} receiver already taken"))
+            }
+        }
     }
 }
 
