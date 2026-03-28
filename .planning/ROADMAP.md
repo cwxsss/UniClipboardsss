@@ -709,3 +709,21 @@ Plans:
 
 - [x] 68-01-PLAN.md — Add sidecar infrastructure: externalBin config, build.rs daemon copy, tauri-plugin-shell dependency, shell capability, .gitignore
 - [x] 68-02-PLAN.md — Replace spawn_daemon_process with sidecar API, migrate GuiOwnedDaemonState to CommandChild, wire AppHandle through bootstrap/supervision
+
+### Phase 69: CLI setup flow: first-time encryption init before daemon spawn
+
+**Goal:** Rewrite CLI `setup` -> "Create new Space" (`run_new_space()`) to perform encryption initialization locally via `build_cli_runtime()` + `CoreUseCases::initialize_encryption()` instead of starting a daemon. Eliminates macOS Keychain popup and daemon startup delay during first-time setup.
+**Requirements**: PH69-01, PH69-02, PH69-03
+**Depends on:** Phase 68
+
+**Success Criteria** (what must be TRUE):
+
+1. `run_new_space()` uses `build_cli_runtime()` and `CoreUseCases::initialize_encryption()` for local encryption init without daemon
+2. Already-initialized encryption state is detected and returns EXIT_ERROR with clear user message
+3. Successful initialization displays next-step guidance to start daemon
+
+**Plans:** 1 plan
+
+Plans:
+
+- [ ] 69-01-PLAN.md — Rewrite run_new_space() to use local CLI runtime for daemon-free encryption initialization

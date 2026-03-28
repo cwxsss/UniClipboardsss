@@ -241,6 +241,12 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH68-05**: `src-tauri/capabilities/default.json` contains `shell:allow-spawn` permission with `sidecar: true` and `args: ["--gui-managed"]`
 - [x] **PH68-06**: `GuiOwnedDaemonState` holds `tauri_plugin_shell::process::CommandChild` instead of `std::process::Child`, and `shutdown_owned_daemon` uses PID-based termination
 
+### CLI Setup Flow — First-Time Encryption Init
+
+- [ ] **PH69-01**: `run_new_space()` uses `build_cli_runtime()` and `CoreUseCases::initialize_encryption().execute(Passphrase(...))` for local encryption init without starting daemon
+- [ ] **PH69-02**: `run_new_space()` checks `runtime.encryption_state()` and returns `EXIT_ERROR` with clear message when encryption is already `Initialized`
+- [ ] **PH69-03**: Successful encryption initialization displays next-step guidance to start daemon and begin pairing
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -388,21 +394,23 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH67-05     | 67    | Complete |
 | PH67-06     | 67    | Complete |
 | PH67-07     | 67    | Complete |
-
-| PH68-01 | 68 | Complete |
-| PH68-02 | 68 | Complete |
-| PH68-03 | 68 | Complete |
-| PH68-04 | 68 | Complete |
-| PH68-05 | 68 | Complete |
-| PH68-06 | 68 | Complete |
+| PH68-01     | 68    | Complete |
+| PH68-02     | 68    | Complete |
+| PH68-03     | 68    | Complete |
+| PH68-04     | 68    | Complete |
+| PH68-05     | 68    | Complete |
+| PH68-06     | 68    | Complete |
+| PH69-01     | 69    | Pending  |
+| PH69-02     | 69    | Pending  |
+| PH69-03     | 69    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 119 total
-- Mapped to phases: 119
+- v0.4.0 requirements: 122 total
+- Mapped to phases: 122
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-28 after Phase 68 planning_
+_Last updated: 2026-03-28 after Phase 69 planning_
