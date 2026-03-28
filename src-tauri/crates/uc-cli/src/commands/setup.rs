@@ -7,6 +7,7 @@ use std::time::Duration;
 use console::style;
 use serde::Serialize;
 use serde_json::Value;
+use uc_core::security::state::EncryptionState;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
 
 use crate::daemon_client::{DaemonClientError, DaemonHttpClient};
@@ -55,6 +56,16 @@ pub async fn run_interactive(json: bool, verbose: bool) -> i32 {
 }
 
 // ── New Space flow (create encrypted space only, no pairing) ────────
+
+/// Returns `Ok(())` if encryption state allows new-space initialization,
+/// or `Err(exit_code)` if the operation should be rejected.
+pub fn new_space_encryption_guard(state: EncryptionState) -> Result<(), i32> {
+    if state == EncryptionState::Initialized {
+        Err(exit_codes::EXIT_ERROR)
+    } else {
+        Ok(())
+    }
+}
 
 async fn run_new_space() -> i32 {
     let spinner = ui::spinner("Starting daemon…");

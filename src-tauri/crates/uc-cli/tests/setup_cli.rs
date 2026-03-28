@@ -164,10 +164,11 @@ mod daemon_client {
 mod setup;
 
 use setup::{
-    host_flow_completed, join_retry_message, render_reset_output,
+    host_flow_completed, join_retry_message, new_space_encryption_guard, render_reset_output,
     should_enable_host_pairing_presence, should_prompt_for_host_verification,
     should_prompt_for_join_passphrase, should_prompt_for_join_peer_confirmation, SetupStatusOutput,
 };
+use uc_core::security::state::EncryptionState;
 use uc_daemon::api::types::SetupStateResponse;
 
 fn sample_status_response() -> SetupStateResponse {
@@ -324,4 +325,16 @@ fn host_flow_only_exits_after_active_session_clears() {
 
     assert!(!host_flow_completed(&active, true));
     assert!(host_flow_completed(&cleared, true));
+}
+
+#[test]
+fn new_space_already_initialized_returns_error() {
+    let result = new_space_encryption_guard(EncryptionState::Initialized);
+    assert_eq!(result, Err(exit_codes::EXIT_ERROR));
+}
+
+#[test]
+fn new_space_uninitialized_allows_init() {
+    let result = new_space_encryption_guard(EncryptionState::Uninitialized);
+    assert!(result.is_ok());
 }
