@@ -245,6 +245,7 @@ Recent decisions affecting current work:
 - Phase 67 added: 设备在 setup 完成前不应被其他设备发现，需要在业务层进行过滤
 - Phase 68 added: Adopt Tauri Sidecar for daemon binary management (dev build, bundling, and path resolution)
 - Phase 69 added: CLI setup flow: first-time encryption init before daemon spawn
+- Phase 70 added: CLI start/stop commands for daemon lifecycle management
 
 ### Pending Todos
 
