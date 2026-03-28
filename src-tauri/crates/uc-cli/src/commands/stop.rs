@@ -86,10 +86,7 @@ where
 
     // Step 3: Send SIGTERM.
     if !send_sigterm(pid) {
-        eprintln!(
-            "Error: failed to send stop signal to daemon (pid {})",
-            pid
-        );
+        eprintln!("Error: failed to send stop signal to daemon (pid {})", pid);
         return exit_codes::EXIT_ERROR;
     }
 
@@ -156,13 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_no_pid_file() {
-        let exit_code = run_stop_with(
-            || Ok(None),
-            |_pid| false,
-            |_pid| false,
-            false,
-        )
-        .await;
+        let exit_code = run_stop_with(|| Ok(None), |_pid| false, |_pid| false, false).await;
 
         assert_eq!(exit_code, exit_codes::EXIT_SUCCESS);
     }

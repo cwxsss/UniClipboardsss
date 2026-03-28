@@ -131,7 +131,11 @@ impl FileTransferOrchestrator {
 
     /// Emit `file-transfer://status-changed` for each pending transfer
     /// after inbound clipboard metadata is applied.
-    pub fn emit_pending_status(&self, entry_id: &str, pending_transfers: &[PendingTransferLinkage]) {
+    pub fn emit_pending_status(
+        &self,
+        entry_id: &str,
+        pending_transfers: &[PendingTransferLinkage],
+    ) {
         let emitter = self
             .emitter_cell
             .read()
@@ -178,8 +182,10 @@ impl FileTransferOrchestrator {
                 Ok(true) => {
                     info!(transfer_id, "Transfer promoted to transferring");
                     // We need the entry_id to emit status. The tracker can look it up.
-                    if let Ok(Some(entry_id)) =
-                        self.tracker.get_entry_summary_by_transfer(transfer_id).await
+                    if let Ok(Some(entry_id)) = self
+                        .tracker
+                        .get_entry_summary_by_transfer(transfer_id)
+                        .await
                     {
                         let emitter = self
                             .emitter_cell
@@ -222,11 +228,7 @@ impl FileTransferOrchestrator {
     /// Marks the transfer row as completed before emitting the status event.
     /// If the pending record hasn't been seeded yet (race condition), stores
     /// the completion in `early_completion_cache` for later reconciliation.
-    pub async fn handle_transfer_completed(
-        &self,
-        transfer_id: &str,
-        content_hash: Option<&str>,
-    ) {
+    pub async fn handle_transfer_completed(&self, transfer_id: &str, content_hash: Option<&str>) {
         let now_ms = self.clock.now_ms();
 
         // Mark durable row completed
@@ -512,7 +514,8 @@ mod tests {
 
     /// In-memory mock for FileTransferRepositoryPort.
     struct MockFileTransferRepo {
-        transfers: std::sync::Mutex<Vec<uc_core::ports::file_transfer_repository::TrackedFileTransfer>>,
+        transfers:
+            std::sync::Mutex<Vec<uc_core::ports::file_transfer_repository::TrackedFileTransfer>>,
     }
 
     impl MockFileTransferRepo {
@@ -524,9 +527,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl uc_core::ports::file_transfer_repository::FileTransferRepositoryPort
-        for MockFileTransferRepo
-    {
+    impl uc_core::ports::file_transfer_repository::FileTransferRepositoryPort for MockFileTransferRepo {
         async fn insert_pending_transfers(
             &self,
             transfers: &[PendingInboundTransfer],
@@ -566,11 +567,7 @@ mod tests {
             Ok(())
         }
 
-        async fn mark_transferring(
-            &self,
-            transfer_id: &str,
-            now_ms: i64,
-        ) -> anyhow::Result<bool> {
+        async fn mark_transferring(&self, transfer_id: &str, now_ms: i64) -> anyhow::Result<bool> {
             let mut store = self.transfers.lock().unwrap();
             if let Some(t) = store.iter_mut().find(|t| t.transfer_id == transfer_id) {
                 if t.status
@@ -584,11 +581,7 @@ mod tests {
             Ok(false)
         }
 
-        async fn refresh_activity(
-            &self,
-            transfer_id: &str,
-            now_ms: i64,
-        ) -> anyhow::Result<()> {
+        async fn refresh_activity(&self, transfer_id: &str, now_ms: i64) -> anyhow::Result<()> {
             let mut store = self.transfers.lock().unwrap();
             if let Some(t) = store.iter_mut().find(|t| t.transfer_id == transfer_id) {
                 t.updated_at_ms = now_ms;
@@ -604,7 +597,8 @@ mod tests {
         ) -> anyhow::Result<bool> {
             let mut store = self.transfers.lock().unwrap();
             if let Some(t) = store.iter_mut().find(|t| t.transfer_id == transfer_id) {
-                t.status = uc_core::ports::file_transfer_repository::TrackedFileTransferStatus::Completed;
+                t.status =
+                    uc_core::ports::file_transfer_repository::TrackedFileTransferStatus::Completed;
                 t.content_hash = content_hash.map(|s| s.to_string());
                 t.updated_at_ms = now_ms;
                 Ok(true)
@@ -621,7 +615,8 @@ mod tests {
         ) -> anyhow::Result<()> {
             let mut store = self.transfers.lock().unwrap();
             if let Some(t) = store.iter_mut().find(|t| t.transfer_id == transfer_id) {
-                t.status = uc_core::ports::file_transfer_repository::TrackedFileTransferStatus::Failed;
+                t.status =
+                    uc_core::ports::file_transfer_repository::TrackedFileTransferStatus::Failed;
                 t.failure_reason = Some(reason.to_string());
                 t.updated_at_ms = now_ms;
             }
@@ -687,12 +682,10 @@ mod tests {
         async fn get_entry_transfer_summary(
             &self,
             entry_id: &str,
-        ) -> anyhow::Result<
-            Option<uc_core::ports::file_transfer_repository::EntryTransferSummary>,
-        > {
+        ) -> anyhow::Result<Option<uc_core::ports::file_transfer_repository::EntryTransferSummary>>
+        {
             let store = self.transfers.lock().unwrap();
-            let entry_transfers: Vec<_> =
-                store.iter().filter(|t| t.entry_id == entry_id).collect();
+            let entry_transfers: Vec<_> = store.iter().filter(|t| t.entry_id == entry_id).collect();
             if entry_transfers.is_empty() {
                 return Ok(None);
             }
@@ -700,8 +693,8 @@ mod tests {
             let aggregate =
                 uc_core::ports::file_transfer_repository::compute_aggregate_status(&statuses)
                     .unwrap_or(
-                        uc_core::ports::file_transfer_repository::TrackedFileTransferStatus::Pending,
-                    );
+                    uc_core::ports::file_transfer_repository::TrackedFileTransferStatus::Pending,
+                );
             let failure_reason = if aggregate
                 == uc_core::ports::file_transfer_repository::TrackedFileTransferStatus::Failed
             {
@@ -715,22 +708,25 @@ mod tests {
             } else {
                 None
             };
-            let transfer_ids: Vec<String> =
-                entry_transfers.iter().map(|t| t.transfer_id.clone()).collect();
-            Ok(Some(uc_core::ports::file_transfer_repository::EntryTransferSummary {
-                entry_id: entry_id.to_string(),
-                aggregate_status: aggregate,
-                failure_reason,
-                transfer_ids,
-            }))
+            let transfer_ids: Vec<String> = entry_transfers
+                .iter()
+                .map(|t| t.transfer_id.clone())
+                .collect();
+            Ok(Some(
+                uc_core::ports::file_transfer_repository::EntryTransferSummary {
+                    entry_id: entry_id.to_string(),
+                    aggregate_status: aggregate,
+                    failure_reason,
+                    transfer_ids,
+                },
+            ))
         }
 
         async fn list_transfers_for_entry(
             &self,
             entry_id: &str,
-        ) -> anyhow::Result<
-            Vec<uc_core::ports::file_transfer_repository::TrackedFileTransfer>,
-        > {
+        ) -> anyhow::Result<Vec<uc_core::ports::file_transfer_repository::TrackedFileTransfer>>
+        {
             let store = self.transfers.lock().unwrap();
             Ok(store
                 .iter()
@@ -755,9 +751,7 @@ mod tests {
         repo: Arc<MockFileTransferRepo>,
         emitter: Arc<RecordingEmitter>,
     ) -> FileTransferOrchestrator {
-        let emitter_cell = Arc::new(RwLock::new(
-            emitter.clone() as Arc<dyn HostEventEmitterPort>,
-        ));
+        let emitter_cell = Arc::new(RwLock::new(emitter.clone() as Arc<dyn HostEventEmitterPort>));
         let tracker = Arc::new(TrackInboundTransfersUseCase::new(repo));
         let clock = Arc::new(FixedClock(1_000_000));
         FileTransferOrchestrator::new(tracker, emitter_cell, clock)
@@ -888,6 +882,10 @@ mod tests {
         );
 
         let events = recording.events.lock().unwrap();
-        assert_eq!(events.len(), 1, "Event should reach the new emitter after swap");
+        assert_eq!(
+            events.len(),
+            1,
+            "Event should reach the new emitter after swap"
+        );
     }
 }
