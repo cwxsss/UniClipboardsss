@@ -123,10 +123,15 @@ async fn run_new_space() -> i32 {
         }
     }
 
-    // 5. Success
+    // 5. Persist setup completion so daemon/GUI recognise setup is done
+    if let Err(e) = uc.mark_setup_complete().execute().await {
+        ui::error(&format!("Failed to persist setup status: {e}"));
+        return exit_codes::EXIT_ERROR;
+    }
+
+    // 6. Success
     ui::bar();
-    ui::success("Setup complete! Your space is ready.");
-    ui::end("");
+    ui::end("Setup complete! Your space is ready.");
     exit_codes::EXIT_SUCCESS
 }
 
