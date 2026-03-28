@@ -60,7 +60,7 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - **CLI-F01**: CLI clipboard history list/show commands
 - **CLI-F02**: CLI sync trigger command
 - **CLI-F03**: CLI transfer list/show commands
-- **CLI-F04**: CLI daemon start/stop commands with process management
+- ~~**CLI-F04**: CLI daemon start/stop commands with process management~~ (implemented in Phase 70)
 
 ### Daemon API Foundation
 
@@ -247,6 +247,13 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH69-02**: `run_new_space()` checks `runtime.encryption_state()` and returns `EXIT_ERROR` with clear message when encryption is already `Initialized`
 - [x] **PH69-03**: Successful encryption initialization displays next-step guidance to start daemon and begin pairing
 
+### CLI Start/Stop Commands For Daemon Lifecycle
+
+- [ ] **PH70-01**: `uniclipboard-cli start` launches daemon in background via `ensure_local_daemon_running()`, prints pid on success, and exits 0 if daemon is already running (idempotent)
+- [ ] **PH70-02**: `uniclipboard-cli start --foreground` spawns daemon with inherited stdout/stderr (no `--gui-managed`), CLI process waits for daemon exit or Ctrl+C
+- [ ] **PH70-03**: `uniclipboard-cli stop` reads PID from profile-aware PID file, sends SIGTERM (Unix) / TerminateProcess (Windows), polls for process exit with timeout, and exits 0 if daemon is not running (idempotent)
+- [ ] **PH70-04**: Both `start` and `stop` commands support `--json` for structured output (`{"status": "started", "pid": ...}` / `{"status": "stopped"}`) and human-readable Display output
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -403,14 +410,18 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH69-01     | 69    | Complete |
 | PH69-02     | 69    | Complete |
 | PH69-03     | 69    | Complete |
+| PH70-01     | 70    | Pending  |
+| PH70-02     | 70    | Pending  |
+| PH70-03     | 70    | Pending  |
+| PH70-04     | 70    | Pending  |
 
 **Coverage:**
 
-- v0.4.0 requirements: 122 total
-- Mapped to phases: 122
+- v0.4.0 requirements: 126 total
+- Mapped to phases: 126
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-28 after Phase 69 planning_
+_Last updated: 2026-03-28 after Phase 70 planning_
