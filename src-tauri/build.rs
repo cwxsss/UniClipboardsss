@@ -9,8 +9,8 @@ fn main() {
 ///
 /// Non-fatal if the daemon binary doesn't exist yet (first build or clean checkout).
 fn copy_daemon_binary_to_binaries() {
-    let target_triple = std::env::var("TAURI_ENV_TARGET_TRIPLE")
-        .unwrap_or_else(|_| construct_triple_from_cfg());
+    let target_triple =
+        std::env::var("TAURI_ENV_TARGET_TRIPLE").unwrap_or_else(|_| construct_triple_from_cfg());
 
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
     let manifest_dir = std::path::PathBuf::from(
@@ -32,7 +32,11 @@ fn copy_daemon_binary_to_binaries() {
         println!("cargo:warning=Failed to create binaries dir: {e}");
         return;
     }
-    let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
+    let ext = if cfg!(target_os = "windows") {
+        ".exe"
+    } else {
+        ""
+    };
     let dest_name = format!("uniclipboard-daemon-{target_triple}{ext}");
     let dest = binaries_dir.join(&dest_name);
 
