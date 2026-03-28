@@ -28,6 +28,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Start the daemon (background by default, use --foreground for log streaming)
+    Start {
+        /// Run daemon in foreground (log output to terminal)
+        #[arg(long, short = 'f', help = "Run daemon in foreground (log output to terminal)")]
+        foreground: bool,
+    },
+    /// Stop the running daemon
+    Stop,
     /// Show daemon status
     Status,
     /// Drive daemon-owned setup flows (interactive guide when no subcommand given)
@@ -62,6 +70,10 @@ fn main() -> anyhow::Result<()> {
 
     let exit_code = rt.block_on(async {
         match cli.command {
+            Commands::Start { foreground } => {
+                commands::start::run(foreground, cli.json, cli.verbose).await
+            }
+            Commands::Stop => commands::stop::run(cli.json, cli.verbose).await,
             Commands::Status => commands::status::run(cli.json, cli.verbose).await,
             Commands::Setup { subcommand } => match subcommand {
                 None => commands::setup::run_interactive(cli.json, cli.verbose).await,

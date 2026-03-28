@@ -199,7 +199,7 @@ fn spawn_daemon_process() -> Result<Child, LocalDaemonError> {
         })
 }
 
-fn resolve_daemon_binary_path() -> Result<PathBuf, LocalDaemonError> {
+pub(crate) fn resolve_daemon_binary_path() -> Result<PathBuf, LocalDaemonError> {
     let current_exe = std::env::current_exe().map_err(|error| {
         LocalDaemonError::ResolveBinary(
             anyhow::Error::new(error).context("failed to resolve current CLI executable"),
