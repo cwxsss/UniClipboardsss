@@ -30,11 +30,60 @@ impl fmt::Display for StartOutput {
 
 /// Run the start command.
 pub async fn run(foreground: bool, json: bool, verbose: bool) -> i32 {
+    if let Some(code) = check_setup_complete(json, verbose) {
+        return code;
+    }
+
     if foreground {
         run_foreground(json, verbose).await
     } else {
         run_background(json).await
     }
+}
+
+/// Check if setup (encryption initialization) is complete before starting the daemon.
+///
+/// Uses a lightweight file-existence check on `.initialized_encryption` marker
+/// instead of building the full CLI runtime, which would trigger keychain
+/// access popups on macOS.
+///
+/// Returns `Some(exit_code)` if start should be blocked, `None` if ok to proceed.
+fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
+    let app_data_root = match resolve_app_data_root() {
+        Some(dir) => dir,
+        None => return None, // Can't resolve — let daemon handle it
+    };
+
+    let marker_file = app_data_root.join(".initialized_encryption");
+    if marker_file.exists() {
+        return None; // Setup complete — proceed
+    }
+
+    if json {
+        let _ = output::print_result(
+            &StartOutput {
+                status: "setup_required",
+                pid: None,
+            },
+            true,
+        );
+    } else {
+        eprintln!(
+            "Error: setup not complete. Run `uniclipboard setup` first to create or join a Space."
+        );
+    }
+    Some(exit_codes::EXIT_ERROR)
+}
+
+/// Resolve the app data root directory without building a full runtime.
+///
+/// Uses `resolve_app_config()` which reads config.toml (dev mode) or falls
+/// back to platform-specific app data directory. The `database_path` parent
+/// is the app data root where `.initialized_encryption` marker lives.
+fn resolve_app_data_root() -> Option<std::path::PathBuf> {
+    uc_bootstrap::config_resolution::resolve_app_config()
+        .ok()
+        .and_then(|config| config.database_path.parent().map(|p| p.to_path_buf()))
 }
 
 async fn run_background(json: bool) -> i32 {
@@ -63,9 +112,7 @@ async fn run_foreground(json: bool, _verbose: bool) -> i32 {
     match local_daemon::ensure_local_daemon_running().await {
         Ok(session) if !session.spawned => {
             // Daemon was already running -- report and exit 0.
-            let pid = uc_daemon::process_metadata::read_pid_file()
-                .ok()
-                .flatten();
+            let pid = uc_daemon::process_metadata::read_pid_file().ok().flatten();
             let out = StartOutput {
                 status: "already_running",
                 pid,
@@ -130,12 +177,12 @@ pub(crate) async fn run_start_background_with<EnsureDaemon, EnsureFuture, ReadPi
 ) -> Result<StartOutput, String>
 where
     EnsureDaemon: FnOnce() -> EnsureFuture,
-    EnsureFuture: std::future::Future<Output = Result<local_daemon::LocalDaemonSession, local_daemon::LocalDaemonError>>,
+    EnsureFuture: std::future::Future<
+        Output = Result<local_daemon::LocalDaemonSession, local_daemon::LocalDaemonError>,
+    >,
     ReadPid: FnOnce() -> anyhow::Result<Option<u32>>,
 {
-    let session = ensure_daemon()
-        .await
-        .map_err(|e| e.to_string())?;
+    let session = ensure_daemon().await.map_err(|e| e.to_string())?;
 
     let pid = read_pid().ok().flatten();
 
@@ -162,11 +209,9 @@ mod tests {
 
     #[tokio::test]
     async fn start_background_already_running() {
-        let result = run_start_background_with(
-            || async { healthy_session(false) },
-            || Ok(Some(12345_u32)),
-        )
-        .await;
+        let result =
+            run_start_background_with(|| async { healthy_session(false) }, || Ok(Some(12345_u32)))
+                .await;
 
         let output = result.expect("should succeed when daemon already running");
         assert_eq!(output.status, "already_running");
@@ -175,11 +220,9 @@ mod tests {
 
     #[tokio::test]
     async fn start_background_spawned() {
-        let result = run_start_background_with(
-            || async { healthy_session(true) },
-            || Ok(Some(99999_u32)),
-        )
-        .await;
+        let result =
+            run_start_background_with(|| async { healthy_session(true) }, || Ok(Some(99999_u32)))
+                .await;
 
         let output = result.expect("should succeed after spawning daemon");
         assert_eq!(output.status, "started");
