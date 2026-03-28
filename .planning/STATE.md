@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Phase complete — ready for verification
+status: Milestone complete
 stopped_at: Completed 69-01-PLAN.md
-last_updated: "2026-03-28T09:23:01.309Z"
+last_updated: '2026-03-28T09:31:02.997Z'
 progress:
   total_phases: 40
   completed_phases: 33
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 69 (cli-setup-flow-first-time-encryption-init-before-daemon-spawn) — EXECUTING
-Plan: 1 of 1
+Phase: 69
+Plan: Not started
 
 ## Performance Metrics
 
@@ -96,7 +96,7 @@ Plan: 1 of 1
   | Phase 67-setup-filter P02 | 8 | 1 tasks | 3 files |
   | Phase 68-adopt-tauri-sidecar-for-daemon P01 | 5 | 2 tasks | 6 files |
   | Phase 68 P02 | 20 | 2 tasks | 6 files |
-| Phase 69 P01 | 4 | 3 tasks | 2 files |
+  | Phase 69 P01 | 4 | 3 tasks | 2 files |
 
 ## Accumulated Context
 
