@@ -1,6 +1,36 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 use serde_json::json;
+
+mod ui {
+    pub fn header(_text: &str) {}
+    pub fn step(_text: &str) {}
+    pub fn success(_text: &str) {}
+    pub fn warn(_text: &str) {}
+    pub fn error(_text: &str) {}
+    pub fn info(_label: &str, _value: &str) {}
+    pub fn bar() {}
+    pub fn end(_text: &str) {}
+    pub fn select(_prompt: &str, _items: &[String]) -> Result<usize, String> {
+        Ok(0)
+    }
+    pub fn confirm(_prompt: &str, _default: bool) -> Result<bool, String> {
+        Ok(true)
+    }
+    pub fn password(_prompt: &str) -> Result<String, String> {
+        Ok(String::new())
+    }
+    pub fn password_with_confirm(_prompt: &str, _confirm: &str) -> Result<String, String> {
+        Ok(String::new())
+    }
+    pub fn spinner(_message: &str) -> indicatif::ProgressBar {
+        indicatif::ProgressBar::hidden()
+    }
+    pub fn spinner_finish_success(_pb: &indicatif::ProgressBar, _message: &str) {}
+    pub fn spinner_finish_error(_pb: &indicatif::ProgressBar, _message: &str) {}
+    pub fn identity_banner(_profile: &str, _mode: &str, _device: &str, _peer_id: &str) {}
+    pub fn verification_code(_code: &str) {}
+}
 
 mod exit_codes {
     pub const EXIT_SUCCESS: i32 = 0;

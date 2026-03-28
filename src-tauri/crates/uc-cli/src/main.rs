@@ -3,6 +3,7 @@ mod daemon_client;
 mod exit_codes;
 mod local_daemon;
 mod output;
+mod ui;
 
 use clap::{Parser, Subcommand};
 
@@ -29,10 +30,10 @@ struct Cli {
 enum Commands {
     /// Show daemon status
     Status,
-    /// Drive daemon-owned setup flows
+    /// Drive daemon-owned setup flows (interactive guide when no subcommand given)
     Setup {
         #[command(subcommand)]
-        subcommand: SetupCommands,
+        subcommand: Option<SetupCommands>,
     },
     /// List paired devices via the daemon API
     Devices,
@@ -42,10 +43,10 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum SetupCommands {
-    /// Create a new space and wait for inbound join requests
-    Host,
-    /// Join an existing space through an interactive operator flow
-    Join,
+    /// Start pairing mode and wait for another device to connect
+    Pair,
+    /// Connect to a device that is in pairing mode
+    Connect,
     /// Inspect daemon-owned setup state
     Status,
     /// Reset daemon-owned setup state for repeatable local reruns
@@ -63,10 +64,17 @@ fn main() -> anyhow::Result<()> {
         match cli.command {
             Commands::Status => commands::status::run(cli.json, cli.verbose).await,
             Commands::Setup { subcommand } => match subcommand {
-                SetupCommands::Host => commands::setup::run_host(cli.json, cli.verbose).await,
-                SetupCommands::Join => commands::setup::run_join(cli.json, cli.verbose).await,
-                SetupCommands::Status => commands::setup::run_status(cli.json, cli.verbose).await,
-                SetupCommands::Reset => commands::setup::run_reset(cli.json, cli.verbose).await,
+                None => commands::setup::run_interactive(cli.json, cli.verbose).await,
+                Some(SetupCommands::Pair) => commands::setup::run_host(cli.json, cli.verbose).await,
+                Some(SetupCommands::Connect) => {
+                    commands::setup::run_join(cli.json, cli.verbose).await
+                }
+                Some(SetupCommands::Status) => {
+                    commands::setup::run_status(cli.json, cli.verbose).await
+                }
+                Some(SetupCommands::Reset) => {
+                    commands::setup::run_reset(cli.json, cli.verbose).await
+                }
             },
             Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
             Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,
