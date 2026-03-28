@@ -113,6 +113,7 @@ Phase 62 complete — daemon receives inbound clipboard from peers via Clipboard
 Phase 63 complete — daemon file transfer orchestration: DaemonApiEventEmitter forwards Transfer StatusChanged as WS events on file-transfer topic; InboundClipboardSyncWorker seeds pending transfer records via FileTransferOrchestrator with early completion cache reconciliation; FileSyncOrchestratorWorker subscribes to network events for transfer lifecycle management (progress/completed/failed), startup reconciliation, timeout sweeps, and clipboard restore.
 Phase 64 complete — Tauri sync retirement: removed 896 lines of daemon-duplicated sync loops from wiring.rs (clipboard_receive, pairing_events, file_transfer_reconcile, timeout_sweep); gated restore_clipboard_entry outbound sync on Full mode to prevent double-sync with daemon; removed dead sync_inbound_clipboard accessor and blake3 dependency from uc-tauri.
 Phase 66 complete — Fixed daemon WS topic registration for clipboard and file-transfer subscriptions; added WS reconnection compensation with bridge_state_monitor and DaemonReconnected event; Dashboard auto-refreshes clipboard list on reconnect.
+Phase 69 complete — CLI `setup` → "Create new Space" performs encryption initialization locally via `build_cli_runtime()` + `CoreUseCases::initialize_encryption()` instead of starting daemon; eliminates macOS Keychain popup during first-time setup.
 
 ## Key Decisions
 
@@ -149,4 +150,4 @@ Phase 66 complete — Fixed daemon WS topic registration for clipboard and file-
 
 ---
 
-_Last updated: 2026-03-27 after Phase 66 completion_
+_Last updated: 2026-03-28 after Phase 69 completion_
