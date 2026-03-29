@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: 'Phase 71 shipped — PR #323'
-stopped_at: Completed 71-03-PLAN.md
-last_updated: '2026-03-29T02:04:04.638Z'
+status: Milestone complete
+stopped_at: Completed 72-02-PLAN.md
+last_updated: '2026-03-29T04:52:00.232Z'
 progress:
-  total_phases: 42
-  completed_phases: 35
-  total_plans: 93
-  completed_plans: 90
+  total_phases: 43
+  completed_phases: 36
+  total_plans: 95
+  completed_plans: 92
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 71
+Phase: 72
 Plan: Not started
 
 ## Performance Metrics
@@ -101,6 +101,7 @@ Plan: Not started
   | Phase 71 P02 | 52s | 1 tasks | 1 files |
   | Phase 71 P01 | 2 | 2 tasks | 4 files |
   | Phase 71 P03 | 2 | 2 tasks | 4 files |
+  | Phase 72 P02 | 6 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -235,6 +236,8 @@ Recent decisions affecting current work:
 - [Phase 71]: cargo update steps in release.yml gated with if: github.event_name == 'workflow_dispatch' to avoid running on tag-push events
 - [Phase 71]: CLI artifact collection uses separate find loop with no collision handling — CLI archives have unique names (version + target triple in filename)
 - [Phase 71]: buildCliInstallerLines() detects artifacts by uniclipboard-cli- prefix + target triple patterns (aarch64-apple-darwin, x86_64-apple-darwin, linux-gnu, windows-msvc)
+- [Phase 72]: restore_clipboard_entry delegates fully to daemon via DaemonClipboardClient — origin tracking, restore, touch, outbound sync all in daemon handler
+- [Phase 72]: forward_clipboard_event preserved as ONLY frontend update after daemon restore success (LocalRestore skips capture, no WS clipboard.new_content event emitted)
 
 ### Roadmap Evolution
 
@@ -279,6 +282,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T14:15:39.318Z
-Stopped at: Completed 71-03-PLAN.md
+Last session: 2026-03-29T04:45:07.366Z
+Stopped at: Completed 72-02-PLAN.md
 Resume file: None
