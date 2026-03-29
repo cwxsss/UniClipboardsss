@@ -6,7 +6,7 @@ use tracing::debug;
 use uc_core::ports::clipboard::ClipboardChangeOriginPort;
 use uc_core::ClipboardChangeOrigin;
 
-pub struct InMemoryClipboardChangeOrigin {
+pub(crate) struct InMemoryClipboardChangeOrigin {
     state: Mutex<OriginStore>,
 }
 
@@ -29,7 +29,7 @@ struct OriginStore {
 const SNAPSHOT_ORIGIN_MAX: usize = 256;
 
 impl InMemoryClipboardChangeOrigin {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: Mutex::new(OriginStore {
                 next_origin: None,

@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::usecases::clipboard::clipboard_write_coordinator::{
+    ClipboardWriteCoordinator, ClipboardWriteIntent,
+};
 use crate::usecases::clipboard::ClipboardIntegrationMode;
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
@@ -17,10 +20,9 @@ use uc_core::network::protocol::{
 use uc_core::network::ClipboardMessage;
 use uc_core::ports::clipboard::{RepresentationCachePort, SpoolQueuePort};
 use uc_core::ports::{
-    ClipboardChangeOriginPort, ClipboardEntryRepositoryPort, ClipboardEventWriterPort,
-    ClipboardRepresentationNormalizerPort, DeviceIdentityPort, EncryptionPort,
-    EncryptionSessionPort, SelectRepresentationPolicyPort, SettingsPort, SystemClipboardPort,
-    TransferPayloadDecryptorPort,
+    ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardRepresentationNormalizerPort,
+    DeviceIdentityPort, EncryptionPort, EncryptionSessionPort, SelectRepresentationPolicyPort,
+    SettingsPort, TransferPayloadDecryptorPort,
 };
 use uc_core::{
     ClipboardChangeOrigin, MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
@@ -50,8 +52,9 @@ pub enum InboundApplyOutcome {
 
 pub struct SyncInboundClipboardUseCase {
     mode: ClipboardIntegrationMode,
-    local_clipboard: Arc<dyn SystemClipboardPort>,
-    clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    /// Coordinator for Full-mode OS clipboard writes (write path).
+    /// None for Passive-mode instances that never write to the OS clipboard.
+    clipboard_write_coordinator: Option<Arc<ClipboardWriteCoordinator>>,
     encryption_session: Arc<dyn EncryptionSessionPort>,
     #[allow(dead_code)]
     encryption: Arc<dyn EncryptionPort>,
@@ -68,8 +71,6 @@ pub struct SyncInboundClipboardUseCase {
 impl SyncInboundClipboardUseCase {
     pub fn new(
         mode: ClipboardIntegrationMode,
-        local_clipboard: Arc<dyn SystemClipboardPort>,
-        clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
         encryption_session: Arc<dyn EncryptionSessionPort>,
         encryption: Arc<dyn EncryptionPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
@@ -84,8 +85,7 @@ impl SyncInboundClipboardUseCase {
 
         Ok(Self {
             mode,
-            local_clipboard,
-            clipboard_change_origin,
+            clipboard_write_coordinator: None,
             encryption_session,
             encryption,
             device_identity,
@@ -99,8 +99,6 @@ impl SyncInboundClipboardUseCase {
 
     pub fn with_capture_dependencies(
         mode: ClipboardIntegrationMode,
-        local_clipboard: Arc<dyn SystemClipboardPort>,
-        clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
         encryption_session: Arc<dyn EncryptionSessionPort>,
         encryption: Arc<dyn EncryptionPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
@@ -116,8 +114,7 @@ impl SyncInboundClipboardUseCase {
     ) -> Self {
         Self {
             mode,
-            local_clipboard,
-            clipboard_change_origin,
+            clipboard_write_coordinator: None,
             encryption_session,
             encryption,
             device_identity: device_identity.clone(),
@@ -137,6 +134,18 @@ impl SyncInboundClipboardUseCase {
             file_cache_dir,
             settings,
         }
+    }
+
+    /// Set the coordinator for Full-mode OS clipboard writes.
+    ///
+    /// Call this after `with_capture_dependencies()` to enable the coordinator path
+    /// for Full-mode writes. Passive-mode instances do not need a coordinator.
+    pub fn with_clipboard_write_coordinator(
+        mut self,
+        coordinator: Arc<ClipboardWriteCoordinator>,
+    ) -> Self {
+        self.clipboard_write_coordinator = Some(coordinator);
+        self
     }
 
     pub async fn execute(
@@ -516,7 +525,7 @@ impl SyncInboundClipboardUseCase {
                 representations: all_reps,
             };
 
-            // In Full mode: remember inbound snapshot hash + write to OS clipboard
+            // In Full mode: write to OS clipboard via coordinator (handles guard + write + loopback guard)
             if self.mode.allow_os_write() {
                 let selected_rep_ref = &snapshot_for_os.representations[0];
                 info!(
@@ -527,39 +536,20 @@ impl SyncInboundClipboardUseCase {
                     "V3 inbound: writing selected representation to OS clipboard"
                 );
 
-                let snapshot_hash = snapshot_for_os.snapshot_hash().to_string();
-                self.clipboard_change_origin
-                    .remember_remote_snapshot_hash(
-                        snapshot_hash.clone(),
-                        Duration::from_millis(REMOTE_SNAPSHOT_HASH_TTL_MS),
-                    )
-                    .await;
-
-                if let Err(err) = self.local_clipboard.write_snapshot(snapshot_for_os) {
-                    self.clipboard_change_origin
-                        .consume_origin_for_snapshot_or_default(
-                            &snapshot_hash,
-                            ClipboardChangeOrigin::LocalCapture,
-                        )
-                        .await;
+                let Some(coordinator) = self.clipboard_write_coordinator.as_ref() else {
                     self.rollback_recent_id(&message.id).await;
-                    return Err(err)
-                        .context("V3 inbound: failed to write snapshot to OS clipboard");
+                    return Err(anyhow::anyhow!(
+                        "clipboard_write_coordinator required for Full-mode OS write"
+                    ))
+                    .context("V3 inbound: coordinator unavailable");
+                };
+                if let Err(err) = coordinator
+                    .write(snapshot_for_os, ClipboardWriteIntent::RemotePush)
+                    .await
+                {
+                    self.rollback_recent_id(&message.id).await;
+                    return Err(err).context("V3 inbound: failed to write snapshot to OS clipboard");
                 }
-
-                // Guard against loopback when the OS re-encodes clipboard content.
-                // Some platforms (e.g. Windows clipboard-rs) re-encode images (PNG→DIB→PNG),
-                // producing different bytes than the original. The hash-based guard above
-                // won't match the re-encoded content, so we set a one-shot origin override:
-                // the NEXT clipboard change will be treated as RemotePush regardless of hash.
-                // This avoids reading back the clipboard (which can crash on Windows with
-                // large native bitmaps).
-                self.clipboard_change_origin
-                    .set_next_origin(
-                        ClipboardChangeOrigin::RemotePush,
-                        Duration::from_millis(REMOTE_SNAPSHOT_HASH_TTL_MS),
-                    )
-                    .await;
 
                 info!(message_id = %message.id, "V3 inbound clipboard applied");
                 return Ok(InboundApplyOutcome::Applied {
@@ -625,8 +615,6 @@ impl SyncInboundClipboardUseCase {
         .await
     }
 }
-
-const REMOTE_SNAPSHOT_HASH_TTL_MS: u64 = 60_000;
 
 /// Returns the index of the highest-priority BinaryRepresentation, or None if empty.
 ///
@@ -725,6 +713,7 @@ mod tests {
     use uc_core::clipboard::{ClipboardSelection, PolicyError, SelectionPolicyVersion};
     use uc_core::ids::RepresentationId;
     use uc_core::network::protocol::ClipboardPayloadVersion;
+    use uc_core::ports::{ClipboardChangeOriginPort, SystemClipboardPort};
     use uc_core::security::model::{
         EncryptedBlob, EncryptionAlgo, EncryptionError, KdfParams, Kek, MasterKey, Passphrase,
     };
@@ -1198,18 +1187,26 @@ mod tests {
         let remote_hash_values = Arc::new(Mutex::new(Vec::new()));
         let decrypt_calls = Arc::new(AtomicUsize::new(0));
 
+        // Build shared mock instances for coordinator and usecase
+        let mock_clipboard: Arc<dyn SystemClipboardPort> = Arc::new(MockSystemClipboard {
+            reads: local_snapshot,
+            writes: writes.clone(),
+            calls: calls.clone(),
+        });
+        let mock_origin: Arc<dyn ClipboardChangeOriginPort> = Arc::new(MockChangeOrigin {
+            calls: calls.clone(),
+            values: origin_values.clone(),
+            remote_hash_values: remote_hash_values.clone(),
+        });
+
+        // Build coordinator for Full-mode OS writes; shares same mock instances
+        let coordinator = Arc::new(ClipboardWriteCoordinator::new(
+            mock_clipboard.clone(),
+            mock_origin.clone(),
+        ));
+
         let usecase = SyncInboundClipboardUseCase::new(
             mode,
-            Arc::new(MockSystemClipboard {
-                reads: local_snapshot,
-                writes: writes.clone(),
-                calls: calls.clone(),
-            }),
-            Arc::new(MockChangeOrigin {
-                calls: calls.clone(),
-                values: origin_values.clone(),
-                remote_hash_values: remote_hash_values.clone(),
-            }),
             Arc::new(MockEncryptionSession { ready }),
             Arc::new(MockEncryption {
                 decrypt_calls: decrypt_calls.clone(),
@@ -1222,7 +1219,8 @@ mod tests {
                 settings: uc_core::settings::model::Settings::default(),
             }),
         )
-        .expect("build inbound usecase");
+        .expect("build inbound usecase")
+        .with_clipboard_write_coordinator(coordinator);
 
         (
             usecase,
@@ -1235,7 +1233,6 @@ mod tests {
     }
 
     fn build_passive_usecase(
-        local_snapshot: SystemClipboardSnapshot,
         local_device_id: &str,
     ) -> (
         SyncInboundClipboardUseCase,
@@ -1251,16 +1248,6 @@ mod tests {
 
         let usecase = SyncInboundClipboardUseCase::with_capture_dependencies(
             ClipboardIntegrationMode::Passive,
-            Arc::new(MockSystemClipboard {
-                reads: local_snapshot,
-                writes: writes.clone(),
-                calls: calls.clone(),
-            }),
-            Arc::new(MockChangeOrigin {
-                calls: calls.clone(),
-                values: Arc::new(Mutex::new(Vec::new())),
-                remote_hash_values: Arc::new(Mutex::new(Vec::new())),
-            }),
             Arc::new(MockEncryptionSession { ready: true }),
             Arc::new(MockEncryption {
                 decrypt_calls: Arc::new(AtomicUsize::new(0)),
@@ -1320,19 +1307,6 @@ mod tests {
     fn new_rejects_passive_mode_without_capture_dependencies() {
         let result = SyncInboundClipboardUseCase::new(
             ClipboardIntegrationMode::Passive,
-            Arc::new(MockSystemClipboard {
-                reads: SystemClipboardSnapshot {
-                    ts_ms: 0,
-                    representations: vec![],
-                },
-                writes: Arc::new(Mutex::new(Vec::new())),
-                calls: Arc::new(Mutex::new(Vec::new())),
-            }),
-            Arc::new(MockChangeOrigin {
-                calls: Arc::new(Mutex::new(Vec::new())),
-                values: Arc::new(Mutex::new(Vec::new())),
-                remote_hash_values: Arc::new(Mutex::new(Vec::new())),
-            }),
             Arc::new(MockEncryptionSession { ready: true }),
             Arc::new(MockEncryption {
                 decrypt_calls: Arc::new(AtomicUsize::new(0)),
@@ -1442,13 +1416,7 @@ mod tests {
 
     #[tokio::test]
     async fn passive_mode_persists_without_os_clipboard_calls_and_dedupes_by_message_id() {
-        let (usecase, writes, calls, save_calls, insert_calls) = build_passive_usecase(
-            SystemClipboardSnapshot {
-                ts_ms: 0,
-                representations: vec![],
-            },
-            "local-1",
-        );
+        let (usecase, writes, calls, save_calls, insert_calls) = build_passive_usecase("local-1");
 
         let (message, plaintext) = build_v3_text_message("passive inbound", "remote-1");
         let plaintext2 = plaintext.clone();
@@ -1469,13 +1437,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_with_outcome_marks_duplicate_as_skipped_in_passive_mode() {
-        let (usecase, _, _, _, _) = build_passive_usecase(
-            SystemClipboardSnapshot {
-                ts_ms: 0,
-                representations: vec![],
-            },
-            "local-1",
-        );
+        let (usecase, _, _, _, _) = build_passive_usecase("local-1");
         let (message, plaintext) = build_v3_text_message("passive inbound", "remote-1");
         let plaintext2 = plaintext.clone();
 
@@ -1705,13 +1667,7 @@ mod tests {
 
     #[tokio::test]
     async fn passive_mode_v3_payload_preserves_all_representations_for_capture() {
-        let (usecase, writes, calls, save_calls, insert_calls) = build_passive_usecase(
-            SystemClipboardSnapshot {
-                ts_ms: 0,
-                representations: vec![],
-            },
-            "local-1",
-        );
+        let (usecase, writes, calls, save_calls, insert_calls) = build_passive_usecase("local-1");
 
         // Build a V3 payload that contains both plain text and HTML representations.
         let (message, plaintext) = build_v3_message_pre_decoded(

@@ -36,8 +36,9 @@ use uc_core::ports::*;
 use uc_core::settings::model::Settings;
 use uc_infra::blob::BlobWriter;
 use uc_infra::clipboard::{
+    clipboard_change_origin, init_clipboard_change_origin, new_in_memory_change_origin,
     ClipboardPayloadResolver, ClipboardRepresentationNormalizer, DurableSpoolQueue,
-    InMemoryClipboardChangeOrigin, InfraThumbnailGenerator, RepresentationCache, SpoolManager,
+    InfraThumbnailGenerator, RepresentationCache, SpoolManager,
 };
 use uc_infra::config::ClipboardStorageConfig;
 use uc_infra::db::executor::DieselSqliteExecutor;
@@ -155,6 +156,9 @@ pub struct BackgroundRuntimeDeps {
     /// File transfer lifecycle orchestrator. Holds a clone of the shared emitter_cell so
     /// it automatically sees emitter swaps (LoggingEventEmitter → TauriEventEmitter).
     pub file_transfer_orchestrator: Arc<uc_app::usecases::file_sync::FileTransferOrchestrator>,
+    /// Single write boundary for all programmatic clipboard writes.
+    /// Centralises guard-registration + write + cleanup-on-error.
+    pub clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
 }
 
 /// Fully wired dependencies plus background runtime components.
@@ -787,8 +791,10 @@ pub fn wire_dependencies_with_identity_store(
         worker_tx.clone(),
     ));
 
-    let clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort> =
-        Arc::new(InMemoryClipboardChangeOrigin::new());
+    let origin_impl = new_in_memory_change_origin();
+    init_clipboard_change_origin(origin_impl.clone());
+    let clipboard_change_origin =
+        clipboard_change_origin().expect("clipboard_change_origin not initialized");
 
     // Create payload resolver for resolving staged/processing payloads
     let payload_resolver: Arc<dyn ClipboardPayloadResolverPort> =
@@ -860,6 +866,11 @@ pub fn wire_dependencies_with_identity_store(
         deps.system.clock.clone(),
     );
 
+    let clipboard_write_coordinator = build_clipboard_write_coordinator(
+        deps.clipboard.system_clipboard.clone(),
+        deps.clipboard.clipboard_change_origin.clone(),
+    );
+
     Ok(WiredDependencies {
         deps,
         background: BackgroundRuntimeDeps {
@@ -875,6 +886,7 @@ pub fn wire_dependencies_with_identity_store(
             worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
             file_transfer_orchestrator,
+            clipboard_write_coordinator,
         },
         emitter_cell,
     })
@@ -1051,6 +1063,21 @@ pub fn build_file_transfer_orchestrator(
         tracker,
         emitter_cell,
         clock,
+    ))
+}
+
+/// Constructs a `ClipboardWriteCoordinator` — the single write boundary for all
+/// programmatic clipboard writes.
+///
+/// Centralises the guard-registration + write + cleanup-on-error pattern
+/// (previously duplicated across restore_clipboard_selection, sync_inbound, copy_file_to_clipboard).
+pub fn build_clipboard_write_coordinator(
+    system_clipboard: Arc<dyn uc_core::ports::clipboard::SystemClipboardPort>,
+    clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+) -> Arc<uc_app::usecases::ClipboardWriteCoordinator> {
+    Arc::new(uc_app::usecases::ClipboardWriteCoordinator::new(
+        system_clipboard,
+        clipboard_change_origin,
     ))
 }
 

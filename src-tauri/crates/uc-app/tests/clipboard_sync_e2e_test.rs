@@ -5,6 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use tokio::sync::mpsc;
+use uc_app::usecases::clipboard::clipboard_write_coordinator::ClipboardWriteCoordinator;
 use uc_app::usecases::clipboard::sync_inbound::SyncInboundClipboardUseCase;
 use uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase;
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
@@ -15,10 +16,9 @@ use uc_core::network::{
 };
 use uc_core::network::{PairedDevice, PairingState};
 use uc_core::ports::{
-    ClipboardChangeOriginPort, ClipboardTransportPort, DeviceIdentityPort, EncryptionPort,
-    EncryptionSessionPort, NetworkEventPort, PairedDeviceRepositoryError,
-    PairedDeviceRepositoryPort, PairingTransportPort, PeerDirectoryPort, SettingsPort,
-    SystemClipboardPort,
+    ClipboardTransportPort, DeviceIdentityPort, EncryptionPort, EncryptionSessionPort,
+    NetworkEventPort, PairedDeviceRepositoryError, PairedDeviceRepositoryPort,
+    PairingTransportPort, PeerDirectoryPort, SettingsPort, SystemClipboardPort,
 };
 use uc_core::security::model::{
     EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfParams, Kek,
@@ -31,8 +31,15 @@ use uc_core::{
     SystemClipboardSnapshot,
 };
 use uc_infra::clipboard::{
-    InMemoryClipboardChangeOrigin, TransferPayloadDecryptorAdapter, TransferPayloadEncryptorAdapter,
+    new_in_memory_change_origin, TransferPayloadDecryptorAdapter, TransferPayloadEncryptorAdapter,
 };
+
+/// Creates a fresh origin instance for use in tests. Each call produces a new
+/// `InMemoryClipboardChangeOrigin` so callers (e.g. peer A and peer B in the same
+/// test) get independent state.
+fn fresh_test_origin() -> Arc<dyn uc_core::ports::clipboard::ClipboardChangeOriginPort> {
+    new_in_memory_change_origin()
+}
 
 struct InMemoryClipboard {
     snapshot: Arc<Mutex<SystemClipboardSnapshot>>,
@@ -471,8 +478,8 @@ async fn clipboard_sync_e2e_dual_peer_in_process() -> Result<()> {
     let clipboard_a = Arc::new(InMemoryClipboard::new(text_snapshot("", 0)));
     let clipboard_b = Arc::new(InMemoryClipboard::new(text_snapshot("", 0)));
 
-    let origin_a = Arc::new(InMemoryClipboardChangeOrigin::new());
-    let origin_b = Arc::new(InMemoryClipboardChangeOrigin::new());
+    let origin_a = fresh_test_origin();
+    let origin_b = fresh_test_origin();
 
     let encryption_a: Arc<dyn EncryptionPort> = Arc::new(PassthroughEncryption);
     let encryption_b: Arc<dyn EncryptionPort> = Arc::new(PassthroughEncryption);
@@ -492,26 +499,36 @@ async fn clipboard_sync_e2e_dual_peer_in_process() -> Result<()> {
 
     let transfer_decryptor: Arc<TransferPayloadDecryptorAdapter> =
         Arc::new(TransferPayloadDecryptorAdapter);
-    let inbound_a = Arc::new(SyncInboundClipboardUseCase::new(
-        ClipboardIntegrationMode::Full,
+    let coordinator_a = Arc::new(ClipboardWriteCoordinator::new(
         clipboard_a.clone(),
         origin_a.clone(),
-        session_a.clone(),
-        encryption_a.clone(),
-        identity_a.clone(),
-        transfer_decryptor.clone(),
-        settings.clone(),
-    )?);
-    let inbound_b = Arc::new(SyncInboundClipboardUseCase::new(
-        ClipboardIntegrationMode::Full,
+    ));
+    let inbound_a = Arc::new(
+        SyncInboundClipboardUseCase::new(
+            ClipboardIntegrationMode::Full,
+            session_a.clone(),
+            encryption_a.clone(),
+            identity_a.clone(),
+            transfer_decryptor.clone(),
+            settings.clone(),
+        )?
+        .with_clipboard_write_coordinator(coordinator_a),
+    );
+    let coordinator_b = Arc::new(ClipboardWriteCoordinator::new(
         clipboard_b.clone(),
         origin_b.clone(),
-        session_b.clone(),
-        encryption_b.clone(),
-        identity_b.clone(),
-        transfer_decryptor,
-        settings.clone(),
-    )?);
+    ));
+    let inbound_b = Arc::new(
+        SyncInboundClipboardUseCase::new(
+            ClipboardIntegrationMode::Full,
+            session_b.clone(),
+            encryption_b.clone(),
+            identity_b.clone(),
+            transfer_decryptor,
+            settings.clone(),
+        )?
+        .with_clipboard_write_coordinator(coordinator_b),
+    );
 
     let a_send_count = Arc::new(AtomicUsize::new(0));
     let b_send_count = Arc::new(AtomicUsize::new(0));
@@ -604,7 +621,7 @@ async fn clipboard_sync_e2e_image_single_rep() -> Result<()> {
     let clipboard_a = Arc::new(InMemoryClipboard::new(image_snapshot(vec![], 0)));
     let clipboard_b = Arc::new(InMemoryClipboard::new(image_snapshot(vec![], 0)));
 
-    let origin_b = Arc::new(InMemoryClipboardChangeOrigin::new());
+    let origin_b = fresh_test_origin();
 
     let _encryption_a: Arc<dyn EncryptionPort> = Arc::new(PassthroughEncryption);
     let encryption_b: Arc<dyn EncryptionPort> = Arc::new(PassthroughEncryption);
@@ -624,16 +641,21 @@ async fn clipboard_sync_e2e_image_single_rep() -> Result<()> {
 
     let transfer_decryptor: Arc<TransferPayloadDecryptorAdapter> =
         Arc::new(TransferPayloadDecryptorAdapter);
-    let inbound_b = Arc::new(SyncInboundClipboardUseCase::new(
-        ClipboardIntegrationMode::Full,
+    let coordinator_b = Arc::new(ClipboardWriteCoordinator::new(
         clipboard_b.clone(),
         origin_b.clone(),
-        session_b.clone(),
-        encryption_b.clone(),
-        identity_b.clone(),
-        transfer_decryptor,
-        settings.clone(),
-    )?);
+    ));
+    let inbound_b = Arc::new(
+        SyncInboundClipboardUseCase::new(
+            ClipboardIntegrationMode::Full,
+            session_b.clone(),
+            encryption_b.clone(),
+            identity_b.clone(),
+            transfer_decryptor,
+            settings.clone(),
+        )?
+        .with_clipboard_write_coordinator(coordinator_b),
+    );
 
     let a_send_count = Arc::new(AtomicUsize::new(0));
 
@@ -705,7 +727,7 @@ async fn clipboard_sync_e2e_windows_image_multi_rep() -> Result<()> {
     let clipboard_a = Arc::new(InMemoryClipboard::new(image_snapshot(vec![], 0)));
     let clipboard_b = Arc::new(InMemoryClipboard::new(image_snapshot(vec![], 0)));
 
-    let origin_b = Arc::new(InMemoryClipboardChangeOrigin::new());
+    let origin_b = fresh_test_origin();
 
     let _encryption_a: Arc<dyn EncryptionPort> = Arc::new(PassthroughEncryption);
     let encryption_b: Arc<dyn EncryptionPort> = Arc::new(PassthroughEncryption);
@@ -725,16 +747,21 @@ async fn clipboard_sync_e2e_windows_image_multi_rep() -> Result<()> {
 
     let transfer_decryptor: Arc<TransferPayloadDecryptorAdapter> =
         Arc::new(TransferPayloadDecryptorAdapter);
-    let inbound_b = Arc::new(SyncInboundClipboardUseCase::new(
-        ClipboardIntegrationMode::Full,
+    let coordinator_b = Arc::new(ClipboardWriteCoordinator::new(
         clipboard_b.clone(),
         origin_b.clone(),
-        session_b.clone(),
-        encryption_b.clone(),
-        identity_b.clone(),
-        transfer_decryptor,
-        settings.clone(),
-    )?);
+    ));
+    let inbound_b = Arc::new(
+        SyncInboundClipboardUseCase::new(
+            ClipboardIntegrationMode::Full,
+            session_b.clone(),
+            encryption_b.clone(),
+            identity_b.clone(),
+            transfer_decryptor,
+            settings.clone(),
+        )?
+        .with_clipboard_write_coordinator(coordinator_b),
+    );
 
     let a_send_count = Arc::new(AtomicUsize::new(0));
 

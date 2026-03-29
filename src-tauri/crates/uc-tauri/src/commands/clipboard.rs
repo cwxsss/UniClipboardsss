@@ -14,11 +14,11 @@ use tauri::State;
 use tracing::{info_span, Instrument};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::clipboard::ClipboardUseCases;
-use uc_daemon_client::DaemonConnectionState;
 use uc_app::usecases::clipboard::{ClipboardStats, EntryProjectionDto};
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 use uc_core::security::state::EncryptionState;
+use uc_daemon_client::DaemonConnectionState;
 use uc_platform::ports::observability::TraceMetadata;
 
 /// Get clipboard history entries (preview only)
@@ -594,7 +594,10 @@ pub async fn copy_file_to_clipboard(
     runtime: State<'_, Arc<AppRuntime>>,
     entry_id: String,
 ) -> Result<(), String> {
-    let uc = runtime.usecases().copy_file_to_clipboard();
+    let uc = runtime
+        .usecases()
+        .copy_file_to_clipboard()
+        .map_err(|e| e.to_string())?;
     let id = EntryId::from(entry_id);
     uc.execute(&id).await.map_err(|e| e.to_string())
 }
@@ -629,11 +632,15 @@ mod tests {
     };
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::{Blob, BlobId, ContentHash, DeviceId};
-    use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
+    use uc_infra::clipboard::new_in_memory_change_origin;
 
     fn clipboard_mode_env_lock() -> &'static std::sync::Mutex<()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    fn test_origin() -> std::sync::Arc<dyn uc_core::ports::clipboard::ClipboardChangeOriginPort> {
+        new_in_memory_change_origin()
     }
 
     struct MockEntryRepository {
@@ -1399,7 +1406,7 @@ mod tests {
                 representation_policy: Arc::new(NoopPort),
                 representation_cache: Arc::new(NoopPort),
                 spool_queue: Arc::new(NoopPort),
-                clipboard_change_origin: Arc::new(InMemoryClipboardChangeOrigin::new()),
+                clipboard_change_origin: test_origin(),
                 worker_tx,
                 payload_resolver: Arc::new(NoopPort),
             },

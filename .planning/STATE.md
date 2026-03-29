@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Milestone complete
-stopped_at: Completed 72-02-PLAN.md
-last_updated: '2026-03-29T04:52:00.232Z'
+status: 'Phase 73 shipped — PR #329'
+stopped_at: Completed 73-02-PLAN.md
+last_updated: '2026-03-29T11:49:13.003Z'
 progress:
-  total_phases: 43
-  completed_phases: 36
-  total_plans: 95
-  completed_plans: 92
+  total_phases: 44
+  completed_phases: 37
+  total_plans: 97
+  completed_plans: 94
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 71 — dual-product-release-pipeline-for-cli-and-app
+**Current focus:** Phase 73 — refactor-clipboard-restore-loop-prevention
 
 ## Current Position
 
-Phase: 72
+Phase: 73
 Plan: Not started
 
 ## Performance Metrics
@@ -102,6 +102,8 @@ Plan: Not started
   | Phase 71 P01 | 2 | 2 tasks | 4 files |
   | Phase 71 P03 | 2 | 2 tasks | 4 files |
   | Phase 72 P02 | 6 | 1 tasks | 1 files |
+  | Phase 73 P01 | 14 | 2 tasks | 14 files |
+  | Phase 73 P02 | 90 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -238,6 +240,10 @@ Recent decisions affecting current work:
 - [Phase 71]: buildCliInstallerLines() detects artifacts by uniclipboard-cli- prefix + target triple patterns (aarch64-apple-darwin, x86_64-apple-darwin, linux-gnu, windows-msvc)
 - [Phase 72]: restore_clipboard_entry delegates fully to daemon via DaemonClipboardClient — origin tracking, restore, touch, outbound sync all in daemon handler
 - [Phase 72]: forward_clipboard_event preserved as ONLY frontend update after daemon restore success (LocalRestore skips capture, no WS clipboard.new_content event emitted)
+- [Phase 73]: ClipboardWriteCoordinator centralises guard-registration + write + cleanup-on-error for all programmatic clipboard writes; InMemoryClipboardChangeOrigin locked to pub(crate) via new_clipboard_change_origin() factory
+- [Phase 73]: SyncInboundClipboardUseCase keeps legacy constructor params with #[allow(dead_code)] for e2e test compatibility; coordinator wired via with_clipboard_write_coordinator() builder
+- [Phase 73]: REMOTE_SNAPSHOT_HASH_TTL_MS removed from sync_inbound.rs — TTL semantics now exclusively owned by ClipboardWriteCoordinator
+- [Phase 73]: FileSyncOrchestratorWorker consolidates system_clipboard + clipboard_change_origin into single clipboard_write_coordinator field
 
 ### Roadmap Evolution
 
@@ -263,6 +269,8 @@ Recent decisions affecting current work:
 - Phase 69 added: CLI setup flow: first-time encryption init before daemon spawn
 - Phase 70 added: CLI start/stop commands for daemon lifecycle management
 - Phase 71 added: Dual-product release pipeline for CLI and App
+- Phase 73 added: Refactor clipboard restore loop prevention: introduce ClipboardWriteCoordinator as single write boundary owning origin guard registration, derive meaningful content key, and remove composition-time re-creation risk of origin store
+- Phase 73 discussed: ClipboardWriteCoordinator.write(snapshot, intent) as sole clipboard write API; snapshot building stays in use cases; Coordinator is only caller of origin_guard_key(); coordinator built in bootstrap assembly
 
 ### Pending Todos
 
@@ -282,6 +290,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T04:45:07.366Z
-Stopped at: Completed 72-02-PLAN.md
+Last session: 2026-03-29T10:20:37.221Z
+Stopped at: Completed 73-02-PLAN.md
 Resume file: None
