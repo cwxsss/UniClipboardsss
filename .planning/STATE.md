@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: 'Phase 73 shipped — PR #329'
-stopped_at: Completed 73-02-PLAN.md
-last_updated: '2026-03-29T11:49:13.003Z'
+status: 'Phase 74 shipped — PR #330'
+stopped_at: Completed 74-02-PLAN.md
+last_updated: '2026-03-29T13:07:03.194Z'
 progress:
-  total_phases: 44
-  completed_phases: 37
-  total_plans: 97
-  completed_plans: 94
+  total_phases: 52
+  completed_phases: 38
+  total_plans: 101
+  completed_plans: 96
 ---
 
 # Project State
@@ -19,20 +19,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 73 — refactor-clipboard-restore-loop-prevention
 
 ## Current Position
 
-Phase: 73
+**Current focus:** Phase 75 — daemon-security-middleware
+
+## Current Position
+
+Phase: 75
 Plan: Not started
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 2
-- Average duration: 6.5min
-- Total execution time: 0.22 hours
+- Total plans completed: 4
+- Average duration: 5.8min
+- Total execution time: 0.26 hours
 
 **By Phase:**
 
@@ -104,6 +107,8 @@ Plan: Not started
   | Phase 72 P02 | 6 | 1 tasks | 1 files |
   | Phase 73 P01 | 14 | 2 tasks | 14 files |
   | Phase 73 P02 | 90 | 2 tasks | 6 files |
+  | Phase 74 P01 | 4 | 2 tasks | 5 files |
+  | Phase 74 P02 | 149 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -244,6 +249,7 @@ Recent decisions affecting current work:
 - [Phase 73]: SyncInboundClipboardUseCase keeps legacy constructor params with #[allow(dead_code)] for e2e test compatibility; coordinator wired via with_clipboard_write_coordinator() builder
 - [Phase 73]: REMOTE_SNAPSHOT_HASH_TTL_MS removed from sync_inbound.rs — TTL semantics now exclusively owned by ClipboardWriteCoordinator
 - [Phase 73]: FileSyncOrchestratorWorker consolidates system_clipboard + clipboard_change_origin into single clipboard_write_coordinator field
+- [Phase 74]: 74-01: EntryDetailResult needed serde::Serialize added as Rule 2 auto-fix
 
 ### Roadmap Evolution
 
@@ -271,6 +277,14 @@ Recent decisions affecting current work:
 - Phase 71 added: Dual-product release pipeline for CLI and App
 - Phase 73 added: Refactor clipboard restore loop prevention: introduce ClipboardWriteCoordinator as single write boundary owning origin guard registration, derive meaningful content key, and remove composition-time re-creation risk of origin store
 - Phase 73 discussed: ClipboardWriteCoordinator.write(snapshot, intent) as sole clipboard write API; snapshot building stays in use cases; Coordinator is only caller of origin_guard_key(); coordinator built in bootstrap assembly
+- Phase 74 added: Daemon Clipboard HTTP API — add list, detail, delete, favorite, stats endpoints
+- Phase 75 added: Daemon Security Middleware — JWT session token, PID verification, rate limiting, permission levels
+- Phase 76 added: Daemon Settings, Encryption & Storage HTTP API
+- Phase 77 added: Frontend Daemon HTTP Client & Auth Module
+- Phase 78 added: Frontend Clipboard API Migration — Tauri invoke to daemon HTTP
+- Phase 79 added: Frontend WebSocket Direct Connection & Event Migration
+- Phase 80 added: uc-tauri Command Cleanup — remove migrated commands
+- Phase 81 added: Frontend-Daemon Integration Testing & Security Audit
 
 ### Pending Todos
 
@@ -290,6 +304,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T10:20:37.221Z
-Stopped at: Completed 73-02-PLAN.md
+Last session: 2026-03-29T12:24:35.913Z
+Stopped at: Completed 74-02-PLAN.md
 Resume file: None
