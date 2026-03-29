@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Milestone complete
-stopped_at: Completed 70-01-PLAN.md
-last_updated: '2026-03-28T10:15:15.549Z'
+status: 'Phase 71 shipped — PR #323'
+stopped_at: Completed 71-03-PLAN.md
+last_updated: '2026-03-29T02:04:04.638Z'
 progress:
-  total_phases: 41
-  completed_phases: 34
-  total_plans: 90
-  completed_plans: 87
+  total_phases: 42
+  completed_phases: 35
+  total_plans: 93
+  completed_plans: 90
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 70 — cli-start-stop-commands-for-daemon-lifecycle-management
+**Current focus:** Phase 71 — dual-product-release-pipeline-for-cli-and-app
 
 ## Current Position
 
-Phase: 70
+Phase: 71
 Plan: Not started
 
 ## Performance Metrics
@@ -98,6 +98,9 @@ Plan: Not started
   | Phase 68 P02 | 20 | 2 tasks | 6 files |
   | Phase 69 P01 | 4 | 3 tasks | 2 files |
   | Phase 70 P01 | 8 | 2 tasks | 6 files |
+  | Phase 71 P02 | 52s | 1 tasks | 1 files |
+  | Phase 71 P01 | 2 | 2 tasks | 4 files |
+  | Phase 71 P03 | 2 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -226,6 +229,12 @@ Recent decisions affecting current work:
 - [Phase 70]: Background start reuses ensure_local_daemon_running() for probe-spawn-poll pattern consistency
 - [Phase 70]: SIGKILL not used -- user warned if daemon does not stop within 10s timeout
 - [Phase 70]: libc added directly to uc-cli (not workspace) since no other crate needs it
+- [Phase 71]: Mirror setup-matrix pattern from build.yml for consistent platform matrix across CLI and app builds
+- [Phase 71]: Use cli-{target} artifact prefix to disambiguate from app artifacts in shared release workflows
+- [Phase 71]: Cargo.lock refresh for workspace members delegated to cargo update -p uc-cli in CI (not fragile JS regex patching)
+- [Phase 71]: cargo update steps in release.yml gated with if: github.event_name == 'workflow_dispatch' to avoid running on tag-push events
+- [Phase 71]: CLI artifact collection uses separate find loop with no collision handling — CLI archives have unique names (version + target triple in filename)
+- [Phase 71]: buildCliInstallerLines() detects artifacts by uniclipboard-cli- prefix + target triple patterns (aarch64-apple-darwin, x86_64-apple-darwin, linux-gnu, windows-msvc)
 
 ### Roadmap Evolution
 
@@ -250,6 +259,7 @@ Recent decisions affecting current work:
 - Phase 68 added: Adopt Tauri Sidecar for daemon binary management (dev build, bundling, and path resolution)
 - Phase 69 added: CLI setup flow: first-time encryption init before daemon spawn
 - Phase 70 added: CLI start/stop commands for daemon lifecycle management
+- Phase 71 added: Dual-product release pipeline for CLI and App
 
 ### Pending Todos
 
@@ -269,6 +279,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T10:10:03.072Z
-Stopped at: Completed 70-01-PLAN.md
+Last session: 2026-03-28T14:15:39.318Z
+Stopped at: Completed 71-03-PLAN.md
 Resume file: None

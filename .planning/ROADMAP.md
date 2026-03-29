@@ -746,3 +746,25 @@ Plans:
 Plans:
 
 - [x] 70-01-PLAN.md — Implement start and stop commands with background/foreground modes, PID-based SIGTERM, and idempotent behavior
+
+### Phase 71: Dual-product release pipeline for CLI and App
+
+**Goal:** Align CLI version to workspace inheritance, create a parallel CLI build workflow, and integrate CLI artifacts into the existing release pipeline so every release ships both App bundles and CLI binaries.
+**Requirements**: PH71-01, PH71-02, PH71-03, PH71-04, PH71-05, PH71-06
+**Depends on:** Phase 70
+**Plans:** 3/3 plans complete
+
+**Success Criteria** (what must be TRUE):
+
+1. `uc-cli/Cargo.toml` uses `version.workspace = true` (no hardcoded version)
+2. `bump-version.js` refreshes all workspace member entries in Cargo.lock during version bumps
+3. `build-cli.yml` reusable workflow exists and builds CLI binaries for all 4 platforms
+4. `release.yml` calls both `build.yml` and `build-cli.yml`, downloads CLI artifacts, includes them in GitHub Release and R2
+5. Release notes include a "CLI Downloads" section with platform-specific download links
+6. Update manifest (`assemble-update-manifest.js`) remains App-only (unchanged)
+
+Plans:
+
+- [x] 71-01-PLAN.md — Version alignment: uc-cli workspace version, bump-version.js Cargo.lock workspace refresh, CI workflow comments
+- [x] 71-02-PLAN.md — Create build-cli.yml reusable workflow for cross-platform CLI binary compilation and packaging
+- [x] 71-03-PLAN.md — Wire release pipeline: add build-cli job to release.yml, extend release notes template and generator with CLI section
