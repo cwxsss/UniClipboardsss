@@ -1,6 +1,6 @@
 [package]
 name = "uniclipboard"
-version = "0.3.3"
+version = "0.4.0-alpha.1"
 description = "一个剪切板同步工具"
 authors = ["mkdir700@gmail.com"]
 edition = "2021"
@@ -20,10 +20,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # ===== Workspace crates =====
 uc-core = { path = "crates/uc-core" }
-uc-app = { path = "crates/uc-app" }
 uc-platform = { path = "crates/uc-platform" }
-uc-infra = { path = "crates/uc-infra" }
 uc-tauri = { path = "crates/uc-tauri" }
+uc-bootstrap = { path = "crates/uc-bootstrap" }
+uc-daemon-client = { path = "crates/uc-daemon-client" }
 
 # ===== Tauri 相关依赖 =====
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
@@ -31,9 +31,12 @@ tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-stronghold = "2"
+tauri-plugin-shell = "2"
 
 # ===== 异步运行时 =====
 tokio = { version = "1.28", features = ["full"] }
+futures-util = "0.3"
+tokio-tungstenite = "0.24"
 
 # ===== 错误处理 =====
 anyhow = "1.0"
@@ -82,10 +85,18 @@ members = [
   "crates/uc-clipboard-probe",
   "crates/uc-tauri",
   "crates/uc-observability",
+  "crates/uc-bootstrap",
+  "crates/uc-daemon",
+  "crates/uc-cli",
+  "crates/uc-daemon-client",
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.4.0-alpha.1"
 
 # Dependencies for workspace crates, mainly for tauri plugins
 [workspace.dependencies]
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2"
+tauri-plugin-shell = "2"

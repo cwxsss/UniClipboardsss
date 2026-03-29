@@ -4,9 +4,9 @@
 //! frontend depends on. Integration-level command invocation tests are deferred
 //! until the pre-existing uc-tauri test compilation issues are resolved.
 
+use uc_app::usecases::clipboard::ClipboardStats;
 use uc_tauri::models::{
-    ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse, ClipboardStats,
-    ClipboardTextItemDto,
+    ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse, ClipboardTextItemDto,
 };
 
 #[test]

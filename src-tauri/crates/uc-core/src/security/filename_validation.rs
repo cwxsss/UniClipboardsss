@@ -183,7 +183,10 @@ mod tests {
 
     #[test]
     fn reject_whitespace_only() {
-        assert_eq!(validate_filename("   "), Err(FilenameValidationError::Empty));
+        assert_eq!(
+            validate_filename("   "),
+            Err(FilenameValidationError::Empty)
+        );
     }
 
     #[test]

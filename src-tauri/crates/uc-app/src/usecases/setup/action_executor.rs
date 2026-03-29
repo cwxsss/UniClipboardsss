@@ -23,7 +23,7 @@ use uc_core::{
     setup::{SetupAction, SetupError as SetupDomainError, SetupEvent, SetupState},
 };
 
-use crate::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
+use crate::usecases::pairing::PairingDomainEvent;
 use crate::usecases::setup::context::SetupContext;
 use crate::usecases::setup::MarkSetupComplete;
 use crate::usecases::space_access::{
@@ -31,6 +31,7 @@ use crate::usecases::space_access::{
 };
 use crate::usecases::AppLifecycleCoordinator;
 use crate::usecases::InitializeEncryption;
+use crate::usecases::SetupPairingFacadePort;
 
 use super::orchestrator::SetupError;
 
@@ -63,7 +64,7 @@ pub struct SetupActionExecutor {
     pub(super) persistence_port: Arc<Mutex<dyn PersistencePort>>,
 
     // Collaborator orchestrators
-    pub(super) pairing_orchestrator: Arc<PairingOrchestrator>,
+    pub(super) setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
     pub(super) space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
 }
 
@@ -485,8 +486,16 @@ impl SetupActionExecutor {
                 if message_lower.contains("timeout") {
                     return SetupDomainError::NetworkTimeout;
                 }
+                if message_lower.contains("host_not_discoverable")
+                    || message_lower.contains("no_local_pairing_participant_ready")
+                    || message_lower == "busy"
+                    || message_lower.contains("peer unavailable")
+                {
+                    return SetupDomainError::PeerUnavailable;
+                }
                 SetupDomainError::PairingFailed
             }
+            FailureReason::PeerBusy => SetupDomainError::PeerUnavailable,
             _ => SetupDomainError::PairingFailed,
         }
     }
@@ -507,8 +516,27 @@ impl SetupActionExecutor {
             SetupError::PairingFailed
         })?;
 
+        // Subscribe to pairing domain events BEFORE initiating the session.
+        //
+        // `initiate_pairing` may emit `PairingVerificationRequired` or
+        // `PairingFailed` synchronously (e.g. on the same device / low latency
+        // path).  If we subscribed after the initiation we would miss those
+        // first events and the setup state machine would stall forever in
+        // `ProcessingJoinSpace`.
+        let event_rx = match self.setup_pairing_facade.subscribe().await {
+            Ok(rx) => rx,
+            Err(err) => {
+                error!(
+                    error = %err,
+                    peer_id = %peer_id,
+                    "failed to subscribe pairing events before initiating pairing"
+                );
+                return Err(SetupError::PairingFailed);
+            }
+        };
+
         let session_id = self
-            .pairing_orchestrator
+            .setup_pairing_facade
             .initiate_pairing(peer_id.clone())
             .await
             .map_err(|err| {
@@ -521,8 +549,9 @@ impl SetupActionExecutor {
             *guard = Some(session_id.clone());
         }
 
-        self.start_pairing_verification_listener(
+        self.start_pairing_verification_listener_with_rx(
             session_id,
+            event_rx,
             pairing_session_id,
             joiner_offer,
             context,
@@ -545,8 +574,8 @@ impl SetupActionExecutor {
             SetupError::PairingFailed
         })?;
 
-        self.pairing_orchestrator
-            .user_accept_pairing(&session_id)
+        self.setup_pairing_facade
+            .accept_pairing(&session_id)
             .await
             .map_err(|err| {
                 error!(error = %err, session_id = %session_id, "failed to accept pairing session");
@@ -573,11 +602,7 @@ impl SetupActionExecutor {
             guard.take()
         };
         if let Some(session_id) = session_id {
-            if let Err(err) = self
-                .pairing_orchestrator
-                .user_reject_pairing(&session_id)
-                .await
-            {
+            if let Err(err) = self.setup_pairing_facade.reject_pairing(&session_id).await {
                 warn!(error = %err, session_id = %session_id, "failed to reject pairing session");
             }
         }
@@ -588,24 +613,20 @@ impl SetupActionExecutor {
         }
     }
 
-    async fn start_pairing_verification_listener(
+    /// Start listening for pairing domain events using a pre-subscribed receiver.
+    ///
+    /// The caller must subscribe to pairing events **before** calling
+    /// `initiate_pairing` to avoid missing events that are emitted in the
+    /// same async cycle as the initiation (low-latency / same-device scenario).
+    async fn start_pairing_verification_listener_with_rx(
         &self,
         session_id: String,
+        event_rx: tokio::sync::mpsc::Receiver<PairingDomainEvent>,
         pairing_session_id: &Arc<Mutex<Option<String>>>,
         joiner_offer: &Arc<Mutex<Option<SpaceAccessJoinerOffer>>>,
         context: &Arc<SetupContext>,
     ) {
-        let mut event_rx = match self.pairing_orchestrator.subscribe().await {
-            Ok(rx) => rx,
-            Err(err) => {
-                error!(
-                    error = %err,
-                    session_id = %session_id,
-                    "failed to subscribe pairing events"
-                );
-                return;
-            }
-        };
+        let mut event_rx = event_rx;
         let context = Arc::clone(context);
         let pairing_session_id = Arc::clone(pairing_session_id);
         let joiner_offer = Arc::clone(joiner_offer);

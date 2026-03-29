@@ -9,7 +9,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use uc_tauri::bootstrap::task_registry::TaskRegistry;
+use uc_app::task_registry::TaskRegistry;
 
 #[tokio::test]
 async fn shutdown_cancels_all_tasks_and_joins_cleanly() {

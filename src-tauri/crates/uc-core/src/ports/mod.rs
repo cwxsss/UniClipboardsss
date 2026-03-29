@@ -35,17 +35,18 @@ pub mod file_manager;
 pub mod file_transfer_repository;
 pub mod file_transport;
 mod hash;
+pub mod host_event_emitter;
 pub mod network_control;
 pub mod network_events;
 pub mod paired_device_repository;
 pub mod pairing_transport;
 pub mod peer_directory;
+pub mod realtime;
 pub mod security;
 pub mod settings;
 pub mod setup;
 pub mod setup_event_port;
 pub mod space;
-pub mod start_clipboard_watcher;
 mod timer;
 pub mod transfer_progress;
 
@@ -74,11 +75,22 @@ pub use file_transfer_repository::{
     TrackedFileTransfer, TrackedFileTransferStatus,
 };
 pub use file_transport::{FileTransportPort, NoopFileTransportPort};
+pub use host_event_emitter::{
+    ClipboardHostEvent, ClipboardOriginKind, EmitError, HostEvent, HostEventEmitterPort,
+    PeerConnectionHostEvent, PeerDiscoveryHostEvent, TransferHostEvent,
+};
 pub use network_control::NetworkControlPort;
 pub use network_events::NetworkEventPort;
 pub use paired_device_repository::PairedDeviceRepositoryPort;
 pub use pairing_transport::PairingTransportPort;
 pub use peer_directory::PeerDirectoryPort;
+pub use realtime::{
+    PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
+    PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
+    PeerNameUpdatedEvent, RealtimeEvent, RealtimeFrontendEvent, RealtimeFrontendPayload,
+    RealtimePairedDeviceSummary, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
+    FRONTEND_REALTIME_EVENT,
+};
 pub use security::encryption::EncryptionPort;
 pub use security::encryption_session::EncryptionSessionPort;
 pub use security::key_material::KeyMaterialPort;
@@ -89,5 +101,4 @@ pub use security::transfer_crypto::{
 pub use settings::{SettingsMigrationPort, SettingsPort};
 pub use setup::SetupStatusPort;
 pub use setup_event_port::SetupEventPort;
-pub use start_clipboard_watcher::{StartClipboardWatcherError, StartClipboardWatcherPort};
 pub use transfer_progress::{TransferDirection, TransferProgress, TransferProgressPort};

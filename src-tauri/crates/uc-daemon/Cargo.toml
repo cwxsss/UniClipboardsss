@@ -1,0 +1,40 @@
+[package]
+name = "uc-daemon"
+version.workspace = true
+edition = "2021"
+description = "Headless daemon for UniClipboard — background clipboard sync without GUI"
+
+[[bin]]
+name = "uniclipboard-daemon"
+path = "src/main.rs"
+
+[lib]
+name = "uc_daemon"
+path = "src/lib.rs"
+
+[dependencies]
+uc-bootstrap = { path = "../uc-bootstrap" }
+uc-app = { path = "../uc-app" }
+uc-core = { path = "../uc-core" }
+uc-infra = { path = "../uc-infra" }
+uc-platform = { path = "../uc-platform" }
+clipboard-rs = { version = "0.3.3", features = ["default"] }
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1.0"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+blake3 = "1"
+tracing = "0.1"
+futures-util = "0.3"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+chrono = { version = "0.4", default-features = true }
+tower = { version = "0.5", features = ["util"] }
+tokio-tungstenite = "0.24"

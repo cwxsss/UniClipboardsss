@@ -6,10 +6,10 @@
 
 use objc2::ffi::object_setClass;
 use objc2::runtime::AnyObject;
-use objc2::{ClassType, MainThreadMarker};
-use objc2_app_kit::{NSPanel, NSScreen, NSWindowStyleMask};
+use objc2::{msg_send, ClassType, MainThreadMarker};
+use objc2_app_kit::{NSColor, NSPanel, NSScreen, NSWindowStyleMask};
 use tauri::WebviewWindow;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Convert a Tauri WebviewWindow's underlying NSWindow into an NSPanel
 /// with `NonactivatingPanel` behavior. Unlike the quick panel's UCKeyablePanel,
@@ -50,9 +50,32 @@ pub fn convert_to_non_key_panel(window: &WebviewWindow) {
         panel.setFloatingPanel(true);
         panel.setBecomesKeyOnlyIfNeeded(true); // Don't accept keyboard input
         panel.setHidesOnDeactivate(false);
+
+        // Window-level transparency (CSS handles rounded corners)
+        make_panel_transparent(panel);
+    }
+
+    // Disable WKWebView background drawing so CSS transparency works
+    if let Err(e) = window.with_webview(|webview| unsafe {
+        let wk: *mut AnyObject = webview.inner().cast();
+        if !wk.is_null() {
+            let _: () = msg_send![&*wk, _setDrawsBackground: false];
+        }
+    }) {
+        warn!(error = %e, "Failed to set preview webview background transparent");
     }
 
     info!("Converted NSWindow → NSPanel (non-key) for preview panel");
+}
+
+/// Make a borderless NSPanel fully transparent so CSS handles all visuals.
+///
+/// Only sets window-level transparency. Rounded corners are handled by
+/// CSS `rounded-xl overflow-hidden` — no native `cornerRadius`/`masksToBounds`
+/// needed. This avoids WKWebView repaint issues with layer-backed compositing.
+unsafe fn make_panel_transparent(panel: &NSPanel) {
+    panel.setOpaque(false);
+    panel.setBackgroundColor(Some(&NSColor::clearColor()));
 }
 
 /// Show the preview panel without activating the app or making it key.

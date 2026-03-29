@@ -84,6 +84,12 @@ impl SpaceAccessOrchestrator {
         Arc::clone(&self.context)
     }
 
+    pub async fn reset(&self) {
+        let _dispatch_guard = self.dispatch_lock.lock().await;
+        *self.context.lock().await = SpaceAccessContext::default();
+        *self.state.lock().await = SpaceAccessState::Idle;
+    }
+
     pub async fn dispatch(
         &self,
         executor: &mut SpaceAccessExecutor<'_>,
@@ -96,16 +102,16 @@ impl SpaceAccessOrchestrator {
         async {
             let current = self.state.lock().await.clone();
 
-            // When re-entering from a terminal state (e.g. sponsor handling a
-            // second joiner after the first completed), clear stale context so
+            // When re-entering from any non-Idle state (e.g. sponsor handling a
+            // second joiner after the first completed, or a stale
+            // WaitingJoinerProof from a failed pairing), clear stale context so
             // the new session starts with a clean slate.
-            let restarting_from_terminal = matches!(
-                current,
-                SpaceAccessState::Granted { .. }
-                    | SpaceAccessState::Denied { .. }
-                    | SpaceAccessState::Cancelled { .. }
-            );
-            if restarting_from_terminal {
+            let restarting = !matches!(current, SpaceAccessState::Idle)
+                && matches!(
+                    event,
+                    SpaceAccessEvent::SponsorAuthorizationRequested { .. }
+                );
+            if restarting {
                 let mut context = self.context.lock().await;
                 context.prepared_offer = None;
                 context.joiner_offer = None;
@@ -274,6 +280,16 @@ impl SpaceAccessOrchestrator {
                 .clone()
                 .unwrap_or_else(|| "unknown".to_string())
         };
+
+        let senders_count = self.event_senders.lock().await.len();
+        tracing::info!(
+            session_id,
+            success,
+            ?reason,
+            peer_id = %peer_id,
+            senders_count,
+            "emit_completion called"
+        );
 
         let event = SpaceAccessCompletedEvent {
             session_id: session_id.to_string(),

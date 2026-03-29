@@ -5,36 +5,18 @@ use crate::bootstrap::AppRuntime;
 use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{Emitter, State};
-use tracing::{info_span, Instrument};
-use uc_app::usecases::{LocalDeviceInfo, PairingOrchestrator};
-use uc_core::network::{ConnectedPeer, DiscoveredPeer, PairedDevice, PairingState};
+use tauri::State;
+use tracing::{error, info_span, warn, Instrument};
+use uc_app::usecases::pairing::{P2PPeerInfo, PairedPeer};
+use uc_app::usecases::LocalDeviceInfo;
+use uc_core::network::PairingState;
 use uc_core::PeerId;
+use uc_daemon_client::{
+    http::{DaemonPairingClient, DaemonPairingRequestError, DaemonQueryClient},
+    DaemonConnectionState,
+};
 use uc_platform::ports::observability::TraceMetadata;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct P2PPeerInfo {
-    pub peer_id: String,
-    pub device_name: Option<String>,
-    pub addresses: Vec<String>,
-    pub is_paired: bool,
-    pub connected: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PairedPeer {
-    pub peer_id: String,
-    pub device_name: String,
-    pub shared_secret: Vec<u8>,
-    pub paired_at: String,
-    pub last_seen: Option<String>,
-    pub last_known_addresses: Vec<String>,
-    pub connected: bool,
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,18 +39,33 @@ pub struct P2PPinVerifyRequest {
     pub pin_matches: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct P2PCommandErrorEvent {
-    command: String,
+#[derive(Debug, Clone)]
+struct PairingCommandErrorContext {
+    code: String,
     message: String,
+    user_message: String,
+}
+
+fn map_daemon_paired_device_to_peer(device: uc_daemon::api::types::PairedDeviceDto) -> PairedPeer {
+    PairedPeer {
+        peer_id: device.peer_id,
+        device_name: device.device_name,
+        shared_secret: vec![],
+        paired_at: String::new(),
+        last_seen: device
+            .last_seen_at_ms
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .map(|timestamp| timestamp.to_rfc3339()),
+        last_known_addresses: vec![],
+        connected: device.connected,
+    }
 }
 
 /// List paired devices
 /// 列出已配对设备
 #[tauri::command]
 pub async fn list_paired_devices(
-    runtime: State<'_, Arc<AppRuntime>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<Vec<PairedPeer>, CommandError> {
     let span = info_span!(
@@ -78,16 +75,16 @@ pub async fn list_paired_devices(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let uc = runtime.usecases().list_paired_devices();
-        let devices = uc.execute().await.map_err(|e| {
-            tracing::error!(error = %e, "Failed to list paired devices");
-            let message = e.to_string();
-            emit_command_error(&runtime, "list_paired_devices", &message);
-            CommandError::InternalError(message)
-        })?;
+        let devices = DaemonQueryClient::new(daemon_connection.inner().clone())
+            .get_paired_devices()
+            .await
+            .map_err(|error| {
+                tracing::error!(error = %error, "Failed to query daemon paired devices");
+                CommandError::InternalError(error.to_string())
+            })?;
         let peers: Vec<PairedPeer> = devices
             .into_iter()
-            .map(|d| map_paired_device_to_peer(d, None, false))
+            .map(map_daemon_paired_device_to_peer)
             .collect();
         Ok(peers)
     }
@@ -130,9 +127,7 @@ pub async fn get_local_device_info(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to get local device info");
-                let message = e.to_string();
-                emit_command_error(&runtime, "get_local_device_info", &message);
-                CommandError::InternalError(message)
+                CommandError::InternalError(e.to_string())
             })
     }
     .instrument(span)
@@ -141,7 +136,7 @@ pub async fn get_local_device_info(
 
 #[tauri::command]
 pub async fn get_p2p_peers(
-    runtime: State<'_, Arc<AppRuntime>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<Vec<P2PPeerInfo>, CommandError> {
     let span = info_span!(
@@ -151,43 +146,27 @@ pub async fn get_p2p_peers(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let discovered = runtime
-            .usecases()
-            .list_discovered_peers()
-            .execute()
+        let snapshot = DaemonQueryClient::new(daemon_connection.inner().clone())
+            .get_peers()
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list discovered peers");
-                let message = format!("list_discovered_peers: {}", e);
-                emit_command_error(&runtime, "get_p2p_peers", &message);
-                CommandError::InternalError(e.to_string())
+            .map_err(|error| {
+                tracing::error!(error = %error, "Failed to query daemon peers snapshot");
+                CommandError::InternalError(error.to_string())
             })?;
-        let connected = runtime
-            .usecases()
-            .list_connected_peers()
-            .execute()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list connected peers");
-                let message = format!("list_connected_peers: {}", e);
-                emit_command_error(&runtime, "get_p2p_peers", &message);
-                CommandError::InternalError(e.to_string())
-            })?;
-        let connected_map = connected_peer_ids(&connected);
+
         tracing::info!(
-            discovered_peer_count = discovered.len(),
-            connected_peer_count = connected_map.len(),
-            "assembled p2p peer snapshot"
+            peer_count = snapshot.len(),
+            "assembled p2p peer snapshot from daemon query"
         );
 
-        Ok(discovered
+        Ok(snapshot
             .into_iter()
-            .map(|peer| P2PPeerInfo {
-                peer_id: peer.peer_id.clone(),
-                device_name: peer.device_name,
-                addresses: peer.addresses,
-                is_paired: peer.is_paired,
-                connected: connected_map.contains_key(&peer.peer_id),
+            .map(|p| P2PPeerInfo {
+                peer_id: p.peer_id,
+                device_name: p.device_name,
+                addresses: p.addresses,
+                is_paired: p.is_paired,
+                connected: p.connected,
             })
             .collect())
     }
@@ -197,15 +176,15 @@ pub async fn get_p2p_peers(
 
 #[tauri::command]
 pub async fn get_paired_peers(
-    runtime: State<'_, Arc<AppRuntime>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<Vec<PairedPeer>, CommandError> {
-    get_paired_peers_with_status(runtime, _trace).await
+    get_paired_peers_with_status(daemon_connection, _trace).await
 }
 
 #[tauri::command]
 pub async fn get_paired_peers_with_status(
-    runtime: State<'_, Arc<AppRuntime>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<Vec<PairedPeer>, CommandError> {
     let span = info_span!(
@@ -215,91 +194,26 @@ pub async fn get_paired_peers_with_status(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let paired_devices = runtime
-            .usecases()
-            .list_paired_devices()
-            .execute()
+        let devices = DaemonQueryClient::new(daemon_connection.inner().clone())
+            .get_paired_devices()
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list paired devices");
-                let message = format!("list_paired_devices: {}", e);
-                emit_command_error(&runtime, "get_paired_peers_with_status", &message);
-                CommandError::InternalError(e.to_string())
+            .map_err(|error| {
+                tracing::error!(error = %error, "Failed to query daemon paired devices");
+                CommandError::InternalError(error.to_string())
             })?;
-        let discovered = runtime
-            .usecases()
-            .list_discovered_peers()
-            .execute()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list discovered peers");
-                let message = format!("list_discovered_peers: {}", e);
-                emit_command_error(&runtime, "get_paired_peers_with_status", &message);
-                CommandError::InternalError(e.to_string())
-            })?;
-        let connected = runtime
-            .usecases()
-            .list_connected_peers()
-            .execute()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to list connected peers");
-                let message = format!("list_connected_peers: {}", e);
-                emit_command_error(&runtime, "get_paired_peers_with_status", &message);
-                CommandError::InternalError(e.to_string())
-            })?;
-        let discovered_map = discovered_peer_map(&discovered);
-        let connected_map = connected_peer_ids(&connected);
+
         tracing::info!(
-            paired_device_count = paired_devices.len(),
-            discovered_peer_count = discovered_map.len(),
-            connected_peer_count = connected_map.len(),
-            "assembled paired peers with status"
+            paired_peer_count = devices.len(),
+            "assembled paired peers with status from daemon query"
         );
 
-        Ok(paired_devices
+        Ok(devices
             .into_iter()
-            .map(|device| {
-                let peer_id = device.peer_id.as_str().to_string();
-                let discovered_peer = discovered_map.get(&peer_id);
-                let connected = connected_map.contains_key(&peer_id);
-                map_paired_device_to_peer(device, discovered_peer, connected)
-            })
+            .map(map_daemon_paired_device_to_peer)
             .collect())
     }
     .instrument(span)
     .await
-}
-
-fn map_paired_device_to_peer(
-    device: PairedDevice,
-    discovered_peer: Option<&DiscoveredPeer>,
-    connected: bool,
-) -> PairedPeer {
-    let peer_id = device.peer_id.as_str().to_string();
-
-    // Use persisted device_name as primary, fallback to discovered name, then to "Unknown Device"
-    let device_name = if !device.device_name.is_empty() {
-        device.device_name.clone()
-    } else {
-        discovered_peer
-            .and_then(|peer| peer.device_name.clone())
-            .unwrap_or_else(|| "Unknown Device".to_string())
-    };
-
-    let addresses = discovered_peer
-        .map(|peer| peer.addresses.clone())
-        .unwrap_or_default();
-
-    PairedPeer {
-        peer_id,
-        device_name,
-        shared_secret: vec![],
-        paired_at: device.paired_at.to_rfc3339(),
-        last_seen: device.last_seen_at.map(|time| time.to_rfc3339()),
-        last_known_addresses: addresses,
-        connected,
-    }
 }
 
 /// Update pairing state for a peer
@@ -324,9 +238,7 @@ pub async fn set_pairing_state(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to set pairing state");
-                let message = e.to_string();
-                emit_command_error(&runtime, "set_pairing_state", &message);
-                CommandError::InternalError(message)
+                CommandError::InternalError(e.to_string())
             })?;
         Ok(())
     }
@@ -337,7 +249,7 @@ pub async fn set_pairing_state(
 #[tauri::command]
 pub async fn initiate_p2p_pairing(
     request: P2PPairingRequest,
-    orchestrator: State<'_, Arc<PairingOrchestrator>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<P2PPairingResponse, CommandError> {
     let span = info_span!(
@@ -348,18 +260,25 @@ pub async fn initiate_p2p_pairing(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let session_id = orchestrator
+        match DaemonPairingClient::new(daemon_connection.inner().clone())
             .initiate_pairing(request.peer_id)
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to initiate P2P pairing");
-                CommandError::InternalError(e.to_string())
-            })?;
-        Ok(P2PPairingResponse {
-            session_id,
-            success: true,
-            error: None,
-        })
+        {
+            Ok(response) => Ok(P2PPairingResponse {
+                session_id: response.session_id,
+                success: true,
+                error: None,
+            }),
+            Err(error) => {
+                let mapped = map_pairing_command_error(&error);
+                log_pairing_command_error("initiate_p2p_pairing", &mapped);
+                Ok(P2PPairingResponse {
+                    session_id: String::new(),
+                    success: false,
+                    error: Some(mapped.user_message),
+                })
+            }
+        }
     }
     .instrument(span)
     .await
@@ -368,7 +287,7 @@ pub async fn initiate_p2p_pairing(
 #[tauri::command]
 pub async fn accept_p2p_pairing(
     session_id: String,
-    orchestrator: State<'_, Arc<PairingOrchestrator>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
     let span = info_span!(
@@ -379,13 +298,15 @@ pub async fn accept_p2p_pairing(
     );
     record_trace_fields(&span, &_trace);
     async {
-        orchestrator
-            .user_accept_pairing(&session_id)
+        DaemonPairingClient::new(daemon_connection.inner().clone())
+            .accept_pairing(&session_id)
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, session_id = %session_id, "Failed to accept P2P pairing");
-                CommandError::InternalError(e.to_string())
-            })
+            .map_err(|error| {
+                let mapped = map_pairing_command_error(&error);
+                log_pairing_command_error("accept_p2p_pairing", &mapped);
+                CommandError::InternalError(mapped.user_message)
+            })?;
+        Ok(())
     }
     .instrument(span)
     .await
@@ -394,7 +315,7 @@ pub async fn accept_p2p_pairing(
 #[tauri::command]
 pub async fn reject_p2p_pairing(
     session_id: String,
-    orchestrator: State<'_, Arc<PairingOrchestrator>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
     let span = info_span!(
@@ -405,13 +326,15 @@ pub async fn reject_p2p_pairing(
     );
     record_trace_fields(&span, &_trace);
     async {
-        orchestrator
-            .user_reject_pairing(&session_id)
+        DaemonPairingClient::new(daemon_connection.inner().clone())
+            .reject_pairing(&session_id)
             .await
-            .map_err(|e| {
-                tracing::error!(error = %e, session_id = %session_id, "Failed to reject P2P pairing");
-                CommandError::InternalError(e.to_string())
-            })
+            .map_err(|error| {
+                let mapped = map_pairing_command_error(&error);
+                log_pairing_command_error("reject_p2p_pairing", &mapped);
+                CommandError::InternalError(mapped.user_message)
+            })?;
+        Ok(())
     }
     .instrument(span)
     .await
@@ -420,7 +343,7 @@ pub async fn reject_p2p_pairing(
 #[tauri::command]
 pub async fn verify_p2p_pairing_pin(
     request: P2PPinVerifyRequest,
-    orchestrator: State<'_, Arc<PairingOrchestrator>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
     let span = info_span!(
@@ -431,31 +354,15 @@ pub async fn verify_p2p_pairing_pin(
     );
     record_trace_fields(&span, &_trace);
     async {
-        if request.pin_matches {
-            orchestrator
-                .user_accept_pairing(&request.session_id)
-                .await
-                .map_err(|e| {
-                    tracing::error!(
-                        error = %e,
-                        session_id = %request.session_id,
-                        "Failed to accept P2P pairing (pin verify)"
-                    );
-                    CommandError::InternalError(e.to_string())
-                })
-        } else {
-            orchestrator
-                .user_reject_pairing(&request.session_id)
-                .await
-                .map_err(|e| {
-                    tracing::error!(
-                        error = %e,
-                        session_id = %request.session_id,
-                        "Failed to reject P2P pairing (pin verify)"
-                    );
-                    CommandError::InternalError(e.to_string())
-                })
-        }
+        DaemonPairingClient::new(daemon_connection.inner().clone())
+            .verify_pairing(&request.session_id, request.pin_matches)
+            .await
+            .map_err(|error| {
+                let mapped = map_pairing_command_error(&error);
+                log_pairing_command_error("verify_p2p_pairing_pin", &mapped);
+                CommandError::InternalError(mapped.user_message)
+            })?;
+        Ok(())
     }
     .instrument(span)
     .await
@@ -464,7 +371,7 @@ pub async fn verify_p2p_pairing_pin(
 #[tauri::command]
 pub async fn unpair_p2p_device(
     peer_id: String,
-    runtime: State<'_, Arc<AppRuntime>>,
+    daemon_connection: State<'_, DaemonConnectionState>,
     _trace: Option<TraceMetadata>,
 ) -> Result<(), CommandError> {
     let span = info_span!(
@@ -475,13 +382,13 @@ pub async fn unpair_p2p_device(
     );
     record_trace_fields(&span, &_trace);
     async {
-        let uc = runtime.usecases().unpair_device();
-        uc.execute(peer_id.clone()).await.map_err(|e| {
-            tracing::error!(error = %e, peer_id = %peer_id, "Failed to unpair P2P device");
-            let message = e.to_string();
-            emit_command_error(&runtime, "unpair_p2p_device", &message);
-            CommandError::InternalError(message)
-        })
+        DaemonPairingClient::new(daemon_connection.inner().clone())
+            .unpair_device(peer_id.clone())
+            .await
+            .map_err(|error| {
+                tracing::error!(error = %error, peer_id = %peer_id, "Failed to unpair P2P device");
+                CommandError::InternalError(error.to_string())
+            })
     }
     .instrument(span)
     .await
@@ -508,9 +415,7 @@ pub async fn get_device_sync_settings(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to get device sync settings");
-                let message = e.to_string();
-                emit_command_error(&runtime, "get_device_sync_settings", &message);
-                CommandError::InternalError(message)
+                CommandError::InternalError(e.to_string())
             })
     }
     .instrument(span)
@@ -539,124 +444,97 @@ pub async fn update_device_sync_settings(
             .await
             .map_err(|e| {
                 tracing::error!(error = %e, "Failed to update device sync settings");
-                let message = e.to_string();
-                emit_command_error(&runtime, "update_device_sync_settings", &message);
-                CommandError::InternalError(message)
+                CommandError::InternalError(e.to_string())
             })
     }
     .instrument(span)
     .await
 }
 
-fn emit_command_error(runtime: &AppRuntime, command: &str, message: &str) {
-    if let Some(app) = runtime.app_handle().as_ref() {
-        let payload = P2PCommandErrorEvent {
-            command: command.to_string(),
-            message: message.to_string(),
+fn map_pairing_command_error(error: &anyhow::Error) -> PairingCommandErrorContext {
+    if let Some(pairing_error) = error.downcast_ref::<DaemonPairingRequestError>() {
+        let code = pairing_error
+            .code
+            .clone()
+            .unwrap_or_else(|| "internal".to_string());
+        let user_message = match code.as_str() {
+            "active_session_exists" => "active pairing session exists".to_string(),
+            "no_local_participant" => "no local pairing participant ready".to_string(),
+            "host_not_discoverable" => "host not discoverable".to_string(),
+            "session_not_found" => "pairing session not found".to_string(),
+            _ => pairing_error.message.clone(),
         };
-        if let Err(err) = app.emit("p2p-command-error", payload) {
-            tracing::warn!(error = %err, command = %command, "Failed to emit p2p command error");
-        }
-    } else {
-        tracing::debug!(
-            command = %command,
-            "AppHandle not available, skipping p2p command error emission"
-        );
+        return PairingCommandErrorContext {
+            code,
+            message: pairing_error.message.clone(),
+            user_message,
+        };
+    }
+
+    PairingCommandErrorContext {
+        code: "internal".to_string(),
+        message: error.to_string(),
+        user_message: error.to_string(),
     }
 }
 
-fn discovered_peer_map(peers: &[DiscoveredPeer]) -> HashMap<String, DiscoveredPeer> {
-    peers
-        .iter()
-        .map(|peer| (peer.peer_id.clone(), peer.clone()))
-        .collect()
-}
-
-fn connected_peer_ids(peers: &[ConnectedPeer]) -> HashMap<String, ConnectedPeer> {
-    peers
-        .iter()
-        .map(|peer| (peer.peer_id.clone(), peer.clone()))
-        .collect()
+fn log_pairing_command_error(command: &'static str, mapped: &PairingCommandErrorContext) {
+    match mapped.code.as_str() {
+        "active_session_exists"
+        | "no_local_participant"
+        | "host_not_discoverable"
+        | "session_not_found" => warn!(
+            command,
+            code = %mapped.code,
+            message = %mapped.message,
+            "daemon pairing command returned handled error"
+        ),
+        _ => error!(
+            command,
+            code = %mapped.code,
+            message = %mapped.message,
+            "daemon pairing command failed"
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use uc_core::network::{DiscoveredPeer, PairedDevice, PairingState};
-    use uc_core::PeerId;
+    use uc_daemon::api::types::PairedDeviceDto;
 
     #[test]
-    fn test_map_paired_device_to_peer_uses_persisted_name() {
-        let device = PairedDevice {
-            peer_id: PeerId::from("peer-1"),
-            pairing_state: PairingState::Trusted,
-            identity_fingerprint: "fp".to_string(),
-            paired_at: Utc::now(),
-            last_seen_at: None,
-            device_name: "Persisted Name".to_string(),
-            sync_settings: None,
-        };
-
-        let discovered = DiscoveredPeer {
+    fn map_daemon_paired_device_to_peer_uses_daemon_shape() {
+        let result = map_daemon_paired_device_to_peer(PairedDeviceDto {
             peer_id: "peer-1".to_string(),
-            device_name: Some("Discovered Name".to_string()),
-            device_id: None,
-            addresses: vec!["127.0.0.1:1234".to_string()],
-            discovered_at: Utc::now(),
-            last_seen: Utc::now(),
-            is_paired: true,
-        };
+            device_name: "Peer One".to_string(),
+            pairing_state: "Trusted".to_string(),
+            last_seen_at_ms: Some(1_704_067_200_000_i64),
+            connected: true,
+        });
 
-        let result = map_paired_device_to_peer(device, Some(&discovered), true);
-
-        assert_eq!(result.device_name, "Persisted Name");
-        assert_eq!(result.last_known_addresses, vec!["127.0.0.1:1234"]);
+        assert_eq!(result.peer_id, "peer-1");
+        assert_eq!(result.device_name, "Peer One");
+        assert!(result.shared_secret.is_empty());
+        assert_eq!(result.paired_at, "");
+        assert_eq!(
+            result.last_seen.as_deref(),
+            Some("2024-01-01T00:00:00+00:00")
+        );
+        assert!(result.last_known_addresses.is_empty());
         assert!(result.connected);
     }
 
     #[test]
-    fn test_map_paired_device_to_peer_falls_back_to_discovered_name() {
-        let device = PairedDevice {
-            peer_id: PeerId::from("peer-1"),
-            pairing_state: PairingState::Trusted,
-            identity_fingerprint: "fp".to_string(),
-            paired_at: Utc::now(),
-            last_seen_at: None,
-            device_name: "".to_string(),
-            sync_settings: None,
-        };
-
-        let discovered = DiscoveredPeer {
+    fn map_daemon_paired_device_to_peer_skips_invalid_timestamp() {
+        let result = map_daemon_paired_device_to_peer(PairedDeviceDto {
             peer_id: "peer-1".to_string(),
-            device_name: Some("Discovered Name".to_string()),
-            device_id: None,
-            addresses: vec![],
-            discovered_at: Utc::now(),
-            last_seen: Utc::now(),
-            is_paired: true,
-        };
+            device_name: "Peer One".to_string(),
+            pairing_state: "Trusted".to_string(),
+            last_seen_at_ms: Some(i64::MAX),
+            connected: false,
+        });
 
-        let result = map_paired_device_to_peer(device, Some(&discovered), false);
-
-        assert_eq!(result.device_name, "Discovered Name");
-        assert!(!result.connected);
-    }
-
-    #[test]
-    fn test_map_paired_device_to_peer_falls_back_to_unknown_device() {
-        let device = PairedDevice {
-            peer_id: PeerId::from("peer-1"),
-            pairing_state: PairingState::Trusted,
-            identity_fingerprint: "fp".to_string(),
-            paired_at: Utc::now(),
-            last_seen_at: None,
-            device_name: "".to_string(),
-            sync_settings: None,
-        };
-
-        let result = map_paired_device_to_peer(device, None, false);
-
-        assert_eq!(result.device_name, "Unknown Device");
+        assert_eq!(result.last_seen, None);
     }
 }

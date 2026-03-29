@@ -19,6 +19,10 @@ pub enum PairingDomainEvent {
         local_fingerprint: String,
         peer_fingerprint: String,
     },
+    PairingVerifying {
+        session_id: String,
+        peer_id: String,
+    },
     PairingSucceeded {
         session_id: String,
         peer_id: String,

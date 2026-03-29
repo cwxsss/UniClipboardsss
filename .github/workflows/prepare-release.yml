@@ -90,6 +90,11 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           node scripts/bump-version.js --to "${VERSION}"
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Refresh Cargo.lock for workspace members
+        run: cd src-tauri && cargo update -p uc-cli
+
       - name: Generate changelog skeleton
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -151,15 +156,48 @@ jobs:
           responses-api-endpoint: ${{ secrets.CODEX_API_ENDPOINT || 'https://api.openai.com/v1/responses' }}
           openai-api-key: ${{ secrets.CODEX_API_KEY }}
           prompt: >-
-            Read docs/CHANGELOG_TEMPLATE.md for the changelog format rules and conventions.
-            Then generate the changelog at docs/changelog/${{ steps.version.outputs.version }}.md
-            following those rules exactly:
-            - Categorize commits since the last tag using conventional commit types
-            - Only include categories that have entries (omit empty ones)
-            - Write descriptions in English, concise and user-facing
-            - Add Breaking Changes section at top if any exist
-            Also create docs/changelog/${{ steps.version.outputs.version }}.zh.md
-            as a Chinese translation following the same structure.
+            Generate a user-facing changelog for version ${{ steps.version.outputs.version }}.
+
+            ## Step 1: Gather changes
+
+            Read docs/CHANGELOG_TEMPLATE.md for format rules.
+            Run `git log main..HEAD --oneline` to get all commits on this release branch.
+            If prior alpha/beta/rc changelogs exist under docs/changelog/ for this version
+            (e.g. 0.3.0-alpha.1.md, 0.3.0-alpha.2.md), read them all to understand
+            intermediate changes.
+
+            ## Step 2: Merge into final state
+
+            Merge all intermediate changelogs plus any post-last-prerelease commits into
+            a single changelog. Critically:
+            - Remove reverted changes (feature added in one alpha then reverted in another).
+            - Deduplicate: if the same area was changed across multiple alphas, keep only
+              the final user-visible outcome.
+            - Only include Features and Fixes sections. Omit Refactor, Tests, Docs, and
+              chore categories entirely — end users do not care about these.
+            - Add Breaking Changes section at top only if any exist.
+
+            ## Step 3: Remove internal details
+
+            Remove items that end users cannot perceive or do not care about:
+            - Internal infrastructure (logging modules, observability crates, tracing, CI changes).
+            - Developer-only fixes (dev-mode isolation, build script tweaks, component spacing微调).
+            - Implementation specifics in descriptions — strip terms like "chunked transfer",
+              "BLAKE3", "event-driven", "hexagonal architecture", "Redux slice", etc.
+              Describe WHAT the user gets, not HOW it is built.
+
+            ## Step 4: Consolidate related items
+
+            Merge closely related entries into one line. For example:
+            - Multiple Windows focus fixes for the same panel → one line.
+            - Multiple setup flow improvements → one line.
+            Keep each line short (one sentence).
+
+            ## Output
+
+            Write the English changelog to docs/changelog/${{ steps.version.outputs.version }}.md
+            and a Chinese translation to docs/changelog/${{ steps.version.outputs.version }}.zh.md.
+            Both files follow the format in docs/CHANGELOG_TEMPLATE.md.
             Only modify files under docs/changelog/. Do not change any code files.
 
       - name: Commit codex changes

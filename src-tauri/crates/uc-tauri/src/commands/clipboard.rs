@@ -5,9 +5,8 @@ use crate::bootstrap::AppRuntime;
 use crate::commands::error::CommandError;
 use crate::commands::record_trace_fields;
 use crate::models::{
-    ClipboardEntriesResponse, ClipboardEntryDetail, ClipboardEntryProjection,
-    ClipboardEntryResource, ClipboardImageItemDto, ClipboardItemDto, ClipboardItemResponse,
-    ClipboardLinkItemDto, ClipboardStats, ClipboardTextItemDto,
+    ClipboardEntriesResponse, ClipboardEntryDetail, ClipboardEntryResource, ClipboardImageItemDto,
+    ClipboardItemDto, ClipboardItemResponse, ClipboardLinkItemDto, ClipboardTextItemDto,
 };
 use base64::Engine;
 use std::sync::Arc;
@@ -15,6 +14,7 @@ use tauri::State;
 use tracing::{info_span, Instrument};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::clipboard::ClipboardUseCases;
+use uc_app::usecases::clipboard::{ClipboardStats, EntryProjectionDto};
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 use uc_core::security::state::EncryptionState;
@@ -66,34 +66,14 @@ pub async fn get_clipboard_entries(
                 CommandError::InternalError(e.to_string())
             })?;
 
-        // Map DTOs to command layer models
-        let projections: Vec<ClipboardEntryProjection> = dtos
-            .into_iter()
-            .map(|dto| {
-                let link_domains = dto
-                    .link_urls
-                    .as_ref()
-                    .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
-                ClipboardEntryProjection {
-                    id: dto.id,
-                    preview: dto.preview,
-                    has_detail: dto.has_detail,
-                    size_bytes: dto.size_bytes,
-                    captured_at: dto.captured_at,
-                    content_type: dto.content_type,
-                    thumbnail_url: dto.thumbnail_url,
-                    is_encrypted: dto.is_encrypted,
-                    is_favorited: dto.is_favorited,
-                    updated_at: dto.updated_at,
-                    active_time: dto.active_time,
-                    file_transfer_status: dto.file_transfer_status,
-                    file_transfer_reason: dto.file_transfer_reason,
-                    link_urls: dto.link_urls,
-                    link_domains,
-                    file_sizes: dto.file_sizes,
-                }
-            })
-            .collect();
+        // Populate link_domains on each DTO directly (no separate mapping type needed)
+        let mut projections = dtos;
+        for dto in &mut projections {
+            dto.link_domains = dto
+                .link_urls
+                .as_ref()
+                .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
+        }
 
         tracing::info!(count = projections.len(), "Retrieved clipboard entries");
         Ok(ClipboardEntriesResponse::Ready {
@@ -129,11 +109,7 @@ pub async fn get_clipboard_stats(
             CommandError::InternalError(e.to_string())
         })?;
 
-        let stats = ClipboardUseCases::compute_stats(&dtos);
-        Ok(ClipboardStats {
-            total_items: stats.total_items,
-            total_size: stats.total_size,
-        })
+        Ok(ClipboardUseCases::compute_stats(&dtos))
     }
     .instrument(span)
     .await
@@ -226,30 +202,13 @@ pub async fn get_clipboard_entry(
             CommandError::InternalError(e.to_string())
         })?;
 
-        let entries: Vec<ClipboardEntryProjection> = match projection {
-            Some(dto) => {
-                let link_domains = dto
+        let entries: Vec<EntryProjectionDto> = match projection {
+            Some(mut dto) => {
+                dto.link_domains = dto
                     .link_urls
                     .as_ref()
                     .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
-                vec![ClipboardEntryProjection {
-                    id: dto.id,
-                    preview: dto.preview,
-                    has_detail: dto.has_detail,
-                    size_bytes: dto.size_bytes,
-                    captured_at: dto.captured_at,
-                    content_type: dto.content_type,
-                    thumbnail_url: dto.thumbnail_url,
-                    is_encrypted: dto.is_encrypted,
-                    is_favorited: dto.is_favorited,
-                    updated_at: dto.updated_at,
-                    active_time: dto.active_time,
-                    file_transfer_status: dto.file_transfer_status,
-                    file_transfer_reason: dto.file_transfer_reason,
-                    link_urls: dto.link_urls,
-                    link_domains,
-                    file_sizes: dto.file_sizes,
-                }]
+                vec![dto]
             }
             None => vec![],
         };
@@ -611,24 +570,31 @@ async fn restore_clipboard_entry_impl(
             return Err(CommandError::NotFound("Entry not found".to_string()));
         }
 
-        let outbound_snapshot = snapshot.clone();
-        restore_uc.restore_snapshot(snapshot).await.map_err(|err| {
+        restore_uc.restore_snapshot(snapshot.clone()).await.map_err(|err| {
             tracing::error!(error = %err, entry_id = %entry_id, "Failed to write restore snapshot");
             CommandError::InternalError(err.to_string())
         })?;
 
-        let outbound_sync_uc = runtime.usecases().sync_outbound_clipboard();
-        match tokio::task::spawn_blocking(move || {
-            outbound_sync_uc.execute(outbound_snapshot, uc_core::ClipboardChangeOrigin::LocalRestore, None, vec![])
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                tracing::warn!(error = %err, entry_id = %entry_id, "Restore outbound sync failed");
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, entry_id = %entry_id, "Restore outbound sync task join failed");
+        // In Passive mode, daemon's ClipboardWatcherWorker handles outbound sync
+        // after detecting the OS clipboard write. Skip direct sync to avoid double-send.
+        if !matches!(
+            runtime.clipboard_integration_mode(),
+            ClipboardIntegrationMode::Passive
+        ) {
+            let outbound_snapshot = snapshot;
+            let outbound_sync_uc = runtime.usecases().sync_outbound_clipboard();
+            match tokio::task::spawn_blocking(move || {
+                outbound_sync_uc.execute(outbound_snapshot, uc_core::ClipboardChangeOrigin::LocalRestore, None, vec![])
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(error = %err, entry_id = %entry_id, "Restore outbound sync failed");
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, entry_id = %entry_id, "Restore outbound sync task join failed");
+                }
             }
         }
 
@@ -699,7 +665,11 @@ mod tests {
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::{Blob, BlobId, ContentHash, DeviceId};
     use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
-    use uc_platform::ports::{WatcherControlError, WatcherControlPort};
+
+    fn clipboard_mode_env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
 
     struct MockEntryRepository {
         entry: Option<ClipboardEntry>,
@@ -1033,6 +1003,10 @@ mod tests {
         async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
             Ok(())
         }
+
+        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -1067,17 +1041,6 @@ mod tests {
         }
 
         async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl WatcherControlPort for NoopPort {
-        async fn start_watcher(&self) -> Result<(), WatcherControlError> {
-            Ok(())
-        }
-
-        async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
             Ok(())
         }
     }
@@ -1527,9 +1490,7 @@ mod tests {
 
     #[tokio::test]
     async fn sync_clipboard_items_returns_error_in_passive_mode() {
-        let _guard = crate::bootstrap::clipboard_integration_mode::clipboard_mode_env_lock()
-            .lock()
-            .expect("env lock");
+        let _guard = clipboard_mode_env_lock().lock().expect("env lock");
         let _mode_guard = EnvVarGuard::set("UC_CLIPBOARD_MODE", "passive");
 
         let (worker_tx, _worker_rx) = mpsc::channel(1);

@@ -1,4 +1,4 @@
-import { listen } from '@tauri-apps/api/event'
+import { onDaemonRealtimeEvent } from '@/api/realtime'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
 export type SetupError =
@@ -101,47 +101,81 @@ export async function cancelSetup(): Promise<SetupState> {
   return (await invokeWithTrace('cancel_setup')) as SetupState
 }
 
+export interface SpaceAccessCompletedEvent {
+  sessionId: string
+  peerId: string
+  success: boolean
+  reason?: string | null
+  ts: number
+}
+
+/**
+ * Called by the frontend when the daemon emits `setup.spaceAccessCompleted` via
+ * the WebSocket bridge. This bridges the gap between the daemon's space access
+ * orchestrator completing and the app's setup orchestrator transitioning to
+ * `Completed`.
+ */
+export async function handleSpaceAccessCompleted(): Promise<SetupState> {
+  return (await invokeWithTrace('handle_space_access_completed')) as SetupState
+}
+
+/**
+ * Listen for space access completion events from the daemon.
+ * This is used to transition the setup state machine from `ProcessingJoinSpace`
+ * to `Completed` when the daemon's space access flow completes.
+ */
+export async function onSpaceAccessCompleted(
+  callback: (event: SpaceAccessCompletedEvent) => void
+): Promise<() => void> {
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic !== 'setup' || event.type !== 'setup.spaceAccessCompleted') {
+      return
+    }
+    callback(event.payload as SpaceAccessCompletedEvent)
+  })
+}
+
 /**
  * Listen setup state changes with session idempotency.
  */
 export async function onSetupStateChanged(
   callback: (event: SetupStateChangedEvent) => void
 ): Promise<() => void> {
-  try {
-    let activeSessionId: string | null = null
-    const seenEventKeys = new Set<string>()
+  let activeSessionId: string | null = null
+  const seenEventKeys = new Set<string>()
 
-    const unlisten = await listen<SetupStateChangedEvent>('setup-state-changed', event => {
-      const payload = event.payload
-
-      if (!payload.sessionId) {
-        return
-      }
-
-      if (activeSessionId !== payload.sessionId) {
-        activeSessionId = payload.sessionId
-        seenEventKeys.clear()
-      }
-
-      const dedupeKey = `${payload.sessionId}:${JSON.stringify(payload.state)}:${payload.ts}`
-      if (seenEventKeys.has(dedupeKey)) {
-        return
-      }
-      seenEventKeys.add(dedupeKey)
-
-      callback(payload)
-
-      if (payload.state === 'Completed') {
-        activeSessionId = null
-        seenEventKeys.clear()
-      }
-    })
-
-    return () => {
-      unlisten()
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic !== 'setup' || event.type !== 'setup.stateChanged') {
+      return
     }
-  } catch (error) {
-    console.error('Failed to setup setup state changed listener:', error)
-    return () => {}
-  }
+
+    const payload = event.payload as Omit<SetupStateChangedEvent, 'ts' | 'source'>
+    const enrichedEvent: SetupStateChangedEvent = {
+      ...payload,
+      source: 'realtime',
+      ts: event.ts,
+    }
+
+    if (!enrichedEvent.sessionId) {
+      return
+    }
+
+    if (activeSessionId !== enrichedEvent.sessionId) {
+      activeSessionId = enrichedEvent.sessionId
+      seenEventKeys.clear()
+    }
+
+    const dedupeKey = `${enrichedEvent.sessionId}:${JSON.stringify(enrichedEvent.state)}:${enrichedEvent.ts}`
+    if (seenEventKeys.has(dedupeKey)) {
+      return
+    }
+    seenEventKeys.add(dedupeKey)
+
+    callback(enrichedEvent)
+
+    if (enrichedEvent.state === 'Completed') {
+      activeSessionId = null
+      seenEventKeys.clear()
+    }
+  })
 }

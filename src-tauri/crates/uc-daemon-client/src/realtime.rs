@@ -1,0 +1,537 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use tokio::time::{sleep, Duration};
+use tokio_util::sync::CancellationToken;
+use tracing::warn;
+use uc_app::realtime::{
+    run_pairing_realtime_consumer, run_pairing_realtime_consumer_with_rx,
+    run_peers_realtime_consumer, run_peers_realtime_consumer_with_rx, run_setup_realtime_consumer,
+    run_setup_realtime_consumer_with_rx, run_setup_state_realtime_consumer,
+    run_setup_state_realtime_consumer_with_rx, SetupPairingEventHub,
+};
+use uc_app::task_registry::TaskRegistry;
+use uc_app::usecases::pairing::PairingDomainEvent;
+use uc_app::usecases::setup::SetupPairingFacadePort;
+use uc_core::ports::host_event_emitter::{ClipboardHostEvent, ClipboardOriginKind, HostEvent};
+use uc_core::ports::realtime::ClipboardNewContentEvent;
+use uc_core::ports::{HostEventEmitterPort, RealtimeTopic};
+
+use crate::http::DaemonPairingClient;
+use crate::ws_bridge::DaemonWsBridgeConfig;
+use crate::{DaemonConnectionState, DaemonWsBridge};
+
+const GUI_PAIRING_LEASE_TTL_MS: u64 = 300_000;
+const GUI_PAIRING_LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(60);
+const GUI_PAIRING_LEASE_WAIT_INTERVAL: Duration = Duration::from_millis(250);
+const SETUP_PAIRING_HUB_BUFFER: usize = 64;
+
+#[async_trait]
+trait PairingLeasePort: Send + Sync {
+    async fn set_enabled(&self, enabled: bool) -> Result<()>;
+}
+
+struct DaemonPairingLeasePort {
+    connection_state: DaemonConnectionState,
+}
+
+impl DaemonPairingLeasePort {
+    fn new(connection_state: DaemonConnectionState) -> Self {
+        Self { connection_state }
+    }
+}
+
+#[async_trait]
+impl PairingLeasePort for DaemonPairingLeasePort {
+    async fn set_enabled(&self, enabled: bool) -> Result<()> {
+        DaemonPairingClient::new(self.connection_state.clone())
+            .register_gui_participant(enabled, Some(GUI_PAIRING_LEASE_TTL_MS))
+            .await?;
+        Ok(())
+    }
+}
+
+async fn maintain_gui_pairing_leases(
+    connection_state: DaemonConnectionState,
+    lease_port: Arc<dyn PairingLeasePort>,
+    token: CancellationToken,
+) {
+    loop {
+        if token.is_cancelled() {
+            break;
+        }
+
+        if connection_state.get().is_none() {
+            tokio::select! {
+                _ = token.cancelled() => break,
+                _ = sleep(GUI_PAIRING_LEASE_WAIT_INTERVAL) => {}
+            }
+            continue;
+        }
+
+        if let Err(err) = lease_port.set_enabled(true).await {
+            warn!(error = %err, ttl_ms = GUI_PAIRING_LEASE_TTL_MS, "failed to renew gui pairing lease");
+        }
+
+        tokio::select! {
+            _ = token.cancelled() => break,
+            _ = sleep(GUI_PAIRING_LEASE_RENEW_INTERVAL) => {}
+        }
+    }
+
+    if connection_state.get().is_some() {
+        if let Err(err) = lease_port.set_enabled(false).await {
+            warn!(error = %err, "failed to revoke gui pairing lease");
+        }
+    }
+}
+
+/// Daemon-backed implementation of [`SetupPairingFacadePort`].
+///
+/// Inlined in uc-daemon-client to avoid a circular dependency with uc-tauri.
+pub struct DaemonBackedSetupPairingFacade {
+    connection_state: DaemonConnectionState,
+    event_hub: Arc<SetupPairingEventHub>,
+    participant_ready: bool,
+}
+
+impl DaemonBackedSetupPairingFacade {
+    pub fn new(
+        connection_state: DaemonConnectionState,
+        event_hub: Arc<SetupPairingEventHub>,
+    ) -> Self {
+        Self {
+            connection_state,
+            event_hub,
+            participant_ready: false,
+        }
+    }
+
+    pub async fn subscribe(&self) -> Result<tokio::sync::mpsc::Receiver<PairingDomainEvent>> {
+        self.event_hub.subscribe().await
+    }
+
+    pub async fn initiate_pairing(&self, peer_id: String) -> Result<String> {
+        let client = DaemonPairingClient::new(self.connection_state.clone());
+        let response = client.initiate_pairing(peer_id).await?;
+        Ok(response.session_id)
+    }
+
+    pub async fn accept_pairing(&self, session_id: &str) -> Result<()> {
+        let client = DaemonPairingClient::new(self.connection_state.clone());
+        client.accept_pairing(session_id).await?;
+        Ok(())
+    }
+
+    pub async fn reject_pairing(&self, session_id: &str) -> Result<()> {
+        let client = DaemonPairingClient::new(self.connection_state.clone());
+        client.reject_pairing(session_id).await?;
+        Ok(())
+    }
+
+    pub async fn cancel_pairing(&self, session_id: &str) -> Result<()> {
+        let client = DaemonPairingClient::new(self.connection_state.clone());
+        client.cancel_pairing(session_id).await?;
+        Ok(())
+    }
+
+    pub async fn verify_pairing(&self, session_id: &str, pin_matches: bool) -> Result<()> {
+        let client = DaemonPairingClient::new(self.connection_state.clone());
+        client.verify_pairing(session_id, pin_matches).await?;
+        Ok(())
+    }
+
+    pub async fn set_participant_ready(
+        &mut self,
+        ready: bool,
+        lease_ttl_ms: Option<u64>,
+    ) -> Result<()> {
+        let client = DaemonPairingClient::new(self.connection_state.clone());
+        client
+            .set_pairing_participant_ready("setup", ready, lease_ttl_ms)
+            .await?;
+        self.participant_ready = ready;
+        Ok(())
+    }
+
+    pub fn is_participant_ready(&self) -> bool {
+        self.participant_ready
+    }
+}
+
+impl Drop for DaemonBackedSetupPairingFacade {
+    fn drop(&mut self) {
+        if self.participant_ready {
+            let connection_state = self.connection_state.clone();
+            tokio::spawn(async move {
+                let client = DaemonPairingClient::new(connection_state);
+                if let Err(error) = client
+                    .set_pairing_participant_ready("setup", false, None)
+                    .await
+                {
+                    warn!(error = %error, "failed to revoke participant-ready on facade drop");
+                }
+            });
+        }
+    }
+}
+
+#[async_trait]
+impl SetupPairingFacadePort for DaemonBackedSetupPairingFacade {
+    async fn subscribe(&self) -> Result<tokio::sync::mpsc::Receiver<PairingDomainEvent>> {
+        self.subscribe().await
+    }
+
+    async fn initiate_pairing(&self, peer_id: String) -> Result<String> {
+        self.initiate_pairing(peer_id).await
+    }
+
+    async fn accept_pairing(&self, session_id: &str) -> Result<()> {
+        self.accept_pairing(session_id).await
+    }
+
+    async fn reject_pairing(&self, session_id: &str) -> Result<()> {
+        self.reject_pairing(session_id).await
+    }
+
+    async fn cancel_pairing(&self, session_id: &str) -> Result<()> {
+        self.cancel_pairing(session_id).await
+    }
+
+    async fn verify_pairing(&self, session_id: &str, pin_matches: bool) -> Result<()> {
+        self.verify_pairing(session_id, pin_matches).await
+    }
+}
+
+/// Installs the daemon-backed setup/pairing facade into SetupAssemblyPorts.
+///
+/// Inlines the facade construction to avoid a circular dependency between
+/// uc-daemon-client and uc-tauri. Wires
+/// `setup_ports.setup_pairing_facade = Arc::new(DaemonBackedSetupPairingFacade::new(...))`.
+pub fn install_daemon_setup_pairing_facade(
+    setup_ports: &mut uc_bootstrap::assembly::SetupAssemblyPorts,
+    connection_state: DaemonConnectionState,
+) -> Arc<SetupPairingEventHub> {
+    let setup_hub = Arc::new(SetupPairingEventHub::new(SETUP_PAIRING_HUB_BUFFER));
+    setup_ports.setup_pairing_facade = Arc::new(DaemonBackedSetupPairingFacade::new(
+        connection_state,
+        setup_hub.clone(),
+    ));
+    setup_hub
+}
+
+pub async fn start_realtime_runtime(
+    connection_state: DaemonConnectionState,
+    event_emitter: Arc<dyn HostEventEmitterPort>,
+    setup_hub: Arc<SetupPairingEventHub>,
+    task_registry: &Arc<TaskRegistry>,
+) {
+    let bridge = Arc::new(DaemonWsBridge::new(
+        connection_state.clone(),
+        DaemonWsBridgeConfig::default(),
+    ));
+
+    let pairing_rx = match bridge
+        .subscribe("pairing_realtime_consumer", &[RealtimeTopic::Pairing])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe pairing realtime consumer");
+            None
+        }
+    };
+
+    let peers_rx = match bridge
+        .subscribe("peers_realtime_consumer", &[RealtimeTopic::Peers])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe peers realtime consumer");
+            None
+        }
+    };
+
+    let setup_rx = match bridge
+        .subscribe("setup_realtime_consumer", &[RealtimeTopic::Pairing])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe setup realtime consumer");
+            None
+        }
+    };
+
+    let setup_state_rx = match bridge
+        .subscribe("setup_state_realtime_consumer", &[RealtimeTopic::Setup])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe setup state realtime consumer");
+            None
+        }
+    };
+
+    let clipboard_rx = match bridge
+        .subscribe("clipboard_realtime_consumer", &[RealtimeTopic::Clipboard])
+        .await
+    {
+        Ok(rx) => Some(rx),
+        Err(err) => {
+            warn!(error = %err, "failed to eagerly subscribe clipboard realtime consumer");
+            None
+        }
+    };
+
+    let pairing_bridge = bridge.clone();
+    let pairing_emitter = event_emitter.clone();
+    task_registry
+        .spawn("realtime_pairing_consumer", |_token| async move {
+            let result = match pairing_rx {
+                Some(mut rx) => {
+                    run_pairing_realtime_consumer_with_rx(&mut rx, pairing_emitter).await
+                }
+                None => run_pairing_realtime_consumer(pairing_bridge, pairing_emitter).await,
+            };
+            if let Err(err) = result {
+                warn!(error = %err, "pairing realtime consumer stopped");
+            }
+        })
+        .await;
+
+    let peers_bridge = bridge.clone();
+    let peers_emitter = event_emitter.clone();
+    task_registry
+        .spawn("realtime_peers_consumer", |_token| async move {
+            let result = match peers_rx {
+                Some(mut rx) => run_peers_realtime_consumer_with_rx(&mut rx, peers_emitter).await,
+                None => run_peers_realtime_consumer(peers_bridge, peers_emitter).await,
+            };
+            if let Err(err) = result {
+                warn!(error = %err, "peers realtime consumer stopped");
+            }
+        })
+        .await;
+
+    let setup_bridge = bridge.clone();
+    let setup_hub_clone = setup_hub.clone();
+    task_registry
+        .spawn("realtime_setup_consumer", |_token| async move {
+            let result = match setup_rx {
+                Some(mut rx) => run_setup_realtime_consumer_with_rx(&mut rx, setup_hub_clone).await,
+                None => run_setup_realtime_consumer(setup_bridge, setup_hub_clone).await,
+            };
+            if let Err(err) = result {
+                warn!(error = %err, "setup realtime consumer stopped");
+            }
+        })
+        .await;
+
+    let setup_state_bridge = bridge.clone();
+    let setup_state_emitter = event_emitter.clone();
+    task_registry
+        .spawn("realtime_setup_state_consumer", |_token| async move {
+            let result = match setup_state_rx {
+                Some(mut rx) => {
+                    run_setup_state_realtime_consumer_with_rx(&mut rx, setup_state_emitter).await
+                }
+                None => {
+                    run_setup_state_realtime_consumer(setup_state_bridge, setup_state_emitter).await
+                }
+            };
+            if let Err(err) = result {
+                warn!(error = %err, "setup state realtime consumer stopped");
+            }
+        })
+        .await;
+
+    let clipboard_bridge = bridge.clone();
+    let clipboard_emitter = event_emitter.clone();
+    task_registry
+        .spawn("realtime_clipboard_consumer", |_token| async move {
+            let result = match clipboard_rx {
+                Some(mut rx) => {
+                    run_clipboard_realtime_consumer_with_rx(&mut rx, clipboard_emitter).await
+                }
+                None => run_clipboard_realtime_consumer(clipboard_bridge, clipboard_emitter).await,
+            };
+            if let Err(err) = result {
+                warn!(error = %err, "clipboard realtime consumer stopped");
+            }
+        })
+        .await;
+
+    let monitor_bridge = bridge.clone();
+    let monitor_emitter = event_emitter.clone();
+    task_registry
+        .spawn("bridge_state_monitor", move |token| async move {
+            bridge_state_monitor(monitor_bridge, monitor_emitter, token).await;
+        })
+        .await;
+
+    task_registry
+        .spawn("daemon_ws_bridge", move |token| async move {
+            if let Err(err) = bridge.run(token).await {
+                warn!(error = %err, "daemon websocket bridge stopped");
+            }
+        })
+        .await;
+
+    let lease_connection_state = connection_state.clone();
+    let lease_port: Arc<dyn PairingLeasePort> =
+        Arc::new(DaemonPairingLeasePort::new(connection_state.clone()));
+    task_registry
+        .spawn("gui_pairing_lease_keeper", move |token| async move {
+            maintain_gui_pairing_leases(lease_connection_state, lease_port, token).await;
+        })
+        .await;
+}
+
+async fn run_clipboard_realtime_consumer(
+    bridge: Arc<DaemonWsBridge>,
+    emitter: Arc<dyn HostEventEmitterPort>,
+) -> Result<()> {
+    let mut rx = bridge
+        .subscribe("clipboard_realtime_consumer", &[RealtimeTopic::Clipboard])
+        .await?;
+    run_clipboard_realtime_consumer_with_rx(&mut rx, emitter).await
+}
+
+async fn run_clipboard_realtime_consumer_with_rx(
+    rx: &mut tokio::sync::mpsc::Receiver<uc_core::ports::realtime::RealtimeEvent>,
+    emitter: Arc<dyn HostEventEmitterPort>,
+) -> Result<()> {
+    use uc_core::ports::realtime::RealtimeEvent;
+    while let Some(event) = rx.recv().await {
+        match event {
+            RealtimeEvent::ClipboardNewContent(ClipboardNewContentEvent {
+                entry_id,
+                preview,
+                origin,
+            }) => {
+                let origin_kind = match origin.as_str() {
+                    "remote" => ClipboardOriginKind::Remote,
+                    _ => ClipboardOriginKind::Local,
+                };
+                if let Err(err) =
+                    emitter.emit(HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                        entry_id,
+                        preview,
+                        origin: origin_kind,
+                    }))
+                {
+                    warn!(error = %err, "failed to emit clipboard new content host event");
+                }
+            }
+            _ => {} // ignore non-clipboard events on this subscription
+        }
+    }
+    Ok(())
+}
+
+async fn bridge_state_monitor(
+    bridge: Arc<DaemonWsBridge>,
+    emitter: Arc<dyn HostEventEmitterPort>,
+    token: CancellationToken,
+) {
+    use crate::ws_bridge::BridgeState;
+
+    let mut has_been_ready = false;
+    let mut was_degraded = false;
+
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => return,
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+        }
+
+        let current = bridge.state();
+
+        match current {
+            BridgeState::Ready if !has_been_ready => {
+                // First-ever Ready — record it, do NOT emit reconnect
+                has_been_ready = true;
+                was_degraded = false;
+            }
+            BridgeState::Degraded => {
+                was_degraded = true;
+            }
+            BridgeState::Ready if was_degraded && has_been_ready => {
+                was_degraded = false;
+                if let Err(err) = emitter.emit(HostEvent::Clipboard(
+                    ClipboardHostEvent::DaemonReconnected,
+                )) {
+                    warn!(error = %err, "failed to emit daemon reconnected event");
+                }
+            }
+            _ => {
+                // Disconnected, Connecting, Subscribing, or Ready without prior Degraded — no-op
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc as StdArc;
+    use uc_daemon::api::auth::DaemonConnectionInfo;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct LeaseCall {
+        enabled: bool,
+    }
+
+    #[derive(Default)]
+    struct RecordingLeasePort {
+        calls: tokio::sync::Mutex<Vec<LeaseCall>>,
+    }
+
+    impl RecordingLeasePort {
+        async fn get_calls_async(&self) -> Vec<LeaseCall> {
+            self.calls.lock().await.clone()
+        }
+    }
+
+    #[async_trait]
+    impl PairingLeasePort for RecordingLeasePort {
+        async fn set_enabled(&self, enabled: bool) -> Result<()> {
+            self.calls.lock().await.push(LeaseCall { enabled });
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn gui_pairing_lease_keeper_registers_and_revokes_gui_leases() {
+        let connection_state = DaemonConnectionState::default();
+        connection_state.set(DaemonConnectionInfo {
+            base_url: "http://127.0.0.1:42715".to_string(),
+            ws_url: "ws://127.0.0.1:42715/ws".to_string(),
+            token: "test-token".to_string(),
+        });
+        let lease_port_concrete: StdArc<RecordingLeasePort> =
+            StdArc::new(RecordingLeasePort::default());
+        let lease_port: StdArc<dyn PairingLeasePort> = lease_port_concrete.clone();
+        let token = CancellationToken::new();
+
+        let task = tokio::spawn(maintain_gui_pairing_leases(
+            connection_state,
+            lease_port.clone(),
+            token.clone(),
+        ));
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        token.cancel();
+        task.await.expect("lease keeper should stop cleanly");
+
+        let calls = lease_port_concrete.get_calls_async().await;
+        assert_eq!(
+            calls,
+            vec![LeaseCall { enabled: true }, LeaseCall { enabled: false },]
+        );
+    }
+}

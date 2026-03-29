@@ -1,6 +1,6 @@
 [package]
 name = "uc-tauri"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Tauri adapter layer for UniClipboard"
 
@@ -11,6 +11,9 @@ uc-app = { path = "../uc-app" }
 uc-infra = { path = "../uc-infra" }
 uc-platform = { path = "../uc-platform" }
 uc-observability = { path = "../uc-observability" }
+uc-bootstrap = { path = "../uc-bootstrap" }
+uc-daemon = { path = "../uc-daemon" }
+uc-daemon-client = { path = "../uc-daemon-client" }
 
 # System utilities
 gethostname = "1.1"
@@ -21,21 +24,22 @@ tauri = { workspace = true }
 tauri-plugin-autostart = { workspace = true }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-shell = { workspace = true }
 url = "2"
 
 # Async
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
 async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 base64 = "0.22"
-
-# Hashing
-blake3 = "1"
 
 # Error handling
 anyhow = "1.0"
@@ -64,7 +68,7 @@ windows = { version = "0.61", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSPanel", "NSResponder", "NSWindow"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSPanel", "NSResponder", "NSWindow", "NSColor"] }
 core-graphics = "0.24"
 objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
 

@@ -1,0 +1,110 @@
+mod commands;
+mod daemon_client;
+mod exit_codes;
+mod local_daemon;
+mod output;
+mod ui;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(
+    name = "uniclipboard-cli",
+    version,
+    about = "UniClipboard command-line interface"
+)]
+struct Cli {
+    /// Output in JSON format
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// Enable verbose tracing output (shows debug logs on console)
+    #[arg(long, short, global = true)]
+    verbose: bool,
+
+    /// Run in development mode (use file-based secure storage instead of system keychain)
+    #[cfg_attr(not(debug_assertions), arg(long, global = true, hide = true))]
+    #[cfg_attr(debug_assertions, arg(long, global = true))]
+    dev: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the daemon (background by default, use --foreground for log streaming)
+    Start {
+        /// Run daemon in foreground (log output to terminal)
+        #[arg(
+            long,
+            short = 'f',
+            help = "Run daemon in foreground (log output to terminal)"
+        )]
+        foreground: bool,
+    },
+    /// Stop the running daemon
+    Stop,
+    /// Show daemon status
+    Status,
+    /// Drive daemon-owned setup flows (interactive guide when no subcommand given)
+    Setup {
+        #[command(subcommand)]
+        subcommand: Option<SetupCommands>,
+    },
+    /// List paired devices via the daemon API
+    Devices,
+    /// Show space and encryption status (direct mode, no daemon required)
+    SpaceStatus,
+}
+
+#[derive(Subcommand)]
+enum SetupCommands {
+    /// Start pairing mode and wait for another device to connect
+    Pair,
+    /// Connect to a device that is in pairing mode
+    Connect,
+    /// Inspect daemon-owned setup state
+    Status,
+    /// Reset daemon-owned setup state for repeatable local reruns
+    Reset,
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
+    if cli.dev {
+        std::env::set_var("UNICLIPBOARD_ENV", "development");
+    }
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    let exit_code = rt.block_on(async {
+        match cli.command {
+            Commands::Start { foreground } => {
+                commands::start::run(foreground, cli.json, cli.verbose).await
+            }
+            Commands::Stop => commands::stop::run(cli.json, cli.verbose).await,
+            Commands::Status => commands::status::run(cli.json, cli.verbose).await,
+            Commands::Setup { subcommand } => match subcommand {
+                None => commands::setup::run_interactive(cli.json, cli.verbose).await,
+                Some(SetupCommands::Pair) => commands::setup::run_host(cli.json, cli.verbose).await,
+                Some(SetupCommands::Connect) => {
+                    commands::setup::run_join(cli.json, cli.verbose).await
+                }
+                Some(SetupCommands::Status) => {
+                    commands::setup::run_status(cli.json, cli.verbose).await
+                }
+                Some(SetupCommands::Reset) => {
+                    commands::setup::run_reset(cli.json, cli.verbose).await
+                }
+            },
+            Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
+            Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,
+        }
+    });
+
+    std::process::exit(exit_code);
+}

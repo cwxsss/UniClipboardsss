@@ -1,20 +1,16 @@
 // @vitest-environment jsdom
 // Tests for event-driven device discovery replacing the old 3-second polling approach
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { HTMLAttributes, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import {
-  getP2PPeers,
-  onP2PPeerConnectionChanged,
-  onP2PPeerDiscoveryChanged,
-  onP2PPeerNameUpdated,
-} from '@/api/p2p'
-import { getSetupState, selectJoinPeer } from '@/api/setup'
+import { getP2PPeers } from '@/api/p2p'
+import { onDaemonRealtimeEvent } from '@/api/realtime'
+import { selectJoinPeer } from '@/api/setup'
 import SetupPage from '@/pages/SetupPage'
+const useSetupRealtimeStoreMock = vi.hoisted(() => vi.fn())
+const syncSetupStateFromCommandMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/setup', () => ({
-  getSetupState: vi.fn(),
-  onSetupStateChanged: vi.fn(() => Promise.resolve(() => {})),
   startNewSpace: vi.fn(),
   startJoinSpace: vi.fn(),
   selectJoinPeer: vi.fn(),
@@ -24,11 +20,16 @@ vi.mock('@/api/setup', () => ({
   confirmPeerTrust: vi.fn(),
 }))
 
+vi.mock('@/store/setupRealtimeStore', () => ({
+  useSetupRealtimeStore: useSetupRealtimeStoreMock,
+}))
+
 vi.mock('@/api/p2p', () => ({
   getP2PPeers: vi.fn(),
-  onP2PPeerDiscoveryChanged: vi.fn(() => Promise.resolve(() => {})),
-  onP2PPeerConnectionChanged: vi.fn(() => Promise.resolve(() => {})),
-  onP2PPeerNameUpdated: vi.fn(() => Promise.resolve(() => {})),
+}))
+
+vi.mock('@/api/realtime', () => ({
+  onDaemonRealtimeEvent: vi.fn(() => Promise.resolve(() => {})),
 }))
 
 const navigateMock = vi.fn()
@@ -65,18 +66,19 @@ vi.mock('framer-motion', () => ({
 describe('setup event-driven device discovery', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    ;(getSetupState as Mock).mockReset()
     ;(getP2PPeers as Mock).mockReset()
     ;(selectJoinPeer as Mock).mockReset()
-    ;(onP2PPeerDiscoveryChanged as Mock).mockReset()
-    ;(onP2PPeerConnectionChanged as Mock).mockReset()
-    ;(onP2PPeerNameUpdated as Mock).mockReset()
+    ;(onDaemonRealtimeEvent as Mock).mockReset()
     navigateMock.mockReset()
-    ;(getSetupState as Mock).mockResolvedValue({ JoinSpaceSelectDevice: { error: null } })
+    syncSetupStateFromCommandMock.mockReset()
+    useSetupRealtimeStoreMock.mockReturnValue({
+      setupState: { JoinSpaceSelectDevice: { error: null } },
+      sessionId: null,
+      hydrated: true,
+      syncSetupStateFromCommand: syncSetupStateFromCommandMock,
+    })
     ;(getP2PPeers as Mock).mockResolvedValue([])
-    ;(onP2PPeerDiscoveryChanged as Mock).mockResolvedValue(() => {})
-    ;(onP2PPeerConnectionChanged as Mock).mockResolvedValue(() => {})
-    ;(onP2PPeerNameUpdated as Mock).mockResolvedValue(() => {})
+    ;(onDaemonRealtimeEvent as Mock).mockResolvedValue(() => {})
   })
 
   afterEach(() => {
@@ -93,10 +95,7 @@ describe('setup event-driven device discovery', () => {
       expect(getP2PPeers).toHaveBeenCalled()
     })
 
-    // Event listeners must be set up
-    expect(onP2PPeerDiscoveryChanged).toHaveBeenCalledTimes(1)
-    expect(onP2PPeerConnectionChanged).toHaveBeenCalledTimes(1)
-    expect(onP2PPeerNameUpdated).toHaveBeenCalledTimes(1)
+    expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
 
     const callsBeforeAdvance = (getP2PPeers as Mock).mock.calls.length
 
@@ -130,17 +129,12 @@ describe('setup event-driven device discovery', () => {
   })
 
   it('discovery event adds device to list', async () => {
-    let discoveryCallback:
-      | ((event: {
-          peerId: string
-          deviceName: string | null
-          addresses: string[]
-          discovered: boolean
-        }) => void)
+    let realtimeCallback:
+      | ((event: { topic: string; type: string; payload: unknown }) => void)
       | null = null
 
-    ;(onP2PPeerDiscoveryChanged as Mock).mockImplementation((cb: typeof discoveryCallback) => {
-      discoveryCallback = cb
+    ;(onDaemonRealtimeEvent as Mock).mockImplementation((cb: typeof realtimeCallback) => {
+      realtimeCallback = cb
       return Promise.resolve(() => {})
     })
 
@@ -148,16 +142,22 @@ describe('setup event-driven device discovery', () => {
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(discoveryCallback).not.toBeNull()
+      expect(realtimeCallback).not.toBeNull()
     })
 
-    // Fire discovery event with a device
     await act(async () => {
-      discoveryCallback!({
-        peerId: 'peer-1',
-        deviceName: 'Test Device',
-        addresses: [],
-        discovered: true,
+      realtimeCallback!({
+        topic: 'peers',
+        type: 'peers.changed',
+        payload: {
+          peers: [
+            {
+              peerId: 'peer-1',
+              deviceName: 'Test Device',
+              connected: false,
+            },
+          ],
+        },
       })
     })
 
@@ -165,15 +165,63 @@ describe('setup event-driven device discovery', () => {
     expect(view.getByText('Test Device')).toBeTruthy()
   })
 
+  it('selects a discovered device and advances join pairing progression', async () => {
+    let realtimeCallback:
+      | ((event: { topic: string; type: string; payload: unknown }) => void)
+      | null = null
+
+    ;(selectJoinPeer as Mock).mockResolvedValue({
+      ProcessingJoinSpace: { message: 'waiting for pairing verification' },
+    })
+    ;(onDaemonRealtimeEvent as Mock).mockImplementation((cb: typeof realtimeCallback) => {
+      realtimeCallback = cb
+      return Promise.resolve(() => {})
+    })
+
+    render(<SetupPage />)
+    await act(async () => {})
+
+    await vi.waitFor(() => {
+      expect(realtimeCallback).not.toBeNull()
+    })
+
+    await act(async () => {
+      realtimeCallback!({
+        topic: 'peers',
+        type: 'peers.changed',
+        payload: {
+          peers: [
+            {
+              peerId: 'peer-join-1',
+              deviceName: 'Pairing Host',
+              connected: false,
+            },
+          ],
+        },
+      })
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'setup.joinPickDevice.actions.select' }))
+    })
+
+    expect(selectJoinPeer).toHaveBeenCalledWith('peer-join-1')
+    await vi.waitFor(() => {
+      expect(syncSetupStateFromCommandMock).toHaveBeenCalledWith({
+        ProcessingJoinSpace: { message: 'waiting for pairing verification' },
+      })
+    })
+  })
+
   it('cleans up event listeners on unmount', async () => {
     const cleanupSpy = vi.fn()
-    ;(onP2PPeerDiscoveryChanged as Mock).mockResolvedValue(cleanupSpy)
+    ;(onDaemonRealtimeEvent as Mock).mockResolvedValue(cleanupSpy)
 
     const view = render(<SetupPage />)
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(onP2PPeerDiscoveryChanged).toHaveBeenCalledTimes(1)
+      expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
     })
 
     // Unmount the component
@@ -185,17 +233,12 @@ describe('setup event-driven device discovery', () => {
   })
 
   it('anonymous device renders with i18n fallback from render layer', async () => {
-    let discoveryCallback:
-      | ((event: {
-          peerId: string
-          deviceName: string | null
-          addresses: string[]
-          discovered: boolean
-        }) => void)
+    let realtimeCallback:
+      | ((event: { topic: string; type: string; payload: unknown }) => void)
       | null = null
 
-    ;(onP2PPeerDiscoveryChanged as Mock).mockImplementation((cb: typeof discoveryCallback) => {
-      discoveryCallback = cb
+    ;(onDaemonRealtimeEvent as Mock).mockImplementation((cb: typeof realtimeCallback) => {
+      realtimeCallback = cb
       return Promise.resolve(() => {})
     })
 
@@ -203,16 +246,22 @@ describe('setup event-driven device discovery', () => {
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(discoveryCallback).not.toBeNull()
+      expect(realtimeCallback).not.toBeNull()
     })
 
-    // Fire discovery event with null deviceName (anonymous device)
     await act(async () => {
-      discoveryCallback!({
-        peerId: 'peer-anon',
-        deviceName: null,
-        addresses: ['addr'],
-        discovered: true,
+      realtimeCallback!({
+        topic: 'peers',
+        type: 'peers.changed',
+        payload: {
+          peers: [
+            {
+              peerId: 'peer-anon',
+              deviceName: null,
+              connected: false,
+            },
+          ],
+        },
       })
     })
 

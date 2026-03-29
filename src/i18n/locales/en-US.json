@@ -677,7 +677,11 @@
         "loadPeers": "Failed to get device list",
         "reject": "Connection request rejected",
         "initiate": "Failed to initiate pairing",
-        "verifyPin": "Failed to verify PIN"
+        "verifyPin": "Failed to verify PIN",
+        "activeSession": "Another pairing session is already in progress",
+        "noParticipant": "No local device is ready to confirm pairing",
+        "sessionExpired": "The pairing session expired or was already closed",
+        "daemonUnavailable": "The pairing daemon is unavailable. Start the desktop service and try again"
       }
     }
   },

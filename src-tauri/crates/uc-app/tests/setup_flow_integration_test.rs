@@ -35,8 +35,6 @@ use uc_infra::security::{
 use uc_infra::setup_status::FileSetupStatusRepository;
 use uc_infra::time::Timer;
 use uc_platform::adapters::InMemoryEncryptionSessionPort;
-use uc_platform::ports::{WatcherControlError, WatcherControlPort};
-use uc_platform::usecases::StartClipboardWatcher;
 
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration, Instant};
@@ -90,21 +88,6 @@ impl KeyScopePort for TestKeyScope {
 // NoopLifecycleEventEmitter, NoopPairedDeviceRepository, NoopDiscoveryPort,
 // NoopSetupEventPort, NoopSpaceAccessTransport, NoopPairingTransport
 // — imported from uc_app::testing.
-// NoopWatcherControl stays inline (WatcherControlPort is in uc-platform).
-
-struct NoopWatcherControl;
-
-#[async_trait]
-impl WatcherControlPort for NoopWatcherControl {
-    async fn start_watcher(&self) -> Result<(), WatcherControlError> {
-        Ok(())
-    }
-
-    async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
-        Ok(())
-    }
-}
-
 struct OrderedNetworkControl {
     calls: Arc<Mutex<Vec<&'static str>>>,
 }
@@ -239,10 +222,6 @@ async fn drive_space_access_to_waiting_decision(
 fn build_mock_lifecycle() -> Arc<AppLifecycleCoordinator> {
     Arc::new(AppLifecycleCoordinator::from_deps(
         AppLifecycleCoordinatorDeps {
-            watcher: Arc::new(StartClipboardWatcher::new(
-                Arc::new(NoopWatcherControl),
-                ClipboardIntegrationMode::Full,
-            )),
             network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(NoopNetworkControl))),
             announcer: None,
             emitter: Arc::new(NoopSessionReadyEmitter),
@@ -257,10 +236,6 @@ fn build_ordered_mock_lifecycle(
 ) -> Arc<AppLifecycleCoordinator> {
     Arc::new(AppLifecycleCoordinator::from_deps(
         AppLifecycleCoordinatorDeps {
-            watcher: Arc::new(StartClipboardWatcher::new(
-                Arc::new(NoopWatcherControl),
-                ClipboardIntegrationMode::Full,
-            )),
             network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(
                 OrderedNetworkControl { calls },
             ))),

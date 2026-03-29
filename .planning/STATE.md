@@ -1,17 +1,15 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.1
-milestone_name: milestone
-status: completed
-stopped_at: Completed 35-02-PLAN.md
-last_updated: '2026-03-16T08:28:23.136Z'
-last_activity: '2026-03-15 — Completed 33-05 plan: File transfer state UI and Copy gating'
+milestone: v0.4.0
+milestone_name: Runtime Mode Separation
+status: 'Phase 71 shipped — PR #323'
+stopped_at: Completed 71-03-PLAN.md
+last_updated: '2026-03-29T02:04:04.638Z'
 progress:
-  total_phases: 19
-  completed_phases: 18
-  total_plans: 50
-  completed_plans: 49
-  percent: 98
+  total_phases: 42
+  completed_phases: 35
+  total_plans: 93
+  completed_plans: 90
 ---
 
 # Project State
@@ -21,16 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 33 - Fix file sync eventual consistency
+**Current focus:** Phase 71 — dual-product-release-pipeline-for-cli-and-app
 
 ## Current Position
 
-Phase: 32 of 32 (Fix file sync eventual consistency)
-Plan: 5 of 5 complete
-Status: Complete
-Last activity: 2026-03-15 — Completed 33-05 plan: File transfer state UI and Copy gating
-
-Progress: [██████████] 98%
+Phase: 71
+Plan: Not started
 
 ## Performance Metrics
 
@@ -96,6 +90,17 @@ Progress: [██████████] 98%
   | Phase 34 P01 | 19 | 3 tasks | 9 files |
   | Phase 35 P01 | 7min | 1 tasks | 4 files |
   | Phase 35 P02 | 10min | 2 tasks | 2 files |
+  | Phase 65 P01 | 5min | 2 tasks | 19 files |
+  | Phase 66 P01 | 5 | 1 tasks | 1 files |
+  | Phase 66-daemon-dashboard P02 | 18 | 2 tasks | 4 files |
+  | Phase 67-setup-filter P02 | 8 | 1 tasks | 3 files |
+  | Phase 68-adopt-tauri-sidecar-for-daemon P01 | 5 | 2 tasks | 6 files |
+  | Phase 68 P02 | 20 | 2 tasks | 6 files |
+  | Phase 69 P01 | 4 | 3 tasks | 2 files |
+  | Phase 70 P01 | 8 | 2 tasks | 6 files |
+  | Phase 71 P02 | 52s | 1 tasks | 1 files |
+  | Phase 71 P01 | 2 | 2 tasks | 4 files |
+  | Phase 71 P03 | 2 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -206,6 +211,30 @@ Recent decisions affecting current work:
 - [Phase 35]: OutboundSyncPlanner plan() infallible: settings failure returns safe defaults (clipboard: Some, files: [])
 - [Phase 35]: runtime.rs retains extract_file_paths_from_snapshot() + std::fs::metadata() calls (platform layer owns all fs I/O)
 - [Phase 35]: extracted_paths_count captured from resolved_paths.len() BEFORE metadata filter; passed to plan() for all_files_excluded detection
+- [Phase 65]: Inlined PlatformEvent (ClipboardChanged only) into clipboard/watcher.rs rather than keeping separate ipc module
+- [Phase 66]: clipboard and file-transfer WS topics return Ok(None) from build_snapshot_event — no initial snapshot, matching PAIRING_VERIFICATION/SETUP pattern
+- [Phase 66-daemon-dashboard]: bridge_state_monitor uses two boolean flags (has_been_ready, was_degraded) so startup path does not emit reconnect even if it briefly passes through Degraded
+- [Phase 66-daemon-dashboard]: DaemonReconnected is ClipboardHostEvent variant (not HostEvent top-level) matching existing clipboard subsystem grouping
+- [Phase 66-daemon-dashboard]: daemon://ws-reconnected is a dedicated Tauri channel separate from clipboard://event to avoid conflating reconnect signal with content events
+- [Phase 67-setup-filter]: recover_encryption_session made pub so main.rs can call it before DaemonApp construction
+- [Phase 67-setup-filter]: Removed recover_encryption_session from DaemonApp::run() — Phase 67 moved it to main.rs for deferred-start logic
+- [Phase 67-setup-filter]: RuntimeState::update_service_health() added for single-entry Stopped→Healthy mutation when deferred worker starts
+- [Phase 68]: Copy daemon binary before tauri_build::build() so externalBin path validation succeeds at check time
+- [Phase 68]: tauri-plugin-shell in workspace.dependencies; build.rs in src-tauri/ (main crate) for TAURI_ENV_TARGET_TRIPLE access
+- [Phase 68]: CommandChild from sidecar spawn maintains stdin tether (D-06): drop sends EOF to daemon's --gui-managed stdin monitor
+- [Phase 68]: shutdown_owned_daemon uses terminate_local_daemon_pid + libc::kill(0) polling instead of Child::try_wait/kill/wait
+- [Phase 68]: Sidecar rx Receiver drained in background task — must not be dropped immediately or pipe blocks
+- [Phase 69]: run_new_space() uses build_cli_runtime() directly (no daemon) for first-time encryption init, matching space_status.rs pattern
+- [Phase 69]: new_space_encryption_guard() extracted as pub fn for behavioral testability without async runtime
+- [Phase 70]: Background start reuses ensure_local_daemon_running() for probe-spawn-poll pattern consistency
+- [Phase 70]: SIGKILL not used -- user warned if daemon does not stop within 10s timeout
+- [Phase 70]: libc added directly to uc-cli (not workspace) since no other crate needs it
+- [Phase 71]: Mirror setup-matrix pattern from build.yml for consistent platform matrix across CLI and app builds
+- [Phase 71]: Use cli-{target} artifact prefix to disambiguate from app artifacts in shared release workflows
+- [Phase 71]: Cargo.lock refresh for workspace members delegated to cargo update -p uc-cli in CI (not fragile JS regex patching)
+- [Phase 71]: cargo update steps in release.yml gated with if: github.event_name == 'workflow_dispatch' to avoid running on tag-push events
+- [Phase 71]: CLI artifact collection uses separate find loop with no collision handling — CLI archives have unique names (version + target triple in filename)
+- [Phase 71]: buildCliInstallerLines() detects artifacts by uniclipboard-cli- prefix + target triple patterns (aarch64-apple-darwin, x86_64-apple-darwin, linux-gnu, windows-msvc)
 
 ### Roadmap Evolution
 
@@ -225,6 +254,12 @@ Recent decisions affecting current work:
 - Phase 33 added: Fix file sync eventual consistency - ensure atomic sync with metadata and blob together
 - Phase 34 added: Optimize JoinPickDevice page: event-driven discovery with scanning UX
 - Phase 35 added: Extract OutboundSyncPlanner to consolidate scattered sync policy checks
+- Phase 66 added: 修复 daemon 剪切板监听导致前端 dashboard 不会自动刷新剪切板历史的问题
+- Phase 67 added: 设备在 setup 完成前不应被其他设备发现，需要在业务层进行过滤
+- Phase 68 added: Adopt Tauri Sidecar for daemon binary management (dev build, bundling, and path resolution)
+- Phase 69 added: CLI setup flow: first-time encryption init before daemon spawn
+- Phase 70 added: CLI start/stop commands for daemon lifecycle management
+- Phase 71 added: Dual-product release pipeline for CLI and App
 
 ### Pending Todos
 
@@ -244,6 +279,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-16T08:22:30.633Z
-Stopped at: Completed 35-02-PLAN.md
+Last session: 2026-03-28T14:15:39.318Z
+Stopped at: Completed 71-03-PLAN.md
 Resume file: None

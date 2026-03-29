@@ -16,6 +16,44 @@ use uc_core::ports::{
 
 use crate::identity_store::load_or_create_identity;
 
+const DISABLED_PAIRING_RUNTIME_ERROR: &str = "local pairing runtime is disabled in this process";
+
+/// Declares which process owns the local pairing runtime.
+/// 声明哪个进程拥有本地 pairing runtime。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingRuntimeOwner {
+    CurrentProcess,
+    ExternalDaemon,
+}
+
+/// Pairing transport that always fails because this process does not host pairing runtime.
+/// 当前进程不承载 pairing runtime 时使用的失败型 pairing transport。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DisabledPairingTransport;
+
+#[async_trait]
+impl PairingTransportPort for DisabledPairingTransport {
+    async fn open_pairing_session(&self, _peer_id: String, _session_id: String) -> Result<()> {
+        Err(anyhow::anyhow!(DISABLED_PAIRING_RUNTIME_ERROR))
+    }
+
+    async fn send_pairing_on_session(&self, _message: PairingMessage) -> Result<()> {
+        Err(anyhow::anyhow!(DISABLED_PAIRING_RUNTIME_ERROR))
+    }
+
+    async fn close_pairing_session(
+        &self,
+        _session_id: String,
+        _reason: Option<String>,
+    ) -> Result<()> {
+        Err(anyhow::anyhow!(DISABLED_PAIRING_RUNTIME_ERROR))
+    }
+
+    async fn unpair_device(&self, _peer_id: String) -> Result<()> {
+        Err(anyhow::anyhow!(DISABLED_PAIRING_RUNTIME_ERROR))
+    }
+}
+
 /// Placeholder network port implementation
 /// 占位符网络端口实现
 #[derive(Debug, Clone)]
@@ -139,6 +177,7 @@ impl NetworkControlPort for PlaceholderNetworkPort {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+    use uc_core::network::{PairingMessage, PairingRequest};
 
     #[derive(Default)]
     struct TestIdentityStore {
@@ -166,5 +205,54 @@ mod tests {
         let peer_id: &PeerId = adapter.local_peer_id();
 
         assert!(!peer_id.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn disabled_pairing_transport_returns_fixed_error() {
+        let transport = DisabledPairingTransport;
+        let message = PairingMessage::Request(PairingRequest {
+            session_id: "session-1".to_string(),
+            device_name: "Peer One".to_string(),
+            device_id: "123456".to_string(),
+            peer_id: "peer-1".to_string(),
+            identity_pubkey: vec![1; 32],
+            nonce: vec![2; 32],
+        });
+
+        let open_error = transport
+            .open_pairing_session("peer-1".to_string(), "session-1".to_string())
+            .await
+            .expect_err("open must fail");
+        assert_eq!(
+            open_error.to_string(),
+            "local pairing runtime is disabled in this process"
+        );
+
+        let send_error = transport
+            .send_pairing_on_session(message)
+            .await
+            .expect_err("send must fail");
+        assert_eq!(
+            send_error.to_string(),
+            "local pairing runtime is disabled in this process"
+        );
+
+        let close_error = transport
+            .close_pairing_session("session-1".to_string(), Some("test".to_string()))
+            .await
+            .expect_err("close must fail");
+        assert_eq!(
+            close_error.to_string(),
+            "local pairing runtime is disabled in this process"
+        );
+
+        let unpair_error = transport
+            .unpair_device("peer-1".to_string())
+            .await
+            .expect_err("unpair must fail");
+        assert_eq!(
+            unpair_error.to_string(),
+            "local pairing runtime is disabled in this process"
+        );
     }
 }

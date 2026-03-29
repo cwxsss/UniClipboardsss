@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
   acceptP2PPairing,
+  classifyPairingError,
   onP2PPairingVerification,
   onSpaceAccessCompleted,
   rejectP2PPairing,
-  type P2PPairingVerificationEvent,
-  type SpaceAccessCompletedEvent,
 } from '@/api/p2p'
 import PairingPinDialog from '@/components/PairingPinDialog'
 
@@ -31,32 +30,26 @@ export function PairingNotificationProvider() {
     activeSessionIdRef.current = activeSessionId
   }, [activeSessionId])
 
-  useEffect(() => {
-    const unlistenPromise = onSpaceAccessCompleted((event: SpaceAccessCompletedEvent) => {
-      const currentSessionId = activeSessionIdRef.current
-
-      if (currentSessionId && event.sessionId === currentSessionId) {
-        if (event.success) {
-          setDialogState(prev => ({ ...prev, phase: 'success' }))
-          setTimeout(() => {
-            setDialogState(prev => ({ ...prev, open: false }))
-            setActiveSessionId(null)
-          }, 2000)
-        } else {
-          setDialogState(prev => ({ ...prev, open: false }))
-          toast.error(event.reason || t('pairing.failed', { defaultValue: 'Pairing failed' }))
-          setActiveSessionId(null)
-        }
+  const localizePairingError = useCallback(
+    (error?: string | null) => {
+      switch (classifyPairingError(error)) {
+        case 'active_session_exists':
+          return t('pairing.failed.errors.activeSession')
+        case 'no_local_participant':
+          return t('pairing.failed.errors.noParticipant')
+        case 'session_not_found':
+          return t('pairing.failed.errors.sessionExpired')
+        case 'daemon_unavailable':
+          return t('pairing.failed.errors.daemonUnavailable')
+        default:
+          return error || t('pairing.failed.title', { defaultValue: 'Pairing failed' })
       }
-    })
-
-    return () => {
-      unlistenPromise.then(unlisten => unlisten())
-    }
-  }, [t])
+    },
+    [t]
+  )
 
   useEffect(() => {
-    const unlistenPromise = onP2PPairingVerification((event: P2PPairingVerificationEvent) => {
+    const unlistenVerificationPromise = onP2PPairingVerification(event => {
       const currentSessionId = activeSessionIdRef.current
 
       if (event.kind === 'request') {
@@ -72,10 +65,17 @@ export function PairingNotificationProvider() {
             action: {
               label: t('common.accept', { defaultValue: 'Accept' }),
               onClick: () => {
+                activeSessionIdRef.current = event.sessionId
                 setActiveSessionId(event.sessionId)
                 acceptP2PPairing(event.sessionId).catch(err => {
-                  console.error(err)
-                  toast.error(t('pairing.failed', { defaultValue: 'Pairing failed' }))
+                  const message = localizePairingError(
+                    err instanceof Error ? err.message : String(err)
+                  )
+                  console.error('Failed to accept pairing request:', err)
+                  toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
+                    description: message,
+                  })
+                  activeSessionIdRef.current = null
                   setActiveSessionId(null)
                 })
               },
@@ -84,7 +84,15 @@ export function PairingNotificationProvider() {
               label: t('common.reject', { defaultValue: 'Reject' }),
               onClick: () => {
                 if (event.peerId) {
-                  rejectP2PPairing(event.sessionId, event.peerId).catch(console.error)
+                  rejectP2PPairing(event.sessionId, event.peerId).catch(err => {
+                    const message = localizePairingError(
+                      err instanceof Error ? err.message : String(err)
+                    )
+                    console.error('Failed to reject pairing request:', err)
+                    toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
+                      description: message,
+                    })
+                  })
                 }
               },
             },
@@ -94,37 +102,72 @@ export function PairingNotificationProvider() {
         return
       }
 
-      if (currentSessionId && event.sessionId === currentSessionId) {
-        if (event.kind === 'verification') {
-          if (event.code) {
-            setDialogState({
-              open: true,
-              pinCode: event.code,
-              peerDeviceName: event.deviceName,
-              peerId: event.peerId,
-              phase: 'display',
-            })
-          }
-        } else if (event.kind === 'verifying') {
-          setDialogState(prev => ({ ...prev, phase: 'verifying' }))
-        } else if (event.kind === 'complete') {
-          setDialogState(prev => ({ ...prev, phase: 'verifying' }))
-        } else if (event.kind === 'failed') {
-          setDialogState(prev => ({ ...prev, open: false }))
-          toast.error(event.error || t('pairing.failed', { defaultValue: 'Pairing failed' }))
-          setActiveSessionId(null)
-        }
+      if (!currentSessionId || event.sessionId !== currentSessionId) {
+        return
+      }
+
+      if (event.kind === 'verification' && event.code) {
+        setDialogState({
+          open: true,
+          pinCode: event.code,
+          peerDeviceName: event.deviceName,
+          peerId: event.peerId,
+          phase: 'display',
+        })
+        return
+      }
+
+      if (event.kind === 'verifying' || event.kind === 'complete') {
+        setDialogState(prev => ({ ...prev, phase: 'verifying' }))
+        return
+      }
+
+      if (event.kind === 'failed') {
+        setDialogState(prev => ({ ...prev, open: false }))
+        toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
+          description: localizePairingError(event.error),
+        })
+        setActiveSessionId(null)
       }
     })
 
+    const unlistenSpaceAccessPromise = onSpaceAccessCompleted(event => {
+      const currentSessionId = activeSessionIdRef.current
+      if (!currentSessionId || event.sessionId !== currentSessionId) {
+        return
+      }
+
+      if (event.success) {
+        setDialogState(prev => ({ ...prev, phase: 'success' }))
+        setTimeout(() => {
+          setDialogState(prev => ({ ...prev, open: false }))
+          setActiveSessionId(null)
+        }, 2000)
+        return
+      }
+
+      setDialogState(prev => ({ ...prev, open: false }))
+      toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
+        description: localizePairingError(event.reason),
+      })
+      setActiveSessionId(null)
+    })
+
     return () => {
-      unlistenPromise.then(unlisten => unlisten())
+      unlistenVerificationPromise.then(unlisten => unlisten())
+      unlistenSpaceAccessPromise.then(unlisten => unlisten())
     }
-  }, [t])
+  }, [localizePairingError, t])
 
   const handleCancel = () => {
     if (activeSessionIdRef.current && dialogState.peerId) {
-      rejectP2PPairing(activeSessionIdRef.current, dialogState.peerId).catch(console.error)
+      rejectP2PPairing(activeSessionIdRef.current, dialogState.peerId).catch(err => {
+        const message = localizePairingError(err instanceof Error ? err.message : String(err))
+        console.error('Failed to cancel pairing dialog:', err)
+        toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
+          description: message,
+        })
+      })
     }
     setDialogState(prev => ({ ...prev, open: false }))
     setActiveSessionId(null)

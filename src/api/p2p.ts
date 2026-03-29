@@ -4,7 +4,7 @@
  * 提供 libp2p 设备发现、配对和剪贴板同步功能
  */
 
-import { listen } from '@tauri-apps/api/event'
+import { onDaemonRealtimeEvent } from '@/api/realtime'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
 /**
@@ -89,6 +89,70 @@ export type P2PPairingVerificationKind =
   | 'verifying'
   | 'complete'
   | 'failed'
+
+export type PairingErrorKind =
+  | 'active_session_exists'
+  | 'no_local_participant'
+  | 'session_not_found'
+  | 'daemon_unavailable'
+  | 'unknown'
+
+function stringifyPairingError(error: unknown): string {
+  if (typeof error === 'string') {
+    return error
+  }
+  if (error instanceof Error) {
+    return error.message
+  }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return error.message
+  }
+  return String(error)
+}
+
+export function classifyPairingError(rawError?: string | null): PairingErrorKind {
+  const normalized = rawError?.toLowerCase() ?? ''
+
+  if (
+    normalized.includes('active pairing session exists') ||
+    normalized.includes('active_session_exists')
+  ) {
+    return 'active_session_exists'
+  }
+
+  if (
+    normalized.includes('no local pairing participant ready') ||
+    normalized.includes('no_local_participant')
+  ) {
+    return 'no_local_participant'
+  }
+
+  if (
+    normalized.includes('pairing session not found') ||
+    normalized.includes('session_not_found') ||
+    normalized.includes('session expired')
+  ) {
+    return 'session_not_found'
+  }
+
+  if (
+    normalized.includes('daemon connection info is not available') ||
+    normalized.includes('connection refused') ||
+    normalized.includes('failed to call daemon pairing route') ||
+    normalized.includes('failed to open daemon tcp socket') ||
+    normalized.includes('failed to connect daemon websocket') ||
+    normalized.includes('pairing_host_unavailable')
+  ) {
+    return 'daemon_unavailable'
+  }
+
+  return 'unknown'
+}
 
 /**
  * P2P 配对验证事件数据
@@ -252,7 +316,11 @@ export async function initiateP2PPairing(request: P2PPairingRequest): Promise<P2
     })
   } catch (error) {
     console.error('Failed to initiate P2P pairing:', error)
-    throw error
+    return {
+      sessionId: '',
+      success: false,
+      error: stringifyPairingError(error),
+    }
   }
 }
 
@@ -266,7 +334,7 @@ export async function verifyP2PPairingPin(request: P2PPinVerifyRequest): Promise
     })
   } catch (error) {
     console.error('Failed to verify P2P pairing PIN:', error)
-    throw error
+    throw new Error(stringifyPairingError(error))
   }
 }
 
@@ -281,7 +349,7 @@ export async function rejectP2PPairing(sessionId: string, peerId: string): Promi
     })
   } catch (error) {
     console.error('Failed to reject P2P pairing:', error)
-    throw error
+    throw new Error(stringifyPairingError(error))
   }
 }
 
@@ -309,7 +377,7 @@ export async function acceptP2PPairing(sessionId: string): Promise<void> {
     })
   } catch (error) {
     console.error('Failed to accept P2P pairing:', error)
-    throw error
+    throw new Error(stringifyPairingError(error))
   }
 }
 
@@ -319,21 +387,63 @@ export async function acceptP2PPairing(sessionId: string): Promise<void> {
 export async function onP2PPairingVerification(
   callback: (event: P2PPairingVerificationEvent) => void
 ): Promise<() => void> {
-  try {
-    const unlisten = await listen<P2PPairingVerificationEvent>(
-      'p2p-pairing-verification',
-      event => {
-        callback(event.payload)
-      }
-    )
-
-    return () => {
-      unlisten()
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic !== 'pairing') {
+      return
     }
-  } catch (error) {
-    console.error('Failed to setup P2P pairing verification listener:', error)
-    return () => {}
-  }
+
+    if (event.type === 'pairing.updated') {
+      const payload = event.payload as {
+        sessionId: string
+        status: string
+        peerId?: string
+        deviceName?: string
+      }
+
+      if (payload.status === 'request' || payload.status === 'verifying') {
+        callback({
+          sessionId: payload.sessionId,
+          kind: payload.status === 'request' ? 'request' : 'verifying',
+          peerId: payload.peerId,
+          deviceName: payload.deviceName,
+        })
+      }
+      return
+    }
+
+    if (event.type === 'pairing.verificationRequired') {
+      const payload = event.payload as Omit<P2PPairingVerificationEvent, 'kind'>
+      callback({ ...payload, kind: 'verification' })
+      return
+    }
+
+    if (event.type === 'pairing.complete') {
+      const payload = event.payload as {
+        sessionId: string
+        peerId?: string
+        deviceName?: string
+      }
+      callback({
+        sessionId: payload.sessionId,
+        peerId: payload.peerId,
+        deviceName: payload.deviceName,
+        kind: 'complete',
+      })
+      return
+    }
+
+    if (event.type === 'pairing.failed') {
+      const payload = event.payload as {
+        sessionId: string
+        reason?: string
+      }
+      callback({
+        sessionId: payload.sessionId,
+        kind: 'failed',
+        error: payload.reason,
+      })
+    }
+  })
 }
 
 /**
@@ -342,18 +452,11 @@ export async function onP2PPairingVerification(
 export async function onP2PPeerConnectionChanged(
   callback: (event: P2PPeerConnectionEvent) => void
 ): Promise<() => void> {
-  try {
-    const unlisten = await listen<P2PPeerConnectionEvent>('p2p-peer-connection-changed', event => {
-      callback(event.payload)
-    })
-
-    return () => {
-      unlisten()
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic === 'peers' && event.type === 'peers.connectionChanged') {
+      callback(event.payload as P2PPeerConnectionEvent)
     }
-  } catch (error) {
-    console.error('Failed to setup P2P peer connection changed listener:', error)
-    return () => {}
-  }
+  })
 }
 
 /**
@@ -362,18 +465,11 @@ export async function onP2PPeerConnectionChanged(
 export async function onP2PPeerNameUpdated(
   callback: (event: P2PPeerNameUpdatedEvent) => void
 ): Promise<() => void> {
-  try {
-    const unlisten = await listen<P2PPeerNameUpdatedEvent>('p2p-peer-name-updated', event => {
-      callback(event.payload)
-    })
-
-    return () => {
-      unlisten()
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic === 'peers' && event.type === 'peers.nameUpdated') {
+      callback(event.payload as P2PPeerNameUpdatedEvent)
     }
-  } catch (error) {
-    console.error('Failed to setup P2P peer name updated listener:', error)
-    return () => {}
-  }
+  })
 }
 
 /**
@@ -382,21 +478,50 @@ export async function onP2PPeerNameUpdated(
 export async function onP2PPeerDiscoveryChanged(
   callback: (event: P2PPeerDiscoveryChangedEvent) => void
 ): Promise<() => void> {
-  try {
-    const unlisten = await listen<P2PPeerDiscoveryChangedEvent>(
-      'p2p-peer-discovery-changed',
-      event => {
-        callback(event.payload)
-      }
-    )
+  const knownPeers = new Map<string, { deviceName?: string | null }>()
 
-    return () => {
-      unlisten()
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic !== 'peers' || event.type !== 'peers.changed') {
+      return
     }
-  } catch (error) {
-    console.error('Failed to setup P2P peer discovery changed listener:', error)
-    return () => {}
-  }
+
+    const payload = event.payload as {
+      peers: Array<{
+        peerId: string
+        deviceName?: string | null
+        connected: boolean
+      }>
+    }
+
+    const nextPeers = new Map<string, { deviceName?: string | null }>()
+    for (const peer of payload.peers) {
+      nextPeers.set(peer.peerId, { deviceName: peer.deviceName ?? null })
+      if (!knownPeers.has(peer.peerId)) {
+        callback({
+          peerId: peer.peerId,
+          deviceName: peer.deviceName ?? null,
+          addresses: [],
+          discovered: true,
+        })
+      }
+    }
+
+    for (const [peerId, previous] of knownPeers.entries()) {
+      if (!nextPeers.has(peerId)) {
+        callback({
+          peerId,
+          deviceName: previous.deviceName ?? null,
+          addresses: [],
+          discovered: false,
+        })
+      }
+    }
+
+    knownPeers.clear()
+    for (const [peerId, peer] of nextPeers.entries()) {
+      knownPeers.set(peerId, peer)
+    }
+  })
 }
 
 /**
@@ -405,47 +530,37 @@ export async function onP2PPeerDiscoveryChanged(
 export async function onSpaceAccessCompleted(
   callback: (event: SpaceAccessCompletedEvent) => void
 ): Promise<() => void> {
-  try {
-    let activeSessionId: string | null = null
-    const seenEventKeys = new Set<string>()
+  let activeSessionId: string | null = null
+  const seenEventKeys = new Set<string>()
 
-    const unlisten = await listen<SpaceAccessCompletedEvent>(
-      'p2p-space-access-completed',
-      event => {
-        const payload = event.payload
-
-        if (!payload.sessionId) {
-          return
-        }
-
-        if (activeSessionId === null) {
-          activeSessionId = payload.sessionId
-        }
-
-        if (payload.sessionId !== activeSessionId) {
-          return
-        }
-
-        const dedupeKey = `${payload.sessionId}:${payload.peerId}:${payload.success}:${payload.reason ?? ''}:${payload.ts}`
-        if (seenEventKeys.has(dedupeKey)) {
-          return
-        }
-        seenEventKeys.add(dedupeKey)
-
-        callback(payload)
-
-        activeSessionId = null
-        seenEventKeys.clear()
-      }
-    )
-
-    return () => {
-      unlisten()
+  return onDaemonRealtimeEvent(event => {
+    if (event.topic !== 'setup' || event.type !== 'setup.spaceAccessCompleted') {
+      return
     }
-  } catch (error) {
-    console.error('Failed to setup space access completed listener:', error)
-    return () => {}
-  }
+
+    const payload = event.payload as SpaceAccessCompletedEvent
+    if (!payload.sessionId) {
+      return
+    }
+
+    if (activeSessionId === null) {
+      activeSessionId = payload.sessionId
+    }
+
+    if (payload.sessionId !== activeSessionId) {
+      return
+    }
+
+    const dedupeKey = `${payload.sessionId}:${payload.peerId}:${payload.success}:${payload.reason ?? ''}:${payload.ts}`
+    if (seenEventKeys.has(dedupeKey)) {
+      return
+    }
+    seenEventKeys.add(dedupeKey)
+
+    callback(payload)
+    activeSessionId = null
+    seenEventKeys.clear()
+  })
 }
 
 /**

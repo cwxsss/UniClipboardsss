@@ -1,10 +1,16 @@
+pub mod adapters;
+pub use adapters::{
+    DeviceNameAnnouncer, InMemoryLifecycleStatus, LoggingLifecycleEventEmitter,
+    LoggingSessionReadyEmitter,
+};
+
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use tracing::{info, info_span, warn, Instrument};
 
-use super::{StartClipboardWatcherPort, StartNetworkAfterUnlock};
+use super::StartNetworkAfterUnlock;
 
 // ---------------------------------------------------------------------------
 // Lifecycle state
@@ -19,8 +25,6 @@ pub enum LifecycleState {
     Pending,
     /// All subsystems are running and ready.
     Ready,
-    /// The clipboard watcher failed to start.
-    WatcherFailed,
     /// The network runtime failed to start.
     NetworkFailed,
 }
@@ -32,8 +36,6 @@ pub enum LifecycleState {
 /// Events emitted during the lifecycle boot process.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum LifecycleEvent {
-    /// The clipboard watcher failed to start. Contains the error message.
-    WatcherFailed(String),
     /// The network runtime failed to start. Contains the error message.
     NetworkFailed(String),
     /// All subsystems booted successfully.
@@ -80,16 +82,14 @@ pub trait DeviceAnnouncer: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Coordinates application lifecycle readiness by orchestrating
-/// the clipboard watcher, network runtime, and session ready emission.
+/// the network runtime and session ready emission.
 ///
 /// On each call to [`ensure_ready`](Self::ensure_ready) the coordinator:
 /// 1. Sets the lifecycle state to **Pending**.
-/// 2. Attempts to start the clipboard watcher.
-/// 3. Attempts to start the network runtime.
-/// 4. If both succeed, sets state to **Ready** and emits a `Ready` event.
-/// 5. On failure, sets the appropriate failed state and emits a failure event.
+/// 2. Attempts to start the network runtime.
+/// 3. If it succeeds, sets state to **Ready** and emits a `Ready` event.
+/// 4. On failure, sets the appropriate failed state and emits a failure event.
 pub struct AppLifecycleCoordinator {
-    watcher: Arc<dyn StartClipboardWatcherPort>,
     network: Arc<StartNetworkAfterUnlock>,
     announcer: Option<Arc<dyn DeviceAnnouncer>>,
     emitter: Arc<dyn SessionReadyEmitter>,
@@ -99,7 +99,6 @@ pub struct AppLifecycleCoordinator {
 
 /// Helper for constructing the coordinator with explicit dependency fields.
 pub struct AppLifecycleCoordinatorDeps {
-    pub watcher: Arc<dyn StartClipboardWatcherPort>,
     pub network: Arc<StartNetworkAfterUnlock>,
     pub announcer: Option<Arc<dyn DeviceAnnouncer>>,
     pub emitter: Arc<dyn SessionReadyEmitter>,
@@ -110,7 +109,6 @@ pub struct AppLifecycleCoordinatorDeps {
 impl AppLifecycleCoordinator {
     /// Create a new coordinator instance.
     pub fn new(
-        watcher: Arc<dyn StartClipboardWatcherPort>,
         network: Arc<StartNetworkAfterUnlock>,
         announcer: Option<Arc<dyn DeviceAnnouncer>>,
         emitter: Arc<dyn SessionReadyEmitter>,
@@ -118,7 +116,6 @@ impl AppLifecycleCoordinator {
         lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
     ) -> Self {
         Self {
-            watcher,
             network,
             announcer,
             emitter,
@@ -130,7 +127,6 @@ impl AppLifecycleCoordinator {
     /// Construct a coordinator from dependency bundle.
     pub fn from_deps(deps: AppLifecycleCoordinatorDeps) -> Self {
         let AppLifecycleCoordinatorDeps {
-            watcher,
             network,
             announcer,
             emitter,
@@ -138,22 +134,14 @@ impl AppLifecycleCoordinator {
             lifecycle_emitter,
         } = deps;
 
-        Self::new(
-            watcher,
-            network,
-            announcer,
-            emitter,
-            status,
-            lifecycle_emitter,
-        )
+        Self::new(network, announcer, emitter, status, lifecycle_emitter)
     }
 
-    /// Ensure the application lifecycle is ready by booting watcher,
-    /// network, and emitting the ready event.
+    /// Ensure the application lifecycle is ready by booting
+    /// network and emitting the ready event.
     ///
     /// State transitions:
     /// - `Idle` / any → `Pending` → `Ready` (on success)
-    /// - `Idle` / any → `Pending` → `WatcherFailed` (if watcher fails)
     /// - `Idle` / any → `Pending` → `NetworkFailed` (if network fails)
     pub async fn ensure_ready(&self) -> Result<()> {
         let span = info_span!("usecase.app_lifecycle_coordinator.ensure_ready");
@@ -169,18 +157,7 @@ impl AppLifecycleCoordinator {
             self.status.set_state(LifecycleState::Pending).await?;
             info!("Lifecycle state set to Pending");
 
-            // 2. Start clipboard watcher
-            if let Err(e) = self.watcher.execute().await {
-                let msg = e.to_string();
-                warn!(error = %msg, "Clipboard watcher failed to start");
-                self.status.set_state(LifecycleState::WatcherFailed).await?;
-                self.lifecycle_emitter
-                    .emit_lifecycle_event(LifecycleEvent::WatcherFailed(msg.clone()))
-                    .await?;
-                return Err(anyhow::anyhow!(msg));
-            }
-
-            // 3. Start network
+            // 2. Start network
             if let Err(e) = self.network.execute().await {
                 let msg = e.to_string();
                 if msg.to_ascii_lowercase().contains("already started") {
@@ -195,14 +172,14 @@ impl AppLifecycleCoordinator {
                 }
             }
 
-            // 3.5. Announce device name (best-effort, failure is non-fatal)
+            // 2.5. Announce device name (best-effort, failure is non-fatal)
             if let Some(announcer) = &self.announcer {
                 if let Err(e) = announcer.announce().await {
                     warn!(error = %e, "Failed to announce device name after network start");
                 }
             }
 
-            // 4. All good – mark ready and emit events
+            // 3. All good – mark ready and emit events
             self.status.set_state(LifecycleState::Ready).await?;
             self.lifecycle_emitter
                 .emit_lifecycle_event(LifecycleEvent::Ready)

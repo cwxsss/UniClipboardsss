@@ -1,8 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::http::header::{
     HeaderValue, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
 };
@@ -11,32 +11,17 @@ use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut;
+use tauri_plugin_shell;
 use tauri_plugin_single_instance;
 use tauri_plugin_stronghold;
-use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
-use uc_app::usecases::{
-    pairing::{PairingOrchestrator, StagedPairedDeviceStore},
-    space_access::SpaceAccessOrchestrator,
-};
-use uc_core::config::AppConfig;
-use uc_core::ports::ClipboardChangeHandler;
-use uc_core::ports::PeerDirectoryPort;
-use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
-use uc_platform::app_dirs::DirsAppDirsAdapter;
-use uc_platform::ipc::PlatformCommand;
-use uc_platform::ports::AppDirsPort;
-use uc_platform::ports::PlatformCommandExecutorPort;
-use uc_platform::runtime::event_bus::{
-    PlatformCommandReceiver, PlatformEventReceiver, PlatformEventSender,
-};
-use uc_platform::runtime::runtime::PlatformRuntime;
-use uc_tauri::bootstrap::tracing as bootstrap_tracing;
+use uc_bootstrap::GuiBootstrapContext;
+use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
+use uc_daemon_client::{realtime::install_daemon_setup_pairing_facade, DaemonConnectionState};
 use uc_tauri::bootstrap::{
-    ensure_default_device_name, get_storage_paths, load_config, resolve_pairing_config,
-    resolve_pairing_device_name, start_background_tasks, wire_dependencies, AppRuntime,
-    SetupRuntimePorts,
+    bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
+    start_background_tasks, supervise_daemon, AppRuntime,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -48,37 +33,8 @@ mod plugins;
 use uc_tauri::preview_panel;
 use uc_tauri::quick_panel;
 
-/// Simple executor for platform commands
-///
-/// This is a placeholder implementation that logs commands.
-/// In a full implementation, this would execute the actual platform commands.
-struct SimplePlatformCommandExecutor;
-
-#[async_trait::async_trait]
-impl PlatformCommandExecutorPort for SimplePlatformCommandExecutor {
-    async fn execute(&self, command: PlatformCommand) -> anyhow::Result<()> {
-        // For now, just acknowledge the command
-        // TODO: Implement actual command execution in future tasks
-        match command {
-            PlatformCommand::StartClipboardWatcher => {
-                info!("StartClipboardWatcher command received");
-            }
-            PlatformCommand::StopClipboardWatcher => {
-                info!("StopClipboardWatcher command received");
-            }
-            PlatformCommand::ReadClipboard => {
-                info!("ReadClipboard command received (not implemented)");
-            }
-            PlatformCommand::WriteClipboard { .. } => {
-                info!("WriteClipboard command received (not implemented)");
-            }
-            PlatformCommand::Shutdown => {
-                info!("Shutdown command received (not implemented)");
-            }
-        }
-        Ok(())
-    }
-}
+const DAEMON_EXIT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
+const DAEMON_EXIT_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 fn is_allowed_cors_origin(origin: &str) -> bool {
     origin == "tauri://localhost"
@@ -273,12 +229,6 @@ async fn resolve_uc_thumbnail_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
-    use std::fs;
-    use std::sync::Mutex;
-    use tempfile::TempDir;
-
-    static CWD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_cors_headers_are_set_for_dev_origin() {
@@ -307,292 +257,64 @@ mod tests {
         let headers = response.headers();
         assert!(headers.get(ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
     }
-
-    #[test]
-    fn test_resolve_config_path_finds_parent_directory() {
-        let _guard = CWD_TEST_LOCK.lock().unwrap();
-        let temp_dir = TempDir::new().unwrap();
-        let root_dir = temp_dir.path();
-        let nested_dir = root_dir.join("src-tauri");
-        fs::create_dir_all(&nested_dir).unwrap();
-        fs::write(root_dir.join("config.toml"), "").unwrap();
-
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(&nested_dir).unwrap();
-
-        let resolved = resolve_config_path().and_then(|path| fs::canonicalize(path).ok());
-
-        env::set_current_dir(original_dir).unwrap();
-
-        let expected = fs::canonicalize(root_dir.join("config.toml")).unwrap();
-        assert_eq!(resolved, Some(expected));
-    }
-
-    #[test]
-    fn test_resolve_config_path_finds_src_tauri_config_from_repo_root() {
-        let _guard = CWD_TEST_LOCK.lock().unwrap();
-        let temp_dir = TempDir::new().unwrap();
-        let root_dir = temp_dir.path();
-        let src_tauri_dir = root_dir.join("src-tauri");
-        fs::create_dir_all(&src_tauri_dir).unwrap();
-        fs::write(src_tauri_dir.join("config.toml"), "").unwrap();
-
-        let original_dir = env::current_dir().unwrap();
-        env::set_current_dir(root_dir).unwrap();
-
-        let resolved = resolve_config_path().and_then(|path| fs::canonicalize(path).ok());
-
-        env::set_current_dir(original_dir).unwrap();
-
-        let expected = fs::canonicalize(src_tauri_dir.join("config.toml")).unwrap();
-        assert_eq!(resolved, Some(expected));
-    }
 }
 
-fn resolve_config_path() -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var("UC_CONFIG_PATH") {
-        let explicit_path = PathBuf::from(explicit);
-        if explicit_path.is_file() {
-            return Some(explicit_path);
-        }
-    }
-
-    let current_dir = std::env::current_dir().ok()?;
-
-    for ancestor in current_dir.ancestors() {
-        let candidate = ancestor.join("config.toml");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-
-        let src_tauri_candidate = ancestor.join("src-tauri").join("config.toml");
-        if src_tauri_candidate.is_file() {
-            return Some(src_tauri_candidate);
-        }
-    }
-
-    None
-}
-
-fn apply_profile_suffix(path: PathBuf) -> PathBuf {
-    let profile = match std::env::var("UC_PROFILE") {
-        Ok(value) if !value.is_empty() => value,
-        _ => return path,
-    };
-
-    let file_name = match path.file_name().and_then(|name| name.to_str()) {
-        Some(name) => name.to_string(),
-        None => return path,
-    };
-
-    let mut updated = path;
-    updated.set_file_name(format!("{file_name}_{profile}"));
-    updated
-}
-
-fn resolve_keyslot_store_vault_dir(config: &AppConfig, app_data_root: PathBuf) -> PathBuf {
-    if config.vault_key_path.as_os_str().is_empty() {
-        return app_data_root.join("vault");
-    }
-
-    let configured_vault_root = config
-        .vault_key_path
-        .parent()
-        .unwrap_or(&config.vault_key_path)
-        .to_path_buf();
-
-    if config.database_path.as_os_str().is_empty() {
-        return apply_profile_suffix(configured_vault_root);
-    }
-
-    let configured_db_root = config
-        .database_path
-        .parent()
-        .unwrap_or(&config.database_path)
-        .to_path_buf();
-
-    if configured_vault_root.starts_with(&configured_db_root) {
-        let relative = configured_vault_root
-            .strip_prefix(&configured_db_root)
-            .unwrap_or(Path::new(""));
-        app_data_root.join(relative)
-    } else {
-        apply_profile_suffix(configured_vault_root)
-    }
-}
-
-/// Starts the application.
-///
-/// Initializes tracing, attempts to load `config.toml` (development mode), falls back to system
-/// defaults using the platform app-data directory when no config file is present, and then runs
-/// the Tauri application. On fatal initialization failures (tracing or app-data resolution) the
-/// process exits with code 1.
-///
-/// # Examples
-///
-/// ```no_run
-/// // Running the application (example; do not run in doctests)
-/// crate::main();
-/// ```
 fn main() {
-    // Initialize tracing subscriber FIRST (before any logging)
-    // This sets up the tracing infrastructure and enables log-tracing bridge
-    if let Err(e) = bootstrap_tracing::init_tracing_subscriber() {
-        eprintln!("Failed to initialize tracing: {}", e);
-        std::process::exit(1);
-    }
-
-    // NOTE: config.toml is optional and intended for development use only
-    // Production environment uses system-default paths automatically
-
-    let config_path = resolve_config_path().unwrap_or_else(|| PathBuf::from("config.toml"));
-
-    // Load configuration using the new bootstrap flow
-    let config = match load_config(config_path.clone()) {
-        Ok(config) => {
-            info!(
-                "Loaded config from {} (development mode)",
-                config_path.display()
-            );
-            config
-        }
+    // Tracing and config are handled inside build_gui_app()
+    let ctx = match uc_bootstrap::build_gui_app() {
+        Ok(ctx) => ctx,
         Err(e) => {
-            debug!("No config.toml found, using system defaults: {}", e);
-
-            let app_dirs = match uc_platform::app_dirs::DirsAppDirsAdapter::new().get_app_dirs() {
-                Ok(dirs) => dirs,
-                Err(err) => {
-                    error!("Failed to determine system data directory: {}", err);
-                    error!("Please ensure your platform's data directory is accessible");
-                    error!("macOS: ~/Library/Application Support/");
-                    error!("Linux: ~/.local/share/");
-                    error!("Windows: %LOCALAPPDATA%");
-                    std::process::exit(1);
-                }
-            };
-
-            AppConfig::with_system_defaults(app_dirs.app_data_root)
+            eprintln!("Bootstrap failed: {}", e);
+            std::process::exit(1);
         }
     };
 
-    // Run the application with the loaded config
-    run_app(config);
+    run_app(ctx);
 }
 
 /// Run the Tauri application
-fn run_app(config: AppConfig) {
+fn run_app(ctx: GuiBootstrapContext) {
     use tauri::Builder;
 
-    // Create event channels for PlatformRuntime
-    let (platform_event_tx, platform_event_rx): (PlatformEventSender, PlatformEventReceiver) =
-        mpsc::channel(100);
-    let (platform_cmd_tx, platform_cmd_rx): (
-        tokio::sync::mpsc::Sender<uc_platform::ipc::PlatformCommand>,
-        PlatformCommandReceiver,
-    ) = mpsc::channel(100);
-
-    // Wire all dependencies using the new bootstrap flow
-    let wired = match wire_dependencies(&config, platform_cmd_tx.clone()) {
-        Ok(wired) => wired,
-        Err(e) => {
-            error!("Failed to wire dependencies: {}", e);
-            panic!("Dependency wiring failed: {}", e);
-        }
-    };
-
-    let deps = wired.deps;
-    let background = wired.background;
-    let watcher_control = wired.watcher_control;
-
-    let pairing_device_repo = deps.device.paired_device_repo.clone();
-    let pairing_device_identity = deps.device.device_identity.clone();
-    let pairing_settings = deps.settings.clone();
-    let discovery_network = deps.network_ports.peers.clone();
-    let pairing_peer_id = background.libp2p_network.local_peer_id();
-    let pairing_identity_pubkey = background.libp2p_network.local_identity_pubkey();
-    let (pairing_device_name, pairing_config) = tauri::async_runtime::block_on(async move {
-        let device_name = resolve_pairing_device_name(pairing_settings.clone()).await;
-        let config = resolve_pairing_config(pairing_settings).await;
-        (device_name, config)
-    });
-    let pairing_device_id = pairing_device_identity.current_device_id().to_string();
-    let staged_store = Arc::new(StagedPairedDeviceStore::new());
-    let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
-        pairing_config,
-        pairing_device_repo,
-        pairing_device_name,
-        pairing_device_id,
-        pairing_peer_id,
-        pairing_identity_pubkey,
-        staged_store.clone(),
-    );
-    let pairing_orchestrator = Arc::new(pairing_orchestrator);
-    let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
-    // Resolve app directories once for reuse across wiring
-    let app_dirs = match DirsAppDirsAdapter::new().get_app_dirs() {
-        Ok(dirs) => dirs,
-        Err(err) => {
-            error!(error = %err, "Failed to determine app directories");
-            panic!("Failed to determine app directories: {}", err);
-        }
-    };
-
-    let key_slot_store: Arc<dyn KeySlotStore> = {
-        let app_data_root = if config.database_path.as_os_str().is_empty() {
-            app_dirs.app_data_root.clone()
-        } else {
-            let configured_db_root = config
-                .database_path
-                .parent()
-                .unwrap_or(&config.database_path)
-                .to_path_buf();
-            apply_profile_suffix(configured_db_root)
-        };
-
-        let vault_dir = resolve_keyslot_store_vault_dir(&config, app_data_root);
-        Arc::new(JsonKeySlotStore::new(vault_dir))
-    };
-
-    // Get resolved storage paths with profile suffix and config overrides applied
-    let storage_paths = get_storage_paths(&config).expect("failed to get storage paths");
-
-    let runtime = AppRuntime::with_setup(
+    // Destructure context -- deps, orchestrators all come from build_gui_app()
+    let GuiBootstrapContext {
         deps,
-        SetupRuntimePorts::from_network(
-            pairing_orchestrator.clone(),
-            space_access_orchestrator.clone(),
-            discovery_network,
-        ),
-        watcher_control,
+        background,
+        setup_ports,
         storage_paths,
-    );
+        pairing_orchestrator: _pairing_orchestrator,
+        pairing_action_rx: _pairing_action_rx,
+        staged_store: _staged_store,
+        key_slot_store: _key_slot_store,
+        config: _config,
+    } = ctx;
 
-    // Wrap runtime in Arc for clipboard handler (PlatformRuntime needs Arc<dyn ClipboardChangeHandler>)
-    let runtime_for_handler = Arc::new(runtime);
+    let daemon_connection_state = DaemonConnectionState::default();
+    let gui_owned_daemon_state = GuiOwnedDaemonState::default();
+    let mut setup_ports = setup_ports;
+    let setup_pairing_event_hub =
+        install_daemon_setup_pairing_facade(&mut setup_ports, daemon_connection_state.clone());
 
-    // Clone Arc for Tauri state management (will have app_handle injected in setup)
-    let runtime_for_tauri = runtime_for_handler.clone();
+    let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
+        std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::LoggingEventEmitter);
+    let runtime = AppRuntime::with_setup(deps, setup_ports, storage_paths, event_emitter);
+    let runtime = Arc::new(runtime);
 
     // Startup barrier used to coordinate backend readiness and main window show timing.
     let startup_barrier = Arc::new(uc_tauri::commands::startup::StartupBarrier::default());
 
-    // Create clipboard handler from runtime (AppRuntime implements ClipboardChangeHandler)
-    let clipboard_handler: Arc<dyn ClipboardChangeHandler> = runtime_for_handler.clone();
-
-    info!("Creating platform runtime with clipboard callback");
-
-    // Note: PlatformRuntime will be started in setup block
-    // The actual startup will be completed in a follow-up task
-
     let disable_single_instance = std::env::var("UC_DISABLE_SINGLE_INSTANCE").as_deref() == Ok("1");
 
     // Store TaskRegistry reference for exit hook registration
-    let task_registry = runtime_for_handler.task_registry().clone();
+    let task_registry = runtime.task_registry().clone();
+    let startup_barrier_for_page_load = startup_barrier.clone();
+    let daemon_connection_state_for_page_load = daemon_connection_state.clone();
 
     let builder = Builder::default()
         // Register AppRuntime for Tauri commands
-        .manage(runtime_for_tauri)
-        .manage(pairing_orchestrator.clone())
+        .manage(runtime.clone())
+        .manage(DaemonConnectionState::clone(&daemon_connection_state))
+        .manage(GuiOwnedDaemonState::clone(&gui_owned_daemon_state))
         .manage(TrayState::default())
         .manage(task_registry.clone())
         .on_window_event(|window, event| {
@@ -608,7 +330,7 @@ fn run_app(config: AppConfig) {
                 }
             }
         })
-        .on_page_load(|webview, payload| {
+        .on_page_load(move |webview, payload| {
             if webview.label() != "main" {
                 return;
             }
@@ -624,6 +346,20 @@ fn run_app(config: AppConfig) {
                 url = %payload.url(),
                 "[StartupTiming] main webview page load"
             );
+
+            if matches!(payload.event(), PageLoadEvent::Finished) {
+                startup_barrier_for_page_load.mark_frontend_ready();
+                if let Err(error) = emit_daemon_connection_info_if_ready(
+                    &webview.app_handle(),
+                    &daemon_connection_state_for_page_load,
+                    &startup_barrier_for_page_load,
+                ) {
+                    error!(
+                        error = %error,
+                        "Failed to emit daemon connection info after main webview load"
+                    );
+                }
+            }
         })
         .register_asynchronous_uri_scheme_protocol("uc", move |ctx, request, responder| {
             let app_handle = ctx.app_handle().clone();
@@ -637,7 +373,8 @@ fn run_app(config: AppConfig) {
         // 2) In frontend devtools: fetch("uc://thumbnail/<representation_id>")
         // 3) Network should show 200 with Access-Control-Allow-Origin matching http://localhost:1420
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_shell::init());
 
     let builder = if disable_single_instance {
         info!("UC_DISABLE_SINGLE_INSTANCE=1 set; skipping single-instance plugin registration");
@@ -645,6 +382,9 @@ fn run_app(config: AppConfig) {
     } else {
         builder.plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {}))
     };
+
+    let task_registry_for_run = task_registry.clone();
+    let gui_owned_daemon_state_for_run = gui_owned_daemon_state.clone();
 
     builder
         .plugin(tauri_plugin_autostart::init(
@@ -662,12 +402,63 @@ fn run_app(config: AppConfig) {
         .setup(move |app| {
             // Set AppHandle on runtime so it can emit events to frontend
             // In Tauri 2, use app.handle() to get the AppHandle
-            runtime_for_handler.set_app_handle(app.handle().clone());
+            runtime.set_app_handle(app.handle().clone());
             info!("AppHandle set on AppRuntime for event emission");
+
+            // Swap event emitter from LoggingEventEmitter to TauriEventEmitter
+            // now that AppHandle is available
+            let tauri_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
+                std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::TauriEventEmitter::new(
+                    app.handle().clone(),
+                ));
+            runtime.set_event_emitter(tauri_emitter);
+            info!("Event emitter swapped to TauriEventEmitter");
+
+            let daemon_connection_state_for_setup = daemon_connection_state.clone();
+            let gui_owned_daemon_state_for_setup = gui_owned_daemon_state.clone();
+            let startup_barrier_for_daemon = startup_barrier.clone();
+            let app_handle_for_daemon = app.handle().clone();
+            let supervisor_token = task_registry.token().clone();
+            tauri::async_runtime::spawn(async move {
+                match bootstrap_daemon_connection(
+                    &app_handle_for_daemon,
+                    &daemon_connection_state_for_setup,
+                    &gui_owned_daemon_state_for_setup,
+                )
+                .await
+                {
+                    Ok(_connection_info) => {
+                        if let Err(error) = emit_daemon_connection_info_if_ready(
+                            &app_handle_for_daemon,
+                            &daemon_connection_state_for_setup,
+                            &startup_barrier_for_daemon,
+                        ) {
+                            warn!(error = %error, "Failed to deliver daemon connection info to main webview");
+                        }
+
+                        // Start daemon supervisor to respawn if daemon dies unexpectedly.
+                        let supervisor_state = daemon_connection_state_for_setup.clone();
+                        let supervisor_daemon = gui_owned_daemon_state_for_setup.clone();
+                        let app_handle_for_supervisor = app_handle_for_daemon.clone();
+                        tauri::async_runtime::spawn(async move {
+                            supervise_daemon(
+                                &app_handle_for_supervisor,
+                                &supervisor_state,
+                                &supervisor_daemon,
+                                supervisor_token,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(error) => {
+                        error!(error = %error, "Daemon startup/probe failed during Tauri bootstrap");
+                    }
+                }
+            });
 
             // Load startup settings for tray and silent start
             let (silent_start, initial_language) = {
-                let settings_port = runtime_for_handler.settings_port();
+                let settings_port = runtime.settings_port();
                 match tauri::async_runtime::block_on(settings_port.load()) {
                     Ok(settings) => {
                         let silent = settings.general.silent_start;
@@ -701,7 +492,7 @@ fn run_app(config: AppConfig) {
 
                 // Read shortcut override from settings, or use default
                 let shortcuts = {
-                    let settings_port = runtime_for_handler.settings_port();
+                    let settings_port = runtime.settings_port();
                     match tauri::async_runtime::block_on(settings_port.load()) {
                         Ok(settings) => quick_panel::resolve_shortcut_from_settings(&settings),
                         Err(e) => {
@@ -740,14 +531,11 @@ fn run_app(config: AppConfig) {
             // Start background spooler and blob worker tasks
             start_background_tasks(
                 background,
-                runtime_for_handler.wiring_deps(),
-                Some(app.handle().clone()),
-                pairing_orchestrator.clone(),
-                pairing_action_rx,
-                staged_store,
-                space_access_orchestrator.clone(),
-                key_slot_store.clone(),
-                runtime_for_handler.task_registry(),
+                runtime.wiring_deps(),
+                runtime.event_emitter(),
+                daemon_connection_state.clone(),
+                setup_pairing_event_hub.clone(),
+                runtime.task_registry(),
             );
 
             // Clone handles for async blocks
@@ -755,8 +543,7 @@ fn run_app(config: AppConfig) {
             let startup_barrier_for_backend = startup_barrier.clone();
 
             // Spawn the initialization task immediately (don't wait for frontend)
-            let runtime = runtime_for_handler.clone();
-            let platform_event_tx_clone = platform_event_tx.clone();
+            let runtime = runtime.clone();
             let silent_start_for_barrier = silent_start;
             tauri::async_runtime::spawn(async move {
                 info!("Starting backend initialization");
@@ -766,26 +553,6 @@ fn run_app(config: AppConfig) {
                     warn!("Failed to initialize default device name: {}", e);
                     // Non-fatal: continue startup even if device name initialization fails
                 }
-
-                // 1. Create PlatformRuntime
-                info!("Creating PlatformRuntime...");
-                let executor = Arc::new(SimplePlatformCommandExecutor);
-                let platform_runtime = match PlatformRuntime::new(
-                    platform_event_tx_clone,
-                    platform_event_rx,
-                    platform_cmd_rx,
-                    executor,
-                    Some(clipboard_handler),
-                ) {
-                    Ok(rt) => {
-                        info!("PlatformRuntime created successfully");
-                        rt
-                    }
-                    Err(e) => {
-                        error!("Failed to create platform runtime: {}", e);
-                        return;
-                    }
-                };
 
                 // Mark backend-side startup tasks completed. We now finish startup based on backend readiness
                 // to avoid deadlocks when the main window is hidden; frontend handles its own loading state.
@@ -797,9 +564,10 @@ fn run_app(config: AppConfig) {
                     info!("[Startup] Silent start: skipping startup barrier window show");
                 }
 
-                // 2. Auto-unlock (non-blocking) if enabled in settings
+                // 1. Auto-unlock (non-blocking) if enabled in settings
                 let runtime_for_auto_unlock = runtime.clone();
                 let app_handle_for_unlock = app_handle_for_startup.clone();
+                let daemon_conn_for_unlock = daemon_connection_state.clone();
                 tauri::async_runtime::spawn(async move {
                     let auto_unlock_enabled =
                         match runtime_for_auto_unlock.settings_port().load().await {
@@ -820,17 +588,13 @@ fn run_app(config: AppConfig) {
                             &runtime_for_auto_unlock,
                             &app_handle_for_unlock,
                             None,
+                            Some(&daemon_conn_for_unlock),
                         )
                         .await
                     {
                         warn!("[Startup] Auto unlock failed: {}", e);
                     }
                 });
-
-                // 3. Start platform runtime (this is an infinite loop that runs until app exits)
-                platform_runtime.start().await;
-
-                info!("Platform runtime task ended");
             });
 
             info!("App runtime initialized, backend initialization started");
@@ -866,6 +630,7 @@ fn run_app(config: AppConfig) {
             uc_tauri::commands::setup::verify_passphrase,
             uc_tauri::commands::setup::confirm_peer_trust,
             uc_tauri::commands::setup::cancel_setup,
+            uc_tauri::commands::setup::handle_space_access_completed,
             // Pairing commands
             uc_tauri::commands::pairing::get_local_peer_id,
             uc_tauri::commands::pairing::get_p2p_peers,
@@ -914,13 +679,61 @@ fn run_app(config: AppConfig) {
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")
-        .run(move |_app_handle, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                info!("App exit requested, cancelling all tracked tasks");
-                task_registry.token().cancel();
-            }
-            if let tauri::RunEvent::Exit = event {
-                info!("Application exiting");
+        .run(move |app_handle, event| {
+            match event {
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    info!("App exit requested, cancelling all tracked tasks");
+                    task_registry_for_run.token().cancel();
+
+                    if gui_owned_daemon_state_for_run.exit_cleanup_in_progress() {
+                        api.prevent_exit();
+                        info!("GUI-owned daemon exit cleanup already in progress");
+                        return;
+                    }
+
+                    if gui_owned_daemon_state_for_run.snapshot_pid().is_none() {
+                        return;
+                    }
+
+                    if !gui_owned_daemon_state_for_run.begin_exit_cleanup() {
+                        api.prevent_exit();
+                        info!("Skipping duplicate GUI-owned daemon exit cleanup request");
+                        return;
+                    }
+
+                    api.prevent_exit();
+                    let app_handle = app_handle.clone();
+                    let gui_owned_daemon_state = gui_owned_daemon_state_for_run.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match gui_owned_daemon_state
+                            .shutdown_owned_daemon(
+                                DAEMON_EXIT_CLEANUP_TIMEOUT,
+                                DAEMON_EXIT_CLEANUP_POLL_INTERVAL,
+                            )
+                            .await
+                        {
+                            Ok(true) => {
+                                info!("GUI-owned daemon cleaned up before application exit");
+                            }
+                            Ok(false) => {
+                                info!("No GUI-owned daemon cleanup required on application exit");
+                            }
+                            Err(error) => {
+                                error!(
+                                    error = %error,
+                                    "Failed to clean up GUI-owned daemon during application exit"
+                                );
+                            }
+                        }
+
+                        gui_owned_daemon_state.finish_exit_cleanup();
+                        app_handle.exit(0);
+                    });
+                }
+                tauri::RunEvent::Exit => {
+                    info!("Application exiting");
+                }
+                _ => {}
             }
         });
 }

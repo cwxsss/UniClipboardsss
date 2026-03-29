@@ -1,0 +1,174 @@
+name: 'Build CLI'
+run-name: "build-cli-${{ inputs.platform || 'all' }}-${{ github.run_number }}"
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Select build platform'
+        required: true
+        type: choice
+        options:
+          - 'macos-aarch64'
+          - 'macos-x86_64'
+          - 'ubuntu-22.04'
+          - 'windows-latest'
+          - 'all'
+        default: 'all'
+  workflow_call:
+    inputs:
+      platform:
+        description: 'Select build platform'
+        required: false
+        type: string
+        default: 'all'
+      branch:
+        description: 'Branch to build'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  setup-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Generate matrix
+        id: set-matrix
+        run: |
+          PLATFORM="${{ inputs.platform || 'all' }}"
+          if [ "$PLATFORM" == "all" ]; then
+            echo 'matrix=[{"platform":"macos-latest","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin"},{"platform":"macos-latest","target":"x86_64-apple-darwin","args":"--target x86_64-apple-darwin"},{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":""},{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","args":""}]' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" == "macos-aarch64" ]; then
+            echo 'matrix=[{"platform":"macos-latest","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin"}]' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" == "macos-x86_64" ]; then
+            echo 'matrix=[{"platform":"macos-latest","target":"x86_64-apple-darwin","args":"--target x86_64-apple-darwin"}]' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" == "ubuntu-22.04" ]; then
+            echo 'matrix=[{"platform":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":""}]' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" == "windows-latest" ]; then
+            echo 'matrix=[{"platform":"windows-latest","target":"x86_64-pc-windows-msvc","args":""}]' >> "$GITHUB_OUTPUT"
+          else
+            echo "Error: Unknown platform '$PLATFORM'. Valid options: all, macos-aarch64, macos-x86_64, ubuntu-22.04, windows-latest"
+            exit 1
+          fi
+
+  build-cli:
+    name: Build CLI ${{ matrix.target }}
+    needs: setup-matrix
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch || github.ref }}
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          shared-key: cli-${{ matrix.target }}
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: build CLI binary
+        working-directory: src-tauri
+        run: cargo build --release -p uc-cli ${{ matrix.args }}
+
+      - name: import Apple certificate (macOS only)
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 12)
+
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $CERTIFICATE_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: sign CLI binary (macOS only)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          # Extract signing identity from imported certificate
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "ERROR: No Developer ID Application identity found in keychain"
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+            exit 1
+          fi
+          echo "Signing with: $IDENTITY"
+
+          TARGET="${{ matrix.target }}"
+          BIN_NAME="uniclipboard-cli"
+          BIN_PATH="src-tauri/target/${TARGET}/release/${BIN_NAME}"
+          if [ ! -f "$BIN_PATH" ]; then
+            BIN_PATH="src-tauri/target/release/${BIN_NAME}"
+          fi
+
+          codesign --force --options runtime --sign "$IDENTITY" --keychain "$KEYCHAIN_PATH" "$BIN_PATH"
+          codesign --verify --verbose "$BIN_PATH"
+
+      - name: package CLI binary
+        id: package
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TARGET="${{ matrix.target }}"
+          BIN_NAME="uniclipboard-cli"
+
+          if [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            BIN_SRC="src-tauri/target/release/${BIN_NAME}.exe"
+            # Windows non-cross build puts binary in target/release/, not target/{target}/release/
+            if [ ! -f "$BIN_SRC" ]; then
+              BIN_SRC="src-tauri/target/${TARGET}/release/${BIN_NAME}.exe"
+            fi
+            ARCHIVE="uniclipboard-cli-${VERSION}-${TARGET}.zip"
+            7z a "$ARCHIVE" "$BIN_SRC"
+          else
+            BIN_DIR="src-tauri/target/${TARGET}/release"
+            # Fallback for non-cross builds
+            if [ ! -f "${BIN_DIR}/${BIN_NAME}" ]; then
+              BIN_DIR="src-tauri/target/release"
+            fi
+            ARCHIVE="uniclipboard-cli-${VERSION}-${TARGET}.tar.gz"
+            tar -czf "$ARCHIVE" -C "$BIN_DIR" "$BIN_NAME"
+          fi
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: uniclipboard-cli-*
+
+      - name: cleanup keychain (macOS only)
+        if: matrix.platform == 'macos-latest' && always()
+        run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true

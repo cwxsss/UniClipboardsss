@@ -6,6 +6,7 @@ use crate::security::state::{EncryptionState, EncryptionStateError};
 pub trait EncryptionStatePort: Send + Sync {
     async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError>;
     async fn persist_initialized(&self) -> Result<(), EncryptionStateError>;
+    async fn clear_initialized(&self) -> Result<(), EncryptionStateError>;
 }
 
 #[async_trait]

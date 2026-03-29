@@ -42,6 +42,7 @@ pub struct EncryptionSessionStatus {
 #[tauri::command]
 pub async fn initialize_encryption(
     runtime: State<'_, Arc<AppRuntime>>,
+    daemon_conn: State<'_, uc_daemon_client::DaemonConnectionState>,
     app_handle: AppHandle,
     passphrase: String,
     _trace: Option<TraceMetadata>,
@@ -74,6 +75,14 @@ pub async fn initialize_encryption(
         warn!("Failed to boot lifecycle after encryption init: {}", e);
     } else {
         info!("Lifecycle boot completed after encryption init");
+    }
+
+    // Signal daemon to enable clipboard capture after initialization
+    {
+        let client = uc_daemon_client::DaemonQueryClient::new(daemon_conn.inner().clone());
+        if let Err(e) = client.signal_lifecycle_ready().await {
+            warn!("Failed to signal daemon lifecycle ready after init: {}", e);
+        }
     }
 
     // Emit onboarding-password-set event for frontend
@@ -113,6 +122,7 @@ pub async fn unlock_encryption_session_with_runtime<R: Runtime>(
     runtime: &Arc<AppRuntime>,
     app_handle: &AppHandle<R>,
     trace: Option<TraceMetadata>,
+    daemon_connection_state: Option<&uc_daemon_client::DaemonConnectionState>,
 ) -> Result<bool, String> {
     let span = info_span!(
         "command.encryption.unlock_session",
@@ -136,6 +146,22 @@ pub async fn unlock_encryption_session_with_runtime<R: Runtime>(
                 } else {
                     info!("{} Auto lifecycle boot completed", UNLOCK_CONTEXT);
                 }
+
+                // Signal the daemon to enable clipboard capture.
+                // In --gui-managed mode, the daemon defers clipboard monitoring
+                // until the GUI explicitly signals readiness after unlock.
+                if let Some(conn) = daemon_connection_state {
+                    let client = uc_daemon_client::DaemonQueryClient::new(conn.clone());
+                    if let Err(e) = client.signal_lifecycle_ready().await {
+                        warn!(
+                            "{} Failed to signal daemon lifecycle ready: {}",
+                            UNLOCK_CONTEXT, e
+                        );
+                    } else {
+                        info!("{} Daemon clipboard capture enabled", UNLOCK_CONTEXT);
+                    }
+                }
+
                 Ok(true)
             }
             Ok(false) => {
@@ -165,10 +191,17 @@ pub async fn unlock_encryption_session_with_runtime<R: Runtime>(
 #[tauri::command]
 pub async fn unlock_encryption_session(
     runtime: State<'_, Arc<AppRuntime>>,
+    daemon_conn: State<'_, uc_daemon_client::DaemonConnectionState>,
     app_handle: AppHandle,
     _trace: Option<TraceMetadata>,
 ) -> Result<bool, String> {
-    unlock_encryption_session_with_runtime(runtime.inner(), &app_handle, _trace).await
+    unlock_encryption_session_with_runtime(
+        runtime.inner(),
+        &app_handle,
+        _trace,
+        Some(daemon_conn.inner()),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -207,7 +240,7 @@ mod tests {
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::{Blob, BlobId, ClipboardChangeOrigin, ContentHash, DeviceId, PeerId};
     use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
-    use uc_platform::ports::{AutostartPort, UiPort, WatcherControlError, WatcherControlPort};
+    use uc_platform::ports::{AutostartPort, UiPort};
     #[tokio::test]
     async fn emit_session_ready_emits_event() {
         let app = tauri::test::mock_app();
@@ -539,6 +572,10 @@ mod tests {
         async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
             Ok(())
         }
+
+        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -592,17 +629,6 @@ mod tests {
         }
 
         async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl WatcherControlPort for NoopPort {
-        async fn start_watcher(&self) -> Result<(), WatcherControlError> {
-            Ok(())
-        }
-
-        async fn stop_watcher(&self) -> Result<(), WatcherControlError> {
             Ok(())
         }
     }
@@ -945,7 +971,7 @@ mod tests {
         let app = tauri::test::mock_app();
         let app_handle = app.handle();
 
-        let unlocked = unlock_encryption_session_with_runtime(&runtime, &app_handle, None)
+        let unlocked = unlock_encryption_session_with_runtime(&runtime, &app_handle, None, None)
             .await
             .expect("unlock");
 

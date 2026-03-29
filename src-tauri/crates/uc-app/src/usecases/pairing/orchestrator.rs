@@ -452,6 +452,30 @@ impl PairingOrchestrator {
         .await
     }
 
+    /// User cancels pairing.
+    pub async fn user_cancel_pairing(&self, session_id: &str) -> Result<()> {
+        let span = info_span!("pairing.user_cancel", session_id = %session_id);
+        async {
+            let actions = self
+                .session_manager
+                .process_event(
+                    session_id,
+                    PairingEvent::UserCancel {
+                        session_id: session_id.to_string(),
+                    },
+                )
+                .await?;
+
+            for action in actions {
+                self.execute_action(session_id, "", action).await?;
+            }
+
+            Ok(())
+        }
+        .instrument(span)
+        .await
+    }
+
     /// Handle received Confirm.
     pub async fn handle_confirm(
         &self,
@@ -550,7 +574,12 @@ impl PairingOrchestrator {
     }
 
     /// Handle received Busy.
-    pub async fn handle_busy(&self, session_id: &str, peer_id: &str) -> Result<()> {
+    pub async fn handle_busy(
+        &self,
+        session_id: &str,
+        peer_id: &str,
+        reason: Option<String>,
+    ) -> Result<()> {
         let span = info_span!(
             "pairing.handle_busy",
             session_id = %session_id,
@@ -563,6 +592,7 @@ impl PairingOrchestrator {
                     session_id,
                     PairingEvent::RecvBusy {
                         session_id: session_id.to_string(),
+                        reason,
                     },
                 )
                 .await?;
@@ -623,6 +653,11 @@ impl PairingOrchestrator {
     /// Get role for a session.
     pub async fn get_session_role(&self, session_id: &str) -> Option<PairingRole> {
         self.session_manager.get_session_role(session_id).await
+    }
+
+    /// Return whether a session currently exists in the orchestrator.
+    pub async fn has_session(&self, session_id: &str) -> bool {
+        self.session_manager.has_session(session_id).await
     }
 
     /// Cleanup expired sessions.
@@ -1584,6 +1619,57 @@ mod tests {
                 assert_eq!(peer_fingerprint, "PEER");
             }
             _ => panic!("expected PairingVerificationRequired event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pairing_orchestrator_preserves_busy_reason_in_failure_event() {
+        let config = PairingConfig::default();
+        let device_repo = Arc::new(NoopPairedDeviceRepository);
+        let (orchestrator, mut action_rx) = PairingOrchestrator::new(
+            config,
+            device_repo,
+            "LocalDevice".to_string(),
+            "device-123".to_string(),
+            "peer-local".to_string(),
+            vec![0u8; 32],
+            Arc::new(StagedPairedDeviceStore::new()),
+        );
+        let mut event_rx = PairingEventPort::subscribe(&orchestrator)
+            .await
+            .expect("subscribe to pairing events");
+
+        let session_id = orchestrator
+            .initiate_pairing("peer-busy".to_string())
+            .await
+            .expect("initiate pairing");
+
+        let _ = timeout(Duration::from_secs(1), action_rx.recv())
+            .await
+            .expect("send action timeout")
+            .expect("send action missing");
+
+        orchestrator
+            .handle_busy(
+                &session_id,
+                "peer-busy",
+                Some("no_local_pairing_participant_ready".to_string()),
+            )
+            .await
+            .expect("handle busy with reason");
+
+        let failed_event = timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("event timeout")
+            .expect("event missing");
+        match failed_event {
+            crate::usecases::pairing::PairingDomainEvent::PairingFailed { reason, .. } => {
+                assert_eq!(
+                    reason,
+                    FailureReason::Other("no_local_pairing_participant_ready".to_string())
+                );
+            }
+            _ => panic!("expected PairingFailed event"),
         }
     }
 }

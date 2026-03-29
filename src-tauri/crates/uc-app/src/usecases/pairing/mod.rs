@@ -1,9 +1,11 @@
 pub mod announce_device_name;
+pub mod dto;
 pub mod events;
 pub mod facade;
 pub mod get_device_sync_settings;
 pub mod get_local_device_info;
 pub mod get_local_peer_id;
+pub mod get_p2p_peers_snapshot;
 pub mod list_connected_peers;
 pub mod list_discovered_peers;
 pub mod list_paired_devices;
@@ -19,11 +21,13 @@ pub mod unpair_device;
 pub mod update_device_sync_settings;
 
 pub use announce_device_name::AnnounceDeviceName;
+pub use dto::{P2PPeerInfo, PairedPeer};
 pub use events::{PairingDomainEvent, PairingEventPort};
 pub use facade::PairingFacade;
 pub use get_device_sync_settings::GetDeviceSyncSettings;
 pub use get_local_device_info::{GetLocalDeviceInfo, LocalDeviceInfo};
 pub use get_local_peer_id::GetLocalPeerId;
+pub use get_p2p_peers_snapshot::{GetP2pPeersSnapshot, P2pPeerSnapshot};
 pub use list_connected_peers::ListConnectedPeers;
 pub use list_discovered_peers::ListDiscoveredPeers;
 pub use list_paired_devices::ListPairedDevices;

@@ -324,13 +324,18 @@ impl SpaceAccessStateMachine {
                 vec![SpaceAccessAction::StopTimer],
             ),
 
-            // ===== Sponsor re-authorization from terminal states =====
-            // After completing authorization for one joiner, the sponsor must be
-            // able to start a fresh authorization for the next joiner.
+            // ===== Sponsor re-authorization from any non-Idle state =====
+            // After completing authorization for one joiner, or when a previous
+            // session left stale state (e.g. WaitingJoinerProof from a failed
+            // pairing), the sponsor must be able to start a fresh authorization.
             (
                 SpaceAccessState::Granted { .. }
                 | SpaceAccessState::Denied { .. }
-                | SpaceAccessState::Cancelled { .. },
+                | SpaceAccessState::Cancelled { .. }
+                | SpaceAccessState::WaitingJoinerProof { .. }
+                | SpaceAccessState::WaitingOffer { .. }
+                | SpaceAccessState::WaitingUserPassphrase { .. }
+                | SpaceAccessState::WaitingDecision { .. },
                 SpaceAccessEvent::SponsorAuthorizationRequested {
                     pairing_session_id,
                     space_id,
@@ -695,6 +700,49 @@ mod tests {
         );
 
         assert!(matches!(next, SpaceAccessState::WaitingJoinerProof { .. }));
+    }
+
+    #[test]
+    fn sponsor_reauthorization_from_stale_waiting_joiner_proof() {
+        let now = fixed_now();
+        let old_expires = now + Duration::seconds(30);
+        let from = SpaceAccessState::WaitingJoinerProof {
+            pairing_session_id: "old-session".to_string(),
+            space_id: "space-1".into(),
+            expires_at: old_expires,
+        };
+
+        let (next, actions) = SpaceAccessStateMachine::transition_at(
+            from,
+            SpaceAccessEvent::SponsorAuthorizationRequested {
+                pairing_session_id: "new-session".to_string(),
+                space_id: "space-1".into(),
+                ttl_secs: 30,
+            },
+            now,
+        );
+
+        let new_expires = now + Duration::seconds(30);
+        assert_eq!(
+            next,
+            SpaceAccessState::WaitingJoinerProof {
+                pairing_session_id: "new-session".to_string(),
+                space_id: "space-1".into(),
+                expires_at: new_expires,
+            }
+        );
+        assert_eq!(
+            actions,
+            vec![
+                SpaceAccessAction::RequestOfferPreparation {
+                    pairing_session_id: CoreSessionId::from("new-session"),
+                    space_id: "space-1".into(),
+                    expires_at: new_expires,
+                },
+                SpaceAccessAction::SendOffer,
+                SpaceAccessAction::StartTimer { ttl_secs: 30 },
+            ]
+        );
     }
 
     #[test]

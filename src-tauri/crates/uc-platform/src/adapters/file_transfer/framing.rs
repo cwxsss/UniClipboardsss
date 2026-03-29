@@ -69,9 +69,7 @@ where
 /// Read a typed, length-prefixed frame from the reader.
 ///
 /// Returns `Ok(None)` if the stream ends cleanly before the type byte.
-pub async fn read_file_frame<R>(
-    reader: &mut R,
-) -> Result<Option<(FileMessageType, Vec<u8>)>>
+pub async fn read_file_frame<R>(reader: &mut R) -> Result<Option<(FileMessageType, Vec<u8>)>>
 where
     R: AsyncRead + Unpin,
 {
@@ -133,9 +131,7 @@ mod tests {
         for msg_type in types {
             let payload = b"test";
             let mut buf = Vec::new();
-            write_file_frame(&mut buf, msg_type, payload)
-                .await
-                .unwrap();
+            write_file_frame(&mut buf, msg_type, payload).await.unwrap();
 
             let mut cursor = &buf[..];
             let (decoded_type, decoded_payload) =

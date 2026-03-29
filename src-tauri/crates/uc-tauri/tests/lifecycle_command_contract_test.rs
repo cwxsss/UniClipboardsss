@@ -28,10 +28,6 @@ fn lifecycle_status_dto_json_shape_matches_contract() {
     let idle_json = serde_json::to_value(&idle).expect("serialize failed");
     assert_eq!(idle_json["state"], Value::String("Idle".to_string()));
 
-    let watcher_failed = LifecycleStatusDto::from_state(LifecycleState::WatcherFailed);
-    let wf_json = serde_json::to_value(&watcher_failed).expect("serialize failed");
-    assert_eq!(wf_json["state"], Value::String("WatcherFailed".to_string()));
-
     let network_failed = LifecycleStatusDto::from_state(LifecycleState::NetworkFailed);
     let nf_json = serde_json::to_value(&network_failed).expect("serialize failed");
     assert_eq!(nf_json["state"], Value::String("NetworkFailed".to_string()));
