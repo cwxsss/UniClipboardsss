@@ -50,7 +50,7 @@ Session token must not be stored in localStorage, sessionStorage, or cookies —
   - Estimate: medium
   - Files: src/__tests__/lib/daemon-auth.test.ts, src/__tests__/lib/daemon-client.test.ts
   - Verify: All session lifecycle tests pass. Grep verifies tokens not persisted to storage.
-- [ ] **T04: Security audit and token leakage check** — Security audit checklist:
+- [x] **T04: Security audit completed — all 6 checks passed with 1 documented limitation** — Security audit checklist:
 
 1. **Token leakage**: grep source for localStorage.setItem('token'), sessionStorage.setItem('token'), document.cookie with token → should find zero
 2. **Bearer token placement**: verify Authorization header set only, never in URL query params
