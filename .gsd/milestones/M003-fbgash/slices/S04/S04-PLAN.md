@@ -37,7 +37,7 @@ Note: Phase 72 already moved restore_clipboard_entry proxying to daemon, so veri
   - Estimate: medium
   - Files: src-tauri/crates/uc-tauri/src/commands/encryption.rs, src-tauri/crates/uc-tauri/src/commands/settings.rs, src-tauri/crates/uc-tauri/src/commands/storage.rs, src-tauri/src/main.rs
   - Verify: cargo build in src-tauri/ succeeds. Settings, encryption, storage operations work via daemon HTTP.
-- [ ] **T03: Code audit and build verification** — Final verification before completing:
+- [x] **T03: Code audit and build verification — all 12 grep checks pass, cargo build succeeds** — Final verification before completing:
 
 ```bash
 # Frontend: no invoke() calls to removed commands
