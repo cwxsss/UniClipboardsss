@@ -4,7 +4,7 @@
 **Demo:** After this: uc-tauri/src/commands/clipboard.rs, encryption.rs, settings.rs, storage.rs deleted; invoke_handler![] cleaned up
 
 ## Tasks
-- [ ] **T01: Remove clipboard Tauri commands** — In `src-tauri/crates/uc-tauri/src/commands/clipboard.rs`:
+- [x] **T01: Removed all 11 clipboard Tauri commands; deleted clipboard.rs, clipboard DTOs from models/mod.rs, and clipboard test file** — In `src-tauri/crates/uc-tauri/src/commands/clipboard.rs`:
 
 Remove these functions (or delete entire file if empty after):
 - get_clipboard_entries

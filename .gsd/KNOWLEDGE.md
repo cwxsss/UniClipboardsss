@@ -138,6 +138,45 @@ The `setupRealtimeStore.ts` retry loop (line ~106) retries indefinitely, generat
 
 ---
 
+## bun test lacks vitest mocking APIs — React hook tests need npx vitest
+
+**Pattern:** bun test does not expose `vi.stubGlobal`, `vi.advanceTimersByTimeAsync`, `vi.mocked`, `vi.importActual`, or jsdom DOM environment. Tests for React hooks and WebSocket clients that need mocking must run under `npx vitest` instead.
+
+**Lesson:** If a test file uses `vi.fn()`, `vi.mock()`, `vi.useFakeTimers()`, or needs a DOM environment (jsdom), it must be run with `npx vitest run` — not `bun test`. The existing `daemon-ws.test.ts` (17 tests) and `useUINavigateListener.test.tsx` also fail under bun test for the same reasons. Prefer `npx vitest run` for all frontend unit tests going forward.
+
+**Seen in:** M003-fbgash / S03 / T01 (daemon-ws.test.ts — 13 of 17 tests fail) and T02 (useDaemonEvents.test.ts — requires npx vitest with jsdom).
+
+---
+
+## WebSocket factory injection via constructor for testability
+
+**Pattern:** `DaemonWsClient` accepts a `_wsFactory` constructor parameter (defaults to global `WebSocket`). Tests pass a mock factory that returns a mock WebSocket instance.
+
+```typescript
+// Production: uses native WebSocket
+const daemonWs = new DaemonWsClient()
+
+// Test: inject mock
+const mockWs = new MockWebSocket()
+const client = new DaemonWsClient((url) => mockWs)
+```
+
+**Lesson:** Global `WebSocket` cannot be stubbed in bun test. Constructor injection with a protected `_wsFactory` field enables tests to inject controlled mock objects. The `reset()` method clears singleton state between test cases.
+
+**Seen in:** M003-fbgash / S03 / T01 — `daemon-ws.ts`.
+
+---
+
+## daemonWs.subscribe() auto-reconnects and re-subscribes — no manual reconnect listener needed
+
+**Pattern:** `daemonWs` maintains `_activeTopics` internally and automatically re-subscribes all active topics on every reconnect. Callers do not need to listen for `daemon://ws-reconnected` to re-establish subscriptions.
+
+**Lesson:** After a daemon restart or network blip, `daemonWs` handles reconnection and re-subscription transparently. Hooks that call `daemonWs.subscribe()` in `useEffect` will get fresh subscriptions automatically — the hook itself does not need to know about reconnection events. The `daemon://ws-reconnected` Tauri event and associated `useDaemonReconnectedListener` are no longer needed for WS subscription management.
+
+**Seen in:** M003-fbgash / S03 / T03 — replaced `listen('daemon://ws-reconnected', ...)` with implicit re-subscription via `daemonWs`.
+
+---
+
 ## clearClipboardItems has no daemon endpoint — falls back to Tauri invoke
 
 **Pattern:** The `POST /clipboard/entries/clear` or similar endpoint does not exist in the daemon. The `clearAllItems` thunk in clipboardSlice falls back to the Tauri invoke path.

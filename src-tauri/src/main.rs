@@ -602,18 +602,6 @@ fn run_app(ctx: GuiBootstrapContext) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Clipboard commands
-            uc_tauri::commands::clipboard::get_clipboard_entries,
-            uc_tauri::commands::clipboard::get_clipboard_entry,
-            uc_tauri::commands::clipboard::get_clipboard_entry_detail,
-            uc_tauri::commands::clipboard::get_clipboard_entry_resource,
-            uc_tauri::commands::clipboard::delete_clipboard_entry,
-            uc_tauri::commands::clipboard::restore_clipboard_entry,
-            uc_tauri::commands::clipboard::sync_clipboard_items,
-            uc_tauri::commands::clipboard::get_clipboard_stats,
-            uc_tauri::commands::clipboard::toggle_favorite_clipboard_item,
-            uc_tauri::commands::clipboard::get_clipboard_item,
-            uc_tauri::commands::clipboard::copy_file_to_clipboard,
             // Encryption commands
             uc_tauri::commands::encryption::initialize_encryption,
             uc_tauri::commands::encryption::get_encryption_session_status,

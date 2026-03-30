@@ -1,5 +1,4 @@
 pub mod autostart;
-pub mod clipboard;
 pub mod encryption;
 pub mod error;
 pub mod lifecycle;
@@ -18,7 +17,7 @@ use uc_platform::ports::observability::TraceMetadata;
 
 // Re-export commonly used types
 pub use autostart::*;
-pub use clipboard::*;
+
 pub use encryption::*;
 pub use lifecycle::*;
 pub use pairing::*;

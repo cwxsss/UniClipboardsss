@@ -6,7 +6,7 @@ import { getClipboardEntry } from '@/api/clipboardItems'
 // Mock daemonWs instead of Tauri listen (hook now uses daemonWs.subscribe)
 vi.mock('@/lib/daemon-ws', () => ({
   daemonWs: {
-    subscribe: vi.fn((topics, handler) => {
+    subscribe: vi.fn((_topics, handler) => {
       // Capture the handler so tests can invoke it directly.
       capturedHandler = handler
       return () => {
