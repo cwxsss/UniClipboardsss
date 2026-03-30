@@ -27,6 +27,34 @@ use crate::api::types::{
 
 type ClientTopics = Arc<RwLock<HashSet<String>>>;
 
+/// Extract session token from Authorization header or ?auth= query parameter.
+///
+/// Browser WebSocket clients cannot send custom headers, so the session token is
+/// passed via URL query parameter. Native clients can continue using the Authorization header.
+/// Returns `None` if neither source provides a valid "Session <token>" format.
+fn extract_session_token(
+    headers: &HeaderMap,
+    params: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    // Try Authorization header first (native clients prefer this path).
+    if let Some(token) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Session "))
+    {
+        return Some(token.to_string());
+    }
+
+    // Fall back to ?auth= query parameter (browser WebSocket clients).
+    if let Some(auth_value) = params.get("auth") {
+        if let Some(token) = auth_value.strip_prefix("Session ") {
+            return Some(token.to_string());
+        }
+    }
+
+    None
+}
+
 pub fn router() -> Router<DaemonApiState> {
     Router::new().route("/ws", get(websocket_upgrade))
 }
@@ -35,14 +63,15 @@ async fn websocket_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<DaemonApiState>,
     headers: HeaderMap,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    // Step 1: Extract session token from Authorization header
-    let token = match headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|h| h.strip_prefix("Session "))
-    {
-        Some(t) => t.to_string(),
+    // Step 1: Extract session token from Authorization header OR ?auth= query parameter.
+    //
+    // Browser WebSocket clients cannot send custom headers, so the session token is
+    // passed via URL query parameter: ws://host/ws?auth=Session%20<jwt>.
+    // Non-browser clients (native apps, CLI tools) can continue using the Authorization header.
+    let token = match extract_session_token(&headers, &params) {
+        Some(t) => t,
         None => {
             return ws_unauthorized("missing_session_token").into_response();
         }

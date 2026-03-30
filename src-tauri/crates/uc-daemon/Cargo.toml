@@ -40,3 +40,4 @@ tempfile = "3"
 chrono = { version = "0.4", default-features = true }
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
+percent-encoding = "2"

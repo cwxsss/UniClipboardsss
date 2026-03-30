@@ -82,9 +82,10 @@ async fn connect_with_token(
     token: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let mut request = url.into_client_request().unwrap();
+    // Phase 75+: WS upgrade uses "Session <token>" prefix (JWT session token), not "Bearer".
     request.headers_mut().insert(
         "Authorization",
-        format!("Bearer {}", token.trim()).parse().unwrap(),
+        format!("Session {}", token.trim()).parse().unwrap(),
     );
     let (socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
     socket
@@ -136,7 +137,7 @@ async fn snapshot_contains_session_id_and_omits_verification_secrets() {
     )
     .await;
 
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing"]).await;
 
     let event = next_json(&mut socket).await;
@@ -156,7 +157,7 @@ async fn snapshot_contains_session_id_and_omits_verification_secrets() {
 #[tokio::test]
 async fn incremental_verification_event_contains_code_and_fingerprints() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing"]).await;
     let _snapshot = next_json(&mut socket).await;
 
@@ -194,7 +195,7 @@ async fn incremental_verification_event_contains_code_and_fingerprints() {
 #[tokio::test]
 async fn peers_and_paired_devices_incremental_events_preserve_bridge_fields() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["peers", "paired-devices"]).await;
     let _peers_snapshot = next_json(&mut socket).await;
     let _paired_devices_snapshot = next_json(&mut socket).await;
@@ -299,7 +300,7 @@ async fn peers_and_paired_devices_incremental_events_preserve_bridge_fields() {
 #[tokio::test]
 async fn websocket_event_uses_type_not_event_type() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing"]).await;
     let _snapshot = next_json(&mut socket).await;
 
@@ -340,7 +341,7 @@ async fn pairing_session_http_response_omits_verification_secrets_even_with_real
     )
     .await;
 
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing"]).await;
     let _snapshot = next_json(&mut socket).await;
 
@@ -391,7 +392,7 @@ async fn pairing_session_http_response_omits_verification_secrets_even_with_real
 #[tokio::test]
 async fn granular_pairing_topic_subscription_receives_session_events() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing/session"]).await;
     let _snapshot = next_json(&mut socket).await;
 
@@ -425,7 +426,7 @@ async fn granular_pairing_topic_subscription_receives_session_events() {
 #[tokio::test]
 async fn setup_topic_subscription_receives_setup_state_changed_events() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["setup"]).await;
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 

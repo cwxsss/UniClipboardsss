@@ -315,3 +315,15 @@ export async function clearCache(confirmed: boolean): Promise<void> {
 **Lesson:** Test coverage requirements drove the creation of a missing API module. The module should be created in the same PR as the tests. Add it to `src/api/daemon/index.ts` for clean exports.
 
 **Seen in:** M003-fbgash / S05 / T01 — `src/api/daemon/storage.ts` created.
+
+---
+
+## clipboardItems.ts retains Tauri invoke calls for native clipboard operations — not a bug
+
+**Pattern:** After clipboardSlice.ts migrates to the daemon HTTP client, `clipboardItems.ts` still contains invoke calls for operations that require native OS clipboard integration (`restore_clipboard_entry`, `copy_file_to_clipboard`, `download_file_entry`, `open_file_location`, `clear_clipboard_items`). These are on the explicit Tauri allowlist (D005) and are NOT a migration gap.
+
+**Lesson:** The grep audit in T03 (`rg invokeWithTrace for get_storage_stats, clear_cache, get_encryption_session_status`) was scoped to the storage/settings/encryption areas being migrated. Clipboard invokes in `clipboardItems.ts` were already handled in T02 when clipboardSlice.ts was migrated. The module retains invoke calls because: (a) native clipboard operations cannot go through daemon HTTP, and (b) `clipboardItems.ts` is now a types-and-native-utility module with zero function calls in the migrated business layer. The grep pattern `get_clipboard_` (with underscore) would not match `get_clipboard_entries` (no underscore) anyway.
+
+**Audit approach:** To verify zero clipboard business invokes remain, scope grep to `src/store/slices/ src/api/daemon/ src/hooks/ src/components/` — not `clipboardItems.ts`. The allowlist in `src/api/storage.ts` documents the one remaining Tauri invoke (`open_data_directory`) with a bilingual comment.
+
+**Seen in:** M003-fbgash / S06 / T02, T03 — `src/api/clipboardItems.ts`, `src/api/storage.ts`.
