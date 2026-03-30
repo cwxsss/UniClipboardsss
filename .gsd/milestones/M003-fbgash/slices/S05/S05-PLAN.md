@@ -25,7 +25,7 @@ Error response shapes: DaemonApiError fields populated correctly.
   - Estimate: medium
   - Files: src/__tests__/api/daemon/clipboard.test.ts, src/__tests__/api/daemon/settings.test.ts, src/__tests__/api/daemon/encryption.test.ts, src/__tests__/api/daemon/storage.test.ts
   - Verify: All integration tests pass. `npm test` or `bun test` returns 0 failures.
-- [ ] **T02: WebSocket event delivery and reconnect tests** — Test DaemonWsClient event delivery:
+- [x] **T02: WebSocket event delivery and reconnect tests: 28 tests all passing** — Test DaemonWsClient event delivery:
 
 - Subscribe to 'clipboard' topic, copy on device B → event received within 100ms
 - Subscribe to 'encryption' topic, lock/unlock → events received

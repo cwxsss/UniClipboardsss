@@ -251,8 +251,14 @@ export class DaemonWsClient {
   private _handleMessage(data: string): void {
     // Parse the raw event from the daemon.
     // The daemon serializes with snake_case: { topic, event_type, session_id, ts, payload }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw: Record<string, any> = JSON.parse(data)
+    let raw: Record<string, unknown>
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      raw = JSON.parse(data) as Record<string, any>
+    } catch {
+      console.error('[DaemonWsClient] failed to parse incoming message:', data)
+      return
+    }
 
     const event: DaemonWsEvent = {
       topic: raw.topic,
@@ -305,16 +311,17 @@ export class DaemonWsClient {
     if (this._isReconnecting) return
     // Don't reconnect if disconnect() has cleared _wsUrl since this close was intentional.
     if (!this._wsUrl) return
-    this._isReconnecting = true
-    this._reconnectAttempt++
 
-    if (this._reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
+    if (this._reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
       console.error(
         `[DaemonWsClient] gave up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`,
       )
       this._isReconnecting = false
       return
     }
+
+    this._isReconnecting = true
+    this._reconnectAttempt++
 
     // Exponential backoff with jitter: min(30s, 1s * 2^attempt) ± 10%.
     const baseDelay = Math.min(
