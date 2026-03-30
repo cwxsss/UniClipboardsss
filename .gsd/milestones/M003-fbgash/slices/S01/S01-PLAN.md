@@ -39,7 +39,7 @@ function isSessionExpired(token: SessionToken | null): boolean
   - Estimate: small
   - Files: src/api/daemon/types.ts
   - Verify: Types used correctly in DaemonClient. No runtime type errors.
-- [ ] **T03: DaemonApiError class with typed error codes** — Create `src/api/daemon/errors.ts`:
+- [x] **T03: Verified DaemonApiError, DaemonErrorCode enum, and mapStatusToErrorCode with 12 dedicated unit tests — implementation already complete from T01** — Create `src/api/daemon/errors.ts`:
 
 ```typescript
 export class DaemonApiError extends Error {

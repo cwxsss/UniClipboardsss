@@ -25,7 +25,7 @@ function mockFetchOk(body: unknown, status = 200): void {
 
 function mockFetchSequence(responses: Array<{ ok: boolean; status: number; body: unknown }>): void {
   const fetchMock = vi.fn()
-  for (const [i, resp] of responses.entries()) {
+  for (const [, resp] of responses.entries()) {
     fetchMock.mockResolvedValueOnce({
       ok: resp.ok,
       status: resp.status,
