@@ -1,30 +1,35 @@
-import { listen } from '@tauri-apps/api/event'
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useEncryptionSessionState } from '../useEncryptionSessionState'
 import { getEncryptionSessionStatus } from '@/api/security'
 
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(),
+// Mock daemonWs (hook now uses daemonWs.subscribe instead of Tauri listen)
+let capturedEncryptionHandler: ((event: { eventType: string }) => void) | null = null
+vi.mock('@/lib/daemon-ws', () => ({
+  daemonWs: {
+    subscribe: vi.fn((topics: string[], handler: (event: { eventType: string }) => void) => {
+      if (topics.includes('encryption')) {
+        capturedEncryptionHandler = handler
+      }
+      return () => {
+        if (topics.includes('encryption')) {
+          capturedEncryptionHandler = null
+        }
+      }
+    }),
+  },
 }))
 
 vi.mock('@/api/security', () => ({
   getEncryptionSessionStatus: vi.fn(),
 }))
 
-const mockListen = vi.mocked(listen)
 const mockGetEncryptionSessionStatus = vi.mocked(getEncryptionSessionStatus)
 
 describe('useEncryptionSessionState', () => {
-  let callback: ((event: { payload: unknown }) => void) | null = null
-
   beforeEach(() => {
     vi.clearAllMocks()
-    callback = null
-    mockListen.mockImplementation(async (_channel: string, cb: unknown) => {
-      callback = cb as (event: { payload: unknown }) => void
-      return (() => {}) as () => void
-    })
+    capturedEncryptionHandler = null
   })
 
   it('treats uninitialized encryption as ready', async () => {
@@ -55,7 +60,7 @@ describe('useEncryptionSessionState', () => {
     })
   })
 
-  it('switches to ready after SessionReady event', async () => {
+  it('switches to ready after encryption.sessionReady event', async () => {
     mockGetEncryptionSessionStatus.mockResolvedValue({
       initialized: true,
       session_ready: false,
@@ -64,10 +69,11 @@ describe('useEncryptionSessionState', () => {
     const { result } = renderHook(() => useEncryptionSessionState())
 
     await waitFor(() => {
-      expect(callback).not.toBeNull()
+      expect(capturedEncryptionHandler).not.toBeNull()
     })
 
-    callback?.({ payload: 'SessionReady' })
+    // Simulate encryption.sessionReady from daemon WS
+    capturedEncryptionHandler?.({ eventType: 'encryption.sessionReady' })
 
     await waitFor(() => {
       expect(result.current.encryptionReady).toBe(true)

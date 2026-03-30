@@ -1,13 +1,22 @@
-import { listen } from '@tauri-apps/api/event'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useClipboardEventStream } from '../useClipboardEventStream'
 import { getClipboardEntry } from '@/api/clipboardItems'
 
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(),
+// Mock daemonWs instead of Tauri listen (hook now uses daemonWs.subscribe)
+vi.mock('@/lib/daemon-ws', () => ({
+  daemonWs: {
+    subscribe: vi.fn((topics, handler) => {
+      // Capture the handler so tests can invoke it directly.
+      capturedHandler = handler
+      return () => {
+        capturedHandler = null
+      }
+    }),
+  },
 }))
 
+// Mock clipboard API
 vi.mock('@/api/clipboardItems', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/clipboardItems')>()
   return {
@@ -16,21 +25,14 @@ vi.mock('@/api/clipboardItems', async importOriginal => {
   }
 })
 
-const mockListen = vi.mocked(listen)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let capturedHandler: ((event: any) => void) | null = null
 const mockGetClipboardEntry = vi.mocked(getClipboardEntry)
 
 describe('useClipboardEventStream', () => {
-  let callback:
-    | ((event: { payload: { type: string; entry_id?: string; origin?: string } }) => void)
-    | null = null
-
   beforeEach(() => {
     vi.clearAllMocks()
-    callback = null
-    mockListen.mockImplementation(async (_channel: string, cb: unknown) => {
-      callback = cb as typeof callback
-      return (() => {}) as () => void
-    })
+    capturedHandler = null
   })
 
   afterEach(() => {
@@ -57,10 +59,16 @@ describe('useClipboardEventStream', () => {
       })
     )
 
-    await waitFor(() => expect(callback).not.toBeNull())
+    await waitFor(() => expect(capturedHandler).not.toBeNull())
 
     await act(async () => {
-      callback?.({ payload: { type: 'NewContent', entry_id: 'entry-1', origin: 'local' } })
+      capturedHandler?.({
+        topic: 'clipboard',
+        eventType: 'clipboard.new-content',
+        ts: 0,
+        sessionId: null,
+        payload: { entry_id: 'entry-1', preview: 'hello', origin: 'local' },
+      })
       await Promise.resolve()
     })
 
@@ -79,12 +87,24 @@ describe('useClipboardEventStream', () => {
       })
     )
 
-    await waitFor(() => expect(callback).not.toBeNull())
+    await waitFor(() => expect(capturedHandler).not.toBeNull())
     vi.useFakeTimers()
 
     act(() => {
-      callback?.({ payload: { type: 'NewContent', entry_id: 'entry-1', origin: 'remote' } })
-      callback?.({ payload: { type: 'NewContent', entry_id: 'entry-2', origin: 'remote' } })
+      capturedHandler?.({
+        topic: 'clipboard',
+        eventType: 'clipboard.new-content',
+        ts: 0,
+        sessionId: null,
+        payload: { entry_id: 'entry-1', preview: '...', origin: 'remote' },
+      })
+      capturedHandler?.({
+        topic: 'clipboard',
+        eventType: 'clipboard.new-content',
+        ts: 0,
+        sessionId: null,
+        payload: { entry_id: 'entry-2', preview: '...', origin: 'remote' },
+      })
     })
 
     expect(onRemoteInvalidate).toHaveBeenCalledTimes(1)
@@ -108,10 +128,16 @@ describe('useClipboardEventStream', () => {
       })
     )
 
-    await waitFor(() => expect(callback).not.toBeNull())
+    await waitFor(() => expect(capturedHandler).not.toBeNull())
 
     act(() => {
-      callback?.({ payload: { type: 'Deleted', entry_id: 'entry-9' } })
+      capturedHandler?.({
+        topic: 'clipboard',
+        eventType: 'clipboard.deleted',
+        ts: 0,
+        sessionId: null,
+        payload: { entry_id: 'entry-9' },
+      })
     })
 
     expect(onDeleted).toHaveBeenCalledWith('entry-9')

@@ -1,5 +1,5 @@
-import { listen } from '@tauri-apps/api/event'
 import { useEffect, useState } from 'react'
+import { daemonWs } from '@/lib/daemon-ws'
 import { getEncryptionSessionStatus } from '@/api/security'
 
 interface EncryptionSessionState {
@@ -33,21 +33,20 @@ export function useEncryptionSessionState(): EncryptionSessionState {
       }
     }
 
-    const unlistenPromise = listen<'SessionReady' | { type?: string }>(
-      'encryption://event',
-      event => {
-        const eventType = typeof event.payload === 'string' ? event.payload : event.payload?.type
-        if (eventType === 'SessionReady' && !cancelled) {
-          setState({ encryptionReady: true, isLocked: false })
-        }
+    const handler = (event: { eventType: string }) => {
+      if (cancelled) return
+      if (event.eventType === 'encryption.sessionReady') {
+        setState({ encryptionReady: true, isLocked: false })
       }
-    )
+    }
+
+    const unsubscribe = daemonWs.subscribe(['encryption'], handler)
 
     void syncState()
 
     return () => {
       cancelled = true
-      unlistenPromise.then(fn => fn())
+      unsubscribe()
     }
   }, [])
 

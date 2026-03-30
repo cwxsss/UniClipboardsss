@@ -1,0 +1,91 @@
+/**
+ * Daemon WS Bootstrap — connects the frontend WebSocket client to the daemon.
+ *
+ * Listens for the one-shot `daemon://connection-info` Tauri event (emitted once
+ * by the Tauri backend when the daemon process is ready), then:
+ *   1. Initializes `daemonClient` with the connection config.
+ *   2. Connects `daemonWs` to the daemon's WebSocket endpoint.
+ *
+ * After this runs, `daemonWs` will maintain its own connection with automatic
+ * reconnect (exponential backoff, max 10 attempts). All `daemonWs.subscribe()`
+ * calls in hooks will automatically receive events once connected.
+ */
+
+import { listen } from '@tauri-apps/api/event'
+import { daemonClient } from '@/api/daemon/client'
+import { daemonWs } from '@/lib/daemon-ws'
+
+const DAEMON_CONNECTION_EVENT = 'daemon://connection-info'
+
+interface DaemonConnectionPayload {
+  baseUrl: string
+  wsUrl: string
+  token: string
+}
+
+let connectionEstablished = false
+
+/**
+ * Connect the frontend WebSocket client to the daemon.
+ *
+ * Idempotent — safe to call multiple times. Returns immediately if already connected.
+ * Starts the `daemonWs` singleton with the URL and session token from the Tauri
+ * bootstrap event. After this, `daemonWs.subscribe()` calls in hooks will work.
+ *
+ * @returns Promise that resolves when `daemonWs.connect()` resolves,
+ *          or immediately if already connected.
+ */
+export function connectDaemonWs(): Promise<void> {
+  if (connectionEstablished) {
+    return Promise.resolve()
+  }
+
+  const wsUrlPromise = waitForConnectionEvent()
+
+  return wsUrlPromise
+    .then(payload => {
+      // Initialize the HTTP client with the connection config.
+      daemonClient.initialize({
+        baseUrl: payload.baseUrl,
+        wsUrl: payload.wsUrl,
+        token: payload.token,
+        pid: 0,
+      })
+
+      // Connect the WebSocket client. daemonWs will auto-reconnect on disconnect.
+      return daemonWs.connect(payload.wsUrl)
+    })
+    .then(() => {
+      connectionEstablished = true
+      console.info('[daemon-ws-bootstrap] connected to daemon WebSocket')
+    })
+    .catch(err => {
+      console.error('[daemon-ws-bootstrap] failed to connect to daemon WebSocket:', err)
+      throw err
+    })
+}
+
+/**
+ * Wait for the one-shot `daemon://connection-info` Tauri event.
+ * Automatically unsubscribes after receiving the first event.
+ */
+function waitForConnectionEvent(): Promise<DaemonConnectionPayload> {
+  return new Promise((resolve, reject) => {
+    let unlisten: (() => void) | null = null
+    let resolved = false
+
+    listen<DaemonConnectionPayload>(DAEMON_CONNECTION_EVENT, (event) => {
+      if (resolved) return
+      resolved = true
+      unlisten?.()
+      resolve(event.payload)
+    })
+      .then((fn) => {
+        unlisten = fn
+        if (resolved) fn()
+      })
+      .catch((err) => {
+        reject(err)
+      })
+  })
+}

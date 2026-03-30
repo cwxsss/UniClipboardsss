@@ -1,4 +1,3 @@
-import { listen } from '@tauri-apps/api/event'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   BrowserRouter as Router,
@@ -19,6 +18,7 @@ import { SearchProvider } from '@/contexts/SearchContext'
 import { SettingProvider } from '@/contexts/SettingContext'
 import { ShortcutProvider } from '@/contexts/ShortcutContext'
 import { UpdateProvider } from '@/contexts/UpdateContext'
+import { useEncryptionState } from '@/hooks/useDaemonEvents'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useUINavigateListener } from '@/hooks/useUINavigateListener'
 import { MainLayout, SettingsFullLayout, WindowShell } from '@/layouts'
@@ -83,24 +83,21 @@ const AppContent = ({
     error: encryptionQueryError,
   } = useGetEncryptionSessionStatusQuery(undefined, { skip: isSetupActive })
 
-  useEffect(() => {
-    const unlistenPromise = listen<'SessionReady' | { type: string }>(
-      'encryption://event',
-      event => {
-        console.log('Encryption event:', event.payload)
-        const eventType = typeof event.payload === 'string' ? event.payload : event.payload?.type
-        if (eventType === 'SessionReady') {
-          setEncryptionStatus(prev =>
-            prev ? { ...prev, session_ready: true } : { initialized: true, session_ready: true }
-          )
-        }
-      }
-    )
-
-    return () => {
-      unlistenPromise.then(unlisten => unlisten())
+  // Listen for encryption session ready/failed via daemon WebSocket.
+  useEncryptionState(
+    () => {
+      // Session became ready — update status without downgrading session_ready.
+      setEncryptionStatus(prev =>
+        prev ? { ...prev, session_ready: true } : { initialized: true, session_ready: true }
+      )
+    },
+    () => {
+      // Session failed — clear session_ready.
+      setEncryptionStatus(prev =>
+        prev ? { ...prev, session_ready: false } : { initialized: true, session_ready: false }
+      )
     }
-  }, [])
+  )
 
   useEffect(() => {
     if (encryptionData) {

@@ -1,5 +1,6 @@
 import { listen } from '@tauri-apps/api/event'
 import { useEffect, useRef } from 'react'
+import { daemonWs } from '@/lib/daemon-ws'
 import { useAppDispatch } from '@/store/hooks'
 import {
   updateTransferProgress,
@@ -29,10 +30,13 @@ interface FileTransferStatusEvent {
 }
 
 /**
- * Hook that listens to file-transfer:// Tauri events and dispatches
- * progress updates and durable status changes to the Redux fileTransfer slice.
+ * Hook that listens to file-transfer Tauri events and daemon WS clipboard events,
+ * dispatching progress updates and durable status changes to the Redux fileTransfer slice.
  *
- * Call once in a top-level component (e.g., ClipboardContent) to activate.
+ * - File-transfer events (progress, status-changed) come from Tauri (file-transfer://).
+ * - Clipboard new-content events come from daemon WS (clipboard.new-content).
+ *
+ * Call once in a top-level component (e.g. ClipboardContent) to activate.
  */
 export function useTransferProgress(): void {
   const dispatch = useAppDispatch()
@@ -41,84 +45,84 @@ export function useTransferProgress(): void {
   useEffect(() => {
     let cancelled = false
 
-    const setup = async () => {
-      try {
-        // Listen for durable status-changed events (pending/transferring/completed/failed)
-        const unlistenStatusChanged = await listen<FileTransferStatusEvent>(
-          'file-transfer://status-changed',
-          event => {
-            if (cancelled) return
-            const { entryId, status, reason } = event.payload
-            const validStatuses = ['pending', 'transferring', 'completed', 'failed'] as const
-            if (validStatuses.includes(status as (typeof validStatuses)[number])) {
-              dispatch(
-                setEntryTransferStatus({
-                  entryId,
-                  status: status as (typeof validStatuses)[number],
-                  reason: reason ?? null,
-                })
-              )
-            }
+    // Subscribe to clipboard new-content from daemon WS.
+    // Cancels clipboard auto-write when a new entry arrives from remote.
+    const clipboardHandler = (event: { eventType: string; payload: unknown }) => {
+      if (cancelled) return
+      if (event.eventType === 'clipboard.new-content') {
+        dispatch(cancelClipboardWrite())
+      }
+    }
+    const unsubscribeClipboard = daemonWs.subscribe(['clipboard'], clipboardHandler)
 
-            // If status is failed, also mark the transfer as failed in progress state
-            if (status === 'failed') {
-              dispatch(
-                markTransferFailed({
-                  transferId: event.payload.transferId,
-                  error: reason ?? undefined,
-                })
-              )
-            }
+    // Subscribe to file-transfer progress and status events from Tauri.
+    const setup = async () => {
+      // Listen for durable status-changed events (pending/transferring/completed/failed)
+      const unlistenStatusChanged = await listen<FileTransferStatusEvent>(
+        'file-transfer://status-changed',
+        event => {
+          if (cancelled) return
+          const { entryId, status, reason } = event.payload
+          const validStatuses = ['pending', 'transferring', 'completed', 'failed'] as const
+          if (validStatuses.includes(status as (typeof validStatuses)[number])) {
+            dispatch(
+              setEntryTransferStatus({
+                entryId,
+                status: status as (typeof validStatuses)[number],
+                reason: reason ?? null,
+              })
+            )
           }
+
+          // If status is failed, also mark the transfer as failed in progress state
+          if (status === 'failed') {
+            dispatch(
+              markTransferFailed({
+                transferId: event.payload.transferId,
+                error: reason ?? undefined,
+              })
+            )
+          }
+        }
+      )
+
+      const unlisten = await listen<TransferProgressEvent>('file-transfer://progress', event => {
+        if (cancelled) return
+
+        const payload = event.payload
+        dispatch(
+          updateTransferProgress({
+            transferId: payload.transferId,
+            peerId: payload.peerId,
+            direction: payload.direction,
+            chunksCompleted: payload.chunksCompleted,
+            totalChunks: payload.totalChunks,
+            bytesTransferred: payload.bytesTransferred,
+            totalBytes: payload.totalBytes,
+          })
         )
 
-        // Listen for clipboard changes to cancel auto-write on active transfers
-        const unlistenClipboard = await listen('clipboard://new-content', () => {
-          if (cancelled) return
-          dispatch(cancelClipboardWrite())
-        })
+        // Auto-clear completed transfers after delay
+        // NOTE: this only clears the ephemeral progress state, NOT the durable entryStatusById
+        const isCompleted =
+          payload.chunksCompleted === payload.totalChunks && payload.totalChunks > 0
+        if (isCompleted) {
+          // Clear any existing timeout for this transfer
+          const existing = clearTimeoutsRef.current.get(payload.transferId)
+          if (existing) clearTimeout(existing)
 
-        const unlisten = await listen<TransferProgressEvent>('file-transfer://progress', event => {
-          if (cancelled) return
+          const timeout = setTimeout(() => {
+            if (!cancelled) {
+              dispatch(removeTransfer(payload.transferId))
+            }
+            clearTimeoutsRef.current.delete(payload.transferId)
+          }, COMPLETED_CLEAR_DELAY_MS)
 
-          const payload = event.payload
-          dispatch(
-            updateTransferProgress({
-              transferId: payload.transferId,
-              peerId: payload.peerId,
-              direction: payload.direction,
-              chunksCompleted: payload.chunksCompleted,
-              totalChunks: payload.totalChunks,
-              bytesTransferred: payload.bytesTransferred,
-              totalBytes: payload.totalBytes,
-            })
-          )
+          clearTimeoutsRef.current.set(payload.transferId, timeout)
+        }
+      })
 
-          // Auto-clear completed transfers after delay
-          // NOTE: this only clears the ephemeral progress state, NOT the durable entryStatusById
-          const isCompleted =
-            payload.chunksCompleted === payload.totalChunks && payload.totalChunks > 0
-          if (isCompleted) {
-            // Clear any existing timeout for this transfer
-            const existing = clearTimeoutsRef.current.get(payload.transferId)
-            if (existing) clearTimeout(existing)
-
-            const timeout = setTimeout(() => {
-              if (!cancelled) {
-                dispatch(removeTransfer(payload.transferId))
-              }
-              clearTimeoutsRef.current.delete(payload.transferId)
-            }, COMPLETED_CLEAR_DELAY_MS)
-
-            clearTimeoutsRef.current.set(payload.transferId, timeout)
-          }
-        })
-
-        return { unlisten, unlistenStatusChanged, unlistenClipboard }
-      } catch (err) {
-        console.error('[useTransferProgress] Failed to setup transfer progress listener:', err)
-        return undefined
-      }
+      return { unlisten, unlistenStatusChanged }
     }
 
     const setupPromise = setup()
@@ -131,11 +135,11 @@ export function useTransferProgress(): void {
       }
       clearTimeoutsRef.current.clear()
       // Unlisten all
+      unsubscribeClipboard()
       setupPromise.then(listeners => {
         if (listeners) {
           listeners.unlisten()
           listeners.unlistenStatusChanged()
-          listeners.unlistenClipboard()
         }
       })
     }

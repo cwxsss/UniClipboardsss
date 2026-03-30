@@ -65,7 +65,7 @@ All hooks: call daemonWs.subscribe() in useEffect, unsubscribe on cleanup. Handl
   - Estimate: medium
   - Files: src/hooks/useDaemonEvents.ts
   - Verify: TypeScript compiles. Hooks correctly subscribe/unsubscribe on mount/unmount. Multiple concurrent subscriptions work.
-- [ ] **T03: Migrate Tauri listen() calls to daemonWs.subscribe()** — Find all existing `listen()` calls for clipboard, pairing, encryption, lifecycle events in src/ and replace with daemonWs.subscribe() equivalents.
+- [x] **T03: Migrated all Tauri listen() calls to daemonWs.subscribe() — frontend now connects to daemon WS directly for clipboard, pairing, encryption, and lifecycle events** — Find all existing `listen()` calls for clipboard, pairing, encryption, lifecycle events in src/ and replace with daemonWs.subscribe() equivalents.
 
 Patterns to replace:
 - `listen('daemon://realtime', ...)` → `daemonWs.subscribe(['clipboard', 'peers', 'pairing', ...], ...)`

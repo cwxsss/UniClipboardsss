@@ -1,8 +1,7 @@
-import { listen } from '@tauri-apps/api/event'
 import { useEffect, useRef } from 'react'
+import { daemonWs } from '@/lib/daemon-ws'
 import { getClipboardEntry } from '@/api/clipboardItems'
 import type { ClipboardItemResponse } from '@/api/clipboardItems'
-import type { ClipboardEvent } from '@/types/events'
 
 export interface UseClipboardEventStreamOptions {
   enabled?: boolean
@@ -10,6 +9,20 @@ export interface UseClipboardEventStreamOptions {
   onLocalItem: (item: ClipboardItemResponse) => void
   onRemoteInvalidate: () => void
   onDeleted: (id: string) => void
+}
+
+/**
+ * Payload for `clipboard.new-content` daemon WS events.
+ * (Matches the Rust `ClipboardNewContentEvent` serde shape.)
+ */
+interface ClipboardNewContentPayload {
+  entry_id: string
+  preview: string
+  origin: string // "local" | "remote"
+}
+
+interface ClipboardDeletedPayload {
+  entry_id: string
 }
 
 export function useClipboardEventStream({
@@ -34,63 +47,60 @@ export function useClipboardEventStream({
   useEffect(() => {
     if (!enabled) return
 
-    let cancelled = false
-
-    const unlistenPromise = listen<ClipboardEvent>('clipboard://event', event => {
-      if (cancelled) return
-
-      if (event.payload.type === 'Deleted' && event.payload.entry_id) {
-        onDeletedRef.current(event.payload.entry_id)
-        return
-      }
-
-      if (event.payload.type !== 'NewContent' || !event.payload.entry_id) return
-
-      if (event.payload.origin === 'local') {
-        void getClipboardEntry(event.payload.entry_id).then(item => {
-          if (cancelled || !item) return
-          onLocalItemRef.current(item)
-        })
-        return
-      }
-
-      const now = Date.now()
-      const lastReload = lastReloadTimestampRef.current
-
-      if (lastReload === undefined || now - lastReload >= throttleMs) {
-        lastReloadTimestampRef.current = now
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current)
-          timeoutRef.current = null
+    const handler = (event: { topic: string; eventType: string; payload: unknown }) => {
+      // Route clipboard.new-content to onLocalItem / onRemoteInvalidate.
+      if (event.eventType === 'clipboard.new-content') {
+        const payload = event.payload as ClipboardNewContentPayload
+        if (payload.origin === 'local') {
+          void getClipboardEntry(payload.entry_id).then(item => {
+            if (!item) return
+            onLocalItemRef.current(item)
+          })
+          return
         }
-        onRemoteInvalidateRef.current()
+
+        // Remote: throttled full list reload.
+        const now = Date.now()
+        const lastReload = lastReloadTimestampRef.current
+        if (lastReload === undefined || now - lastReload >= throttleMs) {
+          lastReloadTimestampRef.current = now
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current)
+            timeoutRef.current = null
+          }
+          onRemoteInvalidateRef.current()
+          return
+        }
+
+        if (!timeoutRef.current) {
+          const delay = throttleMs - (now - lastReload)
+          timeoutRef.current = window.setTimeout(() => {
+            lastReloadTimestampRef.current = Date.now()
+            onRemoteInvalidateRef.current()
+            timeoutRef.current = null
+          }, delay)
+        }
         return
       }
 
-      if (!timeoutRef.current) {
-        const delay = throttleMs - (now - lastReload)
-        timeoutRef.current = window.setTimeout(() => {
-          lastReloadTimestampRef.current = Date.now()
-          onRemoteInvalidateRef.current()
-          timeoutRef.current = null
-        }, delay)
+      // Route clipboard.deleted to onDeleted.
+      if (event.eventType === 'clipboard.deleted') {
+        const payload = event.payload as ClipboardDeletedPayload
+        if (payload.entry_id) {
+          onDeletedRef.current(payload.entry_id)
+        }
+        return
       }
-    })
+    }
 
-    // Reconnect compensation: refetch clipboard list when daemon WS bridge recovers (D-05, D-06)
-    const unlistenReconnectPromise = listen('daemon://ws-reconnected', () => {
-      if (cancelled) return
-      onRemoteInvalidateRef.current()
-    })
+    const unsubscribe = daemonWs.subscribe(['clipboard'], handler)
 
     return () => {
-      cancelled = true
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
         timeoutRef.current = null
       }
-      void unlistenPromise.then(fn => fn())
-      void unlistenReconnectPromise.then(unlisten => unlisten())
+      unsubscribe()
     }
   }, [enabled, throttleMs])
 }

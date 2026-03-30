@@ -70,6 +70,14 @@ initLogging().then(() => {
   console.log('[Tauri Log] Logging system initialized')
 })
 
+// Connect the frontend WebSocket client to the daemon.
+// This must run before React renders so that daemonWs is connected by the time
+// hooks (useEncryptionState, usePairingEvents, useClipboardNewContent) mount.
+import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
+connectDaemonWs().catch(err => {
+  console.error('[main] daemon WS bootstrap failed:', err)
+})
+
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <Provider store={store}>

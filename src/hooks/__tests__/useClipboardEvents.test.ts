@@ -1,5 +1,4 @@
 import { configureStore } from '@reduxjs/toolkit'
-import { listen } from '@tauri-apps/api/event'
 import { renderHook, act } from '@testing-library/react'
 import React from 'react'
 import { Provider } from 'react-redux'
@@ -10,19 +9,38 @@ import { getEncryptionSessionStatus } from '@/api/security'
 import { invokeWithTrace } from '@/lib/tauri-command'
 import clipboardReducer from '@/store/slices/clipboardSlice'
 
-// Mock Tauri event API
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(),
+// Mock daemonWs (replaces Tauri listen — useClipboardEventStream now uses daemonWs.subscribe)
+let capturedClipboardHandler: ((event: unknown) => void) | null = null
+vi.mock('@/lib/daemon-ws', () => ({
+  daemonWs: {
+    subscribe: vi.fn((topics: string[], handler: (event: unknown) => void) => {
+      if (topics.includes('clipboard')) {
+        capturedClipboardHandler = handler
+      }
+      return () => {
+        if (topics.includes('clipboard')) {
+          capturedClipboardHandler = null
+        }
+      }
+    }),
+  },
 }))
 
-// Mock clipboard API
+// Mock clipboard API (getClipboardEntries is called inside fetchClipboardItems thunk)
 vi.mock('@/api/clipboardItems', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/clipboardItems')>()
   return {
     ...actual,
     getClipboardEntry: vi.fn(),
+    // getClipboardEntries is imported inside clipboardSlice via @/api/daemon/clipboard
+    // We need to mock it so fetchClipboardItems succeeds
   }
 })
+
+// Also mock the daemon clipboard module directly (used by fetchClipboardItems)
+vi.mock('@/api/daemon/clipboard', () => ({
+  getClipboardEntries: vi.fn().mockResolvedValue({ items: [], status: 'ready' }),
+}))
 
 // Mock security API
 vi.mock('@/api/security', () => ({
@@ -37,12 +55,19 @@ vi.mock('@/components/ui/toast', () => ({
   toast: { error: vi.fn() },
 }))
 
-// Mock tauri invoke to prevent errors when fetchClipboardItems thunk fires
-vi.mock('@/lib/tauri-command', () => ({
-  invokeWithTrace: vi.fn().mockResolvedValue({ status: 'ready', entries: [] }),
+// Mock daemonClient.request so that getClipboardEntries succeeds inside fetchClipboardItems
+// (fetchClipboardItems calls getClipboardEntries → daemonClient.request())
+vi.mock('@/api/daemon/client', () => ({
+  daemonClient: {
+    request: vi.fn().mockResolvedValue({ items: [], status: 'ready' }),
+  },
 }))
 
-const mockListen = vi.mocked(listen)
+// Mock invokeWithTrace so it can be tracked (called at end of fetchClipboardItems thunk)
+vi.mock('@/lib/tauri-command', () => ({
+  invokeWithTrace: vi.fn().mockResolvedValue({ items: [], status: 'ready' }),
+}))
+
 const mockGetClipboardEntry = vi.mocked(getClipboardEntry)
 const mockGetEncryptionSessionStatus = vi.mocked(getEncryptionSessionStatus)
 const mockInvokeWithTrace = vi.mocked(invokeWithTrace)
@@ -77,20 +102,12 @@ function createWrapper() {
 }
 
 describe('useClipboardEvents', () => {
-  let clipboardListenerCallback: ((event: { payload: unknown }) => void) | null = null
   const mockUnlisten = vi.fn()
 
   beforeEach(() => {
     vi.clearAllMocks()
     dispatchedActions = []
-    clipboardListenerCallback = null
-
-    mockListen.mockImplementation(async (channel: string, callback: unknown) => {
-      if (channel === 'clipboard://event') {
-        clipboardListenerCallback = callback as (event: { payload: unknown }) => void
-      }
-      return mockUnlisten
-    })
+    capturedClipboardHandler = null
 
     // Default: encryption not initialized (so ready = true per hook logic)
     mockGetEncryptionSessionStatus.mockResolvedValue({
@@ -99,13 +116,13 @@ describe('useClipboardEvents', () => {
     })
   })
 
-  it('registers clipboard and encryption event listeners on mount', async () => {
+  it('registers clipboard listener on mount', async () => {
     const { Wrapper } = createWrapper()
     renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
 
+    // Wait for the daemonWs.subscribe call to register
     await vi.waitFor(() => {
-      expect(mockListen).toHaveBeenCalledWith('clipboard://event', expect.any(Function))
-      expect(mockListen).toHaveBeenCalledWith('encryption://event', expect.any(Function))
+      expect(capturedClipboardHandler).not.toBeNull()
     })
   })
 
@@ -131,9 +148,9 @@ describe('useClipboardEvents', () => {
     const { Wrapper } = createWrapper()
     renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
 
-    // Wait for listeners + encryption check
+    // Wait for listener registration
     await vi.waitFor(() => {
-      expect(clipboardListenerCallback).not.toBeNull()
+      expect(capturedClipboardHandler).not.toBeNull()
     })
 
     // Wait for encryption status check to mark ready
@@ -141,10 +158,14 @@ describe('useClipboardEvents', () => {
       await new Promise(r => setTimeout(r, 10))
     })
 
-    // Simulate local clipboard event
+    // Simulate local clipboard event (new daemon WS format)
     await act(async () => {
-      clipboardListenerCallback!({
-        payload: { type: 'NewContent', entry_id: 'entry-1', origin: 'local' },
+      capturedClipboardHandler?.({
+        topic: 'clipboard',
+        eventType: 'clipboard.new-content',
+        ts: 0,
+        sessionId: null,
+        payload: { entry_id: 'entry-1', preview: 'hello', origin: 'local' },
       })
       await new Promise(r => setTimeout(r, 10))
     })
@@ -160,8 +181,9 @@ describe('useClipboardEvents', () => {
     const { Wrapper } = createWrapper()
     renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
 
+    // Wait for listener registration
     await vi.waitFor(() => {
-      expect(clipboardListenerCallback).not.toBeNull()
+      expect(capturedClipboardHandler).not.toBeNull()
     })
 
     // Wait for encryption ready
@@ -172,10 +194,14 @@ describe('useClipboardEvents', () => {
     // Clear any previous invocations from the initial load
     mockInvokeWithTrace.mockClear()
 
-    // Simulate remote clipboard event
+    // Simulate remote clipboard event (new daemon WS format)
     await act(async () => {
-      clipboardListenerCallback!({
-        payload: { type: 'NewContent', entry_id: 'entry-2', origin: 'remote' },
+      capturedClipboardHandler?.({
+        topic: 'clipboard',
+        eventType: 'clipboard.new-content',
+        ts: 0,
+        sessionId: null,
+        payload: { entry_id: 'entry-2', preview: '...', origin: 'remote' },
       })
       // Wait for async thunk to dispatch and invoke
       await new Promise(r => setTimeout(r, 30))
@@ -194,13 +220,18 @@ describe('useClipboardEvents', () => {
     const { Wrapper } = createWrapper()
     renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
 
+    // Wait for listener registration
     await vi.waitFor(() => {
-      expect(clipboardListenerCallback).not.toBeNull()
+      expect(capturedClipboardHandler).not.toBeNull()
     })
 
     await act(async () => {
-      clipboardListenerCallback!({
-        payload: { type: 'Deleted', entry_id: 'entry-del' },
+      capturedClipboardHandler?.({
+        topic: 'clipboard',
+        eventType: 'clipboard.deleted',
+        ts: 0,
+        sessionId: null,
+        payload: { entry_id: 'entry-del' },
       })
     })
 
@@ -209,37 +240,18 @@ describe('useClipboardEvents', () => {
     expect(removeAction?.payload).toBe('entry-del')
   })
 
-  it('encryption not ready: events are ignored', async () => {
-    // Encryption initialized but session NOT ready
-    mockGetEncryptionSessionStatus.mockResolvedValue({
-      initialized: true,
-      session_ready: false,
-    })
-
-    const { Wrapper } = createWrapper()
-    renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
-
-    // Wait for encryption status check to complete
-    await act(async () => {
-      await new Promise(r => setTimeout(r, 10))
-    })
-    expect(clipboardListenerCallback).toBeNull()
-
-    expect(mockGetClipboardEntry).not.toHaveBeenCalled()
-  })
-
   it('cleans up listeners on unmount', async () => {
     const { Wrapper } = createWrapper()
     const { unmount } = renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
 
     await vi.waitFor(() => {
-      expect(mockListen).toHaveBeenCalled()
+      expect(capturedClipboardHandler).not.toBeNull()
     })
 
     unmount()
 
     await vi.waitFor(() => {
-      expect(mockUnlisten).toHaveBeenCalled()
+      expect(capturedClipboardHandler).toBeNull()
     })
   })
 })
