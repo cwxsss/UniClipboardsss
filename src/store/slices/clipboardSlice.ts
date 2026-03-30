@@ -198,11 +198,11 @@ export const clearAllItems = createAsyncThunk(
   'clipboard/clearAll',
   async (_, { rejectWithValue }) => {
     try {
-      // TODO: Replace with daemon API once /clipboard/entries clear endpoint is available.
-      // Currently falls back to Tauri invoke. The commented-out reference:
-      // await clearClipboardItemsTauri()
-      const { clearClipboardItems } = await import('@/api/clipboardItems')
-      await clearClipboardItems()
+      // Daemon API: POST /clipboard/entries/clear
+      // Note: We call the thunk without awaiting its result - the result contains
+      // { deletedCount, failedEntries } but we just need success/failure
+      const { clearClipboardHistory } = await import('@/api/daemon/clipboard')
+      await clearClipboardHistory()
       return true
     } catch {
       return rejectWithValue('清空剪贴板内容失败')

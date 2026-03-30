@@ -16,9 +16,9 @@ import {
   ClipboardCodeItem,
   ClipboardFileItem,
   fetchClipboardResourceText,
-  getClipboardEntryResource,
   getResourceImageUrl,
 } from '@/api/clipboardItems'
+import { getClipboardEntryResource } from '@/api/daemon/clipboard'
 import { toast } from '@/components/ui/toast'
 import { resolveUcUrl } from '@/lib/protocol'
 import { cn } from '@/lib/utils'

@@ -3,11 +3,13 @@ import { Loader2 } from 'lucide-react'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  getClipboardEntryDetail,
-  getClipboardEntryResource,
   getResourceImageUrl,
   isImageType,
 } from '@/api/clipboardItems'
+import {
+  getClipboardEntryDetail,
+  getClipboardEntryResource,
+} from '@/api/daemon/clipboard'
 import { useThemeSync } from '@/hooks/useThemeSync'
 import { resolveUcUrl } from '@/lib/protocol'
 

@@ -21,9 +21,9 @@ import {
   ClipboardLinkItem,
   ClipboardTextItem,
   fetchClipboardResourceText,
-  getClipboardEntryResource,
   getResourceImageUrl,
 } from '@/api/clipboardItems'
+import { getClipboardEntryResource } from '@/api/daemon/clipboard'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'

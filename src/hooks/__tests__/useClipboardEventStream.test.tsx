@@ -1,9 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useClipboardEventStream } from '../useClipboardEventStream'
-import { getClipboardEntry } from '@/api/clipboardItems'
 
-// Mock daemonWs instead of Tauri listen (hook now uses daemonWs.subscribe)
+// Mock daemonWs (hook now uses daemonWs.subscribe)
 vi.mock('@/lib/daemon-ws', () => ({
   daemonWs: {
     subscribe: vi.fn((_topics, handler) => {
@@ -16,18 +15,21 @@ vi.mock('@/lib/daemon-ws', () => ({
   },
 }))
 
-// Mock clipboard API
+// Mock daemon clipboard API for getClipboardEntries
+vi.mock('@/api/daemon/clipboard', () => ({
+  getClipboardEntries: vi.fn(),
+}))
+
+// Mock clipboardItems utility (isImageType)
 vi.mock('@/api/clipboardItems', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/clipboardItems')>()
   return {
     ...actual,
-    getClipboardEntry: vi.fn(),
   }
 })
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let capturedHandler: ((event: any) => void) | null = null
-const mockGetClipboardEntry = vi.mocked(getClipboardEntry)
 
 describe('useClipboardEventStream', () => {
   beforeEach(() => {
@@ -40,16 +42,33 @@ describe('useClipboardEventStream', () => {
   })
 
   it('loads single local item and emits onLocalItem', async () => {
+    const { getClipboardEntries } = await import('@/api/daemon/clipboard')
+    const mockGetClipboardEntries = vi.mocked(getClipboardEntries)
     const onLocalItem = vi.fn()
-    mockGetClipboardEntry.mockResolvedValue({
-      id: 'entry-1',
-      is_downloaded: true,
-      is_favorited: false,
-      created_at: 0,
-      updated_at: 0,
-      active_time: 0,
-      item: { text: { display_text: 'hello', has_detail: false, size: 5 } },
-    } as never)
+    
+    mockGetClipboardEntries.mockResolvedValue({
+      status: 'ready',
+      entries: [
+        {
+          id: 'entry-1',
+          preview: 'hello',
+          has_detail: false,
+          size_bytes: 5,
+          captured_at: 0,
+          content_type: 'text/plain',
+          thumbnail_url: null,
+          is_encrypted: false,
+          is_favorited: false,
+          updated_at: 0,
+          active_time: 0,
+          file_transfer_status: null,
+          file_transfer_reason: null,
+          link_urls: null,
+          link_domains: null,
+          file_sizes: null,
+        },
+      ],
+    })
 
     renderHook(() =>
       useClipboardEventStream({
@@ -72,7 +91,7 @@ describe('useClipboardEventStream', () => {
       await Promise.resolve()
     })
 
-    expect(mockGetClipboardEntry).toHaveBeenCalledWith('entry-1')
+    expect(mockGetClipboardEntries).toHaveBeenCalled()
     expect(onLocalItem).toHaveBeenCalledWith(expect.objectContaining({ id: 'entry-1' }))
   })
 

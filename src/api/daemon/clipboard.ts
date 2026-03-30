@@ -297,6 +297,12 @@ export async function getClipboardEntryResource(id: string): Promise<ClipboardEn
 }
 
 /**
+ * Alias for getEntryDetail — maintains compatibility with existing code
+ * that uses the Tauri-style naming convention.
+ */
+export { getEntryDetail as getClipboardEntryDetail }
+
+/**
  * Clipboard entry resource metadata.
  * Matches `ClipboardEntryResource` on the Rust side.
  *
