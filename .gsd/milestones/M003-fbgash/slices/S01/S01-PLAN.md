@@ -85,7 +85,7 @@ Types from uc-core DTOs (SettingsResponse, SettingsUpdateRequest).
   - Estimate: small
   - Files: src/api/daemon/settings.ts
   - Verify: TypeScript compiles with correct response types. Integration test against running daemon.
-- [ ] **T06: Encryption API module** — Create `src/api/daemon/encryption.ts`:
+- [x] **T06: Created src/api/daemon/encryption.ts with getEncryptionState(), unlockEncryption(passphrase), and lockEncryption() typed API functions matching daemon encryption endpoints** — Create `src/api/daemon/encryption.ts`:
 
 `getEncryptionState()` → GET /encryption/state
 `unlockEncryption(passphrase)` → POST /encryption/unlock with { passphrase }

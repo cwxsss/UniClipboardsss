@@ -20,3 +20,5 @@ export type {
   SyncFrequency,
   RuleEvaluation,
 } from './settings'
+export { getEncryptionState, unlockEncryption, lockEncryption } from './encryption'
+export type { EncryptionStateResponse } from './encryption'
