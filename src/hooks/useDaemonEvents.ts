@@ -9,9 +9,9 @@
  */
 
 import { useEffect, useRef } from 'react'
+import type { ClipboardEntryDto } from '@/api/daemon/clipboard'
 import { daemonWs } from '@/lib/daemon-ws'
 import type { DaemonWsEvent } from '@/lib/daemon-ws'
-import type { ClipboardEntryDto } from '@/api/daemon/clipboard'
 
 // ── Payload types for daemon WS events ─────────────────────────
 
@@ -226,6 +226,7 @@ export function useEncryptionState(
 ): void {
   const onReadyRef = useRef(onReady)
   const onFailedRef = useRef(onFailed)
+  // eslint-disable-next-line react-hooks/refs -- intentional: ref updates stabilize callbacks without re-running effect
   onReadyRef.current = onReady
   onFailedRef.current = onFailed
 

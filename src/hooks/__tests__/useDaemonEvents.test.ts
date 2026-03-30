@@ -11,6 +11,7 @@
  * not bun test (which lacks vi.mocked and jsdom support).
  */
 
+// eslint-disable-next-line import-x/order -- blank line between doc comment and imports is intentional; rule misinterprets as empty import group
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useClipboardNewContent, usePairingEvents, useEncryptionState } from '../useDaemonEvents'
@@ -44,7 +45,7 @@ beforeEach(() => {
   capturedCb = () => {}
   subscribeCalls.length = 0
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   mockedDaemonWs.subscribe = ((topics: string[], cb: (...args: unknown[]) => void) => {
     subscribeCalls.push([topics, cb])
     capturedCb = cb

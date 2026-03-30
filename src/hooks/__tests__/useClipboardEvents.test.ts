@@ -155,7 +155,7 @@ describe('useClipboardEvents', () => {
     })
 
     // Override encryption state so it's immediately ready — no async resolution needed
-    mockEncryptionState.mockResolvedValueOnce({
+    vi.mocked(getEncryptionState).mockResolvedValueOnce({
       initialized: false,
       sessionReady: false,
     })

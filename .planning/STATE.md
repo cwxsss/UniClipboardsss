@@ -287,6 +287,7 @@ Recent decisions affecting current work:
 - Phase 68 added: Adopt Tauri Sidecar for daemon binary management (dev build, bundling, and path resolution)
 - Phase 69 added: CLI setup flow: first-time encryption init before daemon spawn
 - Phase 70 added: CLI start/stop commands for daemon lifecycle management
+<<<<<<< Updated upstream
 - Phase 71 added: Dual-product release pipeline for CLI and App
 - Phase 73 added: Refactor clipboard restore loop prevention: introduce ClipboardWriteCoordinator as single write boundary owning origin guard registration, derive meaningful content key, and remove composition-time re-creation risk of origin store
 - Phase 73 discussed: ClipboardWriteCoordinator.write(snapshot, intent) as sole clipboard write API; snapshot building stays in use cases; Coordinator is only caller of origin_guard_key(); coordinator built in bootstrap assembly
@@ -298,6 +299,9 @@ Recent decisions affecting current work:
 - Phase 79 added: Frontend WebSocket Direct Connection & Event Migration
 - Phase 80 added: uc-tauri Command Cleanup — remove migrated commands
 - Phase 81 added: Frontend-Daemon Integration Testing & Security Audit
+=======
+- Phase 71 added: Migrate restore-clipboard to daemon — eliminate cross-process origin desync
+>>>>>>> Stashed changes
 
 ### Pending Todos
 
