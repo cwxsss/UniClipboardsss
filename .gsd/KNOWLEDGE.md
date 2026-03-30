@@ -327,3 +327,86 @@ export async function clearCache(confirmed: boolean): Promise<void> {
 **Audit approach:** To verify zero clipboard business invokes remain, scope grep to `src/store/slices/ src/api/daemon/ src/hooks/ src/components/` — not `clipboardItems.ts`. The allowlist in `src/api/storage.ts` documents the one remaining Tauri invoke (`open_data_directory`) with a bilingual comment.
 
 **Seen in:** M003-fbgash / S06 / T02, T03 — `src/api/clipboardItems.ts`, `src/api/storage.ts`.
+
+---
+
+## Auth-first bootstrap: session refresh is a hard prerequisite before WebSocket connect
+
+**Pattern:** The frontend bootstrap must call `daemonClient.refreshSession()` and wait for it to resolve before calling `daemonWs.connect()`. The sequence is:
+
+```typescript
+// ✅ Correct bootstrap order
+await daemonClient.initialize(config);  // sets up HTTP client
+await daemonClient.refreshSession();    // exchanges bearer → JWT session
+await daemonWs.connect(wsUrl);         // now authenticated
+
+// ❌ Wrong — race condition, causes invalid_session_token churn
+await daemonClient.initialize(config);
+await daemonWs.connect(wsUrl);         // daemon sees raw bearer, rejects
+```
+
+**Lesson:** `daemonClient.initialize()` only sets up the HTTP client with the bearer token. It does NOT exchange the bearer for a JWT session token. The session token is what the daemon's WebSocket handler validates. Without `refreshSession()` in between, the WS connection receives the unauthenticated bearer and the daemon logs `WS JWT validation failed`. The `invalid_session_token` console flood on app startup is the symptom of this ordering bug.
+
+**Seen in:** M003-fbgash / S07 / T02 — `src/lib/daemon-ws-bootstrap.ts`. Root cause of the known issue documented in M003 S02.
+
+---
+
+## validatePayload() with TypeScript asserts guards bootstrap events before client init
+
+**Pattern:** When the frontend listens for a one-shot Tauri event (e.g., `daemon://connection-info`) that configures a singleton, validate the payload shape before using it to initialize clients:
+
+```typescript
+function validatePayload(payload: unknown): asserts payload is DaemonConnectionPayload {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Bootstrap: invalid payload — not an object');
+  }
+  const p = payload as Record<string, unknown>;
+  if (typeof p.baseUrl !== 'string' || !p.baseUrl.startsWith('http')) {
+    throw new Error('Bootstrap: invalid baseUrl in payload');
+  }
+  if (typeof p.token !== 'string' || !p.token.startsWith('Bearer ')) {
+    throw new Error('Bootstrap: invalid token in payload');
+  }
+  // ...
+}
+```
+
+**Lesson:** `daemon://connection-info` is emitted by the Rust side before the WebView is fully initialized. A malformed payload — or a payload emitted by a different Tauri event with a coincidentally similar name — could initialize `daemonClient` with bad config. `validatePayload()` with TypeScript's `asserts` keyword (or a `Result` type) catches bad shapes early with high-signal diagnostics, before any HTTP or WS calls are made. Without it, failures surface as cryptic network errors downstream.
+
+**Seen in:** M003-fbgash / S07 / T02 — `src/lib/daemon-ws-bootstrap.ts`.
+
+---
+
+## vitest module isolation: module-level `let` state persists across test suites
+
+**Pattern:** In vitest, `let` variables declared at module scope in a test file persist across test suites. If a test sets `moduleLevelVar = true` and another suite expects `moduleLevelVar === false`, the state leaks.
+
+```typescript
+// ❌ Module-level state persists across test suites
+let connectionEstablished = false;
+
+async function connectDaemonWs(payload: DaemonConnectionPayload) {
+  if (connectionEstablished) return; // stale state from previous suite
+  await daemonClient.initialize(payload);
+  await daemonClient.refreshSession();
+  await daemonWs.connect(payload.wsUrl);
+  connectionEstablished = true;
+}
+
+// In test suite A:
+test('first call', async () => {
+  await connectDaemonWs(payload);
+  expect(connectionEstablished).toBe(true);
+});
+
+// In test suite B (runs after A — connectionEstablished is still true!):
+test('idempotency: second call does not reconnect', async () => {
+  // connectionEstablished === true from suite A!
+  await connectDaemonWs(payload);
+  expect(daemonWs.connect).not.toHaveBeenCalled(); // FAILS
+});
+```
+
+**Lesson:** Vitest runs each test file as a separate module, but if the test file uses a module-level `let` variable that accumulates state during test execution, subsequent tests within the same file that expect the initial state will fail. Use `beforeEach` to reset state, `vi.resetModules()` to clear between isolation boundaries, or move mutable state into a singleton whose `reset()` method is called in `beforeEach`. The `DaemonWsClient` singleton pattern (with a `reset()` method) works for state inside the class — but module-level variables outside the class also need explicit reset.
+
+**Seen in:** M003-fbgash / S07 / T02 — `daemon-ws-bootstrap.test.ts` (2 idempotency tests fail due to `connectionEstablished` flag persisting across test suites).
