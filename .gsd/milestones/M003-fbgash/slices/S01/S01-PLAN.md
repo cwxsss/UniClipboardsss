@@ -76,7 +76,7 @@ This module bridges Tauri IPC (for bootstrap) and daemon HTTP (for all subsequen
   - Estimate: medium
   - Files: src/lib/daemon-auth.ts
   - Verify: Unit tests: loadDaemonAuth calls both Tauri and daemon HTTP. verifyAuthState returns correct state. waitForEncryptionReady resolves on ready, rejects on timeout.
-- [ ] **T05: Settings API module** — Create `src/api/daemon/settings.ts`:
+- [x] **T05: Created src/api/daemon/settings.ts with getSettings() and updateSettings() typed API functions matching daemon /settings endpoints and full uc-core Settings type hierarchy** — Create `src/api/daemon/settings.ts`:
 
 `getSettings()` → GET /settings via DaemonClient.request()
 `updateSettings(settings)` → PUT /settings via DaemonClient.request()
