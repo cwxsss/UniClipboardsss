@@ -80,7 +80,7 @@ describe('useClipboardEventStream', () => {
     await act(async () => {
       capturedHandler?.({
         topic: 'clipboard',
-        eventType: 'clipboard.new-content',
+        eventType: 'clipboard.new_content',
         ts: 0,
         sessionId: null,
         payload: { entry_id: 'entry-1', preview: 'hello', origin: 'local' },
@@ -109,14 +109,14 @@ describe('useClipboardEventStream', () => {
     act(() => {
       capturedHandler?.({
         topic: 'clipboard',
-        eventType: 'clipboard.new-content',
+        eventType: 'clipboard.new_content',
         ts: 0,
         sessionId: null,
         payload: { entry_id: 'entry-1', preview: '...', origin: 'remote' },
       })
       capturedHandler?.({
         topic: 'clipboard',
-        eventType: 'clipboard.new-content',
+        eventType: 'clipboard.new_content',
         ts: 0,
         sessionId: null,
         payload: { entry_id: 'entry-2', preview: '...', origin: 'remote' },
@@ -133,29 +133,5 @@ describe('useClipboardEventStream', () => {
     vi.useRealTimers()
   })
 
-  it('forwards delete events', async () => {
-    const onDeleted = vi.fn()
-
-    renderHook(() =>
-      useClipboardEventStream({
-        onLocalItem: vi.fn(),
-        onRemoteInvalidate: vi.fn(),
-        onDeleted,
-      })
-    )
-
-    await waitFor(() => expect(capturedHandler).not.toBeNull())
-
-    act(() => {
-      capturedHandler?.({
-        topic: 'clipboard',
-        eventType: 'clipboard.deleted',
-        ts: 0,
-        sessionId: null,
-        payload: { entry_id: 'entry-9' },
-      })
-    })
-
-    expect(onDeleted).toHaveBeenCalledWith('entry-9')
-  })
+  // Note: clipboard.deleted is never emitted by the daemon — test omitted.
 })

@@ -411,7 +411,7 @@ export async function onP2PPairingVerification(
       return
     }
 
-    if (event.type === 'pairing.verificationRequired') {
+    if (event.type === 'pairing.verification_required') {
       const payload = event.payload as Omit<P2PPairingVerificationEvent, 'kind'>
       callback({ ...payload, kind: 'verification' })
       return

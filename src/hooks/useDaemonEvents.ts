@@ -15,18 +15,18 @@ import type { ClipboardEntryDto } from '@/api/daemon/clipboard'
 
 // ── Payload types for daemon WS events ─────────────────────────
 
-/** Payload for `clipboard.new-content` events. */
+/** Payload for `clipboard.new_content` events. */
 export interface ClipboardNewContentPayload {
   entry: ClipboardEntryDto
   origin: 'local' | 'remote'
 }
 
-/** Payload for `encryption.sessionReady` events. */
+/** Payload for `encryption.session_ready` events. */
 export interface EncryptionSessionReadyPayload {
   sessionId: string
 }
 
-/** Payload for `encryption.sessionFailed` events. */
+/** Payload for `encryption.session_failed` events (daemon never emits this — reserved for future use). */
 export interface EncryptionSessionFailedPayload {
   reason?: string
 }
@@ -34,7 +34,7 @@ export interface EncryptionSessionFailedPayload {
 // ── useClipboardNewContent ───────────────────────────────────────
 
 /**
- * Subscribe to `clipboard.new-content` events from the daemon WebSocket.
+ * Subscribe to `clipboard.new_content` events from the daemon WebSocket.
  *
  * The daemon emits this when a new clipboard entry is created locally or synced
  * from a remote device.
@@ -52,7 +52,7 @@ export function useClipboardNewContent(callback: (entry: ClipboardEntryDto) => v
 
   useEffect(() => {
     const handler = (event: DaemonWsEvent<ClipboardNewContentPayload>) => {
-      if (event.eventType === 'clipboard.new-content') {
+      if (event.eventType === 'clipboard.new_content') {
         callbackRef.current(event.payload.entry)
       }
     }
@@ -124,7 +124,7 @@ export interface UsePairingEventsCallbacks {
  *
  * Covers the full pairing state machine:
  * - `pairing.updated` (request / verifying)
- * - `pairing.verificationRequired`
+ * - `pairing.verification_required`
  * - `pairing.complete`
  * - `pairing.failed`
  *
@@ -161,7 +161,7 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
         return
       }
 
-      if (event.eventType === 'pairing.verificationRequired') {
+      if (event.eventType === 'pairing.verification_required') {
         if (cbs.onVerification) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const p = event.payload as any
@@ -207,7 +207,9 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
  * Subscribe to encryption session state events from the daemon WebSocket.
  *
  * @param onReady   Called when the encryption session becomes ready.
- * @param onFailed  Called when the encryption session fails to initialize.
+ * @param onFailed  Called when the encryption session fails to initialize (never called —
+ *                  daemon does not emit `encryption.session_failed`; failures surface via
+ *                  polling fallback instead).
  *
  * @example
  * const { encryptionReady } = useEncryptionSessionState()
@@ -231,15 +233,15 @@ export function useEncryptionState(
     const handler = (event: DaemonWsEvent) => {
       if (event.topic !== 'encryption') return
 
-      if (event.eventType === 'encryption.sessionReady') {
+      if (event.eventType === 'encryption.session_ready') {
         onReadyRef.current()
         return
       }
 
-      if (event.eventType === 'encryption.sessionFailed') {
-        onFailedRef.current()
-        return
-      }
+      // Note: encryption.session_failed is never emitted by the daemon.
+      // onFailedRef is retained for symmetry but will never fire via WS.
+      // Failures surface through the polling fallback in useEncryptionSessionState.
+      void onFailedRef
     }
 
     const unsubscribe = daemonWs.subscribe(['encryption'], handler)

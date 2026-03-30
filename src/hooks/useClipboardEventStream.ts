@@ -13,17 +13,13 @@ export interface UseClipboardEventStreamOptions {
 }
 
 /**
- * Payload for `clipboard.new-content` daemon WS events.
+ * Payload for `clipboard.new_content` daemon WS events.
  * (Matches the Rust `ClipboardNewContentEvent` serde shape.)
  */
 interface ClipboardNewContentPayload {
   entry_id: string
   preview: string
   origin: string // "local" | "remote"
-}
-
-interface ClipboardDeletedPayload {
-  entry_id: string
 }
 
 // ── Daemon DTO → Frontend response transformer ──────────────────
@@ -114,8 +110,8 @@ export function useClipboardEventStream({
     if (!enabled) return
 
     const handler = (event: { topic: string; eventType: string; payload: unknown }) => {
-      // Route clipboard.new-content to onLocalItem / onRemoteInvalidate.
-      if (event.eventType === 'clipboard.new-content') {
+      // Route clipboard.new_content to onLocalItem / onRemoteInvalidate.
+      if (event.eventType === 'clipboard.new_content') {
         const payload = event.payload as ClipboardNewContentPayload
         if (payload.origin === 'local') {
           // Fetch single entry from daemon list endpoint (matching clipboardSlice pattern)
@@ -157,14 +153,9 @@ export function useClipboardEventStream({
         return
       }
 
-      // Route clipboard.deleted to onDeleted.
-      if (event.eventType === 'clipboard.deleted') {
-        const payload = event.payload as ClipboardDeletedPayload
-        if (payload.entry_id) {
-          onDeletedRef.current(payload.entry_id)
-        }
-        return
-      }
+      // Note: clipboard.deleted is never emitted by the daemon.
+      // The onDeleted callback is retained for API symmetry but will never fire.
+      void onDeletedRef
     }
 
     const unsubscribe = daemonWs.subscribe(['clipboard'], handler)

@@ -35,7 +35,7 @@ export function useEncryptionSessionState(): EncryptionSessionState {
 
     const handler = (event: { eventType: string }) => {
       if (cancelled) return
-      if (event.eventType === 'encryption.sessionReady') {
+      if (event.eventType === 'encryption.session_ready') {
         setState({ encryptionReady: true, isLocked: false })
       }
     }

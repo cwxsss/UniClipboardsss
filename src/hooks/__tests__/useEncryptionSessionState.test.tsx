@@ -66,7 +66,7 @@ describe('useEncryptionSessionState', () => {
     })
   })
 
-  it('switches to ready after encryption.sessionReady event', async () => {
+  it('switches to ready after encryption.session_ready event', async () => {
     mockGetEncryptionState.mockResolvedValue({
       initialized: true,
       sessionReady: false,
@@ -78,8 +78,8 @@ describe('useEncryptionSessionState', () => {
       expect(capturedEncryptionHandler).not.toBeNull()
     })
 
-    // Simulate encryption.sessionReady from daemon WS
-    capturedEncryptionHandler?.({ eventType: 'encryption.sessionReady' })
+    // Simulate encryption.session_ready from daemon WS
+    capturedEncryptionHandler?.({ eventType: 'encryption.session_ready' })
 
     await waitFor(() => {
       expect(result.current.encryptionReady).toBe(true)

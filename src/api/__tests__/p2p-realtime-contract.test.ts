@@ -79,7 +79,7 @@ describe('p2p realtime contract', () => {
     // (as emitted by the Rust DaemonWsEvent struct).
     registeredHandler({
       topic: 'pairing',
-      eventType: 'pairing.verificationRequired',
+      eventType: 'pairing.verification_required',
       ts: 1_710_000_000_000,
       sessionId: 'sess-abc123',
       payload: { sessionId: 'sess-abc123', peerId: 'peer-x', deviceName: 'Desk', code: '123456' },
@@ -88,7 +88,7 @@ describe('p2p realtime contract', () => {
     expect(received).toHaveLength(1)
     expect(received[0]).toMatchObject({
       topic: 'pairing',
-      type: 'pairing.verificationRequired',
+      type: 'pairing.verification_required',
       ts: 1_710_000_000_000,
       sessionId: 'sess-abc123',
     })
@@ -151,7 +151,7 @@ describe('p2p realtime contract', () => {
     let capturedPayload: unknown = null
 
     await onDaemonRealtimeEvent(e => {
-      if (e.topic === 'pairing' && e.type === 'pairing.verificationRequired') {
+      if (e.topic === 'pairing' && e.type === 'pairing.verification_required') {
         capturedPayload = e.payload
       }
     })
@@ -164,7 +164,7 @@ describe('p2p realtime contract', () => {
 
     registeredHandler({
       topic: 'pairing',
-      eventType: 'pairing.verificationRequired',
+      eventType: 'pairing.verification_required',
       ts: 1,
       sessionId: 'session-1',
       payload: {
@@ -225,3 +225,4 @@ describe('p2p realtime contract', () => {
     await expect(onDaemonRealtimeEvent(() => {})).resolves.toBeDefined()
   })
 })
+

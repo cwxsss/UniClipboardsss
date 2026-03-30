@@ -34,7 +34,7 @@ interface FileTransferStatusEvent {
  * dispatching progress updates and durable status changes to the Redux fileTransfer slice.
  *
  * - File-transfer events (progress, status-changed) come from Tauri (file-transfer://).
- * - Clipboard new-content events come from daemon WS (clipboard.new-content).
+ * - Clipboard new_content events come from daemon WS (clipboard.new_content).
  *
  * Call once in a top-level component (e.g. ClipboardContent) to activate.
  */
@@ -49,7 +49,7 @@ export function useTransferProgress(): void {
     // Cancels clipboard auto-write when a new entry arrives from remote.
     const clipboardHandler = (event: { eventType: string; payload: unknown }) => {
       if (cancelled) return
-      if (event.eventType === 'clipboard.new-content') {
+      if (event.eventType === 'clipboard.new_content') {
         dispatch(cancelClipboardWrite())
       }
     }

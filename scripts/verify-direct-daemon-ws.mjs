@@ -229,7 +229,7 @@ async function runSelfTest() {
     // Raw daemon event (snake_case from Rust)
     const rawEvent = {
       topic: 'clipboard',
-      event_type: 'clipboard.new-content',
+      event_type: 'clipboard.new_content',
       ts: 1712000000000,
       session_id: 'sess-abc123',
       payload: {
@@ -249,7 +249,7 @@ async function runSelfTest() {
     }
 
     if (event.topic !== 'clipboard') throw new Error('topic mismatch')
-    if (event.eventType !== 'clipboard.new-content') throw new Error('eventType mismatch')
+    if (event.eventType !== 'clipboard.new_content') throw new Error('eventType mismatch')
     if (event.sessionId !== 'sess-abc123') throw new Error('sessionId mismatch')
     if (event.payload.entry_id !== 'entry-1') throw new Error('payload.entry_id mismatch')
 

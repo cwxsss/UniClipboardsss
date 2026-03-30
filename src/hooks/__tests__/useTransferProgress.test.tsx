@@ -288,7 +288,7 @@ describe('useTransferProgress', () => {
   })
 
   describe('clipboard write cancellation', () => {
-    it('cancels clipboard write on clipboard.new-content event', async () => {
+    it('cancels clipboard write on clipboard.new_content event', async () => {
       const { Wrapper, store } = createWrapper()
       renderHook(() => useTransferProgress(), { wrapper: Wrapper })
 
@@ -311,9 +311,9 @@ describe('useTransferProgress', () => {
 
       expect(store.getState().fileTransfer.activeTransfers['tx-cancel']?.status).toBe('active')
 
-      // Now emit clipboard.new-content — should cancel the clipboard write
+      // Now emit clipboard.new_content — should cancel the clipboard write
       act(() => {
-        emitClipboardEvent('clipboard.new-content', {
+        emitClipboardEvent('clipboard.new_content', {
           entry_id: 'entry-new',
           preview: 'new content',
           origin: 'remote',
