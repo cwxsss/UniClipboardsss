@@ -1,0 +1,5 @@
+export { daemonClient } from './client'
+export type { RequestOptions } from './client'
+export type { DaemonConfig, SessionToken } from './types'
+export { isSessionExpired } from './types'
+export { DaemonApiError, DaemonErrorCode, mapStatusToErrorCode } from './errors'
