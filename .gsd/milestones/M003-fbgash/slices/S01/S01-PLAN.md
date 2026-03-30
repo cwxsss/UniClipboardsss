@@ -18,7 +18,7 @@ Session keep-alive: setInterval every 4 minutes (240s) calling refreshSession() 
   - Estimate: medium
   - Files: src/api/daemon/client.ts
   - Verify: TypeScript compiles. Unit tests: initialize succeeds when daemon is up, refreshSession returns valid session token, request<T> returns typed data, auto-retry on 401, destroy clears timer.
-- [ ] **T02: DaemonConfig and SessionToken types** — Define TypeScript interfaces:
+- [x] **T02: Verified DaemonConfig, SessionToken, and isSessionExpired types in src/api/daemon/types.ts — already created in T01 as a compile dependency** — Define TypeScript interfaces:
 
 ```typescript
 interface DaemonConfig {
