@@ -64,7 +64,7 @@ Map HTTP status codes to error codes: 401→UNAUTHORIZED, 403→FORBIDDEN, 404�
   - Estimate: small
   - Files: src/api/daemon/errors.ts
   - Verify: Unit tests: error thrown correctly for each HTTP status, code and message fields populated from response.
-- [ ] **T04: Auth module bridging Tauri bootstrap and daemon HTTP** — Create `src/lib/daemon-auth.ts`:
+- [x] **T04: Created daemon-auth module with loadDaemonAuth(), verifyAuthState(), and waitForEncryptionReady() bridging Tauri IPC bootstrap and daemon HTTP** — Create `src/lib/daemon-auth.ts`:
 
 `loadDaemonAuth()`: call Tauri invoke for connection config → call DaemonClient.refreshSession() → return session token. Also extract wsUrl for later WS connection.
 
