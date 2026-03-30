@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
-import { daemonWs } from '@/lib/daemon-ws'
-import { getClipboardEntries, isImageType } from '@/api/clipboardItems'
+import { isImageType } from '@/api/clipboardItems'
 import type { ClipboardItemResponse } from '@/api/clipboardItems'
+import { getClipboardEntries } from '@/api/daemon/clipboard'
+import { daemonWs } from '@/lib/daemon-ws'
 
 export interface UseClipboardEventStreamOptions {
   enabled?: boolean
@@ -36,7 +37,9 @@ function extractDomainFromUrl(url: string): string {
   }
 }
 
-function transformDtoToItemResponse(entry: import('@/api/daemon/clipboard').ClipboardEntryDto): ClipboardItemResponse {
+function transformDtoToItemResponse(
+  entry: import('@/api/daemon/clipboard').ClipboardEntryDto
+): ClipboardItemResponse {
   const isFile = entry.content_type.includes('uri-list')
   const isImage = !isFile && isImageType(entry.content_type)
   const hasLinkData = !isImage && entry.link_urls && entry.link_urls.length > 0

@@ -33,6 +33,7 @@ fn connection_state() -> DaemonConnectionState {
         base_url: "http://127.0.0.1:43123".into(),
         ws_url: "ws://127.0.0.1:43123/ws".into(),
         token: "test-token".into(),
+        pid: 54321,
     });
     state
 }
@@ -43,6 +44,7 @@ fn unavailable_connection_state() -> DaemonConnectionState {
         base_url: "http://127.0.0.1:9".into(),
         ws_url: "ws://127.0.0.1:9/ws".into(),
         token: "test-token".into(),
+        pid: 54321,
     });
     state
 }

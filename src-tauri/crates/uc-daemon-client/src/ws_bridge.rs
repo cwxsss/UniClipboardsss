@@ -145,7 +145,7 @@ impl DaemonWsBridge {
             .scripted_connector
             .clone()
             .context("run_until_idle is only available for scripted connectors")?;
-        let connection = self
+        let _connection = self
             .connection_state
             .get()
             .context("daemon connection not available for scripted bridge")?;
@@ -153,7 +153,7 @@ impl DaemonWsBridge {
 
         while let Some(events) = connector.next_connection().await {
             self.set_state(BridgeState::Connecting);
-            connector.record_connect(format!("Bearer {}", connection.token));
+            connector.record_connect(format!("Session test-session-token"));
             self.set_state(BridgeState::Subscribing);
             connector.record_subscribe(topics.clone());
             self.set_state(BridgeState::Ready);
@@ -252,6 +252,12 @@ impl DaemonWsBridge {
         topics: &[String],
         token: &CancellationToken,
     ) -> Result<()> {
+        // Exchange bearer → session JWT lazily on first WS connect attempt.
+        // Uses the same session token cache as HTTP requests.
+        let http = reqwest::Client::new();
+        let session_token =
+            crate::http::get_session_token(&http, &self.connection_state, connection.pid).await?;
+
         let mut request = connection
             .ws_url
             .as_str()
@@ -259,7 +265,7 @@ impl DaemonWsBridge {
             .context("failed to build daemon websocket client request")?;
         request.headers_mut().insert(
             "Authorization",
-            format!("Bearer {}", connection.token).parse()?,
+            format!("Session {}", session_token).parse()?,
         );
 
         let ws_url = url::Url::parse(&connection.ws_url)

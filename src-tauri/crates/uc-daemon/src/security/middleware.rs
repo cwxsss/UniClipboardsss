@@ -12,10 +12,11 @@ use std::sync::Arc;
 use axum::{
     extract::Request,
     extract::State,
-    http::{StatusCode, header::AUTHORIZATION},
+    http::{header::AUTHORIZATION, StatusCode},
     middleware::Next,
     response::IntoResponse,
 };
+use url::form_urlencoded;
 
 use super::claims::SessionTokenClaims;
 
@@ -75,13 +76,21 @@ pub async fn auth_extractor_middleware(
     mut request: Request,
     next: Next,
 ) -> axum::response::Response {
-    // Extract Authorization header
+    // Extract Authorization header first, then fall back to auth query param for browser fetches.
     let auth_header = request
         .headers()
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
 
-    let Some(auth_value) = auth_header else {
+    let auth_query = request.uri().query().and_then(|query| {
+        form_urlencoded::parse(query.as_bytes())
+            .find(|(key, _)| key == "auth")
+            .map(|(_, value)| value.into_owned())
+    });
+
+    let auth_value = auth_header.map(str::to_owned).or(auth_query);
+
+    let Some(auth_value) = auth_value else {
         return (
             StatusCode::UNAUTHORIZED,
             axum::Json(serde_json::json!({
@@ -92,7 +101,10 @@ pub async fn auth_extractor_middleware(
     };
 
     // Parse "Session <token>" prefix
-    let token = auth_value.strip_prefix("Session ").unwrap_or(auth_value).trim();
+    let token = auth_value
+        .strip_prefix("Session ")
+        .unwrap_or(auth_value.as_str())
+        .trim();
     if token.is_empty() {
         return (
             StatusCode::UNAUTHORIZED,

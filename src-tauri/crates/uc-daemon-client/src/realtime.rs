@@ -462,9 +462,9 @@ async fn bridge_state_monitor(
             }
             BridgeState::Ready if was_degraded && has_been_ready => {
                 was_degraded = false;
-                if let Err(err) = emitter.emit(HostEvent::Clipboard(
-                    ClipboardHostEvent::DaemonReconnected,
-                )) {
+                if let Err(err) =
+                    emitter.emit(HostEvent::Clipboard(ClipboardHostEvent::DaemonReconnected))
+                {
                     warn!(error = %err, "failed to emit daemon reconnected event");
                 }
             }
@@ -512,6 +512,7 @@ mod tests {
             base_url: "http://127.0.0.1:42715".to_string(),
             ws_url: "ws://127.0.0.1:42715/ws".to_string(),
             token: "test-token".to_string(),
+            pid: 54321,
         });
         let lease_port_concrete: StdArc<RecordingLeasePort> =
             StdArc::new(RecordingLeasePort::default());

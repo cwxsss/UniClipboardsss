@@ -92,7 +92,7 @@ class DaemonClient {
     if (!this.config) {
       throw new DaemonApiError(
         DaemonErrorCode.INTERNAL_ERROR,
-        'DaemonClient not initialized — call initialize() first',
+        'DaemonClient not initialized — call initialize() first'
       )
     }
 
@@ -125,7 +125,7 @@ class DaemonClient {
     if (!this.config) {
       throw new DaemonApiError(
         DaemonErrorCode.INTERNAL_ERROR,
-        'DaemonClient not initialized — call initialize() first',
+        'DaemonClient not initialized — call initialize() first'
       )
     }
 
@@ -164,17 +164,15 @@ class DaemonClient {
   private async doRefreshSession(): Promise<SessionToken> {
     const config = this.config!
     const url = `${config.baseUrl}/auth/connect`
+    const body = new URLSearchParams({
+      token: config.token,
+      pid: String(config.pid),
+      clientType: 'gui',
+    })
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.token}`,
-      },
-      body: JSON.stringify({
-        pid: config.pid,
-        clientType: 'gui',
-      }),
+      body,
     })
 
     if (!response.ok) {
@@ -204,20 +202,22 @@ class DaemonClient {
 
   private async sendRequest(endpoint: string, options: RequestOptions): Promise<Response> {
     const config = this.config!
-    const url = `${config.baseUrl}${endpoint}`
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...options.headers,
+    const url = new URL(`${config.baseUrl}${endpoint}`)
+    const headers: Record<string, string> = { ...options.headers }
+    const hasBody = options.body !== undefined
+
+    if (this.session?.token) {
+      url.searchParams.set('auth', `Session ${this.session.token}`)
     }
 
-    if (this.session) {
-      headers['Authorization'] = `Session ${this.session.token}`
+    if (hasBody) {
+      headers['Content-Type'] = 'application/json'
     }
 
     return fetch(url, {
       method: options.method ?? 'GET',
       headers,
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body: hasBody ? JSON.stringify(options.body) : undefined,
     })
   }
 
@@ -247,7 +247,7 @@ class DaemonClient {
   private startKeepAlive(): void {
     this.stopKeepAlive()
     this.refreshTimer = setInterval(() => {
-      this.refreshSession().catch((err) => {
+      this.refreshSession().catch(err => {
         console.error('[DaemonClient] keep-alive refresh failed:', err)
       })
     }, REFRESH_INTERVAL_MS)

@@ -65,8 +65,19 @@ impl DaemonSetupClient {
             .await
     }
 
-    fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
-        authorized_daemon_request(&self.http, &self.connection_state, method, path)
+    async fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
+        let connection = self
+            .connection_state
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("daemon connection info is not available"))?;
+        authorized_daemon_request(
+            &self.http,
+            &self.connection_state,
+            method,
+            path,
+            connection.pid,
+        )
+        .await
     }
 
     async fn send_json<TReq, TResp>(
@@ -79,7 +90,7 @@ impl DaemonSetupClient {
         TReq: serde::Serialize + ?Sized,
         TResp: serde::de::DeserializeOwned,
     {
-        let request = self.authorized_request(method, path)?;
+        let request = self.authorized_request(method, path).await?;
         let request = if let Some(payload) = payload {
             request.json(payload)
         } else {
@@ -123,6 +134,28 @@ mod tests {
     use super::*;
     use crate::DaemonConnectionState;
 
+    // Pre-cache a session token so HTTP requests use it without triggering a real exchange.
+    async fn with_session_cache<F>(token: &str, f: F)
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        use crate::http::SESSION_TOKEN_CACHE;
+        let expires_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 300;
+        {
+            let mut cache = SESSION_TOKEN_CACHE.write().await;
+            *cache = Some((token.to_string(), expires_at));
+        }
+        f.await;
+        {
+            let mut cache = SESSION_TOKEN_CACHE.write().await;
+            *cache = None;
+        }
+    }
+
     #[tokio::test]
     async fn daemon_setup_client_fetches_setup_state_from_daemon_api() {
         let expected = SetupStateResponse {
@@ -151,7 +184,8 @@ mod tests {
             let size = stream.read(&mut request).await.unwrap();
             let request = String::from_utf8_lossy(&request[..size]);
             assert!(request.starts_with("GET /setup/state HTTP/1.1\r\n"));
-            assert!(request.contains("authorization: Bearer test-token\r\n"));
+            // After session exchange, header is "Session <session-token>".
+            assert!(request.contains("authorization: Session test-session\r\n"));
 
             let body = serde_json::to_string(&expected_response).unwrap();
             let response = format!(
@@ -166,13 +200,16 @@ mod tests {
         connection_state.set(DaemonConnectionInfo {
             base_url: format!("http://{addr}"),
             ws_url: format!("ws://{addr}/ws"),
-            token: "test-token".to_string(),
+            token: "test-bearer".to_string(),
+            pid: 54321,
         });
 
         let client = DaemonSetupClient::new(connection_state);
-        let result = client.get_setup_state().await.unwrap();
-
-        assert_eq!(result, expected);
+        with_session_cache("test-session", async move {
+            let result = client.get_setup_state().await.unwrap();
+            assert_eq!(result, expected);
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -196,7 +233,8 @@ mod tests {
             let size = stream.read(&mut request).await.unwrap();
             let request = String::from_utf8_lossy(&request[..size]);
             assert!(request.starts_with("POST /setup/submit-passphrase HTTP/1.1\r\n"));
-            assert!(request.contains("authorization: Bearer test-token\r\n"));
+            // After session exchange, header is "Session <session-token>".
+            assert!(request.contains("authorization: Session test-session\r\n"));
             assert!(request.contains("\r\n\r\n{\"passphrase\":\"secret-passphrase\"}"));
 
             let body = serde_json::to_string(&expected_response).unwrap();
@@ -212,15 +250,18 @@ mod tests {
         connection_state.set(DaemonConnectionInfo {
             base_url: format!("http://{addr}"),
             ws_url: format!("ws://{addr}/ws"),
-            token: "test-token".to_string(),
+            token: "test-bearer".to_string(),
+            pid: 54321,
         });
 
         let client = DaemonSetupClient::new(connection_state);
-        let result = client
-            .submit_passphrase("secret-passphrase".to_string())
-            .await
-            .unwrap();
-
-        assert_eq!(result, expected);
+        with_session_cache("test-session", async move {
+            let result = client
+                .submit_passphrase("secret-passphrase".to_string())
+                .await
+                .unwrap();
+            assert_eq!(result, expected);
+        })
+        .await;
     }
 }

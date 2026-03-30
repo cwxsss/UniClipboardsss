@@ -14,7 +14,10 @@ use crate::socket::resolve_daemon_token_path_from;
 pub struct DaemonConnectionInfo {
     pub base_url: String,
     pub ws_url: String,
+    /// Raw bearer token (used only to exchange for session JWT).
     pub token: String,
+    /// PID of the client process (used for daemon JWT PID whitelist verification).
+    pub pid: u32,
 }
 
 /// Internal daemon bearer token.
@@ -58,11 +61,13 @@ pub fn build_connection_info(
     host: &str,
     port: u16,
     token: &DaemonAuthToken,
+    pid: u32,
 ) -> DaemonConnectionInfo {
     DaemonConnectionInfo {
         base_url: format!("http://{host}:{port}"),
         ws_url: format!("ws://{host}:{port}/ws"),
         token: token.as_str().to_string(),
+        pid,
     }
 }
 

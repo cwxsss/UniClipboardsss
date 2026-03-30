@@ -4,8 +4,17 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use axum::body::Body;
+use axum::http::header::{
+    HeaderName, HeaderValue, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+    ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_REQUEST_METHOD, ORIGIN,
+};
 use axum::http::HeaderMap;
+use axum::http::Method;
+use axum::http::Request;
 use axum::http::StatusCode;
+use axum::middleware::Next;
+use axum::response::Response;
 use axum::Router;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -114,8 +123,17 @@ impl DaemonApiState {
         self
     }
 
-    pub fn connection_info_for_addr(&self, listen_addr: SocketAddr) -> DaemonConnectionInfo {
-        build_connection_info(DEFAULT_HTTP_HOST, listen_addr.port(), &self.auth_token)
+    pub fn connection_info_for_addr(
+        &self,
+        listen_addr: SocketAddr,
+        client_pid: u32,
+    ) -> DaemonConnectionInfo {
+        build_connection_info(
+            DEFAULT_HTTP_HOST,
+            listen_addr.port(),
+            &self.auth_token,
+            client_pid,
+        )
     }
 
     pub fn is_authorized(&self, headers: &HeaderMap) -> bool {
@@ -135,6 +153,73 @@ pub fn build_router(state: DaemonApiState) -> Router {
         .merge(crate::security::connect::router())
         .merge(ws::router())
         .with_state(state)
+}
+
+pub(crate) async fn cors_middleware(request: Request<Body>, next: Next) -> Response {
+    tracing::info!(
+        method = %request.method(),
+        uri = %request.uri(),
+        has_origin = request.headers().contains_key(ORIGIN),
+        has_preflight_method = request.headers().contains_key(ACCESS_CONTROL_REQUEST_METHOD),
+        "daemon cors middleware received request"
+    );
+
+    let origin = request
+        .headers()
+        .get(ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .filter(|origin| is_allowed_cors_origin(origin))
+        .map(str::to_owned);
+
+    if request.method() == Method::OPTIONS
+        && request
+            .headers()
+            .contains_key(ACCESS_CONTROL_REQUEST_METHOD)
+    {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::NO_CONTENT;
+        apply_cors_headers(response.headers_mut(), origin.as_deref());
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    apply_cors_headers(response.headers_mut(), origin.as_deref());
+    response
+}
+
+fn apply_cors_headers(headers: &mut HeaderMap, origin: Option<&str>) {
+    let Some(origin) = origin else {
+        return;
+    };
+
+    let Ok(origin_value) = HeaderValue::from_str(origin) else {
+        return;
+    };
+    headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, origin_value);
+
+    headers.insert(
+        ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, PUT, OPTIONS"),
+    );
+    headers.insert(
+        ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization, content-type"),
+    );
+    headers.insert(
+        HeaderName::from_static("vary"),
+        HeaderValue::from_static(
+            "origin, access-control-request-method, access-control-request-headers",
+        ),
+    );
+}
+
+fn is_allowed_cors_origin(origin: &str) -> bool {
+    origin == "tauri://localhost"
+        || origin == "http://tauri.localhost"
+        || origin == "https://tauri.localhost"
+        || origin.starts_with("http://localhost:")
+        || origin.starts_with("http://127.0.0.1:")
+        || origin.starts_with("http://[::1]:")
 }
 
 pub(crate) fn map_daemon_pairing_error(
@@ -187,7 +272,7 @@ pub async fn run_http_server(
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let addr = try_resolve_daemon_http_addr()?;
-    let connection_info = state.connection_info_for_addr(addr);
+    let connection_info = state.connection_info_for_addr(addr, std::process::id());
     tracing::info!(
         base_url = %connection_info.base_url,
         ws_url = %connection_info.ws_url,

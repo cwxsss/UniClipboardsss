@@ -5,9 +5,13 @@ import { Provider } from 'react-redux'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useClipboardEvents } from '../useClipboardEvents'
 import { Filter, getClipboardEntry } from '@/api/clipboardItems'
-import { getEncryptionSessionStatus } from '@/api/security'
-import { invokeWithTrace } from '@/lib/tauri-command'
+import { getClipboardEntries } from '@/api/daemon/clipboard'
 import clipboardReducer from '@/store/slices/clipboardSlice'
+
+// Mock useEncryptionSessionState — always return encryption ready (avoids async complexity)
+vi.mock('../useEncryptionSessionState', () => ({
+  useEncryptionSessionState: () => ({ encryptionReady: true, isLocked: false }),
+}))
 
 // Mock daemonWs (replaces Tauri listen — useClipboardEventStream now uses daemonWs.subscribe)
 let capturedClipboardHandler: ((event: unknown) => void) | null = null
@@ -37,17 +41,19 @@ vi.mock('@/api/clipboardItems', async importOriginal => {
   }
 })
 
-// Also mock the daemon clipboard module directly (used by fetchClipboardItems)
+// Mock the daemon clipboard module — used by fetchClipboardItems thunk and useClipboardEventStream
 vi.mock('@/api/daemon/clipboard', () => ({
-  getClipboardEntries: vi.fn().mockResolvedValue({ items: [], status: 'ready' }),
+  getClipboardEntries: vi.fn().mockResolvedValue({ entries: [], status: 'ready' }),
 }))
 
-// Mock security API
-vi.mock('@/api/security', () => ({
-  getEncryptionSessionStatus: vi.fn().mockResolvedValue({
+// Mock the daemon clipboard module — used by fetchClipboardItems thunk and useClipboardEventStream
+vi.mock('@/api/daemon', () => ({
+  getEncryptionState: vi.fn().mockResolvedValue({
     initialized: false,
-    session_ready: false,
+    sessionReady: false,
   }),
+  // Provide getClipboardEntries so clipboardSlice's fetchClipboardItems thunk can import it
+  getClipboardEntries: vi.fn().mockResolvedValue({ entries: [], status: 'ready' }),
 }))
 
 // Mock toast
@@ -55,22 +61,19 @@ vi.mock('@/components/ui/toast', () => ({
   toast: { error: vi.fn() },
 }))
 
-// Mock daemonClient.request so that getClipboardEntries succeeds inside fetchClipboardItems
-// (fetchClipboardItems calls getClipboardEntries → daemonClient.request())
+// Mock daemonClient.request to return appropriate shape based on the path
 vi.mock('@/api/daemon/client', () => ({
   daemonClient: {
-    request: vi.fn().mockResolvedValue({ items: [], status: 'ready' }),
+    request: vi.fn().mockImplementation((path: string) => {
+      if (typeof path === 'string' && path.startsWith('/encryption/')) {
+        return Promise.resolve({ data: { initialized: false, sessionReady: false } })
+      }
+      return Promise.resolve({ entries: [], items: [], status: 'ready' })
+    }),
   },
 }))
 
-// Mock invokeWithTrace so it can be tracked (called at end of fetchClipboardItems thunk)
-vi.mock('@/lib/tauri-command', () => ({
-  invokeWithTrace: vi.fn().mockResolvedValue({ items: [], status: 'ready' }),
-}))
-
 const mockGetClipboardEntry = vi.mocked(getClipboardEntry)
-const mockGetEncryptionSessionStatus = vi.mocked(getEncryptionSessionStatus)
-const mockInvokeWithTrace = vi.mocked(invokeWithTrace)
 
 // Track dispatched actions
 let dispatchedActions: Array<{ type: string; payload?: unknown }> = []
@@ -102,18 +105,14 @@ function createWrapper() {
 }
 
 describe('useClipboardEvents', () => {
-  const mockUnlisten = vi.fn()
+  const _mockUnlisten = vi.fn()
 
   beforeEach(() => {
     vi.clearAllMocks()
     dispatchedActions = []
     capturedClipboardHandler = null
 
-    // Default: encryption not initialized (so ready = true per hook logic)
-    mockGetEncryptionSessionStatus.mockResolvedValue({
-      initialized: false,
-      session_ready: false,
-    })
+    // useEncryptionSessionState is mocked to always return ready
   })
 
   it('registers clipboard listener on mount', async () => {
@@ -127,38 +126,54 @@ describe('useClipboardEvents', () => {
   })
 
   it('P16-05: local origin event triggers getClipboardEntry and dispatches prependItem', async () => {
-    const mockItem = {
+    // The hook now calls getClipboardEntries from @/api/daemon/clipboard (daemon HTTP path).
+    // Set up daemonClient.request mock to return a matching entry
+    const mockEntry = {
       id: 'entry-1',
-      is_downloaded: true,
-      is_favorited: false,
-      created_at: 1000,
+      content_type: 'text/plain',
+      preview: 'hello',
+      has_detail: false,
+      size_bytes: 5,
+      captured_at: 1000,
       updated_at: 1000,
       active_time: 0,
-      item: {
-        text: { display_text: 'hello', has_detail: false, size: 5 },
-        image: null,
-        file: null,
-        link: null,
-        code: null,
-        unknown: null,
-      },
+      is_favorited: false,
+      is_downloaded: true,
+      link_urls: null,
+      link_domains: null,
+      file_sizes: null,
+      file_transfer_status: null,
+      file_transfer_reason: null,
+      thumbnail_url: null,
     }
-    mockGetClipboardEntry.mockResolvedValue(mockItem)
+
+    // Override getClipboardEntries to return the specific entry (intercepted before daemonClient.request)
+    const mockGetClipboardEntries = vi.mocked(getClipboardEntries)
+    mockGetClipboardEntries.mockResolvedValueOnce({
+      entries: [mockEntry],
+      status: 'ready' as const,
+    })
+
+    // Override encryption state so it's immediately ready — no async resolution needed
+    mockEncryptionState.mockResolvedValueOnce({
+      initialized: false,
+      sessionReady: false,
+    })
 
     const { Wrapper } = createWrapper()
-    renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
+    const { unmount } = renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
 
     // Wait for listener registration
     await vi.waitFor(() => {
       expect(capturedClipboardHandler).not.toBeNull()
     })
 
-    // Wait for encryption status check to mark ready
-    await act(async () => {
-      await new Promise(r => setTimeout(r, 10))
+    // Encryption is immediately ready — loadData should have been called
+    await vi.waitFor(() => {
+      expect(dispatchedActions.some(a => a.type.startsWith('clipboard/fetchItems'))).toBe(true)
     })
 
-    // Simulate local clipboard event (new daemon WS format)
+    // Simulate local clipboard event (daemon WS format)
     await act(async () => {
       capturedClipboardHandler?.({
         topic: 'clipboard',
@@ -167,34 +182,40 @@ describe('useClipboardEvents', () => {
         sessionId: null,
         payload: { entry_id: 'entry-1', preview: 'hello', origin: 'local' },
       })
-      await new Promise(r => setTimeout(r, 10))
+      await new Promise(r => setTimeout(r, 0)) // flush micro-task queue
     })
 
-    expect(mockGetClipboardEntry).toHaveBeenCalledWith('entry-1')
-
+    // prependItem should have been dispatched
     const prependAction = dispatchedActions.find(a => a.type === 'clipboard/prependItem')
     expect(prependAction).toBeDefined()
-    expect(prependAction?.payload).toEqual(mockItem)
+    expect(prependAction?.payload).toMatchObject({ id: 'entry-1' })
+
+    unmount()
   })
 
   it('P16-06: remote origin event triggers throttled full reload (fetchClipboardItems dispatch)', async () => {
+    // The hook now calls fetchClipboardItems thunk (which uses daemon HTTP, not Tauri invoke)
+    // Verify the thunk was dispatched rather than checking for invokeWithTrace
+
+    // useEncryptionSessionState is mocked to always return ready
+
     const { Wrapper } = createWrapper()
-    renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
+    const { unmount } = renderHook(() => useClipboardEvents(Filter.All), { wrapper: Wrapper })
 
     // Wait for listener registration
     await vi.waitFor(() => {
       expect(capturedClipboardHandler).not.toBeNull()
     })
 
-    // Wait for encryption ready
-    await act(async () => {
-      await new Promise(r => setTimeout(r, 10))
+    // Encryption is immediately ready — loadData should have been called
+    await vi.waitFor(() => {
+      expect(dispatchedActions.some(a => a.type.startsWith('clipboard/fetchItems'))).toBe(true)
     })
 
     // Clear any previous invocations from the initial load
-    mockInvokeWithTrace.mockClear()
+    dispatchedActions = []
 
-    // Simulate remote clipboard event (new daemon WS format)
+    // Simulate remote clipboard event (daemon WS format)
     await act(async () => {
       capturedClipboardHandler?.({
         topic: 'clipboard',
@@ -203,17 +224,16 @@ describe('useClipboardEvents', () => {
         sessionId: null,
         payload: { entry_id: 'entry-2', preview: '...', origin: 'remote' },
       })
-      // Wait for async thunk to dispatch and invoke
-      await new Promise(r => setTimeout(r, 30))
+      await new Promise(r => setTimeout(r, 0)) // flush micro-task queue
     })
 
-    // Remote event should trigger loadData which calls fetchClipboardItems -> invokeWithTrace('get_clipboard_entries', ...)
-    expect(mockInvokeWithTrace).toHaveBeenCalledWith(
-      'get_clipboard_entries',
-      expect.objectContaining({ limit: 20, offset: 0 })
-    )
-    // getClipboardEntry should NOT have been called (that's for local events)
+    // Remote event should trigger loadData -> fetchClipboardItems thunk (daemon HTTP path)
+    const fetchAction = dispatchedActions.find(a => a.type === 'clipboard/fetchItems')
+    expect(fetchAction).toBeDefined()
+    // getClipboardEntry should NOT have been called (that's for local events only)
     expect(mockGetClipboardEntry).not.toHaveBeenCalled()
+
+    unmount()
   })
 
   it('Deleted event dispatches removeItem', async () => {

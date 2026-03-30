@@ -46,6 +46,7 @@ pub fn router_l1(state: DaemonApiState) -> Router<DaemonApiState> {
     Router::new()
         .route("/health", get(health))
         .with_state(state)
+        .layer(middleware::from_fn(crate::api::server::cors_middleware))
 }
 
 /// Build the L2+ (protected) router - requires valid session token.
@@ -116,13 +117,16 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
     // rate_limit (outermost, runs second) checks the rate limit using client_id.
     // See detailed comment above for layer order explanation.
     let state_for_middleware = Arc::new(state);
-    router.layer(middleware::from_fn_with_state(
-        state_for_middleware.clone(),
-        rate_limit_middleware,
-    )).layer(middleware::from_fn_with_state(
-        state_for_middleware,
-        auth_extractor_middleware,
-    ))
+    router
+        .layer(middleware::from_fn(crate::api::server::cors_middleware))
+        .layer(middleware::from_fn_with_state(
+            state_for_middleware.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state_for_middleware,
+            auth_extractor_middleware,
+        ))
 }
 
 async fn health(State(state): State<DaemonApiState>) -> impl IntoResponse {
@@ -134,9 +138,7 @@ async fn health(State(state): State<DaemonApiState>) -> impl IntoResponse {
 /// In `--gui-managed` mode, clipboard capture is gated until the GUI
 /// explicitly signals readiness (after the user unlocks the app).
 /// This endpoint opens that gate.
-async fn lifecycle_ready(
-    State(state): State<DaemonApiState>,
-) -> impl IntoResponse {
+async fn lifecycle_ready(State(state): State<DaemonApiState>) -> impl IntoResponse {
     if let Some(gate) = &state.clipboard_capture_gate {
         let was_closed = !gate.swap(true, Ordering::SeqCst);
         if was_closed {
@@ -222,18 +224,14 @@ async fn peers(State(state): State<DaemonApiState>) -> impl IntoResponse {
     }
 }
 
-async fn paired_devices(
-    State(state): State<DaemonApiState>,
-) -> impl IntoResponse {
+async fn paired_devices(State(state): State<DaemonApiState>) -> impl IntoResponse {
     match state.query_service.paired_devices().await {
         Ok(response) => Json(response).into_response(),
         Err(error) => internal_error(error).into_response(),
     }
 }
 
-async fn space_access_state_handler(
-    State(state): State<DaemonApiState>,
-) -> impl IntoResponse {
+async fn space_access_state_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
     Json(
         state
             .query_service
@@ -243,9 +241,7 @@ async fn space_access_state_handler(
     .into_response()
 }
 
-async fn setup_state(
-    State(state): State<DaemonApiState>,
-) -> axum::response::Response {
+async fn setup_state(State(state): State<DaemonApiState>) -> axum::response::Response {
     let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
         return setup_failed("setup orchestrator unavailable").into_response();
     };
@@ -260,9 +256,7 @@ async fn setup_state(
     }
 }
 
-async fn setup_host(
-    State(state): State<DaemonApiState>,
-) -> axum::response::Response {
+async fn setup_host(State(state): State<DaemonApiState>) -> axum::response::Response {
     setup_action_without_body(
         state,
         SetupRouteAction::Host,
@@ -271,9 +265,7 @@ async fn setup_host(
     .await
 }
 
-async fn setup_join(
-    State(state): State<DaemonApiState>,
-) -> axum::response::Response {
+async fn setup_join(State(state): State<DaemonApiState>) -> axum::response::Response {
     setup_action_without_body(
         state,
         SetupRouteAction::Join,
@@ -306,9 +298,7 @@ async fn setup_select_peer(
     }
 }
 
-async fn setup_confirm_peer(
-    State(state): State<DaemonApiState>,
-) -> axum::response::Response {
+async fn setup_confirm_peer(State(state): State<DaemonApiState>) -> axum::response::Response {
     let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
         return setup_failed("setup orchestrator unavailable").into_response();
     };
@@ -389,9 +379,7 @@ async fn setup_submit_passphrase(
     }
 }
 
-async fn setup_cancel(
-    State(state): State<DaemonApiState>,
-) -> axum::response::Response {
+async fn setup_cancel(State(state): State<DaemonApiState>) -> axum::response::Response {
     let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
         return setup_failed("setup orchestrator unavailable").into_response();
     };
@@ -425,9 +413,7 @@ async fn setup_cancel(
     }
 }
 
-async fn setup_reset(
-    State(state): State<DaemonApiState>,
-) -> axum::response::Response {
+async fn setup_reset(State(state): State<DaemonApiState>) -> axum::response::Response {
     let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
         return setup_failed("setup orchestrator unavailable").into_response();
     };
@@ -623,11 +609,9 @@ async fn handle_accept_pairing(
     State(state): State<DaemonApiState>,
     payload: Result<Json<PairingSessionCommandRequest>, JsonRejection>,
 ) -> impl IntoResponse {
-    handle_session_command(
-        state,
-        payload,
-        |pairing_host, session_id| async move { pairing_host.accept_pairing(&session_id).await },
-    )
+    handle_session_command(state, payload, |pairing_host, session_id| async move {
+        pairing_host.accept_pairing(&session_id).await
+    })
     .await
 }
 
@@ -649,11 +633,9 @@ async fn handle_reject_pairing(
     State(state): State<DaemonApiState>,
     payload: Result<Json<PairingSessionCommandRequest>, JsonRejection>,
 ) -> impl IntoResponse {
-    handle_session_command(
-        state,
-        payload,
-        |pairing_host, session_id| async move { pairing_host.reject_pairing(&session_id).await },
-    )
+    handle_session_command(state, payload, |pairing_host, session_id| async move {
+        pairing_host.reject_pairing(&session_id).await
+    })
     .await
 }
 
@@ -675,11 +657,9 @@ async fn handle_cancel_pairing(
     State(state): State<DaemonApiState>,
     payload: Result<Json<PairingSessionCommandRequest>, JsonRejection>,
 ) -> impl IntoResponse {
-    handle_session_command(
-        state,
-        payload,
-        |pairing_host, session_id| async move { pairing_host.cancel_pairing(&session_id).await },
-    )
+    handle_session_command(state, payload, |pairing_host, session_id| async move {
+        pairing_host.cancel_pairing(&session_id).await
+    })
     .await
 }
 

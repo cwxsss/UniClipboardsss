@@ -26,6 +26,15 @@ impl LifecycleStatusDto {
     }
 }
 
+/// Response DTO for the clipboard entries list command.
+/// Used by the `list_clipboard_entries` Tauri command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ClipboardEntriesResponse {
+    Ready { entries: Vec<serde_json::Value> },
+    NotReady,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -578,6 +578,7 @@ fn load_daemon_connection_info() -> Result<DaemonConnectionInfo, DaemonBootstrap
         base_url: format!("http://{}:{}", addr.ip(), addr.port()),
         ws_url: format!("ws://{}:{}/ws", addr.ip(), addr.port()),
         token,
+        pid: std::process::id(),
     })
 }
 
@@ -913,6 +914,7 @@ mod tests {
             base_url: "http://127.0.0.1:42715".to_string(),
             ws_url: "ws://127.0.0.1:42715/ws".to_string(),
             token: "secret".to_string(),
+            pid: 12345,
         });
 
         let value = serde_json::to_value(payload).unwrap();

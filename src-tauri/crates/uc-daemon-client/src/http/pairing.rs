@@ -168,8 +168,19 @@ impl DaemonPairingClient {
         .await
     }
 
-    fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
-        authorized_daemon_request(&self.http, &self.connection_state, method, path)
+    async fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
+        let connection = self
+            .connection_state
+            .get()
+            .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
+        authorized_daemon_request(
+            &self.http,
+            &self.connection_state,
+            method,
+            path,
+            connection.pid,
+        )
+        .await
     }
 
     async fn send_json<TReq, TResp>(
@@ -182,7 +193,7 @@ impl DaemonPairingClient {
         TReq: serde::Serialize + ?Sized,
         TResp: serde::de::DeserializeOwned,
     {
-        let request = self.authorized_request(method, path)?;
+        let request = self.authorized_request(method, path).await?;
         let request = if let Some(payload) = payload {
             request.json(payload)
         } else {
@@ -203,7 +214,7 @@ impl DaemonPairingClient {
         path: &str,
         payload: &T,
     ) -> Result<()> {
-        let request = self.authorized_request(method, path)?;
+        let request = self.authorized_request(method, path).await?;
         let response = request
             .json(payload)
             .send()
@@ -265,29 +276,27 @@ mod tests {
     use tokio::net::TcpListener;
     use uc_daemon::api::auth::DaemonConnectionInfo;
 
-    #[test]
-    fn authorized_request_builds_bearer_header() {
-        let connection_state = DaemonConnectionState::default();
-        connection_state.set(DaemonConnectionInfo {
-            base_url: "http://127.0.0.1:42715".to_string(),
-            ws_url: "ws://127.0.0.1:42715/ws".to_string(),
-            token: "test-token".to_string(),
-        });
-        let client = DaemonPairingClient::new(connection_state);
-
-        let request = client
-            .authorized_request(Method::POST, "/pairing/initiate")
-            .expect("request should build")
-            .build()
-            .expect("request should be valid");
-
-        let auth_header = request
-            .headers()
-            .get(AUTHORIZATION)
-            .expect("authorization header should exist")
-            .to_str()
-            .expect("authorization header should be utf-8");
-        assert_eq!(auth_header, "Bearer test-token");
+    // Pre-cache a session token in the module-level cache so HTTP requests use it
+    // without triggering a real /auth/connect exchange.
+    async fn with_session_cache<F>(token: &str, f: F)
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        use crate::http::SESSION_TOKEN_CACHE;
+        let expires_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 300;
+        {
+            let mut cache = SESSION_TOKEN_CACHE.write().await;
+            *cache = Some((token.to_string(), expires_at));
+        }
+        f.await;
+        {
+            let mut cache = SESSION_TOKEN_CACHE.write().await;
+            *cache = None;
+        }
     }
 
     #[tokio::test]
@@ -300,7 +309,8 @@ mod tests {
             let size = stream.read(&mut request).await.unwrap();
             let request = String::from_utf8_lossy(&request[..size]);
             assert!(request.starts_with("POST /pairing/unpair HTTP/1.1\r\n"));
-            assert!(request.contains("authorization: Bearer test-token\r\n"));
+            // After session exchange, header is "Session <session-token>".
+            assert!(request.contains("authorization: Session test-session\r\n"));
             assert!(request.contains("\r\n\r\n{\"peerId\":\"peer-daemon\"}"));
 
             let response = "HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n";
@@ -311,14 +321,18 @@ mod tests {
         connection_state.set(DaemonConnectionInfo {
             base_url: format!("http://{addr}"),
             ws_url: format!("ws://{addr}/ws"),
-            token: "test-token".to_string(),
+            token: "test-bearer".to_string(),
+            pid: 54321,
         });
 
         let client = DaemonPairingClient::new(connection_state);
-        client
-            .unpair_device("peer-daemon".to_string())
-            .await
-            .unwrap();
+        with_session_cache("test-session", async move {
+            client
+                .unpair_device("peer-daemon".to_string())
+                .await
+                .unwrap();
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -331,7 +345,8 @@ mod tests {
             let size = stream.read(&mut request).await.unwrap();
             let request = String::from_utf8_lossy(&request[..size]);
             assert!(request.starts_with("POST /pairing/gui/lease HTTP/1.1\r\n"));
-            assert!(request.contains("authorization: Bearer test-token\r\n"));
+            // After session exchange, header is "Session <session-token>".
+            assert!(request.contains("authorization: Session test-session\r\n"));
             assert!(request.contains("\r\n\r\n{\"enabled\":true,\"leaseTtlMs\":300000}"));
 
             let response = "HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n";
@@ -342,13 +357,17 @@ mod tests {
         connection_state.set(DaemonConnectionInfo {
             base_url: format!("http://{addr}"),
             ws_url: format!("ws://{addr}/ws"),
-            token: "test-token".to_string(),
+            token: "test-bearer".to_string(),
+            pid: 54321,
         });
 
         let client = DaemonPairingClient::new(connection_state);
-        client
-            .register_gui_participant(true, Some(300_000))
-            .await
-            .unwrap();
+        with_session_cache("test-session", async move {
+            client
+                .register_gui_participant(true, Some(300_000))
+                .await
+                .unwrap();
+        })
+        .await;
     }
 }

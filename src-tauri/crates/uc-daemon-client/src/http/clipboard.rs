@@ -22,6 +22,10 @@ impl DaemonClipboardClient {
     /// Returns Ok(()) on success. The daemon handles origin tracking; no outbound sync
     /// occurs because CaptureClipboardUseCase skips capture for LocalRestore origin.
     pub async fn restore_clipboard_entry(&self, entry_id: &str) -> Result<()> {
+        let connection = self
+            .connection_state
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("daemon connection info is not available"))?;
         let path = format!(
             "{}/{entry_id}",
             uc_core::network::daemon_api_strings::http_route::CLIPBOARD_RESTORE
@@ -31,7 +35,9 @@ impl DaemonClipboardClient {
             &self.connection_state,
             Method::POST,
             &path,
-        )?;
+            connection.pid,
+        )
+        .await?;
 
         let response = request
             .send()

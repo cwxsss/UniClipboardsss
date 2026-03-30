@@ -5,12 +5,12 @@ use std::time::Duration;
 use uc_daemon::api::auth::DaemonConnectionInfo;
 use uc_daemon::api::types::HealthResponse;
 use uc_daemon::DAEMON_API_REVISION;
+use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
 use uc_daemon_client::DaemonConnectionState;
 use uc_tauri::bootstrap::run::{
     bootstrap_daemon_connection_with_hooks, DaemonBootstrapError, ProbeOutcome,
 };
 use uc_tauri::bootstrap::runtime::DaemonBootstrapOwnershipState;
-use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
 
 fn compatible_health() -> HealthResponse {
     HealthResponse {
@@ -25,6 +25,7 @@ fn fixed_connection_info() -> DaemonConnectionInfo {
         base_url: "http://127.0.0.1:42715".to_string(),
         ws_url: "ws://127.0.0.1:42715/ws".to_string(),
         token: "token-46-3".to_string(),
+        pid: 54321,
     }
 }
 

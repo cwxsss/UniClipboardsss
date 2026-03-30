@@ -6,13 +6,17 @@
 
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, State};
+use axum::body::{to_bytes, Body};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware;
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
+use url::form_urlencoded;
 
 use crate::api::auth::parse_bearer_token;
 use crate::api::server::DaemonApiState;
@@ -26,6 +30,12 @@ pub struct ConnectRequest {
     pub pid: u32,
     /// Client type: "gui", "cli", or "other".
     pub client_type: String,
+}
+
+struct ParsedConnectRequest {
+    pid: u32,
+    client_type: String,
+    token: Option<String>,
 }
 
 /// Response body for POST /auth/connect
@@ -46,7 +56,11 @@ pub struct ConnectResponse {
 /// (not session token) because it's the entry point for getting a session token.
 pub fn router() -> Router<DaemonApiState> {
     Router::new()
-        .route(uc_core::network::daemon_api_strings::auth_route::AUTH_CONNECT, post(connect_handler))
+        .route(
+            uc_core::network::daemon_api_strings::auth_route::AUTH_CONNECT,
+            post(connect_handler),
+        )
+        .layer(middleware::from_fn(crate::api::server::cors_middleware))
 }
 
 /// Handler for POST /auth/connect.
@@ -74,7 +88,7 @@ async fn connect_handler(
     State(state): State<DaemonApiState>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
-    Json(req): Json<ConnectRequest>,
+    request: Request<Body>,
 ) -> axum::response::Response {
     // Step 1: Apply rate limiting by client IP (pre-auth, no session token yet).
     // ConnectInfo is None in test contexts (no real TCP connection via oneshot).
@@ -90,16 +104,27 @@ async fn connect_handler(
         }
     }
 
-    // Step 2: Validate bearer token (same as existing daemon auth)
-    let token = match headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(parse_bearer_token)
-    {
-        Some(t) => t,
+    let parsed = match parse_connect_request(request).await {
+        Some(parsed) => parsed,
         None => {
-            return unauthorized().into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "invalid_connect_request"})),
+            )
+                .into_response();
         }
+    };
+
+    // Step 2: Validate bearer token (same as existing daemon auth)
+    let token = parsed.token.as_deref().or_else(|| {
+        headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(parse_bearer_token)
+    });
+
+    let Some(token) = token else {
+        return unauthorized().into_response();
     };
 
     if token != state.auth_token.as_str() {
@@ -113,7 +138,7 @@ async fn connect_handler(
     // 2. The frontend runs on the same machine as the daemon
     // 3. PID verification is defense-in-depth against local malware, not a hard security boundary
     // 4. The bearer token file has filesystem permissions (600)
-    state.security.register_pid(req.pid).await;
+    state.security.register_pid(parsed.pid).await;
 
     // Step 4: Build claims
     //
@@ -127,8 +152,8 @@ async fn connect_handler(
     let access_level = LEVEL_L2; // Phase 75: always L2
 
     let claims = SessionTokenClaims::new(
-        req.pid,
-        req.client_type,
+        parsed.pid,
+        parsed.client_type,
         access_level,
         encryption_ready,
     );
@@ -153,6 +178,43 @@ async fn connect_handler(
     };
 
     (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn parse_connect_request(request: Request<Body>) -> Option<ParsedConnectRequest> {
+    let content_type = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value: &axum::http::HeaderValue| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    let (parts, body) = request.into_parts();
+    let bytes = to_bytes(body, 16 * 1024).await.ok()?;
+
+    if content_type.starts_with("application/x-www-form-urlencoded") {
+        let form: HashMap<String, String> = form_urlencoded::parse(bytes.as_ref())
+            .into_owned()
+            .collect();
+
+        return Some(ParsedConnectRequest {
+            pid: form.get("pid")?.parse().ok()?,
+            client_type: form.get("clientType")?.clone(),
+            token: form.get("token").cloned(),
+        });
+    }
+
+    let req: ConnectRequest = serde_json::from_slice(&bytes).ok()?;
+    let token = parts.uri.query().and_then(|query: &str| {
+        form_urlencoded::parse(query.as_bytes())
+            .find(|(key, _)| key == "token")
+            .map(|(_, value)| value.into_owned())
+    });
+
+    Some(ParsedConnectRequest {
+        pid: req.pid,
+        client_type: req.client_type,
+        token,
+    })
 }
 
 fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {

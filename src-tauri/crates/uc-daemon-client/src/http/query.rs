@@ -30,7 +30,8 @@ impl DaemonQueryClient {
     /// Signal the daemon that the GUI has unlocked and clipboard capture can begin.
     pub async fn signal_lifecycle_ready(&self) -> Result<()> {
         let response = self
-            .authorized_request(Method::POST, "/lifecycle/ready")?
+            .authorized_request(Method::POST, "/lifecycle/ready")
+            .await?
             .send()
             .await
             .with_context(|| "failed to call daemon /lifecycle/ready")?;
@@ -50,8 +51,19 @@ impl DaemonQueryClient {
         ))
     }
 
-    fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
-        authorized_daemon_request(&self.http, &self.connection_state, method, path)
+    async fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
+        let connection = self
+            .connection_state
+            .get()
+            .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
+        authorized_daemon_request(
+            &self.http,
+            &self.connection_state,
+            method,
+            path,
+            connection.pid,
+        )
+        .await
     }
 
     async fn get_json<T>(&self, method: Method, path: &str) -> Result<T>
@@ -59,7 +71,8 @@ impl DaemonQueryClient {
         T: serde::de::DeserializeOwned,
     {
         let response = self
-            .authorized_request(method, path)?
+            .authorized_request(method, path)
+            .await?
             .send()
             .await
             .with_context(|| format!("failed to call daemon query route {path}"))?;
@@ -94,6 +107,28 @@ mod tests {
     use uc_daemon::api::auth::DaemonConnectionInfo;
     use uc_daemon::api::types::{PairedDeviceDto, PeerSnapshotDto};
 
+    // Pre-cache a session token so HTTP requests use it without triggering a real exchange.
+    async fn with_session_cache<F>(token: &str, f: F)
+    where
+        F: std::future::Future<Output = ()>,
+    {
+        use crate::http::SESSION_TOKEN_CACHE;
+        let expires_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 300;
+        {
+            let mut cache = SESSION_TOKEN_CACHE.write().await;
+            *cache = Some((token.to_string(), expires_at));
+        }
+        f.await;
+        {
+            let mut cache = SESSION_TOKEN_CACHE.write().await;
+            *cache = None;
+        }
+    }
+
     #[tokio::test]
     async fn daemon_query_client_fetches_peer_snapshots_from_daemon_api() {
         let peers = vec![PeerSnapshotDto {
@@ -125,13 +160,16 @@ mod tests {
         connection_state.set(DaemonConnectionInfo {
             base_url: format!("http://{addr}"),
             ws_url: format!("ws://{addr}/ws"),
-            token: "test-token".to_string(),
+            token: "test-bearer".to_string(),
+            pid: 54321,
         });
 
         let client = DaemonQueryClient::new(connection_state);
-        let result = client.get_peers().await.unwrap();
-
-        assert_eq!(result, expected_peers);
+        with_session_cache("test-session", async move {
+            let result = client.get_peers().await.unwrap();
+            assert_eq!(result, expected_peers);
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -153,7 +191,8 @@ mod tests {
             let size = stream.read(&mut request).await.unwrap();
             let request = String::from_utf8_lossy(&request[..size]);
             assert!(request.starts_with("GET /paired-devices HTTP/1.1\r\n"));
-            assert!(request.contains("authorization: Bearer test-token\r\n"));
+            // After session exchange, header is "Session <session-token>".
+            assert!(request.contains("authorization: Session test-session\r\n"));
 
             let body = serde_json::to_string(&paired_devices).unwrap();
             let response = format!(
@@ -168,12 +207,15 @@ mod tests {
         connection_state.set(DaemonConnectionInfo {
             base_url: format!("http://{addr}"),
             ws_url: format!("ws://{addr}/ws"),
-            token: "test-token".to_string(),
+            token: "test-bearer".to_string(),
+            pid: 54321,
         });
 
         let client = DaemonQueryClient::new(connection_state);
-        let result = client.get_paired_devices().await.unwrap();
-
-        assert_eq!(result, expected_paired_devices);
+        with_session_cache("test-session", async move {
+            let result = client.get_paired_devices().await.unwrap();
+            assert_eq!(result, expected_paired_devices);
+        })
+        .await;
     }
 }

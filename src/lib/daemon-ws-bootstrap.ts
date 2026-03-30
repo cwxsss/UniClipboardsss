@@ -46,6 +46,7 @@ function validatePayload(payload: unknown): asserts payload is DaemonConnectionP
 }
 
 let connectionEstablished = false
+let connectionPromise: Promise<void> | null = null
 
 /**
  * Connect the frontend WebSocket client to the daemon.
@@ -68,9 +69,11 @@ export function connectDaemonWs(): Promise<void> {
     return Promise.resolve()
   }
 
-  const wsUrlPromise = waitForConnectionEvent()
+  if (connectionPromise) {
+    return connectionPromise
+  }
 
-  return wsUrlPromise
+  connectionPromise = waitForConnectionEvent()
     .then(async payload => {
       // Reject malformed payloads before using them to initialize clients.
       validatePayload(payload)
@@ -90,7 +93,7 @@ export function connectDaemonWs(): Promise<void> {
       await daemonClient.refreshSession()
 
       // Step 3: Connect the WebSocket client. daemonWs will auto-reconnect on disconnect.
-      return daemonWs.connect(payload.wsUrl)
+      await daemonWs.connect(payload.wsUrl)
     })
     .then(() => {
       connectionEstablished = true
@@ -100,6 +103,13 @@ export function connectDaemonWs(): Promise<void> {
       console.error('[daemon-ws-bootstrap] failed to connect to daemon WebSocket:', err)
       throw err
     })
+    .finally(() => {
+      if (!connectionEstablished) {
+        connectionPromise = null
+      }
+    })
+
+  return connectionPromise
 }
 
 /**
@@ -108,6 +118,7 @@ export function connectDaemonWs(): Promise<void> {
  */
 export function resetConnectDaemonWsForTests(): void {
   connectionEstablished = false
+  connectionPromise = null
 }
 
 /**
@@ -119,17 +130,17 @@ function waitForConnectionEvent(): Promise<DaemonConnectionPayload> {
     let unlisten: (() => void) | null = null
     let resolved = false
 
-    listen<DaemonConnectionPayload>(DAEMON_CONNECTION_EVENT, (event) => {
+    listen<DaemonConnectionPayload>(DAEMON_CONNECTION_EVENT, event => {
       if (resolved) return
       resolved = true
       unlisten?.()
       resolve(event.payload)
     })
-      .then((fn) => {
+      .then(fn => {
         unlisten = fn
         if (resolved) fn()
       })
-      .catch((err) => {
+      .catch(err => {
         reject(err)
       })
   })

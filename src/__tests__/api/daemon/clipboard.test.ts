@@ -14,6 +14,13 @@
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import {
+  setupFetchMock,
+  teardownFetchMock,
+  makeEntryDto,
+  mockResponse,
+  mockErrorResponse,
+} from './_test-helpers'
+import {
   getClipboardEntries,
   getClipboardEntry,
   deleteClipboardEntry,
@@ -22,13 +29,6 @@ import {
   getClipboardStats,
 } from '@/api/daemon/clipboard'
 import { DaemonErrorCode } from '@/api/daemon/errors'
-import {
-  setupFetchMock,
-  teardownFetchMock,
-  makeEntryDto,
-  mockResponse,
-  mockErrorResponse,
-} from './_test-helpers'
 
 describe('Clipboard API', () => {
   let mockFetch: ReturnType<typeof vi.spyOn>
@@ -112,7 +112,9 @@ describe('Clipboard API', () => {
     })
 
     it('re-throws DaemonApiError on HTTP error', async () => {
-      mockFetch.mockResolvedValueOnce(mockErrorResponse(500, { error: '500 on /clipboard/entries' }))
+      mockFetch.mockResolvedValueOnce(
+        mockErrorResponse(500, { error: '500 on /clipboard/entries' })
+      )
 
       await expect(getClipboardEntries()).rejects.toMatchObject({
         code: DaemonErrorCode.INTERNAL_ERROR,
@@ -205,17 +207,17 @@ describe('Clipboard API', () => {
     })
   })
 
-  // ── PUT /clipboard/entries/:id/favorite ────────────────────
+  // ── POST /clipboard/entries/:id/favorite ────────────────────
 
   describe('toggleFavorite(id, favorited)', () => {
-    it('sends PUT with is_favorited:true to enable favorite', async () => {
+    it('sends POST with is_favorited:true to enable favorite', async () => {
       mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }))
 
       await toggleFavorite('entry-1', true)
 
       const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/clipboard/entries/entry-1/favorite')
-      expect((opts as { method: string }).method).toBe('PUT')
+      expect((opts as { method: string }).method).toBe('POST')
       expect(JSON.parse((opts as { body: string }).body)).toEqual({ is_favorited: true })
     })
 

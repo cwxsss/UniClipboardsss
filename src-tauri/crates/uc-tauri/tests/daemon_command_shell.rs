@@ -187,6 +187,7 @@ async fn pairing_commands_use_daemon_queries_and_unpair_route() {
         base_url: format!("http://{addr}"),
         ws_url: format!("ws://{addr}/ws"),
         token: "test-token".to_string(),
+        pid: 54321,
     });
     let webview = build_pairing_webview(daemon_connection);
 
@@ -307,6 +308,7 @@ async fn setup_commands_forward_to_daemon_and_deserialize_setup_state() {
         base_url: format!("http://{addr}"),
         ws_url: format!("ws://{addr}/ws"),
         token: "test-token".to_string(),
+        pid: 54321,
     });
     let webview = build_setup_webview(daemon_connection);
 

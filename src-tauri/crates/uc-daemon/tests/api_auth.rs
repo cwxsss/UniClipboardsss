@@ -40,7 +40,7 @@ fn connection_info_builder_returns_http_and_ws_urls() {
     let token_path = tempdir.path().join("daemon.token");
     let token = load_or_create_auth_token(&token_path).unwrap();
 
-    let info = build_connection_info("127.0.0.1", 43210, &token);
+    let info = build_connection_info("127.0.0.1", 43210, &token, 54321);
 
     assert_eq!(info.base_url, "http://127.0.0.1:43210");
     assert_eq!(info.ws_url, "ws://127.0.0.1:43210/ws");

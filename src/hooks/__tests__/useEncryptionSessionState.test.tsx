@@ -1,7 +1,8 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useEncryptionSessionState } from '../useEncryptionSessionState'
-import { getEncryptionSessionStatus } from '@/api/security'
+import { getEncryptionState } from '@/api/daemon'
+import { getEncryptionSessionStatus as _getEncryptionSessionStatus } from '@/api/security'
 
 // Mock daemonWs (hook now uses daemonWs.subscribe instead of Tauri listen)
 let capturedEncryptionHandler: ((event: { eventType: string }) => void) | null = null
@@ -20,11 +21,16 @@ vi.mock('@/lib/daemon-ws', () => ({
   },
 }))
 
+// Mock the daemon encryption module (used by useEncryptionSessionState — calls getEncryptionState from @/api/daemon)
+vi.mock('@/api/daemon', () => ({
+  getEncryptionState: vi.fn(),
+}))
+
 vi.mock('@/api/security', () => ({
   getEncryptionSessionStatus: vi.fn(),
 }))
 
-const mockGetEncryptionSessionStatus = vi.mocked(getEncryptionSessionStatus)
+const mockGetEncryptionState = vi.mocked(getEncryptionState)
 
 describe('useEncryptionSessionState', () => {
   beforeEach(() => {
@@ -33,9 +39,9 @@ describe('useEncryptionSessionState', () => {
   })
 
   it('treats uninitialized encryption as ready', async () => {
-    mockGetEncryptionSessionStatus.mockResolvedValue({
+    mockGetEncryptionState.mockResolvedValue({
       initialized: false,
-      session_ready: false,
+      sessionReady: false,
     })
 
     const { result } = renderHook(() => useEncryptionSessionState())
@@ -47,9 +53,9 @@ describe('useEncryptionSessionState', () => {
   })
 
   it('treats initialized but locked encryption as locked', async () => {
-    mockGetEncryptionSessionStatus.mockResolvedValue({
+    mockGetEncryptionState.mockResolvedValue({
       initialized: true,
-      session_ready: false,
+      sessionReady: false,
     })
 
     const { result } = renderHook(() => useEncryptionSessionState())
@@ -61,9 +67,9 @@ describe('useEncryptionSessionState', () => {
   })
 
   it('switches to ready after encryption.sessionReady event', async () => {
-    mockGetEncryptionSessionStatus.mockResolvedValue({
+    mockGetEncryptionState.mockResolvedValue({
       initialized: true,
-      session_ready: false,
+      sessionReady: false,
     })
 
     const { result } = renderHook(() => useEncryptionSessionState())
