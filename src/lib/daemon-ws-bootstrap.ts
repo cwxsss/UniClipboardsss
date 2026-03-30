@@ -23,16 +23,44 @@ interface DaemonConnectionPayload {
   token: string
 }
 
+/**
+ * Validates the shape of a DaemonConnectionPayload.
+ * Rejects missing or empty required fields before using them to initialize clients.
+ */
+function validatePayload(payload: unknown): asserts payload is DaemonConnectionPayload {
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    !('baseUrl' in payload) ||
+    !('wsUrl' in payload) ||
+    !('token' in payload) ||
+    typeof (payload as DaemonConnectionPayload).baseUrl !== 'string' ||
+    typeof (payload as DaemonConnectionPayload).wsUrl !== 'string' ||
+    typeof (payload as DaemonConnectionPayload).token !== 'string' ||
+    !(payload as DaemonConnectionPayload).baseUrl ||
+    !(payload as DaemonConnectionPayload).wsUrl ||
+    !(payload as DaemonConnectionPayload).token
+  ) {
+    throw new Error('Malformed daemon connection payload: missing required fields')
+  }
+}
+
 let connectionEstablished = false
 
 /**
  * Connect the frontend WebSocket client to the daemon.
  *
  * Idempotent — safe to call multiple times. Returns immediately if already connected.
- * Starts the `daemonWs` singleton with the URL and session token from the Tauri
- * bootstrap event. After this, `daemonWs.subscribe()` calls in hooks will work.
+ * The full bootstrap sequence is:
+ *   1. Wait for `daemon://connection-info` Tauri event.
+ *   2. Initialize `daemonClient` with the received connection config.
+ *   3. Exchange the bearer token for a JWT session via POST /auth/connect.
+ *   4. Open the WebSocket with the session token in the URL.
  *
- * @returns Promise that resolves when `daemonWs.connect()` resolves,
+ * WebSocket connect never starts before step 3 is complete, ensuring the daemon
+ * receives an authenticated session on the first connection attempt.
+ *
+ * @returns Promise that resolves when the WebSocket is open,
  *          or immediately if already connected.
  */
 export function connectDaemonWs(): Promise<void> {
@@ -43,8 +71,11 @@ export function connectDaemonWs(): Promise<void> {
   const wsUrlPromise = waitForConnectionEvent()
 
   return wsUrlPromise
-    .then(payload => {
-      // Initialize the HTTP client with the connection config.
+    .then(async payload => {
+      // Reject malformed payloads before using them to initialize clients.
+      validatePayload(payload)
+
+      // Step 1: Initialize the HTTP client with the connection config.
       daemonClient.initialize({
         baseUrl: payload.baseUrl,
         wsUrl: payload.wsUrl,
@@ -52,7 +83,13 @@ export function connectDaemonWs(): Promise<void> {
         pid: 0,
       })
 
-      // Connect the WebSocket client. daemonWs will auto-reconnect on disconnect.
+      // Step 2: Exchange the bearer token for a JWT session before opening the WebSocket.
+      // This is the critical ordering requirement — daemonWs._openSocket() reads
+      // daemonClient.currentSession.token to build the auth URL, so the session
+      // must exist before connect() is called.
+      await daemonClient.refreshSession()
+
+      // Step 3: Connect the WebSocket client. daemonWs will auto-reconnect on disconnect.
       return daemonWs.connect(payload.wsUrl)
     })
     .then(() => {
@@ -63,6 +100,14 @@ export function connectDaemonWs(): Promise<void> {
       console.error('[daemon-ws-bootstrap] failed to connect to daemon WebSocket:', err)
       throw err
     })
+}
+
+/**
+ * Reset the module-level `connectionEstablished` flag.
+ * Exported for test use only — do not call in production.
+ */
+export function resetConnectDaemonWsForTests(): void {
+  connectionEstablished = false
 }
 
 /**

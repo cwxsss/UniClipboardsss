@@ -45,7 +45,7 @@ A browser-compatible websocket handshake authenticates successfully, the old neg
   - Estimate: 90m
   - Files: src-tauri/crates/uc-daemon/src/api/ws.rs, src-tauri/crates/uc-daemon/src/api/types.rs, src-tauri/crates/uc-daemon/tests/websocket_api.rs, src-tauri/crates/uc-daemon/tests/pairing_ws.rs
   - Verify: env -C src-tauri cargo test -p uc-daemon --test websocket_api --test pairing_ws
-- [ ] **T02: Unify frontend bootstrap around a live session before realtime connect** — ## Why
+- [x] **T02: Added await daemonClient.refreshSession() before daemonWs.connect() in connectDaemonWs(), eliminating the startup race that caused invalid_session_token errors; added validatePayload() guard and rewritten p2p-realtime-contract.test.ts** — ## Why
 
 The frontend currently has two separate bootstrap paths: `daemon-auth` knows how to refresh the session token, while `daemon-ws-bootstrap` immediately opens the websocket after only `daemonClient.initialize()`. That race leaves `daemonWs` unauthenticated at startup and compounds the known `invalid_session_token` noise in setup realtime consumers.
 
