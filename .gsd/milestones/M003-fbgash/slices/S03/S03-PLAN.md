@@ -4,7 +4,7 @@
 **Demo:** After this: Frontend connects to daemon WS directly; clipboard new-content events trigger UI update without Tauri emit
 
 ## Tasks
-- [ ] **T01: DaemonWsClient class with reconnect logic** — Create `src/lib/daemon-ws.ts`:
+- [x] **T01: Created DaemonWsClient with WebSocket connect/subscribe/reconnect and exponential backoff; TypeScript clean; unit tests written but blocked by bun test** — Create `src/lib/daemon-ws.ts`:
 
 ```typescript
 interface DaemonWsEvent<T = unknown> {

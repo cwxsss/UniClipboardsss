@@ -43,7 +43,7 @@ Keep the old Tauri invoke() calls as commented-out references for rollback durin
   - Estimate: medium
   - Files: src/store/clipboardSlice.ts (or equivalent)
   - Verify: TypeScript compiles. Browser test: all clipboard operations work via daemon HTTP. Redux DevTools shows correct state transitions.
-- [ ] **T03: Migration verification and grep audit** — Before completing this slice, run verification:
+- [x] **T03: Grep audit confirms zero invoke() clipboard calls remain in migrated Redux slices and daemon API module; all 80 store+API tests pass** — Before completing this slice, run verification:
 
 ```bash
 # Verify no invoke() calls for clipboard commands remain
