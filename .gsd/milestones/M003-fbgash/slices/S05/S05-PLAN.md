@@ -38,7 +38,7 @@ Use a test daemon instance or mock WebSocket server.
   - Estimate: medium
   - Files: src/__tests__/lib/daemon-ws.test.ts
   - Verify: All WS tests pass. Event latency measured and within 100ms threshold.
-- [ ] **T03: Session token lifecycle tests** — Test session token lifecycle:
+- [x] **T03: Session token lifecycle tests: 33 tests across daemon-client.test.ts and daemon-auth.test.ts — all passing** — Test session token lifecycle:
 
 - Initial loadDaemonAuth() → session token obtained, stored in memory
 - Session expiry (mock time or wait 5min in test): next request auto-refreshes
