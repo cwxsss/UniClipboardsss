@@ -1,12 +1,11 @@
-import { listen } from '@tauri-apps/api/event'
 import React, { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { SettingContext } from './setting-context'
 import { DEFAULT_THEME_COLOR } from '@/constants/theme'
+import { getSettings, updateSettings } from '@/api/daemon'
 import i18n, { normalizeLanguage, persistLanguage } from '@/i18n'
 import { invokeWithTrace } from '@/lib/tauri-command'
 import { applyThemePreset } from '@/lib/theme-engine'
 import { startThemeTransition } from '@/lib/theme-transition'
-import type { SettingChangedEvent } from '@/types/events'
 import type { SettingContextType, Settings } from '@/types/setting'
 
 // 设置提供者属性接口
@@ -24,7 +23,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
   const loadSetting = useCallback(async () => {
     try {
       setLoading(true)
-      const settingObj = await invokeWithTrace<Settings>('get_settings')
+      const settingObj = await getSettings()
       setSetting(settingObj)
       setError(null)
     } catch (err) {
@@ -39,8 +38,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
   const saveSetting = async (newSetting: Settings) => {
     try {
       setLoading(true)
-      // New command: update_settings, takes JSON object directly
-      await invokeWithTrace('update_settings', { settings: newSetting })
+      await updateSettings(newSetting)
       setSetting(newSetting)
       setError(null)
     } catch (err) {
@@ -66,7 +64,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
         ...setting.general,
         ...newGeneralSetting,
       },
-    }
+    } as Settings
     await saveSetting(updatedSetting)
   }
 
@@ -79,7 +77,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
         ...setting.sync,
         ...newSyncSetting,
       },
-    }
+    } as Settings
     await saveSetting(updatedSetting)
   }
 
@@ -92,7 +90,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
         ...setting.security,
         ...newSecuritySetting,
       },
-    }
+    } as Settings
     await saveSetting(updatedSetting)
   }
 
@@ -105,7 +103,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
         ...setting.retention_policy,
         ...newPolicy,
       },
-    }
+    } as Settings
     await saveSetting(updatedSetting)
   }
 
@@ -150,38 +148,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     void loadSetting()
   }, [loadSetting])
 
-  // 监听来自其他窗口的设置变更事件
-  useEffect(() => {
-    let unlisten: (() => void) | undefined
-
-    const setupSettingChangeListener = async () => {
-      try {
-        unlisten = await listen<SettingChangedEvent>('setting-changed', event => {
-          console.log('收到设置变更事件:', event.payload)
-
-          // 解析新的设置
-          try {
-            const newSetting = JSON.parse(event.payload.settingJson) as Settings
-
-            // 更新本地状态 (不触发再次保存)
-            setSetting(newSetting)
-          } catch (err) {
-            console.error('解析设置变更事件失败:', err)
-          }
-        })
-      } catch (err) {
-        console.error('设置设置变更监听器失败:', err)
-      }
-    }
-
-    setupSettingChangeListener()
-
-    return () => {
-      if (unlisten) {
-        unlisten()
-      }
-    }
-  }, [])
+  // Note: Cross-window settings sync via daemon WebSocket events (future enhancement)
 
   // 监听主题变化并应用
   const prevThemeRef = React.useRef<string | undefined>()

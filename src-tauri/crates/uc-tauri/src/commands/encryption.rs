@@ -180,6 +180,37 @@ pub async fn unlock_encryption_session_with_runtime<R: Runtime>(
     .await
 }
 
+/// Auto-unlock the encryption session using macOS Keychain-stored KEK.
+///
+/// This command retrieves the KEK from the keychain (no passphrase required)
+/// and uses it to unlock the encryption session. It is the keyring-based
+/// counterpart to `initialize_encryption` which requires a passphrase.
+///
+/// This is needed by the frontend's UnlockPage where the user clicks
+/// "Unlock" without entering a passphrase - the credentials are in keychain.
+#[tauri::command]
+pub async fn unlock_encryption_session(
+    runtime: State<'_, Arc<AppRuntime>>,
+    app_handle: AppHandle,
+    daemon_conn: State<'_, uc_daemon_client::DaemonConnectionState>,
+    _trace: Option<TraceMetadata>,
+) -> Result<bool, String> {
+    let span = info_span!(
+        "command.encryption.unlock_session",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+    );
+    record_trace_fields(&span, &_trace);
+    unlock_encryption_session_with_runtime(
+        &runtime,
+        &app_handle,
+        _trace,
+        Some(daemon_conn.inner()),
+    )
+    .await
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::{emit_session_ready, unlock_encryption_session_with_runtime};

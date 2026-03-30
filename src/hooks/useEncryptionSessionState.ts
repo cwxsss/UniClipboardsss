@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { daemonWs } from '@/lib/daemon-ws'
-import { getEncryptionSessionStatus } from '@/api/security'
+import { getEncryptionState } from '@/api/daemon'
 
 interface EncryptionSessionState {
   encryptionReady: boolean
@@ -18,13 +18,13 @@ export function useEncryptionSessionState(): EncryptionSessionState {
 
     const syncState = async () => {
       try {
-        const status = await getEncryptionSessionStatus()
+        const status = await getEncryptionState()
         if (cancelled) return
 
-        const ready = !status.initialized || status.session_ready
+        const ready = !status.initialized || status.sessionReady
         setState({
           encryptionReady: ready,
-          isLocked: status.initialized && !status.session_ready,
+          isLocked: status.initialized && !status.sessionReady,
         })
       } catch (err) {
         if (cancelled) return

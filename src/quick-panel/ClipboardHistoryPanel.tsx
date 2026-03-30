@@ -12,7 +12,7 @@ import {
   Unlock,
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { copyClipboardItem, deleteClipboardItem } from '@/api/clipboardItems'
+import { restoreClipboardEntry, deleteClipboardEntry } from '@/api/daemon'
 import { unlockEncryptionSession } from '@/api/security'
 import { useClipboardCollection } from '@/hooks/useClipboardCollection'
 import { useThemeSync } from '@/hooks/useThemeSync'
@@ -263,7 +263,7 @@ const ClipboardHistoryPanel: React.FC = () => {
       if (!item) return
 
       try {
-        await copyClipboardItem(item.id)
+        await restoreClipboardEntry(item.id)
       } catch (err) {
         console.error('Failed to restore clipboard entry:', err)
         return
@@ -282,7 +282,7 @@ const ClipboardHistoryPanel: React.FC = () => {
       if (!item) return
 
       try {
-        await deleteClipboardItem(item.id)
+        await deleteClipboardEntry(item.id)
 
         // Mark as deleting so effects skip the dismiss/reset cycle
         deletingRef.current = true

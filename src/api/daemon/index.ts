@@ -38,3 +38,5 @@ export type {
   ClipboardEntryResource,
   RestoreResult,
 } from './clipboard'
+export { getStorageStats, clearCache } from './storage'
+export type { StorageStats } from './storage'

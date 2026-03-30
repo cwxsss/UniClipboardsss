@@ -4,7 +4,7 @@
 **Demo:** After this: Test suite runs: HTTP API correctness, WS event delivery, session token lifecycle, reconnection recovery, security properties
 
 ## Tasks
-- [ ] **T01: HTTP API integration tests** — Create integration test suite for all daemon HTTP endpoints. Use Vitest + msw (mock service worker) or real HTTP client against running daemon.
+- [x] **T01: HTTP API integration tests: 47 tests across clipboard, settings, encryption, storage endpoints — all passing** — Create integration test suite for all daemon HTTP endpoints. Use Vitest + msw (mock service worker) or real HTTP client against running daemon.
 
 Test coverage:
 - GET /clipboard/entries — correct pagination, entry shapes

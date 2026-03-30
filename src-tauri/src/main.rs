@@ -605,6 +605,7 @@ fn run_app(ctx: GuiBootstrapContext) {
             // Encryption commands
             uc_tauri::commands::encryption::initialize_encryption,
             uc_tauri::commands::encryption::verify_keychain_access,
+            uc_tauri::commands::encryption::unlock_encryption_session,
             // Setup commands
             uc_tauri::commands::setup::get_setup_state,
             uc_tauri::commands::setup::start_new_space,
@@ -645,6 +646,8 @@ fn run_app(ctx: GuiBootstrapContext) {
             // Storage commands
             uc_tauri::commands::storage::clear_all_clipboard_history,
             uc_tauri::commands::storage::open_data_directory,
+            uc_tauri::commands::storage::get_storage_stats,
+            uc_tauri::commands::storage::clear_cache,
             // macOS-specific commands (conditionally compiled)
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::enable_rounded_corners,

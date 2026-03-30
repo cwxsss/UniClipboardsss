@@ -1,9 +1,7 @@
-import { listen } from '@tauri-apps/api/event'
 import { useEffect, useRef } from 'react'
-import { invokeWithTrace } from '@/lib/tauri-command'
+import { getSettings } from '@/api/daemon'
 import { applyThemePreset, DEFAULT_THEME_COLOR } from '@/lib/theme-engine'
 import type { ThemeMode } from '@/lib/theme-engine'
-import type { SettingChangedEvent } from '@/types/events'
 import type { Settings } from '@/types/setting'
 
 function resolveThemeMode(theme: string | undefined | null): ThemeMode {
@@ -28,7 +26,8 @@ export function useThemeSync(): void {
   useEffect(() => {
     let cancelled = false
 
-    void invokeWithTrace<Settings>('get_settings')
+    // Load initial theme from daemon settings API
+    void getSettings()
       .then(settings => {
         if (cancelled) return
         settingsRef.current = settings
@@ -40,16 +39,7 @@ export function useThemeSync(): void {
         applyFullTheme(null)
       })
 
-    const unlistenSettings = listen<SettingChangedEvent>('setting-changed', event => {
-      try {
-        const newSettings = JSON.parse(event.payload.settingJson) as Settings
-        settingsRef.current = newSettings
-        applyFullTheme(newSettings)
-      } catch (err) {
-        console.error('Failed to parse setting-changed event:', err)
-      }
-    })
-
+    // Watch for system theme changes when user prefers 'system' theme
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
     const handleSystemChange = () => {
       const settings = settingsRef.current
@@ -62,7 +52,6 @@ export function useThemeSync(): void {
 
     return () => {
       cancelled = true
-      unlistenSettings.then(fn => fn())
       mediaQuery.removeEventListener('change', handleSystemChange)
     }
   }, [])

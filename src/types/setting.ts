@@ -21,9 +21,9 @@ export interface GeneralSettings {
   silent_start: boolean
   auto_check_update: boolean
   theme: Theme
-  theme_color?: string | null
-  language?: string | null
-  device_name?: string | null
+  theme_color: string | null
+  language: string | null
+  device_name: string | null
   update_channel?: UpdateChannel | null
 }
 
