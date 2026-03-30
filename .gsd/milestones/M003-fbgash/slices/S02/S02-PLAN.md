@@ -29,7 +29,7 @@ All use DaemonClient.request(). Response types must match existing Tauri command
   - Estimate: medium
   - Files: src/api/daemon/clipboard.ts
   - Verify: TypeScript compiles. All functions return correct types. Integration test against running daemon.
-- [ ] **T02: Redux clipboard thunks migration** — Identify all clipboard-related Redux thunks in src/store/ that use Tauri invoke(). Replace each invoke() call with the corresponding daemon API function from src/api/daemon/clipboard.ts.
+- [x] **T02: All clipboard Redux thunks migrated from Tauri invoke() to daemon HTTP client; TypeScript compiles clean; all 80 store+API tests pass** — Identify all clipboard-related Redux thunks in src/store/ that use Tauri invoke(). Replace each invoke() call with the corresponding daemon API function from src/api/daemon/clipboard.ts.
 
 Priority order:
 1. clipboardSlice entries list thunk

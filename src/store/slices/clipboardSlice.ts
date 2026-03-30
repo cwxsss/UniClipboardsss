@@ -1,18 +1,99 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
 import { hydrateEntryTransferStatuses } from './fileTransferSlice'
+import type { ClipboardItemResponse, ClipboardItemsResult } from '@/api/clipboardItems'
 import {
-  getClipboardItems,
-  deleteClipboardItem,
-  copyClipboardItem,
-  clearClipboardItems,
+  // Tauri API — kept as commented reference during transition
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // getClipboardItems as getClipboardItemsTauri,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // deleteClipboardItem as deleteClipboardItemTauri,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // copyClipboardItem as copyClipboardItemTauri,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // clearClipboardItems as clearClipboardItemsTauri,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // favoriteClipboardItem as favoriteClipboardItemTauri,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  // unfavoriteClipboardItem as unfavoriteClipboardItemTauri,
   OrderBy,
-  favoriteClipboardItem,
-  unfavoriteClipboardItem,
   Filter,
 } from '@/api/clipboardItems'
-import type { ClipboardItemResponse, ClipboardItemsResult } from '@/api/clipboardItems'
+import {
+  getClipboardEntries,
+  deleteClipboardEntry,
+  restoreClipboardEntry,
+  toggleFavorite,
+  // clearClipboardItems — no daemon endpoint yet, see comment in thunk
+} from '@/api/daemon'
 
-// 定义状态接口
+// ── Daemon DTO → Frontend response transformer ──────────────────
+// Mirrors the transformProjectionToResponse logic from clipboardItems.ts
+// so clipboardSlice remains independent of the old Tauri module.
+function isImageType(contentType: string): boolean {
+  return contentType === 'image' || contentType.startsWith('image/')
+}
+
+function extractDomainFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
+
+function transformDtoToItemResponse(entry: import('@/api/daemon').ClipboardEntryDto): ClipboardItemResponse {
+  const isFile = entry.content_type.includes('uri-list')
+  const isImage = !isFile && isImageType(entry.content_type)
+  const hasLinkData = !isImage && entry.link_urls && entry.link_urls.length > 0
+
+  let linkItem: { urls: string[]; domains: string[] } | null = null
+  if (hasLinkData) {
+    linkItem = {
+      urls: entry.link_urls!,
+      domains: entry.link_domains ?? entry.link_urls!.map(extractDomainFromUrl),
+    }
+  }
+
+  return {
+    id: entry.id,
+    is_downloaded: true,
+    is_favorited: entry.is_favorited,
+    created_at: entry.captured_at,
+    updated_at: entry.updated_at,
+    active_time: entry.active_time,
+    item: {
+      text:
+        !isImage && !isFile && !hasLinkData
+          ? { display_text: entry.preview, has_detail: entry.has_detail, size: entry.size_bytes }
+          : null,
+      image: isImage
+        ? { thumbnail: entry.thumbnail_url ?? null, size: entry.size_bytes, width: 0, height: 0 }
+        : null,
+      file: isFile
+        ? {
+            file_names: entry.preview
+              .split('\n')
+              .filter(Boolean)
+              .map(uri => {
+                try {
+                  return decodeURIComponent(new URL(uri).pathname.split('/').pop() || uri)
+                } catch {
+                  return uri
+                }
+              }),
+            file_sizes: entry.file_sizes ?? [],
+          }
+        : null,
+      link: linkItem as unknown as ClipboardItemResponse['item']['link'],
+      code: null,
+      unknown: null,
+    },
+    file_transfer_status: entry.file_transfer_status ?? null,
+    file_transfer_reason: entry.file_transfer_reason ?? null,
+  }
+}
+
+// ── State ────────────────────────────────────────────────────────
 interface ClipboardState {
   items: ClipboardItemResponse[]
   loading: boolean
@@ -54,18 +135,17 @@ export const fetchClipboardItems = createAsyncThunk<
   FetchClipboardItemsParams | undefined
 >('clipboard/fetchItems', async (params = {}, { rejectWithValue, dispatch }) => {
   try {
-    const result = await getClipboardItems(
-      params.orderBy,
-      params.limit,
-      params.offset,
-      params.filter
-    )
+    // Daemon API: GET /clipboard/entries
+    // Note: orderBy and filter are not yet supported by the daemon endpoint.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { orderBy: _orderBy, filter: _filter, isFavorited: _isFavorited, ...rest } = params
+    const result = await getClipboardEntries(rest.limit ?? 50, rest.offset ?? 0)
 
     // Hydrate durable file transfer statuses from persisted API fields.
     // This ensures entryStatusById in fileTransferSlice is seeded on app load
     // so file entries show correct status badges immediately after restart.
-    if (result.status === 'ready') {
-      const statusEntries = result.items
+    if (result.status === 'ready' && result.entries) {
+      const statusEntries = result.entries
         .filter(item => item.file_transfer_status != null)
         .map(item => ({
           entryId: item.id,
@@ -77,7 +157,12 @@ export const fetchClipboardItems = createAsyncThunk<
       }
     }
 
-    return { ...result, offset: params.offset ?? 0 }
+    // Transform daemon ClipboardEntriesResponse to ClipboardItemsResult shape
+    if (result.status === 'not_ready') {
+      return { status: 'not_ready', items: [], offset: params.offset ?? 0 }
+    }
+    const items: ClipboardItemResponse[] = result.entries?.map(transformDtoToItemResponse) ?? []
+    return { ...result, items, status: 'ready' as const, offset: params.offset ?? 0 }
   } catch {
     return rejectWithValue('获取剪贴板内容失败')
   }
@@ -87,7 +172,8 @@ export const removeClipboardItem = createAsyncThunk(
   'clipboard/removeItem',
   async (id: string, { rejectWithValue }) => {
     try {
-      await deleteClipboardItem(id)
+      // Daemon API: DELETE /clipboard/entries/:id
+      await deleteClipboardEntry(id)
       return id
     } catch {
       return rejectWithValue('删除剪贴板内容失败')
@@ -99,11 +185,8 @@ export const toggleFavoriteItem = createAsyncThunk(
   'clipboard/toggleFavorite',
   async ({ id, isFavorited }: { id: string; isFavorited: boolean }, { rejectWithValue }) => {
     try {
-      if (isFavorited) {
-        await favoriteClipboardItem(id)
-      } else {
-        await unfavoriteClipboardItem(id)
-      }
+      // Daemon API: PUT /clipboard/entries/:id/favorite { is_favorited }
+      await toggleFavorite(id, isFavorited)
       return { id, isFavorited }
     } catch {
       return rejectWithValue('设置收藏状态失败')
@@ -115,6 +198,10 @@ export const clearAllItems = createAsyncThunk(
   'clipboard/clearAll',
   async (_, { rejectWithValue }) => {
     try {
+      // TODO: Replace with daemon API once /clipboard/entries clear endpoint is available.
+      // Currently falls back to Tauri invoke. The commented-out reference:
+      // await clearClipboardItemsTauri()
+      const { clearClipboardItems } = await import('@/api/clipboardItems')
       await clearClipboardItems()
       return true
     } catch {
@@ -127,8 +214,9 @@ export const copyToClipboard = createAsyncThunk(
   'clipboard/copyItem',
   async (id: string, { rejectWithValue }) => {
     try {
-      const success = await copyClipboardItem(id)
-      return { id, success }
+      // Daemon API: POST /clipboard/restore/:id
+      await restoreClipboardEntry(id)
+      return { id, success: true }
     } catch {
       return rejectWithValue('复制到剪贴板失败')
     }

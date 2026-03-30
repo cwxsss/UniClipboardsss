@@ -1,5 +1,11 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
-import { getClipboardStats, ClipboardStats } from '@/api/clipboardItems'
+// Tauri API — kept as commented reference during transition
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// import { getClipboardStats as getClipboardStatsTauri } from '@/api/clipboardItems'
+import { getClipboardStats, type ClipboardStats as DaemonClipboardStats } from '@/api/daemon'
+
+// Alias to the ClipboardStats name used throughout the slice
+type ClipboardStats = DaemonClipboardStats
 
 interface StatsState {
   stats: ClipboardStats
