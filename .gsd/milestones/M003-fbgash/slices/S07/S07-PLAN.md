@@ -87,7 +87,7 @@ The frontend has one authenticated bootstrap flow, realtime consumers receive co
   - Estimate: 90m
   - Files: src/main.tsx, src/lib/daemon-auth.ts, src/lib/daemon-ws.ts, src/lib/daemon-ws-bootstrap.ts, src/api/realtime.ts, src/store/setupRealtimeStore.ts, src/__tests__/lib/daemon-auth.test.ts, src/__tests__/lib/daemon-ws.test.ts, src/api/__tests__/p2p-realtime-contract.test.ts, src/store/__tests__/setupRealtimeStore.test.ts
   - Verify: npx vitest run src/__tests__/lib/daemon-auth.test.ts src/__tests__/lib/daemon-ws.test.ts src/api/__tests__/p2p-realtime-contract.test.ts src/store/__tests__/setupRealtimeStore.test.ts
-- [ ] **T03: Add a live daemon WS proof harness and UAT evidence** — ## Why
+- [x] **T03: Added runtime proof harness, fixed consumer tests, created UAT runbook for direct daemon WS verification** — ## Why
 
 S07 is the milestone’s final transport proof slice, so it needs something stronger than unit tests: a repeatable runtime probe and UAT notes that a future agent can run against a live daemon/browser session to confirm websocket auth, snapshot delivery, reconnect recovery, and security diagnostics.
 

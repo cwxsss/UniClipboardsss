@@ -15,18 +15,11 @@ vi.mock('@/lib/daemon-ws', () => ({
   },
 }))
 
-// Mock daemon clipboard API for getClipboardEntries
-vi.mock('@/api/daemon/clipboard', () => ({
+// Mock clipboardItems (getClipboardEntries, isImageType) — the hook imports from here
+vi.mock('@/api/clipboardItems', () => ({
   getClipboardEntries: vi.fn(),
+  isImageType: vi.fn(() => false),
 }))
-
-// Mock clipboardItems utility (isImageType)
-vi.mock('@/api/clipboardItems', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/api/clipboardItems')>()
-  return {
-    ...actual,
-  }
-})
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let capturedHandler: ((event: any) => void) | null = null
@@ -42,7 +35,7 @@ describe('useClipboardEventStream', () => {
   })
 
   it('loads single local item and emits onLocalItem', async () => {
-    const { getClipboardEntries } = await import('@/api/daemon/clipboard')
+    const { getClipboardEntries } = await import('@/api/clipboardItems')
     const mockGetClipboardEntries = vi.mocked(getClipboardEntries)
     const onLocalItem = vi.fn()
     

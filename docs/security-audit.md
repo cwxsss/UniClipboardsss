@@ -226,6 +226,108 @@ fn claims_expired_token_rejected() {
 
 ---
 
+## 9. Browser-Compatible WebSocket Auth (M003 S07)
+
+### Check: `?auth=Session%20TOKEN` query parameter
+
+The browser WebSocket API (`new WebSocket(url)`) does not support custom headers on the upgrade request. The session token is therefore passed as a URL query parameter.
+
+**Implementation** (`src/lib/daemon-ws.ts:197-204`):
+```typescript
+private _openSocket(): void {
+  const token = daemonClient.currentSession?.token
+  const url = this._wsUrl!
+  // Browser-compatible: no custom headers on WS upgrade
+  const authUrl = token ? `${url}?auth=${encodeURIComponent(`Session ${token}`)}` : url
+  const ws = this._wsFactory(authUrl)
+  // ...
+}
+```
+
+**Daemon extraction** (`src-tauri/crates/uc-daemon/src/api/ws.rs`):
+- Tries `Authorization: Session <token>` header first (non-browser clients)
+- Falls back to `?auth=Session%20<token>` query parameter (browser clients)
+
+**Security considerations**:
+- Loopback-only: daemon only binds to `127.0.0.1` — traffic never leaves the machine
+- JWT signature verified server-side regardless of how token was passed
+- PID whitelist enforced after auth
+- Rate limiting enforced per-client
+
+### Proof Harness
+
+The `scripts/verify-direct-daemon-ws.mjs` script provides automated verification:
+
+```bash
+# Self-test (no daemon required)
+node scripts/verify-direct-daemon-ws.mjs --self-test
+
+# Live mode (requires running daemon)
+DAEMON_BASE_URL=http://127.0.0.1:<port> \
+DAEMON_TOKEN=$(cat ~/Library/Application\ Support/uniclipboard/daemon.token) \
+node scripts/verify-direct-daemon-ws.mjs --live
+```
+
+**Coverage**:
+- Bearer→session exchange (HTTP POST /auth/connect)
+- WebSocket open with `?auth=Session%20TOKEN`
+- Topic subscribe and snapshot event receipt
+- Reconnect after disconnect
+- Token redaction in diagnostics
+
+See `docs/uat/direct-daemon-ws.md` for full UAT runbook.
+
+---
+
+## 10. Consumer-Level WebSocket Coverage
+
+### Check: Frontend consumer receives corrected WebSocket envelopes
+
+The `useClipboardEventStream` hook (`src/hooks/__tests__/useClipboardEventStream.test.tsx`) verifies that:
+1. Corrected daemon event envelopes (snake_case from Rust → camelCase normalized) reach the frontend consumer
+2. The hook handles `clipboard.new-content`, `clipboard.deleted`, and remote invalidation events
+3. Throttling logic correctly deduplicates rapid remote events
+
+**Test coverage**:
+| Test | What It Verifies |
+|------|-----------------|
+| `loads single local item and emits onLocalItem` | Envelope with `origin=local` triggers callback |
+| `throttles remote invalidation` | Duplicate remote events within 300ms are deduped |
+| `forwards delete events` | `clipboard.deleted` envelope triggers `onDeleted` callback |
+
+**Run consumer tests**:
+```bash
+npx vitest run src/hooks/__tests__/useClipboardEventStream.test.tsx
+```
+
+---
+
+## Summary
+
+| Check | Result | Notes |
+|-------|--------|-------|
+| Token leakage (localStorage/sessionStorage/cookies) | ✅ PASS | In-memory only |
+| Bearer token placement (HTTP header) | ✅ PASS | Authorization header used |
+| WebSocket auth (URL query param) | ⚠️ ACCEPTABLE | Browser API limitation; loopback-only |
+| Rate limiting (100 req/min) | ✅ PASS | Sliding window, per-client |
+| L2 permission enforcement | ✅ PASS | JWT + PID whitelist |
+| L3 permission enforcement | ❌ NOT IMPLEMENTED | Phase 76 scope |
+| L4 confirmation (clear-cache) | ✅ PASS | `confirmed: true` required |
+| PID verification | ✅ PASS | Whitelist enforced |
+| CORS wildcard | ✅ PASS | No CORS; loopback-only |
+| Cryptographic security | ✅ PASS | Secure RNG, short TTLs |
+| Browser WS auth (M003 S07) | ✅ PASS | ?auth= query param; loopback-only |
+| Consumer WS coverage (M003 S07) | ✅ PASS | useClipboardEventStream tests pass |
+
+**Overall Assessment**: ✅ PASS with documented limitations
+
+**Critical Issues**: 0
+**High Issues**: 0
+**Medium Issues**: 1 (L3 not enforced — documented as Phase 76 scope)
+**Low Issues**: 3 (WebSocket URL auth, PID trust model, pre-auth rate limiting — all documented and accepted)
+
+---
+
 ## Verification Commands
 
 ```bash
@@ -246,4 +348,13 @@ grep -rn "cors\|tower-http" src-tauri/crates/uc-daemon/
 
 # Confirmation check
 grep -rn "confirmed" src-tauri/crates/uc-daemon/src/api/storage.rs
+
+# Browser WS auth check
+grep -n "auth.*encodeURIComponent\|encodeURIComponent.*auth" src/lib/daemon-ws.ts
+
+# Consumer-level WS test
+npx vitest run src/hooks/__tests__/useClipboardEventStream.test.tsx
+
+# Live daemon WS proof harness
+node scripts/verify-direct-daemon-ws.mjs --self-test
 ```
