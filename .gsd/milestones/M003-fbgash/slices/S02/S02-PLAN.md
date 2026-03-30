@@ -4,7 +4,7 @@
 **Demo:** After this: Clipboard list page loads entries via GET /clipboard/entries; restore sends POST; entries update in real-time via WS events
 
 ## Tasks
-- [ ] **T01: Daemon clipboard API module** — Create `src/api/daemon/clipboard.ts` with all clipboard API functions:
+- [x] **T01: Created daemon clipboard API module with typed HTTP client functions for entries, stats, restore, delete, favorite toggle, and resource metadata** — Create `src/api/daemon/clipboard.ts` with all clipboard API functions:
 
 ```typescript
 export async function getClipboardEntries(

@@ -22,3 +22,19 @@ export type {
 } from './settings'
 export { getEncryptionState, unlockEncryption, lockEncryption } from './encryption'
 export type { EncryptionStateResponse } from './encryption'
+export {
+  getClipboardEntries,
+  getClipboardEntry,
+  deleteClipboardEntry,
+  restoreClipboardEntry,
+  toggleFavorite,
+  getClipboardStats,
+  getClipboardEntryResource,
+} from './clipboard'
+export type {
+  ClipboardEntryDto,
+  ClipboardEntriesResponse,
+  ClipboardStats,
+  ClipboardEntryResource,
+  RestoreResult,
+} from './clipboard'

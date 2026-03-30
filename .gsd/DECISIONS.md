@@ -25,3 +25,11 @@
 **Revisable:** Yes — could be replaced with a two-phase confirm endpoint if UX requires a separate confirmation step.  
 **When:** M002-zldd9y / S03 (2026-03-30)  
 **Made by:** agent
+
+---
+
+## Decisions Table
+
+| # | When | Scope | Decision | Choice | Rationale | Revisable? | Made By |
+|---|------|-------|----------|--------|-----------|------------|---------|
+| D001 | M003-fbgash / S01 / T01 (2026-03-30) | architecture | DaemonClient bootstrapped via Tauri event daemon://connection-info, not Tauri invoke command | Tauri one-shot event daemon://connection-info carries { baseUrl, wsUrl, token, pid } | The Tauri command `daemon_connect_info` does not exist in the Rust backend. The correct bootstrap path is the `daemon://connection-info` Tauri event emitted once by the Rust side when the daemon is ready. Frontend listens for this one-shot event, extracts config, and calls DaemonClient.initialize(config). The invoke approach in the original plan cannot work without a Rust-side addition. | Yes — if daemon_connect_info Tauri command is added in future, daemon-auth.ts can be updated to use invoke as primary with event as fallback. | agent |

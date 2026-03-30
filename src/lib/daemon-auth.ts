@@ -12,7 +12,7 @@
 import { listen } from '@tauri-apps/api/event'
 
 import { daemonClient } from '@/api/daemon/client'
-import { DaemonApiError, DaemonErrorCode } from '@/api/daemon/errors'
+import { DaemonApiError } from '@/api/daemon/errors'
 import type { DaemonConfig, SessionToken } from '@/api/daemon/types'
 
 /** Tauri event name emitted by the Rust backend with daemon connection info. */
@@ -88,7 +88,7 @@ export async function loadDaemonAuth(): Promise<DaemonAuthResult> {
     // The webview cannot access the OS process ID directly.
     // The daemon registers whatever PID is sent via /auth/connect,
     // so 0 works as a sentinel for the GUI client.
-    pid: globalThis.process?.pid ?? 0,
+    pid: (globalThis as unknown as { process?: { pid?: number } }).process?.pid ?? 0,
   }
 
   daemonClient.initialize(config)
