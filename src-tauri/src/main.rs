@@ -604,12 +604,7 @@ fn run_app(ctx: GuiBootstrapContext) {
         .invoke_handler(tauri::generate_handler![
             // Encryption commands
             uc_tauri::commands::encryption::initialize_encryption,
-            uc_tauri::commands::encryption::get_encryption_session_status,
-            uc_tauri::commands::encryption::unlock_encryption_session,
             uc_tauri::commands::encryption::verify_keychain_access,
-            // Settings commands
-            uc_tauri::commands::settings::get_settings,
-            uc_tauri::commands::settings::update_settings,
             // Setup commands
             uc_tauri::commands::setup::get_setup_state,
             uc_tauri::commands::setup::start_new_space,
@@ -648,8 +643,6 @@ fn run_app(ctx: GuiBootstrapContext) {
             uc_tauri::commands::updater::check_for_update,
             uc_tauri::commands::updater::install_update,
             // Storage commands
-            uc_tauri::commands::storage::get_storage_stats,
-            uc_tauri::commands::storage::clear_cache,
             uc_tauri::commands::storage::clear_all_clipboard_history,
             uc_tauri::commands::storage::open_data_directory,
             // macOS-specific commands (conditionally compiled)

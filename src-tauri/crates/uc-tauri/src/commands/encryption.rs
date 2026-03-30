@@ -19,15 +19,7 @@ struct OnboardingPasswordSetEvent {
     timestamp: u64,
 }
 
-/// Encryption session status payload
-/// 加密会话状态载荷
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct EncryptionSessionStatus {
-    initialized: bool,
-    session_ready: bool,
-}
 
-/// Initialize encryption with passphrase
 /// 使用密码短语初始化加密
 ///
 /// This command uses the InitializeEncryption use case through the UseCases accessor.
@@ -185,22 +177,6 @@ pub async fn unlock_encryption_session_with_runtime<R: Runtime>(
         }
     }
     .instrument(span)
-    .await
-}
-
-#[tauri::command]
-pub async fn unlock_encryption_session(
-    runtime: State<'_, Arc<AppRuntime>>,
-    daemon_conn: State<'_, uc_daemon_client::DaemonConnectionState>,
-    app_handle: AppHandle,
-    _trace: Option<TraceMetadata>,
-) -> Result<bool, String> {
-    unlock_encryption_session_with_runtime(
-        runtime.inner(),
-        &app_handle,
-        _trace,
-        Some(daemon_conn.inner()),
-    )
     .await
 }
 
@@ -1045,43 +1021,4 @@ pub async fn is_encryption_initialized(
     .await
 }
 
-/// Get encryption session readiness
-/// 获取加密会话就绪状态
-///
-/// This command reports whether encryption is initialized and whether the session is ready.
-/// 此命令返回加密是否已初始化以及会话是否就绪。
-#[tauri::command]
-pub async fn get_encryption_session_status(
-    runtime: State<'_, Arc<AppRuntime>>,
-    _trace: Option<TraceMetadata>,
-) -> Result<EncryptionSessionStatus, String> {
-    let span = info_span!(
-        "command.encryption.session_status",
-        trace_id = tracing::field::Empty,
-        trace_ts = tracing::field::Empty,
-    );
-    record_trace_fields(&span, &_trace);
 
-    async {
-        let state = runtime.encryption_state().await.map_err(|e| {
-            tracing::error!(error = %e, "Failed to load encryption state");
-            e
-        })?;
-
-        let session_ready = runtime.is_encryption_ready().await;
-        let initialized = state == uc_core::security::state::EncryptionState::Initialized;
-
-        tracing::info!(
-            initialized,
-            session_ready,
-            "Encryption session status checked"
-        );
-
-        Ok(EncryptionSessionStatus {
-            initialized,
-            session_ready,
-        })
-    }
-    .instrument(span)
-    .await
-}

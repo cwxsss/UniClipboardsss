@@ -21,7 +21,7 @@ Remove use statements and imports that become unused.
   - Estimate: medium
   - Files: src-tauri/crates/uc-tauri/src/commands/clipboard.rs, src-tauri/src/main.rs
   - Verify: cargo build in src-tauri/ succeeds. Frontend builds and clipboard operations work via daemon HTTP.
-- [ ] **T02: Remove encryption/settings/storage Tauri commands** — In `src-tauri/crates/uc-tauri/src/commands/encryption.rs`:
+- [x] **T02: Removed six migrated Tauri commands (get_encryption_session_status, unlock_encryption_session, get_settings, update_settings, get_storage_stats, clear_cache); deleted settings.rs** — In `src-tauri/crates/uc-tauri/src/commands/encryption.rs`:
 
 Remove: get_encryption_state, unlock_encryption_session, lock_encryption_session.
 
