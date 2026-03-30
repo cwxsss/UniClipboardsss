@@ -37,6 +37,7 @@ fn clamp_limit(limit: usize) -> usize {
 pub fn router() -> Router<DaemonApiState> {
     Router::new()
         .route("/clipboard/entries", get(list_entries))
+        .route("/clipboard/entries/clear", post(clear_history))
         .route("/clipboard/entries/:id", get(get_entry))
         .route("/clipboard/entries/:id", delete(delete_entry))
         .route("/clipboard/entries/:id/favorite", post(toggle_favorite))
@@ -217,8 +218,9 @@ async fn get_stats(
     };
 
     let usecases = CoreUseCases::new(runtime.as_ref());
-    // Use a large limit to get all entries for stats computation (matching Tauri command pattern)
-    match usecases.list_entry_projections().execute(10_000, 0).await {
+    // Use clamp_limit to cap at 1000 (matches route-level guard)
+    let limit = clamp_limit(10_000);
+    match usecases.list_entry_projections().execute(limit, 0).await {
         Ok(entries) => {
             let stats = compute_clipboard_stats(&entries);
             let ts = chrono::Utc::now().timestamp_millis();
@@ -261,5 +263,23 @@ async fn get_entry_resource(
             }
             internal_error(e).into_response()
         }
+    }
+}
+
+/// POST /clipboard/entries/clear
+/// Clears all clipboard history via bulk deletion.
+/// Returns the number of entries deleted and any failures.
+async fn clear_history(State(state): State<DaemonApiState>) -> impl IntoResponse {
+    let Some(runtime) = state.runtime.clone() else {
+        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
+    };
+
+    let usecases = CoreUseCases::new(runtime.as_ref());
+    match usecases.clear_clipboard_history().execute().await {
+        Ok(result) => {
+            let ts = chrono::Utc::now().timestamp_millis();
+            Json(json!({ "data": result, "ts": ts })).into_response()
+        }
+        Err(e) => internal_error(anyhow::anyhow!("{}", e)).into_response(),
     }
 }

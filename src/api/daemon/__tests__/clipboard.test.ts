@@ -1,7 +1,7 @@
 /**
  * Unit tests for the daemon clipboard API module.
  *
- * These tests verify type correctness and basic API function signatures.
+ * These tests verify type correctness, HTTP method contracts, and basic API function signatures.
  * Integration tests against a running daemon would require mocking the HTTP layer.
  */
 
@@ -15,6 +15,8 @@ vi.mock('../client', () => ({
     initialized: true,
   },
 }))
+
+// ── Type tests ───────────────────────────────────────────────────
 
 describe('ClipboardEntryDto type', () => {
   it('accepts a valid entry projection', () => {
@@ -150,5 +152,173 @@ describe('ClipboardStats type', () => {
 
     expect(stats.total_items).toBe(0)
     expect(stats.total_size).toBe(0)
+  })
+})
+
+// ── API function contract tests ──────────────────────────────────
+
+describe('toggleFavorite HTTP contract', () => {
+  it('uses POST method as defined by daemon route', async () => {
+    const { daemonClient } = await import('../client')
+    const { toggleFavorite } = await import('../clipboard')
+
+    // Mock successful response
+    vi.mocked(daemonClient.request).mockResolvedValue(undefined)
+
+    await toggleFavorite('entry-123', true)
+
+    expect(daemonClient.request).toHaveBeenCalledWith(
+      '/clipboard/entries/entry-123/favorite',
+      expect.objectContaining({ method: 'POST' })
+    )
+  })
+
+  it('sends is_favorited in request body', async () => {
+    const { daemonClient } = await import('../client')
+    const { toggleFavorite } = await import('../clipboard')
+
+    vi.mocked(daemonClient.request).mockResolvedValue(undefined)
+
+    await toggleFavorite('entry-123', true)
+
+    expect(daemonClient.request).toHaveBeenCalledWith(
+      '/clipboard/entries/entry-123/favorite',
+      expect.objectContaining({
+        body: { is_favorited: true },
+      })
+    )
+  })
+})
+
+describe('clearClipboardHistory HTTP contract', () => {
+  it('uses POST method to /clipboard/entries/clear', async () => {
+    const { daemonClient } = await import('../client')
+    const { clearClipboardHistory } = await import('../clipboard')
+
+    vi.mocked(daemonClient.request).mockResolvedValue({
+      deletedCount: 5,
+      failedEntries: [],
+    })
+
+    const result = await clearClipboardHistory()
+
+    expect(daemonClient.request).toHaveBeenCalledWith(
+      '/clipboard/entries/clear',
+      expect.objectContaining({ method: 'POST' })
+    )
+    expect(result.deletedCount).toBe(5)
+    expect(result.failedEntries).toEqual([])
+  })
+
+  it('returns result with failed entries when some deletions fail', async () => {
+    const { daemonClient } = await import('../client')
+    const { clearClipboardHistory } = await import('../clipboard')
+
+    vi.mocked(daemonClient.request).mockResolvedValue({
+      deletedCount: 3,
+      failedEntries: [['entry-4', 'database error'], ['entry-5', 'not found']],
+    })
+
+    const result = await clearClipboardHistory()
+
+    expect(result.deletedCount).toBe(3)
+    expect(result.failedEntries).toHaveLength(2)
+  })
+})
+
+describe('getEntryDetail HTTP contract', () => {
+  it('uses GET method to /clipboard/entries/:id', async () => {
+    const { daemonClient } = await import('../client')
+    const { getEntryDetail } = await import('../clipboard')
+
+    vi.mocked(daemonClient.request).mockResolvedValue({
+      id: 'entry-123',
+      content: 'Hello, World!',
+      sizeBytes: 13,
+      createdAtMs: 1710000000000,
+      activeTimeMs: 1710000000000,
+      mimeType: 'text/plain',
+    })
+
+    const result = await getEntryDetail('entry-123')
+
+    expect(daemonClient.request).toHaveBeenCalledWith(
+      '/clipboard/entries/entry-123'
+    )
+    expect(result?.content).toBe('Hello, World!')
+  })
+
+  it('returns null on not-found error', async () => {
+    const { daemonClient } = await import('../client')
+    const { getEntryDetail } = await import('../clipboard')
+
+    const notFoundError = new Error('not found')
+    ;(notFoundError as { code: string }).code = 'NOT_FOUND'
+    vi.mocked(daemonClient.request).mockRejectedValue(notFoundError)
+
+    const result = await getEntryDetail('nonexistent-id')
+
+    expect(result).toBeNull()
+  })
+
+  it('re-throws non-not-found errors', async () => {
+    const { daemonClient } = await import('../client')
+    const { getEntryDetail } = await import('../clipboard')
+
+    const serverError = new Error('server error')
+    vi.mocked(daemonClient.request).mockRejectedValue(serverError)
+
+    await expect(getEntryDetail('entry-123')).rejects.toThrow('server error')
+  })
+})
+
+describe('getClipboardEntryResource HTTP contract', () => {
+  it('uses GET to /clipboard/entries/:id/resource', async () => {
+    const { daemonClient } = await import('../client')
+    const { getClipboardEntryResource } = await import('../clipboard')
+
+    vi.mocked(daemonClient.request).mockResolvedValue({
+      blob_id: 'blob-abc',
+      mime_type: 'text/plain',
+      size_bytes: 1024,
+      url: null,
+      inline_data: 'Hello World',
+    })
+
+    const result = await getClipboardEntryResource('entry-123')
+
+    expect(daemonClient.request).toHaveBeenCalledWith(
+      '/clipboard/entries/entry-123/resource'
+    )
+    expect(result?.blob_id).toBe('blob-abc')
+  })
+
+  it('returns null on not-found', async () => {
+    const { daemonClient } = await import('../client')
+    const { getClipboardEntryResource } = await import('../clipboard')
+
+    const notFoundError = new Error('not found')
+    ;(notFoundError as { code: string }).code = 'NOT_FOUND'
+    vi.mocked(daemonClient.request).mockRejectedValue(notFoundError)
+
+    const result = await getClipboardEntryResource('nonexistent-id')
+
+    expect(result).toBeNull()
+  })
+})
+
+describe('deleteClipboardEntry HTTP contract', () => {
+  it('uses DELETE method', async () => {
+    const { daemonClient } = await import('../client')
+    const { deleteClipboardEntry } = await import('../clipboard')
+
+    vi.mocked(daemonClient.request).mockResolvedValue(undefined)
+
+    await deleteClipboardEntry('entry-123')
+
+    expect(daemonClient.request).toHaveBeenCalledWith(
+      '/clipboard/entries/entry-123',
+      expect.objectContaining({ method: 'DELETE' })
+    )
   })
 })

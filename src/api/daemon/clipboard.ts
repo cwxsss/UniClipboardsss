@@ -6,6 +6,11 @@
  * # Endpoints / 端点
  * - `GET /clipboard/entries` → paginated list of clipboard entry projections
  * - `GET /clipboard/stats` → aggregate clipboard statistics
+ * - `POST /clipboard/entries/clear` → clear all clipboard history
+ * - `GET /clipboard/entries/:id` → full entry detail (text content)
+ * - `GET /clipboard/entries/:id/resource` → resource metadata (blob/thumbnail)
+ * - `POST /clipboard/entries/:id/favorite` → toggle favorite state
+ * - `DELETE /clipboard/entries/:id` → delete a single entry
  * - `POST /clipboard/restore/:id` → restore entry to OS clipboard
  *
  * These replace the Tauri `invoke()` calls in `clipboardItems.ts`, enabling the
@@ -88,6 +93,32 @@ export interface RestoreResult {
   success: boolean
 }
 
+/**
+ * Result of clearing all clipboard history.
+ * Matches `ClearHistoryResult` on the Rust side.
+ *
+ * Rust 端的 `ClearHistoryResult` 对应。
+ */
+export interface ClearHistoryResult {
+  deletedCount: number
+  failedEntries: [string, string][]
+}
+
+/**
+ * Full entry detail (text content) from the daemon.
+ * Matches `EntryDetailResult` on the Rust side.
+ *
+ * Rust 端的 `EntryDetailResult` 对应。
+ */
+export interface EntryDetail {
+  id: string
+  content: string
+  sizeBytes: number
+  createdAtMs: number
+  activeTimeMs: number
+  mimeType: string | null
+}
+
 // ── API functions ───────────────────────────────────────────────
 
 /**
@@ -165,8 +196,10 @@ export async function restoreClipboardEntry(id: string): Promise<RestoreResult> 
 
 /**
  * Toggle favorite state for a clipboard entry.
+ * Uses POST as defined by the daemon route contract.
  *
  * 切换剪贴板条目的收藏状态。
+ * 使用 daemon 路由契约定义的 POST 方法。
  *
  * @param id Entry ID.
  * @param favorited New favorite state.
@@ -174,12 +207,51 @@ export async function restoreClipboardEntry(id: string): Promise<RestoreResult> 
  */
 export async function toggleFavorite(id: string, favorited: boolean): Promise<void> {
   const options: RequestOptions = {
-    method: 'PUT',
+    method: 'POST',
     body: { is_favorited: favorited },
   }
-  // Note: favorite toggle endpoint path should be confirmed with daemon API spec.
-  // Using a reasonable convention based on RESTful patterns.
   await daemonClient.request<void>(`${CLIPBOARD_ENTRIES}/${id}/favorite`, options)
+}
+
+/**
+ * Clear all clipboard history via the daemon bulk delete endpoint.
+ * Returns the number of entries deleted and any failures.
+ *
+ * 通过 daemon 批量删除端点清除所有剪贴板历史。
+ *
+ * @throws {DaemonApiError} On HTTP errors or session failures.
+ */
+export async function clearClipboardHistory(): Promise<ClearHistoryResult> {
+  const options: RequestOptions = {
+    method: 'POST',
+  }
+  return daemonClient.request<ClearHistoryResult>(`${CLIPBOARD_ENTRIES}/clear`, options)
+}
+
+/**
+ * Fetch full entry detail (text content) for a given entry ID.
+ * Returns 404 for non-text content or missing entries.
+ *
+ * 获取给定条目的完整文本内容详情。
+ * 非文本内容或缺失条目返回 404。
+ *
+ * @param id Entry ID.
+ * @returns Entry detail or null if not found.
+ * @throws {DaemonApiError} On HTTP errors or session failures (excluding not-found).
+ */
+export async function getEntryDetail(id: string): Promise<EntryDetail | null> {
+  try {
+    return await daemonClient.request<EntryDetail>(`${CLIPBOARD_ENTRIES}/${id}`)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      (error as { code: string }).code === 'NOT_FOUND'
+    ) {
+      return null
+    }
+    throw error
+  }
 }
 
 /**

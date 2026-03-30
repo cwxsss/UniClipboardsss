@@ -184,3 +184,134 @@ const client = new DaemonWsClient((url) => mockWs)
 **Lesson:** When adding clipboard endpoints to the daemon, `POST /clipboard/entries/clear` should be included. The fallback in clipboardSlice.ts is marked with a `// TODO: Replace with daemon API once /clipboard/entries clear endpoint is available` comment.
 
 **Seen in:** M003-fbgash / S02 / T02 — `src/store/slices/clipboardSlice.ts`, `clearAllItems` thunk.
+
+---
+
+## vi.spyOn cannot intercept ES module-level fetch captures — use vi.mock with module-level state
+
+**Pattern:** When testing code that imports a module-level singleton (e.g., `daemonClient` in `@/api/daemon/client`) which captures `fetch` at module scope, `vi.spyOn(globalThis, 'fetch')` will not work — it only intercepts calls made after the spy is installed.
+
+```typescript
+// ❌ vi.spyOn cannot intercept module-level fetch capture
+vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse);
+import { daemonClient } from '@/api/daemon/client'; // captures fetch HERE
+await daemonClient.request(); // uses captured fetch, NOT the spy
+
+// ✅ vi.mock replaces the module, bypassing the capture
+const sharedState = { capturedRequests: [] };
+vi.mock('@/api/daemon/client', () => ({
+  daemonClient: {
+    request: (opts) => { sharedState.capturedRequests.push(opts); return mockResponse; }
+  }
+}));
+import { daemonClient } from '@/api/daemon/client'; // gets mock
+await daemonClient.request();
+assert(sharedState.capturedRequests.length > 0);
+```
+
+**Lesson:** Module-level captures happen at import time, before test setup runs. `vi.mock` replaces the module at the source — it never had the original `fetch` captured. The `vi.mock` factory can share state with the test via closure (module-level `sharedState` object).
+
+**Seen in:** M003-fbgash / S05 / T03 — `daemon-client.test.ts` and `daemon-auth.test.ts`.
+
+---
+
+## Fake timers (vi.useFakeTimers) conflict with EventTarget — use per-test, not globally
+
+**Pattern:** `vi.useFakeTimers()` globally replaces `EventTarget`, which breaks any class that extends `EventTarget` (including `MockWebSocket`).
+
+```typescript
+// ❌ Global fake timers — breaks EventTarget subclasses
+beforeAll(() => vi.useFakeTimers()); // EventTarget is now broken
+afterAll(() => vi.useRealTimers());
+
+// ✅ Per-test fake timers — only affects the reconnect test
+test('reconnect uses exponential backoff', () => {
+  vi.useFakeTimers(); // scoped here
+  // ... test code
+  vi.useRealTimers(); // restore immediately
+});
+```
+
+**Lesson:** Use `vi.useFakeTimers()` per individual test that needs timer control, not in `beforeAll`. Always call `vi.useRealTimers()` in `afterEach` or at the end of the test to restore. The `MockWebSocket` class must extend `EventTarget` to fire real `message` and `open` events.
+
+**Seen in:** M003-fbgash / S05 / T02 — `daemon-ws.test.ts`.
+
+---
+
+## vi.mock for Tauri events must be in the test file itself (hoisting requirement)
+
+**Pattern:** When mocking Tauri events in Vitest, the `vi.mock('@tauri-apps/api/event', ...)` call must be in the test file itself — not in a helper module — because Vitest hoists `vi.mock` calls to the top of the file before any imports.
+
+```typescript
+// ❌ Mock in helper module — hoisting doesn't reach helper imports
+// helpers/tauri-mock.ts
+export const listeners = new Map();
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: (name, cb) => { listeners.set(name, cb); return Promise.resolve({}); }
+}));
+
+// ❌ Still broken — helper module already imported before vi.mock runs
+import { listeners } from './helpers/tauri-mock'; // loaded too early
+
+// ✅ Mock in test file — hoisting works correctly
+const listeners = new Map(); // shared closure
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: (name, cb) => { listeners.set(name, cb); return Promise.resolve({}); }
+}));
+// Now both the mock AND the shared `listeners` map are in the same hoisted scope
+```
+
+**Lesson:** Vitest hoisting applies only within a single test file. Imports from helper modules are resolved before hoisting happens. Both the mock and the shared state must be in the same test file (or both in the same hoisted block). Alternatively, the Tauri event module can be passed as a dependency to the code under test (like `DaemonWsClient._wsFactory`).
+
+**Seen in:** M003-fbgash / S05 / T03 — `daemon-auth.test.ts`.
+
+---
+
+## Math.random mocking for deterministic exponential backoff testing
+
+**Pattern:** Exponential backoff uses `Math.random()` to add jitter to delays. For deterministic test results, mock `Math.random` to a fixed value.
+
+```typescript
+test('exponential backoff delay is calculated correctly', () => {
+  vi.useFakeTimers();
+  // mock Math.random = 0.5 → baseDelay * (0.5 + 0.5) = baseDelay * 1.0
+  const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+
+  const ws = new DaemonWsClient(mockWsFactory);
+  ws.connect('ws://localhost');
+  mockWsFactory().close(); // trigger reconnect
+
+  // With Math.random = 0.5 and baseDelay = 1000: delay = 1000 * 2^attempt * (0.5 + 0.5) = 2000
+  vi.advanceTimersByTime(2000); // exactly enough to trigger reconnect
+
+  vi.useRealTimers();
+  randomSpy.mockRestore();
+});
+```
+
+**Lesson:** Without mocking `Math.random`, backoff delays are unpredictable. Mock to a fixed value to get deterministic delay calculations. Always `mockRestore()` after the test.
+
+**Seen in:** M003-fbgash / S05 / T02 — `daemon-ws.test.ts`.
+
+---
+
+## Storage API module did not exist in daemon client — created for test coverage
+
+**Pattern:** When the test plan references an API module that does not exist in the codebase, create the module following the established pattern rather than skipping the test.
+
+```typescript
+// src/api/daemon/storage.ts — created to satisfy test plan
+// Follows the same GET / POST pattern as clipboard.ts, settings.ts, encryption.ts
+export async function getStorageStats(): Promise<StorageStats> {
+  return daemonClient.request({ method: 'GET', path: '/storage/stats' });
+}
+
+export async function clearCache(confirmed: boolean): Promise<void> {
+  if (!confirmed) throw new Error('CONFIRMATION_REQUIRED');
+  await daemonClient.request({ method: 'POST', path: '/storage/clear-cache', body: { confirmed: true } });
+}
+```
+
+**Lesson:** Test coverage requirements drove the creation of a missing API module. The module should be created in the same PR as the tests. Add it to `src/api/daemon/index.ts` for clean exports.
+
+**Seen in:** M003-fbgash / S05 / T01 — `src/api/daemon/storage.ts` created.
