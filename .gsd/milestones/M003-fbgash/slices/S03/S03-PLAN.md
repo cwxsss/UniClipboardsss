@@ -37,7 +37,7 @@ Connection flow:
   - Estimate: medium
   - Files: src/lib/daemon-ws.ts
   - Verify: Unit tests: connect succeeds, subscribe returns unsubscribe fn, reconnect logic works. Browser test against running daemon WS.
-- [ ] **T02: React hooks for daemon WS events** — Create `src/hooks/useDaemonEvents.ts`:
+- [x] **T02: Created useClipboardNewContent, usePairingEvents, and useEncryptionState React hooks wrapping daemon WS subscribe; TypeScript clean; 20 vitest tests pass** — Create `src/hooks/useDaemonEvents.ts`:
 
 ```typescript
 // Subscribe to clipboard.new-content events
