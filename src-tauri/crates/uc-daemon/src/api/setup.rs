@@ -25,6 +25,7 @@ pub fn router() -> Router<DaemonApiState> {
         .route("/setup/confirm-peer", post(confirm_peer))
         .route("/setup/submit-passphrase", post(submit_passphrase))
         .route("/setup/cancel", post(cancel))
+        .route("/setup/complete-space-access", post(complete_space_access))
         .route("/setup/reset", post(reset))
 }
 
@@ -325,6 +326,53 @@ async fn submit_passphrase(
         tracing::error!(error = %e, "setup submit passphrase failed");
         ApiError::internal(format!("setup submit passphrase failed: {e}"))
     })?;
+
+    let inner = state
+        .query_service
+        .setup_state(orchestrator.as_ref(), state.pairing_host().as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "daemon setup API request failed");
+            ApiError::internal(e.to_string())
+        })?;
+
+    Ok(Json(SetupActionResponse {
+        data: SetupStateResponseDto::from(inner),
+        ts: chrono::Utc::now().timestamp_millis(),
+    }))
+}
+
+/// POST /setup/complete-space-access
+/// Called by the frontend when the daemon emits `setup.spaceAccessCompleted` via
+/// the WebSocket bridge. Transitions the setup orchestrator to `Completed`.
+///
+/// For the sponsor (already Completed), returns the current state without
+/// dispatching any transition.
+#[utoipa::path(
+    post,
+    path = "/setup/complete-space-access",
+    tag = "setup",
+    responses(
+        (status = 200, body = SetupActionResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse)
+    )
+)]
+async fn complete_space_access(
+    State(state): State<DaemonApiState>,
+) -> Result<Json<SetupActionResponse>, ApiError> {
+    let orchestrator = state
+        .setup_orchestrator()
+        .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
+
+    // If setup is already completed (sponsor role), return current state
+    // without dispatching any transition.
+    let current_state = orchestrator.get_state().await;
+    if !matches!(current_state, SetupState::Completed) {
+        orchestrator.complete_join_space().await.map_err(|e| {
+            tracing::warn!(error = %e, "complete_space_access: join space succeeded event not applicable in current state");
+            ApiError::internal(format!("complete space access failed: {e}"))
+        })?;
+    }
 
     let inner = state
         .query_service

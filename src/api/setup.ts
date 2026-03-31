@@ -2,8 +2,8 @@
  * Setup API — stable facade layer delegating to daemon HTTP endpoints.
  *
  * This module is the public API surface for setup functionality.
- * All forwarding calls go through daemon HTTP; only Tauri-specific
- * operations (handleSpaceAccessCompleted, event listeners) remain here.
+ * All calls go through daemon HTTP; event listeners use the daemon
+ * realtime WebSocket bridge.
  */
 
 import {
@@ -15,6 +15,7 @@ import {
   verifyPassphrase as daemonVerifyPassphrase,
   confirmPeerTrust as daemonConfirmPeerTrust,
   cancelSetup as daemonCancelSetup,
+  completeSpaceAccess as daemonCompleteSpaceAccess,
 } from '@/api/daemon/setup'
 import type {
   SetupState,
@@ -22,7 +23,6 @@ import type {
   SpaceAccessCompletedEvent,
 } from '@/api/daemon/setup'
 import { onDaemonRealtimeEvent } from '@/api/realtime'
-import { invokeWithTrace } from '@/lib/tauri-command'
 
 // Types are defined in the daemon module to avoid circular imports.
 // Re-export them so consumers can import from either location.
@@ -109,7 +109,7 @@ export async function cancelSetup(): Promise<SetupState> {
  * `Completed`.
  */
 export async function handleSpaceAccessCompleted(): Promise<SetupState> {
-  return (await invokeWithTrace('handle_space_access_completed')) as SetupState
+  return daemonCompleteSpaceAccess()
 }
 
 /**

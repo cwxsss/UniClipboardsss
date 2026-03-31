@@ -197,3 +197,19 @@ export async function cancelSetup(): Promise<SetupState> {
   })
   return response.data.state
 }
+
+/**
+ * Complete space access — transitions the setup orchestrator to Completed.
+ *
+ * 完成空间访问 — 将设置编排器转换到 Completed 状态。
+ *
+ * Called when the daemon emits `setup.spaceAccessCompleted` via the WebSocket
+ * bridge. For the sponsor (already Completed), the daemon returns the current
+ * state without dispatching any transition.
+ */
+export async function completeSpaceAccess(): Promise<SetupState> {
+  const response = await daemonClient.request<SetupApiResponse>('/setup/complete-space-access', {
+    method: 'POST',
+  })
+  return response.data.state
+}

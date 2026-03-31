@@ -609,8 +609,6 @@ fn run_app(ctx: GuiBootstrapContext) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Setup commands
-            uc_tauri::commands::setup::handle_space_access_completed,
             // Tray commands
             uc_tauri::commands::tray::set_tray_language,
             // Lifecycle commands
