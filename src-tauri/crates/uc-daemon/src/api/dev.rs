@@ -131,6 +131,10 @@ pub async fn dev_token_handler(
         "issuing dev session token"
     );
 
+    // Auto-register the dev token's PID in the whitelist so that the JWT
+    // middleware's PID check passes without requiring a separate /auth/connect call.
+    state.security.register_pid(query.pid).await;
+
     let claims = SessionTokenClaims::new(query.pid, query.client_type, LEVEL_L2, false);
 
     let token = match claims.sign(state.security.jwt_secret.as_ref()) {
