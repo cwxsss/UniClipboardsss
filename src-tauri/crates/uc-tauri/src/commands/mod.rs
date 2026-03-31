@@ -1,7 +1,6 @@
 pub mod autostart;
 pub mod encryption;
 pub mod error;
-pub mod lifecycle;
 pub mod pairing;
 pub mod preview_panel;
 pub mod quick_panel;
@@ -14,11 +13,18 @@ pub mod updater;
 use tracing::Span;
 use uc_platform::ports::observability::TraceMetadata;
 
+/// Get the OS process ID of the Tauri application.
+///
+/// 获取 Tauri 应用的操作系统进程 ID。
+#[tauri::command]
+pub fn get_tauri_pid() -> u32 {
+    std::process::id()
+}
+
 // Re-export commonly used types
 pub use autostart::*;
 
 pub use encryption::*;
-pub use lifecycle::*;
 pub use pairing::*;
 pub use setup::*;
 pub use startup::*;

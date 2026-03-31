@@ -607,36 +607,15 @@ fn run_app(ctx: GuiBootstrapContext) {
             uc_tauri::commands::encryption::verify_keychain_access,
             uc_tauri::commands::encryption::unlock_encryption_session,
             // Setup commands
-            uc_tauri::commands::setup::get_setup_state,
-            uc_tauri::commands::setup::start_new_space,
-            uc_tauri::commands::setup::start_join_space,
-            uc_tauri::commands::setup::select_device,
-            uc_tauri::commands::setup::submit_passphrase,
-            uc_tauri::commands::setup::verify_passphrase,
-            uc_tauri::commands::setup::confirm_peer_trust,
-            uc_tauri::commands::setup::cancel_setup,
             uc_tauri::commands::setup::handle_space_access_completed,
             // Pairing commands
-            uc_tauri::commands::pairing::get_local_peer_id,
-            uc_tauri::commands::pairing::get_p2p_peers,
             uc_tauri::commands::pairing::get_local_device_info,
-            uc_tauri::commands::pairing::get_paired_peers,
-            uc_tauri::commands::pairing::get_paired_peers_with_status,
-            uc_tauri::commands::pairing::initiate_p2p_pairing,
-            uc_tauri::commands::pairing::verify_p2p_pairing_pin,
-            uc_tauri::commands::pairing::reject_p2p_pairing,
-            uc_tauri::commands::pairing::accept_p2p_pairing,
-            uc_tauri::commands::pairing::unpair_p2p_device,
-            uc_tauri::commands::pairing::list_paired_devices,
-            uc_tauri::commands::pairing::set_pairing_state,
             uc_tauri::commands::pairing::get_device_sync_settings,
             uc_tauri::commands::pairing::update_device_sync_settings,
             // Tray commands
             uc_tauri::commands::tray::set_tray_language,
             // Lifecycle commands
-            uc_tauri::commands::lifecycle::retry_lifecycle,
-            uc_tauri::commands::lifecycle::get_lifecycle_status,
-            uc_tauri::commands::lifecycle::get_tauri_pid,
+            uc_tauri::commands::get_tauri_pid,
             // Autostart commands
             uc_tauri::commands::autostart::enable_autostart,
             uc_tauri::commands::autostart::disable_autostart,
@@ -645,10 +624,7 @@ fn run_app(ctx: GuiBootstrapContext) {
             uc_tauri::commands::updater::check_for_update,
             uc_tauri::commands::updater::install_update,
             // Storage commands
-            uc_tauri::commands::storage::clear_all_clipboard_history,
             uc_tauri::commands::storage::open_data_directory,
-            uc_tauri::commands::storage::get_storage_stats,
-            uc_tauri::commands::storage::clear_cache,
             // macOS-specific commands (conditionally compiled)
             #[cfg(target_os = "macos")]
             plugins::mac_rounded_corners::enable_rounded_corners,
