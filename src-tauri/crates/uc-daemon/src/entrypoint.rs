@@ -162,7 +162,24 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // Phase 67: Recover encryption session BEFORE building services.
     let encryption_unlocked = rt.block_on(async {
         use tracing::{info_span, Instrument};
-        crate::app::recover_encryption_session(&runtime)
+
+        // Determine whether auto-unlock should be attempted.
+        // - CLI mode (gui_managed=false): always attempt auto-unlock
+        // - GUI mode (gui_managed=true): respect the auto_unlock_enabled setting
+        let auto_unlock_enabled = if gui_managed {
+            let settings = runtime
+                .wiring_deps()
+                .settings
+                .load()
+                .await
+                .unwrap_or_default();
+            settings.security.auto_unlock_enabled
+        } else {
+            // CLI mode: always auto-unlock
+            true
+        };
+
+        crate::app::recover_encryption_session(&runtime, auto_unlock_enabled)
             .instrument(info_span!("daemon.startup.recover_encryption_session"))
             .await
     })?;

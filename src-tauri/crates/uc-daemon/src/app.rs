@@ -33,13 +33,46 @@ use crate::state::RuntimeState;
 
 /// Recover encryption session from disk/keyring if encryption has been initialized.
 ///
-/// Returns Ok(true) when encryption is Initialized and the session was successfully unlocked.
-/// Returns Ok(false) when encryption is Uninitialized (first run — no recovery needed).
-/// Returns Err if encryption is initialized but recovery fails (daemon must not start).
+/// # Parameters
+///
+/// - `runtime`: The core runtime
+/// - `auto_unlock_enabled`: Whether to attempt automatic unlock via keyring
+///
+/// # Returns
+///
+/// - `Ok(true)`: Session was successfully unlocked (encryption initialized + unlock succeeded)
+/// - `Ok(false)`: Session was NOT unlocked — either encryption is uninitialized, or
+///   `auto_unlock_enabled` is false while encryption is initialized (requires manual unlock)
+/// - `Err`: Unlock failed (daemon must not start in this case)
 ///
 /// This function is `pub` so `main.rs` can call it BEFORE constructing `DaemonApp`,
 /// using the result to decide whether to start `PeerDiscoveryWorker` immediately or defer.
-pub async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result<bool> {
+pub async fn recover_encryption_session(
+    runtime: &CoreRuntime,
+    auto_unlock_enabled: bool,
+) -> anyhow::Result<bool> {
+    // Check encryption state first — needed to determine behavior when auto_unlock is disabled.
+    let encryption_state = runtime
+        .wiring_deps()
+        .security
+        .encryption_state
+        .load_state()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to load encryption state: {}", e))?;
+
+    // When auto-unlock is disabled, skip the unlock attempt entirely.
+    // If encryption is already initialized, return false so the GUI can prompt for manual unlock.
+    // If encryption is uninitialized, return false (no unlock needed — setup flow handles it).
+    if !auto_unlock_enabled {
+        if encryption_state == uc_core::security::state::EncryptionState::Initialized {
+            info!("Auto-unlock disabled via settings — skipping encryption session recovery");
+        } else {
+            info!("Encryption not initialized, skipping session recovery");
+        }
+        return Ok(false);
+    }
+
+    // Auto-unlock enabled: attempt to recover the session from keyring.
     let usecases = CoreUseCases::new(runtime);
     let uc = usecases.auto_unlock_encryption_session();
     match uc.execute().await {
@@ -228,8 +261,12 @@ impl DaemonApp {
         security.register_pid(pid).await;
 
         // 3. Build API state using the shared event_tx (same channel used by all services)
-        let mut api_state =
-            DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()), security);
+        let mut api_state = DaemonApiState::new(
+            query_service,
+            auth_token,
+            Some(self.runtime.clone()),
+            security,
+        );
         // Replace the default-created channel with our shared one so all services
         // emit to the same broadcast channel that WebSocket subscribers receive from.
         api_state.event_tx = self.event_tx.clone();
