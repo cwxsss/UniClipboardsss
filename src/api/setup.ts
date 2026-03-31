@@ -30,6 +30,7 @@ export type {
   SetupError,
   SetupState,
   SetupStateChangedEvent,
+  SetupStateResponse,
   SpaceAccessCompletedEvent,
 } from '@/api/daemon/setup'
 

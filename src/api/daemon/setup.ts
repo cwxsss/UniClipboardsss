@@ -50,6 +50,19 @@ export interface SetupStateChangedEvent {
   ts: number
 }
 
+export interface SetupStateResponse {
+  state: SetupState
+  sessionId: string | null
+  nextStepHint: string | null
+  profile: string | null
+  clipboardMode: string | null
+  deviceName: string | null
+  peerId: string | null
+  selectedPeerId: string | null
+  selectedPeerName: string | null
+  hasCompleted: boolean
+}
+
 export interface SpaceAccessCompletedEvent {
   sessionId: string
   peerId: string
@@ -57,6 +70,9 @@ export interface SpaceAccessCompletedEvent {
   reason?: string | null
   ts: number
 }
+
+/** Response wrapper returned by all setup endpoints. */
+type SetupApiResponse = { data: SetupStateResponse; ts: number }
 
 /**
  * Submit passphrase result (mirrors Tauri command contract).
@@ -75,19 +91,24 @@ export async function submitPassphrase(
       },
     }
   }
-  return daemonClient.request<SetupState>('/setup/submit-passphrase', {
+  const response = await daemonClient.request<SetupApiResponse>('/setup/submit-passphrase', {
     method: 'POST',
     body: { passphrase: passphrase1 },
   })
+  return response.data.state
 }
 
 /**
  * Get current setup state.
  *
  * 获取当前设置流程状态。
+ *
+ * The daemon API returns a wrapped response: { data: SetupStateResponse, ts }.
+ * This function unwraps it and returns only the state field.
  */
 export async function getSetupState(): Promise<SetupState> {
-  return daemonClient.request<SetupState>('/setup/state')
+  const response = await daemonClient.request<SetupApiResponse>('/setup/state')
+  return response.data.state
 }
 
 /**
@@ -96,7 +117,10 @@ export async function getSetupState(): Promise<SetupState> {
  * 启动新空间流程。
  */
 export async function startNewSpace(): Promise<SetupState> {
-  return daemonClient.request<SetupState>('/setup/host', { method: 'POST' })
+  const response = await daemonClient.request<SetupApiResponse>('/setup/host', {
+    method: 'POST',
+  })
+  return response.data.state
 }
 
 /**
@@ -105,7 +129,10 @@ export async function startNewSpace(): Promise<SetupState> {
  * 启动加入空间流程。
  */
 export async function startJoinSpace(): Promise<SetupState> {
-  return daemonClient.request<SetupState>('/setup/join', { method: 'POST' })
+  const response = await daemonClient.request<SetupApiResponse>('/setup/join', {
+    method: 'POST',
+  })
+  return response.data.state
 }
 
 /**
@@ -114,10 +141,11 @@ export async function startJoinSpace(): Promise<SetupState> {
  * 选择加入空间的设备。
  */
 export async function selectJoinPeer(peerId: string): Promise<SetupState> {
-  return daemonClient.request<SetupState>('/setup/select-peer', {
+  const response = await daemonClient.request<SetupApiResponse>('/setup/select-peer', {
     method: 'POST',
     body: { peerId },
   })
+  return response.data.state
 }
 
 /**
@@ -126,10 +154,11 @@ export async function selectJoinPeer(peerId: string): Promise<SetupState> {
  * 提交新空间口令。
  */
 export async function submitNewSpacePassphrase(passphrase: string): Promise<SetupState> {
-  return daemonClient.request<SetupState>('/setup/submit-passphrase', {
+  const response = await daemonClient.request<SetupApiResponse>('/setup/submit-passphrase', {
     method: 'POST',
     body: { passphrase },
   })
+  return response.data.state
 }
 
 /**
@@ -138,10 +167,11 @@ export async function submitNewSpacePassphrase(passphrase: string): Promise<Setu
  * 校验加入空间口令。
  */
 export async function verifyPassphrase(passphrase: string): Promise<SetupState> {
-  return daemonClient.request<SetupState>('/setup/verify-passphrase', {
+  const response = await daemonClient.request<SetupApiResponse>('/setup/verify-passphrase', {
     method: 'POST',
     body: { passphrase },
   })
+  return response.data.state
 }
 
 /**
@@ -150,7 +180,10 @@ export async function verifyPassphrase(passphrase: string): Promise<SetupState> 
  * 确认选中设备的可信度。
  */
 export async function confirmPeerTrust(): Promise<SetupState> {
-  return daemonClient.request<SetupState>('/setup/confirm-peer', { method: 'POST' })
+  const response = await daemonClient.request<SetupApiResponse>('/setup/confirm-peer', {
+    method: 'POST',
+  })
+  return response.data.state
 }
 
 /**
@@ -159,5 +192,8 @@ export async function confirmPeerTrust(): Promise<SetupState> {
  * 取消设置流程。
  */
 export async function cancelSetup(): Promise<SetupState> {
-  return daemonClient.request<SetupState>('/setup/cancel', { method: 'POST' })
+  const response = await daemonClient.request<SetupApiResponse>('/setup/cancel', {
+    method: 'POST',
+  })
+  return response.data.state
 }
