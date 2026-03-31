@@ -36,6 +36,14 @@ pub async fn retry_lifecycle(
     .await
 }
 
+/// Get the OS process ID of the Tauri application.
+///
+/// 获取 Tauri 应用的操作系统进程 ID。
+#[tauri::command]
+pub fn get_tauri_pid() -> u32 {
+    std::process::id()
+}
+
 /// Get current lifecycle status as a typed DTO.
 ///
 /// 获取当前生命周期状态（类型化 DTO）。

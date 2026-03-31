@@ -9,8 +9,8 @@
  * - `waitForEncryptionReady(timeout)`: Poll encryption state until session_ready or timeout.
  */
 
+import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-
 import { daemonClient } from '@/api/daemon/client'
 import { DaemonApiError } from '@/api/daemon/errors'
 import type { DaemonConfig, SessionToken } from '@/api/daemon/types'
@@ -86,9 +86,8 @@ export async function loadDaemonAuth(): Promise<DaemonAuthResult> {
     wsUrl: payload.wsUrl,
     token: payload.token,
     // The webview cannot access the OS process ID directly.
-    // The daemon registers whatever PID is sent via /auth/connect,
-    // so 0 works as a sentinel for the GUI client.
-    pid: (globalThis as unknown as { process?: { pid?: number } }).process?.pid ?? 0,
+    // Use a Tauri command to get the real OS PID for /auth/connect.
+    pid: await invoke<number>('get_tauri_pid'),
   }
 
   daemonClient.initialize(config)
@@ -185,16 +184,16 @@ export async function waitForEncryptionReady(timeoutMs = 30_000): Promise<boolea
  * 等待一次性的 `daemon://connection-info` Tauri 事件。接收第一个事件后自动取消订阅。
  */
 function waitForConnectionEvent(): Promise<DaemonConnectionPayload> {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     let unlisten: (() => void) | null = null
     let resolved = false
 
-    listen<DaemonConnectionPayload>(DAEMON_CONNECTION_EVENT, (event) => {
+    listen<DaemonConnectionPayload>(DAEMON_CONNECTION_EVENT, event => {
       if (resolved) return
       resolved = true
       unlisten?.()
       resolve(event.payload)
-    }).then((fn) => {
+    }).then(fn => {
       unlisten = fn
       // If the event already fired before listen() resolved, clean up now.
       if (resolved) fn()
@@ -208,5 +207,5 @@ function waitForConnectionEvent(): Promise<DaemonConnectionPayload> {
  * 基于 Promise 的延迟工具。
  */
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  return new Promise(resolve => setTimeout(resolve, ms))
 }

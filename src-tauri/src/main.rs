@@ -636,6 +636,7 @@ fn run_app(ctx: GuiBootstrapContext) {
             // Lifecycle commands
             uc_tauri::commands::lifecycle::retry_lifecycle,
             uc_tauri::commands::lifecycle::get_lifecycle_status,
+            uc_tauri::commands::lifecycle::get_tauri_pid,
             // Autostart commands
             uc_tauri::commands::autostart::enable_autostart,
             uc_tauri::commands::autostart::disable_autostart,
