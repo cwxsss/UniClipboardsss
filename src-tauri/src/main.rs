@@ -605,7 +605,6 @@ fn run_app(ctx: GuiBootstrapContext) {
             // Encryption commands
             uc_tauri::commands::encryption::initialize_encryption,
             uc_tauri::commands::encryption::verify_keychain_access,
-            uc_tauri::commands::encryption::unlock_encryption_session,
             // Setup commands
             uc_tauri::commands::setup::handle_space_access_completed,
             // Pairing commands
