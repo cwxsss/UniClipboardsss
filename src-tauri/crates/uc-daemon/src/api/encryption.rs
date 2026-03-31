@@ -8,16 +8,12 @@ use axum::{Json, Router};
 use serde_json::json;
 use tokio::sync::broadcast::error::SendError;
 use tracing::{info, warn};
-use uc_app::usecases::unlock_encryption_with_passphrase::UnlockWithPassphraseError;
 use uc_app::usecases::CoreUseCases;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
-use uc_core::security::model::Passphrase;
 use uc_core::security::state::EncryptionState;
 use utoipa;
 
-use crate::api::dto::encryption::{
-    EncryptionSessionReadyPayload, EncryptionStateResponse, UnlockRequest,
-};
+use crate::api::dto::encryption::{EncryptionSessionReadyPayload, EncryptionStateResponse};
 use crate::api::dto::error::ApiErrorResponse;
 use crate::api::server::DaemonApiState;
 use crate::api::types::DaemonWsEvent;
@@ -89,24 +85,19 @@ async fn get_encryption_state_handler(State(state): State<DaemonApiState>) -> im
 }
 
 /// POST /encryption/unlock
-/// Attempts to unlock the encryption session using the provided passphrase.
+/// Attempts to auto-unlock the encryption session using keyring-stored KEK.
+/// No passphrase is required — credentials are retrieved from the OS keychain.
 /// On success, broadcasts the `encryption.session_ready` WebSocket event.
 #[utoipa::path(
     post,
     path = "/encryption/unlock",
     tag = "encryption",
-    request_body = UnlockRequest,
     responses(
-        (status = 200, description = "Encryption session unlocked"),
-        (status = 400, description = "Bad request", body = ApiErrorResponse),
-        (status = 401, description = "Wrong passphrase", body = ApiErrorResponse),
+        (status = 200, description = "Encryption session unlocked (or already ready)"),
         (status = 500, description = "Internal server error", body = ApiErrorResponse),
     )
 )]
-async fn unlock_handler(
-    State(state): State<DaemonApiState>,
-    payload: Result<Json<UnlockRequest>, axum::extract::rejection::JsonRejection>,
-) -> impl IntoResponse {
+async fn unlock_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
     let Some(runtime) = state.runtime.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -118,30 +109,11 @@ async fn unlock_handler(
             .into_response();
     };
 
-    let Json(payload) = match payload {
-        Ok(p) => p,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorResponse {
-                    code: "bad_request".to_string(),
-                    message: "malformed request body".to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
-
     let usecases = CoreUseCases::new(runtime.as_ref());
-    let passphrase = Passphrase(payload.passphrase.clone());
 
-    match usecases
-        .unlock_encryption_with_passphrase()
-        .execute(passphrase)
-        .await
-    {
-        Ok(()) => {
-            info!(?payload.passphrase, "encryption session unlocked via passphrase");
+    match usecases.auto_unlock_encryption_session().execute().await {
+        Ok(true) => {
+            info!("encryption session auto-unlocked via keyring");
 
             // Broadcast encryption.session_ready WS event
             let event_payload = EncryptionSessionReadyPayload {
@@ -165,33 +137,23 @@ async fn unlock_handler(
             )
                 .into_response()
         }
+        Ok(false) => {
+            // Encryption not initialized — not an error, just return success=false
+            info!("encryption not initialized, skipping auto-unlock");
+            let ts = chrono::Utc::now().timestamp_millis();
+            (
+                StatusCode::OK,
+                Json(json!({ "data": { "success": false }, "ts": ts })),
+            )
+                .into_response()
+        }
         Err(e) => {
             let msg = e.to_string();
-            tracing::warn!(error = %e, "encryption unlock failed");
-
-            // Map UnlockWithPassphraseError to HTTP status codes
-            let (status, code, error_msg) = match &e {
-                UnlockWithPassphraseError::NotInitialized => (
-                    StatusCode::BAD_REQUEST,
-                    "not_initialized",
-                    "encryption has not been initialized",
-                ),
-                UnlockWithPassphraseError::UnwrapFailed(_) => (
-                    StatusCode::UNAUTHORIZED,
-                    "wrong_passphrase",
-                    "wrong passphrase",
-                ),
-                // All other errors → 500
-                _ => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    msg.as_str(),
-                ),
-            };
+            tracing::warn!(error = %e, "keyring auto-unlock failed");
 
             (
-                status,
-                Json(json!({ "error": { "code": code, "message": error_msg } })),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": { "code": "auto_unlock_failed", "message": msg.as_str() } })),
             )
                 .into_response()
         }

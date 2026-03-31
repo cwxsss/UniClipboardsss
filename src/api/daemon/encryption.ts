@@ -55,17 +55,17 @@ export async function getEncryptionState(): Promise<EncryptionStateResponse> {
 }
 
 /**
- * Unlock the encryption session using the provided passphrase.
+ * Auto-unlock the encryption session via keyring.
  *
- * 使用提供的密码短语解锁加密会话。
+ * 通过 keyring 自动解锁加密会话（无需 passphrase）。
  *
- * @param passphrase The user's encryption passphrase.
- * @throws {DaemonApiError} On wrong passphrase (401), not initialized (400), or other errors.
+ * Uses daemon HTTP API: `POST /encryption/unlock`
+ *
+ * @throws {DaemonApiError} On unlock errors (500) or if encryption not initialized.
  */
-export async function unlockEncryption(passphrase: string): Promise<void> {
+export async function unlockEncryption(): Promise<void> {
   await daemonClient.request<EncryptionActionEnvelope>('/encryption/unlock', {
     method: 'POST',
-    body: { passphrase },
   })
 }
 

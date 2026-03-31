@@ -1,12 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use utoipa::ToSchema;
-
-/// Request payload for POST /encryption/unlock.
-#[derive(Clone, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct UnlockRequest {
-    pub passphrase: String,
-}
 
 /// Response payload for GET /encryption/state.
 #[derive(Debug, Clone, Serialize, ToSchema)]

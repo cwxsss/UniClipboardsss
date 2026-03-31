@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { daemonClient } from '@/api/daemon/client'
 import {
   getEncryptionSessionStatus,
   unlockEncryptionSession,
@@ -7,7 +8,6 @@ import {
   deleteEncryptionPassword,
 } from '@/api/security'
 import { invokeWithTrace } from '@/lib/tauri-command'
-import { daemonClient } from '@/api/daemon/client'
 
 // ── Mock dependencies ─────────────────────────────────────────
 
@@ -99,12 +99,17 @@ describe('security api', () => {
   })
 
   describe('unlockEncryptionSession', () => {
-    it('calls Tauri unlock_encryption_session command', async () => {
-      invokeMock.mockResolvedValueOnce(true)
+    it('calls daemon POST /encryption/unlock and returns true on success', async () => {
+      daemonClientRequestMock.mockResolvedValueOnce({
+        data: { success: true },
+        ts: Date.now(),
+      })
 
       const result = await unlockEncryptionSession()
 
-      expect(invokeMock).toHaveBeenCalledWith('unlock_encryption_session')
+      expect(daemonClientRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: '/encryption/unlock' })
+      )
       expect(result).toBe(true)
     })
   })

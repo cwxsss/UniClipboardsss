@@ -3,7 +3,7 @@
  *
  * Covers:
  * - GET /encryption/state — correct state shapes (initialized/sessionReady)
- * - POST /encryption/unlock — wrong passphrase (401), not initialized (400), success
+ * - POST /encryption/unlock — auto-unlock (keyring-based, no passphrase)
  * - POST /encryption/lock — success
  *
  * @vitest-environment jsdom
@@ -11,18 +11,14 @@
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import {
-  getEncryptionState,
-  unlockEncryption,
-  lockEncryption,
-} from '@/api/daemon/encryption'
-import { DaemonErrorCode } from '@/api/daemon/errors'
-import {
   setupFetchMock,
   teardownFetchMock,
   makeEncryptionStateDto,
   mockResponse,
   mockErrorResponse,
 } from './_test-helpers'
+import { getEncryptionState, unlockEncryption, lockEncryption } from '@/api/daemon/encryption'
+import { DaemonErrorCode } from '@/api/daemon/errors'
 
 describe('Encryption API', () => {
   let mockFetch: ReturnType<typeof vi.spyOn>
@@ -41,7 +37,7 @@ describe('Encryption API', () => {
   describe('getEncryptionState()', () => {
     it('returns initialized:true, sessionReady:false when passphrase set but locked', async () => {
       mockFetch.mockResolvedValueOnce(
-        mockResponse({ data: { initialized: true, sessionReady: false }, ts: Date.now() }),
+        mockResponse({ data: { initialized: true, sessionReady: false }, ts: Date.now() })
       )
 
       const state = await getEncryptionState()
@@ -54,7 +50,7 @@ describe('Encryption API', () => {
 
     it('returns initialized:false, sessionReady:false when passphrase not configured', async () => {
       mockFetch.mockResolvedValueOnce(
-        mockResponse({ data: { initialized: false, sessionReady: false }, ts: Date.now() }),
+        mockResponse({ data: { initialized: false, sessionReady: false }, ts: Date.now() })
       )
 
       const state = await getEncryptionState()
@@ -65,7 +61,7 @@ describe('Encryption API', () => {
 
     it('returns initialized:true, sessionReady:true when unlocked', async () => {
       mockFetch.mockResolvedValueOnce(
-        mockResponse({ data: { initialized: true, sessionReady: true }, ts: Date.now() }),
+        mockResponse({ data: { initialized: true, sessionReady: true }, ts: Date.now() })
       )
 
       const state = await getEncryptionState()
@@ -76,9 +72,7 @@ describe('Encryption API', () => {
 
     it('wraps response in data envelope with ts', async () => {
       const ts = 1710000000000
-      mockFetch.mockResolvedValueOnce(
-        mockResponse({ data: makeEncryptionStateDto(), ts }),
-      )
+      mockFetch.mockResolvedValueOnce(mockResponse({ data: makeEncryptionStateDto(), ts }))
 
       const state = await getEncryptionState()
 
@@ -97,59 +91,32 @@ describe('Encryption API', () => {
 
   // ── POST /encryption/unlock ─────────────────────────────────
 
-  describe('unlockEncryption(passphrase)', () => {
-    it('sends POST with passphrase in body and resolves on success', async () => {
+  describe('unlockEncryption()', () => {
+    it('sends POST to /encryption/unlock with no body and resolves on success', async () => {
       mockFetch.mockResolvedValueOnce(mockResponse({ data: { success: true }, ts: Date.now() }))
 
-      await expect(unlockEncryption('correct-passphrase')).resolves.toBeUndefined()
+      await expect(unlockEncryption()).resolves.toBeUndefined()
 
       const [url, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/encryption/unlock')
       expect((opts as { method: string }).method).toBe('POST')
-      expect(JSON.parse((opts as { body: string }).body)).toEqual({ passphrase: 'correct-passphrase' })
+      // No body sent for auto-unlock
+      expect((opts as { body?: string }).body).toBeUndefined()
     })
 
-    it('returns 401 with UNAUTHORIZED code on wrong passphrase', async () => {
-      // The DaemonClient auto-retries once on 401 by refreshing the session.
-      // Sequence: unlock(401) → refreshSession → unlock-retry(401) → rejected.
-      // mockImplementation gives us full control over successive calls.
-      mockFetch.mockImplementation(async (input) => {
-        const url = typeof input === 'string' ? input : (input as URL).toString()
-        if (url.includes('/encryption/unlock')) {
-          return mockErrorResponse(401, { error: 'Invalid passphrase' })
-        }
-        if (url.includes('/auth/connect')) {
-          // refreshSession success
-          return mockResponse({ sessionToken: 'fresh-token', expiresInSecs: 300, refreshAtSecs: 240 })
-        }
-        return mockErrorResponse(500, { error: 'unexpected call' })
-      })
+    it('resolves successfully when encryption not initialized (success: false in body)', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({ data: { success: false }, ts: Date.now() }))
 
-      await expect(unlockEncryption('wrong-passphrase')).rejects.toMatchObject({
-        code: DaemonErrorCode.UNAUTHORIZED,
-        message: 'Invalid passphrase',
-      })
+      // Even success=false still resolves (no passphrase needed, nothing to do)
+      await expect(unlockEncryption()).resolves.toBeUndefined()
     })
 
-    it('returns 400 / INTERNAL_ERROR when encryption not initialized', async () => {
-      mockFetch.mockResolvedValueOnce(
-        mockErrorResponse(400, { error: 'Encryption not initialized' }),
-      )
+    it('re-throws DaemonApiError on auto-unlock failure (500)', async () => {
+      mockFetch.mockResolvedValueOnce(mockErrorResponse(500, { error: 'keyring access denied' }))
 
-      await expect(unlockEncryption('any-passphrase')).rejects.toMatchObject({
+      await expect(unlockEncryption()).rejects.toMatchObject({
         code: DaemonErrorCode.INTERNAL_ERROR,
-        message: 'Encryption not initialized',
-      })
-    })
-
-    it('passes through passphrase with whitespace (trimming is caller responsibility)', async () => {
-      mockFetch.mockResolvedValueOnce(mockResponse({ data: { success: true }, ts: Date.now() }))
-
-      await unlockEncryption('  leading-trailing-spaces  ')
-
-      const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
-      expect(JSON.parse((opts as { body: string }).body)).toEqual({
-        passphrase: '  leading-trailing-spaces  ',
+        message: 'keyring access denied',
       })
     })
   })

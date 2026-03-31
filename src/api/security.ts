@@ -5,7 +5,7 @@
  *
  * # Daemon Endpoints / Daemon 端点
  * - `GET /encryption/state` → current encryption initialization & session state
- * - `POST /encryption/unlock` → unlock encryption session with passphrase
+ * - `POST /encryption/unlock` → auto-unlock encryption session (keyring-based, no passphrase)
  * - `POST /encryption/lock` → lock encryption session (clear master key)
  *
  * # Tauri Commands / Tauri 命令
@@ -13,12 +13,14 @@
  * - `get_encryption_password` → read from macOS Keychain
  * - `set_encryption_password` → write to macOS Keychain
  * - `delete_encryption_password` → delete from macOS Keychain
- * - `unlock_encryption_session` → passphrase unlock (legacy)
  * - `verify_keychain_access` → check Keychain "Always Allow" permission
  */
 
+import {
+  getEncryptionState as daemonGetEncryptionState,
+  unlockEncryption as daemonUnlockEncryption,
+} from './daemon/encryption'
 import { invokeWithTrace } from '@/lib/tauri-command'
-import { getEncryptionState as daemonGetEncryptionState } from './daemon/encryption'
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -105,16 +107,19 @@ export async function deleteEncryptionPassword(): Promise<boolean> {
 }
 
 /**
- * Unlock the encryption session (legacy Tauri command).
+ * Auto-unlock the encryption session via the daemon.
  *
- * 解锁加密会话（旧的 Tauri 命令）。
+ * 通过 daemon 自动解锁加密会话（从 keychain 获取 KEK，无需 passphrase）。
  *
- * @returns True on success.
+ * Uses daemon HTTP API: `POST /encryption/unlock`
+ *
+ * @returns True on success, false if encryption not initialized.
  * @throws On unlock errors.
  */
 export async function unlockEncryptionSession(): Promise<boolean> {
   try {
-    return await invokeWithTrace('unlock_encryption_session')
+    await daemonUnlockEncryption()
+    return true
   } catch (error) {
     console.error('Failed to unlock encryption session:', error)
     throw error
