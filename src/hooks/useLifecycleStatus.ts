@@ -8,17 +8,17 @@ export function useLifecycleStatus() {
   const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
-    // Check initial status
+    // Fetch initial status via daemon HTTP
     getLifecycleStatus()
       .then(setStatus)
       .catch(() => {
-        // If the command fails, leave status null (unknown)
+        // If the call fails, leave status null (unknown)
         setStatus(null)
       })
 
-    // Listen for lifecycle events
+    // Listen for lifecycle events from Tauri
     const unlistenPromise = listen<{ type: string }>('lifecycle://event', () => {
-      // Refresh status when lifecycle events occur
+      // Refresh status from daemon HTTP when lifecycle events occur
       getLifecycleStatus()
         .then(setStatus)
         .catch(() => {})

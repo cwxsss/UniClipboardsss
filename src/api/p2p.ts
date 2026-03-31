@@ -1,9 +1,24 @@
 /**
  * P2P device discovery and pairing API
  *
- * 提供 libp2p 设备发现、配对和剪贴板同步功能
+ * Provides libp2p device discovery, pairing, and clipboard sync functionality.
+ *
+ * Pairing functions are forwarded to daemon HTTP endpoints.
+ * Device info and sync settings remain as Tauri commands.
+ * Event listeners remain as WebSocket subscriptions.
  */
 
+import {
+  getP2PPeers as daemonGetP2PPeers,
+  getPairedPeers as daemonGetPairedPeers,
+  getPairedPeersWithStatus as daemonGetPairedPeersWithStatus,
+  initiateP2PPairing as daemonInitiateP2PPairing,
+  acceptP2PPairing as daemonAcceptP2PPairing,
+  rejectP2PPairing as daemonRejectP2PPairing,
+  verifyP2PPairingPin as daemonVerifyP2PPairingPin,
+  unpairP2PDevice as daemonUnpairP2PDevice,
+} from '@/api/daemon/pairing'
+import type { SpaceAccessCompletedEvent } from '@/api/daemon/setup'
 import { onDaemonRealtimeEvent } from '@/api/realtime'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
@@ -213,22 +228,6 @@ export interface P2PPeerDiscoveryChangedEvent {
 }
 
 /**
- * Space access completion event payload.
- */
-export interface SpaceAccessCompletedEvent {
-  /** Session ID for idempotency and dedupe */
-  sessionId: string
-  /** Peer ID */
-  peerId: string
-  /** Whether access succeeded */
-  success: boolean
-  /** Optional reason when failed */
-  reason?: string
-  /** Event timestamp */
-  ts: number
-}
-
-/**
  * Per-device sync settings content type toggles
  */
 export interface ContentTypes {
@@ -283,45 +282,17 @@ export async function updateDeviceSyncSettings(
 }
 
 /**
- * 获取本地 Peer ID
- */
-export async function getLocalPeerId(): Promise<string> {
-  try {
-    return await invokeWithTrace<string>('get_local_peer_id')
-  } catch (error) {
-    console.error('Failed to get local peer ID:', error)
-    throw error
-  }
-}
-
-/**
  * 获取发现的 P2P 设备列表
  */
 export async function getP2PPeers(): Promise<P2PPeerInfo[]> {
-  try {
-    return await invokeWithTrace<P2PPeerInfo[]>('get_p2p_peers')
-  } catch (error) {
-    console.error('Failed to get P2P peers:', error)
-    throw error
-  }
+  return daemonGetP2PPeers()
 }
 
 /**
  * 发起 P2P 配对请求
  */
 export async function initiateP2PPairing(request: P2PPairingRequest): Promise<P2PPairingResponse> {
-  try {
-    return await invokeWithTrace<P2PPairingResponse>('initiate_p2p_pairing', {
-      request,
-    })
-  } catch (error) {
-    console.error('Failed to initiate P2P pairing:', error)
-    return {
-      sessionId: '',
-      success: false,
-      error: stringifyPairingError(error),
-    }
-  }
+  return daemonInitiateP2PPairing(request)
 }
 
 /**
@@ -329,9 +300,7 @@ export async function initiateP2PPairing(request: P2PPairingRequest): Promise<P2
  */
 export async function verifyP2PPairingPin(request: P2PPinVerifyRequest): Promise<void> {
   try {
-    await invokeWithTrace('verify_p2p_pairing_pin', {
-      request,
-    })
+    await daemonVerifyP2PPairingPin(request.sessionId, request.pinMatches)
   } catch (error) {
     console.error('Failed to verify P2P pairing PIN:', error)
     throw new Error(stringifyPairingError(error))
@@ -343,10 +312,7 @@ export async function verifyP2PPairingPin(request: P2PPinVerifyRequest): Promise
  */
 export async function rejectP2PPairing(sessionId: string, peerId: string): Promise<void> {
   try {
-    await invokeWithTrace('reject_p2p_pairing', {
-      sessionId,
-      peerId,
-    })
+    await daemonRejectP2PPairing(sessionId, peerId)
   } catch (error) {
     console.error('Failed to reject P2P pairing:', error)
     throw new Error(stringifyPairingError(error))
@@ -358,9 +324,7 @@ export async function rejectP2PPairing(sessionId: string, peerId: string): Promi
  */
 export async function unpairP2PDevice(peerId: string): Promise<void> {
   try {
-    await invokeWithTrace('unpair_p2p_device', {
-      peerId,
-    })
+    await daemonUnpairP2PDevice(peerId)
   } catch (error) {
     console.error('Failed to unpair P2P device:', error)
     throw error
@@ -372,9 +336,7 @@ export async function unpairP2PDevice(peerId: string): Promise<void> {
  */
 export async function acceptP2PPairing(sessionId: string): Promise<void> {
   try {
-    await invokeWithTrace('accept_p2p_pairing', {
-      sessionId,
-    })
+    await daemonAcceptP2PPairing(sessionId)
   } catch (error) {
     console.error('Failed to accept P2P pairing:', error)
     throw new Error(stringifyPairingError(error))
@@ -579,22 +541,12 @@ export async function getLocalDeviceInfo(): Promise<LocalDeviceInfo> {
  * 获取已配对的设备列表
  */
 export async function getPairedPeers(): Promise<PairedPeer[]> {
-  try {
-    return await invokeWithTrace<PairedPeer[]>('get_paired_peers')
-  } catch (error) {
-    console.error('Failed to get paired peers:', error)
-    throw error
-  }
+  return daemonGetPairedPeers()
 }
 
 /**
  * 获取已配对的设备列表（带连接状态）
  */
 export async function getPairedPeersWithStatus(): Promise<PairedPeer[]> {
-  try {
-    return await invokeWithTrace<PairedPeer[]>('get_paired_peers_with_status')
-  } catch (error) {
-    console.error('Failed to get paired peers with status:', error)
-    throw error
-  }
+  return daemonGetPairedPeersWithStatus()
 }
