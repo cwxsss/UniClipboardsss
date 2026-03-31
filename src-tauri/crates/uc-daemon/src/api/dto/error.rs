@@ -12,6 +12,42 @@ pub struct ApiErrorResponse {
     pub message: String,
 }
 
+impl ApiErrorResponse {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            code: "internal_error".to_string(),
+            message: message.into(),
+        }
+    }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            code: "bad_request".to_string(),
+            message: message.into(),
+        }
+    }
+
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self {
+            code: "unauthorized".to_string(),
+            message: message.into(),
+        }
+    }
+}
+
+impl IntoResponse for ApiErrorResponse {
+    fn into_response(self) -> Response {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
+    }
+}
+
 #[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,

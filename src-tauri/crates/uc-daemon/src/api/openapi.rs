@@ -7,6 +7,7 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
+use crate::api::dto::encryption::{EncryptionStateResponse, UnlockRequest};
 use crate::api::dto::error::ApiErrorResponse;
 use crate::api::dto::settings::{
     ContentTypesDto, FileSyncSettingsDto, GeneralSettingsDto, GetSettingsResponse,
@@ -53,6 +54,9 @@ impl Modify for SecurityAddon {
     paths(
         crate::api::settings::get_settings_handler,
         crate::api::settings::update_settings_handler,
+        crate::api::encryption::get_encryption_state_handler,
+        crate::api::encryption::unlock_handler,
+        crate::api::encryption::lock_handler,
     ),
     components(
         schemas(
@@ -73,10 +77,13 @@ impl Modify for SecurityAddon {
             ShortcutKeyDto,
             ThemeDto,
             UpdateChannelDto,
+            EncryptionStateResponse,
+            UnlockRequest,
         )
     ),
     tags(
-        (name = "settings", description = "Settings management APIs")
+        (name = "settings", description = "Settings management APIs"),
+        (name = "encryption", description = "Encryption state and session management"),
     )
 )]
 pub struct ApiDoc;
