@@ -151,13 +151,13 @@ impl DaemonApiState {
 
     /// Extracts the runtime, or returns an ApiError if unavailable.
     ///
-    /// Usage: `let runtime = state.runtime_or_error()?;`
-    /// Only use in handlers that return `Result<T, ApiError>` (e.g. settings handlers).
-    /// For handlers returning `impl IntoResponse`, use the inline `if let Some(runtime) = state.runtime.clone() else { return ... }` pattern.
+    /// Usage: `let runtime = state.runtime_or_error()?;` (for `Result` handlers)
+    /// or `let runtime = state.runtime_or_error().map_err(ApiError::into_response)?;`
+    /// (for `impl IntoResponse` handlers).
     pub fn runtime_or_error(&self) -> Result<Arc<CoreRuntime>, ApiError> {
         self.runtime
             .clone()
-            .ok_or_else(|| ApiError::internal("daemon runtime unavailable"))
+            .ok_or_else(|| ApiError::service_unavailable("daemon runtime unavailable"))
     }
 }
 

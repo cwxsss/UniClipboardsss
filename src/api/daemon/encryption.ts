@@ -7,6 +7,7 @@
  * - `GET /encryption/state` → current encryption initialization & session state
  * - `POST /encryption/unlock` → unlock encryption session with passphrase
  * - `POST /encryption/lock` → lock encryption session (clear master key)
+ * - `GET /encryption/keychain-access` → verify Keychain "Always Allow" permission
  */
 
 import { daemonClient } from './client'
@@ -36,6 +37,12 @@ interface EncryptionStateEnvelope {
 /** Wrapper for POST /encryption/unlock and /encryption/lock JSON envelope. */
 interface EncryptionActionEnvelope {
   data: { success: boolean }
+  ts: number
+}
+
+/** Wrapper for GET /encryption/keychain-access JSON envelope. */
+interface KeychainAccessEnvelope {
+  data: { granted: boolean }
   ts: number
 }
 
@@ -80,4 +87,19 @@ export async function lockEncryption(): Promise<void> {
   await daemonClient.request<EncryptionActionEnvelope>('/encryption/lock', {
     method: 'POST',
   })
+}
+
+/**
+ * Verify macOS Keychain "Always Allow" permission for this app.
+ *
+ * 验证此应用的 macOS Keychain "始终允许" 权限。
+ *
+ * Uses daemon HTTP API: `GET /encryption/keychain-access`
+ *
+ * @returns True if permission is granted.
+ * @throws {DaemonApiError} On HTTP or permission check errors.
+ */
+export async function verifyKeychainAccess(): Promise<boolean> {
+  const res = await daemonClient.request<KeychainAccessEnvelope>('/encryption/keychain-access')
+  return res.data.granted
 }

@@ -604,7 +604,6 @@ fn run_app(ctx: GuiBootstrapContext) {
         .invoke_handler(tauri::generate_handler![
             // Encryption commands
             uc_tauri::commands::encryption::initialize_encryption,
-            uc_tauri::commands::encryption::verify_keychain_access,
             // Setup commands
             uc_tauri::commands::setup::handle_space_access_completed,
             // Pairing commands

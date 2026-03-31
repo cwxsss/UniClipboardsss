@@ -7,7 +7,7 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::api::dto::encryption::EncryptionStateResponse;
+use crate::api::dto::encryption::{EncryptionStateResponse, KeychainAccessResponse};
 use crate::api::dto::error::ApiErrorResponse;
 use crate::api::dto::settings::{
     ContentTypesDto, FileSyncSettingsDto, GeneralSettingsDto, GetSettingsResponse,
@@ -57,6 +57,7 @@ impl Modify for SecurityAddon {
         crate::api::encryption::get_encryption_state_handler,
         crate::api::encryption::unlock_handler,
         crate::api::encryption::lock_handler,
+        crate::api::encryption::verify_keychain_access_handler,
     ),
     components(
         schemas(
@@ -78,6 +79,7 @@ impl Modify for SecurityAddon {
             ThemeDto,
             UpdateChannelDto,
             EncryptionStateResponse,
+            KeychainAccessResponse,
         )
     ),
     tags(

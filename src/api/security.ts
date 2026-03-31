@@ -13,12 +13,12 @@
  * - `get_encryption_password` → read from macOS Keychain
  * - `set_encryption_password` → write to macOS Keychain
  * - `delete_encryption_password` → delete from macOS Keychain
- * - `verify_keychain_access` → check Keychain "Always Allow" permission
  */
 
 import {
   getEncryptionState as daemonGetEncryptionState,
   unlockEncryption as daemonUnlockEncryption,
+  verifyKeychainAccess as daemonVerifyKeychainAccess,
 } from './daemon/encryption'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
@@ -131,14 +131,11 @@ export async function unlockEncryptionSession(): Promise<boolean> {
  *
  * 验证此应用的 macOS Keychain "始终允许" 权限。
  *
+ * Uses daemon HTTP API: `GET /encryption/keychain-access`
+ *
  * @returns True if permission is granted.
- * @throws On permission check errors.
+ * @throws {DaemonApiError} On permission check errors.
  */
 export async function verifyKeychainAccess(): Promise<boolean> {
-  try {
-    return await invokeWithTrace('verify_keychain_access')
-  } catch (error) {
-    console.error('Keychain verification failed:', error)
-    throw error
-  }
+  return daemonVerifyKeychainAccess()
 }

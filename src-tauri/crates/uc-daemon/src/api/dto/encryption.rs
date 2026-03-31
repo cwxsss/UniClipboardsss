@@ -16,3 +16,11 @@ pub struct EncryptionStateResponse {
 pub struct EncryptionSessionReadyPayload {
     pub ts: i64,
 }
+
+/// Response payload for GET /encryption/keychain-access.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KeychainAccessResponse {
+    /// Whether Keychain access is granted (Always Allow permission).
+    pub granted: bool,
+}
