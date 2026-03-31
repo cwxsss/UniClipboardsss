@@ -18,7 +18,7 @@ use tracing::{error, info, warn};
 
 use uc_bootstrap::GuiBootstrapContext;
 use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
-use uc_daemon_client::{realtime::install_daemon_setup_pairing_facade, DaemonConnectionState};
+use uc_daemon_client::DaemonConnectionState;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
     start_background_tasks, supervise_daemon, AppRuntime,
@@ -291,9 +291,6 @@ fn run_app(ctx: GuiBootstrapContext) {
 
     let daemon_connection_state = DaemonConnectionState::default();
     let gui_owned_daemon_state = GuiOwnedDaemonState::default();
-    let mut setup_ports = setup_ports;
-    let setup_pairing_event_hub =
-        install_daemon_setup_pairing_facade(&mut setup_ports, daemon_connection_state.clone());
 
     let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
         std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::LoggingEventEmitter);
@@ -529,13 +526,10 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             app.manage(PendingUpdate(Mutex::new(None)));
 
-            // Start background spooler and blob worker tasks
+            // Start file cache cleanup task (runs once at startup)
             start_background_tasks(
-                background,
-                runtime.wiring_deps(),
-                runtime.event_emitter(),
-                daemon_connection_state.clone(),
-                setup_pairing_event_hub.clone(),
+                runtime.wiring_deps().settings.clone(),
+                background.file_cache_dir.clone(),
                 runtime.task_registry(),
             );
 

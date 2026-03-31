@@ -35,12 +35,11 @@
 
 use std::sync::Arc;
 use tauri::async_runtime;
-use tracing::info;
+use tracing::{info, warn};
 
 use uc_app::task_registry::TaskRegistry;
-use uc_app::AppDeps;
-use uc_core::ports::host_event_emitter::HostEventEmitterPort;
-use uc_daemon_client::realtime::start_realtime_runtime;
+use uc_app::usecases::file_sync::CleanupExpiredFilesUseCase;
+
 // Re-export assembly types from uc-bootstrap.
 pub use uc_bootstrap::assembly::{
     get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
@@ -51,71 +50,33 @@ pub use uc_bootstrap::assembly::{
 // Re-export BackgroundRuntimeDeps from uc-bootstrap (definition moved in Phase 40).
 pub use uc_bootstrap::BackgroundRuntimeDeps;
 
-/// Start background spooler and blob worker tasks.
-/// 启动后台假脱机写入和 blob 物化任务。
-///
-/// All long-lived tasks are spawned through the `TaskRegistry` for centralized
-/// lifecycle management and graceful shutdown via cooperative cancellation.
+/// Start the file cache cleanup task (runs once at startup, fire-and-forget).
 pub fn start_background_tasks(
-    background: BackgroundRuntimeDeps,
-    deps: &AppDeps,
-    event_emitter: Arc<dyn HostEventEmitterPort>,
-    daemon_connection_state: uc_daemon_client::DaemonConnectionState,
-    setup_pairing_event_hub: Arc<uc_app::realtime::SetupPairingEventHub>,
+    settings: Arc<dyn uc_core::ports::SettingsPort>,
+    file_cache_dir: std::path::PathBuf,
     task_registry: &Arc<TaskRegistry>,
 ) {
-    // Clones for GUI-only tasks
-    let deps_settings = deps.settings.clone();
-    let cleanup_file_cache_dir = background.file_cache_dir.clone();
-    let blob_ports = uc_bootstrap::BlobProcessingPorts::from_app_deps(deps);
-
-    // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
-    // We use a single orchestration spawn to set up all registry tasks, since
-    // registry.spawn() is async and start_background_tasks is sync.
     let registry = task_registry.clone();
     async_runtime::spawn(async move {
-        // --- Shared blob processing tasks (SpoolScanner + SpoolerTask + BackgroundBlobWorker + SpoolJanitor) ---
-        uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &registry).await;
-
-        // --- Unified realtime runtime (daemon WebSocket bridge + app consumers) ---
-        start_realtime_runtime(
-            daemon_connection_state,
-            event_emitter.clone(),
-            setup_pairing_event_hub,
-            &registry,
-        )
-        .await;
-        info!("Started unified daemon realtime runtime");
-
-        // --- File cache cleanup (runs once at startup, fire-and-forget) ---
-        {
-            use tracing::warn;
-            let cleanup_settings = deps_settings.clone();
-            let cleanup_cache_dir = cleanup_file_cache_dir.clone();
-            registry
-                .spawn("file_cache_cleanup", |_token| async move {
-                    let uc = uc_app::usecases::file_sync::CleanupExpiredFilesUseCase::new(
-                        cleanup_settings,
-                        cleanup_cache_dir,
-                    );
-                    match uc.execute().await {
-                        Ok(result) => {
-                            if result.files_removed > 0 {
-                                info!(
-                                    files_removed = result.files_removed,
-                                    bytes_reclaimed = result.bytes_reclaimed,
-                                    "Startup file cache cleanup completed"
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Startup file cache cleanup failed (non-fatal)");
+        registry
+            .spawn("file_cache_cleanup", |_token| async move {
+                let uc = CleanupExpiredFilesUseCase::new(settings, file_cache_dir.clone());
+                match uc.execute().await {
+                    Ok(result) => {
+                        if result.files_removed > 0 {
+                            info!(
+                                files_removed = result.files_removed,
+                                bytes_reclaimed = result.bytes_reclaimed,
+                                "Startup file cache cleanup completed"
+                            );
                         }
                     }
-                })
-                .await;
-        }
-
+                    Err(e) => {
+                        warn!(error = %e, "Startup file cache cleanup failed (non-fatal)");
+                    }
+                }
+            })
+            .await;
         info!("All background tasks registered with TaskRegistry");
     });
 }

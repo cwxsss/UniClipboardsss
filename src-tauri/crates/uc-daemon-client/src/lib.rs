@@ -6,7 +6,6 @@
 pub mod connection;
 pub mod daemon_lifecycle;
 pub mod http;
-pub mod realtime;
 pub mod ws_bridge;
 
 pub use connection::DaemonConnectionState;
@@ -17,5 +16,4 @@ pub use http::{
     DaemonClipboardClient, DaemonPairingClient, DaemonPairingRequestError, DaemonQueryClient,
     DaemonSetupClient,
 };
-pub use realtime::{install_daemon_setup_pairing_facade, start_realtime_runtime};
 pub use ws_bridge::{BridgeState, DaemonWsBridge, DaemonWsBridgeConfig, DaemonWsBridgeError};
