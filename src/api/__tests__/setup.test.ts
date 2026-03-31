@@ -1,4 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+/**
+ * Tests for the setup API facade.
+ * Verifies that functions delegate to daemon HTTP endpoints correctly,
+ * and that submitPassphrase performs local mismatch validation before calling the daemon.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { daemonClient } from '@/api/daemon/client'
 import {
   cancelSetup,
   confirmPeerTrust,
@@ -9,22 +16,21 @@ import {
   submitPassphrase,
   verifyPassphrase,
 } from '@/api/setup'
-import { invokeWithTrace } from '@/lib/tauri-command'
-
-vi.mock('@/lib/tauri-command', () => ({
-  invokeWithTrace: vi.fn(),
-}))
 
 describe('setup api', () => {
-  const invokeWithTraceMock = vi.mocked(invokeWithTrace)
+  let requestSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
-    invokeWithTraceMock.mockReset()
-    invokeWithTraceMock.mockResolvedValue('Welcome')
+    requestSpy = vi.spyOn(daemonClient, 'request')
+    requestSpy.mockResolvedValue(undefined)
   })
 
-  it('getSetupState returns the typed setup state from tauri', async () => {
-    invokeWithTraceMock.mockResolvedValue({
+  afterEach(() => {
+    requestSpy.mockRestore()
+  })
+
+  it('getSetupState returns the typed setup state from daemon', async () => {
+    requestSpy.mockResolvedValueOnce({
       CreateSpaceInputPassphrase: { error: null },
     })
 
@@ -33,33 +39,101 @@ describe('setup api', () => {
     })
   })
 
-  it.each([
-    ['getSetupState', () => getSetupState(), 'get_setup_state', undefined],
-    ['startNewSpace', () => startNewSpace(), 'start_new_space', undefined],
-    ['startJoinSpace', () => startJoinSpace(), 'start_join_space', undefined],
-    ['selectJoinPeer', () => selectJoinPeer('peer-1'), 'select_device', { peerId: 'peer-1' }],
-    [
-      'submitPassphrase',
-      () => submitPassphrase('a', 'b'),
-      'submit_passphrase',
-      { passphrase1: 'a', passphrase2: 'b' },
-    ],
-    [
-      'verifyPassphrase',
-      () => verifyPassphrase('secret-passphrase'),
-      'verify_passphrase',
-      { passphrase: 'secret-passphrase' },
-    ],
-    ['confirmPeerTrust', () => confirmPeerTrust(), 'confirm_peer_trust', undefined],
-    ['cancelSetup', () => cancelSetup(), 'cancel_setup', undefined],
-  ])('%s calls the expected tauri command', async (_name, call, command, payload) => {
-    await call()
+  it('startNewSpace calls POST /setup/host', async () => {
+    requestSpy.mockResolvedValueOnce({ CreateSpaceInputPassphrase: { error: null } })
+    await startNewSpace()
+    expect(requestSpy).toHaveBeenCalledTimes(1)
+    expect(requestSpy).toHaveBeenCalledWith('/setup/host', { method: 'POST' })
+  })
 
-    if (payload === undefined) {
-      expect(invokeWithTraceMock).toHaveBeenCalledWith(command)
-      return
+  it('startJoinSpace calls POST /setup/join', async () => {
+    requestSpy.mockResolvedValueOnce({ JoinSpaceSelectDevice: { error: null } })
+    await startJoinSpace()
+    expect(requestSpy).toHaveBeenCalledTimes(1)
+    expect(requestSpy).toHaveBeenCalledWith('/setup/join', { method: 'POST' })
+  })
+
+  it('confirmPeerTrust calls POST /setup/confirm-peer', async () => {
+    requestSpy.mockResolvedValueOnce({ ProcessingJoinSpace: { message: null } })
+    await confirmPeerTrust()
+    expect(requestSpy).toHaveBeenCalledTimes(1)
+    expect(requestSpy).toHaveBeenCalledWith('/setup/confirm-peer', { method: 'POST' })
+  })
+
+  it('cancelSetup calls POST /setup/cancel', async () => {
+    requestSpy.mockResolvedValueOnce('Welcome')
+    await cancelSetup()
+    expect(requestSpy).toHaveBeenCalledTimes(1)
+    expect(requestSpy).toHaveBeenCalledWith('/setup/cancel', { method: 'POST' })
+  })
+
+  it('selectJoinPeer sends peerId in body', async () => {
+    requestSpy.mockResolvedValueOnce({
+      JoinSpaceInputPassphrase: { error: null },
+    })
+    await selectJoinPeer('peer-abc-123')
+
+    expect(requestSpy).toHaveBeenCalledWith('/setup/select-peer', {
+      method: 'POST',
+      body: { peerId: 'peer-abc-123' },
+    })
+  })
+
+  it('submitPassphrase returns early with PassphraseMismatch when passphrases differ (no daemon call)', async () => {
+    const result = await submitPassphrase('pass1', 'pass2')
+
+    expect(result).toEqual({
+      CreateSpaceInputPassphrase: { error: 'PassphraseMismatch' },
+    })
+    // Should NOT have called the daemon
+    expect(requestSpy).not.toHaveBeenCalled()
+  })
+
+  it('submitPassphrase calls daemon HTTP when passphrases match', async () => {
+    requestSpy.mockResolvedValueOnce({
+      ProcessingCreateSpace: { message: null },
+    })
+
+    const result = await submitPassphrase('same-passphrase', 'same-passphrase')
+
+    expect(requestSpy).toHaveBeenCalledWith('/setup/submit-passphrase', {
+      method: 'POST',
+      body: { passphrase: 'same-passphrase' },
+    })
+    expect(result).toEqual({
+      ProcessingCreateSpace: { message: null },
+    })
+  })
+
+  it('submitPassphrase returns early on passphrase1 !== passphrase2 with exact error shape', async () => {
+    const mismatches = [
+      ['a', 'b'],
+      ['', 'x'],
+      ['x', ''],
+      ['hello', 'world'],
+    ]
+
+    for (const [p1, p2] of mismatches) {
+      const result = await submitPassphrase(p1, p2)
+      expect(result).toEqual({
+        CreateSpaceInputPassphrase: { error: 'PassphraseMismatch' },
+      })
     }
 
-    expect(invokeWithTraceMock).toHaveBeenCalledWith(command, payload)
+    // Daemon should never have been called for any mismatch
+    expect(requestSpy).not.toHaveBeenCalled()
+  })
+
+  it('verifyPassphrase sends passphrase in body', async () => {
+    requestSpy.mockResolvedValueOnce({
+      JoinSpaceInputPassphrase: { error: null },
+    })
+
+    await verifyPassphrase('my-secret')
+
+    expect(requestSpy).toHaveBeenCalledWith('/setup/verify-passphrase', {
+      method: 'POST',
+      body: { passphrase: 'my-secret' },
+    })
   })
 })

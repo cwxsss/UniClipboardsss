@@ -1,72 +1,113 @@
 /**
  * Shared test helpers for DaemonClient API integration tests.
  *
- * Uses vi.spyOn(globalThis, 'fetch') to intercept HTTP calls at the network layer.
- * This avoids module-singleton mutation issues in Vitest's ESM environment.
+ * Provides a shared mock for daemonClient.request that all daemon API tests use.
+ * The vi.mock for @/api/daemon/client is defined HERE (in _test-helpers.ts) so
+ * that only ONE mock is applied for this module across all test files.
  *
  * Usage in each test file:
- *   import { setupFetchMock, teardownFetchMock } from './_test-helpers'
+ *   import { mockDaemonClient, setupMockClient, teardownMockClient } from './_test-helpers'
  *
- *   let mockFetch: ReturnType<typeof expect.any>
- *   beforeEach(() => { ({ mockFetch } = setupFetchMock()) })
- *   afterEach(() => { teardownFetchMock() })
+ *   beforeEach(() => { mockDaemonClient.request.mockReset() })
+ *   afterEach(() => { teardownMockClient() })
  */
 
 import { vi } from 'vitest'
-import { daemonClient } from '@/api/daemon/client'
-import type { DaemonConfig } from '@/api/daemon/types'
+import type { ClipboardEntryDto } from '@/api/daemon/clipboard'
+import type { EncryptionStateResponse } from '@/api/daemon/encryption'
 import { DaemonErrorCode, DaemonApiError } from '@/api/daemon/errors'
 import type { DaemonApiError as DaemonApiErrorType } from '@/api/daemon/errors'
-import type { ClipboardEntryDto } from '@/api/daemon/clipboard'
 import type { Settings } from '@/api/daemon/settings'
-import type { EncryptionStateResponse } from '@/api/daemon/encryption'
 
-// ── Mock fetch factory ────────────────────────────────────────
+// ── Mock daemonClient ──────────────────────────────────────────
+// MUST be at the top of this file so vi.mock can reference it before hoisting.
+const mockRequest = vi.fn()
+const mockRefreshSession = vi.fn()
 
-const MOCK_CONFIG: DaemonConfig = {
-  baseUrl: 'http://127.0.0.1:42715',
-  wsUrl: 'ws://127.0.0.1:42715/ws',
-  pid: 12345,
-  token: 'mock-bearer-token',
+export const mockDaemonClient = {
+  initialize: vi.fn(),
+  destroy: vi.fn(),
+  request: mockRequest,
+  refreshSession: mockRefreshSession,
+  session: null as { token: string; expiresAt: number; encryptionReady: boolean } | null,
+  get initialized() {
+    return true
+  },
+  get wsUrl() {
+    return null
+  },
+  get currentSession() {
+    return null
+  },
 }
 
-const MOCK_SESSION = {
-  token: 'mock-session',
-  expiresAt: Date.now() + 300_000,
-  encryptionReady: false,
+// Hoisted mock — this runs before any import of @/api/daemon/client
+vi.mock('@/api/daemon/client', () => ({
+  daemonClient: mockDaemonClient,
+}))
+
+// ── Helper functions ───────────────────────────────────────────
+
+/**
+ * Reset mockDaemonClient.request between tests.
+ * Call this in beforeEach.
+ */
+export function setupMockClient(): void {
+  mockDaemonClient.request.mockReset()
+  mockDaemonClient.request.mockResolvedValue(undefined)
+  mockDaemonClient.initialize.mockReset()
+  mockDaemonClient.destroy.mockReset()
 }
 
 /**
- * Install a spy on globalThis.fetch and initialize the DaemonClient singleton.
- * Returns the mock so tests can set resolved/rejected values per test.
- *
- * Must be paired with `teardownFetchMock()` in afterEach.
+ * Restore all mocks.
+ * Call this in afterEach.
+ */
+export function teardownMockClient(): void {
+  vi.restoreAllMocks()
+}
+
+// ── Legacy fetch-based helpers (for pre-existing tests) ───────────
+// These are kept for backward compatibility with pre-existing tests that
+// used vi.spyOn(globalThis, 'fetch') via setupFetchMock/teardownFetchMock.
+
+/**
+ * @deprecated Use setupMockClient + mockDaemonClient.request.mockResolvedValueOnce instead.
  */
 export function setupFetchMock(): { mockFetch: ReturnType<typeof vi.spyOn> } {
-  // Bootstrap the singleton: initialize + provide a valid session so the
-  // client skips pre-emptive refresh and goes straight to sendRequest.
-  daemonClient.initialize(MOCK_CONFIG)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(daemonClient as any).session = MOCK_SESSION
-
   const mockFetch = vi.spyOn(globalThis, 'fetch')
-
   return { mockFetch }
 }
 
 /**
- * Restore globalThis.fetch and destroy the DaemonClient singleton.
- * Call this in afterEach.
+ * @deprecated Use teardownMockClient instead.
  */
 export function teardownFetchMock(): void {
   vi.restoreAllMocks()
-  daemonClient.destroy()
+}
+
+// ── Mock fetch response builders ──────────────────────────────
+
+/** Build a Response that returns the given JSON payload and status. */
+export function mockResponse<T>(payload: T, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+/** Build a Response representing a daemon error (non-ok status). */
+export function mockErrorResponse(status: number, body?: unknown): Response {
+  return new Response(JSON.stringify(body ?? { error: `HTTP ${status}` }), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 // ── Error factories ────────────────────────────────────────────
 
 export function makeNotFoundError(
-  message = '404 on /clipboard/entries/test-id',
+  message = '404 on /clipboard/entries/test-id'
 ): DaemonApiErrorType {
   return new DaemonApiError(DaemonErrorCode.NOT_FOUND, message)
 }
@@ -77,16 +118,14 @@ export function makeUnauthorizedError(message = '401 Unauthorized'): DaemonApiEr
 
 export function makeValidationError(
   message = 'validation failed',
-  details?: unknown,
+  details?: unknown
 ): DaemonApiErrorType {
   return new DaemonApiError(DaemonErrorCode.INTERNAL_ERROR, message, details)
 }
 
 // ── Mock data factories ────────────────────────────────────────
 
-export function makeEntryDto(
-  overrides: Partial<ClipboardEntryDto> = {},
-): ClipboardEntryDto {
+export function makeEntryDto(overrides: Partial<ClipboardEntryDto> = {}): ClipboardEntryDto {
   return {
     id: 'entry-1',
     preview: 'Hello, world!',
@@ -166,7 +205,7 @@ export function makeSettingsDto(overrides: Partial<Settings> = {}): Settings {
 }
 
 export function makeEncryptionStateDto(
-  overrides: Partial<EncryptionStateResponse> = {},
+  overrides: Partial<EncryptionStateResponse> = {}
 ): EncryptionStateResponse {
   return {
     initialized: true,
@@ -175,13 +214,15 @@ export function makeEncryptionStateDto(
   }
 }
 
-export function makeStorageStatsDto(overrides: Partial<{
-  total_entries: number
-  total_size_bytes: number
-  cache_size_bytes: number
-  oldest_entry_ts: number | null
-  newest_entry_ts: number | null
-}> = {}): {
+export function makeStorageStatsDto(
+  overrides: Partial<{
+    total_entries: number
+    total_size_bytes: number
+    cache_size_bytes: number
+    oldest_entry_ts: number | null
+    newest_entry_ts: number | null
+  }> = {}
+): {
   total_entries: number
   total_size_bytes: number
   cache_size_bytes: number
@@ -196,22 +237,4 @@ export function makeStorageStatsDto(overrides: Partial<{
     newest_entry_ts: 1710000000000,
     ...overrides,
   }
-}
-
-// ── Mock fetch response builders ──────────────────────────────
-
-/** Build a Response that returns the given JSON payload and status. */
-export function mockResponse<T>(payload: T, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
-
-/** Build a Response representing a daemon error (non-ok status). */
-export function mockErrorResponse(status: number, body?: unknown): Response {
-  return new Response(JSON.stringify(body ?? { error: `HTTP ${status}` }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
 }

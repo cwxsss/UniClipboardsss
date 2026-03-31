@@ -1,45 +1,61 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+/**
+ * Tests for the lifecycle API facade.
+ * Verifies that getLifecycleStatus and retryLifecycle delegate to daemon HTTP endpoints.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { daemonClient } from '@/api/daemon/client'
 import { getLifecycleStatus, retryLifecycle } from '@/api/lifecycle'
-import type { CommandError, LifecycleStatusDto } from '@/api/types'
-import { invokeWithTrace } from '@/lib/tauri-command'
+import type { LifecycleStatusDto } from '@/api/types'
 
-vi.mock('@/lib/tauri-command', () => ({
-  invokeWithTrace: vi.fn(),
-}))
+describe('lifecycle api facade', () => {
+  let requestSpy: ReturnType<typeof vi.spyOn>
 
-const invokeWithTraceMock = vi.mocked(invokeWithTrace)
-
-describe('lifecycle api dto contract', () => {
   beforeEach(() => {
-    invokeWithTraceMock.mockReset()
+    requestSpy = vi.spyOn(daemonClient, 'request')
+    requestSpy.mockResolvedValue(undefined)
   })
 
-  it('getLifecycleStatus returns typed dto with lifecycleState union', async () => {
-    const payload: LifecycleStatusDto = { state: 'Ready' }
+  afterEach(() => {
+    requestSpy.mockRestore()
+  })
 
-    invokeWithTraceMock.mockResolvedValue(payload)
+  it('getLifecycleStatus calls daemon getLifecycleStatus', async () => {
+    const payload: LifecycleStatusDto = { state: 'Ready' }
+    requestSpy.mockResolvedValueOnce(payload)
 
     const result = await getLifecycleStatus()
 
-    expect(invokeWithTraceMock).toHaveBeenCalledWith('get_lifecycle_status')
+    expect(requestSpy).toHaveBeenCalledTimes(1)
+    expect(requestSpy).toHaveBeenCalledWith('/lifecycle/status')
+    expect(result).toEqual(payload)
     expect(result.state).toBe('Ready')
   })
 
-  it('retryLifecycle forwards command and allows CommandError surface later', async () => {
-    invokeWithTraceMock.mockResolvedValue(undefined)
+  it('getLifecycleStatus returns typed dto with lifecycleState union', async () => {
+    requestSpy.mockResolvedValueOnce({ state: 'Pending' })
 
-    await retryLifecycle()
+    const result = await getLifecycleStatus()
 
-    expect(invokeWithTraceMock).toHaveBeenCalledWith('retry_lifecycle')
+    expect(result.state).toBe('Pending')
   })
 
-  it('CommandError discriminated union shape matches backend contract', () => {
-    const error: CommandError = {
-      code: 'NotFound',
-      message: 'entry missing',
-    }
+  it('retryLifecycle calls daemon retryLifecycle', async () => {
+    await retryLifecycle()
 
-    expect(error.code).toBe('NotFound')
-    expect(error.message).toBe('entry missing')
+    expect(requestSpy).toHaveBeenCalledTimes(1)
+    expect(requestSpy).toHaveBeenCalledWith('/lifecycle/retry', { method: 'POST' })
+  })
+
+  it('getLifecycleStatus re-throws daemon errors', async () => {
+    requestSpy.mockRejectedValueOnce(new Error('daemon unavailable'))
+
+    await expect(getLifecycleStatus()).rejects.toThrow('daemon unavailable')
+  })
+
+  it('retryLifecycle re-throws daemon errors', async () => {
+    requestSpy.mockRejectedValueOnce(new Error('lifecycle retry failed'))
+
+    await expect(retryLifecycle()).rejects.toThrow('lifecycle retry failed')
   })
 })
