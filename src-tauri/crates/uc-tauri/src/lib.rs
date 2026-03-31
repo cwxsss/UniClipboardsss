@@ -9,7 +9,6 @@ pub mod adapters;
 pub mod bootstrap;
 pub mod commands;
 pub mod events;
-pub mod models;
 pub mod preview_panel;
 pub mod protocol;
 pub mod quick_panel;
