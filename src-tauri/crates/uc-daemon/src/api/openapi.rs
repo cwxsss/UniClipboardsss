@@ -7,6 +7,7 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
+use crate::api::dto::device::{GetLocalDeviceInfoResponse, LocalDeviceInfoDto};
 use crate::api::dto::encryption::{EncryptionStateResponse, KeychainAccessResponse};
 use crate::api::dto::error::ApiErrorResponse;
 use crate::api::dto::settings::{
@@ -58,11 +59,14 @@ impl Modify for SecurityAddon {
         crate::api::encryption::unlock_handler,
         crate::api::encryption::lock_handler,
         crate::api::encryption::verify_keychain_access_handler,
+        crate::api::device::get_local_device_info_handler,
     ),
     components(
         schemas(
             ContentTypesDto,
             ApiErrorResponse,
+            GetLocalDeviceInfoResponse,
+            LocalDeviceInfoDto,
             GetSettingsResponse,
             UpdateSettingsResponse,
             SettingsDto,
@@ -83,6 +87,7 @@ impl Modify for SecurityAddon {
         )
     ),
     tags(
+        (name = "device", description = "Local device identity"),
         (name = "settings", description = "Settings management APIs"),
         (name = "encryption", description = "Encryption state and session management"),
     )

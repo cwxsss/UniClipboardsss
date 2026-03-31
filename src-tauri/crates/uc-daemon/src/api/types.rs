@@ -276,3 +276,5 @@ impl From<DaemonPairingSessionSnapshot> for PairingSessionSummaryDto {
         }
     }
 }
+
+pub use crate::api::dto::device::LocalDeviceInfoDto;
