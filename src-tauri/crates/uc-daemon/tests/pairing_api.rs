@@ -44,12 +44,7 @@ fn build_api_fixture() -> PairingApiFixture {
         Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
     );
     let runtime = Arc::new(
-        build_non_gui_runtime_with_setup(
-            ctx.deps,
-            ctx.storage_paths.clone(),
-            setup_ports,
-        )
-        .unwrap(),
+        build_non_gui_runtime_with_setup(ctx.deps, ctx.storage_paths.clone(), setup_ports).unwrap(),
     );
     let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
     let query_service = Arc::new(DaemonQueryService::new(runtime.clone(), state.clone()));

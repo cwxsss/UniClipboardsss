@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use uc_daemon::api::types::HealthResponse;
 use uc_daemon::DAEMON_API_REVISION;
-use uc_tauri::bootstrap::run::ProbeOutcome;
 use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
+use uc_tauri::bootstrap::run::ProbeOutcome;
 
 const EXIT_CLEANUP_COMMAND: &str =
     "cargo test -p uc-tauri --test daemon_exit_cleanup -- --test-threads=1";
@@ -34,8 +34,14 @@ fn compatible_health() -> HealthResponse {
 }
 
 fn assert_canonical_commands() {
-    assert_eq!(EXIT_CLEANUP_COMMAND, "cargo test -p uc-tauri --test daemon_exit_cleanup -- --test-threads=1");
-    assert_eq!(BOOTSTRAP_CONTRACT_COMMAND, "cargo test -p uc-tauri --test daemon_bootstrap_contract -- --test-threads=1");
+    assert_eq!(
+        EXIT_CLEANUP_COMMAND,
+        "cargo test -p uc-tauri --test daemon_exit_cleanup -- --test-threads=1"
+    );
+    assert_eq!(
+        BOOTSTRAP_CONTRACT_COMMAND,
+        "cargo test -p uc-tauri --test daemon_bootstrap_contract -- --test-threads=1"
+    );
 }
 
 fn main_rs_source() -> String {

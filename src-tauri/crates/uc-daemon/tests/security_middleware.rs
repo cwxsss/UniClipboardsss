@@ -380,12 +380,24 @@ async fn session_token_contains_correct_pid() {
     let claims = SessionTokenClaims::verify(&session_token, &security.jwt_secret)
         .expect("session token from /auth/connect should be valid");
 
-    assert_eq!(claims.pid, pid, "JWT should contain the PID used in /auth/connect");
-    assert_eq!(claims.client_type, "test", "JWT should contain the clientType from /auth/connect");
+    assert_eq!(
+        claims.pid, pid,
+        "JWT should contain the PID used in /auth/connect"
+    );
+    assert_eq!(
+        claims.client_type, "test",
+        "JWT should contain the clientType from /auth/connect"
+    );
     assert_eq!(claims.access_level, 2, "JWT should have L2 access level");
-    assert!(!claims.encryption_ready, "encryption_ready should be false by default");
+    assert!(
+        !claims.encryption_ready,
+        "encryption_ready should be false by default"
+    );
     assert!(!claims.jti.is_empty(), "JWT should have a non-empty jti");
-    assert_eq!(claims.iss, "uniclipboard-daemon", "JWT issuer should be uniclipboard-daemon");
+    assert_eq!(
+        claims.iss, "uniclipboard-daemon",
+        "JWT issuer should be uniclipboard-daemon"
+    );
     assert_eq!(claims.sub, "frontend", "JWT subject should be frontend");
     assert!(claims.exp > claims.iat, "exp should be greater than iat");
 }
@@ -433,7 +445,10 @@ async fn session_token_for_gui_client_type_contains_correct_claims() {
     let claims = SessionTokenClaims::verify(token_str, &security.jwt_secret)
         .expect("session token should be valid");
 
-    assert_eq!(claims.client_type, "gui", "JWT clientType should match request");
+    assert_eq!(
+        claims.client_type, "gui",
+        "JWT clientType should match request"
+    );
     assert_eq!(claims.pid, pid, "JWT pid should match request");
 }
 
@@ -467,15 +482,21 @@ async fn auth_connect_session_token_contains_expected_fields() {
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
-    let token_str = json["sessionToken"].as_str().expect("sessionToken should be a string");
+    let token_str = json["sessionToken"]
+        .as_str()
+        .expect("sessionToken should be a string");
     // JWT is three base64 segments separated by dots
     let parts: Vec<&str> = token_str.split('.').collect();
     assert_eq!(parts.len(), 3, "session token should be a 3-part JWT");
 
-    let expires_in = json["expiresInSecs"].as_i64().expect("expiresInSecs should be integer");
+    let expires_in = json["expiresInSecs"]
+        .as_i64()
+        .expect("expiresInSecs should be integer");
     assert!(expires_in > 0, "expiresInSecs should be positive");
 
-    let refresh_at = json["refreshAtSecs"].as_i64().expect("refreshAtSecs should be integer");
+    let refresh_at = json["refreshAtSecs"]
+        .as_i64()
+        .expect("refreshAtSecs should be integer");
     assert!(refresh_at > 0, "refreshAtSecs should be positive");
     assert!(
         refresh_at < expires_in,

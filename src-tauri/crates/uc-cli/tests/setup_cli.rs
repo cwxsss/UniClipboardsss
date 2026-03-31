@@ -66,7 +66,7 @@ mod local_daemon {
 
 mod daemon_client {
     use reqwest::StatusCode;
-    use uc_daemon::api::pairing::AckedPairingCommandResponse;
+    use uc_daemon::api::dto::pairing::AckedPairingCommandResponse;
     use uc_daemon::api::types::{
         PeerSnapshotDto, SetupActionAckResponse, SetupResetResponse, SetupStateResponse,
     };

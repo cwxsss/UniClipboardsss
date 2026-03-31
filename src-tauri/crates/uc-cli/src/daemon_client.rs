@@ -6,7 +6,7 @@ use anyhow::Result;
 use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
 use uc_daemon::api::auth::resolve_daemon_token_path;
-use uc_daemon::api::pairing::{
+use uc_daemon::api::dto::pairing::{
     AckedPairingCommandResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
     VerifyPairingRequest,
 };

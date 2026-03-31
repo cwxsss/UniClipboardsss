@@ -10,6 +10,12 @@ use utoipa::{Modify, OpenApi};
 use crate::api::dto::device::{GetLocalDeviceInfoResponse, LocalDeviceInfoDto};
 use crate::api::dto::encryption::{EncryptionStateResponse, KeychainAccessResponse};
 use crate::api::dto::error::ApiErrorResponse;
+use crate::api::dto::pairing::{
+    AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
+    PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
+    PairingSessionSummaryDto, SetPairingDiscoverabilityRequest, SetPairingParticipantRequest,
+    UnpairDeviceRequest, VerifyPairingRequest,
+};
 use crate::api::dto::settings::{
     ContentTypesDto, FileSyncSettingsDto, GeneralSettingsDto, GetSettingsResponse,
     PairingSettingsDto, RetentionPolicyDto, RetentionRuleDto, RuleEvaluationDto,
@@ -72,6 +78,20 @@ impl Modify for SecurityAddon {
         crate::api::setup::submit_passphrase,
         crate::api::setup::cancel,
         crate::api::setup::reset,
+        crate::api::pairing::handle_initiate_pairing,
+        crate::api::pairing::handle_accept_pairing,
+        crate::api::pairing::handle_reject_pairing,
+        crate::api::pairing::handle_cancel_pairing,
+        crate::api::pairing::handle_unpair_device,
+        crate::api::pairing::handle_pairing_gui_lease,
+        crate::api::pairing::set_pairing_discoverability,
+        crate::api::pairing::set_pairing_participant,
+        crate::api::pairing::initiate_pairing,
+        crate::api::pairing::pairing_session,
+        crate::api::pairing::accept_pairing,
+        crate::api::pairing::reject_pairing,
+        crate::api::pairing::cancel_pairing,
+        crate::api::pairing::verify_pairing,
     ),
     components(
         schemas(
@@ -102,6 +122,17 @@ impl Modify for SecurityAddon {
             SetupStateResponseDto,
             SetupSelectPeerRequest,
             SetupSubmitPassphraseRequest,
+            AckedPairingCommandResponse,
+            InitiatePairingRequest,
+            InitiatePairingResponse,
+            PairingApiErrorResponse,
+            PairingGuiLeaseRequest,
+            PairingSessionCommandRequest,
+            PairingSessionSummaryDto,
+            SetPairingDiscoverabilityRequest,
+            SetPairingParticipantRequest,
+            UnpairDeviceRequest,
+            VerifyPairingRequest,
         )
     ),
     tags(
@@ -109,6 +140,7 @@ impl Modify for SecurityAddon {
         (name = "settings", description = "Settings management APIs"),
         (name = "encryption", description = "Encryption state and session management"),
         (name = "setup", description = "Device setup and pairing flow"),
+        (name = "pairing", description = "Pairing lifecycle management"),
     )
 )]
 pub struct ApiDoc;

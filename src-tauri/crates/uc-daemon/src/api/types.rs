@@ -6,8 +6,6 @@ use uc_app::usecases::pairing::get_p2p_peers_snapshot::P2pPeerSnapshot;
 use uc_core::network::PairedDevice;
 use uc_core::security::space_access::state::SpaceAccessState;
 
-use crate::state::DaemonPairingSessionSnapshot;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
@@ -52,16 +50,6 @@ pub struct PairedDeviceDto {
     pub pairing_state: String,
     pub last_seen_at_ms: Option<i64>,
     pub connected: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PairingSessionSummaryDto {
-    pub session_id: String,
-    pub peer_id: Option<String>,
-    pub device_name: Option<String>,
-    pub state: String,
-    pub updated_at_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,19 +219,8 @@ impl From<PairedDevice> for PairedDeviceDto {
     }
 }
 
-impl From<DaemonPairingSessionSnapshot> for PairingSessionSummaryDto {
-    fn from(value: DaemonPairingSessionSnapshot) -> Self {
-        Self {
-            session_id: value.session_id,
-            peer_id: value.peer_id,
-            device_name: value.device_name,
-            state: value.state,
-            updated_at_ms: value.updated_at_ms,
-        }
-    }
-}
-
 pub use crate::api::dto::device::LocalDeviceInfoDto;
+pub use crate::api::dto::pairing::PairingSessionSummaryDto;
 
 // Re-export setup DTOs for backward compatibility with internal consumers.
 pub use crate::api::dto::setup::{

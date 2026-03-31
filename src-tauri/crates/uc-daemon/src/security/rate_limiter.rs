@@ -101,7 +101,10 @@ mod tests {
     async fn under_limit_allows() {
         let limiter = SlidingWindowRateLimiter::new();
         for i in 0..50 {
-            assert!(limiter.check("client-a").await, "request {i} should be allowed");
+            assert!(
+                limiter.check("client-a").await,
+                "request {i} should be allowed"
+            );
         }
     }
 

@@ -14,7 +14,10 @@ use crate::security::{
 async fn rate_limit_rejects_after_100_requests() {
     let limiter = Arc::new(SlidingWindowRateLimiter::new());
     for i in 0..100 {
-        assert!(limiter.check("client-a").await, "request {i} should be allowed");
+        assert!(
+            limiter.check("client-a").await,
+            "request {i} should be allowed"
+        );
     }
     assert!(
         !limiter.check("client-a").await,
@@ -152,10 +155,7 @@ async fn jwt_fields_correct_after_verify() {
 
 #[test]
 fn permission_level_l1_maps_from_u8() {
-    assert_eq!(
-        PermissionLevel::from_u8(1),
-        Some(PermissionLevel::L1Public)
-    );
+    assert_eq!(PermissionLevel::from_u8(1), Some(PermissionLevel::L1Public));
 }
 
 #[test]

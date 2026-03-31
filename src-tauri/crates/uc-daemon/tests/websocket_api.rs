@@ -81,7 +81,10 @@ async fn connect_with_query_auth(url: &str, session_token: &str) {
     let auth_url = format!("{}?auth={}", url, encoded_auth);
     let request = auth_url.into_client_request().unwrap();
     let result = tokio_tungstenite::connect_async(request).await;
-    assert!(result.is_ok(), "Browser-style query param auth should succeed");
+    assert!(
+        result.is_ok(),
+        "Browser-style query param auth should succeed"
+    );
 }
 
 // ── Header Auth Tests (native clients) ──────────────────────────
@@ -244,7 +247,10 @@ async fn auth_fails_with_wrong_prefix_in_query_param() {
 
     handle.abort();
 
-    assert!(result.is_err(), "Bearer prefix in query param should be rejected");
+    assert!(
+        result.is_err(),
+        "Bearer prefix in query param should be rejected"
+    );
 }
 
 #[tokio::test]

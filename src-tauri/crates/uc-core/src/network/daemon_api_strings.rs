@@ -120,21 +120,39 @@ mod tests {
         assert_eq!(ws_event::PEERS_SNAPSHOT, "peers.snapshot");
         assert_eq!(ws_event::PEERS_CHANGED, "peers.changed");
         assert_eq!(ws_event::PEERS_NAME_UPDATED, "peers.name_updated");
-        assert_eq!(ws_event::PEERS_CONNECTION_CHANGED, "peers.connection_changed");
+        assert_eq!(
+            ws_event::PEERS_CONNECTION_CHANGED,
+            "peers.connection_changed"
+        );
         assert_eq!(ws_event::PAIRED_DEVICES_SNAPSHOT, "paired-devices.snapshot");
         assert_eq!(ws_event::PAIRED_DEVICES_CHANGED, "paired-devices.changed");
         assert_eq!(ws_event::PAIRING_SNAPSHOT, "pairing.snapshot");
         assert_eq!(ws_event::PAIRING_UPDATED, "pairing.updated");
-        assert_eq!(ws_event::PAIRING_VERIFICATION_REQUIRED, "pairing.verification_required");
+        assert_eq!(
+            ws_event::PAIRING_VERIFICATION_REQUIRED,
+            "pairing.verification_required"
+        );
         assert_eq!(ws_event::PAIRING_COMPLETE, "pairing.complete");
         assert_eq!(ws_event::PAIRING_FAILED, "pairing.failed");
         assert_eq!(ws_event::SETUP_STATE_CHANGED, "setup.state_changed");
-        assert_eq!(ws_event::SETUP_SPACE_ACCESS_COMPLETED, "setup.space_access_completed");
+        assert_eq!(
+            ws_event::SETUP_SPACE_ACCESS_COMPLETED,
+            "setup.space_access_completed"
+        );
         assert_eq!(ws_event::SPACE_ACCESS_SNAPSHOT, "space_access.snapshot");
-        assert_eq!(ws_event::SPACE_ACCESS_STATE_CHANGED, "space_access.state_changed");
+        assert_eq!(
+            ws_event::SPACE_ACCESS_STATE_CHANGED,
+            "space_access.state_changed"
+        );
         assert_eq!(ws_event::CLIPBOARD_NEW_CONTENT, "clipboard.new_content");
-        assert_eq!(ws_event::FILE_TRANSFER_STATUS_CHANGED, "file-transfer.status_changed");
-        assert_eq!(ws_event::ENCRYPTION_SESSION_READY, "encryption.session_ready");
+        assert_eq!(
+            ws_event::FILE_TRANSFER_STATUS_CHANGED,
+            "file-transfer.status_changed"
+        );
+        assert_eq!(
+            ws_event::ENCRYPTION_SESSION_READY,
+            "encryption.session_ready"
+        );
     }
 
     #[test]
@@ -148,7 +166,10 @@ mod tests {
 
     #[test]
     fn pairing_busy_reason_values_match() {
-        assert_eq!(pairing_busy_reason::HOST_NOT_DISCOVERABLE, "host_not_discoverable");
+        assert_eq!(
+            pairing_busy_reason::HOST_NOT_DISCOVERABLE,
+            "host_not_discoverable"
+        );
         assert_eq!(
             pairing_busy_reason::NO_LOCAL_PAIRING_PARTICIPANT_READY,
             "no_local_pairing_participant_ready"
@@ -158,13 +179,25 @@ mod tests {
 
     #[test]
     fn pairing_error_code_values_match() {
-        assert_eq!(pairing_error_code::ACTIVE_SESSION_EXISTS, "active_session_exists");
-        assert_eq!(pairing_error_code::HOST_NOT_DISCOVERABLE, "host_not_discoverable");
-        assert_eq!(pairing_error_code::NO_LOCAL_PARTICIPANT, "no_local_participant");
+        assert_eq!(
+            pairing_error_code::ACTIVE_SESSION_EXISTS,
+            "active_session_exists"
+        );
+        assert_eq!(
+            pairing_error_code::HOST_NOT_DISCOVERABLE,
+            "host_not_discoverable"
+        );
+        assert_eq!(
+            pairing_error_code::NO_LOCAL_PARTICIPANT,
+            "no_local_participant"
+        );
         assert_eq!(pairing_error_code::SESSION_NOT_FOUND, "session_not_found");
         assert_eq!(pairing_error_code::INTERNAL, "internal");
         assert_eq!(pairing_error_code::BAD_REQUEST, "bad_request");
-        assert_eq!(pairing_error_code::RUNTIME_UNAVAILABLE, "runtime_unavailable");
+        assert_eq!(
+            pairing_error_code::RUNTIME_UNAVAILABLE,
+            "runtime_unavailable"
+        );
     }
 
     #[test]

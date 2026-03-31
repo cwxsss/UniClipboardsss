@@ -104,13 +104,26 @@ async fn list_entries_returns_200_with_pagination() {
     let (app, token) = build_test_router().await;
     let session = get_session_token(&app, &token).await;
 
-    let response = auth_request(&app, &session, axum::http::Method::GET, "/clipboard/entries?limit=10&offset=0", None).await;
+    let response = auth_request(
+        &app,
+        &session,
+        axum::http::Method::GET,
+        "/clipboard/entries?limit=10&offset=0",
+        None,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert!(json.get("data").is_some(), "response should have 'data' key");
-    assert!(json.get("ts").is_some(), "response should have 'ts' timestamp");
+    assert!(
+        json.get("data").is_some(),
+        "response should have 'data' key"
+    );
+    assert!(
+        json.get("ts").is_some(),
+        "response should have 'ts' timestamp"
+    );
 }
 
 #[tokio::test]
@@ -144,7 +157,8 @@ async fn delete_entry_returns_404_for_nonexistent_id() {
         axum::http::Method::DELETE,
         "/clipboard/entries/nonexistent-entry-id-00000000-0000-0000-0000-000000000000",
         None,
-    ).await;
+    )
+    .await;
 
     // Should return 404 for non-existent entry
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -163,7 +177,8 @@ async fn clear_history_returns_200_with_result() {
         axum::http::Method::POST,
         "/clipboard/entries/clear",
         None,
-    ).await;
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
@@ -212,7 +227,8 @@ async fn get_entry_returns_404_for_nonexistent_id() {
         axum::http::Method::GET,
         "/clipboard/entries/nonexistent-entry-id-00000000-0000-0000-0000-000000000000",
         None,
-    ).await;
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
@@ -230,7 +246,8 @@ async fn get_entry_resource_returns_404_for_nonexistent_id() {
         axum::http::Method::GET,
         "/clipboard/entries/nonexistent-entry-id-00000000-0000-0000-0000-000000000000/resource",
         None,
-    ).await;
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
@@ -249,7 +266,8 @@ async fn toggle_favorite_returns_404_for_nonexistent_id() {
         axum::http::Method::POST,
         "/clipboard/entries/nonexistent-entry-id-00000000-0000-0000-0000-000000000000/favorite",
         Some(body),
-    ).await;
+    )
+    .await;
 
     // Returns 404 when entry does not exist
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -266,7 +284,8 @@ async fn toggle_favorite_returns_400_when_body_missing() {
         axum::http::Method::POST,
         "/clipboard/entries/some-id/favorite",
         None, // No body
-    ).await;
+    )
+    .await;
 
     // Should return 400 Bad Request when is_favorited body is missing
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -285,7 +304,8 @@ async fn get_stats_returns_200() {
         axum::http::Method::GET,
         "/clipboard/stats",
         None,
-    ).await;
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), 4096).await.unwrap();

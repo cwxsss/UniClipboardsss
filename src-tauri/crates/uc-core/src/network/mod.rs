@@ -1,11 +1,11 @@
 //! Network protocol types.
 
 pub mod connection_policy;
+pub mod daemon_api_strings;
 pub mod events;
 pub mod paired_device;
 pub mod pairing_state_machine;
 pub mod protocol;
-pub mod daemon_api_strings;
 pub mod protocol_ids;
 
 pub use connection_policy::{

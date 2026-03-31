@@ -64,7 +64,8 @@ async fn build_setup_router() -> (axum::Router, String) {
     let pid = std::process::id();
     let security = Arc::new(SecurityState::new_with_pid(pid));
     let session_token = security.make_session_token_for_pid(pid);
-    let api_state = DaemonApiState::new(query_service, token, None, security).with_setup(setup_orchestrator);
+    let api_state =
+        DaemonApiState::new(query_service, token, None, security).with_setup(setup_orchestrator);
     (build_router(api_state), session_token)
 }
 
@@ -126,12 +127,8 @@ fn build_reset_router() -> (axum::Router, String) {
             Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
         );
         let runtime = Arc::new(
-            build_non_gui_runtime_with_setup(
-                ctx.deps,
-                ctx.storage_paths.clone(),
-                setup_ports,
-            )
-            .expect("build non-gui runtime with setup"),
+            build_non_gui_runtime_with_setup(ctx.deps, ctx.storage_paths.clone(), setup_ports)
+                .expect("build non-gui runtime with setup"),
         );
         let setup_orchestrator = runtime.setup_orchestrator().clone();
         let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
@@ -524,7 +521,8 @@ fn build_join_setup_fixture() -> JoinSetupFixture {
     let pid = std::process::id();
     let security = Arc::new(SecurityState::new_with_pid(pid));
     let session_token = security.make_session_token_for_pid(pid);
-    let api_state = DaemonApiState::new(query_service, token, None, security).with_setup(setup_orchestrator);
+    let api_state =
+        DaemonApiState::new(query_service, token, None, security).with_setup(setup_orchestrator);
 
     JoinSetupFixture {
         app: build_router(api_state),
@@ -566,12 +564,8 @@ fn build_host_setup_fixture() -> HostSetupFixture {
             Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
         );
         let runtime = Arc::new(
-            build_non_gui_runtime_with_setup(
-                ctx.deps,
-                ctx.storage_paths.clone(),
-                setup_ports,
-            )
-            .expect("build non-gui runtime with setup"),
+            build_non_gui_runtime_with_setup(ctx.deps, ctx.storage_paths.clone(), setup_ports)
+                .expect("build non-gui runtime with setup"),
         );
         let setup_orchestrator = runtime.setup_orchestrator().clone();
         let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));

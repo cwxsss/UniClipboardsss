@@ -16,12 +16,13 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, warn};
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 
+use crate::api::dto::pairing::PairingSessionSummaryDto;
 use crate::api::server::DaemonApiState;
 use crate::api::types::{
     DaemonWsEvent, DaemonWsSubscribeRequest, PairedDeviceDto, PairedDevicesChangedPayload,
-    PairingFailurePayload, PairingSessionChangedPayload, PairingSessionSummaryDto,
-    PairingVerificationPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
-    PeerSnapshotDto, PeersChangedFullPayload, SpaceAccessStateResponse, StatusResponse,
+    PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeerSnapshotDto, PeersChangedFullPayload,
+    SpaceAccessStateResponse, StatusResponse,
 };
 use crate::security::claims::SessionTokenClaims;
 

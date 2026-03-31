@@ -3,7 +3,7 @@ use reqwest::{Method, RequestBuilder, StatusCode};
 
 use crate::http::authorized_daemon_request;
 use crate::DaemonConnectionState;
-use uc_daemon::api::pairing::{
+use uc_daemon::api::dto::pairing::{
     AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
     PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
     SetPairingDiscoverabilityRequest, SetPairingParticipantRequest, UnpairDeviceRequest,

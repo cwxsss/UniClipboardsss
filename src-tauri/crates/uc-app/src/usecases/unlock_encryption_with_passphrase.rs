@@ -129,9 +129,7 @@ impl UnlockEncryptionWithPassphrase {
     /// passphrase is provided. The underlying crypto may fail at the KDF stage
     /// (Argon2id password hashing) or at the AEAD unwrap stage (wrong key).
     pub async fn execute(&self, passphrase: Passphrase) -> Result<(), UnlockWithPassphraseError> {
-        let span = info_span!(
-            "usecase.unlock_encryption_with_passphrase.execute"
-        );
+        let span = info_span!("usecase.unlock_encryption_with_passphrase.execute");
 
         async {
             info!("Checking encryption state for passphrase unlock");
@@ -205,7 +203,7 @@ mod tests {
     use uc_core::{
         ports::security::key_scope::ScopeError,
         security::model::{
-            EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion, Kek, KeyScope, KdfParams,
+            EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion, KdfParams, Kek, KeyScope,
             MasterKey, WrappedMasterKey,
         },
         security::state::EncryptionStateError,
@@ -511,7 +509,10 @@ mod tests {
             .execute(Passphrase("test-passphrase".to_string()))
             .await;
 
-        assert!(result.is_err(), "should fail when encryption is uninitialized");
+        assert!(
+            result.is_err(),
+            "should fail when encryption is uninitialized"
+        );
         let err = result.unwrap_err();
         assert!(
             matches!(err, UnlockWithPassphraseError::NotInitialized),
@@ -528,9 +529,8 @@ mod tests {
         };
         let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
         let scope = Arc::new(MockKeyScope::succeed_with(scope_value.clone()));
-        let key_material = Arc::new(
-            MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)),
-        );
+        let key_material =
+            Arc::new(MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)));
         let encryption = Arc::new(MockEncryption::new());
         let session = Arc::new(MockEncryptionSession::new());
 
@@ -554,9 +554,8 @@ mod tests {
         };
         let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
         let scope = Arc::new(MockKeyScope::succeed_with(scope_value.clone()));
-        let key_material = Arc::new(
-            MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)),
-        );
+        let key_material =
+            Arc::new(MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)));
         let encryption = Arc::new(MockEncryption::new().fail_on_unwrap());
         let session = Arc::new(MockEncryptionSession::new());
 
@@ -594,10 +593,7 @@ mod tests {
         assert!(result.is_err(), "should fail when keyslot load fails");
         let err = result.unwrap_err();
         assert!(
-            matches!(
-                err,
-                UnlockWithPassphraseError::KeySlotLoadFailed(_)
-            ),
+            matches!(err, UnlockWithPassphraseError::KeySlotLoadFailed(_)),
             "error should be KeySlotLoadFailed, got: {}",
             err
         );
@@ -668,9 +664,8 @@ mod tests {
         };
         let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
         let scope = Arc::new(MockKeyScope::succeed_with(scope_value.clone()));
-        let key_material = Arc::new(
-            MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)),
-        );
+        let key_material =
+            Arc::new(MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)));
         let encryption = Arc::new(MockEncryption::new());
         let session = Arc::new(MockEncryptionSession::new().fail_on_set());
 

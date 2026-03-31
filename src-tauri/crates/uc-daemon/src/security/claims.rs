@@ -160,7 +160,10 @@ mod tests {
         let claims = SessionTokenClaims::new(12345, "gui".into(), LEVEL_L2, false);
         let token = claims.sign(&secret_a).expect("sign should succeed");
         let result = SessionTokenClaims::verify(&token, &secret_b);
-        assert!(result.is_err(), "token signed with wrong secret should be rejected");
+        assert!(
+            result.is_err(),
+            "token signed with wrong secret should be rejected"
+        );
     }
 
     #[test]
@@ -175,6 +178,9 @@ mod tests {
         validation.set_issuer(&["wrong-issuer"]);
         let key = DecodingKey::from_secret(&secret);
         let result = decode::<SessionTokenClaims>(&token, &key, &validation);
-        assert!(result.is_err(), "token with wrong issuer should be rejected");
+        assert!(
+            result.is_err(),
+            "token with wrong issuer should be rejected"
+        );
     }
 }

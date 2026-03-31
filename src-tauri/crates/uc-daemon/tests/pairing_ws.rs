@@ -14,7 +14,7 @@ use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::server::{build_router, DaemonApiState};
 use uc_daemon::api::types::{
     DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload, PairingVerificationPayload,
-    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload, PeerSnapshotDto,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeerSnapshotDto, PeersChangedFullPayload,
     SetupStateChangedPayload,
 };
 use uc_daemon::pairing::session_projection::upsert_pairing_snapshot;

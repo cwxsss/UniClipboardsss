@@ -150,9 +150,6 @@ mod tests {
         let state_a = SecurityState::new();
         let state_b = SecurityState::new();
         // Different instances should have different secrets (extremely unlikely to collide)
-        assert_ne!(
-            state_a.jwt_secret.as_ref(),
-            state_b.jwt_secret.as_ref()
-        );
+        assert_ne!(state_a.jwt_secret.as_ref(), state_b.jwt_secret.as_ref());
     }
 }

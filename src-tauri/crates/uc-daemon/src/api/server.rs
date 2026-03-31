@@ -30,8 +30,8 @@ use crate::api::auth::{
     build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
 };
 use crate::api::dto::error::ApiError;
+use crate::api::dto::pairing::PairingApiErrorResponse;
 use crate::api::openapi::ApiDoc;
-use crate::api::pairing::PairingApiErrorResponse;
 use crate::api::query::DaemonQueryService;
 use crate::api::routes;
 use crate::api::types::DaemonWsEvent;
