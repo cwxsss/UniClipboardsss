@@ -16,6 +16,10 @@ use crate::api::dto::settings::{
     SecuritySettingsDto, SettingsDto, ShortcutKeyDto, SyncFrequencyDto, SyncSettingsDto, ThemeDto,
     UpdateChannelDto, UpdateSettingsResponse,
 };
+use crate::api::dto::setup::{
+    GetSetupStateResponse, SetupActionResponse, SetupResetResponse, SetupSelectPeerRequest,
+    SetupStateResponseDto, SetupSubmitPassphraseRequest,
+};
 
 /// Adds a `session` Bearer security scheme to the OpenAPI document and applies it
 /// to all L2+ paths.
@@ -60,6 +64,14 @@ impl Modify for SecurityAddon {
         crate::api::encryption::lock_handler,
         crate::api::encryption::verify_keychain_access_handler,
         crate::api::device::get_local_device_info_handler,
+        crate::api::setup::get_setup_state,
+        crate::api::setup::start_host,
+        crate::api::setup::start_join,
+        crate::api::setup::select_peer,
+        crate::api::setup::confirm_peer,
+        crate::api::setup::submit_passphrase,
+        crate::api::setup::cancel,
+        crate::api::setup::reset,
     ),
     components(
         schemas(
@@ -84,12 +96,19 @@ impl Modify for SecurityAddon {
             UpdateChannelDto,
             EncryptionStateResponse,
             KeychainAccessResponse,
+            GetSetupStateResponse,
+            SetupActionResponse,
+            SetupResetResponse,
+            SetupStateResponseDto,
+            SetupSelectPeerRequest,
+            SetupSubmitPassphraseRequest,
         )
     ),
     tags(
         (name = "device", description = "Local device identity"),
         (name = "settings", description = "Settings management APIs"),
         (name = "encryption", description = "Encryption state and session management"),
+        (name = "setup", description = "Device setup and pairing flow"),
     )
 )]
 pub struct ApiDoc;

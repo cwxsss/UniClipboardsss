@@ -22,8 +22,6 @@ use axum::{Json, Router};
 use serde_json::json;
 use uc_app::usecases::CoreUseCases;
 use uc_core::network::daemon_api_strings::{http_route, pairing_error_code, pairing_stage};
-use uc_core::security::model::EncryptionError;
-use uc_core::setup::SetupState;
 
 use crate::api::pairing::{
     AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
@@ -32,7 +30,6 @@ use crate::api::pairing::{
     VerifyPairingRequest,
 };
 use crate::api::server::{map_daemon_pairing_error, DaemonApiState};
-use crate::api::types::{SetupResetResponse, SetupSelectPeerRequest, SetupSubmitPassphraseRequest};
 use crate::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
 use crate::security::middleware::{auth_extractor_middleware, rate_limit_middleware};
 
@@ -78,20 +75,13 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
         .merge(crate::api::clipboard::router())
         .merge(crate::api::device::router())
         .merge(crate::api::settings::router())
+        .merge(crate::api::setup::router())
         .merge(crate::api::encryption::router())
         .merge(crate::api::storage::router())
         .route("/status", get(status))
         .route("/peers", get(peers))
         .route("/paired-devices", get(paired_devices))
         .route("/space-access/state", get(space_access_state_handler))
-        .route("/setup/state", get(setup_state))
-        .route("/setup/host", post(setup_host))
-        .route("/setup/join", post(setup_join))
-        .route("/setup/select-peer", post(setup_select_peer))
-        .route("/setup/confirm-peer", post(setup_confirm_peer))
-        .route("/setup/submit-passphrase", post(setup_submit_passphrase))
-        .route("/setup/cancel", post(setup_cancel))
-        .route("/setup/reset", post(setup_reset))
         .route("/pairing/initiate", post(handle_initiate_pairing))
         .route("/pairing/accept", post(handle_accept_pairing))
         .route("/pairing/reject", post(handle_reject_pairing))
@@ -225,249 +215,6 @@ async fn space_access_state_handler(State(state): State<DaemonApiState>) -> impl
     .into_response()
 }
 
-async fn setup_state(State(state): State<DaemonApiState>) -> axum::response::Response {
-    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
-        return setup_failed("setup orchestrator unavailable").into_response();
-    };
-
-    match state
-        .query_service
-        .setup_state(setup_orchestrator.as_ref(), state.pairing_host().as_deref())
-        .await
-    {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => setup_internal_error(error).into_response(),
-    }
-}
-
-async fn setup_host(State(state): State<DaemonApiState>) -> axum::response::Response {
-    setup_action_without_body(
-        state,
-        SetupRouteAction::Host,
-        |setup_orchestrator| async move { setup_orchestrator.new_space().await },
-    )
-    .await
-}
-
-async fn setup_join(State(state): State<DaemonApiState>) -> axum::response::Response {
-    setup_action_without_body(
-        state,
-        SetupRouteAction::Join,
-        |setup_orchestrator| async move { setup_orchestrator.join_space().await },
-    )
-    .await
-}
-
-async fn setup_select_peer(
-    State(state): State<DaemonApiState>,
-    payload: Result<Json<SetupSelectPeerRequest>, JsonRejection>,
-) -> axum::response::Response {
-    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
-        return setup_failed("setup orchestrator unavailable").into_response();
-    };
-    let Json(payload) = match payload {
-        Ok(payload) => payload,
-        Err(_) => return setup_bad_request("malformed request body").into_response(),
-    };
-
-    let current_state = setup_orchestrator.get_state().await;
-    if !is_transition_allowed(SetupRouteAction::SelectPeer, &current_state) {
-        return invalid_setup_transition("current setup state does not allow selecting a peer")
-            .into_response();
-    }
-
-    match setup_orchestrator.select_device(payload.peer_id).await {
-        Ok(_) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
-        Err(error) => setup_failed(format!("setup select peer failed: {error}")).into_response(),
-    }
-}
-
-async fn setup_confirm_peer(State(state): State<DaemonApiState>) -> axum::response::Response {
-    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
-        return setup_failed("setup orchestrator unavailable").into_response();
-    };
-
-    let current_state = setup_orchestrator.get_state().await;
-    let current_hint = match state
-        .query_service
-        .setup_state(setup_orchestrator.as_ref(), state.pairing_host().as_deref())
-        .await
-    {
-        Ok(response) => response.next_step_hint,
-        Err(error) => return setup_internal_error(error).into_response(),
-    };
-
-    if !is_confirm_peer_transition_allowed(&current_state, &current_hint) {
-        return invalid_setup_transition("current setup state does not allow this action")
-            .into_response();
-    }
-
-    if should_delegate_host_confirmation_to_pairing_host(&current_state, &current_hint) {
-        let Some(pairing_host) = pairing_host(&state).into_response_ok() else {
-            return daemon_pairing_unavailable().into_response();
-        };
-        let Some(session_id) = pairing_host.active_session_id().await else {
-            return invalid_setup_transition("no active pairing session to confirm")
-                .into_response();
-        };
-
-        return match pairing_host.accept_pairing(&session_id).await {
-            Ok(()) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
-            Err(error) => pairing_command_error(error).into_response(),
-        };
-    }
-
-    match setup_orchestrator.confirm_peer_trust().await {
-        Ok(_) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
-        Err(error) => setup_failed(format!("setup action failed: {error}")).into_response(),
-    }
-}
-
-async fn setup_submit_passphrase(
-    State(state): State<DaemonApiState>,
-    payload: Result<Json<SetupSubmitPassphraseRequest>, JsonRejection>,
-) -> axum::response::Response {
-    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
-        return setup_failed("setup orchestrator unavailable").into_response();
-    };
-    let Json(payload) = match payload {
-        Ok(payload) => payload,
-        Err(_) => return setup_bad_request("malformed request body").into_response(),
-    };
-
-    let current_state = setup_orchestrator.get_state().await;
-    let result = match current_state {
-        SetupState::CreateSpaceInputPassphrase { .. } => {
-            setup_orchestrator
-                .submit_passphrase(payload.passphrase.clone(), payload.passphrase)
-                .await
-        }
-        SetupState::JoinSpaceInputPassphrase { .. } => {
-            setup_orchestrator
-                .verify_passphrase(payload.passphrase)
-                .await
-        }
-        _ => {
-            return invalid_setup_transition(
-                "current setup state does not allow submitting a passphrase",
-            )
-            .into_response();
-        }
-    };
-
-    match result {
-        Ok(_) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
-        Err(error) => {
-            setup_failed(format!("setup submit passphrase failed: {error}")).into_response()
-        }
-    }
-}
-
-async fn setup_cancel(State(state): State<DaemonApiState>) -> axum::response::Response {
-    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
-        return setup_failed("setup orchestrator unavailable").into_response();
-    };
-    let current_state = setup_orchestrator.get_state().await;
-    let current_hint = match state
-        .query_service
-        .setup_state(setup_orchestrator.as_ref(), state.pairing_host().as_deref())
-        .await
-    {
-        Ok(response) => response.next_step_hint,
-        Err(error) => return setup_internal_error(error).into_response(),
-    };
-
-    if should_delegate_host_confirmation_to_pairing_host(&current_state, &current_hint) {
-        let Some(pairing_host) = pairing_host(&state).into_response_ok() else {
-            return daemon_pairing_unavailable().into_response();
-        };
-        let Some(session_id) = pairing_host.active_session_id().await else {
-            return invalid_setup_transition("no active pairing session to cancel").into_response();
-        };
-
-        return match pairing_host.reject_pairing(&session_id).await {
-            Ok(()) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
-            Err(error) => pairing_command_error(error).into_response(),
-        };
-    }
-
-    match setup_orchestrator.cancel_setup().await {
-        Ok(_) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
-        Err(error) => setup_failed(format!("setup cancel failed: {error}")).into_response(),
-    }
-}
-
-async fn setup_reset(State(state): State<DaemonApiState>) -> axum::response::Response {
-    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
-        return setup_failed("setup orchestrator unavailable").into_response();
-    };
-    let Some(runtime) = state.runtime.clone() else {
-        return setup_failed("daemon runtime unavailable").into_response();
-    };
-
-    if let Some(pairing_host) = state.pairing_host() {
-        pairing_host.reset_setup_state().await;
-    }
-
-    if let Err(error) = setup_orchestrator.reset().await {
-        return setup_failed(format!("setup reset failed: {error}")).into_response();
-    }
-
-    let deps = runtime.wiring_deps();
-    let paired_devices = match deps.device.paired_device_repo.list_all().await {
-        Ok(devices) => devices,
-        Err(error) => {
-            return setup_failed(format!("setup reset failed: {error}")).into_response();
-        }
-    };
-    for device in paired_devices {
-        if let Err(error) = deps.device.paired_device_repo.delete(&device.peer_id).await {
-            if !matches!(error, uc_core::ports::PairedDeviceRepositoryError::NotFound) {
-                return setup_failed(format!("setup reset failed: {error}")).into_response();
-            }
-        }
-    }
-
-    let scope = match deps.security.key_scope.current_scope().await {
-        Ok(scope) => scope,
-        Err(error) => {
-            return setup_failed(format!("setup reset failed: {error}")).into_response();
-        }
-    };
-
-    if let Err(error) = deps.security.key_material.delete_keyslot(&scope).await {
-        if !matches!(error, EncryptionError::KeyNotFound) {
-            return setup_failed(format!("setup reset failed: {error}")).into_response();
-        }
-    }
-    if let Err(error) = deps.security.key_material.delete_kek(&scope).await {
-        if !matches!(error, EncryptionError::KeyNotFound) {
-            return setup_failed(format!("setup reset failed: {error}")).into_response();
-        }
-    }
-    if let Err(error) = deps.security.encryption_state.clear_initialized().await {
-        return setup_failed(format!("setup reset failed: {error}")).into_response();
-    }
-    if let Err(error) = deps.security.encryption_session.clear().await {
-        if !matches!(
-            error,
-            EncryptionError::KeyNotFound | EncryptionError::NotInitialized
-        ) {
-            return setup_failed(format!("setup reset failed: {error}")).into_response();
-        }
-    }
-
-    Json(SetupResetResponse {
-        profile: std::env::var("UC_PROFILE")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "default".to_string()),
-        daemon_kept_running: true,
-    })
-    .into_response()
-}
-
 async fn pairing_session(
     State(state): State<DaemonApiState>,
     Path(session_id): Path<String>,
@@ -544,7 +291,7 @@ async fn initiate_pairing(
 
     match pairing_host.initiate_pairing(payload.peer_id).await {
         Ok(session_id) => acknowledged(session_id, true, pairing_stage::REQUEST).into_response(),
-        Err(error) => pairing_command_error(error).into_response(),
+        Err(error) => map_pairing_command_error(error).into_response(),
     }
 }
 
@@ -585,7 +332,7 @@ async fn accept_pairing(
 
     match pairing_host.accept_pairing(&session_id).await {
         Ok(()) => acknowledged(session_id, true, pairing_stage::VERIFYING).into_response(),
-        Err(error) => pairing_command_error(error).into_response(),
+        Err(error) => map_pairing_command_error(error).into_response(),
     }
 }
 
@@ -609,7 +356,7 @@ async fn reject_pairing(
 
     match pairing_host.reject_pairing(&session_id).await {
         Ok(()) => acknowledged(session_id, true, pairing_stage::FAILED).into_response(),
-        Err(error) => pairing_command_error(error).into_response(),
+        Err(error) => map_pairing_command_error(error).into_response(),
     }
 }
 
@@ -633,7 +380,7 @@ async fn cancel_pairing(
 
     match pairing_host.cancel_pairing(&session_id).await {
         Ok(()) => acknowledged(session_id, true, pairing_stage::FAILED).into_response(),
-        Err(error) => pairing_command_error(error).into_response(),
+        Err(error) => map_pairing_command_error(error).into_response(),
     }
 }
 
@@ -714,7 +461,7 @@ async fn verify_pairing(
             },
         )
         .into_response(),
-        Err(error) => pairing_command_error(error).into_response(),
+        Err(error) => map_pairing_command_error(error).into_response(),
     }
 }
 
@@ -748,12 +495,6 @@ async fn handle_pairing_gui_lease(
 
 fn pairing_host(state: &DaemonApiState) -> Result<Arc<DaemonPairingHost>, ()> {
     state.pairing_host().ok_or(())
-}
-
-fn setup_orchestrator(
-    state: &DaemonApiState,
-) -> Result<Arc<uc_app::usecases::SetupOrchestrator>, ()> {
-    state.setup_orchestrator().ok_or(())
 }
 
 async fn handle_session_command<F, Fut>(
@@ -796,42 +537,7 @@ pub(crate) fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
-fn setup_bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({
-            "code": "bad_request",
-            "message": message,
-        })),
-    )
-}
-
-fn invalid_setup_transition(message: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({
-            "code": "invalid_setup_transition",
-            "message": message,
-        })),
-    )
-}
-
-fn setup_failed(message: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({
-            "code": "setup_failed",
-            "message": message.into(),
-        })),
-    )
-}
-
-fn setup_internal_error(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
-    tracing::error!(error = %error, "daemon setup API request failed");
-    setup_failed(error.to_string())
-}
-
-fn daemon_pairing_unavailable() -> (StatusCode, Json<serde_json::Value>) {
+pub(crate) fn daemon_pairing_unavailable() -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         Json(json!({"error": "pairing_host_unavailable"})),
@@ -850,7 +556,9 @@ pub(crate) fn internal_error(error: anyhow::Error) -> (StatusCode, Json<serde_js
     )
 }
 
-fn pairing_command_error(error: DaemonPairingHostError) -> (StatusCode, Json<serde_json::Value>) {
+pub(crate) fn map_pairing_command_error(
+    error: DaemonPairingHostError,
+) -> (StatusCode, Json<serde_json::Value>) {
     let (status, body) = map_daemon_pairing_error(error);
     (
         status,
@@ -905,120 +613,5 @@ trait IntoResponseOk<T> {
 impl<T, E> IntoResponseOk<T> for Result<T, E> {
     fn into_response_ok(self) -> Option<T> {
         self.ok()
-    }
-}
-
-#[derive(Clone, Copy)]
-enum SetupRouteAction {
-    Host,
-    Join,
-    SelectPeer,
-}
-
-fn is_transition_allowed(action: SetupRouteAction, state: &SetupState) -> bool {
-    match action {
-        SetupRouteAction::Host | SetupRouteAction::Join => matches!(state, SetupState::Welcome),
-        SetupRouteAction::SelectPeer => matches!(state, SetupState::JoinSpaceSelectDevice { .. }),
-    }
-}
-
-fn is_confirm_peer_transition_allowed(state: &SetupState, next_step_hint: &str) -> bool {
-    matches!(state, SetupState::JoinSpaceConfirmPeer { .. })
-        || matches!(state, SetupState::Completed) && next_step_hint == "host-confirm-peer"
-}
-
-fn should_delegate_host_confirmation_to_pairing_host(
-    state: &SetupState,
-    next_step_hint: &str,
-) -> bool {
-    matches!(state, SetupState::Completed) && next_step_hint == "host-confirm-peer"
-}
-
-async fn setup_action_without_body<F, Fut>(
-    state: DaemonApiState,
-    action: SetupRouteAction,
-    handler: F,
-) -> axum::response::Response
-where
-    F: FnOnce(Arc<uc_app::usecases::SetupOrchestrator>) -> Fut,
-    Fut: std::future::Future<Output = Result<SetupState, uc_app::usecases::SetupError>>,
-{
-    let Some(setup_orchestrator) = setup_orchestrator(&state).into_response_ok() else {
-        return setup_failed("setup orchestrator unavailable").into_response();
-    };
-
-    let current_state = setup_orchestrator.get_state().await;
-    if !is_transition_allowed(action, &current_state) {
-        return invalid_setup_transition("current setup state does not allow this action")
-            .into_response();
-    }
-
-    match handler(setup_orchestrator.clone()).await {
-        Ok(_) => setup_action_ack_response(&state, setup_orchestrator.as_ref()).await,
-        Err(error) => setup_failed(format!("setup action failed: {error}")).into_response(),
-    }
-}
-
-async fn setup_action_ack_response(
-    state: &DaemonApiState,
-    setup_orchestrator: &uc_app::usecases::SetupOrchestrator,
-) -> axum::response::Response {
-    match state
-        .query_service
-        .setup_action_ack(setup_orchestrator, state.pairing_host().as_deref())
-        .await
-    {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => setup_internal_error(error).into_response(),
-    }
-}
-
-#[allow(dead_code)]
-fn _route_markers() -> [&'static str; 22] {
-    [
-        "/space-access/state",
-        "/setup/state",
-        "/setup/host",
-        "/setup/join",
-        "/setup/select-peer",
-        "/setup/confirm-peer",
-        "/setup/submit-passphrase",
-        "/setup/cancel",
-        "/setup/reset",
-        "/pairing/discoverability/current",
-        "/pairing/participants/current",
-        "/pairing/unpair",
-        "/pairing/sessions",
-        "/pairing/sessions/:session_id/accept",
-        "/pairing/sessions/:session_id/reject",
-        "/pairing/sessions/:session_id/cancel",
-        "/pairing/sessions/:session_id/verify",
-        pairing_error_code::ACTIVE_SESSION_EXISTS,
-        pairing_error_code::NO_LOCAL_PARTICIPANT,
-        pairing_error_code::HOST_NOT_DISCOVERABLE,
-        "invalid_setup_transition",
-        "/clipboard/restore/:entry_id",
-    ]
-}
-
-#[allow(dead_code)]
-fn _response_marker(_: AckedPairingCommandResponse) -> StatusCode {
-    StatusCode::ACCEPTED
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn confirm_peer_transition_accepts_completed_state_when_hint_requests_host_confirmation() {
-        assert!(is_confirm_peer_transition_allowed(
-            &SetupState::Completed,
-            "host-confirm-peer"
-        ));
-        assert!(!is_confirm_peer_transition_allowed(
-            &SetupState::Completed,
-            "completed"
-        ));
     }
 }

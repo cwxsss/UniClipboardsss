@@ -66,44 +66,10 @@ pub struct PairingSessionSummaryDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SetupStateResponse {
-    pub state: Value,
-    pub session_id: Option<String>,
-    pub next_step_hint: String,
-    pub profile: String,
-    pub clipboard_mode: String,
-    pub device_name: String,
-    pub peer_id: String,
-    pub selected_peer_id: Option<String>,
-    pub selected_peer_name: Option<String>,
-    pub has_completed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupSelectPeerRequest {
-    pub peer_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupSubmitPassphraseRequest {
-    pub passphrase: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SetupActionAckResponse {
     pub state: Value,
     pub session_id: Option<String>,
     pub next_step_hint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupResetResponse {
-    pub profile: String,
-    pub daemon_kept_running: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -278,3 +244,9 @@ impl From<DaemonPairingSessionSnapshot> for PairingSessionSummaryDto {
 }
 
 pub use crate::api::dto::device::LocalDeviceInfoDto;
+
+// Re-export setup DTOs for backward compatibility with internal consumers.
+pub use crate::api::dto::setup::{
+    GetSetupStateResponse, SetupActionResponse, SetupResetResponse, SetupSelectPeerRequest,
+    SetupStateResponse, SetupStateResponseDto, SetupSubmitPassphraseRequest,
+};

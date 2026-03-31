@@ -71,6 +71,22 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request".to_string(),
+            message: message.into(),
+        }
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "conflict".to_string(),
+            message: message.into(),
+        }
+    }
 }
 
 impl IntoResponse for ApiError {

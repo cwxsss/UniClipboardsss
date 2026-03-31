@@ -13,6 +13,7 @@ pub mod query;
 pub mod routes;
 pub mod server;
 pub mod settings;
+pub mod setup;
 pub mod storage;
 pub mod types;
 pub mod ws;

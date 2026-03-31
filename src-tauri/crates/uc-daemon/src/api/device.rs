@@ -9,7 +9,7 @@ use utoipa;
 
 use uc_app::usecases::CoreUseCases;
 
-use crate::api::dto::device::{GetLocalDeviceInfoResponse, LocalDeviceInfoDto};
+use crate::api::dto::device::GetLocalDeviceInfoResponse;
 use crate::api::dto::error::ApiError;
 use crate::api::server::DaemonApiState;
 

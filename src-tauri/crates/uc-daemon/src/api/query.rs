@@ -15,10 +15,10 @@ use uc_core::network::PairedDevice;
 use uc_core::security::space_access::state::SpaceAccessState;
 use uc_core::setup::SetupState;
 
+use crate::api::dto::setup::SetupStateResponse;
 use crate::api::types::{
     HealthResponse, PairedDeviceDto, PairingSessionSummaryDto, PeerSnapshotDto,
-    SetupActionAckResponse, SetupStateResponse, SpaceAccessStateResponse, StatusResponse,
-    WorkerStatusDto,
+    SetupActionAckResponse, SpaceAccessStateResponse, StatusResponse, WorkerStatusDto,
 };
 use crate::pairing::host::DaemonPairingHost;
 use crate::service::ServiceHealth;

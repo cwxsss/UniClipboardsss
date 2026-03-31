@@ -1,12 +1,9 @@
 use anyhow::{Context, Result};
 use reqwest::{Method, RequestBuilder};
+use uc_daemon::api::dto::setup as dto;
 
 use crate::http::authorized_daemon_request;
 use crate::DaemonConnectionState;
-use uc_daemon::api::types::{
-    SetupActionAckResponse, SetupSelectPeerRequest, SetupStateResponse,
-    SetupSubmitPassphraseRequest,
-};
 
 #[derive(Clone)]
 pub struct DaemonSetupClient {
@@ -22,46 +19,46 @@ impl DaemonSetupClient {
         }
     }
 
-    pub async fn get_setup_state(&self) -> Result<SetupStateResponse> {
-        self.send_json::<(), SetupStateResponse>(Method::GET, "/setup/state", None)
+    pub async fn get_setup_state(&self) -> Result<dto::GetSetupStateResponse> {
+        self.send_json::<(), dto::GetSetupStateResponse>(Method::GET, "/setup/state", None)
             .await
     }
 
-    pub async fn start_new_space(&self) -> Result<SetupActionAckResponse> {
-        self.send_json::<(), SetupActionAckResponse>(Method::POST, "/setup/host", None)
+    pub async fn start_new_space(&self) -> Result<dto::SetupActionResponse> {
+        self.send_json::<(), dto::SetupActionResponse>(Method::POST, "/setup/host", None)
             .await
     }
 
-    pub async fn start_join_space(&self) -> Result<SetupActionAckResponse> {
-        self.send_json::<(), SetupActionAckResponse>(Method::POST, "/setup/join", None)
+    pub async fn start_join_space(&self) -> Result<dto::SetupActionResponse> {
+        self.send_json::<(), dto::SetupActionResponse>(Method::POST, "/setup/join", None)
             .await
     }
 
-    pub async fn select_device(&self, peer_id: String) -> Result<SetupActionAckResponse> {
+    pub async fn select_device(&self, peer_id: String) -> Result<dto::SetupActionResponse> {
         self.send_json(
             Method::POST,
             "/setup/select-peer",
-            Some(&SetupSelectPeerRequest { peer_id }),
+            Some(&dto::SetupSelectPeerRequest { peer_id }),
         )
         .await
     }
 
-    pub async fn confirm_peer_trust(&self) -> Result<SetupActionAckResponse> {
-        self.send_json::<(), SetupActionAckResponse>(Method::POST, "/setup/confirm-peer", None)
+    pub async fn confirm_peer_trust(&self) -> Result<dto::SetupActionResponse> {
+        self.send_json::<(), dto::SetupActionResponse>(Method::POST, "/setup/confirm-peer", None)
             .await
     }
 
-    pub async fn submit_passphrase(&self, passphrase: String) -> Result<SetupActionAckResponse> {
+    pub async fn submit_passphrase(&self, passphrase: String) -> Result<dto::SetupActionResponse> {
         self.send_json(
             Method::POST,
             "/setup/submit-passphrase",
-            Some(&SetupSubmitPassphraseRequest { passphrase }),
+            Some(&dto::SetupSubmitPassphraseRequest { passphrase }),
         )
         .await
     }
 
-    pub async fn cancel_setup(&self) -> Result<SetupActionAckResponse> {
-        self.send_json::<(), SetupActionAckResponse>(Method::POST, "/setup/cancel", None)
+    pub async fn cancel_setup(&self) -> Result<dto::SetupActionResponse> {
+        self.send_json::<(), dto::SetupActionResponse>(Method::POST, "/setup/cancel", None)
             .await
     }
 
@@ -129,7 +126,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use uc_daemon::api::auth::DaemonConnectionInfo;
-    use uc_daemon::api::types::{SetupActionAckResponse, SetupStateResponse};
+    use uc_daemon::api::dto::setup as dto;
 
     use super::*;
     use crate::DaemonConnectionState;
@@ -158,7 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_setup_client_fetches_setup_state_from_daemon_api() {
-        let expected = SetupStateResponse {
+        let inner = dto::SetupStateResponseDto {
             state: serde_json::json!({
                 "JoinSpaceSelectDevice": {
                     "deviceNames": []
@@ -174,8 +171,11 @@ mod tests {
             selected_peer_name: None,
             has_completed: false,
         };
+        let expected = dto::GetSetupStateResponse {
+            data: inner.clone(),
+            ts: 1710000000000,
+        };
 
-        let expected_response = expected.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -187,7 +187,7 @@ mod tests {
             // After session exchange, header is "Session <session-token>".
             assert!(request.contains("authorization: Session test-session\r\n"));
 
-            let body = serde_json::to_string(&expected_response).unwrap();
+            let body = serde_json::to_string(&expected).unwrap();
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
                 body.len(),
@@ -207,14 +207,16 @@ mod tests {
         let client = DaemonSetupClient::new(connection_state);
         with_session_cache("test-session", async move {
             let result = client.get_setup_state().await.unwrap();
-            assert_eq!(result, expected);
+            assert_eq!(result.data.state, inner.state);
+            assert_eq!(result.data.session_id, inner.session_id);
+            assert_eq!(result.data.next_step_hint, inner.next_step_hint);
         })
         .await;
     }
 
     #[tokio::test]
     async fn daemon_setup_client_posts_submit_passphrase_to_daemon_api() {
-        let expected = SetupActionAckResponse {
+        let inner = dto::SetupStateResponseDto {
             state: serde_json::json!({
                 "JoinSpaceConfirmPeer": {
                     "shortCode": "123456"
@@ -222,9 +224,19 @@ mod tests {
             }),
             session_id: Some("session-2".to_string()),
             next_step_hint: "host-confirm-peer".to_string(),
+            profile: "default".to_string(),
+            clipboard_mode: "full".to_string(),
+            device_name: "Peer A".to_string(),
+            peer_id: "peer-a".to_string(),
+            selected_peer_id: None,
+            selected_peer_name: None,
+            has_completed: false,
+        };
+        let expected = dto::SetupActionResponse {
+            data: inner.clone(),
+            ts: 1710000000000,
         };
 
-        let expected_response = expected.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr: SocketAddr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -237,7 +249,7 @@ mod tests {
             assert!(request.contains("authorization: Session test-session\r\n"));
             assert!(request.contains("\r\n\r\n{\"passphrase\":\"secret-passphrase\"}"));
 
-            let body = serde_json::to_string(&expected_response).unwrap();
+            let body = serde_json::to_string(&expected).unwrap();
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
                 body.len(),
@@ -260,7 +272,9 @@ mod tests {
                 .submit_passphrase("secret-passphrase".to_string())
                 .await
                 .unwrap();
-            assert_eq!(result, expected);
+            assert_eq!(result.data.state, inner.state);
+            assert_eq!(result.data.session_id, inner.session_id);
+            assert_eq!(result.data.next_step_hint, inner.next_step_hint);
         })
         .await;
     }
