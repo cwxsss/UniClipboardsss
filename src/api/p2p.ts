@@ -12,6 +12,7 @@ import {
   getP2PPeers as daemonGetP2PPeers,
   getPairedPeers as daemonGetPairedPeers,
   getPairedPeersWithStatus as daemonGetPairedPeersWithStatus,
+  getLocalDeviceInfo as daemonGetLocalDeviceInfo,
   initiateP2PPairing as daemonInitiateP2PPairing,
   acceptP2PPairing as daemonAcceptP2PPairing,
   rejectP2PPairing as daemonRejectP2PPairing,
@@ -530,7 +531,7 @@ export async function onSpaceAccessCompleted(
  */
 export async function getLocalDeviceInfo(): Promise<LocalDeviceInfo> {
   try {
-    return await invokeWithTrace<LocalDeviceInfo>('get_local_device_info')
+    return await daemonGetLocalDeviceInfo()
   } catch (error) {
     console.error('Failed to get local device info:', error)
     throw error

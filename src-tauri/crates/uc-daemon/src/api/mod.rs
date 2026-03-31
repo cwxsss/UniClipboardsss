@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod clipboard;
+pub mod device;
 pub mod dto;
 pub mod encryption;
 pub mod event_emitter;

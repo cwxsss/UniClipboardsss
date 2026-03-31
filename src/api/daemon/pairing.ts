@@ -170,6 +170,15 @@ export async function getPairedPeersWithStatus(): Promise<PairedPeer[]> {
 }
 
 /**
+ * Get local device info (peer ID + resolved device name).
+ *
+ * 获取本地设备信息（peer ID + 解析后的设备名称）。
+ */
+export async function getLocalDeviceInfo(): Promise<LocalDeviceInfo> {
+  return daemonClient.request<LocalDeviceInfo>('/device/me')
+}
+
+/**
  * Initiate P2P pairing with a peer.
  * Returns `{ success: false, error }` on failure to match the existing contract.
  */

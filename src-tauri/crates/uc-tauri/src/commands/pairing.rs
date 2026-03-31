@@ -7,35 +7,8 @@ use crate::commands::record_trace_fields;
 use std::sync::Arc;
 use tauri::State;
 use tracing::{info_span, Instrument};
-use uc_app::usecases::LocalDeviceInfo;
 use uc_core::PeerId;
 use uc_platform::ports::observability::TraceMetadata;
-
-#[tauri::command]
-pub async fn get_local_device_info(
-    runtime: State<'_, Arc<AppRuntime>>,
-    _trace: Option<TraceMetadata>,
-) -> Result<LocalDeviceInfo, CommandError> {
-    let span = info_span!(
-        "command.pairing.get_local_device_info",
-        trace_id = tracing::field::Empty,
-        trace_ts = tracing::field::Empty,
-    );
-    record_trace_fields(&span, &_trace);
-    async {
-        runtime
-            .usecases()
-            .get_local_device_info()
-            .execute()
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "Failed to get local device info");
-                CommandError::InternalError(e.to_string())
-            })
-    }
-    .instrument(span)
-    .await
-}
 
 /// Get resolved sync settings for a specific device.
 /// Returns per-device overrides if set, otherwise global defaults.

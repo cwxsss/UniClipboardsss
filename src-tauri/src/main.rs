@@ -612,7 +612,6 @@ fn run_app(ctx: GuiBootstrapContext) {
             // Setup commands
             uc_tauri::commands::setup::handle_space_access_completed,
             // Pairing commands
-            uc_tauri::commands::pairing::get_local_device_info,
             uc_tauri::commands::pairing::get_device_sync_settings,
             uc_tauri::commands::pairing::update_device_sync_settings,
             // Tray commands
