@@ -42,10 +42,17 @@ use crate::security::middleware::{auth_extractor_middleware, rate_limit_middlewa
 /// Takes state to return Router<DaemonApiState> so it can be merged
 /// with router_l2_plus without type mismatch.
 pub fn router_l1(state: DaemonApiState) -> Router<DaemonApiState> {
-    Router::new()
+    let mut router = Router::new()
         .route("/health", get(health))
-        .with_state(state)
-        .layer(middleware::from_fn(crate::api::server::cors_middleware))
+        .with_state(state.clone())
+        .layer(middleware::from_fn(crate::api::server::cors_middleware));
+
+    #[cfg(debug_assertions)]
+    {
+        router = router.merge(crate::api::dev::router(state));
+    }
+
+    router
 }
 
 /// Build the L2+ (protected) router - requires valid session token.

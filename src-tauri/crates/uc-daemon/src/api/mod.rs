@@ -15,3 +15,9 @@ pub mod settings;
 pub mod storage;
 pub mod types;
 pub mod ws;
+
+#[cfg(debug_assertions)]
+pub mod dev;
+
+#[cfg(debug_assertions)]
+pub use dev::{dev_token_handler, ApiDocDev, DevTokenResponse};

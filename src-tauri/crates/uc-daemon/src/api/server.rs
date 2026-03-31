@@ -150,8 +150,16 @@ impl DaemonApiState {
 }
 
 pub fn build_router(state: DaemonApiState) -> Router {
+    let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi());
+
+    #[cfg(debug_assertions)]
+    let swagger = swagger.url("/api-docs/openapi-dev.json", {
+        use crate::api::ApiDocDev;
+        ApiDocDev::openapi()
+    });
+
     Router::new()
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge(swagger)
         .merge(routes::router_l1(state.clone()))
         .merge(routes::router_l2_plus(state.clone()))
         .merge(crate::security::connect::router())
