@@ -210,6 +210,16 @@ pub struct SpaceAccessStateResponse {
     pub state: SpaceAccessState,
 }
 
+/// Response payload for GET /lifecycle/status.
+/// Mirrors the frontend LifecycleStatusDto shape so the HTTP endpoint
+/// can replace the Tauri get_lifecycle_status command without frontend type changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleStatusResponse {
+    /// Current lifecycle state.
+    pub state: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonWsSubscribeRequest {

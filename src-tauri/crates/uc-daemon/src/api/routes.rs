@@ -10,7 +10,6 @@
 //!
 //! L3/L4 permission enforcement is NOT implemented in Phase 75 (deferred to future phases).
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
@@ -105,7 +104,7 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
         .route("/pairing/sessions/:session_id/reject", post(reject_pairing))
         .route("/pairing/sessions/:session_id/cancel", post(cancel_pairing))
         .route("/pairing/sessions/:session_id/verify", post(verify_pairing))
-        .route("/lifecycle/ready", post(lifecycle_ready))
+        .merge(crate::api::lifecycle::router())
         .route(
             &format!("{}/:entry_id", http_route::CLIPBOARD_RESTORE),
             post(restore_clipboard_entry_handler),
@@ -131,29 +130,6 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
 
 async fn health(State(state): State<DaemonApiState>) -> impl IntoResponse {
     Json(state.query_service.health().await)
-}
-
-/// Signal that the GUI has unlocked and clipboard capture can begin.
-///
-/// In `--gui-managed` mode, clipboard capture is gated until the GUI
-/// explicitly signals readiness (after the user unlocks the app).
-/// This endpoint opens that gate.
-async fn lifecycle_ready(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    if let Some(gate) = &state.clipboard_capture_gate {
-        let was_closed = !gate.swap(true, Ordering::SeqCst);
-        if was_closed {
-            tracing::info!("Clipboard capture gate opened by GUI lifecycle/ready signal");
-        } else {
-            tracing::debug!("Clipboard capture gate already open (duplicate lifecycle/ready call)");
-        }
-    }
-
-    // Trigger deferred services start (clipboard-watcher, inbound-clipboard-sync, etc.)
-    if let Some(notify) = &state.deferred_ready_notify {
-        notify.notify_one();
-    }
-
-    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn restore_clipboard_entry_handler(

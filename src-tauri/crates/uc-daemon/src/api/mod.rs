@@ -4,6 +4,7 @@ pub mod auth;
 pub mod clipboard;
 pub mod encryption;
 pub mod event_emitter;
+pub mod lifecycle;
 pub mod pairing;
 pub mod query;
 pub mod routes;
