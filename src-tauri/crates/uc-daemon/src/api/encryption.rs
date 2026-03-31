@@ -1,6 +1,6 @@
 //! HTTP route handlers for encryption state and session management endpoints.
 
-use axum::extract::{State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::broadcast::error::SendError;
 use tracing::{info, warn};
-use uc_app::usecases::CoreUseCases;
 use uc_app::usecases::unlock_encryption_with_passphrase::UnlockWithPassphraseError;
+use uc_app::usecases::CoreUseCases;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::security::model::Passphrase;
 use uc_core::security::state::EncryptionState;
@@ -49,9 +49,7 @@ pub fn router() -> Router<DaemonApiState> {
 
 /// GET /encryption/state
 /// Returns the current encryption state and session readiness.
-async fn get_encryption_state_handler(
-    State(state): State<DaemonApiState>,
-) -> impl IntoResponse {
+async fn get_encryption_state_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
     let Some(runtime) = state.runtime.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -138,15 +136,17 @@ async fn unlock_handler(
                 event_type: ws_event::ENCRYPTION_SESSION_READY.to_string(),
                 session_id: None,
                 ts: event_payload.ts,
-                payload: serde_json::to_value(&event_payload)
-                    .unwrap_or(serde_json::Value::Null),
+                payload: serde_json::to_value(&event_payload).unwrap_or(serde_json::Value::Null),
             };
             if let Err(SendError(_)) = state.event_tx.send(event) {
                 warn!("failed to broadcast encryption.session_ready event — no active subscribers");
             }
 
             let ts = chrono::Utc::now().timestamp_millis();
-            (StatusCode::OK, Json(json!({ "data": { "success": true }, "ts": ts })))
+            (
+                StatusCode::OK,
+                Json(json!({ "data": { "success": true }, "ts": ts })),
+            )
                 .into_response()
         }
         Err(e) => {
@@ -173,7 +173,10 @@ async fn unlock_handler(
                 ),
             };
 
-            (status, Json(json!({ "error": { "code": code, "message": error_msg } })))
+            (
+                status,
+                Json(json!({ "error": { "code": code, "message": error_msg } })),
+            )
                 .into_response()
         }
     }
@@ -190,11 +193,20 @@ async fn lock_handler(State(state): State<DaemonApiState>) -> impl IntoResponse 
             .into_response();
     };
 
-    match runtime.wiring_deps().security.encryption_session.clear().await {
+    match runtime
+        .wiring_deps()
+        .security
+        .encryption_session
+        .clear()
+        .await
+    {
         Ok(()) => {
             info!("encryption session cleared (locked)");
             let ts = chrono::Utc::now().timestamp_millis();
-            (StatusCode::OK, Json(json!({ "data": { "success": true }, "ts": ts })))
+            (
+                StatusCode::OK,
+                Json(json!({ "data": { "success": true }, "ts": ts })),
+            )
                 .into_response()
         }
         Err(e) => {

@@ -17,13 +17,13 @@ use tracing::{debug, warn};
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 
 use crate::api::server::DaemonApiState;
-use crate::security::claims::SessionTokenClaims;
 use crate::api::types::{
     DaemonWsEvent, DaemonWsSubscribeRequest, PairedDeviceDto, PairedDevicesChangedPayload,
     PairingFailurePayload, PairingSessionChangedPayload, PairingSessionSummaryDto,
     PairingVerificationPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
     PeerSnapshotDto, PeersChangedFullPayload, SpaceAccessStateResponse, StatusResponse,
 };
+use crate::security::claims::SessionTokenClaims;
 
 type ClientTopics = Arc<RwLock<HashSet<String>>>;
 
@@ -95,7 +95,12 @@ async fn websocket_upgrade(
     // Step 4: Apply rate limiting using PID from validated JWT claims.
     // Rate limiting by PID is trustworthy because the PID was extracted from a
     // validated JWT (signed with the daemon's secret), not from caller-controlled input.
-    if !state.security.rate_limiter.check(&claims.pid.to_string()).await {
+    if !state
+        .security
+        .rate_limiter
+        .check(&claims.pid.to_string())
+        .await
+    {
         return ws_rate_limited().into_response();
     }
 

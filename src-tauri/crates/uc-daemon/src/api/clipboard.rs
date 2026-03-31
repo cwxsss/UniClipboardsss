@@ -210,9 +210,7 @@ async fn toggle_favorite(
 
 /// GET /clipboard/stats
 /// Returns { total_items, total_size }.
-async fn get_stats(
-    State(state): State<DaemonApiState>,
-) -> impl IntoResponse {
+async fn get_stats(State(state): State<DaemonApiState>) -> impl IntoResponse {
     let Some(runtime) = state.runtime.clone() else {
         return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
     };
@@ -248,7 +246,8 @@ async fn get_entry_resource(
             // EntryResourceResult already derives serde::Serialize
             match serde_json::to_value(&resource) {
                 Ok(data) => Json(json!({ "data": data, "ts": ts })).into_response(),
-                Err(e) => internal_error(anyhow::anyhow!("failed to serialize resource: {}", e)).into_response(),
+                Err(e) => internal_error(anyhow::anyhow!("failed to serialize resource: {}", e))
+                    .into_response(),
             }
         }
         Err(e) => {

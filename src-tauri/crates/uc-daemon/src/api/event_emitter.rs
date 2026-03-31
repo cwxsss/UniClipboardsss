@@ -293,9 +293,7 @@ mod tests {
             }))
             .expect("emit should succeed");
 
-        let event = rx
-            .try_recv()
-            .expect("clipboard event should be broadcast");
+        let event = rx.try_recv().expect("clipboard event should be broadcast");
         assert_eq!(event.topic, ws_topic::CLIPBOARD);
         assert_eq!(event.event_type, ws_event::CLIPBOARD_NEW_CONTENT);
         assert_eq!(event.payload["entryId"].as_str(), Some("entry-001"));
@@ -322,9 +320,7 @@ mod tests {
             }))
             .expect("emit should succeed");
 
-        let event = rx
-            .try_recv()
-            .expect("clipboard event should be broadcast");
+        let event = rx.try_recv().expect("clipboard event should be broadcast");
         assert_eq!(event.payload["origin"].as_str(), Some("remote"));
     }
 }

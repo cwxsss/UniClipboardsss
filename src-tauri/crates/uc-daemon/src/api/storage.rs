@@ -12,8 +12,8 @@ use serde_json::json;
 use std::path::Path;
 use uc_app::usecases::CoreUseCases;
 
-use crate::api::server::DaemonApiState;
 use crate::api::routes::internal_error;
+use crate::api::server::DaemonApiState;
 
 /// Response payload for GET /storage/stats.
 #[derive(Debug, Clone, Serialize)]
@@ -57,9 +57,7 @@ pub fn router() -> Router<DaemonApiState> {
 /// GET /storage/stats
 /// Returns storage statistics across database, cache, and spool directories.
 /// Includes blob_count derived from the total number of clipboard entries.
-async fn get_storage_stats_handler(
-    State(state): State<DaemonApiState>,
-) -> impl IntoResponse {
+async fn get_storage_stats_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
     let Some(runtime) = state.runtime.clone() else {
         return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
     };
@@ -178,10 +176,7 @@ async fn clear_cache_handler(
         Ok(freed_bytes) => {
             tracing::info!(freed_bytes, "Cache cleared via HTTP API");
             let ts = chrono::Utc::now().timestamp_millis();
-            Json(
-                json!({ "data": ClearCacheResponse { freed_bytes }, "ts": ts }),
-            )
-                .into_response()
+            Json(json!({ "data": ClearCacheResponse { freed_bytes }, "ts": ts })).into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to clear cache");
