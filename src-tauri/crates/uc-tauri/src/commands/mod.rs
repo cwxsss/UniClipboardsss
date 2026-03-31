@@ -1,6 +1,5 @@
 pub mod autostart;
 pub mod error;
-pub mod pairing;
 pub mod preview_panel;
 pub mod quick_panel;
 pub mod setup;
@@ -23,7 +22,6 @@ pub fn get_tauri_pid() -> u32 {
 // Re-export commonly used types
 pub use autostart::*;
 
-pub use pairing::*;
 pub use setup::*;
 pub use startup::*;
 pub use storage::*;

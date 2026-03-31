@@ -78,8 +78,8 @@ export const updateDeviceSyncSettings = createAsyncThunk(
     { rejectWithValue }
   ) => {
     try {
-      await updateDeviceSyncSettingsApi(peerId, settings)
-      return { peerId, settings }
+      const resolved = await updateDeviceSyncSettingsApi(peerId, settings)
+      return { peerId, settings: resolved }
     } catch {
       return rejectWithValue('Failed to update device sync settings')
     }

@@ -7,7 +7,12 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-use crate::api::dto::device::{GetLocalDeviceInfoResponse, LocalDeviceInfoDto};
+use crate::api::dto::device::{
+    ContentTypesDto as DeviceContentTypesDto, ContentTypesPatchDto, DeviceSyncSettingsDto,
+    DeviceSyncSettingsPatchDto, GetDeviceSyncSettingsResponse, GetLocalDeviceInfoResponse,
+    LocalDeviceInfoDto, SyncFrequencyDto as DeviceSyncFrequencyDto,
+    UpdateDeviceSyncSettingsResponse,
+};
 use crate::api::dto::encryption::{EncryptionStateResponse, KeychainAccessResponse};
 use crate::api::dto::error::ApiErrorResponse;
 use crate::api::dto::pairing::{
@@ -70,6 +75,8 @@ impl Modify for SecurityAddon {
         crate::api::encryption::lock_handler,
         crate::api::encryption::verify_keychain_access_handler,
         crate::api::device::get_local_device_info_handler,
+        crate::api::device::get_device_sync_settings_handler,
+        crate::api::device::update_device_sync_settings_handler,
         crate::api::setup::get_setup_state,
         crate::api::setup::start_host,
         crate::api::setup::start_join,
@@ -133,10 +140,18 @@ impl Modify for SecurityAddon {
             SetPairingParticipantRequest,
             UnpairDeviceRequest,
             VerifyPairingRequest,
+            // Device sync settings
+            DeviceContentTypesDto,
+            DeviceSyncFrequencyDto,
+            DeviceSyncSettingsDto,
+            DeviceSyncSettingsPatchDto,
+            ContentTypesPatchDto,
+            GetDeviceSyncSettingsResponse,
+            UpdateDeviceSyncSettingsResponse,
         )
     ),
     tags(
-        (name = "device", description = "Local device identity"),
+        (name = "device", description = "Local device identity and per-device sync settings"),
         (name = "settings", description = "Settings management APIs"),
         (name = "encryption", description = "Encryption state and session management"),
         (name = "setup", description = "Device setup and pairing flow"),

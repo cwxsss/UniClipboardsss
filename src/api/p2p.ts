@@ -4,10 +4,14 @@
  * Provides libp2p device discovery, pairing, and clipboard sync functionality.
  *
  * Pairing functions are forwarded to daemon HTTP endpoints.
- * Device info and sync settings remain as Tauri commands.
+ * Device sync settings use daemon HTTP endpoints.
  * Event listeners remain as WebSocket subscriptions.
  */
 
+import {
+  getDeviceSyncSettings as daemonGetDeviceSyncSettings,
+  updateDeviceSyncSettings as daemonUpdateDeviceSyncSettings,
+} from '@/api/daemon/device'
 import {
   getP2PPeers as daemonGetP2PPeers,
   getPairedPeers as daemonGetPairedPeers,
@@ -21,7 +25,6 @@ import {
 } from '@/api/daemon/pairing'
 import type { SpaceAccessCompletedEvent } from '@/api/daemon/setup'
 import { onDaemonRealtimeEvent } from '@/api/realtime'
-import { invokeWithTrace } from '@/lib/tauri-command'
 
 /**
  * P2P 设备信息
@@ -259,7 +262,7 @@ export interface SyncSettings {
  */
 export async function getDeviceSyncSettings(peerId: string): Promise<SyncSettings> {
   try {
-    return await invokeWithTrace<SyncSettings>('get_device_sync_settings', { peerId })
+    return await daemonGetDeviceSyncSettings(peerId)
   } catch (error) {
     console.error('Failed to get device sync settings:', error)
     throw error
@@ -269,13 +272,14 @@ export async function getDeviceSyncSettings(peerId: string): Promise<SyncSetting
 /**
  * Update or clear per-device sync settings.
  * Passing null for settings resets to global defaults.
+ * Returns the resolved sync settings after the update.
  */
 export async function updateDeviceSyncSettings(
   peerId: string,
   settings: SyncSettings | null
-): Promise<void> {
+): Promise<SyncSettings> {
   try {
-    await invokeWithTrace('update_device_sync_settings', { peerId, settings })
+    return await daemonUpdateDeviceSyncSettings(peerId, settings)
   } catch (error) {
     console.error('Failed to update device sync settings:', error)
     throw error
