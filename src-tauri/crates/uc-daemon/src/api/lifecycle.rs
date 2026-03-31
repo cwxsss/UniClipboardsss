@@ -52,7 +52,6 @@ async fn get_lifecycle_status_handler(State(state): State<DaemonApiState>) -> im
     let Some(runtime) = state.runtime.clone() else {
         return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
     };
-
     let usecases = CoreUseCases::new(runtime.as_ref());
     let status_port = usecases.get_lifecycle_status();
     let current_state = status_port.get_state().await;
@@ -72,7 +71,7 @@ async fn retry_lifecycle_handler(State(state): State<DaemonApiState>) -> impl In
     };
 
     let span = tracing::info_span!("daemon.lifecycle.retry");
-    async {
+    async move {
         let usecases = CoreUseCases::new(runtime.as_ref());
 
         // Check if already ready — skip if so.

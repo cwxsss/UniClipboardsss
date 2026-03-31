@@ -38,11 +38,7 @@ pub fn router() -> Router<DaemonApiState> {
 async fn get_settings_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<GetSettingsResponse>, ApiError> {
-    let runtime = state
-        .runtime
-        .clone()
-        .ok_or_else(|| ApiError::internal("daemon runtime unavailable"))?;
-
+    let runtime = state.runtime_or_error()?;
     let usecases = CoreUseCases::new(runtime.as_ref());
 
     let settings = usecases
@@ -78,10 +74,7 @@ async fn update_settings_handler(
     State(state): State<DaemonApiState>,
     Json(payload): Json<SettingsPatchDto>,
 ) -> Result<Json<UpdateSettingsResponse>, ApiError> {
-    let runtime = state
-        .runtime
-        .clone()
-        .ok_or_else(|| ApiError::internal("daemon runtime unavailable"))?;
+    let runtime = state.runtime_or_error()?;
 
     let usecases = CoreUseCases::new(runtime.as_ref());
 

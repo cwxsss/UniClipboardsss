@@ -29,6 +29,7 @@ use uc_core::network::daemon_api_strings::pairing_error_code;
 use crate::api::auth::{
     build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
 };
+use crate::api::dto::error::ApiError;
 use crate::api::openapi::ApiDoc;
 use crate::api::pairing::PairingApiErrorResponse;
 use crate::api::query::DaemonQueryService;
@@ -146,6 +147,17 @@ impl DaemonApiState {
             .and_then(parse_bearer_token)
             .map(|token| token == self.auth_token.as_str())
             .unwrap_or(false)
+    }
+
+    /// Extracts the runtime, or returns an ApiError if unavailable.
+    ///
+    /// Usage: `let runtime = state.runtime_or_error()?;`
+    /// Only use in handlers that return `Result<T, ApiError>` (e.g. settings handlers).
+    /// For handlers returning `impl IntoResponse`, use the inline `if let Some(runtime) = state.runtime.clone() else { return ... }` pattern.
+    pub fn runtime_or_error(&self) -> Result<Arc<CoreRuntime>, ApiError> {
+        self.runtime
+            .clone()
+            .ok_or_else(|| ApiError::internal("daemon runtime unavailable"))
     }
 }
 

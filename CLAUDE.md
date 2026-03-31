@@ -408,6 +408,81 @@ When adding new commands:
 4. Register in `invoke_handler![]` in `src-tauri/src/main.rs`
 5. Use `runtime.usecases().xxx()` - NEVER `runtime.deps.xxx`
 
+## Daemon HTTP API (uc-daemon)
+
+### File Organization
+
+```
+crates/uc-daemon/src/api/
+├── settings.rs       # Handler logic (router + handler functions)
+├── dto/
+│   ├── mod.rs         # Sub-module exports
+│   ├── error.rs       # ApiError + ApiErrorResponse
+│   └── settings.rs    # All settings-related DTOs
+├── server.rs         # DaemonApiState + router builder
+├── routes.rs         # L1/L2+ router composition + helpers
+├── openapi.rs        # OpenAPI doc definition (utoipa)
+└── *.rs             # Other domain handlers (clipboard.rs, pairing.rs, etc.)
+```
+
+### router() Granularity
+
+Each handler file may export a `pub fn router() -> Router<DaemonApiState>`. Follow these guidelines:
+
+| Condition                                                                              | Action                                  |
+| -------------------------------------------------------------------------------------- | --------------------------------------- |
+| Domain is simple, < 500 lines total                                                    | Keep handlers + DTOs in one file        |
+| Domain is complex (10+ DTOs, > 500 lines)                                              | Split into `dto/xxx.rs` for DTOs        |
+| Sub-resources have distinct path prefixes (`/settings/general`, `/settings/retention`) | Split into sub-modules under `api/xxx/` |
+
+**Rule**: A file either has `router()` (exports routes) or doesn't (internal module/DTO library). Never more than one `router()` per file.
+
+### Runtime Access in Handlers
+
+`DaemonApiState.runtime` may be `None` in some modes. Use the helper:
+
+```rust
+// For handlers returning Result<T, ApiError> (e.g. settings):
+let runtime = state.runtime_or_error()?;
+
+// For handlers returning impl IntoResponse:
+let Some(runtime) = state.runtime.clone() else {
+    return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
+};
+```
+
+### Handler Response Patterns
+
+```rust
+// Pattern A: Result-returning handler (used by utoipa::path for OpenAPI)
+async fn get_handler(State(state): State<DaemonApiState>) -> Result<Json<ResponseDto>, ApiError> {
+    let runtime = state.runtime_or_error()?;
+    let usecases = CoreUseCases::new(runtime.as_ref());
+    let data = usecases.some_use_case().execute().await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(ResponseDto { data, ts: chrono::Utc::now().timestamp_millis() }))
+}
+
+// Pattern B: impl IntoResponse handler (no utoipa::path annotation)
+async fn list_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
+    let Some(runtime) = state.runtime.clone() else {
+        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
+    };
+    let usecases = CoreUseCases::new(runtime.as_ref());
+    // ...
+    Json(json!({ "data": result, "ts": ts })).into_response()
+}
+```
+
+### Adding a New API Endpoint
+
+1. **DTO**: Add to `dto/xxx.rs` — Request/Response/Patch DTOs + `From<core::X>` impls
+2. **Handler**: Add to `xxx.rs` — `router()` + handler functions + merge logic (if PATCH)
+3. **Conversion**: `From<core::X> for XxxDto` for reads; `From<XxxDto> for core::X` for writes
+4. **OpenAPI**: Register in `openapi.rs` `#[openapi(paths(...), components(schemas(...)))]`
+5. **Router**: Add `.merge(crate::api::xxx::router())` in `routes.rs` `router_l2_plus()`
+6. **Comment**: Add NOTE on handler for important behavior differences (e.g. "no OS side effects")
+
 ## Development Notes
 
 - **Package manager**: Bun (not npm/yarn) - faster install/dev times
