@@ -34,6 +34,10 @@ jsonwebtoken = { version = "10", default-features = false, features = ["rust_cry
 tracing = "0.1"
 futures-util = "0.3"
 url = "2"
+utoipa = { version = "4", features = ["uuid", "chrono", "url"] }
+utoipa-axum = "0.2"
+utoipa-swagger-ui = { version = "7", features = ["axum"] }
+serde_with = "3.18.0"
 
 [dev-dependencies]
 tempfile = "3"

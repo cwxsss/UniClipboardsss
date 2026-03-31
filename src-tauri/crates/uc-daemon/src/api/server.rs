@@ -20,6 +20,8 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::SetupOrchestrator;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_core::network::daemon_api_strings::pairing_error_code;
@@ -27,6 +29,7 @@ use uc_core::network::daemon_api_strings::pairing_error_code;
 use crate::api::auth::{
     build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
 };
+use crate::api::openapi::ApiDoc;
 use crate::api::pairing::PairingApiErrorResponse;
 use crate::api::query::DaemonQueryService;
 use crate::api::routes;
@@ -148,6 +151,7 @@ impl DaemonApiState {
 
 pub fn build_router(state: DaemonApiState) -> Router {
     Router::new()
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .merge(routes::router_l1(state.clone()))
         .merge(routes::router_l2_plus(state.clone()))
         .merge(crate::security::connect::router())
