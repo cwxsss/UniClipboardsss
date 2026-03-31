@@ -565,9 +565,8 @@ fn run_app(ctx: GuiBootstrapContext) {
                     info!("[Startup] Silent start: skipping startup barrier window show");
                 }
 
-                // 1. Auto-unlock (non-blocking) if enabled in settings
+                // 1. Auto-unlock (non-blocking) via daemon API if enabled in settings
                 let runtime_for_auto_unlock = runtime.clone();
-                let app_handle_for_unlock = app_handle_for_startup.clone();
                 let daemon_conn_for_unlock = daemon_connection_state.clone();
                 tauri::async_runtime::spawn(async move {
                     let auto_unlock_enabled =
@@ -584,16 +583,24 @@ fn run_app(ctx: GuiBootstrapContext) {
                         return;
                     }
 
-                    if let Err(e) =
-                        uc_tauri::commands::encryption::unlock_encryption_session_with_runtime(
-                            &runtime_for_auto_unlock,
-                            &app_handle_for_unlock,
-                            None,
-                            Some(&daemon_conn_for_unlock),
-                        )
-                        .await
-                    {
-                        warn!("[Startup] Auto unlock failed: {}", e);
+                    let client = uc_daemon_client::DaemonQueryClient::new(daemon_conn_for_unlock);
+                    match client.unlock_encryption().await {
+                        Ok(true) => {
+                            info!("[Startup] Daemon encryption auto-unlocked");
+                        }
+                        Ok(false) => {
+                            info!("[Startup] Encryption not initialized, skip");
+                        }
+                        Err(e) => {
+                            warn!("[Startup] Daemon encryption unlock failed: {}", e);
+                            return;
+                        }
+                    }
+
+                    if let Err(e) = client.lifecycle_retry().await {
+                        warn!("[Startup] Daemon lifecycle retry failed: {}", e);
+                    } else {
+                        info!("[Startup] Daemon lifecycle boot completed");
                     }
                 });
             });

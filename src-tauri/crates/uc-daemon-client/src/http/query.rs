@@ -27,6 +27,62 @@ impl DaemonQueryClient {
         self.get_json(Method::GET, "/paired-devices").await
     }
 
+    /// Unlock the encryption session via the daemon keyring (auto-unlock).
+    pub async fn unlock_encryption(&self) -> Result<bool> {
+        let response = self
+            .authorized_request(Method::POST, "/encryption/unlock")
+            .await?
+            .send()
+            .await
+            .with_context(|| "failed to call daemon /encryption/unlock")?;
+
+        if response.status().is_success() {
+            let body: serde_json::Value = response
+                .json()
+                .await
+                .with_context(|| "failed to decode /encryption/unlock response")?;
+            let success = body
+                .pointer("/data/success")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            return Ok(success);
+        }
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed to read body>".to_string());
+        Err(anyhow!(
+            "daemon /encryption/unlock failed with status {}: {}",
+            status,
+            body,
+        ))
+    }
+
+    /// Retry the lifecycle boot on the daemon (starts network, opens clipboard capture gate).
+    pub async fn lifecycle_retry(&self) -> Result<()> {
+        let response = self
+            .authorized_request(Method::POST, "/lifecycle/retry")
+            .await?
+            .send()
+            .await
+            .with_context(|| "failed to call daemon /lifecycle/retry")?;
+
+        if response.status().is_success() {
+            return Ok(());
+        }
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<failed to read body>".to_string());
+        Err(anyhow!(
+            "daemon /lifecycle/retry failed with status {}: {}",
+            status,
+            body,
+        ))
+    }
+
     /// Signal the daemon that the GUI has unlocked and clipboard capture can begin.
     pub async fn signal_lifecycle_ready(&self) -> Result<()> {
         let response = self
