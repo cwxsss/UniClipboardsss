@@ -36,7 +36,7 @@ async fn test_update_settings_persists() {
     settings.general.device_name = Some("test_device".to_string());
 
     let update_uc = UpdateSettings::new(repo_arc.clone());
-    update_uc.execute(settings.clone()).await.unwrap();
+    update_uc.execute(&settings).await.unwrap();
 
     // Verify persistence through GetSettings
     let get_uc = GetSettings::new(repo_arc);
@@ -57,7 +57,7 @@ async fn test_update_settings_validates_schema_version() {
     settings.schema_version = 999; // Invalid version
 
     let update_uc = UpdateSettings::new(repo_arc);
-    let result = update_uc.execute(settings).await;
+    let result = update_uc.execute(&settings).await;
 
     assert!(result.is_err());
     assert!(result

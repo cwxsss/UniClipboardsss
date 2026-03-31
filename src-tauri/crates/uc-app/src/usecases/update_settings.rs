@@ -37,7 +37,7 @@ impl UpdateSettings {
     /// # Returns / 返回值
     /// - `Ok(())` if settings are saved successfully
     /// - `Err(e)` if validation or save fails
-    pub async fn execute(&self, settings: Settings) -> Result<()> {
+    pub async fn execute(&self, settings: &Settings) -> Result<()> {
         let span = info_span!("usecase.update_settings.execute");
 
         async {
@@ -45,7 +45,7 @@ impl UpdateSettings {
             let old_settings = self.settings.load().await?;
 
             // Calculate and log changes
-            let changes = SettingsDiff::diff(&old_settings, &settings);
+            let changes = SettingsDiff::diff(&old_settings, settings);
             if !changes.is_empty() {
                 info!(
                     changed_fields = %changes.to_log_string(),
@@ -66,7 +66,7 @@ impl UpdateSettings {
             }
 
             // Persist settings
-            self.settings.save(&settings).await?;
+            self.settings.save(settings).await?;
 
             info!(
                 changed_fields = %changes.to_log_string(),
@@ -410,7 +410,7 @@ mod tests {
         updated.general.device_name = Some("device-1".to_string());
 
         let usecase = UpdateSettings::new(repo.clone());
-        usecase.execute(updated.clone()).await.unwrap();
+        usecase.execute(&updated).await.unwrap();
 
         assert_eq!(repo.load_count(), 1);
         assert_eq!(repo.save_count(), 1);
