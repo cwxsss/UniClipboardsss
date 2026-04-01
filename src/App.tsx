@@ -216,7 +216,9 @@ const AppContent = ({
   if (resolvedEncryptionStatus?.initialized && !resolvedEncryptionStatus?.session_ready) {
     return (
       <>
-        <UnlockPage />
+        <UnlockPage
+          onUnlockSucceeded={() => setEncryptionStatus({ initialized: true, session_ready: true })}
+        />
         <PairingNotificationProvider />
       </>
     )

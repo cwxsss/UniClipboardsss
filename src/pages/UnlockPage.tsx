@@ -16,36 +16,36 @@ import { Switch } from '@/components/ui/switch'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useSetting } from '@/hooks/useSetting'
 
-export default function UnlockPage() {
+interface UnlockPageProps {
+  onUnlockSucceeded?: () => void
+}
+
+export default function UnlockPage({ onUnlockSucceeded }: UnlockPageProps) {
   const { t } = useTranslation()
   const { setting, updateSecuritySetting, loading: settingsLoading } = useSetting()
   const { isMac } = usePlatform()
   const [unlocking, setUnlocking] = useState(false)
-  const [isExiting, setIsExiting] = useState(false)
   const [showKeychainModal, setShowKeychainModal] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [verifyError, setVerifyError] = useState<string | null>(null)
 
   const handleUnlock = async () => {
     setUnlocking(true)
-    setIsExiting(false)
     try {
       const unlocked = await unlockEncryptionSession()
       if (unlocked) {
-        // The App component will handle the navigation when the session becomes ready
-        // via the encryption://event SessionReady listener.
-        setIsExiting(true)
+        // Unlock success means the daemon session is ready now.
+        // Notify the parent immediately instead of waiting solely on async WS delivery.
+        onUnlockSucceeded?.()
       } else {
         // unlock_encryption_session returned false — encryption was not initialized
         // or the session was already ready. Do not animate out; reset state.
         console.warn('Unlock returned false — encryption may not be initialized')
         setUnlocking(false)
-        setIsExiting(false)
       }
     } catch (error) {
       console.error('Unlock failed:', error)
       setUnlocking(false)
-      setIsExiting(false)
     }
   }
 
@@ -88,11 +88,7 @@ export default function UnlockPage() {
       <div className="absolute -top-24 -left-16 h-96 w-96 rounded-full bg-primary/5 blur-3xl" />
       <div className="absolute -bottom-24 -right-16 h-96 w-96 rounded-full bg-primary/5 blur-3xl" />
 
-      <div
-        className={`relative z-10 flex w-full max-w-sm flex-col items-center space-y-8 text-center transition-all duration-500 ${
-          isExiting ? 'translate-y-2 opacity-0' : 'translate-y-0 opacity-100'
-        }`}
-      >
+      <div className="relative z-10 flex w-full max-w-sm flex-col items-center space-y-8 text-center">
         <div className="relative flex h-24 w-24 items-center justify-center rounded-3xl bg-muted/30 shadow-inner ring-1 ring-border/50">
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-primary/10 to-transparent opacity-50" />
           <Lock className="h-10 w-10 text-primary" />
