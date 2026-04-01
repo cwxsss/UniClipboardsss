@@ -4,7 +4,7 @@ milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: Ready to execute
 stopped_at: Completed 75-03-PLAN.md
-last_updated: "2026-03-29T16:37:56.116Z"
+last_updated: '2026-03-29T16:37:56.116Z'
 progress:
   total_phases: 52
   completed_phases: 39
@@ -111,9 +111,9 @@ Plan: Not started
   | Phase 73 P02 | 90 | 2 tasks | 6 files |
   | Phase 74 P01 | 4 | 2 tasks | 5 files |
   | Phase 74 P02 | 149 | 1 tasks | 1 files |
-| Phase 75 P01 | 1194 | 2 tasks | 17 files |
-| Phase 75 P02 | 60 | 3 tasks | 11 files |
-| Phase 75 P03 | 10 | 2 tasks | 3 files |
+  | Phase 75 P01 | 1194 | 2 tasks | 17 files |
+  | Phase 75 P02 | 60 | 3 tasks | 11 files |
+  | Phase 75 P03 | 10 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -287,8 +287,8 @@ Recent decisions affecting current work:
 - Phase 68 added: Adopt Tauri Sidecar for daemon binary management (dev build, bundling, and path resolution)
 - Phase 69 added: CLI setup flow: first-time encryption init before daemon spawn
 - Phase 70 added: CLI start/stop commands for daemon lifecycle management
-<<<<<<< Updated upstream
 - Phase 71 added: Dual-product release pipeline for CLI and App
+- Phase 71 added: Migrate restore-clipboard to daemon — eliminate cross-process origin desync
 - Phase 73 added: Refactor clipboard restore loop prevention: introduce ClipboardWriteCoordinator as single write boundary owning origin guard registration, derive meaningful content key, and remove composition-time re-creation risk of origin store
 - Phase 73 discussed: ClipboardWriteCoordinator.write(snapshot, intent) as sole clipboard write API; snapshot building stays in use cases; Coordinator is only caller of origin_guard_key(); coordinator built in bootstrap assembly
 - Phase 74 added: Daemon Clipboard HTTP API — add list, detail, delete, favorite, stats endpoints
@@ -299,9 +299,7 @@ Recent decisions affecting current work:
 - Phase 79 added: Frontend WebSocket Direct Connection & Event Migration
 - Phase 80 added: uc-tauri Command Cleanup — remove migrated commands
 - Phase 81 added: Frontend-Daemon Integration Testing & Security Audit
-=======
-- Phase 71 added: Migrate restore-clipboard to daemon — eliminate cross-process origin desync
->>>>>>> Stashed changes
+- Phase 82 added: Replace uc:// custom protocol with daemon HTTP blob endpoints
 
 ### Pending Todos
 

@@ -748,6 +748,7 @@ Plans:
 - [x] 70-01-PLAN.md — Implement start and stop commands with background/foreground modes, PID-based SIGTERM, and idempotent behavior
 
 <<<<<<< Updated upstream
+
 ### Phase 71: Dual-product release pipeline for CLI and App
 
 **Goal:** Align CLI version to workspace inheritance, create a parallel CLI build workflow, and integrate CLI artifacts into the existing release pipeline so every release ships both App bundles and CLI binaries.
@@ -901,8 +902,8 @@ Plans:
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 81 to break down)
-=======
+- [ ] # TBD (run /gsd:plan-phase 81 to break down)
+
 ### Phase 71: Migrate restore-clipboard to daemon — eliminate cross-process origin desync
 
 **Goal:** [To be planned]
@@ -911,5 +912,17 @@ Plans:
 **Plans:** 0 plans
 
 Plans:
+
 - [ ] TBD (run /gsd:plan-phase 71 to break down)
->>>>>>> Stashed changes
+  > > > > > > > Stashed changes
+
+### Phase 82: Replace uc:// custom protocol with daemon HTTP blob endpoints
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 81
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 82 to break down)
