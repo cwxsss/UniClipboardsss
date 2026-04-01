@@ -176,10 +176,9 @@ impl AppRuntime {
         // so that HostEventSetupPort reads the current emitter after swap.
         let emitter_cell = Arc::new(std::sync::RwLock::new(event_emitter));
 
-        // Build session_ready_emitter from app_handle BEFORE build_setup_orchestrator.
-        let session_ready_emitter: Arc<dyn uc_app::usecases::SessionReadyEmitter> = Arc::new(
-            crate::adapters::lifecycle::TauriSessionReadyEmitter::new(app_handle.clone()),
-        );
+        // Build session_ready_emitter — emits "Session ready" log, no frontend event.
+        let session_ready_emitter: Arc<dyn uc_app::usecases::SessionReadyEmitter> =
+            Arc::new(uc_app::usecases::app_lifecycle::adapters::LoggingSessionReadyEmitter);
 
         // Pass shared state + adapters to build_setup_orchestrator as SEPARATE params.
         let setup_orchestrator = uc_bootstrap::assembly::build_setup_orchestrator(
@@ -250,7 +249,6 @@ impl AppRuntime {
     }
 
     /// Returns a clone of the shared app_handle cell.
-    /// Used by consumers (like TauriSessionReadyEmitter) that need to hold onto the handle.
     pub fn app_handle_cell(&self) -> Arc<std::sync::RwLock<Option<tauri::AppHandle>>> {
         self.app_handle.clone()
     }
@@ -329,7 +327,7 @@ impl AppRuntime {
 /// Provides transparent access to all CoreUseCases methods (via Deref) plus
 /// 3 non-core accessors that cannot live in uc-app:
 /// - apply_autostart (needs AppHandle)
-/// - app_lifecycle_coordinator (needs TauriSessionReadyEmitter)
+/// - app_lifecycle_coordinator (needs LoggingSessionReadyEmitter)
 /// - sync_outbound_clipboard (needs uc_infra TransferPayloadEncryptorAdapter)
 pub struct AppUseCases<'a> {
     app_runtime: &'a AppRuntime,
@@ -369,9 +367,9 @@ impl<'a> AppUseCases<'a> {
             uc_app::usecases::AppLifecycleCoordinatorDeps {
                 network: Arc::new(self.core.start_network_after_unlock()),
                 announcer: Some(announcer),
-                emitter: Arc::new(crate::adapters::lifecycle::TauriSessionReadyEmitter::new(
-                    self.app_runtime.app_handle_cell(),
-                )),
+                emitter: Arc::new(
+                    uc_app::usecases::app_lifecycle::adapters::LoggingSessionReadyEmitter,
+                ),
                 status: self.app_runtime.core.lifecycle_status().clone(),
                 lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
             },
