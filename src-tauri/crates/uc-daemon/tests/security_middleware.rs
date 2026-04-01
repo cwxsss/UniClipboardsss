@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 use axum::body::{to_bytes, Body};
-use axum::http::{Request, StatusCode};
+use axum::http::{header::ACCESS_CONTROL_ALLOW_ORIGIN, Request, StatusCode};
 use serde_json::Value;
 use tower::ServiceExt;
 use uc_daemon::api::auth::load_or_create_auth_token;
@@ -192,6 +192,31 @@ async fn protected_route_returns_401_without_any_token() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn protected_route_auth_failures_still_include_cors_headers() {
+    let (app, _bearer, _security) = build_test_router_with_security().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Origin", "http://localhost:1420")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response
+            .headers()
+            .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        Some("http://localhost:1420")
+    );
 }
 
 #[tokio::test]

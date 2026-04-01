@@ -4,9 +4,10 @@
 //! - L1 (router_l1): public endpoints requiring no authentication (health check)
 //! - L2+ (router_l2_plus): protected endpoints behind auth_extractor + rate_limit middleware
 //!
-//! Auth middleware chain (layer order):
-//!   auth_extractor (innermost) runs FIRST -> validates JWT + PID whitelist -> sets client_id
-//!   rate_limit (outermost) runs SECOND -> checks rate limit using client_id from extensions
+//! Middleware request order:
+//!   cors_middleware runs FIRST and wraps all responses
+//!   auth_extractor runs SECOND -> validates JWT + PID whitelist -> sets client_id
+//!   rate_limit runs THIRD -> checks rate limit using client_id from extensions
 //!
 //! L3/L4 permission enforcement is NOT implemented in Phase 75 (deferred to future phases).
 
@@ -45,16 +46,18 @@ pub fn router_l1(state: DaemonApiState) -> Router<DaemonApiState> {
 }
 
 /// Build the L2+ (protected) router - requires valid session token.
-/// All routes are behind auth_extractor -> rate_limit middleware layers.
+/// All routes are behind auth_extractor -> rate_limit middleware layers, wrapped by CORS.
 ///
-/// LAYER ORDER (FINDING-2): In Axum, the LAST `.layer()` call wraps closest to the
-/// handler and runs FIRST on incoming requests. We want auth_extractor to run FIRST
-/// (to validate the JWT and set client_id in extensions), then rate_limit to run SECOND
-/// (to check the rate limit using the client_id from extensions).
+/// LAYER ORDER (FINDING-2): In Axum, the LAST `.layer()` call runs FIRST on
+/// incoming requests and sees responses returned by inner layers. We want:
+/// - CORS to wrap the full chain so auth/rate-limit rejections still include CORS headers
+/// - auth_extractor to run before rate_limit
+/// - rate_limit to run after auth_extractor has populated client_id
 ///
-/// Therefore, auth_extractor_middleware must be the LAST .layer() call:
-///   .layer(rate_limit_middleware)      // first in code -> outer -> runs SECOND
-///   .layer(auth_extractor_middleware)  // last in code -> inner -> runs FIRST
+/// Therefore, the order must be:
+///   .layer(rate_limit_middleware)      // innermost -> runs THIRD
+///   .layer(auth_extractor_middleware)  // middle    -> runs SECOND
+///   .layer(cors_middleware)            // outermost -> runs FIRST
 ///
 /// This means rate limiting applies to already-authenticated requests (by validated PID).
 /// It is NOT a pre-auth gate - that is a deliberate design choice for Phase 75.
@@ -83,12 +86,12 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
         .with_state(state.clone());
 
     // Apply middleware layers.
-    // auth_extractor (innermost, runs first) sets client_id in extensions.
-    // rate_limit (outermost, runs second) checks the rate limit using client_id.
+    // CORS must wrap the full chain so browser clients still receive ACAO headers
+    // when auth/rate-limit reject before reaching a handler.
+    // auth_extractor runs before rate_limit and sets client_id in extensions.
     // See detailed comment above for layer order explanation.
     let state_for_middleware = Arc::new(state);
     router
-        .layer(middleware::from_fn(crate::api::server::cors_middleware))
         .layer(middleware::from_fn_with_state(
             state_for_middleware.clone(),
             rate_limit_middleware,
@@ -97,6 +100,7 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
             state_for_middleware,
             auth_extractor_middleware,
         ))
+        .layer(middleware::from_fn(crate::api::server::cors_middleware))
 }
 
 async fn health(State(state): State<DaemonApiState>) -> impl IntoResponse {
