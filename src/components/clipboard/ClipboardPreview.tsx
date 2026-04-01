@@ -23,11 +23,11 @@ import {
   fetchClipboardResourceText,
   getResourceImageUrl,
 } from '@/api/clipboardItems'
+import { daemonClient } from '@/api/daemon/client'
 import { getClipboardEntryResource } from '@/api/daemon/clipboard'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { resolveUcUrl } from '@/lib/protocol'
 import { useAppSelector } from '@/store/hooks'
 import {
   selectEntryTransferStatus,
@@ -139,7 +139,7 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
         )
       }
       case 'image': {
-        const resolved = imageUrl ? resolveUcUrl(imageUrl) : null
+        const resolved = imageUrl ? daemonClient.blobUrl(imageUrl) : null
         return (
           <div className="flex items-center justify-center p-4">
             {isLoadingImage || !resolved ? (

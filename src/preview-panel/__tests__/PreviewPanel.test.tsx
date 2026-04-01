@@ -32,8 +32,12 @@ vi.mock('@/api/daemon/clipboard', () => ({
 // Mock useThemeSync to avoid daemon client initialization
 vi.mock('@/hooks/useThemeSync', () => ({ useThemeSync: vi.fn() }))
 
-// Mock protocol utility
-vi.mock('@/lib/protocol', () => ({ resolveUcUrl: vi.fn((url: string) => url) }))
+// Mock daemon client blobUrl for image resolution
+vi.mock('@/api/daemon/client', () => ({
+  daemonClient: {
+    blobUrl: vi.fn((path: string) => `http://127.0.0.1:12345${path}?auth=Session+test`),
+  },
+}))
 
 const capturedListeners: Record<string, (event: { payload: unknown }) => void> = {}
 
@@ -103,7 +107,7 @@ describe('PreviewPanel', () => {
       blobId: 'blob-123',
       mimeType: 'image/png',
       sizeBytes: 1024,
-      url: 'http://localhost/blob/123',
+      url: '/clipboard/blobs/blob-123',
       inlineData: null,
     })
 

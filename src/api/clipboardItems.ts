@@ -1,4 +1,4 @@
-import { resolveUcUrl } from '@/lib/protocol'
+import { daemonClient } from '@/api/daemon/client'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
 // Backend projection type
@@ -354,7 +354,7 @@ export async function fetchClipboardResourceText(
     if (!resource.url) {
       throw new Error('Resource has neither inlineData nor url')
     }
-    const resolvedUrl = resolveUcUrl(resource.url)
+    const resolvedUrl = daemonClient.blobUrl(resource.url!) ?? resource.url!
     const response = await fetch(resolvedUrl)
     if (!response.ok) {
       throw new Error(`Failed to fetch clipboard resource: ${response.status}`)

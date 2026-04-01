@@ -3,9 +3,9 @@ import { Loader2 } from 'lucide-react'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getResourceImageUrl, isImageType } from '@/api/clipboardItems'
+import { daemonClient } from '@/api/daemon/client'
 import { getClipboardEntryDetail, getClipboardEntryResource } from '@/api/daemon/clipboard'
 import { useThemeSync } from '@/hooks/useThemeSync'
-import { resolveUcUrl } from '@/lib/protocol'
 
 interface ShowPayload {
   entryId: string
@@ -57,7 +57,10 @@ const PreviewPanel: React.FC = () => {
         if (isImageType(resource.mimeType)) {
           // Image: use resource URL directly (get_clipboard_entry_detail fails for images)
           const rawUrl = getResourceImageUrl(resource)
-          const url = rawUrl && !rawUrl.startsWith('data:') ? resolveUcUrl(rawUrl) : rawUrl
+          const url =
+            rawUrl && !rawUrl.startsWith('data:')
+              ? (daemonClient.blobUrl(rawUrl) ?? rawUrl)
+              : rawUrl
           setPreview({
             entryId,
             contentType: 'image',

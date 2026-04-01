@@ -7,8 +7,12 @@ vi.mock('@/lib/tauri-command', () => ({
   invokeWithTrace: vi.fn(),
 }))
 
-// resolveUcUrl no longer depends on @tauri-apps/api/core.
-// In test env (non-Windows userAgent), it produces uc://localhost/{path} format.
+// Mock daemon client blobUrl for image expansion
+vi.mock('@/api/daemon/client', () => ({
+  daemonClient: {
+    blobUrl: vi.fn((path: string) => `http://127.0.0.1:12345${path}?auth=Session+test`),
+  },
+}))
 
 const invokeMock = vi.mocked(invokeWithTrace)
 
@@ -25,7 +29,7 @@ describe('ClipboardItem', () => {
   it('expands by fetching resource bytes and decoding text', async () => {
     const preview = 'x'.repeat(260)
     const fullText = 'full content'
-    const url = 'uc://blob/blob-1'
+    const url = '/clipboard/blobs/blob-1'
 
     invokeMock.mockResolvedValue({
       blobId: 'blob-1',
@@ -56,16 +60,17 @@ describe('ClipboardItem', () => {
       expect(invokeMock).toHaveBeenCalledWith('get_clipboard_entry_resource', {
         entryId: 'entry-1',
       })
-      // resolveUcUrl converts uc://blob/blob-1 → uc://localhost/blob/blob-1
-      expect(fetchMock).toHaveBeenCalledWith('uc://localhost/blob/blob-1')
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:12345/clipboard/blobs/blob-1?auth=Session+test'
+      )
     })
 
     expect(await screen.findByText(fullText)).toBeInTheDocument()
   })
 
   it('expands image by loading resource url', async () => {
-    const url = 'uc://blob/image-1'
-    const thumbnail = 'thumb://image-1'
+    const url = '/clipboard/blobs/image-1'
+    const thumbnail = '/clipboard/thumbnails/image-1'
 
     invokeMock.mockResolvedValue({
       blobId: 'image-1',
@@ -95,7 +100,9 @@ describe('ClipboardItem', () => {
       })
     })
 
-    // resolveUcUrl converts uc://blob/image-1 → uc://localhost/blob/image-1
-    expect(image).toHaveAttribute('src', 'uc://localhost/blob/image-1')
+    expect(image).toHaveAttribute(
+      'src',
+      'http://127.0.0.1:12345/clipboard/blobs/image-1?auth=Session+test'
+    )
   })
 })

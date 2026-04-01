@@ -148,6 +148,23 @@ class DaemonClient {
   }
 
   /**
+   * Build a full daemon URL for binary resource access with session auth.
+   * Suitable for use in <img src> without JavaScript fetch.
+   *
+   * 构建带 session 认证的 daemon 二进制资源完整 URL。
+   * 适用于 <img src> 等无法设置请求头的场景。
+   *
+   * @param path API path (e.g. "/clipboard/blobs/abc-123").
+   * @returns Full URL string with ?auth= query param, or null if client not ready.
+   */
+  blobUrl(path: string): string | null {
+    if (!this.config || !this.session?.token) return null
+    const url = new URL(`${this.config.baseUrl}${path}`)
+    url.searchParams.set('auth', `Session ${this.session.token}`)
+    return url.toString()
+  }
+
+  /**
    * Stop the keep-alive timer and clear session state.
    *
    * 停止保活定时器并清除 session 状态。
