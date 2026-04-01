@@ -17,7 +17,9 @@ Object.defineProperty(window, 'matchMedia', {
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn((event: string, _callback: (event: { payload: unknown }) => void) => {
     capturedListeners[event] = _callback
-    return Promise.resolve(() => { delete capturedListeners[event] })
+    return Promise.resolve(() => {
+      delete capturedListeners[event]
+    })
   }),
 }))
 
@@ -57,25 +59,38 @@ describe('PreviewPanel', () => {
     render(<PreviewPanel />)
 
     const showHandler = capturedListeners['preview-panel://show']
-    act(() => { showHandler({ payload: { entryId: 'test-entry-1' } }) })
+    act(() => {
+      showHandler({ payload: { entryId: 'test-entry-1' } })
+    })
 
     expect(screen.getByRole('img')).toBeInTheDocument()
   })
 
   it('displays text content from getClipboardEntryDetail', async () => {
-    const { getClipboardEntryResource, getClipboardEntryDetail } = await import('@/api/daemon/clipboard')
+    const { getClipboardEntryResource, getClipboardEntryDetail } =
+      await import('@/api/daemon/clipboard')
     vi.mocked(getClipboardEntryResource).mockResolvedValue({
-      blob_id: null, mime_type: 'text/plain', size_bytes: 13, url: null, inline_data: null,
+      blobId: null,
+      mimeType: 'text/plain',
+      sizeBytes: 13,
+      url: null,
+      inlineData: null,
     })
     vi.mocked(getClipboardEntryDetail).mockResolvedValue({
-      id: 'test-entry-1', content: 'Hello, World!', sizeBytes: 13,
-      createdAtMs: 1710000000000, activeTimeMs: 1710000000000, mimeType: 'text/plain',
+      id: 'test-entry-1',
+      content: 'Hello, World!',
+      sizeBytes: 13,
+      createdAtMs: 1710000000000,
+      activeTimeMs: 1710000000000,
+      mimeType: 'text/plain',
     })
 
     render(<PreviewPanel />)
 
     const showHandler = capturedListeners['preview-panel://show']
-    act(() => { showHandler({ payload: { entryId: 'test-entry-1' } }) })
+    act(() => {
+      showHandler({ payload: { entryId: 'test-entry-1' } })
+    })
 
     await waitFor(() => {
       expect(screen.getByText('Hello, World!')).toBeInTheDocument()
@@ -85,14 +100,19 @@ describe('PreviewPanel', () => {
   it('displays image content from getClipboardEntryResource', async () => {
     const { getClipboardEntryResource } = await import('@/api/daemon/clipboard')
     vi.mocked(getClipboardEntryResource).mockResolvedValue({
-      blob_id: 'blob-123', mime_type: 'image/png', size_bytes: 1024,
-      url: 'http://localhost/blob/123', inline_data: null,
+      blobId: 'blob-123',
+      mimeType: 'image/png',
+      sizeBytes: 1024,
+      url: 'http://localhost/blob/123',
+      inlineData: null,
     })
 
     render(<PreviewPanel />)
 
     const showHandler = capturedListeners['preview-panel://show']
-    act(() => { showHandler({ payload: { entryId: 'test-entry-2' } }) })
+    act(() => {
+      showHandler({ payload: { entryId: 'test-entry-2' } })
+    })
 
     await waitFor(() => {
       expect(screen.getByRole('img')).toBeInTheDocument()
@@ -106,7 +126,9 @@ describe('PreviewPanel', () => {
     render(<PreviewPanel />)
 
     const showHandler = capturedListeners['preview-panel://show']
-    act(() => { showHandler({ payload: { entryId: 'test-entry-3' } }) })
+    act(() => {
+      showHandler({ payload: { entryId: 'test-entry-3' } })
+    })
 
     await waitFor(() => {
       expect(screen.getByText('Failed to load preview')).toBeInTheDocument()
@@ -114,23 +136,38 @@ describe('PreviewPanel', () => {
   })
 
   it('clears preview on preview-panel://hide event', async () => {
-    const { getClipboardEntryResource, getClipboardEntryDetail } = await import('@/api/daemon/clipboard')
+    const { getClipboardEntryResource, getClipboardEntryDetail } =
+      await import('@/api/daemon/clipboard')
     vi.mocked(getClipboardEntryResource).mockResolvedValue({
-      blob_id: null, mime_type: 'text/plain', size_bytes: 13, url: null, inline_data: null,
+      blobId: null,
+      mimeType: 'text/plain',
+      sizeBytes: 13,
+      url: null,
+      inlineData: null,
     })
     vi.mocked(getClipboardEntryDetail).mockResolvedValue({
-      id: 'test-entry-1', content: 'Hello, World!', sizeBytes: 13,
-      createdAtMs: 1710000000000, activeTimeMs: 1710000000000, mimeType: 'text/plain',
+      id: 'test-entry-1',
+      content: 'Hello, World!',
+      sizeBytes: 13,
+      createdAtMs: 1710000000000,
+      activeTimeMs: 1710000000000,
+      mimeType: 'text/plain',
     })
 
     render(<PreviewPanel />)
 
     const showHandler = capturedListeners['preview-panel://show']
-    act(() => { showHandler({ payload: { entryId: 'test-entry-1' } }) })
-    await waitFor(() => { expect(screen.getByText('Hello, World!')).toBeInTheDocument() })
+    act(() => {
+      showHandler({ payload: { entryId: 'test-entry-1' } })
+    })
+    await waitFor(() => {
+      expect(screen.getByText('Hello, World!')).toBeInTheDocument()
+    })
 
     const hideHandler = capturedListeners['preview-panel://hide']
-    act(() => { hideHandler({ payload: {} }) })
+    act(() => {
+      hideHandler({ payload: {} })
+    })
 
     expect(screen.getByText('Hover over an item to preview')).toBeInTheDocument()
   })

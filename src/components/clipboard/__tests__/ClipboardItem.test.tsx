@@ -28,9 +28,9 @@ describe('ClipboardItem', () => {
     const url = 'uc://blob/blob-1'
 
     invokeMock.mockResolvedValue({
-      blob_id: 'blob-1',
-      mime_type: 'text/plain',
-      size_bytes: fullText.length,
+      blobId: 'blob-1',
+      mimeType: 'text/plain',
+      sizeBytes: fullText.length,
       url,
     })
 
@@ -68,9 +68,9 @@ describe('ClipboardItem', () => {
     const thumbnail = 'thumb://image-1'
 
     invokeMock.mockResolvedValue({
-      blob_id: 'image-1',
-      mime_type: 'image/png',
-      size_bytes: 123,
+      blobId: 'image-1',
+      mimeType: 'image/png',
+      sizeBytes: 123,
       url,
     })
 
