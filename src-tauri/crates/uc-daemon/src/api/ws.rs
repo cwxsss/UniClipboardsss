@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -18,6 +19,7 @@ use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::{interval, Instant};
 use tracing::{debug, warn};
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use utoipa;
@@ -34,6 +36,30 @@ use crate::api::types::{
 use crate::security::claims::SessionTokenClaims;
 
 type ClientTopics = Arc<RwLock<HashSet<String>>>;
+
+// ---------------------------------------------------------------------------
+// Heartbeat constants
+// ---------------------------------------------------------------------------
+
+/// How often the server sends a ping frame to the client.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+/// How long the server waits for a pong after sending a ping.
+/// If exceeded, the connection is considered stale and closed.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(40);
+
+/// Signal sent from the heartbeat task to the receive loop when the
+/// connection has gone stale (no pong received after a ping).
+enum HeartbeatSignal {
+    Stale,
+}
+
+/// Message type for the unified send channel.
+/// Heartbeat pings and close requests go through this channel.
+/// Daemon events are sent via the dedicated `outbound_rx` channel.
+enum SendMsg {
+    Ping,
+    Close,
+}
 
 // ---------------------------------------------------------------------------
 // Router
@@ -166,7 +192,7 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: Ses
     let fanout_topics = Arc::clone(&topics);
     let fanout_tx = outbound_tx.clone();
 
-    // Fanout task: receives daemon events and forwards them to the client.
+    // Fanout task: receives daemon events and forwards them to the client via outbound_tx.
     let fanout_task = tokio::spawn(async move {
         loop {
             match broadcast_rx.recv().await {
@@ -193,47 +219,137 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: Ses
         }
     });
 
-    let (mut sender, mut receiver) = socket.split();
+    // Heartbeat channel: the heartbeat task signals `Stale` when the client
+    // fails to respond to a ping within CLIENT_TIMEOUT.
+    let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel::<HeartbeatSignal>(1);
 
-    // Send task: drains the outbound channel and writes to the socket.
-    let send_task = tokio::spawn(async move {
-        while let Some(event) = outbound_rx.recv().await {
-            let payload = match serde_json::to_string(&event) {
-                Ok(payload) => payload,
-                Err(error) => {
-                    warn!(error = %error, "failed to serialize websocket event");
-                    continue;
-                }
-            };
+    // Unified send channel: both daemon events and heartbeat pings are sent here.
+    // This avoids needing to share the SplitSink across tasks.
+    let (send_tx, mut send_rx) = mpsc::channel::<SendMsg>(16);
+    let send_tx_for_heartbeat = send_tx.clone();
 
-            if sender.send(Message::Text(payload.into())).await.is_err() {
+    // Heartbeat task: sends a ping frame every HEARTBEAT_INTERVAL seconds.
+    // If no pong is received within CLIENT_TIMEOUT after a ping, the task
+    // signals `Stale` which causes the receive loop to close the socket.
+    let heartbeat_task = tokio::spawn(async move {
+        let mut ping_interval = interval(HEARTBEAT_INTERVAL);
+        // Wait for the initial interval tick before the first ping.
+        ping_interval.tick().await;
+
+        loop {
+            // Send a ping.
+            if send_tx_for_heartbeat.send(SendMsg::Ping).await.is_err() {
+                debug!("heartbeat: send channel closed, exiting");
                 break;
+            }
+            debug!("heartbeat: ping sent");
+
+            // Wait for the next interval or the deadline.
+            let deadline = Instant::now() + CLIENT_TIMEOUT;
+            loop {
+                tokio::select! {
+                    _ = ping_interval.tick() => {
+                        // Interval elapsed — time for the next ping.
+                        break;
+                    }
+                    _ = tokio::time::sleep_until(deadline) => {
+                        // Timeout — no pong received.
+                        debug!("heartbeat: deadline expired, connection stale");
+                        if heartbeat_tx.send(HeartbeatSignal::Stale).await.is_err() {
+                            debug!("heartbeat: heartbeat_rx dropped, exiting");
+                        }
+                        return;
+                    }
+                }
             }
         }
     });
 
-    // Receive loop: handles client messages (subscribe requests).
-    while let Some(message) = receiver.next().await {
-        match message {
-            Ok(Message::Text(payload)) => {
-                if let Err(error) =
-                    handle_client_message(payload.as_str(), &state, &topics, &outbound_tx).await
-                {
-                    warn!(error = %error, "failed to handle websocket client message");
-                    break;
+    let (mut sender, mut receiver) = socket.split();
+
+    // Send task: drives the actual socket writes.
+    // Receives both daemon events (via outbound_rx) and heartbeat pings (via send_rx).
+    let send_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                // Daemon event to forward to the client.
+                Some(event) = outbound_rx.recv() => {
+                    let payload = match serde_json::to_string(&event) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            warn!(error = %error, "failed to serialize websocket event");
+                            continue;
+                        }
+                    };
+                    if sender.send(Message::Text(payload.into())).await.is_err() {
+                        break;
+                    }
+                }
+                // Heartbeat ping or close request.
+                Some(msg) = send_rx.recv() => {
+                    match msg {
+                        SendMsg::Ping => {
+                            if sender.send(Message::Ping(b"".into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        SendMsg::Close => {
+                            let _ = sender.send(Message::Close(None)).await;
+                            break;
+                        }
+                    }
                 }
             }
-            Ok(Message::Close(_)) => break,
-            Ok(Message::Ping(_)) | Ok(Message::Pong(_)) | Ok(Message::Binary(_)) => {}
-            Err(error) => {
-                warn!(error = %error, "websocket receive loop failed");
-                break;
+        }
+    });
+
+    // Receive loop: handles client messages (subscribe requests, pong frames).
+    // Also drains the heartbeat channel to detect stale connections.
+    loop {
+        tokio::select! {
+            // Incoming message from the client socket.
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(Message::Text(payload))) => {
+                        if let Err(error) =
+                            handle_client_message(payload.as_str(), &state, &topics, &outbound_tx).await
+                        {
+                            warn!(error = %error, "failed to handle websocket client message");
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        debug!("heartbeat: pong received");
+                    }
+                    Some(Ok(Message::Close(_))) => break,
+                    // Ping: axum/tokio-tungstenite automatically replies with a Pong.
+                    // Binary frames are ignored.
+                    Some(Ok(Message::Ping(_))) | Some(Ok(Message::Binary(_))) => {}
+                    Some(Err(error)) => {
+                        warn!(error = %error, "websocket receive loop failed");
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            // Signal from the heartbeat task that the connection is stale.
+            sig = heartbeat_rx.recv() => {
+                match sig {
+                    Some(HeartbeatSignal::Stale) => {
+                        warn!("heartbeat: client missed pong, closing stale connection");
+                        let _ = send_tx.send(SendMsg::Close).await;
+                        break;
+                    }
+                    None => break,
+                }
             }
         }
     }
 
     drop(outbound_tx);
+    drop(send_tx);
     fanout_task.abort();
+    heartbeat_task.abort();
     let _ = fanout_task.await;
     let _ = send_task.await;
     debug!("daemon websocket connection closed");
