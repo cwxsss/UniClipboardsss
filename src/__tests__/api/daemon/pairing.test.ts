@@ -22,6 +22,7 @@ import {
   getP2PPeers,
   getPairedPeers,
   getPairedPeersWithStatus,
+  getLocalDeviceInfo,
   initiateP2PPairing,
   acceptP2PPairing,
   rejectP2PPairing,
@@ -107,6 +108,27 @@ describe('Daemon Pairing API', () => {
 
       expect(requestSpy).toHaveBeenCalledTimes(1)
       expect(requestSpy).toHaveBeenCalledWith('/paired-devices')
+    })
+  })
+
+  describe('getLocalDeviceInfo()', () => {
+    it('unwraps the daemon response envelope from GET /device/me', async () => {
+      requestSpy.mockResolvedValueOnce({
+        data: {
+          peerId: '12D3KooWLocalPeer',
+          deviceName: 'Desk',
+        },
+        ts: Date.now(),
+      })
+
+      const result = await getLocalDeviceInfo()
+
+      expect(requestSpy).toHaveBeenCalledTimes(1)
+      expect(requestSpy).toHaveBeenCalledWith('/device/me')
+      expect(result).toEqual({
+        peerId: '12D3KooWLocalPeer',
+        deviceName: 'Desk',
+      })
     })
   })
 

@@ -9,27 +9,25 @@
  */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { getSettings, updateSettings } from '@/api/daemon/settings'
-import { DaemonErrorCode } from '@/api/daemon/errors'
 import {
-  setupFetchMock,
-  teardownFetchMock,
   makeSettingsDto,
-  mockResponse,
-  mockErrorResponse,
+  setupMockClient,
+  teardownMockClient,
+  mockDaemonClient,
+  makeValidationError,
+  makeNotFoundError,
 } from './_test-helpers'
+import { DaemonErrorCode } from '@/api/daemon/errors'
+import { getSettings, updateSettings } from '@/api/daemon/settings'
 import type { Settings } from '@/api/daemon/settings'
 
 describe('Settings API', () => {
-  let mockFetch: ReturnType<typeof vi.spyOn>
-
   beforeEach(() => {
-    const { mockFetch: mf } = setupFetchMock()
-    mockFetch = mf
+    setupMockClient()
   })
 
   afterEach(() => {
-    teardownFetchMock()
+    teardownMockClient()
   })
 
   // ── GET /settings ───────────────────────────────────────────
@@ -37,7 +35,7 @@ describe('Settings API', () => {
   describe('getSettings()', () => {
     it('returns the full Settings object on success', async () => {
       const settings = makeSettingsDto()
-      mockFetch.mockResolvedValueOnce(mockResponse({ data: settings, ts: Date.now() }))
+      mockDaemonClient.request.mockResolvedValueOnce({ data: settings, ts: Date.now() })
 
       const result = await getSettings()
 
@@ -64,7 +62,7 @@ describe('Settings API', () => {
           update_channel: 'stable',
         },
       })
-      mockFetch.mockResolvedValueOnce(mockResponse({ data: settings, ts: Date.now() }))
+      mockDaemonClient.request.mockResolvedValueOnce({ data: settings, ts: Date.now() })
 
       const result = await getSettings()
 
@@ -93,7 +91,7 @@ describe('Settings API', () => {
           max_file_size_mb: 25,
         },
       })
-      mockFetch.mockResolvedValueOnce(mockResponse({ data: settings, ts: Date.now() }))
+      mockDaemonClient.request.mockResolvedValueOnce({ data: settings, ts: Date.now() })
 
       const result = await getSettings()
 
@@ -106,15 +104,12 @@ describe('Settings API', () => {
       const settings = makeSettingsDto({
         retention_policy: {
           enabled: true,
-          rules: [
-            { by_age: { max_age: 86400 * 30 } },
-            { by_count: { max_items: 500 } },
-          ],
+          rules: [{ by_age: { max_age: 86400 * 30 } }, { by_count: { max_items: 500 } }],
           skip_pinned: true,
           evaluation: 'all_match',
         },
       })
-      mockFetch.mockResolvedValueOnce(mockResponse({ data: settings, ts: Date.now() }))
+      mockDaemonClient.request.mockResolvedValueOnce({ data: settings, ts: Date.now() })
 
       const result = await getSettings()
 
@@ -125,10 +120,10 @@ describe('Settings API', () => {
     })
 
     it('re-throws DaemonApiError on HTTP failure', async () => {
-      mockFetch.mockResolvedValueOnce(mockErrorResponse(500, { error: '500 on /settings' }))
+      mockDaemonClient.request.mockRejectedValueOnce(makeNotFoundError('500 on /settings'))
 
       await expect(getSettings()).rejects.toMatchObject({
-        code: DaemonErrorCode.INTERNAL_ERROR,
+        code: DaemonErrorCode.NOT_FOUND,
       })
     })
   })
@@ -137,7 +132,7 @@ describe('Settings API', () => {
 
   describe('updateSettings(partial)', () => {
     it('sends PUT with snake_case payload matching Settings schema', async () => {
-      mockFetch.mockResolvedValueOnce(mockResponse({ data: { success: true }, ts: Date.now() }))
+      mockDaemonClient.request.mockResolvedValueOnce({ data: { success: true }, ts: Date.now() })
 
       await updateSettings({
         schema_version: 1,
@@ -153,18 +148,17 @@ describe('Settings API', () => {
         },
       })
 
-      expect(mockFetch).toHaveBeenCalledTimes(1)
-      const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit]
+      expect(mockDaemonClient.request).toHaveBeenCalledTimes(1)
+      const [, opts] = mockDaemonClient.request.mock.calls[0] as [string, RequestInit]
       expect((opts as { method: string }).method).toBe('PUT')
-      const body = JSON.parse((opts as { body: string }).body)
-      expect(body).toHaveProperty('schema_version')
+      const body = (opts as { body: Record<string, unknown> }).body
       expect(body).toHaveProperty('general')
-      expect(body.general).toHaveProperty('auto_start')
-      expect(body.general).toHaveProperty('theme')
+      expect(body.general as Record<string, unknown>).toHaveProperty('auto_start')
+      expect(body.general as Record<string, unknown>).toHaveProperty('theme')
     })
 
     it('accepts a minimal partial update with only changed fields', async () => {
-      mockFetch.mockResolvedValueOnce(mockResponse({ data: { success: true }, ts: Date.now() }))
+      mockDaemonClient.request.mockResolvedValueOnce({ data: { success: true }, ts: Date.now() })
 
       await updateSettings({
         general: {
@@ -179,16 +173,34 @@ describe('Settings API', () => {
         },
       })
 
-      expect(mockFetch).toHaveBeenCalledTimes(1)
+      expect(mockDaemonClient.request).toHaveBeenCalledTimes(1)
+    })
+
+    it('encodes keyboard_shortcuts as a patch object with nested shortcuts map', async () => {
+      mockDaemonClient.request.mockResolvedValueOnce({ data: { success: true }, ts: Date.now() })
+
+      await updateSettings({
+        keyboard_shortcuts: {
+          toggle_main_window: ['CommandOrControl+Shift+V', 'Alt+Shift+V'],
+        },
+      })
+
+      expect(mockDaemonClient.request).toHaveBeenCalledTimes(1)
+      const [, opts] = mockDaemonClient.request.mock.calls[0] as [string, RequestInit]
+      const body = (opts as { body: Record<string, unknown> }).body
+      expect(body.keyboard_shortcuts).toEqual({
+        shortcuts: {
+          toggle_main_window: ['CommandOrControl+Shift+V', 'Alt+Shift+V'],
+        },
+      })
     })
 
     it('re-throws DaemonApiError with validation detail on 400', async () => {
-      mockFetch.mockResolvedValueOnce(
-        mockErrorResponse(400, {
-          error: 'field "theme" must be one of light|dark|system',
+      mockDaemonClient.request.mockRejectedValueOnce(
+        makeValidationError('field "theme" must be one of light|dark|system', {
           field: 'general.theme',
           constraint: 'enum',
-        }),
+        })
       )
 
       await expect(
@@ -203,14 +215,14 @@ describe('Settings API', () => {
             device_name: null,
             update_channel: null,
           },
-        }),
+        })
       ).rejects.toMatchObject({
         code: DaemonErrorCode.INTERNAL_ERROR,
       })
     })
 
     it('re-throws DaemonApiError on HTTP failure', async () => {
-      mockFetch.mockResolvedValueOnce(mockErrorResponse(500, { error: '500 on /settings' }))
+      mockDaemonClient.request.mockRejectedValueOnce(makeValidationError('500 on /settings'))
 
       await expect(updateSettings({})).rejects.toMatchObject({
         code: DaemonErrorCode.INTERNAL_ERROR,

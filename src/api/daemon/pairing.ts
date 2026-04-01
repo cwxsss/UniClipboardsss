@@ -34,6 +34,11 @@ export interface LocalDeviceInfo {
   deviceName: string
 }
 
+interface LocalDeviceInfoResponse {
+  data: LocalDeviceInfo
+  ts: number
+}
+
 export interface PairedPeer {
   peerId: string
   deviceName: string
@@ -175,7 +180,8 @@ export async function getPairedPeersWithStatus(): Promise<PairedPeer[]> {
  * 获取本地设备信息（peer ID + 解析后的设备名称）。
  */
 export async function getLocalDeviceInfo(): Promise<LocalDeviceInfo> {
-  return daemonClient.request<LocalDeviceInfo>('/device/me')
+  const response = await daemonClient.request<LocalDeviceInfoResponse>('/device/me')
+  return response.data
 }
 
 /**

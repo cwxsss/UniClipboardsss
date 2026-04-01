@@ -151,6 +151,27 @@ interface SettingsUpdateResponse {
   ts: number
 }
 
+interface SettingsPatchRequest {
+  general?: Partial<GeneralSettings>
+  sync?: Partial<SyncSettings>
+  retention_policy?: Partial<RetentionPolicy>
+  security?: {
+    encryption_enabled?: boolean
+    auto_unlock_enabled?: boolean
+    passphrase?: string
+  }
+  pairing?: {
+    step_timeout?: number
+    user_verification_timeout?: number
+    session_timeout?: number
+    max_retries?: number
+  }
+  keyboard_shortcuts?: {
+    shortcuts: Record<string, ShortcutKey>
+  }
+  file_sync?: Partial<FileSyncSettings>
+}
+
 // ── Public API ─────────────────────────────────────────────────
 
 /**
@@ -178,8 +199,103 @@ export async function getSettings(): Promise<Settings> {
  * @throws {DaemonApiError} On HTTP or validation errors.
  */
 export async function updateSettings(settings: Partial<Settings>): Promise<void> {
+  const patch = toSettingsPatchRequest(settings)
   await daemonClient.request<SettingsUpdateResponse>('/settings', {
     method: 'PUT',
-    body: settings,
+    body: patch,
   })
+}
+
+function toSettingsPatchRequest(settings: Partial<Settings>): SettingsPatchRequest {
+  const patch: SettingsPatchRequest = {}
+
+  if (settings.general) {
+    const {
+      auto_start,
+      silent_start,
+      auto_check_update,
+      theme,
+      theme_color,
+      language,
+      device_name,
+      update_channel,
+    } = settings.general
+
+    patch.general = {
+      auto_start,
+      silent_start,
+      auto_check_update,
+      theme,
+      theme_color,
+      language,
+      device_name,
+      update_channel,
+    }
+  }
+
+  if (settings.sync) {
+    const { auto_sync, sync_frequency, content_types, max_file_size_mb } = settings.sync
+    patch.sync = {
+      auto_sync,
+      sync_frequency,
+      content_types,
+      max_file_size_mb,
+    }
+  }
+
+  if (settings.retention_policy) {
+    const { enabled, rules, skip_pinned, evaluation } = settings.retention_policy
+    patch.retention_policy = {
+      enabled,
+      rules,
+      skip_pinned,
+      evaluation,
+    }
+  }
+
+  if (settings.security) {
+    const { encryption_enabled, auto_unlock_enabled } = settings.security
+    patch.security = {
+      encryption_enabled,
+      auto_unlock_enabled,
+    }
+  }
+
+  if (settings.pairing) {
+    const { step_timeout, user_verification_timeout, session_timeout, max_retries } =
+      settings.pairing
+    patch.pairing = {
+      step_timeout,
+      user_verification_timeout,
+      session_timeout,
+      max_retries,
+    }
+  }
+
+  if (settings.keyboard_shortcuts) {
+    patch.keyboard_shortcuts = {
+      shortcuts: settings.keyboard_shortcuts,
+    }
+  }
+
+  if (settings.file_sync) {
+    const {
+      file_sync_enabled,
+      small_file_threshold,
+      max_file_size,
+      file_cache_quota_per_device,
+      file_retention_hours,
+      file_auto_cleanup,
+    } = settings.file_sync
+    patch.file_sync = {
+      file_sync_enabled,
+      small_file_threshold,
+      max_file_size,
+      file_cache_quota_per_device,
+      file_retention_hours,
+      file_auto_cleanup,
+    }
+  }
+
+  return patch
 }
