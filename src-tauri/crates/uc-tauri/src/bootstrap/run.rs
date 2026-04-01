@@ -2,8 +2,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use thiserror::Error;
@@ -16,11 +15,9 @@ use uc_daemon::DAEMON_API_REVISION;
 use uc_daemon_client::DaemonConnectionState;
 
 use super::runtime::DaemonBootstrapOwnershipState;
-use crate::commands::startup::StartupBarrier;
 pub use uc_daemon_client::daemon_lifecycle::terminate_local_daemon_pid;
 use uc_daemon_client::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
 
-pub const DAEMON_CONNECTION_EVENT: &str = "daemon://connection-info";
 const HEALTH_PATH: &str = "/health";
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -53,28 +50,6 @@ pub enum DaemonBootstrapError {
     StartupTimeout { timeout_ms: u64 },
     #[error("failed to load daemon connection info: {0}")]
     ConnectionInfo(anyhow::Error),
-    #[error("main webview window is not available")]
-    MainWindowUnavailable,
-    #[error("failed to emit daemon connection info event: {0}")]
-    Emit(anyhow::Error),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DaemonConnectionPayload {
-    base_url: String,
-    ws_url: String,
-    token: String,
-}
-
-impl From<&DaemonConnectionInfo> for DaemonConnectionPayload {
-    fn from(value: &DaemonConnectionInfo) -> Self {
-        Self {
-            base_url: value.base_url.clone(),
-            ws_url: value.ws_url.clone(),
-            token: value.token.clone(),
-        }
-    }
 }
 
 pub async fn bootstrap_daemon_connection<R: Runtime>(
@@ -214,41 +189,6 @@ pub async fn supervise_daemon<R: Runtime>(
             }
         }
     }
-}
-
-pub fn emit_daemon_connection_info_if_ready<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    state: &DaemonConnectionState,
-    startup_barrier: &StartupBarrier,
-) -> Result<bool, DaemonBootstrapError> {
-    if !startup_barrier.frontend_ready() {
-        return Ok(false);
-    }
-
-    let connection_info = match state.get() {
-        Some(connection_info) => connection_info,
-        None => return Ok(false),
-    };
-
-    if !startup_barrier.try_begin_daemon_connection_emit() {
-        return Ok(false);
-    }
-
-    let window = match app_handle.get_webview_window("main") {
-        Some(window) => window,
-        None => {
-            startup_barrier.release_daemon_connection_emit();
-            return Err(DaemonBootstrapError::MainWindowUnavailable);
-        }
-    };
-
-    let payload = DaemonConnectionPayload::from(&connection_info);
-    if let Err(error) = window.emit(DAEMON_CONNECTION_EVENT, payload) {
-        startup_barrier.release_daemon_connection_emit();
-        return Err(DaemonBootstrapError::Emit(anyhow::Error::new(error)));
-    }
-
-    Ok(true)
 }
 
 pub async fn bootstrap_daemon_connection_with_hooks<
@@ -906,24 +846,6 @@ mod tests {
             Err(DaemonBootstrapError::StartupTimeout { .. })
         ));
         assert!(attempts.load(Ordering::SeqCst) >= 2);
-    }
-
-    #[test]
-    fn emitted_event_payload_uses_camel_case_keys() {
-        let payload = DaemonConnectionPayload::from(&DaemonConnectionInfo {
-            base_url: "http://127.0.0.1:42715".to_string(),
-            ws_url: "ws://127.0.0.1:42715/ws".to_string(),
-            token: "secret".to_string(),
-            pid: 12345,
-        });
-
-        let value = serde_json::to_value(payload).unwrap();
-
-        assert_eq!(value["baseUrl"], "http://127.0.0.1:42715");
-        assert_eq!(value["wsUrl"], "ws://127.0.0.1:42715/ws");
-        assert_eq!(value["token"], "secret");
-        assert!(value.get("base_url").is_none());
-        assert!(value.get("ws_url").is_none());
     }
 
     #[test]

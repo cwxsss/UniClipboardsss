@@ -20,6 +20,20 @@ import {
 describe('setup api', () => {
   let requestSpy: ReturnType<typeof vi.spyOn>
 
+  const wrapState = (state: unknown) => ({
+    state,
+    sessionId: null,
+    nextStepHint: 'idle',
+    profile: 'default',
+    clipboardMode: 'full',
+    deviceName: 'Test Device',
+    peerId: 'peer-1',
+    selectedPeerId: null,
+    selectedPeerName: null,
+    hasCompleted: false,
+    ts: Date.now(),
+  })
+
   beforeEach(() => {
     requestSpy = vi.spyOn(daemonClient, 'request')
     requestSpy.mockResolvedValue(undefined)
@@ -30,9 +44,11 @@ describe('setup api', () => {
   })
 
   it('getSetupState returns the typed setup state from daemon', async () => {
-    requestSpy.mockResolvedValueOnce({
-      CreateSpaceInputPassphrase: { error: null },
-    })
+    requestSpy.mockResolvedValueOnce(
+      wrapState({
+        CreateSpaceInputPassphrase: { error: null },
+      })
+    )
 
     await expect(getSetupState()).resolves.toEqual({
       CreateSpaceInputPassphrase: { error: null },
@@ -40,37 +56,39 @@ describe('setup api', () => {
   })
 
   it('startNewSpace calls POST /setup/host', async () => {
-    requestSpy.mockResolvedValueOnce({ CreateSpaceInputPassphrase: { error: null } })
+    requestSpy.mockResolvedValueOnce(wrapState({ CreateSpaceInputPassphrase: { error: null } }))
     await startNewSpace()
     expect(requestSpy).toHaveBeenCalledTimes(1)
     expect(requestSpy).toHaveBeenCalledWith('/setup/host', { method: 'POST' })
   })
 
   it('startJoinSpace calls POST /setup/join', async () => {
-    requestSpy.mockResolvedValueOnce({ JoinSpaceSelectDevice: { error: null } })
+    requestSpy.mockResolvedValueOnce(wrapState({ JoinSpaceSelectDevice: { error: null } }))
     await startJoinSpace()
     expect(requestSpy).toHaveBeenCalledTimes(1)
     expect(requestSpy).toHaveBeenCalledWith('/setup/join', { method: 'POST' })
   })
 
   it('confirmPeerTrust calls POST /setup/confirm-peer', async () => {
-    requestSpy.mockResolvedValueOnce({ ProcessingJoinSpace: { message: null } })
+    requestSpy.mockResolvedValueOnce(wrapState({ ProcessingJoinSpace: { message: null } }))
     await confirmPeerTrust()
     expect(requestSpy).toHaveBeenCalledTimes(1)
     expect(requestSpy).toHaveBeenCalledWith('/setup/confirm-peer', { method: 'POST' })
   })
 
   it('cancelSetup calls POST /setup/cancel', async () => {
-    requestSpy.mockResolvedValueOnce('Welcome')
+    requestSpy.mockResolvedValueOnce(wrapState('Welcome'))
     await cancelSetup()
     expect(requestSpy).toHaveBeenCalledTimes(1)
     expect(requestSpy).toHaveBeenCalledWith('/setup/cancel', { method: 'POST' })
   })
 
   it('selectJoinPeer sends peerId in body', async () => {
-    requestSpy.mockResolvedValueOnce({
-      JoinSpaceInputPassphrase: { error: null },
-    })
+    requestSpy.mockResolvedValueOnce(
+      wrapState({
+        JoinSpaceInputPassphrase: { error: null },
+      })
+    )
     await selectJoinPeer('peer-abc-123')
 
     expect(requestSpy).toHaveBeenCalledWith('/setup/select-peer', {
@@ -90,9 +108,11 @@ describe('setup api', () => {
   })
 
   it('submitPassphrase calls daemon HTTP when passphrases match', async () => {
-    requestSpy.mockResolvedValueOnce({
-      ProcessingCreateSpace: { message: null },
-    })
+    requestSpy.mockResolvedValueOnce(
+      wrapState({
+        ProcessingCreateSpace: { message: null },
+      })
+    )
 
     const result = await submitPassphrase('same-passphrase', 'same-passphrase')
 
@@ -125,9 +145,11 @@ describe('setup api', () => {
   })
 
   it('verifyPassphrase sends passphrase in body', async () => {
-    requestSpy.mockResolvedValueOnce({
-      JoinSpaceInputPassphrase: { error: null },
-    })
+    requestSpy.mockResolvedValueOnce(
+      wrapState({
+        JoinSpaceInputPassphrase: { error: null },
+      })
+    )
 
     await verifyPassphrase('my-secret')
 

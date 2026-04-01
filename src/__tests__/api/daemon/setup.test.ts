@@ -33,6 +33,20 @@ import {
 describe('Daemon Setup API', () => {
   let requestSpy: ReturnType<typeof vi.spyOn>
 
+  const wrapState = (state: unknown) => ({
+    state,
+    sessionId: null,
+    nextStepHint: 'idle',
+    profile: 'default',
+    clipboardMode: 'full',
+    deviceName: 'Test Device',
+    peerId: 'peer-1',
+    selectedPeerId: null,
+    selectedPeerName: null,
+    hasCompleted: false,
+    ts: Date.now(),
+  })
+
   beforeEach(() => {
     // Spy on daemonClient.request to track calls while keeping real logic intact.
     requestSpy = vi.spyOn(daemonClient, 'request')
@@ -47,7 +61,7 @@ describe('Daemon Setup API', () => {
 
   describe('getSetupState()', () => {
     it('calls GET /setup/state', async () => {
-      requestSpy.mockResolvedValueOnce('Welcome')
+      requestSpy.mockResolvedValueOnce(wrapState('Welcome'))
 
       await getSetupState()
 
@@ -63,7 +77,7 @@ describe('Daemon Setup API', () => {
           error: null,
         },
       }
-      requestSpy.mockResolvedValueOnce(state)
+      requestSpy.mockResolvedValueOnce(wrapState(state))
 
       const result = await getSetupState()
 
@@ -81,9 +95,11 @@ describe('Daemon Setup API', () => {
 
   describe('startNewSpace()', () => {
     it('calls POST /setup/host', async () => {
-      requestSpy.mockResolvedValueOnce({
-        CreateSpaceInputPassphrase: { error: null },
-      })
+      requestSpy.mockResolvedValueOnce(
+        wrapState({
+          CreateSpaceInputPassphrase: { error: null },
+        })
+      )
 
       await startNewSpace()
 
@@ -102,9 +118,11 @@ describe('Daemon Setup API', () => {
 
   describe('startJoinSpace()', () => {
     it('calls POST /setup/join', async () => {
-      requestSpy.mockResolvedValueOnce({
-        JoinSpaceSelectDevice: { error: null },
-      })
+      requestSpy.mockResolvedValueOnce(
+        wrapState({
+          JoinSpaceSelectDevice: { error: null },
+        })
+      )
 
       await startJoinSpace()
 
@@ -117,9 +135,11 @@ describe('Daemon Setup API', () => {
 
   describe('selectJoinPeer(peerId)', () => {
     it('calls POST /setup/select-peer with peerId in body', async () => {
-      requestSpy.mockResolvedValueOnce({
-        JoinSpaceInputPassphrase: { error: null },
-      })
+      requestSpy.mockResolvedValueOnce(
+        wrapState({
+          JoinSpaceInputPassphrase: { error: null },
+        })
+      )
 
       await selectJoinPeer('QmPeerID123')
 
@@ -145,9 +165,11 @@ describe('Daemon Setup API', () => {
     })
 
     it('calls POST /setup/submit-passphrase when passphrases match', async () => {
-      requestSpy.mockResolvedValueOnce({
-        ProcessingCreateSpace: { message: null },
-      })
+      requestSpy.mockResolvedValueOnce(
+        wrapState({
+          ProcessingCreateSpace: { message: null },
+        })
+      )
 
       const result = await submitPassphrase('my-secret', 'my-secret')
 
@@ -178,9 +200,11 @@ describe('Daemon Setup API', () => {
 
   describe('verifyPassphrase(passphrase)', () => {
     it('calls POST /setup/verify-passphrase with passphrase in body', async () => {
-      requestSpy.mockResolvedValueOnce({
-        ProcessingJoinSpace: { message: null },
-      })
+      requestSpy.mockResolvedValueOnce(
+        wrapState({
+          ProcessingJoinSpace: { message: null },
+        })
+      )
 
       await verifyPassphrase('join-secret')
 
@@ -196,9 +220,11 @@ describe('Daemon Setup API', () => {
 
   describe('confirmPeerTrust()', () => {
     it('calls POST /setup/confirm-peer', async () => {
-      requestSpy.mockResolvedValueOnce({
-        ProcessingJoinSpace: { message: null },
-      })
+      requestSpy.mockResolvedValueOnce(
+        wrapState({
+          ProcessingJoinSpace: { message: null },
+        })
+      )
 
       await confirmPeerTrust()
 
@@ -211,7 +237,7 @@ describe('Daemon Setup API', () => {
 
   describe('cancelSetup()', () => {
     it('calls POST /setup/cancel', async () => {
-      requestSpy.mockResolvedValueOnce('Welcome')
+      requestSpy.mockResolvedValueOnce(wrapState('Welcome'))
 
       await cancelSetup()
 

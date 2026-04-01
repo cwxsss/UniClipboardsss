@@ -7,6 +7,10 @@ import {
   useSetupRealtimeStore,
 } from '@/store/setupRealtimeStore'
 
+vi.mock('@/lib/daemon-ws-bootstrap', () => ({
+  connectDaemonWs: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/api/setup', () => ({
   getSetupState: vi.fn(),
   onSetupStateChanged: vi.fn(),
@@ -70,6 +74,24 @@ describe('setupRealtimeStore', () => {
       },
     })
     expect(result.current.sessionId).toBe('session-setup')
+  })
+
+  it('hydrates from the setup state returned by the API facade', async () => {
+    vi.mocked(getSetupState).mockResolvedValue({
+      CreateSpaceInputPassphrase: { error: null },
+    })
+    vi.mocked(onSetupStateChanged).mockResolvedValue(() => {})
+    vi.mocked(onSpaceAccessCompleted).mockResolvedValue(() => {})
+
+    const { result } = renderHook(() => useSetupRealtimeStore())
+
+    await waitFor(() => {
+      expect(result.current.hydrated).toBe(true)
+    })
+
+    expect(result.current.setupState).toEqual({
+      CreateSpaceInputPassphrase: { error: null },
+    })
   })
 
   it('applies command responses without rehydrating setup state', async () => {

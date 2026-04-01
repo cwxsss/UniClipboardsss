@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { SettingContext } from './setting-context'
-import { DEFAULT_THEME_COLOR } from '@/constants/theme'
 import { getSettings, updateSettings } from '@/api/daemon'
+import { DEFAULT_THEME_COLOR } from '@/constants/theme'
 import i18n, { normalizeLanguage, persistLanguage } from '@/i18n'
+import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
 import { invokeWithTrace } from '@/lib/tauri-command'
 import { applyThemePreset } from '@/lib/theme-engine'
 import { startThemeTransition } from '@/lib/theme-transition'
@@ -23,6 +24,9 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
   const loadSetting = useCallback(async () => {
     try {
       setLoading(true)
+      // Ensure daemon is connected before making API calls — the connection may not
+      // have been established yet if this fires before AppContent calls connectDaemonWs().
+      await connectDaemonWs()
       const settingObj = await getSettings()
       setSetting(settingObj)
       setError(null)

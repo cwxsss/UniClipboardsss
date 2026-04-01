@@ -5,9 +5,9 @@
  */
 
 /**
- * Daemon connection config received from `daemon://connection-info` event.
+ * Daemon connection config received from `get_daemon_connection_info`.
  *
- * 从 Tauri 事件 `daemon://connection-info` 接收的 daemon 连接配置。
+ * 从 `get_daemon_connection_info` 命令接收的 daemon 连接配置。
  */
 export interface DaemonConfig {
   /** HTTP base URL, e.g. "http://127.0.0.1:42715" */

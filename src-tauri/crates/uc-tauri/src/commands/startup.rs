@@ -3,10 +3,59 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use serde::Serialize;
 use tauri::AppHandle;
-use tracing::info;
+use tracing::{info, info_span, Instrument};
+use uc_daemon::api::auth::DaemonConnectionInfo;
+use uc_daemon_client::DaemonConnectionState;
+use uc_platform::ports::observability::TraceMetadata;
 
+use crate::commands::record_trace_fields;
 use crate::tray::show_main_window;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonConnectionPayload {
+    base_url: String,
+    ws_url: String,
+    token: String,
+}
+
+impl From<&DaemonConnectionInfo> for DaemonConnectionPayload {
+    fn from(value: &DaemonConnectionInfo) -> Self {
+        Self {
+            base_url: value.base_url.clone(),
+            ws_url: value.ws_url.clone(),
+            token: value.token.clone(),
+        }
+    }
+}
+
+pub fn read_daemon_connection_info(
+    state: &DaemonConnectionState,
+) -> Option<DaemonConnectionPayload> {
+    state.get().as_ref().map(DaemonConnectionPayload::from)
+}
+
+/// Read the daemon connection info from managed state.
+///
+/// Pure status read from managed state; no usecase orchestration is required.
+#[tauri::command]
+pub async fn get_daemon_connection_info(
+    state: tauri::State<'_, DaemonConnectionState>,
+    _trace: Option<TraceMetadata>,
+) -> Result<Option<DaemonConnectionPayload>, crate::commands::CommandError> {
+    let span = info_span!(
+        "command.startup.get_daemon_connection_info",
+        trace_id = tracing::field::Empty,
+        trace_ts = tracing::field::Empty,
+    );
+    record_trace_fields(&span, &_trace);
+
+    async move { Ok(read_daemon_connection_info(&state)) }
+        .instrument(span)
+        .await
+}
 
 /// Startup barrier used to coordinate backend readiness.
 ///
@@ -19,8 +68,6 @@ use crate::tray::show_main_window;
 pub struct StartupBarrier {
     backend_ready: AtomicBool,
     finished: AtomicBool,
-    frontend_ready: AtomicBool,
-    daemon_connection_emitted: AtomicBool,
 }
 
 impl StartupBarrier {
@@ -29,26 +76,6 @@ impl StartupBarrier {
     /// 标记后端已就绪。
     pub fn mark_backend_ready(&self) {
         self.backend_ready.store(true, Ordering::SeqCst);
-    }
-
-    /// Mark the main webview as ready for runtime event delivery.
-    pub fn mark_frontend_ready(&self) {
-        self.frontend_ready.store(true, Ordering::SeqCst);
-    }
-
-    pub fn frontend_ready(&self) -> bool {
-        self.frontend_ready.load(Ordering::SeqCst)
-    }
-
-    pub fn try_begin_daemon_connection_emit(&self) -> bool {
-        self.daemon_connection_emitted
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-    }
-
-    pub fn release_daemon_connection_emit(&self) {
-        self.daemon_connection_emitted
-            .store(false, Ordering::SeqCst);
     }
 
     /// Try to finish startup once (idempotent).

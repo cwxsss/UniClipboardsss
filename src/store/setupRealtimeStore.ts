@@ -6,6 +6,7 @@ import {
   onSpaceAccessCompleted,
   type SetupState,
 } from '@/api/setup'
+import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
 
 type SetupRealtimeSnapshot = {
   setupState: SetupState | null
@@ -85,6 +86,10 @@ export async function ensureSetupRealtimeSync(): Promise<void> {
   startPromise = (async () => {
     try {
       clearRetryTimer()
+
+      // Ensure daemon is connected before making API calls — the connection may not
+      // have been established yet if this fires before AppContent calls connectDaemonWs().
+      await connectDaemonWs()
 
       if (!snapshot.hydrated) {
         const initialState = await getSetupState()

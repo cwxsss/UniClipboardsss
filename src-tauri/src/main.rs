@@ -20,8 +20,8 @@ use uc_bootstrap::GuiBootstrapContext;
 use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
 use uc_daemon_client::DaemonConnectionState;
 use uc_tauri::bootstrap::{
-    bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
-    start_background_tasks, supervise_daemon, AppRuntime,
+    bootstrap_daemon_connection, ensure_default_device_name, start_background_tasks,
+    supervise_daemon, AppRuntime,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::protocol::{parse_uc_request, UcRoute};
@@ -305,9 +305,6 @@ fn run_app(ctx: GuiBootstrapContext) {
 
     // Store TaskRegistry reference for exit hook registration
     let task_registry = runtime.task_registry().clone();
-    let startup_barrier_for_page_load = startup_barrier.clone();
-    let daemon_connection_state_for_page_load = daemon_connection_state.clone();
-
     let builder = Builder::default()
         // Register AppRuntime for Tauri commands
         .manage(runtime.clone())
@@ -345,19 +342,7 @@ fn run_app(ctx: GuiBootstrapContext) {
                 "[StartupTiming] main webview page load"
             );
 
-            if matches!(payload.event(), PageLoadEvent::Finished) {
-                startup_barrier_for_page_load.mark_frontend_ready();
-                if let Err(error) = emit_daemon_connection_info_if_ready(
-                    &webview.app_handle(),
-                    &daemon_connection_state_for_page_load,
-                    &startup_barrier_for_page_load,
-                ) {
-                    error!(
-                        error = %error,
-                        "Failed to emit daemon connection info after main webview load"
-                    );
-                }
-            }
+            if matches!(payload.event(), PageLoadEvent::Finished) {}
         })
         .register_asynchronous_uri_scheme_protocol("uc", move |ctx, request, responder| {
             let app_handle = ctx.app_handle().clone();
@@ -405,7 +390,6 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             let daemon_connection_state_for_setup = daemon_connection_state.clone();
             let gui_owned_daemon_state_for_setup = gui_owned_daemon_state.clone();
-            let startup_barrier_for_daemon = startup_barrier.clone();
             let app_handle_for_daemon = app.handle().clone();
             let supervisor_token = task_registry.token().clone();
             tauri::async_runtime::spawn(async move {
@@ -417,14 +401,6 @@ fn run_app(ctx: GuiBootstrapContext) {
                 .await
                 {
                     Ok(_connection_info) => {
-                        if let Err(error) = emit_daemon_connection_info_if_ready(
-                            &app_handle_for_daemon,
-                            &daemon_connection_state_for_setup,
-                            &startup_barrier_for_daemon,
-                        ) {
-                            warn!(error = %error, "Failed to deliver daemon connection info to main webview");
-                        }
-
                         // Start daemon supervisor to respawn if daemon dies unexpectedly.
                         let supervisor_state = daemon_connection_state_for_setup.clone();
                         let supervisor_daemon = gui_owned_daemon_state_for_setup.clone();
@@ -598,6 +574,7 @@ fn run_app(ctx: GuiBootstrapContext) {
             uc_tauri::commands::tray::set_tray_language,
             // Lifecycle commands
             uc_tauri::commands::get_tauri_pid,
+            uc_tauri::commands::get_daemon_connection_info,
             // Autostart commands
             uc_tauri::commands::autostart::enable_autostart,
             uc_tauri::commands::autostart::disable_autostart,

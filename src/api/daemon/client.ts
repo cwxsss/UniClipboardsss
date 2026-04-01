@@ -4,7 +4,7 @@
  * Daemon 单例 HTTP 客户端，管理 session token 生命周期并提供类型化请求方法。
  *
  * # Bootstrap Flow / 启动流程
- * 1. Tauri emits `daemon://connection-info` with `{ baseUrl, wsUrl, token }`.
+ * 1. Frontend polls `get_daemon_connection_info` until it receives `{ baseUrl, wsUrl, token }`.
  * 2. Call `daemonClient.initialize(config)` with the received config.
  * 3. The client auto-refreshes the session token every 4 minutes.
  *
@@ -73,7 +73,7 @@ class DaemonClient {
    *
    * 用 daemon 连接配置初始化，并启动 session 保活定时器。
    *
-   * @param config Connection config from `daemon://connection-info` event.
+   * @param config Connection config returned by `get_daemon_connection_info`.
    */
   initialize(config: DaemonConfig): void {
     this.config = config

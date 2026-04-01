@@ -71,8 +71,17 @@ export interface SpaceAccessCompletedEvent {
   ts: number
 }
 
-/** Response wrapper returned by all setup endpoints. */
-type SetupApiResponse = { data: SetupStateResponse; ts: number }
+type LegacySetupApiResponse = { data: SetupStateResponse; ts: number }
+
+/** Runtime response shapes observed across setup endpoints. */
+type SetupApiResponse = (SetupStateResponse & { ts: number }) | LegacySetupApiResponse
+
+function extractSetupState(response: SetupApiResponse): SetupState {
+  if ('data' in response) {
+    return response.data.state
+  }
+  return response.state
+}
 
 /**
  * Submit passphrase result (mirrors Tauri command contract).
@@ -95,7 +104,7 @@ export async function submitPassphrase(
     method: 'POST',
     body: { passphrase: passphrase1 },
   })
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -103,12 +112,12 @@ export async function submitPassphrase(
  *
  * 获取当前设置流程状态。
  *
- * The daemon API returns a wrapped response: { data: SetupStateResponse, ts }.
- * This function unwraps it and returns only the state field.
+ * The daemon API returns a flat response with metadata fields beside `state`.
+ * This function extracts and returns only the current setup state.
  */
 export async function getSetupState(): Promise<SetupState> {
   const response = await daemonClient.request<SetupApiResponse>('/setup/state')
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -120,7 +129,7 @@ export async function startNewSpace(): Promise<SetupState> {
   const response = await daemonClient.request<SetupApiResponse>('/setup/host', {
     method: 'POST',
   })
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -132,7 +141,7 @@ export async function startJoinSpace(): Promise<SetupState> {
   const response = await daemonClient.request<SetupApiResponse>('/setup/join', {
     method: 'POST',
   })
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -145,7 +154,7 @@ export async function selectJoinPeer(peerId: string): Promise<SetupState> {
     method: 'POST',
     body: { peerId },
   })
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -158,7 +167,7 @@ export async function submitNewSpacePassphrase(passphrase: string): Promise<Setu
     method: 'POST',
     body: { passphrase },
   })
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -171,7 +180,7 @@ export async function verifyPassphrase(passphrase: string): Promise<SetupState> 
     method: 'POST',
     body: { passphrase },
   })
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -183,7 +192,7 @@ export async function confirmPeerTrust(): Promise<SetupState> {
   const response = await daemonClient.request<SetupApiResponse>('/setup/confirm-peer', {
     method: 'POST',
   })
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -195,7 +204,7 @@ export async function cancelSetup(): Promise<SetupState> {
   const response = await daemonClient.request<SetupApiResponse>('/setup/cancel', {
     method: 'POST',
   })
-  return response.data.state
+  return extractSetupState(response)
 }
 
 /**
@@ -211,5 +220,5 @@ export async function completeSpaceAccess(): Promise<SetupState> {
   const response = await daemonClient.request<SetupApiResponse>('/setup/complete-space-access', {
     method: 'POST',
   })
-  return response.data.state
+  return extractSetupState(response)
 }

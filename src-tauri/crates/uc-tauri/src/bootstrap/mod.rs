@@ -7,9 +7,7 @@ pub mod runtime;
 pub mod wiring;
 
 // Re-export commonly used bootstrap functions
-pub use run::{
-    bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, supervise_daemon,
-};
+pub use run::{bootstrap_daemon_connection, supervise_daemon};
 pub use runtime::{create_app, create_runtime, AppRuntime, AppUseCases};
 pub use uc_bootstrap::assembly::SetupAssemblyPorts;
 pub use uc_bootstrap::ensure_default_device_name;
