@@ -4,17 +4,21 @@
 //! applied at the router level (see routes::router_l2_plus).
 
 use axum::extract::{Path, Query, State};
-use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use serde_json::json;
 use uc_app::usecases::clipboard::compute_clipboard_stats;
 use uc_app::usecases::CoreUseCases;
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 
-use crate::api::routes::internal_error;
+use crate::api::dto::clipboard::{
+    ClearHistoryResponse, ClearHistoryResultDto, ClipboardStatsDto, EntryDetailDto,
+    EntryProjectionResponseDto, EntryResourceDto, GetClipboardStatsResponse,
+    GetEntryDetailResponse, GetEntryResourceResponse, ListEntriesResponse, ToggleFavoriteRequest,
+    ToggleFavoriteResponse, ToggleFavoriteResultDto,
+};
+use crate::api::dto::error::ApiError;
 use crate::api::server::DaemonApiState;
 
 #[derive(Deserialize)]
@@ -46,239 +50,291 @@ pub fn router() -> Router<DaemonApiState> {
 }
 
 /// GET /clipboard/entries?limit=50&offset=0
-/// Lists clipboard entries with pagination. Returns full EntryProjectionDto array.
-/// Populates link_domains from link_urls (per Tauri command pattern).
-/// limit is clamped to 1000 to prevent unbounded queries.
+///
+/// Lists clipboard entries with pagination. Returns camelCase entry projections.
+/// Populates `linkDomains` from `linkUrls`. Limit is clamped to 1000.
+#[utoipa::path(
+    get,
+    path = "/clipboard/entries",
+    tag = "clipboard",
+    params(
+        ("limit" = Option<usize>, Query, description = "Maximum entries to return (default 50, max 1000)"),
+        ("offset" = Option<usize>, Query, description = "Number of entries to skip"),
+    ),
+    responses(
+        (status = 200, body = ListEntriesResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse),
+    )
+)]
 async fn list_entries(
     State(state): State<DaemonApiState>,
     Query(params): Query<PaginationParams>,
-) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
-    };
-
+) -> Result<Json<ListEntriesResponse>, ApiError> {
+    let runtime = state.runtime_or_error()?;
     let limit = clamp_limit(params.limit);
     let usecases = CoreUseCases::new(runtime.as_ref());
-    match usecases
+
+    let mut entries = usecases
         .list_entry_projections()
         .execute(limit, params.offset)
         .await
-    {
-        Ok(mut entries) => {
-            // Populate link_domains from link_urls
-            for dto in &mut entries {
-                dto.link_domains = dto
-                    .link_urls
-                    .as_ref()
-                    .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
-            }
-            let ts = chrono::Utc::now().timestamp_millis();
-            Json(json!({ "data": entries, "ts": ts })).into_response()
-        }
-        Err(e) => internal_error(anyhow::anyhow!("{}", e)).into_response(),
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // Populate link_domains from link_urls
+    for dto in &mut entries {
+        dto.link_domains = dto
+            .link_urls
+            .as_ref()
+            .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
     }
+
+    let response_entries: Vec<EntryProjectionResponseDto> =
+        entries.into_iter().map(Into::into).collect();
+
+    Ok(Json(ListEntriesResponse {
+        data: response_entries,
+        ts: chrono::Utc::now().timestamp_millis(),
+    }))
 }
 
 /// GET /clipboard/entries/:id
-/// Returns entry detail (full content) or 404 if not found.
-/// Uses GetEntryDetailUseCase to return actual text content, not just projection fields.
-/// NOTE: GetEntryDetailUseCase only returns entries that are text content (mime starts with "text/"
-/// or contains json/xml/javascript). Non-text entries return an error.
+///
+/// Returns entry detail (full text content). Returns 404 if not found,
+/// 422 if entry is not text content.
+#[utoipa::path(
+    get,
+    path = "/clipboard/entries/{id}",
+    tag = "clipboard",
+    params(
+        ("id" = String, Path, description = "Entry ID"),
+    ),
+    responses(
+        (status = 200, body = GetEntryDetailResponse),
+        (status = 404, description = "Entry not found", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 422, description = "Entry is not text content", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse),
+    )
+)]
 async fn get_entry(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
-) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
-    };
-
-    let parsed_id = EntryId::from(entry_id.clone());
+) -> Result<Json<GetEntryDetailResponse>, ApiError> {
+    let runtime = state.runtime_or_error()?;
+    let parsed_id = EntryId::from(entry_id);
     let usecases = CoreUseCases::new(runtime.as_ref());
-    match usecases.get_entry_detail().execute(&parsed_id).await {
-        Ok(detail) => {
-            let ts = chrono::Utc::now().timestamp_millis();
-            Json(json!({ "data": detail, "ts": ts })).into_response()
-        }
-        Err(e) => {
+
+    let detail = usecases
+        .get_entry_detail()
+        .execute(&parsed_id)
+        .await
+        .map_err(|e| {
             let msg = e.to_string().to_lowercase();
-            // GetEntryDetailUseCase returns "not found" or "not text content"
             if msg.contains("not found") {
-                let ts = chrono::Utc::now().timestamp_millis();
-                return (
-                    axum::http::StatusCode::NOT_FOUND,
-                    Json(json!({ "error": { "code": "not_found", "message": "entry not found" }, "ts": ts })),
-                )
-                    .into_response();
+                return ApiError::not_found("entry not found");
             }
-            // Non-text content returns an error — return 422 Unprocessable Entity
             if msg.contains("not text content") || msg.contains("not text") {
-                let ts = chrono::Utc::now().timestamp_millis();
-                return (
-                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(json!({ "error": { "code": "unsupported_content", "message": "entry is not text content" }, "ts": ts })),
-                )
-                    .into_response();
+                return ApiError {
+                    status: axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                    code: "unsupported_content".to_string(),
+                    message: "entry is not text content".to_string(),
+                };
             }
-            internal_error(anyhow::anyhow!("{}", e)).into_response()
-        }
-    }
+            ApiError::internal(e.to_string())
+        })?;
+
+    Ok(Json(GetEntryDetailResponse {
+        data: EntryDetailDto::from(detail),
+        ts: chrono::Utc::now().timestamp_millis(),
+    }))
 }
 
 /// DELETE /clipboard/entries/:id
+///
 /// Deletes an entry. Returns 204 on success, 404 if not found.
+#[utoipa::path(
+    delete,
+    path = "/clipboard/entries/{id}",
+    tag = "clipboard",
+    params(
+        ("id" = String, Path, description = "Entry ID"),
+    ),
+    responses(
+        (status = 204, description = "Entry deleted"),
+        (status = 404, description = "Entry not found", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse),
+    )
+)]
 async fn delete_entry(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
-) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
-    };
-
-    let parsed_id = EntryId::from(entry_id.clone());
+) -> Result<axum::http::StatusCode, ApiError> {
+    let runtime = state.runtime_or_error()?;
+    let parsed_id = EntryId::from(entry_id);
     let usecases = CoreUseCases::new(runtime.as_ref());
-    match usecases.delete_clipboard_entry().execute(&parsed_id).await {
-        Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
+
+    usecases
+        .delete_clipboard_entry()
+        .execute(&parsed_id)
+        .await
+        .map_err(|e| {
             let msg = e.to_string().to_lowercase();
             if msg.contains("not found") {
-                let ts = chrono::Utc::now().timestamp_millis();
-                return (
-                    axum::http::StatusCode::NOT_FOUND,
-                    Json(json!({ "error": { "code": "not_found", "message": "entry not found" }, "ts": ts })),
-                )
-                    .into_response();
+                return ApiError::not_found("entry not found");
             }
-            internal_error(e).into_response()
-        }
-    }
-}
+            ApiError::internal(e.to_string())
+        })?;
 
-#[derive(Deserialize)]
-pub struct ToggleFavoriteBody {
-    pub is_favorited: bool,
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// POST /clipboard/entries/:id/favorite
-/// Body: { "is_favorited": bool }
-/// Validates entry existence and acknowledges the favorite toggle request.
-/// NOTE: The domain model (ClipboardEntry) does not yet persist an `is_favorited` flag.
-/// This endpoint validates entry existence and returns success for known entries.
-/// Actual persistence will land when the schema is extended with an `is_favorited` column.
-/// Returns 200 on success, 404 if not found.
+///
+/// Toggles favorite state for an entry. Returns 200 on success, 404 if not found.
+#[utoipa::path(
+    post,
+    path = "/clipboard/entries/{id}/favorite",
+    tag = "clipboard",
+    params(
+        ("id" = String, Path, description = "Entry ID"),
+    ),
+    request_body = ToggleFavoriteRequest,
+    responses(
+        (status = 200, body = ToggleFavoriteResponse),
+        (status = 400, description = "Missing isFavorited field", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 404, description = "Entry not found", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse),
+    )
+)]
 async fn toggle_favorite(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
-    body: Result<Json<ToggleFavoriteBody>, axum::extract::rejection::JsonRejection>,
-) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
-    };
+    body: Result<Json<ToggleFavoriteRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<ToggleFavoriteResponse>, ApiError> {
+    let runtime = state.runtime_or_error()?;
 
-    let Json(body) = match body {
-        Ok(b) => b,
-        Err(_) => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                Json(json!({ "error": { "code": "bad_request", "message": "missing is_favorited field" } })),
-            )
-                .into_response();
-        }
-    };
+    let Json(body) = body.map_err(|_| ApiError::bad_request("missing isFavorited field"))?;
 
-    let parsed_id = EntryId::from(entry_id.clone());
+    let parsed_id = EntryId::from(entry_id);
     let usecases = CoreUseCases::new(runtime.as_ref());
-    match usecases
+
+    let found = usecases
         .toggle_favorite_clipboard_entry()
         .execute(&parsed_id, body.is_favorited)
         .await
-    {
-        Ok(true) => {
-            let ts = chrono::Utc::now().timestamp_millis();
-            Json(json!({ "data": { "success": true }, "ts": ts })).into_response()
-        }
-        Ok(false) => {
-            let ts = chrono::Utc::now().timestamp_millis();
-            (
-                axum::http::StatusCode::NOT_FOUND,
-                Json(json!({ "error": { "code": "not_found", "message": "entry not found" }, "ts": ts })),
-            )
-                .into_response()
-        }
-        Err(e) => internal_error(anyhow::anyhow!("{}", e)).into_response(),
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    if !found {
+        return Err(ApiError::not_found("entry not found"));
     }
+
+    Ok(Json(ToggleFavoriteResponse {
+        data: ToggleFavoriteResultDto { success: true },
+        ts: chrono::Utc::now().timestamp_millis(),
+    }))
 }
 
 /// GET /clipboard/stats
-/// Returns { total_items, total_size }.
-async fn get_stats(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
-    };
-
+///
+/// Returns aggregate clipboard statistics (total items and total size).
+#[utoipa::path(
+    get,
+    path = "/clipboard/stats",
+    tag = "clipboard",
+    responses(
+        (status = 200, body = GetClipboardStatsResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse),
+    )
+)]
+async fn get_stats(
+    State(state): State<DaemonApiState>,
+) -> Result<Json<GetClipboardStatsResponse>, ApiError> {
+    let runtime = state.runtime_or_error()?;
     let usecases = CoreUseCases::new(runtime.as_ref());
-    // Use clamp_limit to cap at 1000 (matches route-level guard)
+
     let limit = clamp_limit(10_000);
-    match usecases.list_entry_projections().execute(limit, 0).await {
-        Ok(entries) => {
-            let stats = compute_clipboard_stats(&entries);
-            let ts = chrono::Utc::now().timestamp_millis();
-            Json(json!({ "data": stats, "ts": ts })).into_response()
-        }
-        Err(e) => internal_error(anyhow::anyhow!("{}", e)).into_response(),
-    }
+    let entries = usecases
+        .list_entry_projections()
+        .execute(limit, 0)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let stats = compute_clipboard_stats(&entries);
+
+    Ok(Json(GetClipboardStatsResponse {
+        data: ClipboardStatsDto::from(stats),
+        ts: chrono::Utc::now().timestamp_millis(),
+    }))
 }
 
 /// GET /clipboard/entries/:id/resource
-/// Returns resource metadata (URL for blob/thumbnail, or content_type + inline metadata).
+///
+/// Returns resource metadata (blob URL or inline content).
+#[utoipa::path(
+    get,
+    path = "/clipboard/entries/{id}/resource",
+    tag = "clipboard",
+    params(
+        ("id" = String, Path, description = "Entry ID"),
+    ),
+    responses(
+        (status = 200, body = GetEntryResourceResponse),
+        (status = 404, description = "Entry not found", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse),
+    )
+)]
 async fn get_entry_resource(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
-) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
-    };
-
-    let parsed_id = EntryId::from(entry_id.clone());
+) -> Result<Json<GetEntryResourceResponse>, ApiError> {
+    let runtime = state.runtime_or_error()?;
+    let parsed_id = EntryId::from(entry_id);
     let usecases = CoreUseCases::new(runtime.as_ref());
-    match usecases.get_entry_resource().execute(&parsed_id).await {
-        Ok(resource) => {
-            let ts = chrono::Utc::now().timestamp_millis();
-            // EntryResourceResult already derives serde::Serialize
-            match serde_json::to_value(&resource) {
-                Ok(data) => Json(json!({ "data": data, "ts": ts })).into_response(),
-                Err(e) => internal_error(anyhow::anyhow!("failed to serialize resource: {}", e))
-                    .into_response(),
-            }
-        }
-        Err(e) => {
+
+    let resource = usecases
+        .get_entry_resource()
+        .execute(&parsed_id)
+        .await
+        .map_err(|e| {
             let msg = e.to_string().to_lowercase();
             if msg.contains("not found") {
-                let ts = chrono::Utc::now().timestamp_millis();
-                return (
-                    axum::http::StatusCode::NOT_FOUND,
-                    Json(json!({ "error": { "code": "not_found", "message": "entry not found" }, "ts": ts })),
-                )
-                    .into_response();
+                return ApiError::not_found("entry not found");
             }
-            internal_error(e).into_response()
-        }
-    }
+            ApiError::internal(e.to_string())
+        })?;
+
+    Ok(Json(GetEntryResourceResponse {
+        data: EntryResourceDto::from(resource),
+        ts: chrono::Utc::now().timestamp_millis(),
+    }))
 }
 
 /// POST /clipboard/entries/clear
+///
 /// Clears all clipboard history via bulk deletion.
 /// Returns the number of entries deleted and any failures.
-async fn clear_history(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
-    };
-
+#[utoipa::path(
+    post,
+    path = "/clipboard/entries/clear",
+    tag = "clipboard",
+    responses(
+        (status = 200, body = ClearHistoryResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse),
+    )
+)]
+async fn clear_history(
+    State(state): State<DaemonApiState>,
+) -> Result<Json<ClearHistoryResponse>, ApiError> {
+    let runtime = state.runtime_or_error()?;
     let usecases = CoreUseCases::new(runtime.as_ref());
-    match usecases.clear_clipboard_history().execute().await {
-        Ok(result) => {
-            let ts = chrono::Utc::now().timestamp_millis();
-            Json(json!({ "data": result, "ts": ts })).into_response()
-        }
-        Err(e) => internal_error(anyhow::anyhow!("{}", e)).into_response(),
-    }
+
+    let result = usecases
+        .clear_clipboard_history()
+        .execute()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    Ok(Json(ClearHistoryResponse {
+        data: ClearHistoryResultDto::from(result),
+        ts: chrono::Utc::now().timestamp_millis(),
+    }))
 }

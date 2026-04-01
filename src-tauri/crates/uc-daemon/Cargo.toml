@@ -38,6 +38,7 @@ utoipa = { version = "4", features = ["uuid", "chrono", "url"] }
 utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
 serde_with = "3.18.0"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"

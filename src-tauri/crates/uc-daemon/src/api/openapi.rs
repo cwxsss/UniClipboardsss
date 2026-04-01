@@ -7,6 +7,12 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
+use crate::api::dto::clipboard::{
+    ClearHistoryResponse, ClearHistoryResultDto, ClipboardStatsDto, EntryDetailDto,
+    EntryProjectionResponseDto, EntryResourceDto, GetClipboardStatsResponse,
+    GetEntryDetailResponse, GetEntryResourceResponse, ListEntriesResponse, ToggleFavoriteRequest,
+    ToggleFavoriteResponse, ToggleFavoriteResultDto,
+};
 use crate::api::dto::device::{
     ContentTypesDto as DeviceContentTypesDto, ContentTypesPatchDto, DeviceSyncSettingsDto,
     DeviceSyncSettingsPatchDto, GetDeviceSyncSettingsResponse, GetLocalDeviceInfoResponse,
@@ -68,6 +74,13 @@ impl Modify for SecurityAddon {
 #[openapi(
     modifiers(&SecurityAddon),
     paths(
+        crate::api::clipboard::list_entries,
+        crate::api::clipboard::get_entry,
+        crate::api::clipboard::delete_entry,
+        crate::api::clipboard::toggle_favorite,
+        crate::api::clipboard::get_stats,
+        crate::api::clipboard::get_entry_resource,
+        crate::api::clipboard::clear_history,
         crate::api::settings::get_settings_handler,
         crate::api::settings::update_settings_handler,
         crate::api::encryption::get_encryption_state_handler,
@@ -103,6 +116,21 @@ impl Modify for SecurityAddon {
     ),
     components(
         schemas(
+            // Clipboard
+            ListEntriesResponse,
+            EntryProjectionResponseDto,
+            GetEntryDetailResponse,
+            EntryDetailDto,
+            GetEntryResourceResponse,
+            EntryResourceDto,
+            GetClipboardStatsResponse,
+            ClipboardStatsDto,
+            ClearHistoryResponse,
+            ClearHistoryResultDto,
+            ToggleFavoriteRequest,
+            ToggleFavoriteResponse,
+            ToggleFavoriteResultDto,
+            // Common
             ContentTypesDto,
             ApiErrorResponse,
             GetLocalDeviceInfoResponse,
@@ -152,6 +180,7 @@ impl Modify for SecurityAddon {
         )
     ),
     tags(
+        (name = "clipboard", description = "Clipboard entry CRUD and statistics"),
         (name = "device", description = "Local device identity and per-device sync settings"),
         (name = "settings", description = "Settings management APIs"),
         (name = "encryption", description = "Encryption state and session management"),
