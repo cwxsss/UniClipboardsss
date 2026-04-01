@@ -1,26 +1,33 @@
 //! WebSocket subscribe protocol for daemon read-model topics.
+//!
+//! Browser WebSocket clients cannot send custom headers, so the session token is
+//! passed via URL query parameter: `ws://host/ws?auth=Session%20<jwt>`.
+//! Native clients can continue using the `Authorization: Session <jwt>` header.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::Json;
+use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, warn};
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
+use utoipa;
 
-use crate::api::dto::pairing::PairingSessionSummaryDto;
+use crate::api::dto::error::ApiError;
+use crate::api::dto::ws::{WsErrorResponse, WsSubscribeRequest};
 use crate::api::server::DaemonApiState;
 use crate::api::types::{
-    DaemonWsEvent, DaemonWsSubscribeRequest, PairedDeviceDto, PairedDevicesChangedPayload,
-    PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
+    DaemonWsEvent, PairedDeviceDto, PairedDevicesChangedPayload, PairingFailurePayload,
+    PairingSessionChangedPayload, PairingSessionSummaryDto, PairingVerificationPayload,
     PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeerSnapshotDto, PeersChangedFullPayload,
     SpaceAccessStateResponse, StatusResponse,
 };
@@ -28,16 +35,45 @@ use crate::security::claims::SessionTokenClaims;
 
 type ClientTopics = Arc<RwLock<HashSet<String>>>;
 
-/// Extract session token from Authorization header or ?auth= query parameter.
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+/// Returns the WebSocket router.
+#[utoipa::path(
+    get,
+    path = "/ws",
+    tag = "websocket",
+    params(
+        ("auth" = String, Query, description = "JWT session token prefixed with 'Session '. Used when the client cannot set custom headers (e.g., browser WebSocket).")
+    ),
+    responses(
+        (status = 101, description = "WebSocket upgrade accepted"),
+        (status = 401, description = "Missing or invalid session token", body = WsErrorResponse),
+        (status = 403, description = "PID not allowed", body = WsErrorResponse),
+        (status = 429, description = "Rate limit exceeded", body = WsErrorResponse),
+    ),
+    security(())
+)]
+pub fn router() -> Router<DaemonApiState> {
+    Router::new().route("/ws", get(websocket_upgrade))
+}
+
+// ---------------------------------------------------------------------------
+// Auth helpers
+// ---------------------------------------------------------------------------
+
+/// Extract session token from `Authorization` header or `?auth=` query parameter.
 ///
 /// Browser WebSocket clients cannot send custom headers, so the session token is
-/// passed via URL query parameter. Native clients can continue using the Authorization header.
-/// Returns `None` if neither source provides a valid "Session <token>" format.
+/// passed via URL query parameter. Native clients can continue using the
+/// Authorization header. Returns `None` if neither source provides a valid
+/// `"Session <token>"` format.
 fn extract_session_token(
     headers: &HeaderMap,
     params: &std::collections::HashMap<String, String>,
 ) -> Option<String> {
-    // Try Authorization header first (native clients prefer this path).
+    // Authorization header (native clients).
     if let Some(token) = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -46,7 +82,7 @@ fn extract_session_token(
         return Some(token.to_string());
     }
 
-    // Fall back to ?auth= query parameter (browser WebSocket clients).
+    // ?auth= query parameter (browser WebSocket clients).
     if let Some(auth_value) = params.get("auth") {
         if let Some(token) = auth_value.strip_prefix("Session ") {
             return Some(token.to_string());
@@ -56,46 +92,40 @@ fn extract_session_token(
     None
 }
 
-pub fn router() -> Router<DaemonApiState> {
-    Router::new().route("/ws", get(websocket_upgrade))
-}
+// ---------------------------------------------------------------------------
+// Upgrade handler
+// ---------------------------------------------------------------------------
 
 async fn websocket_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<DaemonApiState>,
     headers: HeaderMap,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Response {
-    // Step 1: Extract session token from Authorization header OR ?auth= query parameter.
-    //
-    // Browser WebSocket clients cannot send custom headers, so the session token is
-    // passed via URL query parameter: ws://host/ws?auth=Session%20<jwt>.
-    // Non-browser clients (native apps, CLI tools) can continue using the Authorization header.
+) -> impl IntoResponse {
+    // Step 1: Extract session token.
     let token = match extract_session_token(&headers, &params) {
         Some(t) => t,
         None => {
-            return ws_unauthorized("missing_session_token").into_response();
+            return ApiError::unauthorized("missing_session_token").into_response();
         }
     };
 
-    // Step 2: Verify JWT using the JWT secret from merged SecurityState
+    // Step 2: Verify JWT.
     let claims = match SessionTokenClaims::verify(&token, &state.security.jwt_secret) {
         Ok(claims) => claims,
         Err(e) => {
             warn!(error = %e, "WS JWT validation failed");
-            return ws_unauthorized("invalid_session_token").into_response();
+            return ApiError::unauthorized("invalid_session_token").into_response();
         }
     };
 
-    // Step 3: Check PID whitelist via merged DaemonApiState.security field
+    // Step 3: Check PID whitelist.
     if !state.security.is_pid_allowed(claims.pid).await {
         warn!(pid = claims.pid, "WS request from non-whitelisted PID");
-        return ws_forbidden("pid_not_allowed").into_response();
+        return ApiError::unauthorized("pid_not_allowed").into_response();
     }
 
-    // Step 4: Apply rate limiting using PID from validated JWT claims.
-    // Rate limiting by PID is trustworthy because the PID was extracted from a
-    // validated JWT (signed with the daemon's secret), not from caller-controlled input.
+    // Step 4: Apply rate limiting by PID (trusted — extracted from validated JWT).
     if !state
         .security
         .rate_limiter
@@ -105,22 +135,38 @@ async fn websocket_upgrade(
         return ws_rate_limited().into_response();
     }
 
-    // Step 5: Upgrade the WebSocket, passing claims to the connection handler
+    // Step 5: Upgrade the WebSocket.
     ws.on_upgrade(move |socket| handle_connection(socket, state, claims))
 }
+
+fn ws_rate_limited() -> (StatusCode, Json<WsErrorResponse>) {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(WsErrorResponse {
+            error: "rate_limit_exceeded".to_string(),
+            retry_after_secs: Some(60),
+        }),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Connection handler
+// ---------------------------------------------------------------------------
 
 async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: SessionTokenClaims) {
     let topics = Arc::new(RwLock::new(HashSet::<String>::new()));
     tracing::info!(
         pid = claims.pid,
         client_type = %claims.client_type,
-        "websocket connection authenticated"
+        "websocket connection authenticated",
     );
+
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<DaemonWsEvent>(32);
     let mut broadcast_rx = state.event_tx.subscribe();
     let fanout_topics = Arc::clone(&topics);
     let fanout_tx = outbound_tx.clone();
 
+    // Fanout task: receives daemon events and forwards them to the client.
     let fanout_task = tokio::spawn(async move {
         loop {
             match broadcast_rx.recv().await {
@@ -148,6 +194,8 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: Ses
     });
 
     let (mut sender, mut receiver) = socket.split();
+
+    // Send task: drains the outbound channel and writes to the socket.
     let send_task = tokio::spawn(async move {
         while let Some(event) = outbound_rx.recv().await {
             let payload = match serde_json::to_string(&event) {
@@ -164,6 +212,7 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: Ses
         }
     });
 
+    // Receive loop: handles client messages (subscribe requests).
     while let Some(message) = receiver.next().await {
         match message {
             Ok(Message::Text(payload)) => {
@@ -190,13 +239,17 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: Ses
     debug!("daemon websocket connection closed");
 }
 
+// ---------------------------------------------------------------------------
+// Client message handler
+// ---------------------------------------------------------------------------
+
 async fn handle_client_message(
     payload: &str,
     state: &DaemonApiState,
     topics: &ClientTopics,
     outbound_tx: &mpsc::Sender<DaemonWsEvent>,
-) -> Result<()> {
-    let request: DaemonWsSubscribeRequest =
+) -> anyhow::Result<()> {
+    let request: WsSubscribeRequest =
         serde_json::from_str(payload).context("invalid websocket request payload")?;
 
     if request.action != "subscribe" {
@@ -220,6 +273,11 @@ async fn handle_client_message(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Topic helpers
+// ---------------------------------------------------------------------------
+
+/// Returns only topics that are supported and deduplicated.
 fn normalize_topics(topics: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
@@ -236,6 +294,7 @@ fn normalize_topics(topics: Vec<String>) -> Vec<String> {
     normalized
 }
 
+/// Check whether a topic string is in the supported set.
 fn is_supported_topic(topic: &str) -> bool {
     matches!(
         topic,
@@ -253,15 +312,21 @@ fn is_supported_topic(topic: &str) -> bool {
     )
 }
 
+/// Returns `true` when the subscribed topic matches the event topic.
+/// Subscription `"pairing"` matches all `"pairing/*"` events.
 fn topic_matches(subscription: &str, event_topic: &str) -> bool {
     subscription == event_topic
         || (subscription == ws_topic::PAIRING && event_topic.starts_with("pairing/"))
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot builder
+// ---------------------------------------------------------------------------
+
 async fn build_snapshot_event(
     state: &DaemonApiState,
     topic: &str,
-) -> Result<Option<DaemonWsEvent>> {
+) -> anyhow::Result<Option<DaemonWsEvent>> {
     match topic {
         ws_topic::STATUS => snapshot_event(
             ws_topic::STATUS,
@@ -270,6 +335,7 @@ async fn build_snapshot_event(
             state.query_service.status().await?,
         )
         .map(Some),
+
         ws_topic::PEERS => snapshot_event(
             ws_topic::PEERS,
             ws_event::PEERS_SNAPSHOT,
@@ -277,6 +343,7 @@ async fn build_snapshot_event(
             state.query_service.peers().await?,
         )
         .map(Some),
+
         ws_topic::PAIRED_DEVICES => snapshot_event(
             ws_topic::PAIRED_DEVICES,
             ws_event::PAIRED_DEVICES_SNAPSHOT,
@@ -284,24 +351,20 @@ async fn build_snapshot_event(
             state.query_service.paired_devices().await?,
         )
         .map(Some),
-        ws_topic::PAIRING => snapshot_event(
+
+        ws_topic::PAIRING | ws_topic::PAIRING_SESSION => snapshot_event(
             ws_topic::PAIRING,
             ws_event::PAIRING_SNAPSHOT,
             None,
             state.query_service.pairing_sessions().await,
         )
         .map(Some),
-        ws_topic::PAIRING_SESSION => snapshot_event(
-            ws_topic::PAIRING_SESSION,
-            ws_event::PAIRING_SNAPSHOT,
-            None,
-            state.query_service.pairing_sessions().await,
-        )
-        .map(Some),
+
         ws_topic::PAIRING_VERIFICATION => Ok(None),
         ws_topic::SETUP => Ok(None),
         ws_topic::CLIPBOARD => Ok(None),
         ws_topic::FILE_TRANSFER => Ok(None),
+
         ws_topic::SPACE_ACCESS => {
             let space_access_state = state
                 .query_service
@@ -315,10 +378,12 @@ async fn build_snapshot_event(
             )
             .map(Some)
         }
+
         ws_topic::ENCRYPTION => {
             // No snapshot for encryption — only an event is emitted on session_ready.
             Ok(None)
         }
+
         unsupported => anyhow::bail!("unsupported websocket topic: {unsupported}"),
     }
 }
@@ -328,7 +393,7 @@ fn snapshot_event<T: Serialize>(
     event_type: &str,
     session_id: Option<String>,
     payload: T,
-) -> Result<DaemonWsEvent> {
+) -> anyhow::Result<DaemonWsEvent> {
     Ok(DaemonWsEvent {
         topic: topic.to_string(),
         event_type: event_type.to_string(),
@@ -338,26 +403,9 @@ fn snapshot_event<T: Serialize>(
     })
 }
 
-fn ws_unauthorized(error: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(serde_json::json!({"error": error})),
-    )
-}
-
-fn ws_forbidden(error: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({"error": error})),
-    )
-}
-
-fn ws_rate_limited() -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::TOO_MANY_REQUESTS,
-        Json(serde_json::json!({"error": "rate_limit_exceeded", "retry_after_secs": 60})),
-    )
-}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -408,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_topics_keeps_clipboard_and_file_transfer() {
+    fn normalize_topics_keeps_valid_known_topics() {
         let topics = vec![
             "clipboard".to_string(),
             "file-transfer".to_string(),
@@ -426,6 +474,11 @@ mod tests {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Compile-time type witnesses
+// ---------------------------------------------------------------------------
+
+/// Compile-time assertion that all required types are reachable from this module.
 #[allow(dead_code)]
 fn _event_type_markers(
     _: StatusResponse,
