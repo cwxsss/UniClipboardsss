@@ -83,7 +83,7 @@ describe('useClipboardEventStream', () => {
         eventType: 'clipboard.new_content',
         ts: 0,
         sessionId: null,
-        payload: { entry_id: 'entry-1', preview: 'hello', origin: 'local' },
+        payload: { entryId: 'entry-1', preview: 'hello', origin: 'local' },
       })
       await Promise.resolve()
     })
@@ -112,14 +112,14 @@ describe('useClipboardEventStream', () => {
         eventType: 'clipboard.new_content',
         ts: 0,
         sessionId: null,
-        payload: { entry_id: 'entry-1', preview: '...', origin: 'remote' },
+        payload: { entryId: 'entry-1', preview: '...', origin: 'remote' },
       })
       capturedHandler?.({
         topic: 'clipboard',
         eventType: 'clipboard.new_content',
         ts: 0,
         sessionId: null,
-        payload: { entry_id: 'entry-2', preview: '...', origin: 'remote' },
+        payload: { entryId: 'entry-2', preview: '...', origin: 'remote' },
       })
     })
 

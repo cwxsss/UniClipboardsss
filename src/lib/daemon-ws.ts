@@ -20,10 +20,11 @@ import { daemonClient } from '@/api/daemon/client'
 
 /**
  * Raw event envelope received from the daemon WebSocket.
- * Field names match the Rust `DaemonWsEvent` struct (snake_case).
+ * Rust `DaemonWsEvent` serializes with `#[serde(rename_all = "camelCase")]`
+ * and `#[serde(rename = "type")]` for `event_type`, so the wire format is:
+ * `{ topic, type, sessionId, ts, payload }`.
  *
  * 从 daemon WebSocket 接收的事件信封。
- * 字段名与 Rust `DaemonWsEvent` 结构体一致。
  */
 export interface DaemonWsEvent<T = unknown> {
   topic: string
@@ -53,7 +54,6 @@ function makeNonce(): string {
 
 /** DaemonWsClient class — exported for testability (use `daemonWs` singleton in production). */
 export class DaemonWsClient {
-
   /**
    * WebSocket constructor used to open connections.
    * Exposed for testability — defaults to the global WebSocket.
@@ -80,7 +80,7 @@ export class DaemonWsClient {
   private _isReconnecting = false
 
   constructor(wsFactory?: (url: string) => WebSocket) {
-    this._wsFactory = wsFactory ?? ((url) => new WebSocket(url))
+    this._wsFactory = wsFactory ?? (url => new WebSocket(url))
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -216,7 +216,7 @@ export class DaemonWsClient {
       }
     }
 
-    ws.onmessage = (event) => {
+    ws.onmessage = event => {
       try {
         this._handleMessage(event.data)
       } catch (err) {
@@ -224,7 +224,7 @@ export class DaemonWsClient {
       }
     }
 
-    ws.onerror = (event) => {
+    ws.onerror = event => {
       console.error('[DaemonWsClient] WebSocket error', event)
       const reject = this._connectReject
       this._connectResolve = null
@@ -250,7 +250,7 @@ export class DaemonWsClient {
 
   private _handleMessage(data: string): void {
     // Parse the raw event from the daemon.
-    // The daemon serializes with snake_case: { topic, event_type, session_id, ts, payload }
+    // The daemon serializes with camelCase + rename: { topic, type, sessionId, ts, payload }
     let raw: Record<string, unknown>
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -262,11 +262,12 @@ export class DaemonWsClient {
 
     const event: DaemonWsEvent = {
       topic: raw.topic,
-      eventType: raw.event_type,
+      eventType: (raw.type ?? raw.event_type) as string,
       ts: raw.ts,
-      sessionId: raw.session_id ?? null,
+      sessionId: (raw.sessionId ?? raw.session_id ?? null) as string | null,
       payload: raw.payload,
     }
+    console.info('[DaemonWsClient] received WS event:', event.topic, event.eventType)
 
     // Dispatch to every callback registered for this exact topic.
     const callbacks = this._callbacks.get(event.topic)
@@ -313,9 +314,7 @@ export class DaemonWsClient {
     if (!this._wsUrl) return
 
     if (this._reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-      console.error(
-        `[DaemonWsClient] gave up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`,
-      )
+      console.error(`[DaemonWsClient] gave up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`)
       this._isReconnecting = false
       return
     }
@@ -326,13 +325,13 @@ export class DaemonWsClient {
     // Exponential backoff with jitter: min(30s, 1s * 2^attempt) ± 10%.
     const baseDelay = Math.min(
       RECONNECT_MAX_DELAY_MS,
-      RECONNECT_BASE_DELAY_MS * 2 ** (this._reconnectAttempt - 1),
+      RECONNECT_BASE_DELAY_MS * 2 ** (this._reconnectAttempt - 1)
     )
     const jitter = baseDelay * 0.1 * (Math.random() * 2 - 1)
     const delayMs = Math.round(baseDelay + jitter)
 
     console.info(
-      `[DaemonWsClient] scheduling reconnect attempt ${this._reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS} in ${delayMs}ms`,
+      `[DaemonWsClient] scheduling reconnect attempt ${this._reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS} in ${delayMs}ms`
     )
 
     this._reconnectTimer = setTimeout(() => {

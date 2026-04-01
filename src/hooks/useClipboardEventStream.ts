@@ -17,7 +17,7 @@ export interface UseClipboardEventStreamOptions {
  * (Matches the Rust `ClipboardNewContentEvent` serde shape.)
  */
 interface ClipboardNewContentPayload {
-  entry_id: string
+  entryId: string
   preview: string
   origin: string // "local" | "remote"
 }
@@ -107,22 +107,46 @@ export function useClipboardEventStream({
   }, [onDeleted, onLocalItem, onRemoteInvalidate])
 
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled) {
+      console.warn(
+        '[useClipboardEventStream] disabled (enabled=false, likely encryptionReady=false)'
+      )
+      return
+    }
+    console.info('[useClipboardEventStream] subscribing to clipboard topic')
 
     const handler = (event: { topic: string; eventType: string; payload: unknown }) => {
+      console.info('[useClipboardEventStream] received event:', event.eventType, event.payload)
       // Route clipboard.new_content to onLocalItem / onRemoteInvalidate.
       if (event.eventType === 'clipboard.new_content') {
         const payload = event.payload as ClipboardNewContentPayload
+        console.info(
+          '[useClipboardEventStream] clipboard.new_content payload:',
+          JSON.stringify(payload)
+        )
         if (payload.origin === 'local') {
           // Fetch single entry from daemon list endpoint (matching clipboardSlice pattern)
           void getClipboardEntries(50, 0)
             .then(response => {
+              console.info(
+                '[useClipboardEventStream] getClipboardEntries response status:',
+                response.status,
+                'entries count:',
+                response.entries?.length ?? 0
+              )
               if (response.status !== 'ready' || !response.entries) return null
-              const entry = response.entries.find(e => e.id === payload.entry_id)
+              const entry = response.entries.find(e => e.id === payload.entryId)
+              console.info(
+                '[useClipboardEventStream] found entry for id',
+                payload.entryId,
+                ':',
+                !!entry
+              )
               if (!entry) return null
               return transformDtoToItemResponse(entry)
             })
             .then(item => {
+              console.info('[useClipboardEventStream] onLocalItem called with item:', !!item)
               if (item) onLocalItemRef.current(item)
             })
             .catch(err => console.error('Failed to fetch local clipboard entry:', err))
