@@ -55,7 +55,7 @@ export default function UnlockPage({ onUnlockSucceeded }: UnlockPageProps) {
       setShowKeychainModal(true)
       return
     }
-    await updateSecuritySetting({ auto_unlock_enabled: checked })
+    await updateSecuritySetting({ autoUnlockEnabled: checked })
   }
 
   const handleKeychainVerify = async () => {
@@ -64,7 +64,7 @@ export default function UnlockPage({ onUnlockSucceeded }: UnlockPageProps) {
     try {
       const granted = await verifyKeychainAccess()
       if (granted) {
-        await updateSecuritySetting({ auto_unlock_enabled: true })
+        await updateSecuritySetting({ autoUnlockEnabled: true })
         setShowKeychainModal(false)
       } else {
         setVerifyError(t('unlock.keychainModal.error'))
@@ -132,7 +132,7 @@ export default function UnlockPage({ onUnlockSucceeded }: UnlockPageProps) {
             </div>
             <Switch
               id="auto-unlock"
-              checked={setting?.security?.auto_unlock_enabled ?? false}
+              checked={setting?.security?.autoUnlockEnabled ?? false}
               onCheckedChange={handleAutoUnlockChange}
               disabled={settingsLoading}
             />

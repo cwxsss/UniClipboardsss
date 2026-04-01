@@ -10,7 +10,7 @@ vi.mock('@/hooks/useSetting', () => {
       setting: {
         general: {
           theme: 'light',
-          theme_color: DEFAULT_THEME_COLOR,
+          themeColor: DEFAULT_THEME_COLOR,
           language: 'en',
         },
       },
@@ -38,18 +38,18 @@ describe('SettingProvider theme integration', () => {
     document.documentElement.removeAttribute('data-theme')
   })
 
-  it('applies persisted theme_color on mount', () => {
+  it('applies persisted themeColor on mount', () => {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <SettingProvider>{children}</SettingProvider>
     )
 
     const { result } = renderHook(() => useSetting(), { wrapper })
 
-    expect(result.current.setting?.general.theme_color).toBe(DEFAULT_THEME_COLOR)
+    expect(result.current.setting?.general.themeColor).toBe(DEFAULT_THEME_COLOR)
     expect(document.documentElement.getAttribute('data-theme')).toBe(DEFAULT_THEME_COLOR)
   })
 
-  it('falls back to default preset when theme_color is null', () => {
+  it('falls back to default preset when themeColor is null', () => {
     const wrapper = ({ children }: { children: React.ReactNode }) => (
       <SettingProvider>{children}</SettingProvider>
     )
@@ -58,7 +58,7 @@ describe('SettingProvider theme integration', () => {
 
     act(() => {
       if (result.current.setting?.general) {
-        result.current.setting.general.theme_color = null
+        result.current.setting.general.themeColor = null
       }
     })
 

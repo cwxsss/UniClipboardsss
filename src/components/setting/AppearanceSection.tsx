@@ -70,7 +70,7 @@ export default function AppearanceSection() {
   const handleThemeColorChange = async (newThemeColor: string, e: MouseEvent) => {
     try {
       setTransitionOrigin(e.clientX, e.clientY)
-      await updateGeneralSetting({ theme_color: newThemeColor })
+      await updateGeneralSetting({ themeColor: newThemeColor })
     } catch (error) {
       console.error('Failed to change theme color:', error)
     }
@@ -115,8 +115,8 @@ export default function AppearanceSection() {
               }}
               className={cn(
                 'cursor-pointer group relative flex flex-col items-center gap-2 p-2 rounded-xl border-2 transition-all hover:bg-muted/50',
-                setting?.general?.theme_color === item.name ||
-                  (item.name === DEFAULT_THEME_COLOR && !setting?.general?.theme_color)
+                setting?.general?.themeColor === item.name ||
+                  (item.name === DEFAULT_THEME_COLOR && !setting?.general?.themeColor)
                   ? 'border-primary bg-primary/5'
                   : 'border-transparent'
               )}

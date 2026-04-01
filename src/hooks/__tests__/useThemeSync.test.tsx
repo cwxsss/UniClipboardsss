@@ -36,7 +36,7 @@ describe('useThemeSync', () => {
     mediaQueryListener = null
 
     mockInvokeWithTrace.mockResolvedValue({
-      general: { theme: 'dark', theme_color: 'blue' },
+      general: { theme: 'dark', themeColor: 'blue' },
     })
 
     mockListen.mockImplementation(async (_channel: string, callback: unknown) => {
@@ -75,7 +75,7 @@ describe('useThemeSync', () => {
 
     settingChangedCallback?.({
       payload: {
-        settingJson: JSON.stringify({ general: { theme: 'light', theme_color: 'rose' } }),
+        settingJson: JSON.stringify({ general: { theme: 'light', themeColor: 'rose' } }),
       },
     })
 
@@ -85,7 +85,7 @@ describe('useThemeSync', () => {
 
   it('reacts to system theme changes when theme follows system', async () => {
     mockInvokeWithTrace.mockResolvedValue({
-      general: { theme: 'system', theme_color: 'green' },
+      general: { theme: 'system', themeColor: 'green' },
     })
     const matchMediaMock = vi.fn().mockImplementation(() => ({
       matches: true,

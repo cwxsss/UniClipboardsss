@@ -50,7 +50,7 @@ export const useShortcut = ({
   // Get setting context for keyboard shortcuts override support
   // This is optional - only used when id is provided
   const settingContext = useContext(SettingContext)
-  const keyboardShortcuts = settingContext?.setting?.keyboard_shortcuts ?? null
+  const keyboardShortcuts = settingContext?.setting?.keyboardShortcuts ?? null
 
   // Determine effective key: use override from settings if available
   const effectiveKey = (() => {

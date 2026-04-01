@@ -1,20 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getStorageStats, clearCache, openDataDirectory } from '@/api/storage'
-import { daemonClient } from '@/api/daemon/client'
 
 // ── Mock dependencies ─────────────────────────────────────────
 
+const mockRequest = vi.fn()
 vi.mock('@/api/daemon/client', () => ({
   daemonClient: {
-    request: vi.fn(),
+    request: mockRequest,
   },
 }))
 
-vi.mock('@/lib/tauri-command', () => ({
-  invokeWithTrace: vi.fn(),
-}))
-
-const daemonClientRequestMock = vi.mocked(daemonClient.request)
 const invokeMock = vi.fn()
 vi.mock('@/lib/tauri-command', () => ({
   invokeWithTrace: (...args: unknown[]) => invokeMock(...args),
@@ -22,64 +17,62 @@ vi.mock('@/lib/tauri-command', () => ({
 
 describe('storage api', () => {
   beforeEach(() => {
-    daemonClientRequestMock.mockReset()
+    mockRequest.mockReset()
     invokeMock.mockReset()
   })
 
   describe('getStorageStats', () => {
-    it('calls GET /storage/stats via daemonClient and returns stats', async () => {
+    it('calls GET /storage/stats via daemonClient and returns unwrapped stats', async () => {
       const mockStats = {
-        total_entries: 150,
-        total_size_bytes: 52428800,
-        cache_size_bytes: 10485760,
-        oldest_entry_ts: 1710000000000,
-        newest_entry_ts: 1710090000000,
+        totalBytes: 52428800,
+        databaseBytes: 10485760,
+        vaultBytes: 20971520,
+        cacheBytes: 10485760,
+        logsBytes: 10485760,
       }
-      daemonClientRequestMock.mockResolvedValueOnce(mockStats)
+      mockRequest.mockResolvedValueOnce({ data: mockStats, ts: Date.now() })
 
       const result = await getStorageStats()
 
-      expect(daemonClientRequestMock).toHaveBeenCalledWith('/storage/stats')
+      expect(mockRequest).toHaveBeenCalledWith('/storage/stats')
       expect(result).toEqual(mockStats)
     })
 
     it('returns correct values for empty storage', async () => {
       const emptyStats = {
-        total_entries: 0,
-        total_size_bytes: 0,
-        cache_size_bytes: 0,
-        oldest_entry_ts: null,
-        newest_entry_ts: null,
+        totalBytes: 0,
+        databaseBytes: 0,
+        vaultBytes: 0,
+        cacheBytes: 0,
+        logsBytes: 0,
       }
-      daemonClientRequestMock.mockResolvedValueOnce(emptyStats)
+      mockRequest.mockResolvedValueOnce({ data: emptyStats, ts: Date.now() })
 
       const result = await getStorageStats()
 
-      expect(result.total_entries).toBe(0)
-      expect(result.total_size_bytes).toBe(0)
-      expect(result.oldest_entry_ts).toBeNull()
-      expect(result.newest_entry_ts).toBeNull()
+      expect(result.totalBytes).toBe(0)
+      expect(result.databaseBytes).toBe(0)
     })
   })
 
   describe('clearCache', () => {
     it('calls POST /storage/clear-cache with confirmed=true', async () => {
-      daemonClientRequestMock.mockResolvedValueOnce(undefined)
+      mockRequest.mockResolvedValueOnce(undefined)
 
       await clearCache(true)
 
-      expect(daemonClientRequestMock).toHaveBeenCalledWith('/storage/clear-cache', {
+      expect(mockRequest).toHaveBeenCalledWith('/storage/clear-cache', {
         method: 'POST',
         body: { confirmed: true },
       })
     })
 
     it('calls POST /storage/clear-cache with confirmed=false', async () => {
-      daemonClientRequestMock.mockResolvedValueOnce(undefined)
+      mockRequest.mockResolvedValueOnce(undefined)
 
       await clearCache(false)
 
-      expect(daemonClientRequestMock).toHaveBeenCalledWith('/storage/clear-cache', {
+      expect(mockRequest).toHaveBeenCalledWith('/storage/clear-cache', {
         method: 'POST',
         body: { confirmed: false },
       })

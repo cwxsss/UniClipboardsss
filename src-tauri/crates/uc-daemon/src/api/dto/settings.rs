@@ -23,6 +23,7 @@ pub struct UpdateSettingsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsDto {
     pub auto_start: bool,
     pub silent_start: bool,
@@ -66,6 +67,7 @@ pub enum ShortcutKeyDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ContentTypesDto {
     pub text: bool,
     pub image: bool,
@@ -76,6 +78,7 @@ pub struct ContentTypesDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncSettingsDto {
     pub auto_sync: bool,
     pub sync_frequency: SyncFrequencyDto,
@@ -92,7 +95,7 @@ pub enum SyncFrequencyDto {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum RetentionRuleDto {
     /// 按时间清理
     ByAge {
@@ -124,14 +127,14 @@ pub enum RetentionRuleDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub enum RuleEvaluationDto {
     AnyMatch,
     AllMatch,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct RetentionPolicyDto {
     pub enabled: bool,
     pub rules: Vec<RetentionRuleDto>,
@@ -140,7 +143,7 @@ pub struct RetentionPolicyDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct SecuritySettingsDto {
     /// 是否启用本地数据加密
     pub encryption_enabled: bool,
@@ -161,6 +164,7 @@ pub struct SecuritySettingsDto {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct PairingSettingsDto {
     #[serde_as(as = "DurationSeconds<u64>")]
     #[schema(value_type = u64)]
@@ -179,6 +183,7 @@ pub struct PairingSettingsDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FileSyncSettingsDto {
     pub file_sync_enabled: bool,
     pub small_file_threshold: u64,
@@ -189,6 +194,7 @@ pub struct FileSyncSettingsDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SettingsDto {
     pub schema_version: u32,
     pub general: GeneralSettingsDto,
@@ -206,6 +212,7 @@ pub struct SettingsDto {
 
 /// All fields are optional — only provided fields are updated.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsPatchDto {
     pub auto_start: Option<bool>,
     pub silent_start: Option<bool>,
@@ -218,6 +225,7 @@ pub struct GeneralSettingsPatchDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ContentTypesPatchDto {
     pub text: Option<bool>,
     pub image: Option<bool>,
@@ -228,6 +236,7 @@ pub struct ContentTypesPatchDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncSettingsPatchDto {
     pub auto_sync: Option<bool>,
     pub sync_frequency: Option<SyncFrequencyDto>,
@@ -236,6 +245,7 @@ pub struct SyncSettingsPatchDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct RetentionPolicyPatchDto {
     pub enabled: Option<bool>,
     pub rules: Option<Vec<RetentionRuleDto>>,
@@ -244,6 +254,7 @@ pub struct RetentionPolicyPatchDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SecuritySettingsPatchDto {
     /// 写入时设置是否启用本地数据加密（需要 passphrase）
     pub encryption_enabled: Option<bool>,
@@ -256,6 +267,7 @@ pub struct SecuritySettingsPatchDto {
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct PairingSettingsPatchDto {
     #[serde_as(as = "Option<DurationSeconds<u64>>")]
     #[schema(value_type = Option<u64>)]
@@ -273,6 +285,7 @@ pub struct PairingSettingsPatchDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FileSyncSettingsPatchDto {
     pub file_sync_enabled: Option<bool>,
     pub small_file_threshold: Option<u64>,
@@ -288,6 +301,7 @@ pub struct KeyboardShortcutsPatchDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct SettingsPatchDto {
     pub general: Option<GeneralSettingsPatchDto>,
     pub sync: Option<SyncSettingsPatchDto>,

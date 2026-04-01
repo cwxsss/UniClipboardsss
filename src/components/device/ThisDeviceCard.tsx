@@ -17,7 +17,7 @@ const ThisDeviceCard: React.FC = () => {
     state => state.devices
   )
   const { setting } = useSetting()
-  const syncActive = setting?.sync.auto_sync !== false
+  const syncActive = setting?.sync.autoSync !== false
 
   const handleRetry = () => {
     dispatch(clearLocalDeviceError())

@@ -17,35 +17,35 @@ import { SUPPORTED_LANGUAGES, type SupportedLanguage, getInitialLanguage } from 
 export default function GeneralSection() {
   const { t } = useTranslation()
   const { setting, loading: settingLoading, updateGeneralSetting } = useSetting()
-  const [autoStart, setAutoStart] = useState(setting?.general.auto_start ?? false)
-  const [silentStart, setSilentStart] = useState(setting?.general.silent_start ?? false)
+  const [autoStart, setAutoStart] = useState(setting?.general.autoStart ?? false)
+  const [silentStart, setSilentStart] = useState(setting?.general.silentStart ?? false)
   const [language, setLanguage] = useState<SupportedLanguage>(() => {
     const backendLang = setting?.general.language
     const isValid = backendLang && SUPPORTED_LANGUAGES.includes(backendLang as SupportedLanguage)
     return isValid ? (backendLang as SupportedLanguage) : getInitialLanguage()
   })
-  const [deviceName, setDeviceName] = useState(setting?.general.device_name ?? '')
+  const [deviceName, setDeviceName] = useState(setting?.general.deviceName ?? '')
   const [saving, setSaving] = useState(false)
   const isBusy = settingLoading || saving
 
   // 从配置中读取设置（auto_start 状态由后端管理，直接从 settings 读取）
   useEffect(() => {
     if (!setting?.general) return
-    setAutoStart(setting.general.auto_start)
-    setSilentStart(setting.general.silent_start)
+    setAutoStart(setting.general.autoStart)
+    setSilentStart(setting.general.silentStart)
     // Validate backend language value against supported languages
     const backendLang = setting.general.language
     const isValidLanguage =
       backendLang && SUPPORTED_LANGUAGES.includes(backendLang as SupportedLanguage)
     setLanguage(isValidLanguage ? (backendLang as SupportedLanguage) : getInitialLanguage())
-    setDeviceName(setting.general.device_name ?? '')
+    setDeviceName(setting.general.deviceName ?? '')
   }, [setting])
 
   // 处理自启动开关变化（后端 update_settings 会自动调用 ApplyAutostartSetting）
   const handleAutoStartChange = async (checked: boolean) => {
     try {
       setSaving(true)
-      await updateGeneralSetting({ auto_start: checked })
+      await updateGeneralSetting({ autoStart: checked })
       setAutoStart(checked)
     } catch (error) {
       console.error('更改自启动状态失败:', error)
@@ -59,7 +59,7 @@ export default function GeneralSection() {
     try {
       setSaving(true)
       // 更新设置和状态
-      await updateGeneralSetting({ silent_start: checked })
+      await updateGeneralSetting({ silentStart: checked })
       setSilentStart(checked)
     } catch (error) {
       console.error('更改静默启动状态失败:', error)
@@ -89,7 +89,7 @@ export default function GeneralSection() {
   const handleDeviceNameBlur = async () => {
     try {
       setSaving(true)
-      await updateGeneralSetting({ device_name: deviceName })
+      await updateGeneralSetting({ deviceName: deviceName })
     } catch (error) {
       console.error('更改设备名称失败:', error)
     } finally {

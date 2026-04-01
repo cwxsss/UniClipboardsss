@@ -85,26 +85,26 @@ function formatBytes(bytes: number): string {
 
 function getByAgeSecs(rules: RetentionRule[]): number | null {
   for (const rule of rules) {
-    if ('by_age' in rule) return rule.by_age.max_age
+    if ('byAge' in rule) return rule.byAge.maxAge
   }
   return null
 }
 
 function getByCountItems(rules: RetentionRule[]): number | null {
   for (const rule of rules) {
-    if ('by_count' in rule) return rule.by_count.max_items
+    if ('byCount' in rule) return rule.byCount.maxItems
   }
   return null
 }
 
 function setByAgeRule(rules: RetentionRule[], days: number): RetentionRule[] {
-  const newRule: RetentionRule = { by_age: { max_age: days * SECONDS_PER_DAY } }
-  return [newRule, ...rules.filter(r => !('by_age' in r))]
+  const newRule: RetentionRule = { byAge: { maxAge: days * SECONDS_PER_DAY } }
+  return [newRule, ...rules.filter(r => !('byAge' in r))]
 }
 
 function setByCountRule(rules: RetentionRule[], maxItems: number): RetentionRule[] {
-  const newRule: RetentionRule = { by_count: { max_items: maxItems } }
-  return [...rules.filter(r => !('by_count' in r)), newRule]
+  const newRule: RetentionRule = { byCount: { maxItems: maxItems } }
+  return [...rules.filter(r => !('byCount' in r)), newRule]
 }
 
 // ── StorageBar sub-component ─────────────────────────────────────────
@@ -328,11 +328,11 @@ const StorageSection: React.FC = () => {
   // ── Sync retention policy from backend ───────────────────────────
 
   useEffect(() => {
-    if (!setting?.retention_policy) return
-    const rp = setting.retention_policy
+    if (!setting?.retentionPolicy) return
+    const rp = setting.retentionPolicy
 
     setEnabled(rp.enabled)
-    setSkipPinned(rp.skip_pinned)
+    setSkipPinned(rp.skipPinned)
     optimisticRulesRef.current = rp.rules
 
     const ageSecs = getByAgeSecs(rp.rules)
@@ -347,7 +347,7 @@ const StorageSection: React.FC = () => {
       const match = MAX_ITEMS_OPTIONS.find(o => o.count === count)
       setMaxItems(match ? match.value : '500')
     }
-  }, [setting?.retention_policy])
+  }, [setting?.retentionPolicy])
 
   // ── Handlers ─────────────────────────────────────────────────────
 
@@ -365,7 +365,7 @@ const StorageSection: React.FC = () => {
   const handleRetentionDaysChange = async (value: string) => {
     const prev = retentionDays
     setRetentionDays(value)
-    if (!setting?.retention_policy) return
+    if (!setting?.retentionPolicy) return
     const days = RETENTION_DAYS_OPTIONS.find(o => o.value === value)?.days ?? 30
     const prevRules = optimisticRulesRef.current
     const newRules = setByAgeRule(prevRules, days)
@@ -382,7 +382,7 @@ const StorageSection: React.FC = () => {
   const handleMaxItemsChange = async (value: string) => {
     const prev = maxItems
     setMaxItems(value)
-    if (!setting?.retention_policy) return
+    if (!setting?.retentionPolicy) return
     const count = MAX_ITEMS_OPTIONS.find(o => o.value === value)?.count ?? 500
     const prevRules = optimisticRulesRef.current
     const newRules = setByCountRule(prevRules, count)
@@ -400,7 +400,7 @@ const StorageSection: React.FC = () => {
     const prev = skipPinned
     setSkipPinned(checked)
     try {
-      await updateRetentionPolicy({ skip_pinned: checked })
+      await updateRetentionPolicy({ skipPinned: checked })
     } catch (err) {
       console.error('Failed to update skip pinned:', err)
       setSkipPinned(prev)

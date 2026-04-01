@@ -36,7 +36,7 @@ export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
     setIsCheckingUpdate(true)
 
     try {
-      const channel = setting?.general?.update_channel ?? null
+      const channel = setting?.general?.updateChannel ?? null
       const update = await checkForUpdate(channel)
       setUpdateInfo(update)
       return update
@@ -44,7 +44,7 @@ export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
       isCheckingRef.current = false
       setIsCheckingUpdate(false)
     }
-  }, [updateInfo, setting?.general?.update_channel])
+  }, [updateInfo, setting?.general?.updateChannel])
 
   const doInstallUpdate = useCallback(async () => {
     setDownloadProgress({ downloaded: 0, total: null, phase: 'downloading' })
@@ -65,7 +65,7 @@ export const UpdateProvider: React.FC<UpdateProviderProps> = ({ children }) => {
 
     hasCheckedOnStartup.current = true
 
-    if (!setting.general.auto_check_update) {
+    if (!setting.general.autoCheckUpdate) {
       return
     }
 

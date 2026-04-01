@@ -17,46 +17,46 @@ vi.mock('react-i18next', () => ({
 }))
 
 const baseSetting: Settings = {
-  schema_version: 1,
+  schemaVersion: 1,
   general: {
-    auto_start: false,
-    silent_start: false,
-    auto_check_update: true,
+    autoStart: false,
+    silentStart: false,
+    autoCheckUpdate: true,
     theme: 'system',
-    theme_color: null,
+    themeColor: null,
     language: 'en-US',
-    device_name: 'Test Device',
+    deviceName: 'Test Device',
   },
   sync: {
-    auto_sync: true,
-    sync_frequency: 'realtime',
-    content_types: {
+    autoSync: true,
+    syncFrequency: 'realtime',
+    contentTypes: {
       text: true,
       image: true,
       link: true,
       file: true,
-      code_snippet: true,
-      rich_text: true,
+      codeSnippet: true,
+      richText: true,
     },
-    max_file_size_mb: 10,
+    maxFileSizeMb: 10,
   },
-  retention_policy: {
+  retentionPolicy: {
     enabled: false,
     rules: [],
-    skip_pinned: false,
-    evaluation: 'any_match',
+    skipPinned: false,
+    evaluation: 'anyMatch',
   },
   security: {
-    encryption_enabled: false,
-    passphrase_configured: false,
-    auto_unlock_enabled: false,
+    encryptionEnabled: false,
+    passphraseConfigured: false,
+    autoUnlockEnabled: false,
   },
   pairing: {
-    step_timeout: 15,
-    user_verification_timeout: 120,
-    session_timeout: 300,
-    max_retries: 3,
-    protocol_version: '1.0.0',
+    stepTimeout: 15,
+    userVerificationTimeout: 120,
+    sessionTimeout: 300,
+    maxRetries: 3,
+    protocolVersion: '1.0.0',
   },
 }
 
@@ -138,7 +138,7 @@ describe('UpdateProvider', () => {
       ...baseSetting,
       general: {
         ...baseSetting.general,
-        auto_check_update: false,
+        autoCheckUpdate: false,
       },
     }
 

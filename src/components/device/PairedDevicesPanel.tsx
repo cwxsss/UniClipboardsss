@@ -23,8 +23,8 @@ const PairedDevicesPanel: React.FC = () => {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
   const { pairedDevices, pairedDevicesError } = useAppSelector(state => state.devices)
-  const globalAutoSyncOff = setting?.sync.auto_sync === false
-  const globalFileSyncOff = setting?.file_sync?.file_sync_enabled === false
+  const globalAutoSyncOff = setting?.sync.autoSync === false
+  const globalFileSyncOff = setting?.fileSync?.fileSyncEnabled === false
 
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)

@@ -27,20 +27,20 @@ export type UpdateChannel = 'stable' | 'alpha' | 'beta' | 'rc'
 export type SyncFrequency = 'realtime' | 'interval'
 
 /** Retention rule evaluation strategy. / 保留规则评估策略。 */
-export type RuleEvaluation = 'any_match' | 'all_match'
+export type RuleEvaluation = 'anyMatch' | 'allMatch'
 
 // ── Sub-setting interfaces ─────────────────────────────────────
 
 /** General application settings. / 常规应用设置。 */
 export interface GeneralSettings {
-  auto_start: boolean
-  silent_start: boolean
-  auto_check_update: boolean
+  autoStart: boolean
+  silentStart: boolean
+  autoCheckUpdate: boolean
   theme: Theme
-  theme_color: string | null
+  themeColor: string | null
   language: string | null
-  device_name: string | null
-  update_channel?: UpdateChannel | null
+  deviceName: string | null
+  updateChannel?: UpdateChannel | null
 }
 
 /** Content type toggles for sync filtering. / 同步过滤的内容类型开关。 */
@@ -49,45 +49,45 @@ export interface ContentTypes {
   image: boolean
   link: boolean
   file: boolean
-  code_snippet: boolean
-  rich_text: boolean
+  codeSnippet: boolean
+  richText: boolean
 }
 
 /** Sync behaviour settings. / 同步行为设置。 */
 export interface SyncSettings {
-  auto_sync: boolean
-  sync_frequency: SyncFrequency
-  content_types: ContentTypes
-  max_file_size_mb: number
+  autoSync: boolean
+  syncFrequency: SyncFrequency
+  contentTypes: ContentTypes
+  maxFileSizeMb: number
 }
 
 /** Security / encryption settings. / 安全/加密设置。 */
 export interface SecuritySettings {
-  encryption_enabled: boolean
-  passphrase_configured: boolean
-  auto_unlock_enabled: boolean
+  encryptionEnabled: boolean
+  passphraseConfigured: boolean
+  autoUnlockEnabled: boolean
 }
 
 /** Pairing timeout and protocol settings. / 配对超时和协议设置。 */
 export interface PairingSettings {
   /** Step timeout in seconds. */
-  step_timeout: number
+  stepTimeout: number
   /** User verification timeout in seconds. */
-  user_verification_timeout: number
+  userVerificationTimeout: number
   /** Session timeout in seconds. */
-  session_timeout: number
-  max_retries: number
-  protocol_version: string
+  sessionTimeout: number
+  maxRetries: number
+  protocolVersion: string
 }
 
 /** File sync settings. / 文件同步设置。 */
 export interface FileSyncSettings {
-  file_sync_enabled: boolean
-  small_file_threshold: number
-  max_file_size: number
-  file_cache_quota_per_device: number
-  file_retention_hours: number
-  file_auto_cleanup: boolean
+  fileSyncEnabled: boolean
+  smallFileThreshold: number
+  maxFileSize: number
+  fileCacheQuotaPerDevice: number
+  fileRetentionHours: number
+  fileAutoCleanup: boolean
 }
 
 /**
@@ -96,17 +96,17 @@ export interface FileSyncSettings {
  * 保留规则 — 与 Rust `RetentionRule` 枚举匹配的可区分联合类型。
  */
 export type RetentionRule =
-  | { by_age: { max_age: number } }
-  | { by_count: { max_items: number } }
-  | { by_content_type: { content_type: ContentTypes; max_age: number } }
-  | { by_total_size: { max_bytes: number } }
-  | { sensitive: { max_age: number } }
+  | { byAge: { maxAge: number } }
+  | { byCount: { maxItems: number } }
+  | { byContentType: { contentType: ContentTypes; maxAge: number } }
+  | { byTotalSize: { maxBytes: number } }
+  | { sensitive: { maxAge: number } }
 
 /** Retention policy configuration. / 保留策略配置。 */
 export interface RetentionPolicy {
   enabled: boolean
   rules: RetentionRule[]
-  skip_pinned: boolean
+  skipPinned: boolean
   evaluation: RuleEvaluation
 }
 
@@ -124,17 +124,17 @@ export type ShortcutKey = string | string[]
  *
  * 完整应用设置，匹配 `uc-core::settings::model::Settings`。
  *
- * Field names are snake_case to match the Rust serde serialisation.
+ * Field names are camelCase to match the Rust serde serialisation.
  */
 export interface Settings {
-  schema_version: number
+  schemaVersion: number
   general: GeneralSettings
   sync: SyncSettings
-  retention_policy: RetentionPolicy
+  retentionPolicy: RetentionPolicy
   security: SecuritySettings
   pairing: PairingSettings
-  keyboard_shortcuts: Record<string, ShortcutKey>
-  file_sync: FileSyncSettings
+  keyboardShortcuts: Record<string, ShortcutKey>
+  fileSync: FileSyncSettings
 }
 
 // ── API response wrappers ──────────────────────────────────────
@@ -154,22 +154,22 @@ interface SettingsUpdateResponse {
 interface SettingsPatchRequest {
   general?: Partial<GeneralSettings>
   sync?: Partial<SyncSettings>
-  retention_policy?: Partial<RetentionPolicy>
+  retentionPolicy?: Partial<RetentionPolicy>
   security?: {
-    encryption_enabled?: boolean
-    auto_unlock_enabled?: boolean
+    encryptionEnabled?: boolean
+    autoUnlockEnabled?: boolean
     passphrase?: string
   }
   pairing?: {
-    step_timeout?: number
-    user_verification_timeout?: number
-    session_timeout?: number
-    max_retries?: number
+    stepTimeout?: number
+    userVerificationTimeout?: number
+    sessionTimeout?: number
+    maxRetries?: number
   }
-  keyboard_shortcuts?: {
+  keyboardShortcuts?: {
     shortcuts: Record<string, ShortcutKey>
   }
-  file_sync?: Partial<FileSyncSettings>
+  fileSync?: Partial<FileSyncSettings>
 }
 
 // ── Public API ─────────────────────────────────────────────────
@@ -211,89 +211,88 @@ function toSettingsPatchRequest(settings: Partial<Settings>): SettingsPatchReque
 
   if (settings.general) {
     const {
-      auto_start,
-      silent_start,
-      auto_check_update,
+      autoStart,
+      silentStart,
+      autoCheckUpdate,
       theme,
-      theme_color,
+      themeColor,
       language,
-      device_name,
-      update_channel,
+      deviceName,
+      updateChannel,
     } = settings.general
 
     patch.general = {
-      auto_start,
-      silent_start,
-      auto_check_update,
+      autoStart,
+      silentStart,
+      autoCheckUpdate,
       theme,
-      theme_color,
+      themeColor,
       language,
-      device_name,
-      update_channel,
+      deviceName,
+      updateChannel,
     }
   }
 
   if (settings.sync) {
-    const { auto_sync, sync_frequency, content_types, max_file_size_mb } = settings.sync
+    const { autoSync, syncFrequency, contentTypes, maxFileSizeMb } = settings.sync
     patch.sync = {
-      auto_sync,
-      sync_frequency,
-      content_types,
-      max_file_size_mb,
+      autoSync,
+      syncFrequency,
+      contentTypes,
+      maxFileSizeMb,
     }
   }
 
-  if (settings.retention_policy) {
-    const { enabled, rules, skip_pinned, evaluation } = settings.retention_policy
-    patch.retention_policy = {
+  if (settings.retentionPolicy) {
+    const { enabled, rules, skipPinned, evaluation } = settings.retentionPolicy
+    patch.retentionPolicy = {
       enabled,
       rules,
-      skip_pinned,
+      skipPinned,
       evaluation,
     }
   }
 
   if (settings.security) {
-    const { encryption_enabled, auto_unlock_enabled } = settings.security
+    const { encryptionEnabled, autoUnlockEnabled } = settings.security
     patch.security = {
-      encryption_enabled,
-      auto_unlock_enabled,
+      encryptionEnabled,
+      autoUnlockEnabled,
     }
   }
 
   if (settings.pairing) {
-    const { step_timeout, user_verification_timeout, session_timeout, max_retries } =
-      settings.pairing
+    const { stepTimeout, userVerificationTimeout, sessionTimeout, maxRetries } = settings.pairing
     patch.pairing = {
-      step_timeout,
-      user_verification_timeout,
-      session_timeout,
-      max_retries,
+      stepTimeout,
+      userVerificationTimeout,
+      sessionTimeout,
+      maxRetries,
     }
   }
 
-  if (settings.keyboard_shortcuts) {
-    patch.keyboard_shortcuts = {
-      shortcuts: settings.keyboard_shortcuts,
+  if (settings.keyboardShortcuts) {
+    patch.keyboardShortcuts = {
+      shortcuts: settings.keyboardShortcuts,
     }
   }
 
-  if (settings.file_sync) {
+  if (settings.fileSync) {
     const {
-      file_sync_enabled,
-      small_file_threshold,
-      max_file_size,
-      file_cache_quota_per_device,
-      file_retention_hours,
-      file_auto_cleanup,
-    } = settings.file_sync
-    patch.file_sync = {
-      file_sync_enabled,
-      small_file_threshold,
-      max_file_size,
-      file_cache_quota_per_device,
-      file_retention_hours,
-      file_auto_cleanup,
+      fileSyncEnabled,
+      smallFileThreshold,
+      maxFileSize,
+      fileCacheQuotaPerDevice,
+      fileRetentionHours,
+      fileAutoCleanup,
+    } = settings.fileSync
+    patch.fileSync = {
+      fileSyncEnabled,
+      smallFileThreshold,
+      maxFileSize,
+      fileCacheQuotaPerDevice,
+      fileRetentionHours,
+      fileAutoCleanup,
     }
   }
 

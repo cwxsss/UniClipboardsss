@@ -27,37 +27,31 @@ const SyncSection: React.FC = () => {
   const { setting, error, updateSyncSetting, updateFileSyncSetting } = useSetting()
 
   // Local state for UI display - initialize from setting to avoid flash
-  const [autoSync, setAutoSync] = useState(setting?.sync.auto_sync ?? true)
+  const [autoSync, setAutoSync] = useState(setting?.sync.autoSync ?? true)
   const [syncFrequency, setSyncFrequency] = useState<string>(
-    setting?.sync.sync_frequency ?? 'realtime'
+    setting?.sync.syncFrequency ?? 'realtime'
   )
 
-  const [maxFileSize, setMaxFileSize] = useState(setting?.sync.max_file_size_mb ?? 10)
+  const [maxFileSize, setMaxFileSize] = useState(setting?.sync.maxFileSizeMb ?? 10)
   const [maxFileSizeError, setMaxFileSizeError] = useState<string | null>(null)
 
   // File sync local state
-  const [fileSyncEnabled, setFileSyncEnabled] = useState(
-    setting?.file_sync?.file_sync_enabled ?? true
-  )
+  const [fileSyncEnabled, setFileSyncEnabled] = useState(setting?.fileSync?.fileSyncEnabled ?? true)
   const [smallFileThreshold, setSmallFileThreshold] = useState(
-    bytesToMb(setting?.file_sync?.small_file_threshold ?? 10 * MB)
+    bytesToMb(setting?.fileSync?.smallFileThreshold ?? 10 * MB)
   )
   const [smallFileThresholdError, setSmallFileThresholdError] = useState<string | null>(null)
   const [maxFileSizeLimit, setMaxFileSizeLimit] = useState(
-    bytesToMb(setting?.file_sync?.max_file_size ?? 5120 * MB)
+    bytesToMb(setting?.fileSync?.maxFileSize ?? 5120 * MB)
   )
   const [maxFileSizeLimitError, setMaxFileSizeLimitError] = useState<string | null>(null)
   const [cacheQuota, setCacheQuota] = useState(
-    bytesToMb(setting?.file_sync?.file_cache_quota_per_device ?? 500 * MB)
+    bytesToMb(setting?.fileSync?.fileCacheQuotaPerDevice ?? 500 * MB)
   )
   const [cacheQuotaError, setCacheQuotaError] = useState<string | null>(null)
-  const [retentionHours, setRetentionHours] = useState(
-    setting?.file_sync?.file_retention_hours ?? 24
-  )
+  const [retentionHours, setRetentionHours] = useState(setting?.fileSync?.fileRetentionHours ?? 24)
   const [retentionHoursError, setRetentionHoursError] = useState<string | null>(null)
-  const [fileAutoCleanup, setFileAutoCleanup] = useState(
-    setting?.file_sync?.file_auto_cleanup ?? true
-  )
+  const [fileAutoCleanup, setFileAutoCleanup] = useState(setting?.fileSync?.fileAutoCleanup ?? true)
 
   // Sync frequency options
   const syncFrequencyOptions = [
@@ -71,30 +65,30 @@ const SyncSection: React.FC = () => {
   // Update local state when settings are loaded
   useEffect(() => {
     if (setting) {
-      setAutoSync(setting.sync.auto_sync)
-      setSyncFrequency(setting.sync.sync_frequency)
-      setMaxFileSize(setting.sync.max_file_size_mb)
+      setAutoSync(setting.sync.autoSync)
+      setSyncFrequency(setting.sync.syncFrequency)
+      setMaxFileSize(setting.sync.maxFileSizeMb)
 
       // File sync settings
-      setFileSyncEnabled(setting.file_sync?.file_sync_enabled ?? true)
-      setSmallFileThreshold(bytesToMb(setting.file_sync?.small_file_threshold ?? 10 * MB))
-      setMaxFileSizeLimit(bytesToMb(setting.file_sync?.max_file_size ?? 5120 * MB))
-      setCacheQuota(bytesToMb(setting.file_sync?.file_cache_quota_per_device ?? 500 * MB))
-      setRetentionHours(setting.file_sync?.file_retention_hours ?? 24)
-      setFileAutoCleanup(setting.file_sync?.file_auto_cleanup ?? true)
+      setFileSyncEnabled(setting.fileSync?.fileSyncEnabled ?? true)
+      setSmallFileThreshold(bytesToMb(setting.fileSync?.smallFileThreshold ?? 10 * MB))
+      setMaxFileSizeLimit(bytesToMb(setting.fileSync?.maxFileSize ?? 5120 * MB))
+      setCacheQuota(bytesToMb(setting.fileSync?.fileCacheQuotaPerDevice ?? 500 * MB))
+      setRetentionHours(setting.fileSync?.fileRetentionHours ?? 24)
+      setFileAutoCleanup(setting.fileSync?.fileAutoCleanup ?? true)
     }
   }, [setting])
 
   // Handle auto sync switch change
   const handleAutoSyncChange = (checked: boolean) => {
     setAutoSync(checked)
-    updateSyncSetting({ auto_sync: checked })
+    updateSyncSetting({ autoSync: checked })
   }
 
   // Handle sync frequency change
   const handleSyncFrequencyChange = (value: string) => {
     setSyncFrequency(value)
-    updateSyncSetting({ sync_frequency: value as 'realtime' | 'interval' })
+    updateSyncSetting({ syncFrequency: value as 'realtime' | 'interval' })
   }
 
   // Handle max file size change
@@ -122,14 +116,14 @@ const SyncSection: React.FC = () => {
     }
 
     setMaxFileSizeError(null)
-    updateSyncSetting({ max_file_size_mb: size })
+    updateSyncSetting({ maxFileSizeMb: size })
   }
 
   // --- File sync handlers ---
 
   const handleFileSyncEnabledChange = (checked: boolean) => {
     setFileSyncEnabled(checked)
-    updateFileSyncSetting({ file_sync_enabled: checked })
+    updateFileSyncSetting({ fileSyncEnabled: checked })
   }
 
   const handleSmallFileThresholdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -167,7 +161,7 @@ const SyncSection: React.FC = () => {
     }
 
     setSmallFileThresholdError(null)
-    updateFileSyncSetting({ small_file_threshold: mbToBytes(size) })
+    updateFileSyncSetting({ smallFileThreshold: mbToBytes(size) })
   }
 
   const handleMaxFileSizeLimitChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -194,7 +188,7 @@ const SyncSection: React.FC = () => {
     }
 
     setMaxFileSizeLimitError(null)
-    updateFileSyncSetting({ max_file_size: mbToBytes(size) })
+    updateFileSyncSetting({ maxFileSize: mbToBytes(size) })
   }
 
   const handleCacheQuotaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -221,7 +215,7 @@ const SyncSection: React.FC = () => {
     }
 
     setCacheQuotaError(null)
-    updateFileSyncSetting({ file_cache_quota_per_device: mbToBytes(size) })
+    updateFileSyncSetting({ fileCacheQuotaPerDevice: mbToBytes(size) })
   }
 
   const handleRetentionHoursChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -248,12 +242,12 @@ const SyncSection: React.FC = () => {
     }
 
     setRetentionHoursError(null)
-    updateFileSyncSetting({ file_retention_hours: hours })
+    updateFileSyncSetting({ fileRetentionHours: hours })
   }
 
   const handleFileAutoCleanupChange = (checked: boolean) => {
     setFileAutoCleanup(checked)
-    updateFileSyncSetting({ file_auto_cleanup: checked })
+    updateFileSyncSetting({ fileAutoCleanup: checked })
   }
 
   // Show error message if any

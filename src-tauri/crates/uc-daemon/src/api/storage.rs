@@ -9,7 +9,6 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::Path;
 use uc_app::usecases::CoreUseCases;
 
 use crate::api::routes::internal_error;
@@ -19,11 +18,11 @@ use crate::api::server::DaemonApiState;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageStatsResponse {
-    pub total_size_bytes: u64,
-    pub blob_count: usize,
-    pub database_size_bytes: u64,
-    pub cache_size_bytes: u64,
-    pub spool_size_bytes: u64,
+    pub total_bytes: u64,
+    pub database_bytes: u64,
+    pub vault_bytes: u64,
+    pub cache_bytes: u64,
+    pub logs_bytes: u64,
 }
 
 /// Request payload for POST /storage/clear-cache.
@@ -63,13 +62,8 @@ async fn get_storage_stats_handler(State(state): State<DaemonApiState>) -> impl 
     };
 
     let usecases = CoreUseCases::new(runtime.as_ref());
-    let spool_dir = runtime.storage_paths().spool_dir.clone();
 
-    // Run three independent async operations concurrently:
-    // 1. Storage stats (db, vault, cache, logs sizes)
-    // 2. Clipboard entries list for blob_count
-    // 3. Spool directory size
-    let storage_result = match usecases.get_storage_stats().execute().await {
+    let result = match usecases.get_storage_stats().execute().await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "Failed to compute storage stats");
@@ -77,54 +71,16 @@ async fn get_storage_stats_handler(State(state): State<DaemonApiState>) -> impl 
         }
     };
 
-    let entries = match usecases.list_clipboard_entries().execute(10_000, 0).await {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to list clipboard entries for blob count");
-            return internal_error(anyhow::anyhow!("{}", e)).into_response();
-        }
-    };
-
-    let spool_size = compute_dir_size(&spool_dir).await.unwrap_or(0);
-
-    let blob_count = entries.len();
-
     let response = StorageStatsResponse {
-        total_size_bytes: storage_result.total_bytes,
-        blob_count,
-        database_size_bytes: storage_result.database_bytes,
-        cache_size_bytes: storage_result.cache_bytes,
-        spool_size_bytes: spool_size,
+        total_bytes: result.total_bytes,
+        database_bytes: result.database_bytes,
+        vault_bytes: result.vault_bytes,
+        cache_bytes: result.cache_bytes,
+        logs_bytes: result.logs_bytes,
     };
 
     let ts = chrono::Utc::now().timestamp_millis();
     Json(json!({ "data": response, "ts": ts })).into_response()
-}
-
-/// Compute the size of a directory and its contents using tokio::fs.
-/// Returns 0 if the path does not exist.
-async fn compute_dir_size(path: &Path) -> anyhow::Result<u64> {
-    if !path.exists() {
-        return Ok(0);
-    }
-
-    if path.is_file() {
-        let meta = tokio::fs::metadata(path).await?;
-        return Ok(meta.len());
-    }
-
-    let mut total: u64 = 0;
-    let mut entries = tokio::fs::read_dir(path).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let entry_path = entry.path();
-        if entry_path.is_dir() {
-            total += Box::pin(compute_dir_size(&entry_path)).await?;
-        } else {
-            let meta = tokio::fs::metadata(&entry_path).await?;
-            total += meta.len();
-        }
-    }
-    Ok(total)
 }
 
 /// POST /storage/clear-cache

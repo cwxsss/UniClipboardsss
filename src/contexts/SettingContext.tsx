@@ -99,12 +99,12 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
   }
 
   // 更新保留策略
-  const updateRetentionPolicy = async (newPolicy: Partial<Settings['retention_policy']>) => {
+  const updateRetentionPolicy = async (newPolicy: Partial<Settings['retentionPolicy']>) => {
     if (!setting) return
     const updatedSetting: Settings = {
       ...setting,
-      retention_policy: {
-        ...setting.retention_policy,
+      retentionPolicy: {
+        ...setting.retentionPolicy,
         ...newPolicy,
       },
     } as Settings
@@ -113,19 +113,19 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
 
   // Update file sync settings
   const updateFileSyncSetting = async (
-    newFileSyncSetting: Partial<Settings['file_sync'] & object>
+    newFileSyncSetting: Partial<Settings['fileSync'] & object>
   ) => {
     if (!setting) return
     const updatedSetting: Settings = {
       ...setting,
-      file_sync: {
-        ...(setting.file_sync ?? {
-          file_sync_enabled: true,
-          small_file_threshold: 10 * 1024 * 1024,
-          max_file_size: 5 * 1024 * 1024 * 1024,
-          file_cache_quota_per_device: 500 * 1024 * 1024,
-          file_retention_hours: 24,
-          file_auto_cleanup: true,
+      fileSync: {
+        ...(setting.fileSync ?? {
+          fileSyncEnabled: true,
+          smallFileThreshold: 10 * 1024 * 1024,
+          maxFileSize: 5 * 1024 * 1024 * 1024,
+          fileCacheQuotaPerDevice: 500 * 1024 * 1024,
+          fileRetentionHours: 24,
+          fileAutoCleanup: true,
         }),
         ...newFileSyncSetting,
       },
@@ -138,7 +138,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     if (!setting) {
       throw new Error('No settings loaded')
     }
-    const updatedSetting: Settings = { ...setting, keyboard_shortcuts: overrides }
+    const updatedSetting: Settings = { ...setting, keyboardShortcuts: overrides }
     try {
       await saveSetting(updatedSetting)
     } catch (err) {
@@ -169,7 +169,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
 
     const applyTheme = () => {
       const theme = setting.general.theme
-      const themeColor = setting.general.theme_color || DEFAULT_THEME_COLOR
+      const themeColor = setting.general.themeColor || DEFAULT_THEME_COLOR
 
       // 1. Apply Mode (Light/Dark)
       root.classList.remove('light', 'dark')
@@ -192,10 +192,10 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     // Use view transition animation only for user-initiated theme changes (not initial load)
     const hasChanged =
       prevThemeRef.current !== setting.general.theme ||
-      prevThemeColorRef.current !== (setting.general.theme_color || DEFAULT_THEME_COLOR)
+      prevThemeColorRef.current !== (setting.general.themeColor || DEFAULT_THEME_COLOR)
 
     prevThemeRef.current = setting.general.theme
-    prevThemeColorRef.current = setting.general.theme_color || DEFAULT_THEME_COLOR
+    prevThemeColorRef.current = setting.general.themeColor || DEFAULT_THEME_COLOR
 
     if (!hasAppliedOnceRef.current || !hasChanged) {
       hasAppliedOnceRef.current = true
@@ -215,7 +215,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     return () => {
       systemThemeMedia.removeEventListener('change', handleSystemThemeChange)
     }
-  }, [setting?.general.theme, setting?.general.theme_color])
+  }, [setting?.general.theme, setting?.general.themeColor])
 
   // 监听语言变化并应用
   useEffect(() => {

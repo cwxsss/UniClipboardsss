@@ -112,15 +112,15 @@ export interface ContentTypes {
   image: boolean
   link: boolean
   file: boolean
-  code_snippet: boolean
-  rich_text: boolean
+  codeSnippet: boolean
+  richText: boolean
 }
 
 export interface SyncSettings {
-  auto_sync: boolean
-  sync_frequency: 'realtime' | 'interval'
-  content_types: ContentTypes
-  max_file_size_mb: number
+  autoSync: boolean
+  syncFrequency: 'realtime' | 'interval'
+  contentTypes: ContentTypes
+  maxFileSizeMb: number
 }
 
 export { classifyPairingError } from '@/api/p2p'

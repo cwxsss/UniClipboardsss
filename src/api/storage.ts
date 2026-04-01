@@ -18,11 +18,16 @@ import { daemonClient } from './daemon/client'
  * `GET /storage/stats` 返回的存储使用统计。
  */
 export interface StorageStats {
-  total_entries: number
-  total_size_bytes: number
-  cache_size_bytes: number
-  oldest_entry_ts: number | null
-  newest_entry_ts: number | null
+  totalBytes: number
+  databaseBytes: number
+  vaultBytes: number
+  cacheBytes: number
+  logsBytes: number
+}
+
+interface StorageStatsEnvelope {
+  data: StorageStats
+  ts: number
 }
 
 // ── Public API ─────────────────────────────────────────────────
@@ -36,7 +41,8 @@ export interface StorageStats {
  * @throws {DaemonApiError} On HTTP or session errors.
  */
 export async function getStorageStats(): Promise<StorageStats> {
-  return daemonClient.request<StorageStats>('/storage/stats')
+  const res = await daemonClient.request<StorageStatsEnvelope>('/storage/stats')
+  return res.data
 }
 
 /**

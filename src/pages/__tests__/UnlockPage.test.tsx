@@ -17,7 +17,7 @@ const updateSecuritySettingMock = vi.fn()
 
 vi.mock('@/hooks/useSetting', () => ({
   useSetting: () => ({
-    setting: { security: { auto_unlock_enabled: false } },
+    setting: { security: { autoUnlockEnabled: false } },
     updateSecuritySetting: updateSecuritySettingMock,
     loading: false,
   }),

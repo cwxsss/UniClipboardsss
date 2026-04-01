@@ -149,56 +149,56 @@ export function makeEntryDto(overrides: Partial<ClipboardEntryDto> = {}): Clipbo
 
 export function makeSettingsDto(overrides: Partial<Settings> = {}): Settings {
   return {
-    schema_version: 1,
+    schemaVersion: 1,
     general: {
-      auto_start: false,
-      silent_start: false,
-      auto_check_update: true,
+      autoStart: false,
+      silentStart: false,
+      autoCheckUpdate: true,
       theme: 'system',
-      theme_color: null,
+      themeColor: null,
       language: null,
-      device_name: 'Test Device',
-      update_channel: null,
+      deviceName: 'Test Device',
+      updateChannel: null,
     },
     sync: {
-      auto_sync: true,
-      sync_frequency: 'realtime',
-      content_types: {
+      autoSync: true,
+      syncFrequency: 'realtime',
+      contentTypes: {
         text: true,
         image: true,
         link: true,
         file: true,
-        code_snippet: true,
-        rich_text: true,
+        codeSnippet: true,
+        richText: true,
       },
-      max_file_size_mb: 50,
+      maxFileSizeMb: 50,
     },
-    retention_policy: {
+    retentionPolicy: {
       enabled: false,
       rules: [],
-      skip_pinned: true,
-      evaluation: 'any_match',
+      skipPinned: true,
+      evaluation: 'anyMatch',
     },
     security: {
-      encryption_enabled: true,
-      passphrase_configured: false,
-      auto_unlock_enabled: false,
+      encryptionEnabled: true,
+      passphraseConfigured: false,
+      autoUnlockEnabled: false,
     },
     pairing: {
-      step_timeout: 30,
-      user_verification_timeout: 60,
-      session_timeout: 3600,
-      max_retries: 3,
-      protocol_version: '1.0.0',
+      stepTimeout: 30,
+      userVerificationTimeout: 60,
+      sessionTimeout: 3600,
+      maxRetries: 3,
+      protocolVersion: '1.0.0',
     },
-    keyboard_shortcuts: {},
-    file_sync: {
-      file_sync_enabled: true,
-      small_file_threshold: 1024,
-      max_file_size: 1024 * 1024 * 100,
-      file_cache_quota_per_device: 1024 * 1024 * 500,
-      file_retention_hours: 168,
-      file_auto_cleanup: true,
+    keyboardShortcuts: {},
+    fileSync: {
+      fileSyncEnabled: true,
+      smallFileThreshold: 1024,
+      maxFileSize: 1024 * 1024 * 100,
+      fileCacheQuotaPerDevice: 1024 * 1024 * 500,
+      fileRetentionHours: 168,
+      fileAutoCleanup: true,
     },
     ...overrides,
   }
@@ -216,25 +216,25 @@ export function makeEncryptionStateDto(
 
 export function makeStorageStatsDto(
   overrides: Partial<{
-    total_entries: number
-    total_size_bytes: number
-    cache_size_bytes: number
-    oldest_entry_ts: number | null
-    newest_entry_ts: number | null
+    totalBytes: number
+    databaseBytes: number
+    vaultBytes: number
+    cacheBytes: number
+    logsBytes: number
   }> = {}
 ): {
-  total_entries: number
-  total_size_bytes: number
-  cache_size_bytes: number
-  oldest_entry_ts: number | null
-  newest_entry_ts: number | null
+  totalBytes: number
+  databaseBytes: number
+  vaultBytes: number
+  cacheBytes: number
+  logsBytes: number
 } {
   return {
-    total_entries: 42,
-    total_size_bytes: 1024 * 512,
-    cache_size_bytes: 1024 * 128,
-    oldest_entry_ts: 1709000000000,
-    newest_entry_ts: 1710000000000,
+    totalBytes: 1024 * 512,
+    databaseBytes: 1024 * 128,
+    vaultBytes: 1024 * 256,
+    cacheBytes: 1024 * 64,
+    logsBytes: 1024 * 64,
     ...overrides,
   }
 }

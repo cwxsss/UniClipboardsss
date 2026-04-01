@@ -239,21 +239,21 @@ export interface ContentTypes {
   image: boolean
   link: boolean
   file: boolean
-  code_snippet: boolean
-  rich_text: boolean
+  codeSnippet: boolean
+  richText: boolean
 }
 
 /**
  * Per-device sync settings (matches Rust SyncSettings serde shape)
  *
- * Field names are snake_case to match Rust serde serialization.
+ * Field names are camelCase to match Rust serde(rename_all = "camelCase") serialization.
  * SyncFrequency enum values are lowercase ("realtime", "interval").
  */
 export interface SyncSettings {
-  auto_sync: boolean
-  sync_frequency: 'realtime' | 'interval'
-  content_types: ContentTypes
-  max_file_size_mb: number
+  autoSync: boolean
+  syncFrequency: 'realtime' | 'interval'
+  contentTypes: ContentTypes
+  maxFileSizeMb: number
 }
 
 /**

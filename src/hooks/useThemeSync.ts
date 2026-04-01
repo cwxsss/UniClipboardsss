@@ -12,7 +12,7 @@ function resolveThemeMode(theme: string | undefined | null): ThemeMode {
 function applyFullTheme(settings: Settings | null): void {
   const root = document.documentElement
   const theme = settings?.general?.theme
-  const themeColor = settings?.general?.theme_color || DEFAULT_THEME_COLOR
+  const themeColor = settings?.general?.themeColor || DEFAULT_THEME_COLOR
   const resolvedMode = resolveThemeMode(theme)
 
   root.classList.remove('light', 'dark')

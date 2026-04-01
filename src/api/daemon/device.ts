@@ -26,8 +26,8 @@ export interface ContentTypes {
   image: boolean
   link: boolean
   file: boolean
-  code_snippet: boolean
-  rich_text: boolean
+  codeSnippet: boolean
+  richText: boolean
 }
 
 /** Sync frequency mode. */
@@ -38,10 +38,10 @@ export type SyncFrequency = 'realtime' | 'interval'
  * Matches `DeviceSyncSettingsDto` on the Rust side.
  */
 export interface DeviceSyncSettings {
-  auto_sync: boolean
-  sync_frequency: SyncFrequency
-  content_types: ContentTypes
-  max_file_size_mb: number
+  autoSync: boolean
+  syncFrequency: SyncFrequency
+  contentTypes: ContentTypes
+  maxFileSizeMb: number
 }
 
 /**
@@ -49,10 +49,10 @@ export interface DeviceSyncSettings {
  * Matches `DeviceSyncSettingsPatchDto` on the Rust side.
  */
 export interface DeviceSyncSettingsPatch {
-  auto_sync?: boolean
-  sync_frequency?: SyncFrequency
-  content_types?: ContentTypesPatch
-  max_file_size_mb?: number
+  autoSync?: boolean
+  syncFrequency?: SyncFrequency
+  contentTypes?: ContentTypesPatch
+  maxFileSizeMb?: number
 }
 
 /** Partial content types for PATCH. */
@@ -61,8 +61,8 @@ export interface ContentTypesPatch {
   image?: boolean | null
   link?: boolean | null
   file?: boolean | null
-  code_snippet?: boolean | null
-  rich_text?: boolean | null
+  codeSnippet?: boolean | null
+  richText?: boolean | null
 }
 
 // ── Response wrappers ──────────────────────────────────────────
@@ -119,7 +119,7 @@ export async function updateDeviceSyncSettings(
     // The server treats this as a reset by storing null / removing per-device settings.
     const res = await daemonClient.request<DeviceSyncSettingsUpdateResponse>(
       DEVICE_SYNC_SETTINGS(peerId),
-      { method: 'PATCH', body: { auto_sync: null } }
+      { method: 'PATCH', body: { autoSync: null } }
     )
     return res.data
   }

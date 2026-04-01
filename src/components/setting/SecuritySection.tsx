@@ -10,19 +10,19 @@ const SecuritySection: React.FC = () => {
   const { setting, error, updateSecuritySetting } = useSetting()
 
   const [autoUnlockEnabled, setAutoUnlockEnabled] = useState(
-    setting?.security.auto_unlock_enabled ?? false
+    setting?.security.autoUnlockEnabled ?? false
   )
 
   // Update local state when settings are loaded
   useEffect(() => {
     if (setting) {
-      setAutoUnlockEnabled(setting.security.auto_unlock_enabled)
+      setAutoUnlockEnabled(setting.security.autoUnlockEnabled)
     }
   }, [setting])
 
   const handleAutoUnlockChange = (checked: boolean) => {
     setAutoUnlockEnabled(checked)
-    updateSecuritySetting({ auto_unlock_enabled: checked })
+    updateSecuritySetting({ autoUnlockEnabled: checked })
   }
 
   // Display error message if there is an error

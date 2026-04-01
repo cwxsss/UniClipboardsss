@@ -43,7 +43,7 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('@/hooks/useSetting', () => ({
   useSetting: () => ({
-    setting: { sync: { auto_sync: true }, file_sync: { file_sync_enabled: true } },
+    setting: { sync: { autoSync: true }, fileSync: { fileSyncEnabled: true } },
   }),
 }))
 
