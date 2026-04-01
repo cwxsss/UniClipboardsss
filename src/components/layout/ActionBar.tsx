@@ -1,7 +1,7 @@
 import { RefreshCw } from 'lucide-react'
 import React from 'react'
-import { ClipboardStats } from '@/api/clipboardItems'
 import { syncClipboardItems } from '@/api/clipboardItems'
+import type { ClipboardStats } from '@/api/daemon/clipboard'
 import { Button } from '@/components/ui/button'
 import { useAppDispatch } from '@/store/hooks'
 import { clearAllItems } from '@/store/slices/clipboardSlice'
@@ -46,9 +46,9 @@ const ActionBar: React.FC<ActionBarProps> = ({ stats, onSync }) => {
   return (
     <footer className="absolute bottom-0 w-full glass-strong border-t border-border px-8 py-4 flex items-center justify-between z-10">
       <div className="text-sm text-muted-foreground flex items-center gap-2">
-        <span className="font-medium text-foreground">已同步 {stats.total_items} 项</span>
+        <span className="font-medium text-foreground">已同步 {stats.totalItems} 项</span>
         <span>·</span>
-        <span>已使用 {formatFileSize(stats.total_size)}</span>
+        <span>已使用 {formatFileSize(stats.totalSize)}</span>
       </div>
 
       <div className="flex items-center gap-3">

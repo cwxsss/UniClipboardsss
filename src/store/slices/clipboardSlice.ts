@@ -3,17 +3,17 @@ import { hydrateEntryTransferStatuses } from './fileTransferSlice'
 import type { ClipboardItemResponse, ClipboardItemsResult } from '@/api/clipboardItems'
 import {
   // Tauri API — kept as commented reference during transition
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   // getClipboardItems as getClipboardItemsTauri,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   // deleteClipboardItem as deleteClipboardItemTauri,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   // copyClipboardItem as copyClipboardItemTauri,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   // clearClipboardItems as clearClipboardItemsTauri,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   // favoriteClipboardItem as favoriteClipboardItemTauri,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   // unfavoriteClipboardItem as unfavoriteClipboardItemTauri,
   OrderBy,
   Filter,
@@ -41,33 +41,35 @@ function extractDomainFromUrl(url: string): string {
   }
 }
 
-function transformDtoToItemResponse(entry: import('@/api/daemon').ClipboardEntryDto): ClipboardItemResponse {
-  const isFile = entry.content_type.includes('uri-list')
-  const isImage = !isFile && isImageType(entry.content_type)
-  const hasLinkData = !isImage && entry.link_urls && entry.link_urls.length > 0
+function transformDtoToItemResponse(
+  entry: import('@/api/daemon').ClipboardEntryDto
+): ClipboardItemResponse {
+  const isFile = entry.contentType.includes('uri-list')
+  const isImage = !isFile && isImageType(entry.contentType)
+  const hasLinkData = !isImage && entry.linkUrls && entry.linkUrls.length > 0
 
   let linkItem: { urls: string[]; domains: string[] } | null = null
   if (hasLinkData) {
     linkItem = {
-      urls: entry.link_urls!,
-      domains: entry.link_domains ?? entry.link_urls!.map(extractDomainFromUrl),
+      urls: entry.linkUrls!,
+      domains: entry.linkDomains ?? entry.linkUrls!.map(extractDomainFromUrl),
     }
   }
 
   return {
     id: entry.id,
     is_downloaded: true,
-    is_favorited: entry.is_favorited,
-    created_at: entry.captured_at,
-    updated_at: entry.updated_at,
-    active_time: entry.active_time,
+    is_favorited: entry.isFavorited,
+    created_at: entry.capturedAt,
+    updated_at: entry.updatedAt,
+    active_time: entry.activeTime,
     item: {
       text:
         !isImage && !isFile && !hasLinkData
-          ? { display_text: entry.preview, has_detail: entry.has_detail, size: entry.size_bytes }
+          ? { display_text: entry.preview, has_detail: entry.hasDetail, size: entry.sizeBytes }
           : null,
       image: isImage
-        ? { thumbnail: entry.thumbnail_url ?? null, size: entry.size_bytes, width: 0, height: 0 }
+        ? { thumbnail: entry.thumbnailUrl ?? null, size: entry.sizeBytes, width: 0, height: 0 }
         : null,
       file: isFile
         ? {
@@ -81,15 +83,15 @@ function transformDtoToItemResponse(entry: import('@/api/daemon').ClipboardEntry
                   return uri
                 }
               }),
-            file_sizes: entry.file_sizes ?? [],
+            file_sizes: entry.fileSizes ?? [],
           }
         : null,
       link: linkItem as unknown as ClipboardItemResponse['item']['link'],
       code: null,
       unknown: null,
     },
-    file_transfer_status: entry.file_transfer_status ?? null,
-    file_transfer_reason: entry.file_transfer_reason ?? null,
+    file_transfer_status: entry.fileTransferStatus ?? null,
+    file_transfer_reason: entry.fileTransferReason ?? null,
   }
 }
 
@@ -137,7 +139,7 @@ export const fetchClipboardItems = createAsyncThunk<
   try {
     // Daemon API: GET /clipboard/entries
     // Note: orderBy and filter are not yet supported by the daemon endpoint.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
     const { orderBy: _orderBy, filter: _filter, isFavorited: _isFavorited, ...rest } = params
     const result = await getClipboardEntries(rest.limit ?? 50, rest.offset ?? 0)
 
@@ -146,11 +148,11 @@ export const fetchClipboardItems = createAsyncThunk<
     // so file entries show correct status badges immediately after restart.
     if (result.status === 'ready' && result.entries) {
       const statusEntries = result.entries
-        .filter(item => item.file_transfer_status != null)
+        .filter(item => item.fileTransferStatus != null)
         .map(item => ({
           entryId: item.id,
-          status: item.file_transfer_status as 'pending' | 'transferring' | 'completed' | 'failed',
-          reason: item.file_transfer_reason ?? null,
+          status: item.fileTransferStatus as 'pending' | 'transferring' | 'completed' | 'failed',
+          reason: item.fileTransferReason ?? null,
         }))
       if (statusEntries.length > 0) {
         dispatch(hydrateEntryTransferStatuses(statusEntries))

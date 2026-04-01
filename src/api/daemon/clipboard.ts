@@ -41,25 +41,25 @@ const CLIPBOARD_RESTORE = '/clipboard/restore'
 export interface ClipboardEntryDto {
   id: string
   preview: string
-  has_detail: boolean
-  size_bytes: number
-  captured_at: number
-  content_type: string
-  thumbnail_url: string | null
-  is_encrypted: boolean
-  is_favorited: boolean
-  updated_at: number
-  active_time: number
+  hasDetail: boolean
+  sizeBytes: number
+  capturedAt: number
+  contentType: string
+  thumbnailUrl: string | null
+  isEncrypted: boolean
+  isFavorited: boolean
+  updatedAt: number
+  activeTime: number
   /** Aggregate file transfer status for file entries. */
-  file_transfer_status: string | null
-  /** Failure reason when file_transfer_status is "failed". */
-  file_transfer_reason: string | null
+  fileTransferStatus: string | null
+  /** Failure reason when fileTransferStatus is "failed". */
+  fileTransferReason: string | null
   /** Parsed link URLs for link-type entries. */
-  link_urls: string[] | null
+  linkUrls: string[] | null
   /** Extracted domains for link entries. */
-  link_domains: string[] | null
+  linkDomains: string[] | null
   /** Per-file sizes in bytes for file (uri-list) entries. */
-  file_sizes: number[] | null
+  fileSizes: number[] | null
 }
 
 /**
@@ -72,6 +72,38 @@ export interface ClipboardEntriesResponse {
   entries?: ClipboardEntryDto[]
 }
 
+// ── API response wrappers (matching Rust { data, ts } envelope) ──
+
+/** GET /clipboard/entries API envelope. */
+interface ListEntriesApiResponse {
+  data: ClipboardEntryDto[]
+  ts: number
+}
+
+/** GET /clipboard/entries/:id API envelope. */
+interface GetEntryDetailApiResponse {
+  data: EntryDetail
+  ts: number
+}
+
+/** GET /clipboard/stats API envelope. */
+interface GetStatsApiResponse {
+  data: ClipboardStats
+  ts: number
+}
+
+/** GET /clipboard/entries/:id/resource API envelope. */
+interface GetResourceApiResponse {
+  data: ClipboardEntryResource
+  ts: number
+}
+
+/** POST /clipboard/entries/clear API envelope. */
+interface ClearHistoryApiResponse {
+  data: ClearHistoryResult
+  ts: number
+}
+
 /**
  * Aggregate clipboard statistics.
  * Matches `ClipboardStats` on the Rust side.
@@ -79,8 +111,8 @@ export interface ClipboardEntriesResponse {
  * Rust 端的 `ClipboardStats` 对应。
  */
 export interface ClipboardStats {
-  total_items: number
-  total_size: number
+  totalItems: number
+  totalSize: number
 }
 
 /**
@@ -136,7 +168,8 @@ export async function getClipboardEntries(
   offset: number = 0
 ): Promise<ClipboardEntriesResponse> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
-  return daemonClient.request<ClipboardEntriesResponse>(`${CLIPBOARD_ENTRIES}?${params}`)
+  const res = await daemonClient.request<ListEntriesApiResponse>(`${CLIPBOARD_ENTRIES}?${params}`)
+  return { status: 'ready', entries: res.data }
 }
 
 /**
@@ -150,15 +183,11 @@ export async function getClipboardEntries(
  */
 export async function getClipboardEntry(id: string): Promise<ClipboardEntryDto | null> {
   const params = new URLSearchParams({ id })
-  const response = await daemonClient.request<ClipboardEntriesResponse>(
+  const response = await daemonClient.request<ListEntriesApiResponse>(
     `${CLIPBOARD_ENTRIES}?${params}`
   )
 
-  if (response.status === 'not_ready') {
-    return null
-  }
-
-  return response.entries?.[0] ?? null
+  return response.data?.[0] ?? null
 }
 
 /**
@@ -208,7 +237,7 @@ export async function restoreClipboardEntry(id: string): Promise<RestoreResult> 
 export async function toggleFavorite(id: string, favorited: boolean): Promise<void> {
   const options: RequestOptions = {
     method: 'POST',
-    body: { is_favorited: favorited },
+    body: { isFavorited: favorited },
   }
   await daemonClient.request<void>(`${CLIPBOARD_ENTRIES}/${id}/favorite`, options)
 }
@@ -225,7 +254,11 @@ export async function clearClipboardHistory(): Promise<ClearHistoryResult> {
   const options: RequestOptions = {
     method: 'POST',
   }
-  return daemonClient.request<ClearHistoryResult>(`${CLIPBOARD_ENTRIES}/clear`, options)
+  const res = await daemonClient.request<ClearHistoryApiResponse>(
+    `${CLIPBOARD_ENTRIES}/clear`,
+    options
+  )
+  return res.data
 }
 
 /**
@@ -241,7 +274,8 @@ export async function clearClipboardHistory(): Promise<ClearHistoryResult> {
  */
 export async function getEntryDetail(id: string): Promise<EntryDetail | null> {
   try {
-    return await daemonClient.request<EntryDetail>(`${CLIPBOARD_ENTRIES}/${id}`)
+    const res = await daemonClient.request<GetEntryDetailApiResponse>(`${CLIPBOARD_ENTRIES}/${id}`)
+    return res.data
   } catch (error) {
     if (
       error instanceof Error &&
@@ -263,7 +297,8 @@ export async function getEntryDetail(id: string): Promise<EntryDetail | null> {
  * @throws {DaemonApiError} On HTTP errors or session failures.
  */
 export async function getClipboardStats(): Promise<ClipboardStats> {
-  return daemonClient.request<ClipboardStats>(CLIPBOARD_STATS)
+  const res = await daemonClient.request<GetStatsApiResponse>(CLIPBOARD_STATS)
+  return res.data
 }
 
 /**
@@ -278,11 +313,14 @@ export async function getClipboardStats(): Promise<ClipboardStats> {
  * @returns Resource metadata or null if not found.
  * @throws {DaemonApiError} On HTTP errors or session failures.
  */
-export async function getClipboardEntryResource(id: string): Promise<ClipboardEntryResource | null> {
+export async function getClipboardEntryResource(
+  id: string
+): Promise<ClipboardEntryResource | null> {
   try {
-    return await daemonClient.request<ClipboardEntryResource>(
+    const res = await daemonClient.request<GetResourceApiResponse>(
       `${CLIPBOARD_ENTRIES}/${id}/resource`
     )
+    return res.data
   } catch (error) {
     // Return null for not-found rather than throwing
     if (
@@ -309,9 +347,9 @@ export { getEntryDetail as getClipboardEntryDetail }
  * Rust 端的 `ClipboardEntryResource` 对应。
  */
 export interface ClipboardEntryResource {
-  blob_id: string | null
-  mime_type: string
-  size_bytes: number
+  blobId: string | null
+  mimeType: string
+  sizeBytes: number
   url: string | null
-  inline_data: string | null
+  inlineData: string | null
 }

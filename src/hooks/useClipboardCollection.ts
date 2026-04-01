@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useClipboardEventStream } from './useClipboardEventStream'
 import { useEncryptionSessionState } from './useEncryptionSessionState'
-import { getClipboardEntries } from '@/api/daemon/clipboard'
 import { isImageType } from '@/api/clipboardItems'
 import type { ClipboardItemResponse } from '@/api/clipboardItems'
+import { getClipboardEntries } from '@/api/daemon/clipboard'
 
 const PAGE_SIZE = 50
 
@@ -18,33 +18,35 @@ function extractDomainFromUrl(url: string): string {
   }
 }
 
-function transformDtoToItemResponse(entry: import('@/api/daemon/clipboard').ClipboardEntryDto): ClipboardItemResponse {
-  const isFile = entry.content_type.includes('uri-list')
-  const isImage = !isFile && isImageType(entry.content_type)
-  const hasLinkData = !isImage && entry.link_urls && entry.link_urls.length > 0
+function transformDtoToItemResponse(
+  entry: import('@/api/daemon/clipboard').ClipboardEntryDto
+): ClipboardItemResponse {
+  const isFile = entry.contentType.includes('uri-list')
+  const isImage = !isFile && isImageType(entry.contentType)
+  const hasLinkData = !isImage && entry.linkUrls && entry.linkUrls.length > 0
 
   let linkItem: { urls: string[]; domains: string[] } | null = null
   if (hasLinkData) {
     linkItem = {
-      urls: entry.link_urls!,
-      domains: entry.link_domains ?? entry.link_urls!.map(extractDomainFromUrl),
+      urls: entry.linkUrls!,
+      domains: entry.linkDomains ?? entry.linkUrls!.map(extractDomainFromUrl),
     }
   }
 
   return {
     id: entry.id,
     is_downloaded: true,
-    is_favorited: entry.is_favorited,
-    created_at: entry.captured_at,
-    updated_at: entry.updated_at,
-    active_time: entry.active_time,
+    is_favorited: entry.isFavorited,
+    created_at: entry.capturedAt,
+    updated_at: entry.updatedAt,
+    active_time: entry.activeTime,
     item: {
       text:
         !isImage && !isFile && !hasLinkData
-          ? { display_text: entry.preview, has_detail: entry.has_detail, size: entry.size_bytes }
+          ? { display_text: entry.preview, has_detail: entry.hasDetail, size: entry.sizeBytes }
           : null,
       image: isImage
-        ? { thumbnail: entry.thumbnail_url ?? null, size: entry.size_bytes, width: 0, height: 0 }
+        ? { thumbnail: entry.thumbnailUrl ?? null, size: entry.sizeBytes, width: 0, height: 0 }
         : null,
       file: isFile
         ? {
@@ -58,15 +60,15 @@ function transformDtoToItemResponse(entry: import('@/api/daemon/clipboard').Clip
                   return uri
                 }
               }),
-            file_sizes: entry.file_sizes ?? [],
+            file_sizes: entry.fileSizes ?? [],
           }
         : null,
       link: linkItem as unknown as ClipboardItemResponse['item']['link'],
       code: null,
       unknown: null,
     },
-    file_transfer_status: entry.file_transfer_status ?? null,
-    file_transfer_reason: entry.file_transfer_reason ?? null,
+    file_transfer_status: entry.fileTransferStatus ?? null,
+    file_transfer_reason: entry.fileTransferReason ?? null,
   }
 }
 

@@ -2,14 +2,8 @@ import { listen } from '@tauri-apps/api/event'
 import { Loader2 } from 'lucide-react'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  getResourceImageUrl,
-  isImageType,
-} from '@/api/clipboardItems'
-import {
-  getClipboardEntryDetail,
-  getClipboardEntryResource,
-} from '@/api/daemon/clipboard'
+import { getResourceImageUrl, isImageType } from '@/api/clipboardItems'
+import { getClipboardEntryDetail, getClipboardEntryResource } from '@/api/daemon/clipboard'
 import { useThemeSync } from '@/hooks/useThemeSync'
 import { resolveUcUrl } from '@/lib/protocol'
 
@@ -60,14 +54,14 @@ const PreviewPanel: React.FC = () => {
 
         if (currentRequestId !== requestIdRef.current) return
 
-        if (isImageType(resource.mime_type)) {
+        if (isImageType(resource.mimeType)) {
           // Image: use resource URL directly (get_clipboard_entry_detail fails for images)
           const rawUrl = getResourceImageUrl(resource)
           const url = rawUrl && !rawUrl.startsWith('data:') ? resolveUcUrl(rawUrl) : rawUrl
           setPreview({
             entryId,
             contentType: 'image',
-            sizeBytes: resource.size_bytes,
+            sizeBytes: resource.sizeBytes,
             imageUrl: url ?? undefined,
           })
         } else {
@@ -79,7 +73,7 @@ const PreviewPanel: React.FC = () => {
           setPreview({
             entryId,
             contentType: 'text',
-            sizeBytes: detail.size_bytes,
+            sizeBytes: detail.sizeBytes,
             textContent: detail.content,
           })
         }

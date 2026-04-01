@@ -44,12 +44,12 @@ export interface ClipboardEntryDetail {
 }
 
 export interface ClipboardEntryResource {
-  blob_id: string | null
-  mime_type: string
-  size_bytes: number
+  blobId: string | null
+  mimeType: string
+  sizeBytes: number
   url: string | null
   /** Base64-encoded inline data (present when content is stored inline, not in blob) */
-  inline_data: string | null
+  inlineData: string | null
 }
 
 /**
@@ -345,14 +345,14 @@ export async function fetchClipboardResourceText(
 ): Promise<string> {
   try {
     // Use inline data when available (small content stored directly)
-    if (resource.inline_data) {
-      const bytes = Uint8Array.from(atob(resource.inline_data), c => c.charCodeAt(0))
+    if (resource.inlineData) {
+      const bytes = Uint8Array.from(atob(resource.inlineData), c => c.charCodeAt(0))
       return new TextDecoder('utf-8').decode(bytes)
     }
 
     // Fall back to URL fetch for blob-backed content
     if (!resource.url) {
-      throw new Error('Resource has neither inline_data nor url')
+      throw new Error('Resource has neither inlineData nor url')
     }
     const resolvedUrl = resolveUcUrl(resource.url)
     const response = await fetch(resolvedUrl)
@@ -376,8 +376,8 @@ export function getResourceImageUrl(resource: ClipboardEntryResource): string | 
   if (resource.url) {
     return resource.url
   }
-  if (resource.inline_data) {
-    return `data:${resource.mime_type};base64,${resource.inline_data}`
+  if (resource.inlineData) {
+    return `data:${resource.mimeType};base64,${resource.inlineData}`
   }
   return null
 }
