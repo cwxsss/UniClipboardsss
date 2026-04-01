@@ -101,7 +101,7 @@ impl GetEntryResourceUseCase {
                     blob_id: Some(blob_id),
                     mime_type: Some(mime),
                     size_bytes: preview_rep.size_bytes,
-                    url: Some(format!("uc://blob/{}", blob_id_clone)),
+                    url: Some(format!("/clipboard/blobs/{}", blob_id_clone)),
                     inline_data: None,
                 })
             }
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(result.blob_id, Some(BlobId::from("blob-1")));
         assert_eq!(result.mime_type, Some("text/plain".to_string()));
         assert_eq!(result.size_bytes, 4096);
-        assert_eq!(result.url, Some("uc://blob/blob-1".to_string()));
+        assert_eq!(result.url, Some("/clipboard/blobs/blob-1".to_string()));
         assert!(result.inline_data.is_none());
     }
 

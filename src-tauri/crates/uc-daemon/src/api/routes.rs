@@ -74,6 +74,7 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
         .merge(crate::api::encryption::router())
         .merge(crate::api::storage::router())
         .merge(crate::api::pairing::router())
+        .merge(crate::api::blob::router())
         .route("/status", get(status))
         .route("/peers", get(peers))
         .route("/paired-devices", get(paired_devices))
@@ -192,16 +193,8 @@ async fn space_access_state_handler(State(state): State<DaemonApiState>) -> impl
     .into_response()
 }
 
-/// NOTE: The `unauthorized()` helper is kept for backward compatibility with modules
-/// that may still reference it. The middleware layer now handles authentication
-/// before requests reach handlers, so individual handlers no longer call this.
-pub(crate) fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({"error": "unauthorized"})),
-    )
-}
-
+/// NOTE: Individual API handlers now use `ApiError::unauthorized()` directly.
+/// This helper is kept for backward compatibility with the security middleware layer.
 pub(crate) fn internal_error(error: anyhow::Error) -> (StatusCode, Json<serde_json::Value>) {
     tracing::error!(error = %error, "daemon API request failed");
     (

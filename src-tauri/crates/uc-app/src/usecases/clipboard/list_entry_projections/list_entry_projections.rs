@@ -264,7 +264,7 @@ impl ListClipboardEntryProjections {
                 .get_by_representation_id(&selection.selection.preview_rep_id)
                 .await
             {
-                Ok(Some(_metadata)) => Some(format!("uc://thumbnail/{}", preview_rep_id)),
+                Ok(Some(_metadata)) => Some(format!("/clipboard/thumbnails/{}", preview_rep_id)),
                 Ok(None) => None,
                 Err(err) => {
                     tracing::error!(
@@ -463,7 +463,9 @@ impl ListClipboardEntryProjections {
                     .get_by_representation_id(&selection.selection.preview_rep_id)
                     .await
                 {
-                    Ok(Some(_metadata)) => Some(format!("uc://thumbnail/{}", preview_rep_id)),
+                    Ok(Some(_metadata)) => {
+                        Some(format!("/clipboard/thumbnails/{}", preview_rep_id))
+                    }
                     Ok(None) => None,
                     Err(err) => {
                         tracing::error!(
@@ -908,7 +910,7 @@ mod tests {
 
         assert_eq!(
             projection.thumbnail_url,
-            Some(format!("uc://thumbnail/{}", rep_id.inner()))
+            Some(format!("/clipboard/thumbnails/{}", rep_id.inner()))
         );
     }
 
