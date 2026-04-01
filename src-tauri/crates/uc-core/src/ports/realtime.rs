@@ -125,48 +125,6 @@ pub enum RealtimeEvent {
     ClipboardNewContent(ClipboardNewContentEvent),
 }
 
-pub const FRONTEND_REALTIME_EVENT: &str = "daemon://realtime";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RealtimeFrontendPayload {
-    PairingUpdated(PairingUpdatedEvent),
-    PairingVerificationRequired(PairingVerificationRequiredEvent),
-    PairingFailed(PairingFailedEvent),
-    PairingComplete(PairingCompleteEvent),
-    PeersChanged(PeerChangedEvent),
-    PeersNameUpdated(PeerNameUpdatedEvent),
-    PeersConnectionChanged(PeerConnectionChangedEvent),
-    PairedDevicesChanged(PairedDevicesChangedEvent),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RealtimeFrontendEvent {
-    pub topic: RealtimeTopic,
-    pub r#type: &'static str,
-    pub ts: i64,
-    pub payload: RealtimeFrontendPayload,
-}
-
-impl RealtimeFrontendEvent {
-    pub fn new(
-        topic: RealtimeTopic,
-        event_type: &'static str,
-        ts: i64,
-        payload: RealtimeFrontendPayload,
-    ) -> Self {
-        Self {
-            topic,
-            r#type: event_type,
-            ts,
-            payload,
-        }
-    }
-
-    pub fn event_type(&self) -> &'static str {
-        self.r#type
-    }
-}
-
 #[async_trait]
 pub trait RealtimeTopicPort: Send + Sync {
     async fn subscribe(

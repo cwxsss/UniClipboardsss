@@ -293,7 +293,7 @@ fn run_app(ctx: GuiBootstrapContext) {
     let gui_owned_daemon_state = GuiOwnedDaemonState::default();
 
     let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
-        std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::LoggingEventEmitter);
+        std::sync::Arc::new(uc_bootstrap::LoggingHostEventEmitter);
     let runtime = AppRuntime::with_setup(deps, setup_ports, storage_paths, event_emitter)
         .with_clipboard_write_coordinator(background.clipboard_write_coordinator.clone());
     let runtime = Arc::new(runtime);
@@ -402,15 +402,6 @@ fn run_app(ctx: GuiBootstrapContext) {
             // In Tauri 2, use app.handle() to get the AppHandle
             runtime.set_app_handle(app.handle().clone());
             info!("AppHandle set on AppRuntime for event emission");
-
-            // Swap event emitter from LoggingEventEmitter to TauriEventEmitter
-            // now that AppHandle is available
-            let tauri_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
-                std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::TauriEventEmitter::new(
-                    app.handle().clone(),
-                ));
-            runtime.set_event_emitter(tauri_emitter);
-            info!("Event emitter swapped to TauriEventEmitter");
 
             let daemon_connection_state_for_setup = daemon_connection_state.clone();
             let gui_owned_daemon_state_for_setup = gui_owned_daemon_state.clone();

@@ -1,16 +1,14 @@
 /**
  * Realtime event bridge — frontend WebSocket direct connection.
  *
- * Replaces the Tauri `listen('daemon://realtime', ...)` pattern with a direct
- * `daemonWs.subscribe()` call. The `onDaemonRealtimeEvent()` API is preserved so
- * all existing callers (useDeviceDiscovery, setup, p2p) do not need changes.
+ * Uses `daemonWs.subscribe()` to listen for daemon WS events. The
+ * `onDaemonRealtimeEvent()` API is preserved so all existing callers
+ * (useDeviceDiscovery, setup, p2p) do not need changes.
  *
  * Requires `daemonWs` to be connected first (call `connectDaemonWs()` at startup).
  */
 
 import { daemonWs } from '@/lib/daemon-ws'
-
-export const DAEMON_REALTIME_EVENT = 'daemon://realtime'
 
 /**
  * Event envelope forwarded to callers.
@@ -46,7 +44,13 @@ export async function onDaemonRealtimeEvent(
 ): Promise<() => void> {
   // Convert DaemonWsEvent (eventType) to the legacy envelope (type) so all
   // existing callers continue to work without changes.
-  const handler = (wsEvent: { topic: string; eventType: string; ts: number; sessionId: string | null; payload: unknown }) => {
+  const handler = (wsEvent: {
+    topic: string
+    eventType: string
+    ts: number
+    sessionId: string | null
+    payload: unknown
+  }) => {
     callback({
       topic: wsEvent.topic,
       type: wsEvent.eventType,
@@ -57,14 +61,7 @@ export async function onDaemonRealtimeEvent(
   }
 
   // Subscribe to all topics that the daemon emits realtime events for.
-  const topics = [
-    'clipboard',
-    'peers',
-    'pairing',
-    'setup',
-    'space_access',
-    'paired_devices',
-  ]
+  const topics = ['clipboard', 'peers', 'pairing', 'setup', 'space_access', 'paired_devices']
 
   return daemonWs.subscribe(topics, handler)
 }

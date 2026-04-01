@@ -76,35 +76,6 @@ use uc_platform::ports::{AppDirsPort, IdentityStorePort};
 
 use tokio::sync::mpsc;
 
-/// A minimal logging event emitter used as the initial placeholder inside the shared
-/// emitter cell created at wire time.
-///
-/// Logs event type names only (no payload content, which may be sensitive).
-/// After Tauri setup or non-GUI runtime construction, callers replace this with
-/// a `TauriEventEmitter` or keep it as-is for non-GUI paths.
-struct WireTimeLoggingEmitter;
-
-impl HostEventEmitterPort for WireTimeLoggingEmitter {
-    fn emit(
-        &self,
-        event: uc_core::ports::host_event_emitter::HostEvent,
-    ) -> Result<(), uc_core::ports::host_event_emitter::EmitError> {
-        use uc_core::ports::host_event_emitter::HostEvent;
-        let event_type = match &event {
-            HostEvent::Clipboard(_) => "clipboard",
-            HostEvent::PeerDiscovery(_) => "peer_discovery",
-            HostEvent::PeerConnection(_) => "peer_connection",
-            HostEvent::Transfer(_) => "transfer",
-            HostEvent::Pairing(_) => "pairing",
-            HostEvent::Realtime(_) => "realtime",
-            HostEvent::Setup(_) => "setup",
-            HostEvent::SpaceAccess(_) => "space_access",
-        };
-        tracing::debug!(event_type, "wire-time host event (pre-bootstrap)");
-        Ok(())
-    }
-}
-
 /// Result type for wiring operations
 pub type WiringResult<T> = Result<T, WiringError>;
 
@@ -154,7 +125,7 @@ pub struct BackgroundRuntimeDeps {
     pub worker_retry_max_attempts: u32,
     pub worker_retry_backoff_ms: u64,
     /// File transfer lifecycle orchestrator. Holds a clone of the shared emitter_cell so
-    /// it automatically sees emitter swaps (LoggingEventEmitter → TauriEventEmitter).
+    /// it automatically sees emitter swaps (LoggingEventEmitter → DaemonApiEventEmitter).
     pub file_transfer_orchestrator: Arc<uc_app::usecases::file_sync::FileTransferOrchestrator>,
     /// Single write boundary for all programmatic clipboard writes.
     /// Centralises guard-registration + write + cleanup-on-error.
@@ -175,7 +146,7 @@ pub struct WiredDependencies {
 /// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
 ///
 /// Uses Arc<RwLock<...>> shared cell so that HostEventSetupPort always reads the
-/// current emitter after bootstrap swaps it from LoggingEventEmitter to TauriEventEmitter.
+/// current emitter after bootstrap swaps it from LoggingEventEmitter to DaemonApiEventEmitter.
 /// This eliminates the stale emitter bug described in STATE.md Known Bugs.
 #[derive(Clone)]
 pub struct HostEventSetupPort {
@@ -856,7 +827,8 @@ pub fn wire_dependencies_with_identity_store(
     // Create shared emitter cell at wire time using the logging placeholder.
     // All consumers (CoreRuntime, SetupOrchestrator, FileTransferOrchestrator)
     // hold a clone of this cell and automatically see the emitter after any swap.
-    let initial_emitter: Arc<dyn HostEventEmitterPort> = Arc::new(WireTimeLoggingEmitter);
+    let initial_emitter: Arc<dyn HostEventEmitterPort> =
+        Arc::new(crate::non_gui_runtime::LoggingHostEventEmitter);
     let emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>> =
         Arc::new(std::sync::RwLock::new(initial_emitter));
 
@@ -1050,7 +1022,7 @@ impl SetupAssemblyPorts {
 /// Constructs a `FileTransferOrchestrator` for file transfer lifecycle management.
 ///
 /// Uses the shared `emitter_cell` so the orchestrator automatically sees emitter swaps
-/// (e.g., `LoggingHostEventEmitter` → `TauriEventEmitter` after Tauri setup).
+/// (e.g., `LoggingHostEventEmitter` → `DaemonApiEventEmitter` after Tauri setup).
 pub fn build_file_transfer_orchestrator(
     file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
     emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,

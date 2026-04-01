@@ -150,7 +150,7 @@ impl AppRuntime {
     pub fn new(deps: AppDeps, storage_paths: uc_app::app_paths::AppPaths) -> Self {
         let setup_ports = uc_bootstrap::assembly::SetupAssemblyPorts::placeholder(&deps);
         let event_emitter: Arc<dyn HostEventEmitterPort> =
-            Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter);
+            Arc::new(uc_bootstrap::LoggingHostEventEmitter);
         Self::with_setup(deps, setup_ports, storage_paths, event_emitter)
     }
 
@@ -258,14 +258,13 @@ impl AppRuntime {
     /// Get the current event emitter (clones the inner Arc).
     ///
     /// Returns the active [`HostEventEmitterPort`] implementation. During early bootstrap,
-    /// this is a [`LoggingEventEmitter`]; after setup, a `TauriEventEmitter`.
+    /// this is a [`LoggingEventEmitter`]; after daemon setup, a `DaemonApiEventEmitter`.
     pub fn event_emitter(&self) -> Arc<dyn HostEventEmitterPort> {
         self.core.event_emitter()
     }
 
-    /// Swap the event emitter. Called from setup callback to replace the
-    /// initial [`LoggingEventEmitter`] with a [`TauriEventEmitter`] once the
-    /// Tauri `AppHandle` is available.
+    /// Swap the event emitter. Called from daemon setup to replace the
+    /// initial [`LoggingEventEmitter`] with a [`DaemonApiEventEmitter`].
     pub fn set_event_emitter(&self, emitter: Arc<dyn HostEventEmitterPort>) {
         self.core.set_event_emitter(emitter);
     }
@@ -1381,21 +1380,21 @@ mod tests {
         runtime.set_event_emitter(swapped_emitter.clone());
         runtime
             .event_emitter()
-            .emit(HostEvent::Clipboard(
-                ClipboardHostEvent::InboundSubscribeRecovered {
-                    recovered_after_attempts: 2,
-                },
-            ))
+            .emit(HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                entry_id: "entry-swap".to_string(),
+                preview: "swapped".to_string(),
+                origin: uc_core::ports::host_event_emitter::ClipboardOriginKind::Local,
+            }))
             .expect("emit through swapped emitter");
 
         assert!(initial_emitter.events.lock().unwrap().is_empty());
         let swapped_events = swapped_emitter.events.lock().unwrap();
         assert_eq!(swapped_events.len(), 1);
         match &swapped_events[0] {
-            HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeRecovered {
-                recovered_after_attempts,
-            }) => assert_eq!(*recovered_after_attempts, 2),
-            other => panic!("expected recovered event on swapped emitter, got {other:?}"),
+            HostEvent::Clipboard(ClipboardHostEvent::NewContent { entry_id, .. }) => {
+                assert_eq!(entry_id, "entry-swap");
+            }
+            other => panic!("expected NewContent event on swapped emitter, got {other:?}"),
         }
     }
 }

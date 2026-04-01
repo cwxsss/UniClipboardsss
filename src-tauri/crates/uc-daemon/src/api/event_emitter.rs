@@ -30,21 +30,6 @@ struct ClipboardNewContentPayload {
     content_type: Option<String>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct ClipboardDeletedPayload {
-    entry_id: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct ClipboardUpdatedPayload {
-    entry_id: String,
-    changes: Vec<String>,
-}
-
 pub struct DaemonApiEventEmitter {
     event_tx: broadcast::Sender<DaemonWsEvent>,
 }
@@ -81,10 +66,6 @@ impl DaemonApiEventEmitter {
             ts,
             payload,
         });
-    }
-
-    fn log_non_setup_event(event_type: &'static str) {
-        tracing::debug!(event_type, "host event (daemon api emitter)");
     }
 }
 
@@ -150,40 +131,24 @@ impl HostEventEmitterPort for DaemonApiEventEmitter {
                     },
                 );
             }
-            HostEvent::Clipboard(clipboard_event) => match clipboard_event {
-                ClipboardHostEvent::NewContent {
-                    entry_id,
-                    preview,
-                    origin,
-                } => {
-                    self.emit_ws_event(
-                        ws_event::CLIPBOARD_NEW_CONTENT,
-                        ws_topic::CLIPBOARD,
-                        None,
-                        Self::now_ms(),
-                        ClipboardNewContentPayload {
-                            entry_id,
-                            preview,
-                            origin: format!("{:?}", origin).to_lowercase(),
-                            content_type: None,
-                        },
-                    );
-                }
-                ClipboardHostEvent::InboundError { .. }
-                | ClipboardHostEvent::InboundSubscribeRecovered { .. }
-                | ClipboardHostEvent::InboundSubscribeError { .. }
-                | ClipboardHostEvent::InboundSubscribeRetry { .. }
-                | ClipboardHostEvent::DaemonReconnected => {
-                    // These are handled by TauriEventEmitter / DaemonWsBridge on the GUI side.
-                    // No WS broadcast needed from daemon — these are GUI-internal signals.
-                    Self::log_non_setup_event("clipboard_internal");
-                }
-            },
-            HostEvent::PeerDiscovery(_) => Self::log_non_setup_event("peer_discovery"),
-            HostEvent::PeerConnection(_) => Self::log_non_setup_event("peer_connection"),
-            HostEvent::Transfer(_) => Self::log_non_setup_event("transfer"),
-            HostEvent::Pairing(_) => Self::log_non_setup_event("pairing"),
-            HostEvent::Realtime(_) => Self::log_non_setup_event("realtime"),
+            HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                entry_id,
+                preview,
+                origin,
+            }) => {
+                self.emit_ws_event(
+                    ws_event::CLIPBOARD_NEW_CONTENT,
+                    ws_topic::CLIPBOARD,
+                    None,
+                    Self::now_ms(),
+                    ClipboardNewContentPayload {
+                        entry_id,
+                        preview,
+                        origin: format!("{:?}", origin).to_lowercase(),
+                        content_type: None,
+                    },
+                );
+            }
         }
 
         Ok(())
