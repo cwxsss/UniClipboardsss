@@ -3,10 +3,6 @@
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::http::header::{
-    HeaderValue, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
-};
-use tauri::http::{Request, Response, StatusCode};
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
@@ -24,7 +20,6 @@ use uc_tauri::bootstrap::{
     supervise_daemon, AppRuntime,
 };
 use uc_tauri::commands::updater::PendingUpdate;
-use uc_tauri::protocol::{parse_uc_request, UcRoute};
 use uc_tauri::tray::TrayState;
 
 // Platform-specific command modules
@@ -35,229 +30,6 @@ use uc_tauri::quick_panel;
 
 const DAEMON_EXIT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_EXIT_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-fn is_allowed_cors_origin(origin: &str) -> bool {
-    origin == "tauri://localhost"
-        || origin == "http://tauri.localhost"
-        || origin == "https://tauri.localhost"
-        || origin.starts_with("http://localhost:")
-        || origin.starts_with("http://127.0.0.1:")
-        || origin.starts_with("http://[::1]:")
-}
-
-fn set_cors_headers(response: &mut Response<Vec<u8>>, origin: Option<&str>) {
-    let origin = match origin {
-        Some(origin) if is_allowed_cors_origin(origin) => origin,
-        _ => return,
-    };
-
-    match HeaderValue::from_str(origin) {
-        Ok(value) => {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_ORIGIN, value);
-        }
-        Err(err) => {
-            error!(error = %err, "Invalid origin for CORS response");
-        }
-    }
-
-    if let Ok(value) = HeaderValue::from_str("GET") {
-        response
-            .headers_mut()
-            .insert(ACCESS_CONTROL_ALLOW_METHODS, value);
-    }
-}
-
-fn build_response(
-    status: StatusCode,
-    content_type: Option<&str>,
-    body: Vec<u8>,
-    origin: Option<&str>,
-) -> Response<Vec<u8>> {
-    let mut response = Response::new(body);
-    *response.status_mut() = status;
-
-    if let Some(content_type) = content_type {
-        match HeaderValue::from_str(content_type) {
-            Ok(value) => {
-                response.headers_mut().insert(CONTENT_TYPE, value);
-            }
-            Err(err) => {
-                error!(error = %err, "Invalid content type for response");
-            }
-        }
-    }
-
-    set_cors_headers(&mut response, origin);
-
-    response
-}
-
-fn text_response(status: StatusCode, message: &str, origin: Option<&str>) -> Response<Vec<u8>> {
-    build_response(
-        status,
-        Some("text/plain"),
-        message.as_bytes().to_vec(),
-        origin,
-    )
-}
-
-async fn resolve_uc_request(
-    app_handle: tauri::AppHandle,
-    request: Request<Vec<u8>>,
-) -> Response<Vec<u8>> {
-    let uri = request.uri();
-    let host = uri.host().unwrap_or_default();
-    let path = uri.path();
-    let origin = request
-        .headers()
-        .get("Origin")
-        .and_then(|value| value.to_str().ok());
-
-    let route = match parse_uc_request(&request) {
-        Ok(route) => route,
-        Err(err) => {
-            error!(
-                error = %err,
-                host = %host,
-                path = %path,
-                "Failed to parse uc URI request"
-            );
-            return text_response(err.status_code(), err.response_message(), origin);
-        }
-    };
-
-    match route {
-        UcRoute::Blob { blob_id } => resolve_uc_blob_request(app_handle, blob_id, origin).await,
-        UcRoute::Thumbnail { representation_id } => {
-            resolve_uc_thumbnail_request(app_handle, representation_id, origin).await
-        }
-    }
-}
-
-async fn resolve_uc_blob_request(
-    app_handle: tauri::AppHandle,
-    blob_id: uc_core::BlobId,
-    origin: Option<&str>,
-) -> Response<Vec<u8>> {
-    let runtime = match app_handle.try_state::<Arc<AppRuntime>>() {
-        Some(state) => state,
-        None => {
-            error!("AppRuntime state not managed for uc URI handling");
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Runtime not ready",
-                origin,
-            );
-        }
-    };
-
-    let use_case = runtime.usecases().resolve_blob_resource();
-    match use_case.execute(&blob_id).await {
-        Ok(result) => build_response(
-            StatusCode::OK,
-            Some(
-                result
-                    .mime_type
-                    .as_deref()
-                    .unwrap_or("application/octet-stream"),
-            ),
-            result.bytes,
-            origin,
-        ),
-        Err(err) => {
-            let err_msg = err.to_string();
-            error!(error = %err, blob_id = %blob_id, "Failed to resolve blob resource");
-            let status = if err_msg.contains("not found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            text_response(status, "Failed to resolve blob resource", origin)
-        }
-    }
-}
-
-async fn resolve_uc_thumbnail_request(
-    app_handle: tauri::AppHandle,
-    representation_id: uc_core::ids::RepresentationId,
-    origin: Option<&str>,
-) -> Response<Vec<u8>> {
-    let runtime = match app_handle.try_state::<Arc<AppRuntime>>() {
-        Some(state) => state,
-        None => {
-            error!("AppRuntime state not managed for uc URI handling");
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Runtime not ready",
-                origin,
-            );
-        }
-    };
-
-    let use_case = runtime.usecases().resolve_thumbnail_resource();
-    match use_case.execute(&representation_id).await {
-        Ok(result) => build_response(
-            StatusCode::OK,
-            Some(
-                result
-                    .mime_type
-                    .as_deref()
-                    .unwrap_or("application/octet-stream"),
-            ),
-            result.bytes,
-            origin,
-        ),
-        Err(err) => {
-            let err_msg = err.to_string();
-            error!(
-                error = %err,
-                representation_id = %representation_id,
-                "Failed to resolve thumbnail resource"
-            );
-            let status = if err_msg.contains("not found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            text_response(status, "Failed to resolve thumbnail resource", origin)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cors_headers_are_set_for_dev_origin() {
-        let origin = "http://localhost:1420";
-        let response = build_response(StatusCode::OK, None, vec![], Some(origin));
-
-        let headers = response.headers();
-        assert_eq!(
-            headers
-                .get(ACCESS_CONTROL_ALLOW_ORIGIN)
-                .and_then(|value| value.to_str().ok()),
-            Some(origin)
-        );
-        assert_eq!(
-            headers
-                .get(ACCESS_CONTROL_ALLOW_METHODS)
-                .and_then(|value| value.to_str().ok()),
-            Some("GET")
-        );
-    }
-
-    #[test]
-    fn test_cors_headers_not_set_for_untrusted_origin() {
-        let response = build_response(StatusCode::OK, None, vec![], Some("https://example.com"));
-
-        let headers = response.headers();
-        assert!(headers.get(ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
-    }
-}
 
 fn main() {
     // Tracing and config are handled inside build_gui_app()
@@ -344,17 +116,6 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             if matches!(payload.event(), PageLoadEvent::Finished) {}
         })
-        .register_asynchronous_uri_scheme_protocol("uc", move |ctx, request, responder| {
-            let app_handle = ctx.app_handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let response = resolve_uc_request(app_handle, request).await;
-                responder.respond(response);
-            });
-        })
-        // Manual verification (dev):
-        // 1) In frontend devtools: fetch("uc://blob/<blob_id>")
-        // 2) In frontend devtools: fetch("uc://thumbnail/<representation_id>")
-        // 3) Network should show 200 with Access-Control-Allow-Origin matching http://localhost:1420
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init());
