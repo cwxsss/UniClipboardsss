@@ -42,8 +42,6 @@ pub const WS_SUPPORTED_TOPICS: &[&str] = &[
     ws_topic::PEERS,
     ws_topic::PAIRED_DEVICES,
     ws_topic::PAIRING,
-    ws_topic::PAIRING_SESSION,
-    ws_topic::PAIRING_VERIFICATION,
     ws_topic::SETUP,
     ws_topic::SPACE_ACCESS,
     ws_topic::CLIPBOARD,

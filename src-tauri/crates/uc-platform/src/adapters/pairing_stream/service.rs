@@ -3,7 +3,6 @@ use crate::ports::observability::TraceMetadata;
 use anyhow::{anyhow, Result};
 use libp2p::{futures::StreamExt, PeerId, StreamProtocol};
 use libp2p_stream as stream;
-use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -11,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{timeout, Duration};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
-use tracing::{info_span, Instrument, Span};
+use tracing::{debug, info, info_span, warn, Instrument, Span};
 use uc_core::network::{NetworkEvent, PairingMessage, ProtocolId};
 
 pub const MAX_PAIRING_CONCURRENCY: usize = 16;
@@ -206,6 +205,7 @@ impl PairingStreamService {
     #[tracing::instrument(skip(self, message), fields(session_id = %message.session_id()))]
     pub async fn send_pairing_on_session(&self, message: PairingMessage) -> Result<()> {
         let session_id = message.session_id().to_string();
+        let message_kind = pairing_message_kind(&message);
         let sender = {
             let sessions = self.inner.sessions.lock().await;
             sessions
@@ -213,10 +213,21 @@ impl PairingStreamService {
                 .map(|handle| handle.write_tx.clone())
                 .ok_or_else(|| anyhow!("pairing session not open: {session_id}"))?
         };
+        debug!(
+            session_id = %session_id,
+            message_kind,
+            "queueing pairing message onto session writer"
+        );
         sender
             .send(message)
             .await
-            .map_err(|err| anyhow!("pairing session send failed: {err}"))
+            .map_err(|err| anyhow!("pairing session send failed: {err}"))?;
+        info!(
+            session_id = %session_id,
+            message_kind,
+            "pairing message accepted by session writer queue"
+        );
+        Ok(())
     }
 
     #[tracing::instrument(skip(self), fields(peer_id = %peer_id))]
@@ -281,8 +292,20 @@ impl PairingStreamService {
         let first_payload = self.read_frame(&mut stream).await?;
         let first_payload =
             first_payload.ok_or_else(|| anyhow!("stream closed before first message"))?;
+        info!(
+            peer_id = %peer_id,
+            payload_len = first_payload.len(),
+            "read first pairing frame from inbound stream"
+        );
         let first_message = self.decode_message(&peer_id, &first_payload)?;
         let session_id = first_message.session_id().to_string();
+        let message_kind = pairing_message_kind(&first_message);
+        info!(
+            peer_id = %peer_id,
+            session_id = %session_id,
+            message_kind,
+            "decoded first pairing message from inbound stream"
+        );
         self.spawn_session(peer_id, session_id, stream, Some(first_message), permits)
             .await?
             .await?
@@ -390,6 +413,20 @@ impl PairingStreamService {
 
     fn decode_message(&self, peer_id: &str, payload: &[u8]) -> Result<PairingMessage> {
         self.inner.decode_message(peer_id, payload)
+    }
+}
+
+fn pairing_message_kind(message: &PairingMessage) -> &'static str {
+    match message {
+        PairingMessage::Request(_) => "request",
+        PairingMessage::Challenge(_) => "challenge",
+        PairingMessage::KeyslotOffer(_) => "keyslot_offer",
+        PairingMessage::ChallengeResponse(_) => "challenge_response",
+        PairingMessage::Response(_) => "response",
+        PairingMessage::Confirm(_) => "confirm",
+        PairingMessage::Reject(_) => "reject",
+        PairingMessage::Cancel(_) => "cancel",
+        PairingMessage::Busy(_) => "busy",
     }
 }
 

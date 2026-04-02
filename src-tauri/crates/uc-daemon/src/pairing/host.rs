@@ -609,6 +609,13 @@ async fn run_pairing_action_loop(
                 match action {
                     PairingAction::Send { peer_id, message } => {
                         let session_id = message.session_id().to_string();
+                        let message_kind = pairing_message_kind(&message);
+                        info!(
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                            message_kind,
+                            "dispatching pairing action send"
+                        );
                         if let Err(err) = pairing_transport
                             .open_pairing_session(peer_id.clone(), session_id.clone())
                             .await
@@ -626,6 +633,13 @@ async fn run_pairing_action_loop(
                             continue;
                         }
 
+                        debug!(
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                            message_kind,
+                            "pairing session open confirmed before send"
+                        );
+
                         if let Err(err) = pairing_transport.send_pairing_on_session(message).await {
                             signal_pairing_transport_failure(
                                 pairing_orchestrator.as_ref(),
@@ -637,6 +651,13 @@ async fn run_pairing_action_loop(
                                 err.to_string(),
                             )
                             .await?;
+                        } else {
+                            info!(
+                                session_id = %session_id,
+                                peer_id = %peer_id,
+                                message_kind,
+                                "pairing action send queued to transport"
+                            );
                         }
                     }
                     PairingAction::ShowVerification {
@@ -833,7 +854,7 @@ async fn run_pairing_domain_event_loop(
                         let ts = now_ms();
                         emit_ws_event(
                             &event_tx,
-                            ws_topic::PAIRING_SESSION,
+                            ws_topic::PAIRING,
                             ws_event::PAIRING_UPDATED,
                             Some(session_id.clone()),
                             PairingSessionChangedPayload {
@@ -864,7 +885,7 @@ async fn run_pairing_domain_event_loop(
                         let ts = now_ms();
                         emit_ws_event(
                             &event_tx,
-                            ws_topic::PAIRING_SESSION,
+                            ws_topic::PAIRING,
                             ws_event::PAIRING_COMPLETE,
                             Some(session_id.clone()),
                             PairingSessionChangedPayload {
@@ -950,7 +971,7 @@ async fn run_pairing_domain_event_loop(
                         let ts = now_ms();
                         emit_ws_event(
                             &event_tx,
-                            ws_topic::PAIRING_VERIFICATION,
+                            ws_topic::PAIRING,
                             ws_event::PAIRING_FAILED,
                             Some(session_id.clone()),
                             PairingFailurePayload {
@@ -1109,6 +1130,14 @@ async fn handle_pairing_message(
     peer_id: String,
     message: PairingMessage,
 ) -> anyhow::Result<()> {
+    let session_id = message.session_id().to_string();
+    let message_kind = pairing_message_kind(&message);
+    info!(
+        session_id = %session_id,
+        peer_id = %peer_id,
+        message_kind,
+        "handling inbound pairing message"
+    );
     match message {
         PairingMessage::Request(request) => {
             if !discoverability.is_active().await {
@@ -1163,7 +1192,7 @@ async fn handle_pairing_message(
             .await;
             emit_ws_event(
                 event_tx,
-                ws_topic::PAIRING_SESSION,
+                ws_topic::PAIRING,
                 ws_event::PAIRING_UPDATED,
                 Some(request.session_id.clone()),
                 PairingSessionChangedPayload {
@@ -1177,9 +1206,27 @@ async fn handle_pairing_message(
                 },
             );
 
-            pairing_orchestrator
-                .handle_incoming_request(peer_id, request)
-                .await?;
+            info!(
+                session_id = %request.session_id,
+                sender_peer_id = %peer_id,
+                request_target_peer_id = %request.peer_id,
+                request_device_id = %request.device_id,
+                request_device_name = %request.device_name,
+                "forwarding inbound pairing request to orchestrator"
+            );
+
+            if let Err(err) = pairing_orchestrator
+                .handle_incoming_request(peer_id.clone(), request)
+                .await
+            {
+                warn!(
+                    error = %err,
+                    session_id = %session_id,
+                    sender_peer_id = %peer_id,
+                    "failed to handle inbound pairing request"
+                );
+                return Err(err);
+            }
         }
         PairingMessage::Challenge(challenge) => {
             let session_id = challenge.session_id.clone();
@@ -1331,6 +1378,20 @@ async fn handle_pairing_message(
     Ok(())
 }
 
+fn pairing_message_kind(message: &PairingMessage) -> &'static str {
+    match message {
+        PairingMessage::Request(_) => "request",
+        PairingMessage::Challenge(_) => "challenge",
+        PairingMessage::KeyslotOffer(_) => "keyslot_offer",
+        PairingMessage::ChallengeResponse(_) => "challenge_response",
+        PairingMessage::Response(_) => "response",
+        PairingMessage::Confirm(_) => "confirm",
+        PairingMessage::Reject(_) => "reject",
+        PairingMessage::Cancel(_) => "cancel",
+        PairingMessage::Busy(_) => "busy",
+    }
+}
+
 async fn reject_inbound_request(
     pairing_transport: &Arc<dyn uc_core::ports::PairingTransportPort>,
     peer_id: &str,
@@ -1413,7 +1474,7 @@ fn emit_pairing_session_changed(
 ) {
     emit_ws_event(
         event_tx,
-        ws_topic::PAIRING_SESSION,
+        ws_topic::PAIRING,
         ws_event::PAIRING_UPDATED,
         Some(session_id.to_string()),
         PairingSessionChangedPayload {
@@ -1441,7 +1502,7 @@ fn emit_pairing_verification(
 ) {
     emit_ws_event(
         event_tx,
-        ws_topic::PAIRING_VERIFICATION,
+        ws_topic::PAIRING,
         ws_event::PAIRING_VERIFICATION_REQUIRED,
         Some(session_id.to_string()),
         PairingVerificationPayload {
@@ -1465,7 +1526,7 @@ fn emit_pairing_failure(
 ) {
     emit_ws_event(
         event_tx,
-        ws_topic::PAIRING_VERIFICATION,
+        ws_topic::PAIRING,
         ws_event::PAIRING_FAILED,
         Some(session_id.to_string()),
         PairingFailurePayload {

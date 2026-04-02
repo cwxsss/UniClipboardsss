@@ -20,7 +20,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use utoipa;
 
@@ -197,15 +197,26 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: Ses
         loop {
             match broadcast_rx.recv().await {
                 Ok(event) => {
-                    let should_deliver = {
+                    let matched_topics = {
                         let guard = fanout_topics.read().await;
                         guard
                             .iter()
-                            .any(|topic| topic_matches(topic, event.topic.as_str()))
+                            .filter(|topic| topic_matches(topic, event.topic.as_str()))
+                            .cloned()
+                            .collect::<Vec<_>>()
                     };
 
-                    if should_deliver && fanout_tx.send(event).await.is_err() {
-                        break;
+                    if !matched_topics.is_empty() {
+                        info!(
+                            event_topic = %event.topic,
+                            event_type = %event.event_type,
+                            session_id = event.session_id.as_deref().unwrap_or(""),
+                            matched_topics = ?matched_topics,
+                            "forwarding daemon websocket event to subscribed client"
+                        );
+                        if fanout_tx.send(event).await.is_err() {
+                            break;
+                        }
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -373,6 +384,11 @@ async fn handle_client_message(
     }
 
     let normalized_topics = normalize_topics(request.topics);
+    info!(
+        requested_topics = %payload,
+        normalized_topics = ?normalized_topics,
+        "websocket client subscribed to topics"
+    );
     {
         let mut guard = topics.write().await;
         guard.extend(normalized_topics.iter().cloned());
@@ -418,8 +434,6 @@ fn is_supported_topic(topic: &str) -> bool {
             | ws_topic::PEERS
             | ws_topic::PAIRED_DEVICES
             | ws_topic::PAIRING
-            | ws_topic::PAIRING_SESSION
-            | ws_topic::PAIRING_VERIFICATION
             | ws_topic::SETUP
             | ws_topic::SPACE_ACCESS
             | ws_topic::CLIPBOARD
@@ -429,10 +443,8 @@ fn is_supported_topic(topic: &str) -> bool {
 }
 
 /// Returns `true` when the subscribed topic matches the event topic.
-/// Subscription `"pairing"` matches all `"pairing/*"` events.
 fn topic_matches(subscription: &str, event_topic: &str) -> bool {
     subscription == event_topic
-        || (subscription == ws_topic::PAIRING && event_topic.starts_with("pairing/"))
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +480,7 @@ async fn build_snapshot_event(
         )
         .map(Some),
 
-        ws_topic::PAIRING | ws_topic::PAIRING_SESSION => snapshot_event(
+        ws_topic::PAIRING => snapshot_event(
             ws_topic::PAIRING,
             ws_event::PAIRING_SNAPSHOT,
             None,
@@ -476,7 +488,6 @@ async fn build_snapshot_event(
         )
         .map(Some),
 
-        ws_topic::PAIRING_VERIFICATION => Ok(None),
         ws_topic::SETUP => Ok(None),
         ws_topic::CLIPBOARD => Ok(None),
         ws_topic::FILE_TRANSFER => Ok(None),
@@ -555,8 +566,6 @@ mod tests {
             ws_topic::PEERS,
             ws_topic::PAIRED_DEVICES,
             ws_topic::PAIRING,
-            ws_topic::PAIRING_SESSION,
-            ws_topic::PAIRING_VERIFICATION,
             ws_topic::SETUP,
             ws_topic::SPACE_ACCESS,
             ws_topic::CLIPBOARD,
