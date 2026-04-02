@@ -19,8 +19,8 @@ pub mod ws_event {
     pub const STATUS_UPDATED: &str = "status.updated";
     pub const PEERS_SNAPSHOT: &str = "peers.snapshot";
     pub const PEERS_CHANGED: &str = "peers.changed";
-    pub const PEERS_NAME_UPDATED: &str = "peers.name_updated";
-    pub const PEERS_CONNECTION_CHANGED: &str = "peers.connection_changed";
+    pub const PEERS_NAME_UPDATED: &str = "peers.nameUpdated";
+    pub const PEERS_CONNECTION_CHANGED: &str = "peers.connectionChanged";
     pub const PAIRED_DEVICES_SNAPSHOT: &str = "paired-devices.snapshot";
     pub const PAIRED_DEVICES_CHANGED: &str = "paired-devices.changed";
     pub const PAIRING_SNAPSHOT: &str = "pairing.snapshot";
@@ -28,8 +28,8 @@ pub mod ws_event {
     pub const PAIRING_VERIFICATION_REQUIRED: &str = "pairing.verification_required";
     pub const PAIRING_COMPLETE: &str = "pairing.complete";
     pub const PAIRING_FAILED: &str = "pairing.failed";
-    pub const SETUP_STATE_CHANGED: &str = "setup.state_changed";
-    pub const SETUP_SPACE_ACCESS_COMPLETED: &str = "setup.space_access_completed";
+    pub const SETUP_STATE_CHANGED: &str = "setup.stateChanged";
+    pub const SETUP_SPACE_ACCESS_COMPLETED: &str = "setup.spaceAccessCompleted";
     pub const SPACE_ACCESS_SNAPSHOT: &str = "space_access.snapshot";
     pub const SPACE_ACCESS_STATE_CHANGED: &str = "space_access.state_changed";
     pub const CLIPBOARD_NEW_CONTENT: &str = "clipboard.new_content";
@@ -119,10 +119,10 @@ mod tests {
         assert_eq!(ws_event::STATUS_UPDATED, "status.updated");
         assert_eq!(ws_event::PEERS_SNAPSHOT, "peers.snapshot");
         assert_eq!(ws_event::PEERS_CHANGED, "peers.changed");
-        assert_eq!(ws_event::PEERS_NAME_UPDATED, "peers.name_updated");
+        assert_eq!(ws_event::PEERS_NAME_UPDATED, "peers.nameUpdated");
         assert_eq!(
             ws_event::PEERS_CONNECTION_CHANGED,
-            "peers.connection_changed"
+            "peers.connectionChanged"
         );
         assert_eq!(ws_event::PAIRED_DEVICES_SNAPSHOT, "paired-devices.snapshot");
         assert_eq!(ws_event::PAIRED_DEVICES_CHANGED, "paired-devices.changed");
@@ -134,10 +134,10 @@ mod tests {
         );
         assert_eq!(ws_event::PAIRING_COMPLETE, "pairing.complete");
         assert_eq!(ws_event::PAIRING_FAILED, "pairing.failed");
-        assert_eq!(ws_event::SETUP_STATE_CHANGED, "setup.state_changed");
+        assert_eq!(ws_event::SETUP_STATE_CHANGED, "setup.stateChanged");
         assert_eq!(
             ws_event::SETUP_SPACE_ACCESS_COMPLETED,
-            "setup.space_access_completed"
+            "setup.spaceAccessCompleted"
         );
         assert_eq!(ws_event::SPACE_ACCESS_SNAPSHOT, "space_access.snapshot");
         assert_eq!(

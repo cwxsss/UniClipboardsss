@@ -434,7 +434,7 @@ async fn setup_topic_subscription_receives_setup_state_changed_events() {
         .event_tx
         .send(DaemonWsEvent {
             topic: "setup".to_string(),
-            event_type: "setup.state_changed".to_string(),
+            event_type: "setup.stateChanged".to_string(),
             session_id: Some("session-setup".to_string()),
             ts: 8,
             payload: serde_json::to_value(SetupStateChangedPayload {
@@ -454,7 +454,7 @@ async fn setup_topic_subscription_receives_setup_state_changed_events() {
     let event = next_json(&mut socket).await;
     harness.handle.abort();
 
-    assert_eq!(event["type"], "setup.state_changed");
+    assert_eq!(event["type"], "setup.stateChanged");
     assert_eq!(event["payload"]["sessionId"], "session-setup");
     assert_eq!(
         event["payload"]["state"]["JoinSpaceConfirmPeer"]["short_code"],

@@ -41,7 +41,7 @@ describe('p2p realtime contract', () => {
 
     expect(daemonWs.subscribe).toHaveBeenCalledTimes(1)
     expect(daemonWs.subscribe).toHaveBeenCalledWith(
-      ['clipboard', 'peers', 'pairing', 'setup', 'space_access', 'paired_devices'],
+      ['clipboard', 'peers', 'pairing', 'setup', 'space-access', 'paired-devices'],
       expect.any(Function)
     )
   })
@@ -69,9 +69,13 @@ describe('p2p realtime contract', () => {
     // Extract the handler registered with daemonWs.subscribe from the mock's last call.
     const { daemonWs } = await import('@/lib/daemon-ws')
     const subscribeCalls = (daemonWs.subscribe as ReturnType<typeof vi.fn>).mock.calls
-    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (
-      wsEvent: { topic: string; eventType: string; ts: number; sessionId: string | null; payload: unknown }
-    ) => void
+    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (wsEvent: {
+      topic: string
+      eventType: string
+      ts: number
+      sessionId: string | null
+      payload: unknown
+    }) => void
 
     expect(registeredHandler).toBeDefined()
 
@@ -102,16 +106,25 @@ describe('p2p realtime contract', () => {
 
     const { daemonWs } = await import('@/lib/daemon-ws')
     const subscribeCalls = (daemonWs.subscribe as ReturnType<typeof vi.fn>).mock.calls
-    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (
-      wsEvent: { topic: string; eventType: string; ts: number; sessionId: string | null; payload: unknown }
-    ) => void
+    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (wsEvent: {
+      topic: string
+      eventType: string
+      ts: number
+      sessionId: string | null
+      payload: unknown
+    }) => void
 
     registeredHandler({
       topic: 'setup',
       eventType: 'setup.stateChanged',
       ts: 1,
       sessionId: 'sess-1',
-      payload: { sessionId: 'sess-1', state: { JoinSpaceConfirmPeer: { short_code: '654321', peer_fingerprint: 'fp', error: null } } },
+      payload: {
+        sessionId: 'sess-1',
+        state: {
+          JoinSpaceConfirmPeer: { short_code: '654321', peer_fingerprint: 'fp', error: null },
+        },
+      },
     })
 
     expect(received).toHaveLength(1)
@@ -128,9 +141,13 @@ describe('p2p realtime contract', () => {
 
     const { daemonWs } = await import('@/lib/daemon-ws')
     const subscribeCalls = (daemonWs.subscribe as ReturnType<typeof vi.fn>).mock.calls
-    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (
-      wsEvent: { topic: string; eventType: string; ts: number; sessionId: string | null; payload: unknown }
-    ) => void
+    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (wsEvent: {
+      topic: string
+      eventType: string
+      ts: number
+      sessionId: string | null
+      payload: unknown
+    }) => void
 
     registeredHandler({
       topic: 'clipboard',
@@ -158,9 +175,13 @@ describe('p2p realtime contract', () => {
 
     const { daemonWs } = await import('@/lib/daemon-ws')
     const subscribeCalls = (daemonWs.subscribe as ReturnType<typeof vi.fn>).mock.calls
-    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (
-      wsEvent: { topic: string; eventType: string; ts: number; sessionId: string | null; payload: unknown }
-    ) => void
+    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (wsEvent: {
+      topic: string
+      eventType: string
+      ts: number
+      sessionId: string | null
+      payload: unknown
+    }) => void
 
     registeredHandler({
       topic: 'pairing',
@@ -197,9 +218,13 @@ describe('p2p realtime contract', () => {
 
     const { daemonWs } = await import('@/lib/daemon-ws')
     const subscribeCalls = (daemonWs.subscribe as ReturnType<typeof vi.fn>).mock.calls
-    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (
-      wsEvent: { topic: string; eventType: string; ts: number; sessionId: string | null; payload: unknown }
-    ) => void
+    const registeredHandler = subscribeCalls[subscribeCalls.length - 1]?.[1] as (wsEvent: {
+      topic: string
+      eventType: string
+      ts: number
+      sessionId: string | null
+      payload: unknown
+    }) => void
 
     // Event for 'clipboard' — topic IS in the subscription list
     registeredHandler({

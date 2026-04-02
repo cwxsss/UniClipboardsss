@@ -720,7 +720,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     warn!(
                         error = %err,
                         event_type = %event_type,
-                        "failed to decode setup.state_changed websocket payload"
+                        "failed to decode setup stateChanged websocket payload"
                     );
                     None
                 }
