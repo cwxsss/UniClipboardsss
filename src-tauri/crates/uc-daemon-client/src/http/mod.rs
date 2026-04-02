@@ -13,7 +13,6 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::header::AUTHORIZATION;
 use reqwest::{Method, RequestBuilder};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
 
 /// Cache for the daemon session token (JWT) exchanged from the bearer token.
 ///
@@ -30,11 +29,14 @@ static SESSION_TOKEN_CACHE: tokio::sync::RwLock<Option<(String, u64)>> =
 /// a valid JWT, not the raw bearer token).
 ///
 /// NOTE: `pid` should be the current process ID (used for PID whitelist verification
-/// in the daemon's JWT middleware).
-async fn exchange_session_token(
+/// in the daemon's JWT middleware). `client_type` distinguishes the client (e.g. "gui", "cli").
+///
+/// Exposed as `pub` so the CLI crate can call it directly.
+pub async fn exchange_session_token(
     http: &reqwest::Client,
     connection_state: &DaemonConnectionState,
     pid: u32,
+    client_type: &str,
 ) -> Result<String> {
     let connection = connection_state
         .get()
@@ -46,7 +48,7 @@ async fn exchange_session_token(
         .header(AUTHORIZATION, format!("Bearer {}", connection.token))
         .json(&serde_json::json!({
             "pid": pid,
-            "clientType": "gui"
+            "clientType": client_type
         }))
         .send()
         .await
@@ -77,6 +79,16 @@ async fn exchange_session_token(
     Ok(resp.session_token)
 }
 
+/// Exchange bearer token for JWT session using the CLI client type.
+/// Shorthand for `exchange_session_token(http, conn, pid, "cli")`.
+pub async fn exchange_cli_session_token(
+    http: &reqwest::Client,
+    connection_state: &DaemonConnectionState,
+    pid: u32,
+) -> Result<String> {
+    exchange_session_token(http, connection_state, pid, "cli").await
+}
+
 /// Get or exchange the session token for daemon auth.
 ///
 /// Lazily exchanges the bearer token on first call, then caches the result.
@@ -104,7 +116,7 @@ pub(crate) async fn get_session_token(
     }
 
     // Exchange new token.
-    let new_token = exchange_session_token(http, connection_state, pid).await?;
+    let new_token = exchange_session_token(http, connection_state, pid, "gui").await?;
     let expires_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -127,7 +139,8 @@ pub async fn clear_session_token_cache() {
 /// Build an authorized HTTP request using the session token (JWT).
 ///
 /// This is the async version — it lazily exchanges the bearer token for a session JWT
-/// on first call, then uses `Authorization: Session <token>` for all subsequent requests.
+/// for "gui" client type on first call, then uses `Authorization: Session <token>`
+/// for all subsequent requests.
 /// Use this for all daemon HTTP API calls from the daemon-client.
 pub async fn authorized_daemon_request(
     http: &reqwest::Client,
@@ -136,12 +149,26 @@ pub async fn authorized_daemon_request(
     path: &str,
     pid: u32,
 ) -> Result<RequestBuilder> {
+    authorized_daemon_request_with_type(http, connection_state, method, path, pid, "gui").await
+}
+
+/// Build an authorized HTTP request using the session token (JWT) with explicit client type.
+///
+/// Use this when the caller needs to specify a different client type (e.g. "cli").
+pub async fn authorized_daemon_request_with_type(
+    http: &reqwest::Client,
+    connection_state: &DaemonConnectionState,
+    method: Method,
+    path: &str,
+    pid: u32,
+    client_type: &str,
+) -> Result<RequestBuilder> {
     let connection = connection_state
         .get()
         .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
     let url = format!("{}{}", connection.base_url, path);
 
-    let session_token = get_session_token(http, connection_state, pid).await?;
+    let session_token = exchange_session_token(http, connection_state, pid, client_type).await?;
 
     Ok(http
         .request(method, url)
