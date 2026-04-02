@@ -68,6 +68,7 @@ pub async fn exchange_session_token(
     #[serde(rename_all = "camelCase")]
     struct ConnectResponse {
         session_token: String,
+        #[allow(dead_code)]
         expires_in_secs: i64,
     }
 
@@ -154,7 +155,10 @@ pub async fn authorized_daemon_request(
 
 /// Build an authorized HTTP request using the session token (JWT) with explicit client type.
 ///
-/// Use this when the caller needs to specify a different client type (e.g. "cli").
+/// Uses cached tokens for "gui" client type (via `get_session_token`) to avoid
+/// redundant /auth/connect calls in long-running GUI processes.
+/// For other client types (e.g. "cli"), calls `exchange_session_token` directly
+/// so each invocation gets a fresh token.
 pub async fn authorized_daemon_request_with_type(
     http: &reqwest::Client,
     connection_state: &DaemonConnectionState,
@@ -168,7 +172,13 @@ pub async fn authorized_daemon_request_with_type(
         .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
     let url = format!("{}{}", connection.base_url, path);
 
-    let session_token = exchange_session_token(http, connection_state, pid, client_type).await?;
+    // GUI clients benefit from token caching (long-running process).
+    // CLI and other types use fresh tokens each call.
+    let session_token = if client_type == "gui" {
+        get_session_token(http, connection_state, pid).await?
+    } else {
+        exchange_session_token(http, connection_state, pid, client_type).await?
+    };
 
     Ok(http
         .request(method, url)

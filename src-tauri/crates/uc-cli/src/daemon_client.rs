@@ -1,3 +1,9 @@
+//! CLI daemon HTTP client using session exchange pattern.
+//!
+//! Each CLI command runs as a fresh process, so every request exchanges the bearer
+//! token for a short-lived JWT via POST /auth/connect.
+//! Per D-07 (no JWT file caching): session tokens are cached in-memory only.
+
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -5,6 +11,7 @@ use std::time::Duration;
 use anyhow::Result;
 use reqwest::{Client, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
+use tokio::sync::RwLock;
 use uc_daemon::api::auth::resolve_daemon_token_path;
 use uc_daemon::api::dto::pairing::{
     AckedPairingCommandResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
@@ -15,16 +22,33 @@ use uc_daemon::api::types::{
     SetupSelectPeerRequest, SetupStateResponse, SetupSubmitPassphraseRequest, StatusResponse,
 };
 use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr};
+use uc_daemon_client::http::exchange_cli_session_token;
+use uc_daemon_client::DaemonConnectionState;
 
 const DEFAULT_QUERY_TIMEOUT_SECS: u64 = 2;
 const SETUP_ACTION_TIMEOUT_SECS: u64 = 15;
 const ENV_BASE_URL: &str = "UNICLIPBOARD_DAEMON_BASE_URL";
 const ENV_TOKEN_PATH: &str = "UNICLIPBOARD_DAEMON_TOKEN_PATH";
 
+/// CLI daemon HTTP client using session exchange pattern.
+///
+/// Each CLI command runs as a fresh OS process. The client:
+/// - Reads the bearer token from daemon.token (same as before)
+/// - Captures the OS process ID via `std::process::id()`
+/// - Exchanges bearer for JWT via POST /auth/connect on every HTTP request
+/// - Uses `Authorization: Session <jwt>` for all daemon requests
+///
+/// Per D-07: No JWT file caching — tokens live in-memory only.
 pub struct DaemonHttpClient {
     http: Client,
     base_url: String,
-    token: String,
+    /// Bearer token (from daemon.token file) — used only for /auth/connect exchange.
+    bearer_token: String,
+    /// The CLI's OS process ID, used for daemon PID whitelist registration.
+    cli_pid: u32,
+    /// In-memory session token for this command invocation.
+    /// Exchanged fresh on first HTTP request via POST /auth/connect.
+    session_token: RwLock<Option<String>>,
 }
 
 #[derive(Debug)]
@@ -41,7 +65,9 @@ impl fmt::Display for DaemonClientError {
         match self {
             Self::Unreachable(error) => write!(f, "daemon unreachable: {error}"),
             Self::Unauthorized => write!(f, "daemon rejected request: unauthorized"),
-            Self::Initialization(error) => write!(f, "failed to initialize daemon client: {error}"),
+            Self::Initialization(error) => {
+                write!(f, "failed to initialize daemon client: {error}")
+            }
             Self::UnexpectedStatus { status, body } => {
                 if body.is_empty() {
                     write!(f, "daemon returned unexpected status {status}")
@@ -49,7 +75,9 @@ impl fmt::Display for DaemonClientError {
                     write!(f, "daemon returned unexpected status {status}: {body}")
                 }
             }
-            Self::InvalidResponse(error) => write!(f, "daemon returned invalid response: {error}"),
+            Self::InvalidResponse(error) => {
+                write!(f, "daemon returned invalid response: {error}")
+            }
         }
     }
 }
@@ -57,30 +85,93 @@ impl fmt::Display for DaemonClientError {
 impl std::error::Error for DaemonClientError {}
 
 impl DaemonHttpClient {
+    /// Create a new CLI daemon client.
+    /// Reads bearer token from daemon.token file and captures current PID.
     pub fn new() -> Result<Self, DaemonClientError> {
+        let bearer_token = resolve_bearer_token()?;
+        let cli_pid = std::process::id();
+        let http = Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| DaemonClientError::Initialization(anyhow::anyhow!(e)))?;
         let base_url = resolve_base_url_for_client()?;
-        let token_path = resolve_token_path();
-        let token = std::fs::read_to_string(&token_path).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => {
-                DaemonClientError::Unreachable(anyhow::Error::new(error).context(format!(
-                    "daemon auth token not found at {}",
-                    token_path.display()
-                )))
+
+        Ok(Self {
+            http,
+            base_url,
+            bearer_token,
+            cli_pid,
+            session_token: RwLock::const_new(None),
+        })
+    }
+
+    /// Create a client from a base URL and bearer token (used by tests).
+    #[cfg(test)]
+    pub(crate) fn from_parts(base_url: String, bearer_token: String) -> Result<Self, DaemonClientError> {
+        let cli_pid = std::process::id();
+        let http = Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| DaemonClientError::Initialization(anyhow::anyhow!(e)))?;
+
+        Ok(Self {
+            http,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            bearer_token,
+            cli_pid,
+            session_token: RwLock::const_new(None),
+        })
+    }
+
+    /// Build the daemon connection state from current bearer token and base URL.
+    fn build_connection_state(&self) -> DaemonConnectionState {
+        let state = DaemonConnectionState::default();
+        state.set(uc_daemon::api::auth::DaemonConnectionInfo {
+            base_url: self.base_url.clone(),
+            ws_url: format!("{}/ws", self.base_url),
+            token: self.bearer_token.clone(),
+            pid: self.cli_pid,
+        });
+        state
+    }
+
+    /// Exchange bearer token for session JWT via POST /auth/connect.
+    /// Per D-07: Called fresh on every HTTP request (no file caching).
+    async fn ensure_session_token(&self) -> Result<String, DaemonClientError> {
+        // Check if we already have a valid session token in memory.
+        {
+            let guard = self.session_token.read().await;
+            if let Some(token) = &*guard {
+                return Ok(token.clone());
             }
-            _ => DaemonClientError::Initialization(anyhow::Error::new(error).context(format!(
-                "failed to read daemon auth token at {}",
-                token_path.display()
-            ))),
-        })?;
-        let token = token.trim().to_string();
-        if token.is_empty() {
-            return Err(DaemonClientError::Initialization(anyhow::anyhow!(
-                "daemon auth token at {} is empty",
-                token_path.display()
-            )));
         }
 
-        Self::from_parts(base_url, token)
+        // Exchange new token via POST /auth/connect.
+        let connection_state = self.build_connection_state();
+        let token = exchange_cli_session_token(&self.http, &connection_state, self.cli_pid)
+            .await
+            .map_err(|e| DaemonClientError::Initialization(anyhow::anyhow!(e)))?;
+
+        // Cache in memory for this command.
+        {
+            let mut guard = self.session_token.write().await;
+            *guard = Some(token.clone());
+        }
+
+        Ok(token)
+    }
+
+    /// Build an authorized request using the session JWT (Authorization: Session <token>).
+    async fn authorized_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder, DaemonClientError> {
+        let session_token = self.ensure_session_token().await?;
+        Ok(self
+            .http
+            .request(method, format!("{}{}", self.base_url, path))
+            .header("Authorization", format!("Session {}", session_token)))
     }
 
     pub async fn get_status(&self) -> Result<StatusResponse, DaemonClientError> {
@@ -100,13 +191,11 @@ impl DaemonHttpClient {
     }
 
     pub async fn start_setup_host(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
-        self.post_without_body("/setup/host", setup_action_timeout())
-            .await
+        self.post_without_body("/setup/host", setup_action_timeout()).await
     }
 
     pub async fn start_setup_join(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
-        self.post_without_body("/setup/join", setup_action_timeout())
-            .await
+        self.post_without_body("/setup/join", setup_action_timeout()).await
     }
 
     pub async fn select_setup_peer(
@@ -181,19 +270,15 @@ impl DaemonHttpClient {
     }
 
     pub async fn reset_setup(&self) -> Result<SetupResetResponse, DaemonClientError> {
-        self.post_without_body("/setup/reset", setup_action_timeout())
-            .await
+        self.post_without_body("/setup/reset", setup_action_timeout()).await
     }
 
     pub async fn set_pairing_gui_lease(&self, enabled: bool) -> Result<(), DaemonClientError> {
-        let response = self
-            .http
-            .post(format!("{}{}", self.base_url, "/pairing/gui/lease"))
+        let req = self
+            .authorized_request(reqwest::Method::POST, "/pairing/gui/lease")
+            .await?;
+        let response = req
             .timeout(setup_action_timeout())
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", self.token),
-            )
             .json(&PairingGuiLeaseRequest {
                 enabled,
                 lease_ttl_ms: None,
@@ -205,38 +290,14 @@ impl DaemonHttpClient {
         decode_empty_response(response).await
     }
 
-    fn from_parts(base_url: String, token: String) -> Result<Self, DaemonClientError> {
-        let http = Client::builder()
-            .timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS))
-            .build()
-            .map_err(|error| {
-                DaemonClientError::Initialization(
-                    anyhow::Error::new(error).context("failed to build daemon HTTP client"),
-                )
-            })?;
-
-        Ok(Self {
-            http,
-            base_url: base_url.trim_end_matches('/').to_string(),
-            token,
-        })
-    }
-
     async fn get_json<T>(&self, path: &str) -> Result<T, DaemonClientError>
     where
         T: DeserializeOwned,
     {
-        let response = self
-            .http
-            .get(format!("{}{}", self.base_url, path))
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", self.token),
-            )
-            .send()
-            .await
-            .map_err(map_reqwest_error)?;
-
+        let req = self
+            .authorized_request(reqwest::Method::GET, path)
+            .await?;
+        let response = req.send().await.map_err(map_reqwest_error)?;
         decode_json_response(response).await
     }
 
@@ -248,18 +309,8 @@ impl DaemonHttpClient {
     where
         T: DeserializeOwned,
     {
-        let response = self
-            .http
-            .post(format!("{}{}", self.base_url, path))
-            .timeout(timeout)
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", self.token),
-            )
-            .send()
-            .await
-            .map_err(map_reqwest_error)?;
-
+        let req = self.authorized_request(reqwest::Method::POST, path).await?;
+        let response = req.timeout(timeout).send().await.map_err(map_reqwest_error)?;
         decode_json_response(response).await
     }
 
@@ -273,19 +324,13 @@ impl DaemonHttpClient {
         T: DeserializeOwned,
         B: Serialize + ?Sized,
     {
-        let response = self
-            .http
-            .post(format!("{}{}", self.base_url, path))
+        let req = self.authorized_request(reqwest::Method::POST, path).await?;
+        let response = req
             .timeout(timeout)
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", self.token),
-            )
             .json(body)
             .send()
             .await
             .map_err(map_reqwest_error)?;
-
         decode_json_response(response).await
     }
 }
@@ -308,9 +353,8 @@ where
         return Err(DaemonClientError::UnexpectedStatus { status, body });
     }
 
-    serde_json::from_str(&body).map_err(|error| {
-        DaemonClientError::InvalidResponse(anyhow::Error::new(error).context(body))
-    })
+    serde_json::from_str(&body)
+        .map_err(|error| DaemonClientError::InvalidResponse(anyhow::Error::new(error).context(body)))
 }
 
 async fn decode_empty_response(response: reqwest::Response) -> Result<(), DaemonClientError> {
@@ -331,7 +375,7 @@ async fn decode_empty_response(response: reqwest::Response) -> Result<(), Daemon
     Ok(())
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 fn resolve_base_url() -> String {
     resolve_base_url_for_client()
         .expect("daemon base url resolution should stay within reserved loopback port range")
@@ -345,12 +389,38 @@ fn resolve_base_url_for_client() -> Result<String, DaemonClientError> {
         }
     }
 
-    let addr = try_resolve_daemon_http_addr().map_err(|error| {
-        DaemonClientError::Initialization(
-            error.context("failed to resolve profile-aware daemon HTTP address"),
-        )
-    })?;
+    let addr =
+        try_resolve_daemon_http_addr()
+            .map_err(|error| {
+                DaemonClientError::Initialization(
+                    error.context("failed to resolve profile-aware daemon HTTP address"),
+                )
+            })?;
     Ok(format!("http://{}:{}", addr.ip(), addr.port()))
+}
+
+fn resolve_bearer_token() -> Result<String, DaemonClientError> {
+    let token_path = resolve_token_path();
+    let token = std::fs::read_to_string(&token_path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => {
+            DaemonClientError::Unreachable(anyhow::Error::new(error).context(format!(
+                "daemon auth token not found at {}",
+                token_path.display()
+            )))
+        }
+        _ => DaemonClientError::Initialization(anyhow::Error::new(error).context(format!(
+            "failed to read daemon auth token at {}",
+            token_path.display()
+        ))),
+    })?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Err(DaemonClientError::Initialization(anyhow::anyhow!(
+            "daemon auth token at {} is empty",
+            token_path.display()
+        )));
+    }
+    Ok(token)
 }
 
 fn resolve_token_path() -> PathBuf {
@@ -370,7 +440,6 @@ fn map_reqwest_error(error: reqwest::Error) -> DaemonClientError {
     if error.is_connect() || error.is_timeout() {
         return DaemonClientError::Unreachable(error.into());
     }
-
     DaemonClientError::InvalidResponse(error.into())
 }
 
@@ -382,7 +451,7 @@ fn setup_action_timeout() -> Duration {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -429,6 +498,7 @@ mod tests {
             .get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         let previous_profile = std::env::var("UC_PROFILE").ok();
         let previous_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
         let previous_base_url = std::env::var(ENV_BASE_URL).ok();
@@ -489,7 +559,8 @@ mod tests {
     #[test]
     fn resolve_token_path_uses_socket_parent_directory() {
         let token_path = with_daemon_env(None, None, None, None, resolve_token_path);
-        let socket_path = with_daemon_env(None, None, None, None, resolve_daemon_socket_path);
+        let socket_path =
+            with_daemon_env(None, None, None, None, resolve_daemon_socket_path);
         let expected =
             resolve_daemon_token_path(socket_path.parent().unwrap_or_else(|| Path::new("/tmp")));
 
@@ -526,11 +597,15 @@ mod tests {
         );
 
         assert_eq!(
-            token_path_a.file_name().and_then(std::ffi::OsStr::to_str),
+            token_path_a
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str),
             Some("uniclipboard-daemon-a.token")
         );
         assert_eq!(
-            token_path_b.file_name().and_then(std::ffi::OsStr::to_str),
+            token_path_b
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str),
             Some("uniclipboard-daemon-b.token")
         );
         assert_ne!(token_path_a, token_path_b);
@@ -576,72 +651,63 @@ mod tests {
         assert_eq!(submit_passphrase["passphrase"], "secret");
     }
 
+    /// Verifies that set_pairing_gui_lease uses Authorization: Session <jwt>
+    /// (the new session exchange pattern) instead of Authorization: Bearer <token>.
+    ///
+    /// The server handles two connections: one for /auth/connect (session exchange),
+    /// and one for the actual API call (with Session auth header).
     #[tokio::test]
-    async fn set_pairing_gui_lease_sends_default_ttl_field() {
+    async fn set_pairing_gui_lease_uses_session_auth_not_bearer() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
         let addr = listener.local_addr().expect("listener should expose addr");
 
+        // Store what the server received for assertions.
+        let request_info = Arc::new(std::sync::Mutex::new(None));
+        let request_info_clone = request_info.clone();
+
         let server = tokio::spawn(async move {
+            // Accept first connection: handle /auth/connect session exchange
             let (mut stream, _) = listener.accept().await.expect("connection should arrive");
-            let mut request = Vec::new();
-            let mut buffer = [0; 1024];
-            let mut expected_total_len = None;
 
-            loop {
-                let read = stream
-                    .read(&mut buffer)
+            let first_request = read_full_request(&mut stream).await;
+            let first_text =
+                String::from_utf8(first_request).expect("first request should be valid utf-8");
+
+            if first_text.contains("POST /auth/connect") {
+                let resp = r#"{"sessionToken":"test-session-jwt","expiresInSecs":300}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    resp.len(),
+                    resp
+                );
+                stream
+                    .write_all(response.as_bytes())
                     .await
-                    .expect("request should be readable");
-                if read == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..read]);
-
-                if expected_total_len.is_none() {
-                    if let Some(header_end) = find_header_end(&request) {
-                        let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
-                        let content_length = headers
-                            .lines()
-                            .find_map(|line| {
-                                let (name, value) = line.split_once(':')?;
-                                name.trim()
-                                    .eq_ignore_ascii_case("content-length")
-                                    .then(|| value.trim().parse::<usize>().ok())
-                                    .flatten()
-                            })
-                            .unwrap_or(0);
-                        expected_total_len = Some(header_end + 4 + content_length);
-                    }
-                }
-
-                if let Some(expected_total_len) = expected_total_len {
-                    if request.len() >= expected_total_len {
-                        break;
-                    }
-                }
+                    .expect("auth/connect response should be writable");
             }
+            drop(stream);
 
-            let header_end = find_header_end(&request).expect("request should include headers");
-            let request_text =
-                String::from_utf8(request).expect("request bytes should be valid utf-8");
-            let request_lower = request_text.to_ascii_lowercase();
-            let body = &request_text[header_end + 4..];
+            // Accept second connection: handle actual API call with Session auth
+            let (mut stream, _) = listener.accept().await.expect("connection should arrive");
+
+            let second_request = read_full_request(&mut stream).await;
+            let header_end =
+                find_header_end(&second_request).expect("second request should have headers");
+            let second_text =
+                String::from_utf8(second_request).expect("second request should be valid utf-8");
+            let second_lower = second_text.to_ascii_lowercase();
+            let body = &second_text[header_end + 4..];
+
+            // Capture auth header for assertion.
+            let auth_line = second_lower
+                .lines()
+                .find(|line| line.starts_with("authorization:"));
             let payload: serde_json::Value =
                 serde_json::from_str(body).expect("request body should be valid json");
 
-            assert!(
-                request_text.starts_with("POST /pairing/gui/lease HTTP/1.1\r\n"),
-                "unexpected request line: {request_text}"
-            );
-            assert!(
-                request_lower.contains("\r\nauthorization: bearer test-token\r\n"),
-                "authorization header should be present: {request_text}"
-            );
-            assert_eq!(payload["enabled"], true);
-            assert!(payload["leaseTtlMs"].is_null());
-            assert!(payload.get("lease_ttl_ms").is_none());
+            *request_info_clone.lock().unwrap() = Some((auth_line.map(|s| s.to_string()), payload));
 
             stream
                 .write_all(
@@ -651,8 +717,10 @@ mod tests {
                 .expect("response should be writable");
         });
 
-        let client = DaemonHttpClient::from_parts(format!("http://{addr}"), "test-token".into())
-            .expect("client should build");
+        // Create client with session exchange pattern.
+        let client =
+            DaemonHttpClient::from_parts(format!("http://{addr}"), "test-bearer-token".into())
+                .expect("client should build");
 
         client
             .set_pairing_gui_lease(true)
@@ -660,6 +728,71 @@ mod tests {
             .expect("request should succeed");
 
         server.await.expect("server should finish");
+
+        let Some((auth_line, payload)) = request_info.lock().unwrap().take() else {
+            panic!("expected request info to be set");
+        };
+        // Must use Session auth, not Bearer.
+        assert!(
+            auth_line
+                .as_ref()
+                .map(|s: &String| s.contains("authorization: session"))
+                .unwrap_or(false),
+            "should use 'Session' auth, got: {:?}",
+            auth_line
+        );
+        assert!(
+            auth_line
+                .as_ref()
+                .map(|s: &String| !s.contains("authorization: bearer"))
+                .unwrap_or(true),
+            "should NOT use 'Bearer' auth, got: {:?}",
+            auth_line
+        );
+        assert_eq!(payload["enabled"], true);
+        assert!(payload["leaseTtlMs"].is_null());
+    }
+
+    async fn read_full_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut buffer = [0; 4096];
+        let mut expected_total_len = None;
+
+        loop {
+            let read = stream
+                .read(&mut buffer)
+                .await
+                .expect("request should be readable");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+
+            if expected_total_len.is_none() {
+                if let Some(header_end) = find_header_end(&request) {
+                    let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.trim()
+                                .eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    expected_total_len = Some(header_end + 4 + content_length);
+                }
+            }
+
+            if let Some(expected_total_len) = expected_total_len {
+                if request.len() >= expected_total_len {
+                    break;
+                }
+            }
+        }
+
+        request
     }
 
     #[tokio::test]
@@ -670,12 +803,29 @@ mod tests {
         let addr = listener.local_addr().expect("listener should expose addr");
 
         let server = tokio::spawn(async move {
+            // First connection: handle /auth/connect session exchange (must be fast)
             let (mut stream, _) = listener.accept().await.expect("connection should arrive");
-            let mut buffer = vec![0; 4096];
-            let _ = stream
-                .read(&mut buffer)
-                .await
-                .expect("request should be readable");
+            let first_request = read_full_request(&mut stream).await;
+            let first_text =
+                String::from_utf8(first_request).expect("first request should be valid utf-8");
+
+            if first_text.contains("POST /auth/connect") {
+                let resp = r#"{"sessionToken":"test-session-jwt","expiresInSecs":300}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    resp.len(),
+                    resp
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("auth/connect response should be writable");
+            }
+            drop(stream);
+
+            // Second connection: slow setup response (15-second timeout, 3-second delay is fine)
+            let (mut stream, _) = listener.accept().await.expect("connection should arrive");
+            let _second_request = read_full_request(&mut stream).await;
 
             tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -692,8 +842,9 @@ mod tests {
                 .expect("response should be writable");
         });
 
-        let client = DaemonHttpClient::from_parts(format!("http://{addr}"), "test-token".into())
-            .expect("client should build");
+        let client =
+            DaemonHttpClient::from_parts(format!("http://{addr}"), "test-bearer-token".into())
+                .expect("client should build");
 
         let ack = client
             .submit_setup_passphrase("secret".to_string())
@@ -717,14 +868,29 @@ mod tests {
         let addr = listener.local_addr().expect("listener should expose addr");
 
         let server = tokio::spawn(async move {
+            // First connection: handle /auth/connect session exchange (must be fast)
             let (mut stream, _) = listener.accept().await.expect("connection should arrive");
-            let mut buffer = vec![0; 4096];
-            let read = stream
-                .read(&mut buffer)
-                .await
-                .expect("request should be readable");
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            assert!(request.starts_with("POST /setup/verify-passphrase HTTP/1.1\r\n"));
+            let first_request = read_full_request(&mut stream).await;
+            let first_text =
+                String::from_utf8(first_request).expect("first request should be valid utf-8");
+
+            if first_text.contains("POST /auth/connect") {
+                let resp = r#"{"sessionToken":"test-session-jwt","expiresInSecs":300}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    resp.len(),
+                    resp
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("auth/connect response should be writable");
+            }
+            drop(stream);
+
+            // Second connection: slow setup response (15-second timeout, 3-second delay is fine)
+            let (mut stream, _) = listener.accept().await.expect("connection should arrive");
+            let _second_request = read_full_request(&mut stream).await;
 
             tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -740,8 +906,9 @@ mod tests {
                 .expect("response should be writable");
         });
 
-        let client = DaemonHttpClient::from_parts(format!("http://{addr}"), "test-token".into())
-            .expect("client should build");
+        let client =
+            DaemonHttpClient::from_parts(format!("http://{addr}"), "test-bearer-token".into())
+                .expect("client should build");
 
         let ack = client
             .verify_setup_passphrase("secret".to_string())
