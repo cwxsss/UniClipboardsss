@@ -939,3 +939,36 @@ Plans:
 - [x] 83-01-PLAN.md — Foundation: daemon/events.ts (diffPeerSnapshots, classifyPairingError) + discoveredPeers Redux state + test scaffolds
 - [x] 83-02-PLAN.md — Hook implementation: extend usePairingEvents + migrate useDeviceDiscovery to Redux + extract useSetupFlow
 - [x] 83-03-PLAN.md — Caller migration + p2p.ts facade deletion
+
+### Phase 84: 统一 CLI/GUI 与 Daemon 的认证架构
+
+**Goal:** Unify the CLI/GUI authentication architecture so both clients use daemon as the sole entry point. CLI currently sends raw bearer tokens directly; GUI properly exchanges for JWT via `POST /auth/connect`. This phase consolidates both to use the same session exchange flow.
+**Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, AUTH-05, AUTH-06
+**Depends on:** Phase 83
+**Plans:** 3/3 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. CLI uses POST /auth/connect exchange instead of direct bearer (AUTH-01)
+2. CLI PID registered in daemon PID whitelist (AUTH-02)
+3. CLI rate limited same as GUI via PID-based rate limiting (AUTH-03)
+4. Daemon L2+ routes reject bare bearer tokens with explicit error (AUTH-04)
+5. CLI and GUI get independent session tokens (different jti, different PIDs) (AUTH-05)
+6. Bearer token only accepted at /auth/connect, not at L2+ routes (AUTH-06)
+
+Plans:
+
+- [x] 84-01-PLAN.md — Daemon middleware hardening: reject bare bearer tokens explicitly (Wave 1)
+- [x] 84-02-PLAN.md — CLI migration: replace direct bearer with session exchange (Wave 2)
+- [x] 84-03-PLAN.md — Verification: integration tests for all auth requirements (Wave 3)
+
+### Phase 85: Improve pairing observability across daemon, event routing, and UI state transitions
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 84
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 85 to break down)
