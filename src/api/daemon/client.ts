@@ -253,12 +253,17 @@ class DaemonClient {
       throw new DaemonApiError(errorCode, message, details)
     }
 
-    // 204 No Content — return undefined as T.
-    if (response.status === 204) {
+    // Treat empty success responses as void even when the server uses 200 OK.
+    if (response.status === 204 || response.status === 205) {
       return undefined as T
     }
 
-    return response.json() as Promise<T>
+    const body = await response.text()
+    if (body.trim().length === 0) {
+      return undefined as T
+    }
+
+    return JSON.parse(body) as T
   }
 
   private startKeepAlive(): void {
