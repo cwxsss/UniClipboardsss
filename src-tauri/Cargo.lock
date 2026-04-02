@@ -9458,6 +9458,7 @@ name = "uc-cli"
 version = "0.4.0-alpha.2"
 dependencies = [
  "anyhow",
+ "axum 0.7.9",
  "clap",
  "console",
  "dialoguer",
@@ -9466,12 +9467,15 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "tower",
  "tracing",
  "uc-app",
  "uc-bootstrap",
  "uc-core",
  "uc-daemon",
+ "uc-daemon-client",
  "uc-observability",
 ]
 
