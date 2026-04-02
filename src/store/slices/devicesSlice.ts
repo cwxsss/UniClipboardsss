@@ -2,12 +2,14 @@ import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
 import {
   getLocalDeviceInfo,
   getPairedPeersWithStatus,
-  getDeviceSyncSettings,
-  updateDeviceSyncSettings as updateDeviceSyncSettingsApi,
   type LocalDeviceInfo,
   type PairedPeer,
-  type SyncSettings,
-} from '@/api/p2p'
+} from '@/api/daemon/pairing'
+import {
+  getDeviceSyncSettings,
+  updateDeviceSyncSettings as updateDeviceSyncSettingsApi,
+  type DeviceSyncSettings as SyncSettings,
+} from '@/api/daemon/device'
 
 export interface DiscoveredPeer {
   id: string

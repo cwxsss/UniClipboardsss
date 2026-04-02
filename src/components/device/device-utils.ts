@@ -1,5 +1,5 @@
 import { Laptop, Monitor, Smartphone, Tablet } from 'lucide-react'
-import type { ContentTypes } from '@/api/p2p'
+import type { ContentTypes } from '@/api/daemon/device'
 
 export function getDeviceIcon(deviceName?: string | null) {
   const name = deviceName?.toLowerCase() || ''

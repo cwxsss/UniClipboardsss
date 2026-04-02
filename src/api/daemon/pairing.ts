@@ -123,7 +123,7 @@ export interface SyncSettings {
   maxFileSizeMb: number
 }
 
-export { classifyPairingError } from '@/api/p2p'
+export { classifyPairingError } from '@/api/daemon/events'
 
 // ── Error helper ─────────────────────────────────────────────────
 

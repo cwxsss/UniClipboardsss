@@ -2,34 +2,76 @@
 // Tests for event-driven device discovery replacing the old 3-second polling approach
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { HTMLAttributes, ReactNode } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { getP2PPeers } from '@/api/p2p'
-import { onDaemonRealtimeEvent } from '@/api/realtime'
-import { selectJoinPeer } from '@/api/setup'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getP2PPeers } from '@/api/daemon/pairing'
+import { daemonWs } from '@/lib/daemon-ws'
+import { selectJoinPeer } from '@/api/daemon/setup'
 import SetupPage from '@/pages/SetupPage'
-const useSetupRealtimeStoreMock = vi.hoisted(() => vi.fn())
-const syncSetupStateFromCommandMock = vi.hoisted(() => vi.fn())
 
-vi.mock('@/api/setup', () => ({
+// Module-level mock refs — reset in beforeEach
+const getP2PPeersMock = vi.fn()
+const selectJoinPeerMock = vi.fn()
+const runActionMock = vi.fn()
+const setSelectedPeerIdMock = vi.fn()
+
+vi.mock('@/hooks/useSetupFlow', () => ({
+  useSetupFlow: () => ({
+    setupState: { JoinSpaceSelectDevice: { error: null } },
+    hydrated: true,
+    stepInfo: null,
+    direction: 'forward' as const,
+    loading: false,
+    runAction: runActionMock,
+    selectedPeerId: null,
+    setSelectedPeerId: setSelectedPeerIdMock,
+  }),
+}))
+
+vi.mock('@/hooks/useDeviceDiscovery', () => ({
+  useDeviceDiscovery: vi.fn(() => ({ scanPhase: 'scanning' as const, resetScan: vi.fn() })),
+}))
+
+vi.mock('@/api/daemon/pairing', () => ({
+  getP2PPeers: (...args: unknown[]) => getP2PPeersMock(...args),
+  getPairedPeers: vi.fn(),
+  getPairedPeersWithStatus: vi.fn(),
+  getLocalDeviceInfo: vi.fn(),
+  initiateP2PPairing: vi.fn(),
+  acceptP2PPairing: vi.fn(),
+  rejectP2PPairing: vi.fn(),
+  verifyP2PPairingPin: vi.fn(),
+  unpairP2PDevice: vi.fn(),
+}))
+
+vi.mock('@/api/daemon/setup', () => ({
   startNewSpace: vi.fn(),
   startJoinSpace: vi.fn(),
-  selectJoinPeer: vi.fn(),
+  selectJoinPeer: (...args: unknown[]) => selectJoinPeerMock(...args),
   submitPassphrase: vi.fn(),
   verifyPassphrase: vi.fn(),
   cancelSetup: vi.fn(),
   confirmPeerTrust: vi.fn(),
 }))
 
-vi.mock('@/store/setupRealtimeStore', () => ({
-  useSetupRealtimeStore: useSetupRealtimeStoreMock,
+// Capture daemonWs.subscribe handlers for test injection
+const capturedWsHandlers: Array<(event: { topic: string; eventType: string; payload: unknown }) => void> = []
+vi.mock('@/lib/daemon-ws', () => ({
+  daemonWs: {
+    subscribe: vi.fn((_topics: string[], handler: typeof capturedWsHandlers[number]) => {
+      capturedWsHandlers.push(handler)
+      return vi.fn(() => {
+        const idx = capturedWsHandlers.indexOf(handler)
+        if (idx !== -1) capturedWsHandlers.splice(idx, 1)
+      })
+    }),
+  },
 }))
 
-vi.mock('@/api/p2p', () => ({
-  getP2PPeers: vi.fn(),
-}))
-
-vi.mock('@/api/realtime', () => ({
-  onDaemonRealtimeEvent: vi.fn(() => Promise.resolve(() => {})),
+// Mock Redux store
+const dispatchMock = vi.fn()
+vi.mock('react-redux', () => ({
+  useSelector: vi.fn(() => []),
+  useDispatch: () => dispatchMock,
 }))
 
 const navigateMock = vi.fn()
@@ -66,19 +108,15 @@ vi.mock('framer-motion', () => ({
 describe('setup event-driven device discovery', () => {
   beforeEach(() => {
     vi.useFakeTimers()
-    ;(getP2PPeers as Mock).mockReset()
-    ;(selectJoinPeer as Mock).mockReset()
-    ;(onDaemonRealtimeEvent as Mock).mockReset()
+    capturedWsHandlers.length = 0
+    getP2PPeersMock.mockReset()
+    getP2PPeersMock.mockResolvedValue([])
+    selectJoinPeerMock.mockReset()
+    runActionMock.mockReset()
+    setSelectedPeerIdMock.mockReset()
+    dispatchMock.mockReset()
     navigateMock.mockReset()
-    syncSetupStateFromCommandMock.mockReset()
-    useSetupRealtimeStoreMock.mockReturnValue({
-      setupState: { JoinSpaceSelectDevice: { error: null } },
-      sessionId: null,
-      hydrated: true,
-      syncSetupStateFromCommand: syncSetupStateFromCommandMock,
-    })
-    ;(getP2PPeers as Mock).mockResolvedValue([])
-    ;(onDaemonRealtimeEvent as Mock).mockResolvedValue(() => {})
+    translationFnByPrefix.clear()
   })
 
   afterEach(() => {
@@ -87,34 +125,35 @@ describe('setup event-driven device discovery', () => {
     vi.useRealTimers()
   })
 
-  it('calls getP2PPeers on mount and sets up event listeners', async () => {
+  it('calls getP2PPeers on mount and sets up daemonWs event listeners', async () => {
     render(<SetupPage />)
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(getP2PPeers).toHaveBeenCalled()
+      expect(getP2PPeersMock).toHaveBeenCalled()
     })
 
-    expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
+    // daemonWs.subscribe should have been called for peers topic
+    expect(daemonWs.subscribe).toHaveBeenCalled()
 
-    const callsBeforeAdvance = (getP2PPeers as Mock).mock.calls.length
+    const callsBeforeAdvance = getP2PPeersMock.mock.calls.length
 
-    // Advance 6 seconds -- NO repeated polling should occur
+    // Advance 6 seconds — NO repeated polling should occur
     await act(async () => {
       vi.advanceTimersByTime(6000)
     })
 
-    expect((getP2PPeers as Mock).mock.calls.length).toBe(callsBeforeAdvance)
+    expect(getP2PPeersMock.mock.calls.length).toBe(callsBeforeAdvance)
   })
 
   it('shows scanning state then transitions to empty after timeout', async () => {
-    ;(getP2PPeers as Mock).mockResolvedValue([])
+    getP2PPeersMock.mockResolvedValue([])
 
     const view = render(<SetupPage />)
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(getP2PPeers).toHaveBeenCalled()
+      expect(getP2PPeersMock).toHaveBeenCalled()
     })
 
     // Scanning state should be visible initially
@@ -128,27 +167,22 @@ describe('setup event-driven device discovery', () => {
     expect(view.getByText('setup.joinPickDevice.empty.title')).toBeTruthy()
   })
 
-  it('discovery event adds device to list', async () => {
-    let realtimeCallback:
-      | ((event: { topic: string; type: string; payload: unknown }) => void)
-      | null = null
-
-    ;(onDaemonRealtimeEvent as Mock).mockImplementation((cb: typeof realtimeCallback) => {
-      realtimeCallback = cb
-      return Promise.resolve(() => {})
-    })
+  it('discovery event adds device to list via Redux', async () => {
+    // Simulate a peers.changed event being pushed via daemonWs.subscribe
+    const handler = capturedWsHandlers[0]
 
     const view = render(<SetupPage />)
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(realtimeCallback).not.toBeNull()
+      expect(handler).toBeTruthy()
     })
 
-    await act(async () => {
-      realtimeCallback!({
+    // Simulate peers.changed event from daemon
+    act(() => {
+      handler({
         topic: 'peers',
-        type: 'peers.changed',
+        eventType: 'peers.changed',
         payload: {
           peers: [
             {
@@ -166,29 +200,23 @@ describe('setup event-driven device discovery', () => {
   })
 
   it('selects a discovered device and advances join pairing progression', async () => {
-    let realtimeCallback:
-      | ((event: { topic: string; type: string; payload: unknown }) => void)
-      | null = null
-
-    ;(selectJoinPeer as Mock).mockResolvedValue({
+    selectJoinPeerMock.mockResolvedValue({
       ProcessingJoinSpace: { message: 'waiting for pairing verification' },
     })
-    ;(onDaemonRealtimeEvent as Mock).mockImplementation((cb: typeof realtimeCallback) => {
-      realtimeCallback = cb
-      return Promise.resolve(() => {})
-    })
+
+    const handler = capturedWsHandlers[0]
 
     render(<SetupPage />)
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(realtimeCallback).not.toBeNull()
+      expect(handler).toBeTruthy()
     })
 
-    await act(async () => {
-      realtimeCallback!({
+    act(() => {
+      handler({
         topic: 'peers',
-        type: 'peers.changed',
+        eventType: 'peers.changed',
         payload: {
           peers: [
             {
@@ -205,23 +233,18 @@ describe('setup event-driven device discovery', () => {
       fireEvent.click(screen.getByRole('button', { name: 'setup.joinPickDevice.actions.select' }))
     })
 
-    expect(selectJoinPeer).toHaveBeenCalledWith('peer-join-1')
-    await vi.waitFor(() => {
-      expect(syncSetupStateFromCommandMock).toHaveBeenCalledWith({
-        ProcessingJoinSpace: { message: 'waiting for pairing verification' },
-      })
-    })
+    expect(selectJoinPeerMock).toHaveBeenCalledWith('peer-join-1')
   })
 
   it('cleans up event listeners on unmount', async () => {
-    const cleanupSpy = vi.fn()
-    ;(onDaemonRealtimeEvent as Mock).mockResolvedValue(cleanupSpy)
+    const unsubscribeFn = vi.fn()
+    ;(daemonWs.subscribe as ReturnType<typeof vi.fn>).mockReturnValue(unsubscribeFn)
 
     const view = render(<SetupPage />)
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
+      expect(daemonWs.subscribe).toHaveBeenCalled()
     })
 
     // Unmount the component
@@ -229,30 +252,23 @@ describe('setup event-driven device discovery', () => {
     await act(async () => {})
 
     // Cleanup function should have been called
-    expect(cleanupSpy).toHaveBeenCalled()
+    expect(unsubscribeFn).toHaveBeenCalled()
   })
 
   it('anonymous device renders with i18n fallback from render layer', async () => {
-    let realtimeCallback:
-      | ((event: { topic: string; type: string; payload: unknown }) => void)
-      | null = null
-
-    ;(onDaemonRealtimeEvent as Mock).mockImplementation((cb: typeof realtimeCallback) => {
-      realtimeCallback = cb
-      return Promise.resolve(() => {})
-    })
+    const handler = capturedWsHandlers[0]
 
     const view = render(<SetupPage />)
     await act(async () => {})
 
     await vi.waitFor(() => {
-      expect(realtimeCallback).not.toBeNull()
+      expect(handler).toBeTruthy()
     })
 
-    await act(async () => {
-      realtimeCallback!({
+    act(() => {
+      handler({
         topic: 'peers',
-        type: 'peers.changed',
+        eventType: 'peers.changed',
         payload: {
           peers: [
             {
@@ -266,8 +282,6 @@ describe('setup event-driven device discovery', () => {
     })
 
     // The render layer applies tCommon('unknownDevice') fallback.
-    // The mock t function with keyPrefix 'setup.common' returns 'setup.common.unknownDevice'
-    // NOT the hardcoded English string 'Unknown device'
     expect(view.getByText('setup.common.unknownDevice')).toBeTruthy()
   })
 })

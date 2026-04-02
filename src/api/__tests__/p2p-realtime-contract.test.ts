@@ -225,4 +225,3 @@ describe('p2p realtime contract', () => {
     await expect(onDaemonRealtimeEvent(() => {})).resolves.toBeDefined()
   })
 })
-

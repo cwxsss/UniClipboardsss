@@ -7,16 +7,11 @@ import {
   AlertCircle,
   ShieldCheck,
 } from 'lucide-react'
-import React, { useState, useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  getP2PPeers,
-  initiateP2PPairing,
-  verifyP2PPairingPin,
-  onP2PPairingVerification,
-  classifyPairingError,
-  type P2PPeerInfo,
-} from '@/api/p2p'
+import { classifyPairingError } from '@/api/daemon/events'
+import { getP2PPeers, initiateP2PPairing, verifyP2PPairingPin } from '@/api/daemon/pairing'
+import type { P2PPeerInfo } from '@/api/daemon/pairing'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -26,6 +21,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { toast } from '@/components/ui/toast'
+import { usePairingEvents } from '@/hooks/useDaemonEvents'
 import { formatPeerIdForDisplay } from '@/lib/utils'
 // import { getLocalDeviceName } from '@/api/deviceConnection' // Assuming we'll add this or use existing
 
@@ -70,88 +66,61 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
     [t]
   )
 
-  // Cleanup refs
-  const cleanupRefs = React.useRef<(() => void)[]>([])
-  const listenerRegistered = React.useRef(false)
-
   useEffect(() => {
     pairingSessionIdRef.current = pairingSessionId
   }, [pairingSessionId])
 
-  // Reset state when dialog opens
-  const setupListeners = React.useCallback(async () => {
-    // 防止重复注册
-    if (listenerRegistered.current) {
-      console.log('[PairingDialog] Listener already registered, skipping')
-      return
-    }
+  // Use usePairingEvents for subscription (replaces onP2PPairingVerification)
+  usePairingEvents({
+    onVerification: ({ sessionId, deviceName, code }) => {
+      const currentSessionId = pairingSessionIdRef.current
+      if (currentSessionId && sessionId !== currentSessionId) {
+        return
+      }
 
-    console.log('[PairingDialog] Setting up listeners')
-    try {
-      const unlistenVerification = await onP2PPairingVerification(event => {
-        console.log('[PairingDialog] Event received:', {
-          kind: event.kind,
-          sessionId: event.sessionId,
-          timestamp: new Date().toISOString(),
-        })
+      console.log('[PairingDialog] Verification event:', { sessionId, deviceName, code })
+      pairingSessionIdRef.current = sessionId
+      setPairingSessionId(sessionId)
+      setPinCode(code ?? '')
+      setStep('pin-verify')
+      setIsPinVerifying(false)
+    },
 
-        if (event.kind === 'verification') {
-          const currentSessionId = pairingSessionIdRef.current
-          if (currentSessionId && event.sessionId !== currentSessionId) {
-            return
-          }
+    onVerifying: () => {
+      setIsPinVerifying(true)
+    },
 
-          console.log('[PairingDialog] Verification event:', event)
-          pairingSessionIdRef.current = event.sessionId
-          setPairingSessionId(event.sessionId)
-          setPinCode(event.code ?? '')
-          setStep('pin-verify')
-          setIsPinVerifying(false)
-          return
-        }
+    onComplete: ({ sessionId, deviceName }) => {
+      if (pairingSessionIdRef.current && sessionId !== pairingSessionIdRef.current) {
+        return
+      }
+      console.log('[PairingDialog] Complete event:', { sessionId, deviceName })
+      console.trace('[PairingDialog] Toast success triggered from:')
+      pairingSessionIdRef.current = null
+      setStep('success')
+      setIsPinVerifying(false)
+      toast.success(t('pairing.success.title'))
+      setTimeout(() => {
+        onPairingSuccess?.()
+        onClose()
+      }, 2000)
+    },
 
-        if (!pairingSessionIdRef.current || event.sessionId !== pairingSessionIdRef.current) {
-          return
-        }
-
-        if (event.kind === 'verifying') {
-          setIsPinVerifying(true)
-          return
-        }
-
-        if (event.kind === 'complete') {
-          console.log('[PairingDialog] Complete event:', event)
-          console.trace('[PairingDialog] Toast success triggered from:')
-          pairingSessionIdRef.current = null
-          setStep('success')
-          setIsPinVerifying(false)
-          toast.success(t('pairing.success.title'))
-          setTimeout(() => {
-            onPairingSuccess?.()
-            onClose()
-          }, 2000)
-          return
-        }
-
-        if (event.kind === 'failed') {
-          console.error('[PairingDialog] Failed event:', event)
-          const message = localizePairingError(event.error)
-          pairingSessionIdRef.current = null
-          setErrorMsg(message)
-          setStep('failed')
-          setIsPinVerifying(false)
-          toast.error(t('pairing.failed.title'), {
-            description: message,
-          })
-        }
+    onFailed: ({ sessionId, error }) => {
+      if (pairingSessionIdRef.current && sessionId !== pairingSessionIdRef.current) {
+        return
+      }
+      console.error('[PairingDialog] Failed event:', { sessionId, error })
+      const message = localizePairingError(error)
+      pairingSessionIdRef.current = null
+      setErrorMsg(message)
+      setStep('failed')
+      setIsPinVerifying(false)
+      toast.error(t('pairing.failed.title'), {
+        description: message,
       })
-      cleanupRefs.current.push(unlistenVerification)
-      listenerRegistered.current = true
-      console.log('[PairingDialog] Listener registered successfully')
-    } catch (err) {
-      console.error('[PairingDialog] Failed to setup listeners:', err)
-    }
-  }, [localizePairingError, onClose, onPairingSuccess, t])
+    },
+  })
 
   const loadPeers = React.useCallback(async () => {
     setLoading(true)
@@ -173,15 +142,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
     if (open) {
       console.log('[PairingDialog] Dialog opened, initializing...')
 
-      // 先清理旧监听器（防止重复注册）
-      if (cleanupRefs.current.length > 0) {
-        console.log('[PairingDialog] Cleaning up old listeners')
-        cleanupRefs.current.forEach(cleanup => cleanup())
-        cleanupRefs.current = []
-        listenerRegistered.current = false
-      }
-
-      // 重置状态
+      // Reset state
       setStep('discovery')
       setPeers([])
       setSelectedPeer(null)
@@ -191,22 +152,14 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
       setErrorMsg('')
       setIsPinVerifying(false)
 
-      // 加载对等设备
-      loadPeers()
-
-      // 设置监听器（只注册一次）
-      setupListeners()
+      // Load peers
+      void loadPeers()
     } else {
-      // Cleanup listeners when closed
-      console.log('[PairingDialog] Dialog closed, cleaning up listeners')
-      cleanupRefs.current.forEach(cleanup => {
-        cleanup()
-      })
-      cleanupRefs.current = []
-      listenerRegistered.current = false
+      // Cleanup when closed
+      console.log('[PairingDialog] Dialog closed')
       pairingSessionIdRef.current = null
     }
-  }, [open, loadPeers, setupListeners])
+  }, [open, loadPeers])
 
   const handleConnect = async (peer: P2PPeerInfo) => {
     setSelectedPeer(peer)
@@ -233,10 +186,7 @@ export default function PairingDialog({ open, onClose, onPairingSuccess }: Pairi
     if (!pairingSessionId) return
     setIsPinVerifying(true)
     try {
-      await verifyP2PPairingPin({
-        sessionId: pairingSessionId,
-        pinMatches: matches,
-      })
+      await verifyP2PPairingPin(pairingSessionId, matches)
       if (!matches) {
         setIsPinVerifying(false)
         pairingSessionIdRef.current = null

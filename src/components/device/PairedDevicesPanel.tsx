@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { getDeviceIcon, getIconColor } from './device-utils'
 import DeviceSettingsSheet from './DeviceSettingsSheet'
 import UnpairAlertDialog from './UnpairAlertDialog'
-import { onP2PPeerConnectionChanged, onP2PPeerNameUpdated, unpairP2PDevice } from '@/api/p2p'
+import { unpairP2PDevice } from '@/api/daemon/pairing'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useSetting } from '@/hooks/useSetting'
@@ -16,6 +16,7 @@ import {
   updatePeerConnectionStatus,
   updatePeerDeviceName,
 } from '@/store/slices/devicesSlice'
+import { daemonWs } from '@/lib/daemon-ws'
 
 const PairedDevicesPanel: React.FC = () => {
   const { t } = useTranslation()
@@ -34,39 +35,25 @@ const PairedDevicesPanel: React.FC = () => {
   useEffect(() => {
     dispatch(fetchPairedDevices())
 
-    let unlistenConnection: (() => void) | undefined
-    let unlistenName: (() => void) | undefined
-
-    const setupConnectionListener = async () => {
-      unlistenConnection = await onP2PPeerConnectionChanged(event => {
+    const handler = (event: { topic: string; eventType: string; payload: unknown }) => {
+      if (event.topic !== 'peers') return
+      if (event.eventType === 'peers.connectionChanged') {
+        const p = event.payload as { peerId: string; deviceName?: string | null; connected: boolean }
         dispatch(
           updatePeerConnectionStatus({
-            peerId: event.peerId,
-            connected: event.connected,
-            deviceName: event.deviceName ?? undefined,
+            peerId: p.peerId,
+            connected: p.connected,
+            deviceName: p.deviceName,
           })
         )
-      })
+      }
+      if (event.eventType === 'peers.nameUpdated') {
+        const p = event.payload as { peerId: string; deviceName: string }
+        dispatch(updatePeerDeviceName({ peerId: p.peerId, deviceName: p.deviceName }))
+      }
     }
-
-    const setupNameListener = async () => {
-      unlistenName = await onP2PPeerNameUpdated(event => {
-        dispatch(
-          updatePeerDeviceName({
-            peerId: event.peerId,
-            deviceName: event.deviceName,
-          })
-        )
-      })
-    }
-
-    setupConnectionListener()
-    setupNameListener()
-
-    return () => {
-      unlistenConnection?.()
-      unlistenName?.()
-    }
+    const unsub = daemonWs.subscribe(['peers'], handler)
+    return unsub
   }, [dispatch])
 
   const openSheet = (peerId: string) => {
