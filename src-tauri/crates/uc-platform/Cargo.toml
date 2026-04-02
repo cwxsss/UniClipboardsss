@@ -1,6 +1,6 @@
 [package]
 name = "uc-platform"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Platform-specific implementations for UniClipboard (clipboard, security, storage)"
 

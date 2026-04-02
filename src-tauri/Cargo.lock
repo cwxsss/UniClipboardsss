@@ -9393,7 +9393,7 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
 name = "uc-app"
-version = "0.1.0"
+version = "0.4.0-alpha.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9425,7 +9425,7 @@ dependencies = [
 
 [[package]]
 name = "uc-bootstrap"
-version = "0.1.0"
+version = "0.4.0-alpha.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9477,7 +9477,7 @@ dependencies = [
 
 [[package]]
 name = "uc-clipboard-probe"
-version = "0.1.0"
+version = "0.4.0-alpha.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9490,7 +9490,7 @@ dependencies = [
 
 [[package]]
 name = "uc-core"
-version = "0.1.0"
+version = "0.4.0-alpha.2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -9581,7 +9581,7 @@ dependencies = [
 
 [[package]]
 name = "uc-infra"
-version = "0.1.0"
+version = "0.4.0-alpha.2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -9611,7 +9611,7 @@ dependencies = [
 
 [[package]]
 name = "uc-observability"
-version = "0.1.0"
+version = "0.4.0-alpha.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -9628,7 +9628,7 @@ dependencies = [
 
 [[package]]
 name = "uc-platform"
-version = "0.1.0"
+version = "0.4.0-alpha.2"
 dependencies = [
  "anyhow",
  "arboard",
