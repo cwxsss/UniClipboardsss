@@ -5,6 +5,7 @@ use uc_core::app_dirs::AppDirs;
 use uc_core::ports::AppDirsError;
 
 const APP_DIR_NAME: &str = "app.uniclipboard.desktop";
+const PID_EXTENSION: &str = "pid";
 
 fn resolved_app_dir_name() -> String {
     match std::env::var("UC_PROFILE") {
@@ -34,10 +35,12 @@ impl DirsAppDirsAdapter {
         }
     }
 
-    /// Creates a test-only adapter that overrides the base local data directory.
+    /// Creates an adapter that overrides the base local data directory.
     ///
     /// The provided `base` path will be used instead of the system data local directory
     /// when resolving application directories for this adapter.
+    ///
+    /// This is useful for testing, where you want to redirect paths to a temp directory.
     ///
     /// # Examples
     ///
@@ -47,7 +50,6 @@ impl DirsAppDirsAdapter {
     ///
     /// let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/tmp"));
     /// ```
-    #[cfg(test)]
     pub fn with_base_data_local_dir(base: PathBuf) -> Self {
         Self {
             base_data_local_dir_override: Some(base),
@@ -118,6 +120,68 @@ impl AppDirsPort for DirsAppDirsAdapter {
     }
 }
 
+/// Resolve the daemon PID file name, matching the profile-aware naming convention.
+///
+/// Uses `UC_PROFILE` to generate a suffix when a profile is active:
+/// - Default: `"uniclipboard-daemon.pid"`
+/// - With `UC_PROFILE=a`: `"uniclipboard-daemon-a.pid"`
+fn daemon_pid_file_name() -> String {
+    match std::env::var("UC_PROFILE") {
+        Ok(profile) if !profile.is_empty() => {
+            let sanitized = sanitize_profile_component(&profile);
+            format!("uniclipboard-daemon-{sanitized}.{PID_EXTENSION}")
+        }
+        _ => format!("uniclipboard-daemon.{PID_EXTENSION}"),
+    }
+}
+
+/// Sanitize a profile string into a safe filesystem component.
+///
+/// Strips characters that are not alphanumeric, `-`, or `_`. If the result
+/// is all underscores (i.e. the input contained only invalid characters),
+/// returns `"profile"` as a fallback.
+fn sanitize_profile_component(profile: &str) -> String {
+    let sanitized: String = profile
+        .chars()
+        .map(|ch| match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => ch,
+            _ => '_',
+        })
+        .collect();
+
+    if sanitized.chars().all(|ch| ch == '_') {
+        "profile".to_string()
+    } else {
+        sanitized
+    }
+}
+
+/// Resolve the daemon PID file path under the application data directory.
+///
+/// The PID file is stored alongside other application data, ensuring it
+/// survives across sessions (unlike `/tmp`-based paths which may be cleared).
+///
+/// The resolved path follows the profile-aware naming convention, so
+/// each `UC_PROFILE` value gets its own isolated pid file.
+pub fn resolve_daemon_pid_path() -> Result<PathBuf, AppDirsError> {
+    let app_dirs = DirsAppDirsAdapter::new().get_app_dirs()?;
+    Ok(app_dirs.app_data_root.join(daemon_pid_file_name()))
+}
+
+/// Resolve the daemon PID file path with an explicit base directory override.
+///
+/// This is the test-helpers equivalent of `resolve_daemon_pid_path()`. It allows
+/// callers (including daemon unit tests) to redirect the pid path to an
+/// arbitrary directory without depending on the live system data directory.
+#[cfg(feature = "test-helpers")]
+pub fn resolve_daemon_pid_path_for_testing(
+    base: std::path::PathBuf,
+) -> Result<PathBuf, AppDirsError> {
+    let adapter = DirsAppDirsAdapter::with_base_data_local_dir(base);
+    let app_dirs = adapter.get_app_dirs()?;
+    Ok(app_dirs.app_data_root.join(daemon_pid_file_name()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +248,74 @@ mod tests {
             PathBuf::from("/tmp/app.uniclipboard.desktop-b")
         );
         assert_ne!(dirs_a.app_cache_root, dirs_b.app_cache_root);
+    }
+
+    #[test]
+    fn sanitize_profile_component_preserves_valid_chars() {
+        assert_eq!(sanitize_profile_component("abc"), "abc");
+        assert_eq!(sanitize_profile_component("team-alpha"), "team-alpha");
+        assert_eq!(sanitize_profile_component("profile_1"), "profile_1");
+        assert_eq!(sanitize_profile_component("A1-b2_C3"), "A1-b2_C3");
+    }
+
+    #[test]
+    fn sanitize_profile_component_replaces_invalid_chars() {
+        assert_eq!(sanitize_profile_component("team/alpha"), "team_alpha");
+        assert_eq!(sanitize_profile_component("a b c"), "a_b_c");
+        assert_eq!(sanitize_profile_component("foo@bar!baz"), "foo_bar_baz");
+    }
+
+    #[test]
+    fn sanitize_profile_component_falls_back_for_all_invalid() {
+        assert_eq!(sanitize_profile_component("!!!"), "profile");
+        assert_eq!(sanitize_profile_component("   "), "profile");
+        assert_eq!(sanitize_profile_component(""), "profile");
+    }
+
+    #[test]
+    fn daemon_pid_file_name_default() {
+        with_uc_profile(None, || {
+            assert_eq!(daemon_pid_file_name(), "uniclipboard-daemon.pid");
+        });
+    }
+
+    #[test]
+    fn daemon_pid_file_name_profile_aware() {
+        with_uc_profile(Some("a"), || {
+            assert_eq!(daemon_pid_file_name(), "uniclipboard-daemon-a.pid");
+        });
+        with_uc_profile(Some("team-alpha"), || {
+            assert_eq!(daemon_pid_file_name(), "uniclipboard-daemon-team-alpha.pid");
+        });
+        with_uc_profile(Some(""), || {
+            assert_eq!(daemon_pid_file_name(), "uniclipboard-daemon.pid");
+        });
+    }
+
+    #[test]
+    fn daemon_pid_file_name_sanitizes_invalid_chars() {
+        with_uc_profile(Some("team/alpha"), || {
+            assert_eq!(daemon_pid_file_name(), "uniclipboard-daemon-team_alpha.pid");
+        });
+    }
+
+    #[test]
+    fn resolve_daemon_pid_path_is_data_dir_based() {
+        with_uc_profile(None, || {
+            let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/var/data"));
+            let app_dirs = adapter.get_app_dirs().unwrap();
+            // The pid path should be inside the app data root, not /tmp
+            let pid_path = app_dirs.app_data_root.join(daemon_pid_file_name());
+            assert!(
+                pid_path.to_string_lossy().contains("/var/data/"),
+                "pid path should be under /var/data/, got: {}",
+                pid_path.display()
+            );
+            assert!(
+                !pid_path.to_string_lossy().contains("/tmp"),
+                "pid path should NOT be under /tmp, got: {}",
+                pid_path.display()
+            );
+        });
     }
 }

@@ -10,6 +10,7 @@ pub use tracing;
 
 pub mod adapters;
 pub mod app_dirs;
+pub use app_dirs::resolve_daemon_pid_path;
 pub mod bootstrap;
 pub mod capability;
 pub mod clipboard;

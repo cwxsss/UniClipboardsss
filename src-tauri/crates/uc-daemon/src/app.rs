@@ -458,7 +458,7 @@ async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::process_metadata::{read_pid_file, resolve_daemon_pid_path};
+    use crate::process_metadata::{read_pid_file, resolve_pid_path};
     use std::path::Path;
     use std::sync::{Mutex, OnceLock};
 
@@ -897,10 +897,10 @@ mod tests {
                         .expect("pid file should exist"),
                     std::process::id()
                 );
-                assert!(resolve_daemon_pid_path().exists());
+                assert!(resolve_pid_path().exists());
             }
 
-            assert!(!resolve_daemon_pid_path().exists());
+            assert!(!resolve_pid_path().exists());
             assert!(read_pid_file()
                 .expect("pid file read should succeed")
                 .is_none());

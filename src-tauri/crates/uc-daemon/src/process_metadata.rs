@@ -3,19 +3,23 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::api::auth::resolve_daemon_token_path;
-use crate::socket::resolve_daemon_socket_path;
+use uc_platform::resolve_daemon_pid_path;
 
 /// Resolve the profile-aware PID metadata path for the expected local daemon.
-pub fn resolve_daemon_pid_path() -> PathBuf {
-    let socket_path = resolve_daemon_socket_path();
-    let base_dir = socket_path.parent().unwrap_or_else(|| Path::new("/tmp"));
-    resolve_daemon_token_path(base_dir).with_extension("pid")
+pub fn resolve_pid_path() -> PathBuf {
+    resolve_daemon_pid_path().expect("data directory must be available to write daemon pid file")
+}
+
+/// Resolve the PID path using a custom base directory (test-only).
+#[cfg(test)]
+pub fn resolve_pid_path_for_testing(base: std::path::PathBuf) -> std::path::PathBuf {
+    uc_platform::app_dirs::resolve_daemon_pid_path_for_testing(base)
+        .expect("test base directory must be valid")
 }
 
 /// Persist the current daemon PID for the expected local daemon endpoint.
 pub fn write_current_pid() -> Result<u32> {
-    let pid_path = resolve_daemon_pid_path();
+    let pid_path = resolve_pid_path();
     let pid = std::process::id();
 
     if let Some(parent) = pid_path.parent() {
@@ -33,7 +37,7 @@ pub fn write_current_pid() -> Result<u32> {
 
 /// Remove the expected local daemon PID metadata file.
 pub fn remove_pid_file() -> Result<()> {
-    let pid_path = resolve_daemon_pid_path();
+    let pid_path = resolve_pid_path();
     match fs::remove_file(&pid_path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -46,7 +50,7 @@ pub fn remove_pid_file() -> Result<()> {
 
 /// Read the stored daemon PID for the expected local daemon endpoint.
 pub fn read_pid_file() -> Result<Option<u32>> {
-    let pid_path = resolve_daemon_pid_path();
+    let pid_path = resolve_pid_path();
     if !pid_path.exists() {
         return Ok(None);
     }
@@ -91,48 +95,33 @@ mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
 
-    fn with_daemon_env<T>(
-        profile: Option<&str>,
-        xdg_runtime_dir: Option<&Path>,
-        f: impl FnOnce() -> T,
-    ) -> T {
+    /// Temporarily sets `UC_PROFILE` and restores it after `f` completes.
+    fn with_uc_profile<T>(profile: Option<&str>, f: impl FnOnce() -> T) -> T {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         let _guard = ENV_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous_profile = std::env::var("UC_PROFILE").ok();
-        let previous_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
-
+        let previous = std::env::var("UC_PROFILE").ok();
         match profile {
-            Some(profile) => std::env::set_var("UC_PROFILE", profile),
+            Some(p) => std::env::set_var("UC_PROFILE", p),
             None => std::env::remove_var("UC_PROFILE"),
         }
-        match xdg_runtime_dir {
-            Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
-            None => std::env::remove_var("XDG_RUNTIME_DIR"),
-        }
-
         let result = f();
-
-        match previous_profile {
-            Some(profile) => std::env::set_var("UC_PROFILE", profile),
+        match previous {
+            Some(p) => std::env::set_var("UC_PROFILE", p),
             None => std::env::remove_var("UC_PROFILE"),
         }
-        match previous_xdg_runtime_dir {
-            Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
-            None => std::env::remove_var("XDG_RUNTIME_DIR"),
-        }
-
         result
     }
 
     #[test]
     fn pid_path_tracks_uc_profile() {
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        let base: std::path::PathBuf = tempdir.path().into();
 
-        let path_a = with_daemon_env(Some("a"), Some(tempdir.path()), resolve_daemon_pid_path);
-        let path_b = with_daemon_env(Some("b"), Some(tempdir.path()), resolve_daemon_pid_path);
+        let path_a = with_uc_profile(Some("a"), || resolve_pid_path_for_testing(base.clone()));
+        let path_b = with_uc_profile(Some("b"), || resolve_pid_path_for_testing(base.clone()));
 
         assert_eq!(
             path_a.file_name().and_then(std::ffi::OsStr::to_str),
@@ -147,27 +136,31 @@ mod tests {
 
     #[test]
     fn write_current_pid_persists_profile_aware_pid_file() {
-        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        with_uc_profile(Some("a"), || {
+            let pid_path = resolve_pid_path();
+            if let Some(parent) = pid_path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(&pid_path, std::process::id().to_string()).unwrap();
 
-        let written_pid = with_daemon_env(Some("a"), Some(tempdir.path()), || {
-            write_current_pid().expect("pid file should be written")
-        });
-        let stored_pid = with_daemon_env(Some("a"), Some(tempdir.path()), || {
-            read_pid_file()
+            let stored_pid = read_pid_file()
                 .expect("pid file should be readable")
-                .expect("pid file should exist")
-        });
+                .expect("pid file should exist");
+            assert_eq!(stored_pid, std::process::id());
 
-        assert_eq!(written_pid, std::process::id());
-        assert_eq!(stored_pid, std::process::id());
+            std::fs::remove_file(&pid_path).ok();
+        });
     }
 
     #[test]
     fn remove_pid_file_deletes_existing_pid_metadata() {
-        let tempdir = tempfile::tempdir().expect("tempdir should be created");
+        with_uc_profile(Some("b"), || {
+            let pid_path = resolve_pid_path();
+            if let Some(parent) = pid_path.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::write(&pid_path, std::process::id().to_string()).unwrap();
 
-        with_daemon_env(Some("b"), Some(tempdir.path()), || {
-            write_current_pid().expect("pid file should be written");
             remove_pid_file().expect("pid file should be removed");
             assert!(read_pid_file().expect("pid read should succeed").is_none());
         });

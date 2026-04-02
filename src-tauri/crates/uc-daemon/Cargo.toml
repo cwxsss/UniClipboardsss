@@ -17,7 +17,7 @@ uc-bootstrap = { path = "../uc-bootstrap" }
 uc-app = { path = "../uc-app" }
 uc-core = { path = "../uc-core" }
 uc-infra = { path = "../uc-infra" }
-uc-platform = { path = "../uc-platform" }
+uc-platform = { path = "../uc-platform", features = ["test-helpers"] }
 uc-observability = { path = "../uc-observability" }
 clipboard-rs = { version = "0.3.3", features = ["default"] }
 axum = { version = "0.7", features = ["ws", "tokio", "http1", "http2"] }
