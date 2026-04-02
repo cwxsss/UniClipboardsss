@@ -11,9 +11,9 @@
  * not bun test (which lacks vi.mocked and jsdom support).
  */
 
-// eslint-disable-next-line import-x/order -- blank line between doc comment and imports is intentional; rule misinterprets as empty import group
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+// eslint-disable-next-line import-x/order -- blank line between doc comment and imports is misinterpreted as import group separator
 import { useClipboardNewContent, usePairingEvents, useEncryptionState } from '../useDaemonEvents'
 
 // ── Mock daemonWs ─────────────────────────────────────────────
@@ -34,6 +34,8 @@ vi.mock('@/lib/daemon-ws', () => ({
 import { daemonWs as mockedDaemonWs } from '@/lib/daemon-ws'
 
 const mockUnsubscribe = vi.fn()
+// Track handlers by topic for targeted event dispatching
+const handlersByTopic = new Map<string, (...args: unknown[]) => void>()
 let capturedCb: (...args: unknown[]) => void = () => {}
 
 // Track subscribe call arguments for test assertions
@@ -44,13 +46,16 @@ beforeEach(() => {
   mockUnsubscribe.mockClear()
   capturedCb = () => {}
   subscribeCalls.length = 0
+  handlersByTopic.clear()
 
-   
   mockedDaemonWs.subscribe = ((topics: string[], cb: (...args: unknown[]) => void) => {
     subscribeCalls.push([topics, cb])
     capturedCb = cb
+    for (const topic of topics) {
+      handlersByTopic.set(topic, cb)
+    }
     return mockUnsubscribe
-  }) as any
+  }) as unknown as typeof mockedDaemonWs.subscribe
 })
 
 // ── useClipboardNewContent ─────────────────────────────────────
@@ -132,23 +137,26 @@ describe('useClipboardNewContent', () => {
 // ── usePairingEvents ─────────────────────────────────────────
 
 describe('usePairingEvents', () => {
-  it('subscribes to pairing topic on mount', () => {
+  it('subscribes to both pairing and setup topics on mount', () => {
     const { unmount } = renderHook(() =>
-      usePairingEvents({ onVerification: vi.fn(), onComplete: vi.fn() }),
+      usePairingEvents({ onVerification: vi.fn(), onComplete: vi.fn() })
     )
 
-    expect(subscribeCalls.length).toBe(1)
-    const [topics] = subscribeCalls[0]
+    // usePairingEvents now subscribes to both 'pairing' and 'setup'
+    expect(subscribeCalls.length).toBe(2)
+    const topics = subscribeCalls.flatMap(([t]) => t)
     expect(topics).toContain('pairing')
+    expect(topics).toContain('setup')
 
     unmount()
   })
 
-  it('unsubscribes on unmount', () => {
+  it('unsubscribes both subscriptions on unmount', () => {
     const { unmount } = renderHook(() => usePairingEvents({ onVerification: vi.fn() }))
     unmount()
 
-    expect(mockUnsubscribe).toHaveBeenCalledTimes(1)
+    // Both pairing and setup subscriptions unsubscribed
+    expect(mockUnsubscribe).toHaveBeenCalledTimes(2)
   })
 
   it('routes pairing.verification_required to onVerification', () => {
@@ -156,7 +164,7 @@ describe('usePairingEvents', () => {
     renderHook(() => usePairingEvents({ onVerification }))
 
     act(() => {
-      capturedCb({
+      handlersByTopic.get('pairing')?.({
         topic: 'pairing',
         eventType: 'pairing.verification_required',
         ts: 1,
@@ -186,7 +194,7 @@ describe('usePairingEvents', () => {
     renderHook(() => usePairingEvents({ onComplete }))
 
     act(() => {
-      capturedCb({
+      handlersByTopic.get('pairing')?.({
         topic: 'pairing',
         eventType: 'pairing.complete',
         ts: 1,
@@ -196,7 +204,10 @@ describe('usePairingEvents', () => {
     })
 
     expect(onComplete).toHaveBeenCalledTimes(1)
-    expect(onComplete.mock.calls[0][0]).toMatchObject({ sessionId: 'session-1', peerId: 'peer-xyz' })
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      sessionId: 'session-1',
+      peerId: 'peer-xyz',
+    })
   })
 
   it('routes pairing.failed to onFailed', () => {
@@ -204,7 +215,7 @@ describe('usePairingEvents', () => {
     renderHook(() => usePairingEvents({ onFailed }))
 
     act(() => {
-      capturedCb({
+      handlersByTopic.get('pairing')?.({
         topic: 'pairing',
         eventType: 'pairing.failed',
         ts: 1,
@@ -214,7 +225,10 @@ describe('usePairingEvents', () => {
     })
 
     expect(onFailed).toHaveBeenCalledTimes(1)
-    expect(onFailed.mock.calls[0][0]).toMatchObject({ sessionId: 'session-1', error: 'PIN mismatch' })
+    expect(onFailed.mock.calls[0][0]).toMatchObject({
+      sessionId: 'session-1',
+      error: 'PIN mismatch',
+    })
   })
 
   it('routes pairing.updated (request) to onRequest', () => {
@@ -222,12 +236,12 @@ describe('usePairingEvents', () => {
     renderHook(() => usePairingEvents({ onRequest }))
 
     act(() => {
-      capturedCb({
+      handlersByTopic.get('pairing')?.({
         topic: 'pairing',
         eventType: 'pairing.updated',
         ts: 1,
         sessionId: 'session-1',
-        payload: { sessionId: 'session-1', status: 'request', peerId: 'peer-1', deviceName: 'iPad' },
+        payload: { sessionId: 'session-1', state: 'request', peerId: 'peer-1', deviceName: 'iPad' },
       })
     })
 
@@ -240,12 +254,17 @@ describe('usePairingEvents', () => {
     renderHook(() => usePairingEvents({ onVerifying }))
 
     act(() => {
-      capturedCb({
+      handlersByTopic.get('pairing')?.({
         topic: 'pairing',
         eventType: 'pairing.updated',
         ts: 1,
         sessionId: 'session-1',
-        payload: { sessionId: 'session-1', status: 'verifying', peerId: 'peer-1', deviceName: 'iPad' },
+        payload: {
+          sessionId: 'session-1',
+          state: 'verifying',
+          peerId: 'peer-1',
+          deviceName: 'iPad',
+        },
       })
     })
 
@@ -253,12 +272,40 @@ describe('usePairingEvents', () => {
     expect(onVerifying.mock.calls[0][0]).toMatchObject({ sessionId: 'session-1' })
   })
 
+  it('routes setup.spaceAccessCompleted to onSpaceAccessCompleted', () => {
+    const onSpaceAccessCompleted = vi.fn()
+    renderHook(() => usePairingEvents({ onSpaceAccessCompleted }))
+
+    act(() => {
+      handlersByTopic.get('setup')?.({
+        topic: 'setup',
+        eventType: 'setup.spaceAccessCompleted',
+        ts: 1,
+        sessionId: 'session-1',
+        payload: {
+          sessionId: 'session-1',
+          peerId: 'peer-xyz',
+          success: true,
+          reason: null,
+          ts: 1,
+        },
+      })
+    })
+
+    expect(onSpaceAccessCompleted).toHaveBeenCalledTimes(1)
+    expect(onSpaceAccessCompleted.mock.calls[0][0]).toMatchObject({
+      sessionId: 'session-1',
+      peerId: 'peer-xyz',
+      success: true,
+    })
+  })
+
   it('ignores events from other topics', () => {
     const onComplete = vi.fn()
     renderHook(() => usePairingEvents({ onComplete }))
 
     act(() => {
-      capturedCb({
+      handlersByTopic.get('pairing')?.({
         topic: 'clipboard',
         eventType: 'pairing.complete',
         ts: 1,
@@ -275,14 +322,14 @@ describe('usePairingEvents', () => {
 
     expect(() =>
       act(() => {
-        capturedCb({
+        handlersByTopic.get('pairing')?.({
           topic: 'pairing',
           eventType: 'pairing.complete',
           ts: 1,
           sessionId: 'session-1',
           payload: { sessionId: 'session-1', peerId: 'peer-1', deviceName: 'Mac' },
         })
-      }),
+      })
     ).not.toThrow()
   })
 })
@@ -388,10 +435,11 @@ describe('multiple concurrent subscriptions', () => {
     renderHook(() => usePairingEvents({ onComplete: vi.fn() }))
     renderHook(() => useEncryptionState(vi.fn(), vi.fn()))
 
-    expect(subscribeCalls[0][0]).toContain('clipboard')
-    expect(subscribeCalls[1][0]).toContain('pairing')
-    expect(subscribeCalls[2][0]).toContain('encryption')
+    // clipboard: 1 subscription, pairing: 2 (pairing + setup), encryption: 1 = 4 total
+    const allTopics = subscribeCalls.flatMap(([t]) => t)
+    expect(allTopics).toContain('clipboard')
+    expect(allTopics).toContain('pairing')
+    expect(allTopics).toContain('setup')
+    expect(allTopics).toContain('encryption')
   })
 })
-
-

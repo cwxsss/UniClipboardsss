@@ -31,6 +31,63 @@ export interface EncryptionSessionFailedPayload {
   reason?: string
 }
 
+/** Payload for `setup.spaceAccessCompleted` events. */
+export interface SpaceAccessCompletedPayload {
+  sessionId: string
+  peerId: string
+  success: boolean
+  reason?: string | null
+  ts: number
+}
+
+/** Payload for `peers.changed` events. */
+export interface PeersChangedPayload {
+  peers: Array<{
+    peerId: string
+    deviceName?: string | null
+    connected: boolean
+  }>
+}
+
+/** Payload for `peers.nameUpdated` events. */
+export interface PeersNameUpdatedPayload {
+  peerId: string
+  deviceName: string
+}
+
+/** Payload for `peers.connectionChanged` events. */
+export interface PeersConnectionChangedPayload {
+  peerId: string
+  deviceName?: string | null
+  connected: boolean
+}
+
+// ── Type guard functions ────────────────────────────────────────
+
+export function isSpaceAccessCompletedPayload(
+  payload: unknown
+): payload is SpaceAccessCompletedPayload {
+  if (typeof payload !== 'object' || payload === null) return false
+  return 'sessionId' in payload && 'peerId' in payload && 'success' in payload
+}
+
+export function isPeersChangedPayload(payload: unknown): payload is PeersChangedPayload {
+  if (typeof payload !== 'object' || payload === null) return false
+  return 'peers' in payload && Array.isArray((payload as PeersChangedPayload).peers)
+}
+
+export function isPeersNameUpdatedPayload(payload: unknown): payload is PeersNameUpdatedPayload {
+  if (typeof payload !== 'object' || payload === null) return false
+  return 'peerId' in payload && 'deviceName' in payload
+}
+
+export function isPeersConnectionChangedPayload(
+  payload: unknown
+): payload is PeersConnectionChangedPayload {
+  if (typeof payload !== 'object' || payload === null) return false
+  return 'peerId' in payload && 'connected' in payload
+}
+
 // ── useClipboardNewContent ───────────────────────────────────────
 
 /**
@@ -48,6 +105,7 @@ export interface EncryptionSessionFailedPayload {
  */
 export function useClipboardNewContent(callback: (entry: ClipboardEntryDto) => void): void {
   const callbackRef = useRef(callback)
+  // eslint-disable-next-line react-hooks/refs -- intentional: ref updates stabilize callbacks without re-running effect
   callbackRef.current = callback
 
   useEffect(() => {
@@ -70,11 +128,7 @@ export interface UsePairingEventsCallbacks {
    * Called when the pairing request arrives from a remote device.
    * (kind: 'request')
    */
-  onRequest?: (data: {
-    sessionId: string
-    peerId?: string
-    deviceName?: string
-  }) => void
+  onRequest?: (data: { sessionId: string; peerId?: string; deviceName?: string }) => void
 
   /**
    * Called when the user must verify the pairing with a short code.
@@ -93,29 +147,29 @@ export interface UsePairingEventsCallbacks {
    * Called when the pairing is verifying / processing.
    * (kind: 'verifying')
    */
-  onVerifying?: (data: {
-    sessionId: string
-    peerId?: string
-    deviceName?: string
-  }) => void
+  onVerifying?: (data: { sessionId: string; peerId?: string; deviceName?: string }) => void
 
   /**
    * Called when the pairing completes successfully.
    * (kind: 'complete')
    */
-  onComplete?: (data: {
-    sessionId: string
-    peerId?: string
-    deviceName?: string
-  }) => void
+  onComplete?: (data: { sessionId: string; peerId?: string; deviceName?: string }) => void
 
   /**
    * Called when the pairing fails.
    * (kind: 'failed')
    */
-  onFailed?: (data: {
+  onFailed?: (data: { sessionId: string; error?: string }) => void
+
+  /**
+   * Called when a space access is completed after join flow.
+   * (topic: 'setup', eventType: 'setup.spaceAccessCompleted')
+   */
+  onSpaceAccessCompleted?: (data: {
     sessionId: string
-    error?: string
+    peerId: string
+    success: boolean
+    reason?: string
   }) => void
 }
 
@@ -142,20 +196,30 @@ export interface UsePairingEventsCallbacks {
  */
 export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
   const callbacksRef = useRef(callbacks)
+  // eslint-disable-next-line react-hooks/refs -- intentional: ref updates stabilize callbacks without re-running effect
   callbacksRef.current = callbacks
 
   useEffect(() => {
-    const handler = (event: DaemonWsEvent) => {
+    const pairingHandler = (event: DaemonWsEvent) => {
       if (event.topic !== 'pairing') return
 
       const cbs = callbacksRef.current
 
+      const p = event.payload as {
+        sessionId: string
+        peerId?: string
+        deviceName?: string
+        state?: string
+        code?: string
+        localFingerprint?: string
+        peerFingerprint?: string
+        reason?: string
+      }
+
       if (event.eventType === 'pairing.updated') {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const p = event.payload as any
-        if (p.status === 'request' && cbs.onRequest) {
+        if (p.state === 'request' && cbs.onRequest) {
           cbs.onRequest({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
-        } else if (p.status === 'verifying' && cbs.onVerifying) {
+        } else if (p.state === 'verifying' && cbs.onVerifying) {
           cbs.onVerifying({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
         }
         return
@@ -163,8 +227,6 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
 
       if (event.eventType === 'pairing.verification_required') {
         if (cbs.onVerification) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const p = event.payload as any
           cbs.onVerification({
             sessionId: p.sessionId,
             peerId: p.peerId,
@@ -179,8 +241,6 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
 
       if (event.eventType === 'pairing.complete') {
         if (cbs.onComplete) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const p = event.payload as any
           cbs.onComplete({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
         }
         return
@@ -188,16 +248,36 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
 
       if (event.eventType === 'pairing.failed') {
         if (cbs.onFailed) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const p = event.payload as any
           cbs.onFailed({ sessionId: p.sessionId, error: p.reason })
         }
         return
       }
     }
 
-    const unsubscribe = daemonWs.subscribe(['pairing'], handler)
-    return unsubscribe
+    const setupHandler = (event: DaemonWsEvent) => {
+      if (event.topic !== 'setup') return
+      if (
+        event.eventType === 'setup.spaceAccessCompleted' &&
+        isSpaceAccessCompletedPayload(event.payload)
+      ) {
+        const p = event.payload as SpaceAccessCompletedPayload
+        if (callbacksRef.current.onSpaceAccessCompleted) {
+          callbacksRef.current.onSpaceAccessCompleted({
+            sessionId: p.sessionId,
+            peerId: p.peerId,
+            success: p.success,
+            reason: p.reason ?? undefined,
+          })
+        }
+      }
+    }
+
+    const unsubPairing = daemonWs.subscribe(['pairing'], pairingHandler)
+    const unsubSetup = daemonWs.subscribe(['setup'], setupHandler)
+    return () => {
+      unsubPairing()
+      unsubSetup()
+    }
   }, [])
 }
 
@@ -220,14 +300,12 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
  *   onFailed: () => dispatch(setEncryptionReady(false)),
  * })
  */
-export function useEncryptionState(
-  onReady: () => void,
-  onFailed: () => void
-): void {
+export function useEncryptionState(onReady: () => void, onFailed: () => void): void {
   const onReadyRef = useRef(onReady)
   const onFailedRef = useRef(onFailed)
   // eslint-disable-next-line react-hooks/refs -- intentional: ref updates stabilize callbacks without re-running effect
   onReadyRef.current = onReady
+  // eslint-disable-next-line react-hooks/refs -- intentional: ref updates stabilize callbacks without re-running effect
   onFailedRef.current = onFailed
 
   useEffect(() => {
