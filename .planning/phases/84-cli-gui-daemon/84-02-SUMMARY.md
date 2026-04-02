@@ -134,3 +134,11 @@ Finished successfully (no warnings in production builds)
 ## Known Stubs
 
 None.
+
+## Self-Check: PASSED
+
+- [x] SUMMARY.md created at `.planning/phases/84-cli-gui-daemon/84-02-SUMMARY.md`
+- [x] Code commit `51b18b64` found in git log
+- [x] Docs commit `1d73395b` found in git log
+- [x] All 20 tests passing (9 CLI + 11 daemon-client)
+- [x] Both packages compile cleanly (no warnings in production builds)
