@@ -185,7 +185,13 @@ const AppContent = ({
   }, [daemonBootstrapReady, isSetupActive, resolvedEncryptionStatus])
 
   if (isSetupActive) {
-    return <SetupPage onCompleteSetup={onSetupComplete} />
+    return (
+      <>
+        <SetupPage onCompleteSetup={onSetupComplete} />
+        <Toaster />
+        <PairingNotificationProvider />
+      </>
+    )
   }
 
   // Only show blank screen during initial load when we have no encryption status at all.
