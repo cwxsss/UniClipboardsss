@@ -25,7 +25,7 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 
 - **Latest shipped milestone:** v0.3.0 Log Observability & Feature Expansion (2026-03-17)
 - **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase; daemon handles file transfer lifecycle (progress, completion, failure, timeout sweeps, startup reconciliation); clipboard restore delegated to daemon for in-process origin tracking
-- **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established; CLI start/stop commands for daemon lifecycle management (background/foreground modes, PID-based stop with SIGTERM); daemon encryption state recovery via existing AutoUnlockEncryptionSession use case; peer discovery deduplication fixed (local_peer_id filtering + full-snapshot peers.changed events); daemon gates PeerDiscoveryWorker on encryption state (deferred start for uninitialized devices via oneshot channel); dual-product release pipeline — CLI binary builds in parallel with App, included in GitHub Release and R2; GUI restore_clipboard_entry is thin daemon proxy (cross-process origin desync eliminated)
+- **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established; CLI start/stop commands for daemon lifecycle management (background/foreground modes, PID-based stop with SIGTERM); daemon encryption state recovery via existing AutoUnlockEncryptionSession use case; peer discovery deduplication fixed (local_peer_id filtering + full-snapshot peers.changed events); daemon gates PeerDiscoveryWorker on encryption state (deferred start for uninitialized devices via oneshot channel); dual-product release pipeline — CLI binary builds in parallel with App, included in GitHub Release and R2; GUI restore_clipboard_entry is thin daemon proxy (cross-process origin desync eliminated); frontend p2p.ts facade removed — all callers migrated to daemon modules and hooks (daemon/pairing, daemon/events, daemon/ws, usePairingEvents, useSetupFlow)
 - **LOC:** ~135K Rust + ~20K TypeScript (estimated)
 - **Supported content types:** Text, Image, Link, File (all with per-device sync toggles)
 
@@ -73,7 +73,11 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - [ ] uc-bootstrap crate as sole composition root with scene-specific builders
 - [ ] uc-daemon skeleton with worker lifecycle and local RPC
 - [ ] uc-cli skeleton with command routing, direct/daemon dispatch, and output rendering
-- [x] CLI clipboard list/get/clear commands with direct-mode bootstrap — Validated in Phase 42
+- [x] CLI clipboard list/get/clear commands with direct-mode bootstrap — Phase 42
+- [x] Frontend p2p.ts facade removed, all callers migrated to daemon modules and hooks — Phase 83
+- [x] usePairingEvents extended with space access events, type-safe payloads, dual topic subscription — Phase 83
+- [x] useDeviceDiscovery refactored to Redux via daemonWs.subscribe + diffPeerSnapshots — Phase 83
+- [x] useSetupFlow hook extracted from SetupPage.tsx — Phase 83
 
 ### Deferred
 
@@ -151,4 +155,4 @@ Phase 73 complete — ClipboardWriteCoordinator introduced as single write bound
 
 ---
 
-_Last updated: 2026-03-29 after Phase 73 completion_
+_Last updated: 2026-04-02 after Phase 83 completion_
