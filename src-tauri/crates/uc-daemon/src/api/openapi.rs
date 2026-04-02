@@ -96,6 +96,7 @@ impl Modify for SecurityAddon {
         crate::api::setup::select_peer,
         crate::api::setup::confirm_peer,
         crate::api::setup::submit_passphrase,
+        crate::api::setup::verify_passphrase,
         crate::api::setup::cancel,
         crate::api::setup::complete_space_access,
         crate::api::setup::reset,

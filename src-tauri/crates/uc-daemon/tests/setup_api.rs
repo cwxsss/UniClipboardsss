@@ -636,26 +636,6 @@ impl CryptoPort for NoopSpaceAccessCrypto {
     }
 }
 
-async fn wait_for_setup_state(
-    app: &axum::Router,
-    token: &str,
-    predicate: impl Fn(&Value) -> bool,
-) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(1);
-    loop {
-        let state = get_setup_state(app, token).await;
-        if predicate(&state["state"]) {
-            return state;
-        }
-
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for expected setup state, last state: {state}"
-        );
-        sleep(Duration::from_millis(10)).await;
-    }
-}
-
 async fn wait_for_setup_response(
     app: &axum::Router,
     token: &str,
@@ -909,7 +889,7 @@ async fn setup_confirm_peer_routes_host_confirmation_through_daemon_pairing_host
 }
 
 #[tokio::test]
-async fn setup_submit_passphrase_routes_join_passphrase_through_verify_passphrase() {
+async fn setup_submit_passphrase_route_rejects_join_passphrase_flow() {
     let fixture = build_join_setup_fixture_async().await;
 
     let join_response = fixture
@@ -951,10 +931,17 @@ async fn setup_submit_passphrase_routes_join_passphrase_through_verify_passphras
         })
         .await;
 
-    wait_for_setup_state(&fixture.app, &fixture.token, |state| {
-        state.get("JoinSpaceConfirmPeer").is_some()
+    let pending_state = wait_for_setup_response(&fixture.app, &fixture.token, |response| {
+        let confirm = &response["data"]["state"]["JoinSpaceConfirmPeer"];
+        confirm["shortCode"].as_str() == Some("123456")
+            || confirm["short_code"].as_str() == Some("123456")
     })
     .await;
+    let confirm = &pending_state["data"]["state"]["JoinSpaceConfirmPeer"];
+    assert!(
+        confirm["shortCode"].as_str() == Some("123456")
+            || confirm["short_code"].as_str() == Some("123456")
+    );
 
     let confirm_response = fixture
         .app
@@ -976,16 +963,6 @@ async fn setup_submit_passphrase_routes_join_passphrase_through_verify_passphras
         vec!["session-test".to_string()]
     );
 
-    fixture
-        .facade
-        .emit(PairingDomainEvent::KeyslotReceived {
-            session_id: "session-test".to_string(),
-            peer_id: "peer-remote".to_string(),
-            keyslot_file: sample_keyslot_file("join-space"),
-            challenge: vec![3; 32],
-        })
-        .await;
-
     let submit_response = fixture
         .app
         .clone()
@@ -997,12 +974,117 @@ async fn setup_submit_passphrase_routes_join_passphrase_through_verify_passphras
             Some("application/json"),
         ))
         .await
-        .expect("join submit passphrase should succeed");
+        .expect("join submit passphrase request should return a response");
 
-    assert_eq!(submit_response.status(), StatusCode::OK);
-    let submit_body = json_body(submit_response).await;
-    assert!(submit_body["state"]["ProcessingJoinSpace"]["message"].is_string());
-    assert_eq!(submit_body["nextStepHint"], "join-waiting-for-host");
+    assert_eq!(submit_response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn setup_verify_passphrase_route_supports_join_passphrase_submission() {
+    let fixture = build_join_setup_fixture_async().await;
+
+    let join_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/join",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("setup join request should succeed");
+    assert_eq!(join_response.status(), StatusCode::OK);
+
+    let select_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/select-peer",
+            &fixture.token,
+            Body::from(json!({ "peerId": "peer-remote" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("setup select peer request should succeed");
+    assert_eq!(select_response.status(), StatusCode::OK);
+
+    fixture
+        .facade
+        .emit(PairingDomainEvent::PairingVerificationRequired {
+            session_id: "session-test".to_string(),
+            peer_id: "peer-remote".to_string(),
+            short_code: "123456".to_string(),
+            local_fingerprint: "local-fingerprint".to_string(),
+            peer_fingerprint: "peer-fingerprint".to_string(),
+        })
+        .await;
+
+    let pending_state = wait_for_setup_response(&fixture.app, &fixture.token, |response| {
+        let confirm = &response["data"]["state"]["JoinSpaceConfirmPeer"];
+        confirm["shortCode"].as_str() == Some("123456")
+            || confirm["short_code"].as_str() == Some("123456")
+    })
+    .await;
+    let confirm = &pending_state["data"]["state"]["JoinSpaceConfirmPeer"];
+    assert!(
+        confirm["shortCode"].as_str() == Some("123456")
+            || confirm["short_code"].as_str() == Some("123456")
+    );
+
+    let confirm_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/confirm-peer",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("join confirm peer should succeed");
+    assert_eq!(confirm_response.status(), StatusCode::OK);
+
+    fixture
+        .facade
+        .emit(PairingDomainEvent::KeyslotReceived {
+            session_id: "session-test".to_string(),
+            peer_id: "peer-remote".to_string(),
+            keyslot_file: sample_keyslot_file("join-space"),
+            challenge: vec![3; 32],
+        })
+        .await;
+
+    let verify_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/verify-passphrase",
+            &fixture.token,
+            Body::from(json!({ "passphrase": "secret-passphrase" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("join verify passphrase should succeed");
+
+    assert_eq!(verify_response.status(), StatusCode::OK);
+    let verify_body = json_body(verify_response).await;
+    let state = if verify_body.get("state").is_some() {
+        &verify_body["state"]
+    } else {
+        &verify_body["data"]["state"]
+    };
+    let next_step_hint = if verify_body.get("nextStepHint").is_some() {
+        &verify_body["nextStepHint"]
+    } else {
+        &verify_body["data"]["nextStepHint"]
+    };
+    assert!(state["ProcessingJoinSpace"]["message"].is_string());
+    assert_eq!(next_step_hint, "join-waiting-for-host");
 }
 
 #[tokio::test]

@@ -206,7 +206,7 @@ impl SetupOrchestrator {
     }
 
     pub async fn verify_passphrase(&self, passphrase: String) -> Result<SetupState, SetupError> {
-        let event = SetupEvent::SubmitPassphrase {
+        let event = SetupEvent::VerifyPassphrase {
             passphrase: SecretString::new(passphrase),
         };
         self.dispatch(event).await
@@ -465,7 +465,7 @@ impl SetupOrchestrator {
             SetupEvent::VerifyPassphrase { passphrase } => {
                 let (event_passphrase, stored_passphrase) = Self::split_passphrase(passphrase);
                 *self.passphrase.lock().await = Some(stored_passphrase);
-                SetupEvent::SubmitPassphrase {
+                SetupEvent::VerifyPassphrase {
                     passphrase: event_passphrase,
                 }
             }
@@ -1898,7 +1898,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn capture_context_normalizes_verify_passphrase_events() {
+    async fn capture_context_preserves_verify_passphrase_events() {
         let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
         let orchestrator = build_orchestrator(setup_status);
 
@@ -1909,7 +1909,7 @@ mod tests {
             .await;
 
         match event {
-            SetupEvent::SubmitPassphrase { .. } => {}
+            SetupEvent::VerifyPassphrase { .. } => {}
             other => panic!("unexpected event returned: {:?}", other),
         }
 

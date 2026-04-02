@@ -24,6 +24,7 @@ pub fn router() -> Router<DaemonApiState> {
         .route("/setup/select-peer", post(select_peer))
         .route("/setup/confirm-peer", post(confirm_peer))
         .route("/setup/submit-passphrase", post(submit_passphrase))
+        .route("/setup/verify-passphrase", post(verify_passphrase))
         .route("/setup/cancel", post(cancel))
         .route("/setup/complete-space-access", post(complete_space_access))
         .route("/setup/reset", post(reset))
@@ -306,26 +307,76 @@ async fn submit_passphrase(
         .setup_orchestrator()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
-    let result = match orchestrator.get_state().await {
-        SetupState::CreateSpaceInputPassphrase { .. } => {
-            orchestrator
-                .submit_passphrase(payload.passphrase.clone(), payload.passphrase)
-                .await
-        }
-        SetupState::JoinSpaceInputPassphrase { .. } => {
-            orchestrator.verify_passphrase(payload.passphrase).await
-        }
-        _ => {
-            return Err(ApiError::conflict(
-                "current setup state does not allow submitting a passphrase",
-            ));
-        }
-    };
+    if !matches!(
+        orchestrator.get_state().await,
+        SetupState::CreateSpaceInputPassphrase { .. }
+    ) {
+        return Err(ApiError::conflict(
+            "current setup state does not allow submitting a passphrase",
+        ));
+    }
+
+    let result = orchestrator
+        .submit_passphrase(payload.passphrase.clone(), payload.passphrase)
+        .await;
 
     result.map_err(|e| {
         tracing::error!(error = %e, "setup submit passphrase failed");
         ApiError::internal(format!("setup submit passphrase failed: {e}"))
     })?;
+
+    let inner = state
+        .query_service
+        .setup_state(orchestrator.as_ref(), state.pairing_host().as_deref())
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "daemon setup API request failed");
+            ApiError::internal(e.to_string())
+        })?;
+
+    Ok(Json(SetupActionResponse {
+        data: SetupStateResponseDto::from(inner),
+        ts: chrono::Utc::now().timestamp_millis(),
+    }))
+}
+
+/// POST /setup/verify-passphrase
+/// Verifies the encryption passphrase during join setup.
+#[utoipa::path(
+    post,
+    path = "/setup/verify-passphrase",
+    tag = "setup",
+    request_body = SetupSubmitPassphraseRequest,
+    responses(
+        (status = 200, body = SetupActionResponse),
+        (status = 409, description = "Current setup state does not allow this action", body = crate::api::dto::error::ApiErrorResponse),
+        (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse)
+    )
+)]
+async fn verify_passphrase(
+    State(state): State<DaemonApiState>,
+    Json(payload): Json<SetupSubmitPassphraseRequest>,
+) -> Result<Json<SetupActionResponse>, ApiError> {
+    let orchestrator = state
+        .setup_orchestrator()
+        .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
+
+    if !matches!(
+        orchestrator.get_state().await,
+        SetupState::JoinSpaceInputPassphrase { .. }
+    ) {
+        return Err(ApiError::conflict(
+            "current setup state does not allow verifying a passphrase",
+        ));
+    }
+
+    orchestrator
+        .verify_passphrase(payload.passphrase)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "setup verify passphrase failed");
+            ApiError::internal(format!("setup verify passphrase failed: {e}"))
+        })?;
 
     let inner = state
         .query_service
