@@ -926,3 +926,16 @@ Plans:
 Plans:
 
 - [ ] TBD (run /gsd:plan-phase 82 to break down)
+
+### Phase 83: 分析前端 Peer 配对请求，简化事件流架构，分离关注点,创建配对状态管理,提取业务逻辑
+
+**Goal:** 分析前端配对请求，简化事件流架构，分离关注点，创建配对状态管理，提取业务逻辑
+**Requirements**: TBD
+**Depends on:** Phase 82
+**Plans:** 3 plans in 3 waves
+
+Plans:
+
+- [ ] 83-01-PLAN.md — Foundation: daemon/events.ts (diffPeerSnapshots, classifyPairingError) + discoveredPeers Redux state + test scaffolds
+- [ ] 83-02-PLAN.md — Hook implementation: extend usePairingEvents + migrate useDeviceDiscovery to Redux + extract useSetupFlow
+- [ ] 83-03-PLAN.md — Caller migration + p2p.ts facade deletion
