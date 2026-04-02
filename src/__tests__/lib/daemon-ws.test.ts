@@ -78,9 +78,7 @@ function closeSocket(ws: MockWebSocket): void {
 
 function freshClient(): { client: DaemonWsClient } {
   MockWebSocket._nextId = 0
-  const client = new DaemonWsClient(
-    (url: string) => new MockWebSocket(url) as unknown as WebSocket,
-  )
+  const client = new DaemonWsClient((url: string) => new MockWebSocket(url) as unknown as WebSocket)
   return { client }
 }
 
@@ -187,12 +185,24 @@ describe('subscribe()', () => {
     const cb = vi.fn()
     const unsub = client.subscribe(['clipboard'], cb)
 
-    receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1, session_id: null, payload: { id: 'e1' } })
+    receiveMessage(ws, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 1,
+      session_id: null,
+      payload: { id: 'e1' },
+    })
     expect(cb).toHaveBeenCalledTimes(1)
 
     unsub()
 
-    receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 2, session_id: null, payload: { id: 'e2' } })
+    receiveMessage(ws, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 2,
+      session_id: null,
+      payload: { id: 'e2' },
+    })
     expect(cb).toHaveBeenCalledTimes(1) // still 1
   })
 
@@ -217,9 +227,15 @@ describe('subscribe()', () => {
     await p
 
     const received: object[] = []
-    client.subscribe(['clipboard'], (e) => received.push(e))
+    client.subscribe(['clipboard'], e => received.push(e))
 
-    receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1710000000000, session_id: 'sess-1', payload: { id: 'e1' } })
+    receiveMessage(ws, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 1710000000000,
+      session_id: 'sess-1',
+      payload: { id: 'e1' },
+    })
 
     expect(received).toHaveLength(1)
     expect(received[0]).toMatchObject({
@@ -228,6 +244,45 @@ describe('subscribe()', () => {
       ts: 1710000000000,
       sessionId: 'sess-1',
       payload: { id: 'e1' },
+    })
+  })
+
+  it('dispatches pairing events to pairing topic subscribers', async () => {
+    const { client } = freshClient()
+    const p = client.connect('ws://127.0.0.1:42715/ws')
+    const ws = currentWs(client)
+    openSocket(ws)
+    await p
+
+    const received: object[] = []
+    client.subscribe(['pairing'], e => received.push(e))
+
+    receiveMessage(ws, {
+      topic: 'pairing',
+      event_type: 'pairing.updated',
+      ts: 1710000000001,
+      session_id: 'sess-pairing-1',
+      payload: { sessionId: 'sess-pairing-1', status: 'request' },
+    })
+
+    receiveMessage(ws, {
+      topic: 'pairing',
+      event_type: 'pairing.verification_required',
+      ts: 1710000000002,
+      session_id: 'sess-pairing-1',
+      payload: { sessionId: 'sess-pairing-1', code: '123456' },
+    })
+
+    expect(received).toHaveLength(2)
+    expect(received[0]).toMatchObject({
+      topic: 'pairing',
+      eventType: 'pairing.updated',
+      sessionId: 'sess-pairing-1',
+    })
+    expect(received[1]).toMatchObject({
+      topic: 'pairing',
+      eventType: 'pairing.verification_required',
+      sessionId: 'sess-pairing-1',
     })
   })
 
@@ -244,7 +299,13 @@ describe('subscribe()', () => {
     client.subscribe(['clipboard'], cb1)
     client.subscribe(['clipboard'], cb2)
 
-    receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1, session_id: null, payload: {} })
+    receiveMessage(ws, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 1,
+      session_id: null,
+      payload: {},
+    })
 
     expect(cb1).toHaveBeenCalledTimes(1)
     expect(cb2).toHaveBeenCalledTimes(1)
@@ -258,9 +319,15 @@ describe('subscribe()', () => {
     await p
 
     const received: object[] = []
-    client.subscribe(['clipboard'], (e) => received.push(e))
+    client.subscribe(['clipboard'], e => received.push(e))
 
-    receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1, session_id: null, payload: {} })
+    receiveMessage(ws, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 1,
+      session_id: null,
+      payload: {},
+    })
 
     expect(received).toHaveLength(1)
     expect(received[0]).toMatchObject({ sessionId: null })
@@ -309,7 +376,7 @@ describe('reconnect', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
     const { client } = freshClient()
     void client.connect('ws://127.0.0.1:42715/ws')
-    let ws = currentWs(client)
+    const ws = currentWs(client)
     openSocket(ws)
     vi.runAllTicks()
 
@@ -359,14 +426,20 @@ describe('reconnect', () => {
     vi.runAllTicks()
 
     const received: object[] = []
-    client.subscribe(['clipboard'], (e) => received.push(e))
+    client.subscribe(['clipboard'], e => received.push(e))
 
     closeSocket(ws)
     vi.advanceTimersByTime(1000)
     const newWs = client['_ws'] as MockWebSocket
     openSocket(newWs)
 
-    receiveMessage(newWs, { topic: 'clipboard', event_type: 'entry_added', ts: 1, session_id: null, payload: { id: 'after-reconnect' } })
+    receiveMessage(newWs, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 1,
+      session_id: null,
+      payload: { id: 'after-reconnect' },
+    })
 
     expect(received).toHaveLength(1)
     expect(received[0]).toMatchObject({ payload: { id: 'after-reconnect' } })
@@ -386,10 +459,16 @@ describe('Topic filtering', () => {
     const clipboardEvents: object[] = []
     const encryptionEvents: object[] = []
 
-    client.subscribe(['clipboard'], (e) => clipboardEvents.push(e))
-    client.subscribe(['encryption'], (e) => encryptionEvents.push(e))
+    client.subscribe(['clipboard'], e => clipboardEvents.push(e))
+    client.subscribe(['encryption'], e => encryptionEvents.push(e))
 
-    receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1, session_id: null, payload: {} })
+    receiveMessage(ws, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 1,
+      session_id: null,
+      payload: {},
+    })
 
     expect(clipboardEvents).toHaveLength(1)
     expect(encryptionEvents).toHaveLength(0)
@@ -403,9 +482,15 @@ describe('Topic filtering', () => {
     await p
 
     const received: object[] = []
-    client.subscribe(['encryption'], (e) => received.push(e))
+    client.subscribe(['encryption'], e => received.push(e))
 
-    receiveMessage(ws, { topic: 'encryption', event_type: 'session_ready', ts: 1, session_id: 'sess-1', payload: { ready: true } })
+    receiveMessage(ws, {
+      topic: 'encryption',
+      event_type: 'session_ready',
+      ts: 1,
+      session_id: 'sess-1',
+      payload: { ready: true },
+    })
 
     expect(received).toHaveLength(1)
     expect(received[0]).toMatchObject({ eventType: 'session_ready', payload: { ready: true } })
@@ -419,9 +504,15 @@ describe('Topic filtering', () => {
     await p
 
     const received: object[] = []
-    client.subscribe(['clipboard'], (e) => received.push(e))
+    client.subscribe(['clipboard'], e => received.push(e))
 
-    receiveMessage(ws, { topic: 'peers', event_type: 'peer_connected', ts: 1, session_id: null, payload: {} })
+    receiveMessage(ws, {
+      topic: 'peers',
+      event_type: 'peer_connected',
+      ts: 1,
+      session_id: null,
+      payload: {},
+    })
 
     expect(received).toHaveLength(0)
   })
@@ -450,12 +541,20 @@ describe('Error resilience', () => {
     await p
 
     const goodCb = vi.fn()
-    const throwingCb = vi.fn(() => { throw new Error('boom') })
+    const throwingCb = vi.fn(() => {
+      throw new Error('boom')
+    })
 
     client.subscribe(['clipboard'], throwingCb)
     client.subscribe(['clipboard'], goodCb)
 
-    receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1, session_id: null, payload: {} })
+    receiveMessage(ws, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 1,
+      session_id: null,
+      payload: {},
+    })
 
     expect(throwingCb).toHaveBeenCalledTimes(1)
     expect(goodCb).toHaveBeenCalledTimes(1)
@@ -473,10 +572,16 @@ describe('Rapid events', () => {
     await p
 
     const received: object[] = []
-    client.subscribe(['clipboard'], (e) => received.push(e))
+    client.subscribe(['clipboard'], e => received.push(e))
 
     for (let i = 0; i < 20; i++) {
-      receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1 + i, session_id: null, payload: { id: i } })
+      receiveMessage(ws, {
+        topic: 'clipboard',
+        event_type: 'entry_added',
+        ts: 1 + i,
+        session_id: null,
+        payload: { id: i },
+      })
     }
 
     expect(received).toHaveLength(20)
@@ -490,15 +595,27 @@ describe('Rapid events', () => {
     await p
 
     const received: object[] = []
-    const unsub = client.subscribe(['clipboard'], (e) => received.push(e))
+    const unsub = client.subscribe(['clipboard'], e => received.push(e))
 
-    receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1, session_id: null, payload: { id: 'e1' } })
+    receiveMessage(ws, {
+      topic: 'clipboard',
+      event_type: 'entry_added',
+      ts: 1,
+      session_id: null,
+      payload: { id: 'e1' },
+    })
     expect(received).toHaveLength(1)
 
     unsub()
 
     for (let i = 0; i < 10; i++) {
-      receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 2 + i, session_id: null, payload: { id: `e-after-${i}` } })
+      receiveMessage(ws, {
+        topic: 'clipboard',
+        event_type: 'entry_added',
+        ts: 2 + i,
+        session_id: null,
+        payload: { id: `e-after-${i}` },
+      })
     }
 
     expect(received).toHaveLength(1)
@@ -516,10 +633,16 @@ describe('Event latency', () => {
     await p
 
     const received: object[] = []
-    client.subscribe(['clipboard'], (e) => received.push(e))
+    client.subscribe(['clipboard'], e => received.push(e))
 
     for (let i = 0; i < 10; i++) {
-      receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1 + i, session_id: null, payload: { id: `e${i}` } })
+      receiveMessage(ws, {
+        topic: 'clipboard',
+        event_type: 'entry_added',
+        ts: 1 + i,
+        session_id: null,
+        payload: { id: `e${i}` },
+      })
     }
 
     expect(received).toHaveLength(10)
@@ -533,10 +656,16 @@ describe('Event latency', () => {
     await p
 
     const received: object[] = []
-    client.subscribe(['clipboard'], (e) => received.push(e))
+    client.subscribe(['clipboard'], e => received.push(e))
 
     for (let i = 0; i < 5; i++) {
-      receiveMessage(ws, { topic: 'clipboard', event_type: 'entry_added', ts: 1 + i, session_id: null, payload: { id: `e${i}` } })
+      receiveMessage(ws, {
+        topic: 'clipboard',
+        event_type: 'entry_added',
+        ts: 1 + i,
+        session_id: null,
+        payload: { id: `e${i}` },
+      })
       // Use fake timers just for the advance, then switch back.
       vi.useFakeTimers()
       vi.advanceTimersByTime(80)
