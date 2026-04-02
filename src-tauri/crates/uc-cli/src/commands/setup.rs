@@ -447,7 +447,7 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
                 }
             };
             spinner = Some(ui::spinner("Verifying passphrase…"));
-            if let Err(error) = client.submit_setup_passphrase(passphrase).await {
+            if let Err(error) = client.verify_setup_passphrase(passphrase).await {
                 finish_spinner(&mut spinner);
                 return print_client_error(error);
             }

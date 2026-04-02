@@ -57,6 +57,15 @@ impl DaemonSetupClient {
         .await
     }
 
+    pub async fn verify_passphrase(&self, passphrase: String) -> Result<dto::SetupActionResponse> {
+        self.send_json(
+            Method::POST,
+            "/setup/verify-passphrase",
+            Some(&dto::SetupSubmitPassphraseRequest { passphrase }),
+        )
+        .await
+    }
+
     pub async fn cancel_setup(&self) -> Result<dto::SetupActionResponse> {
         self.send_json::<(), dto::SetupActionResponse>(Method::POST, "/setup/cancel", None)
             .await
@@ -270,6 +279,70 @@ mod tests {
         with_session_cache("test-session", async move {
             let result = client
                 .submit_passphrase("secret-passphrase".to_string())
+                .await
+                .unwrap();
+            assert_eq!(result.data.state, inner.state);
+            assert_eq!(result.data.session_id, inner.session_id);
+            assert_eq!(result.data.next_step_hint, inner.next_step_hint);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn daemon_setup_client_posts_verify_passphrase_to_daemon_api() {
+        let inner = dto::SetupStateResponseDto {
+            state: serde_json::json!({
+                "ProcessingJoinSpace": {
+                    "message": "Verifying passphrase…"
+                }
+            }),
+            session_id: Some("session-3".to_string()),
+            next_step_hint: "join-waiting-for-host".to_string(),
+            profile: "default".to_string(),
+            clipboard_mode: "full".to_string(),
+            device_name: "Peer B".to_string(),
+            peer_id: "peer-b".to_string(),
+            selected_peer_id: None,
+            selected_peer_name: None,
+            has_completed: false,
+        };
+        let expected = dto::SetupActionResponse {
+            data: inner.clone(),
+            ts: 1710000000001,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 4096];
+            let size = stream.read(&mut request).await.unwrap();
+            let request = String::from_utf8_lossy(&request[..size]);
+            assert!(request.starts_with("POST /setup/verify-passphrase HTTP/1.1\r\n"));
+            assert!(request.contains("authorization: Session test-session\r\n"));
+            assert!(request.contains("\r\n\r\n{\"passphrase\":\"join-secret\"}"));
+
+            let body = serde_json::to_string(&expected).unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let connection_state = DaemonConnectionState::default();
+        connection_state.set(DaemonConnectionInfo {
+            base_url: format!("http://{addr}"),
+            ws_url: format!("ws://{addr}/ws"),
+            token: "test-bearer".to_string(),
+            pid: 54321,
+        });
+
+        let client = DaemonSetupClient::new(connection_state);
+        with_session_cache("test-session", async move {
+            let result = client
+                .verify_passphrase("join-secret".to_string())
                 .await
                 .unwrap();
             assert_eq!(result.data.state, inner.state);

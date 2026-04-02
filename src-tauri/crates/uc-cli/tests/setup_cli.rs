@@ -110,6 +110,13 @@ mod daemon_client {
             unreachable!("stub")
         }
 
+        pub async fn verify_setup_passphrase(
+            &self,
+            _passphrase: String,
+        ) -> Result<SetupActionAckResponse, DaemonClientError> {
+            unreachable!("stub")
+        }
+
         pub async fn confirm_setup_peer(
             &self,
         ) -> Result<SetupActionAckResponse, DaemonClientError> {

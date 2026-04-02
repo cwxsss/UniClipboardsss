@@ -163,6 +163,18 @@ impl DaemonHttpClient {
         .await
     }
 
+    pub async fn verify_setup_passphrase(
+        &self,
+        passphrase: String,
+    ) -> Result<SetupActionAckResponse, DaemonClientError> {
+        self.post_json(
+            "/setup/verify-passphrase",
+            &SetupSubmitPassphraseRequest { passphrase },
+            setup_action_timeout(),
+        )
+        .await
+    }
+
     pub async fn cancel_setup(&self) -> Result<SetupActionAckResponse, DaemonClientError> {
         self.post_without_body("/setup/cancel", setup_action_timeout())
             .await
@@ -692,6 +704,54 @@ mod tests {
         assert_eq!(
             ack.state,
             serde_json::Value::String("ProcessingCreateSpace".to_string())
+        );
+
+        server.await.expect("server should finish");
+    }
+
+    #[tokio::test]
+    async fn verify_setup_passphrase_tolerates_slow_success_response() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("listener should expose addr");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("connection should arrive");
+            let mut buffer = vec![0; 4096];
+            let read = stream
+                .read(&mut buffer)
+                .await
+                .expect("request should be readable");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(request.starts_with("POST /setup/verify-passphrase HTTP/1.1\r\n"));
+
+            tokio::time::sleep(Duration::from_secs(3)).await;
+
+            let body = r#"{"state":"ProcessingJoinSpace","sessionId":null,"nextStepHint":"join-waiting-for-host"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should be writable");
+        });
+
+        let client = DaemonHttpClient::from_parts(format!("http://{addr}"), "test-token".into())
+            .expect("client should build");
+
+        let ack = client
+            .verify_setup_passphrase("secret".to_string())
+            .await
+            .expect("slow verify response should not time out");
+
+        assert_eq!(ack.next_step_hint, "join-waiting-for-host");
+        assert_eq!(
+            ack.state,
+            serde_json::Value::String("ProcessingJoinSpace".to_string())
         );
 
         server.await.expect("server should finish");
