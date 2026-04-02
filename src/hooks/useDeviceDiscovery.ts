@@ -1,17 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getP2PPeers } from '@/api/p2p'
-import { onDaemonRealtimeEvent } from '@/api/realtime'
-
-/**
- * Raw peer data from backend. deviceName is null when backend has not yet
- * resolved the device name. The hook stores raw values -- the render layer
- * is responsible for displaying a localized fallback.
- */
-export interface DiscoveredPeer {
-  id: string
-  deviceName: string | null
-  device_type: string
-}
+import { useDispatch } from 'react-redux'
+import { diffPeerSnapshots, type PeerSnapshotPeer } from '@/api/daemon/events'
+import { getP2PPeers } from '@/api/daemon/pairing'
+import { daemonWs } from '@/lib/daemon-ws'
+import type { AppDispatch } from '@/store'
+import {
+  clearDiscoveredPeers,
+  setDiscoveredPeers,
+  updateDiscoveredPeerDeviceName,
+  type DiscoveredPeer,
+} from '@/store/slices/devicesSlice'
 
 /**
  * Scanning state machine:
@@ -28,8 +26,8 @@ export interface UseDeviceDiscoveryOptions {
 export function useDeviceDiscovery(
   active: boolean,
   options?: UseDeviceDiscoveryOptions
-): { peers: DiscoveredPeer[]; scanPhase: ScanPhase; resetScan: () => void } {
-  const [peers, setPeers] = useState<DiscoveredPeer[]>([])
+): { scanPhase: ScanPhase; resetScan: () => void } {
+  const dispatch = useDispatch<AppDispatch>()
   const [scanPhase, setScanPhase] = useState<ScanPhase>('scanning')
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -52,7 +50,7 @@ export function useDeviceDiscovery(
     }, 10_000)
   }, [])
 
-  /** Fetch the current peer list and populate state. */
+  /** Fetch the current peer list and populate Redux state. */
   const loadPeers = useCallback(async () => {
     try {
       const list = await getP2PPeers()
@@ -61,39 +59,36 @@ export function useDeviceDiscovery(
         deviceName: p.deviceName ?? null,
         device_type: 'desktop',
       }))
-      setPeers(discovered)
+      dispatch(setDiscoveredPeers(discovered))
       if (discovered.length > 0) {
         setScanPhase('hasDevices')
       }
     } catch (err) {
-      console.error('Failed to fetch peers:', err)
       const error = err instanceof Error ? err : new Error(String(err))
       onErrorRef.current?.(error)
       // Do NOT transition to 'empty' on fetch error -- timeout handles that
       setScanPhase('scanning')
     }
-  }, [])
+  }, [dispatch])
 
   /** Public API: reset to scanning state and re-fetch. */
   const resetScan = useCallback(() => {
-    setPeers([])
+    dispatch(clearDiscoveredPeers())
     setScanPhase('scanning')
     startTimeout()
     void loadPeers()
-  }, [startTimeout, loadPeers])
+  }, [dispatch, startTimeout, loadPeers])
 
   useEffect(() => {
     if (!active) {
       // Deactivation reset: clear stale data so re-entry starts fresh
-      setPeers([])
+      dispatch(clearDiscoveredPeers())
       setScanPhase('scanning')
       return
     }
 
-    let cancelled = false
-
     // Reset state on entry so re-entry always starts clean
-    setPeers([])
+    dispatch(clearDiscoveredPeers())
     setScanPhase('scanning')
 
     // Start the 10-second timeout
@@ -102,57 +97,59 @@ export function useDeviceDiscovery(
     // Initial peer load
     void loadPeers()
 
-    const realtimePromise = onDaemonRealtimeEvent(event => {
-      if (cancelled || event.topic !== 'peers') return
+    // Track known peers for diffPeerSnapshots to detect newly discovered/lost peers
+    const knownPeers = new Map<string, { deviceName?: string | null }>()
 
-      if (event.type === 'peers.changed') {
-        const payload = event.payload as {
-          peers: Array<{
-            peerId: string
-            deviceName?: string | null
-            connected: boolean
-          }>
-        }
+    const handler = (event: { topic: string; eventType: string; payload: unknown }) => {
+      if (event.topic !== 'peers') return
 
-        const nextPeers: DiscoveredPeer[] = payload.peers.map(peer => ({
-          id: peer.peerId,
-          deviceName: peer.deviceName ?? null,
-          device_type: 'desktop',
-        }))
-        setPeers(nextPeers)
-        setScanPhase(nextPeers.length > 0 ? 'hasDevices' : 'empty')
-        return
-      }
-
-      if (event.type === 'peers.nameUpdated') {
-        const payload = event.payload as { peerId: string; deviceName: string }
-        setPeers(prev => {
-          const idx = prev.findIndex(p => p.id === payload.peerId)
-          if (idx < 0) return prev
-          const next = [...prev]
-          next[idx] = { ...next[idx], deviceName: payload.deviceName }
-          return next
+      if (event.eventType === 'peers.changed') {
+        const payload = event.payload as { peers: PeerSnapshotPeer[] }
+        const nextPeers: DiscoveredPeer[] = []
+        diffPeerSnapshots(payload.peers, knownPeers, diffEvent => {
+          if (diffEvent.discovered) {
+            nextPeers.push({
+              id: diffEvent.peerId,
+              deviceName: diffEvent.deviceName ?? null,
+              device_type: 'desktop',
+            })
+          }
         })
+        if (nextPeers.length > 0) {
+          // Use functional updater to avoid stale closure state.
+          // Passing a function to setDiscoveredPeers merges new peers with existing Redux state.
+          dispatch(setDiscoveredPeers((prev: DiscoveredPeer[]) => [...prev, ...nextPeers]))
+        }
+        setScanPhase(knownPeers.size > 0 ? 'hasDevices' : 'empty')
         return
       }
 
-      if (event.type === 'peers.connectionChanged') {
-        // Discovery list stays stable; connection state is consumed elsewhere.
+      if (event.eventType === 'peers.nameUpdated') {
+        const payload = event.payload as { peerId: string; deviceName: string }
+        dispatch(
+          updateDiscoveredPeerDeviceName({ peerId: payload.peerId, deviceName: payload.deviceName })
+        )
+        return
       }
-    })
+
+      if (event.eventType === 'peers.connectionChanged') {
+        // Connection state consumed elsewhere; discovery list stays stable.
+      }
+    }
+
+    const unsubscribe = daemonWs.subscribe(['peers'], handler)
 
     return () => {
-      // Reset state to prevent stale data on re-entry
-      setPeers([])
+      dispatch(clearDiscoveredPeers())
       setScanPhase('scanning')
-      cancelled = true
+      knownPeers.clear()
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
         timeoutRef.current = null
       }
-      realtimePromise.then(fn => fn())
+      unsubscribe()
     }
-  }, [active, startTimeout, loadPeers])
+  }, [active, startTimeout, loadPeers, dispatch])
 
-  return { peers, scanPhase, resetScan }
+  return { scanPhase, resetScan }
 }
