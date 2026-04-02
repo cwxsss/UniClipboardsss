@@ -24,7 +24,7 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 ## Current State
 
 - **Latest shipped milestone:** v0.3.0 Log Observability & Feature Expansion (2026-03-17)
-- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase; daemon handles file transfer lifecycle (progress, completion, failure, timeout sweeps, startup reconciliation); clipboard restore delegated to daemon for in-process origin tracking
+- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase; daemon handles file transfer lifecycle (progress, completion, failure, timeout sweeps, startup reconciliation); clipboard restore delegated to daemon for in-process origin tracking; unified auth architecture — CLI/GUI/Daemon all use POST /auth/connect session exchange with independent token scopes
 - **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established; CLI start/stop commands for daemon lifecycle management (background/foreground modes, PID-based stop with SIGTERM); daemon encryption state recovery via existing AutoUnlockEncryptionSession use case; peer discovery deduplication fixed (local_peer_id filtering + full-snapshot peers.changed events); daemon gates PeerDiscoveryWorker on encryption state (deferred start for uninitialized devices via oneshot channel); dual-product release pipeline — CLI binary builds in parallel with App, included in GitHub Release and R2; GUI restore_clipboard_entry is thin daemon proxy (cross-process origin desync eliminated); frontend p2p.ts facade removed — all callers migrated to daemon modules and hooks (daemon/pairing, daemon/events, daemon/ws, usePairingEvents, useSetupFlow)
 - **LOC:** ~135K Rust + ~20K TypeScript (estimated)
 - **Supported content types:** Text, Image, Link, File (all with per-device sync toggles)
@@ -62,7 +62,7 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - ✓ Keyboard shortcuts settings UI with click-to-record and conflict detection — v0.3.0
 - ✓ macOS keychain auto-unlock confirmation modal — v0.3.0
 - ✓ Event-driven device discovery replacing polling — v0.3.0
-- ✓ Consolidated outbound sync planner — v0.3.0
+- ✓ Unified CLI/GUI/Daemon auth architecture (session exchange via /auth/connect, bare bearer rejection on L2+ routes, independent token scopes) — Phase 84
 
 ### Active
 
@@ -78,6 +78,8 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - [x] usePairingEvents extended with space access events, type-safe payloads, dual topic subscription — Phase 83
 - [x] useDeviceDiscovery refactored to Redux via daemonWs.subscribe + diffPeerSnapshots — Phase 83
 - [x] useSetupFlow hook extracted from SetupPage.tsx — Phase 83
+- [x] CLI session exchange migration (bare bearer → /auth/connect, "Session " prefix) — Phase 84
+- [x] Unified auth architecture integration tests (AUTH-01 through AUTH-06) — Phase 84
 
 ### Deferred
 
