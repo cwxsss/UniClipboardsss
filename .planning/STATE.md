@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Executing Phase 84
-stopped_at: Completed 83-03-PLAN.md
-last_updated: "2026-04-02T14:17:20.614Z"
+status: Ready to execute
+stopped_at: Completed 84-02-PLAN.md
+last_updated: "2026-04-02T18:44:25.638Z"
 progress:
   total_phases: 56
   completed_phases: 40
-  total_plans: 114
-  completed_plans: 102
+  total_plans: 117
+  completed_plans: 104
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 ## Current Position
 
 Phase: 84 (cli-gui-daemon) — EXECUTING
-Plan: 1 of 3
+Plan: 2 of 3
 
 ## Current Position
 
@@ -115,6 +115,7 @@ Plan: Not started
   | Phase 75 P03 | 10 | 2 tasks | 3 files |
   | Phase 83 P02 | 8 | 4 tasks | 2 files |
   | Phase 83 P03 | 17 | 3 tasks | 13 files |
+| Phase 84 P02 | 384 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -264,6 +265,7 @@ Recent decisions affecting current work:
 - [Phase 75]: SecurityState::new_with_pid() and make_session_token_for_pid() kept without #[cfg(test)] because integration tests in tests/ directory cannot see cfg(test) items
 - [Phase 75]: WS upgrade validates Session JWT not Bearer token — consistent with L2 HTTP middleware pattern
 - [Phase 75]: Rate limit WS upgrades by PID from validated JWT claims for trustworthy rate limiting on authenticated routes
+- [Phase 84]: authorized_daemon_request_with_type: GUI uses cached get_session_token, CLI/others use exchange_session_token directly
 
 ### Roadmap Evolution
 
@@ -323,6 +325,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-02T10:16:54.049Z
-Stopped at: Completed 83-03-PLAN.md
+Last session: 2026-04-02T18:40:57.705Z
+Stopped at: Completed 84-02-PLAN.md
 Resume file: None

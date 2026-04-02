@@ -945,7 +945,7 @@ Plans:
 **Goal:** Unify the CLI/GUI authentication architecture so both clients use daemon as the sole entry point. CLI currently sends raw bearer tokens directly; GUI properly exchanges for JWT via `POST /auth/connect`. This phase consolidates both to use the same session exchange flow.
 **Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, AUTH-05, AUTH-06
 **Depends on:** Phase 83
-**Plans:** 3/3 plans
+**Plans:** 2/3 plans executed
 
 **Success Criteria** (what must be TRUE):
 
