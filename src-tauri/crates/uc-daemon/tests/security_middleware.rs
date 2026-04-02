@@ -543,6 +543,85 @@ async fn session_token_contains_correct_pid() {
     assert!(claims.exp > claims.iat, "exp should be greater than iat");
 }
 
+// ========================================================================
+// AUTH-03: PID-based rate limiting isolation (per-client counters)
+// ========================================================================
+
+#[tokio::test]
+async fn rate_limit_is_per_client_not_global() {
+    // Verify that rate limiting uses per-client (PID) counters.
+    // Exhausting the limit for PID A must NOT affect PID B.
+    let (_app, _bearer, security) = build_test_router_with_security().await;
+
+    let pid_a = 33333u32;
+    let pid_b = 44444u32;
+
+    // Register both PIDs
+    security.register_pid(pid_a).await;
+    security.register_pid(pid_b).await;
+
+    // Exhaust rate limit for PID A (100 requests)
+    for _ in 0..100 {
+        let allowed = security.rate_limiter.check(&pid_a.to_string()).await;
+        if !allowed {
+            break;
+        }
+    }
+
+    // Verify PID A is rate limited
+    assert!(
+        !security.rate_limiter.check(&pid_a.to_string()).await,
+        "PID A should be rate limited after 100 requests"
+    );
+
+    // Verify PID B is NOT rate limited (independent counter)
+    assert!(
+        security.rate_limiter.check(&pid_b.to_string()).await,
+        "PID B should NOT be rate limited (per-client counter isolation)"
+    );
+}
+
+// ========================================================================
+// AUTH-06: Bearer token ONLY accepted at /auth/connect
+// ========================================================================
+
+#[tokio::test]
+async fn bearer_token_only_accepted_at_auth_connect() {
+    // Verify that bearer token is accepted ONLY at /auth/connect.
+    // All other L2 routes must reject it.
+    let (app, bearer, _security) = build_test_router_with_security().await;
+
+    // /auth/connect accepts bearer token (this is correct behavior)
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/connect")
+                .header("Authorization", format!("Bearer {bearer}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&serde_json::json!({
+                        "pid": 55555,
+                        "clientType": "cli"
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "/auth/connect should accept bearer token"
+    );
+
+    // L2 routes reject bearer token (already verified by
+    // bare_bearer_rejected_with_invalid_auth_scheme_error test above)
+}
+
 #[tokio::test]
 async fn session_token_for_gui_client_type_contains_correct_claims() {
     // Verify that /auth/connect with clientType "gui" returns a JWT with
