@@ -130,6 +130,10 @@ PASS (21) FAIL (0)
 Total: 33 tests passing
 ```
 
+## Self-Check: PASSED
+
+All files exist, commits verified, 33/33 tests passing, key grep checks confirmed.
+
 ## Issues Encountered
 
 - RTK 2.x Immer middleware wraps functional updater payloads before reducer execution — `typeof dispatchPayload === 'function'` is always false when inspecting `mockDispatch.mock.calls`; must check `action.type` instead
