@@ -17,7 +17,7 @@ use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
 use uc_daemon_client::DaemonConnectionState;
 use uc_tauri::bootstrap::{
     bootstrap_daemon_connection, ensure_default_device_name, start_background_tasks,
-    supervise_daemon, AppRuntime,
+    start_gui_pairing_lease_task, supervise_daemon, AppRuntime,
 };
 use uc_tauri::commands::updater::PendingUpdate;
 use uc_tauri::tray::TrayState;
@@ -153,6 +153,7 @@ fn run_app(ctx: GuiBootstrapContext) {
             let gui_owned_daemon_state_for_setup = gui_owned_daemon_state.clone();
             let app_handle_for_daemon = app.handle().clone();
             let supervisor_token = task_registry.token().clone();
+            let runtime_for_daemon = runtime.clone();
             tauri::async_runtime::spawn(async move {
                 match bootstrap_daemon_connection(
                     &app_handle_for_daemon,
@@ -162,6 +163,11 @@ fn run_app(ctx: GuiBootstrapContext) {
                 .await
                 {
                     Ok(_connection_info) => {
+                        start_gui_pairing_lease_task(
+                            daemon_connection_state_for_setup.clone(),
+                            runtime_for_daemon.task_registry(),
+                        );
+
                         // Start daemon supervisor to respawn if daemon dies unexpectedly.
                         let supervisor_state = daemon_connection_state_for_setup.clone();
                         let supervisor_daemon = gui_owned_daemon_state_for_setup.clone();

@@ -19,4 +19,4 @@ pub use uc_bootstrap::assembly::{
     WiredDependencies,
 };
 // wiring.rs re-exports (Tauri event loops and background task management)
-pub use wiring::{start_background_tasks, BackgroundRuntimeDeps};
+pub use wiring::{start_background_tasks, start_gui_pairing_lease_task, BackgroundRuntimeDeps};
