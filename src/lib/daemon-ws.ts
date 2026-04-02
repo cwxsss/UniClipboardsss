@@ -66,6 +66,10 @@ function makeNonce(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
+function topicMatches(subscription: string, eventTopic: string): boolean {
+  return subscription === eventTopic
+}
+
 // ── DaemonWsClient ──────────────────────────────────────────────
 
 /** DaemonWsClient class — exported for testability (use `daemonWs` singleton in production). */
@@ -303,9 +307,10 @@ export class DaemonWsClient {
     }
     console.info('[DaemonWsClient] received WS event:', event.topic, event.eventType)
 
-    // Dispatch to every callback registered for this exact topic.
-    const callbacks = this._callbacks.get(event.topic)
-    if (callbacks) {
+    for (const [subscriptionTopic, callbacks] of this._callbacks.entries()) {
+      if (!topicMatches(subscriptionTopic, event.topic)) {
+        continue
+      }
       for (const cb of callbacks) {
         try {
           cb(event)
