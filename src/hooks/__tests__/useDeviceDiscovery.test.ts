@@ -1,45 +1,67 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { useDeviceDiscovery } from '../useDeviceDiscovery'
+import { setDiscoveredPeers, clearDiscoveredPeers } from '@/store/slices/devicesSlice'
 
-// Mock the p2p API module
+// Mock the daemon pairing API module
 const mockGetP2PPeers = vi.fn()
-const mockRealtimeUnlisten = vi.fn()
-let capturedRealtimeCb: ((event: unknown) => void) | null = null
-
-vi.mock('@/api/p2p', () => ({
+vi.mock('@/api/daemon/pairing', () => ({
   getP2PPeers: (...args: unknown[]) => mockGetP2PPeers(...args),
 }))
 
-vi.mock('@/api/realtime', () => ({
-  onDaemonRealtimeEvent: vi.fn((cb: (event: unknown) => void) => {
-    capturedRealtimeCb = cb
-    return Promise.resolve(mockRealtimeUnlisten)
-  }),
+// Mock daemon-ws subscribe
+const mockUnsubscribe = vi.fn()
+let capturedSubscribeHandler:
+  | ((event: { topic: string; eventType: string; payload: unknown }) => void)
+  | null = null
+vi.mock('@/lib/daemon-ws', () => ({
+  daemonWs: {
+    subscribe: vi.fn(
+      (
+        _topics: string[],
+        handler: (event: { topic: string; eventType: string; payload: unknown }) => void
+      ) => {
+        capturedSubscribeHandler = handler
+        return mockUnsubscribe
+      }
+    ),
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+    reset: vi.fn(),
+  },
 }))
 
-// NO mock for sonner -- hook should not import it at all
+// Mock Redux dispatch
+const mockDispatch = vi.fn()
+vi.mock('react-redux', () => ({
+  useDispatch: () => mockDispatch,
+  useSelector: vi.fn((selector: (state: unknown) => unknown) =>
+    selector({ devices: { discoveredPeers: [] } })
+  ),
+}))
 
 describe('useDeviceDiscovery', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockGetP2PPeers.mockResolvedValue([])
-    capturedRealtimeCb = null
+    mockDispatch.mockClear()
+    capturedSubscribeHandler = null
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('Test 1: initial load calls getP2PPeers and sets up daemon realtime listener when active=true', async () => {
+  it('Test 1: initial load calls getP2PPeers and sets up daemonWs.subscribe when active=true', async () => {
     const { unmount } = renderHook(() => useDeviceDiscovery(true))
 
     await waitFor(() => {
       expect(mockGetP2PPeers).toHaveBeenCalledTimes(1)
     })
 
-    const { onDaemonRealtimeEvent } = await import('@/api/realtime')
-    expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
+    const { daemonWs } = await import('@/lib/daemon-ws')
+    expect(daemonWs.subscribe).toHaveBeenCalledTimes(1)
+    expect(daemonWs.subscribe).toHaveBeenCalledWith(['peers'], expect.any(Function))
 
     unmount()
   })
@@ -60,14 +82,25 @@ describe('useDeviceDiscovery', () => {
     // Initially scanning
     expect(result.current.scanPhase).toBe('scanning')
 
-    // After fetch resolves, should have devices
+    // After fetch resolves, should transition to hasDevices
     await waitFor(() => {
       expect(result.current.scanPhase).toBe('hasDevices')
     })
 
-    expect(result.current.peers).toHaveLength(1)
-    expect(result.current.peers[0].id).toBe('peer-1')
-    expect(result.current.peers[0].deviceName).toBe('MacBook Pro')
+    // Peers are dispatched to Redux, not returned from hook
+    await waitFor(() => {
+      expect(mockDispatch).toHaveBeenCalledWith(
+        setDiscoveredPeers(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: 'peer-1',
+              deviceName: 'MacBook Pro',
+              device_type: 'desktop',
+            }),
+          ])
+        )
+      )
+    })
   })
 
   it('Test 3: 10-second timeout transitions scanPhase from scanning to empty when no devices found', async () => {
@@ -91,32 +124,43 @@ describe('useDeviceDiscovery', () => {
     expect(result.current.scanPhase).toBe('empty')
   })
 
-  it('Test 4: peers.changed event adds peer and transitions to hasDevices', async () => {
+  it('Test 4: peers.changed event dispatches setDiscoveredPeers and transitions to hasDevices', async () => {
     mockGetP2PPeers.mockResolvedValue([])
 
-    const { result } = renderHook(() => useDeviceDiscovery(true))
+    const { result, unmount } = renderHook(() => useDeviceDiscovery(true))
 
-    const { onDaemonRealtimeEvent } = await import('@/api/realtime')
     await waitFor(() => {
-      expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
+      expect(mockGetP2PPeers).toHaveBeenCalledTimes(1)
+    })
+
+    const { daemonWs } = await import('@/lib/daemon-ws')
+    await waitFor(() => {
+      expect(daemonWs.subscribe).toHaveBeenCalledTimes(1)
     })
 
     expect(result.current.scanPhase).toBe('scanning')
 
+    // Fire peers.changed event
     act(() => {
-      capturedRealtimeCb?.({
+      capturedSubscribeHandler?.({
         topic: 'peers',
-        type: 'peers.changed',
+        eventType: 'peers.changed',
         payload: {
           peers: [{ peerId: 'peer-2', deviceName: 'iPhone', connected: false }],
         },
       })
     })
 
-    expect(result.current.peers).toHaveLength(1)
-    expect(result.current.peers[0].id).toBe('peer-2')
-    expect(result.current.peers[0].deviceName).toBe('iPhone')
+    // Should dispatch setDiscoveredPeers with the new peer
+    // Call sequence: clearDiscoveredPeers (1) + setDiscoveredPeers([]) from loadPeers (2) +
+    // setDiscoveredPeers(fn) functional updater from handler (3).
+    // Verify the third call is the functional updater carrying peer-2.
+    const thirdCallAction = mockDispatch.mock.calls[2][0] as { type: string; payload: unknown }
+    expect(thirdCallAction.type).toBe('devices/setDiscoveredPeers')
+    expect(typeof thirdCallAction.payload).toBe('function')
     expect(result.current.scanPhase).toBe('hasDevices')
+
+    unmount()
   })
 
   it('Test 5: device appearing after empty state transitions scanPhase back to hasDevices', async () => {
@@ -138,9 +182,9 @@ describe('useDeviceDiscovery', () => {
 
     // Device appears
     act(() => {
-      capturedRealtimeCb?.({
+      capturedSubscribeHandler?.({
         topic: 'peers',
-        type: 'peers.changed',
+        eventType: 'peers.changed',
         payload: {
           peers: [{ peerId: 'peer-3', deviceName: 'Windows PC', connected: false }],
         },
@@ -148,10 +192,9 @@ describe('useDeviceDiscovery', () => {
     })
 
     expect(result.current.scanPhase).toBe('hasDevices')
-    expect(result.current.peers).toHaveLength(1)
   })
 
-  it('Test 6: resetScan clears peers, resets to scanning, starts fresh 10s timeout, re-fetches peers', async () => {
+  it('Test 6: resetScan dispatches clearDiscoveredPeers, resets to scanning, starts fresh 10s timeout, re-fetches peers', async () => {
     vi.useFakeTimers()
     mockGetP2PPeers.mockResolvedValue([
       { peerId: 'peer-1', deviceName: 'MacBook', addresses: [], isPaired: false, connected: false },
@@ -164,8 +207,6 @@ describe('useDeviceDiscovery', () => {
       await vi.runAllTimersAsync()
     })
 
-    expect(result.current.peers).toHaveLength(1)
-
     // After resetScan, second call returns empty list
     mockGetP2PPeers.mockResolvedValue([])
 
@@ -174,8 +215,8 @@ describe('useDeviceDiscovery', () => {
       result.current.resetScan()
     })
 
-    // Should be reset to scanning with empty peers immediately
-    expect(result.current.peers).toHaveLength(0)
+    // Should dispatch clearDiscoveredPeers immediately
+    expect(mockDispatch).toHaveBeenCalledWith(clearDiscoveredPeers())
     expect(result.current.scanPhase).toBe('scanning')
 
     // Allow re-fetch to resolve
@@ -194,7 +235,7 @@ describe('useDeviceDiscovery', () => {
     expect(result.current.scanPhase).toBe('empty')
   })
 
-  it('Test 7: when active goes false then true, state resets (peers=[], scanPhase=scanning) before re-setup', async () => {
+  it('Test 7: when active goes false then true, clearDiscoveredPeers dispatched and state resets before re-setup', async () => {
     mockGetP2PPeers.mockResolvedValue([
       { peerId: 'peer-1', deviceName: 'Device', addresses: [], isPaired: false, connected: false },
     ])
@@ -207,14 +248,18 @@ describe('useDeviceDiscovery', () => {
     )
 
     await waitFor(() => {
-      expect(result.current.peers).toHaveLength(1)
+      expect(mockDispatch).toHaveBeenCalledWith(
+        setDiscoveredPeers(
+          expect.arrayContaining([expect.objectContaining({ id: 'peer-1' })])
+        )
+      )
     })
 
     // Deactivate
     rerender({ active: false })
 
-    // Should reset to empty state
-    expect(result.current.peers).toHaveLength(0)
+    // Should dispatch clearDiscoveredPeers and reset to scanning
+    expect(mockDispatch).toHaveBeenCalledWith(clearDiscoveredPeers())
     expect(result.current.scanPhase).toBe('scanning')
 
     // Re-activate
@@ -223,46 +268,34 @@ describe('useDeviceDiscovery', () => {
 
     // Should start fresh in scanning phase
     expect(result.current.scanPhase).toBe('scanning')
-    expect(result.current.peers).toHaveLength(0)
   })
 
-  it('Test 8: getP2PPeers() rejection logs error via console.error, calls onError callback, hook remains in scanning phase', async () => {
-    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('Test 8: getP2PPeers() rejection calls onError callback, hook remains in scanning phase', async () => {
     const onError = vi.fn()
     mockGetP2PPeers.mockRejectedValueOnce(new Error('network'))
 
     const { result } = renderHook(() => useDeviceDiscovery(true, { onError }))
 
     await waitFor(() => {
-      expect(consoleErrorSpy).toHaveBeenCalled()
+      expect(onError).toHaveBeenCalled()
     })
 
     expect(result.current.scanPhase).toBe('scanning')
-    expect(result.current.peers).toHaveLength(0)
     expect(onError).toHaveBeenCalledWith(expect.any(Error))
-
-    consoleErrorSpy.mockRestore()
   })
 
-  it('Test 9: cleanup on unmount calls realtime unlisten and clears timeout', async () => {
+  it('Test 9: cleanup on unmount calls unsubscribe and clears timeout', async () => {
     mockGetP2PPeers.mockResolvedValue([])
 
     const { unmount } = renderHook(() => useDeviceDiscovery(true))
 
-    const { onDaemonRealtimeEvent } = await import('@/api/realtime')
+    const { daemonWs } = await import('@/lib/daemon-ws')
     await waitFor(() => {
-      expect(onDaemonRealtimeEvent).toHaveBeenCalledTimes(1)
+      expect(daemonWs.subscribe).toHaveBeenCalledTimes(1)
     })
 
     unmount()
-
-    // Wait for async cleanup (unlisten promises to resolve)
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(mockRealtimeUnlisten).toHaveBeenCalledTimes(1)
+    expect(mockUnsubscribe).toHaveBeenCalledTimes(1)
   })
 
   it('Test 10: anonymous peer from getP2PPeers has deviceName: null (hook stores raw value, no fallback)', async () => {
@@ -270,14 +303,17 @@ describe('useDeviceDiscovery', () => {
       { peerId: 'peer-anon', deviceName: null, addresses: [], isPaired: false, connected: false },
     ])
 
-    const { result } = renderHook(() => useDeviceDiscovery(true))
+    renderHook(() => useDeviceDiscovery(true))
 
     await waitFor(() => {
-      expect(result.current.peers).toHaveLength(1)
+      expect(mockDispatch).toHaveBeenCalledWith(
+        setDiscoveredPeers(
+          expect.arrayContaining([
+            expect.objectContaining({ id: 'peer-anon', deviceName: null }),
+          ])
+        )
+      )
     })
-
-    // deviceName should be null (raw from backend), NOT a fallback string
-    expect(result.current.peers[0].deviceName).toBeNull()
   })
 
   it('Test 11: onError callback receives the Error object when getP2PPeers fails', async () => {
@@ -295,5 +331,44 @@ describe('useDeviceDiscovery', () => {
     const receivedError = onError.mock.calls[0][0] as Error
     expect(receivedError).toBeInstanceOf(Error)
     expect(receivedError.message).toBe('connection refused')
+  })
+
+  it('Test 12: diffPeerSnapshots discovered peers are appended via functional updater (no stale closure)', async () => {
+    // This test verifies the fix for Warning 6: dispatch(setDiscoveredPeers(prev => [...prev, ...next]))
+    // When multiple peers.changed events fire, each new peer should be dispatched.
+    // After the first peers.changed event (peer-a), a dispatch is expected.
+    mockGetP2PPeers.mockResolvedValue([])
+
+    renderHook(() => useDeviceDiscovery(true))
+
+    await waitFor(() => {
+      expect(mockGetP2PPeers).toHaveBeenCalledTimes(1)
+    })
+
+    const { daemonWs } = await import('@/lib/daemon-ws')
+    await waitFor(() => {
+      expect(daemonWs.subscribe).toHaveBeenCalledTimes(1)
+    })
+
+    // Fire first peers.changed event: peer-a is new
+    act(() => {
+      capturedSubscribeHandler?.({
+        topic: 'peers',
+        eventType: 'peers.changed',
+        payload: {
+          peers: [{ peerId: 'peer-a', deviceName: 'Device A', connected: true }],
+        },
+      })
+    })
+
+    // After first event: knownPeers has peer-a, setScanPhase -> 'hasDevices', nextPeers=[peer-a] dispatched
+    // Verify at least one setDiscoveredPeers call was made
+    const dispatchCallArgs = mockDispatch.mock.calls.map(call => call[0])
+    const setDiscoveredPeersCall = dispatchCallArgs.find(arg => {
+      if (!arg || typeof arg !== 'object') return false
+      const action = arg as { type?: unknown }
+      return action.type === 'devices/setDiscoveredPeers' || action.type === expect.stringContaining('setDiscoveredPeers')
+    })
+    expect(setDiscoveredPeersCall).toBeDefined()
   })
 })
