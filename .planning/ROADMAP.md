@@ -964,11 +964,22 @@ Plans:
 
 ### Phase 85: Improve pairing observability across daemon, event routing, and UI state transitions
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Add end-to-end, session-centered observability for pairing/setup flows so daemon emission, bridge routing, and frontend state transitions can be correlated and diagnosed without guesswork.
+**Requirements**: PH85-01, PH85-02, PH85-03, PH85-04, PH85-05, PH85-06
 **Depends on:** Phase 84
-**Plans:** 0 plans
+**Plans:** 3 plans
+
+**Success Criteria** (what must be TRUE):
+
+1. A single pairing session can be followed across daemon emission, websocket bridge routing, and frontend handling using stable structured fields (PH85-01)
+2. Frontend pairing/setup consumers explicitly record accept/ignore/dedupe decisions instead of silently dropping events (PH85-02)
+3. Bridge routing decisions for `pairing.verification_required` are explicit and diagnosable (PH85-03)
+4. Pairing-driven setup transitions remain observable through to UI-facing state changes (PH85-04)
+5. New observability records do not leak secrets, raw key material, or sensitive verification payloads (PH85-05)
+6. Existing low-latency race fixes remain covered and verified after observability work lands (PH85-06)
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 85 to break down)
+- [ ] 85-01-PLAN.md — Backend observability contract for daemon emission and bridge routing (Wave 1)
+- [ ] 85-02-PLAN.md — Frontend pairing/setup consumption diagnostics and shared event handling visibility (Wave 2)
+- [ ] 85-03-PLAN.md — Regression coverage and validation evidence for end-to-end pairing observability (Wave 3)
