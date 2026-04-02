@@ -100,11 +100,18 @@ pub async fn auth_extractor_middleware(
             .into_response();
     };
 
-    // Parse "Session <token>" prefix
-    let token = auth_value
-        .strip_prefix("Session ")
-        .unwrap_or(auth_value.as_str())
-        .trim();
+    // Parse "Session <token>" prefix — bare bearer tokens are explicitly rejected.
+    let Some(token) = auth_value.strip_prefix("Session ") else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({
+                "error": "invalid_auth_scheme",
+                "message": "expected 'Session ' prefix; use POST /auth/connect to obtain a session token"
+            })),
+        )
+            .into_response();
+    };
+    let token = token.trim();
     if token.is_empty() {
         return (
             StatusCode::UNAUTHORIZED,

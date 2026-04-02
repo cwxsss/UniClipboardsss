@@ -2,16 +2,34 @@
 import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { verifyP2PPairingPin } from '@/api/daemon/pairing'
 import PairingDialog from '@/components/PairingDialog'
 import { PairingNotificationProvider } from '@/components/PairingNotificationProvider'
 
-// Module-level mock refs — reset in beforeEach
-const getP2PPeersMock = vi.fn()
-const initiateP2PPairingMock = vi.fn()
-const verifyP2PPairingPinMock = vi.fn()
-const acceptP2PPairingMock = vi.fn()
-const rejectP2PPairingMock = vi.fn()
+// Module-level mock refs — created in a hoisted scope so vi.mock factories can access them.
+const {
+  getP2PPeersMock,
+  initiateP2PPairingMock,
+  verifyP2PPairingPinMock,
+  acceptP2PPairingMock,
+  rejectP2PPairingMock,
+  toastMock,
+} = vi.hoisted(() => {
+  const toastFn = vi.fn() as ReturnType<typeof vi.fn> & {
+    error: ReturnType<typeof vi.fn>
+    success: ReturnType<typeof vi.fn>
+  }
+  toastFn.error = vi.fn()
+  toastFn.success = vi.fn()
+
+  return {
+    getP2PPeersMock: vi.fn(),
+    initiateP2PPairingMock: vi.fn(),
+    verifyP2PPairingPinMock: vi.fn(),
+    acceptP2PPairingMock: vi.fn(),
+    rejectP2PPairingMock: vi.fn(),
+    toastMock: toastFn,
+  }
+})
 
 // Capture handlers registered via daemonWs.subscribe for test injection
 const capturedHandlers = {
@@ -52,10 +70,6 @@ vi.mock('@/api/daemon/events', () => ({
   },
 }))
 
-// Mock sonner toast
-const toastMock = vi.fn() as ReturnType<typeof vi.fn> & { error: ReturnType<typeof vi.fn>; success: ReturnType<typeof vi.fn> }
-toastMock.error = vi.fn()
-toastMock.success = vi.fn()
 vi.mock('sonner', () => ({
   toast: toastMock,
 }))
@@ -119,7 +133,7 @@ describe('PairingDialog', () => {
 
     await user.click(confirmButton)
 
-    expect(verifyP2PPairingPin).toHaveBeenCalledWith('session-1', true)
+    expect(verifyP2PPairingPinMock).toHaveBeenCalledWith('session-1', true)
     expect(confirmButton).toBeDisabled()
     expect(confirmButton).toHaveTextContent(/正在验证|Verifying/i)
   })
@@ -334,5 +348,78 @@ describe('PairingNotificationProvider — accept->verification race regression',
     })
 
     expect(screen.queryByText('999999')).not.toBeInTheDocument()
+  })
+
+  it('keeps verifying state when verification_required repeats with kind=verifying', async () => {
+    render(<PairingNotificationProvider />)
+
+    await act(async () => {})
+
+    act(() => {
+      capturedHandlers.pairing!({
+        topic: 'pairing',
+        eventType: 'pairing.updated',
+        payload: {
+          state: 'request',
+          sessionId: 'session-verifying',
+          deviceName: 'PeerB',
+          peerId: 'peer-id-b',
+        },
+      })
+    })
+
+    const toastOptions = toastMock.mock.calls[0][1] as { action?: { onClick?: () => void } }
+
+    act(() => {
+      toastOptions.action!.onClick!()
+    })
+
+    act(() => {
+      capturedHandlers.pairing!({
+        topic: 'pairing',
+        eventType: 'pairing.verification_required',
+        payload: {
+          sessionId: 'session-verifying',
+          kind: 'verification',
+          code: '123456',
+          deviceName: 'PeerB',
+          peerId: 'peer-id-b',
+        },
+      })
+    })
+
+    await screen.findByText('123456')
+
+    act(() => {
+      capturedHandlers.pairing!({
+        topic: 'pairing',
+        eventType: 'pairing.updated',
+        payload: {
+          state: 'verifying',
+          sessionId: 'session-verifying',
+          deviceName: 'PeerB',
+          peerId: 'peer-id-b',
+        },
+      })
+    })
+
+    expect(await screen.findAllByText(/正在验证|Verifying/i)).toHaveLength(2)
+    expect(screen.queryByText('123456')).not.toBeInTheDocument()
+
+    act(() => {
+      capturedHandlers.pairing!({
+        topic: 'pairing',
+        eventType: 'pairing.verification_required',
+        payload: {
+          sessionId: 'session-verifying',
+          kind: 'verifying',
+          deviceName: 'PeerB',
+          peerId: 'peer-id-b',
+        },
+      })
+    })
+
+    expect(await screen.findAllByText(/正在验证|Verifying/i)).toHaveLength(2)
+    expect(screen.queryByText('123456')).not.toBeInTheDocument()
   })
 })

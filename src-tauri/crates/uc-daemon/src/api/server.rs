@@ -27,7 +27,7 @@ use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_core::network::daemon_api_strings::pairing_error_code;
 
 use crate::api::auth::{
-    build_connection_info, parse_bearer_token, DaemonAuthToken, DaemonConnectionInfo,
+    build_connection_info, DaemonAuthToken, DaemonConnectionInfo,
 };
 use crate::api::dto::error::ApiError;
 use crate::api::dto::pairing::PairingApiErrorResponse;
@@ -138,15 +138,6 @@ impl DaemonApiState {
             &self.auth_token,
             client_pid,
         )
-    }
-
-    pub fn is_authorized(&self, headers: &HeaderMap) -> bool {
-        headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .and_then(parse_bearer_token)
-            .map(|token| token == self.auth_token.as_str())
-            .unwrap_or(false)
     }
 
     /// Extracts the runtime, or returns an ApiError if unavailable.

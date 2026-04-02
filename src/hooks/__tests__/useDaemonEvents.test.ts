@@ -189,6 +189,64 @@ describe('usePairingEvents', () => {
     })
   })
 
+  it('routes pairing.verification_required kind=verifying to onVerifying instead of onVerification', () => {
+    const onVerification = vi.fn()
+    const onVerifying = vi.fn()
+    renderHook(() => usePairingEvents({ onVerification, onVerifying }))
+
+    act(() => {
+      handlersByTopic.get('pairing')?.({
+        topic: 'pairing',
+        eventType: 'pairing.verification_required',
+        ts: 1,
+        sessionId: 'session-1',
+        payload: {
+          sessionId: 'session-1',
+          kind: 'verifying',
+          peerId: 'peer-abc',
+          deviceName: 'MacBook Pro',
+        },
+      })
+    })
+
+    expect(onVerification).not.toHaveBeenCalled()
+    expect(onVerifying).toHaveBeenCalledTimes(1)
+    expect(onVerifying.mock.calls[0][0]).toMatchObject({
+      sessionId: 'session-1',
+      peerId: 'peer-abc',
+      deviceName: 'MacBook Pro',
+    })
+  })
+
+  it('routes pairing.verification_required kind=complete to onComplete instead of onVerification', () => {
+    const onVerification = vi.fn()
+    const onComplete = vi.fn()
+    renderHook(() => usePairingEvents({ onVerification, onComplete }))
+
+    act(() => {
+      handlersByTopic.get('pairing')?.({
+        topic: 'pairing',
+        eventType: 'pairing.verification_required',
+        ts: 1,
+        sessionId: 'session-1',
+        payload: {
+          sessionId: 'session-1',
+          kind: 'complete',
+          peerId: 'peer-xyz',
+          deviceName: 'iPhone',
+        },
+      })
+    })
+
+    expect(onVerification).not.toHaveBeenCalled()
+    expect(onComplete).toHaveBeenCalledTimes(1)
+    expect(onComplete.mock.calls[0][0]).toMatchObject({
+      sessionId: 'session-1',
+      peerId: 'peer-xyz',
+      deviceName: 'iPhone',
+    })
+  })
+
   it('routes pairing.complete to onComplete', () => {
     const onComplete = vi.fn()
     renderHook(() => usePairingEvents({ onComplete }))

@@ -239,6 +239,122 @@ async fn protected_route_returns_401_with_bearer_token_instead_of_session_token(
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+// ========================================================================
+// Phase 84: Bare Bearer Token Rejection Tests (AUTH-04, AUTH-06)
+// ========================================================================
+
+#[tokio::test]
+async fn bare_bearer_rejected_with_invalid_auth_scheme_error() {
+    // Phase 84: Daemon L2+ routes explicitly reject bare bearer tokens
+    // with "invalid_auth_scheme" error (not "invalid_session_token").
+    let (app, bearer, _security) = build_test_router_with_security().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Authorization", format!("Bearer {}", bearer.trim()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["error"].as_str(),
+        Some("invalid_auth_scheme"),
+        "error should be 'invalid_auth_scheme', got: {:?}",
+        json["error"]
+    );
+    assert!(
+        json["message"].as_str().is_some_and(|m| m.contains("/auth/connect")),
+        "error message should mention /auth/connect hint"
+    );
+}
+
+#[tokio::test]
+async fn empty_session_token_rejected() {
+    // Phase 84: "Session " with no token value gets "missing_session_token".
+    let (app, _bearer, _security) = build_test_router_with_security().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Authorization", "Session ")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["error"].as_str(),
+        Some("missing_session_token"),
+        "error should be 'missing_session_token'"
+    );
+}
+
+#[tokio::test]
+async fn bare_bearer_on_l2_route_rejected_differently_than_invalid_jwt() {
+    // Phase 84: Bare bearer gets "invalid_auth_scheme" (wrong scheme).
+    // Tampered JWT gets "invalid_session_token" (valid scheme, bad value).
+    // These are distinguishable error codes.
+    let (app, bearer, _security) = build_test_router_with_security().await;
+    let session_token = get_session_token(&app, &bearer).await;
+
+    // Bare bearer (wrong scheme)
+    let bare_response = app.clone()
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Authorization", format!("Bearer {}", bearer.trim()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Tampered JWT (right scheme, bad value)
+    let mut tampered = session_token.clone();
+    tampered.push_str("X");
+    let tampered_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .header("Authorization", format!("Session {}", tampered))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(bare_response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(tampered_response.status(), StatusCode::UNAUTHORIZED);
+
+    let bare_body = to_bytes(bare_response.into_body(), 4096).await.unwrap();
+    let tampered_body = to_bytes(tampered_response.into_body(), 4096).await.unwrap();
+    let bare_json: Value = serde_json::from_slice(&bare_body).unwrap();
+    let tampered_json: Value = serde_json::from_slice(&tampered_body).unwrap();
+
+    assert_eq!(
+        bare_json["error"].as_str(),
+        Some("invalid_auth_scheme"),
+        "bare bearer should get 'invalid_auth_scheme'"
+    );
+    assert_eq!(
+        tampered_json["error"].as_str(),
+        Some("invalid_session_token"),
+        "tampered JWT should get 'invalid_session_token'"
+    );
+}
+
 #[tokio::test]
 async fn protected_route_returns_200_with_valid_session_token() {
     let (app, bearer, _security) = build_test_router_with_security().await;

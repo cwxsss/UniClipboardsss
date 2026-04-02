@@ -107,11 +107,15 @@ export function PairingNotificationProvider() {
       })
     },
 
-    onVerifying: () => {
+    onVerifying: ({ sessionId }) => {
+      const currentSessionId = activeSessionIdRef.current
+      if (!currentSessionId || sessionId !== currentSessionId) return
       setDialogState(prev => ({ ...prev, phase: 'verifying' }))
     },
 
-    onComplete: () => {
+    onComplete: ({ sessionId }) => {
+      const currentSessionId = activeSessionIdRef.current
+      if (!currentSessionId || sessionId !== currentSessionId) return
       setDialogState(prev => ({ ...prev, phase: 'verifying' }))
     },
 

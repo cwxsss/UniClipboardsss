@@ -210,9 +210,11 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
         peerId?: string
         deviceName?: string
         state?: string
+        kind?: string
         code?: string
         localFingerprint?: string
         peerFingerprint?: string
+        error?: string
         reason?: string
       }
 
@@ -226,6 +228,24 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
       }
 
       if (event.eventType === 'pairing.verification_required') {
+        if (p.kind === 'verifying' && cbs.onVerifying) {
+          cbs.onVerifying({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
+          return
+        }
+
+        if (p.kind === 'complete' && cbs.onComplete) {
+          cbs.onComplete({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
+          return
+        }
+
+        if (p.kind === 'failed' && cbs.onFailed) {
+          cbs.onFailed({
+            sessionId: p.sessionId,
+            error: p.reason ?? p.error,
+          })
+          return
+        }
+
         if (cbs.onVerification) {
           cbs.onVerification({
             sessionId: p.sessionId,

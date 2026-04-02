@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Milestone complete
+status: Executing Phase 84
 stopped_at: Completed 83-03-PLAN.md
-last_updated: '2026-04-02T10:23:30.556Z'
+last_updated: "2026-04-02T14:17:20.614Z"
 progress:
-  total_phases: 54
+  total_phases: 56
   completed_phases: 40
-  total_plans: 111
+  total_plans: 114
   completed_plans: 102
 ---
 
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 83
-Plan: Not started
+Phase: 84 (cli-gui-daemon) — EXECUTING
+Plan: 1 of 3
 
 ## Current Position
 
@@ -302,6 +302,8 @@ Recent decisions affecting current work:
 - Phase 81 added: Frontend-Daemon Integration Testing & Security Audit
 - Phase 82 added: Replace uc:// custom protocol with daemon HTTP blob endpoints
 - Phase 83 added: 分析前端 Peer 配对请求，简化事件流架构，分离关注点,创建配对状态管理,提取业务逻辑
+- Phase 84 added: 统一 CLI/GUI 与 Daemon 的认证架构 — daemon 作为唯一入口，local key 做身份确认后发短时通行证，CLI/GUI 各自独立拿证
+- Phase 85 added: Improve pairing observability across daemon, event routing, and UI state transitions
 
 ### Pending Todos
 
