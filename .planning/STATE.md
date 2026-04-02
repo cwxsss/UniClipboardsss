@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Ready to execute
+status: Ready to plan
 stopped_at: Completed 84-03-PLAN.md
-last_updated: "2026-04-02T19:54:56.287Z"
+last_updated: '2026-04-02T20:23:23.954Z'
 progress:
   total_phases: 56
   completed_phases: 41
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 84 (cli-gui-daemon) — EXECUTING
-Plan: 3 of 3
+Phase: 85
+Plan: Not started
 
 ## Current Position
 
@@ -115,8 +115,8 @@ Plan: Not started
   | Phase 75 P03 | 10 | 2 tasks | 3 files |
   | Phase 83 P02 | 8 | 4 tasks | 2 files |
   | Phase 83 P03 | 17 | 3 tasks | 13 files |
-| Phase 84 P02 | 384 | 2 tasks | 2 files |
-| Phase 84 P03 | 15 | 3 tasks | 4 files |
+  | Phase 84 P02 | 384 | 2 tasks | 2 files |
+  | Phase 84 P03 | 15 | 3 tasks | 4 files |
 
 ## Accumulated Context
 
