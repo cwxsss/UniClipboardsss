@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Phase complete — ready for verification
+status: Milestone complete
 stopped_at: Completed 86-04-PLAN.md
-last_updated: "2026-04-03T10:03:49.409Z"
+last_updated: "2026-04-03T10:08:42.643Z"
 progress:
   total_phases: 57
   completed_phases: 42
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 86 (cli-host-join-flow-phase) — EXECUTING
-Plan: 4 of 4
+Phase: 86
+Plan: Not started
 
 ## Current Position
 
