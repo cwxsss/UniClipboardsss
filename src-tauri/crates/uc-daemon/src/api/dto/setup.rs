@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt::Debug;
 use utoipa::ToSchema;
 
 /// Inner setup state type returned by the query service.
@@ -52,7 +53,7 @@ pub struct SetupActionResponse {
 }
 
 /// Inner setup state returned by all setup endpoints.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupStateResponseDto {
     pub state: Value,
@@ -65,6 +66,22 @@ pub struct SetupStateResponseDto {
     pub selected_peer_id: Option<String>,
     pub selected_peer_name: Option<String>,
     pub has_completed: bool,
+}
+
+impl Debug for SetupStateResponseDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let variant = match &self.state {
+            Value::String(s) => s.as_str(),
+            Value::Object(map) if map.len() == 1 => map.keys().next().map(String::as_str).unwrap_or("<none>"),
+            _ => "<complex>",
+        };
+        f.debug_struct("SetupStateResponseDto")
+            .field("hint", &self.next_step_hint)
+            .field("sid", &self.session_id.as_deref().map(|s| &s[..8.min(s.len())]))
+            .field("done", &self.has_completed)
+            .field("variant", &variant)
+            .finish()
+    }
 }
 
 impl From<SetupStateResponse> for SetupStateResponseDto {
