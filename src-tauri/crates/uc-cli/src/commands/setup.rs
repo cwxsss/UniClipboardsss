@@ -1,5 +1,12 @@
 //! Interactive setup commands over daemon-owned setup state.
 
+// Submodules for phase-driven flow
+mod host_flow;
+mod join_flow;
+
+pub use host_flow::{HostCliPhase, HostCliSession};
+pub use join_flow::{JoinCliPhase, JoinCliSession};
+
 use std::fmt;
 use std::io::{self, IsTerminal};
 use std::time::Duration;
