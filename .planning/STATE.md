@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Ready to plan
-stopped_at: Phase 86 context gathered
-last_updated: '2026-04-03T08:50:08.953Z'
+status: Ready to execute
+stopped_at: Completed 86-02-PLAN.md
+last_updated: "2026-04-03T09:39:36.412Z"
 progress:
   total_phases: 57
   completed_phases: 41
-  total_plans: 117
-  completed_plans: 105
+  total_plans: 121
+  completed_plans: 107
 ---
 
 # Project State
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 85
-Plan: Not started
+Phase: 86 (cli-host-join-flow-phase) — EXECUTING
+Plan: 3 of 4
 
 ## Current Position
 
@@ -117,6 +117,8 @@ Plan: Not started
   | Phase 83 P03 | 17 | 3 tasks | 13 files |
   | Phase 84 P02 | 384 | 2 tasks | 2 files |
   | Phase 84 P03 | 15 | 3 tasks | 4 files |
+| Phase 86 P01 | 95 | 3 tasks | 2 files |
+| Phase 86 P02 | 8 | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -269,6 +271,7 @@ Recent decisions affecting current work:
 - [Phase 84]: authorized_daemon_request_with_type: GUI uses cached get_session_token, CLI/others use exchange_session_token directly
 - [Phase 84]: Phase 84: authorized_daemon_request_with_type routes gui to get_session_token (caching), others to exchange_session_token (no cache)
 - [Phase 84]: Phase 84-03: All 6 AUTH requirements now have automated integration test coverage via cli_auth.rs and security_middleware.rs
+- [Phase 86]: D-01: Changed first clearing condition from OR to AND to prevent premature clearing of decision session when in NeedVerification state
 
 ### Roadmap Evolution
 
@@ -329,6 +332,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T08:50:08.944Z
-Stopped at: Phase 86 context gathered
-Resume file: .planning/phases/86-cli-host-join-flow-phase/86-CONTEXT.md
+Last session: 2026-04-03T09:39:36.407Z
+Stopped at: Completed 86-02-PLAN.md
+Resume file: None
