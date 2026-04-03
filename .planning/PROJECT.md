@@ -121,6 +121,7 @@ Phase 64 complete — Tauri sync retirement: removed 896 lines of daemon-duplica
 Phase 66 complete — Fixed daemon WS topic registration for clipboard and file-transfer subscriptions; added WS reconnection compensation with bridge_state_monitor and DaemonReconnected event; Dashboard auto-refreshes clipboard list on reconnect.
 Phase 69 complete — CLI `setup` → "Create new Space" performs encryption initialization locally via `build_cli_runtime()` + `CoreUseCases::initialize_encryption()` instead of starting daemon; eliminates macOS Keychain popup during first-time setup.
 Phase 73 complete — ClipboardWriteCoordinator introduced as single write boundary for all programmatic clipboard writes (LocalRestore, RemotePush, LocalCapture intents); InMemoryClipboardChangeOrigin locked to pub(crate) via factory; all 4 write callsites migrated (RestoreClipboardSelectionUseCase, CopyFileToClipboardUseCase, SyncInboundClipboardUseCase, FileSyncOrchestratorWorker); dead guard code removed.
+Phase 86 complete — CLI host/join flow refactored: ParsedSetupState centralized in uc-daemon-client/setup; HostCliPhase/JoinCliPhase enums introduced with pure derive_*_phase() functions; run_pair and run_connect rewritten as phase-driven loops (poll→parse→derive→match→sleep pattern); Phase 0 bugs eliminated (double-negative clearing condition, verbose Debug impl); old inline parsing helpers migrated to daemon-client module and deleted from uc-cli.
 
 ## Key Decisions
 
@@ -157,4 +158,4 @@ Phase 73 complete — ClipboardWriteCoordinator introduced as single write bound
 
 ---
 
-_Last updated: 2026-04-02 after Phase 83 completion_
+_Last updated: 2026-04-03 after Phase 86 completion_
