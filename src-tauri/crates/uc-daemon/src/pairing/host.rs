@@ -106,6 +106,42 @@ impl std::fmt::Display for DaemonPairingHostError {
 
 impl std::error::Error for DaemonPairingHostError {}
 
+/// RAII guard that clears the active session on drop.
+///
+/// Similar to Python's `with` statement, this ensures the session is always
+/// cleaned up whether the operation succeeds or fails.
+///
+/// Usage:
+/// ```ignore
+/// let _guard = ActiveSessionGuard::new(&self.active_session_id, session_id);
+/// // ... perform operations ...
+/// // guard is automatically dropped and session is cleared
+/// ```
+struct ActiveSessionGuard<'a> {
+    active_session_id: &'a Arc<RwLock<Option<String>>>,
+    session_id: Option<String>,
+}
+
+impl<'a> ActiveSessionGuard<'a> {
+    fn new(active_session_id: &'a Arc<RwLock<Option<String>>>, session_id: Option<String>) -> Self {
+        Self {
+            active_session_id,
+            session_id,
+        }
+    }
+}
+
+impl Drop for ActiveSessionGuard<'_> {
+    fn drop(&mut self) {
+        // Use blocking_write since Drop cannot be async
+        // This is acceptable because drop is guaranteed to be synchronous
+        let mut guard = self.active_session_id.blocking_write();
+        if guard.as_ref() == self.session_id.as_ref() {
+            *guard = None;
+        }
+    }
+}
+
 pub struct DaemonPairingHost {
     runtime: Arc<CoreRuntime>,
     pairing_orchestrator: Arc<PairingOrchestrator>,
@@ -260,6 +296,7 @@ impl DaemonPairingHost {
 
     pub async fn accept_pairing(&self, session_id: &str) -> Result<(), DaemonPairingHostError> {
         self.require_session(session_id).await?;
+        let _guard = ActiveSessionGuard::new(&self.active_session_id, Some(session_id.to_string()));
         self.pairing_orchestrator
             .user_accept_pairing(session_id)
             .await
@@ -269,21 +306,21 @@ impl DaemonPairingHost {
 
     pub async fn reject_pairing(&self, session_id: &str) -> Result<(), DaemonPairingHostError> {
         self.require_session(session_id).await?;
+        let _guard = ActiveSessionGuard::new(&self.active_session_id, Some(session_id.to_string()));
         self.pairing_orchestrator
             .user_reject_pairing(session_id)
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
-        self.clear_active_session(Some(session_id)).await;
         Ok(())
     }
 
     pub async fn cancel_pairing(&self, session_id: &str) -> Result<(), DaemonPairingHostError> {
         self.require_session(session_id).await?;
+        let _guard = ActiveSessionGuard::new(&self.active_session_id, Some(session_id.to_string()));
         self.pairing_orchestrator
             .user_cancel_pairing(session_id)
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
-        self.clear_active_session(Some(session_id)).await;
         Ok(())
     }
 

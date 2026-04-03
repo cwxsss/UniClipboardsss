@@ -9,7 +9,6 @@ pub mod assembly;
 pub mod background_tasks;
 pub mod builders;
 pub mod config;
-pub mod config_resolution;
 pub mod init;
 pub mod non_gui_runtime;
 pub mod tracing;
@@ -27,7 +26,6 @@ pub use builders::{
     CliBootstrapContext, DaemonBootstrapContext, GuiBootstrapContext,
 };
 pub use config::load_config;
-pub use config_resolution::{resolve_app_config, resolve_config_path, ConfigResolutionError};
 pub use init::ensure_default_device_name;
 pub use non_gui_runtime::{
     build_cli_runtime, build_non_gui_runtime, build_non_gui_runtime_with_emitter,

@@ -574,43 +574,12 @@ pub fn get_storage_paths(
     resolve_app_paths(&platform_dirs, config)
 }
 
-/// Resolve the effective `AppDirs` by applying config overrides.
-pub fn resolve_app_dirs(
-    platform_dirs: &uc_core::app_dirs::AppDirs,
-    config: &AppConfig,
-) -> uc_core::app_dirs::AppDirs {
-    let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
-    let config_overrides_root = !config.database_path.as_os_str().is_empty() && !is_in_memory_db;
-
-    if config_overrides_root {
-        let raw_root = config
-            .database_path
-            .parent()
-            .unwrap_or(&config.database_path)
-            .to_path_buf();
-        let abs_root = if raw_root.is_relative() {
-            std::env::current_dir().unwrap_or_default().join(&raw_root)
-        } else {
-            raw_root
-        };
-        let app_data_root = apply_profile_suffix(abs_root);
-        let app_cache_root = app_data_root.join("cache");
-        uc_core::app_dirs::AppDirs {
-            app_data_root,
-            app_cache_root,
-        }
-    } else {
-        platform_dirs.clone()
-    }
-}
-
 /// Build `AppPaths` from platform dirs and config overrides.
 pub fn resolve_app_paths(
     platform_dirs: &uc_core::app_dirs::AppDirs,
     config: &AppConfig,
 ) -> WiringResult<uc_app::app_paths::AppPaths> {
-    let resolved_dirs = resolve_app_dirs(platform_dirs, config);
-    let mut paths = uc_app::app_paths::AppPaths::from_app_dirs(&resolved_dirs);
+    let mut paths = uc_app::app_paths::AppPaths::from_app_dirs(platform_dirs);
 
     let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
 
