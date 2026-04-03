@@ -12,6 +12,8 @@ use uc_core::security::model::Passphrase;
 use uc_core::security::state::EncryptionState;
 use uc_daemon::api::dto::setup::SetupStateResponseDto;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
+// Re-export for integration tests (same crate)
+pub(crate) use uc_daemon_client::setup::{parse_setup_state, ParsedSetupState, SetupHint, SetupVariant};
 use uc_daemon_client::{DaemonClientContext, DaemonPairingClient};
 
 use crate::exit_codes;
@@ -198,35 +200,30 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
                 return print_anyhow_error(error);
             }
         };
+        let parsed = parse_setup_state(&state);
 
-        if !matches!(state.next_step_hint.as_str(), "host-confirm-peer")
-            && !matches!(
-                setup_state_variant(&state.state),
-                Some("JoinSpaceConfirmPeer")
-            )
+        if !matches!(parsed.hint, SetupHint::HostConfirmPeer)
+            && !matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer)
         {
             submitted_host_decision_session = None;
         }
 
-        if state.next_step_hint != "host-confirm-peer"
-            || !matches!(
-                setup_state_variant(&state.state),
-                Some("JoinSpaceConfirmPeer")
-            )
+        if !matches!(parsed.hint, SetupHint::HostConfirmPeer)
+            || !matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer)
         {
             submitted_host_verification_session = None;
         }
 
-        if should_prompt_host_verification(&state, submitted_host_verification_session.as_deref()) {
+        if should_prompt_host_verification(&parsed, submitted_host_verification_session.as_deref()) {
             finish_spinner(&mut spinner);
-            let session_id = match state.session_id.clone() {
+            let session_id = match parsed.session_id.clone() {
                 Some(session_id) => session_id,
                 None => {
                     ui::error("Missing pairing session id for host verification");
                     return exit_codes::EXIT_ERROR;
                 }
             };
-            match prompt_host_verification(&state) {
+            match prompt_host_verification(&parsed) {
                 Ok(true) => {
                     if let Err(error) = setup_client.confirm_peer_trust().await {
                         return print_anyhow_error(error);
@@ -246,11 +243,11 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
                     return exit_codes::EXIT_ERROR;
                 }
             }
-        } else if should_prompt_host_decision(&state, submitted_host_decision_session.as_deref()) {
+        } else if should_prompt_host_decision(&parsed, submitted_host_decision_session.as_deref()) {
             finish_spinner(&mut spinner);
             handled_peer_request = true;
-            let session_id = state.session_id.clone();
-            match prompt_host_decision(&state) {
+            let session_id = parsed.session_id.clone();
+            match prompt_host_decision(&parsed) {
                 Ok(HostDecision::Accept) => {
                     let accept_result = setup_client.confirm_peer_trust().await;
                     if let Err(error) = accept_result {
@@ -275,7 +272,7 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
                     return exit_codes::EXIT_ERROR;
                 }
             }
-        } else if state.next_step_hint == "completed" && !handled_peer_request {
+        } else if matches!(parsed.hint, SetupHint::Completed) && !handled_peer_request {
             if !host_pairing_presence_enabled {
                 if let Err(error) = pairing_client.register_gui_participant(true, None).await {
                     finish_spinner(&mut spinner);
@@ -295,7 +292,7 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
             if spinner.is_none() {
                 spinner = Some(ui::spinner("Host ready. Waiting for a join request…"));
             }
-        } else if should_complete_host_flow(&state, handled_peer_request, handled_host_verification)
+        } else if should_complete_host_flow(&parsed, handled_peer_request, handled_host_verification)
         {
             finish_spinner(&mut spinner);
             let _ =
@@ -303,7 +300,7 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
                     .await;
             ui::success("Setup host flow completed!");
             return exit_codes::EXIT_SUCCESS;
-        } else if state.next_step_hint == "idle" && handled_peer_request {
+        } else if matches!(parsed.hint, SetupHint::Idle) && handled_peer_request {
             finish_spinner(&mut spinner);
             let _ =
                 disable_host_pairing_presence(&pairing_client, &mut host_pairing_presence_enabled)
@@ -365,14 +362,15 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
                 return print_anyhow_error(error);
             }
         };
+        let parsed = parse_setup_state(&state);
 
-        if state.has_completed || state.next_step_hint == "completed" {
+        if parsed.has_completed || matches!(parsed.hint, SetupHint::Completed) {
             finish_spinner(&mut spinner);
             ui::success("Setup join flow completed!");
             return exit_codes::EXIT_SUCCESS;
         }
 
-        if state.next_step_hint == "join-select-peer" {
+        if matches!(parsed.hint, SetupHint::JoinSelectPeer) {
             let peers = match query_client.get_peers().await {
                 Ok(peers) => filter_joinable_peers(peers),
                 Err(error) => {
@@ -408,12 +406,9 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
                     }
                 }
             }
-        } else if matches!(
-            setup_state_variant(&state.state),
-            Some("JoinSpaceConfirmPeer")
-        ) {
+        } else if matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer) {
             finish_spinner(&mut spinner);
-            match prompt_join_peer_confirmation(&state) {
+            match prompt_join_peer_confirmation(&parsed) {
                 Ok(true) => {
                     if let Err(error) = setup_client.confirm_peer_trust().await {
                         return print_anyhow_error(error);
@@ -431,14 +426,11 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
                     return exit_codes::EXIT_ERROR;
                 }
             }
-        } else if state.next_step_hint == "join-enter-passphrase"
-            || matches!(
-                setup_state_variant(&state.state),
-                Some("JoinSpaceInputPassphrase")
-            )
+        } else if matches!(parsed.hint, SetupHint::JoinEnterPassphrase)
+            || matches!(parsed.variant, SetupVariant::JoinSpaceInputPassphrase)
         {
             finish_spinner(&mut spinner);
-            if setup_state_error_code(&state.state) == Some("PassphraseInvalidOrMismatch") {
+            if parsed.error_code.as_deref() == Some("PassphraseInvalidOrMismatch") {
                 ui::warn("Passphrase rejected; retrying current join session");
             }
             let passphrase: String = match ui::password("Space passphrase") {
@@ -457,7 +449,7 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
                 finish_spinner(&mut spinner);
                 return print_anyhow_error(error);
             }
-        } else if state.next_step_hint == "idle" && submitted_peer_request {
+        } else if matches!(parsed.hint, SetupHint::Idle) && submitted_peer_request {
             finish_spinner(&mut spinner);
             ui::error("Setup returned to idle before completion");
             return exit_codes::EXIT_ERROR;
@@ -483,11 +475,14 @@ pub(crate) struct SetupStatusOutput {
 
 impl fmt::Display for SetupStatusOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
-            f,
-            "state: {}",
-            setup_state_variant(&self.state).unwrap_or("unknown")
-        )?;
+        let variant = SetupVariant::from_state_value(&self.state);
+        match variant {
+            SetupVariant::Idle => writeln!(f, "state: Idle")?,
+            SetupVariant::JoinSpaceConfirmPeer => writeln!(f, "state: JoinSpaceConfirmPeer")?,
+            SetupVariant::JoinSpaceInputPassphrase => writeln!(f, "state: JoinSpaceInputPassphrase")?,
+            SetupVariant::Completed => writeln!(f, "state: Completed")?,
+            SetupVariant::Unknown(s) => writeln!(f, "state: {}", s)?,
+        }
         writeln!(
             f,
             "sessionId: {}",
@@ -611,10 +606,11 @@ fn prompt_new_space_passphrase() -> Result<String, String> {
     ui::password_with_confirm("New space passphrase", "Confirm passphrase")
 }
 
-fn prompt_host_decision(state: &SetupStateResponseDto) -> Result<HostDecision, String> {
-    let peer_name = format_selected_peer_label(state).unwrap_or_else(|| "unknown peer".to_string());
+fn prompt_host_decision(state: &ParsedSetupState) -> Result<HostDecision, String> {
+    let peer_name = state.selected_peer_label.clone()
+        .unwrap_or_else(|| "unknown peer".to_string());
     ui::step(&format!("Join request from {}", style(peer_name).bold()));
-    if let Some(short_code) = setup_state_short_code(&state.state) {
+    if let Some(short_code) = &state.short_code {
         ui::verification_code(short_code);
     }
 
@@ -627,65 +623,67 @@ fn prompt_host_decision(state: &SetupStateResponseDto) -> Result<HostDecision, S
 }
 
 pub(crate) fn should_prompt_host_decision(
-    state: &SetupStateResponseDto,
+    parsed: &ParsedSetupState,
     submitted_session_id: Option<&str>,
 ) -> bool {
-    if state.next_step_hint != "host-confirm-peer" {
+    if !matches!(parsed.hint, SetupHint::HostConfirmPeer) {
         return false;
     }
-
-    if matches!(
-        setup_state_variant(&state.state),
-        Some("JoinSpaceConfirmPeer")
-    ) {
+    if matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer) {
         return false;
     }
-
-    state.session_id.as_deref() != submitted_session_id
+    parsed.session_id.as_deref() != submitted_session_id
 }
 
 fn should_prompt_host_verification(
-    state: &SetupStateResponseDto,
+    parsed: &ParsedSetupState,
     submitted_session_id: Option<&str>,
 ) -> bool {
-    if state.next_step_hint != "host-confirm-peer" {
+    if !matches!(parsed.hint, SetupHint::HostConfirmPeer) {
         return false;
     }
-
-    if !matches!(
-        setup_state_variant(&state.state),
-        Some("JoinSpaceConfirmPeer")
-    ) {
+    if !matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer) {
         return false;
     }
-
-    state.session_id.as_deref() != submitted_session_id
+    parsed.session_id.as_deref() != submitted_session_id
 }
 
-fn prompt_host_verification(state: &SetupStateResponseDto) -> Result<bool, String> {
-    let peer_name =
-        format_selected_peer_label(state).unwrap_or_else(|| "selected peer".to_string());
+pub(crate) fn should_complete_host_flow(
+    parsed: &ParsedSetupState,
+    handled_peer_request: bool,
+    handled_host_verification: bool,
+) -> bool {
+    handled_peer_request
+        && handled_host_verification
+        && parsed.has_completed
+        && matches!(parsed.hint, SetupHint::Completed)
+        && parsed.session_id.is_none()
+}
+
+fn prompt_host_verification(state: &ParsedSetupState) -> Result<bool, String> {
+    let peer_name = state.selected_peer_label.clone()
+        .unwrap_or_else(|| "selected peer".to_string());
 
     ui::step(&format!(
         "Confirm peer trust for {}",
         style(peer_name).bold()
     ));
-    if let Some(short_code) = setup_state_short_code(&state.state) {
+    if let Some(short_code) = &state.short_code {
         ui::verification_code(short_code);
     }
 
     ui::confirm("Do the verification codes match?", true)
 }
 
-fn prompt_join_peer_confirmation(state: &SetupStateResponseDto) -> Result<bool, String> {
-    let peer_name =
-        format_selected_peer_label(state).unwrap_or_else(|| "selected peer".to_string());
+fn prompt_join_peer_confirmation(state: &ParsedSetupState) -> Result<bool, String> {
+    let peer_name = state.selected_peer_label.clone()
+        .unwrap_or_else(|| "selected peer".to_string());
 
     ui::step(&format!(
         "Confirm peer trust for {}",
         style(peer_name).bold()
     ));
-    if let Some(short_code) = setup_state_short_code(&state.state) {
+    if let Some(short_code) = &state.short_code {
         ui::verification_code(short_code);
     }
 
@@ -723,66 +721,7 @@ fn finish_spinner(spinner: &mut Option<indicatif::ProgressBar>) {
     }
 }
 
-// ── State inspection helpers ────────────────────────────────────────
-
-pub(crate) fn setup_state_variant(state: &Value) -> Option<&str> {
-    match state {
-        Value::String(value) => Some(value.as_str()),
-        Value::Object(map) if map.len() == 1 => map.keys().next().map(String::as_str),
-        _ => None,
-    }
-}
-
-pub(crate) fn setup_state_error_code(state: &Value) -> Option<&str> {
-    let variant = setup_state_variant(state)?;
-    let payload = match state {
-        Value::Object(map) => map.get(variant)?,
-        _ => return None,
-    };
-    payload.get("error")?.as_str()
-}
-
-fn setup_state_short_code(state: &Value) -> Option<&str> {
-    let payload = match state {
-        Value::Object(map) => map.get("JoinSpaceConfirmPeer")?,
-        _ => return None,
-    };
-    payload.get("short_code")?.as_str()
-}
-
-pub(crate) fn should_complete_host_flow(
-    state: &SetupStateResponseDto,
-    handled_peer_request: bool,
-    handled_host_verification: bool,
-) -> bool {
-    handled_peer_request
-        && handled_host_verification
-        && state.has_completed
-        && state.next_step_hint == "completed"
-        && state.session_id.is_none()
-}
-
-pub(crate) fn format_selected_peer_label(state: &SetupStateResponseDto) -> Option<String> {
-    let peer_id = state.selected_peer_id.as_deref();
-    let peer_name = state.selected_peer_name.as_deref().map(str::trim);
-
-    match (peer_name, peer_id) {
-        (Some(name), Some(peer_id)) if !name.is_empty() => {
-            Some(format!("{name} ({})", format_peer_id_suffix(peer_id)))
-        }
-        (Some(name), None) if !name.is_empty() => Some(name.to_string()),
-        (_, Some(peer_id)) => Some(format_peer_id_suffix(peer_id)),
-        _ => None,
-    }
-}
-
-fn format_peer_id_suffix(peer_id: &str) -> String {
-    if peer_id.len() <= 8 {
-        peer_id.to_string()
-    } else {
-        peer_id[peer_id.len() - 8..].to_string()
-    }
-}
+// ── Render helpers ──────────────────────────────────────────────────
 
 pub(crate) fn render_reset_output(profile: &str, daemon_kept_running: bool) -> String {
     let mut lines = vec![format!("Reset complete for profile {profile}")];
@@ -899,14 +838,13 @@ mod tests {
             }
         });
 
-        assert_eq!(
-            setup_state_variant(&state),
-            Some("JoinSpaceInputPassphrase")
-        );
-        assert_eq!(
-            setup_state_error_code(&state),
-            Some("PassphraseInvalidOrMismatch")
-        );
+        let variant = SetupVariant::from_state_value(&state);
+        assert!(matches!(variant, SetupVariant::JoinSpaceInputPassphrase));
+        // Inline error extraction (same logic as parse_setup_state)
+        let error_code: Option<&str> = state.get("JoinSpaceInputPassphrase")
+            .and_then(|p| p.get("error"))
+            .and_then(|e| e.as_str());
+        assert_eq!(error_code, Some("PassphraseInvalidOrMismatch"));
     }
 
     #[test]
@@ -951,7 +889,7 @@ mod tests {
 
     #[test]
     fn format_selected_peer_label_uses_peer_suffix_when_available() {
-        let state = SetupStateResponse {
+        let dto = SetupStateResponseDto {
             state: json!("Completed"),
             session_id: Some("session-1".to_string()),
             next_step_hint: "host-confirm-peer".to_string(),
@@ -963,9 +901,10 @@ mod tests {
             selected_peer_name: Some("Peer B".to_string()),
             has_completed: true,
         };
+        let parsed = parse_setup_state(&dto);
 
         assert_eq!(
-            format_selected_peer_label(&state.into()),
+            parsed.selected_peer_label,
             Some("Peer B (ABCDEFGH)".to_string())
         );
     }

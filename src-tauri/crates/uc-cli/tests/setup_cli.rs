@@ -171,8 +171,9 @@ mod daemon_client {
 mod setup;
 
 use setup::{
-    new_space_encryption_guard, render_reset_output, setup_state_error_code, setup_state_variant,
-    SetupStatusOutput,
+    new_space_encryption_guard, parse_setup_state, render_reset_output,
+    should_complete_host_flow, should_prompt_host_decision, SetupHint, SetupStatusOutput,
+    SetupVariant,
 };
 use uc_core::security::state::EncryptionState;
 use uc_daemon::api::types::SetupStateResponse;
@@ -225,16 +226,15 @@ fn setup_join_reports_passphrase_retry_without_exiting() {
         has_completed: false,
     };
 
+    let dto: uc_daemon::api::dto::setup::SetupStateResponseDto = state.clone().into();
+    let parsed = parse_setup_state(&dto);
     assert_eq!(
-        setup_state_error_code(&state.state),
+        parsed.error_code.as_deref(),
         Some("PassphraseInvalidOrMismatch")
     );
     assert!(
         state.next_step_hint == "join-enter-passphrase"
-            || matches!(
-                setup_state_variant(&state.state),
-                Some("JoinSpaceInputPassphrase")
-            )
+            || matches!(parsed.variant, SetupVariant::JoinSpaceInputPassphrase)
     );
 }
 
@@ -259,16 +259,12 @@ fn setup_join_prompts_for_peer_confirmation_before_passphrase() {
         has_completed: false,
     };
 
-    assert!(matches!(
-        setup_state_variant(&state.state),
-        Some("JoinSpaceConfirmPeer")
-    ));
+    let dto: uc_daemon::api::dto::setup::SetupStateResponseDto = state.clone().into();
+    let parsed = parse_setup_state(&dto);
+    assert!(matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer));
     assert!(
         state.next_step_hint != "join-enter-passphrase"
-            && !matches!(
-                setup_state_variant(&state.state),
-                Some("JoinSpaceInputPassphrase")
-            )
+            && !matches!(parsed.variant, SetupVariant::JoinSpaceInputPassphrase)
     );
 }
 
@@ -328,13 +324,55 @@ fn setup_host_prompts_for_verification_after_accept() {
     };
 
     // should_prompt_for_host_verification = has_completed && variant == "JoinSpaceConfirmPeer"
+    let dto: uc_daemon::api::dto::setup::SetupStateResponseDto = state.clone().into();
+    let parsed = parse_setup_state(&dto);
     assert!(
         state.has_completed
-            && matches!(
-                setup_state_variant(&state.state),
-                Some("JoinSpaceConfirmPeer")
-            )
+            && matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer)
     );
+}
+
+#[test]
+fn host_decision_prompt_is_suppressed_after_same_session_submission() {
+    let state = SetupStateResponse {
+        state: json!("Completed"),
+        session_id: Some("session-host".to_string()),
+        next_step_hint: "host-confirm-peer".to_string(),
+        profile: "peerA".to_string(),
+        clipboard_mode: "full".to_string(),
+        device_name: "Peer A".to_string(),
+        peer_id: "peer-a-id".to_string(),
+        selected_peer_id: Some("peer-b-id".to_string()),
+        selected_peer_name: Some("Peer B".to_string()),
+        has_completed: true,
+    };
+
+    let dto: uc_daemon::api::dto::setup::SetupStateResponseDto = state.into();
+    let parsed = parse_setup_state(&dto);
+    assert!(!should_prompt_host_decision(&parsed, Some("session-host")));
+}
+
+#[test]
+fn host_decision_prompt_is_allowed_for_new_session() {
+    let state = SetupStateResponse {
+        state: json!("Completed"),
+        session_id: Some("session-host".to_string()),
+        next_step_hint: "host-confirm-peer".to_string(),
+        profile: "peerA".to_string(),
+        clipboard_mode: "full".to_string(),
+        device_name: "Peer A".to_string(),
+        peer_id: "peer-a-id".to_string(),
+        selected_peer_id: Some("peer-b-id".to_string()),
+        selected_peer_name: Some("Peer B".to_string()),
+        has_completed: true,
+    };
+
+    let dto: uc_daemon::api::dto::setup::SetupStateResponseDto = state.clone().into();
+    let parsed = parse_setup_state(&dto);
+    assert!(should_prompt_host_decision(&parsed, None));
+    let dto2: uc_daemon::api::dto::setup::SetupStateResponseDto = state.into();
+    let parsed2 = parse_setup_state(&dto2);
+    assert!(should_prompt_host_decision(&parsed2, Some("other-session")));
 }
 
 #[test]
@@ -369,6 +407,52 @@ fn host_flow_only_exits_after_active_session_clears() {
             && cleared.next_step_hint == "completed"
             && cleared.session_id.is_none()
     ); // cleared case passes
+}
+
+#[test]
+fn host_peer_label_includes_peer_id_suffix_when_name_present() {
+    let state = SetupStateResponse {
+        state: json!("Completed"),
+        session_id: Some("session-host".to_string()),
+        next_step_hint: "host-confirm-peer".to_string(),
+        profile: "peerA".to_string(),
+        clipboard_mode: "full".to_string(),
+        device_name: "Peer A".to_string(),
+        peer_id: "peer-a-id".to_string(),
+        selected_peer_id: Some("12D3KooWABCDEFGH".to_string()),
+        selected_peer_name: Some("Peer B".to_string()),
+        has_completed: true,
+    };
+
+    let dto: uc_daemon::api::dto::setup::SetupStateResponseDto = state.into();
+    let parsed = parse_setup_state(&dto);
+    assert_eq!(
+        parsed.selected_peer_label,
+        Some("Peer B (ABCDEFGH)".to_string())
+    );
+}
+
+#[test]
+fn host_flow_completion_waits_for_verification_confirmation() {
+    let state = SetupStateResponse {
+        state: json!("Completed"),
+        session_id: None,
+        next_step_hint: "completed".to_string(),
+        profile: "peerA".to_string(),
+        clipboard_mode: "full".to_string(),
+        device_name: "Peer A".to_string(),
+        peer_id: "peer-a-id".to_string(),
+        selected_peer_id: Some("peer-b-id".to_string()),
+        selected_peer_name: Some("Peer B".to_string()),
+        has_completed: true,
+    };
+
+    let dto: uc_daemon::api::dto::setup::SetupStateResponseDto = state.clone().into();
+    let parsed = parse_setup_state(&dto);
+    assert!(!should_complete_host_flow(&parsed, true, false));
+    let dto2: uc_daemon::api::dto::setup::SetupStateResponseDto = state.into();
+    let parsed2 = parse_setup_state(&dto2);
+    assert!(should_complete_host_flow(&parsed2, true, true));
 }
 
 #[test]
