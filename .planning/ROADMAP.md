@@ -983,3 +983,17 @@ Plans:
 - [ ] 85-01-PLAN.md — Backend observability contract for daemon emission and bridge routing (Wave 1)
 - [ ] 85-02-PLAN.md — Frontend pairing/setup consumption diagnostics and shared event handling visibility (Wave 2)
 - [ ] 85-03-PLAN.md — Regression coverage and validation evidence for end-to-end pairing observability (Wave 3)
+
+### Phase 86: CLI 层重构：收口远端状态解析，拆分 host/join flow phase
+
+**Goal:** Refactor CLI setup flow (run_pair / run_connect) to centralize remote state parsing into typed `ParsedSetupState`, introduce lightweight `HostCliPhase` / `JoinCliPhase` enums, and restructure the main loop as "poll -> parse -> derive phase -> execute action"
+**Requirements**: REQ-86-01 (Phase 0 bug fixes), REQ-86-02 (ParsedSetupState in uc-daemon-client), REQ-86-03 (HostCliPhase/JoinCliPhase enums), REQ-86-04 (Phase-driven loops)
+**Depends on:** Phase 85
+**Plans:** 4 plans in 3 waves
+
+Plans:
+
+- [ ] 86-01-PLAN.md — Phase 0: Fix broken if/else in run_pair, add Debug impl for state change detection (Wave 1)
+- [ ] 86-02-PLAN.md — Phase 1: Create uc-daemon-client/src/setup/ module with ParsedSetupState, delete old helpers (Wave 1)
+- [ ] 86-03-PLAN.md — Phase 2: Create HostCliPhase/JoinCliPhase enums and derive\_\*\_phase() functions (Wave 2)
+- [ ] 86-04-PLAN.md — Phase 3: Phase-driven loops for run_pair and run_connect (Wave 3)
