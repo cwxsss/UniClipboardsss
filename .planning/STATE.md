@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
 status: Ready to plan
-stopped_at: Completed 84-03-PLAN.md
-last_updated: '2026-04-02T20:23:23.954Z'
+stopped_at: Phase 86 context gathered
+last_updated: '2026-04-03T08:50:08.953Z'
 progress:
-  total_phases: 56
+  total_phases: 57
   completed_phases: 41
   total_plans: 117
   completed_plans: 105
@@ -309,6 +309,7 @@ Recent decisions affecting current work:
 - Phase 83 added: 分析前端 Peer 配对请求，简化事件流架构，分离关注点,创建配对状态管理,提取业务逻辑
 - Phase 84 added: 统一 CLI/GUI 与 Daemon 的认证架构 — daemon 作为唯一入口，local key 做身份确认后发短时通行证，CLI/GUI 各自独立拿证
 - Phase 85 added: Improve pairing observability across daemon, event routing, and UI state transitions
+- Phase 86 added: CLI 层重构：收口远端状态解析，拆分 host/join flow phase
 
 ### Pending Todos
 
@@ -328,6 +329,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-02T19:54:56.284Z
-Stopped at: Completed 84-03-PLAN.md
-Resume file: None
+Last session: 2026-04-03T08:50:08.944Z
+Stopped at: Phase 86 context gathered
+Resume file: .planning/phases/86-cli-host-join-flow-phase/86-CONTEXT.md
