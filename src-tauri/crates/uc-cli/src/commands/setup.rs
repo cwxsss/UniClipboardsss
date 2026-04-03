@@ -4,8 +4,8 @@
 mod host_flow;
 mod join_flow;
 
-pub use host_flow::{HostCliPhase, HostCliSession};
-pub use join_flow::{JoinCliPhase, JoinCliSession};
+pub use host_flow::{HostCliPhase, HostCliSession, derive_host_phase};
+pub use join_flow::{JoinCliPhase, JoinCliSession, derive_join_phase};
 
 use std::fmt;
 use std::io::{self, IsTerminal};
@@ -181,7 +181,7 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
     ui::step("Device identity");
     print_identity_banner(&initial_state);
 
-    // Guard: space must already be initialized before entering pairing mode
+    // Guard: space must already be initialized before entering pairing mode.
     if !initial_state.has_completed {
         ui::error("Space is not initialized.");
         ui::info(
@@ -191,133 +191,197 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
         return exit_codes::EXIT_ERROR;
     }
 
-    let mut handled_peer_request = false;
-    let mut submitted_host_decision_session: Option<String> = None;
-    let mut handled_host_verification = false;
-    let mut submitted_host_verification_session: Option<String> = None;
-    let mut host_pairing_presence_enabled = false;
-    let mut last_host_lease_refresh = std::time::Instant::now();
-    let mut spinner: Option<indicatif::ProgressBar> = None;
+    // ── Phase-driven session ─────────────────────────────────
+    let mut session = HostCliSession::default();
+    let mut submitted_decision_session: Option<String> = None;
+    let mut submitted_verification_session: Option<String> = None;
+
+    // State signature for debug logging (D-05).
+    let mut last_state_signature: Option<String> = None;
 
     loop {
-        let state: SetupStateResponseDto = match setup_client.get_setup_state().await {
+        // POLL
+        let dto: SetupStateResponseDto = match setup_client.get_setup_state().await {
             Ok(state) => state.data,
             Err(error) => {
-                finish_spinner(&mut spinner);
+                finish_spinner(&mut session.spinner);
                 return print_anyhow_error(error);
             }
         };
-        let parsed = parse_setup_state(&state);
 
-        if !matches!(parsed.hint, SetupHint::HostConfirmPeer)
-            && !matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer)
-        {
-            submitted_host_decision_session = None;
+        // PARSE
+        let parsed = parse_setup_state(&dto);
+
+        // DERIVE PHASE
+        let next_phase = derive_host_phase(&parsed, &session.phase);
+
+        // DEBUG LOG: print when state signature changes (D-05).
+        let signature = format!("{:?}", parsed);
+        if last_state_signature.as_ref() != Some(&signature) {
+            tracing::debug!(host_phase = ?next_phase, hint = ?parsed.hint, variant = ?parsed.variant, session_id = ?parsed.session_id, "host pairing state changed");
+            last_state_signature = Some(signature);
         }
 
-        if !matches!(parsed.hint, SetupHint::HostConfirmPeer)
-            || !matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer)
-        {
-            submitted_host_verification_session = None;
+        // PHASE CHANGED: UI update only (D-17).
+        if next_phase != session.phase {
+            on_host_phase_changed(&session.phase, &next_phase, &mut session.spinner);
+            session.phase = next_phase;
         }
 
-        if should_prompt_host_verification(&parsed, submitted_host_verification_session.as_deref()) {
-            finish_spinner(&mut spinner);
-            let session_id = match parsed.session_id.clone() {
-                Some(session_id) => session_id,
-                None => {
-                    ui::error("Missing pairing session id for host verification");
-                    return exit_codes::EXIT_ERROR;
-                }
-            };
-            match prompt_host_verification(&parsed) {
-                Ok(true) => {
-                    if let Err(error) = setup_client.confirm_peer_trust().await {
-                        return print_anyhow_error(error);
+        // EXECUTE ACTION (match on current phase).
+        let action_result: Result<(), i32> = match &session.phase {
+            HostCliPhase::WaitingJoinRequest => {
+                // No action needed; backend sends events. Enable pairing presence once.
+                if !session.pairing_presence_enabled {
+                    if pairing_client.register_gui_participant(true, None).await.is_err() {
+                        finish_spinner(&mut session.spinner);
+                        return exit_codes::EXIT_ERROR;
                     }
-                    handled_host_verification = true;
-                    submitted_host_verification_session = Some(session_id);
-                }
-                Ok(false) => {
-                    if let Err(error) = setup_client.cancel_setup().await {
-                        return print_anyhow_error(error);
+                    session.pairing_presence_enabled = true;
+                    session.last_lease_refresh = std::time::Instant::now();
+                } else if session.last_lease_refresh.elapsed() >= HOST_LEASE_REFRESH_INTERVAL {
+                    if pairing_client.register_gui_participant(true, None).await.is_err() {
+                        finish_spinner(&mut session.spinner);
+                        return exit_codes::EXIT_ERROR;
                     }
-                    ui::warn("Host pairing canceled.");
-                    return exit_codes::EXIT_SUCCESS;
+                    session.last_lease_refresh = std::time::Instant::now();
                 }
-                Err(error) => {
-                    ui::error(&error);
-                    return exit_codes::EXIT_ERROR;
+                if session.spinner.is_none() {
+                    session.spinner = Some(ui::spinner("Host ready. Waiting for a join request..."));
+                }
+                Ok(())
+            }
+
+            HostCliPhase::NeedDecision { session_id } => {
+                // Only prompt if we haven't submitted a decision for this session.
+                if submitted_decision_session.as_deref() == Some(session_id) {
+                    Ok(()) // Already submitted; continue polling via sleep.
+                } else {
+                    finish_spinner(&mut session.spinner);
+                    let peer_label = parsed.selected_peer_label.clone()
+                        .unwrap_or_else(|| "unknown peer".to_string());
+                    ui::step(&format!("Join request from {}", console::style(peer_label).bold()));
+                    if let Some(code) = &parsed.short_code {
+                        ui::verification_code(code);
+                    }
+                    match ui::confirm("Accept this peer?", true) {
+                        Ok(true) => {
+                            if setup_client.confirm_peer_trust().await.is_err() {
+                                return exit_codes::EXIT_ERROR;
+                            }
+                            submitted_decision_session = Some(session_id.clone());
+                            Ok(())
+                        }
+                        Ok(false) => {
+                            if setup_client.cancel_setup().await.is_err()
+                                || disable_host_pairing_presence(
+                                    &pairing_client,
+                                    &mut session.pairing_presence_enabled,
+                                )
+                                .await
+                                .is_err()
+                            {
+                                return exit_codes::EXIT_ERROR;
+                            }
+                            ui::warn("Host pairing canceled.");
+                            return exit_codes::EXIT_ERROR; // Canceled -> treat as error for loop exit.
+                        }
+                        Err(e) => {
+                            ui::error(&e);
+                            return exit_codes::EXIT_ERROR;
+                        }
+                    }
                 }
             }
-        } else if should_prompt_host_decision(&parsed, submitted_host_decision_session.as_deref()) {
-            finish_spinner(&mut spinner);
-            handled_peer_request = true;
-            let session_id = parsed.session_id.clone();
-            match prompt_host_decision(&parsed) {
-                Ok(HostDecision::Accept) => {
-                    let accept_result = setup_client.confirm_peer_trust().await;
-                    if let Err(error) = accept_result {
-                        return print_anyhow_error(error);
+
+            HostCliPhase::NeedVerification { session_id } => {
+                // Only prompt if we haven't submitted verification for this session.
+                if submitted_verification_session.as_deref() == Some(session_id) {
+                    Ok(()) // Already submitted; continue polling via sleep.
+                } else {
+                    finish_spinner(&mut session.spinner);
+                    let peer_label = parsed.selected_peer_label.clone()
+                        .unwrap_or_else(|| "selected peer".to_string());
+                    ui::step(&format!("Confirm peer trust for {}", console::style(peer_label).bold()));
+                    if let Some(code) = &parsed.short_code {
+                        ui::verification_code(code);
                     }
-                    submitted_host_decision_session = session_id;
-                }
-                Ok(HostDecision::Reject) => {
-                    if let Err(error) = setup_client.cancel_setup().await {
-                        return print_anyhow_error(error);
+                    match ui::confirm("Do the verification codes match?", true) {
+                        Ok(true) => {
+                            if setup_client.confirm_peer_trust().await.is_err() {
+                                return exit_codes::EXIT_ERROR;
+                            }
+                            submitted_verification_session = Some(session_id.clone());
+                            Ok(())
+                        }
+                        Ok(false) => {
+                            if setup_client.cancel_setup().await.is_err() {
+                                return exit_codes::EXIT_ERROR;
+                            }
+                            ui::warn("Host pairing canceled.");
+                            return exit_codes::EXIT_ERROR; // Canceled -> treat as error for loop exit.
+                        }
+                        Err(e) => {
+                            ui::error(&e);
+                            return exit_codes::EXIT_ERROR;
+                        }
                     }
-                    let _ = disable_host_pairing_presence(
-                        &pairing_client,
-                        &mut host_pairing_presence_enabled,
-                    )
-                    .await;
-                    ui::warn("Host setup canceled.");
-                    return exit_codes::EXIT_SUCCESS;
-                }
-                Err(error) => {
-                    ui::error(&error);
-                    return exit_codes::EXIT_ERROR;
                 }
             }
-        } else if matches!(parsed.hint, SetupHint::Completed) && !handled_peer_request {
-            if !host_pairing_presence_enabled {
-                if let Err(error) = pairing_client.register_gui_participant(true, None).await {
-                    finish_spinner(&mut spinner);
-                    return print_anyhow_error(error);
+
+            HostCliPhase::WaitingBackendCompletion => {
+                // Nothing to do; just wait for the backend to complete.
+                if session.spinner.is_none() {
+                    session.spinner = Some(ui::spinner("Processing..."));
                 }
-                host_pairing_presence_enabled = true;
-                last_host_lease_refresh = std::time::Instant::now();
-            } else if host_pairing_presence_enabled
-                && last_host_lease_refresh.elapsed() >= HOST_LEASE_REFRESH_INTERVAL
-            {
-                if let Err(error) = pairing_client.register_gui_participant(true, None).await {
-                    finish_spinner(&mut spinner);
-                    return print_anyhow_error(error);
-                }
-                last_host_lease_refresh = std::time::Instant::now();
+                Ok(())
             }
-            if spinner.is_none() {
-                spinner = Some(ui::spinner("Host ready. Waiting for a join request…"));
+
+            HostCliPhase::Completed => {
+                finish_spinner(&mut session.spinner);
+                let _ = disable_host_pairing_presence(
+                    &pairing_client,
+                    &mut session.pairing_presence_enabled,
+                )
+                .await;
+                ui::success("Setup host flow completed!");
+                return exit_codes::EXIT_SUCCESS;
             }
-        } else if should_complete_host_flow(&parsed, handled_peer_request, handled_host_verification)
-        {
-            finish_spinner(&mut spinner);
-            let _ =
-                disable_host_pairing_presence(&pairing_client, &mut host_pairing_presence_enabled)
-                    .await;
-            ui::success("Setup host flow completed!");
-            return exit_codes::EXIT_SUCCESS;
-        } else if matches!(parsed.hint, SetupHint::Idle) && handled_peer_request {
-            finish_spinner(&mut spinner);
-            let _ =
-                disable_host_pairing_presence(&pairing_client, &mut host_pairing_presence_enabled)
-                    .await;
-            ui::end("Host setup returned to idle.");
-            return exit_codes::EXIT_SUCCESS;
+
+            HostCliPhase::Canceled => {
+                finish_spinner(&mut session.spinner);
+                let _ = disable_host_pairing_presence(
+                    &pairing_client,
+                    &mut session.pairing_presence_enabled,
+                )
+                .await;
+                ui::end("Host setup returned to idle.");
+                return exit_codes::EXIT_SUCCESS;
+            }
+        };
+
+        // D-18: action failure returns EXIT_ERROR immediately (no retry).
+        if action_result.is_err() {
+            return exit_codes::EXIT_ERROR;
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+/// Per D-17: on_phase_changed handles only UI state (spinner, logging).
+/// No business logic here.
+fn on_host_phase_changed(
+    old: &HostCliPhase,
+    new: &HostCliPhase,
+    spinner: &mut Option<indicatif::ProgressBar>,
+) {
+    if old.is_terminal() {
+        return; // Don't log transitions from terminal states.
+    }
+    tracing::debug!(from = ?old, to = ?new, "host phase transition");
+    // Clear spinner on any phase change so the new phase sets its own.
+    finish_spinner(spinner);
 }
 
 // ── Join flow ───────────────────────────────────────────────────────
@@ -354,116 +418,202 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
     ui::step("Device identity");
     print_identity_banner(&initial_state);
 
+    // Start the join flow.
     if let Err(error) = setup_client.start_join_space().await {
         return print_anyhow_error(error);
     }
 
-    let mut submitted_peer_request = false;
-    let mut spinner: Option<indicatif::ProgressBar> = None;
+    // ── Phase-driven session ─────────────────────────────────
+    let mut session = JoinCliSession::default();
+
+    // State signature for debug logging (D-05).
+    let mut last_state_signature: Option<String> = None;
 
     loop {
-        let state: SetupStateResponseDto = match setup_client.get_setup_state().await {
+        // POLL
+        let dto: SetupStateResponseDto = match setup_client.get_setup_state().await {
             Ok(state) => state.data,
             Err(error) => {
-                finish_spinner(&mut spinner);
+                finish_spinner(&mut session.spinner);
                 return print_anyhow_error(error);
             }
         };
-        let parsed = parse_setup_state(&state);
 
-        if parsed.has_completed || matches!(parsed.hint, SetupHint::Completed) {
-            finish_spinner(&mut spinner);
-            ui::success("Setup join flow completed!");
-            return exit_codes::EXIT_SUCCESS;
+        // PARSE
+        let parsed = parse_setup_state(&dto);
+
+        // DERIVE PHASE
+        let next_phase = derive_join_phase(&parsed, &session.phase);
+
+        // DEBUG LOG: print when state signature changes (D-05).
+        let signature = format!("{:?}", parsed);
+        if last_state_signature.as_ref() != Some(&signature) {
+            tracing::debug!(join_phase = ?next_phase, hint = ?parsed.hint, variant = ?parsed.variant, session_id = ?parsed.session_id, "join pairing state changed");
+            last_state_signature = Some(signature);
         }
 
-        if matches!(parsed.hint, SetupHint::JoinSelectPeer) {
-            let peers = match query_client.get_peers().await {
-                Ok(peers) => filter_joinable_peers(peers),
-                Err(error) => {
-                    finish_spinner(&mut spinner);
-                    return print_anyhow_error(error);
+        // PHASE CHANGED: UI update only (D-17).
+        if next_phase != session.phase {
+            on_join_phase_changed(&session.phase, &next_phase, &mut session.spinner);
+            session.phase = next_phase;
+        }
+
+        // EXECUTE ACTION.
+        let action_result: Result<(), i32> = match &session.phase {
+            JoinCliPhase::SelectingPeer => {
+                // Show spinner while discovering.
+                if session.spinner.is_none() {
+                    session.spinner = Some(ui::spinner("Discovering peers on the network..."));
                 }
-            };
-            if peers.is_empty() {
-                if spinner.is_none() {
-                    spinner = Some(ui::spinner("Discovering peers on the network…"));
-                }
-            } else {
-                finish_spinner(&mut spinner);
-                match prompt_for_peer_selection(&peers) {
-                    Ok(Some(peer_id)) => {
-                        submitted_peer_request = true;
-                        spinner = Some(ui::spinner("Connecting to peer…"));
-                        if let Err(error) = setup_client.select_device(peer_id).await {
-                            finish_spinner(&mut spinner);
-                            return print_anyhow_error(error);
+                let peers = match query_client.get_peers().await {
+                    Ok(peers) => filter_joinable_peers(peers),
+                    Err(error) => {
+                        finish_spinner(&mut session.spinner);
+                        return print_anyhow_error(error);
+                    }
+                };
+                if peers.is_empty() {
+                    // Keep polling; spinner already shown.
+                    Ok(())
+                } else {
+                    finish_spinner(&mut session.spinner);
+                    match prompt_for_peer_selection(&peers) {
+                        Ok(Some(peer_id)) => {
+                            session.submitted_peer_request = true;
+                            session.spinner = Some(ui::spinner("Connecting to peer..."));
+                            if setup_client.select_device(peer_id).await.is_err() {
+                                finish_spinner(&mut session.spinner);
+                                return exit_codes::EXIT_ERROR;
+                            }
+                            Ok(())
+                        }
+                        Ok(None) => {
+                            // User canceled.
+                            if setup_client.cancel_setup().await.is_err() {
+                                return exit_codes::EXIT_ERROR;
+                            }
+                            ui::warn("Join setup canceled.");
+                            return exit_codes::EXIT_ERROR; // Canceled -> treat as error for loop exit.
+                        }
+                        Err(e) => {
+                            ui::error(&e);
+                            return exit_codes::EXIT_ERROR;
                         }
                     }
-                    Ok(None) => {
-                        if let Err(error) = setup_client.cancel_setup().await {
-                            return print_anyhow_error(error);
+                }
+            }
+
+            JoinCliPhase::WaitingPeerDiscovery => {
+                // Currently unused — SelectingPeer shows spinner while discovering.
+                // This phase exists for future extensibility.
+                Ok(())
+            }
+
+            JoinCliPhase::WaitingHostResponse => {
+                if session.spinner.is_none() {
+                    session.spinner = Some(ui::spinner("Waiting for host response..."));
+                }
+                Ok(())
+            }
+
+            JoinCliPhase::NeedPeerConfirmation { session_id: _ } => {
+                // Idempotent: skip if already confirmed.
+                finish_spinner(&mut session.spinner);
+                let peer_label = parsed.selected_peer_label.clone()
+                    .unwrap_or_else(|| "selected peer".to_string());
+                ui::step(&format!(
+                    "Confirm peer trust for {}",
+                    console::style(peer_label).bold()
+                ));
+                if let Some(code) = &parsed.short_code {
+                    ui::verification_code(code);
+                }
+                match ui::confirm("Do the verification codes match?", true) {
+                    Ok(true) => {
+                        if setup_client.confirm_peer_trust().await.is_err() {
+                            return exit_codes::EXIT_ERROR;
+                        }
+                        Ok(())
+                    }
+                    Ok(false) => {
+                        if setup_client.cancel_setup().await.is_err() {
+                            return exit_codes::EXIT_ERROR;
                         }
                         ui::warn("Join setup canceled.");
-                        return exit_codes::EXIT_SUCCESS;
+                        return exit_codes::EXIT_ERROR; // Canceled -> treat as error for loop exit.
                     }
-                    Err(error) => {
-                        ui::error(&error);
+                    Err(e) => {
+                        ui::error(&e);
                         return exit_codes::EXIT_ERROR;
                     }
                 }
             }
-        } else if matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer) {
-            finish_spinner(&mut spinner);
-            match prompt_join_peer_confirmation(&parsed) {
-                Ok(true) => {
-                    if let Err(error) = setup_client.confirm_peer_trust().await {
-                        return print_anyhow_error(error);
+
+            JoinCliPhase::NeedPassphrase => {
+                // Show passphrase error warning if applicable.
+                if parsed.error_code.as_deref() == Some("PassphraseInvalidOrMismatch") {
+                    ui::warn("Passphrase rejected; retrying current join session");
+                }
+                finish_spinner(&mut session.spinner);
+                let passphrase: String = match ui::password("Space passphrase") {
+                    Ok(p) if p.trim().is_empty() => {
+                        ui::error("Passphrase cannot be empty");
+                        return exit_codes::EXIT_ERROR;
                     }
-                }
-                Ok(false) => {
-                    if let Err(error) = setup_client.cancel_setup().await {
-                        return print_anyhow_error(error);
+                    Ok(p) => p,
+                    Err(e) => {
+                        ui::error(&e);
+                        return exit_codes::EXIT_ERROR;
                     }
-                    ui::warn("Join setup canceled.");
-                    return exit_codes::EXIT_SUCCESS;
-                }
-                Err(error) => {
-                    ui::error(&error);
+                };
+                session.spinner = Some(ui::spinner("Verifying passphrase..."));
+                if setup_client.verify_passphrase(passphrase).await.is_err() {
+                    finish_spinner(&mut session.spinner);
                     return exit_codes::EXIT_ERROR;
                 }
+                Ok(())
             }
-        } else if matches!(parsed.hint, SetupHint::JoinEnterPassphrase)
-            || matches!(parsed.variant, SetupVariant::JoinSpaceInputPassphrase)
-        {
-            finish_spinner(&mut spinner);
-            if parsed.error_code.as_deref() == Some("PassphraseInvalidOrMismatch") {
-                ui::warn("Passphrase rejected; retrying current join session");
-            }
-            let passphrase: String = match ui::password("Space passphrase") {
-                Ok(p) if p.trim().is_empty() => {
-                    ui::error("Passphrase cannot be empty");
-                    return exit_codes::EXIT_ERROR;
+
+            JoinCliPhase::WaitingBackendCompletion => {
+                if session.spinner.is_none() {
+                    session.spinner = Some(ui::spinner("Processing..."));
                 }
-                Ok(p) => p,
-                Err(error) => {
-                    ui::error(&error);
-                    return exit_codes::EXIT_ERROR;
-                }
-            };
-            spinner = Some(ui::spinner("Verifying passphrase…"));
-            if let Err(error) = setup_client.verify_passphrase(passphrase).await {
-                finish_spinner(&mut spinner);
-                return print_anyhow_error(error);
+                Ok(())
             }
-        } else if matches!(parsed.hint, SetupHint::Idle) && submitted_peer_request {
-            finish_spinner(&mut spinner);
-            ui::error("Setup returned to idle before completion");
+
+            JoinCliPhase::Completed => {
+                finish_spinner(&mut session.spinner);
+                ui::success("Setup join flow completed!");
+                return exit_codes::EXIT_SUCCESS;
+            }
+
+            JoinCliPhase::Canceled => {
+                finish_spinner(&mut session.spinner);
+                ui::end("Join setup canceled.");
+                return exit_codes::EXIT_SUCCESS;
+            }
+        };
+
+        // D-18: action failure returns EXIT_ERROR immediately (no retry).
+        if action_result.is_err() {
             return exit_codes::EXIT_ERROR;
         }
 
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+/// Per D-17: on_phase_changed handles only UI state (spinner, logging).
+fn on_join_phase_changed(
+    old: &JoinCliPhase,
+    new: &JoinCliPhase,
+    spinner: &mut Option<indicatif::ProgressBar>,
+) {
+    if old.is_terminal() {
+        return;
+    }
+    tracing::debug!(from = ?old, to = ?new, "join phase transition");
+    finish_spinner(spinner);
 }
 
 // ── Status & Reset (non-interactive) ────────────────────────────────
