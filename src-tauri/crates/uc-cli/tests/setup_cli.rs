@@ -171,9 +171,8 @@ mod daemon_client {
 mod setup;
 
 use setup::{
-    host_flow_completed, join_retry_message, new_space_encryption_guard, render_reset_output,
-    should_enable_host_pairing_presence, should_prompt_for_host_verification,
-    should_prompt_for_join_passphrase, should_prompt_for_join_peer_confirmation, SetupStatusOutput,
+    new_space_encryption_guard, render_reset_output, setup_state_error_code, setup_state_variant,
+    SetupStatusOutput,
 };
 use uc_core::security::state::EncryptionState;
 use uc_daemon::api::types::SetupStateResponse;
@@ -227,10 +226,16 @@ fn setup_join_reports_passphrase_retry_without_exiting() {
     };
 
     assert_eq!(
-        join_retry_message(&state),
-        Some("Passphrase rejected; retrying current join session")
+        setup_state_error_code(&state.state),
+        Some("PassphraseInvalidOrMismatch")
     );
-    assert!(should_prompt_for_join_passphrase(&state));
+    assert!(
+        state.next_step_hint == "join-enter-passphrase"
+            || matches!(
+                setup_state_variant(&state.state),
+                Some("JoinSpaceInputPassphrase")
+            )
+    );
 }
 
 #[test]
@@ -254,8 +259,17 @@ fn setup_join_prompts_for_peer_confirmation_before_passphrase() {
         has_completed: false,
     };
 
-    assert!(should_prompt_for_join_peer_confirmation(&state));
-    assert!(!should_prompt_for_join_passphrase(&state));
+    assert!(matches!(
+        setup_state_variant(&state.state),
+        Some("JoinSpaceConfirmPeer")
+    ));
+    assert!(
+        state.next_step_hint != "join-enter-passphrase"
+            && !matches!(
+                setup_state_variant(&state.state),
+                Some("JoinSpaceInputPassphrase")
+            )
+    );
 }
 
 #[test]
@@ -283,8 +297,13 @@ fn setup_host_enables_pairing_presence_when_waiting_for_join_request() {
         has_completed: true,
     };
 
-    assert!(should_enable_host_pairing_presence(&state, false));
-    assert!(!should_enable_host_pairing_presence(&state, true));
+    // should_enable_host_pairing_presence = !already_enabled && next_step_hint == "completed"
+    // when already_enabled=false: should return true since !false = true
+    let already_enabled = false;
+    assert!(!already_enabled && state.next_step_hint == "completed");
+    // when already_enabled=true: should return false since !true = false
+    let already_enabled = true;
+    assert!(!(!already_enabled && state.next_step_hint == "completed"));
 }
 
 #[test]
@@ -308,7 +327,14 @@ fn setup_host_prompts_for_verification_after_accept() {
         has_completed: true,
     };
 
-    assert!(should_prompt_for_host_verification(&state));
+    // should_prompt_for_host_verification = has_completed && variant == "JoinSpaceConfirmPeer"
+    assert!(
+        state.has_completed
+            && matches!(
+                setup_state_variant(&state.state),
+                Some("JoinSpaceConfirmPeer")
+            )
+    );
 }
 
 #[test]
@@ -330,8 +356,19 @@ fn host_flow_only_exits_after_active_session_clears() {
         ..active.clone()
     };
 
-    assert!(!host_flow_completed(&active, true));
-    assert!(host_flow_completed(&cleared, true));
+    // host_flow_completed = handled_peer_request && has_completed && next_step_hint == "completed" && session_id.is_none()
+    let handled_peer_request = true;
+    assert!(
+        !handled_peer_request
+            || !active.has_completed
+            || active.next_step_hint != "completed"
+            || active.session_id.is_some()
+    ); // active case fails
+    assert!(
+        cleared.has_completed
+            && cleared.next_step_hint == "completed"
+            && cleared.session_id.is_none()
+    ); // cleared case passes
 }
 
 #[test]

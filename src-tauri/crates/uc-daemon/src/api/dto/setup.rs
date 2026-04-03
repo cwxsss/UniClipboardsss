@@ -84,6 +84,23 @@ impl From<SetupStateResponse> for SetupStateResponseDto {
     }
 }
 
+impl From<SetupStateResponseDto> for SetupStateResponse {
+    fn from(value: SetupStateResponseDto) -> Self {
+        Self {
+            state: value.state,
+            session_id: value.session_id,
+            next_step_hint: value.next_step_hint,
+            profile: value.profile,
+            clipboard_mode: value.clipboard_mode,
+            device_name: value.device_name,
+            peer_id: value.peer_id,
+            selected_peer_id: value.selected_peer_id,
+            selected_peer_name: value.selected_peer_name,
+            has_completed: value.has_completed,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupResetResponse {

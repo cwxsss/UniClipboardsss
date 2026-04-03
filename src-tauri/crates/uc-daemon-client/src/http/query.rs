@@ -1,21 +1,37 @@
+use std::sync::Arc;
+
 use anyhow::{anyhow, Context, Result};
 use reqwest::{Method, RequestBuilder};
 
-use crate::http::authorized_daemon_request;
+use crate::http::authorized_daemon_request_with_type;
 use crate::DaemonConnectionState;
-use uc_daemon::api::types::{PairedDeviceDto, PeerSnapshotDto};
+use uc_daemon::api::types::{PairedDeviceDto, PeerSnapshotDto, StatusResponse};
 
 #[derive(Clone)]
 pub struct DaemonQueryClient {
-    http: reqwest::Client,
+    http: Arc<reqwest::Client>,
     connection_state: DaemonConnectionState,
+    client_type: String,
 }
 
 impl DaemonQueryClient {
     pub fn new(connection_state: DaemonConnectionState) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: Arc::new(reqwest::Client::new()),
             connection_state,
+            client_type: "gui".to_string(),
+        }
+    }
+
+    pub(crate) fn with_http_conn_state_and_type(
+        http: Arc<reqwest::Client>,
+        connection_state: DaemonConnectionState,
+        client_type: String,
+    ) -> Self {
+        Self {
+            http,
+            connection_state,
+            client_type,
         }
     }
 
@@ -25,6 +41,10 @@ impl DaemonQueryClient {
 
     pub async fn get_paired_devices(&self) -> Result<Vec<PairedDeviceDto>> {
         self.get_json(Method::GET, "/paired-devices").await
+    }
+
+    pub async fn get_status(&self) -> Result<StatusResponse> {
+        self.get_json(Method::GET, "/status").await
     }
 
     /// Unlock the encryption session via the daemon keyring (auto-unlock).
@@ -112,12 +132,13 @@ impl DaemonQueryClient {
             .connection_state
             .get()
             .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
-        authorized_daemon_request(
-            &self.http,
+        authorized_daemon_request_with_type(
+            &*self.http,
             &self.connection_state,
             method,
             path,
             connection.pid,
+            &self.client_type,
         )
         .await
     }

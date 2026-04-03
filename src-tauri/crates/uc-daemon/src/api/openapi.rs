@@ -91,7 +91,7 @@ impl Modify for SecurityAddon {
         crate::api::device::get_device_sync_settings_handler,
         crate::api::device::update_device_sync_settings_handler,
         crate::api::setup::get_setup_state,
-        crate::api::setup::start_host,
+        crate::api::setup::start_new,
         crate::api::setup::start_join,
         crate::api::setup::select_peer,
         crate::api::setup::confirm_peer,

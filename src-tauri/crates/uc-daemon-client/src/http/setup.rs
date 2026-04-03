@@ -1,21 +1,45 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use reqwest::{Method, RequestBuilder};
 use uc_daemon::api::dto::setup as dto;
 
-use crate::http::authorized_daemon_request;
+use crate::http::authorized_daemon_request_with_type;
 use crate::DaemonConnectionState;
 
 #[derive(Clone)]
 pub struct DaemonSetupClient {
-    http: reqwest::Client,
+    http: Arc<reqwest::Client>,
     connection_state: DaemonConnectionState,
+    client_type: String,
 }
 
 impl DaemonSetupClient {
-    pub fn new(connection_state: DaemonConnectionState) -> Self {
+    pub fn new() -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: Arc::new(reqwest::Client::new()),
+            connection_state: DaemonConnectionState::default(),
+            client_type: "gui".to_string(),
+        }
+    }
+
+    pub fn with_conn_state(connection_state: DaemonConnectionState) -> Self {
+        Self {
+            http: Arc::new(reqwest::Client::new()),
             connection_state,
+            client_type: "gui".to_string(),
+        }
+    }
+
+    pub(crate) fn with_http_conn_state_and_type(
+        http: Arc<reqwest::Client>,
+        connection_state: DaemonConnectionState,
+        client_type: String,
+    ) -> Self {
+        Self {
+            http,
+            connection_state,
+            client_type,
         }
     }
 
@@ -25,7 +49,7 @@ impl DaemonSetupClient {
     }
 
     pub async fn start_new_space(&self) -> Result<dto::SetupActionResponse> {
-        self.send_json::<(), dto::SetupActionResponse>(Method::POST, "/setup/host", None)
+        self.send_json::<(), dto::SetupActionResponse>(Method::POST, "/setup/new", None)
             .await
     }
 
@@ -71,17 +95,23 @@ impl DaemonSetupClient {
             .await
     }
 
+    pub async fn reset_setup(&self) -> Result<dto::SetupResetResponse> {
+        self.send_json::<(), dto::SetupResetResponse>(Method::POST, "/setup/reset", None)
+            .await
+    }
+
     async fn authorized_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
         let connection = self
             .connection_state
             .get()
             .ok_or_else(|| anyhow::anyhow!("daemon connection info is not available"))?;
-        authorized_daemon_request(
-            &self.http,
+        authorized_daemon_request_with_type(
+            &*self.http,
             &self.connection_state,
             method,
             path,
             connection.pid,
+            &self.client_type,
         )
         .await
     }
@@ -213,7 +243,7 @@ mod tests {
             pid: 54321,
         });
 
-        let client = DaemonSetupClient::new(connection_state);
+        let client = DaemonSetupClient::with_conn_state(connection_state);
         with_session_cache("test-session", async move {
             let result = client.get_setup_state().await.unwrap();
             assert_eq!(result.data.state, inner.state);
@@ -275,7 +305,7 @@ mod tests {
             pid: 54321,
         });
 
-        let client = DaemonSetupClient::new(connection_state);
+        let client = DaemonSetupClient::with_conn_state(connection_state);
         with_session_cache("test-session", async move {
             let result = client
                 .submit_passphrase("secret-passphrase".to_string())
@@ -339,7 +369,7 @@ mod tests {
             pid: 54321,
         });
 
-        let client = DaemonSetupClient::new(connection_state);
+        let client = DaemonSetupClient::with_conn_state(connection_state);
         with_session_cache("test-session", async move {
             let result = client
                 .verify_passphrase("join-secret".to_string())

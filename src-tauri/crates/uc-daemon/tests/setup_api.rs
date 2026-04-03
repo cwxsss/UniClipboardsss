@@ -681,7 +681,7 @@ async fn setup_host_route_starts_new_space_and_returns_setup_state() {
         .clone()
         .oneshot(authed_request(
             "POST",
-            "/setup/host",
+            "/setup/new",
             &token,
             Body::empty(),
             None,
@@ -811,7 +811,7 @@ async fn setup_confirm_peer_routes_host_confirmation_through_daemon_pairing_host
         .clone()
         .oneshot(authed_request(
             "POST",
-            "/setup/host",
+            "/setup/new",
             &fixture.token,
             Body::empty(),
             None,
@@ -1149,7 +1149,7 @@ async fn setup_reset_clears_active_setup_state() {
         .clone()
         .oneshot(authed_request(
             "POST",
-            "/setup/host",
+            "/setup/new",
             &token,
             Body::empty(),
             None,
@@ -1246,7 +1246,7 @@ async fn setup_reset_allows_second_host_start_without_manual_cleanup() {
         .clone()
         .oneshot(authed_request(
             "POST",
-            "/setup/host",
+            "/setup/new",
             &token,
             Body::empty(),
             None,
@@ -1275,7 +1275,7 @@ async fn setup_reset_allows_second_host_start_without_manual_cleanup() {
         .clone()
         .oneshot(authed_request(
             "POST",
-            "/setup/host",
+            "/setup/new",
             &token,
             Body::empty(),
             None,

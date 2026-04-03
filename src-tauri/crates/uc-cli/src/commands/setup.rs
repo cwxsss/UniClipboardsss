@@ -10,9 +10,10 @@ use serde_json::Value;
 use uc_app::usecases::CoreUseCases;
 use uc_core::security::model::Passphrase;
 use uc_core::security::state::EncryptionState;
+use uc_daemon::api::dto::setup::SetupStateResponseDto;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
+use uc_daemon_client::{DaemonClientContext, DaemonPairingClient};
 
-use crate::daemon_client::{DaemonClientError, DaemonHttpClient};
 use crate::exit_codes;
 use crate::local_daemon::{ensure_local_daemon_running, LocalDaemonError};
 use crate::output;
@@ -52,7 +53,7 @@ pub async fn run_interactive(json: bool, verbose: bool) -> i32 {
 
     match choice {
         0 => run_new_space().await,
-        1 => run_join(json, verbose).await,
+        1 => run_connect(json, verbose).await,
         _ => unreachable!(),
     }
 }
@@ -92,7 +93,7 @@ async fn run_new_space() -> i32 {
         ui::error("Space already initialized.");
         ui::info(
             "Hint",
-            "run `uniclipboard-daemon` to start the daemon, then `setup host` to begin pairing",
+            "run `uniclipboard setup` and select 'Create new Space' to initialize your space first",
         );
         return code;
     }
@@ -137,13 +138,13 @@ async fn run_new_space() -> i32 {
 
 // ── Host flow ───────────────────────────────────────────────────────
 
-pub async fn run_host(json: bool, _verbose: bool) -> i32 {
+pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
     if json {
         eprintln!("Error: `--json` is only supported with `setup status`");
         return exit_codes::EXIT_ERROR;
     }
     if !stdin_is_terminal() {
-        eprintln!("Error: `setup host` requires an interactive terminal");
+        eprintln!("Error: `setup pair` requires an interactive terminal");
         return exit_codes::EXIT_ERROR;
     }
 
@@ -151,41 +152,32 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
         return print_local_daemon_error(error);
     }
 
-    let client = match DaemonHttpClient::new() {
-        Ok(client) => client,
-        Err(error) => return print_client_error(error),
+    let ctx = match DaemonClientContext::from_env() {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            ui::error(&format!("Failed to connect to daemon: {error}"));
+            return exit_codes::EXIT_DAEMON_UNREACHABLE;
+        }
     };
+    let setup_client = ctx.setup_client();
+    let pairing_client = ctx.pairing_client();
 
-    let initial_state = match client.get_setup_state().await {
-        Ok(state) => state,
-        Err(error) => return print_client_error(error),
+    let initial_state: SetupStateResponseDto = match setup_client.get_setup_state().await {
+        Ok(state) => state.data,
+        Err(error) => return print_anyhow_error(error),
     };
 
     ui::step("Device identity");
     print_identity_banner(&initial_state);
 
-    let mut ack = match client.start_setup_host().await {
-        Ok(ack) => ack,
-        Err(error) => return print_client_error(error),
-    };
-
-    if ack.next_step_hint == "create-space-passphrase"
-        || matches!(
-            setup_state_variant(&ack.state),
-            Some("CreateSpaceInputPassphrase" | "ProcessingCreateSpace")
-        )
-    {
-        let passphrase = match prompt_new_space_passphrase() {
-            Ok(passphrase) => passphrase,
-            Err(error) => {
-                ui::error(&error);
-                return exit_codes::EXIT_ERROR;
-            }
-        };
-        ack = match client.submit_setup_passphrase(passphrase).await {
-            Ok(ack) => ack,
-            Err(error) => return print_client_error(error),
-        };
+    // Guard: space must already be initialized before entering pairing mode
+    if !initial_state.has_completed {
+        ui::error("Space is not initialized.");
+        ui::info(
+            "Hint",
+            "run `uniclipboard setup` and select 'Create new Space' to initialize your space first",
+        );
+        return exit_codes::EXIT_ERROR;
     }
 
     let mut last_signature = String::new();
@@ -195,11 +187,11 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
     let mut spinner: Option<indicatif::ProgressBar> = None;
 
     loop {
-        let state = match client.get_setup_state().await {
-            Ok(state) => state,
+        let state: SetupStateResponseDto = match setup_client.get_setup_state().await {
+            Ok(state) => state.data,
             Err(error) => {
                 finish_spinner(&mut spinner);
-                return print_client_error(error);
+                return print_anyhow_error(error);
             }
         };
 
@@ -208,7 +200,12 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
             last_signature = signature;
         }
 
-        if should_prompt_for_host_verification(&state) {
+        if state.has_completed
+            && matches!(
+                setup_state_variant(&state.state),
+                Some("JoinSpaceConfirmPeer")
+            )
+        {
             finish_spinner(&mut spinner);
             handled_peer_request = true;
             let session_id = match state.session_id.clone() {
@@ -220,13 +217,13 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
             };
             match prompt_host_verification(&state) {
                 Ok(true) => {
-                    if let Err(error) = client.verify_pairing_session(session_id, true).await {
-                        return print_client_error(error);
+                    if let Err(error) = pairing_client.verify_pairing(&session_id, true).await {
+                        return print_anyhow_error(error);
                     }
                 }
                 Ok(false) => {
-                    if let Err(error) = client.verify_pairing_session(session_id, false).await {
-                        return print_client_error(error);
+                    if let Err(error) = pairing_client.verify_pairing(&session_id, false).await {
+                        return print_anyhow_error(error);
                     }
                     ui::warn("Host pairing canceled.");
                     return exit_codes::EXIT_SUCCESS;
@@ -241,35 +238,20 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
             handled_peer_request = true;
             match prompt_host_decision(&state) {
                 Ok(HostDecision::Accept) => {
-                    let accept_result = match client.confirm_setup_peer().await {
-                        Ok(_) => Ok(()),
-                        Err(DaemonClientError::UnexpectedStatus { status, .. })
-                            if status == reqwest::StatusCode::CONFLICT && state.has_completed =>
-                        {
-                            match state.session_id.clone() {
-                                Some(session_id) => {
-                                    client.accept_pairing_session(session_id).await.map(|_| ())
-                                }
-                                None => Err(DaemonClientError::UnexpectedStatus {
-                                    status,
-                                    body: "missing setup session id for pairing accept fallback"
-                                        .to_string(),
-                                }),
-                            }
-                        }
-                        Err(error) => Err(error),
-                    };
+                    let accept_result = setup_client.confirm_peer_trust().await;
                     if let Err(error) = accept_result {
-                        return print_client_error(error);
+                        return print_anyhow_error(error);
                     }
                 }
                 Ok(HostDecision::Reject) => {
-                    if let Err(error) = client.cancel_setup().await {
-                        return print_client_error(error);
+                    if let Err(error) = setup_client.cancel_setup().await {
+                        return print_anyhow_error(error);
                     }
-                    let _ =
-                        disable_host_pairing_presence(&client, &mut host_pairing_presence_enabled)
-                            .await;
+                    let _ = disable_host_pairing_presence(
+                        &pairing_client,
+                        &mut host_pairing_presence_enabled,
+                    )
+                    .await;
                     ui::warn("Host setup canceled.");
                     return exit_codes::EXIT_SUCCESS;
                 }
@@ -279,47 +261,52 @@ pub async fn run_host(json: bool, _verbose: bool) -> i32 {
                 }
             }
         } else if state.next_step_hint == "completed" && !handled_peer_request {
-            if should_enable_host_pairing_presence(&state, host_pairing_presence_enabled) {
-                if let Err(error) = client.set_pairing_gui_lease(true).await {
+            if !host_pairing_presence_enabled {
+                if let Err(error) = pairing_client.register_gui_participant(true, None).await {
                     finish_spinner(&mut spinner);
-                    return print_client_error(error);
+                    return print_anyhow_error(error);
                 }
                 host_pairing_presence_enabled = true;
                 last_host_lease_refresh = std::time::Instant::now();
             } else if host_pairing_presence_enabled
                 && last_host_lease_refresh.elapsed() >= HOST_LEASE_REFRESH_INTERVAL
             {
-                if let Err(error) = client.set_pairing_gui_lease(true).await {
+                if let Err(error) = pairing_client.register_gui_participant(true, None).await {
                     finish_spinner(&mut spinner);
-                    return print_client_error(error);
+                    return print_anyhow_error(error);
                 }
                 last_host_lease_refresh = std::time::Instant::now();
             }
             if spinner.is_none() {
                 spinner = Some(ui::spinner("Host ready. Waiting for a join request…"));
             }
-        } else if host_flow_completed(&state, handled_peer_request) {
+        } else if handled_peer_request
+            && state.has_completed
+            && state.next_step_hint == "completed"
+            && state.session_id.is_none()
+        {
             finish_spinner(&mut spinner);
             let _ =
-                disable_host_pairing_presence(&client, &mut host_pairing_presence_enabled).await;
+                disable_host_pairing_presence(&pairing_client, &mut host_pairing_presence_enabled)
+                    .await;
             ui::success("Setup host flow completed!");
             return exit_codes::EXIT_SUCCESS;
         } else if state.next_step_hint == "idle" && handled_peer_request {
             finish_spinner(&mut spinner);
             let _ =
-                disable_host_pairing_presence(&client, &mut host_pairing_presence_enabled).await;
+                disable_host_pairing_presence(&pairing_client, &mut host_pairing_presence_enabled)
+                    .await;
             ui::end("Host setup returned to idle.");
             return exit_codes::EXIT_SUCCESS;
         }
 
-        let _ = &ack;
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
 // ── Join flow ───────────────────────────────────────────────────────
 
-pub async fn run_join(json: bool, _verbose: bool) -> i32 {
+pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
     if json {
         eprintln!("Error: `--json` is only supported with `setup status`");
         return exit_codes::EXIT_ERROR;
@@ -333,21 +320,26 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
         return print_local_daemon_error(error);
     }
 
-    let client = match DaemonHttpClient::new() {
-        Ok(client) => client,
-        Err(error) => return print_client_error(error),
+    let ctx = match DaemonClientContext::from_env() {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            ui::error(&format!("Failed to connect to daemon: {error}"));
+            return exit_codes::EXIT_DAEMON_UNREACHABLE;
+        }
     };
+    let setup_client = ctx.setup_client();
+    let query_client = ctx.query_client();
 
-    let initial_state = match client.get_setup_state().await {
-        Ok(state) => state,
-        Err(error) => return print_client_error(error),
+    let initial_state: SetupStateResponseDto = match setup_client.get_setup_state().await {
+        Ok(state) => state.data,
+        Err(error) => return print_anyhow_error(error),
     };
 
     ui::step("Device identity");
     print_identity_banner(&initial_state);
 
-    if let Err(error) = client.start_setup_join().await {
-        return print_client_error(error);
+    if let Err(error) = setup_client.start_join_space().await {
+        return print_anyhow_error(error);
     }
 
     let mut last_signature = String::new();
@@ -355,11 +347,11 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
     let mut spinner: Option<indicatif::ProgressBar> = None;
 
     loop {
-        let state = match client.get_setup_state().await {
-            Ok(state) => state,
+        let state: SetupStateResponseDto = match setup_client.get_setup_state().await {
+            Ok(state) => state.data,
             Err(error) => {
                 finish_spinner(&mut spinner);
-                return print_client_error(error);
+                return print_anyhow_error(error);
             }
         };
 
@@ -375,11 +367,11 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
         }
 
         if state.next_step_hint == "join-select-peer" {
-            let peers = match client.get_peers().await {
+            let peers = match query_client.get_peers().await {
                 Ok(peers) => filter_joinable_peers(peers),
                 Err(error) => {
                     finish_spinner(&mut spinner);
-                    return print_client_error(error);
+                    return print_anyhow_error(error);
                 }
             };
             if peers.is_empty() {
@@ -392,14 +384,14 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
                     Ok(Some(peer_id)) => {
                         submitted_peer_request = true;
                         spinner = Some(ui::spinner("Connecting to peer…"));
-                        if let Err(error) = client.select_setup_peer(peer_id).await {
+                        if let Err(error) = setup_client.select_device(peer_id).await {
                             finish_spinner(&mut spinner);
-                            return print_client_error(error);
+                            return print_anyhow_error(error);
                         }
                     }
                     Ok(None) => {
-                        if let Err(error) = client.cancel_setup().await {
-                            return print_client_error(error);
+                        if let Err(error) = setup_client.cancel_setup().await {
+                            return print_anyhow_error(error);
                         }
                         ui::warn("Join setup canceled.");
                         return exit_codes::EXIT_SUCCESS;
@@ -410,17 +402,20 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
                     }
                 }
             }
-        } else if should_prompt_for_join_peer_confirmation(&state) {
+        } else if matches!(
+            setup_state_variant(&state.state),
+            Some("JoinSpaceConfirmPeer")
+        ) {
             finish_spinner(&mut spinner);
             match prompt_join_peer_confirmation(&state) {
                 Ok(true) => {
-                    if let Err(error) = client.confirm_setup_peer().await {
-                        return print_client_error(error);
+                    if let Err(error) = setup_client.confirm_peer_trust().await {
+                        return print_anyhow_error(error);
                     }
                 }
                 Ok(false) => {
-                    if let Err(error) = client.cancel_setup().await {
-                        return print_client_error(error);
+                    if let Err(error) = setup_client.cancel_setup().await {
+                        return print_anyhow_error(error);
                     }
                     ui::warn("Join setup canceled.");
                     return exit_codes::EXIT_SUCCESS;
@@ -430,10 +425,15 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
                     return exit_codes::EXIT_ERROR;
                 }
             }
-        } else if should_prompt_for_join_passphrase(&state) {
+        } else if state.next_step_hint == "join-enter-passphrase"
+            || matches!(
+                setup_state_variant(&state.state),
+                Some("JoinSpaceInputPassphrase")
+            )
+        {
             finish_spinner(&mut spinner);
-            if let Some(message) = join_retry_message(&state) {
-                ui::warn(message);
+            if setup_state_error_code(&state.state) == Some("PassphraseInvalidOrMismatch") {
+                ui::warn("Passphrase rejected; retrying current join session");
             }
             let passphrase: String = match ui::password("Space passphrase") {
                 Ok(p) if p.trim().is_empty() => {
@@ -447,9 +447,9 @@ pub async fn run_join(json: bool, _verbose: bool) -> i32 {
                 }
             };
             spinner = Some(ui::spinner("Verifying passphrase…"));
-            if let Err(error) = client.verify_setup_passphrase(passphrase).await {
+            if let Err(error) = setup_client.verify_passphrase(passphrase).await {
                 finish_spinner(&mut spinner);
-                return print_client_error(error);
+                return print_anyhow_error(error);
             }
         } else if state.next_step_hint == "idle" && submitted_peer_request {
             finish_spinner(&mut spinner);
@@ -496,17 +496,21 @@ impl fmt::Display for SetupStatusOutput {
 }
 
 pub async fn run_status(json: bool, _verbose: bool) -> i32 {
-    let client = match DaemonHttpClient::new() {
-        Ok(client) => client,
-        Err(error) => return print_client_error(error),
+    let ctx = match DaemonClientContext::from_env() {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            ui::error(&format!("Failed to connect to daemon: {error}"));
+            return exit_codes::EXIT_DAEMON_UNREACHABLE;
+        }
+    };
+    let setup_client = ctx.setup_client();
+
+    let state_dto = match setup_client.get_setup_state().await {
+        Ok(state) => state.data,
+        Err(error) => return print_anyhow_error(error),
     };
 
-    let state = match client.get_setup_state().await {
-        Ok(state) => state,
-        Err(error) => return print_client_error(error),
-    };
-
-    let output_value = SetupStatusOutput::from(state);
+    let output_value = SetupStatusOutput::from(state_dto);
     if let Err(error) = output::print_result(&output_value, json) {
         eprintln!("Error: {error}");
         return exit_codes::EXIT_ERROR;
@@ -525,14 +529,17 @@ pub async fn run_reset(json: bool, _verbose: bool) -> i32 {
         return print_local_daemon_error(error);
     }
 
-    let client = match DaemonHttpClient::new() {
-        Ok(client) => client,
-        Err(error) => return print_client_error(error),
+    let ctx = match DaemonClientContext::from_env() {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            ui::error(&format!("Failed to connect to daemon: {error}"));
+            return exit_codes::EXIT_DAEMON_UNREACHABLE;
+        }
     };
 
-    let response = match client.reset_setup().await {
+    let response = match ctx.setup_client().reset_setup().await {
         Ok(response) => response,
-        Err(error) => return print_client_error(error),
+        Err(error) => return print_anyhow_error(error),
     };
 
     ui::success(&render_reset_output(
@@ -559,6 +566,20 @@ impl From<SetupStateResponse> for SetupStatusOutput {
     }
 }
 
+impl From<SetupStateResponseDto> for SetupStatusOutput {
+    fn from(value: SetupStateResponseDto) -> Self {
+        Self {
+            state: value.state,
+            session_id: value.session_id,
+            next_step_hint: value.next_step_hint,
+            profile: value.profile,
+            clipboard_mode: value.clipboard_mode,
+            device_name: value.device_name,
+            peer_id: value.peer_id,
+        }
+    }
+}
+
 // ── Prompt helpers ──────────────────────────────────────────────────
 
 enum HostDecision {
@@ -570,7 +591,7 @@ fn stdin_is_terminal() -> bool {
     io::stdin().is_terminal()
 }
 
-fn print_identity_banner(state: &SetupStateResponse) {
+fn print_identity_banner(state: &SetupStateResponseDto) {
     ui::identity_banner(
         &state.profile,
         &state.clipboard_mode,
@@ -584,7 +605,7 @@ fn prompt_new_space_passphrase() -> Result<String, String> {
     ui::password_with_confirm("New space passphrase", "Confirm passphrase")
 }
 
-fn prompt_host_decision(state: &SetupStateResponse) -> Result<HostDecision, String> {
+fn prompt_host_decision(state: &SetupStateResponseDto) -> Result<HostDecision, String> {
     let peer_name = state
         .selected_peer_name
         .as_deref()
@@ -604,7 +625,7 @@ fn prompt_host_decision(state: &SetupStateResponse) -> Result<HostDecision, Stri
     }
 }
 
-fn prompt_host_verification(state: &SetupStateResponse) -> Result<bool, String> {
+fn prompt_host_verification(state: &SetupStateResponseDto) -> Result<bool, String> {
     let peer_name = state
         .selected_peer_name
         .as_deref()
@@ -622,7 +643,7 @@ fn prompt_host_verification(state: &SetupStateResponse) -> Result<bool, String> 
     ui::confirm("Do the verification codes match?", true)
 }
 
-fn prompt_join_peer_confirmation(state: &SetupStateResponse) -> Result<bool, String> {
+fn prompt_join_peer_confirmation(state: &SetupStateResponseDto) -> Result<bool, String> {
     let peer_name = state
         .selected_peer_name
         .as_deref()
@@ -673,14 +694,7 @@ fn finish_spinner(spinner: &mut Option<indicatif::ProgressBar>) {
 
 // ── State inspection helpers ────────────────────────────────────────
 
-pub(crate) fn should_enable_host_pairing_presence(
-    state: &SetupStateResponse,
-    already_enabled: bool,
-) -> bool {
-    !already_enabled && state.next_step_hint == "completed"
-}
-
-fn state_signature(state: &SetupStateResponse) -> String {
+fn state_signature(state: &SetupStateResponseDto) -> String {
     format!(
         "{}:{}:{}:{}",
         state.next_step_hint,
@@ -690,37 +704,7 @@ fn state_signature(state: &SetupStateResponse) -> String {
     )
 }
 
-pub(crate) fn should_prompt_for_join_passphrase(state: &SetupStateResponse) -> bool {
-    state.next_step_hint == "join-enter-passphrase"
-        || matches!(
-            setup_state_variant(&state.state),
-            Some("JoinSpaceInputPassphrase")
-        )
-}
-
-pub(crate) fn should_prompt_for_join_peer_confirmation(state: &SetupStateResponse) -> bool {
-    matches!(
-        setup_state_variant(&state.state),
-        Some("JoinSpaceConfirmPeer")
-    )
-}
-
-pub(crate) fn should_prompt_for_host_verification(state: &SetupStateResponse) -> bool {
-    state.has_completed
-        && matches!(
-            setup_state_variant(&state.state),
-            Some("JoinSpaceConfirmPeer")
-        )
-}
-
-pub(crate) fn host_flow_completed(state: &SetupStateResponse, handled_peer_request: bool) -> bool {
-    handled_peer_request
-        && state.has_completed
-        && state.next_step_hint == "completed"
-        && state.session_id.is_none()
-}
-
-fn setup_state_variant(state: &Value) -> Option<&str> {
+pub(crate) fn setup_state_variant(state: &Value) -> Option<&str> {
     match state {
         Value::String(value) => Some(value.as_str()),
         Value::Object(map) if map.len() == 1 => map.keys().next().map(String::as_str),
@@ -728,7 +712,7 @@ fn setup_state_variant(state: &Value) -> Option<&str> {
     }
 }
 
-fn setup_state_error_code(state: &Value) -> Option<&str> {
+pub(crate) fn setup_state_error_code(state: &Value) -> Option<&str> {
     let variant = setup_state_variant(state)?;
     let payload = match state {
         Value::Object(map) => map.get(variant)?,
@@ -743,14 +727,6 @@ fn setup_state_short_code(state: &Value) -> Option<&str> {
         _ => return None,
     };
     payload.get("short_code")?.as_str()
-}
-
-pub(crate) fn join_retry_message(state: &SetupStateResponse) -> Option<&'static str> {
-    if setup_state_error_code(&state.state) == Some("PassphraseInvalidOrMismatch") {
-        Some("Passphrase rejected; retrying current join session")
-    } else {
-        None
-    }
 }
 
 pub(crate) fn render_reset_output(profile: &str, daemon_kept_running: bool) -> String {
@@ -786,14 +762,14 @@ fn truncate_id(id: &str) -> String {
 }
 
 async fn disable_host_pairing_presence(
-    client: &DaemonHttpClient,
+    client: &DaemonPairingClient,
     host_pairing_presence_enabled: &mut bool,
-) -> Result<(), DaemonClientError> {
+) -> Result<(), anyhow::Error> {
     if !*host_pairing_presence_enabled {
         return Ok(());
     }
 
-    client.set_pairing_gui_lease(false).await?;
+    client.register_gui_participant(false, None).await?;
     *host_pairing_presence_enabled = false;
     Ok(())
 }
@@ -803,23 +779,9 @@ fn print_local_daemon_error(error: LocalDaemonError) -> i32 {
     exit_codes::EXIT_DAEMON_UNREACHABLE
 }
 
-fn print_client_error(error: DaemonClientError) -> i32 {
-    match error {
-        DaemonClientError::Unreachable(_) => {
-            ui::error("Daemon unreachable (is uniclipboard-daemon running?)");
-            exit_codes::EXIT_DAEMON_UNREACHABLE
-        }
-        DaemonClientError::Unauthorized => {
-            ui::error("Daemon rejected request: invalid or missing auth token");
-            exit_codes::EXIT_ERROR
-        }
-        DaemonClientError::Initialization(_)
-        | DaemonClientError::UnexpectedStatus { .. }
-        | DaemonClientError::InvalidResponse(_) => {
-            ui::error(&format!("{error}"));
-            exit_codes::EXIT_ERROR
-        }
-    }
+fn print_anyhow_error(error: anyhow::Error) -> i32 {
+    ui::error(&format!("{error}"));
+    exit_codes::EXIT_ERROR
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
@@ -917,53 +879,6 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].peer_id, "peer-a");
-    }
-
-    #[test]
-    fn setup_host_prompts_for_verification_after_accept() {
-        let state = SetupStateResponse {
-            state: json!({
-                "JoinSpaceConfirmPeer": {
-                    "short_code": "123-456",
-                    "peer_fingerprint": "peer-fingerprint",
-                    "error": serde_json::Value::Null
-                }
-            }),
-            session_id: Some("session-host".to_string()),
-            next_step_hint: "host-confirm-peer".to_string(),
-            profile: "peerA".to_string(),
-            clipboard_mode: "full".to_string(),
-            device_name: "Peer A".to_string(),
-            peer_id: "peer-a-id".to_string(),
-            selected_peer_id: Some("peer-b-id".to_string()),
-            selected_peer_name: Some("Peer B".to_string()),
-            has_completed: true,
-        };
-
-        assert!(should_prompt_for_host_verification(&state));
-    }
-
-    #[test]
-    fn host_flow_only_exits_after_active_session_clears() {
-        let active = SetupStateResponse {
-            state: json!("Completed"),
-            session_id: Some("session-host".to_string()),
-            next_step_hint: "completed".to_string(),
-            profile: "peerA".to_string(),
-            clipboard_mode: "full".to_string(),
-            device_name: "Peer A".to_string(),
-            peer_id: "peer-a-id".to_string(),
-            selected_peer_id: None,
-            selected_peer_name: None,
-            has_completed: true,
-        };
-        let cleared = SetupStateResponse {
-            session_id: None,
-            ..active.clone()
-        };
-
-        assert!(!host_flow_completed(&active, true));
-        assert!(host_flow_completed(&cleared, true));
     }
 
     #[test]

@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use anyhow::{anyhow, Context, Result};
 use reqwest::{Method, RequestBuilder, StatusCode};
 
-use crate::http::authorized_daemon_request;
+use crate::http::authorized_daemon_request_with_type;
 use crate::DaemonConnectionState;
 use uc_daemon::api::dto::pairing::{
     AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
@@ -12,8 +14,9 @@ use uc_daemon::api::dto::pairing::{
 
 #[derive(Clone)]
 pub struct DaemonPairingClient {
-    http: reqwest::Client,
+    http: Arc<reqwest::Client>,
     connection_state: DaemonConnectionState,
+    client_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -47,8 +50,21 @@ impl std::error::Error for DaemonPairingRequestError {}
 impl DaemonPairingClient {
     pub fn new(connection_state: DaemonConnectionState) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: Arc::new(reqwest::Client::new()),
             connection_state,
+            client_type: "gui".to_string(),
+        }
+    }
+
+    pub(crate) fn with_http_conn_state_and_type(
+        http: Arc<reqwest::Client>,
+        connection_state: DaemonConnectionState,
+        client_type: String,
+    ) -> Self {
+        Self {
+            http,
+            connection_state,
+            client_type,
         }
     }
 
@@ -173,12 +189,13 @@ impl DaemonPairingClient {
             .connection_state
             .get()
             .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
-        authorized_daemon_request(
-            &self.http,
+        authorized_daemon_request_with_type(
+            &*self.http,
             &self.connection_state,
             method,
             path,
             connection.pid,
+            &self.client_type,
         )
         .await
     }
@@ -271,7 +288,6 @@ mod tests {
     use super::*;
     use std::net::SocketAddr;
 
-    use reqwest::header::AUTHORIZATION;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use uc_daemon::api::auth::DaemonConnectionInfo;

@@ -1,5 +1,4 @@
 mod commands;
-mod daemon_client;
 mod exit_codes;
 mod local_daemon;
 mod output;
@@ -103,9 +102,9 @@ fn main() -> anyhow::Result<()> {
             Commands::Status => commands::status::run(cli.json, cli.verbose).await,
             Commands::Setup { subcommand } => match subcommand {
                 None => commands::setup::run_interactive(cli.json, cli.verbose).await,
-                Some(SetupCommands::Pair) => commands::setup::run_host(cli.json, cli.verbose).await,
+                Some(SetupCommands::Pair) => commands::setup::run_pair(cli.json, cli.verbose).await,
                 Some(SetupCommands::Connect) => {
-                    commands::setup::run_join(cli.json, cli.verbose).await
+                    commands::setup::run_connect(cli.json, cli.verbose).await
                 }
                 Some(SetupCommands::Status) => {
                     commands::setup::run_status(cli.json, cli.verbose).await

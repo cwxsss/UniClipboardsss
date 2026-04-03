@@ -1,20 +1,36 @@
-use anyhow::{Context, Result};
+use std::sync::Arc;
+
+use anyhow::{anyhow, Context, Result};
 use reqwest::Method;
 
-use crate::http::authorized_daemon_request;
+use crate::http::authorized_daemon_request_with_type;
 use crate::DaemonConnectionState;
 
 #[derive(Clone)]
 pub struct DaemonClipboardClient {
-    http: reqwest::Client,
+    http: Arc<reqwest::Client>,
     connection_state: DaemonConnectionState,
+    client_type: String,
 }
 
 impl DaemonClipboardClient {
     pub fn new(connection_state: DaemonConnectionState) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: Arc::new(reqwest::Client::new()),
             connection_state,
+            client_type: "gui".to_string(),
+        }
+    }
+
+    pub(crate) fn with_http_conn_state_and_type(
+        http: Arc<reqwest::Client>,
+        connection_state: DaemonConnectionState,
+        client_type: String,
+    ) -> Self {
+        Self {
+            http,
+            connection_state,
+            client_type,
         }
     }
 
@@ -25,17 +41,18 @@ impl DaemonClipboardClient {
         let connection = self
             .connection_state
             .get()
-            .ok_or_else(|| anyhow::anyhow!("daemon connection info is not available"))?;
+            .ok_or_else(|| anyhow!("daemon connection info is not available"))?;
         let path = format!(
             "{}/{entry_id}",
             uc_core::network::daemon_api_strings::http_route::CLIPBOARD_RESTORE
         );
-        let request = authorized_daemon_request(
-            &self.http,
+        let request = authorized_daemon_request_with_type(
+            &*self.http,
             &self.connection_state,
             Method::POST,
             &path,
             connection.pid,
+            &self.client_type,
         )
         .await?;
 

@@ -19,7 +19,7 @@ use crate::pairing::host::DaemonPairingHostError;
 pub fn router() -> Router<DaemonApiState> {
     Router::new()
         .route("/setup/state", get(get_setup_state))
-        .route("/setup/host", post(start_host))
+        .route("/setup/new", post(start_new))
         .route("/setup/join", post(start_join))
         .route("/setup/select-peer", post(select_peer))
         .route("/setup/confirm-peer", post(confirm_peer))
@@ -64,11 +64,11 @@ async fn get_setup_state(
     }))
 }
 
-/// POST /setup/host
+/// POST /setup/new
 /// Initiates a new space creation flow.
 #[utoipa::path(
     post,
-    path = "/setup/host",
+    path = "/setup/new",
     tag = "setup",
     responses(
         (status = 200, body = SetupActionResponse),
@@ -76,7 +76,7 @@ async fn get_setup_state(
         (status = 500, description = "Internal server error", body = crate::api::dto::error::ApiErrorResponse)
     )
 )]
-async fn start_host(
+async fn start_new(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
