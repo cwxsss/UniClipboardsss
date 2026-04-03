@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub mod connection;
 pub mod daemon_lifecycle;
 pub mod http;
+pub mod setup;
 pub mod ws_bridge;
 
 use anyhow::{Context, Result};
