@@ -96,7 +96,9 @@ pub fn derive_join_phase(parsed: &ParsedSetupState, current: &JoinCliPhase) -> J
 
         // HostConfirmPeer: the host is asking us to confirm the short code.
         SetupHint::HostConfirmPeer => {
-            let session_id = parsed.session_id.clone()
+            let session_id = parsed
+                .session_id
+                .clone()
                 .unwrap_or_else(|| "unknown".to_string());
             NeedPeerConfirmation { session_id }
         }
@@ -114,7 +116,12 @@ mod tests {
     use uc_daemon_client::setup::SetupHint;
     use uc_daemon_client::setup::SetupVariant;
 
-    fn make_parsed(hint: SetupHint, variant: SetupVariant, session_id: Option<String>, completed: bool) -> ParsedSetupState {
+    fn make_parsed(
+        hint: SetupHint,
+        variant: SetupVariant,
+        session_id: Option<String>,
+        completed: bool,
+    ) -> ParsedSetupState {
         ParsedSetupState {
             hint,
             variant,
@@ -126,9 +133,15 @@ mod tests {
         }
     }
 
-    fn idle() -> SetupVariant { SetupVariant::Idle }
-    fn join_input_passphrase() -> SetupVariant { SetupVariant::JoinSpaceInputPassphrase }
-    fn join_confirm() -> SetupVariant { SetupVariant::JoinSpaceConfirmPeer }
+    fn idle() -> SetupVariant {
+        SetupVariant::Idle
+    }
+    fn join_input_passphrase() -> SetupVariant {
+        SetupVariant::JoinSpaceInputPassphrase
+    }
+    fn join_confirm() -> SetupVariant {
+        SetupVariant::JoinSpaceConfirmPeer
+    }
 
     // SelectingPeer
 
@@ -171,7 +184,9 @@ mod tests {
             false,
         );
         let phase = derive_join_phase(&parsed, &JoinCliPhase::WaitingHostResponse);
-        assert!(matches!(phase, JoinCliPhase::NeedPeerConfirmation { session_id } if session_id == "s2"));
+        assert!(
+            matches!(phase, JoinCliPhase::NeedPeerConfirmation { session_id } if session_id == "s2")
+        );
     }
 
     #[test]
@@ -183,7 +198,9 @@ mod tests {
             false,
         );
         let phase = derive_join_phase(&parsed, &JoinCliPhase::NeedPassphrase);
-        assert!(matches!(phase, JoinCliPhase::NeedPeerConfirmation { session_id } if session_id == "s1"));
+        assert!(
+            matches!(phase, JoinCliPhase::NeedPeerConfirmation { session_id } if session_id == "s1")
+        );
     }
 
     // Completed

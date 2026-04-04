@@ -30,7 +30,8 @@ async fn build_test_router() -> (axum::Router, String, Arc<SecurityState>) {
     let token_path = tempdir.path().join("daemon.token");
     let token = load_or_create_auth_token(&token_path).unwrap();
 
-    let runtime = Arc::new(uc_bootstrap::build_cli_runtime(None).expect("test runtime should build"));
+    let runtime =
+        Arc::new(uc_bootstrap::build_cli_runtime(None).expect("test runtime should build"));
     let state = Arc::new(tokio::sync::RwLock::new(RuntimeState::new(vec![])));
     let query_service = Arc::new(DaemonQueryService::new(runtime.clone(), state));
     let security = Arc::new(SecurityState::new());
@@ -191,19 +192,11 @@ async fn cli_and_gui_get_independent_tokens() {
     );
 
     // Decode and verify PIDs are different using the SAME security state
-    let cli_claims =
-        SessionTokenClaims::verify(&cli_token, security.jwt_secret.as_ref()).unwrap();
-    let gui_claims =
-        SessionTokenClaims::verify(&gui_token, security.jwt_secret.as_ref()).unwrap();
+    let cli_claims = SessionTokenClaims::verify(&cli_token, security.jwt_secret.as_ref()).unwrap();
+    let gui_claims = SessionTokenClaims::verify(&gui_token, security.jwt_secret.as_ref()).unwrap();
 
-    assert_eq!(
-        cli_claims.pid, cli_pid,
-        "CLI token should have CLI PID"
-    );
-    assert_eq!(
-        gui_claims.pid, gui_pid,
-        "GUI token should have GUI PID"
-    );
+    assert_eq!(cli_claims.pid, cli_pid, "CLI token should have CLI PID");
+    assert_eq!(gui_claims.pid, gui_pid, "GUI token should have GUI PID");
     assert_eq!(
         cli_claims.client_type, "cli",
         "CLI token should have client_type 'cli'"

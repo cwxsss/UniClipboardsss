@@ -102,12 +102,16 @@ pub fn derive_host_phase(parsed: &ParsedSetupState, current: &HostCliPhase) -> H
         SetupHint::HostConfirmPeer => {
             if matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer) {
                 // NeedVerification state.
-                let session_id = parsed.session_id.clone()
+                let session_id = parsed
+                    .session_id
+                    .clone()
                     .unwrap_or_else(|| "unknown".to_string());
                 NeedVerification { session_id }
             } else {
                 // NeedDecision state.
-                let session_id = parsed.session_id.clone()
+                let session_id = parsed
+                    .session_id
+                    .clone()
                     .unwrap_or_else(|| "unknown".to_string());
                 NeedDecision { session_id }
             }
@@ -127,7 +131,12 @@ mod tests {
     use uc_daemon_client::setup::SetupHint;
     use uc_daemon_client::setup::SetupVariant;
 
-    fn make_parsed(hint: SetupHint, variant: SetupVariant, session_id: Option<String>, completed: bool) -> ParsedSetupState {
+    fn make_parsed(
+        hint: SetupHint,
+        variant: SetupVariant,
+        session_id: Option<String>,
+        completed: bool,
+    ) -> ParsedSetupState {
         ParsedSetupState {
             hint,
             variant,
@@ -139,8 +148,12 @@ mod tests {
         }
     }
 
-    fn idle_variant() -> SetupVariant { SetupVariant::Idle }
-    fn join_confirm() -> SetupVariant { SetupVariant::JoinSpaceConfirmPeer }
+    fn idle_variant() -> SetupVariant {
+        SetupVariant::Idle
+    }
+    fn join_confirm() -> SetupVariant {
+        SetupVariant::JoinSpaceConfirmPeer
+    }
 
     // WaitingJoinRequest
 
@@ -180,7 +193,12 @@ mod tests {
             Some("s2".to_string()),
             false,
         );
-        let phase = derive_host_phase(&parsed, &HostCliPhase::NeedDecision { session_id: "s1".to_string() });
+        let phase = derive_host_phase(
+            &parsed,
+            &HostCliPhase::NeedDecision {
+                session_id: "s1".to_string(),
+            },
+        );
         assert!(matches!(phase, HostCliPhase::NeedDecision { session_id } if session_id == "s2"));
     }
 
@@ -195,7 +213,9 @@ mod tests {
             false,
         );
         let phase = derive_host_phase(&parsed, &HostCliPhase::WaitingJoinRequest);
-        assert!(matches!(phase, HostCliPhase::NeedVerification { session_id } if session_id == "s3"));
+        assert!(
+            matches!(phase, HostCliPhase::NeedVerification { session_id } if session_id == "s3")
+        );
     }
 
     #[test]
@@ -206,8 +226,15 @@ mod tests {
             Some("s1".to_string()),
             false,
         );
-        let phase = derive_host_phase(&parsed, &HostCliPhase::NeedDecision { session_id: "s1".to_string() });
-        assert!(matches!(phase, HostCliPhase::NeedVerification { session_id } if session_id == "s1"));
+        let phase = derive_host_phase(
+            &parsed,
+            &HostCliPhase::NeedDecision {
+                session_id: "s1".to_string(),
+            },
+        );
+        assert!(
+            matches!(phase, HostCliPhase::NeedVerification { session_id } if session_id == "s1")
+        );
     }
 
     // Completed

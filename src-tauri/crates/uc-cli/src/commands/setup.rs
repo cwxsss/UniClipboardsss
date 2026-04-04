@@ -4,8 +4,8 @@
 mod host_flow;
 mod join_flow;
 
-pub use host_flow::{HostCliPhase, HostCliSession, derive_host_phase};
-pub use join_flow::{JoinCliPhase, JoinCliSession, derive_join_phase};
+pub use host_flow::{derive_host_phase, HostCliPhase, HostCliSession};
+pub use join_flow::{derive_join_phase, JoinCliPhase, JoinCliSession};
 
 use std::fmt;
 use std::io::{self, IsTerminal};
@@ -20,7 +20,9 @@ use uc_core::security::state::EncryptionState;
 use uc_daemon::api::dto::setup::SetupStateResponseDto;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
 // Re-export for integration tests (same crate)
-pub(crate) use uc_daemon_client::setup::{parse_setup_state, ParsedSetupState, SetupHint, SetupVariant};
+pub(crate) use uc_daemon_client::setup::{
+    parse_setup_state, ParsedSetupState, SetupHint, SetupVariant,
+};
 use uc_daemon_client::{DaemonClientContext, DaemonPairingClient};
 
 use crate::exit_codes;
@@ -233,21 +235,30 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
             HostCliPhase::WaitingJoinRequest => {
                 // No action needed; backend sends events. Enable pairing presence once.
                 if !session.pairing_presence_enabled {
-                    if pairing_client.register_gui_participant(true, None).await.is_err() {
+                    if pairing_client
+                        .register_gui_participant(true, None)
+                        .await
+                        .is_err()
+                    {
                         finish_spinner(&mut session.spinner);
                         return exit_codes::EXIT_ERROR;
                     }
                     session.pairing_presence_enabled = true;
                     session.last_lease_refresh = std::time::Instant::now();
                 } else if session.last_lease_refresh.elapsed() >= HOST_LEASE_REFRESH_INTERVAL {
-                    if pairing_client.register_gui_participant(true, None).await.is_err() {
+                    if pairing_client
+                        .register_gui_participant(true, None)
+                        .await
+                        .is_err()
+                    {
                         finish_spinner(&mut session.spinner);
                         return exit_codes::EXIT_ERROR;
                     }
                     session.last_lease_refresh = std::time::Instant::now();
                 }
                 if session.spinner.is_none() {
-                    session.spinner = Some(ui::spinner("Host ready. Waiting for a join request..."));
+                    session.spinner =
+                        Some(ui::spinner("Host ready. Waiting for a join request..."));
                 }
                 Ok(())
             }
@@ -258,9 +269,14 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
                     Ok(()) // Already submitted; continue polling via sleep.
                 } else {
                     finish_spinner(&mut session.spinner);
-                    let peer_label = parsed.selected_peer_label.clone()
+                    let peer_label = parsed
+                        .selected_peer_label
+                        .clone()
                         .unwrap_or_else(|| "unknown peer".to_string());
-                    ui::step(&format!("Join request from {}", console::style(peer_label).bold()));
+                    ui::step(&format!(
+                        "Join request from {}",
+                        console::style(peer_label).bold()
+                    ));
                     if let Some(code) = &parsed.short_code {
                         ui::verification_code(code);
                     }
@@ -300,9 +316,14 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
                     Ok(()) // Already submitted; continue polling via sleep.
                 } else {
                     finish_spinner(&mut session.spinner);
-                    let peer_label = parsed.selected_peer_label.clone()
+                    let peer_label = parsed
+                        .selected_peer_label
+                        .clone()
                         .unwrap_or_else(|| "selected peer".to_string());
-                    ui::step(&format!("Confirm peer trust for {}", console::style(peer_label).bold()));
+                    ui::step(&format!(
+                        "Confirm peer trust for {}",
+                        console::style(peer_label).bold()
+                    ));
                     if let Some(code) = &parsed.short_code {
                         ui::verification_code(code);
                     }
@@ -519,7 +540,9 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
             JoinCliPhase::NeedPeerConfirmation { session_id: _ } => {
                 // Idempotent: skip if already confirmed.
                 finish_spinner(&mut session.spinner);
-                let peer_label = parsed.selected_peer_label.clone()
+                let peer_label = parsed
+                    .selected_peer_label
+                    .clone()
                     .unwrap_or_else(|| "selected peer".to_string());
                 ui::step(&format!(
                     "Confirm peer trust for {}",
@@ -636,7 +659,9 @@ impl fmt::Display for SetupStatusOutput {
         match variant {
             SetupVariant::Idle => writeln!(f, "state: Idle")?,
             SetupVariant::JoinSpaceConfirmPeer => writeln!(f, "state: JoinSpaceConfirmPeer")?,
-            SetupVariant::JoinSpaceInputPassphrase => writeln!(f, "state: JoinSpaceInputPassphrase")?,
+            SetupVariant::JoinSpaceInputPassphrase => {
+                writeln!(f, "state: JoinSpaceInputPassphrase")?
+            }
             SetupVariant::Completed => writeln!(f, "state: Completed")?,
             SetupVariant::Unknown(s) => writeln!(f, "state: {}", s)?,
         }
@@ -764,7 +789,9 @@ fn prompt_new_space_passphrase() -> Result<String, String> {
 }
 
 fn prompt_host_decision(state: &ParsedSetupState) -> Result<HostDecision, String> {
-    let peer_name = state.selected_peer_label.clone()
+    let peer_name = state
+        .selected_peer_label
+        .clone()
         .unwrap_or_else(|| "unknown peer".to_string());
     ui::step(&format!("Join request from {}", style(peer_name).bold()));
     if let Some(short_code) = &state.short_code {
@@ -818,7 +845,9 @@ pub(crate) fn should_complete_host_flow(
 }
 
 fn prompt_host_verification(state: &ParsedSetupState) -> Result<bool, String> {
-    let peer_name = state.selected_peer_label.clone()
+    let peer_name = state
+        .selected_peer_label
+        .clone()
         .unwrap_or_else(|| "selected peer".to_string());
 
     ui::step(&format!(
@@ -833,7 +862,9 @@ fn prompt_host_verification(state: &ParsedSetupState) -> Result<bool, String> {
 }
 
 fn prompt_join_peer_confirmation(state: &ParsedSetupState) -> Result<bool, String> {
-    let peer_name = state.selected_peer_label.clone()
+    let peer_name = state
+        .selected_peer_label
+        .clone()
         .unwrap_or_else(|| "selected peer".to_string());
 
     ui::step(&format!(
@@ -998,7 +1029,8 @@ mod tests {
         let variant = SetupVariant::from_state_value(&state);
         assert!(matches!(variant, SetupVariant::JoinSpaceInputPassphrase));
         // Inline error extraction (same logic as parse_setup_state)
-        let error_code: Option<&str> = state.get("JoinSpaceInputPassphrase")
+        let error_code: Option<&str> = state
+            .get("JoinSpaceInputPassphrase")
             .and_then(|p| p.get("error"))
             .and_then(|e| e.as_str());
         assert_eq!(error_code, Some("PassphraseInvalidOrMismatch"));
