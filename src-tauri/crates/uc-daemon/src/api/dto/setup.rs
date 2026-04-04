@@ -72,12 +72,17 @@ impl Debug for SetupStateResponseDto {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let variant = match &self.state {
             Value::String(s) => s.as_str(),
-            Value::Object(map) if map.len() == 1 => map.keys().next().map(String::as_str).unwrap_or("<none>"),
+            Value::Object(map) if map.len() == 1 => {
+                map.keys().next().map(String::as_str).unwrap_or("<none>")
+            }
             _ => "<complex>",
         };
         f.debug_struct("SetupStateResponseDto")
             .field("hint", &self.next_step_hint)
-            .field("sid", &self.session_id.as_deref().map(|s| &s[..8.min(s.len())]))
+            .field(
+                "sid",
+                &self.session_id.as_deref().map(|s| &s[..8.min(s.len())]),
+            )
             .field("done", &self.has_completed)
             .field("variant", &variant)
             .finish()

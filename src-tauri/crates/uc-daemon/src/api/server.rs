@@ -13,7 +13,7 @@ use axum::http::HeaderMap;
 use axum::http::Method;
 use axum::http::Request;
 use axum::http::StatusCode;
-use axum::middleware::Next;
+use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::Router;
 use tokio::sync::broadcast;
@@ -26,9 +26,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_core::network::daemon_api_strings::pairing_error_code;
 
-use crate::api::auth::{
-    build_connection_info, DaemonAuthToken, DaemonConnectionInfo,
-};
+use crate::api::auth::{build_connection_info, DaemonAuthToken, DaemonConnectionInfo};
 use crate::api::dto::error::ApiError;
 use crate::api::dto::pairing::PairingApiErrorResponse;
 use crate::api::openapi::ApiDoc;
@@ -167,6 +165,7 @@ pub fn build_router(state: DaemonApiState) -> Router {
         .merge(routes::router_l2_plus(state.clone()))
         .merge(crate::security::connect::router())
         .merge(ws::router())
+        .layer(middleware::from_fn(cors_middleware))
         .with_state(state)
 }
 

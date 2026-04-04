@@ -93,6 +93,7 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
     // See detailed comment above for layer order explanation.
     let state_for_middleware = Arc::new(state);
     router
+        .layer(middleware::from_fn(crate::api::server::cors_middleware))
         .layer(middleware::from_fn_with_state(
             state_for_middleware.clone(),
             rate_limit_middleware,
@@ -101,7 +102,6 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
             state_for_middleware,
             auth_extractor_middleware,
         ))
-        .layer(middleware::from_fn(crate::api::server::cors_middleware))
 }
 
 async fn health(State(state): State<DaemonApiState>) -> impl IntoResponse {

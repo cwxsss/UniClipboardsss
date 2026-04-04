@@ -26,7 +26,8 @@ fn copy_daemon_binary_to_binaries() {
     };
     let src = target_dir.join(src_name);
 
-    // Destination: src-tauri/binaries/uniclipboard-daemon-{triple}[.exe]
+    // Destination: src-tauri/binaries/uniclipboard-daemon-{triple}[.exe on Windows]
+    // Tauri locates the sidecar as binaries/{name}-{target-triple}[.exe]; must match exactly.
     let binaries_dir = manifest_dir.join("binaries");
     if let Err(e) = std::fs::create_dir_all(&binaries_dir) {
         println!("cargo:warning=Failed to create binaries dir: {e}");
