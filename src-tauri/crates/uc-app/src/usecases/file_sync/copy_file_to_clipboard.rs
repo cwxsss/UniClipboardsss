@@ -169,11 +169,15 @@ impl CopyFileToClipboardUseCase {
     }
 }
 
-/// Build a newline-separated list of native file paths.
+/// Build a newline-separated `text/uri-list`.
 pub fn build_path_list(file_paths: &[PathBuf]) -> String {
     file_paths
         .iter()
-        .map(|p| p.to_string_lossy())
+        .map(|path| {
+            url::Url::from_file_path(path)
+                .map(|url| url.to_string())
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -188,5 +192,18 @@ pub fn build_file_snapshot(uri_list: &str) -> SystemClipboardSnapshot {
             Some(MimeType::uri_list()),
             uri_list.as_bytes().to_vec(),
         )],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_path_list_uses_file_uris_for_origin_guard_roundtrip() {
+        let path = std::env::temp_dir().join("uniclipboard-origin-guard.txt");
+        let uri = url::Url::from_file_path(&path).expect("absolute temp path should convert");
+
+        assert_eq!(build_path_list(&[path]), uri.to_string());
     }
 }
