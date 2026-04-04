@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use futures::future::try_join_all;
-use tracing::{debug, info, info_span, warn, Instrument};
+use tracing::{debug, field, info, info_span, warn, Instrument, Span};
 use uc_observability::stages;
 
 use uc_core::ids::{EntryId, EventId};
@@ -136,6 +136,10 @@ impl CaptureClipboardUseCase {
             source = "callback",
             origin = ?origin,
             representations = snapshot.representations.len(),
+            total_size_bytes = snapshot.total_size_bytes(),
+            device_id = %self.device_identity.current_device_id(),
+            entry_id = field::Empty,
+            event_id = field::Empty,
         );
         async move {
             if origin == ClipboardChangeOrigin::LocalRestore {
@@ -153,6 +157,7 @@ impl CaptureClipboardUseCase {
             info!("Starting clipboard capture with provided snapshot");
 
             let event_id = EventId::new();
+            Span::current().record("event_id", tracing::field::display(&event_id));
             let captured_at_ms = snapshot.ts_ms;
             let source_device = self.device_identity.current_device_id();
             let snapshot_hash = snapshot.snapshot_hash();
@@ -216,6 +221,7 @@ impl CaptureClipboardUseCase {
                 let new_selection = ClipboardSelectionDecision::new(entry_id.clone(), selection);
                 (entry_id, new_selection)
             };
+            Span::current().record("entry_id", tracing::field::display(&entry_id));
 
             // 5. entry_repo.insert_entry
             //

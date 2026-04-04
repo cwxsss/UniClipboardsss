@@ -97,7 +97,12 @@ impl ClipboardHandler for ClipboardWatcher {
                     .sender
                     .try_send(PlatformEvent::ClipboardChanged { snapshot })
                 {
-                    warn!(error = %err, "Failed to notify clipboard change");
+                    warn!(
+                        error_kind = "notify_channel_send_failed",
+                        retryable = true,
+                        error = %err,
+                        "Failed to notify clipboard change"
+                    );
                 } else {
                     if current_dedupe_key
                         .as_ref()
@@ -112,7 +117,12 @@ impl ClipboardHandler for ClipboardWatcher {
             }
 
             Err(e) => {
-                warn!(error = %e, "Failed to read clipboard snapshot");
+                warn!(
+                    error_kind = "platform_clipboard_read_failed",
+                    retryable = true,
+                    error = %e,
+                    "Failed to read clipboard snapshot"
+                );
             }
         }
     }

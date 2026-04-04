@@ -70,6 +70,8 @@ impl SyncOutboundClipboardUseCase {
             Ok(s) => Some(s),
             Err(err) => {
                 warn!(
+                    error_kind = "settings_load_failed",
+                    retryable = true,
                     error = %err,
                     "Failed to load global settings for per-device sync policy check; proceeding with all peers"
                 );
@@ -129,6 +131,8 @@ impl SyncOutboundClipboardUseCase {
                 }
                 Err(err) => {
                     warn!(
+                        error_kind = "paired_device_load_failed",
+                        retryable = true,
                         peer_id = %peer.peer_id,
                         error = %err,
                         "Failed to load paired device for sync policy check; proceeding with sync"
@@ -202,6 +206,8 @@ impl SyncOutboundClipboardUseCase {
             Ok(peers) => peers.len(),
             Err(err) => {
                 warn!(
+                    error_kind = "peer_directory_query_failed",
+                    retryable = true,
                     error = %err,
                     "get_discovered_peers failed during outbound clipboard peer evaluation"
                 );
@@ -268,6 +274,8 @@ impl SyncOutboundClipboardUseCase {
                 .unwrap_or_else(|| "Unknown Device".to_string()),
             Err(err) => {
                 warn!(
+                    error_kind = "settings_load_failed",
+                    retryable = true,
                     error = %err,
                     "Failed to load settings for outbound sync; using fallback device name"
                 );
@@ -345,6 +353,8 @@ impl SyncOutboundClipboardUseCase {
                 }
                 Err(err) => {
                     warn!(
+                        error_kind = "peer_connection_failed",
+                        retryable = true,
                         peer_id = %first_peer.peer_id,
                         error = %err,
                         "failed to ensure outbound business path for first peer; skipping send"
@@ -368,6 +378,8 @@ impl SyncOutboundClipboardUseCase {
                 }
                 Err(err) => {
                     warn!(
+                        error_kind = "peer_connection_failed",
+                        retryable = true,
                         peer_id = %first_peer.peer_id,
                         error = %err,
                         "failed to ensure outbound business path for first peer; skipping send"
@@ -391,6 +403,8 @@ impl SyncOutboundClipboardUseCase {
             .await
             {
                 warn!(
+                    error_kind = "peer_send_failed",
+                    retryable = true,
                     peer_id = %first_peer.peer_id,
                     error = %err,
                     "failed to send outbound clipboard message to first peer"
@@ -409,6 +423,8 @@ impl SyncOutboundClipboardUseCase {
                 .await
             {
                 warn!(
+                    error_kind = "peer_connection_failed",
+                    retryable = true,
                     peer_id = %peer.peer_id,
                     error = %err,
                     "failed to ensure outbound business path; skipping send for this peer"
@@ -427,6 +443,8 @@ impl SyncOutboundClipboardUseCase {
             .await
             {
                 warn!(
+                    error_kind = "peer_send_failed",
+                    retryable = true,
                     peer_id = %peer.peer_id,
                     error = %err,
                     "failed to send outbound clipboard message to peer; continuing best-effort fanout"
@@ -454,7 +472,9 @@ impl SyncOutboundClipboardUseCase {
             failures.extend(connect_failures);
             failures.extend(send_failures);
             let failure_count = failures.len();
-            warn!(
+            // Note: per-peer failures are already logged above with error_kind;
+            // this is a summary-level debug to avoid duplicate error reporting.
+            debug!(
                 sent_count,
                 failure_count,
                 "outbound clipboard fanout partially failed after best-effort retries"
