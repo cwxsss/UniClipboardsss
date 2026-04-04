@@ -168,7 +168,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn make_dto(hint: &str, state: Value, session_id: Option<&str>, has_completed: bool) -> SetupStateResponseDto {
+    fn make_dto(
+        hint: &str,
+        state: Value,
+        session_id: Option<&str>,
+        has_completed: bool,
+    ) -> SetupStateResponseDto {
         SetupStateResponseDto {
             next_step_hint: hint.to_string(),
             state,
@@ -223,8 +228,14 @@ mod tests {
         );
         let parsed = parse_setup_state(&dto);
         assert!(matches!(parsed.hint, SetupHint::JoinEnterPassphrase));
-        assert!(matches!(parsed.variant, SetupVariant::JoinSpaceInputPassphrase));
-        assert_eq!(parsed.error_code, Some("PassphraseInvalidOrMismatch".to_string()));
+        assert!(matches!(
+            parsed.variant,
+            SetupVariant::JoinSpaceInputPassphrase
+        ));
+        assert_eq!(
+            parsed.error_code,
+            Some("PassphraseInvalidOrMismatch".to_string())
+        );
     }
 
     #[test]
@@ -278,7 +289,10 @@ mod tests {
             false,
         );
         let parsed = parse_setup_state(&dto);
-        assert_eq!(parsed.error_code, Some("PassphraseInvalidOrMismatch".to_string()));
+        assert_eq!(
+            parsed.error_code,
+            Some("PassphraseInvalidOrMismatch".to_string())
+        );
     }
 
     #[test]
@@ -294,7 +308,10 @@ mod tests {
         dto.selected_peer_id = Some("12D3KooWABCDEFGH".to_string());
         dto.selected_peer_name = Some("Peer B".to_string());
         let parsed = parse_setup_state(&dto);
-        assert_eq!(parsed.selected_peer_label, Some("Peer B (ABCDEFGH)".to_string()));
+        assert_eq!(
+            parsed.selected_peer_label,
+            Some("Peer B (ABCDEFGH)".to_string())
+        );
     }
 
     #[test]

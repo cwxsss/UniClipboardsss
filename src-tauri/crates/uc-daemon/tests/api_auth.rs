@@ -1,8 +1,6 @@
 use std::fs;
 
-use uc_daemon::api::auth::{
-    build_connection_info, load_or_create_auth_token, parse_bearer_token, resolve_daemon_token_path,
-};
+use uc_daemon::api::auth::{build_connection_info, load_or_create_auth_token, parse_bearer_token};
 
 #[test]
 fn load_creates_token_when_missing() {
@@ -45,14 +43,4 @@ fn connection_info_builder_returns_http_and_ws_urls() {
     assert_eq!(info.base_url, "http://127.0.0.1:43210");
     assert_eq!(info.ws_url, "ws://127.0.0.1:43210/ws");
     assert_eq!(info.token, token.as_str());
-}
-
-#[test]
-fn token_path_helper_ends_with_uniclipboard_daemon_token() {
-    let path = resolve_daemon_token_path(std::path::Path::new("/tmp/uniclipboard"));
-
-    assert_eq!(
-        path.file_name().and_then(std::ffi::OsStr::to_str),
-        Some("uniclipboard-daemon.token")
-    );
 }

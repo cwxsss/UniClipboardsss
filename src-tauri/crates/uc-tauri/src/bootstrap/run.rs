@@ -1,5 +1,5 @@
+use anyhow::Result;
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tauri::{AppHandle, Runtime};
@@ -7,10 +7,10 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use uc_daemon::api::auth::{resolve_daemon_token_path, DaemonConnectionInfo};
+use uc_daemon::api::auth::DaemonConnectionInfo;
 use uc_daemon::api::types::HealthResponse;
 use uc_daemon::process_metadata::read_pid_file;
-use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr};
+use uc_daemon::socket::try_resolve_daemon_http_addr;
 use uc_daemon::DAEMON_API_REVISION;
 use uc_daemon_client::DaemonConnectionState;
 
@@ -494,32 +494,8 @@ fn classify_health_response(health: HealthResponse) -> ProbeOutcome {
 }
 
 fn load_daemon_connection_info() -> Result<DaemonConnectionInfo, DaemonBootstrapError> {
-    let token_path = resolve_token_path();
-    let token = std::fs::read_to_string(&token_path).map_err(|error| {
-        DaemonBootstrapError::ConnectionInfo(anyhow::Error::new(error).context(format!(
-            "failed to read daemon auth token at {}",
-            token_path.display()
-        )))
-    })?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        return Err(DaemonBootstrapError::ConnectionInfo(anyhow::anyhow!(
-            "daemon auth token at {} is empty",
-            token_path.display()
-        )));
-    }
-
-    let addr = try_resolve_daemon_http_addr().map_err(|error| {
-        DaemonBootstrapError::ConnectionInfo(
-            error.context("failed to resolve profile-aware daemon HTTP address"),
-        )
-    })?;
-    Ok(DaemonConnectionInfo {
-        base_url: format!("http://{}:{}", addr.ip(), addr.port()),
-        ws_url: format!("ws://{}:{}/ws", addr.ip(), addr.port()),
-        token,
-        pid: std::process::id(),
-    })
+    uc_daemon_client::resolve_connection_info_from_env()
+        .map_err(|e| DaemonBootstrapError::ConnectionInfo(e))
 }
 
 fn terminate_incompatible_daemon_from_pid_file() -> Result<(), DaemonBootstrapError> {
@@ -589,15 +565,10 @@ fn spawn_daemon_process<R: Runtime>(
     Ok((child, pid))
 }
 
-fn resolve_token_path() -> PathBuf {
-    let socket_path = resolve_daemon_socket_path();
-    let token_base_dir = socket_path.parent().unwrap_or_else(|| Path::new("/tmp"));
-    resolve_daemon_token_path(token_base_dir)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::sync::{Mutex, OnceLock};
@@ -846,24 +817,6 @@ mod tests {
             Err(DaemonBootstrapError::StartupTimeout { .. })
         ));
         assert!(attempts.load(Ordering::SeqCst) >= 2);
-    }
-
-    #[test]
-    fn resolve_token_path_tracks_uc_profile() {
-        let tempdir = tempfile::tempdir().expect("tempdir should be created");
-
-        let token_path_a = with_daemon_env(Some("a"), Some(tempdir.path()), resolve_token_path);
-        let token_path_b = with_daemon_env(Some("b"), Some(tempdir.path()), resolve_token_path);
-
-        assert_eq!(
-            token_path_a.file_name().and_then(std::ffi::OsStr::to_str),
-            Some("uniclipboard-daemon-a.token")
-        );
-        assert_eq!(
-            token_path_b.file_name().and_then(std::ffi::OsStr::to_str),
-            Some("uniclipboard-daemon-b.token")
-        );
-        assert_ne!(token_path_a, token_path_b);
     }
 
     #[test]

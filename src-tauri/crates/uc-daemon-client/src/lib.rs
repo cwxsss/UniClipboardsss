@@ -14,7 +14,7 @@ pub mod ws_bridge;
 
 use anyhow::{Context, Result};
 use uc_daemon::api::auth::DaemonConnectionInfo;
-use uc_daemon::socket::{resolve_daemon_http_addr, resolve_daemon_socket_path};
+use uc_daemon::socket::resolve_daemon_http_addr;
 
 pub use connection::DaemonConnectionState;
 pub use daemon_lifecycle::{
@@ -48,21 +48,17 @@ fn resolve_base_url() -> Result<String> {
 
 /// Resolve the daemon auth token path for client connections.
 ///
-/// Checks `UNICLIPBOARD_DAEMON_TOKEN_PATH` env var first, then derives from
-/// the daemon socket parent directory (profile-aware).
-fn resolve_token_path() -> PathBuf {
+/// Checks `UNICLIPBOARD_DAEMON_TOKEN_PATH` env var first, then resolves from
+/// the data directory (profile-aware).
+fn resolve_token_path() -> Result<PathBuf> {
     if let Ok(value) = std::env::var(ENV_TOKEN_PATH) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
+            return Ok(PathBuf::from(trimmed));
         }
     }
 
-    let socket_path = resolve_daemon_socket_path();
-    let token_base_dir = socket_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("/tmp"));
-    uc_daemon::api::auth::resolve_daemon_token_path(token_base_dir)
+    uc_daemon::socket::resolve_daemon_token_path().map_err(anyhow::Error::from)
 }
 
 /// Resolve the daemon connection info from environment for CLI clients.
@@ -71,7 +67,7 @@ fn resolve_token_path() -> PathBuf {
 /// Reads bearer token from daemon.token file and resolves the HTTP base URL.
 pub fn resolve_connection_info_from_env() -> Result<DaemonConnectionInfo> {
     let base_url = resolve_base_url()?;
-    let token_path = resolve_token_path();
+    let token_path = resolve_token_path()?;
 
     let token = std::fs::read_to_string(&token_path).with_context(|| {
         if token_path.exists() {

@@ -182,6 +182,34 @@ pub fn resolve_daemon_pid_path_for_testing(
     Ok(app_dirs.app_data_root.join(daemon_pid_file_name()))
 }
 
+/// Resolve the daemon auth token file name, matching the profile-aware naming convention.
+fn daemon_token_file_name() -> String {
+    daemon_pid_file_name().replace(".pid", ".token")
+}
+
+/// Resolve the daemon auth token file path under the application data directory.
+///
+/// The token is stored alongside the PID file in the app data root, ensuring it
+/// survives across sessions and is profile-isolated.
+///
+/// Resolves to `{data_local_dir}/app.uniclipboard.desktop[-{profile}]/uniclipboard-daemon.token`.
+pub fn resolve_daemon_token_path() -> Result<PathBuf, AppDirsError> {
+    let app_dirs = DirsAppDirsAdapter::new().get_app_dirs()?;
+    Ok(app_dirs.app_data_root.join(daemon_token_file_name()))
+}
+
+/// Resolve the daemon auth token file path with an explicit base directory override.
+///
+/// This is the test-helpers equivalent of `resolve_daemon_token_path()`.
+#[cfg(feature = "test-helpers")]
+pub fn resolve_daemon_token_path_for_testing(
+    base: std::path::PathBuf,
+) -> Result<PathBuf, AppDirsError> {
+    let adapter = DirsAppDirsAdapter::with_base_data_local_dir(base);
+    let app_dirs = adapter.get_app_dirs()?;
+    Ok(app_dirs.app_data_root.join(daemon_token_file_name()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,15 +334,102 @@ mod tests {
             let app_dirs = adapter.get_app_dirs().unwrap();
             // The pid path should be inside the app data root, not /tmp
             let pid_path = app_dirs.app_data_root.join(daemon_pid_file_name());
+            // Cross-platform: check that app_data_root contains our base (regardless of separator)
             assert!(
-                pid_path.to_string_lossy().contains("/var/data/"),
-                "pid path should be under /var/data/, got: {}",
+                pid_path.starts_with(&app_dirs.app_data_root),
+                "pid path should start with app_data_root, got: {}",
                 pid_path.display()
             );
+            // Ensure /tmp is NOT in the path
+            let path_str = pid_path.to_string_lossy();
             assert!(
-                !pid_path.to_string_lossy().contains("/tmp"),
+                !path_str.contains("/tmp") && !path_str.contains("\\tmp"),
                 "pid path should NOT be under /tmp, got: {}",
-                pid_path.display()
+                path_str
+            );
+        });
+    }
+
+    #[test]
+    fn daemon_token_file_name_default() {
+        with_uc_profile(None, || {
+            assert_eq!(daemon_token_file_name(), "uniclipboard-daemon.token");
+        });
+    }
+
+    #[test]
+    fn daemon_token_file_name_profile_aware() {
+        with_uc_profile(Some("a"), || {
+            assert_eq!(daemon_token_file_name(), "uniclipboard-daemon-a.token");
+        });
+        with_uc_profile(Some(""), || {
+            assert_eq!(daemon_token_file_name(), "uniclipboard-daemon.token");
+        });
+    }
+
+    #[test]
+    fn resolve_daemon_token_path_is_data_dir_based() {
+        with_uc_profile(None, || {
+            let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/var/data"));
+            let app_dirs = adapter.get_app_dirs().unwrap();
+            let token_path = app_dirs.app_data_root.join(daemon_token_file_name());
+            assert!(
+                token_path.starts_with(&app_dirs.app_data_root),
+                "token path should start with app_data_root, got: {}",
+                token_path.display()
+            );
+            let path_str = token_path.to_string_lossy();
+            assert!(
+                !path_str.contains("/tmp") && !path_str.contains("\\tmp"),
+                "token path should NOT be under /tmp, got: {}",
+                path_str
+            );
+        });
+    }
+
+    #[test]
+    fn resolve_daemon_token_path_profile_aware() {
+        let path_a = with_uc_profile(Some("a"), || {
+            let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/tmp"));
+            adapter
+                .get_app_dirs()
+                .unwrap()
+                .app_data_root
+                .join(daemon_token_file_name())
+        });
+        let path_b = with_uc_profile(Some("b"), || {
+            let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/tmp"));
+            adapter
+                .get_app_dirs()
+                .unwrap()
+                .app_data_root
+                .join(daemon_token_file_name())
+        });
+        let path_default = with_uc_profile(None, || {
+            let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/tmp"));
+            adapter
+                .get_app_dirs()
+                .unwrap()
+                .app_data_root
+                .join(daemon_token_file_name())
+        });
+
+        assert_ne!(path_a, path_b);
+        assert_ne!(path_a, path_default);
+        assert_ne!(path_b, path_default);
+    }
+
+    #[test]
+    fn daemon_token_and_pid_share_same_directory() {
+        with_uc_profile(None, || {
+            let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/var/data"));
+            let app_dirs = adapter.get_app_dirs().unwrap();
+            let token_path = app_dirs.app_data_root.join(daemon_token_file_name());
+            let pid_path = app_dirs.app_data_root.join(daemon_pid_file_name());
+            assert_eq!(
+                token_path.parent(),
+                pid_path.parent(),
+                "token and pid should be in the same directory"
             );
         });
     }

@@ -43,6 +43,10 @@ impl AppPaths {
         self.vault_dir.join(".initialized_encryption")
     }
 
+    pub fn daemon_token_path(&self) -> PathBuf {
+        self.app_data_root.join(".daemon-token")
+    }
+
     /// Single source of truth for all application paths.
     /// All subdirectory names are defined here — consumers must use these
     /// fields instead of calling `.join("...")` with hardcoded names.
@@ -86,6 +90,10 @@ mod tests {
         );
         assert_eq!(paths.logs_dir, PathBuf::from("/tmp/uniclipboard/logs"));
         assert_eq!(paths.app_data_root, PathBuf::from("/tmp/uniclipboard"));
+        assert_eq!(
+            paths.daemon_token_path(),
+            PathBuf::from("/tmp/uniclipboard/.daemon-token")
+        );
     }
 
     #[test]
