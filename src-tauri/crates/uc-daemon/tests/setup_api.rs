@@ -23,6 +23,7 @@ use uc_app::usecases::{CoreUseCases, InitializeEncryption, SetupOrchestrator};
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_cli_runtime;
 use uc_bootstrap::{build_non_gui_runtime_with_setup, builders::build_daemon_app};
+use uc_core::network::pairing_state_machine::FailureReason;
 use uc_core::network::PairingRequest;
 use uc_core::ports::space::CryptoPort;
 use uc_core::ports::SetupStatusPort;
@@ -1285,4 +1286,300 @@ async fn setup_reset_allows_second_host_start_without_manual_cleanup() {
     assert_eq!(second_host.status(), StatusCode::OK);
     let second_body = json_body(second_host).await;
     assert_eq!(second_body["nextStepHint"], "create-space-passphrase");
+}
+
+// ── Observability regression tests ─────────────────────────────────────────────────────────────
+//
+// These tests verify that pairing-driven setup transitions remain diagnosable even as
+// the Phase 85 structured observability instrumentation is present in the orchestrator.
+// Each test exercises a distinct transition path that was previously at risk of silent failure.
+
+/// Low-latency: `PairingVerificationRequired` surfaces in setup state within 1 second of
+/// being emitted by the fake facade.  This regression guards against delayed state
+/// propagation hiding verification events from the frontend.
+#[tokio::test]
+async fn setup_pairing_verification_required_surfaces_with_low_latency() {
+    let fixture = build_join_setup_fixture_async().await;
+
+    // Start join flow
+    let join_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/join",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("setup join request should succeed");
+    assert_eq!(join_response.status(), StatusCode::OK);
+
+    // Initiate pairing by selecting a peer
+    let select_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/select-peer",
+            &fixture.token,
+            Body::from(json!({ "peerId": "peer-remote" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("setup select peer request should succeed");
+    assert_eq!(select_response.status(), StatusCode::OK);
+
+    let select_body = json_body(select_response).await;
+    assert_eq!(select_body["nextStepHint"], "join-waiting-for-host");
+
+    // Emit PairingVerificationRequired from the facade — this simulates the daemon
+    // receiving a verification event from the remote host within the pairing flow
+    fixture
+        .facade
+        .emit(PairingDomainEvent::PairingVerificationRequired {
+            session_id: "session-test".to_string(),
+            peer_id: "peer-remote".to_string(),
+            short_code: "654321".to_string(),
+            local_fingerprint: "local-fp".to_string(),
+            peer_fingerprint: "peer-fp".to_string(),
+        })
+        .await;
+
+    // Assert: setup state transitions to JoinSpaceConfirmPeer within 1 second
+    // This is the low-latency requirement — observability instrumentation must not
+    // introduce any delay on this critical path
+    let start = Instant::now();
+    let pending_state = wait_for_setup_response(&fixture.app, &fixture.token, |response| {
+        response["data"]["state"]["JoinSpaceConfirmPeer"].is_object()
+            || response["state"]["JoinSpaceConfirmPeer"].is_object()
+    })
+    .await;
+
+    let elapsed_ms = start.elapsed().as_millis();
+    assert!(
+        elapsed_ms < 1000,
+        "PairingVerificationRequired took {}ms to surface — expected < 1000ms",
+        elapsed_ms
+    );
+
+    // Assert the confirm peer state contains the short code
+    let confirm = if pending_state["data"]["state"]["JoinSpaceConfirmPeer"].is_object() {
+        &pending_state["data"]["state"]["JoinSpaceConfirmPeer"]
+    } else {
+        &pending_state["state"]["JoinSpaceConfirmPeer"]
+    };
+    assert!(
+        confirm["shortCode"].as_str() == Some("654321")
+            || confirm["short_code"].as_str() == Some("654321"),
+        "JoinSpaceConfirmPeer should carry the short code; got: {confirm}"
+    );
+
+    // Assert observability metadata: session_id is visible in the response
+    let session_id = if pending_state["sessionId"].is_string() {
+        &pending_state["sessionId"]
+    } else if pending_state["data"]["sessionId"].is_string() {
+        &pending_state["data"]["sessionId"]
+    } else {
+        &Value::Null
+    };
+    assert!(
+        session_id.as_str().is_some(),
+        "setup state response should carry sessionId for observability; got: {pending_state}"
+    );
+}
+
+/// Reject/failure return path: a `PairingFailed` event emitted during join resets the
+/// state back to device-selection (`JoinSpaceSelectDevice`) or `Welcome`, not stuck in
+/// `ProcessingJoinSpace`.
+#[tokio::test]
+async fn setup_pairing_failure_returns_to_device_selection() {
+    let fixture = build_join_setup_fixture_async().await;
+
+    // Start join flow
+    let join_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/join",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("setup join request should succeed");
+    assert_eq!(join_response.status(), StatusCode::OK);
+
+    // Select peer to start pairing
+    let select_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/select-peer",
+            &fixture.token,
+            Body::from(json!({ "peerId": "peer-remote" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("setup select peer request should succeed");
+    assert_eq!(select_response.status(), StatusCode::OK);
+    assert_eq!(select_response.status(), StatusCode::OK);
+    let select_body = json_body(select_response).await;
+    assert_eq!(
+        select_body["nextStepHint"], "join-waiting-for-host",
+        "Should be waiting for host after select-peer"
+    );
+
+    // Emit PairingFailed — simulates the host rejecting the join request
+    fixture
+        .facade
+        .emit(PairingDomainEvent::PairingFailed {
+            session_id: "session-test".to_string(),
+            peer_id: "peer-remote".to_string(),
+            reason: FailureReason::Other("host rejected".to_string()),
+        })
+        .await;
+
+    // Assert: setup state returns to device selection — not stuck in ProcessingJoinSpace
+    let after_failure = wait_for_setup_response(&fixture.app, &fixture.token, |response| {
+        let hint = response["nextStepHint"]
+            .as_str()
+            .or_else(|| response["data"]["nextStepHint"].as_str())
+            .unwrap_or("");
+        // Must return to a "pre-pairing" state — either select-peer, join-waiting, or idle
+        hint == "join-select-peer" || hint == "idle"
+    })
+    .await;
+
+    let final_hint = after_failure["nextStepHint"]
+        .as_str()
+        .or_else(|| after_failure["data"]["nextStepHint"].as_str())
+        .unwrap_or("");
+    assert!(
+        final_hint == "join-select-peer" || final_hint == "idle",
+        "After PairingFailed, expected join-select-peer or idle but got: {final_hint}"
+    );
+
+    // The state must NOT be ProcessingJoinSpace (i.e. stuck)
+    let stuck_msg = after_failure["data"]["state"]["ProcessingJoinSpace"]["message"]
+        .as_str()
+        .or_else(|| after_failure["state"]["ProcessingJoinSpace"]["message"].as_str());
+    assert!(
+        stuck_msg.is_none(),
+        "Setup must not remain in ProcessingJoinSpace after PairingFailed; got stuck state"
+    );
+}
+
+/// Completion path: a host that progresses through setup/new → submit-passphrase → confirm-peer
+/// ends in `nextStepHint == "completed"`, and the pairing session record in RuntimeState
+/// reflects `state == "verifying"` (proof exchange in flight).
+#[tokio::test]
+async fn setup_host_completion_path_ends_in_completed_and_session_is_diagnosable() {
+    let fixture = build_host_setup_fixture_async().await;
+
+    // Step 1: start new space
+    let new_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/new",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("setup new request should succeed");
+    assert_eq!(new_response.status(), StatusCode::OK);
+
+    // Step 2: submit passphrase
+    let passphrase_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/submit-passphrase",
+            &fixture.token,
+            Body::from(json!({ "passphrase": "correct-horse-battery-staple" }).to_string()),
+            Some("application/json"),
+        ))
+        .await
+        .expect("setup submit passphrase should succeed");
+    assert_eq!(passphrase_response.status(), StatusCode::OK);
+
+    // Step 3: inject inbound pairing request to simulate a joiner arriving
+    let local_peer_id = CoreUseCases::new(fixture.runtime.as_ref())
+        .get_local_device_info()
+        .execute()
+        .await
+        .expect("local device info should load")
+        .peer_id;
+
+    fixture
+        .pairing_host
+        .set_discoverability("gui".to_string(), true, Some(60_000))
+        .await;
+    fixture
+        .pairing_host
+        .set_participant_ready("gui".to_string(), true, Some(60_000))
+        .await;
+    fixture
+        .pairing_host
+        .handle_incoming_request(
+            "peer-joiner".to_string(),
+            inbound_request("session-completion-test", &local_peer_id),
+        )
+        .await
+        .expect("daemon pairing host should accept inbound request fixture");
+
+    // Step 4: wait for host-confirm-peer hint to appear
+    let host_confirm_state = wait_for_setup_response(&fixture.app, &fixture.token, |response| {
+        response["nextStepHint"] == Value::String("host-confirm-peer".to_string())
+            && response["sessionId"] == Value::String("session-completion-test".to_string())
+    })
+    .await;
+
+    assert_eq!(
+        host_confirm_state["nextStepHint"], "host-confirm-peer",
+        "Should be at host-confirm-peer before confirmation"
+    );
+    // Observability: sessionId must be visible in the response at this transition
+    assert_eq!(
+        host_confirm_state["sessionId"], "session-completion-test",
+        "sessionId should be visible at host-confirm-peer for observability"
+    );
+
+    // Step 5: confirm the peer
+    let confirm_response = fixture
+        .app
+        .clone()
+        .oneshot(authed_request(
+            "POST",
+            "/setup/confirm-peer",
+            &fixture.token,
+            Body::empty(),
+            None,
+        ))
+        .await
+        .expect("setup confirm peer request should succeed");
+    assert_eq!(confirm_response.status(), StatusCode::OK);
+
+    let confirm_body = json_body(confirm_response).await;
+    assert_eq!(
+        confirm_body["nextStepHint"], "completed",
+        "Host should reach completed after confirm-peer"
+    );
+
+    // Observability: RuntimeState pairing session record is diagnosable after completion
+    let state_guard = fixture.state.read().await;
+    let session_snapshot = state_guard
+        .pairing_session("session-completion-test")
+        .expect("pairing session record should be present in RuntimeState for observability");
+    assert_eq!(
+        session_snapshot.state, "verifying",
+        "Pairing session state should be 'verifying' (proof exchange) after host confirm-peer"
+    );
 }

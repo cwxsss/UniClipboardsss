@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
 use uc_app::usecases::space_access::{
@@ -597,6 +597,7 @@ async fn run_pairing_action_loop(
     mut action_rx: mpsc::Receiver<PairingAction>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    let _loop_span = tracing::info_span!("pairing.action_loop").entered();
     let pairing_transport = runtime.wiring_deps().network_ports.pairing.clone();
 
     loop {
@@ -611,16 +612,25 @@ async fn run_pairing_action_loop(
                     PairingAction::Send { peer_id, message } => {
                         let session_id = message.session_id().to_string();
                         let message_kind = pairing_message_kind(&message);
-                        info!(
+                        let _session_span = tracing::info_span!(
+                            "pairing.action.send",
                             session_id = %session_id,
                             peer_id = %peer_id,
                             message_kind,
-                            "dispatching pairing action send"
-                        );
+                        )
+                        .entered();
+
+                        info!(event = "pairing.action_dispatch", message_kind);
+
                         if let Err(err) = pairing_transport
                             .open_pairing_session(peer_id.clone(), session_id.clone())
                             .await
                         {
+                            error!(
+                                event = "pairing.transport_open_failed",
+                                error = %err,
+                                error_kind = "transport_failure",
+                            );
                             signal_pairing_transport_failure(
                                 pairing_orchestrator.as_ref(),
                                 &state,
@@ -634,14 +644,14 @@ async fn run_pairing_action_loop(
                             continue;
                         }
 
-                        debug!(
-                            session_id = %session_id,
-                            peer_id = %peer_id,
-                            message_kind,
-                            "pairing session open confirmed before send"
-                        );
+                        debug!(event = "pairing.session_open_confirmed", message_kind);
 
                         if let Err(err) = pairing_transport.send_pairing_on_session(message).await {
+                            error!(
+                                event = "pairing.transport_send_failed",
+                                error = %err,
+                                error_kind = "transport_failure",
+                            );
                             signal_pairing_transport_failure(
                                 pairing_orchestrator.as_ref(),
                                 &state,
@@ -653,12 +663,7 @@ async fn run_pairing_action_loop(
                             )
                             .await?;
                         } else {
-                            info!(
-                                session_id = %session_id,
-                                peer_id = %peer_id,
-                                message_kind,
-                                "pairing action send queued to transport"
-                            );
+                            info!(event = "pairing.action_sent", message_kind);
                         }
                     }
                     PairingAction::ShowVerification {
@@ -787,6 +792,8 @@ async fn run_pairing_domain_event_loop(
     event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    let _loop_span = tracing::info_span!("pairing.domain_event_loop").entered();
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -803,6 +810,13 @@ async fn run_pairing_domain_event_loop(
                         local_fingerprint,
                         peer_fingerprint,
                     } => {
+                        let _session_span = tracing::info_span!(
+                            "pairing.session",
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                        )
+                        .entered();
+
                         let device_name = pairing_orchestrator
                             .get_session_peer(&session_id)
                             .await
@@ -817,14 +831,19 @@ async fn run_pairing_domain_event_loop(
                             short_code: Some(short_code.clone()),
                             peer_fingerprint: Some(peer_fingerprint.clone()),
                         });
+
                         info!(
-                            session_id = %session_id,
-                            peer_id = %peer_id,
-                            device_name = device_name.as_deref().unwrap_or(""),
+                            event = "pairing.verification_required",
+                            stage = pairing_stage::VERIFICATION,
                             has_short_code = !short_code.is_empty(),
                             has_local_fingerprint = !local_fingerprint.is_empty(),
                             has_peer_fingerprint = !peer_fingerprint.is_empty(),
-                            "broadcasting pairing verification to daemon websocket subscribers"
+                        );
+
+                        debug!(
+                            event = "ws.emit",
+                            topic = ws_topic::PAIRING,
+                            ws_event = ws_event::PAIRING_VERIFICATION_REQUIRED,
                         );
                         emit_pairing_session_changed(
                             &event_tx,
@@ -852,7 +871,28 @@ async fn run_pairing_domain_event_loop(
                         keyslot_file: _,
                         challenge: _,
                     } => {
+                        let _session_span = tracing::info_span!(
+                            "pairing.session",
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                        )
+                        .entered();
+
                         let ts = now_ms();
+
+                        info!(
+                            event = "pairing.keyslot_received",
+                            stage = pairing_stage::VERIFYING,
+                        );
+                        debug!(
+                            event = "pairing.state_transition",
+                            to_state = pairing_stage::VERIFYING,
+                        );
+                        debug!(
+                            event = "ws.emit",
+                            topic = ws_topic::PAIRING,
+                            ws_event = ws_event::PAIRING_UPDATED,
+                        );
                         emit_ws_event(
                             &event_tx,
                             ws_topic::PAIRING,
@@ -879,11 +919,32 @@ async fn run_pairing_domain_event_loop(
                         .await;
                     }
                     PairingDomainEvent::PairingSucceeded { session_id, peer_id } => {
+                        let _session_span = tracing::info_span!(
+                            "pairing.session",
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                        )
+                        .entered();
+
                         let device_name = pairing_orchestrator
                             .get_session_peer(&session_id)
                             .await
                             .and_then(|peer| peer.device_name);
                         let ts = now_ms();
+
+                        info!(
+                            event = "pairing.succeeded",
+                            stage = pairing_stage::COMPLETE,
+                        );
+                        debug!(
+                            event = "pairing.state_transition",
+                            to_state = pairing_stage::COMPLETE,
+                        );
+                        debug!(
+                            event = "ws.emit",
+                            topic = ws_topic::PAIRING,
+                            ws_event = ws_event::PAIRING_COMPLETE,
+                        );
                         emit_ws_event(
                             &event_tx,
                             ws_topic::PAIRING,
@@ -925,11 +986,32 @@ async fn run_pairing_domain_event_loop(
                         session_id,
                         peer_id,
                     } => {
+                        let _session_span = tracing::info_span!(
+                            "pairing.session",
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                        )
+                        .entered();
+
                         let device_name = pairing_orchestrator
                             .get_session_peer(&session_id)
                             .await
                             .and_then(|peer| peer.device_name);
                         let ts = now_ms();
+
+                        info!(
+                            event = "pairing.verifying",
+                            stage = pairing_stage::VERIFYING,
+                        );
+                        debug!(
+                            event = "pairing.state_transition",
+                            to_state = pairing_stage::VERIFYING,
+                        );
+                        debug!(
+                            event = "ws.emit",
+                            topic = ws_topic::PAIRING,
+                            ws_event = ws_event::PAIRING_VERIFICATION_REQUIRED,
+                        );
                         upsert_pairing_snapshot(
                             &state,
                             session_id.clone(),
@@ -964,12 +1046,35 @@ async fn run_pairing_domain_event_loop(
                         peer_id,
                         reason,
                     } => {
+                        let _session_span = tracing::info_span!(
+                            "pairing.session",
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                        )
+                        .entered();
+
                         let device_name = pairing_orchestrator
                             .get_session_peer(&session_id)
                             .await
                             .and_then(|peer| peer.device_name);
                         let failure_reason = pairing_failure_message(&reason);
                         let ts = now_ms();
+
+                        error!(
+                            event = "pairing.failed",
+                            stage = pairing_stage::FAILED,
+                            error_kind = "pairing_failed",
+                            reason = %failure_reason,
+                        );
+                        debug!(
+                            event = "pairing.state_transition",
+                            to_state = pairing_stage::FAILED,
+                        );
+                        debug!(
+                            event = "ws.emit",
+                            topic = ws_topic::PAIRING,
+                            ws_event = ws_event::PAIRING_FAILED,
+                        );
                         emit_ws_event(
                             &event_tx,
                             ws_topic::PAIRING,
@@ -1022,6 +1127,7 @@ async fn run_pairing_protocol_loop(
     event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    let _loop_span = tracing::info_span!("pairing.protocol_loop").entered();
     let network_events = runtime.wiring_deps().network_ports.events.clone();
     let pairing_transport = runtime.wiring_deps().network_ports.pairing.clone();
 
@@ -1133,12 +1239,16 @@ async fn handle_pairing_message(
 ) -> anyhow::Result<()> {
     let session_id = message.session_id().to_string();
     let message_kind = pairing_message_kind(&message);
-    info!(
+    let _msg_span = tracing::info_span!(
+        "pairing.handle_message",
         session_id = %session_id,
         peer_id = %peer_id,
         message_kind,
-        "handling inbound pairing message"
-    );
+    )
+    .entered();
+
+    info!(event = "pairing.message_received", message_kind);
+
     match message {
         PairingMessage::Request(request) => {
             if !discoverability.is_active().await {
@@ -1613,6 +1723,8 @@ async fn run_space_access_event_loop(
     event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
+    let _loop_span = tracing::info_span!("space_access.event_loop").entered();
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -1621,10 +1733,10 @@ async fn run_space_access_event_loop(
                     return Ok(());
                 };
                 info!(
+                    event = "space_access.completed",
                     session_id = %event.session_id,
                     peer_id = %event.peer_id,
                     success = event.success,
-                    "daemon emitting space access completed via websocket"
                 );
                 emit_ws_event(
                     &event_tx,

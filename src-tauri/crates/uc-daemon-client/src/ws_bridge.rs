@@ -12,7 +12,7 @@ use tokio::time::sleep;
 use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 use uc_core::network::daemon_api_strings::{pairing_stage, ws_event, ws_topic};
 use uc_core::ports::realtime::{
     ClipboardNewContentEvent, PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent,
@@ -173,6 +173,12 @@ impl DaemonWsBridge {
         Ok(())
     }
 
+    #[instrument(
+        name = "daemon_ws_bridge.run",
+        level = "info",
+        skip(self, token),
+        fields(component = "daemon_ws_bridge")
+    )]
     pub async fn run(self: Arc<Self>, token: CancellationToken) -> Result<()> {
         let mut backoff = self.config.backoff_initial;
 
@@ -184,6 +190,10 @@ impl DaemonWsBridge {
 
             let topics = self.active_topic_names().await;
             if topics.is_empty() {
+                debug!(
+                    event = "bridge.idle_no_topics",
+                    "bridge has no active subscribers; waiting before next connection cycle"
+                );
                 tokio::select! {
                     _ = token.cancelled() => {
                         self.set_state(BridgeState::Disconnected);
@@ -197,6 +207,12 @@ impl DaemonWsBridge {
             let connection = match self.connection_state.get() {
                 Some(connection) => connection,
                 None => {
+                    warn!(
+                        event = "bridge.connection_unavailable",
+                        topics_count = topics.len(),
+                        backoff_ms = backoff.as_millis() as u64,
+                        "daemon connection unavailable for websocket bridge"
+                    );
                     self.set_state(BridgeState::Degraded);
                     tokio::select! {
                         _ = token.cancelled() => {
@@ -213,10 +229,21 @@ impl DaemonWsBridge {
             self.set_state(BridgeState::Connecting);
             match self.connect_and_process(&connection, &topics, &token).await {
                 Ok(()) => {
+                    info!(
+                        event = "bridge.connection_cycle_completed",
+                        topics_count = topics.len(),
+                        "daemon websocket bridge connection cycle completed"
+                    );
                     backoff = self.config.backoff_initial;
                 }
                 Err(err) => {
-                    warn!(error = %err, "daemon websocket bridge cycle failed");
+                    warn!(
+                        event = "bridge.connection_cycle_failed",
+                        error = %err,
+                        backoff_ms = backoff.as_millis() as u64,
+                        topics_count = topics.len(),
+                        "daemon websocket bridge cycle failed"
+                    );
                     self.set_state(BridgeState::Degraded);
                     tokio::select! {
                         _ = token.cancelled() => {
@@ -252,90 +279,156 @@ impl DaemonWsBridge {
         topics: &[String],
         token: &CancellationToken,
     ) -> Result<()> {
-        // Exchange bearer → session JWT lazily on first WS connect attempt.
-        // Uses the same session token cache as HTTP requests.
-        let http = reqwest::Client::new();
-        let session_token =
-            crate::http::get_session_token(&http, &self.connection_state, connection.pid).await?;
-
-        let mut request = connection
-            .ws_url
-            .as_str()
-            .into_client_request()
-            .context("failed to build daemon websocket client request")?;
-        request.headers_mut().insert(
-            "Authorization",
-            format!("Session {}", session_token).parse()?,
+        let span = info_span!(
+            "daemon_ws_bridge.connect_and_process",
+            daemon_pid = connection.pid,
+            ws_url = %connection.ws_url,
+            topics_count = topics.len(),
         );
 
-        let ws_url = url::Url::parse(&connection.ws_url)
-            .with_context(|| format!("invalid daemon websocket url {}", connection.ws_url))?;
-        let host = ws_url
-            .host_str()
-            .context("daemon websocket url missing host")?;
-        let port = ws_url
-            .port_or_known_default()
-            .context("daemon websocket url missing port")?;
-        let tcp_stream = TcpStream::connect((host, port))
-            .await
-            .with_context(|| format!("failed to open daemon tcp socket {host}:{port}"))?;
+        async move {
+            info!(
+                event = "bridge.connect_started",
+                topics = ?topics,
+                "starting daemon websocket bridge connection"
+            );
 
-        let (stream, _) = client_async(request, tcp_stream).await.with_context(|| {
-            format!(
-                "failed to connect daemon websocket at {}",
-                connection.ws_url
-            )
-        })?;
-        let (mut write, mut read) = stream.split();
+            // Exchange bearer → session JWT lazily on first WS connect attempt.
+            // Uses the same session token cache as HTTP requests.
+            let http = reqwest::Client::new();
+            let session_token =
+                crate::http::get_session_token(&http, &self.connection_state, connection.pid)
+                    .await?;
+            debug!(
+                event = "bridge.session_token_acquired",
+                daemon_pid = connection.pid,
+                "acquired daemon websocket session token"
+            );
 
-        self.set_state(BridgeState::Subscribing);
-        write
-            .send(Message::Text(
-                serde_json::json!({
-                    "action": "subscribe",
-                    "topics": topics,
-                })
-                .to_string()
-                .into(),
-            ))
-            .await
-            .context("failed to subscribe daemon websocket topics")?;
-        self.set_state(BridgeState::Ready);
-        info!(topics = ?topics, "daemon realtime bridge subscribed");
+            let mut request = connection
+                .ws_url
+                .as_str()
+                .into_client_request()
+                .context("failed to build daemon websocket client request")?;
+            request.headers_mut().insert(
+                "Authorization",
+                format!("Session {}", session_token).parse()?,
+            );
 
-        loop {
-            tokio::select! {
-                _ = token.cancelled() => {
-                    self.set_state(BridgeState::Disconnected);
-                    return Ok(());
-                }
-                message = read.next() => {
-                    match message {
-                        Some(Ok(Message::Text(text))) => {
-                            match serde_json::from_str::<DaemonWsEvent>(&text) {
-                                Ok(event) => {
-                                    if let Some(realtime_event) = map_daemon_ws_event(event) {
-                                        self.dispatch_event(realtime_event).await;
+            let ws_url = url::Url::parse(&connection.ws_url)
+                .with_context(|| format!("invalid daemon websocket url {}", connection.ws_url))?;
+            let host = ws_url
+                .host_str()
+                .context("daemon websocket url missing host")?;
+            let port = ws_url
+                .port_or_known_default()
+                .context("daemon websocket url missing port")?;
+            let tcp_stream = TcpStream::connect((host, port))
+                .await
+                .with_context(|| format!("failed to open daemon tcp socket {host}:{port}"))?;
+            debug!(
+                event = "bridge.tcp_connected",
+                host = %host,
+                port,
+                "connected daemon websocket tcp socket"
+            );
+
+            let (stream, _) = client_async(request, tcp_stream).await.with_context(|| {
+                format!(
+                    "failed to connect daemon websocket at {}",
+                    connection.ws_url
+                )
+            })?;
+            info!(
+                event = "bridge.ws_connected",
+                ws_url = %connection.ws_url,
+                "daemon websocket handshake completed"
+            );
+            let (mut write, mut read) = stream.split();
+
+            self.set_state(BridgeState::Subscribing);
+            write
+                .send(Message::Text(
+                    serde_json::json!({
+                        "action": "subscribe",
+                        "topics": topics,
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .context("failed to subscribe daemon websocket topics")?;
+            self.set_state(BridgeState::Ready);
+            info!(
+                event = "bridge.subscribed",
+                topics = ?topics,
+                topics_count = topics.len(),
+                "daemon realtime bridge subscribed"
+            );
+
+            loop {
+                tokio::select! {
+                    _ = token.cancelled() => {
+                        info!(
+                            event = "bridge.cancelled",
+                            "daemon websocket bridge cancelled"
+                        );
+                        self.set_state(BridgeState::Disconnected);
+                        return Ok(());
+                    }
+                    message = read.next() => {
+                        match message {
+                            Some(Ok(Message::Text(text))) => {
+                                match serde_json::from_str::<DaemonWsEvent>(&text) {
+                                    Ok(event) => {
+                                        if let Some(realtime_event) = map_daemon_ws_event(event) {
+                                            self.dispatch_event(realtime_event).await;
+                                        }
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            event = "bridge.event_parse_failed",
+                                            error = %err,
+                                            "failed to parse daemon websocket event"
+                                        );
                                     }
                                 }
-                                Err(err) => {
-                                    warn!(error = %err, "failed to parse daemon websocket event");
-                                }
                             }
-                        }
-                        Some(Ok(Message::Close(_))) | None => {
-                            self.set_state(BridgeState::Degraded);
-                            return Ok(());
-                        }
-                        Some(Ok(_)) => {}
-                        Some(Err(err)) => {
-                            self.set_state(BridgeState::Degraded);
-                            return Err(err.into());
+                            Some(Ok(Message::Close(_))) => {
+                                info!(
+                                    event = "bridge.ws_closed",
+                                    close_kind = "close_frame",
+                                    "daemon websocket closed by peer"
+                                );
+                                self.set_state(BridgeState::Degraded);
+                                return Ok(());
+                            }
+                            None => {
+                                info!(
+                                    event = "bridge.ws_closed",
+                                    close_kind = "stream_end",
+                                    "daemon websocket stream ended"
+                                );
+                                self.set_state(BridgeState::Degraded);
+                                return Ok(());
+                            }
+                            Some(Ok(_)) => {}
+                            Some(Err(err)) => {
+                                self.set_state(BridgeState::Degraded);
+                                warn!(
+                                    event = "bridge.ws_read_failed",
+                                    error = %err,
+                                    "daemon websocket read failed"
+                                );
+                                return Err(err.into());
+                            }
                         }
                     }
                 }
             }
         }
+        .instrument(span)
+        .await
     }
 
     async fn active_topic_names(&self) -> Vec<String> {
@@ -352,30 +445,58 @@ impl DaemonWsBridge {
     }
 
     async fn dispatch_event(&self, event: RealtimeEvent) {
+        let event_topic = event_topic(&event);
         let subscribers = self.subscribers.lock().await.clone();
+        let subscriber_count = subscribers.len();
         let mut active = Vec::with_capacity(subscribers.len());
+        let mut delivered_count = 0usize;
 
         for subscriber in subscribers {
             if subscriber.accepts(&event) {
                 subscriber
                     .enqueue(event.clone(), self.config.terminal_retry_delay)
                     .await;
+                delivered_count += 1;
             }
             if !subscriber.is_closed() {
                 active.push(subscriber);
             }
         }
 
+        debug!(
+            event = "bridge.dispatch_completed",
+            event_topic = topic_name(&event_topic),
+            subscriber_count,
+            delivered_count,
+            active_count = active.len(),
+            "daemon websocket bridge dispatched realtime event"
+        );
+
         *self.subscribers.lock().await = active;
     }
 
-    fn set_state(&self, state: BridgeState) {
-        match self.state.write() {
-            Ok(mut guard) => *guard = state,
+    fn set_state(&self, next: BridgeState) {
+        let prev = match self.state.write() {
+            Ok(mut guard) => {
+                let prev = *guard;
+                *guard = next;
+                prev
+            }
             Err(poisoned) => {
                 let mut guard = poisoned.into_inner();
-                *guard = state;
+                let prev = *guard;
+                *guard = next;
+                prev
             }
+        };
+
+        if prev != next {
+            info!(
+                event = "bridge.state_changed",
+                from_state = ?prev,
+                to_state = ?next,
+                "daemon websocket bridge state changed"
+            );
         }
     }
 
@@ -391,7 +512,18 @@ impl DaemonWsBridge {
             tx,
             self.config.queue_capacity,
         ));
-        self.subscribers.lock().await.push(subscriber.clone());
+        let topics_for_log: Vec<&'static str> = topics.iter().map(topic_name).collect();
+        let mut subscribers = self.subscribers.lock().await;
+        subscribers.push(subscriber.clone());
+        info!(
+            event = "bridge.subscriber_added",
+            consumer,
+            topics = ?topics_for_log,
+            queue_capacity = self.config.queue_capacity,
+            subscriber_count = subscribers.len(),
+            "registered daemon websocket bridge subscriber"
+        );
+        drop(subscribers);
         subscriber.spawn_forwarder();
         Ok(rx)
     }
@@ -441,6 +573,12 @@ impl Subscriber {
             loop {
                 let next_event = loop {
                     if self.closed.load(Ordering::SeqCst) {
+                        debug!(
+                            event = "bridge.forwarder_stopped",
+                            consumer = self.consumer,
+                            reason = "subscriber_closed",
+                            "daemon websocket subscriber forwarder stopped"
+                        );
                         return;
                     }
 
@@ -453,6 +591,12 @@ impl Subscriber {
 
                 if self.outbound.send(next_event).await.is_err() {
                     self.closed.store(true, Ordering::SeqCst);
+                    info!(
+                        event = "bridge.forwarder_stopped",
+                        consumer = self.consumer,
+                        reason = "receiver_dropped",
+                        "daemon websocket subscriber forwarder stopped"
+                    );
                     return;
                 }
             }
@@ -472,9 +616,18 @@ impl Subscriber {
             return;
         }
 
+        let event_topic = event_topic(&event);
+
         if !is_terminal_event(&event) {
+            let queue_len = self.pending.lock().await.len();
             warn!(
+                event = "bridge.event_dropped",
                 consumer = self.consumer,
+                event_topic = topic_name(&event_topic),
+                queue_len,
+                capacity = self.capacity,
+                is_terminal = false,
+                reason = "backpressure",
                 "dropping realtime event under backpressure"
             );
             return;
@@ -493,8 +646,15 @@ impl Subscriber {
             pending.push_back(event);
             self.notify.notify_one();
         } else {
-            warn!(
+            error!(
+                event = "bridge.terminal_event_dropped",
                 consumer = self.consumer,
+                event_topic = topic_name(&event_topic),
+                queue_len = pending.len(),
+                capacity = self.capacity,
+                retry_delay_ms = retry_delay.as_millis() as u64,
+                is_terminal = true,
+                reason = "backpressure_after_retry",
                 "terminal realtime event still dropped after retry"
             );
         }
@@ -515,27 +675,94 @@ pub struct DaemonWsBridgeError {
     pub message: String,
 }
 
+/// Log a successful bridge routing decision so the mapping is observable without reading code.
+///
+/// Fields are safe to log: session identity and event class names only — no secrets or payloads.
+fn log_bridge_routing(
+    source_topic: &str,
+    source_event_type: &str,
+    session_id: Option<&str>,
+    payload_kind: Option<&str>,
+    routed_event_class: &'static str,
+) {
+    debug!(
+        event = "bridge.route_succeeded",
+        source_topic,
+        source_event_type,
+        session_id = session_id.unwrap_or(""),
+        payload_kind = payload_kind.unwrap_or(""),
+        routed_event_class,
+        "daemon websocket bridge routed event"
+    );
+}
+
+fn log_decode_failed(
+    source_topic: &str,
+    source_event_type: &str,
+    session_id: Option<&str>,
+    payload_type: &'static str,
+    error: &serde_json::Error,
+) {
+    warn!(
+        event = "bridge.decode_failed",
+        source_topic,
+        source_event_type,
+        session_id = session_id.unwrap_or(""),
+        payload_type,
+        error = %error,
+        "failed to decode websocket payload"
+    );
+}
+
 fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
     let event_type = event.event_type.clone();
     let topic = event.topic.clone();
     let session_id = event.session_id.clone();
 
+    debug!(
+        event = "bridge.ws_event_received",
+        source_topic = %topic,
+        source_event_type = %event_type,
+        session_id = session_id.as_deref().unwrap_or(""),
+        "received daemon websocket event"
+    );
+
     match event.event_type.as_str() {
         ws_event::PAIRING_UPDATED => {
             match serde_json::from_value::<PairingSessionChangedPayload>(event.payload) {
-                Ok(payload) => Some(RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
-                    session_id: payload.session_id,
-                    status: payload.stage,
-                    peer_id: payload.peer_id,
-                    device_name: payload.device_name,
-                })),
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = %payload.session_id,
+                        payload_type = "PairingSessionChangedPayload",
+                        stage = %payload.stage,
+                        has_peer_id = payload.peer_id.is_some(),
+                        has_device_name = payload.device_name.is_some(),
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        Some(&payload.session_id),
+                        Some(&payload.stage),
+                        "PairingUpdated",
+                    );
+                    Some(RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
+                        session_id: payload.session_id,
+                        status: payload.stage,
+                        peer_id: payload.peer_id,
+                        device_name: payload.device_name,
+                    }))
+                }
                 Err(err) => {
-                    warn!(
-                        error = %err,
-                        event_type = %event_type,
-                        topic = %topic,
-                        session_id = ?session_id,
-                        "failed to decode daemon pairing.updated websocket payload"
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "PairingSessionChangedPayload",
+                        &err,
                     );
                     None
                 }
@@ -549,19 +776,28 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     let has_code = payload.code.is_some();
                     let has_local_fingerprint = payload.local_fingerprint.is_some();
                     let has_peer_fingerprint = payload.peer_fingerprint.is_some();
-                    info!(
-                        event_type = %event_type,
-                        topic = %topic,
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
                         session_id = %payload.session_id,
+                        payload_type = "PairingVerificationPayload",
                         kind = %kind,
                         has_peer_id,
                         has_code,
                         has_local_fingerprint,
                         has_peer_fingerprint,
-                        "decoded daemon pairing verification websocket payload"
+                        "decoded websocket payload"
                     );
                     match payload.kind.as_str() {
                         pairing_stage::VERIFICATION => {
+                            log_bridge_routing(
+                                &topic,
+                                &event_type,
+                                Some(&payload.session_id),
+                                Some(&kind),
+                                "PairingVerificationRequired",
+                            );
                             Some(RealtimeEvent::PairingVerificationRequired(
                                 PairingVerificationRequiredEvent {
                                     session_id: payload.session_id,
@@ -574,6 +810,13 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                             ))
                         }
                         pairing_stage::VERIFYING | pairing_stage::REQUEST => {
+                            log_bridge_routing(
+                                &topic,
+                                &event_type,
+                                Some(&payload.session_id),
+                                Some(&kind),
+                                "PairingUpdated",
+                            );
                             Some(RealtimeEvent::PairingUpdated(PairingUpdatedEvent {
                                 session_id: payload.session_id,
                                 status: payload.kind,
@@ -582,6 +825,13 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                             }))
                         }
                         pairing_stage::COMPLETE => {
+                            log_bridge_routing(
+                                &topic,
+                                &event_type,
+                                Some(&payload.session_id),
+                                Some(&kind),
+                                "PairingComplete",
+                            );
                             Some(RealtimeEvent::PairingComplete(PairingCompleteEvent {
                                 session_id: payload.session_id,
                                 peer_id: payload.peer_id,
@@ -589,6 +839,13 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                             }))
                         }
                         pairing_stage::FAILED => {
+                            log_bridge_routing(
+                                &topic,
+                                &event_type,
+                                Some(&payload.session_id),
+                                Some(&kind),
+                                "PairingFailed",
+                            );
                             Some(RealtimeEvent::PairingFailed(PairingFailedEvent {
                                 session_id: payload.session_id,
                                 reason: payload
@@ -598,23 +855,25 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                         }
                         _ => {
                             warn!(
-                                event_type = %event_type,
-                                topic = %topic,
-                                session_id = ?session_id,
+                                event = "bridge.route_unsupported",
+                                source_event_type = %event_type,
+                                source_topic = %topic,
+                                session_id = session_id.as_deref().unwrap_or(""),
                                 kind = %kind,
-                                "ignored daemon pairing verification event with unsupported kind"
+                                dropped = true,
+                                "websocket event kind has no registered route"
                             );
                             None
                         }
                     }
                 }
                 Err(err) => {
-                    warn!(
-                        error = %err,
-                        event_type = %event_type,
-                        topic = %topic,
-                        session_id = ?session_id,
-                        "failed to decode daemon pairing.verification_required websocket payload"
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "PairingVerificationPayload",
+                        &err,
                     );
                     None
                 }
@@ -622,140 +881,408 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
         }
         ws_event::PAIRING_COMPLETE => {
             match serde_json::from_value::<PairingSessionChangedPayload>(event.payload) {
-                Ok(payload) => Some(RealtimeEvent::PairingComplete(PairingCompleteEvent {
-                    session_id: payload.session_id,
-                    peer_id: payload.peer_id,
-                    device_name: payload.device_name,
-                })),
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = %payload.session_id,
+                        payload_type = "PairingSessionChangedPayload",
+                        stage = %payload.stage,
+                        has_peer_id = payload.peer_id.is_some(),
+                        has_device_name = payload.device_name.is_some(),
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        Some(&payload.session_id),
+                        Some(&payload.stage),
+                        "PairingComplete",
+                    );
+                    Some(RealtimeEvent::PairingComplete(PairingCompleteEvent {
+                        session_id: payload.session_id,
+                        peer_id: payload.peer_id,
+                        device_name: payload.device_name,
+                    }))
+                }
                 Err(err) => {
-                    warn!(
-                        error = %err,
-                        event_type = %event_type,
-                        topic = %topic,
-                        session_id = ?session_id,
-                        "failed to decode daemon pairing.complete websocket payload"
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "PairingSessionChangedPayload",
+                        &err,
                     );
                     None
                 }
             }
         }
-        ws_event::PAIRING_FAILED => serde_json::from_value::<PairingFailurePayload>(event.payload)
-            .ok()
-            .map(|payload| {
-                RealtimeEvent::PairingFailed(PairingFailedEvent {
-                    session_id: payload.session_id,
-                    reason: payload.reason,
-                })
-            }),
+        ws_event::PAIRING_FAILED => {
+            match serde_json::from_value::<PairingFailurePayload>(event.payload) {
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = %payload.session_id,
+                        payload_type = "PairingFailurePayload",
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        Some(&payload.session_id),
+                        None,
+                        "PairingFailed",
+                    );
+                    Some(RealtimeEvent::PairingFailed(PairingFailedEvent {
+                        session_id: payload.session_id,
+                        reason: payload.reason,
+                    }))
+                }
+                Err(err) => {
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "PairingFailurePayload",
+                        &err,
+                    );
+                    None
+                }
+            }
+        }
         ws_event::PEERS_CHANGED => {
             match serde_json::from_value::<PeersChangedFullPayload>(event.payload) {
-                Ok(payload) => Some(RealtimeEvent::PeersChanged(PeerChangedEvent {
-                    peers: payload
-                        .peers
-                        .into_iter()
-                        .map(|p| RealtimePeerSummary {
-                            peer_id: p.peer_id,
-                            device_name: p.device_name,
-                            connected: p.connected,
-                        })
-                        .collect(),
-                })),
-                Err(e) => {
-                    warn!(error = %e, "Failed to deserialize peers.changed payload");
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = session_id.as_deref().unwrap_or(""),
+                        payload_type = "PeersChangedFullPayload",
+                        peer_count = payload.peers.len(),
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        None,
+                        "PeersChanged",
+                    );
+                    Some(RealtimeEvent::PeersChanged(PeerChangedEvent {
+                        peers: payload
+                            .peers
+                            .into_iter()
+                            .map(|p| RealtimePeerSummary {
+                                peer_id: p.peer_id,
+                                device_name: p.device_name,
+                                connected: p.connected,
+                            })
+                            .collect(),
+                    }))
+                }
+                Err(err) => {
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "PeersChangedFullPayload",
+                        &err,
+                    );
                     None
                 }
             }
         }
         ws_event::PEERS_NAME_UPDATED => {
-            serde_json::from_value::<PeerNameUpdatedPayload>(event.payload)
-                .ok()
-                .map(|payload| {
-                    RealtimeEvent::PeersNameUpdated(PeerNameUpdatedEvent {
+            match serde_json::from_value::<PeerNameUpdatedPayload>(event.payload) {
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = session_id.as_deref().unwrap_or(""),
+                        payload_type = "PeerNameUpdatedPayload",
+                        peer_id = %payload.peer_id,
+                        has_device_name = payload.device_name.is_some(),
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        None,
+                        "PeersNameUpdated",
+                    );
+                    Some(RealtimeEvent::PeersNameUpdated(PeerNameUpdatedEvent {
                         peer_id: payload.peer_id,
                         device_name: payload.device_name,
-                    })
-                })
+                    }))
+                }
+                Err(err) => {
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "PeerNameUpdatedPayload",
+                        &err,
+                    );
+                    None
+                }
+            }
         }
         ws_event::PEERS_CONNECTION_CHANGED => {
-            serde_json::from_value::<PeerConnectionChangedPayload>(event.payload)
-                .ok()
-                .map(|payload| {
-                    RealtimeEvent::PeersConnectionChanged(PeerConnectionChangedEvent {
-                        peer_id: payload.peer_id,
-                        connected: payload.connected,
-                        device_name: payload.device_name,
-                    })
-                })
+            match serde_json::from_value::<PeerConnectionChangedPayload>(event.payload) {
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = session_id.as_deref().unwrap_or(""),
+                        payload_type = "PeerConnectionChangedPayload",
+                        peer_id = %payload.peer_id,
+                        connected = payload.connected,
+                        has_device_name = payload.device_name.is_some(),
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        None,
+                        "PeersConnectionChanged",
+                    );
+                    Some(RealtimeEvent::PeersConnectionChanged(
+                        PeerConnectionChangedEvent {
+                            peer_id: payload.peer_id,
+                            connected: payload.connected,
+                            device_name: payload.device_name,
+                        },
+                    ))
+                }
+                Err(err) => {
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "PeerConnectionChangedPayload",
+                        &err,
+                    );
+                    None
+                }
+            }
         }
         ws_event::PAIRED_DEVICES_CHANGED => {
-            serde_json::from_value::<PairedDevicesChangedPayload>(event.payload)
-                .ok()
-                .map(|payload| {
-                    RealtimeEvent::PairedDevicesChanged(PairedDevicesChangedEvent {
-                        devices: vec![uc_core::ports::realtime::RealtimePairedDeviceSummary {
-                            device_id: payload.peer_id,
-                            device_name: payload.device_name.unwrap_or_default(),
-                            last_seen_ts: None,
-                        }],
-                    })
-                })
+            match serde_json::from_value::<PairedDevicesChangedPayload>(event.payload) {
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = session_id.as_deref().unwrap_or(""),
+                        payload_type = "PairedDevicesChangedPayload",
+                        peer_id = %payload.peer_id,
+                        has_device_name = payload.device_name.is_some(),
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        None,
+                        "PairedDevicesChanged",
+                    );
+                    Some(RealtimeEvent::PairedDevicesChanged(
+                        PairedDevicesChangedEvent {
+                            devices: vec![uc_core::ports::realtime::RealtimePairedDeviceSummary {
+                                device_id: payload.peer_id,
+                                device_name: payload.device_name.unwrap_or_default(),
+                                last_seen_ts: None,
+                            }],
+                        },
+                    ))
+                }
+                Err(err) => {
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "PairedDevicesChangedPayload",
+                        &err,
+                    );
+                    None
+                }
+            }
         }
         ws_event::SETUP_STATE_CHANGED => {
             match serde_json::from_value::<SetupStateChangedPayload>(event.payload) {
-                Ok(payload) => match serde_json::from_value(payload.state.clone()) {
-                    Ok(state) => Some(RealtimeEvent::SetupStateChanged(SetupStateChangedEvent {
-                        session_id: payload.session_id,
-                        state,
-                    })),
-                    Err(err) => {
-                        warn!(
-                            error = %err,
-                            raw_state = %payload.state,
-                            "failed to decode setup state from daemon websocket event, dropping event"
-                        );
-                        None
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = %payload.session_id,
+                        payload_type = "SetupStateChangedPayload",
+                        "decoded websocket payload"
+                    );
+                    match serde_json::from_value(payload.state.clone()) {
+                        Ok(state) => {
+                            log_bridge_routing(
+                                &topic,
+                                &event_type,
+                                Some(&payload.session_id),
+                                None,
+                                "SetupStateChanged",
+                            );
+                            Some(RealtimeEvent::SetupStateChanged(SetupStateChangedEvent {
+                                session_id: payload.session_id,
+                                state,
+                            }))
+                        }
+                        Err(err) => {
+                            warn!(
+                                event = "bridge.decode_failed",
+                                source_topic = %topic,
+                                source_event_type = %event_type,
+                                session_id = %payload.session_id,
+                                payload_type = "SetupStateValue",
+                                error = %err,
+                                raw_state = %payload.state,
+                                "failed to decode websocket payload"
+                            );
+                            None
+                        }
                     }
-                },
+                }
                 Err(err) => {
-                    warn!(
-                        error = %err,
-                        event_type = %event_type,
-                        "failed to decode setup stateChanged websocket payload"
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "SetupStateChangedPayload",
+                        &err,
                     );
                     None
                 }
             }
         }
         ws_event::SETUP_SPACE_ACCESS_COMPLETED => {
-            serde_json::from_value::<SetupSpaceAccessCompletedPayload>(event.payload)
-                .ok()
-                .map(|payload| {
-                    RealtimeEvent::SetupSpaceAccessCompleted(SetupSpaceAccessCompletedEvent {
-                        session_id: payload.session_id,
-                        peer_id: payload.peer_id,
-                        success: payload.success,
-                        reason: payload.reason,
-                        ts: payload.ts,
-                    })
-                })
+            match serde_json::from_value::<SetupSpaceAccessCompletedPayload>(event.payload) {
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = %payload.session_id,
+                        payload_type = "SetupSpaceAccessCompletedPayload",
+                        peer_id = %payload.peer_id,
+                        success = payload.success,
+                        has_reason = payload.reason.is_some(),
+                        ts = payload.ts,
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        Some(&payload.session_id),
+                        None,
+                        "SetupSpaceAccessCompleted",
+                    );
+                    Some(RealtimeEvent::SetupSpaceAccessCompleted(
+                        SetupSpaceAccessCompletedEvent {
+                            session_id: payload.session_id,
+                            peer_id: payload.peer_id,
+                            success: payload.success,
+                            reason: payload.reason,
+                            ts: payload.ts,
+                        },
+                    ))
+                }
+                Err(err) => {
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "SetupSpaceAccessCompletedPayload",
+                        &err,
+                    );
+                    None
+                }
+            }
         }
         ws_event::SPACE_ACCESS_STATE_CHANGED => {
-            serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload)
-                .ok()
-                .map(|payload| {
-                    RealtimeEvent::SpaceAccessStateChanged(SpaceAccessStateChangedEvent {
-                        state: payload.state,
-                    })
-                })
+            match serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload) {
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = session_id.as_deref().unwrap_or(""),
+                        payload_type = "SpaceAccessStateChangedPayload",
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        None,
+                        "SpaceAccessStateChanged",
+                    );
+                    Some(RealtimeEvent::SpaceAccessStateChanged(
+                        SpaceAccessStateChangedEvent {
+                            state: payload.state,
+                        },
+                    ))
+                }
+                Err(err) => {
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "SpaceAccessStateChangedPayload",
+                        &err,
+                    );
+                    None
+                }
+            }
         }
         ws_event::SPACE_ACCESS_SNAPSHOT => {
-            serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload)
-                .ok()
-                .map(|payload| {
-                    RealtimeEvent::SpaceAccessStateChanged(SpaceAccessStateChangedEvent {
-                        state: payload.state,
-                    })
-                })
+            match serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload) {
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = session_id.as_deref().unwrap_or(""),
+                        payload_type = "SpaceAccessStateChangedPayload",
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        None,
+                        "SpaceAccessStateChanged",
+                    );
+                    Some(RealtimeEvent::SpaceAccessStateChanged(
+                        SpaceAccessStateChangedEvent {
+                            state: payload.state,
+                        },
+                    ))
+                }
+                Err(err) => {
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "SpaceAccessStateChangedPayload",
+                        &err,
+                    );
+                    None
+                }
+            }
         }
         ws_event::CLIPBOARD_NEW_CONTENT => {
             #[derive(serde::Deserialize)]
@@ -766,15 +1293,41 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                 origin: String,
             }
             match serde_json::from_value::<ClipboardPayload>(event.payload) {
-                Ok(payload) => Some(RealtimeEvent::ClipboardNewContent(
-                    ClipboardNewContentEvent {
-                        entry_id: payload.entry_id,
-                        preview: payload.preview,
-                        origin: payload.origin,
-                    },
-                )),
+                Ok(payload) => {
+                    debug!(
+                        event = "bridge.payload_decoded",
+                        source_topic = %topic,
+                        source_event_type = %event_type,
+                        session_id = session_id.as_deref().unwrap_or(""),
+                        payload_type = "ClipboardPayload",
+                        entry_id = %payload.entry_id,
+                        origin = %payload.origin,
+                        preview_len = payload.preview.len(),
+                        "decoded websocket payload"
+                    );
+                    log_bridge_routing(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        None,
+                        "ClipboardNewContent",
+                    );
+                    Some(RealtimeEvent::ClipboardNewContent(
+                        ClipboardNewContentEvent {
+                            entry_id: payload.entry_id,
+                            preview: payload.preview,
+                            origin: payload.origin,
+                        },
+                    ))
+                }
                 Err(err) => {
-                    warn!(error = %err, "failed to decode clipboard.new_content websocket payload");
+                    log_decode_failed(
+                        &topic,
+                        &event_type,
+                        session_id.as_deref(),
+                        "ClipboardPayload",
+                        &err,
+                    );
                     None
                 }
             }

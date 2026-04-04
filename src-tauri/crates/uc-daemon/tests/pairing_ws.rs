@@ -423,6 +423,131 @@ async fn granular_pairing_topic_subscription_receives_session_events() {
     assert_eq!(event["payload"]["peerId"], "peer-5");
 }
 
+/// Verifies that a `pairing.verification_required` with kind=`verifying` is routed to
+/// `pairing.updated` (not `pairing.verification_required`) by the bridge.
+/// This makes the bridge's kind-based mapping decision explicit and test-covered.
+#[tokio::test]
+async fn bridge_routes_verification_required_verifying_kind_to_pairing_updated() {
+    let harness = spawn_server().await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
+    subscribe(&mut socket, &["pairing"]).await;
+    let _snapshot = next_json(&mut socket).await;
+
+    harness
+        .event_tx
+        .send(DaemonWsEvent {
+            topic: "pairing/verification".to_string(),
+            event_type: "pairing.verification_required".to_string(),
+            session_id: Some("session-v".to_string()),
+            ts: 10,
+            payload: serde_json::to_value(PairingVerificationPayload {
+                session_id: "session-v".to_string(),
+                kind: "verifying".to_string(),
+                peer_id: Some("peer-v".to_string()),
+                device_name: Some("Laptop".to_string()),
+                code: None,
+                error: None,
+                local_fingerprint: None,
+                peer_fingerprint: None,
+            })
+            .unwrap(),
+        })
+        .unwrap();
+
+    let event = next_json(&mut socket).await;
+    harness.handle.abort();
+
+    // kind=verifying must route to pairing.updated, not pairing.verification_required
+    assert_eq!(
+        event["type"], "pairing.updated",
+        "kind=verifying must be routed to pairing.updated"
+    );
+    assert_eq!(event["payload"]["sessionId"], "session-v");
+    assert_eq!(event["payload"]["stage"], "verifying");
+}
+
+/// Verifies that a `pairing.verification_required` with kind=`complete` is routed to
+/// `pairing.complete` by the bridge.
+#[tokio::test]
+async fn bridge_routes_verification_required_complete_kind_to_pairing_complete() {
+    let harness = spawn_server().await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
+    subscribe(&mut socket, &["pairing"]).await;
+    let _snapshot = next_json(&mut socket).await;
+
+    harness
+        .event_tx
+        .send(DaemonWsEvent {
+            topic: "pairing/verification".to_string(),
+            event_type: "pairing.verification_required".to_string(),
+            session_id: Some("session-c".to_string()),
+            ts: 11,
+            payload: serde_json::to_value(PairingVerificationPayload {
+                session_id: "session-c".to_string(),
+                kind: "complete".to_string(),
+                peer_id: Some("peer-c".to_string()),
+                device_name: Some("Desktop".to_string()),
+                code: None,
+                error: None,
+                local_fingerprint: None,
+                peer_fingerprint: None,
+            })
+            .unwrap(),
+        })
+        .unwrap();
+
+    let event = next_json(&mut socket).await;
+    harness.handle.abort();
+
+    // kind=complete must route to pairing.complete
+    assert_eq!(
+        event["type"], "pairing.complete",
+        "kind=complete must be routed to pairing.complete"
+    );
+    assert_eq!(event["payload"]["sessionId"], "session-c");
+}
+
+/// Verifies that a `pairing.verification_required` with kind=`failed` is routed to
+/// `pairing.failed` by the bridge, and that the error field is forwarded as the reason.
+#[tokio::test]
+async fn bridge_routes_verification_required_failed_kind_to_pairing_failed() {
+    let harness = spawn_server().await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
+    subscribe(&mut socket, &["pairing"]).await;
+    let _snapshot = next_json(&mut socket).await;
+
+    harness
+        .event_tx
+        .send(DaemonWsEvent {
+            topic: "pairing/verification".to_string(),
+            event_type: "pairing.verification_required".to_string(),
+            session_id: Some("session-f".to_string()),
+            ts: 12,
+            payload: serde_json::to_value(PairingVerificationPayload {
+                session_id: "session-f".to_string(),
+                kind: "failed".to_string(),
+                peer_id: Some("peer-f".to_string()),
+                device_name: None,
+                code: None,
+                error: Some("verification_timeout".to_string()),
+                local_fingerprint: None,
+                peer_fingerprint: None,
+            })
+            .unwrap(),
+        })
+        .unwrap();
+
+    let event = next_json(&mut socket).await;
+    harness.handle.abort();
+
+    // kind=failed must route to pairing.failed
+    assert_eq!(
+        event["type"], "pairing.failed",
+        "kind=failed must be routed to pairing.failed"
+    );
+    assert_eq!(event["payload"]["sessionId"], "session-f");
+}
+
 #[tokio::test]
 async fn setup_topic_subscription_receives_setup_state_changed_events() {
     let harness = spawn_server().await;
