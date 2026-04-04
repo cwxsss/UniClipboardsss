@@ -22,7 +22,6 @@ use crate::pairing::host::DaemonPairingHost;
 use crate::peers::monitor::PeerMonitor;
 use crate::service::DaemonService;
 use crate::service::ServiceHealth;
-use crate::socket::resolve_daemon_socket_path;
 use crate::state::{DaemonServiceSnapshot, RuntimeState};
 use crate::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
 use crate::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
@@ -95,8 +94,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         )?
         .with_clipboard_write_coordinator(clipboard_write_coordinator.clone()),
     );
-
-    let socket_path = resolve_daemon_socket_path();
 
     // 1. Create the shared broadcast channel for WebSocket events.
     //    All services that emit WS events write to this same sender.
@@ -281,7 +278,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         event_tx,
         Some(pairing_host),
         Some(ctx.space_access_orchestrator),
-        socket_path,
         encryption_unlocked,
         deferred_services,
         deferred_notify_opt,
