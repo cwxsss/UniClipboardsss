@@ -1006,7 +1006,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                         session_id = session_id.as_deref().unwrap_or(""),
                         payload_type = "PeerNameUpdatedPayload",
                         peer_id = %payload.peer_id,
-                        has_device_name = payload.device_name.is_some(),
+                        has_device_name = !payload.device_name.is_empty(),
                         "decoded websocket payload"
                     );
                     log_bridge_routing(
@@ -1123,7 +1123,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                         event = "bridge.payload_decoded",
                         source_topic = %topic,
                         source_event_type = %event_type,
-                        session_id = %payload.session_id,
+                        session_id = payload.session_id.as_deref().unwrap_or(""),
                         payload_type = "SetupStateChangedPayload",
                         "decoded websocket payload"
                     );
@@ -1132,7 +1132,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                             log_bridge_routing(
                                 &topic,
                                 &event_type,
-                                Some(&payload.session_id),
+                                payload.session_id.as_deref(),
                                 None,
                                 "SetupStateChanged",
                             );
@@ -1146,7 +1146,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                                 event = "bridge.decode_failed",
                                 source_topic = %topic,
                                 source_event_type = %event_type,
-                                session_id = %payload.session_id,
+                                session_id = payload.session_id.as_deref().unwrap_or(""),
                                 payload_type = "SetupStateValue",
                                 error = %err,
                                 raw_state = %payload.state,
