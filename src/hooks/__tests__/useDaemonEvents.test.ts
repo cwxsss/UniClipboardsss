@@ -390,6 +390,82 @@ describe('usePairingEvents', () => {
       })
     ).not.toThrow()
   })
+
+  it('logs ignored decision when pairing.complete has no callback', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    renderHook(() => usePairingEvents({}))
+
+    act(() => {
+      handlersByTopic.get('pairing')?.({
+        topic: 'pairing',
+        eventType: 'pairing.complete',
+        ts: 1,
+        sessionId: 'session-1',
+        payload: { sessionId: 'session-1', peerId: 'peer-1', deviceName: 'Mac' },
+      })
+    })
+
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('ignored'))
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('pairing.complete'))
+    debugSpy.mockRestore()
+  })
+
+  it('logs unsupported decision for unrecognised event type', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    renderHook(() => usePairingEvents({ onComplete: vi.fn() }))
+
+    act(() => {
+      handlersByTopic.get('pairing')?.({
+        topic: 'pairing',
+        eventType: 'pairing.unknown_event',
+        ts: 1,
+        sessionId: 'session-1',
+        payload: { sessionId: 'session-1' },
+      })
+    })
+
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('unsupported'))
+    debugSpy.mockRestore()
+  })
+
+  it('logs unsupported decision when setup.spaceAccessCompleted payload is malformed', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    renderHook(() => usePairingEvents({ onSpaceAccessCompleted: vi.fn() }))
+
+    act(() => {
+      handlersByTopic.get('setup')?.({
+        topic: 'setup',
+        eventType: 'setup.spaceAccessCompleted',
+        ts: 1,
+        sessionId: 'session-1',
+        // Missing required 'success' field — malformed payload
+        payload: { sessionId: 'session-1', peerId: 'peer-1' },
+      })
+    })
+
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('unsupported'))
+    debugSpy.mockRestore()
+  })
+
+  it('logs routed decision for valid pairing.updated (request) event', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const onRequest = vi.fn()
+    renderHook(() => usePairingEvents({ onRequest }))
+
+    act(() => {
+      handlersByTopic.get('pairing')?.({
+        topic: 'pairing',
+        eventType: 'pairing.updated',
+        ts: 1,
+        sessionId: 'session-1',
+        payload: { sessionId: 'session-1', state: 'request', peerId: 'peer-1', deviceName: 'iPad' },
+      })
+    })
+
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('routed'))
+    expect(onRequest).toHaveBeenCalledTimes(1)
+    debugSpy.mockRestore()
+  })
 })
 
 // ── useEncryptionState ─────────────────────────────────────────

@@ -33,14 +33,20 @@ const {
 
 // Capture handlers registered via daemonWs.subscribe for test injection
 const capturedHandlers = {
-  pairing: null as ((event: { topic: string; eventType: string; payload: Record<string, unknown> }) => void) | null,
-  setup: null as ((event: { topic: string; eventType: string; payload: Record<string, unknown> }) => void) | null,
+  pairing: null as
+    | ((event: { topic: string; eventType: string; payload: Record<string, unknown> }) => void)
+    | null,
+  setup: null as
+    | ((event: { topic: string; eventType: string; payload: Record<string, unknown> }) => void)
+    | null,
 }
 vi.mock('@/lib/daemon-ws', () => ({
   daemonWs: {
     subscribe: vi.fn((topics: string[], handler: (event: unknown) => void) => {
-      if (topics.includes('pairing')) capturedHandlers.pairing = handler as typeof capturedHandlers.pairing
-      if (topics.includes('setup')) capturedHandlers.setup = handler as typeof capturedHandlers.setup
+      if (topics.includes('pairing'))
+        capturedHandlers.pairing = handler as typeof capturedHandlers.pairing
+      if (topics.includes('setup'))
+        capturedHandlers.setup = handler as typeof capturedHandlers.setup
       return vi.fn()
     }),
   },
@@ -62,7 +68,10 @@ vi.mock('@/api/daemon/events', () => ({
   classifyPairingError: (error?: string | null) => {
     const normalized = error?.toLowerCase() ?? ''
     if (normalized.includes('active pairing session exists')) return 'active_session_exists'
-    if (normalized.includes('pairing session not found') || normalized.includes('session_not_found'))
+    if (
+      normalized.includes('pairing session not found') ||
+      normalized.includes('session_not_found')
+    )
       return 'session_not_found'
     if (normalized.includes('connection refused') || normalized.includes('daemon connection info'))
       return 'daemon_unavailable'
@@ -287,7 +296,12 @@ describe('PairingNotificationProvider — accept->verification race regression',
       capturedHandlers.pairing!({
         topic: 'pairing',
         eventType: 'pairing.updated',
-        payload: { state: 'request', sessionId: 'session-abc', deviceName: 'PeerB', peerId: 'peer-id-b' },
+        payload: {
+          state: 'request',
+          sessionId: 'session-abc',
+          deviceName: 'PeerB',
+          peerId: 'peer-id-b',
+        },
       })
     })
 
@@ -306,7 +320,12 @@ describe('PairingNotificationProvider — accept->verification race regression',
       capturedHandlers.pairing!({
         topic: 'pairing',
         eventType: 'pairing.verification_required',
-        payload: { sessionId: 'session-abc', code: '123456', deviceName: 'PeerB', peerId: 'peer-id-b' },
+        payload: {
+          sessionId: 'session-abc',
+          code: '123456',
+          deviceName: 'PeerB',
+          peerId: 'peer-id-b',
+        },
       })
     })
 
@@ -327,7 +346,12 @@ describe('PairingNotificationProvider — accept->verification race regression',
       capturedHandlers.pairing!({
         topic: 'pairing',
         eventType: 'pairing.updated',
-        payload: { state: 'request', sessionId: 'session-fail', deviceName: 'PeerB', peerId: 'peer-id-b' },
+        payload: {
+          state: 'request',
+          sessionId: 'session-fail',
+          deviceName: 'PeerB',
+          peerId: 'peer-id-b',
+        },
       })
     })
 
@@ -343,7 +367,12 @@ describe('PairingNotificationProvider — accept->verification race regression',
       capturedHandlers.pairing!({
         topic: 'pairing',
         eventType: 'pairing.verification_required',
-        payload: { sessionId: 'session-fail', code: '999999', deviceName: 'PeerB', peerId: 'peer-id-b' },
+        payload: {
+          sessionId: 'session-fail',
+          code: '999999',
+          deviceName: 'PeerB',
+          peerId: 'peer-id-b',
+        },
       })
     })
 
@@ -421,5 +450,120 @@ describe('PairingNotificationProvider — accept->verification race regression',
 
     expect(await screen.findAllByText(/正在验证|Verifying/i)).toHaveLength(2)
     expect(screen.queryByText('123456')).not.toBeInTheDocument()
+  })
+})
+
+describe('PairingNotificationProvider — session-aware provider diagnostics', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    capturedHandlers.pairing = null
+    capturedHandlers.setup = null
+    acceptP2PPairingMock.mockResolvedValue(undefined)
+    rejectP2PPairingMock.mockResolvedValue(undefined)
+    toastMock.mockClear()
+    toastMock.error.mockClear()
+    toastMock.success.mockClear()
+  })
+
+  it('logs accepted when user clicks Accept on a pairing request', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    render(<PairingNotificationProvider />)
+    await act(async () => {})
+
+    act(() => {
+      capturedHandlers.pairing!({
+        topic: 'pairing',
+        eventType: 'pairing.updated',
+        payload: {
+          state: 'request',
+          sessionId: 'session-diag',
+          deviceName: 'PeerB',
+          peerId: 'peer-b',
+        },
+      })
+    })
+
+    const toastOptions = toastMock.mock.calls[0][1] as { action?: { onClick?: () => void } }
+    act(() => {
+      toastOptions.action!.onClick!()
+    })
+
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('accepted'))
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('session-diag'))
+    debugSpy.mockRestore()
+  })
+
+  it('logs ignored with session_mismatch when verification arrives for a different session', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    render(<PairingNotificationProvider />)
+    await act(async () => {})
+
+    // Accept session-active
+    act(() => {
+      capturedHandlers.pairing!({
+        topic: 'pairing',
+        eventType: 'pairing.updated',
+        payload: {
+          state: 'request',
+          sessionId: 'session-active',
+          deviceName: 'PeerA',
+          peerId: 'peer-a',
+        },
+      })
+    })
+    const toastOptions = toastMock.mock.calls[0][1] as { action?: { onClick?: () => void } }
+    act(() => {
+      toastOptions.action!.onClick!()
+    })
+
+    // Verification for a different session
+    act(() => {
+      capturedHandlers.pairing!({
+        topic: 'pairing',
+        eventType: 'pairing.verification_required',
+        payload: {
+          sessionId: 'session-other',
+          code: '999999',
+          deviceName: 'PeerB',
+          peerId: 'peer-b',
+        },
+      })
+    })
+
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('ignored'))
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('session_mismatch'))
+    expect(screen.queryByText('999999')).not.toBeInTheDocument()
+    debugSpy.mockRestore()
+  })
+
+  it('logs rejected when user dismisses the request toast', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    render(<PairingNotificationProvider />)
+    await act(async () => {})
+
+    act(() => {
+      capturedHandlers.pairing!({
+        topic: 'pairing',
+        eventType: 'pairing.updated',
+        payload: {
+          state: 'request',
+          sessionId: 'session-reject',
+          deviceName: 'PeerC',
+          peerId: 'peer-c',
+        },
+      })
+    })
+
+    const toastOptions = toastMock.mock.calls[0][1] as { cancel?: { onClick?: () => void } }
+    act(() => {
+      toastOptions.cancel!.onClick!()
+    })
+
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('rejected'))
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('session-reject'))
+    debugSpy.mockRestore()
   })
 })

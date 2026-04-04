@@ -13,6 +13,38 @@ import type { ClipboardEntryDto } from '@/api/daemon/clipboard'
 import { daemonWs } from '@/lib/daemon-ws'
 import type { DaemonWsEvent } from '@/lib/daemon-ws'
 
+// ── Routing diagnostics ─────────────────────────────────────────
+
+/**
+ * Record a routing decision for a pairing/setup event at the shared hook boundary.
+ *
+ * Decisions:
+ * - "routed"   — event was dispatched to the matching callback
+ * - "ignored"  — event was silently skipped (no callback registered, session mismatch, etc.)
+ * - "unsupported" — event type / payload shape not recognised
+ *
+ * Security: never logs code, fingerprint, or passphrase fields.
+ */
+function logPairingRouting(
+  decision: 'routed' | 'ignored' | 'unsupported',
+  context: {
+    eventType: string
+    sessionId?: string
+    kind?: string
+    state?: string
+    reason?: string
+  }
+) {
+  const { eventType, sessionId, kind, state, reason } = context
+  const parts: string[] = [`[useDaemonEvents] ${decision}`, `event_type=${eventType}`]
+  if (sessionId) parts.push(`session_id=${sessionId}`)
+  if (kind !== undefined) parts.push(`kind=${kind}`)
+  if (state !== undefined) parts.push(`state=${state}`)
+  if (reason) parts.push(`reason=${reason}`)
+
+  console.debug(parts.join(' '))
+}
+
 // ── Payload types for daemon WS events ─────────────────────────
 
 /** Payload for `clipboard.new_content` events. */
@@ -220,25 +252,57 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
 
       if (event.eventType === 'pairing.updated') {
         if (p.state === 'request' && cbs.onRequest) {
+          logPairingRouting('routed', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            state: p.state,
+          })
           cbs.onRequest({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
         } else if (p.state === 'verifying' && cbs.onVerifying) {
+          logPairingRouting('routed', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            state: p.state,
+          })
           cbs.onVerifying({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
+        } else {
+          logPairingRouting('ignored', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            state: p.state,
+            reason: p.state ? 'no_callback_for_state' : 'missing_state_field',
+          })
         }
         return
       }
 
       if (event.eventType === 'pairing.verification_required') {
         if (p.kind === 'verifying' && cbs.onVerifying) {
+          logPairingRouting('routed', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            kind: p.kind,
+          })
           cbs.onVerifying({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
           return
         }
 
         if (p.kind === 'complete' && cbs.onComplete) {
+          logPairingRouting('routed', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            kind: p.kind,
+          })
           cbs.onComplete({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
           return
         }
 
         if (p.kind === 'failed' && cbs.onFailed) {
+          logPairingRouting('routed', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            kind: p.kind,
+          })
           cbs.onFailed({
             sessionId: p.sessionId,
             error: p.reason ?? p.error,
@@ -247,6 +311,11 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
         }
 
         if (cbs.onVerification) {
+          logPairingRouting('routed', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            kind: p.kind ?? 'verification',
+          })
           cbs.onVerification({
             sessionId: p.sessionId,
             peerId: p.peerId,
@@ -255,40 +324,83 @@ export function usePairingEvents(callbacks: UsePairingEventsCallbacks): void {
             localFingerprint: p.localFingerprint,
             peerFingerprint: p.peerFingerprint,
           })
+        } else {
+          logPairingRouting('ignored', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            kind: p.kind ?? 'verification',
+            reason: 'no_onVerification_callback',
+          })
         }
         return
       }
 
       if (event.eventType === 'pairing.complete') {
         if (cbs.onComplete) {
+          logPairingRouting('routed', { eventType: event.eventType, sessionId: p.sessionId })
           cbs.onComplete({ sessionId: p.sessionId, peerId: p.peerId, deviceName: p.deviceName })
+        } else {
+          logPairingRouting('ignored', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            reason: 'no_onComplete_callback',
+          })
         }
         return
       }
 
       if (event.eventType === 'pairing.failed') {
         if (cbs.onFailed) {
+          logPairingRouting('routed', { eventType: event.eventType, sessionId: p.sessionId })
           cbs.onFailed({ sessionId: p.sessionId, error: p.reason })
+        } else {
+          logPairingRouting('ignored', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            reason: 'no_onFailed_callback',
+          })
         }
         return
       }
+
+      logPairingRouting('unsupported', {
+        eventType: event.eventType,
+        sessionId: p.sessionId,
+        reason: 'unrecognised_event_type',
+      })
     }
 
     const setupHandler = (event: DaemonWsEvent) => {
       if (event.topic !== 'setup') return
-      if (
-        event.eventType === 'setup.spaceAccessCompleted' &&
-        isSpaceAccessCompletedPayload(event.payload)
-      ) {
+      if (event.eventType === 'setup.spaceAccessCompleted') {
+        if (!isSpaceAccessCompletedPayload(event.payload)) {
+          logPairingRouting('unsupported', {
+            eventType: event.eventType,
+            reason: 'malformed_payload_missing_required_fields',
+          })
+          return
+        }
         const p = event.payload as SpaceAccessCompletedPayload
         if (callbacksRef.current.onSpaceAccessCompleted) {
+          logPairingRouting('routed', { eventType: event.eventType, sessionId: p.sessionId })
           callbacksRef.current.onSpaceAccessCompleted({
             sessionId: p.sessionId,
             peerId: p.peerId,
             success: p.success,
             reason: p.reason ?? undefined,
           })
+        } else {
+          logPairingRouting('ignored', {
+            eventType: event.eventType,
+            sessionId: p.sessionId,
+            reason: 'no_onSpaceAccessCompleted_callback',
+          })
         }
+      } else {
+        logPairingRouting('unsupported', {
+          eventType: event.eventType,
+          reason: 'unrecognised_setup_event_type',
+        })
       }
     }
 

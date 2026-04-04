@@ -6,6 +6,38 @@
  * realtime WebSocket bridge.
  */
 
+// ── Setup realtime diagnostics ──────────────────────────────────────────────
+
+/**
+ * Record a setup realtime routing decision for diagnosability.
+ *
+ * Decisions:
+ * - "applied"     — event was passed to the caller's callback
+ * - "dropped"     — event was suppressed (dedupe, missing session id, etc.)
+ * - "session_switched" — session id changed, dedupe key set cleared
+ *
+ * Security: never logs passphrase, short_code, or fingerprint fields.
+ */
+function logSetupRouting(
+  decision: 'applied' | 'dropped' | 'session_switched',
+  context: {
+    eventType: string
+    sessionId?: string | null
+    activeSessionId?: string | null
+    state?: string
+    reason?: string
+  }
+) {
+  const { eventType, sessionId, activeSessionId, state, reason } = context
+  const parts: string[] = [`[setup.ts] ${decision}`, `event_type=${eventType}`]
+  if (sessionId !== undefined) parts.push(`session_id=${sessionId ?? 'null'}`)
+  if (activeSessionId !== undefined) parts.push(`active_session_id=${activeSessionId ?? 'null'}`)
+  if (state !== undefined) parts.push(`state=${state}`)
+  if (reason) parts.push(`reason=${reason}`)
+
+  console.debug(parts.join(' '))
+}
+
 import {
   getSetupState as daemonGetSetupState,
   startNewSpace as daemonStartNewSpace,
@@ -150,20 +182,41 @@ export async function onSetupStateChanged(
     }
 
     if (!enrichedEvent.sessionId) {
+      logSetupRouting('dropped', { eventType: 'setup.stateChanged', reason: 'missing_session_id' })
       return
     }
 
     if (activeSessionId !== enrichedEvent.sessionId) {
+      logSetupRouting('session_switched', {
+        eventType: 'setup.stateChanged',
+        sessionId: enrichedEvent.sessionId,
+        activeSessionId,
+      })
       activeSessionId = enrichedEvent.sessionId
       seenEventKeys.clear()
     }
 
+    const stateKey =
+      typeof enrichedEvent.state === 'string'
+        ? enrichedEvent.state
+        : (Object.keys(enrichedEvent.state as object)[0] ?? 'unknown')
     const dedupeKey = `${enrichedEvent.sessionId}:${JSON.stringify(enrichedEvent.state)}:${enrichedEvent.ts}`
     if (seenEventKeys.has(dedupeKey)) {
+      logSetupRouting('dropped', {
+        eventType: 'setup.stateChanged',
+        sessionId: enrichedEvent.sessionId,
+        state: stateKey,
+        reason: 'duplicate_state_event',
+      })
       return
     }
     seenEventKeys.add(dedupeKey)
 
+    logSetupRouting('applied', {
+      eventType: 'setup.stateChanged',
+      sessionId: enrichedEvent.sessionId,
+      state: stateKey,
+    })
     callback(enrichedEvent)
 
     if (enrichedEvent.state === 'Completed') {

@@ -3,8 +3,33 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { classifyPairingError } from '@/api/daemon/events'
 import { acceptP2PPairing, rejectP2PPairing } from '@/api/daemon/pairing'
-import { usePairingEvents } from '@/hooks/useDaemonEvents'
 import PairingPinDialog from '@/components/PairingPinDialog'
+import { usePairingEvents } from '@/hooks/useDaemonEvents'
+
+// ── Provider-level pairing diagnostics ─────────────────────────────────────
+
+/**
+ * Record a session-aware provider decision for pairing lifecycle events.
+ *
+ * Security: never logs code, fingerprint, or passphrase fields.
+ */
+function logProviderDecision(
+  decision: 'accepted' | 'rejected' | 'ignored' | 'canceled' | 'success' | 'failure',
+  context: {
+    path: string
+    sessionId?: string | null
+    activeSessionId?: string | null
+    reason?: string
+  }
+) {
+  const { path, sessionId, activeSessionId, reason } = context
+  const parts: string[] = [`[PairingNotificationProvider] ${decision}`, `path=${path}`]
+  if (sessionId) parts.push(`session_id=${sessionId}`)
+  if (activeSessionId !== undefined) parts.push(`active_session_id=${activeSessionId ?? 'null'}`)
+  if (reason) parts.push(`reason=${reason}`)
+
+  console.debug(parts.join(' '))
+}
 
 export function PairingNotificationProvider() {
   const { t } = useTranslation()
@@ -58,12 +83,18 @@ export function PairingNotificationProvider() {
           action: {
             label: t('common.accept', { defaultValue: 'Accept' }),
             onClick: () => {
+              logProviderDecision('accepted', { path: 'request', sessionId })
               activeSessionIdRef.current = sessionId
               setActiveSessionId(sessionId)
               acceptP2PPairing(sessionId).catch(err => {
                 const message = localizePairingError(
                   err instanceof Error ? err.message : String(err)
                 )
+                logProviderDecision('failure', {
+                  path: 'request.accept_api',
+                  sessionId,
+                  reason: 'acceptP2PPairing_rejected',
+                })
                 console.error('Failed to accept pairing request:', err)
                 toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
                   description: message,
@@ -76,11 +107,17 @@ export function PairingNotificationProvider() {
           cancel: {
             label: t('common.reject', { defaultValue: 'Reject' }),
             onClick: () => {
+              logProviderDecision('rejected', { path: 'request', sessionId })
               if (peerId) {
                 rejectP2PPairing(sessionId, peerId).catch(err => {
                   const message = localizePairingError(
                     err instanceof Error ? err.message : String(err)
                   )
+                  logProviderDecision('failure', {
+                    path: 'request.reject_api',
+                    sessionId,
+                    reason: 'rejectP2PPairing_rejected',
+                  })
                   console.error('Failed to reject pairing request:', err)
                   toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
                     description: message,
@@ -96,8 +133,17 @@ export function PairingNotificationProvider() {
 
     onVerification: ({ sessionId, deviceName, code, peerId }) => {
       const currentSessionId = activeSessionIdRef.current
-      if (!currentSessionId || sessionId !== currentSessionId) return
+      if (!currentSessionId || sessionId !== currentSessionId) {
+        logProviderDecision('ignored', {
+          path: 'verification',
+          sessionId,
+          activeSessionId: currentSessionId,
+          reason: currentSessionId ? 'session_mismatch' : 'no_active_session',
+        })
+        return
+      }
 
+      logProviderDecision('accepted', { path: 'verification', sessionId })
       setDialogState({
         open: true,
         pinCode: code ?? '',
@@ -109,19 +155,46 @@ export function PairingNotificationProvider() {
 
     onVerifying: ({ sessionId }) => {
       const currentSessionId = activeSessionIdRef.current
-      if (!currentSessionId || sessionId !== currentSessionId) return
+      if (!currentSessionId || sessionId !== currentSessionId) {
+        logProviderDecision('ignored', {
+          path: 'verifying',
+          sessionId,
+          activeSessionId: currentSessionId,
+          reason: currentSessionId ? 'session_mismatch' : 'no_active_session',
+        })
+        return
+      }
+      logProviderDecision('accepted', { path: 'verifying', sessionId })
       setDialogState(prev => ({ ...prev, phase: 'verifying' }))
     },
 
     onComplete: ({ sessionId }) => {
       const currentSessionId = activeSessionIdRef.current
-      if (!currentSessionId || sessionId !== currentSessionId) return
+      if (!currentSessionId || sessionId !== currentSessionId) {
+        logProviderDecision('ignored', {
+          path: 'complete',
+          sessionId,
+          activeSessionId: currentSessionId,
+          reason: currentSessionId ? 'session_mismatch' : 'no_active_session',
+        })
+        return
+      }
+      logProviderDecision('success', { path: 'complete', sessionId })
       setDialogState(prev => ({ ...prev, phase: 'verifying' }))
     },
 
     onFailed: ({ sessionId, error }) => {
       const currentSessionId = activeSessionIdRef.current
-      if (!currentSessionId || sessionId !== currentSessionId) return
+      if (!currentSessionId || sessionId !== currentSessionId) {
+        logProviderDecision('ignored', {
+          path: 'failed',
+          sessionId,
+          activeSessionId: currentSessionId,
+          reason: currentSessionId ? 'session_mismatch' : 'no_active_session',
+        })
+        return
+      }
+      logProviderDecision('failure', { path: 'failed', sessionId })
       setDialogState(prev => ({ ...prev, open: false }))
       toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
         description: localizePairingError(error),
@@ -131,9 +204,18 @@ export function PairingNotificationProvider() {
 
     onSpaceAccessCompleted: ({ sessionId, success, reason }) => {
       const currentSessionId = activeSessionIdRef.current
-      if (!currentSessionId || sessionId !== currentSessionId) return
+      if (!currentSessionId || sessionId !== currentSessionId) {
+        logProviderDecision('ignored', {
+          path: 'spaceAccessCompleted',
+          sessionId,
+          activeSessionId: currentSessionId,
+          reason: currentSessionId ? 'session_mismatch' : 'no_active_session',
+        })
+        return
+      }
 
       if (success) {
+        logProviderDecision('success', { path: 'spaceAccessCompleted', sessionId })
         setDialogState(prev => ({ ...prev, phase: 'success' }))
         setTimeout(() => {
           setDialogState(prev => ({ ...prev, open: false }))
@@ -142,6 +224,11 @@ export function PairingNotificationProvider() {
         return
       }
 
+      logProviderDecision('failure', {
+        path: 'spaceAccessCompleted',
+        sessionId,
+        reason: reason ?? 'unknown',
+      })
       setDialogState(prev => ({ ...prev, open: false }))
       toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
         description: localizePairingError(reason),
@@ -151,9 +238,15 @@ export function PairingNotificationProvider() {
   })
 
   const handleCancel = () => {
+    logProviderDecision('canceled', { path: 'dialog', sessionId: activeSessionIdRef.current })
     if (activeSessionIdRef.current && dialogState.peerId) {
       rejectP2PPairing(activeSessionIdRef.current, dialogState.peerId).catch(err => {
         const message = localizePairingError(err instanceof Error ? err.message : String(err))
+        logProviderDecision('failure', {
+          path: 'dialog.cancel_api',
+          sessionId: activeSessionIdRef.current,
+          reason: 'rejectP2PPairing_rejected',
+        })
         console.error('Failed to cancel pairing dialog:', err)
         toast.error(t('pairing.failed.title', { defaultValue: 'Pairing failed' }), {
           description: message,
