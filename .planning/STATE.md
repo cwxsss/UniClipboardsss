@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Milestone complete
-stopped_at: Completed 86-04-PLAN.md
-last_updated: "2026-04-03T10:08:42.643Z"
+status: Phase complete — ready for verification
+stopped_at: Completed 85-04-PLAN.md
+last_updated: '2026-04-04T13:48:19.899Z'
 progress:
   total_phases: 57
-  completed_phases: 42
-  total_plans: 121
-  completed_plans: 109
+  completed_phases: 43
+  total_plans: 122
+  completed_plans: 113
 ---
 
 # Project State
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 86
-Plan: Not started
+Phase: 85 (improve-pairing-observability-across-daemon-event-routing-and-ui-state-transitions) — EXECUTING
+Plan: 3 of 3
 
 ## Current Position
 
@@ -117,10 +117,14 @@ Plan: Not started
   | Phase 83 P03 | 17 | 3 tasks | 13 files |
   | Phase 84 P02 | 384 | 2 tasks | 2 files |
   | Phase 84 P03 | 15 | 3 tasks | 4 files |
-| Phase 86 P01 | 95 | 3 tasks | 2 files |
-| Phase 86 P02 | 8 | 3 tasks | 6 files |
-| Phase 86 P03 | 131 | 3 tasks | 3 files |
-| Phase 86 P04 | 1106 | 2 tasks | 1 files |
+  | Phase 86 P01 | 95 | 3 tasks | 2 files |
+  | Phase 86 P02 | 8 | 3 tasks | 6 files |
+  | Phase 86 P03 | 131 | 3 tasks | 3 files |
+  | Phase 86 P04 | 1106 | 2 tasks | 1 files |
+  | Phase 85 P01 | 6 | 3 tasks | 5 files |
+  | Phase 85 P02 | 7 | 3 tasks | 6 files |
+  | Phase 85 P03 | 15 | 3 tasks | 4 files |
+  | Phase 85 P04 | 2 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -274,6 +278,15 @@ Recent decisions affecting current work:
 - [Phase 84]: Phase 84: authorized_daemon_request_with_type routes gui to get_session_token (caching), others to exchange_session_token (no cache)
 - [Phase 84]: Phase 84-03: All 6 AUTH requirements now have automated integration test coverage via cli_auth.rs and security_middleware.rs
 - [Phase 86]: D-01: Changed first clearing condition from OR to AND to prevent premature clearing of decision session when in NeedVerification state
+- [Phase 85]: 85-01: PairingRoutingRecord uses static str for routed_event_class (Rust variant names, zero-alloc, no imports needed)
+- [Phase 85]: 85-01: log_bridge_routing() is a free function in ws_bridge.rs — single helper for consistent bridge mapping diagnostics across all pairing routing branches
+- [Phase 85]: 85-01: pairing.failed decode errors now use explicit match + warn! instead of .ok() silent discard — matches visibility pattern of all other branches
+- [Phase 85]: 85-02: logPairingRouting/logProviderDecision/logSetupRouting/logStoreDecision all use console.debug for zero-overhead frontend observability without Sentry dependency
+- [Phase 85]: 85-02: Provider session mismatch logs include both session_id (incoming) and active_session_id (current) so drop cause is immediately diagnosable
+- [Phase 85]: 85-02: space_access_ignored is a distinct decision type (not dropped) to document intentional sponsor-side behavior in setup flow
+- [Phase 85]: 85-03: Backend timing test uses Instant::now() + wait_for_setup_response with < 1000ms assertion for low-latency regression guard
+- [Phase 85]: 85-03: Frontend observability tests use vi.spyOn(console, debug) to assert logProvider/logStore helpers without test output pollution
+- [Phase 85]: 85-04: PairingRoutingRecord documented as forward-compatibility contract rather than wiring to live log_bridge_routing()
 
 ### Roadmap Evolution
 
@@ -334,6 +347,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-03T10:03:49.401Z
-Stopped at: Completed 86-04-PLAN.md
+Last session: 2026-04-04T13:48:19.876Z
+Stopped at: Completed 85-04-PLAN.md
 Resume file: None

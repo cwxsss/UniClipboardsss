@@ -275,6 +275,15 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [ ] **PH73-09**: `SyncInboundClipboardUseCase` Full-mode OS write path delegates to `coordinator.write(snapshot, RemotePush)` — `REMOTE_SNAPSHOT_HASH_TTL_MS` constant removed from sync_inbound.rs
 - [ ] **PH73-10**: `InboundClipboardSyncWorker` accepts `Arc<ClipboardWriteCoordinator>` instead of `Arc<dyn ClipboardChangeOriginPort>` and passes it to `SyncInboundClipboardUseCase::with_capture_dependencies()`
 
+### Pairing Observability
+
+- [x] **PH85-01**: A single pairing session can be followed across daemon emission, websocket bridge routing, and frontend handling using stable structured fields (session_id, event_type, stage)
+- [x] **PH85-02**: Frontend pairing/setup consumers explicitly record accept/ignore/dedupe decisions instead of silently dropping events — four log helpers: logPairingRouting, logProviderDecision, logSetupRouting, logStoreDecision
+- [x] **PH85-03**: Bridge routing decisions for `pairing.verification_required` are explicit and diagnosable via log_bridge_routing() in ws_bridge.rs with per-branch routing logs
+- [x] **PH85-04**: Pairing-driven setup transitions remain observable through to UI-facing state changes — backend regression tests in setup_api.rs and frontend realtime tests cover session filtering
+- [x] **PH85-05**: New observability records do not leak secrets, raw key material, or sensitive verification payloads — secrets logged as boolean presence flags only
+- [x] **PH85-06**: Existing low-latency race fixes remain covered and verified after observability work lands — timing assertion test with less than 1000ms guard
+
 ### Daemon Settings, Encryption & Storage HTTP API
 
 - [ ] **PH76-01**: `PermissionLevel` enum in `uc-daemon/src/security/permission.rs` includes `L3Sensitive = 3` and `L4Dangerous = 4` variants with `from_u8()` support
@@ -465,14 +474,20 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH73-08 | 73 | Pending |
 | PH73-09 | 73 | Pending |
 | PH73-10 | 73 | Pending |
+| PH85-01 | 85 | Complete |
+| PH85-02 | 85 | Complete |
+| PH85-03 | 85 | Complete |
+| PH85-04 | 85 | Complete |
+| PH85-05 | 85 | Complete |
+| PH85-06 | 85 | Complete |
 
 **Coverage:**
 
-- v0.4.0 requirements: 141 total
-- Mapped to phases: 141
+- v0.4.0 requirements: 147 total
+- Mapped to phases: 147
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-29 after Phase 72 planning_
+_Last updated: 2026-04-04 after Phase 85 gap closure_

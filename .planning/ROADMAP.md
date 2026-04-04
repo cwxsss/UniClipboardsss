@@ -967,7 +967,7 @@ Plans:
 **Goal:** Add end-to-end, session-centered observability for pairing/setup flows so daemon emission, bridge routing, and frontend state transitions can be correlated and diagnosed without guesswork.
 **Requirements**: PH85-01, PH85-02, PH85-03, PH85-04, PH85-05, PH85-06
 **Depends on:** Phase 84
-**Plans:** 3 plans
+**Plans:** 4/4 plans complete
 
 **Success Criteria** (what must be TRUE):
 
@@ -980,9 +980,10 @@ Plans:
 
 Plans:
 
-- [ ] 85-01-PLAN.md — Backend observability contract for daemon emission and bridge routing (Wave 1)
-- [ ] 85-02-PLAN.md — Frontend pairing/setup consumption diagnostics and shared event handling visibility (Wave 2)
-- [ ] 85-03-PLAN.md — Regression coverage and validation evidence for end-to-end pairing observability (Wave 3)
+- [x] 85-01-PLAN.md — Backend observability contract for daemon emission and bridge routing (Wave 1)
+- [x] 85-02-PLAN.md — Frontend pairing/setup consumption diagnostics and shared event handling visibility (Wave 2)
+- [x] 85-03-PLAN.md — Regression coverage and validation evidence for end-to-end pairing observability (Wave 3)
+- [x] 85-04-PLAN.md — Gap closure: add PH85-xx entries to REQUIREMENTS.md and clarify PairingRoutingRecord doc comment (Wave 1)
 
 ### Phase 86: CLI 层重构：收口远端状态解析，拆分 host/join flow phase
 
