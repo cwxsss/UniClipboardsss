@@ -23,7 +23,7 @@ use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
 use crate::api::types::DaemonWsEvent;
 use crate::pairing::host::DaemonPairingHost;
-use crate::process_metadata::{remove_pid_file, write_current_pid};
+use crate::process_metadata::DaemonPidManager;
 use crate::security::{cleanup_rate_limiter_task, SecurityState};
 use crate::service::DaemonService;
 use crate::state::RuntimeState;
@@ -239,8 +239,9 @@ impl DaemonApp {
             "loading daemon auth token"
         );
         let auth_token = load_or_create_auth_token(&token_path)?;
-        let _pid_file_guard = DaemonPidFileGuard::activate()?;
-        let pid = write_current_pid()?;
+        let pid_manager = DaemonPidManager::new(storage_paths.clone());
+        let _pid_file_guard = DaemonPidFileGuard::activate(pid_manager.clone())?;
+        let pid = pid_manager.write_current_pid()?;
         info!(pid, "wrote daemon pid metadata");
         let query_service = Arc::new(DaemonQueryService::new(
             self.runtime.clone(),
@@ -387,19 +388,21 @@ impl DaemonApp {
     }
 }
 
-struct DaemonPidFileGuard;
+struct DaemonPidFileGuard {
+    manager: DaemonPidManager,
+}
 
 impl DaemonPidFileGuard {
-    fn activate() -> anyhow::Result<Self> {
-        let pid = write_current_pid()?;
+    fn activate(manager: DaemonPidManager) -> anyhow::Result<Self> {
+        let pid = manager.write_current_pid()?;
         info!(pid, "wrote daemon pid metadata");
-        Ok(Self)
+        Ok(Self { manager })
     }
 }
 
 impl Drop for DaemonPidFileGuard {
     fn drop(&mut self) {
-        if let Err(error) = remove_pid_file() {
+        if let Err(error) = self.manager.remove_pid_file() {
             warn!(error = %error, "failed to remove daemon pid metadata");
         }
     }
@@ -431,9 +434,10 @@ async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::process_metadata::{read_pid_file, resolve_pid_path};
+    use crate::process_metadata::DaemonPidManager;
     use std::path::Path;
     use std::sync::{Mutex, OnceLock};
+    use uc_app::app_paths::AppPaths;
 
     fn with_daemon_env<T>(
         profile: Option<&str>,
@@ -862,19 +866,25 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
 
         with_daemon_env(Some("a"), Some(tempdir.path()), || {
+            let app_paths = AppPaths::with_base_data_local_dir(tempdir.path().into());
+            let mgr = DaemonPidManager::new(app_paths);
+            let pid_path = mgr.pid_path_for_testing();
+
             {
-                let _guard = DaemonPidFileGuard::activate().expect("pid guard should activate");
+                let _guard =
+                    DaemonPidFileGuard::activate(mgr.clone()).expect("pid guard should activate");
                 assert_eq!(
-                    read_pid_file()
+                    mgr.read_pid_file()
                         .expect("pid file should be readable")
                         .expect("pid file should exist"),
                     std::process::id()
                 );
-                assert!(resolve_pid_path().exists());
+                assert!(pid_path.exists());
             }
 
-            assert!(!resolve_pid_path().exists());
-            assert!(read_pid_file()
+            assert!(!pid_path.exists());
+            assert!(mgr
+                .read_pid_file()
                 .expect("pid file read should succeed")
                 .is_none());
         });
