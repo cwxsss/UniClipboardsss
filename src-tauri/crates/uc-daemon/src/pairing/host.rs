@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
 use uc_app::usecases::space_access::{
@@ -359,40 +359,49 @@ impl DaemonPairingHost {
 
         let mut tasks = JoinSet::new();
 
-        tasks.spawn(run_pairing_action_loop(
-            self.runtime.clone(),
-            self.runtime.setup_orchestrator().clone(),
-            self.pairing_orchestrator.clone(),
-            self.space_access_orchestrator.clone(),
-            self.key_slot_store.clone(),
-            self.state.clone(),
-            self.active_session_id.clone(),
-            self.event_tx.clone(),
-            pairing_action_rx,
-            cancel.child_token(),
-        ));
+        tasks.spawn(
+            run_pairing_action_loop(
+                self.runtime.clone(),
+                self.runtime.setup_orchestrator().clone(),
+                self.pairing_orchestrator.clone(),
+                self.space_access_orchestrator.clone(),
+                self.key_slot_store.clone(),
+                self.state.clone(),
+                self.active_session_id.clone(),
+                self.event_tx.clone(),
+                pairing_action_rx,
+                cancel.child_token(),
+            )
+            .instrument(tracing::info_span!("pairing.action_loop")),
+        );
 
-        tasks.spawn(run_pairing_domain_event_loop(
-            self.pairing_orchestrator.clone(),
-            self.state.clone(),
-            self.active_session_id.clone(),
-            domain_events,
-            self.event_tx.clone(),
-            cancel.child_token(),
-        ));
+        tasks.spawn(
+            run_pairing_domain_event_loop(
+                self.pairing_orchestrator.clone(),
+                self.state.clone(),
+                self.active_session_id.clone(),
+                domain_events,
+                self.event_tx.clone(),
+                cancel.child_token(),
+            )
+            .instrument(tracing::info_span!("pairing.domain_event_loop")),
+        );
 
-        tasks.spawn(run_pairing_protocol_loop(
-            self.runtime.clone(),
-            self.runtime.setup_orchestrator().clone(),
-            self.space_access_orchestrator.clone(),
-            self.pairing_orchestrator.clone(),
-            self.state.clone(),
-            self.active_session_id.clone(),
-            self.discoverability.clone(),
-            self.participant_readiness.clone(),
-            self.event_tx.clone(),
-            cancel.child_token(),
-        ));
+        tasks.spawn(
+            run_pairing_protocol_loop(
+                self.runtime.clone(),
+                self.runtime.setup_orchestrator().clone(),
+                self.space_access_orchestrator.clone(),
+                self.pairing_orchestrator.clone(),
+                self.state.clone(),
+                self.active_session_id.clone(),
+                self.discoverability.clone(),
+                self.participant_readiness.clone(),
+                self.event_tx.clone(),
+                cancel.child_token(),
+            )
+            .instrument(tracing::info_span!("pairing.protocol_loop")),
+        );
 
         tasks.spawn(run_pairing_session_sweep_loop(
             self.pairing_orchestrator.clone(),
@@ -401,11 +410,14 @@ impl DaemonPairingHost {
             cancel.child_token(),
         ));
 
-        tasks.spawn(run_space_access_event_loop(
-            space_access_events,
-            self.event_tx.clone(),
-            cancel.child_token(),
-        ));
+        tasks.spawn(
+            run_space_access_event_loop(
+                space_access_events,
+                self.event_tx.clone(),
+                cancel.child_token(),
+            )
+            .instrument(tracing::info_span!("space_access.event_loop")),
+        );
 
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -597,7 +609,6 @@ async fn run_pairing_action_loop(
     mut action_rx: mpsc::Receiver<PairingAction>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
-    let _loop_span = tracing::info_span!("pairing.action_loop").entered();
     let pairing_transport = runtime.wiring_deps().network_ports.pairing.clone();
 
     loop {
@@ -612,59 +623,60 @@ async fn run_pairing_action_loop(
                     PairingAction::Send { peer_id, message } => {
                         let session_id = message.session_id().to_string();
                         let message_kind = pairing_message_kind(&message);
-                        let _session_span = tracing::info_span!(
+                        let session_span = tracing::info_span!(
                             "pairing.action.send",
                             session_id = %session_id,
                             peer_id = %peer_id,
                             message_kind,
-                        )
-                        .entered();
+                        );
+                        async {
+                            info!(event = "pairing.action_dispatch", message_kind);
 
-                        info!(event = "pairing.action_dispatch", message_kind);
+                            if let Err(err) = pairing_transport
+                                .open_pairing_session(peer_id.clone(), session_id.clone())
+                                .await
+                            {
+                                error!(
+                                    event = "pairing.transport_open_failed",
+                                    error = %err,
+                                    error_kind = "transport_failure",
+                                );
+                                signal_pairing_transport_failure(
+                                    pairing_orchestrator.as_ref(),
+                                    &state,
+                                    &active_session_id,
+                                    &event_tx,
+                                    &session_id,
+                                    &peer_id,
+                                    err.to_string(),
+                                )
+                                .await?;
+                                return Ok(());
+                            }
 
-                        if let Err(err) = pairing_transport
-                            .open_pairing_session(peer_id.clone(), session_id.clone())
-                            .await
-                        {
-                            error!(
-                                event = "pairing.transport_open_failed",
-                                error = %err,
-                                error_kind = "transport_failure",
-                            );
-                            signal_pairing_transport_failure(
-                                pairing_orchestrator.as_ref(),
-                                &state,
-                                &active_session_id,
-                                &event_tx,
-                                &session_id,
-                                &peer_id,
-                                err.to_string(),
-                            )
-                            .await?;
-                            continue;
-                        }
+                            debug!(event = "pairing.session_open_confirmed", message_kind);
 
-                        debug!(event = "pairing.session_open_confirmed", message_kind);
-
-                        if let Err(err) = pairing_transport.send_pairing_on_session(message).await {
-                            error!(
-                                event = "pairing.transport_send_failed",
-                                error = %err,
-                                error_kind = "transport_failure",
-                            );
-                            signal_pairing_transport_failure(
-                                pairing_orchestrator.as_ref(),
-                                &state,
-                                &active_session_id,
-                                &event_tx,
-                                &session_id,
-                                &peer_id,
-                                err.to_string(),
-                            )
-                            .await?;
-                        } else {
-                            info!(event = "pairing.action_sent", message_kind);
-                        }
+                            if let Err(err) = pairing_transport.send_pairing_on_session(message).await {
+                                error!(
+                                    event = "pairing.transport_send_failed",
+                                    error = %err,
+                                    error_kind = "transport_failure",
+                                );
+                                signal_pairing_transport_failure(
+                                    pairing_orchestrator.as_ref(),
+                                    &state,
+                                    &active_session_id,
+                                    &event_tx,
+                                    &session_id,
+                                    &peer_id,
+                                    err.to_string(),
+                                )
+                                .await?;
+                            } else {
+                                info!(event = "pairing.action_sent", message_kind);
+                            }
+                            Ok::<(), anyhow::Error>(())
+                        }.instrument(session_span).await?;
                     }
                     PairingAction::ShowVerification {
                         session_id,
@@ -792,8 +804,6 @@ async fn run_pairing_domain_event_loop(
     event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
-    let _loop_span = tracing::info_span!("pairing.domain_event_loop").entered();
-
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
@@ -810,60 +820,60 @@ async fn run_pairing_domain_event_loop(
                         local_fingerprint,
                         peer_fingerprint,
                     } => {
-                        let _session_span = tracing::info_span!(
+                        let session_span = tracing::info_span!(
                             "pairing.session",
                             session_id = %session_id,
                             peer_id = %peer_id,
-                        )
-                        .entered();
+                        );
+                        async {
+                            let device_name = pairing_orchestrator
+                                .get_session_peer(&session_id)
+                                .await
+                                .and_then(|peer| peer.device_name);
+                            let ts = now_ms();
+                            state.write().await.upsert_pairing_session(DaemonPairingSessionSnapshot {
+                                session_id: session_id.clone(),
+                                peer_id: Some(peer_id.clone()),
+                                device_name: device_name.clone(),
+                                state: pairing_stage::VERIFICATION.to_string(),
+                                updated_at_ms: ts,
+                                short_code: Some(short_code.clone()),
+                                peer_fingerprint: Some(peer_fingerprint.clone()),
+                            });
 
-                        let device_name = pairing_orchestrator
-                            .get_session_peer(&session_id)
-                            .await
-                            .and_then(|peer| peer.device_name);
-                        let ts = now_ms();
-                        state.write().await.upsert_pairing_session(DaemonPairingSessionSnapshot {
-                            session_id: session_id.clone(),
-                            peer_id: Some(peer_id.clone()),
-                            device_name: device_name.clone(),
-                            state: pairing_stage::VERIFICATION.to_string(),
-                            updated_at_ms: ts,
-                            short_code: Some(short_code.clone()),
-                            peer_fingerprint: Some(peer_fingerprint.clone()),
-                        });
+                            info!(
+                                event = "pairing.verification_required",
+                                stage = pairing_stage::VERIFICATION,
+                                has_short_code = !short_code.is_empty(),
+                                has_local_fingerprint = !local_fingerprint.is_empty(),
+                                has_peer_fingerprint = !peer_fingerprint.is_empty(),
+                            );
 
-                        info!(
-                            event = "pairing.verification_required",
-                            stage = pairing_stage::VERIFICATION,
-                            has_short_code = !short_code.is_empty(),
-                            has_local_fingerprint = !local_fingerprint.is_empty(),
-                            has_peer_fingerprint = !peer_fingerprint.is_empty(),
-                        );
-
-                        debug!(
-                            event = "ws.emit",
-                            topic = ws_topic::PAIRING,
-                            ws_event = ws_event::PAIRING_VERIFICATION_REQUIRED,
-                        );
-                        emit_pairing_session_changed(
-                            &event_tx,
-                            &session_id,
-                            pairing_stage::VERIFICATION,
-                            Some(peer_id.clone()),
-                            device_name.clone(),
-                            ts,
-                        );
-                        emit_pairing_verification(
-                            &event_tx,
-                            &session_id,
-                            pairing_stage::VERIFICATION,
-                            Some(peer_id.clone()),
-                            device_name.clone(),
-                            Some(short_code),
-                            None,
-                            Some(local_fingerprint),
-                            Some(peer_fingerprint),
-                        );
+                            debug!(
+                                event = "ws.emit",
+                                topic = ws_topic::PAIRING,
+                                ws_event = ws_event::PAIRING_VERIFICATION_REQUIRED,
+                            );
+                            emit_pairing_session_changed(
+                                &event_tx,
+                                &session_id,
+                                pairing_stage::VERIFICATION,
+                                Some(peer_id.clone()),
+                                device_name.clone(),
+                                ts,
+                            );
+                            emit_pairing_verification(
+                                &event_tx,
+                                &session_id,
+                                pairing_stage::VERIFICATION,
+                                Some(peer_id.clone()),
+                                device_name.clone(),
+                                Some(short_code),
+                                None,
+                                Some(local_fingerprint),
+                                Some(peer_fingerprint),
+                            );
+                        }.instrument(session_span).await;
                     }
                     PairingDomainEvent::KeyslotReceived {
                         session_id,
@@ -871,243 +881,243 @@ async fn run_pairing_domain_event_loop(
                         keyslot_file: _,
                         challenge: _,
                     } => {
-                        let _session_span = tracing::info_span!(
+                        let session_span = tracing::info_span!(
                             "pairing.session",
                             session_id = %session_id,
                             peer_id = %peer_id,
-                        )
-                        .entered();
+                        );
+                        async {
+                            let ts = now_ms();
 
-                        let ts = now_ms();
-
-                        info!(
-                            event = "pairing.keyslot_received",
-                            stage = pairing_stage::VERIFYING,
-                        );
-                        debug!(
-                            event = "pairing.state_transition",
-                            to_state = pairing_stage::VERIFYING,
-                        );
-                        debug!(
-                            event = "ws.emit",
-                            topic = ws_topic::PAIRING,
-                            ws_event = ws_event::PAIRING_UPDATED,
-                        );
-                        emit_ws_event(
-                            &event_tx,
-                            ws_topic::PAIRING,
-                            ws_event::PAIRING_UPDATED,
-                            Some(session_id.clone()),
-                            PairingSessionChangedPayload {
-                                session_id: session_id.clone(),
-                                state: pairing_stage::VERIFYING.to_string(),
-                                stage: pairing_stage::VERIFYING.to_string(),
-                                peer_id: Some(peer_id.clone()),
-                                device_name: None,
-                                updated_at_ms: ts,
+                            info!(
+                                event = "pairing.keyslot_received",
+                                stage = pairing_stage::VERIFYING,
+                            );
+                            debug!(
+                                event = "pairing.state_transition",
+                                to_state = pairing_stage::VERIFYING,
+                            );
+                            debug!(
+                                event = "ws.emit",
+                                topic = ws_topic::PAIRING,
+                                ws_event = ws_event::PAIRING_UPDATED,
+                            );
+                            emit_ws_event(
+                                &event_tx,
+                                ws_topic::PAIRING,
+                                ws_event::PAIRING_UPDATED,
+                                Some(session_id.clone()),
+                                PairingSessionChangedPayload {
+                                    session_id: session_id.clone(),
+                                    state: pairing_stage::VERIFYING.to_string(),
+                                    stage: pairing_stage::VERIFYING.to_string(),
+                                    peer_id: Some(peer_id.clone()),
+                                    device_name: None,
+                                    updated_at_ms: ts,
+                                    ts,
+                                },
+                            );
+                            upsert_pairing_snapshot(
+                                &state,
+                                session_id,
+                                Some(peer_id),
+                                None,
+                                pairing_stage::VERIFYING,
                                 ts,
-                            },
-                        );
-                        upsert_pairing_snapshot(
-                            &state,
-                            session_id,
-                            Some(peer_id),
-                            None,
-                            pairing_stage::VERIFYING,
-                            ts,
-                        )
-                        .await;
+                            )
+                            .await;
+                        }.instrument(session_span).await;
                     }
                     PairingDomainEvent::PairingSucceeded { session_id, peer_id } => {
-                        let _session_span = tracing::info_span!(
+                        let session_span = tracing::info_span!(
                             "pairing.session",
                             session_id = %session_id,
                             peer_id = %peer_id,
-                        )
-                        .entered();
+                        );
+                        async {
+                            let device_name = pairing_orchestrator
+                                .get_session_peer(&session_id)
+                                .await
+                                .and_then(|peer| peer.device_name);
+                            let ts = now_ms();
 
-                        let device_name = pairing_orchestrator
-                            .get_session_peer(&session_id)
-                            .await
-                            .and_then(|peer| peer.device_name);
-                        let ts = now_ms();
-
-                        info!(
-                            event = "pairing.succeeded",
-                            stage = pairing_stage::COMPLETE,
-                        );
-                        debug!(
-                            event = "pairing.state_transition",
-                            to_state = pairing_stage::COMPLETE,
-                        );
-                        debug!(
-                            event = "ws.emit",
-                            topic = ws_topic::PAIRING,
-                            ws_event = ws_event::PAIRING_COMPLETE,
-                        );
-                        emit_ws_event(
-                            &event_tx,
-                            ws_topic::PAIRING,
-                            ws_event::PAIRING_COMPLETE,
-                            Some(session_id.clone()),
-                            PairingSessionChangedPayload {
-                                session_id: session_id.clone(),
-                                state: pairing_stage::COMPLETE.to_string(),
-                                stage: pairing_stage::COMPLETE.to_string(),
-                                peer_id: Some(peer_id.clone()),
-                                device_name: device_name.clone(),
-                                updated_at_ms: ts,
+                            info!(
+                                event = "pairing.succeeded",
+                                stage = pairing_stage::COMPLETE,
+                            );
+                            debug!(
+                                event = "pairing.state_transition",
+                                to_state = pairing_stage::COMPLETE,
+                            );
+                            debug!(
+                                event = "ws.emit",
+                                topic = ws_topic::PAIRING,
+                                ws_event = ws_event::PAIRING_COMPLETE,
+                            );
+                            emit_ws_event(
+                                &event_tx,
+                                ws_topic::PAIRING,
+                                ws_event::PAIRING_COMPLETE,
+                                Some(session_id.clone()),
+                                PairingSessionChangedPayload {
+                                    session_id: session_id.clone(),
+                                    state: pairing_stage::COMPLETE.to_string(),
+                                    stage: pairing_stage::COMPLETE.to_string(),
+                                    peer_id: Some(peer_id.clone()),
+                                    device_name: device_name.clone(),
+                                    updated_at_ms: ts,
+                                    ts,
+                                },
+                            );
+                            emit_pairing_verification(
+                                &event_tx,
+                                &session_id,
+                                pairing_stage::COMPLETE,
+                                Some(peer_id.clone()),
+                                device_name.clone(),
+                                None,
+                                None,
+                                None,
+                                None,
+                            );
+                            mark_pairing_session_terminal(
+                                &state,
+                                session_id.clone(),
+                                Some(peer_id),
+                                device_name,
+                                pairing_stage::COMPLETE,
                                 ts,
-                            },
-                        );
-                        emit_pairing_verification(
-                            &event_tx,
-                            &session_id,
-                            pairing_stage::COMPLETE,
-                            Some(peer_id.clone()),
-                            device_name.clone(),
-                            None,
-                            None,
-                            None,
-                            None,
-                        );
-                        mark_pairing_session_terminal(
-                            &state,
-                            session_id.clone(),
-                            Some(peer_id),
-                            device_name,
-                            pairing_stage::COMPLETE,
-                            ts,
-                        )
-                        .await;
-                        clear_active_session_slot(&active_session_id, &session_id).await;
+                            )
+                            .await;
+                            clear_active_session_slot(&active_session_id, &session_id).await;
+                        }.instrument(session_span).await;
                     }
                     PairingDomainEvent::PairingVerifying {
                         session_id,
                         peer_id,
                     } => {
-                        let _session_span = tracing::info_span!(
+                        let session_span = tracing::info_span!(
                             "pairing.session",
                             session_id = %session_id,
                             peer_id = %peer_id,
-                        )
-                        .entered();
+                        );
+                        async {
+                            let device_name = pairing_orchestrator
+                                .get_session_peer(&session_id)
+                                .await
+                                .and_then(|peer| peer.device_name);
+                            let ts = now_ms();
 
-                        let device_name = pairing_orchestrator
-                            .get_session_peer(&session_id)
-                            .await
-                            .and_then(|peer| peer.device_name);
-                        let ts = now_ms();
-
-                        info!(
-                            event = "pairing.verifying",
-                            stage = pairing_stage::VERIFYING,
-                        );
-                        debug!(
-                            event = "pairing.state_transition",
-                            to_state = pairing_stage::VERIFYING,
-                        );
-                        debug!(
-                            event = "ws.emit",
-                            topic = ws_topic::PAIRING,
-                            ws_event = ws_event::PAIRING_VERIFICATION_REQUIRED,
-                        );
-                        upsert_pairing_snapshot(
-                            &state,
-                            session_id.clone(),
-                            Some(peer_id.clone()),
-                            device_name.clone(),
-                            pairing_stage::VERIFYING,
-                            ts,
-                        )
-                        .await;
-                        emit_pairing_session_changed(
-                            &event_tx,
-                            &session_id,
-                            pairing_stage::VERIFYING,
-                            Some(peer_id.clone()),
-                            device_name.clone(),
-                            ts,
-                        );
-                        emit_pairing_verification(
-                            &event_tx,
-                            &session_id,
-                            pairing_stage::VERIFYING,
-                            Some(peer_id),
-                            device_name,
-                            None,
-                            None,
-                            None,
-                            None,
-                        );
+                            info!(
+                                event = "pairing.verifying",
+                                stage = pairing_stage::VERIFYING,
+                            );
+                            debug!(
+                                event = "pairing.state_transition",
+                                to_state = pairing_stage::VERIFYING,
+                            );
+                            debug!(
+                                event = "ws.emit",
+                                topic = ws_topic::PAIRING,
+                                ws_event = ws_event::PAIRING_VERIFICATION_REQUIRED,
+                            );
+                            upsert_pairing_snapshot(
+                                &state,
+                                session_id.clone(),
+                                Some(peer_id.clone()),
+                                device_name.clone(),
+                                pairing_stage::VERIFYING,
+                                ts,
+                            )
+                            .await;
+                            emit_pairing_session_changed(
+                                &event_tx,
+                                &session_id,
+                                pairing_stage::VERIFYING,
+                                Some(peer_id.clone()),
+                                device_name.clone(),
+                                ts,
+                            );
+                            emit_pairing_verification(
+                                &event_tx,
+                                &session_id,
+                                pairing_stage::VERIFYING,
+                                Some(peer_id),
+                                device_name,
+                                None,
+                                None,
+                                None,
+                                None,
+                            );
+                        }.instrument(session_span).await;
                     }
                     PairingDomainEvent::PairingFailed {
                         session_id,
                         peer_id,
                         reason,
                     } => {
-                        let _session_span = tracing::info_span!(
+                        let session_span = tracing::info_span!(
                             "pairing.session",
                             session_id = %session_id,
                             peer_id = %peer_id,
-                        )
-                        .entered();
+                        );
+                        async {
+                            let device_name = pairing_orchestrator
+                                .get_session_peer(&session_id)
+                                .await
+                                .and_then(|peer| peer.device_name);
+                            let failure_reason = pairing_failure_message(&reason);
+                            let ts = now_ms();
 
-                        let device_name = pairing_orchestrator
-                            .get_session_peer(&session_id)
-                            .await
-                            .and_then(|peer| peer.device_name);
-                        let failure_reason = pairing_failure_message(&reason);
-                        let ts = now_ms();
-
-                        error!(
-                            event = "pairing.failed",
-                            stage = pairing_stage::FAILED,
-                            error_kind = "pairing_failed",
-                            reason = %failure_reason,
-                        );
-                        debug!(
-                            event = "pairing.state_transition",
-                            to_state = pairing_stage::FAILED,
-                        );
-                        debug!(
-                            event = "ws.emit",
-                            topic = ws_topic::PAIRING,
-                            ws_event = ws_event::PAIRING_FAILED,
-                        );
-                        emit_ws_event(
-                            &event_tx,
-                            ws_topic::PAIRING,
-                            ws_event::PAIRING_FAILED,
-                            Some(session_id.clone()),
-                            PairingFailurePayload {
-                                session_id: session_id.clone(),
-                                peer_id: Some(peer_id.clone()),
-                                error: failure_reason.clone(),
-                                reason: failure_reason.clone(),
-                            },
-                        );
-                        emit_pairing_verification(
-                            &event_tx,
-                            &session_id,
-                            pairing_stage::FAILED,
-                            Some(peer_id.clone()),
-                            device_name.clone(),
-                            None,
-                            Some(failure_reason.clone()),
-                            None,
-                            None,
-                        );
-                        mark_pairing_session_terminal(
-                            &state,
-                            session_id.clone(),
-                            Some(peer_id),
-                            device_name,
-                            pairing_stage::FAILED,
-                            ts,
-                        )
-                        .await;
-                        clear_active_session_slot(&active_session_id, &session_id).await;
+                            error!(
+                                event = "pairing.failed",
+                                stage = pairing_stage::FAILED,
+                                error_kind = "pairing_failed",
+                                reason = %failure_reason,
+                            );
+                            debug!(
+                                event = "pairing.state_transition",
+                                to_state = pairing_stage::FAILED,
+                            );
+                            debug!(
+                                event = "ws.emit",
+                                topic = ws_topic::PAIRING,
+                                ws_event = ws_event::PAIRING_FAILED,
+                            );
+                            emit_ws_event(
+                                &event_tx,
+                                ws_topic::PAIRING,
+                                ws_event::PAIRING_FAILED,
+                                Some(session_id.clone()),
+                                PairingFailurePayload {
+                                    session_id: session_id.clone(),
+                                    peer_id: Some(peer_id.clone()),
+                                    error: failure_reason.clone(),
+                                    reason: failure_reason.clone(),
+                                },
+                            );
+                            emit_pairing_verification(
+                                &event_tx,
+                                &session_id,
+                                pairing_stage::FAILED,
+                                Some(peer_id.clone()),
+                                device_name.clone(),
+                                None,
+                                Some(failure_reason.clone()),
+                                None,
+                                None,
+                            );
+                            mark_pairing_session_terminal(
+                                &state,
+                                session_id.clone(),
+                                Some(peer_id),
+                                device_name,
+                                pairing_stage::FAILED,
+                                ts,
+                            )
+                            .await;
+                            clear_active_session_slot(&active_session_id, &session_id).await;
+                        }.instrument(session_span).await;
                     }
                 }
             }
@@ -1127,7 +1137,6 @@ async fn run_pairing_protocol_loop(
     event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
-    let _loop_span = tracing::info_span!("pairing.protocol_loop").entered();
     let network_events = runtime.wiring_deps().network_ports.events.clone();
     let pairing_transport = runtime.wiring_deps().network_ports.pairing.clone();
 
@@ -1224,6 +1233,14 @@ async fn run_pairing_session_sweep_loop(
     }
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        session_id = %message.session_id(),
+        peer_id = %peer_id,
+        message_kind = %pairing_message_kind(&message),
+    )
+)]
 async fn handle_pairing_message(
     setup_orchestrator: &SetupOrchestrator,
     space_access_orchestrator: &SpaceAccessOrchestrator,
@@ -1239,13 +1256,6 @@ async fn handle_pairing_message(
 ) -> anyhow::Result<()> {
     let session_id = message.session_id().to_string();
     let message_kind = pairing_message_kind(&message);
-    let _msg_span = tracing::info_span!(
-        "pairing.handle_message",
-        session_id = %session_id,
-        peer_id = %peer_id,
-        message_kind,
-    )
-    .entered();
 
     info!(event = "pairing.message_received", message_kind);
 
@@ -1723,8 +1733,6 @@ async fn run_space_access_event_loop(
     event_tx: broadcast::Sender<DaemonWsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
-    let _loop_span = tracing::info_span!("space_access.event_loop").entered();
-
     loop {
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
