@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info_span;
@@ -37,6 +38,11 @@ pub enum ClipboardWriteIntent {
 pub struct ClipboardWriteCoordinator {
     system_clipboard: Arc<dyn SystemClipboardPort>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    /// True while a `write()` call is in progress. Used by workers to detect
+    /// genuinely concurrent clipboard writes, replacing the overly broad
+    /// `has_pending_origin()` check that conflated attribution guards with
+    /// active write operations.
+    writing: AtomicBool,
 }
 
 impl ClipboardWriteCoordinator {
@@ -47,15 +53,17 @@ impl ClipboardWriteCoordinator {
         Self {
             system_clipboard,
             clipboard_change_origin,
+            writing: AtomicBool::new(false),
         }
     }
 
-    /// Check if there is a pending clipboard origin guard (non-destructive peek).
+    /// Returns `true` while another `write()` call is actively in progress.
     ///
-    /// Delegates to `ClipboardChangeOriginPort::has_pending_origin()`.
-    /// Used by workers to detect concurrent clipboard operations before writing.
-    pub async fn has_pending_origin(&self) -> bool {
-        self.clipboard_change_origin.has_pending_origin().await
+    /// Unlike the previous `has_pending_origin()`, this only returns `true`
+    /// during an actual concurrent write — it does NOT trigger on stale
+    /// attribution guards left by previously completed writes.
+    pub fn is_write_in_progress(&self) -> bool {
+        self.writing.load(Ordering::Acquire)
     }
 
     /// Write a snapshot to the system clipboard with the given intent.
@@ -74,6 +82,17 @@ impl ClipboardWriteCoordinator {
     /// `consume_origin_for_snapshot_or_default` to prevent stale guard accumulation.
     /// The `set_next_origin` call for `RemotePush` is NOT made on failure.
     pub async fn write(
+        &self,
+        snapshot: SystemClipboardSnapshot,
+        intent: ClipboardWriteIntent,
+    ) -> Result<()> {
+        self.writing.store(true, Ordering::Release);
+        let result = self.write_inner(snapshot, intent).await;
+        self.writing.store(false, Ordering::Release);
+        result
+    }
+
+    async fn write_inner(
         &self,
         snapshot: SystemClipboardSnapshot,
         intent: ClipboardWriteIntent,

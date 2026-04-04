@@ -341,13 +341,14 @@ async fn restore_file_to_clipboard_after_transfer(
     let path_list = build_path_list(&file_paths);
     let snapshot = build_file_snapshot(&path_list);
 
-    // FCLIP-03: Non-destructive check for concurrent clipboard operations.
-    // Use has_pending_origin() (peek) instead of consume_origin_or_default()
-    // to avoid stealing another restore's LocalRestore origin protection.
-    if coordinator.has_pending_origin().await {
+    // FCLIP-03: Check for genuinely concurrent clipboard write operations.
+    // Uses is_write_in_progress() which only returns true while another write()
+    // call is actively executing — not merely because attribution guards from
+    // a previous completed write are still within their TTL window.
+    if coordinator.is_write_in_progress() {
         info!(
             file_count = file_paths.len(),
-            "Concurrent clipboard operation detected, skipping auto-restore. Files available in Dashboard."
+            "Concurrent clipboard write in progress, skipping auto-restore. Files available in Dashboard."
         );
         return;
     }
