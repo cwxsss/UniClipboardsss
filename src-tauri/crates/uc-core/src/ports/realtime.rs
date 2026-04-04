@@ -4,6 +4,33 @@ use tokio::sync::mpsc;
 use crate::security::space_access::state::SpaceAccessState;
 use crate::setup::SetupState;
 
+/// Forward-compatibility type contract for structured pairing routing metadata.
+///
+/// **Current status:** This struct defines the canonical observability shape for pairing
+/// routing decisions but is NOT instantiated in production code paths. The live logging
+/// uses [`log_bridge_routing()`](uc_daemon_client::ws_bridge::log_bridge_routing) which
+/// accepts the same fields as individual `&str` parameters for zero-allocation logging.
+///
+/// **Why it exists:** Provides a shared, testable contract that downstream consumers
+/// (future trace aggregation, structured log serialization, or Seq event enrichment)
+/// can depend on without re-discovering the field set from scattered function signatures.
+///
+/// Used only for structured logging contracts and diagnostics — never sent over the wire or stored.
+/// Must never include secrets, raw key material, fingerprints, codes, or verification payloads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingRoutingRecord {
+    /// Session that originated the event.
+    pub session_id: String,
+    /// Daemon wire event type (e.g. `"pairing.verification_required"`).
+    pub source_event_type: String,
+    /// The `kind`/`stage` value from the payload that drove the routing decision, when present.
+    pub payload_kind: Option<String>,
+    /// The [`RealtimeEvent`] variant name the bridge produced (e.g. `"PairingVerificationRequired"`).
+    pub routed_event_class: &'static str,
+    /// Monotonic timestamp in milliseconds from the daemon event envelope (`ts` field).
+    pub envelope_ts_ms: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RealtimeTopic {
     Pairing,
