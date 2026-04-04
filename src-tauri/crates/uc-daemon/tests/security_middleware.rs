@@ -270,7 +270,9 @@ async fn bare_bearer_rejected_with_invalid_auth_scheme_error() {
         json["error"]
     );
     assert!(
-        json["message"].as_str().is_some_and(|m| m.contains("/auth/connect")),
+        json["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("/auth/connect")),
         "error message should mention /auth/connect hint"
     );
 }
@@ -310,7 +312,8 @@ async fn bare_bearer_on_l2_route_rejected_differently_than_invalid_jwt() {
     let session_token = get_session_token(&app, &bearer).await;
 
     // Bare bearer (wrong scheme)
-    let bare_response = app.clone()
+    let bare_response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/status")
