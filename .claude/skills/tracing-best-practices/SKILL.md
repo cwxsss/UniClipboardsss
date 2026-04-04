@@ -100,6 +100,62 @@ tokio::spawn(task.instrument(span));
 Long-lived background loops MUST create child spans or events per iteration.
 Channel/callback boundaries MUST re-attach message IDs into new span context.
 
+### 2.5 Async Span Lifecycle — Three Correct Patterns
+
+#### Core Rule: NEVER use `.entered()` in async functions
+
+`EnteredSpan` contains `*mut ()` → not `Send` → holding it across `.await` makes the future non-`Send` → `tokio::spawn` / `JoinSet::spawn` will fail to compile.
+
+#### Pattern 1: Function-level — `#[instrument]` (preferred)
+
+Best for: standalone async functions where parameters can be skipped.
+
+```rust
+#[instrument(skip_all, fields(session_id = %session_id, peer_id = %peer_id))]
+async fn handle_message(session_id: &str, peer_id: &str, msg: Message) -> Result<()> {
+    info!("received message");  // automatically under the span
+    do_something().await;       // await-safe
+}
+```
+
+#### Pattern 2: Spawn-level — `.instrument(span)`
+
+Best for: futures passed to `tokio::spawn` / `JoinSet::spawn`.
+
+```rust
+let span = tracing::info_span!("pairing.action_loop");
+tasks.spawn(run_action_loop(rx, cancel).instrument(span));
+```
+
+#### Pattern 3: Inline async block — `async { }.instrument(span).await`
+
+Best for: match arms, if-branches, or other blocks that need a local span with `.await` inside.
+
+```rust
+match event {
+    Event::Succeeded { session_id } => {
+        let span = info_span!("pairing.session", session_id = %session_id);
+        async {
+            info!(event = "succeeded");    // under the span
+            notify_peer().await;           // await-safe
+        }.instrument(span).await;
+    }
+}
+```
+
+#### FORBIDDEN Patterns
+
+```rust
+// ❌ Compile error — EnteredSpan is not Send
+let _guard = info_span!("my_span").entered();
+something.await;  // _guard held across await
+
+// ❌ Same problem, different syntax
+let span = info_span!("my_span");
+let _guard = span.enter();
+something.await;  // _guard still held across await
+```
+
 ---
 
 ## 3. Where NOT to Use `#[instrument]`
@@ -359,3 +415,4 @@ When writing or reviewing tracing code, verify:
 | State machine transitions use structured events?         | **SHOULD**    |
 | Same error repeated across stack layers?                 | **FORBIDDEN** |
 | Secret/large payload in tracing output?                  | **FORBIDDEN** |
+| `.entered()` / `.enter()` held across `.await` in async? | **FORBIDDEN** |
