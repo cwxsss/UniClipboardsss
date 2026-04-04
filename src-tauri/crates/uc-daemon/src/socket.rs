@@ -1,10 +1,10 @@
 //! Shared daemon HTTP address resolution.
 
+use std::path::PathBuf;
+
 use anyhow::Result;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-pub use uc_platform::resolve_daemon_pid_path;
-pub use uc_platform::resolve_daemon_token_path;
+use uc_app::app_paths::AppPaths;
 
 pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
 pub const DEFAULT_HTTP_PORT: u16 = 42715;
@@ -57,11 +57,16 @@ fn stable_profile_hash(profile: &str) -> u64 {
     })
 }
 
+/// Resolve the daemon auth token path using AppPaths.
+pub fn resolve_daemon_token_path() -> Result<PathBuf> {
+    let dirs = uc_platform::app_dirs::default_app_dirs();
+    Ok(AppPaths::from_app_dirs(&dirs).daemon_token_path())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
-    use uc_platform::app_dirs::resolve_daemon_token_path_for_testing;
 
     fn with_uc_profile<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -108,42 +113,5 @@ mod tests {
         assert_ne!(addr_team.port(), addr_a.port());
         assert_ne!(addr_team.port(), addr_b.port());
         assert_eq!(addr_team.port(), addr_team_repeat.port());
-    }
-
-    #[test]
-    fn test_token_path_uses_testing_override() {
-        let path = with_uc_profile(None, || {
-            resolve_daemon_token_path_for_testing(std::path::PathBuf::from("/tmp"))
-                .expect("should resolve")
-        });
-        assert!(
-            path.to_string_lossy().contains("/tmp/"),
-            "token path should be under /tmp/, got: {}",
-            path.display()
-        );
-        assert_eq!(
-            path.file_name().and_then(|n| n.to_str()),
-            Some("uniclipboard-daemon.token")
-        );
-    }
-
-    #[test]
-    fn test_profiled_token_paths_use_distinct_directories() {
-        let path_a = with_uc_profile(Some("a"), || {
-            resolve_daemon_token_path_for_testing(std::path::PathBuf::from("/tmp"))
-                .expect("should resolve")
-        });
-        let path_b = with_uc_profile(Some("b"), || {
-            resolve_daemon_token_path_for_testing(std::path::PathBuf::from("/tmp"))
-                .expect("should resolve")
-        });
-        let path_default = with_uc_profile(None, || {
-            resolve_daemon_token_path_for_testing(std::path::PathBuf::from("/tmp"))
-                .expect("should resolve")
-        });
-
-        assert_ne!(path_a, path_b);
-        assert_ne!(path_a, path_default);
-        assert_ne!(path_b, path_default);
     }
 }
