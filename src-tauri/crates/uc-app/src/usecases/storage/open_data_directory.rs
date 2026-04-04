@@ -24,7 +24,7 @@ impl OpenDataDirectory {
 
     #[tracing::instrument(name = "usecase.open_data_directory.execute", skip(self))]
     pub async fn execute(&self) -> Result<()> {
-        let dir = &self.storage_paths.app_data_root;
+        let dir = &self.storage_paths.app_data_root_dir;
         self.file_manager
             .open_directory(dir)
             .map_err(anyhow::Error::from)?;
@@ -74,7 +74,7 @@ mod tests {
             cache_dir: PathBuf::from("/tmp/test-cache"),
             file_cache_dir: PathBuf::from("/tmp/test-cache/file-cache"),
             spool_dir: PathBuf::from("/tmp/test-cache/spool"),
-            app_data_root: PathBuf::from("/tmp/test-data"),
+            app_data_root_dir: PathBuf::from("/tmp/test-data"),
         }
     }
 
@@ -82,7 +82,7 @@ mod tests {
     async fn opens_app_data_root_directory() {
         let fm = Arc::new(MockFileManager::new(false));
         let paths = test_paths();
-        let expected = paths.app_data_root.clone();
+        let expected = paths.app_data_root_dir.clone();
 
         let uc = OpenDataDirectory::new(paths, fm.clone());
         uc.execute().await.unwrap();

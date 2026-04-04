@@ -591,7 +591,7 @@ pub fn resolve_app_paths(
             .file_name()
             .map(|name| name.to_os_string())
             .unwrap_or_else(|| std::ffi::OsString::from("uniclipboard.db"));
-        paths.db_path = paths.app_data_root.join(db_file_name);
+        paths.db_path = paths.app_data_root_dir.join(db_file_name);
     }
 
     if !config.vault_key_path.as_os_str().is_empty() {
@@ -614,7 +614,7 @@ pub fn resolve_app_paths(
                 let relative = configured_vault_root
                     .strip_prefix(&configured_db_root)
                     .unwrap_or(std::path::Path::new(""));
-                paths.vault_dir = paths.app_data_root.join(relative);
+                paths.vault_dir = paths.app_data_root_dir.join(relative);
             } else {
                 paths.vault_dir = apply_profile_suffix(configured_vault_root);
             }
@@ -667,12 +667,13 @@ pub fn wire_dependencies_with_identity_store(
 
     let secure_storage =
         uc_platform::secure_storage::create_default_secure_storage_in_app_data_root(
-            paths.app_data_root.clone(),
+            paths.app_data_root_dir.clone(),
         )
         .map_err(|e| WiringError::SecureStorageInit(e.to_string()))?;
 
     let identity_store = identity_store.unwrap_or_else(|| {
-        Arc::new(FileIdentityStore::new(paths.app_data_root.clone())) as Arc<dyn IdentityStorePort>
+        Arc::new(FileIdentityStore::new(paths.app_data_root_dir.clone()))
+            as Arc<dyn IdentityStorePort>
     });
 
     let infra = create_infra_layer(db_pool, &vault_path, &settings_path, secure_storage.clone())?;

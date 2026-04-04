@@ -44,7 +44,7 @@ impl GetStorageStats {
         })?;
 
         let total_bytes = database_bytes + vault_bytes + cache_bytes + logs_bytes;
-        let data_dir = paths.app_data_root.to_string_lossy().to_string();
+        let data_dir = paths.app_data_root_dir.to_string_lossy().to_string();
 
         tracing::info!(
             database_bytes,
@@ -81,7 +81,7 @@ mod tests {
             cache_dir: cache.path().to_path_buf(),
             file_cache_dir: cache.path().join("file-cache"),
             spool_dir: cache.path().join("spool"),
-            app_data_root: root_path,
+            app_data_root_dir: root_path,
         }
     }
 
@@ -98,7 +98,7 @@ mod tests {
         assert_eq!(result.vault_bytes, 0);
         assert_eq!(result.logs_bytes, 0);
         assert_eq!(result.total_bytes, 0);
-        assert_eq!(result.data_dir, paths.app_data_root.to_string_lossy());
+        assert_eq!(result.data_dir, paths.app_data_root_dir.to_string_lossy());
     }
 
     #[tokio::test]
@@ -136,7 +136,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let cache = TempDir::new().unwrap();
         let paths = make_paths(&root, &cache);
-        let expected = paths.app_data_root.to_string_lossy().to_string();
+        let expected = paths.app_data_root_dir.to_string_lossy().to_string();
 
         let uc = GetStorageStats::new(paths);
         let result = uc.execute().await.unwrap();

@@ -107,7 +107,7 @@ mod tests {
             cache_dir: PathBuf::from("/tmp/test-cache"),
             file_cache_dir: PathBuf::from("/tmp/test-cache/file-cache"),
             spool_dir: PathBuf::from("/tmp/test-cache/spool"),
-            app_data_root: PathBuf::from("/tmp/test-data"),
+            app_data_root_dir: PathBuf::from("/tmp/test-data"),
         }
     }
 

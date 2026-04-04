@@ -14,7 +14,7 @@ pub struct AppPaths {
     /// Subdirectory for representation spool (disk staging).
     pub spool_dir: PathBuf,
     /// The resolved application data root directory.
-    pub app_data_root: PathBuf,
+    pub app_data_root_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -44,7 +44,11 @@ impl AppPaths {
     }
 
     pub fn daemon_token_path(&self) -> PathBuf {
-        self.app_data_root.join(".daemon-token")
+        self.app_data_root_dir.join(".daemon-token")
+    }
+
+    pub fn daemon_pid_path(&self) -> PathBuf {
+        self.app_data_root_dir.join(".daemon-pid")
     }
 
     /// Single source of truth for all application paths.
@@ -59,8 +63,22 @@ impl AppPaths {
             cache_dir: dirs.app_cache_root.clone(),
             file_cache_dir: dirs.app_cache_root.join("file-cache"),
             spool_dir: dirs.app_cache_root.join("spool"),
-            app_data_root: dirs.app_data_root.clone(),
+            app_data_root_dir: dirs.app_data_root.clone(),
         }
+    }
+
+    /// Constructs an AppPaths with the given base directory (for testing).
+    #[cfg(test)]
+    pub fn with_base_data_local_dir(base: PathBuf) -> Self {
+        let cache_base = base
+            .parent()
+            .map(|p| p.join("cache"))
+            .unwrap_or_else(|| base.clone());
+        let dirs = AppDirs {
+            app_data_root: base.clone(),
+            app_cache_root: cache_base,
+        };
+        Self::from_app_dirs(&dirs)
     }
 }
 
@@ -89,7 +107,7 @@ mod tests {
             PathBuf::from("/tmp/uniclipboard/settings.json")
         );
         assert_eq!(paths.logs_dir, PathBuf::from("/tmp/uniclipboard/logs"));
-        assert_eq!(paths.app_data_root, PathBuf::from("/tmp/uniclipboard"));
+        assert_eq!(paths.app_data_root_dir, PathBuf::from("/tmp/uniclipboard"));
         assert_eq!(
             paths.daemon_token_path(),
             PathBuf::from("/tmp/uniclipboard/.daemon-token")
@@ -112,6 +130,6 @@ mod tests {
             paths.spool_dir,
             PathBuf::from("/tmp/uniclipboard-cache/spool")
         );
-        assert_eq!(paths.app_data_root, PathBuf::from("/tmp/uniclipboard"));
+        assert_eq!(paths.app_data_root_dir, PathBuf::from("/tmp/uniclipboard"));
     }
 }
