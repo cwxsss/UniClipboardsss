@@ -55,11 +55,11 @@ describe('setup api', () => {
     })
   })
 
-  it('startNewSpace calls POST /setup/host', async () => {
+  it('startNewSpace calls POST /setup/new', async () => {
     requestSpy.mockResolvedValueOnce(wrapState({ CreateSpaceInputPassphrase: { error: null } }))
     await startNewSpace()
     expect(requestSpy).toHaveBeenCalledTimes(1)
-    expect(requestSpy).toHaveBeenCalledWith('/setup/host', { method: 'POST' })
+    expect(requestSpy).toHaveBeenCalledWith('/setup/new', { method: 'POST' })
   })
 
   it('startJoinSpace calls POST /setup/join', async () => {

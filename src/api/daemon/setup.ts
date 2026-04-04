@@ -5,7 +5,7 @@
  *
  * # Endpoints / 端点
  * - `GET /setup/state` → current setup state
- * - `POST /setup/host` → start new space (host) flow
+ * - `POST /setup/new` → start new space (host) flow
  * - `POST /setup/join` → start join space flow
  * - `POST /setup/select-peer` → select a peer device to join (body: `{ peerId }`)
  * - `POST /setup/submit-passphrase` → submit passphrase for new space (body: `{ passphrase }`)
@@ -126,7 +126,7 @@ export async function getSetupState(): Promise<SetupState> {
  * 启动新空间流程。
  */
 export async function startNewSpace(): Promise<SetupState> {
-  const response = await daemonClient.request<SetupApiResponse>('/setup/host', {
+  const response = await daemonClient.request<SetupApiResponse>('/setup/new', {
     method: 'POST',
   })
   return extractSetupState(response)

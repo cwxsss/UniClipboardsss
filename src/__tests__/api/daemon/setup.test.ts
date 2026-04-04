@@ -6,7 +6,7 @@
  *
  * Covers:
  * - GET /setup/state
- * - POST /setup/host
+ * - POST /setup/new
  * - POST /setup/join
  * - POST /setup/select-peer
  * - POST /setup/submit-passphrase
@@ -91,10 +91,10 @@ describe('Daemon Setup API', () => {
     })
   })
 
-  // ── POST /setup/host ─────────────────────────────────────────
+  // ── POST /setup/new ─────────────────────────────────────────
 
   describe('startNewSpace()', () => {
-    it('calls POST /setup/host', async () => {
+    it('calls POST /setup/new', async () => {
       requestSpy.mockResolvedValueOnce(
         wrapState({
           CreateSpaceInputPassphrase: { error: null },
@@ -104,7 +104,7 @@ describe('Daemon Setup API', () => {
       await startNewSpace()
 
       expect(requestSpy).toHaveBeenCalledTimes(1)
-      expect(requestSpy).toHaveBeenCalledWith('/setup/host', { method: 'POST' })
+      expect(requestSpy).toHaveBeenCalledWith('/setup/new', { method: 'POST' })
     })
 
     it('re-throws error on HTTP failure', async () => {
