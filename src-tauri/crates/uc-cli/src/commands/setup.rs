@@ -21,12 +21,20 @@ use uc_daemon::api::dto::setup::SetupStateResponseDto;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
 // Re-export for integration tests (same crate)
 pub(crate) use uc_daemon_client::setup::{
-    parse_setup_state, ParsedSetupState, SetupHint, SetupVariant,
+    format_peer_id_suffix, parse_setup_state, ParsedSetupState, SetupHint, SetupVariant,
 };
 use uc_daemon_client::{DaemonClientContext, DaemonPairingClient};
 
+use uc_cli_macros::autostop;
+
 use crate::exit_codes;
-use crate::local_daemon::{ensure_local_daemon_running, LocalDaemonError};
+// `ensure_local_daemon_running` is referenced in source but rewritten to
+// `ensure_local_daemon_running_capture` by the `#[autostop]` proc macro before
+// name resolution; both imports are kept so the raw source remains readable.
+#[allow(unused_imports)]
+use crate::local_daemon::{
+    ensure_local_daemon_running, ensure_local_daemon_running_capture, LocalDaemonError,
+};
 use crate::output;
 use crate::ui;
 
@@ -151,6 +159,7 @@ async fn run_new_space() -> i32 {
 
 // ── Host flow ───────────────────────────────────────────────────────
 
+#[autostop]
 pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
     if json {
         eprintln!("Error: `--json` is only supported with `setup status`");
@@ -161,9 +170,10 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
         return exit_codes::EXIT_ERROR;
     }
 
-    if let Err(error) = ensure_local_daemon_running().await {
-        return print_local_daemon_error(error);
-    }
+    let daemon_session = match ensure_local_daemon_running().await {
+        Ok(s) => s,
+        Err(error) => return print_local_daemon_error(error),
+    };
 
     let ctx = match DaemonClientContext::from_env() {
         Ok(ctx) => ctx,
@@ -366,6 +376,12 @@ pub async fn run_pair(json: bool, _verbose: bool) -> i32 {
                 )
                 .await;
                 ui::success("Setup host flow completed!");
+                if daemon_session.spawned {
+                    ui::info(
+                        "Next",
+                        "daemon will stop shortly. Run `uniclipboard start` to begin clipboard sync.",
+                    );
+                }
                 return exit_codes::EXIT_SUCCESS;
             }
 
@@ -407,6 +423,7 @@ fn on_host_phase_changed(
 
 // ── Join flow ───────────────────────────────────────────────────────
 
+#[autostop]
 pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
     if json {
         eprintln!("Error: `--json` is only supported with `setup status`");
@@ -417,9 +434,10 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
         return exit_codes::EXIT_ERROR;
     }
 
-    if let Err(error) = ensure_local_daemon_running().await {
-        return print_local_daemon_error(error);
-    }
+    let daemon_session = match ensure_local_daemon_running().await {
+        Ok(s) => s,
+        Err(error) => return print_local_daemon_error(error),
+    };
 
     let ctx = match DaemonClientContext::from_env() {
         Ok(ctx) => ctx,
@@ -482,6 +500,16 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
         // EXECUTE ACTION.
         let action_result: Result<(), i32> = match &session.phase {
             JoinCliPhase::SelectingPeer => {
+                // If the joiner has already submitted a peer request, don't re-prompt.
+                // We're waiting for the backend to transition us out of SelectingPeer
+                // (to WaitingHostResponse / NeedPeerConfirmation / NeedPassphrase).
+                if session.submitted_peer_request {
+                    if session.spinner.is_none() {
+                        session.spinner = Some(ui::spinner("Waiting for host response..."));
+                    }
+                    tokio::time::sleep(POLL_INTERVAL).await;
+                    continue;
+                }
                 // Show spinner while discovering.
                 if session.spinner.is_none() {
                     session.spinner = Some(ui::spinner("Discovering peers on the network..."));
@@ -607,6 +635,12 @@ pub async fn run_connect(json: bool, _verbose: bool) -> i32 {
             JoinCliPhase::Completed => {
                 finish_spinner(&mut session.spinner);
                 ui::success("Setup join flow completed!");
+                if daemon_session.spawned {
+                    ui::info(
+                        "Next",
+                        "daemon will stop shortly. Run `uniclipboard start` to begin clipboard sync.",
+                    );
+                }
                 return exit_codes::EXIT_SUCCESS;
             }
 
@@ -702,15 +736,17 @@ pub async fn run_status(json: bool, _verbose: bool) -> i32 {
     exit_codes::EXIT_SUCCESS
 }
 
+#[autostop]
 pub async fn run_reset(json: bool, _verbose: bool) -> i32 {
     if json {
         eprintln!("Error: `--json` is not supported with `setup reset`");
         return exit_codes::EXIT_ERROR;
     }
 
-    if let Err(error) = ensure_local_daemon_running().await {
-        return print_local_daemon_error(error);
-    }
+    let session = match ensure_local_daemon_running().await {
+        Ok(session) => session,
+        Err(error) => return print_local_daemon_error(error),
+    };
 
     let ctx = match DaemonClientContext::from_env() {
         Ok(ctx) => ctx,
@@ -725,10 +761,16 @@ pub async fn run_reset(json: bool, _verbose: bool) -> i32 {
         Err(error) => return print_anyhow_error(error),
     };
 
-    ui::success(&render_reset_output(
-        &response.profile,
-        response.daemon_kept_running,
-    ));
+    // `session.spawned == true` → the autostop guard (installed by #[autostop])
+    // will SIGTERM the daemon on function return. Reflect that in the output
+    // rather than trusting the backend's hard-coded `daemon_kept_running` field.
+    ui::success(&render_reset_output(&response.profile, !session.spawned));
+    if session.spawned {
+        ui::info(
+            "Next",
+            "daemon will stop shortly. Run `uniclipboard start` to begin clipboard sync.",
+        );
+    }
 
     exit_codes::EXIT_SUCCESS
 }
@@ -883,7 +925,7 @@ fn prompt_for_peer_selection(peers: &[PeerSnapshotDto]) -> Result<Option<String>
         .iter()
         .map(|peer| {
             let name = peer.device_name.as_deref().unwrap_or("unknown device");
-            format!("{name} ({})", truncate_id(&peer.peer_id))
+            format!("{name} ({})", format_peer_id_suffix(&peer.peer_id))
         })
         .collect();
 
@@ -915,6 +957,8 @@ pub(crate) fn render_reset_output(profile: &str, daemon_kept_running: bool) -> S
     let mut lines = vec![format!("Reset complete for profile {profile}")];
     if daemon_kept_running {
         lines.push("Daemon kept running".to_string());
+    } else {
+        lines.push("Daemon stopped".to_string());
     }
     lines.join("\n")
 }
@@ -933,14 +977,6 @@ fn filter_joinable_peers(peers: Vec<PeerSnapshotDto>) -> Vec<PeerSnapshotDto> {
             )
     });
     peers
-}
-
-fn truncate_id(id: &str) -> String {
-    if id.len() > 12 {
-        format!("{}…", &id[..12])
-    } else {
-        id.to_string()
-    }
 }
 
 async fn disable_host_pairing_presence(
@@ -1061,19 +1097,6 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].peer_id, "peer-a");
-    }
-
-    #[test]
-    fn truncate_id_short_ids_unchanged() {
-        assert_eq!(truncate_id("short"), "short");
-    }
-
-    #[test]
-    fn truncate_id_long_ids_truncated() {
-        let long = "abcdefghijklmnopqrstuvwxyz";
-        let result = truncate_id(long);
-        assert!(result.ends_with('…'));
-        assert_eq!(result.len(), "abcdefghijkl".len() + '…'.len_utf8());
     }
 
     #[test]
