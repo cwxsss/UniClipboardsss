@@ -72,10 +72,13 @@ impl SelectRepresentationPolicyV1 {
 
     fn score(kind: RepKind, target: SelectionTarget) -> i32 {
         match (target, kind) {
-            // UiPreview: PlainText 优先（简洁预览），其次 Image，最后 RichText
-            (SelectionTarget::UiPreview, RepKind::FileList) => 100,
+            // UiPreview: Image 优先于 FileList——当剪贴板同时包含图片字节与
+            // 文件 URL（典型如截图工具写入的临时 PNG 文件）时，优先展示可视化
+            // 的图片预览，而不是一串文件名/路径。FileList 仍高于文本类，
+            // 因为非图片文件列表仍适合以文件条目形式预览。
+            (SelectionTarget::UiPreview, RepKind::Image) => 100,
+            (SelectionTarget::UiPreview, RepKind::FileList) => 95,
             (SelectionTarget::UiPreview, RepKind::PlainText) => 90,
-            (SelectionTarget::UiPreview, RepKind::Image) => 80,
             (SelectionTarget::UiPreview, RepKind::RichText) => 70,
             (SelectionTarget::UiPreview, RepKind::Uri) => 60,
             (SelectionTarget::UiPreview, RepKind::Unknown) => 10,
