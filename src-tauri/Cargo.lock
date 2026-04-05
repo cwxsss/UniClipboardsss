@@ -9707,10 +9707,20 @@ dependencies = [
  "tracing",
  "uc-app",
  "uc-bootstrap",
+ "uc-cli-macros",
  "uc-core",
  "uc-daemon",
  "uc-daemon-client",
  "uc-observability",
+]
+
+[[package]]
+name = "uc-cli-macros"
+version = "0.4.0-alpha.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.112",
 ]
 
 [[package]]

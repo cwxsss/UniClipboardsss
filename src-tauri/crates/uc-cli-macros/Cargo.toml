@@ -1,0 +1,13 @@
+[package]
+name = "uc-cli-macros"
+version.workspace = true
+edition = "2021"
+description = "Proc-macros for uc-cli (internal)"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "visit-mut"] }
+quote = "1"
+proc-macro2 = "1"
