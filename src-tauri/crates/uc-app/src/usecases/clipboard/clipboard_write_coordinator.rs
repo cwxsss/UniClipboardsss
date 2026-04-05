@@ -12,7 +12,8 @@ use uc_core::ports::clipboard::{ClipboardChangeOriginPort, SystemClipboardPort};
 /// Represents the intent behind a programmatic clipboard write.
 ///
 /// Each variant carries per-intent guard TTL semantics:
-/// - `LocalRestore` / `LocalCapture`: 2-second hash guard (short-lived, local op)
+/// - `LocalRestore`: 2-second hash guard + one-shot next-origin override
+/// - `LocalCapture`: 2-second hash guard (short-lived, local op)
 /// - `RemotePush`: 60-second hash guard + one-shot next-origin override (OS re-encoding guard)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardWriteIntent {
@@ -70,8 +71,11 @@ impl ClipboardWriteCoordinator {
     ///
     /// # Intent semantics
     ///
-    /// - `LocalRestore` / `LocalCapture`: registers a 2-second local snapshot hash guard,
-    ///   then writes. On error, consumes the guard to prevent stale state.
+    /// - `LocalRestore`: registers a 2-second local snapshot hash guard, writes, then
+    ///   sets a one-shot `set_next_origin(LocalRestore, 2s)` to cover file URI/path
+    ///   rewrites that change bytes between write and watcher callback.
+    /// - `LocalCapture`: registers a 2-second local snapshot hash guard, then writes.
+    ///   On error, consumes the guard to prevent stale state.
     /// - `RemotePush`: registers a 60-second remote snapshot hash guard, writes, then
     ///   sets a one-shot `set_next_origin(RemotePush, 60s)` to guard against OS re-encoding
     ///   loopback (e.g., Windows DIB→PNG re-encode produces a different hash than the guard).
@@ -132,15 +136,27 @@ impl ClipboardWriteCoordinator {
                 return Err(err);
             }
 
-            // RemotePush success: set one-shot origin override for OS re-encoding loopback guard.
-            // Some platforms (e.g. Windows clipboard-rs) re-encode images (PNG→DIB→PNG),
-            // producing different bytes than the original. The hash guard above won't match
-            // the re-encoded content, so we set a one-shot origin override: the NEXT clipboard
-            // change will be treated as RemotePush regardless of hash.
-            if intent == ClipboardWriteIntent::RemotePush {
-                self.clipboard_change_origin
-                    .set_next_origin(ClipboardChangeOrigin::RemotePush, Duration::from_secs(60))
-                    .await;
+            match intent {
+                ClipboardWriteIntent::LocalRestore => {
+                    // File restores can come back from the platform clipboard with rewritten
+                    // URI/path bytes, so the hash guard alone is not sufficient.
+                    self.clipboard_change_origin
+                        .set_next_origin(
+                            ClipboardChangeOrigin::LocalRestore,
+                            Duration::from_secs(2),
+                        )
+                        .await;
+                }
+                ClipboardWriteIntent::RemotePush => {
+                    // Some platforms (e.g. Windows clipboard-rs) re-encode images (PNG→DIB→PNG),
+                    // producing different bytes than the original. The hash guard above won't match
+                    // the re-encoded content, so we set a one-shot origin override: the NEXT clipboard
+                    // change will be treated as RemotePush regardless of hash.
+                    self.clipboard_change_origin
+                        .set_next_origin(ClipboardChangeOrigin::RemotePush, Duration::from_secs(60))
+                        .await;
+                }
+                ClipboardWriteIntent::LocalCapture => {}
             }
 
             Ok(())
@@ -292,11 +308,12 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // Test 1: LocalRestore calls remember_local_snapshot_hash with 2s TTL, then write_snapshot
+    // Test 1: LocalRestore calls remember_local_snapshot_hash with 2s TTL, then write_snapshot,
+    // and sets next-origin for transformed clipboard callbacks
     // ---------------------------------------------------------------------------
 
     #[tokio::test]
-    async fn test1_local_restore_registers_local_guard_and_writes() {
+    async fn test1_local_restore_registers_local_guard_writes_and_sets_next_origin() {
         let clipboard = Arc::new(MockSystemClipboard::default());
         let origin = Arc::new(MockOriginPort::default());
         let coord = coordinator(clipboard.clone(), origin.clone());
@@ -322,10 +339,12 @@ mod tests {
             1,
             "write_snapshot must be called once"
         );
-        // No set_next_origin should be called
+        let has_set_next = calls
+            .iter()
+            .any(|c| c == "set_next_origin:LocalRestore:2000ms");
         assert!(
-            !calls.iter().any(|c| c.starts_with("set_next_origin")),
-            "set_next_origin must NOT be called for LocalRestore: {:?}",
+            has_set_next,
+            "set_next_origin(LocalRestore, 2s) must be called: {:?}",
             calls
         );
     }
