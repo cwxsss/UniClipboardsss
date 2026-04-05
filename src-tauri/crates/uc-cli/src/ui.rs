@@ -249,16 +249,8 @@ pub fn identity_banner(profile: &str, mode: &str, device: &str, peer_id: &str) {
     info("Profile", profile);
     info("Mode", mode);
     info("Device", device);
-    info("Peer ID", &truncate_peer_id(peer_id));
+    info("Peer ID", &format_peer_id_suffix(peer_id));
     bar();
-}
-
-fn truncate_peer_id(peer_id: &str) -> String {
-    if peer_id.len() > 16 {
-        format!("{}…", &peer_id[..16])
-    } else {
-        peer_id.to_string()
-    }
 }
 
 // ── Verification code display ───────────────────────────────────────
