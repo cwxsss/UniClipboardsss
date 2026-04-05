@@ -88,7 +88,7 @@ export function useClipboardCollection(): ClipboardCollectionResult {
   const reload = useCallback(async () => {
     if (!encryptionReady) {
       setItems([])
-      setLoading(false)
+      setLoading(!isLocked)
       return
     }
 
@@ -106,17 +106,17 @@ export function useClipboardCollection(): ClipboardCollectionResult {
     } finally {
       setLoading(false)
     }
-  }, [encryptionReady])
+  }, [encryptionReady, isLocked])
 
   useEffect(() => {
     if (!encryptionReady) {
       setItems([])
-      setLoading(false)
+      setLoading(!isLocked)
       return
     }
 
     void reload()
-  }, [encryptionReady, reload])
+  }, [encryptionReady, isLocked, reload])
 
   useClipboardEventStream({
     enabled: encryptionReady,
