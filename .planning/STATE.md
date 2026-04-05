@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: Phase complete — ready for verification
-stopped_at: Completed 85-04-PLAN.md
-last_updated: '2026-04-04T13:48:19.899Z'
+status: Milestone complete
+stopped_at: Completed 87-06-PLAN.md
+last_updated: "2026-04-05T04:52:21.545Z"
 progress:
-  total_phases: 57
-  completed_phases: 43
-  total_plans: 122
-  completed_plans: 113
+  total_phases: 58
+  completed_phases: 44
+  total_plans: 128
+  completed_plans: 119
 ---
 
 # Project State
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-03-09)
 
 ## Current Position
 
-Phase: 85 (improve-pairing-observability-across-daemon-event-routing-and-ui-state-transitions) — EXECUTING
-Plan: 3 of 3
+Phase: 87
+Plan: Not started
 
 ## Current Position
 
@@ -125,6 +125,12 @@ Plan: Not started
   | Phase 85 P02 | 7 | 3 tasks | 6 files |
   | Phase 85 P03 | 15 | 3 tasks | 4 files |
   | Phase 85 P04 | 2 | 2 tasks | 2 files |
+| Phase 87 P01 | 470 | 2 tasks | 7 files |
+| Phase 87 P02 | 6 | 1 tasks | 6 files |
+| Phase 87 P03 | 1523 | 2 tasks | 11 files |
+| Phase 87 P04 | 529 | 2 tasks | 5 files |
+| Phase 87 P05 | 3 | 1 tasks | 6 files |
+| Phase 87 P06 | 394 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -287,6 +293,20 @@ Recent decisions affecting current work:
 - [Phase 85]: 85-03: Backend timing test uses Instant::now() + wait_for_setup_response with < 1000ms assertion for low-latency regression guard
 - [Phase 85]: 85-03: Frontend observability tests use vi.spyOn(console, debug) to assert logProvider/logStore helpers without test output pollution
 - [Phase 85]: 85-04: PairingRoutingRecord documented as forward-compatibility contract rather than wiring to live log_bridge_routing()
+- [Phase 87]: 87-01: Used non-generic init_otlp_pipeline stub (Box<dyn Layer<Registry>> alias) to avoid type-inference errors in wave-0 tests that cannot instantiate S
+- [Phase 87]: 87-01: opentelemetry/opentelemetry_sdk/tracing-opentelemetry added to [dependencies] (not dev-only) because otlp.rs stub module is in src/ and uses their public types
+- [Phase 87]: 87-02: Dual public API for init_otlp_pipeline — boxed OtlpLayer version for test/simple callers, generic version for typed bootstrap composition
+- [Phase 87]: 87-02: tonic appears as indirect dep via opentelemetry-proto/gen-tonic-messages (prost support); unavoidable with http-proto feature but not gRPC transport — D-12 intent satisfied
+- [Phase 87]: 87-03: Two-phase OTLP init with OtlpConcreteLayer<S> type alias enables Rust type inference in .with() chain composition
+- [Phase 87]: 87-03: init_otlp_provider() separates async provider setup from layer creation, otlp::layer pub with concrete type for bootstrap use
+- [Phase 87]: 87-03: UC_SEQ_URL warn emitted via tracing::warn! after subscriber init for structured capture
+- [Phase 87]: 87-04: Stage constants renamed to dotted OTel semconv form (clipboard.normalize, etc.)
+- [Phase 87]: 87-04: clipboard.flow root span wraps all pipeline stages; old usecase.capture_clipboard.execute span removed
+- [Phase 87]: 87-04: tracing-opentelemetry added as direct dep to uc-app for OpenTelemetrySpanExt::set_parent in sync_inbound
+- [Phase 87]: 87-05: span_fields.rs kept as pub(crate) — format.rs FlatJsonFormat still uses collect_span_fields internally; only seq/ and clef_format.rs deleted
+- [Phase 87]: 87-05: seq/ module (3 files) + clef_format.rs hard-deleted; OTLP is now the sole telemetry exporter in uc-observability
+- [Phase 87]: 87-06: UC_SEQ_URL documented as removed in Phase 87 with single controlled migration-note occurrence; OTEL_EXPORTER_OTLP_ENDPOINT is the canonical replacement
+- [Phase 87]: 87-06: Seq signal queries use SpanName/TraceId (OTel PascalCase) instead of flow_id/origin_flow_id (legacy CLEF fields)
 
 ### Roadmap Evolution
 
@@ -328,6 +348,7 @@ Recent decisions affecting current work:
 - Phase 84 added: 统一 CLI/GUI 与 Daemon 的认证架构 — daemon 作为唯一入口，local key 做身份确认后发短时通行证，CLI/GUI 各自独立拿证
 - Phase 85 added: Improve pairing observability across daemon, event routing, and UI state transitions
 - Phase 86 added: CLI 层重构：收口远端状态解析，拆分 host/join flow phase
+- Phase 87 added: 全面迁移 otlp, 兼容 seq 展示, 采用 otlp 的最佳实践
 
 ### Pending Todos
 
@@ -347,6 +368,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-04T13:48:19.876Z
-Stopped at: Completed 85-04-PLAN.md
+Last session: 2026-04-05T04:40:52.291Z
+Stopped at: Completed 87-06-PLAN.md
 Resume file: None

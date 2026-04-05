@@ -8,8 +8,8 @@
 //!
 //! - **uc-observability** provides `build_console_layer` + `build_json_layer`
 //!   (profile-driven, dual-output: pretty console + flat JSON file) and
-//!   `build_seq_layer` (optional CLEF ingestion to a local Seq instance)
-//! - **This module** adds the Sentry layer on top, optionally wires Seq, and
+//!   `otlp::init_otlp_pipeline` (optional OTLP telemetry export, Phase 87)
+//! - **This module** adds the Sentry layer on top, optionally wires OTLP, and
 //!   registers the composed subscriber via `try_init()`
 //!
 //! ## Idempotency
@@ -26,17 +26,21 @@ use std::sync::OnceLock;
 
 use tracing_subscriber::prelude::*;
 use uc_app::app_paths::AppPaths;
-use uc_observability::{LogProfile, SeqGuard, WorkerGuard};
+use uc_observability::{otlp::OtlpGuard, LogProfile, WorkerGuard};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::ports::AppDirsPort;
 
 static SENTRY_GUARD: OnceLock<sentry::ClientInitGuard> = OnceLock::new();
 static JSON_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
-static SEQ_GUARD: OnceLock<SeqGuard> = OnceLock::new();
-/// Dedicated tokio runtime for the Seq background sender task.
-/// Needed because `init_tracing_subscriber` runs before Tauri's async runtime
-/// is available. The runtime is kept alive as long as this static exists.
-static SEQ_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+/// Keeps the OTLP TracerProvider alive for the lifetime of the process.
+///
+/// Stored behind a `ManuallyDrop` inside the `OnceLock` so that the guard is
+/// NEVER dropped, even if `set` were to fail (which would otherwise trigger
+/// `provider.shutdown()` and poison the shared inner state of every clone held
+/// by the registered `tracing_subscriber` layer — producing the infamous
+/// "Spans are being emitted even after Shutdown" warning). Static globals are
+/// not dropped at program exit, so wrapping in `ManuallyDrop` loses nothing.
+static OTLP_GUARD: OnceLock<std::mem::ManuallyDrop<OtlpGuard>> = OnceLock::new();
 
 /// Guard that ensures tracing is initialized exactly once across all entry points.
 static TRACING_INITIALIZED: OnceLock<()> = OnceLock::new();
@@ -128,47 +132,69 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
         ::tracing::debug!("JSON log guard already initialized — skipping");
     }
 
-    // Step 4b: Build Seq layer (if UC_SEQ_URL is set)
-    // build_seq_layer uses tokio::spawn internally, so we need a runtime.
-    // Since this runs before Tauri's async runtime, we create a dedicated one.
-    let seq_enabled;
-    let seq_layer = if std::env::var("UC_SEQ_URL").is_ok() {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()?;
-
-        let layer_result = rt
-            .block_on(async { uc_observability::build_seq_layer(&profile, device_id.as_deref()) });
-
-        match layer_result {
-            Some((layer, guard)) => {
-                seq_enabled = true;
-                if SEQ_GUARD.set(guard).is_err() {
-                    eprintln!("Seq guard already initialized");
+    // Step 4b: Optionally initialize OTLP provider (phase 1 of 2).
+    //
+    // `init_otlp_provider` is fully synchronous — the underlying HTTP client
+    // is `reqwest::blocking::Client`, which manages its own internal tokio
+    // runtime. No outer tokio runtime is required here, and spans are
+    // exported from opentelemetry_sdk's own background std::thread
+    // (not a tokio task), so the provider is fully self-contained.
+    //
+    // Provider initialization is separated from layer creation so that the
+    // layer can be built with the correct generic subscriber type `S`
+    // (determined by the full `.with()` composition in Step 5, not at
+    // provider-init time). `SdkTracerProvider::clone()` uses Arc semantics.
+    let otlp_provider_and_guard = if matches!(profile, LogProfile::Prod) {
+        None
+    } else if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+        match uc_observability::otlp::init_otlp_provider(&profile, device_id.as_deref()) {
+            Ok(Some((provider, guard))) => {
+                // Wrap the guard in ManuallyDrop before handing it to the
+                // OnceLock. If `set` ever fails (it shouldn't — idempotency
+                // guard above ensures single-init), ManuallyDrop prevents a
+                // stray drop from calling `provider.shutdown()` and poisoning
+                // the layer's cloned provider handle.
+                if OTLP_GUARD
+                    .set(std::mem::ManuallyDrop::new(guard))
+                    .is_err()
+                {
+                    eprintln!("[uc-bootstrap] OTLP guard already initialized; leaking new guard");
                 }
-                // Keep the runtime alive so the background sender task continues
-                if SEQ_RUNTIME.set(rt).is_err() {
-                    eprintln!("Seq runtime already initialized");
-                }
-                Some(layer)
+                Some(provider)
             }
-            None => {
-                seq_enabled = false;
+            Ok(None) => None,
+            Err(e) => {
+                // Log to stderr — the global subscriber isn't set yet.
+                eprintln!("[uc-bootstrap] failed to initialize OTLP provider ({e}); continuing without it");
                 None
             }
         }
     } else {
-        seq_enabled = false;
         None
     };
 
-    // Step 5: Compose all layers and register
+    let otlp_enabled = otlp_provider_and_guard.is_some();
+
+    // Step 5: Compose all layers and register.
+    //
+    // Phase 2 of OTLP init: build the typed layer now that the subscriber type `S`
+    // is fixed by the `.with()` chain below.
+    //
+    // `OtlpConcreteLayer<S>` is a concrete type alias for
+    // `Filtered<OpenTelemetryLayer<S, SdkTracer>, EnvFilter, S>`.
+    // Using a concrete type (not `impl Layer<S>`) allows Rust to infer `S`
+    // from the `.with(otlp_layer)` call site rather than requiring it to be
+    // fixed at the `let` binding site.
+    let otlp_layer: Option<uc_observability::otlp::layer::OtlpConcreteLayer<_>> =
+        otlp_provider_and_guard.as_ref().map(|provider| {
+            uc_observability::otlp::layer::build_otlp_layer(provider, &profile)
+        });
+
     match tracing_subscriber::registry()
         .with(sentry_layer)
         .with(console_layer)
         .with(json_layer)
-        .with(seq_layer)
+        .with(otlp_layer)
         .try_init()
     {
         Ok(()) => {}
@@ -192,10 +218,19 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
     ::tracing::info!(
         profile = %profile,
         logs_dir = %paths.logs_dir.display(),
-        seq_enabled = seq_enabled,
+        otlp_enabled = otlp_enabled,
         "Tracing initialized with dual output (console + JSON{})",
-        if seq_enabled { " + Seq" } else { "" }
+        if otlp_enabled { " + OTLP" } else { "" }
     );
+
+    // Legacy env var migration warning (D-14, REQ-87-10).
+    // Emitted through the now-initialized subscriber for structured capture.
+    if std::env::var("UC_SEQ_URL").is_ok() {
+        ::tracing::warn!(
+            "UC_SEQ_URL is set but legacy Seq ingestion was removed in Phase 87. \
+             Migrate to OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:5341/ingest/otlp"
+        );
+    }
 
     Ok(())
 }
