@@ -516,13 +516,33 @@ fn terminate_incompatible_daemon_from_pid_file() -> Result<(), DaemonBootstrapEr
 fn spawn_daemon_process<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(CommandChild, u32), DaemonBootstrapError> {
-    let sidecar_cmd = app
+    let mut sidecar_cmd = app
         .shell()
         .sidecar("uniclipboard-daemon")
         .map_err(|e| {
             DaemonBootstrapError::Spawn(anyhow::Error::msg(format!("sidecar create: {e}")))
         })?
         .args(["--gui-managed"]);
+
+    // Tauri v2 sidecar does NOT inherit the parent environment by default.
+    // Forward observability-related env vars so the daemon can initialize its
+    // own Seq / Sentry / log-profile layers and emit structured events
+    // directly — otherwise the only daemon logs reaching Seq would be the
+    // stdout-forwarding wrapper below, which loses target/level/span/fields.
+    for key in [
+        "UC_SEQ_URL",
+        "UC_SEQ_API_KEY",
+        "UC_LOG_PROFILE",
+        "SENTRY_DSN",
+        "RUST_LOG",
+        "RUST_BACKTRACE",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            if !value.is_empty() {
+                sidecar_cmd = sidecar_cmd.env(key, value);
+            }
+        }
+    }
 
     let (rx, child) = sidecar_cmd.spawn().map_err(|e| {
         DaemonBootstrapError::Spawn(anyhow::Error::msg(format!("sidecar spawn: {e}")))
@@ -532,23 +552,36 @@ fn spawn_daemon_process<R: Runtime>(
     tracing::info!(pid, "daemon sidecar spawned successfully");
 
     // Drain stdout/stderr events to prevent pipe blocking.
-    // Daemon's tracing output goes to stdout (uc-observability console layer).
+    //
+    // The daemon owns its own tracing subscriber (console + JSON file + Seq
+    // when UC_SEQ_URL is forwarded above) — it has already done filtering and
+    // pretty-formatting for the console output before writing to its stdout.
+    // Structured events reach Seq directly from the daemon process.
+    //
+    // Tauri's sidecar API pipes the child's stdio (it never inherits the
+    // parent tty), so we must actively drain `rx`. Write the already-formatted
+    // daemon lines to our own stdout/stderr VERBATIM — do NOT re-wrap them in
+    // `tracing::*!` events: doing so flattens target/level/span into a `line`
+    // string field and produces a noise event in Seq that duplicates the real
+    // structured record the daemon already sent.
+    //
     // CommandChild holds stdin open, maintaining the D-06 stdin tether.
     tauri::async_runtime::spawn(async move {
+        use std::io::Write;
         let mut rx = rx;
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(line) => {
-                    tracing::debug!(
-                        line = %String::from_utf8_lossy(&line),
-                        "daemon sidecar stdout"
-                    );
+                    let mut out = std::io::stdout().lock();
+                    let _ = out.write_all(&line);
+                    let _ = out.write_all(b"\n");
+                    let _ = out.flush();
                 }
                 CommandEvent::Stderr(line) => {
-                    tracing::debug!(
-                        line = %String::from_utf8_lossy(&line),
-                        "daemon sidecar stderr"
-                    );
+                    let mut err = std::io::stderr().lock();
+                    let _ = err.write_all(&line);
+                    let _ = err.write_all(b"\n");
+                    let _ = err.flush();
                 }
                 CommandEvent::Terminated(payload) => {
                     tracing::warn!(?payload, "daemon sidecar terminated");
