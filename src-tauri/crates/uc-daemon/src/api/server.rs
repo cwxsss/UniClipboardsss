@@ -170,7 +170,7 @@ pub fn build_router(state: DaemonApiState) -> Router {
 }
 
 pub(crate) async fn cors_middleware(request: Request<Body>, next: Next) -> Response {
-    tracing::info!(
+    tracing::debug!(
         method = %request.method(),
         uri = %request.uri(),
         has_origin = request.headers().contains_key(ORIGIN),

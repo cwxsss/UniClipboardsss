@@ -34,30 +34,36 @@ use crate::security::middleware::{auth_extractor_middleware, rate_limit_middlewa
 pub fn router_l1(state: DaemonApiState) -> Router<DaemonApiState> {
     let mut router = Router::new()
         .route("/health", get(health))
-        .with_state(state.clone())
-        .layer(middleware::from_fn(crate::api::server::cors_middleware));
+        .with_state(state.clone());
 
     #[cfg(debug_assertions)]
     {
         router = router.merge(crate::api::dev::router(state));
     }
 
+    // NOTE: cors_middleware is applied once at the outermost layer in
+    // `build_router` so it wraps all merged sub-routers. Do not re-layer it
+    // here or each request will traverse CORS twice.
     router
 }
 
 /// Build the L2+ (protected) router - requires valid session token.
-/// All routes are behind auth_extractor -> rate_limit middleware layers, wrapped by CORS.
+/// All routes are behind auth_extractor -> rate_limit middleware layers.
+/// CORS wrapping is applied once at the outermost level in `build_router`.
 ///
 /// LAYER ORDER (FINDING-2): In Axum, the LAST `.layer()` call runs FIRST on
 /// incoming requests and sees responses returned by inner layers. We want:
-/// - CORS to wrap the full chain so auth/rate-limit rejections still include CORS headers
 /// - auth_extractor to run before rate_limit
 /// - rate_limit to run after auth_extractor has populated client_id
+/// - CORS (applied outside this function) to wrap the whole chain so
+///   auth/rate-limit rejections still include CORS headers
 ///
-/// Therefore, the order must be:
+/// Therefore the order inside this function must be:
 ///   .layer(rate_limit_middleware)      // innermost -> runs THIRD
-///   .layer(auth_extractor_middleware)  // middle    -> runs SECOND
-///   .layer(cors_middleware)            // outermost -> runs FIRST
+///   .layer(auth_extractor_middleware)  // outer of these two -> runs SECOND
+///
+/// The outer cors_middleware in `build_router` then runs FIRST on the merged
+/// router, before either of these layers executes.
 ///
 /// This means rate limiting applies to already-authenticated requests (by validated PID).
 /// It is NOT a pre-auth gate - that is a deliberate design choice for Phase 75.
@@ -87,13 +93,13 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
         .with_state(state.clone());
 
     // Apply middleware layers.
-    // CORS must wrap the full chain so browser clients still receive ACAO headers
-    // when auth/rate-limit reject before reaching a handler.
+    // NOTE: cors_middleware is NOT applied here; it is layered once at the
+    // outermost level in `build_router` so it wraps every sub-router exactly
+    // once. Browser clients still receive ACAO headers on auth/rate-limit
+    // rejections because the outer cors layer wraps this entire chain.
     // auth_extractor runs before rate_limit and sets client_id in extensions.
-    // See detailed comment above for layer order explanation.
     let state_for_middleware = Arc::new(state);
     router
-        .layer(middleware::from_fn(crate::api::server::cors_middleware))
         .layer(middleware::from_fn_with_state(
             state_for_middleware.clone(),
             rate_limit_middleware,

@@ -9,7 +9,6 @@ use std::net::SocketAddr;
 use axum::body::{to_bytes, Body};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::middleware;
 use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::{Json, Router};
@@ -55,12 +54,12 @@ pub struct ConnectResponse {
 /// POST /auth/connect is the only route - it accepts bearer token
 /// (not session token) because it's the entry point for getting a session token.
 pub fn router() -> Router<DaemonApiState> {
-    Router::new()
-        .route(
-            uc_core::network::daemon_api_strings::auth_route::AUTH_CONNECT,
-            post(connect_handler),
-        )
-        .layer(middleware::from_fn(crate::api::server::cors_middleware))
+    // NOTE: cors_middleware is applied once at the outermost layer in
+    // `build_router`; do not re-layer it here.
+    Router::new().route(
+        uc_core::network::daemon_api_strings::auth_route::AUTH_CONNECT,
+        post(connect_handler),
+    )
 }
 
 /// Handler for POST /auth/connect.
