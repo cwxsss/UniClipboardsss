@@ -120,17 +120,17 @@ where
 }
 
 #[cfg(unix)]
-fn is_process_running(pid: u32) -> bool {
+pub(crate) fn is_process_running(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
 #[cfg(unix)]
-fn send_sigterm(pid: u32) -> bool {
+pub(crate) fn send_sigterm(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 }
 }
 
 #[cfg(windows)]
-fn is_process_running(pid: u32) -> bool {
+pub(crate) fn is_process_running(pid: u32) -> bool {
     std::process::Command::new("tasklist")
         .args(["/FI", &format!("PID eq {}", pid), "/NH"])
         .output()
@@ -139,7 +139,7 @@ fn is_process_running(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn send_sigterm(pid: u32) -> bool {
+pub(crate) fn send_sigterm(pid: u32) -> bool {
     std::process::Command::new("taskkill")
         .args(["/PID", &pid.to_string()])
         .output()

@@ -10,7 +10,7 @@ use uc_daemon::socket::try_resolve_daemon_http_addr;
 
 const HEALTH_PATH: &str = "/health";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,16 +90,75 @@ pub async fn ensure_local_daemon_running() -> Result<LocalDaemonSession, LocalDa
         .build()
         .map_err(|error| LocalDaemonError::ProbeClient(error.into()))?;
     let base_url = resolve_base_url()?;
-    let probe_base_url = base_url.clone();
 
-    ensure_local_daemon_running_with(
-        || probe_daemon_health(&client, &probe_base_url),
-        || spawn_daemon_process().map(|_| ()),
-        base_url,
-        STARTUP_TIMEOUT,
-        POLL_INTERVAL,
-    )
-    .await
+    // Fast path: daemon is already running.
+    if probe_daemon_health(&client, &base_url).await? {
+        return Ok(LocalDaemonSession {
+            base_url,
+            spawned: false,
+        });
+    }
+
+    // Slow path: spawn + wait for health. Show a spinner so the user sees
+    // progress — daemon cold start can take many seconds in debug builds.
+    let spinner = crate::ui::spinner("Starting local daemon…");
+
+    if let Err(error) = spawn_daemon_process() {
+        crate::ui::spinner_finish_error(&spinner, "Failed to spawn local daemon");
+        return Err(error);
+    }
+
+    let mut probe = || probe_daemon_health(&client, &base_url);
+    match wait_for_daemon_health(&mut probe, STARTUP_TIMEOUT, POLL_INTERVAL, &base_url).await {
+        Ok(()) => {
+            crate::ui::spinner_finish_success(&spinner, "Local daemon ready");
+            Ok(LocalDaemonSession {
+                base_url,
+                spawned: true,
+            })
+        }
+        Err(error) => {
+            crate::ui::spinner_finish_error(&spinner, "Local daemon failed to start");
+            Err(error)
+        }
+    }
+}
+
+/// Capture variant used by the `#[autostop]` proc-macro.
+///
+/// Behaves like [`ensure_local_daemon_running`] but, on success, arms an
+/// [`AutostopGuard`](crate::autostop::AutostopGuard) and stores it into the
+/// caller-provided `slot`. The guard is dropped when the caller's function
+/// returns, sending SIGTERM to the daemon iff this invocation spawned it.
+///
+/// Intended to be called only via `#[autostop]` rewrite. Direct use works too
+/// but is awkward — prefer the macro for ergonomics.
+pub async fn ensure_local_daemon_running_capture(
+    slot: &mut Option<crate::autostop::AutostopGuard>,
+) -> Result<LocalDaemonSession, LocalDaemonError> {
+    let session = ensure_local_daemon_running().await?;
+    *slot = Some(crate::autostop::AutostopGuard::arm(&session));
+    Ok(session)
+}
+
+/// One-shot variant of [`ensure_local_daemon_running`] that pairs the session
+/// with an [`AutostopGuard`](crate::autostop::AutostopGuard).
+///
+/// The guard is armed iff the daemon was spawned by this call. Callers must bind
+/// the returned tuple to two local variables so the guard lives for the whole
+/// command body:
+///
+/// ```ignore
+/// let (session, _autostop) = ensure_local_daemon_running_for_oneshot().await?;
+/// ```
+///
+/// The `#[autostop]` attribute macro in `uc-cli-macros` rewrites plain
+/// `ensure_local_daemon_running` calls into this form automatically.
+pub async fn ensure_local_daemon_running_for_oneshot(
+) -> Result<(LocalDaemonSession, crate::autostop::AutostopGuard), LocalDaemonError> {
+    let session = ensure_local_daemon_running().await?;
+    let guard = crate::autostop::AutostopGuard::arm(&session);
+    Ok((session, guard))
 }
 
 async fn ensure_local_daemon_running_with<Probe, ProbeFuture, Spawn>(

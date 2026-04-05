@@ -1,3 +1,4 @@
+mod autostop;
 mod commands;
 mod exit_codes;
 mod local_daemon;
