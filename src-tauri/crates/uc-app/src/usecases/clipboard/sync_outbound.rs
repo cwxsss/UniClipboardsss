@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use futures::executor;
-use tracing::{debug, info, info_span, warn, Instrument};
+use tracing::{debug, field, info, info_span, warn, Instrument, Span};
 use uuid::Uuid;
 
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
@@ -163,6 +163,7 @@ impl SyncOutboundClipboardUseCase {
             "usecase.clipboard.sync_outbound.execute",
             origin = ?origin,
             representation_count = snapshot.representations.len(),
+            flow_id = field::Empty,
         );
 
         executor::block_on(
@@ -178,6 +179,9 @@ impl SyncOutboundClipboardUseCase {
         origin_flow_id: Option<String>,
         file_transfers: Vec<uc_core::network::protocol::FileTransferMapping>,
     ) -> Result<()> {
+        if let Some(ref fid) = origin_flow_id {
+            Span::current().record("flow_id", tracing::field::display(fid));
+        }
         if origin == ClipboardChangeOrigin::RemotePush {
             debug!(origin = ?origin, "Skipping outbound sync for remote-push origin");
             return Ok(());

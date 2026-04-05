@@ -4,7 +4,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{debug, warn};
 use uc_core::clipboard::link_utils::{is_all_urls, is_single_url, parse_uri_list};
 use uc_core::clipboard::PayloadAvailability;
 use uc_core::network::protocol::MIME_IMAGE_PREFIX;
@@ -544,6 +544,13 @@ impl ListClipboardEntryProjections {
                 file_sizes,
             });
         }
+
+        debug!(
+            limit,
+            offset,
+            projections = projections.len(),
+            "Listed clipboard entry projections"
+        );
 
         Ok(projections)
     }

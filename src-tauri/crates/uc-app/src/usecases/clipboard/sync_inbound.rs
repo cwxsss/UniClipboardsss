@@ -10,7 +10,7 @@ use crate::usecases::clipboard::clipboard_write_coordinator::{
 use crate::usecases::clipboard::ClipboardIntegrationMode;
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, info_span, warn, Instrument};
+use tracing::{debug, error, field, info, info_span, warn, Instrument, Span};
 use uc_core::ids::{EntryId, FormatId, RepresentationId};
 use uc_core::network::protocol::{
     BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion, MIME_IMAGE_PREFIX,
@@ -195,9 +195,13 @@ impl SyncInboundClipboardUseCase {
             message_id = %message.id,
             origin_device_id = %message.origin_device_id,
             payload_version = ?message.payload_version,
+            flow_id = field::Empty,
         );
 
         async move {
+            if let Some(ref fid) = message.origin_flow_id {
+                Span::current().record("flow_id", tracing::field::display(fid));
+            }
             info!(
                 mode = ?self.mode,
                 allow_os_read = self.mode.allow_os_read(),
@@ -480,7 +484,11 @@ impl SyncInboundClipboardUseCase {
                     .collect();
 
                 return match capture
-                    .execute_with_origin(snapshot_for_capture, ClipboardChangeOrigin::RemotePush)
+                    .execute_with_origin(
+                        snapshot_for_capture,
+                        ClipboardChangeOrigin::RemotePush,
+                        message.origin_flow_id.clone(),
+                    )
                     .await
                 {
                     Ok(Some(entry_id)) => {
@@ -583,7 +591,11 @@ impl SyncInboundClipboardUseCase {
                 );
 
                 return match capture
-                    .execute_with_origin(snapshot_for_capture, ClipboardChangeOrigin::RemotePush)
+                    .execute_with_origin(
+                        snapshot_for_capture,
+                        ClipboardChangeOrigin::RemotePush,
+                        message.origin_flow_id.clone(),
+                    )
                     .await
                 {
                     Ok(Some(entry_id)) => {

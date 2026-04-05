@@ -121,7 +121,7 @@ impl CaptureClipboardUseCase {
     /// - Avoids redundant system clipboard reads
     /// - 避免重复读取系统剪贴板
     pub async fn execute(&self, snapshot: SystemClipboardSnapshot) -> Result<EntryId> {
-        self.execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture)
+        self.execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture, None)
             .await?
             .ok_or_else(|| anyhow::anyhow!("local capture should always persist an entry"))
     }
@@ -130,6 +130,7 @@ impl CaptureClipboardUseCase {
         &self,
         snapshot: SystemClipboardSnapshot,
         origin: ClipboardChangeOrigin,
+        flow_id: Option<String>,
     ) -> Result<Option<EntryId>> {
         let span = info_span!(
             "usecase.capture_clipboard.execute",
@@ -140,8 +141,12 @@ impl CaptureClipboardUseCase {
             device_id = %self.device_identity.current_device_id(),
             entry_id = field::Empty,
             event_id = field::Empty,
+            flow_id = field::Empty,
         );
         async move {
+            if let Some(ref fid) = flow_id {
+                Span::current().record("flow_id", tracing::field::display(fid));
+            }
             if origin == ClipboardChangeOrigin::LocalRestore {
                 info!(origin = ?origin, "Skipping clipboard capture");
                 return Ok(None);
@@ -181,6 +186,33 @@ impl CaptureClipboardUseCase {
             }
             .instrument(info_span!("normalize", stage = stages::NORMALIZE))
             .await?;
+
+            // Aggregated summary per capture (per-representation details at trace level)
+            {
+                let mut inline = 0usize;
+                let mut staged_with_preview = 0usize;
+                let mut staged = 0usize;
+                let mut total_bytes: i64 = 0;
+                for rep in &normalized_reps {
+                    total_bytes += rep.size_bytes;
+                    match rep.payload_state() {
+                        PayloadAvailability::Inline => inline += 1,
+                        PayloadAvailability::Staged if rep.inline_data.is_some() => {
+                            staged_with_preview += 1
+                        }
+                        PayloadAvailability::Staged => staged += 1,
+                        _ => {}
+                    }
+                }
+                debug!(
+                    representations = normalized_reps.len(),
+                    inline,
+                    staged_with_preview,
+                    staged,
+                    total_bytes,
+                    "Normalized clipboard representations"
+                );
+            }
 
             async {
                 self.event_writer
@@ -577,7 +609,7 @@ mod tests {
         };
 
         let _ = use_case
-            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalRestore)
+            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalRestore, None)
             .await
             .expect("expected ok result");
 
@@ -631,7 +663,7 @@ mod tests {
         };
 
         let result = use_case
-            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture)
+            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture, None)
             .await
             .expect("expected ok result");
 
