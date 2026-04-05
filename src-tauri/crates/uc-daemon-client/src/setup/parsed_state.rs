@@ -15,6 +15,8 @@ pub enum SetupHint {
     HostConfirmPeer,
     JoinSelectPeer,
     JoinEnterPassphrase,
+    /// Joiner has selected a peer and is waiting for the host to accept/reject.
+    JoinWaitingForHost,
     Unknown(String),
 }
 
@@ -26,6 +28,7 @@ impl SetupHint {
             "host-confirm-peer" => SetupHint::HostConfirmPeer,
             "join-select-peer" => SetupHint::JoinSelectPeer,
             "join-enter-passphrase" => SetupHint::JoinEnterPassphrase,
+            "join-waiting-for-host" => SetupHint::JoinWaitingForHost,
             other => SetupHint::Unknown(other.to_string()),
         }
     }
@@ -153,7 +156,10 @@ fn format_peer_label(peer_id: &Option<String>, peer_name: &Option<String>) -> Op
     }
 }
 
-fn format_peer_id_suffix(peer_id: &str) -> String {
+/// Return the last 8 characters of a peer ID for compact display.
+///
+/// If the peer ID is already 8 chars or shorter, it is returned as-is.
+pub fn format_peer_id_suffix(peer_id: &str) -> String {
     if peer_id.len() <= 8 {
         peer_id.to_string()
     } else {

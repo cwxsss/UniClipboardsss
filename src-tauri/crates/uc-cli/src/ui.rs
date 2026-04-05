@@ -3,6 +3,7 @@
 use console::{style, Key, Style, Term};
 use dialoguer::{Confirm, Select};
 use indicatif::{ProgressBar, ProgressStyle};
+use uc_daemon_client::setup::format_peer_id_suffix;
 
 // ── Colour palette ──────────────────────────────────────────────────
 

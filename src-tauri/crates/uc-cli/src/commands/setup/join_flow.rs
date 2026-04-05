@@ -91,6 +91,9 @@ pub fn derive_join_phase(parsed: &ParsedSetupState, current: &JoinCliPhase) -> J
         // JoinSelectPeer: actively selecting a peer to join.
         SetupHint::JoinSelectPeer => SelectingPeer,
 
+        // JoinWaitingForHost: peer selected; waiting for the host to accept.
+        SetupHint::JoinWaitingForHost => WaitingHostResponse,
+
         // JoinEnterPassphrase: host approved us, now we need the passphrase.
         SetupHint::JoinEnterPassphrase => NeedPassphrase,
 
@@ -157,6 +160,15 @@ mod tests {
         let parsed = make_parsed(SetupHint::JoinSelectPeer, idle(), None, false);
         let phase = derive_join_phase(&parsed, &JoinCliPhase::WaitingHostResponse);
         assert!(matches!(phase, JoinCliPhase::SelectingPeer));
+    }
+
+    // WaitingHostResponse
+
+    #[test]
+    fn join_waiting_for_host_is_waiting_host_response() {
+        let parsed = make_parsed(SetupHint::JoinWaitingForHost, idle(), None, false);
+        let phase = derive_join_phase(&parsed, &JoinCliPhase::SelectingPeer);
+        assert!(matches!(phase, JoinCliPhase::WaitingHostResponse));
     }
 
     // NeedPassphrase
