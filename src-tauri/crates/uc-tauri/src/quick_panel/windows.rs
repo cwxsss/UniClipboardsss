@@ -28,7 +28,9 @@ const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
 const RESTORE_SETTLE_MS: std::time::Duration = std::time::Duration::from_millis(40);
 
 /// The last foreground window before the quick panel claimed focus.
-static PREVIOUS_FOREGROUND_WINDOW: Mutex<Option<HWND>> = Mutex::new(None);
+///
+/// Stored as `isize` because `HWND` contains `*mut c_void` which is not `Send+Sync`.
+static PREVIOUS_FOREGROUND_WINDOW: Mutex<Option<isize>> = Mutex::new(None);
 
 /// Force the given Tauri window to the foreground on Windows.
 ///
@@ -41,7 +43,7 @@ pub fn force_foreground(window: &tauri::WebviewWindow) {
         return;
     };
 
-    activate_window(hwnd, "quick panel");
+    let _ = activate_window(hwnd, "quick panel");
 }
 
 /// Remember the foreground window before the quick panel claims focus.
@@ -59,7 +61,7 @@ pub fn remember_previous_foreground(window: &tauri::WebviewWindow) {
 
         match PREVIOUS_FOREGROUND_WINDOW.lock() {
             Ok(mut guard) => {
-                *guard = Some(foreground_hwnd);
+                *guard = Some(foreground_hwnd.0 as isize);
                 debug!(
                     ?foreground_hwnd,
                     "Captured previous foreground window for quick panel"
@@ -76,6 +78,7 @@ pub fn restore_previous_foreground() -> Result<(), String> {
         Ok(mut guard) => guard.take(),
         Err(_) => return Err("Previous foreground window lock poisoned".into()),
     }
+    .map(|ptr| HWND(ptr as *mut std::ffi::c_void))
     .ok_or_else(|| "No previous foreground window captured".to_string())?;
 
     activate_window(hwnd, "previous app")
