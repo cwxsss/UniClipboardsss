@@ -24,8 +24,6 @@ use uc_daemon::state::RuntimeState;
 struct PairingWsHarness {
     app: axum::Router,
     url: String,
-    /// Bearer token for WebSocket authentication (ws.rs uses is_authorized check directly).
-    token: String,
     /// JWT session token for HTTP route authentication (L2 middleware requires Session token).
     session_token: String,
     event_tx: tokio::sync::broadcast::Sender<DaemonWsEvent>,
@@ -39,6 +37,15 @@ fn build_runtime() -> Arc<uc_app::runtime::CoreRuntime> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Give each test invocation its own DB to prevent intra-binary SQLite contention.
+    let profile = format!(
+        "test_pairing_ws_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    );
+    std::env::set_var("UC_PROFILE", &profile);
     Arc::new(uc_bootstrap::build_cli_runtime(None).unwrap())
 }
 
@@ -49,7 +56,6 @@ async fn spawn_server() -> PairingWsHarness {
     let tempdir = tempfile::tempdir().unwrap();
     let token_path = tempdir.path().join("daemon.token");
     let token = load_or_create_auth_token(&token_path).unwrap();
-    let token_value = std::fs::read_to_string(&token_path).unwrap();
     // Pre-register the test process PID so session tokens pass the whitelist check.
     let pid = std::process::id();
     let security = Arc::new(SecurityState::new_with_pid(pid));
@@ -69,7 +75,6 @@ async fn spawn_server() -> PairingWsHarness {
     PairingWsHarness {
         app,
         url: format!("ws://{}/ws", addr),
-        token: token_value,
         session_token,
         event_tx,
         state,
@@ -112,7 +117,33 @@ async fn next_json(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
 ) -> Value {
-    serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .expect("next_json timed out waiting for WebSocket message")
+            .expect("WebSocket stream ended")
+            .expect("WebSocket message error");
+        match &msg {
+            tokio_tungstenite::tungstenite::Message::Text(text) => {
+                return serde_json::from_str(text)
+                    .expect("failed to parse WebSocket message as JSON");
+            }
+            tokio_tungstenite::tungstenite::Message::Close(reason) => {
+                panic!(
+                    "server unexpectedly closed WebSocket connection: {:?}",
+                    reason
+                );
+            }
+            tokio_tungstenite::tungstenite::Message::Ping(_)
+            | tokio_tungstenite::tungstenite::Message::Pong(_) => {
+                // Skip control frames and wait for the next data message.
+                continue;
+            }
+            other => {
+                panic!("unexpected WebSocket message type: {:?}", other);
+            }
+        }
+    }
 }
 
 fn authed_get_request(uri: &str, session_token: &str) -> Request<Body> {
@@ -553,7 +584,8 @@ async fn setup_topic_subscription_receives_setup_state_changed_events() {
     let harness = spawn_server().await;
     let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["setup"]).await;
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // setup has no snapshot event, so wait for the subscribe to be processed.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     harness
         .event_tx

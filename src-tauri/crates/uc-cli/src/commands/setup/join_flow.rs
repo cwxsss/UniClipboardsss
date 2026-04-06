@@ -2,10 +2,7 @@
 //!
 //! Phase-driven loop structure per D-16 through D-19.
 
-use uc_daemon_client::setup::{ParsedSetupState, SetupHint, SetupVariant};
-
-use crate::exit_codes;
-use crate::ui;
+use uc_daemon_client::setup::{ParsedSetupState, SetupHint};
 
 // ── Phase enum ──────────────────────────────────────────────────────
 
@@ -17,14 +14,17 @@ pub enum JoinCliPhase {
     /// Initial state -- prompting user to select a peer to join.
     SelectingPeer,
     /// Actively scanning/discovering peers on the network.
+    #[allow(dead_code)]
     WaitingPeerDiscovery,
     /// Waiting for the host to respond to our join request.
+    #[allow(dead_code)]
     WaitingHostResponse,
     /// Host accepted; awaiting short-code verification confirmation from joiner.
     NeedPeerConfirmation { session_id: String },
     /// Waiting for the joiner to enter the space passphrase.
     NeedPassphrase,
     /// Backend processing the pairing completion.
+    #[allow(dead_code)]
     WaitingBackendCompletion,
     /// Pairing completed successfully.
     Completed,

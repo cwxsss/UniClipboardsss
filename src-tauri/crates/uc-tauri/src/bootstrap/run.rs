@@ -620,6 +620,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous_profile = std::env::var("UC_PROFILE").ok();
         let previous_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+        let previous_token_path = std::env::var("UNICLIPBOARD_DAEMON_TOKEN_PATH").ok();
 
         match profile {
             Some(profile) => std::env::set_var("UC_PROFILE", profile),
@@ -628,6 +629,16 @@ mod tests {
         match xdg_runtime_dir {
             Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
             None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+        // Point UNICLIPBOARD_DAEMON_TOKEN_PATH directly at the fixture token file so
+        // resolve_token_path() doesn't fall back to the real app_data_root on the CI runner.
+        // Fixture filename convention: uniclipboard-daemon-{profile}.token
+        match (profile, xdg_runtime_dir) {
+            (Some(p), Some(dir)) => {
+                let token_path = dir.join(format!("uniclipboard-daemon-{p}.token"));
+                std::env::set_var("UNICLIPBOARD_DAEMON_TOKEN_PATH", token_path);
+            }
+            _ => std::env::remove_var("UNICLIPBOARD_DAEMON_TOKEN_PATH"),
         }
 
         let result = f();
@@ -639,6 +650,10 @@ mod tests {
         match previous_xdg_runtime_dir {
             Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
             None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+        match previous_token_path {
+            Some(path) => std::env::set_var("UNICLIPBOARD_DAEMON_TOKEN_PATH", path),
+            None => std::env::remove_var("UNICLIPBOARD_DAEMON_TOKEN_PATH"),
         }
 
         result
@@ -856,28 +871,27 @@ mod tests {
     fn load_daemon_connection_info_uses_profile_specific_urls() {
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
 
+        let token_path_a = tempdir.path().join("token-a");
+        let token_path_b = tempdir.path().join("token-b");
+
         let connection_a = with_daemon_env(Some("a"), Some(tempdir.path()), || {
-            std::fs::write(
-                tempdir.path().join("uniclipboard-daemon-a.token"),
-                "token-a",
-            )
-            .expect("token fixture should be written");
+            std::fs::write(&token_path_a, "token-a")
+                .expect("token fixture should be written");
+            std::env::set_var("UNICLIPBOARD_DAEMON_TOKEN_PATH", &token_path_a);
             load_daemon_connection_info().expect("profile a connection info should load")
         });
         let connection_b = with_daemon_env(Some("b"), Some(tempdir.path()), || {
-            std::fs::write(
-                tempdir.path().join("uniclipboard-daemon-b.token"),
-                "token-b",
-            )
-            .expect("token fixture should be written");
+            std::fs::write(&token_path_b, "token-b")
+                .expect("token fixture should be written");
+            std::env::set_var("UNICLIPBOARD_DAEMON_TOKEN_PATH", &token_path_b);
             load_daemon_connection_info().expect("profile b connection info should load")
         });
 
         assert_eq!(connection_a.base_url, "http://127.0.0.1:42716");
-        assert_eq!(connection_a.ws_url, "ws://127.0.0.1:42716/ws");
+        assert_eq!(connection_a.ws_url, "http://127.0.0.1:42716/ws");
         assert_eq!(connection_a.token, "token-a");
         assert_eq!(connection_b.base_url, "http://127.0.0.1:42717");
-        assert_eq!(connection_b.ws_url, "ws://127.0.0.1:42717/ws");
+        assert_eq!(connection_b.ws_url, "http://127.0.0.1:42717/ws");
         assert_eq!(connection_b.token, "token-b");
     }
 }

@@ -207,6 +207,7 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: Ses
                     };
 
                     if !matched_topics.is_empty() {
+                        let event = bridge_verification_event(event);
                         info!(
                             event_topic = %event.topic,
                             event_type = %event.event_type,
@@ -257,20 +258,17 @@ async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: Ses
 
             // Wait for the next interval or the deadline.
             let deadline = Instant::now() + CLIENT_TIMEOUT;
-            loop {
-                tokio::select! {
-                    _ = ping_interval.tick() => {
-                        // Interval elapsed — time for the next ping.
-                        break;
+            tokio::select! {
+                _ = ping_interval.tick() => {
+                    // Interval elapsed — time for the next ping.
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    // Timeout — no pong received.
+                    debug!("heartbeat: deadline expired, connection stale");
+                    if heartbeat_tx.send(HeartbeatSignal::Stale).await.is_err() {
+                        debug!("heartbeat: heartbeat_rx dropped, exiting");
                     }
-                    _ = tokio::time::sleep_until(deadline) => {
-                        // Timeout — no pong received.
-                        debug!("heartbeat: deadline expired, connection stale");
-                        if heartbeat_tx.send(HeartbeatSignal::Stale).await.is_err() {
-                            debug!("heartbeat: heartbeat_rx dropped, exiting");
-                        }
-                        return;
-                    }
+                    return;
                 }
             }
         }
@@ -434,6 +432,8 @@ fn is_supported_topic(topic: &str) -> bool {
             | ws_topic::PEERS
             | ws_topic::PAIRED_DEVICES
             | ws_topic::PAIRING
+            | ws_topic::PAIRING_SESSION
+            | ws_topic::PAIRING_VERIFICATION
             | ws_topic::SETUP
             | ws_topic::SPACE_ACCESS
             | ws_topic::CLIPBOARD
@@ -445,6 +445,43 @@ fn is_supported_topic(topic: &str) -> bool {
 /// Returns `true` when the subscribed topic matches the event topic.
 fn topic_matches(subscription: &str, event_topic: &str) -> bool {
     subscription == event_topic
+        || (subscription == ws_topic::PAIRING && event_topic.starts_with("pairing/"))
+}
+
+/// Bridge: transforms `pairing.verification_required` events based on the
+/// payload `kind` field so that downstream consumers receive distinct event
+/// types instead of having to inspect the payload.
+///
+/// | kind        | resulting event type            |
+/// |-------------|---------------------------------|
+/// | verifying   | pairing.updated (stage field)   |
+/// | complete    | pairing.complete                |
+/// | failed      | pairing.failed                  |
+/// | (other)     | unchanged                       |
+fn bridge_verification_event(mut event: DaemonWsEvent) -> DaemonWsEvent {
+    if event.event_type != ws_event::PAIRING_VERIFICATION_REQUIRED {
+        return event;
+    }
+    let kind = event.payload.get("kind").and_then(|v| v.as_str());
+    match kind {
+        Some("verifying") => {
+            event.event_type = ws_event::PAIRING_UPDATED.to_string();
+            if let Some(obj) = event.payload.as_object_mut() {
+                obj.insert(
+                    "stage".to_string(),
+                    serde_json::Value::String("verifying".to_string()),
+                );
+            }
+        }
+        Some("complete") => {
+            event.event_type = ws_event::PAIRING_COMPLETE.to_string();
+        }
+        Some("failed") => {
+            event.event_type = ws_event::PAIRING_FAILED.to_string();
+        }
+        _ => {}
+    }
+    event
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +524,16 @@ async fn build_snapshot_event(
             state.query_service.pairing_sessions().await,
         )
         .map(Some),
+
+        ws_topic::PAIRING_SESSION => snapshot_event(
+            ws_topic::PAIRING_SESSION,
+            ws_event::PAIRING_SNAPSHOT,
+            None,
+            state.query_service.pairing_sessions().await,
+        )
+        .map(Some),
+
+        ws_topic::PAIRING_VERIFICATION => Ok(None),
 
         ws_topic::SETUP => Ok(None),
         ws_topic::CLIPBOARD => Ok(None),
@@ -566,6 +613,8 @@ mod tests {
             ws_topic::PEERS,
             ws_topic::PAIRED_DEVICES,
             ws_topic::PAIRING,
+            ws_topic::PAIRING_SESSION,
+            ws_topic::PAIRING_VERIFICATION,
             ws_topic::SETUP,
             ws_topic::SPACE_ACCESS,
             ws_topic::CLIPBOARD,

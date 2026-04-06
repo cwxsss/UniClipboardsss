@@ -10,7 +10,6 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use uc_daemon::api::types::HealthResponse;
@@ -117,28 +116,4 @@ fn main_window_close_request_hides_to_tray_without_daemon_cleanup() {
     assert!(close_block.contains("let _ = window.hide();"));
     assert!(!close_block.contains("shutdown_owned_daemon"));
     assert!(!close_block.contains("terminate_local_daemon_pid"));
-}
-
-fn process_is_not_running(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        let status = Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("run kill -0");
-        !status.success()
-    }
-
-    #[cfg(windows)]
-    {
-        let output = Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}")])
-            .output()
-            .expect("run tasklist");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        !stdout.contains(&pid.to_string())
-    }
 }

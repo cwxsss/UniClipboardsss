@@ -1,7 +1,9 @@
 //! Interactive setup commands over daemon-owned setup state.
 
 // Submodules for phase-driven flow
+#[path = "setup/host_flow.rs"]
 mod host_flow;
+#[path = "setup/join_flow.rs"]
 mod join_flow;
 
 pub use host_flow::{derive_host_phase, HostCliPhase, HostCliSession};
@@ -20,9 +22,7 @@ use uc_core::security::state::EncryptionState;
 use uc_daemon::api::dto::setup::SetupStateResponseDto;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
 // Re-export for integration tests (same crate)
-pub(crate) use uc_daemon_client::setup::{
-    format_peer_id_suffix, parse_setup_state, ParsedSetupState, SetupHint, SetupVariant,
-};
+pub(crate) use uc_daemon_client::setup::{format_peer_id_suffix, parse_setup_state, SetupVariant};
 use uc_daemon_client::{DaemonClientContext, DaemonPairingClient};
 
 use uc_cli_macros::autostop;
@@ -807,11 +807,6 @@ impl From<SetupStateResponseDto> for SetupStatusOutput {
 
 // ── Prompt helpers ──────────────────────────────────────────────────
 
-enum HostDecision {
-    Accept,
-    Reject,
-}
-
 fn stdin_is_terminal() -> bool {
     io::stdin().is_terminal()
 }
@@ -828,96 +823,6 @@ fn print_identity_banner(state: &SetupStateResponseDto) {
 fn prompt_new_space_passphrase() -> Result<String, String> {
     ui::bar();
     ui::password_with_confirm("New space passphrase", "Confirm passphrase")
-}
-
-fn prompt_host_decision(state: &ParsedSetupState) -> Result<HostDecision, String> {
-    let peer_name = state
-        .selected_peer_label
-        .clone()
-        .unwrap_or_else(|| "unknown peer".to_string());
-    ui::step(&format!("Join request from {}", style(peer_name).bold()));
-    if let Some(short_code) = &state.short_code {
-        ui::verification_code(short_code);
-    }
-
-    let accepted = ui::confirm("Accept this peer?", true)?;
-    if accepted {
-        Ok(HostDecision::Accept)
-    } else {
-        Ok(HostDecision::Reject)
-    }
-}
-
-pub(crate) fn should_prompt_host_decision(
-    parsed: &ParsedSetupState,
-    submitted_session_id: Option<&str>,
-) -> bool {
-    if !matches!(parsed.hint, SetupHint::HostConfirmPeer) {
-        return false;
-    }
-    if matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer) {
-        return false;
-    }
-    parsed.session_id.as_deref() != submitted_session_id
-}
-
-fn should_prompt_host_verification(
-    parsed: &ParsedSetupState,
-    submitted_session_id: Option<&str>,
-) -> bool {
-    if !matches!(parsed.hint, SetupHint::HostConfirmPeer) {
-        return false;
-    }
-    if !matches!(parsed.variant, SetupVariant::JoinSpaceConfirmPeer) {
-        return false;
-    }
-    parsed.session_id.as_deref() != submitted_session_id
-}
-
-pub(crate) fn should_complete_host_flow(
-    parsed: &ParsedSetupState,
-    handled_peer_request: bool,
-    handled_host_verification: bool,
-) -> bool {
-    handled_peer_request
-        && handled_host_verification
-        && parsed.has_completed
-        && matches!(parsed.hint, SetupHint::Completed)
-        && parsed.session_id.is_none()
-}
-
-fn prompt_host_verification(state: &ParsedSetupState) -> Result<bool, String> {
-    let peer_name = state
-        .selected_peer_label
-        .clone()
-        .unwrap_or_else(|| "selected peer".to_string());
-
-    ui::step(&format!(
-        "Confirm peer trust for {}",
-        style(peer_name).bold()
-    ));
-    if let Some(short_code) = &state.short_code {
-        ui::verification_code(short_code);
-    }
-
-    ui::confirm("Do the verification codes match?", true)
-}
-
-fn prompt_join_peer_confirmation(state: &ParsedSetupState) -> Result<bool, String> {
-    let peer_name = state
-        .selected_peer_label
-        .clone()
-        .unwrap_or_else(|| "selected peer".to_string());
-
-    ui::step(&format!(
-        "Confirm peer trust for {}",
-        style(peer_name).bold()
-    ));
-    if let Some(short_code) = &state.short_code {
-        ui::verification_code(short_code);
-    }
-
-    ui::confirm("Do the verification codes match?", true)
 }
 
 fn prompt_for_peer_selection(peers: &[PeerSnapshotDto]) -> Result<Option<String>, String> {

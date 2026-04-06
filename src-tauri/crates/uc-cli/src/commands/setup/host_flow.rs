@@ -8,9 +8,6 @@ use std::time::Instant;
 use indicatif::ProgressBar;
 use uc_daemon_client::setup::{ParsedSetupState, SetupHint, SetupVariant};
 
-use crate::exit_codes;
-use crate::ui;
-
 // ── Phase enum ──────────────────────────────────────────────────────
 
 /// CLI-layer phase for the host pairing flow.
@@ -25,6 +22,7 @@ pub enum HostCliPhase {
     /// Peer decision accepted; awaiting short-code verification confirmation.
     NeedVerification { session_id: String },
     /// Backend processing the pairing completion.
+    #[allow(dead_code)]
     WaitingBackendCompletion,
     /// Pairing completed successfully.
     Completed,
