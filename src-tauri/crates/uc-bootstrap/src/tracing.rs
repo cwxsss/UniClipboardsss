@@ -26,6 +26,7 @@ use std::sync::OnceLock;
 
 use tracing_subscriber::prelude::*;
 use uc_app::app_paths::AppPaths;
+use uc_infra::settings::repository::load_settings_snapshot;
 use uc_observability::{otlp::OtlpGuard, LogProfile, WorkerGuard};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::ports::AppDirsPort;
@@ -56,6 +57,20 @@ fn resolve_device_id_for_logging(config_dir: &Path) -> Option<String> {
         .trim()
         .to_string()
         .into()
+}
+
+/// Read the `telemetry_enabled` setting from persisted settings.
+///
+/// Uses the canonical settings repository read path so that defaults,
+/// deserialization rules, and migrations stay in one place.
+///
+/// Falls back to `true` (the model default) if the file doesn't exist
+/// or cannot be loaded.
+fn resolve_telemetry_enabled(settings_path: &Path) -> bool {
+    load_settings_snapshot(settings_path)
+        .unwrap_or_default()
+        .general
+        .telemetry_enabled
 }
 
 /// Initialize the tracing subscriber with dual-output and optional Sentry.
@@ -144,11 +159,20 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
     // layer can be built with the correct generic subscriber type `S`
     // (determined by the full `.with()` composition in Step 5, not at
     // provider-init time). `SdkTracerProvider::clone()` uses Arc semantics.
+    // Step 4c: Read telemetry_enabled from persisted settings.
+    // This is a lightweight file read — the full settings are loaded later by
+    // the app runtime. We only need the boolean gate here.
+    let telemetry_enabled = resolve_telemetry_enabled(&paths.settings_path);
+
     // Note: OTLP enablement and any compile-time config backfill are handled
     // inside init_otlp_provider. The exporter itself still resolves the final
     // endpoint using OpenTelemetry's standard env-var rules.
     let otlp_provider_and_guard = {
-        match uc_observability::otlp::init_otlp_provider(&profile, device_id.as_deref()) {
+        match uc_observability::otlp::init_otlp_provider(
+            &profile,
+            device_id.as_deref(),
+            telemetry_enabled,
+        ) {
             Ok(Some((provider, guard))) => {
                 // Wrap the guard in ManuallyDrop before handing it to the
                 // OnceLock. If `set` ever fails (it shouldn't — idempotency
@@ -215,6 +239,7 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
         profile = %profile,
         logs_dir = %paths.logs_dir.display(),
         otlp_enabled = otlp_enabled,
+        telemetry_enabled = telemetry_enabled,
         "Tracing initialized with dual output (console + JSON{})",
         if otlp_enabled { " + OTLP" } else { "" }
     );
@@ -234,6 +259,8 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+    use uc_core::settings::model::Settings;
 
     #[test]
     fn test_tracing_init_compiles() {
@@ -245,5 +272,39 @@ mod tests {
     fn test_log_profile_from_env_works() {
         // Verify we can resolve a profile without panicking
         let _profile = LogProfile::from_env();
+    }
+
+    #[test]
+    fn resolve_telemetry_enabled_defaults_to_true_when_settings_file_is_missing() {
+        let temp_dir = tempdir().unwrap();
+        let settings_path = temp_dir.path().join("settings.json");
+
+        assert!(resolve_telemetry_enabled(&settings_path));
+    }
+
+    #[test]
+    fn resolve_telemetry_enabled_reads_persisted_false_value() {
+        let temp_dir = tempdir().unwrap();
+        let settings_path = temp_dir.path().join("settings.json");
+        let mut settings = Settings::default();
+        settings.general.telemetry_enabled = false;
+
+        std::fs::write(
+            &settings_path,
+            serde_json::to_string_pretty(&settings).unwrap(),
+        )
+        .unwrap();
+
+        assert!(!resolve_telemetry_enabled(&settings_path));
+    }
+
+    #[test]
+    fn resolve_telemetry_enabled_falls_back_to_true_for_malformed_settings() {
+        let temp_dir = tempdir().unwrap();
+        let settings_path = temp_dir.path().join("settings.json");
+
+        std::fs::write(&settings_path, "{ not valid json").unwrap();
+
+        assert!(resolve_telemetry_enabled(&settings_path));
     }
 }
