@@ -144,9 +144,10 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
     // layer can be built with the correct generic subscriber type `S`
     // (determined by the full `.with()` composition in Step 5, not at
     // provider-init time). `SdkTracerProvider::clone()` uses Arc semantics.
-    let otlp_provider_and_guard = if matches!(profile, LogProfile::Prod) {
-        None
-    } else if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
+    // Note: OTLP enablement and any compile-time config backfill are handled
+    // inside init_otlp_provider. The exporter itself still resolves the final
+    // endpoint using OpenTelemetry's standard env-var rules.
+    let otlp_provider_and_guard = {
         match uc_observability::otlp::init_otlp_provider(&profile, device_id.as_deref()) {
             Ok(Some((provider, guard))) => {
                 // Wrap the guard in ManuallyDrop before handing it to the
@@ -166,8 +167,6 @@ pub fn init_tracing_subscriber() -> anyhow::Result<()> {
                 None
             }
         }
-    } else {
-        None
     };
 
     let otlp_enabled = otlp_provider_and_guard.is_some();
