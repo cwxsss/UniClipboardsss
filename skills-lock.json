@@ -1,6 +1,11 @@
 {
   "version": 1,
   "skills": {
+    "ralph-loop": {
+      "source": "andrelandgraf/fullstackrecipes",
+      "sourceType": "github",
+      "computedHash": "f7e1f79b58ab0b0423d716e20267a065f8c899f9e97acd5bab8e0433399a8568"
+    },
     "systematic-debugging": {
       "source": "obra/superpowers",
       "sourceType": "github",
