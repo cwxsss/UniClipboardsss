@@ -18,6 +18,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock, Semaphore};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, info_span, warn, Instrument, Span};
+use uc_core::network::address_registry::{self, AddressRegistry, AddressScope, AddressSource};
 use uc_core::network::protocol::ClipboardPayloadVersion;
 use uc_core::network::{
     ClipboardMessage, ConnectedPeer, DeviceAnnounceMessage, DiscoveredPeer, NetworkEvent,
@@ -84,6 +85,7 @@ pub struct PeerCaches {
     reachable_peers: HashSet<String>,
     connected_at: HashMap<String, DateTime<Utc>>,
     last_dial_observations: HashMap<String, PeerDialObservation>,
+    address_registry: AddressRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -112,15 +114,61 @@ struct PeerAddressSnapshot {
 }
 
 impl PeerCaches {
+    /// Creates an empty `PeerCaches` instance with a fresh `AddressRegistry`.
+    ///
+    /// The caches start with no discovered peers, no reachable peers, no recorded
+    /// connection timestamps, and no dial observations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let caches = PeerCaches::new();
+    /// assert!(caches.discovered_peers.is_empty());
+    /// assert!(caches.reachable_peers.is_empty());
+    /// assert!(caches.connected_at.is_empty());
+    /// assert!(caches.last_dial_observations.is_empty());
+    /// ```
     pub fn new() -> Self {
         Self {
             discovered_peers: HashMap::new(),
             reachable_peers: HashSet::new(),
             connected_at: HashMap::new(),
             last_dial_observations: HashMap::new(),
+            address_registry: AddressRegistry::new(),
         }
     }
 
+    /// Inserts or updates a peer discovered via mDNS, registers each discovered address in the address registry,
+    /// and preserves any existing device name and device id from a prior entry.
+    ///
+    /// The provided `addresses` vector is reordered to prefer QUIC addresses before others and each address is
+    /// registered in the internal `AddressRegistry` with `AddressSource::Mdns` and `AddressScope::Lan`.
+    ///
+    /// The existing `device_name` and `device_id` are preserved when an entry for `peer_id` already exists; other
+    /// fields (addresses, `discovered_at`, `last_seen`, `is_paired`) are replaced by the new values.
+    ///
+    /// # Parameters
+    ///
+    /// - `peer_id`: identifier of the discovered peer.
+    /// - `addresses`: list of multiaddr strings discovered via mDNS (will be sorted with QUIC-first).
+    /// - `discovered_at`: timestamp when the discovery was observed.
+    ///
+    /// # Returns
+    ///
+    /// The `DiscoveredPeer` instance that was inserted into the caches (cloned from the stored entry).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut caches = PeerCaches::new();
+    /// let peer = caches.upsert_discovered(
+    ///     "peer-1".to_string(),
+    ///     vec!["/ip4/192.168.1.2/udp/1234/quic-v1".to_string(), "/ip4/192.168.1.2/tcp/1234".to_string()],
+    ///     chrono::Utc::now(),
+    /// );
+    /// assert_eq!(peer.peer_id, "peer-1");
+    /// assert!(peer.addresses[0].contains("quic-v1")); // QUIC prioritized
+    /// ```
     pub fn upsert_discovered(
         &mut self,
         peer_id: String,
@@ -128,6 +176,13 @@ impl PeerCaches {
         discovered_at: DateTime<Utc>,
     ) -> DiscoveredPeer {
         sort_addresses_quic_first(&mut addresses);
+
+        // Register each address in the address registry for lifecycle tracking.
+        for addr in &addresses {
+            self.address_registry
+                .register(&peer_id, addr, AddressSource::Mdns, AddressScope::Lan);
+        }
+
         // Preserve device_name and device_id from existing entry when
         // re-discovered via mDNS, so we don't overwrite names that were
         // resolved through the DeviceAnnounce protocol.
@@ -150,6 +205,28 @@ impl PeerCaches {
         peer
     }
 
+    /// Insert or update a discovered peer address observed from a direct connection.
+    ///
+    /// Registers the observed multiaddr in the address registry with an inferred scope,
+    /// ensures a `DiscoveredPeer` entry exists for `peer_id`, appends the address if it
+    /// is new (keeping QUIC addresses sorted first), and updates the peer's `last_seen`
+    /// timestamp.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the peer's address list was modified (a new address was added), `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use libp2p::Multiaddr;
+    ///
+    /// let mut caches = PeerCaches::new();
+    /// let addr: Multiaddr = "/ip4/192.0.2.1/tcp/4001".parse().unwrap();
+    /// let changed = caches.upsert_discovered_from_connection("peer1", addr, Utc::now());
+    /// assert!(matches!(changed, true | false));
+    /// ```
     pub fn upsert_discovered_from_connection(
         &mut self,
         peer_id: &str,
@@ -157,6 +234,12 @@ impl PeerCaches {
         observed_at: DateTime<Utc>,
     ) -> bool {
         let address = address.to_string();
+
+        // Register inbound-observed address in the registry with inferred scope.
+        let scope = infer_address_scope(&address);
+        self.address_registry
+            .register(peer_id, &address, AddressSource::Inbound, scope);
+
         let entry = self
             .discovered_peers
             .entry(peer_id.to_string())
@@ -180,7 +263,53 @@ impl PeerCaches {
         changed
     }
 
+    /// Remove mDNS-sourced addresses for a discovered peer and remove the peer entry only when no other addresses remain.
+    ///
+    /// This removes all registry records for `peer_id` that were recorded with `AddressSource::Mdns`. If the peer still has any remaining addresses in the address registry (including addresses in cooldown or from other sources), the peer's `DiscoveredPeer` entry is updated in-place with the remaining addresses (sorted with QUIC addresses first) and the function returns `None`. If no addresses remain after removing mDNS-sourced entries, the peer is fully removed from `discovered_peers` and related reachability metadata (`reachable_peers`, `connected_at`, `last_dial_observations`) and the removed `DiscoveredPeer` is returned.
+    ///
+    /// # Returns
+    ///
+    /// `Some(DiscoveredPeer)` if the peer was fully removed; `None` if the peer remains (addresses updated) or did not exist.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Example usage (ignored so doc-tests do not require full lib context)
+    /// let mut caches = PeerCaches::new();
+    /// let peer_id = "peer-1";
+    /// // ... populate caches via upsert_discovered / upsert_discovered_from_connection ...
+    /// // Remove mDNS-sourced addresses for the peer:
+    /// match caches.remove_discovered(peer_id) {
+    ///     Some(removed) => println!("peer fully removed: {:?}", removed),
+    ///     None => println!("peer retained or did not exist; addresses updated if present"),
+    /// }
+    /// ```
     pub fn remove_discovered(&mut self, peer_id: &str) -> Option<DiscoveredPeer> {
+        // Remove only mDNS-sourced addresses from the registry.
+        self.address_registry
+            .remove_peer_source(peer_id, AddressSource::Mdns);
+
+        // If the registry still has non-mDNS records for this peer
+        // (including cooling-down or expired addresses), keep the peer alive.
+        // Use all_for() instead of candidates_for() so that addresses
+        // temporarily in cooldown don't cause premature peer removal.
+        let remaining: Vec<String> = self
+            .address_registry
+            .all_for(peer_id)
+            .iter()
+            .map(|r| r.addr.clone())
+            .collect();
+
+        if !remaining.is_empty() {
+            // Peer still has non-mDNS addresses — update in place.
+            if let Some(entry) = self.discovered_peers.get_mut(peer_id) {
+                entry.addresses = remaining;
+                sort_addresses_quic_first(&mut entry.addresses);
+            }
+            return None; // Not fully removed.
+        }
+
+        // No remaining addresses — fully remove the peer.
         self.reachable_peers.remove(peer_id);
         self.connected_at.remove(peer_id);
         self.last_dial_observations.remove(peer_id);
@@ -234,9 +363,71 @@ impl PeerCaches {
         self.reachable_peers.contains(peer_id)
     }
 
+    /// Record the outcome of a dial attempt for a peer.
+    ///
+    /// Inserts or replaces the `PeerDialObservation` associated with `peer_id` in
+    /// the cache of recent dial observations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut caches = PeerCaches::new();
+    /// // Construct a placeholder observation for the example.
+    /// let observation: PeerDialObservation = unsafe { std::mem::zeroed() };
+    /// caches.record_dial_observation("peer-id-1", observation);
+    /// assert!(caches.last_dial_observations.contains_key("peer-id-1"));
+    /// ```
     fn record_dial_observation(&mut self, peer_id: &str, observation: PeerDialObservation) {
         self.last_dial_observations
             .insert(peer_id.to_string(), observation);
+    }
+
+    /// Record that a dial to a peer at the given address succeeded.
+    ///
+    /// The `peer_id` is the peer identifier string (e.g., libp2p PeerId as string),
+    /// and `addr` is the multiaddr string that was successfully used for the dial.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut caches = PeerCaches::new();
+    /// caches.record_address_success("QmPeerIdExample", "/ip4/192.0.2.1/tcp/4001");
+    /// ```
+    fn record_address_success(&mut self, peer_id: &str, addr: &str) {
+        self.address_registry.record_success(peer_id, addr);
+    }
+
+    /// Record a failed dial attempt for a peer address in the address registry.
+    ///
+    /// This stores the observed failure (with the provided error message) against the
+    /// given peer/address so the registry can use that information for dial decisions
+    /// and garbage collection.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut caches = PeerCaches::new();
+    /// caches.record_address_failure("peer-id", "/ip4/192.0.2.1/tcp/4001", "connection timeout");
+    /// ```
+    fn record_address_failure(&mut self, peer_id: &str, addr: &str, error: &str) {
+        self.address_registry.record_failure(peer_id, addr, error);
+    }
+
+    /// Runs garbage collection on the address registry, removing expired address entries.
+    ///
+    /// # Returns
+    ///
+    /// The number of registry entries that were expired and removed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut caches = PeerCaches::new();
+    /// // new registry has nothing to collect
+    /// assert_eq!(caches.gc_address_registry(), 0);
+    /// ```
+    fn gc_address_registry(&mut self) -> usize {
+        self.address_registry.gc()
     }
 }
 
@@ -1695,6 +1886,26 @@ async fn check_business_allowed(
     }
 }
 
+/// Drives the libp2p Swarm event loop, processing network events, managing peer caches,
+/// handling business commands, and emitting network events to the application.
+///
+/// This task runs until the swarm is terminated or a fatal internal error occurs. It:
+/// - consumes and reacts to libp2p swarm events (mDNS discovery/expiry, connections, errors, listen addresses),
+/// - maintains `PeerCaches` state (discoveries, reachability, dial observations and address registry GC),
+/// - sequences outgoing business commands with a bounded concurrency semaphore and per-command lifecycle handling,
+/// - records per-address dial successes/failures and emits high-level `NetworkEvent`s via `event_tx`,
+/// - periodically triggers address-registry garbage collection.
+///
+/// # Examples
+///
+/// ```
+/// # use tokio::runtime::Runtime;
+/// # async fn example() {
+/// // Typical usage: spawn the swarm loop onto a Tokio task after constructing the Swarm,
+/// // caches, channels, and policy resolver. Types and construction are omitted here for brevity.
+/// // tokio::spawn(run_swarm(swarm, caches, event_tx, policy_resolver, business_rx, local_peer_id));
+/// # }
+/// ```
 async fn run_swarm(
     mut swarm: Swarm<Libp2pBehaviour>,
     caches: Arc<RwLock<PeerCaches>>,
@@ -1707,6 +1918,8 @@ async fn run_swarm(
     let mut next_business_command_id: u64 = 1;
     let business_command_semaphore = Arc::new(Semaphore::new(MAX_IN_FLIGHT_BUSINESS_COMMANDS));
     let mut pending_business_command: Option<(u64, BusinessCommand)> = None;
+    let mut gc_interval =
+        tokio::time::interval(Duration::from_secs(address_registry::GC_INTERVAL_SECS));
 
     loop {
         tokio::select! {
@@ -1854,6 +2067,11 @@ async fn run_swarm(
                                     &peer_id_string,
                                     successful_dial_observation(&endpoint_address, observed_at),
                                 );
+                                // Record per-address success for the actual dialled address.
+                                caches.record_address_success(
+                                    &peer_id_string,
+                                    &endpoint_address,
+                                );
                             }
                             let event = apply_peer_ready_from_connection(
                                 &mut caches,
@@ -1908,10 +2126,13 @@ async fn run_swarm(
                         let observed_at = Utc::now();
                         let snapshot = if let Some(peer_id) = peer_id_str.as_ref() {
                             let mut caches = caches.write().await;
-                            caches.record_dial_observation(
-                                peer_id,
-                                dial_observation_from_error(&error, observed_at),
-                            );
+                            let observation = dial_observation_from_error(&error, observed_at);
+                            // Record per-address failure for each address that was actually attempted.
+                            let error_msg = error.to_string();
+                            for addr in &observation.dial_attempt_addresses {
+                                caches.record_address_failure(peer_id, addr, &error_msg);
+                            }
+                            caches.record_dial_observation(peer_id, observation);
                             Some(snapshot_peer_addresses(&caches, peer_id, observed_at))
                         } else {
                             None
@@ -2064,6 +2285,19 @@ async fn run_swarm(
                     )
                     .await;
                 });
+            }
+
+            _ = gc_interval.tick() => {
+                let removed = {
+                    let mut caches = caches.write().await;
+                    caches.gc_address_registry()
+                };
+                if removed > 0 {
+                    debug!(
+                        removed_count = removed,
+                        "address registry GC completed"
+                    );
+                }
             }
         }
     }
@@ -2451,11 +2685,33 @@ async fn execute_business_stream(
             ));
         }
 
-        let address_snapshot = {
+        let (address_snapshot, registry_total, registry_candidate_count) = {
             let caches = caches.read().await;
-            snapshot_peer_addresses(&caches, peer_id_str, attempt_started_at)
+            let snapshot = snapshot_peer_addresses(&caches, peer_id_str, attempt_started_at);
+            let reg_total = caches.address_registry.all_for(peer_id_str).len();
+            let reg_candidates = caches.address_registry.candidates_for(peer_id_str).len();
+            (snapshot, reg_total, reg_candidates)
         };
         let dial_decision = dial_decision_for_snapshot(&address_snapshot);
+
+        // Enforce address cooldown: if a new dial is required and the
+        // registry has addresses but ALL of them are cooling down,
+        // reject immediately instead of attempting a doomed dial.
+        if dial_decision == "new_dial_required"
+            && registry_total > 0
+            && registry_candidate_count == 0
+        {
+            warn!(
+                event = "business_stream.all_addresses_cooling_down",
+                operation = denied_operation,
+                peer_id = %peer_id_str,
+                registry_total,
+                "all addresses for peer are in cooldown, skipping dial"
+            );
+            return Err(anyhow!(
+                "all addresses for peer {peer_id_str} are in cooldown"
+            ));
+        }
         let preferred_candidate_transport = preferred_candidate_transport(&address_snapshot);
         let span = Span::current();
         span.record("dial_decision", &dial_decision);
@@ -2711,12 +2967,37 @@ async fn execute_business_stream(
     .await
 }
 
+/// Update peer reachability state in `PeerCaches` and emit a corresponding `NetworkEvent`
+/// reflecting whether a business stream completed successfully.
+///
+/// This function marks the peer as ready when `result` is `Ok(())` or not-ready when
+/// `result` is `Err(..)`, then attempts to send the resulting `NetworkEvent` on
+/// `event_tx`. Address-level success/failure is recorded by connection-layer events
+/// (e.g., `ConnectionEstablished` / `OutgoingConnectionError`), not by this function.
+///
+/// # Examples
+///
+/// ```
+/// // Illustrative usage; actual values come from the network adapter runtime.
+/// # async fn example() {
+/// # use std::sync::Arc;
+/// # use tokio::sync::RwLock;
+/// # use tokio::sync::mpsc;
+/// # use chrono::Utc;
+/// # let caches: Arc<RwLock<crate::PeerCaches>> = Arc::new(RwLock::new(crate::PeerCaches::new()));
+/// # let (tx, _rx) = mpsc::channel(1);
+/// apply_business_stream_result(&caches, &tx, "peer-id", &Ok(())).await;
+/// # }
+/// ```
 async fn apply_business_stream_result(
     caches: &Arc<RwLock<PeerCaches>>,
     event_tx: &mpsc::Sender<NetworkEvent>,
     peer_id: &str,
     result: &Result<()>,
 ) {
+    // Note: address-level success/failure is recorded at the connection layer
+    // (ConnectionEstablished / OutgoingConnectionError), not here, because
+    // business stream results don't carry the specific dialled address.
     let event = {
         let mut caches = caches.write().await;
         if result.is_ok() {
@@ -2758,6 +3039,26 @@ fn listen_on_swarm(swarm: &mut Swarm<Libp2pBehaviour>, listen_addr: Multiaddr) -
     Ok(())
 }
 
+/// Attempts a non-blocking send of a `NetworkEvent` into the provided `mpsc::Sender`,
+/// logging a warning if the send fails.
+///
+/// # Examples
+///
+/// ```
+/// use tokio::sync::mpsc;
+///
+/// let (tx, mut _rx) = mpsc::channel(1);
+/// // assuming `NetworkEvent::Error(String)` exists in scope
+/// try_send_event(&tx, NetworkEvent::Error("oops".into()), "test").unwrap();
+///
+/// // drop the receiver to cause subsequent sends to fail
+/// drop(_rx);
+/// assert!(try_send_event(&tx, NetworkEvent::Error("again".into()), "test").is_err());
+/// ```
+///
+/// # Returns
+///
+/// `Ok(())` on success, `Err(TrySendError<NetworkEvent>)` if the channel is full or closed.
 fn try_send_event(
     event_tx: &mpsc::Sender<NetworkEvent>,
     event: NetworkEvent,
@@ -2769,6 +3070,85 @@ fn try_send_event(
     })
 }
 
+/// Classifies a libp2p multiaddr string as LAN, WAN, or Relay.
+///
+/// Parses the multiaddr and returns the inferred network scope:
+/// - `AddressScope::Relay` for addresses containing `/p2p-circuit`.
+/// - `AddressScope::Lan` for addresses with loopback, private, link-local IPv4 or loopback, link-local, or ULA IPv6.
+/// - `AddressScope::Wan` otherwise (including when the IP cannot be parsed).
+///
+/// # Examples
+///
+/// ```
+/// // IPv4 private -> LAN
+/// assert_eq!(infer_address_scope("/ip4/192.168.0.5/tcp/4001"), AddressScope::Lan);
+/// // IPv6 ULA -> LAN
+/// assert_eq!(infer_address_scope("/ip6/fd00::1/tcp/4001"), AddressScope::Lan);
+/// // Relay -> Relay
+/// assert_eq!(infer_address_scope("/ip4/1.2.3.4/tcp/4001/p2p-circuit"), AddressScope::Relay);
+/// // Public IPv4 -> WAN
+/// assert_eq!(infer_address_scope("/ip4/8.8.8.8/tcp/4001"), AddressScope::Wan);
+/// ```
+fn infer_address_scope(addr: &str) -> AddressScope {
+    if addr.contains("/p2p-circuit") {
+        return AddressScope::Relay;
+    }
+
+    // Parse IP from multiaddr to classify scope accurately.
+    let parts: Vec<&str> = addr.split('/').collect();
+    for (i, part) in parts.iter().enumerate() {
+        match *part {
+            "ip4" => {
+                if let Some(ip_str) = parts.get(i + 1) {
+                    if let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>() {
+                        return if ip.is_loopback() || ip.is_private() || ip.is_link_local() {
+                            AddressScope::Lan
+                        } else {
+                            AddressScope::Wan
+                        };
+                    }
+                }
+            }
+            "ip6" => {
+                if let Some(ip_str) = parts.get(i + 1) {
+                    if let Ok(ip) = ip_str.parse::<std::net::Ipv6Addr>() {
+                        let octets = ip.octets();
+                        let is_loopback = ip.is_loopback();
+                        // Link-local: fe80::/10
+                        let is_link_local = octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80;
+                        // Unique Local Address (ULA): fc00::/7 (fd00::/8)
+                        let is_ula = (octets[0] & 0xfe) == 0xfc;
+                        return if is_loopback || is_link_local || is_ula {
+                            AddressScope::Lan
+                        } else {
+                            AddressScope::Wan
+                        };
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Fallback: if we can't parse the IP, assume WAN (conservative).
+    AddressScope::Wan
+}
+
+/// Sorts multiaddress strings in-place so that addresses containing `/quic-v1` come before others.
+///
+/// The relative order of addresses that both contain `/quic-v1` or both do not contain it is preserved.
+///
+/// # Examples
+///
+/// ```
+/// let mut addrs = vec![
+///     "/ip4/1.2.3.4/tcp/1234".to_string(),
+///     "/ip4/1.2.3.4/udp/1234/quic-v1".to_string(),
+///     "/ip4/5.6.7.8/tcp/80".to_string(),
+/// ];
+/// sort_addresses_quic_first(&mut addrs);
+/// assert_eq!(addrs[0], "/ip4/1.2.3.4/udp/1234/quic-v1");
+/// ```
 fn sort_addresses_quic_first(addresses: &mut Vec<String>) {
     addresses.sort_by_key(|addr| if addr.contains("/quic-v1") { 0 } else { 1 });
 }
@@ -4856,5 +5236,221 @@ mod tests {
         // remote peer must be present
         assert_eq!(peers.len(), 1, "only remote-peer-abc should be returned");
         assert_eq!(peers[0].peer_id, "remote-peer-abc");
+    }
+
+    // ── AddressRegistry integration tests ─────────────────────────
+
+    #[test]
+    fn mdns_expired_preserves_non_mdns_addresses_in_discovered_peers() {
+        let mut caches = PeerCaches::new();
+        let now = Utc::now();
+
+        // Discover peer via mDNS (LAN address).
+        caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec!["/ip4/192.168.1.5/udp/9000/quic-v1".to_string()],
+            now,
+        );
+
+        // Also register a WAN address manually in the registry.
+        caches.address_registry.register(
+            "peer-1",
+            "/ip4/203.0.113.1/tcp/8000",
+            AddressSource::Manual,
+            AddressScope::Wan,
+        );
+        // Add the WAN address to discovered_peers too (simulating a multi-source peer).
+        if let Some(entry) = caches.discovered_peers.get_mut("peer-1") {
+            entry
+                .addresses
+                .push("/ip4/203.0.113.1/tcp/8000".to_string());
+        }
+
+        // mDNS expires — should NOT fully remove the peer.
+        let removed = caches.remove_discovered("peer-1");
+        assert!(
+            removed.is_none(),
+            "peer should not be fully removed when non-mDNS addresses remain"
+        );
+
+        // Peer should still be in discovered_peers with only the WAN address.
+        let peer = caches.discovered_peers.get("peer-1").unwrap();
+        assert_eq!(peer.addresses.len(), 1);
+        assert!(peer.addresses[0].contains("203.0.113.1"));
+    }
+
+    /// Verifies that a peer discovered only via mDNS is fully removed from the caches when mDNS entries are cleared.
+    ///
+    /// This test inserts a discovered peer with only mDNS-sourced addresses, calls `remove_discovered`, and
+    /// asserts that the returned value is `Some` (the removed peer) and that the peer no longer exists in
+    /// `discovered_peers`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut caches = PeerCaches::new();
+    /// let now = Utc::now();
+    ///
+    /// caches.upsert_discovered(
+    ///     "peer-1".to_string(),
+    ///     vec!["/ip4/192.168.1.5/tcp/8000".to_string()],
+    ///     now,
+    /// );
+    ///
+    /// let removed = caches.remove_discovered("peer-1");
+    /// assert!(removed.is_some());
+    /// assert!(caches.discovered_peers.get("peer-1").is_none());
+    /// ```
+    #[test]
+    fn mdns_expired_fully_removes_peer_when_no_other_sources() {
+        let mut caches = PeerCaches::new();
+        let now = Utc::now();
+
+        caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec!["/ip4/192.168.1.5/tcp/8000".to_string()],
+            now,
+        );
+
+        let removed = caches.remove_discovered("peer-1");
+        assert!(
+            removed.is_some(),
+            "peer should be fully removed when only mDNS addresses existed"
+        );
+        assert!(caches.discovered_peers.get("peer-1").is_none());
+    }
+
+    #[test]
+    fn infer_address_scope_private_ips_are_lan() {
+        assert_eq!(
+            infer_address_scope("/ip4/192.168.1.5/udp/9000/quic-v1"),
+            AddressScope::Lan
+        );
+        assert_eq!(
+            infer_address_scope("/ip4/10.0.0.1/tcp/8000"),
+            AddressScope::Lan
+        );
+        assert_eq!(
+            infer_address_scope("/ip4/172.16.0.1/tcp/8000"),
+            AddressScope::Lan
+        );
+        assert_eq!(
+            infer_address_scope("/ip4/127.0.0.1/tcp/8000"),
+            AddressScope::Lan
+        );
+    }
+
+    #[test]
+    fn infer_address_scope_public_ips_are_wan() {
+        assert_eq!(
+            infer_address_scope("/ip4/203.0.113.1/tcp/8000"),
+            AddressScope::Wan
+        );
+        assert_eq!(
+            infer_address_scope("/ip4/8.8.8.8/udp/9000/quic-v1"),
+            AddressScope::Wan
+        );
+        // 172.2.x.x is NOT private (only 172.16-31 is) — must be WAN.
+        assert_eq!(
+            infer_address_scope("/ip4/172.2.0.1/tcp/8000"),
+            AddressScope::Wan
+        );
+    }
+
+    #[test]
+    fn infer_address_scope_ipv6_ula_is_lan() {
+        // fd00::/8 (ULA)
+        assert_eq!(
+            infer_address_scope("/ip6/fd12::1/tcp/8000"),
+            AddressScope::Lan
+        );
+        // fc00::/7
+        assert_eq!(
+            infer_address_scope("/ip6/fc00::1/tcp/8000"),
+            AddressScope::Lan
+        );
+        // fe80::/10 (link-local)
+        assert_eq!(
+            infer_address_scope("/ip6/fe80::1/tcp/8000"),
+            AddressScope::Lan
+        );
+        // ::1 (loopback)
+        assert_eq!(infer_address_scope("/ip6/::1/tcp/8000"), AddressScope::Lan);
+        // Global IPv6 — must be WAN.
+        assert_eq!(
+            infer_address_scope("/ip6/2001:db8::1/tcp/8000"),
+            AddressScope::Wan
+        );
+    }
+
+    #[test]
+    fn mdns_expired_preserves_peer_when_non_mdns_addr_in_cooldown() {
+        let mut caches = PeerCaches::new();
+        let now = Utc::now();
+
+        // Discover peer via mDNS.
+        caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec!["/ip4/192.168.1.5/tcp/8000".to_string()],
+            now,
+        );
+
+        // Register a WAN address manually and put it in cooldown.
+        caches.address_registry.register(
+            "peer-1",
+            "/ip4/203.0.113.1/tcp/8000",
+            AddressSource::Manual,
+            AddressScope::Wan,
+        );
+        caches.address_registry.record_failure(
+            "peer-1",
+            "/ip4/203.0.113.1/tcp/8000",
+            "connection refused",
+        );
+        // Add to discovered_peers too.
+        if let Some(entry) = caches.discovered_peers.get_mut("peer-1") {
+            entry
+                .addresses
+                .push("/ip4/203.0.113.1/tcp/8000".to_string());
+        }
+
+        // mDNS expires — WAN address is cooling down but should NOT cause peer removal.
+        let removed = caches.remove_discovered("peer-1");
+        assert!(
+            removed.is_none(),
+            "peer should not be removed when non-mDNS address exists even in cooldown"
+        );
+        assert!(caches.discovered_peers.get("peer-1").is_some());
+    }
+
+    #[test]
+    fn infer_address_scope_relay_detected() {
+        assert_eq!(
+            infer_address_scope("/ip4/203.0.113.1/tcp/8000/p2p-circuit"),
+            AddressScope::Relay
+        );
+    }
+
+    #[test]
+    fn inbound_connection_uses_inferred_scope() {
+        let mut caches = PeerCaches::new();
+        let now = Utc::now();
+
+        // Inbound from a public IP.
+        let wan_addr: Multiaddr = "/ip4/203.0.113.1/tcp/8000".parse().unwrap();
+        caches.upsert_discovered_from_connection("peer-1", wan_addr, now);
+
+        let records = caches.address_registry.all_for("peer-1");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source, AddressSource::Inbound);
+        assert_eq!(records[0].scope, AddressScope::Wan);
+
+        // Inbound from a private IP.
+        let lan_addr: Multiaddr = "/ip4/192.168.1.5/udp/9000/quic-v1".parse().unwrap();
+        caches.upsert_discovered_from_connection("peer-2", lan_addr, now);
+
+        let records = caches.address_registry.all_for("peer-2");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].scope, AddressScope::Lan);
     }
 }
