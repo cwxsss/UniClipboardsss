@@ -16,8 +16,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock, Semaphore};
-use tokio::time::timeout;
-use tracing::{debug, error, info, warn};
+use tokio::time::{sleep, timeout};
+use tracing::{debug, error, info, info_span, warn, Instrument, Span};
 use uc_core::network::protocol::ClipboardPayloadVersion;
 use uc_core::network::{
     ClipboardMessage, ConnectedPeer, DeviceAnnounceMessage, DiscoveredPeer, NetworkEvent,
@@ -45,6 +45,9 @@ const NETWORK_CHUNK_SIZE: usize = 256 * 1024;
 const MAX_CHUNK_CIPHERTEXT_SIZE: usize = NETWORK_CHUNK_SIZE + 256;
 const BUSINESS_READ_TIMEOUT: Duration = Duration::from_secs(120);
 const BUSINESS_STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+const PAIRING_STREAM_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
+const PAIRING_OPEN_SUCCESS_OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const PAIRING_OPEN_SUCCESS_OBSERVATION_POLL_ATTEMPTS: usize = 5;
 const BUSINESS_STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const BUSINESS_STREAM_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 const BUSINESS_COMMAND_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -80,6 +83,32 @@ pub struct PeerCaches {
     discovered_peers: HashMap<String, DiscoveredPeer>,
     reachable_peers: HashSet<String>,
     connected_at: HashMap<String, DateTime<Utc>>,
+    last_dial_observations: HashMap<String, PeerDialObservation>,
+}
+
+#[derive(Debug, Clone)]
+struct PeerDialObservation {
+    chosen_dial_addr: Option<String>,
+    chosen_dial_addr_resolution: &'static str,
+    dial_attempt_addresses: Vec<String>,
+    dial_outcome: &'static str,
+    observed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct PeerAddressSnapshot {
+    candidate_addresses: Vec<String>,
+    peer_marked_reachable: bool,
+    connected_age_ms: Option<i64>,
+    discovered_age_ms: Option<i64>,
+    last_seen_age_ms: Option<i64>,
+    chosen_dial_addr: Option<String>,
+    chosen_dial_addr_resolution: Option<&'static str>,
+    dial_attempt_addresses: Vec<String>,
+    dial_attempt_address_count: usize,
+    last_dial_outcome: Option<&'static str>,
+    last_dial_age_ms: Option<i64>,
+    last_dial_observed_at: Option<DateTime<Utc>>,
 }
 
 impl PeerCaches {
@@ -88,6 +117,7 @@ impl PeerCaches {
             discovered_peers: HashMap::new(),
             reachable_peers: HashSet::new(),
             connected_at: HashMap::new(),
+            last_dial_observations: HashMap::new(),
         }
     }
 
@@ -153,6 +183,7 @@ impl PeerCaches {
     pub fn remove_discovered(&mut self, peer_id: &str) -> Option<DiscoveredPeer> {
         self.reachable_peers.remove(peer_id);
         self.connected_at.remove(peer_id);
+        self.last_dial_observations.remove(peer_id);
         self.discovered_peers.remove(peer_id)
     }
 
@@ -171,6 +202,7 @@ impl PeerCaches {
     pub fn mark_unreachable(&mut self, peer_id: &str) -> bool {
         let removed = self.reachable_peers.remove(peer_id);
         self.connected_at.remove(peer_id);
+        self.last_dial_observations.remove(peer_id);
         removed
     }
 
@@ -200,6 +232,11 @@ impl PeerCaches {
 
     pub fn is_reachable(&self, peer_id: &str) -> bool {
         self.reachable_peers.contains(peer_id)
+    }
+
+    fn record_dial_observation(&mut self, peer_id: &str, observation: PeerDialObservation) {
+        self.last_dial_observations
+            .insert(peer_id.to_string(), observation);
     }
 }
 
@@ -456,7 +493,13 @@ impl Libp2pNetworkAdapter {
         };
         let quic_addr_str = format!("/ip4/{listen_ip}/udp/0/quic-v1");
         let tcp_addr_str = format!("/ip4/{listen_ip}/tcp/0");
-        info!(quic_address = %quic_addr_str, tcp_address = %tcp_addr_str, "selected listen addresses");
+        info!(
+            event = "network.listen_addresses_selected",
+            listen_ip = %listen_ip,
+            quic_address = %quic_addr_str,
+            tcp_address = %tcp_addr_str,
+            "selected listen addresses"
+        );
 
         let quic_addr: Multiaddr = quic_addr_str
             .parse()
@@ -751,15 +794,133 @@ impl PairingTransportPort for Libp2pNetworkAdapter {
                 .cloned()
                 .ok_or_else(|| anyhow!("pairing service not initialized"))?
         };
-        match service
-            .open_pairing_session(peer_id.clone(), session_id)
-            .await
+        if service.has_session(&session_id).await {
+            info!(
+                event = "pairing_stream.open_skipped",
+                peer_id = %peer_id,
+                session_id = %session_id,
+                skip_reason = "session_already_open",
+                "pairing stream open skipped because session already exists"
+            );
+            return Ok(());
+        }
+        let attempt_started_at = Utc::now();
+        let attempt_snapshot = {
+            let caches = self.caches.read().await;
+            snapshot_peer_addresses(&caches, &peer_id, attempt_started_at)
+        };
+        let dial_decision = dial_decision_for_snapshot(&attempt_snapshot);
+        info!(
+            event = "pairing_stream.open_attempt",
+            peer_id = %peer_id,
+            session_id = %session_id,
+            dial_decision,
+            peer_marked_reachable = attempt_snapshot.peer_marked_reachable,
+            candidate_address_count = attempt_snapshot.candidate_addresses.len(),
+            preferred_candidate_transport = preferred_candidate_transport(&attempt_snapshot),
+            connected_age_ms = ?attempt_snapshot.connected_age_ms,
+            discovered_age_ms = ?attempt_snapshot.discovered_age_ms,
+            last_seen_age_ms = ?attempt_snapshot.last_seen_age_ms,
+            "attempting pairing stream open"
+        );
+        match timeout(
+            PAIRING_STREAM_OPEN_TIMEOUT,
+            service.open_pairing_session(peer_id.clone(), session_id.clone()),
+        )
+        .await
         {
-            Ok(()) => Ok(()),
-            Err(err) => {
+            Ok(Ok(())) => {
+                let success_snapshot = snapshot_pairing_open_success(
+                    &self.caches,
+                    &peer_id,
+                    dial_decision,
+                    attempt_started_at,
+                )
+                .await;
+                let chosen_dial_addr =
+                    chosen_dial_addr_for_log(&success_snapshot, dial_decision, attempt_started_at);
+                let chosen_dial_addr_resolution = infer_chosen_dial_addr_resolution(
+                    &success_snapshot,
+                    dial_decision,
+                    attempt_started_at,
+                );
+                info!(
+                    event = "pairing_stream.open_succeeded",
+                    peer_id = %peer_id,
+                    session_id = %session_id,
+                    dial_decision,
+                    candidate_address_count = success_snapshot.candidate_addresses.len(),
+                    chosen_dial_addr = %chosen_dial_addr.unwrap_or("-"),
+                    chosen_dial_addr_resolution,
+                    dial_attempt_address_count = success_snapshot.dial_attempt_address_count,
+                    dial_attempt_addresses = ?success_snapshot.dial_attempt_addresses,
+                    last_dial_outcome = success_snapshot.last_dial_outcome.unwrap_or("unknown"),
+                    last_dial_age_ms = ?success_snapshot.last_dial_age_ms,
+                    "pairing stream open succeeded"
+                );
+                Ok(())
+            }
+            Ok(Err(err)) => {
+                let failure_snapshot = {
+                    let caches = self.caches.read().await;
+                    snapshot_peer_addresses(&caches, &peer_id, Utc::now())
+                };
+                let chosen_dial_addr =
+                    chosen_dial_addr_for_log(&failure_snapshot, dial_decision, attempt_started_at);
+                let chosen_dial_addr_resolution = infer_chosen_dial_addr_resolution(
+                    &failure_snapshot,
+                    dial_decision,
+                    attempt_started_at,
+                );
+                warn!(
+                    event = "pairing_stream.open_failed",
+                    peer_id = %peer_id,
+                    session_id = %session_id,
+                    dial_decision,
+                    candidate_address_count = failure_snapshot.candidate_addresses.len(),
+                    candidate_addresses = ?failure_snapshot.candidate_addresses,
+                    chosen_dial_addr = %chosen_dial_addr.unwrap_or("-"),
+                    chosen_dial_addr_resolution,
+                    dial_attempt_address_count = failure_snapshot.dial_attempt_address_count,
+                    dial_attempt_addresses = ?failure_snapshot.dial_attempt_addresses,
+                    last_dial_outcome = failure_snapshot.last_dial_outcome.unwrap_or("unknown"),
+                    last_dial_age_ms = ?failure_snapshot.last_dial_age_ms,
+                    error = %err,
+                    "pairing stream open failed"
+                );
                 handle_pairing_open_error(&self.policy_resolver, &self.event_tx, &peer_id, &err)
                     .await;
                 Err(err)
+            }
+            Err(_) => {
+                let timeout_snapshot = {
+                    let caches = self.caches.read().await;
+                    snapshot_peer_addresses(&caches, &peer_id, Utc::now())
+                };
+                let chosen_dial_addr =
+                    chosen_dial_addr_for_log(&timeout_snapshot, dial_decision, attempt_started_at);
+                let chosen_dial_addr_resolution = infer_chosen_dial_addr_resolution(
+                    &timeout_snapshot,
+                    dial_decision,
+                    attempt_started_at,
+                );
+                warn!(
+                    event = "pairing_stream.open_timeout",
+                    peer_id = %peer_id,
+                    session_id = %session_id,
+                    dial_decision,
+                    candidate_address_count = timeout_snapshot.candidate_addresses.len(),
+                    candidate_addresses = ?timeout_snapshot.candidate_addresses,
+                    chosen_dial_addr = %chosen_dial_addr.unwrap_or("-"),
+                    chosen_dial_addr_resolution,
+                    dial_attempt_address_count = timeout_snapshot.dial_attempt_address_count,
+                    dial_attempt_addresses = ?timeout_snapshot.dial_attempt_addresses,
+                    last_dial_outcome = timeout_snapshot.last_dial_outcome.unwrap_or("unknown"),
+                    last_dial_age_ms = ?timeout_snapshot.last_dial_age_ms,
+                    timeout_ms = PAIRING_STREAM_OPEN_TIMEOUT.as_millis() as u64,
+                    "pairing stream open timed out"
+                );
+                Err(anyhow!("pairing stream open timed out"))
             }
         }
     }
@@ -1571,6 +1732,16 @@ async fn run_swarm(
                                 swarm.add_peer_address(peer_id.clone(), address.clone());
                             }
                             let discovered = collect_mdns_discovered(peers);
+                            for (peer_id, addresses) in discovered.iter() {
+                                info!(
+                                    event = "peer.mdns_discovered",
+                                    peer_id = %peer_id,
+                                    local_peer_id = %local_peer_id,
+                                    address_count = addresses.len(),
+                                    addresses = ?addresses,
+                                    "recorded mDNS discovery snapshot"
+                                );
+                            }
                             let events = {
                                 let mut caches = caches.write().await;
                                 apply_mdns_discovered(&mut caches, discovered, Utc::now())
@@ -1603,6 +1774,30 @@ async fn run_swarm(
                                 .filter(|(peer_id, _)| peer_id.to_string() != local_peer_id)
                                 .collect();
                             let expired = collect_mdns_expired(peers);
+                            let expired_snapshots = {
+                                let caches = caches.read().await;
+                                expired
+                                    .iter()
+                                    .map(|peer_id| {
+                                        let addresses = caches
+                                            .discovered_peers
+                                            .get(peer_id)
+                                            .map(|peer| peer.addresses.clone())
+                                            .unwrap_or_default();
+                                        (peer_id.clone(), addresses)
+                                    })
+                                    .collect::<Vec<_>>()
+                            };
+                            for (peer_id, addresses) in expired_snapshots.iter() {
+                                info!(
+                                    event = "peer.mdns_expired",
+                                    peer_id = %peer_id,
+                                    local_peer_id = %local_peer_id,
+                                    address_count = addresses.len(),
+                                    addresses = ?addresses,
+                                    "recorded mDNS expiry snapshot"
+                                );
+                            }
                             let events = {
                                 let mut caches = caches.write().await;
                                 apply_mdns_expired(&mut caches, expired)
@@ -1636,30 +1831,51 @@ async fn run_swarm(
                     SwarmEvent::Behaviour(Libp2pBehaviourEvent::Stream) => {}
                     SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                         let peer_id_string = peer_id.to_string();
-                        let address = match endpoint {
-                            ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
+                        let observed_at = Utc::now();
+                        let (address, endpoint_direction) = match endpoint {
+                            ConnectedPoint::Dialer { address, .. } => {
+                                (Some(address.clone()), "dialer")
+                            }
                             ConnectedPoint::Listener { send_back_addr, .. } => {
-                                Some(send_back_addr.clone())
+                                (Some(send_back_addr.clone()), "listener")
                             }
                         };
                         if let Some(address) = address.as_ref() {
                             swarm.add_peer_address(peer_id, address.clone());
                         }
-                        let event = {
+                        let endpoint_address = address
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| "-".to_string());
+                        let (event, snapshot) = {
                             let mut caches = caches.write().await;
-                            apply_peer_ready_from_connection(
+                            if endpoint_direction == "dialer" {
+                                caches.record_dial_observation(
+                                    &peer_id_string,
+                                    successful_dial_observation(&endpoint_address, observed_at),
+                                );
+                            }
+                            let event = apply_peer_ready_from_connection(
                                 &mut caches,
                                 &peer_id_string,
-                                Utc::now(),
+                                observed_at,
                                 address,
-                            )
+                            );
+                            let snapshot =
+                                snapshot_peer_addresses(&caches, &peer_id_string, observed_at);
+                            (event, snapshot)
                         };
 
                         if let Some(event) = event {
                             let _ = try_send_event(&event_tx, event, "PeerReady");
                             info!(
+                                event = "peer.connection_established",
                                 peer_id = %peer_id_string,
                                 local_peer_id = %local_peer_id,
+                                endpoint_direction,
+                                endpoint_address = %endpoint_address,
+                                endpoint_transport = transport_label_str(&endpoint_address),
+                                known_address_count = snapshot.candidate_addresses.len(),
                                 "peer connection established"
                             );
                         } else {
@@ -1668,22 +1884,80 @@ async fn run_swarm(
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
                         let peer_id = peer_id.to_string();
-                        let event = {
+                        let (event, snapshot) = {
                             let mut caches = caches.write().await;
-                            apply_peer_not_ready(&mut caches, &peer_id)
+                            let snapshot = snapshot_peer_addresses(&caches, &peer_id, Utc::now());
+                            let event = apply_peer_not_ready(&mut caches, &peer_id);
+                            (event, snapshot)
                         };
 
                         if let Some(event) = event {
                             let _ = try_send_event(&event_tx, event, "PeerNotReady");
                             info!(
+                                event = "peer.connection_closed",
                                 peer_id = %peer_id,
                                 local_peer_id = %local_peer_id,
+                                known_address_count = snapshot.candidate_addresses.len(),
+                                connected_age_ms = ?snapshot.connected_age_ms,
                                 "peer connection closed"
                             );
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                        error!("outgoing connection error to {:?}: {}", peer_id, error);
+                        let peer_id_str = peer_id.as_ref().map(ToString::to_string);
+                        let observed_at = Utc::now();
+                        let snapshot = if let Some(peer_id) = peer_id_str.as_ref() {
+                            let mut caches = caches.write().await;
+                            caches.record_dial_observation(
+                                peer_id,
+                                dial_observation_from_error(&error, observed_at),
+                            );
+                            Some(snapshot_peer_addresses(&caches, peer_id, observed_at))
+                        } else {
+                            None
+                        };
+                        error!(
+                            event = "peer.outgoing_connection_error",
+                            peer_id = %peer_id_str.as_deref().unwrap_or("-"),
+                            known_address_count = snapshot
+                                .as_ref()
+                                .map(|snapshot| snapshot.candidate_addresses.len())
+                                .unwrap_or(0),
+                            known_addresses = ?snapshot
+                                .as_ref()
+                                .map(|snapshot| snapshot.candidate_addresses.clone())
+                                .unwrap_or_default(),
+                            chosen_dial_addr = %snapshot
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.chosen_dial_addr.as_deref())
+                                .unwrap_or("-"),
+                            chosen_dial_addr_resolution = snapshot
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.chosen_dial_addr_resolution)
+                                .unwrap_or("unknown"),
+                            dial_attempt_address_count = snapshot
+                                .as_ref()
+                                .map(|snapshot| snapshot.dial_attempt_address_count)
+                                .unwrap_or(0),
+                            dial_attempt_addresses = ?snapshot
+                                .as_ref()
+                                .map(|snapshot| snapshot.dial_attempt_addresses.clone())
+                                .unwrap_or_default(),
+                            peer_marked_reachable = snapshot
+                                .as_ref()
+                                .map(|snapshot| snapshot.peer_marked_reachable)
+                                .unwrap_or(false),
+                            connected_age_ms = ?snapshot.as_ref().and_then(|snapshot| snapshot.connected_age_ms),
+                            discovered_age_ms = ?snapshot.as_ref().and_then(|snapshot| snapshot.discovered_age_ms),
+                            last_seen_age_ms = ?snapshot.as_ref().and_then(|snapshot| snapshot.last_seen_age_ms),
+                            last_dial_age_ms = ?snapshot.as_ref().and_then(|snapshot| snapshot.last_dial_age_ms),
+                            last_dial_outcome = snapshot
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.last_dial_outcome)
+                                .unwrap_or("unknown"),
+                            error = %error,
+                            "outgoing connection error"
+                        );
                         if let Err(err) = event_tx
                             .send(NetworkEvent::Error("network connection error".to_string()))
                             .await
@@ -1697,8 +1971,11 @@ async fn run_swarm(
                         ..
                     } => {
                         error!(
-                            "incoming connection error from {}: {}",
-                            send_back_addr, error
+                            event = "peer.incoming_connection_error",
+                            send_back_addr = %send_back_addr,
+                            transport = transport_label(&send_back_addr),
+                            error = %error,
+                            "incoming connection error"
                         );
                         if let Err(err) = event_tx
                             .send(NetworkEvent::Error("network connection error".to_string()))
@@ -1708,7 +1985,13 @@ async fn run_swarm(
                         }
                     }
                     SwarmEvent::NewListenAddr { address, .. } => {
-                        info!("libp2p listening on {address}");
+                        info!(
+                            event = "network.new_listen_addr",
+                            local_peer_id = %local_peer_id,
+                            listen_addr = %address,
+                            transport = transport_label(&address),
+                            "libp2p listening on discovered address"
+                        );
                     }
                     _ => {}
                 }
@@ -2138,158 +2421,294 @@ async fn execute_business_stream(
     denied_operation: &str,
 ) -> Result<()> {
     let peer_id_str = peer_id.as_str();
+    let payload_bytes = payload.map(|data| data.len() as u64).unwrap_or(0);
+    let span = info_span!(
+        "business_stream.execute",
+        operation = denied_operation,
+        peer_id = %peer_id_str,
+        payload_bytes,
+        has_payload = payload.is_some(),
+        dial_decision = tracing::field::Empty,
+        peer_marked_reachable = tracing::field::Empty,
+        candidate_address_count = tracing::field::Empty,
+        preferred_candidate_transport = tracing::field::Empty,
+    );
 
-    if check_business_allowed(
-        policy_resolver,
-        event_tx,
-        peer_id_str,
-        ProtocolDirection::Outbound,
-    )
-    .await
-    .is_err()
-    {
-        return Err(anyhow!(
-            "business protocol denied for outbound {denied_operation} peer_id={peer_id_str}"
-        ));
-    }
+    async move {
+        let attempt_started_at = Utc::now();
 
-    let mut control = control.clone();
-    let result = match timeout(
-        open_timeout,
-        control.open_stream(peer, StreamProtocol::new(BUSINESS_PROTOCOL_ID)),
-    )
-    .await
-    {
-        Ok(Ok(mut stream)) => {
-            if let Some(data) = payload {
-                // Write payload in NETWORK_CHUNK_SIZE chunks with progress tracking
-                let total = data.len() as u64;
-                let total_chunks =
-                    ((data.len() + NETWORK_CHUNK_SIZE - 1) / NETWORK_CHUNK_SIZE) as u32;
-                let transfer_id = if data.len() >= 25 {
-                    // Extract transfer_id from V3 header bytes [9..25] if payload is large enough
-                    data[9..25]
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect::<String>()
-                } else {
-                    format!("outbound-{}", peer_id_str)
-                };
+        if check_business_allowed(
+            policy_resolver,
+            event_tx,
+            peer_id_str,
+            ProtocolDirection::Outbound,
+        )
+        .await
+        .is_err()
+        {
+            return Err(anyhow!(
+                "business protocol denied for outbound {denied_operation} peer_id={peer_id_str}"
+            ));
+        }
 
-                debug!(
-                    peer_id = %peer_id_str,
-                    transfer_id = %transfer_id,
-                    total_bytes = total,
-                    total_chunks,
-                    chunk_size = NETWORK_CHUNK_SIZE,
-                    "outbound chunked write started"
-                );
+        let address_snapshot = {
+            let caches = caches.read().await;
+            snapshot_peer_addresses(&caches, peer_id_str, attempt_started_at)
+        };
+        let dial_decision = dial_decision_for_snapshot(&address_snapshot);
+        let preferred_candidate_transport = preferred_candidate_transport(&address_snapshot);
+        let span = Span::current();
+        span.record("dial_decision", &dial_decision);
+        span.record(
+            "peer_marked_reachable",
+            &address_snapshot.peer_marked_reachable,
+        );
+        span.record(
+            "candidate_address_count",
+            &(address_snapshot.candidate_addresses.len() as u64),
+        );
+        span.record(
+            "preferred_candidate_transport",
+            &preferred_candidate_transport,
+        );
+        info!(
+            event = "business_stream.open_attempt",
+            operation = denied_operation,
+            peer_id = %peer_id_str,
+            payload_bytes,
+            dial_decision,
+            peer_marked_reachable = address_snapshot.peer_marked_reachable,
+            candidate_address_count = address_snapshot.candidate_addresses.len(),
+            preferred_candidate_transport,
+            connected_age_ms = ?address_snapshot.connected_age_ms,
+            discovered_age_ms = ?address_snapshot.discovered_age_ms,
+            last_seen_age_ms = ?address_snapshot.last_seen_age_ms,
+            "attempting business stream open"
+        );
 
-                let write_result = timeout(write_timeout, async {
-                    let mut written = 0u64;
-                    let mut chunks_completed = 0u32;
-                    let mut last_progress = std::time::Instant::now();
+        let mut control = control.clone();
+        let result = match timeout(
+            open_timeout,
+            control.open_stream(peer, StreamProtocol::new(BUSINESS_PROTOCOL_ID)),
+        )
+        .await
+        {
+            Ok(Ok(mut stream)) => {
+                if let Some(data) = payload {
+                    // Write payload in NETWORK_CHUNK_SIZE chunks with progress tracking
+                    let total = data.len() as u64;
+                    let total_chunks =
+                        ((data.len() + NETWORK_CHUNK_SIZE - 1) / NETWORK_CHUNK_SIZE) as u32;
+                    let transfer_id = if data.len() >= 25 {
+                        // Extract transfer_id from V3 header bytes [9..25] if payload is large enough
+                        data[9..25]
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>()
+                    } else {
+                        format!("outbound-{}", peer_id_str)
+                    };
 
-                    for chunk in data.chunks(NETWORK_CHUNK_SIZE) {
-                        stream.write_all(chunk).await?;
-                        written += chunk.len() as u64;
-                        chunks_completed += 1;
-
-                        debug!(
-                            transfer_id = %transfer_id,
-                            chunk = chunks_completed,
-                            total_chunks,
-                            chunk_bytes = chunk.len(),
-                            bytes_written = written,
-                            total_bytes = total,
-                            "outbound chunk written"
-                        );
-
-                        // Throttle progress events: emit first, last, and at most every 100ms
-                        if chunks_completed == 1
-                            || chunks_completed == total_chunks
-                            || last_progress.elapsed() >= Duration::from_millis(100)
-                        {
-                            let _ = try_send_event(
-                                &event_tx,
-                                NetworkEvent::TransferProgress(TransferProgress {
-                                    transfer_id: transfer_id.clone(),
-                                    peer_id: peer_id_str.to_string(),
-                                    direction: TransferDirection::Sending,
-                                    chunks_completed,
-                                    total_chunks,
-                                    bytes_transferred: written,
-                                    total_bytes: Some(total),
-                                }),
-                                "TransferProgress",
-                            );
-                            last_progress = std::time::Instant::now();
-                        }
-                    }
-                    stream.flush().await?;
                     debug!(
+                        peer_id = %peer_id_str,
                         transfer_id = %transfer_id,
                         total_bytes = total,
                         total_chunks,
-                        "outbound chunked write completed"
+                        chunk_size = NETWORK_CHUNK_SIZE,
+                        "outbound chunked write started"
                     );
-                    Ok::<(), std::io::Error>(())
-                })
-                .await;
 
-                match write_result {
-                    Ok(Ok(())) => match timeout(close_timeout, stream.close()).await {
-                        Ok(Ok(())) => Ok(()),
+                    let write_result = timeout(write_timeout, async {
+                        let mut written = 0u64;
+                        let mut chunks_completed = 0u32;
+                        let mut last_progress = std::time::Instant::now();
+
+                        for chunk in data.chunks(NETWORK_CHUNK_SIZE) {
+                            stream.write_all(chunk).await?;
+                            written += chunk.len() as u64;
+                            chunks_completed += 1;
+
+                            debug!(
+                                transfer_id = %transfer_id,
+                                chunk = chunks_completed,
+                                total_chunks,
+                                chunk_bytes = chunk.len(),
+                                bytes_written = written,
+                                total_bytes = total,
+                                "outbound chunk written"
+                            );
+
+                            // Throttle progress events: emit first, last, and at most every 100ms
+                            if chunks_completed == 1
+                                || chunks_completed == total_chunks
+                                || last_progress.elapsed() >= Duration::from_millis(100)
+                            {
+                                let _ = try_send_event(
+                                    &event_tx,
+                                    NetworkEvent::TransferProgress(TransferProgress {
+                                        transfer_id: transfer_id.clone(),
+                                        peer_id: peer_id_str.to_string(),
+                                        direction: TransferDirection::Sending,
+                                        chunks_completed,
+                                        total_chunks,
+                                        bytes_transferred: written,
+                                        total_bytes: Some(total),
+                                    }),
+                                    "TransferProgress",
+                                );
+                                last_progress = std::time::Instant::now();
+                            }
+                        }
+                        stream.flush().await?;
+                        debug!(
+                            transfer_id = %transfer_id,
+                            total_bytes = total,
+                            total_chunks,
+                            "outbound chunked write completed"
+                        );
+                        Ok::<(), std::io::Error>(())
+                    })
+                    .await;
+
+                    match write_result {
+                        Ok(Ok(())) => match timeout(close_timeout, stream.close()).await {
+                            Ok(Ok(())) => Ok(()),
+                            Ok(Err(err)) => {
+                                warn!("business stream close failed: {err}");
+                                Err(anyhow!("business stream close failed: {err}"))
+                            }
+                            Err(_) => {
+                                warn!(peer_id = %peer_id_str, "business stream close timed out");
+                                Err(anyhow!("business stream close timed out"))
+                            }
+                        },
                         Ok(Err(err)) => {
-                            warn!("business stream close failed: {err}");
-                            Err(anyhow!("business stream close failed: {err}"))
+                            warn!("business stream write failed: {err}");
+                            Err(anyhow!("business stream write failed: {err}"))
                         }
                         Err(_) => {
-                            warn!(peer_id = %peer_id_str, "business stream close timed out");
-                            Err(anyhow!("business stream close timed out"))
+                            warn!(peer_id = %peer_id_str, "business stream write timed out");
+                            Err(anyhow!("business stream write timed out"))
                         }
-                    },
-                    Ok(Err(err)) => {
-                        warn!("business stream write failed: {err}");
-                        Err(anyhow!("business stream write failed: {err}"))
                     }
-                    Err(_) => {
-                        warn!(peer_id = %peer_id_str, "business stream write timed out");
-                        Err(anyhow!("business stream write timed out"))
-                    }
-                }
-            } else {
-                match timeout(close_timeout, stream.close()).await {
-                    Ok(Ok(())) => Ok(()),
-                    Ok(Err(err)) => Err(anyhow!("ensure business stream close failed: {err}")),
-                    Err(_) => {
-                        warn!(peer_id = %peer_id_str, "ensure business stream close timed out");
-                        Err(anyhow!("ensure business stream close timed out"))
+                } else {
+                    match timeout(close_timeout, stream.close()).await {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(err)) => Err(anyhow!("ensure business stream close failed: {err}")),
+                        Err(_) => {
+                            warn!(peer_id = %peer_id_str, "ensure business stream close timed out");
+                            Err(anyhow!("ensure business stream close timed out"))
+                        }
                     }
                 }
             }
-        }
-        Ok(Err(err)) => {
-            if payload.is_some() {
-                warn!("business stream open failed: {err}");
-                Err(anyhow!("business stream open failed: {err}"))
-            } else {
-                Err(anyhow!("ensure business stream open failed: {err}"))
+            Ok(Err(err)) => {
+                let failure_snapshot = {
+                    let caches = caches.read().await;
+                    snapshot_peer_addresses(&caches, peer_id_str, Utc::now())
+                };
+                let chosen_dial_addr =
+                    chosen_dial_addr_for_log(&failure_snapshot, dial_decision, attempt_started_at);
+                let chosen_dial_addr_resolution = infer_chosen_dial_addr_resolution(
+                    &failure_snapshot,
+                    dial_decision,
+                    attempt_started_at,
+                );
+                if payload.is_some() {
+                    warn!(
+                        event = "business_stream.open_failed",
+                        operation = denied_operation,
+                        peer_id = %peer_id_str,
+                        dial_decision,
+                        candidate_address_count = failure_snapshot.candidate_addresses.len(),
+                        candidate_addresses = ?failure_snapshot.candidate_addresses,
+                        chosen_dial_addr = %chosen_dial_addr.unwrap_or("-"),
+                        chosen_dial_addr_resolution,
+                        dial_attempt_address_count = failure_snapshot.dial_attempt_address_count,
+                        dial_attempt_addresses = ?failure_snapshot.dial_attempt_addresses,
+                        last_dial_outcome = failure_snapshot.last_dial_outcome.unwrap_or("unknown"),
+                        last_dial_age_ms = ?failure_snapshot.last_dial_age_ms,
+                        error = %err,
+                        "business stream open failed"
+                    );
+                    Err(anyhow!("business stream open failed: {err}"))
+                } else {
+                    warn!(
+                        event = "business_stream.ensure_open_failed",
+                        operation = denied_operation,
+                        peer_id = %peer_id_str,
+                        dial_decision,
+                        candidate_address_count = failure_snapshot.candidate_addresses.len(),
+                        candidate_addresses = ?failure_snapshot.candidate_addresses,
+                        chosen_dial_addr = %chosen_dial_addr.unwrap_or("-"),
+                        chosen_dial_addr_resolution,
+                        dial_attempt_address_count = failure_snapshot.dial_attempt_address_count,
+                        dial_attempt_addresses = ?failure_snapshot.dial_attempt_addresses,
+                        last_dial_outcome = failure_snapshot.last_dial_outcome.unwrap_or("unknown"),
+                        last_dial_age_ms = ?failure_snapshot.last_dial_age_ms,
+                        error = %err,
+                        "ensure business stream open failed"
+                    );
+                    Err(anyhow!("ensure business stream open failed: {err}"))
+                }
             }
-        }
-        Err(_) => {
-            if payload.is_some() {
-                warn!(peer_id = %peer_id_str, "business stream open timed out");
-                Err(anyhow!("business stream open timed out"))
-            } else {
-                warn!(peer_id = %peer_id_str, "ensure business stream open timed out");
-                Err(anyhow!("ensure business stream open timed out"))
+            Err(_) => {
+                let timeout_snapshot = {
+                    let caches = caches.read().await;
+                    snapshot_peer_addresses(&caches, peer_id_str, Utc::now())
+                };
+                let chosen_dial_addr =
+                    chosen_dial_addr_for_log(&timeout_snapshot, dial_decision, attempt_started_at);
+                let chosen_dial_addr_resolution = infer_chosen_dial_addr_resolution(
+                    &timeout_snapshot,
+                    dial_decision,
+                    attempt_started_at,
+                );
+                if payload.is_some() {
+                    warn!(
+                        event = "business_stream.open_timeout",
+                        operation = denied_operation,
+                        peer_id = %peer_id_str,
+                        dial_decision,
+                        candidate_address_count = timeout_snapshot.candidate_addresses.len(),
+                        candidate_addresses = ?timeout_snapshot.candidate_addresses,
+                        chosen_dial_addr = %chosen_dial_addr.unwrap_or("-"),
+                        chosen_dial_addr_resolution,
+                        dial_attempt_address_count = timeout_snapshot.dial_attempt_address_count,
+                        dial_attempt_addresses = ?timeout_snapshot.dial_attempt_addresses,
+                        last_dial_outcome = timeout_snapshot.last_dial_outcome.unwrap_or("unknown"),
+                        last_dial_age_ms = ?timeout_snapshot.last_dial_age_ms,
+                        timeout_ms = open_timeout.as_millis() as u64,
+                        "business stream open timed out"
+                    );
+                    Err(anyhow!("business stream open timed out"))
+                } else {
+                    warn!(
+                        event = "business_stream.ensure_open_timeout",
+                        operation = denied_operation,
+                        peer_id = %peer_id_str,
+                        dial_decision,
+                        candidate_address_count = timeout_snapshot.candidate_addresses.len(),
+                        candidate_addresses = ?timeout_snapshot.candidate_addresses,
+                        chosen_dial_addr = %chosen_dial_addr.unwrap_or("-"),
+                        chosen_dial_addr_resolution,
+                        dial_attempt_address_count = timeout_snapshot.dial_attempt_address_count,
+                        dial_attempt_addresses = ?timeout_snapshot.dial_attempt_addresses,
+                        last_dial_outcome = timeout_snapshot.last_dial_outcome.unwrap_or("unknown"),
+                        last_dial_age_ms = ?timeout_snapshot.last_dial_age_ms,
+                        timeout_ms = open_timeout.as_millis() as u64,
+                        "ensure business stream open timed out"
+                    );
+                    Err(anyhow!("ensure business stream open timed out"))
+                }
             }
-        }
-    };
+        };
 
-    apply_business_stream_result(caches, event_tx, peer_id_str, &result).await;
-    result
+        apply_business_stream_result(caches, event_tx, peer_id_str, &result).await;
+        result
+    }
+    .instrument(span)
+    .await
 }
 
 async fn apply_business_stream_result(
@@ -2319,9 +2738,22 @@ async fn apply_business_stream_result(
 fn listen_on_swarm(swarm: &mut Swarm<Libp2pBehaviour>, listen_addr: Multiaddr) -> Result<()> {
     if let Err(e) = swarm.listen_on(listen_addr.clone()) {
         let message = format!("failed to listen on {listen_addr}: {e}");
-        warn!("{message}");
+        warn!(
+            event = "network.listen_register_failed",
+            listen_addr = %listen_addr,
+            transport = transport_label(&listen_addr),
+            error = %e,
+            "{message}"
+        );
         return Err(anyhow!(message));
     }
+
+    info!(
+        event = "network.listen_registered",
+        listen_addr = %listen_addr,
+        transport = transport_label(&listen_addr),
+        "registered listen address with swarm"
+    );
 
     Ok(())
 }
@@ -2339,6 +2771,225 @@ fn try_send_event(
 
 fn sort_addresses_quic_first(addresses: &mut Vec<String>) {
     addresses.sort_by_key(|addr| if addr.contains("/quic-v1") { 0 } else { 1 });
+}
+
+fn snapshot_peer_addresses(
+    caches: &PeerCaches,
+    peer_id: &str,
+    observed_at: DateTime<Utc>,
+) -> PeerAddressSnapshot {
+    let discovered = caches.discovered_peers.get(peer_id);
+    let last_dial = caches.last_dial_observations.get(peer_id);
+    PeerAddressSnapshot {
+        candidate_addresses: discovered
+            .map(|peer| peer.addresses.clone())
+            .unwrap_or_default(),
+        peer_marked_reachable: caches.is_reachable(peer_id),
+        connected_age_ms: caches
+            .connected_at
+            .get(peer_id)
+            .map(|connected_at| age_ms(observed_at, *connected_at)),
+        discovered_age_ms: discovered.map(|peer| age_ms(observed_at, peer.discovered_at)),
+        last_seen_age_ms: discovered.map(|peer| age_ms(observed_at, peer.last_seen)),
+        chosen_dial_addr: last_dial.and_then(|dial| dial.chosen_dial_addr.clone()),
+        chosen_dial_addr_resolution: last_dial.map(|dial| dial.chosen_dial_addr_resolution),
+        dial_attempt_addresses: last_dial
+            .map(|dial| dial.dial_attempt_addresses.clone())
+            .unwrap_or_default(),
+        dial_attempt_address_count: last_dial
+            .map(|dial| dial.dial_attempt_addresses.len())
+            .unwrap_or(0),
+        last_dial_outcome: last_dial.map(|dial| dial.dial_outcome),
+        last_dial_age_ms: last_dial.map(|dial| age_ms(observed_at, dial.observed_at)),
+        last_dial_observed_at: last_dial.map(|dial| dial.observed_at),
+    }
+}
+
+async fn snapshot_pairing_open_success(
+    caches: &Arc<RwLock<PeerCaches>>,
+    peer_id: &str,
+    dial_decision: &str,
+    attempt_started_at: DateTime<Utc>,
+) -> PeerAddressSnapshot {
+    for attempt in 0..PAIRING_OPEN_SUCCESS_OBSERVATION_POLL_ATTEMPTS {
+        let snapshot = {
+            let caches = caches.read().await;
+            snapshot_peer_addresses(&caches, peer_id, Utc::now())
+        };
+        let has_current_attempt_dial = snapshot
+            .last_dial_observed_at
+            .is_some_and(|observed_at| observed_at >= attempt_started_at);
+        if dial_decision == "reuse_existing_connection"
+            || has_current_attempt_dial
+            || attempt + 1 == PAIRING_OPEN_SUCCESS_OBSERVATION_POLL_ATTEMPTS
+        {
+            return snapshot;
+        }
+        sleep(PAIRING_OPEN_SUCCESS_OBSERVATION_POLL_INTERVAL).await;
+    }
+
+    let caches = caches.read().await;
+    snapshot_peer_addresses(&caches, peer_id, Utc::now())
+}
+
+fn age_ms(observed_at: DateTime<Utc>, recorded_at: DateTime<Utc>) -> i64 {
+    observed_at
+        .signed_duration_since(recorded_at)
+        .num_milliseconds()
+        .max(0)
+}
+
+fn transport_label(address: &Multiaddr) -> &'static str {
+    transport_label_str(&address.to_string())
+}
+
+fn transport_label_str(address: &str) -> &'static str {
+    if address.contains("/quic-v1") {
+        "quic"
+    } else if address.contains("/tcp/") {
+        "tcp"
+    } else {
+        "other"
+    }
+}
+
+fn dial_decision_for_snapshot(snapshot: &PeerAddressSnapshot) -> &'static str {
+    if snapshot.peer_marked_reachable {
+        "reuse_existing_connection"
+    } else {
+        "new_dial_required"
+    }
+}
+
+fn preferred_candidate_transport(snapshot: &PeerAddressSnapshot) -> &'static str {
+    snapshot
+        .candidate_addresses
+        .first()
+        .map(|addr| transport_label_str(addr))
+        .unwrap_or("none")
+}
+
+fn successful_dial_observation(address: &str, observed_at: DateTime<Utc>) -> PeerDialObservation {
+    PeerDialObservation {
+        chosen_dial_addr: Some(address.to_string()),
+        chosen_dial_addr_resolution: "exact",
+        dial_attempt_addresses: vec![address.to_string()],
+        dial_outcome: "connection_established",
+        observed_at,
+    }
+}
+
+fn dial_observation_from_error(
+    error: &libp2p::swarm::DialError,
+    observed_at: DateTime<Utc>,
+) -> PeerDialObservation {
+    match error {
+        libp2p::swarm::DialError::LocalPeerId { address } => PeerDialObservation {
+            chosen_dial_addr: Some(address.to_string()),
+            chosen_dial_addr_resolution: "exact",
+            dial_attempt_addresses: vec![address.to_string()],
+            dial_outcome: "local_peer_id",
+            observed_at,
+        },
+        libp2p::swarm::DialError::WrongPeerId { address, .. } => PeerDialObservation {
+            chosen_dial_addr: Some(address.to_string()),
+            chosen_dial_addr_resolution: "exact",
+            dial_attempt_addresses: vec![address.to_string()],
+            dial_outcome: "wrong_peer_id",
+            observed_at,
+        },
+        libp2p::swarm::DialError::Transport(errors) => {
+            let dial_attempt_addresses = errors
+                .iter()
+                .map(|(address, _)| address.to_string())
+                .collect::<Vec<_>>();
+            let chosen_dial_addr = if dial_attempt_addresses.len() == 1 {
+                dial_attempt_addresses.first().cloned()
+            } else {
+                None
+            };
+            let chosen_dial_addr_resolution = if chosen_dial_addr.is_some() {
+                "exact"
+            } else if dial_attempt_addresses.is_empty() {
+                "unknown"
+            } else {
+                "multiple_attempts"
+            };
+            PeerDialObservation {
+                chosen_dial_addr,
+                chosen_dial_addr_resolution,
+                dial_attempt_addresses,
+                dial_outcome: "transport_error",
+                observed_at,
+            }
+        }
+        libp2p::swarm::DialError::NoAddresses => PeerDialObservation {
+            chosen_dial_addr: None,
+            chosen_dial_addr_resolution: "no_addresses",
+            dial_attempt_addresses: Vec::new(),
+            dial_outcome: "no_addresses",
+            observed_at,
+        },
+        libp2p::swarm::DialError::DialPeerConditionFalse(_) => PeerDialObservation {
+            chosen_dial_addr: None,
+            chosen_dial_addr_resolution: "peer_condition_false",
+            dial_attempt_addresses: Vec::new(),
+            dial_outcome: "peer_condition_false",
+            observed_at,
+        },
+        libp2p::swarm::DialError::Aborted => PeerDialObservation {
+            chosen_dial_addr: None,
+            chosen_dial_addr_resolution: "aborted",
+            dial_attempt_addresses: Vec::new(),
+            dial_outcome: "aborted",
+            observed_at,
+        },
+        libp2p::swarm::DialError::Denied { .. } => PeerDialObservation {
+            chosen_dial_addr: None,
+            chosen_dial_addr_resolution: "denied",
+            dial_attempt_addresses: Vec::new(),
+            dial_outcome: "denied",
+            observed_at,
+        },
+    }
+}
+
+fn infer_chosen_dial_addr_resolution(
+    snapshot: &PeerAddressSnapshot,
+    dial_decision: &str,
+    attempt_started_at: DateTime<Utc>,
+) -> &'static str {
+    if dial_decision == "reuse_existing_connection" {
+        "not_applicable"
+    } else if snapshot
+        .last_dial_observed_at
+        .is_some_and(|observed_at| observed_at >= attempt_started_at)
+    {
+        snapshot.chosen_dial_addr_resolution.unwrap_or("unknown")
+    } else if !snapshot.peer_marked_reachable && snapshot.candidate_addresses.len() == 1 {
+        "single_candidate_inferred"
+    } else {
+        "unknown"
+    }
+}
+
+fn chosen_dial_addr_for_log<'a>(
+    snapshot: &'a PeerAddressSnapshot,
+    dial_decision: &str,
+    attempt_started_at: DateTime<Utc>,
+) -> Option<&'a str> {
+    if dial_decision == "reuse_existing_connection" {
+        None
+    } else if snapshot
+        .last_dial_observed_at
+        .is_some_and(|observed_at| observed_at >= attempt_started_at)
+    {
+        snapshot.chosen_dial_addr.as_deref()
+    } else if !snapshot.peer_marked_reachable && snapshot.candidate_addresses.len() == 1 {
+        Some(snapshot.candidate_addresses[0].as_str())
+    } else {
+        None
+    }
 }
 
 fn collect_mdns_discovered(
@@ -2437,6 +3088,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::time::{sleep, timeout, Duration};
     use tokio_util::compat::TokioAsyncReadCompatExt;
+    use tracing::field::{Field, Visit};
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::registry::LookupSpan;
     use uc_core::network::{ConnectionPolicy, PairingState, ResolvedConnectionPolicy};
     use uc_core::ports::{ConnectionPolicyResolverError, ConnectionPolicyResolverPort};
     use uc_core::security::MasterKey;
@@ -2570,6 +3226,80 @@ mod tests {
         );
         assert!(caches.mark_reachable("peer-1", Utc::now()));
         assert!(caches.is_reachable("peer-1"));
+    }
+
+    #[test]
+    fn regression_mark_unreachable_clears_last_dial_observation() {
+        let mut caches = PeerCaches::new();
+        let t0 = Utc::now();
+        let dial_addr = "/ip4/10.0.0.8/tcp/4001";
+
+        caches.upsert_discovered("peer-1".to_string(), vec![dial_addr.to_string()], t0);
+        assert!(caches.mark_reachable("peer-1", t0));
+        caches.record_dial_observation("peer-1", successful_dial_observation(dial_addr, t0));
+
+        assert!(caches.mark_unreachable("peer-1"));
+
+        let snapshot =
+            snapshot_peer_addresses(&caches, "peer-1", t0 + chrono::TimeDelta::seconds(1));
+        assert!(snapshot.chosen_dial_addr.is_none());
+        assert!(snapshot.last_dial_observed_at.is_none());
+        assert!(snapshot.last_dial_outcome.is_none());
+        assert_eq!(snapshot.dial_attempt_address_count, 0);
+    }
+
+    #[test]
+    fn regression_stale_dial_observation_not_used_for_new_attempt() {
+        let mut caches = PeerCaches::new();
+        let t0 = Utc::now();
+        let addr_a = "/ip4/10.0.0.8/tcp/4001";
+        let addr_b = "/ip4/10.0.0.9/tcp/4001";
+
+        caches.upsert_discovered(
+            "peer-1".to_string(),
+            vec![addr_a.to_string(), addr_b.to_string()],
+            t0,
+        );
+        caches.record_dial_observation("peer-1", successful_dial_observation(addr_a, t0));
+
+        let attempt_started_at = t0 + chrono::TimeDelta::seconds(1);
+        let snapshot = snapshot_peer_addresses(&caches, "peer-1", attempt_started_at);
+
+        assert_eq!(
+            chosen_dial_addr_for_log(&snapshot, "new_dial_required", attempt_started_at),
+            None
+        );
+        assert_eq!(
+            infer_chosen_dial_addr_resolution(&snapshot, "new_dial_required", attempt_started_at),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn regression_reuse_existing_connection_does_not_emit_chosen_dial_addr() {
+        let mut caches = PeerCaches::new();
+        let t0 = Utc::now();
+        let addr = "/ip4/10.0.0.8/tcp/4001";
+
+        caches.upsert_discovered("peer-1".to_string(), vec![addr.to_string()], t0);
+        assert!(caches.mark_reachable("peer-1", t0));
+        caches.record_dial_observation("peer-1", successful_dial_observation(addr, t0));
+
+        let attempt_started_at = t0 + chrono::TimeDelta::seconds(1);
+        let snapshot = snapshot_peer_addresses(&caches, "peer-1", attempt_started_at);
+
+        assert_eq!(
+            chosen_dial_addr_for_log(&snapshot, "reuse_existing_connection", attempt_started_at),
+            None
+        );
+        assert_eq!(
+            infer_chosen_dial_addr_resolution(
+                &snapshot,
+                "reuse_existing_connection",
+                attempt_started_at
+            ),
+            "not_applicable"
+        );
     }
 
     #[test]
@@ -2739,6 +3469,66 @@ mod tests {
                 pairing_state: PairingState::Pending,
                 allowed: ConnectionPolicy::allowed_protocols(PairingState::Pending),
             })
+        }
+    }
+
+    #[derive(Default)]
+    struct EventNameVisitor {
+        event_name: Option<String>,
+    }
+
+    impl Visit for EventNameVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "event" {
+                self.event_name = Some(value.to_string());
+            }
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "event" && self.event_name.is_none() {
+                self.event_name = Some(format!("{value:?}").trim_matches('"').to_string());
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct EventScopeCaptureLayer {
+        captured: Arc<Mutex<Vec<(String, Vec<String>)>>>,
+    }
+
+    impl EventScopeCaptureLayer {
+        fn new(captured: Arc<Mutex<Vec<(String, Vec<String>)>>>) -> Self {
+            Self { captured }
+        }
+    }
+
+    impl<S> Layer<S> for EventScopeCaptureLayer
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+            let mut visitor = EventNameVisitor::default();
+            event.record(&mut visitor);
+            let Some(event_name) = visitor.event_name else {
+                return;
+            };
+            if event_name != "business_stream.open_attempt" {
+                return;
+            }
+
+            let scope = ctx
+                .event_scope(event)
+                .map(|scope| {
+                    scope
+                        .from_root()
+                        .map(|span| span.name().to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            self.captured
+                .lock()
+                .expect("lock captured events")
+                .push((event_name, scope));
         }
     }
 
@@ -3175,6 +3965,74 @@ mod tests {
         assert!(
             caches.read().await.is_reachable(&remote_peer_id),
             "policy denial must not demote peer network readiness"
+        );
+    }
+
+    #[tokio::test]
+    async fn business_stream_open_attempt_is_scoped_to_stable_span() {
+        let captured = Arc::new(Mutex::new(Vec::<(String, Vec<String>)>::new()));
+        let subscriber =
+            tracing_subscriber::registry().with(EventScopeCaptureLayer::new(captured.clone()));
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+        let keypair = identity::Keypair::generate_ed25519();
+        let local_peer_id = PeerId::from(keypair.public());
+        let behaviour = Libp2pBehaviour::new(local_peer_id).expect("behaviour");
+        let swarm = SwarmBuilder::with_existing_identity(keypair)
+            .with_tokio()
+            .with_tcp(
+                tcp::Config::default().nodelay(true),
+                noise::Config::new,
+                yamux::Config::default,
+            )
+            .expect("tcp config")
+            .with_quic()
+            .with_behaviour(move |_| behaviour)
+            .expect("attach behaviour")
+            .build();
+
+        let caches = Arc::new(RwLock::new(PeerCaches::new()));
+        let remote_keypair = identity::Keypair::generate_ed25519();
+        let remote_peer = PeerId::from(remote_keypair.public());
+        let remote_peer_id = remote_peer.to_string();
+        {
+            let mut caches_guard = caches.write().await;
+            let _ = caches_guard.upsert_discovered(remote_peer_id.clone(), Vec::new(), Utc::now());
+        }
+
+        let resolver: Arc<dyn ConnectionPolicyResolverPort> = Arc::new(FakeResolver);
+        let (event_tx, _event_rx) = mpsc::channel(4);
+        let uc_peer_id = uc_core::PeerId::from(remote_peer_id.as_str());
+        let control = swarm.behaviour().stream.new_control();
+
+        let result = execute_business_stream(
+            &control,
+            &caches,
+            &resolver,
+            &event_tx,
+            &uc_peer_id,
+            remote_peer,
+            Some(b"clipboard"),
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            "clipboard",
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "unconnected peer should not open business stream"
+        );
+
+        let captured = captured.lock().expect("lock captured events");
+        let (_, scope) = captured
+            .iter()
+            .find(|(event_name, _)| event_name == "business_stream.open_attempt")
+            .expect("business stream open attempt should be captured");
+        assert!(
+            scope.iter().any(|span_name| span_name == "business_stream.execute"),
+            "business_stream.open_attempt should be emitted inside business_stream.execute span, got scope {scope:?}"
         );
     }
 
