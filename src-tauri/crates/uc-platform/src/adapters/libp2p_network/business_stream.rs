@@ -10,7 +10,7 @@ use libp2p_stream as stream;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info, info_span, warn, Instrument, Span};
+use tracing::{debug, error, info, info_span, warn, Instrument, Span};
 use uc_core::network::{NetworkEvent, ProtocolDirection};
 use uc_core::ports::{ConnectionPolicyResolverPort, TransferDirection, TransferProgress};
 
@@ -20,13 +20,16 @@ use super::dial_strategy::{
 };
 use super::discovery::{apply_peer_not_ready, apply_peer_ready};
 use super::peer_cache::{snapshot_peer_addresses, PeerCaches};
-use super::{check_business_allowed, try_send_event, BUSINESS_PROTOCOL_ID, NETWORK_CHUNK_SIZE};
+use super::{
+    check_business_allowed, try_send_event, DialRequest, BUSINESS_PROTOCOL_ID, NETWORK_CHUNK_SIZE,
+};
 
 pub(super) async fn execute_business_stream(
     control: &stream::Control,
     caches: &Arc<RwLock<PeerCaches>>,
     policy_resolver: &Arc<dyn ConnectionPolicyResolverPort>,
     event_tx: &mpsc::Sender<NetworkEvent>,
+    dial_tx: &mpsc::Sender<DialRequest>,
     peer_id: &uc_core::PeerId,
     peer: PeerId,
     payload: Option<&[u8]>,
@@ -122,6 +125,120 @@ pub(super) async fn execute_business_stream(
             last_seen_age_ms = ?address_snapshot.last_seen_age_ms,
             "attempting business stream open"
         );
+
+        // Pre-dial: when a new connection is needed, send a DialRequest to the
+        // swarm loop with only the best-tier candidate addresses.  This ensures
+        // LAN addresses are tried before WAN, and WAN before Relay.
+        if dial_decision == "new_dial_required" {
+            let tiers = {
+                let caches = caches.read().await;
+                caches
+                    .address_registry
+                    .candidates_by_tier(peer_id_str)
+                    .into_iter()
+                    .map(|(scope, recs)| {
+                        let addrs: Vec<String> = recs.iter().map(|r| r.addr.clone()).collect();
+                        (scope, addrs)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            // Iterate ALL tiers in order (LAN > WAN > Relay).
+            for (tier_index, (scope, addr_strings)) in tiers.iter().enumerate() {
+                // Parse address strings, logging failures
+                let addrs: Vec<libp2p::Multiaddr> = addr_strings
+                    .iter()
+                    .filter_map(|a| match a.parse() {
+                        Ok(addr) => Some(addr),
+                        Err(e) => {
+                            warn!(
+                                event = "business_stream.pre_dial",
+                                operation = denied_operation,
+                                peer_id = %peer_id_str,
+                                scope = ?scope,
+                                tier_index,
+                                address = %a,
+                                error = %e,
+                                "failed to parse address, skipping"
+                            );
+                            None
+                        }
+                    })
+                    .collect();
+
+                // Skip tier if no usable addresses after parsing
+                if addrs.is_empty() {
+                    continue;
+                }
+
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                info!(
+                    event = "business_stream.pre_dial",
+                    operation = denied_operation,
+                    peer_id = %peer_id_str,
+                    scope = ?scope,
+                    address_count = addrs.len(),
+                    addresses = ?addr_strings,
+                    tier_index,
+                    "sending pre-dial request with tier addresses"
+                );
+
+                match dial_tx
+                    .send(DialRequest {
+                        peer,
+                        addresses: addrs,
+                        result_tx: tx,
+                    })
+                    .await
+                {
+                    Err(e) => {
+                        error!(
+                            event = "business_stream.pre_dial",
+                            operation = denied_operation,
+                            peer_id = %peer_id_str,
+                            scope = ?scope,
+                            tier_index,
+                            error = %e,
+                            "failed to send dial request"
+                        );
+                        break;
+                    }
+                    Ok(()) => match rx.await {
+                        Ok(Ok(())) => {
+                            debug!(
+                                event = "business_stream.pre_dial",
+                                operation = denied_operation,
+                                peer_id = %peer_id_str,
+                                scope = ?scope,
+                                tier_index,
+                                "dial initiation succeeded"
+                            );
+                            break;
+                        }
+                        Ok(Err(e)) => {
+                            warn!(
+                                event = "business_stream.pre_dial",
+                                operation = denied_operation,
+                                peer_id = %peer_id_str,
+                                scope = ?scope,
+                                tier_index,
+                                error = %e,
+                                "dial initiation failed, trying next tier"
+                            );
+                        }
+                        Err(_) => {
+                            warn!(
+                                event = "business_stream.pre_dial",
+                                operation = denied_operation,
+                                peer_id = %peer_id_str,
+                                scope = ?scope,
+                                tier_index,
+                                "dial initiation channel dropped, trying next tier"
+                            );
+                        }
+                    },
+                }
+            }
+        }
 
         let mut control = control.clone();
         let result = match tokio::time::timeout(
