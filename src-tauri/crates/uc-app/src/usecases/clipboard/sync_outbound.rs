@@ -1417,7 +1417,6 @@ mod tests {
     }
 
     fn build_policy_usecase(
-        _sendable_peers: Vec<DiscoveredPeer>,
         paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
     ) -> SyncOutboundClipboardUseCase {
         let network = Arc::new(TestNetwork {
@@ -1503,7 +1502,7 @@ mod tests {
             devices,
             fail_for: HashSet::new(),
         });
-        let uc = build_policy_usecase(peers.clone(), repo);
+        let uc = build_policy_usecase(repo);
 
         let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
         assert_eq!(result.len(), 1);
@@ -1528,7 +1527,7 @@ mod tests {
             devices,
             fail_for: HashSet::new(),
         });
-        let uc = build_policy_usecase(peers.clone(), repo);
+        let uc = build_policy_usecase(repo);
 
         let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
         assert_eq!(
@@ -1564,7 +1563,7 @@ mod tests {
             devices,
             fail_for: HashSet::new(),
         });
-        let uc = build_policy_usecase(peers.clone(), repo);
+        let uc = build_policy_usecase(repo);
 
         let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
         assert_eq!(
@@ -1600,7 +1599,7 @@ mod tests {
             devices,
             fail_for: HashSet::new(),
         });
-        let uc = build_policy_usecase(peers.clone(), repo);
+        let uc = build_policy_usecase(repo);
 
         let result = uc.apply_sync_policy(&peers, &make_unknown_snapshot()).await;
         assert_eq!(
@@ -1636,7 +1635,7 @@ mod tests {
             devices,
             fail_for: HashSet::new(),
         });
-        let uc = build_policy_usecase(peers.clone(), repo);
+        let uc = build_policy_usecase(repo);
 
         let result = uc.apply_sync_policy(&peers, &make_image_snapshot()).await;
         assert_eq!(
@@ -1653,7 +1652,7 @@ mod tests {
             devices: std::collections::HashMap::new(), // empty - peer not found
             fail_for: HashSet::new(),
         });
-        let uc = build_policy_usecase(peers.clone(), repo);
+        let uc = build_policy_usecase(repo);
 
         let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
         assert_eq!(
@@ -1672,7 +1671,7 @@ mod tests {
             devices: std::collections::HashMap::new(),
             fail_for,
         });
-        let uc = build_policy_usecase(peers.clone(), repo);
+        let uc = build_policy_usecase(repo);
 
         let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
         assert_eq!(
@@ -1740,7 +1739,6 @@ mod tests {
     }
 
     fn build_policy_usecase_with_settings(
-        _sendable_peers: Vec<DiscoveredPeer>,
         paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
         settings: Settings,
     ) -> SyncOutboundClipboardUseCase {
@@ -1776,7 +1774,7 @@ mod tests {
         });
         let mut settings = Settings::default();
         settings.file_sync.file_sync_enabled = false;
-        let uc = build_policy_usecase_with_settings(peers.clone(), repo, settings);
+        let uc = build_policy_usecase_with_settings(repo, settings);
 
         let result = uc.apply_sync_policy(&peers, &make_file_snapshot()).await;
         assert!(
@@ -1796,7 +1794,7 @@ mod tests {
         });
         let mut settings = Settings::default();
         settings.file_sync.file_sync_enabled = true;
-        let uc = build_policy_usecase_with_settings(peers.clone(), repo, settings);
+        let uc = build_policy_usecase_with_settings(repo, settings);
 
         let result = uc.apply_sync_policy(&peers, &make_file_snapshot()).await;
         assert_eq!(
@@ -1817,7 +1815,7 @@ mod tests {
         });
         let mut settings = Settings::default();
         settings.file_sync.file_sync_enabled = false;
-        let uc = build_policy_usecase_with_settings(peers.clone(), repo, settings);
+        let uc = build_policy_usecase_with_settings(repo, settings);
 
         let result = uc.apply_sync_policy(&peers, &make_text_snapshot()).await;
         assert_eq!(
