@@ -556,42 +556,6 @@ impl PeerDirectoryPort for Libp2pNetworkAdapter {
         Ok(peers)
     }
 
-    async fn list_sendable_peers(&self) -> Result<Vec<DiscoveredPeer>> {
-        let discovered: Vec<DiscoveredPeer> = {
-            let caches = self.caches.read().await;
-            caches.discovered_peers.values().cloned().collect()
-        };
-
-        let mut sendable = Vec::new();
-        for mut peer in discovered {
-            if peer.peer_id == self.local_peer_id {
-                debug!(peer_id = %peer.peer_id, "skip local peer in sendable peer list");
-                continue;
-            }
-            let policy = match self
-                .policy_resolver
-                .resolve_for_peer(&uc_core::PeerId::from(peer.peer_id.as_str()))
-                .await
-            {
-                Ok(policy) => policy,
-                Err(err) => {
-                    warn!(
-                        peer_id = %peer.peer_id,
-                        error = %err,
-                        "failed to resolve connection policy while listing sendable peers"
-                    );
-                    continue;
-                }
-            };
-
-            if policy.allowed.allows(ProtocolKind::Business) {
-                peer.is_paired = matches!(policy.pairing_state, PairingState::Trusted);
-                sendable.push(peer);
-            }
-        }
-        Ok(sendable)
-    }
-
     fn local_peer_id(&self) -> String {
         self.local_peer_id.clone()
     }

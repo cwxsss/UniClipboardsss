@@ -211,6 +211,22 @@ async fn ensure_explicit_connection(
                 break;
             }
             Ok(Ok(Err(err))) => {
+                let err_msg = err.to_string();
+                // Another task is already dialing this peer — that dial will
+                // establish the connection we need, so just wait for it.
+                if err_msg.contains("dial is in progress") {
+                    debug!(
+                        event = "business_stream.pre_dial",
+                        operation = denied_operation,
+                        peer_id = %peer_id_str,
+                        scope = ?scope,
+                        tier_index,
+                        dial_decision,
+                        "dial already in progress from another task, waiting for connection"
+                    );
+                    dial_initiated = true;
+                    break;
+                }
                 warn!(
                     event = "business_stream.pre_dial",
                     operation = denied_operation,

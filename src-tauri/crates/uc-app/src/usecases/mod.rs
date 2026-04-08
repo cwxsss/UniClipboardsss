@@ -52,8 +52,9 @@ pub use list_clipboard_entries::ListClipboardEntries;
 pub use pairing::{
     AnnounceDeviceName, GetDeviceSyncSettings, GetLocalDeviceInfo, GetLocalPeerId,
     GetP2pPeersSnapshot, ListConnectedPeers, ListDiscoveredPeers, ListPairedDevices,
-    LocalDeviceInfo, PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, SetPairingState,
-    StagedPairedDeviceStore, UnpairDevice, UpdateDeviceSyncSettings,
+    ListSendablePeers, LocalDeviceInfo, PairingConfig, PairingOrchestrator,
+    ResolveConnectionPolicy, SetPairingState, StagedPairedDeviceStore, UnpairDevice,
+    UpdateDeviceSyncSettings,
 };
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator, SetupPairingFacadePort};
 pub use start_network::StartNetwork;
@@ -175,6 +176,14 @@ impl<'a> CoreUseCases<'a> {
         crate::usecases::storage::OpenDataDirectory::new(
             self.runtime.storage_paths.clone(),
             self.runtime.deps.system.file_manager.clone(),
+        )
+    }
+
+    /// List peers eligible for outbound data sync.
+    pub fn list_sendable_peers(&self) -> crate::usecases::ListSendablePeers {
+        crate::usecases::ListSendablePeers::new(
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.network_ports.peers.clone(),
         )
     }
 

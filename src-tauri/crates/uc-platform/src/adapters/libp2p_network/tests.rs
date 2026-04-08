@@ -1178,88 +1178,6 @@ async fn business_stream_open_attempt_is_scoped_to_stable_span() {
 }
 
 #[tokio::test]
-async fn list_sendable_peers_filters_out_untrusted_peers() {
-    let adapter = Libp2pNetworkAdapter::new(
-        Arc::new(TestIdentityStore::default()),
-        Arc::new(PendingResolver),
-        Arc::new(InMemoryEncryptionSessionPort::default()),
-        Arc::new(PassthroughTransferPayloadDecryptor),
-        Arc::new(PassthroughTransferPayloadEncryptor),
-        PathBuf::from("/tmp/test-file-cache"),
-        PairingRuntimeOwner::CurrentProcess,
-    )
-    .expect("create adapter");
-
-    {
-        let mut caches = adapter.caches.write().await;
-        let _ = caches.upsert_discovered("peer-pending".to_string(), Vec::new(), Utc::now());
-    }
-
-    let peers = adapter
-        .list_sendable_peers()
-        .await
-        .expect("list sendable peers");
-    assert!(peers.is_empty(), "pending peer must not be sendable");
-}
-
-#[tokio::test]
-async fn list_sendable_peers_marks_trusted_peers_as_paired() {
-    let adapter = Libp2pNetworkAdapter::new(
-        Arc::new(TestIdentityStore::default()),
-        Arc::new(FakeResolver),
-        Arc::new(InMemoryEncryptionSessionPort::default()),
-        Arc::new(PassthroughTransferPayloadDecryptor),
-        Arc::new(PassthroughTransferPayloadEncryptor),
-        PathBuf::from("/tmp/test-file-cache"),
-        PairingRuntimeOwner::CurrentProcess,
-    )
-    .expect("create adapter");
-
-    {
-        let mut caches = adapter.caches.write().await;
-        let _ = caches.upsert_discovered("peer-trusted".to_string(), Vec::new(), Utc::now());
-    }
-
-    let peers = adapter
-        .list_sendable_peers()
-        .await
-        .expect("list sendable peers");
-    assert_eq!(peers.len(), 1);
-    assert_eq!(peers[0].peer_id, "peer-trusted");
-    assert!(peers[0].is_paired);
-}
-
-#[tokio::test]
-async fn list_sendable_peers_excludes_local_peer_id() {
-    let adapter = Libp2pNetworkAdapter::new(
-        Arc::new(TestIdentityStore::default()),
-        Arc::new(FakeResolver),
-        Arc::new(InMemoryEncryptionSessionPort::default()),
-        Arc::new(PassthroughTransferPayloadDecryptor),
-        Arc::new(PassthroughTransferPayloadEncryptor),
-        PathBuf::from("/tmp/test-file-cache"),
-        PairingRuntimeOwner::CurrentProcess,
-    )
-    .expect("create adapter");
-    let local_peer_id = adapter.local_peer_id();
-
-    {
-        let mut caches = adapter.caches.write().await;
-        let _ = caches.upsert_discovered(local_peer_id.clone(), Vec::new(), Utc::now());
-        let _ = caches.upsert_discovered("peer-trusted".to_string(), Vec::new(), Utc::now());
-    }
-
-    let peers = adapter
-        .list_sendable_peers()
-        .await
-        .expect("list sendable peers");
-
-    assert_eq!(peers.len(), 1);
-    assert_eq!(peers[0].peer_id, "peer-trusted");
-    assert!(peers.iter().all(|peer| peer.peer_id != local_peer_id));
-}
-
-#[tokio::test]
 async fn inbound_business_denied_drops_stream_and_emits_event() {
     let resolver: Arc<dyn ConnectionPolicyResolverPort> = Arc::new(PendingResolver);
     let (event_tx, mut event_rx) = mpsc::channel(1);
@@ -1803,48 +1721,9 @@ fn sort_addresses_quic_first_preserves_relative_order() {
 //
 // Context: commit 62320c21 introduced a presence staleness sweep that
 // *removed* peers from `discovered_peers` after 20s of no mDNS heartbeat.
-// This broke clipboard sync after pairing (which takes >20s) because
-// `list_sendable_peers` reads from `discovered_peers`.
-//
 // These tests encode the invariant:
 //   "Only mDNS Expired events may remove a peer from discovered_peers."
 // Any future staleness/offline logic must mark peers (not remove them).
-
-/// Regression: a peer whose `last_seen` is older than any staleness
-/// threshold must remain in `discovered_peers` so that `list_sendable_peers`
-/// can still reach it.  Only `apply_mdns_expired` should remove peers.
-#[tokio::test]
-async fn regression_stale_peer_remains_sendable_after_long_idle() {
-    let adapter = Libp2pNetworkAdapter::new(
-        Arc::new(TestIdentityStore::default()),
-        Arc::new(FakeResolver),
-        Arc::new(InMemoryEncryptionSessionPort::default()),
-        Arc::new(PassthroughTransferPayloadDecryptor),
-        Arc::new(PassthroughTransferPayloadEncryptor),
-        PathBuf::from("/tmp/test-file-cache"),
-        PairingRuntimeOwner::CurrentProcess,
-    )
-    .expect("create adapter");
-
-    // Insert a peer that was discovered 5 minutes ago and never refreshed
-    let stale_time = Utc::now() - chrono::Duration::seconds(300);
-    {
-        let mut caches = adapter.caches.write().await;
-        caches.upsert_discovered(
-            "peer-stale".to_string(),
-            vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
-            stale_time,
-        );
-    }
-
-    // Peer must still be sendable despite being "stale"
-    let peers = adapter
-        .list_sendable_peers()
-        .await
-        .expect("list sendable peers");
-    assert_eq!(peers.len(), 1, "stale peer must still be sendable");
-    assert_eq!(peers[0].peer_id, "peer-stale");
-}
 
 /// Regression: only `apply_mdns_expired` may remove peers from
 /// `discovered_peers`.  `remove_discovered` is available but must only be
@@ -1874,55 +1753,6 @@ fn regression_only_mdns_expired_removes_discovered_peer() {
 
     assert_eq!(events.len(), 1);
     assert!(!caches.discovered_peers.contains_key("peer-1"));
-}
-
-/// Regression: simulates the exact bug scenario — pair takes >20s, peer goes
-/// stale, then clipboard sync must still find the peer.
-#[tokio::test]
-async fn regression_pairing_delay_does_not_break_sync() {
-    let adapter = Libp2pNetworkAdapter::new(
-        Arc::new(TestIdentityStore::default()),
-        Arc::new(FakeResolver),
-        Arc::new(InMemoryEncryptionSessionPort::default()),
-        Arc::new(PassthroughTransferPayloadDecryptor),
-        Arc::new(PassthroughTransferPayloadEncryptor),
-        PathBuf::from("/tmp/test-file-cache"),
-        PairingRuntimeOwner::CurrentProcess,
-    )
-    .expect("create adapter");
-
-    // Step 1: peer discovered (mDNS)
-    let discovered_time = Utc::now() - chrono::Duration::seconds(60);
-    {
-        let mut caches = adapter.caches.write().await;
-        caches.upsert_discovered(
-            "peer-paired".to_string(),
-            vec!["/ip4/192.168.1.5/tcp/4001".to_string()],
-            discovered_time,
-        );
-    }
-
-    // Step 2: 30s pass (pairing completes), peer's last_seen is now stale.
-    // In the real system, mDNS may not re-emit Discovered for peers still
-    // in its internal cache (TTL 30s), so last_seen stays old.
-    // The FakeResolver returns Trusted, simulating completed pairing.
-
-    // Step 3: verify peer is still sendable
-    let peers = adapter
-        .list_sendable_peers()
-        .await
-        .expect("list sendable peers");
-
-    assert_eq!(
-        peers.len(),
-        1,
-        "paired peer must be sendable even when last_seen is old (pairing delay scenario)"
-    );
-    assert_eq!(peers[0].peer_id, "peer-paired");
-    assert!(
-        peers[0].is_paired,
-        "peer must be marked as paired after pairing completes"
-    );
 }
 
 /// Regression: verifies that `discovered_peers` count is not reduced by any

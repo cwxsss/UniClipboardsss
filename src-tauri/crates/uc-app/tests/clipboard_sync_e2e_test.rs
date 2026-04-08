@@ -285,18 +285,6 @@ impl PeerDirectoryPort for InProcessNetwork {
         Ok(vec![self.remote_peer.clone()])
     }
 
-    async fn list_sendable_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-        Ok(vec![DiscoveredPeer {
-            peer_id: self.remote_peer.peer_id.clone(),
-            device_name: Some(self.remote_peer.device_name.clone()),
-            device_id: None,
-            addresses: Vec::new(),
-            discovered_at: self.remote_peer.connected_at,
-            last_seen: self.remote_peer.connected_at,
-            is_paired: true,
-        }])
-    }
-
     fn local_peer_id(&self) -> String {
         self.local_peer_id.clone()
     }
@@ -341,19 +329,40 @@ impl NetworkEventPort for InProcessNetwork {
     }
 }
 
-struct NoopPairedDeviceRepo;
+struct FakePairedDeviceRepo {
+    devices: Vec<PairedDevice>,
+}
+
+impl FakePairedDeviceRepo {
+    fn with_trusted(peer_ids: &[&str]) -> Self {
+        Self {
+            devices: peer_ids
+                .iter()
+                .map(|id| PairedDevice {
+                    peer_id: PeerId::from(*id),
+                    pairing_state: PairingState::Trusted,
+                    identity_fingerprint: "test-fp".to_string(),
+                    paired_at: Utc::now(),
+                    last_seen_at: None,
+                    device_name: format!("Device-{id}"),
+                    sync_settings: None,
+                })
+                .collect(),
+        }
+    }
+}
 
 #[async_trait]
-impl PairedDeviceRepositoryPort for NoopPairedDeviceRepo {
+impl PairedDeviceRepositoryPort for FakePairedDeviceRepo {
     async fn get_by_peer_id(
         &self,
-        _peer_id: &PeerId,
+        peer_id: &PeerId,
     ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
-        Ok(None)
+        Ok(self.devices.iter().find(|d| d.peer_id == *peer_id).cloned())
     }
 
     async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
-        Ok(vec![])
+        Ok(self.devices.clone())
     }
 
     async fn upsert(&self, _device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
@@ -565,7 +574,7 @@ async fn clipboard_sync_e2e_dual_peer_in_process() -> Result<()> {
         identity_a,
         settings.clone(),
         transfer_encryptor.clone(),
-        Arc::new(NoopPairedDeviceRepo),
+        Arc::new(FakePairedDeviceRepo::with_trusted(&["peer-a", "peer-b"])),
     );
     let outbound_b = SyncOutboundClipboardUseCase::new(
         clipboard_b.clone(),
@@ -575,7 +584,7 @@ async fn clipboard_sync_e2e_dual_peer_in_process() -> Result<()> {
         identity_b,
         settings,
         transfer_encryptor,
-        Arc::new(NoopPairedDeviceRepo),
+        Arc::new(FakePairedDeviceRepo::with_trusted(&["peer-a", "peer-b"])),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -680,7 +689,7 @@ async fn clipboard_sync_e2e_image_single_rep() -> Result<()> {
         identity_a,
         settings,
         transfer_encryptor,
-        Arc::new(NoopPairedDeviceRepo),
+        Arc::new(FakePairedDeviceRepo::with_trusted(&["peer-a", "peer-b"])),
     );
 
     let png_clone = png_bytes.clone();
@@ -786,7 +795,7 @@ async fn clipboard_sync_e2e_windows_image_multi_rep() -> Result<()> {
         identity_a,
         settings,
         transfer_encryptor,
-        Arc::new(NoopPairedDeviceRepo),
+        Arc::new(FakePairedDeviceRepo::with_trusted(&["peer-a", "peer-b"])),
     );
 
     let png_clone = png_bytes.clone();
@@ -900,18 +909,6 @@ impl PeerDirectoryPort for CapturingNetwork {
         Ok(vec![self.remote_peer.clone()])
     }
 
-    async fn list_sendable_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-        Ok(vec![DiscoveredPeer {
-            peer_id: self.remote_peer.peer_id.clone(),
-            device_name: Some(self.remote_peer.device_name.clone()),
-            device_id: None,
-            addresses: Vec::new(),
-            discovered_at: self.remote_peer.connected_at,
-            last_seen: self.remote_peer.connected_at,
-            is_paired: true,
-        }])
-    }
-
     fn local_peer_id(&self) -> String {
         self.local_peer_id.clone()
     }
@@ -1021,7 +1018,7 @@ async fn test_outbound_file_transfers_empty_when_file_sync_disabled() -> Result<
         identity_a,
         settings,
         transfer_encryptor,
-        Arc::new(NoopPairedDeviceRepo),
+        Arc::new(FakePairedDeviceRepo::with_trusted(&["peer-a", "peer-b"])),
     );
 
     // Simulate what runtime.rs does when file_sync_enabled=false:
@@ -1088,7 +1085,7 @@ async fn test_outbound_file_transfers_present_when_file_sync_enabled() -> Result
         identity_a,
         settings,
         transfer_encryptor,
-        Arc::new(NoopPairedDeviceRepo),
+        Arc::new(FakePairedDeviceRepo::with_trusted(&["peer-a", "peer-b"])),
     );
 
     // Simulate what runtime.rs does when file_sync_enabled=true:
