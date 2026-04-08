@@ -5,6 +5,7 @@
   "windows": ["main", "quick-panel"],
   "permissions": [
     "core:default",
+    "core:webview:allow-set-webview-zoom",
     "core:window:allow-start-dragging",
     "core:window:allow-is-fullscreen",
     "core:window:allow-is-maximized",

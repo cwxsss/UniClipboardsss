@@ -13,8 +13,6 @@ describe('ui scale', () => {
 
   beforeEach(() => {
     localStorage.clear()
-    document.documentElement.style.removeProperty('zoom')
-    document.documentElement.style.removeProperty('--app-ui-scale')
   })
 
   afterEach(() => {
@@ -22,8 +20,6 @@ describe('ui scale', () => {
       Object.defineProperty(window, 'localStorage', originalLocalStorageDescriptor)
     }
     window.localStorage.clear()
-    document.documentElement.style.removeProperty('zoom')
-    document.documentElement.style.removeProperty('--app-ui-scale')
   })
 
   it('applies the stored scale on startup', () => {
@@ -32,7 +28,6 @@ describe('ui scale', () => {
     const cleanup = initializeUiScale()
 
     expect(readStoredUiScale()).toBe(1.2)
-    expect(document.documentElement.style.getPropertyValue('--app-ui-scale')).toBe('1.2')
 
     cleanup()
   })
@@ -42,7 +37,6 @@ describe('ui scale', () => {
 
     expect(adjustUiScale('in')).toBe(1.1)
     expect(localStorage.getItem(UI_SCALE_STORAGE_KEY)).toBe('1.1')
-    expect(document.documentElement.style.getPropertyValue('--app-ui-scale')).toBe('1.1')
 
     expect(adjustUiScale('out')).toBe(DEFAULT_UI_SCALE)
     expect(localStorage.getItem(UI_SCALE_STORAGE_KEY)).toBe('1')
@@ -64,8 +58,7 @@ describe('ui scale', () => {
     } as Storage
 
     expect(readStoredUiScale(throwingStorage)).toBe(DEFAULT_UI_SCALE)
-    const cleanup = initializeUiScale(document.documentElement, throwingStorage)
-    expect(document.documentElement.style.getPropertyValue('--app-ui-scale')).toBe('')
+    const cleanup = initializeUiScale(throwingStorage)
     cleanup()
   })
 
@@ -81,8 +74,7 @@ describe('ui scale', () => {
       length: 0,
     } as Storage
 
-    expect(() => setUiScale(1.1, document.documentElement, throwingStorage)).not.toThrow()
-    expect(document.documentElement.style.getPropertyValue('--app-ui-scale')).toBe('1.1')
+    expect(() => setUiScale(1.1, throwingStorage)).not.toThrow()
   })
 
   it('continues initialization when window.localStorage getter throws', () => {

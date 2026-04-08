@@ -13,12 +13,10 @@ describe('GlobalShortcuts zoom integration', () => {
   beforeEach(() => {
     vi.mocked(useShortcut).mockReset()
     localStorage.clear()
-    document.documentElement.style.removeProperty('zoom')
   })
 
   afterEach(() => {
     localStorage.clear()
-    document.documentElement.style.removeProperty('zoom')
   })
 
   it('registers zoom shortcuts and their handlers update the stored scale', () => {
@@ -39,7 +37,6 @@ describe('GlobalShortcuts zoom integration', () => {
 
     zoomIn?.handler()
     expect(localStorage.getItem(UI_SCALE_STORAGE_KEY)).toBe('1.1')
-    expect(document.documentElement.style.getPropertyValue('--app-ui-scale')).toBe('1.1')
 
     zoomOut?.handler()
     expect(localStorage.getItem(UI_SCALE_STORAGE_KEY)).toBe('1')

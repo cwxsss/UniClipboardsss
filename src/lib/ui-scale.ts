@@ -2,7 +2,6 @@ export const UI_SCALE_STORAGE_KEY = 'uniclipboard.uiScale'
 export const DEFAULT_UI_SCALE = 1
 export const MIN_UI_SCALE = 0.8
 export const MAX_UI_SCALE = 1.5
-export const UI_SCALE_STEP = 0.1
 const UI_SCALE_CHANGED_EVENT = 'uniclipboard:ui-scale-changed'
 
 export type UiScaleOption = {
@@ -23,6 +22,8 @@ const roundUiScale = (value: number): number => Math.round(value * 100) / 100
 
 export const clampUiScale = (value: number): number =>
   Math.min(MAX_UI_SCALE, Math.max(MIN_UI_SCALE, roundUiScale(value)))
+
+const isTauriEnv = (): boolean => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 const getStorage = (storage?: Storage | null): Storage | null => {
   if (storage !== undefined) {
@@ -82,23 +83,33 @@ export const readStoredUiScale = (storage?: Storage | null): number => {
   return clampUiScale(parsed)
 }
 
-export const applyUiScale = (
-  scale: number,
-  root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null
-): number => {
+/**
+ * Apply zoom via Tauri's native webview API to avoid coordinate mismatches
+ * that CSS `zoom` causes with pointer-based libraries (resizable panels, context menus).
+ */
+export const applyUiScale = (scale: number): number => {
   const normalized = clampUiScale(scale)
-  if (!root) {
-    return normalized
+
+  if (isTauriEnv()) {
+    import('@tauri-apps/api/webview')
+      .then(({ getCurrentWebview }) => {
+        console.log('[ui-scale] calling setZoom with', normalized)
+        getCurrentWebview()
+          .setZoom(normalized)
+          .then(() => {
+            console.log('[ui-scale] setZoom succeeded')
+          })
+          .catch(err => {
+            console.error('[ui-scale] setZoom failed:', err)
+          })
+      })
+      .catch(err => {
+        console.error('[ui-scale] import webview failed:', err)
+      })
+  } else {
+    console.log('[ui-scale] not in Tauri env, skipping setZoom')
   }
 
-  if (normalized === DEFAULT_UI_SCALE) {
-    root.style.removeProperty('zoom')
-    root.style.removeProperty('--app-ui-scale')
-    return normalized
-  }
-
-  root.style.setProperty('zoom', String(normalized))
-  root.style.setProperty('--app-ui-scale', String(normalized))
   return normalized
 }
 
@@ -139,37 +150,32 @@ export const subscribeUiScaleChanges = (listener: (scale: number) => void): (() 
   }
 }
 
-export const setUiScale = (
-  scale: number,
-  root?: HTMLElement | null,
-  storage?: Storage | null
-): number => {
-  const normalized = applyUiScale(scale, root)
+export const setUiScale = (scale: number, storage?: Storage | null): number => {
+  const normalized = applyUiScale(scale)
   persistUiScale(normalized, storage)
   dispatchUiScaleChanged()
   return normalized
 }
 
-export const adjustUiScale = (
-  direction: 'in' | 'out',
-  root?: HTMLElement | null,
-  storage?: Storage | null
-): number => {
+export const adjustUiScale = (direction: 'in' | 'out', storage?: Storage | null): number => {
   const current = readStoredUiScale(storage)
-  const delta = direction === 'in' ? UI_SCALE_STEP : -UI_SCALE_STEP
-  return setUiScale(current + delta, root, storage)
+
+  if (direction === 'in') {
+    const next = UI_SCALE_OPTIONS.find(o => o.value > current)
+    return next ? setUiScale(next.value, storage) : current
+  } else {
+    const prev = [...UI_SCALE_OPTIONS].reverse().find(o => o.value < current)
+    return prev ? setUiScale(prev.value, storage) : current
+  }
 }
 
-export const initializeUiScale = (
-  root: HTMLElement | null = typeof document !== 'undefined' ? document.documentElement : null,
-  storage?: Storage | null
-): (() => void) => {
-  if (!root || typeof window === 'undefined') {
+export const initializeUiScale = (storage?: Storage | null): (() => void) => {
+  if (typeof window === 'undefined') {
     return () => {}
   }
 
   const syncFromStorage = () => {
-    applyUiScale(readStoredUiScale(storage), root)
+    applyUiScale(readStoredUiScale(storage))
   }
 
   syncFromStorage()
