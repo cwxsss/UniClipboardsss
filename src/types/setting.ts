@@ -4,7 +4,6 @@
 
 /**
  * 主题模式 - 对应 Rust Theme enum
- * serde(rename_all = "snake_case") 会将枚举序列化为小写下划线形式
  */
 export type Theme = 'light' | 'dark' | 'system'
 
@@ -17,14 +16,15 @@ export type UpdateChannel = 'stable' | 'alpha' | 'beta' | 'rc'
  * 通用设置 - 对应 Rust GeneralSettings
  */
 export interface GeneralSettings {
-  auto_start: boolean
-  silent_start: boolean
-  auto_check_update: boolean
+  autoStart: boolean
+  silentStart: boolean
+  autoCheckUpdate: boolean
   theme: Theme
-  theme_color?: string | null
-  language?: string | null
-  device_name?: string | null
-  update_channel?: UpdateChannel | null
+  themeColor: string | null
+  language: string | null
+  deviceName: string | null
+  updateChannel?: UpdateChannel | null
+  telemetryEnabled: boolean
 }
 
 /**
@@ -35,8 +35,8 @@ export interface ContentTypes {
   image: boolean
   link: boolean
   file: boolean
-  code_snippet: boolean
-  rich_text: boolean
+  codeSnippet: boolean
+  richText: boolean
 }
 
 /**
@@ -48,10 +48,9 @@ export type SyncFrequency = 'realtime' | 'interval'
  * 同步设置 - 对应 Rust SyncSettings
  */
 export interface SyncSettings {
-  auto_sync: boolean
-  sync_frequency: SyncFrequency
-  content_types: ContentTypes
-  max_file_size_mb: number
+  autoSync: boolean
+  syncFrequency: SyncFrequency
+  contentTypes: ContentTypes
 }
 
 /**
@@ -62,20 +61,20 @@ export type DurationSeconds = number
 
 /**
  * 保留规则 - 对应 Rust RetentionRule enum
- * Rust 使用 serde externally-tagged + rename_all="snake_case"
- * 序列化为 { "by_age": { "max_age": 2592000 } } 格式
+ * Rust 使用 serde externally-tagged + camelCase
+ * 序列化为 { "byAge": { "maxAge": 2592000 } } 格式
  */
 export type RetentionRule =
-  | { by_age: { max_age: DurationSeconds } }
-  | { by_count: { max_items: number } }
-  | { by_content_type: { content_type: ContentTypes; max_age: DurationSeconds } }
-  | { by_total_size: { max_bytes: number } }
-  | { sensitive: { max_age: DurationSeconds } }
+  | { byAge: { maxAge: DurationSeconds } }
+  | { byCount: { maxItems: number } }
+  | { byContentType: { contentType: ContentTypes; maxAge: DurationSeconds } }
+  | { byTotalSize: { maxBytes: number } }
+  | { sensitive: { maxAge: DurationSeconds } }
 
 /**
  * 规则评估方式 - 对应 Rust RuleEvaluation enum
  */
-export type RuleEvaluation = 'any_match' | 'all_match'
+export type RuleEvaluation = 'anyMatch' | 'allMatch'
 
 /**
  * 保留策略 - 对应 Rust RetentionPolicy
@@ -83,7 +82,7 @@ export type RuleEvaluation = 'any_match' | 'all_match'
 export interface RetentionPolicy {
   enabled: boolean
   rules: RetentionRule[]
-  skip_pinned: boolean
+  skipPinned: boolean
   evaluation: RuleEvaluation
 }
 
@@ -91,46 +90,46 @@ export interface RetentionPolicy {
  * 安全设置 - 对应 Rust SecuritySettings
  */
 export interface SecuritySettings {
-  encryption_enabled: boolean
-  passphrase_configured: boolean
-  auto_unlock_enabled: boolean
+  encryptionEnabled: boolean
+  passphraseConfigured: boolean
+  autoUnlockEnabled: boolean
 }
 
 /**
  * 配对设置 - 对应 Rust PairingSettings
  */
 export interface PairingSettings {
-  step_timeout: DurationSeconds
-  user_verification_timeout: DurationSeconds
-  session_timeout: DurationSeconds
-  max_retries: number
-  protocol_version: string
+  stepTimeout: DurationSeconds
+  userVerificationTimeout: DurationSeconds
+  sessionTimeout: DurationSeconds
+  maxRetries: number
+  protocolVersion: string
 }
 
 /**
  * File sync settings - corresponds to Rust FileSyncSettings
  */
 export interface FileSyncSettings {
-  file_sync_enabled: boolean
-  small_file_threshold: number // bytes, default 10MB
-  max_file_size: number // bytes, default 5GB
-  file_cache_quota_per_device: number // bytes, default 500MB
-  file_retention_hours: number // default 24
-  file_auto_cleanup: boolean // default true
+  fileSyncEnabled: boolean
+  smallFileThreshold: number // bytes, default 10MB
+  maxFileSize: number // bytes, default 5GB
+  fileCacheQuotaPerDevice: number // bytes, default 500MB
+  fileRetentionHours: number // default 24
+  fileAutoCleanup: boolean // default true
 }
 
 /**
  * 应用设置 - 对应 Rust Settings
  */
 export interface Settings {
-  schema_version: number
+  schemaVersion: number
   general: GeneralSettings
   sync: SyncSettings
-  retention_policy: RetentionPolicy
+  retentionPolicy: RetentionPolicy
   security: SecuritySettings
   pairing: PairingSettings
-  keyboard_shortcuts?: Record<string, string | string[]>
-  file_sync?: FileSyncSettings
+  keyboardShortcuts?: Record<string, string | string[]>
+  fileSync?: FileSyncSettings
 }
 
 // ============================================================================

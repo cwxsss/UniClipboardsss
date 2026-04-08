@@ -1,15 +1,13 @@
 //! # DaemonApp
 //!
-//! Top-level daemon lifecycle: binds the RPC socket, starts services,
+//! Top-level daemon lifecycle: starts the HTTP API server and services,
 //! waits for shutdown signal, and tears down in reverse order.
 
-use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::net::UnixListener;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -19,26 +17,59 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{CoreUseCases, SessionReadyEmitter};
 
-use crate::api::auth::{load_or_create_auth_token, resolve_daemon_token_path};
+use crate::api::auth::load_or_create_auth_token;
 use crate::api::event_emitter::DaemonApiEventEmitter;
 use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
 use crate::api::types::DaemonWsEvent;
 use crate::pairing::host::DaemonPairingHost;
-use crate::process_metadata::{remove_pid_file, write_current_pid};
-use crate::rpc::server::{check_or_remove_stale_socket, run_rpc_accept_loop};
+use crate::process_metadata::DaemonPidManager;
+use crate::security::{cleanup_rate_limiter_task, SecurityState};
 use crate::service::DaemonService;
 use crate::state::RuntimeState;
 
 /// Recover encryption session from disk/keyring if encryption has been initialized.
 ///
-/// Returns Ok(true) when encryption is Initialized and the session was successfully unlocked.
-/// Returns Ok(false) when encryption is Uninitialized (first run — no recovery needed).
-/// Returns Err if encryption is initialized but recovery fails (daemon must not start).
+/// # Parameters
+///
+/// - `runtime`: The core runtime
+/// - `auto_unlock_enabled`: Whether to attempt automatic unlock via keyring
+///
+/// # Returns
+///
+/// - `Ok(true)`: Session was successfully unlocked (encryption initialized + unlock succeeded)
+/// - `Ok(false)`: Session was NOT unlocked — either encryption is uninitialized, or
+///   `auto_unlock_enabled` is false while encryption is initialized (requires manual unlock)
+/// - `Err`: Unlock failed (daemon must not start in this case)
 ///
 /// This function is `pub` so `main.rs` can call it BEFORE constructing `DaemonApp`,
 /// using the result to decide whether to start `PeerDiscoveryWorker` immediately or defer.
-pub async fn recover_encryption_session(runtime: &CoreRuntime) -> anyhow::Result<bool> {
+pub async fn recover_encryption_session(
+    runtime: &CoreRuntime,
+    auto_unlock_enabled: bool,
+) -> anyhow::Result<bool> {
+    // Check encryption state first — needed to determine behavior when auto_unlock is disabled.
+    let encryption_state = runtime
+        .wiring_deps()
+        .security
+        .encryption_state
+        .load_state()
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to load encryption state: {}", e))?;
+
+    // When auto-unlock is disabled, skip the unlock attempt entirely.
+    // If encryption is already initialized, return false so the GUI can prompt for manual unlock.
+    // If encryption is uninitialized, return false (no unlock needed — setup flow handles it).
+    if !auto_unlock_enabled {
+        if encryption_state == uc_core::security::state::EncryptionState::Initialized {
+            info!("Auto-unlock disabled via settings — skipping encryption session recovery");
+        } else {
+            info!("Encryption not initialized, skipping session recovery");
+        }
+        return Ok(false);
+    }
+
+    // Auto-unlock enabled: attempt to recover the session from keyring.
     let usecases = CoreUseCases::new(runtime);
     let uc = usecases.auto_unlock_encryption_session();
     match uc.execute().await {
@@ -91,7 +122,7 @@ impl SessionReadyEmitter for SetupCompletionEmitter {
 
 /// Main daemon application.
 ///
-/// Owns the service list, RPC state, and cancellation token.
+/// Owns the service list and cancellation token.
 /// Services use `Arc<dyn DaemonService>` (not `Box`) to allow cloning
 /// for `tokio::spawn` `'static` requirement.
 ///
@@ -105,7 +136,6 @@ pub struct DaemonApp {
     event_tx: broadcast::Sender<DaemonWsEvent>,
     api_pairing_host: Option<Arc<DaemonPairingHost>>,
     space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
-    socket_path: PathBuf,
     cancel: CancellationToken,
     // Deferred services: clipboard-watcher, inbound-clipboard-sync, and peer-discovery
     // are deferred until the GUI signals ready (--gui-managed) or setup completes (uninitialized).
@@ -135,7 +165,6 @@ impl DaemonApp {
         event_tx: broadcast::Sender<DaemonWsEvent>,
         api_pairing_host: Option<Arc<DaemonPairingHost>>,
         space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
-        socket_path: PathBuf,
     ) -> Self {
         Self {
             services,
@@ -144,7 +173,6 @@ impl DaemonApp {
             event_tx,
             api_pairing_host,
             space_access_orchestrator,
-            socket_path,
             cancel: CancellationToken::new(),
             deferred_services: Vec::new(),
             deferred_ready_notify: None,
@@ -169,7 +197,6 @@ impl DaemonApp {
         event_tx: broadcast::Sender<DaemonWsEvent>,
         api_pairing_host: Option<Arc<DaemonPairingHost>>,
         space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
-        socket_path: PathBuf,
         _encryption_unlocked: bool,
         deferred_services: Vec<Arc<dyn DaemonService>>,
         deferred_ready_notify: Option<Arc<tokio::sync::Notify>>,
@@ -189,7 +216,6 @@ impl DaemonApp {
             event_tx,
             api_pairing_host,
             space_access_orchestrator,
-            socket_path,
             cancel: CancellationToken::new(),
             deferred_services,
             deferred_ready_notify,
@@ -198,31 +224,41 @@ impl DaemonApp {
         }
     }
 
-    /// Run the daemon: bind RPC socket, start services, wait for shutdown, cleanup.
+    /// Run the daemon: start the HTTP API server and services, wait for shutdown, cleanup.
     ///
     /// NOTE: `recover_encryption_session` is called in `main.rs` BEFORE constructing
     /// `DaemonApp`, so it does NOT appear here (Phase 67: moved for deferred-start logic).
     pub async fn run(mut self) -> anyhow::Result<()> {
         info!("uniclipboard-daemon starting");
 
-        // 1. Bind RPC socket FIRST (fail-fast before starting services)
-        check_or_remove_stale_socket(&self.socket_path).await?;
-        let listener = UnixListener::bind(&self.socket_path)?;
-        let token_base_dir = self
-            .socket_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/tmp"));
-        let token_path = resolve_daemon_token_path(token_base_dir);
+        // 1. Load or create auth token (stored alongside PID metadata)
+        let storage_paths = self.runtime.storage_paths();
+        let token_path = storage_paths.daemon_token_path();
+        debug!(
+            token_path = %token_path.display(),
+            "loading daemon auth token"
+        );
         let auth_token = load_or_create_auth_token(&token_path)?;
-        let _pid_file_guard = DaemonPidFileGuard::activate()?;
+        let pid_manager = DaemonPidManager::new(storage_paths.clone());
+        let _pid_file_guard = DaemonPidFileGuard::activate(pid_manager.clone())?;
+        let pid = pid_manager.write_current_pid()?;
+        info!(pid, "wrote daemon pid metadata");
         let query_service = Arc::new(DaemonQueryService::new(
             self.runtime.clone(),
             self.state.clone(),
         ));
 
-        // 2. Build API state using the shared event_tx (same channel used by all services)
-        let mut api_state =
-            DaemonApiState::new(query_service, auth_token, Some(self.runtime.clone()));
+        // 2. Build security state and register daemon's own PID
+        let security = Arc::new(SecurityState::new());
+        security.register_pid(pid).await;
+
+        // 3. Build API state using the shared event_tx (same channel used by all services)
+        let mut api_state = DaemonApiState::new(
+            query_service,
+            auth_token,
+            Some(self.runtime.clone()),
+            security,
+        );
         // Replace the default-created channel with our shared one so all services
         // emit to the same broadcast channel that WebSocket subscribers receive from.
         api_state.event_tx = self.event_tx.clone();
@@ -248,7 +284,7 @@ impl DaemonApp {
         self.runtime
             .set_event_emitter(Arc::new(DaemonApiEventEmitter::new(self.event_tx.clone())));
 
-        info!("uniclipboard-daemon running, RPC at {:?}", self.socket_path);
+        info!("uniclipboard-daemon running");
 
         // 4. Start ALL services uniformly via JoinSet
         let mut service_tasks = JoinSet::new();
@@ -258,12 +294,15 @@ impl DaemonApp {
             service_tasks.spawn(async move { svc.start(token).await });
         }
 
-        // 5. Spawn RPC accept loop and HTTP server as infrastructure tasks
-        let rpc_state = self.state.clone();
-        let rpc_cancel = self.cancel.child_token();
-        let mut rpc_handle = tokio::spawn(run_rpc_accept_loop(listener, rpc_state, rpc_cancel));
+        // 5. Spawn HTTP server and rate limiter cleanup task
+        // Clone security and cancel BEFORE moving api_state into the HTTP server
+        let security_for_cleanup = api_state.security.clone();
+        let cleanup_cancel = self.cancel.child_token();
         let http_cancel = self.cancel.child_token();
         let mut http_handle = tokio::spawn(run_http_server(api_state, http_cancel));
+
+        // Rate limiter cleanup: runs every 5 minutes, respects cleanup_cancel
+        let _cleanup_handle = cleanup_rate_limiter_task(security_for_cleanup, cleanup_cancel);
 
         // Prepare deferred services start
         let mut deferred = std::mem::take(&mut self.deferred_services);
@@ -283,10 +322,6 @@ impl DaemonApp {
                     }
                 } => {
                     info!("external shutdown signal received (parent process gone)");
-                    break;
-                }
-                result = &mut rpc_handle => {
-                    warn!("RPC accept loop exited unexpectedly: {:?}", result);
                     break;
                 }
                 result = &mut http_handle => {
@@ -335,10 +370,7 @@ impl DaemonApp {
         .await
         .ok();
 
-        // Await RPC and HTTP with timeout
-        tokio::time::timeout(Duration::from_secs(5), rpc_handle)
-            .await
-            .ok();
+        // Await HTTP server with timeout
         tokio::time::timeout(Duration::from_secs(5), http_handle)
             .await
             .ok();
@@ -351,31 +383,26 @@ impl DaemonApp {
             }
         }
 
-        // Remove socket file
-        if let Err(e) = std::fs::remove_file(&self.socket_path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                warn!("failed to remove socket file: {}", e);
-            }
-        }
-
         info!("uniclipboard-daemon stopped");
         Ok(())
     }
 }
 
-struct DaemonPidFileGuard;
+struct DaemonPidFileGuard {
+    manager: DaemonPidManager,
+}
 
 impl DaemonPidFileGuard {
-    fn activate() -> anyhow::Result<Self> {
-        let pid = write_current_pid()?;
+    fn activate(manager: DaemonPidManager) -> anyhow::Result<Self> {
+        let pid = manager.write_current_pid()?;
         info!(pid, "wrote daemon pid metadata");
-        Ok(Self)
+        Ok(Self { manager })
     }
 }
 
 impl Drop for DaemonPidFileGuard {
     fn drop(&mut self) {
-        if let Err(error) = remove_pid_file() {
+        if let Err(error) = self.manager.remove_pid_file() {
             warn!(error = %error, "failed to remove daemon pid metadata");
         }
     }
@@ -407,9 +434,10 @@ async fn wait_for_shutdown_signal() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::process_metadata::{read_pid_file, resolve_daemon_pid_path};
+    use crate::process_metadata::DaemonPidManager;
     use std::path::Path;
     use std::sync::{Mutex, OnceLock};
+    use uc_app::app_paths::AppPaths;
 
     fn with_daemon_env<T>(
         profile: Option<&str>,
@@ -475,10 +503,10 @@ mod tests {
         );
     }
 
-    /// Verifies that main.rs calls recover_encryption_session before DaemonApp construction.
+    /// Verifies that entrypoint.rs calls recover_encryption_session before DaemonApp construction.
     #[test]
     fn main_calls_recovery_before_daemon_construction() {
-        let main_source = include_str!("main.rs");
+        let main_source = include_str!("entrypoint.rs");
         let recovery_pos = main_source
             .find("recover_encryption_session")
             .expect("main.rs must call recover_encryption_session");
@@ -838,19 +866,25 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
 
         with_daemon_env(Some("a"), Some(tempdir.path()), || {
+            let app_paths = AppPaths::with_base_data_local_dir(tempdir.path().into());
+            let mgr = DaemonPidManager::new(app_paths);
+            let pid_path = mgr.pid_path_for_testing();
+
             {
-                let _guard = DaemonPidFileGuard::activate().expect("pid guard should activate");
+                let _guard =
+                    DaemonPidFileGuard::activate(mgr.clone()).expect("pid guard should activate");
                 assert_eq!(
-                    read_pid_file()
+                    mgr.read_pid_file()
                         .expect("pid file should be readable")
                         .expect("pid file should exist"),
                     std::process::id()
                 );
-                assert!(resolve_daemon_pid_path().exists());
+                assert!(pid_path.exists());
             }
 
-            assert!(!resolve_daemon_pid_path().exists());
-            assert!(read_pid_file()
+            assert!(!pid_path.exists());
+            assert!(mgr
+                .read_pid_file()
                 .expect("pid file read should succeed")
                 .is_none());
         });

@@ -2,12 +2,20 @@ import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
 import {
   getLocalDeviceInfo,
   getPairedPeersWithStatus,
-  getDeviceSyncSettings,
-  updateDeviceSyncSettings as updateDeviceSyncSettingsApi,
   type LocalDeviceInfo,
   type PairedPeer,
-  type SyncSettings,
-} from '@/api/p2p'
+} from '@/api/daemon/pairing'
+import {
+  getDeviceSyncSettings,
+  updateDeviceSyncSettings as updateDeviceSyncSettingsApi,
+  type DeviceSyncSettings as SyncSettings,
+} from '@/api/daemon/device'
+
+export interface DiscoveredPeer {
+  id: string
+  deviceName: string | null
+  device_type: string
+}
 
 interface DevicesState {
   // 当前设备
@@ -23,6 +31,10 @@ interface DevicesState {
   // 每设备同步设置
   deviceSyncSettings: Record<string, SyncSettings>
   deviceSyncSettingsLoading: Record<string, boolean>
+
+  // Discovered peers (from peer discovery scan)
+  discoveredPeers: DiscoveredPeer[]
+  discoveredPeersLoading: boolean
 }
 
 const initialState: DevicesState = {
@@ -34,6 +46,8 @@ const initialState: DevicesState = {
   pairedDevicesError: null,
   deviceSyncSettings: {},
   deviceSyncSettingsLoading: {},
+  discoveredPeers: [],
+  discoveredPeersLoading: false,
 }
 
 // 异步 Thunk Actions
@@ -78,8 +92,8 @@ export const updateDeviceSyncSettings = createAsyncThunk(
     { rejectWithValue }
   ) => {
     try {
-      await updateDeviceSyncSettingsApi(peerId, settings)
-      return { peerId, settings }
+      const resolved = await updateDeviceSyncSettingsApi(peerId, settings)
+      return { peerId, settings: resolved }
     } catch {
       return rejectWithValue('Failed to update device sync settings')
     }
@@ -110,6 +124,33 @@ const devicesSlice = createSlice({
     },
     updatePeerDeviceName: (state, action: { payload: { peerId: string; deviceName: string } }) => {
       const peer = state.pairedDevices.find(d => d.peerId === action.payload.peerId)
+      if (peer) {
+        peer.deviceName = action.payload.deviceName
+      }
+    },
+    setDiscoveredPeers: (
+      state,
+      action: {
+        payload: DiscoveredPeer[] | ((prev: DiscoveredPeer[]) => DiscoveredPeer[])
+      }
+    ) => {
+      if (typeof action.payload === 'function') {
+        // Functional updater: append new peers to existing state without stale closure.
+        // Used by useDeviceDiscovery when diffPeerSnapshots reports newly discovered peers.
+        state.discoveredPeers = action.payload(state.discoveredPeers)
+      } else {
+        state.discoveredPeers = action.payload
+      }
+      state.discoveredPeersLoading = false
+    },
+    clearDiscoveredPeers: state => {
+      state.discoveredPeers = []
+    },
+    updateDiscoveredPeerDeviceName: (
+      state,
+      action: { payload: { peerId: string; deviceName: string } }
+    ) => {
+      const peer = state.discoveredPeers.find(p => p.id === action.payload.peerId)
       if (peer) {
         peer.deviceName = action.payload.deviceName
       }
@@ -187,5 +228,8 @@ export const {
   clearPairedDevicesError,
   updatePeerConnectionStatus,
   updatePeerDeviceName,
+  setDiscoveredPeers,
+  clearDiscoveredPeers,
+  updateDiscoveredPeerDeviceName,
 } = devicesSlice.actions
 export default devicesSlice.reducer

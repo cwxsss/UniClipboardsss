@@ -9,15 +9,14 @@ pub mod assembly;
 pub mod background_tasks;
 pub mod builders;
 pub mod config;
-pub mod config_resolution;
 pub mod init;
 pub mod non_gui_runtime;
 pub mod tracing;
 
 // Re-export primary public items
 pub use assembly::{
-    build_file_transfer_orchestrator, build_setup_orchestrator, get_storage_paths,
-    resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
+    build_clipboard_write_coordinator, build_file_transfer_orchestrator, build_setup_orchestrator,
+    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
     wire_dependencies_with_identity_store, BackgroundRuntimeDeps, HostEventSetupPort,
     SetupAssemblyPorts, WiredDependencies, WiringError, WiringResult,
 };
@@ -27,7 +26,6 @@ pub use builders::{
     CliBootstrapContext, DaemonBootstrapContext, GuiBootstrapContext,
 };
 pub use config::load_config;
-pub use config_resolution::{resolve_app_config, resolve_config_path, ConfigResolutionError};
 pub use init::ensure_default_device_name;
 pub use non_gui_runtime::{
     build_cli_runtime, build_non_gui_runtime, build_non_gui_runtime_with_emitter,

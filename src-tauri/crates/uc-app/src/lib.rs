@@ -8,7 +8,6 @@ pub use tracing;
 pub mod app_paths;
 pub mod deps;
 pub mod models;
-pub mod realtime;
 pub mod runtime;
 pub mod task_registry;
 pub mod testing;

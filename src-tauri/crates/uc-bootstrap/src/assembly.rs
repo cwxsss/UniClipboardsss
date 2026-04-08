@@ -36,8 +36,9 @@ use uc_core::ports::*;
 use uc_core::settings::model::Settings;
 use uc_infra::blob::BlobWriter;
 use uc_infra::clipboard::{
+    clipboard_change_origin, init_clipboard_change_origin, new_in_memory_change_origin,
     ClipboardPayloadResolver, ClipboardRepresentationNormalizer, DurableSpoolQueue,
-    InMemoryClipboardChangeOrigin, InfraThumbnailGenerator, RepresentationCache, SpoolManager,
+    InfraThumbnailGenerator, RepresentationCache, SpoolManager,
 };
 use uc_infra::config::ClipboardStorageConfig;
 use uc_infra::db::executor::DieselSqliteExecutor;
@@ -74,35 +75,6 @@ use uc_platform::identity_store::FileIdentityStore;
 use uc_platform::ports::{AppDirsPort, IdentityStorePort};
 
 use tokio::sync::mpsc;
-
-/// A minimal logging event emitter used as the initial placeholder inside the shared
-/// emitter cell created at wire time.
-///
-/// Logs event type names only (no payload content, which may be sensitive).
-/// After Tauri setup or non-GUI runtime construction, callers replace this with
-/// a `TauriEventEmitter` or keep it as-is for non-GUI paths.
-struct WireTimeLoggingEmitter;
-
-impl HostEventEmitterPort for WireTimeLoggingEmitter {
-    fn emit(
-        &self,
-        event: uc_core::ports::host_event_emitter::HostEvent,
-    ) -> Result<(), uc_core::ports::host_event_emitter::EmitError> {
-        use uc_core::ports::host_event_emitter::HostEvent;
-        let event_type = match &event {
-            HostEvent::Clipboard(_) => "clipboard",
-            HostEvent::PeerDiscovery(_) => "peer_discovery",
-            HostEvent::PeerConnection(_) => "peer_connection",
-            HostEvent::Transfer(_) => "transfer",
-            HostEvent::Pairing(_) => "pairing",
-            HostEvent::Realtime(_) => "realtime",
-            HostEvent::Setup(_) => "setup",
-            HostEvent::SpaceAccess(_) => "space_access",
-        };
-        tracing::debug!(event_type, "wire-time host event (pre-bootstrap)");
-        Ok(())
-    }
-}
 
 /// Result type for wiring operations
 pub type WiringResult<T> = Result<T, WiringError>;
@@ -153,8 +125,11 @@ pub struct BackgroundRuntimeDeps {
     pub worker_retry_max_attempts: u32,
     pub worker_retry_backoff_ms: u64,
     /// File transfer lifecycle orchestrator. Holds a clone of the shared emitter_cell so
-    /// it automatically sees emitter swaps (LoggingEventEmitter → TauriEventEmitter).
+    /// it automatically sees emitter swaps (LoggingEventEmitter → DaemonApiEventEmitter).
     pub file_transfer_orchestrator: Arc<uc_app::usecases::file_sync::FileTransferOrchestrator>,
+    /// Single write boundary for all programmatic clipboard writes.
+    /// Centralises guard-registration + write + cleanup-on-error.
+    pub clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
 }
 
 /// Fully wired dependencies plus background runtime components.
@@ -171,7 +146,7 @@ pub struct WiredDependencies {
 /// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
 ///
 /// Uses Arc<RwLock<...>> shared cell so that HostEventSetupPort always reads the
-/// current emitter after bootstrap swaps it from LoggingEventEmitter to TauriEventEmitter.
+/// current emitter after bootstrap swaps it from LoggingEventEmitter to DaemonApiEventEmitter.
 /// This eliminates the stale emitter bug described in STATE.md Known Bugs.
 #[derive(Clone)]
 pub struct HostEventSetupPort {
@@ -599,55 +574,30 @@ pub fn get_storage_paths(
     resolve_app_paths(&platform_dirs, config)
 }
 
-/// Resolve the effective `AppDirs` by applying config overrides.
-pub fn resolve_app_dirs(
-    platform_dirs: &uc_core::app_dirs::AppDirs,
-    config: &AppConfig,
-) -> uc_core::app_dirs::AppDirs {
-    let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
-    let config_overrides_root = !config.database_path.as_os_str().is_empty() && !is_in_memory_db;
-
-    if config_overrides_root {
-        let raw_root = config
-            .database_path
-            .parent()
-            .unwrap_or(&config.database_path)
-            .to_path_buf();
-        let abs_root = if raw_root.is_relative() {
-            std::env::current_dir().unwrap_or_default().join(&raw_root)
-        } else {
-            raw_root
-        };
-        let app_data_root = apply_profile_suffix(abs_root);
-        let app_cache_root = app_data_root.join("cache");
-        uc_core::app_dirs::AppDirs {
-            app_data_root,
-            app_cache_root,
-        }
-    } else {
-        platform_dirs.clone()
-    }
-}
-
 /// Build `AppPaths` from platform dirs and config overrides.
 pub fn resolve_app_paths(
     platform_dirs: &uc_core::app_dirs::AppDirs,
     config: &AppConfig,
 ) -> WiringResult<uc_app::app_paths::AppPaths> {
-    let resolved_dirs = resolve_app_dirs(platform_dirs, config);
-    let mut paths = uc_app::app_paths::AppPaths::from_app_dirs(&resolved_dirs);
+    let mut paths = uc_app::app_paths::AppPaths::from_app_dirs(platform_dirs);
 
     let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
 
     if is_in_memory_db {
         paths.db_path = config.database_path.clone();
     } else if !config.database_path.as_os_str().is_empty() {
-        let db_file_name = config
-            .database_path
-            .file_name()
-            .map(|name| name.to_os_string())
-            .unwrap_or_else(|| std::ffi::OsString::from("uniclipboard.db"));
-        paths.db_path = paths.app_data_root.join(db_file_name);
+        if config.database_path.is_absolute() {
+            // Absolute path: use as-is. In production the path is already inside
+            // app_data_root_dir; tests use temp dirs and need the full path respected.
+            paths.db_path = config.database_path.clone();
+        } else {
+            let db_file_name = config
+                .database_path
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("uniclipboard.db"));
+            paths.db_path = paths.app_data_root_dir.join(db_file_name);
+        }
     }
 
     if !config.vault_key_path.as_os_str().is_empty() {
@@ -670,7 +620,7 @@ pub fn resolve_app_paths(
                 let relative = configured_vault_root
                     .strip_prefix(&configured_db_root)
                     .unwrap_or(std::path::Path::new(""));
-                paths.vault_dir = paths.app_data_root.join(relative);
+                paths.vault_dir = paths.app_data_root_dir.join(relative);
             } else {
                 paths.vault_dir = apply_profile_suffix(configured_vault_root);
             }
@@ -723,12 +673,13 @@ pub fn wire_dependencies_with_identity_store(
 
     let secure_storage =
         uc_platform::secure_storage::create_default_secure_storage_in_app_data_root(
-            paths.app_data_root.clone(),
+            paths.app_data_root_dir.clone(),
         )
         .map_err(|e| WiringError::SecureStorageInit(e.to_string()))?;
 
     let identity_store = identity_store.unwrap_or_else(|| {
-        Arc::new(FileIdentityStore::new(paths.app_data_root.clone())) as Arc<dyn IdentityStorePort>
+        Arc::new(FileIdentityStore::new(paths.app_data_root_dir.clone()))
+            as Arc<dyn IdentityStorePort>
     });
 
     let infra = create_infra_layer(db_pool, &vault_path, &settings_path, secure_storage.clone())?;
@@ -787,8 +738,10 @@ pub fn wire_dependencies_with_identity_store(
         worker_tx.clone(),
     ));
 
-    let clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort> =
-        Arc::new(InMemoryClipboardChangeOrigin::new());
+    let origin_impl = new_in_memory_change_origin();
+    init_clipboard_change_origin(origin_impl.clone());
+    let clipboard_change_origin =
+        clipboard_change_origin().expect("clipboard_change_origin not initialized");
 
     // Create payload resolver for resolving staged/processing payloads
     let payload_resolver: Arc<dyn ClipboardPayloadResolverPort> =
@@ -850,7 +803,8 @@ pub fn wire_dependencies_with_identity_store(
     // Create shared emitter cell at wire time using the logging placeholder.
     // All consumers (CoreRuntime, SetupOrchestrator, FileTransferOrchestrator)
     // hold a clone of this cell and automatically see the emitter after any swap.
-    let initial_emitter: Arc<dyn HostEventEmitterPort> = Arc::new(WireTimeLoggingEmitter);
+    let initial_emitter: Arc<dyn HostEventEmitterPort> =
+        Arc::new(crate::non_gui_runtime::LoggingHostEventEmitter);
     let emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>> =
         Arc::new(std::sync::RwLock::new(initial_emitter));
 
@@ -858,6 +812,11 @@ pub fn wire_dependencies_with_identity_store(
         deps.storage.file_transfer_repo.clone(),
         emitter_cell.clone(),
         deps.system.clock.clone(),
+    );
+
+    let clipboard_write_coordinator = build_clipboard_write_coordinator(
+        deps.clipboard.system_clipboard.clone(),
+        deps.clipboard.clipboard_change_origin.clone(),
     );
 
     Ok(WiredDependencies {
@@ -875,6 +834,7 @@ pub fn wire_dependencies_with_identity_store(
             worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
             file_transfer_orchestrator,
+            clipboard_write_coordinator,
         },
         emitter_cell,
     })
@@ -1038,7 +998,7 @@ impl SetupAssemblyPorts {
 /// Constructs a `FileTransferOrchestrator` for file transfer lifecycle management.
 ///
 /// Uses the shared `emitter_cell` so the orchestrator automatically sees emitter swaps
-/// (e.g., `LoggingHostEventEmitter` → `TauriEventEmitter` after Tauri setup).
+/// (e.g., `LoggingHostEventEmitter` → `DaemonApiEventEmitter` after Tauri setup).
 pub fn build_file_transfer_orchestrator(
     file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
     emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
@@ -1051,6 +1011,21 @@ pub fn build_file_transfer_orchestrator(
         tracker,
         emitter_cell,
         clock,
+    ))
+}
+
+/// Constructs a `ClipboardWriteCoordinator` — the single write boundary for all
+/// programmatic clipboard writes.
+///
+/// Centralises the guard-registration + write + cleanup-on-error pattern
+/// (previously duplicated across restore_clipboard_selection, sync_inbound, copy_file_to_clipboard).
+pub fn build_clipboard_write_coordinator(
+    system_clipboard: Arc<dyn uc_core::ports::clipboard::SystemClipboardPort>,
+    clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+) -> Arc<uc_app::usecases::ClipboardWriteCoordinator> {
+    Arc::new(uc_app::usecases::ClipboardWriteCoordinator::new(
+        system_clipboard,
+        clipboard_change_origin,
     ))
 }
 

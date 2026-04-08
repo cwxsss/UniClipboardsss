@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useClipboardEventStream } from './useClipboardEventStream'
 import { useEncryptionSessionState } from './useEncryptionSessionState'
-import { getClipboardItems, OrderBy } from '@/api/clipboardItems'
 import type { ClipboardItemResponse } from '@/api/clipboardItems'
+import { getClipboardEntries } from '@/api/daemon/clipboard'
+import { transformDaemonDtoToItemResponse } from '@/lib/clipboard-transform'
 
 const PAGE_SIZE = 50
 
@@ -22,34 +23,35 @@ export function useClipboardCollection(): ClipboardCollectionResult {
   const reload = useCallback(async () => {
     if (!encryptionReady) {
       setItems([])
-      setLoading(false)
+      setLoading(!isLocked)
       return
     }
 
     setLoading(true)
     try {
-      const result = await getClipboardItems(OrderBy.ActiveTimeDesc, PAGE_SIZE, 0)
+      const result = await getClipboardEntries(PAGE_SIZE, 0)
       if (result.status === 'not_ready') {
         setItems([])
         return
       }
-      setItems(result.items)
+      const transformedItems = result.entries?.map(transformDaemonDtoToItemResponse) ?? []
+      setItems(transformedItems)
     } catch (err) {
       console.error('Failed to load clipboard items:', err)
     } finally {
       setLoading(false)
     }
-  }, [encryptionReady])
+  }, [encryptionReady, isLocked])
 
   useEffect(() => {
     if (!encryptionReady) {
       setItems([])
-      setLoading(false)
+      setLoading(!isLocked)
       return
     }
 
     void reload()
-  }, [encryptionReady, reload])
+  }, [encryptionReady, isLocked, reload])
 
   useClipboardEventStream({
     enabled: encryptionReady,

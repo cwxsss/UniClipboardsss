@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { SetupError } from '@/api/setup'
-import type { DiscoveredPeer, ScanPhase } from '@/hooks/useDeviceDiscovery'
+import type { DiscoveredPeer } from '@/store/slices/devicesSlice'
+import type { ScanPhase } from '@/hooks/useDeviceDiscovery'
 
 export type { DiscoveredPeer, ScanPhase }
 export interface StepProps {

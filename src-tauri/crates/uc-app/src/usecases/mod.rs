@@ -31,6 +31,7 @@ pub mod start_network;
 pub mod start_network_after_unlock;
 pub mod storage;
 pub mod sync_planner;
+pub mod unlock_encryption_with_passphrase;
 pub mod update_settings;
 pub mod verify_keychain_access;
 
@@ -57,8 +58,13 @@ pub use pairing::{
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator, SetupPairingFacadePort};
 pub use start_network::StartNetwork;
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
+pub use unlock_encryption_with_passphrase::{
+    UnlockEncryptionWithPassphrase, UnlockWithPassphraseError,
+};
 pub use update_settings::UpdateSettings;
 pub use verify_keychain_access::VerifyKeychainAccess;
+
+pub use clipboard::clipboard_write_coordinator::{ClipboardWriteCoordinator, ClipboardWriteIntent};
 
 pub use file_sync::{
     EarlyCompletionCache, EarlyCompletionInfo, FileTransferOrchestrator, SyncInboundFileUseCase,
@@ -289,6 +295,19 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
+    /// Get the UnlockEncryptionWithPassphrase use case.
+    pub fn unlock_encryption_with_passphrase(
+        &self,
+    ) -> crate::usecases::UnlockEncryptionWithPassphrase {
+        crate::usecases::UnlockEncryptionWithPassphrase::from_ports(
+            self.runtime.deps.security.encryption_state.clone(),
+            self.runtime.deps.security.key_scope.clone(),
+            self.runtime.deps.security.key_material.clone(),
+            self.runtime.deps.security.encryption.clone(),
+            self.runtime.deps.security.encryption_session.clone(),
+        )
+    }
+
     /// Get the SetupOrchestrator.
     pub fn setup_orchestrator(&self) -> Arc<crate::usecases::SetupOrchestrator> {
         self.runtime.setup_orchestrator().clone()
@@ -330,17 +349,22 @@ impl<'a> CoreUseCases<'a> {
     /// Restore clipboard selection to system clipboard.
     pub fn restore_clipboard_selection(
         &self,
-    ) -> crate::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase
-    {
-        crate::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase::new(
+    ) -> anyhow::Result<
+        crate::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase,
+    > {
+        let coordinator = self
+            .runtime
+            .clipboard_write_coordinator()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("clipboard_write_coordinator not available — clipboard writes require daemon/GUI runtime"))?;
+        Ok(crate::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase::new(
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
-            self.runtime.deps.clipboard.system_clipboard.clone(),
+            coordinator,
             self.runtime.deps.clipboard.selection_repo.clone(),
             self.runtime.deps.clipboard.representation_repo.clone(),
             self.runtime.deps.storage.blob_store.clone(),
-            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
             self.runtime.clipboard_integration_mode,
-        )
+        ))
     }
 
     /// Touch clipboard entry active time.
@@ -396,14 +420,29 @@ impl<'a> CoreUseCases<'a> {
     }
 
     /// Create a `CopyFileToClipboardUseCase`.
-    pub fn copy_file_to_clipboard(&self) -> crate::usecases::file_sync::CopyFileToClipboardUseCase {
-        crate::usecases::file_sync::CopyFileToClipboardUseCase::new(
+    pub fn copy_file_to_clipboard(
+        &self,
+    ) -> anyhow::Result<crate::usecases::file_sync::CopyFileToClipboardUseCase> {
+        let coordinator = self
+            .runtime
+            .clipboard_write_coordinator()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("clipboard_write_coordinator not available — clipboard writes require daemon/GUI runtime"))?;
+        Ok(crate::usecases::file_sync::CopyFileToClipboardUseCase::new(
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
             self.runtime.deps.clipboard.representation_repo.clone(),
-            self.runtime.deps.clipboard.system_clipboard.clone(),
-            self.runtime.deps.clipboard.clipboard_change_origin.clone(),
+            coordinator,
             self.runtime.clipboard_integration_mode,
-        )
+        ))
+    }
+
+    /// Get the `ClipboardWriteCoordinator` (clipboard write boundary).
+    ///
+    /// Returns `None` for CLI-only runtimes that do not perform clipboard writes.
+    pub fn clipboard_write_coordinator(
+        &self,
+    ) -> Option<Arc<crate::usecases::ClipboardWriteCoordinator>> {
+        self.runtime.clipboard_write_coordinator().cloned()
     }
 
     /// Create a `CleanupExpiredFilesUseCase`.

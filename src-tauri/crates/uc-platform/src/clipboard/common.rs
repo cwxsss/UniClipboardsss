@@ -192,16 +192,24 @@ impl CommonClipboardImpl {
             }
         }
 
+        // Track file paths captured via ContentFormat::Files. After the image
+        // block runs, we use these to opportunistically load image bytes when
+        // the clipboard only contains a file reference to an image (e.g. many
+        // screenshot tools write a temporary PNG file and copy its path).
+        let mut captured_file_paths: Vec<std::path::PathBuf> = Vec::new();
+
         if ctx.has(ContentFormat::Files) {
             match ctx.get_files() {
                 Ok(files) => {
                     // clipboard-rs returns raw OS paths (e.g. "C:\Users\mark\file.jpg" on Windows).
                     // Normalize to file:// URIs so downstream `extract_file_paths_from_snapshot`
                     // can parse them on all platforms via url::Url::parse().
-                    let uris: Vec<String> = files
-                        .into_iter()
+                    let paths: Vec<std::path::PathBuf> =
+                        files.iter().map(std::path::PathBuf::from).collect();
+                    let uris: Vec<String> = paths
+                        .iter()
                         .filter_map(|path| {
-                            url::Url::from_file_path(&path).ok().map(|u| u.to_string())
+                            url::Url::from_file_path(path).ok().map(|u| u.to_string())
                         })
                         .collect();
                     let bytes = uris.join("\n").into_bytes();
@@ -216,6 +224,7 @@ impl CommonClipboardImpl {
                         Some(MimeType("text/uri-list".to_string())),
                         bytes,
                     ));
+                    captured_file_paths = paths;
                 }
                 Err(err) => {
                     warn!(error = %err, "Failed to read files representation");
@@ -373,6 +382,77 @@ impl CommonClipboardImpl {
         } else {
             // Log at debug level -- this is normal when clipboard has only text
             debug!("clipboard-rs reports no ContentFormat::Image available");
+        }
+
+        // If the clipboard carried file references (but no image bytes were
+        // captured above) and any of those files look like image files,
+        // load their bytes and add them as image representations. This makes
+        // screenshot tools that copy a temp PNG path render as a real image
+        // preview in the UI rather than showing a filename.
+        if !image_already_read && !captured_file_paths.is_empty() {
+            // Safety cap to avoid blocking capture on huge files.
+            const MAX_IMAGE_FILE_BYTES: u64 = 20 * 1024 * 1024; // 20 MB
+
+            for path in &captured_file_paths {
+                let ext = match path.extension().and_then(|e| e.to_str()) {
+                    Some(e) => e.to_ascii_lowercase(),
+                    None => continue,
+                };
+                let mime = match ext.as_str() {
+                    "png" => "image/png",
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "gif" => "image/gif",
+                    "webp" => "image/webp",
+                    "bmp" => "image/bmp",
+                    "tif" | "tiff" => "image/tiff",
+                    _ => continue,
+                };
+                let meta = match std::fs::metadata(path) {
+                    Ok(m) => m,
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            path = %path.display(),
+                            "Failed to stat clipboard image file"
+                        );
+                        continue;
+                    }
+                };
+                if meta.len() == 0 || meta.len() > MAX_IMAGE_FILE_BYTES {
+                    debug!(
+                        path = %path.display(),
+                        size_bytes = meta.len(),
+                        "Skipping clipboard image file (size out of range)"
+                    );
+                    continue;
+                }
+                match std::fs::read(path) {
+                    Ok(bytes) => {
+                        debug!(
+                            path = %path.display(),
+                            size_bytes = bytes.len(),
+                            mime = mime,
+                            "Loaded image bytes from clipboard file path"
+                        );
+                        reps.push(ObservedClipboardRepresentation::new(
+                            RepresentationId::new(),
+                            "image-from-file".into(),
+                            Some(MimeType(mime.to_string())),
+                            bytes,
+                        ));
+                        // One image representation is enough to drive the
+                        // preview; avoid duplicating for multi-file selections.
+                        break;
+                    }
+                    Err(err) => {
+                        warn!(
+                            error = %err,
+                            path = %path.display(),
+                            "Failed to read clipboard image file"
+                        );
+                    }
+                }
+            }
         }
 
         // raw fallback

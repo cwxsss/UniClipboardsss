@@ -1,26 +1,23 @@
+use anyhow::Result;
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use uc_daemon::api::auth::{resolve_daemon_token_path, DaemonConnectionInfo};
+use uc_daemon::api::auth::DaemonConnectionInfo;
 use uc_daemon::api::types::HealthResponse;
 use uc_daemon::process_metadata::read_pid_file;
-use uc_daemon::socket::{resolve_daemon_socket_path, try_resolve_daemon_http_addr};
+use uc_daemon::socket::try_resolve_daemon_http_addr;
 use uc_daemon::DAEMON_API_REVISION;
 use uc_daemon_client::DaemonConnectionState;
 
 use super::runtime::DaemonBootstrapOwnershipState;
-use crate::commands::startup::StartupBarrier;
 pub use uc_daemon_client::daemon_lifecycle::terminate_local_daemon_pid;
 use uc_daemon_client::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
 
-pub const DAEMON_CONNECTION_EVENT: &str = "daemon://connection-info";
 const HEALTH_PATH: &str = "/health";
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -53,28 +50,6 @@ pub enum DaemonBootstrapError {
     StartupTimeout { timeout_ms: u64 },
     #[error("failed to load daemon connection info: {0}")]
     ConnectionInfo(anyhow::Error),
-    #[error("main webview window is not available")]
-    MainWindowUnavailable,
-    #[error("failed to emit daemon connection info event: {0}")]
-    Emit(anyhow::Error),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DaemonConnectionPayload {
-    base_url: String,
-    ws_url: String,
-    token: String,
-}
-
-impl From<&DaemonConnectionInfo> for DaemonConnectionPayload {
-    fn from(value: &DaemonConnectionInfo) -> Self {
-        Self {
-            base_url: value.base_url.clone(),
-            ws_url: value.ws_url.clone(),
-            token: value.token.clone(),
-        }
-    }
 }
 
 pub async fn bootstrap_daemon_connection<R: Runtime>(
@@ -214,41 +189,6 @@ pub async fn supervise_daemon<R: Runtime>(
             }
         }
     }
-}
-
-pub fn emit_daemon_connection_info_if_ready<R: Runtime>(
-    app_handle: &AppHandle<R>,
-    state: &DaemonConnectionState,
-    startup_barrier: &StartupBarrier,
-) -> Result<bool, DaemonBootstrapError> {
-    if !startup_barrier.frontend_ready() {
-        return Ok(false);
-    }
-
-    let connection_info = match state.get() {
-        Some(connection_info) => connection_info,
-        None => return Ok(false),
-    };
-
-    if !startup_barrier.try_begin_daemon_connection_emit() {
-        return Ok(false);
-    }
-
-    let window = match app_handle.get_webview_window("main") {
-        Some(window) => window,
-        None => {
-            startup_barrier.release_daemon_connection_emit();
-            return Err(DaemonBootstrapError::MainWindowUnavailable);
-        }
-    };
-
-    let payload = DaemonConnectionPayload::from(&connection_info);
-    if let Err(error) = window.emit(DAEMON_CONNECTION_EVENT, payload) {
-        startup_barrier.release_daemon_connection_emit();
-        return Err(DaemonBootstrapError::Emit(anyhow::Error::new(error)));
-    }
-
-    Ok(true)
 }
 
 pub async fn bootstrap_daemon_connection_with_hooks<
@@ -554,31 +494,8 @@ fn classify_health_response(health: HealthResponse) -> ProbeOutcome {
 }
 
 fn load_daemon_connection_info() -> Result<DaemonConnectionInfo, DaemonBootstrapError> {
-    let token_path = resolve_token_path();
-    let token = std::fs::read_to_string(&token_path).map_err(|error| {
-        DaemonBootstrapError::ConnectionInfo(anyhow::Error::new(error).context(format!(
-            "failed to read daemon auth token at {}",
-            token_path.display()
-        )))
-    })?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        return Err(DaemonBootstrapError::ConnectionInfo(anyhow::anyhow!(
-            "daemon auth token at {} is empty",
-            token_path.display()
-        )));
-    }
-
-    let addr = try_resolve_daemon_http_addr().map_err(|error| {
-        DaemonBootstrapError::ConnectionInfo(
-            error.context("failed to resolve profile-aware daemon HTTP address"),
-        )
-    })?;
-    Ok(DaemonConnectionInfo {
-        base_url: format!("http://{}:{}", addr.ip(), addr.port()),
-        ws_url: format!("ws://{}:{}/ws", addr.ip(), addr.port()),
-        token,
-    })
+    uc_daemon_client::resolve_connection_info_from_env()
+        .map_err(|e| DaemonBootstrapError::ConnectionInfo(e))
 }
 
 fn terminate_incompatible_daemon_from_pid_file() -> Result<(), DaemonBootstrapError> {
@@ -599,13 +516,33 @@ fn terminate_incompatible_daemon_from_pid_file() -> Result<(), DaemonBootstrapEr
 fn spawn_daemon_process<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(CommandChild, u32), DaemonBootstrapError> {
-    let sidecar_cmd = app
+    let mut sidecar_cmd = app
         .shell()
         .sidecar("uniclipboard-daemon")
         .map_err(|e| {
             DaemonBootstrapError::Spawn(anyhow::Error::msg(format!("sidecar create: {e}")))
         })?
         .args(["--gui-managed"]);
+
+    // Tauri v2 sidecar does NOT inherit the parent environment by default.
+    // Forward observability-related env vars so the daemon can initialize its
+    // own Seq / Sentry / log-profile layers and emit structured events
+    // directly — otherwise the only daemon logs reaching Seq would be the
+    // stdout-forwarding wrapper below, which loses target/level/span/fields.
+    for key in [
+        "UC_SEQ_URL",
+        "UC_SEQ_API_KEY",
+        "UC_LOG_PROFILE",
+        "SENTRY_DSN",
+        "RUST_LOG",
+        "RUST_BACKTRACE",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            if !value.is_empty() {
+                sidecar_cmd = sidecar_cmd.env(key, value);
+            }
+        }
+    }
 
     let (rx, child) = sidecar_cmd.spawn().map_err(|e| {
         DaemonBootstrapError::Spawn(anyhow::Error::msg(format!("sidecar spawn: {e}")))
@@ -615,23 +552,36 @@ fn spawn_daemon_process<R: Runtime>(
     tracing::info!(pid, "daemon sidecar spawned successfully");
 
     // Drain stdout/stderr events to prevent pipe blocking.
-    // Daemon's tracing output goes to stdout (uc-observability console layer).
+    //
+    // The daemon owns its own tracing subscriber (console + JSON file + Seq
+    // when UC_SEQ_URL is forwarded above) — it has already done filtering and
+    // pretty-formatting for the console output before writing to its stdout.
+    // Structured events reach Seq directly from the daemon process.
+    //
+    // Tauri's sidecar API pipes the child's stdio (it never inherits the
+    // parent tty), so we must actively drain `rx`. Write the already-formatted
+    // daemon lines to our own stdout/stderr VERBATIM — do NOT re-wrap them in
+    // `tracing::*!` events: doing so flattens target/level/span into a `line`
+    // string field and produces a noise event in Seq that duplicates the real
+    // structured record the daemon already sent.
+    //
     // CommandChild holds stdin open, maintaining the D-06 stdin tether.
     tauri::async_runtime::spawn(async move {
+        use std::io::Write;
         let mut rx = rx;
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(line) => {
-                    tracing::debug!(
-                        line = %String::from_utf8_lossy(&line),
-                        "daemon sidecar stdout"
-                    );
+                    let mut out = std::io::stdout().lock();
+                    let _ = out.write_all(&line);
+                    let _ = out.write_all(b"\n");
+                    let _ = out.flush();
                 }
                 CommandEvent::Stderr(line) => {
-                    tracing::debug!(
-                        line = %String::from_utf8_lossy(&line),
-                        "daemon sidecar stderr"
-                    );
+                    let mut err = std::io::stderr().lock();
+                    let _ = err.write_all(&line);
+                    let _ = err.write_all(b"\n");
+                    let _ = err.flush();
                 }
                 CommandEvent::Terminated(payload) => {
                     tracing::warn!(?payload, "daemon sidecar terminated");
@@ -648,15 +598,10 @@ fn spawn_daemon_process<R: Runtime>(
     Ok((child, pid))
 }
 
-fn resolve_token_path() -> PathBuf {
-    let socket_path = resolve_daemon_socket_path();
-    let token_base_dir = socket_path.parent().unwrap_or_else(|| Path::new("/tmp"));
-    resolve_daemon_token_path(token_base_dir)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::sync::{Mutex, OnceLock};
@@ -675,6 +620,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous_profile = std::env::var("UC_PROFILE").ok();
         let previous_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+        let previous_token_path = std::env::var("UNICLIPBOARD_DAEMON_TOKEN_PATH").ok();
 
         match profile {
             Some(profile) => std::env::set_var("UC_PROFILE", profile),
@@ -683,6 +629,16 @@ mod tests {
         match xdg_runtime_dir {
             Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
             None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+        // Point UNICLIPBOARD_DAEMON_TOKEN_PATH directly at the fixture token file so
+        // resolve_token_path() doesn't fall back to the real app_data_root on the CI runner.
+        // Fixture filename convention: uniclipboard-daemon-{profile}.token
+        match (profile, xdg_runtime_dir) {
+            (Some(p), Some(dir)) => {
+                let token_path = dir.join(format!("uniclipboard-daemon-{p}.token"));
+                std::env::set_var("UNICLIPBOARD_DAEMON_TOKEN_PATH", token_path);
+            }
+            _ => std::env::remove_var("UNICLIPBOARD_DAEMON_TOKEN_PATH"),
         }
 
         let result = f();
@@ -694,6 +650,10 @@ mod tests {
         match previous_xdg_runtime_dir {
             Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
             None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
+        match previous_token_path {
+            Some(path) => std::env::set_var("UNICLIPBOARD_DAEMON_TOKEN_PATH", path),
+            None => std::env::remove_var("UNICLIPBOARD_DAEMON_TOKEN_PATH"),
         }
 
         result
@@ -908,66 +868,28 @@ mod tests {
     }
 
     #[test]
-    fn emitted_event_payload_uses_camel_case_keys() {
-        let payload = DaemonConnectionPayload::from(&DaemonConnectionInfo {
-            base_url: "http://127.0.0.1:42715".to_string(),
-            ws_url: "ws://127.0.0.1:42715/ws".to_string(),
-            token: "secret".to_string(),
-        });
-
-        let value = serde_json::to_value(payload).unwrap();
-
-        assert_eq!(value["baseUrl"], "http://127.0.0.1:42715");
-        assert_eq!(value["wsUrl"], "ws://127.0.0.1:42715/ws");
-        assert_eq!(value["token"], "secret");
-        assert!(value.get("base_url").is_none());
-        assert!(value.get("ws_url").is_none());
-    }
-
-    #[test]
-    fn resolve_token_path_tracks_uc_profile() {
-        let tempdir = tempfile::tempdir().expect("tempdir should be created");
-
-        let token_path_a = with_daemon_env(Some("a"), Some(tempdir.path()), resolve_token_path);
-        let token_path_b = with_daemon_env(Some("b"), Some(tempdir.path()), resolve_token_path);
-
-        assert_eq!(
-            token_path_a.file_name().and_then(std::ffi::OsStr::to_str),
-            Some("uniclipboard-daemon-a.token")
-        );
-        assert_eq!(
-            token_path_b.file_name().and_then(std::ffi::OsStr::to_str),
-            Some("uniclipboard-daemon-b.token")
-        );
-        assert_ne!(token_path_a, token_path_b);
-    }
-
-    #[test]
     fn load_daemon_connection_info_uses_profile_specific_urls() {
         let tempdir = tempfile::tempdir().expect("tempdir should be created");
 
+        let token_path_a = tempdir.path().join("token-a");
+        let token_path_b = tempdir.path().join("token-b");
+
         let connection_a = with_daemon_env(Some("a"), Some(tempdir.path()), || {
-            std::fs::write(
-                tempdir.path().join("uniclipboard-daemon-a.token"),
-                "token-a",
-            )
-            .expect("token fixture should be written");
+            std::fs::write(&token_path_a, "token-a").expect("token fixture should be written");
+            std::env::set_var("UNICLIPBOARD_DAEMON_TOKEN_PATH", &token_path_a);
             load_daemon_connection_info().expect("profile a connection info should load")
         });
         let connection_b = with_daemon_env(Some("b"), Some(tempdir.path()), || {
-            std::fs::write(
-                tempdir.path().join("uniclipboard-daemon-b.token"),
-                "token-b",
-            )
-            .expect("token fixture should be written");
+            std::fs::write(&token_path_b, "token-b").expect("token fixture should be written");
+            std::env::set_var("UNICLIPBOARD_DAEMON_TOKEN_PATH", &token_path_b);
             load_daemon_connection_info().expect("profile b connection info should load")
         });
 
         assert_eq!(connection_a.base_url, "http://127.0.0.1:42716");
-        assert_eq!(connection_a.ws_url, "ws://127.0.0.1:42716/ws");
+        assert_eq!(connection_a.ws_url, "http://127.0.0.1:42716/ws");
         assert_eq!(connection_a.token, "token-a");
         assert_eq!(connection_b.base_url, "http://127.0.0.1:42717");
-        assert_eq!(connection_b.ws_url, "ws://127.0.0.1:42717/ws");
+        assert_eq!(connection_b.ws_url, "http://127.0.0.1:42717/ws");
         assert_eq!(connection_b.token, "token-b");
     }
 }

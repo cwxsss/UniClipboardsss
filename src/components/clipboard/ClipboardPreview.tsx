@@ -14,6 +14,7 @@ import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { DisplayClipboardItem } from './ClipboardContent'
 import TransferProgressBar from './TransferProgressBar'
+import VirtualizedText from './VirtualizedText'
 import {
   ClipboardCodeItem,
   ClipboardFileItem,
@@ -21,19 +22,21 @@ import {
   ClipboardLinkItem,
   ClipboardTextItem,
   fetchClipboardResourceText,
-  getClipboardEntryResource,
-  getResourceImageUrl,
+  resolveResourceImageUrl,
 } from '@/api/clipboardItems'
+import { getClipboardEntryResource } from '@/api/daemon/clipboard'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { resolveUcUrl } from '@/lib/protocol'
 import { useAppSelector } from '@/store/hooks'
 import {
   selectEntryTransferStatus,
   selectTransferByEntryId,
 } from '@/store/slices/fileTransferSlice'
 import { formatFileSize } from '@/utils'
+
+/** Threshold above which we switch to virtualized rendering for performance. */
+const LARGE_TEXT_THRESHOLD = 50_000
 
 interface ClipboardPreviewProps {
   item: DisplayClipboardItem | null
@@ -81,7 +84,7 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
       if (textContent?.has_detail) {
         setIsLoadingText(true)
         getClipboardEntryResource(item.id)
-          .then(resource => fetchClipboardResourceText(resource))
+          .then(resource => (resource ? fetchClipboardResourceText(resource) : ''))
           .then(text => {
             if (!cancelled) setFullText(text)
           })
@@ -96,7 +99,7 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
       setIsLoadingImage(true)
       getClipboardEntryResource(item.id)
         .then(resource => {
-          if (!cancelled) setImageUrl(getResourceImageUrl(resource))
+          if (!cancelled) setImageUrl(resource ? resolveResourceImageUrl(resource) : null)
         })
         .catch(e => console.error('Failed to load image:', e))
         .finally(() => {
@@ -123,6 +126,9 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
       case 'text': {
         const textItem = item.content as ClipboardTextItem
         const displayText = fullText ?? textItem.display_text
+        if (!isLoadingText && displayText.length > LARGE_TEXT_THRESHOLD) {
+          return <VirtualizedText text={displayText} className="h-full" />
+        }
         return (
           <div className="p-4">
             {isLoadingText ? (
@@ -139,10 +145,9 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
         )
       }
       case 'image': {
-        const resolved = imageUrl ? resolveUcUrl(imageUrl) : null
         return (
           <div className="flex items-center justify-center p-4">
-            {isLoadingImage || !resolved ? (
+            {isLoadingImage || !imageUrl ? (
               <div className="flex flex-col items-center justify-center gap-2 h-48 w-full rounded-md bg-muted/30 border border-border/30">
                 {isLoadingImage ? (
                   <Loader2 className="h-6 w-6 text-muted-foreground/70 animate-spin" />
@@ -152,7 +157,7 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
               </div>
             ) : (
               <img
-                src={resolved}
+                src={imageUrl}
                 className="max-w-full max-h-96 object-contain rounded-md"
                 alt={t('clipboard.item.altText.clipboardImage')}
                 onLoad={e => {
@@ -419,12 +424,22 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
 
   const infoRows = renderInformation()
 
+  // Check if current content needs virtualized rendering (Virtuoso manages its own scroll)
+  const isLargeText =
+    item.type === 'text' &&
+    !isLoadingText &&
+    (fullText ?? (item.content as ClipboardTextItem).display_text).length > LARGE_TEXT_THRESHOLD
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Content preview */}
-      <ScrollArea className="flex-1 min-h-0 overflow-hidden">
-        <div className="overflow-hidden">{renderContent()}</div>
-      </ScrollArea>
+      {isLargeText ? (
+        <div className="flex-1 min-h-0 p-4">{renderContent()}</div>
+      ) : (
+        <ScrollArea className="flex-1 min-h-0 overflow-hidden">
+          <div className="overflow-hidden">{renderContent()}</div>
+        </ScrollArea>
+      )}
 
       {/* Transfer progress section (ephemeral active transfer) */}
       {effectiveStatus === 'transferring' && transfer && transfer.status === 'active' && (

@@ -1,22 +1,17 @@
-import type { CommandError, LifecycleStatusDto } from '@/api/types'
-import { invokeWithTrace } from '@/lib/tauri-command'
+/**
+ * Lifecycle API — stable facade layer delegating to daemon HTTP endpoints.
+ */
+
+import {
+  getLifecycleStatus as daemonGetLifecycleStatus,
+  retryLifecycle as daemonRetryLifecycle,
+} from '@/api/daemon/lifecycle'
+import type { LifecycleStatusDto } from '@/api/types'
 
 export async function getLifecycleStatus(): Promise<LifecycleStatusDto> {
-  try {
-    return await invokeWithTrace<LifecycleStatusDto>('get_lifecycle_status')
-  } catch (error) {
-    console.error('Failed to get lifecycle status:', error)
-    throw error
-  }
+  return daemonGetLifecycleStatus()
 }
 
 export async function retryLifecycle(): Promise<void> {
-  try {
-    await invokeWithTrace<void>('retry_lifecycle')
-  } catch (error) {
-    // In future, this may surface CommandError to callers; for now we log and rethrow.
-    const typedError = error as CommandError | unknown
-    console.error('Failed to retry lifecycle:', typedError)
-    throw error
-  }
+  return daemonRetryLifecycle()
 }

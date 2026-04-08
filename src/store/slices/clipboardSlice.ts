@@ -1,18 +1,16 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
 import { hydrateEntryTransferStatuses } from './fileTransferSlice'
-import {
-  getClipboardItems,
-  deleteClipboardItem,
-  copyClipboardItem,
-  clearClipboardItems,
-  OrderBy,
-  favoriteClipboardItem,
-  unfavoriteClipboardItem,
-  Filter,
-} from '@/api/clipboardItems'
 import type { ClipboardItemResponse, ClipboardItemsResult } from '@/api/clipboardItems'
+import { OrderBy, Filter } from '@/api/clipboardItems'
+import {
+  getClipboardEntries,
+  deleteClipboardEntry,
+  restoreClipboardEntry,
+  toggleFavorite,
+} from '@/api/daemon'
+import { transformDaemonDtoToItemResponse } from '@/lib/clipboard-transform'
 
-// 定义状态接口
+// ── State ────────────────────────────────────────────────────────
 interface ClipboardState {
   items: ClipboardItemResponse[]
   loading: boolean
@@ -54,30 +52,35 @@ export const fetchClipboardItems = createAsyncThunk<
   FetchClipboardItemsParams | undefined
 >('clipboard/fetchItems', async (params = {}, { rejectWithValue, dispatch }) => {
   try {
-    const result = await getClipboardItems(
-      params.orderBy,
-      params.limit,
-      params.offset,
-      params.filter
-    )
+    // Daemon API: GET /clipboard/entries
+    // Note: orderBy and filter are not yet supported by the daemon endpoint.
+
+    const { orderBy: _orderBy, filter: _filter, isFavorited: _isFavorited, ...rest } = params
+    const result = await getClipboardEntries(rest.limit ?? 50, rest.offset ?? 0)
 
     // Hydrate durable file transfer statuses from persisted API fields.
     // This ensures entryStatusById in fileTransferSlice is seeded on app load
     // so file entries show correct status badges immediately after restart.
-    if (result.status === 'ready') {
-      const statusEntries = result.items
-        .filter(item => item.file_transfer_status != null)
+    if (result.status === 'ready' && result.entries) {
+      const statusEntries = result.entries
+        .filter(item => item.fileTransferStatus != null)
         .map(item => ({
           entryId: item.id,
-          status: item.file_transfer_status as 'pending' | 'transferring' | 'completed' | 'failed',
-          reason: item.file_transfer_reason ?? null,
+          status: item.fileTransferStatus as 'pending' | 'transferring' | 'completed' | 'failed',
+          reason: item.fileTransferReason ?? null,
         }))
       if (statusEntries.length > 0) {
         dispatch(hydrateEntryTransferStatuses(statusEntries))
       }
     }
 
-    return { ...result, offset: params.offset ?? 0 }
+    // Transform daemon ClipboardEntriesResponse to ClipboardItemsResult shape
+    if (result.status === 'not_ready') {
+      return { status: 'not_ready', items: [], offset: params.offset ?? 0 }
+    }
+    const items: ClipboardItemResponse[] =
+      result.entries?.map(transformDaemonDtoToItemResponse) ?? []
+    return { ...result, items, status: 'ready' as const, offset: params.offset ?? 0 }
   } catch {
     return rejectWithValue('获取剪贴板内容失败')
   }
@@ -87,7 +90,8 @@ export const removeClipboardItem = createAsyncThunk(
   'clipboard/removeItem',
   async (id: string, { rejectWithValue }) => {
     try {
-      await deleteClipboardItem(id)
+      // Daemon API: DELETE /clipboard/entries/:id
+      await deleteClipboardEntry(id)
       return id
     } catch {
       return rejectWithValue('删除剪贴板内容失败')
@@ -99,11 +103,8 @@ export const toggleFavoriteItem = createAsyncThunk(
   'clipboard/toggleFavorite',
   async ({ id, isFavorited }: { id: string; isFavorited: boolean }, { rejectWithValue }) => {
     try {
-      if (isFavorited) {
-        await favoriteClipboardItem(id)
-      } else {
-        await unfavoriteClipboardItem(id)
-      }
+      // Daemon API: PUT /clipboard/entries/:id/favorite { is_favorited }
+      await toggleFavorite(id, isFavorited)
       return { id, isFavorited }
     } catch {
       return rejectWithValue('设置收藏状态失败')
@@ -115,7 +116,11 @@ export const clearAllItems = createAsyncThunk(
   'clipboard/clearAll',
   async (_, { rejectWithValue }) => {
     try {
-      await clearClipboardItems()
+      // Daemon API: POST /clipboard/entries/clear
+      // Note: We call the thunk without awaiting its result - the result contains
+      // { deletedCount, failedEntries } but we just need success/failure
+      const { clearClipboardHistory } = await import('@/api/daemon/clipboard')
+      await clearClipboardHistory()
       return true
     } catch {
       return rejectWithValue('清空剪贴板内容失败')
@@ -127,8 +132,9 @@ export const copyToClipboard = createAsyncThunk(
   'clipboard/copyItem',
   async (id: string, { rejectWithValue }) => {
     try {
-      const success = await copyClipboardItem(id)
-      return { id, success }
+      // Daemon API: POST /clipboard/restore/:id
+      await restoreClipboardEntry(id)
+      return { id, success: true }
     } catch {
       return rejectWithValue('复制到剪贴板失败')
     }

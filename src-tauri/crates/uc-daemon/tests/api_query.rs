@@ -99,10 +99,12 @@ fn paired_devices_query_does_not_expose_identity_fingerprint() {
 #[tokio::test]
 async fn pairing_session_query_returns_none_when_no_daemon_side_record_exists() {
     let runtime = build_runtime();
-    let state = Arc::new(RwLock::new(RuntimeState::new(vec![DaemonServiceSnapshot {
-        name: "rpc".to_string(),
-        health: ServiceHealth::Healthy,
-    }])));
+    let state = Arc::new(RwLock::new(RuntimeState::new(vec![
+        DaemonServiceSnapshot {
+            name: "rpc".to_string(),
+            health: ServiceHealth::Healthy,
+        },
+    ])));
     let service = DaemonQueryService::new(runtime, state);
 
     let session = service.pairing_session("missing-session").await.unwrap();

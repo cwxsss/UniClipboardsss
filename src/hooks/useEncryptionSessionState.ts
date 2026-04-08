@@ -1,53 +1,67 @@
-import { listen } from '@tauri-apps/api/event'
-import { useEffect, useState } from 'react'
-import { getEncryptionSessionStatus } from '@/api/security'
+import { useEffect, useRef, useState } from 'react'
+import { getEncryptionState } from '@/api/daemon'
+import { daemonWs } from '@/lib/daemon-ws'
 
 interface EncryptionSessionState {
   encryptionReady: boolean
   isLocked: boolean
 }
 
+const ENCRYPTION_STATE_POLL_INTERVAL_MS = 5_000
+
 export function useEncryptionSessionState(): EncryptionSessionState {
   const [state, setState] = useState<EncryptionSessionState>({
     encryptionReady: false,
     isLocked: false,
   })
+  const hasSuccessfulSyncRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
 
+    const applyStatus = (status: { initialized: boolean; sessionReady: boolean }) => {
+      hasSuccessfulSyncRef.current = true
+      const ready = !status.initialized || status.sessionReady
+      setState({
+        encryptionReady: ready,
+        isLocked: status.initialized && !status.sessionReady,
+      })
+    }
+
     const syncState = async () => {
       try {
-        const status = await getEncryptionSessionStatus()
+        const status = await getEncryptionState()
         if (cancelled) return
 
-        const ready = !status.initialized || status.session_ready
-        setState({
-          encryptionReady: ready,
-          isLocked: status.initialized && !status.session_ready,
-        })
+        applyStatus(status)
       } catch (err) {
         if (cancelled) return
-        console.error('Failed to check encryption session status:', err)
+        console.warn('Failed to check encryption session status:', err)
+        if (!hasSuccessfulSyncRef.current) {
+          setState({ encryptionReady: false, isLocked: false })
+        }
+      }
+    }
+
+    const handler = (event: { eventType: string }) => {
+      if (cancelled) return
+      if (event.eventType === 'encryption.session_ready') {
+        hasSuccessfulSyncRef.current = true
         setState({ encryptionReady: true, isLocked: false })
       }
     }
 
-    const unlistenPromise = listen<'SessionReady' | { type?: string }>(
-      'encryption://event',
-      event => {
-        const eventType = typeof event.payload === 'string' ? event.payload : event.payload?.type
-        if (eventType === 'SessionReady' && !cancelled) {
-          setState({ encryptionReady: true, isLocked: false })
-        }
-      }
-    )
+    const unsubscribe = daemonWs.subscribe(['encryption'], handler)
+    const intervalId = window.setInterval(() => {
+      void syncState()
+    }, ENCRYPTION_STATE_POLL_INTERVAL_MS)
 
     void syncState()
 
     return () => {
       cancelled = true
-      unlistenPromise.then(fn => fn())
+      window.clearInterval(intervalId)
+      unsubscribe()
     }
   }, [])
 

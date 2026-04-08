@@ -254,6 +254,50 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 - [x] **PH70-03**: `uniclipboard-cli stop` reads PID from profile-aware PID file, sends SIGTERM (Unix) / TerminateProcess (Windows), polls for process exit with timeout, and exits 0 if daemon is not running (idempotent)
 - [x] **PH70-04**: Both `start` and `stop` commands support `--json` for structured output (`{"status": "started", "pid": ...}` / `{"status": "stopped"}`) and human-readable Display output
 
+### Migrate Restore Clipboard To Daemon
+
+- [ ] **PH72-01**: Daemon exposes `POST /clipboard/restore/:entry_id` with bearer auth that calls `TouchClipboardEntryUseCase` then `RestoreClipboardSelectionUseCase`, returning 200 `{success:true}` on success, 404 on not-found, 401 on unauthorized
+- [ ] **PH72-02**: `daemon_api_strings::http_route::CLIPBOARD_RESTORE` constant exists in uc-core with value assertion test
+- [ ] **PH72-03**: `DaemonClipboardClient` in uc-daemon-client has `restore_clipboard_entry(&self, entry_id: &str) -> Result<()>` using `authorized_daemon_request`
+- [ ] **PH72-04**: GUI `restore_clipboard_entry` Tauri command proxies to daemon via `DaemonClipboardClient`, with `DaemonConnectionState` parameter; direct `RestoreClipboardSelectionUseCase` invocation and `ClipboardChangeOriginPort` usage removed
+- [ ] **PH72-05**: Daemon route handler does NOT call `SyncOutboundClipboardUseCase` or `set_next_origin` directly; outbound sync is handled by `DaemonClipboardChangeHandler` chain after OS clipboard write
+
+### Clipboard Write Coordinator
+
+- [x] **PH73-01**: `ClipboardWriteCoordinator` struct exists in `uc-app/src/usecases/clipboard/clipboard_write_coordinator.rs` with `pub async fn write(&self, snapshot: SystemClipboardSnapshot, intent: ClipboardWriteIntent) -> Result<()>` as sole clipboard write API
+- [x] **PH73-02**: `ClipboardWriteIntent` enum has `LocalRestore`, `RemotePush`, `LocalCapture` variants; coordinator uses per-intent TTL (2s for local, 60s for remote)
+- [x] **PH73-03**: Coordinator's `write()` on failure calls `consume_origin_for_snapshot_or_default` to prevent stale guard state; on RemotePush success calls `set_next_origin` for OS re-encoding protection
+- [ ] **PH73-04**: `RestoreClipboardSelectionUseCase::execute()` calls `coordinator.write(snapshot, LocalRestore)` — `restore_snapshot()` method deleted, manual guard code removed
+- [ ] **PH73-05**: `CopyFileToClipboardUseCase::execute()` calls `coordinator.write(snapshot, LocalRestore)` — manual guard code in `write_files_to_clipboard()` removed
+- [x] **PH73-06**: `InMemoryClipboardChangeOrigin` is `pub(crate)` in uc-infra — cannot be constructed outside uc-infra; factory function `new_clipboard_change_origin()` exposed instead
+- [x] **PH73-07**: All existing `change_origin.rs` unit tests pass unchanged after visibility restriction
+- [ ] **PH73-08**: `FileSyncOrchestratorWorker` accepts `Arc<ClipboardWriteCoordinator>` instead of `Arc<dyn ClipboardChangeOriginPort>` + `Arc<dyn SystemClipboardPort>` — `restore_file_to_clipboard_after_transfer` uses coordinator
+- [ ] **PH73-09**: `SyncInboundClipboardUseCase` Full-mode OS write path delegates to `coordinator.write(snapshot, RemotePush)` — `REMOTE_SNAPSHOT_HASH_TTL_MS` constant removed from sync_inbound.rs
+- [ ] **PH73-10**: `InboundClipboardSyncWorker` accepts `Arc<ClipboardWriteCoordinator>` instead of `Arc<dyn ClipboardChangeOriginPort>` and passes it to `SyncInboundClipboardUseCase::with_capture_dependencies()`
+
+### Pairing Observability
+
+- [x] **PH85-01**: A single pairing session can be followed across daemon emission, websocket bridge routing, and frontend handling using stable structured fields (session_id, event_type, stage)
+- [x] **PH85-02**: Frontend pairing/setup consumers explicitly record accept/ignore/dedupe decisions instead of silently dropping events — four log helpers: logPairingRouting, logProviderDecision, logSetupRouting, logStoreDecision
+- [x] **PH85-03**: Bridge routing decisions for `pairing.verification_required` are explicit and diagnosable via log_bridge_routing() in ws_bridge.rs with per-branch routing logs
+- [x] **PH85-04**: Pairing-driven setup transitions remain observable through to UI-facing state changes — backend regression tests in setup_api.rs and frontend realtime tests cover session filtering
+- [x] **PH85-05**: New observability records do not leak secrets, raw key material, or sensitive verification payloads — secrets logged as boolean presence flags only
+- [x] **PH85-06**: Existing low-latency race fixes remain covered and verified after observability work lands — timing assertion test with less than 1000ms guard
+
+### Daemon Settings, Encryption & Storage HTTP API
+
+- [ ] **PH76-01**: `PermissionLevel` enum in `uc-daemon/src/security/permission.rs` includes `L3Sensitive = 3` and `L4Dangerous = 4` variants with `from_u8()` support
+- [ ] **PH76-02**: `daemon_api_strings` in uc-core has `ws_topic::ENCRYPTION`, `ws_event::ENCRYPTION_SESSION_READY`, and http_route constants for all Phase 76 endpoints with value assertion tests
+- [ ] **PH76-03**: `UnlockEncryptionWithPassphrase` use case exists in uc-app with passphrase-based KEK derivation, master key unwrap, and session set; `CoreUseCases` exposes accessor
+- [ ] **PH76-04**: GET `/settings` returns all settings JSON via `CoreUseCases::get_settings()` at L2 permission
+- [ ] **PH76-05**: PUT `/settings` persists settings via `CoreUseCases::update_settings()` at L3 permission without OS-level side effects (no autostart, no keyboard shortcuts)
+- [ ] **PH76-06**: GET `/encryption/state` returns `{state, has_keyslot, requires_passphrase}` correctly mapped from `EncryptionState` and `is_ready()`
+- [ ] **PH76-07**: POST `/encryption/unlock` calls `UnlockEncryptionWithPassphrase`, broadcasts `encryption.session-ready` WS event on success, returns 401 on wrong passphrase
+- [ ] **PH76-08**: POST `/encryption/lock` clears encryption session via `EncryptionSessionPort::clear()`
+- [ ] **PH76-09**: GET `/storage/stats` returns `StorageStatsResponse` with total_size_bytes, blob_count, database_size_bytes, cache_size_bytes, spool_size_bytes
+- [ ] **PH76-10**: POST `/storage/clear-cache` with `{confirmed: true}` clears cache and returns freed_bytes
+- [ ] **PH76-11**: POST `/storage/clear-cache` without `confirmed: true` returns 400 with code `confirmation_required` (L4 body confirmation pattern)
+
 ## Out of Scope
 
 | Feature                                | Reason                                                            |
@@ -414,14 +458,36 @@ Requirements for runtime mode separation. Each maps to roadmap phases.
 | PH70-02     | 70    | Complete |
 | PH70-03     | 70    | Complete |
 | PH70-04     | 70    | Complete |
+| PH72-01     | 72    | Pending  |
+| PH72-02     | 72    | Pending  |
+| PH72-03     | 72    | Pending  |
+| PH72-04     | 72    | Pending  |
+| PH72-05     | 72    | Pending  |
+
+| PH73-01 | 73 | Complete |
+| PH73-02 | 73 | Complete |
+| PH73-03 | 73 | Complete |
+| PH73-04 | 73 | Pending |
+| PH73-05 | 73 | Pending |
+| PH73-06 | 73 | Complete |
+| PH73-07 | 73 | Complete |
+| PH73-08 | 73 | Pending |
+| PH73-09 | 73 | Pending |
+| PH73-10 | 73 | Pending |
+| PH85-01 | 85 | Complete |
+| PH85-02 | 85 | Complete |
+| PH85-03 | 85 | Complete |
+| PH85-04 | 85 | Complete |
+| PH85-05 | 85 | Complete |
+| PH85-06 | 85 | Complete |
 
 **Coverage:**
 
-- v0.4.0 requirements: 126 total
-- Mapped to phases: 126
+- v0.4.0 requirements: 147 total
+- Mapped to phases: 147
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-17_
-_Last updated: 2026-03-28 after Phase 70 planning_
+_Last updated: 2026-04-04 after Phase 85 gap closure_

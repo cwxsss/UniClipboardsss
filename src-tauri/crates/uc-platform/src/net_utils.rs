@@ -22,6 +22,11 @@ pub fn get_physical_lan_ip() -> Option<Ipv4Addr> {
     };
 
     for (iface_name, ip) in interfaces {
+        if is_loopback_interface(&iface_name) {
+            debug!(interface = %iface_name, "skip loopback interface for p2p listen");
+            continue;
+        }
+
         if let IpAddr::V4(v4) = ip {
             if v4.is_loopback() || v4.is_link_local() {
                 debug!(interface = %iface_name, ip = %v4, "skip non-routable interface address");
@@ -49,6 +54,10 @@ pub fn get_physical_lan_ip() -> Option<Ipv4Addr> {
 
     warn!("no suitable physical LAN IP found");
     None
+}
+
+fn is_loopback_interface(name: &str) -> bool {
+    name == "lo" || name.starts_with("lo")
 }
 
 fn is_tunnel_interface(name: &str) -> bool {

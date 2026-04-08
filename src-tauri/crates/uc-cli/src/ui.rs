@@ -3,6 +3,7 @@
 use console::{style, Key, Style, Term};
 use dialoguer::{Confirm, Select};
 use indicatif::{ProgressBar, ProgressStyle};
+use uc_daemon_client::setup::format_peer_id_suffix;
 
 // ── Colour palette ──────────────────────────────────────────────────
 
@@ -106,9 +107,13 @@ pub fn select(prompt: &str, items: &[String]) -> Result<usize, String> {
 }
 
 /// Show a Confirm prompt (y/n).
+///
+/// Prefixes the prompt with a `◇` glyph so it aligns with the left-side
+/// gutter used by [`step`], [`info`], and [`verification_code`].
 pub fn confirm(prompt: &str, default: bool) -> Result<bool, String> {
+    let prefixed = format!(" {} {}", style("◇").cyan(), prompt);
     Confirm::new()
-        .with_prompt(prompt)
+        .with_prompt(prefixed)
         .default(default)
         .interact_on(&Term::stderr())
         .map_err(|e| format!("confirmation cancelled: {e}"))
@@ -127,12 +132,9 @@ pub fn password_with_confirm(prompt: &str, confirm_prompt: &str) -> Result<Strin
         if p1 == p2 {
             return Ok(p1);
         }
-        let term = Term::stderr();
-        let _ = term.write_line(&format!(
-            " {}  {}",
-            red().apply_to("✗"),
-            "Passphrases do not match, try again"
-        ));
+        // Route through the canonical `error` helper so alignment/colour
+        // match every other error line in the CLI.
+        error("Passphrases do not match, try again");
     }
 }
 
@@ -207,12 +209,16 @@ fn read_masked_password(prompt: &str) -> Result<String, String> {
 // ── Spinner ─────────────────────────────────────────────────────────
 
 /// Create and start a spinner with the given message.
+///
+/// The template uses 2 spaces between glyph and message so the text column
+/// matches [`success`] / [`error`] — this way nothing visually shifts when the
+/// spinner resolves via [`spinner_finish_success`] / [`spinner_finish_error`].
 pub fn spinner(message: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["◒", "◐", "◓", "◑"])
-            .template(" {spinner} {msg}")
+            .template(" {spinner}  {msg}")
             .expect("valid spinner template"),
     );
     pb.set_message(message.to_string());
@@ -221,23 +227,20 @@ pub fn spinner(message: &str) -> ProgressBar {
 }
 
 /// Finish spinner with a success message.
+///
+/// Clears the spinner line entirely, then emits a normal [`success`] line — so
+/// alignment, colour, and spacing are controlled by a single source of truth
+/// (no duplicated spinner template).
 pub fn spinner_finish_success(pb: &ProgressBar, message: &str) {
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!(" {}  {{msg}}", Style::new().green().apply_to("✓")))
-            .expect("valid template"),
-    );
-    pb.finish_with_message(message.to_string());
+    pb.finish_and_clear();
+    success(message);
 }
 
-/// Finish spinner with an error message.
+/// Finish spinner with an error message. See [`spinner_finish_success`] for
+/// alignment rationale.
 pub fn spinner_finish_error(pb: &ProgressBar, message: &str) {
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(&format!(" {}  {{msg}}", Style::new().red().apply_to("✗")))
-            .expect("valid template"),
-    );
-    pb.finish_with_message(message.to_string());
+    pb.finish_and_clear();
+    error(message);
 }
 
 // ── Identity banner ─────────────────────────────────────────────────
@@ -248,16 +251,8 @@ pub fn identity_banner(profile: &str, mode: &str, device: &str, peer_id: &str) {
     info("Profile", profile);
     info("Mode", mode);
     info("Device", device);
-    info("Peer ID", &truncate_peer_id(peer_id));
+    info("Peer ID", &format_peer_id_suffix(peer_id));
     bar();
-}
-
-fn truncate_peer_id(peer_id: &str) -> String {
-    if peer_id.len() > 16 {
-        format!("{}…", &peer_id[..16])
-    } else {
-        peer_id.to_string()
-    }
 }
 
 // ── Verification code display ───────────────────────────────────────

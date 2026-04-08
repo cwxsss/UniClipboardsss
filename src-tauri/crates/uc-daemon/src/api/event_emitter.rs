@@ -2,8 +2,8 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::ports::host_event_emitter::{
-    EmitError, HostEvent, HostEventEmitterPort, SetupHostEvent, SpaceAccessHostEvent,
-    TransferHostEvent,
+    ClipboardHostEvent, EmitError, HostEvent, HostEventEmitterPort, SetupHostEvent,
+    SpaceAccessHostEvent, TransferHostEvent,
 };
 
 use crate::api::types::{
@@ -18,6 +18,16 @@ struct FileTransferStatusChangedPayload {
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardNewContentPayload {
+    entry_id: String,
+    preview: String,
+    origin: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
 }
 
 pub struct DaemonApiEventEmitter {
@@ -56,10 +66,6 @@ impl DaemonApiEventEmitter {
             ts,
             payload,
         });
-    }
-
-    fn log_non_setup_event(event_type: &'static str) {
-        tracing::debug!(event_type, "host event (daemon api emitter)");
     }
 }
 
@@ -125,12 +131,24 @@ impl HostEventEmitterPort for DaemonApiEventEmitter {
                     },
                 );
             }
-            HostEvent::Clipboard(_) => Self::log_non_setup_event("clipboard"),
-            HostEvent::PeerDiscovery(_) => Self::log_non_setup_event("peer_discovery"),
-            HostEvent::PeerConnection(_) => Self::log_non_setup_event("peer_connection"),
-            HostEvent::Transfer(_) => Self::log_non_setup_event("transfer"),
-            HostEvent::Pairing(_) => Self::log_non_setup_event("pairing"),
-            HostEvent::Realtime(_) => Self::log_non_setup_event("realtime"),
+            HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                entry_id,
+                preview,
+                origin,
+            }) => {
+                self.emit_ws_event(
+                    ws_event::CLIPBOARD_NEW_CONTENT,
+                    ws_topic::CLIPBOARD,
+                    None,
+                    Self::now_ms(),
+                    ClipboardNewContentPayload {
+                        entry_id,
+                        preview,
+                        origin: format!("{:?}", origin).to_lowercase(),
+                        content_type: None,
+                    },
+                );
+            }
         }
 
         Ok(())
@@ -211,12 +229,63 @@ mod tests {
             }))
             .expect("emit should succeed");
 
-        let event = rx.try_recv().expect("file-transfer event should be broadcast");
+        let event = rx
+            .try_recv()
+            .expect("file-transfer event should be broadcast");
         assert_eq!(event.topic, ws_topic::FILE_TRANSFER);
         assert_eq!(event.event_type, ws_event::FILE_TRANSFER_STATUS_CHANGED);
         assert_eq!(event.payload["transferId"].as_str(), Some("xfer-42"));
         assert_eq!(event.payload["entryId"].as_str(), Some("entry-99"));
         assert_eq!(event.payload["status"].as_str(), Some("completed"));
-        assert!(event.payload.get("reason").is_none(), "reason should be omitted when None");
+        assert!(
+            event.payload.get("reason").is_none(),
+            "reason should be omitted when None"
+        );
+    }
+
+    #[test]
+    fn emits_clipboard_new_content_to_clipboard_topic() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let emitter = DaemonApiEventEmitter::new(tx);
+
+        use uc_core::ports::host_event_emitter::ClipboardOriginKind;
+
+        emitter
+            .emit(HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                entry_id: "entry-001".to_string(),
+                preview: "Hello world".to_string(),
+                origin: ClipboardOriginKind::Local,
+            }))
+            .expect("emit should succeed");
+
+        let event = rx.try_recv().expect("clipboard event should be broadcast");
+        assert_eq!(event.topic, ws_topic::CLIPBOARD);
+        assert_eq!(event.event_type, ws_event::CLIPBOARD_NEW_CONTENT);
+        assert_eq!(event.payload["entryId"].as_str(), Some("entry-001"));
+        assert_eq!(event.payload["preview"].as_str(), Some("Hello world"));
+        assert_eq!(event.payload["origin"].as_str(), Some("local"));
+        assert!(
+            event.payload.get("contentType").is_none(),
+            "contentType should be omitted when None"
+        );
+    }
+
+    #[test]
+    fn clipboard_new_content_remote_origin_serializes_as_remote() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let emitter = DaemonApiEventEmitter::new(tx);
+
+        use uc_core::ports::host_event_emitter::ClipboardOriginKind;
+
+        emitter
+            .emit(HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                entry_id: "entry-002".to_string(),
+                preview: "Remote clipboard".to_string(),
+                origin: ClipboardOriginKind::Remote,
+            }))
+            .expect("emit should succeed");
+
+        let event = rx.try_recv().expect("clipboard event should be broadcast");
+        assert_eq!(event.payload["origin"].as_str(), Some("remote"));
     }
 }

@@ -70,10 +70,21 @@ impl SelectRepresentationPolicyV1 {
         RepKind::Unknown
     }
 
-    fn score(kind: RepKind, target: SelectionTarget) -> i32 {
+    fn score(rep: &ObservedClipboardRepresentation, kind: RepKind, target: SelectionTarget) -> i32 {
         match (target, kind) {
-            // UiPreview: PlainText 优先（简洁预览），其次 Image，最后 RichText
-            (SelectionTarget::UiPreview, RepKind::FileList) => 100,
+            // UiPreview:
+            // - 从文件路径补读出的图片内容（format_id="image-from-file"）优先于 FileList，
+            //   这样复制图片文件时仍然展示真实图片预览。
+            // - 当 FileList 明确表示“单个图片文件”时，原始剪贴板 Image 也应优先，
+            //   以便 macOS Finder 复制 PNG/JPG 等图片文件时继续展示预览。
+            // - 其他场景下原始剪贴板 Image（例如普通文件复制时 Finder 自动注入的图标 TIFF）
+            //   低于 FileList，避免图标抢占文件名/文件条目。
+            (SelectionTarget::UiPreview, RepKind::Image)
+                if rep.format_id.eq_ignore_ascii_case("image-from-file") =>
+            {
+                100
+            }
+            (SelectionTarget::UiPreview, RepKind::FileList) => 95,
             (SelectionTarget::UiPreview, RepKind::PlainText) => 90,
             (SelectionTarget::UiPreview, RepKind::Image) => 80,
             (SelectionTarget::UiPreview, RepKind::RichText) => 70,
@@ -90,6 +101,44 @@ impl SelectRepresentationPolicyV1 {
         }
     }
 
+    fn file_list_represents_single_previewable_image(
+        rep: &ObservedClipboardRepresentation,
+    ) -> bool {
+        if Self::classify(rep) != RepKind::FileList {
+            return false;
+        }
+
+        let bytes = match std::str::from_utf8(&rep.bytes) {
+            Ok(bytes) => bytes,
+            Err(_) => return false,
+        };
+
+        let mut paths = bytes
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .filter_map(|line| url::Url::parse(line).ok()?.to_file_path().ok());
+
+        let Some(first_path) = paths.next() else {
+            return false;
+        };
+
+        if paths.next().is_some() {
+            return false;
+        }
+
+        first_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| {
+                matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff"
+                )
+            })
+            .unwrap_or(false)
+    }
+
     fn select_one<'a>(
         snapshot: &'a SystemClipboardSnapshot,
         target: SelectionTarget,
@@ -104,13 +153,32 @@ impl SelectRepresentationPolicyV1 {
             return None;
         }
 
+        let has_single_previewable_image_file = snapshot
+            .representations
+            .iter()
+            .any(Self::file_list_represents_single_previewable_image);
+
         reps.sort_by(|a, b| {
             let ka = Self::classify(a);
             let kb = Self::classify(b);
 
             // 1) 分数：desc
-            let sa = Self::score(ka, target);
-            let sb = Self::score(kb, target);
+            let sa = if target == SelectionTarget::UiPreview
+                && ka == RepKind::Image
+                && has_single_previewable_image_file
+            {
+                100
+            } else {
+                Self::score(a, ka, target)
+            };
+            let sb = if target == SelectionTarget::UiPreview
+                && kb == RepKind::Image
+                && has_single_previewable_image_file
+            {
+                100
+            } else {
+                Self::score(b, kb, target)
+            };
             match sb.cmp(&sa) {
                 Ordering::Equal => {}
                 ord => return ord,
@@ -245,5 +313,95 @@ mod tests {
         let selection = policy.select(&snapshot).unwrap();
 
         assert_eq!(selection.paste_rep_id, RepresentationId::from("rep-rich"));
+    }
+
+    #[test]
+    fn select_prefers_file_list_preview_over_clipboard_image() {
+        let policy = SelectRepresentationPolicyV1::new();
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 0,
+            representations: vec![
+                rep(
+                    "rep-files",
+                    "files",
+                    Some(MimeType("text/uri-list".to_string())),
+                    b"file:///tmp/document.pdf",
+                ),
+                rep(
+                    "rep-image",
+                    "image",
+                    Some(MimeType("image/png".to_string())),
+                    b"png-bytes",
+                ),
+            ],
+        };
+
+        let selection = policy.select(&snapshot).unwrap();
+
+        assert_eq!(
+            selection.preview_rep_id,
+            RepresentationId::from("rep-files")
+        );
+        assert_eq!(selection.paste_rep_id, RepresentationId::from("rep-files"));
+    }
+
+    #[test]
+    fn select_prefers_image_loaded_from_file_for_preview() {
+        let policy = SelectRepresentationPolicyV1::new();
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 0,
+            representations: vec![
+                rep(
+                    "rep-files",
+                    "files",
+                    Some(MimeType("text/uri-list".to_string())),
+                    b"file:///tmp/example.png",
+                ),
+                rep(
+                    "rep-image-from-file",
+                    "image-from-file",
+                    Some(MimeType("image/png".to_string())),
+                    b"png-bytes",
+                ),
+            ],
+        };
+
+        let selection = policy.select(&snapshot).unwrap();
+
+        assert_eq!(
+            selection.preview_rep_id,
+            RepresentationId::from("rep-image-from-file")
+        );
+        assert_eq!(selection.paste_rep_id, RepresentationId::from("rep-files"));
+    }
+
+    #[test]
+    fn select_prefers_clipboard_image_for_single_image_file_preview() {
+        let policy = SelectRepresentationPolicyV1::new();
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 0,
+            representations: vec![
+                rep(
+                    "rep-files",
+                    "files",
+                    Some(MimeType("text/uri-list".to_string())),
+                    b"file:///tmp/example.png",
+                ),
+                rep(
+                    "rep-image",
+                    "image",
+                    Some(MimeType("image/png".to_string())),
+                    b"png-bytes",
+                ),
+            ],
+        };
+
+        let selection = policy.select(&snapshot).unwrap();
+
+        assert_eq!(
+            selection.preview_rep_id,
+            RepresentationId::from("rep-image")
+        );
+        assert_eq!(selection.paste_rep_id, RepresentationId::from("rep-files"));
     }
 }

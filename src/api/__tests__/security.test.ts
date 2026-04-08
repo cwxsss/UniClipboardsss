@@ -1,33 +1,68 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { daemonClient } from '@/api/daemon/client'
 import { getEncryptionSessionStatus, unlockEncryptionSession } from '@/api/security'
-import { invokeWithTrace } from '@/lib/tauri-command'
 
-vi.mock('@/lib/tauri-command', () => ({
-  invokeWithTrace: vi.fn(),
+// ── Mock dependencies ─────────────────────────────────────────
+
+vi.mock('@/api/daemon/client', () => ({
+  daemonClient: {
+    request: vi.fn(),
+  },
 }))
 
-const invokeMock = vi.mocked(invokeWithTrace)
+const daemonClientRequestMock = vi.mocked(daemonClient.request)
 
 describe('security api', () => {
   beforeEach(() => {
-    invokeMock.mockReset()
+    daemonClientRequestMock.mockReset()
   })
 
-  it('gets encryption session status', async () => {
-    invokeMock.mockResolvedValueOnce({ initialized: true, session_ready: false })
+  describe('getEncryptionSessionStatus', () => {
+    it('calls GET /encryption/state via daemonClient and returns status', async () => {
+      // Daemon returns camelCase field names
+      daemonClientRequestMock.mockResolvedValueOnce({
+        data: {
+          initialized: true,
+          sessionReady: true,
+        },
+        ts: 1710000000000,
+      })
 
-    const result = await getEncryptionSessionStatus()
+      const result = await getEncryptionSessionStatus()
 
-    expect(invokeMock).toHaveBeenCalledWith('get_encryption_session_status')
-    expect(result).toEqual({ initialized: true, session_ready: false })
+      expect(daemonClientRequestMock).toHaveBeenCalledWith('/encryption/state')
+      // Returns camelCase to match daemon API
+      expect(result).toEqual({ initialized: true, sessionReady: true })
+    })
+
+    it('maps sessionReady from daemon response', async () => {
+      daemonClientRequestMock.mockResolvedValueOnce({
+        data: {
+          initialized: false,
+          sessionReady: false,
+        },
+        ts: 1710000000000,
+      })
+
+      const result = await getEncryptionSessionStatus()
+
+      expect(result).toEqual({ initialized: false, sessionReady: false })
+    })
   })
 
-  it('unlocks encryption session', async () => {
-    invokeMock.mockResolvedValueOnce(true)
+  describe('unlockEncryptionSession', () => {
+    it('calls daemon POST /encryption/unlock and returns true on success', async () => {
+      daemonClientRequestMock.mockResolvedValueOnce({
+        data: { success: true },
+        ts: Date.now(),
+      })
 
-    const result = await unlockEncryptionSession()
+      const result = await unlockEncryptionSession()
 
-    expect(invokeMock).toHaveBeenCalledWith('unlock_encryption_session')
-    expect(result).toBe(true)
+      expect(daemonClientRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: '/encryption/unlock' })
+      )
+      expect(result).toBe(true)
+    })
   })
 })

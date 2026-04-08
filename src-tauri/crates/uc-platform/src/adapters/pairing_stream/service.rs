@@ -3,7 +3,6 @@ use crate::ports::observability::TraceMetadata;
 use anyhow::{anyhow, Result};
 use libp2p::{futures::StreamExt, PeerId, StreamProtocol};
 use libp2p_stream as stream;
-use log::{info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -11,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{timeout, Duration};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
-use tracing::{info_span, Instrument, Span};
+use tracing::{debug, info, info_span, warn, Instrument, Span};
 use uc_core::network::{NetworkEvent, PairingMessage, ProtocolId};
 
 pub const MAX_PAIRING_CONCURRENCY: usize = 16;
@@ -39,6 +38,64 @@ impl std::fmt::Display for ShutdownReason {
             ShutdownReason::StreamClosedByPeer => write!(f, "stream_closed_by_peer"),
             ShutdownReason::ChannelClosed => write!(f, "channel_closed"),
         }
+    }
+}
+
+fn close_initiator_for_shutdown_reason(reason: &ShutdownReason, app_closed: bool) -> &'static str {
+    if app_closed {
+        "application"
+    } else {
+        match reason {
+            ShutdownReason::ExplicitClose => "application",
+            ShutdownReason::StreamClosedByPeer => "peer",
+            ShutdownReason::ChannelClosed => "local",
+        }
+    }
+}
+
+fn close_initiator_for_error(error: &anyhow::Error, completion_source: &str) -> &'static str {
+    let error = error.to_string().to_ascii_lowercase();
+    if error.contains("pairing stream idle timeout") {
+        "local"
+    } else if error.contains("broken pipe")
+        || error.contains("connection reset")
+        || error.contains("unexpected eof")
+        || error.contains("stream closed")
+    {
+        "peer"
+    } else if error.contains("pairing encode failed")
+        || error.contains("task join failed")
+        || error.contains("send failed")
+        || error.contains("channel closed")
+    {
+        "local"
+    } else if completion_source == "write_loop" {
+        "unknown"
+    } else {
+        "unknown"
+    }
+}
+
+fn end_reason_for_error(error: &anyhow::Error, completion_source: &str) -> &'static str {
+    let error = error.to_string().to_ascii_lowercase();
+    if error.contains("pairing stream idle timeout") {
+        "idle_timeout"
+    } else if error.contains("broken pipe")
+        || error.contains("connection reset")
+        || error.contains("unexpected eof")
+        || error.contains("stream closed")
+    {
+        "peer_transport_error"
+    } else if error.contains("pairing frame exceeds max")
+        || error.contains("invalid pairing message")
+    {
+        "invalid_frame"
+    } else if error.contains("pairing encode failed") || error.contains("task join failed") {
+        "internal_error"
+    } else if completion_source == "write_loop" {
+        "write_error"
+    } else {
+        "read_error"
     }
 }
 
@@ -203,9 +260,15 @@ impl PairingStreamService {
         }
     }
 
+    pub async fn has_session(&self, session_id: &str) -> bool {
+        let sessions = self.inner.sessions.lock().await;
+        sessions.contains_key(session_id)
+    }
+
     #[tracing::instrument(skip(self, message), fields(session_id = %message.session_id()))]
     pub async fn send_pairing_on_session(&self, message: PairingMessage) -> Result<()> {
         let session_id = message.session_id().to_string();
+        let message_kind = pairing_message_kind(&message);
         let sender = {
             let sessions = self.inner.sessions.lock().await;
             sessions
@@ -213,10 +276,21 @@ impl PairingStreamService {
                 .map(|handle| handle.write_tx.clone())
                 .ok_or_else(|| anyhow!("pairing session not open: {session_id}"))?
         };
+        debug!(
+            session_id = %session_id,
+            message_kind,
+            "queueing pairing message onto session writer"
+        );
         sender
             .send(message)
             .await
-            .map_err(|err| anyhow!("pairing session send failed: {err}"))
+            .map_err(|err| anyhow!("pairing session send failed: {err}"))?;
+        info!(
+            session_id = %session_id,
+            message_kind,
+            "pairing message accepted by session writer queue"
+        );
+        Ok(())
     }
 
     #[tracing::instrument(skip(self), fields(peer_id = %peer_id))]
@@ -263,12 +337,14 @@ impl PairingStreamService {
             if let Err(err) = handle.shutdown_tx.send(true) {
                 warn!("pairing session shutdown send failed: {err}");
             }
-            if let Some(reason) = reason.as_ref() {
-                info!(
-                    "pairing session closed: session_id={} peer_id={} reason={}",
-                    session_id, handle.peer_id, reason
-                );
-            }
+            info!(
+                event = "pairing_stream.closed",
+                session_id = %session_id,
+                peer_id = %handle.peer_id,
+                close_initiator = "application",
+                close_reason = %reason.as_deref().unwrap_or("explicit_close"),
+                "pairing session close requested"
+            );
         }
         Ok(())
     }
@@ -281,8 +357,22 @@ impl PairingStreamService {
         let first_payload = self.read_frame(&mut stream).await?;
         let first_payload =
             first_payload.ok_or_else(|| anyhow!("stream closed before first message"))?;
+        info!(
+            peer_id = %peer_id,
+            payload_len = first_payload.len(),
+            "read first pairing frame from inbound stream"
+        );
         let first_message = self.decode_message(&peer_id, &first_payload)?;
         let session_id = first_message.session_id().to_string();
+        let message_kind = pairing_message_kind(&first_message);
+        info!(
+            event = "pairing_stream.incoming_session_accepted",
+            peer_id = %peer_id,
+            session_id = %session_id,
+            message_kind,
+            payload_bytes = first_payload.len() as u64,
+            "decoded first pairing message from inbound stream"
+        );
         self.spawn_session(peer_id, session_id, stream, Some(first_message), permits)
             .await?
             .await?
@@ -393,6 +483,20 @@ impl PairingStreamService {
     }
 }
 
+fn pairing_message_kind(message: &PairingMessage) -> &'static str {
+    match message {
+        PairingMessage::Request(_) => "request",
+        PairingMessage::Challenge(_) => "challenge",
+        PairingMessage::KeyslotOffer(_) => "keyslot_offer",
+        PairingMessage::ChallengeResponse(_) => "challenge_response",
+        PairingMessage::Response(_) => "response",
+        PairingMessage::Confirm(_) => "confirm",
+        PairingMessage::Reject(_) => "reject",
+        PairingMessage::Cancel(_) => "cancel",
+        PairingMessage::Busy(_) => "busy",
+    }
+}
+
 struct SessionPermits {
     global: OwnedSemaphorePermit,
     peer: OwnedSemaphorePermit,
@@ -413,9 +517,18 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (reader, writer) = tokio::io::split(stream);
+    let session_direction = if initial_message.is_some() {
+        "inbound"
+    } else {
+        "outbound"
+    };
     info!(
-        "pairing session started: peer_id={} session_id={}",
-        peer_id, session_id
+        event = "pairing_stream.session_started",
+        peer_id = %peer_id,
+        session_id = %session_id,
+        session_direction,
+        idle_timeout_ms = inner.config.idle_timeout.as_millis() as u64,
+        "pairing session started"
     );
     if let Some(message) = initial_message {
         if let Err(err) = emit_pairing_event(&inner.event_tx, &peer_id, message).await {
@@ -491,15 +604,20 @@ where
             // so even in the race where the read loop sees EOF before the
             // shutdown signal, we can still detect the application intent.
             let is_app_closed = *app_closed_rx.borrow();
+            let close_initiator = close_initiator_for_shutdown_reason(&reason, is_app_closed);
             if matches!(
                 (reason, &completed),
                 (ShutdownReason::StreamClosedByPeer, CompletedTask::Read)
             ) && !is_app_closed
             {
                 warn!(
-                    "pairing session closed by peer without explicit protocol termination: \
-                     peer_id={} session_id={} — bridging to PairingFailed",
-                    peer_id, session_id
+                    event = "pairing_stream.ended",
+                    peer_id = %peer_id,
+                    session_id = %session_id,
+                    completion_source = source,
+                    end_reason = %reason,
+                    close_initiator,
+                    "pairing session closed by peer without explicit protocol termination; bridging to PairingFailed"
                 );
                 if let Err(e) = inner
                     .event_tx
@@ -514,8 +632,13 @@ where
                 }
             } else {
                 info!(
-                    "pairing session ended cleanly: peer_id={} session_id={} source={} reason={}",
-                    peer_id, session_id, source, reason
+                    event = "pairing_stream.ended",
+                    peer_id = %peer_id,
+                    session_id = %session_id,
+                    completion_source = source,
+                    end_reason = %reason,
+                    close_initiator,
+                    "pairing session ended"
                 );
             }
         }
@@ -524,9 +647,17 @@ where
                 CompletedTask::Read => "read_loop",
                 CompletedTask::Write => "write_loop",
             };
+            let close_initiator = close_initiator_for_error(err, source);
+            let end_reason = end_reason_for_error(err, source);
             warn!(
-                "pairing session ended with error: peer_id={} session_id={} source={} error={}",
-                peer_id, session_id, source, err
+                event = "pairing_stream.ended_with_error",
+                peer_id = %peer_id,
+                session_id = %session_id,
+                completion_source = source,
+                close_initiator,
+                end_reason,
+                error = %err,
+                "pairing session ended with error"
             );
             if let Err(e) = inner
                 .event_tx
@@ -718,11 +849,81 @@ impl PairingStreamServiceInner {
 mod tests {
     use super::send_shutdown_signal;
     use super::{PairingStreamConfig, PairingStreamService};
+    use anyhow::anyhow;
     use libp2p::PeerId;
-    use log::{Level, LevelFilter, Metadata, Record};
-    use std::sync::{Mutex, Once};
+    use std::sync::{Arc, Mutex};
     use tokio::sync::{mpsc, watch};
     use tokio::time::{timeout, Duration};
+    use tracing::field::{Field, Visit};
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::registry::LookupSpan;
+
+    #[test]
+    fn close_initiator_prefers_application_when_app_closed() {
+        assert_eq!(
+            super::close_initiator_for_shutdown_reason(
+                &super::ShutdownReason::StreamClosedByPeer,
+                true,
+            ),
+            "application"
+        );
+        assert_eq!(
+            super::close_initiator_for_shutdown_reason(
+                &super::ShutdownReason::ExplicitClose,
+                false,
+            ),
+            "application"
+        );
+        assert_eq!(
+            super::close_initiator_for_shutdown_reason(
+                &super::ShutdownReason::StreamClosedByPeer,
+                false,
+            ),
+            "peer"
+        );
+        assert_eq!(
+            super::close_initiator_for_shutdown_reason(
+                &super::ShutdownReason::ChannelClosed,
+                false,
+            ),
+            "local"
+        );
+    }
+
+    #[test]
+    fn error_classification_normalizes_idle_timeout_and_peer_errors() {
+        let idle_timeout = anyhow!("pairing stream idle timeout");
+        assert_eq!(
+            super::close_initiator_for_error(&idle_timeout, "read_loop"),
+            "local"
+        );
+        assert_eq!(
+            super::end_reason_for_error(&idle_timeout, "read_loop"),
+            "idle_timeout"
+        );
+
+        let peer_closed = anyhow!("broken pipe");
+        assert_eq!(
+            super::close_initiator_for_error(&peer_closed, "write_loop"),
+            "peer"
+        );
+        assert_eq!(
+            super::end_reason_for_error(&peer_closed, "write_loop"),
+            "peer_transport_error"
+        );
+
+        let fallback = anyhow!("some other io failure");
+        assert_eq!(
+            super::close_initiator_for_error(&fallback, "write_loop"),
+            "unknown"
+        );
+        assert_eq!(
+            super::end_reason_for_error(&fallback, "write_loop"),
+            "write_error"
+        );
+    }
 
     #[tokio::test]
     async fn open_pairing_session_is_idempotent_when_session_exists() {
@@ -841,51 +1042,67 @@ mod tests {
         );
     }
 
-    struct TestLogger {
-        logs: Mutex<Vec<String>>,
+    #[derive(Default)]
+    struct MessageVisitor {
+        message: Option<String>,
     }
 
-    impl log::Log for TestLogger {
-        fn enabled(&self, metadata: &Metadata) -> bool {
-            metadata.level() <= Level::Warn
-        }
-
-        fn log(&self, record: &Record) {
-            if self.enabled(record.metadata()) {
-                let mut logs = self.logs.lock().expect("logs lock");
-                logs.push(format!("{}", record.args()));
+    impl Visit for MessageVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "message" {
+                self.message = Some(value.to_string());
             }
         }
 
-        fn flush(&self) {}
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" && self.message.is_none() {
+                self.message = Some(format!("{value:?}").trim_matches('"').to_string());
+            }
+        }
     }
 
-    static LOGGER: TestLogger = TestLogger {
-        logs: Mutex::new(Vec::new()),
-    };
-    static LOGGER_INIT: Once = Once::new();
+    #[derive(Clone)]
+    struct WarningCaptureLayer {
+        warnings: Arc<Mutex<Vec<String>>>,
+    }
 
-    fn init_logger() {
-        LOGGER_INIT.call_once(|| {
-            let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Warn));
-        });
+    impl WarningCaptureLayer {
+        fn new(warnings: Arc<Mutex<Vec<String>>>) -> Self {
+            Self { warnings }
+        }
+    }
+
+    impl<S> Layer<S> for WarningCaptureLayer
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+            if *event.metadata().level() > tracing::Level::WARN {
+                return;
+            }
+
+            let mut visitor = MessageVisitor::default();
+            event.record(&mut visitor);
+            if let Some(message) = visitor.message {
+                self.warnings.lock().expect("warnings lock").push(message);
+            }
+        }
     }
 
     #[test]
     fn shutdown_signal_logs_warning_when_receiver_dropped() {
-        init_logger();
-        {
-            let mut logs = LOGGER.logs.lock().expect("logs lock");
-            logs.clear();
-        }
+        let warnings = Arc::new(Mutex::new(Vec::<String>::new()));
+        let subscriber =
+            tracing_subscriber::registry().with(WarningCaptureLayer::new(warnings.clone()));
+        let _guard = tracing::subscriber::set_default(subscriber);
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         drop(shutdown_rx);
 
         send_shutdown_signal(&shutdown_tx);
 
-        let logs = LOGGER.logs.lock().expect("logs lock");
-        assert!(logs
+        let warnings = warnings.lock().expect("warnings lock");
+        assert!(warnings
             .iter()
             .any(|entry| entry.contains("pairing session shutdown send failed")));
     }

@@ -106,10 +106,10 @@ const Sidebar: React.FC = () => {
   ]
 
   useEffect(() => {
-    if (!setting?.general.auto_check_update) {
+    if (!setting?.general.autoCheckUpdate) {
       setUpdateDialogOpen(false)
     }
-  }, [setting?.general.auto_check_update])
+  }, [setting?.general.autoCheckUpdate])
 
   const handleInstallUpdate = async () => {
     if (!updateInfo || isInstallingUpdate) return

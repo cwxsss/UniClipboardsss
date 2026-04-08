@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::trace;
 
 use uc_core::{
     clipboard::ObservedClipboardRepresentation,
@@ -69,10 +69,10 @@ impl ClipboardEventRepositoryPort for DecryptingClipboardEventRepository {
                         .await
                         .context("failed to decrypt representation bytes")?;
 
-                    debug!(
-                        "Decrypted representation bytes for {} ({} bytes)",
-                        representation_id,
-                        plaintext.len()
+                    trace!(
+                        representation_id = %representation_id,
+                        bytes = plaintext.len(),
+                        "Decrypted representation bytes"
                     );
 
                     observed.bytes = plaintext;

@@ -186,10 +186,20 @@ impl PairingOrchestrator {
         peer_id: String,
         request: PairingRequest,
     ) -> Result<()> {
-        if request.peer_id != self.session_manager.local_peer_id() {
+        let expected_local_peer_id = self.session_manager.local_peer_id().to_string();
+        if request.peer_id != expected_local_peer_id {
+            tracing::warn!(
+                session_id = %request.session_id,
+                sender_peer_id = %peer_id,
+                request_target_peer_id = %request.peer_id,
+                expected_local_peer_id = %expected_local_peer_id,
+                request_device_id = %request.device_id,
+                request_device_name = %request.device_name,
+                "incoming pairing request target peer_id mismatch"
+            );
             return Err(anyhow::anyhow!(
                 "Request target peer_id mismatch: expected {}, got {}",
-                self.session_manager.local_peer_id(),
+                expected_local_peer_id,
                 request.peer_id
             ));
         }
@@ -201,6 +211,15 @@ impl PairingOrchestrator {
             peer_id = %peer_id
         );
         async {
+            tracing::info!(
+                session_id = %session_id,
+                sender_peer_id = %peer_id,
+                request_target_peer_id = %request.peer_id,
+                expected_local_peer_id = %expected_local_peer_id,
+                request_device_id = %request.device_id,
+                request_device_name = %request.device_name,
+                "validated inbound pairing request target peer_id"
+            );
             self.session_manager
                 .record_session_peer(
                     &session_id,

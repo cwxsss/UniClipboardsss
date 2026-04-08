@@ -1,4 +1,3 @@
-import { listen } from '@tauri-apps/api/event'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   BrowserRouter as Router,
@@ -8,20 +7,28 @@ import {
   Outlet,
   useNavigate,
 } from 'react-router-dom'
-import { type EncryptionSessionStatus, unlockEncryptionSession } from '@/api/security'
+import { signalLifecycleReady } from '@/api/daemon/lifecycle'
+import { unlockEncryptionSession } from '@/api/security'
 import { type SetupState } from '@/api/setup'
 import { TitleBar } from '@/components'
 import { GlobalShortcuts } from '@/components/GlobalShortcuts'
 import { PairingNotificationProvider } from '@/components/PairingNotificationProvider'
+import TelemetryNotice from '@/components/TelemetryNotice'
 import { Toaster } from '@/components/ui/sonner'
 import { useSearch } from '@/contexts/search-context'
 import { SearchProvider } from '@/contexts/SearchContext'
 import { SettingProvider } from '@/contexts/SettingContext'
 import { ShortcutProvider } from '@/contexts/ShortcutContext'
 import { UpdateProvider } from '@/contexts/UpdateContext'
+import { useEncryptionState } from '@/hooks/useDaemonEvents'
 import { usePlatform } from '@/hooks/usePlatform'
 import { useUINavigateListener } from '@/hooks/useUINavigateListener'
 import { MainLayout, SettingsFullLayout, WindowShell } from '@/layouts'
+import {
+  shouldSignalDaemonLifecycleReady,
+  type EncryptionStatusView,
+} from '@/lib/daemon-lifecycle-ready'
+import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
 import DashboardPage from '@/pages/DashboardPage'
 import DevicesPage from '@/pages/DevicesPage'
 import SettingsPage from '@/pages/SettingsPage'
@@ -69,38 +76,65 @@ const AppContent = ({
   isSetupActive: boolean
   onSetupComplete: () => void
 }) => {
-  const [encryptionStatus, setEncryptionStatus] = useState<EncryptionSessionStatus | null>(null)
+  const [encryptionStatus, setEncryptionStatus] = useState<EncryptionStatusView | null>(null)
   const [encryptionError, setEncryptionError] = useState<string | null>(null)
+  const [daemonBootstrapReady, setDaemonBootstrapReady] = useState(false)
+  const daemonLifecycleReadySignaledRef = useRef(false)
   // Post-setup auto-unlock is handled by onSetupComplete callback (in AppContentWithBar),
   // NOT by detecting isSetupActive transitions. Detecting transitions here would false-trigger
   // on initial hydration: isSetupActive starts true (hydrated=false placeholder) then becomes
   // false when hydration completes with setupState='Completed', mimicking a setup→completed
   // transition even though setup was already done.
 
+  useEffect(() => {
+    if (isSetupActive) {
+      return
+    }
+
+    let cancelled = false
+
+    connectDaemonWs()
+      .then(() => {
+        if (!cancelled) {
+          setDaemonBootstrapReady(true)
+          setEncryptionError(null)
+        }
+      })
+      .catch(error => {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error)
+          setEncryptionError(message)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [isSetupActive])
+
   const {
     data: encryptionData,
     isLoading: encryptionLoading,
     error: encryptionQueryError,
-  } = useGetEncryptionSessionStatusQuery(undefined, { skip: isSetupActive })
+  } = useGetEncryptionSessionStatusQuery(undefined, {
+    skip: isSetupActive || !daemonBootstrapReady,
+  })
 
-  useEffect(() => {
-    const unlistenPromise = listen<'SessionReady' | { type: string }>(
-      'encryption://event',
-      event => {
-        console.log('Encryption event:', event.payload)
-        const eventType = typeof event.payload === 'string' ? event.payload : event.payload?.type
-        if (eventType === 'SessionReady') {
-          setEncryptionStatus(prev =>
-            prev ? { ...prev, session_ready: true } : { initialized: true, session_ready: true }
-          )
-        }
-      }
-    )
-
-    return () => {
-      unlistenPromise.then(unlisten => unlisten())
+  // Listen for encryption session ready/failed via daemon WebSocket.
+  useEncryptionState(
+    () => {
+      // Session became ready — update status without downgrading session_ready.
+      setEncryptionStatus(prev =>
+        prev ? { ...prev, session_ready: true } : { initialized: true, session_ready: true }
+      )
+    },
+    () => {
+      // Session failed — clear session_ready.
+      setEncryptionStatus(prev =>
+        prev ? { ...prev, session_ready: false } : { initialized: true, session_ready: false }
+      )
     }
-  }, [])
+  )
 
   useEffect(() => {
     if (encryptionData) {
@@ -132,8 +166,33 @@ const AppContent = ({
 
   const resolvedEncryptionStatus = encryptionStatus ?? encryptionData ?? null
 
+  useEffect(() => {
+    if (
+      daemonLifecycleReadySignaledRef.current ||
+      !shouldSignalDaemonLifecycleReady(
+        isSetupActive,
+        daemonBootstrapReady,
+        resolvedEncryptionStatus
+      )
+    ) {
+      return
+    }
+
+    daemonLifecycleReadySignaledRef.current = true
+    signalLifecycleReady().catch(error => {
+      daemonLifecycleReadySignaledRef.current = false
+      console.error('Failed to signal daemon lifecycle ready:', error)
+    })
+  }, [daemonBootstrapReady, isSetupActive, resolvedEncryptionStatus])
+
   if (isSetupActive) {
-    return <SetupPage onCompleteSetup={onSetupComplete} />
+    return (
+      <>
+        <SetupPage onCompleteSetup={onSetupComplete} />
+        <Toaster />
+        <PairingNotificationProvider />
+      </>
+    )
   }
 
   // Only show blank screen during initial load when we have no encryption status at all.
@@ -154,13 +213,19 @@ const AppContent = ({
     )
   }
 
+  if (!daemonBootstrapReady && encryptionStatus === null) {
+    return null
+  }
+
   // If initialized but not ready, show unlock page.
   // PairingNotificationProvider is mounted here too so that already-completed
   // hosts can still receive and display pairing requests while on the unlock screen.
   if (resolvedEncryptionStatus?.initialized && !resolvedEncryptionStatus?.session_ready) {
     return (
       <>
-        <UnlockPage />
+        <UnlockPage
+          onUnlockSucceeded={() => setEncryptionStatus({ initialized: true, session_ready: true })}
+        />
         <PairingNotificationProvider />
       </>
     )
@@ -188,6 +253,7 @@ const AppContent = ({
       </Routes>
       <Toaster />
       <PairingNotificationProvider />
+      <TelemetryNotice />
     </ShortcutProvider>
   )
 }

@@ -1,0 +1,141 @@
+name: 'Format Check'
+run-name: 'Format check for ${{ github.head_ref || github.ref_name }}'
+
+on:
+  pull_request:
+    branches: [main, dev, develop]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  format:
+    name: Format Check
+    # Guard against accidental non-PR triggers (e.g. workflow validation runs on push).
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          # Use a PAT or the default token; for same-repo PRs GITHUB_TOKEN can push.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Install Rust stable (with rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run cargo fmt
+        working-directory: src-tauri
+        run: cargo fmt --all
+
+      - name: Run prettier
+        run: bun run format
+
+      - name: Check for format changes
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "has_workflow_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No format issues found."
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Format issues detected:"
+            git diff --stat
+
+            if git diff --name-only -- .github/workflows | grep -q .; then
+              echo "has_workflow_changes=true" >> "$GITHUB_OUTPUT"
+              echo "::warning::Formatted changes include .github/workflows files; the default GitHub Actions token cannot auto-push workflow file updates."
+            else
+              echo "has_workflow_changes=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      # ---------- Same-repo PR: create auto-fix branch + PR ----------
+      - name: Create fix branch and open PR (same-repo only)
+        if: |
+          steps.diff.outputs.has_changes == 'true' &&
+          steps.diff.outputs.has_workflow_changes != 'true' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          FIX_BRANCH="format-fix/pr-$PR_NUMBER"
+
+          git checkout -b "$FIX_BRANCH"
+          git add -A
+          git commit -m "style: auto-format code for PR #$PR_NUMBER"
+          git push origin "$FIX_BRANCH" --force
+
+          DIFF_STAT=$(git diff HEAD~1 --stat)
+
+          PR_BODY="Auto-generated format fix for #$PR_NUMBER.
+
+          Merge this PR first, then re-push the original branch to pass the format check.
+
+          **Changes:**
+          \`\`\`
+          $DIFF_STAT
+          \`\`\`"
+
+          # Check if a PR already exists for this fix branch.
+          EXISTING_PR_URL=$(gh pr list --head "$FIX_BRANCH" --json url --jq '.[0].url' 2>/dev/null)
+
+          if [ -n "$EXISTING_PR_URL" ]; then
+            echo "::notice::Format fix PR already exists: $EXISTING_PR_URL"
+          else
+            NEW_PR_URL=$(gh pr create \
+              --title "style: auto-format for PR #$PR_NUMBER" \
+              --body "$PR_BODY" \
+              --base "$PR_HEAD_REF" \
+              --head "$FIX_BRANCH" 2>&1) && \
+            echo "::notice::Format fix PR created: $NEW_PR_URL" || \
+            echo "::warning::Could not auto-create PR (branch '$FIX_BRANCH' has been pushed). Please create a PR manually from '$FIX_BRANCH' → '$PR_HEAD_REF'. Error: $NEW_PR_URL"
+          fi
+
+      # ---------- Fork PR: print diff for author to fix manually ----------
+      - name: Show diff when auto-push is unavailable
+        if: |
+          steps.diff.outputs.has_changes == 'true' &&
+          (
+            github.event.pull_request.head.repo.full_name != github.repository ||
+            steps.diff.outputs.has_workflow_changes == 'true'
+          )
+        run: |
+          if [ "${{ steps.diff.outputs.has_workflow_changes }}" = "true" ]; then
+            echo "::warning::Format issues include .github/workflows files. GitHub Actions cannot auto-push workflow file changes with the default token."
+          else
+            echo "::warning::Format issues found. Cannot auto-create fix PR for fork contributions."
+          fi
+          echo "Please run the following commands locally and push the changes:"
+          echo ""
+          echo "  cd src-tauri && cargo fmt --all && cd .."
+          echo "  bun run format"
+          git diff
+
+      # ---------- Always fail the check if there were format issues ----------
+      - name: Fail if format changes needed
+        if: steps.diff.outputs.has_changes == 'true'
+        run: |
+          echo "::error::Format issues found. See above for details."
+          exit 1

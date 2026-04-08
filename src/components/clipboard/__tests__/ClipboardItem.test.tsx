@@ -1,20 +1,24 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { daemonClient } from '@/api/daemon/client'
 import ClipboardItem from '@/components/clipboard/ClipboardItem'
-import { invokeWithTrace } from '@/lib/tauri-command'
 
-vi.mock('@/lib/tauri-command', () => ({
-  invokeWithTrace: vi.fn(),
+vi.mock('@/api/daemon/client', () => ({
+  daemonClient: {
+    request: vi.fn(),
+    blobUrl: vi.fn((path: string) => `http://127.0.0.1:12345${path}?auth=Session+test`),
+  },
 }))
 
-// resolveUcUrl no longer depends on @tauri-apps/api/core.
-// In test env (non-Windows userAgent), it produces uc://localhost/{path} format.
-
-const invokeMock = vi.mocked(invokeWithTrace)
+const requestMock = vi.mocked(daemonClient.request)
+const blobUrlMock = vi.mocked(daemonClient.blobUrl)
 
 describe('ClipboardItem', () => {
   beforeEach(() => {
-    invokeMock.mockReset()
+    requestMock.mockReset()
+    blobUrlMock.mockImplementation(
+      (path: string) => `http://127.0.0.1:12345${path}?auth=Session+test`
+    )
     globalThis.fetch = vi.fn()
   })
 
@@ -25,13 +29,17 @@ describe('ClipboardItem', () => {
   it('expands by fetching resource bytes and decoding text', async () => {
     const preview = 'x'.repeat(260)
     const fullText = 'full content'
-    const url = 'uc://blob/blob-1'
+    const url = '/clipboard/blobs/blob-1'
 
-    invokeMock.mockResolvedValue({
-      blob_id: 'blob-1',
-      mime_type: 'text/plain',
-      size_bytes: fullText.length,
-      url,
+    requestMock.mockResolvedValue({
+      data: {
+        blobId: 'blob-1',
+        mimeType: 'text/plain',
+        sizeBytes: fullText.length,
+        url,
+        inlineData: null,
+      },
+      ts: Date.now(),
     })
 
     const fetchMock = vi.mocked(globalThis.fetch)
@@ -53,25 +61,25 @@ describe('ClipboardItem', () => {
     await userEvent.click(screen.getByText(/Expand|展开/))
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('get_clipboard_entry_resource', {
-        entryId: 'entry-1',
-      })
-      // resolveUcUrl converts uc://blob/blob-1 → uc://localhost/blob/blob-1
-      expect(fetchMock).toHaveBeenCalledWith('uc://localhost/blob/blob-1')
+      expect(requestMock).toHaveBeenCalledWith('/clipboard/entries/entry-1/resource')
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://127.0.0.1:12345/clipboard/blobs/blob-1?auth=Session+test'
+      )
     })
 
     expect(await screen.findByText(fullText)).toBeInTheDocument()
   })
 
-  it('expands image by loading resource url', async () => {
-    const url = 'uc://blob/image-1'
-    const thumbnail = 'thumb://image-1'
-
-    invokeMock.mockResolvedValue({
-      blob_id: 'image-1',
-      mime_type: 'image/png',
-      size_bytes: 123,
-      url,
+  it('loads blob-backed images through authenticated daemon URLs', async () => {
+    requestMock.mockResolvedValue({
+      data: {
+        blobId: 'image-1',
+        mimeType: 'image/png',
+        sizeBytes: 123,
+        url: '/clipboard/blobs/image-1',
+        inlineData: null,
+      },
+      ts: Date.now(),
     })
 
     render(
@@ -79,23 +87,46 @@ describe('ClipboardItem', () => {
         index={2}
         type="image"
         time="just now"
-        content={{ thumbnail, size: 123, width: 10, height: 10 }}
+        content={{ thumbnail: null, size: 123, width: 10, height: 10 }}
         entryId="entry-2"
       />
     )
 
-    const image = screen.getByAltText(/Clipboard Image|剪贴板图片/)
-    expect(image).toHaveAttribute('src', thumbnail)
-
-    await userEvent.click(screen.getByText(/Expand|展开/))
-
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('get_clipboard_entry_resource', {
-        entryId: 'entry-2',
-      })
+      expect(requestMock).toHaveBeenCalledWith('/clipboard/entries/entry-2/resource')
     })
 
-    // resolveUcUrl converts uc://blob/image-1 → uc://localhost/blob/image-1
-    expect(image).toHaveAttribute('src', 'uc://localhost/blob/image-1')
+    const image = await screen.findByAltText(/Clipboard Image|剪贴板图片/)
+    expect(image).toHaveAttribute(
+      'src',
+      'http://127.0.0.1:12345/clipboard/blobs/image-1?auth=Session+test'
+    )
+  })
+
+  it('keeps inline data image URLs as data URLs instead of prefixing daemon base URL', async () => {
+    requestMock.mockResolvedValue({
+      data: {
+        blobId: null,
+        mimeType: 'image/png',
+        sizeBytes: 123,
+        url: null,
+        inlineData: 'iVBORw0KGgo=',
+      },
+      ts: Date.now(),
+    })
+
+    render(
+      <ClipboardItem
+        index={3}
+        type="image"
+        time="just now"
+        content={{ thumbnail: null, size: 123, width: 10, height: 10 }}
+        entryId="entry-3"
+      />
+    )
+
+    const image = await screen.findByAltText(/Clipboard Image|剪贴板图片/)
+    expect(image).toHaveAttribute('src', 'data:image/png;base64,iVBORw0KGgo=')
+    expect(blobUrlMock).not.toHaveBeenCalledWith('data:image/png;base64,iVBORw0KGgo=')
   })
 })

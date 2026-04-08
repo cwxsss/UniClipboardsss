@@ -17,10 +17,12 @@ use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::server::{build_router, DaemonApiState};
 use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::pairing::host::DaemonPairingHost;
+use uc_daemon::security::SecurityState;
 use uc_daemon::state::RuntimeState;
 
 struct PairingApiFixture {
     app: axum::Router,
+    /// JWT session token (pre-obtained) for authenticated requests.
     token: String,
     runtime: Arc<CoreRuntime>,
     pairing_host: Arc<DaemonPairingHost>,
@@ -33,6 +35,15 @@ fn build_api_fixture() -> PairingApiFixture {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
+    // Give each test invocation its own DB to prevent SQLite contention.
+    let profile = format!(
+        "test_pairing_api_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    );
+    std::env::set_var("UC_PROFILE", &profile);
     let ctx = build_daemon_app().unwrap();
     let setup_ports = SetupAssemblyPorts::from_network(
         ctx.pairing_orchestrator.clone(),
@@ -42,19 +53,13 @@ fn build_api_fixture() -> PairingApiFixture {
         Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
     );
     let runtime = Arc::new(
-        build_non_gui_runtime_with_setup(
-            ctx.deps,
-            ctx.storage_paths.clone(),
-            setup_ports,
-        )
-        .unwrap(),
+        build_non_gui_runtime_with_setup(ctx.deps, ctx.storage_paths.clone(), setup_ports).unwrap(),
     );
     let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
     let query_service = Arc::new(DaemonQueryService::new(runtime.clone(), state.clone()));
     let tempdir = tempfile::tempdir().unwrap();
     let token_path = tempdir.path().join("daemon.token");
     let token = load_or_create_auth_token(&token_path).unwrap();
-    let token_value = std::fs::read_to_string(&token_path).unwrap();
     let (event_tx, _event_rx) = broadcast::channel::<DaemonWsEvent>(128);
     let pairing_host = Arc::new(DaemonPairingHost::new(
         runtime.clone(),
@@ -65,11 +70,15 @@ fn build_api_fixture() -> PairingApiFixture {
         ctx.key_slot_store,
         event_tx,
     ));
-    let api_state = DaemonApiState::new(query_service, token, Some(runtime.clone()))
+    // Pre-register the test process PID so session tokens created here pass the whitelist check.
+    let pid = std::process::id();
+    let security = Arc::new(SecurityState::new_with_pid(pid));
+    let session_token = security.make_session_token_for_pid(pid);
+    let api_state = DaemonApiState::new(query_service, token, Some(runtime.clone()), security)
         .with_pairing_host(pairing_host.clone());
     PairingApiFixture {
         app: build_router(api_state),
-        token: token_value,
+        token: session_token,
         runtime,
         pairing_host,
     }
@@ -99,10 +108,11 @@ fn authed_request(
     body: Body,
     content_type: Option<&str>,
 ) -> Request<Body> {
+    // token is a JWT session token (pre-obtained via SecurityState::make_session_token_for_pid)
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)
-        .header("Authorization", format!("Bearer {}", token.trim()));
+        .header("Authorization", format!("Session {}", token.trim()));
     if let Some(content_type) = content_type {
         builder = builder.header("Content-Type", content_type);
     }
@@ -256,13 +266,13 @@ async fn pairing_api_returns_409_active_pairing_session_exists() {
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     assert_eq!(second.status(), StatusCode::CONFLICT);
     assert_eq!(
-        json_body(second).await["error"],
-        Value::String("active_pairing_session_exists".to_string())
+        json_body(second).await["code"],
+        Value::String("active_session_exists".to_string())
     );
 }
 
 #[tokio::test]
-async fn pairing_api_returns_412_when_no_local_participant_ready() {
+async fn pairing_api_returns_400_when_no_local_participant_ready() {
     let (app, token) = build_api_router_async().await;
     assert_eq!(
         set_discoverability(&app, &token, true, Some(60_000))
@@ -273,15 +283,15 @@ async fn pairing_api_returns_412_when_no_local_participant_ready() {
 
     let response = initiate_pairing(&app, &token, "peer-a").await;
 
-    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        json_body(response).await["error"],
-        Value::String("no_local_pairing_participant_ready".to_string())
+        json_body(response).await["code"],
+        Value::String("no_local_participant".to_string())
     );
 }
 
 #[tokio::test]
-async fn pairing_api_returns_409_host_not_discoverable() {
+async fn pairing_api_returns_400_host_not_discoverable() {
     let (app, token) = build_api_router_async().await;
     assert_eq!(
         set_participant_ready(&app, &token, true, Some(60_000))
@@ -292,9 +302,9 @@ async fn pairing_api_returns_409_host_not_discoverable() {
 
     let response = initiate_pairing(&app, &token, "peer-a").await;
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        json_body(response).await["error"],
+        json_body(response).await["code"],
         Value::String("host_not_discoverable".to_string())
     );
 }
@@ -345,7 +355,7 @@ async fn pairing_api_requires_explicit_discoverability_opt_in_for_cli() {
     let response = initiate_pairing(&app, &token, "peer-a").await;
     let body = json_body(response).await;
 
-    assert_eq!(body["error"], "host_not_discoverable");
+    assert_eq!(body["code"], "host_not_discoverable");
 }
 
 #[tokio::test]
@@ -358,9 +368,9 @@ async fn pairing_api_expires_discoverability_lease() {
 
     let response = initiate_pairing(&app, &token, "peer-a").await;
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        json_body(response).await["error"],
+        json_body(response).await["code"],
         Value::String("host_not_discoverable".to_string())
     );
 }

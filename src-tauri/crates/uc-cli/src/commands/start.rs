@@ -4,6 +4,7 @@ use std::fmt;
 use std::process::Stdio;
 
 use serde::Serialize;
+use uc_app::app_paths::AppPaths;
 
 use crate::exit_codes;
 use crate::local_daemon;
@@ -49,12 +50,12 @@ pub async fn run(foreground: bool, json: bool, verbose: bool) -> i32 {
 ///
 /// Returns `Some(exit_code)` if start should be blocked, `None` if ok to proceed.
 fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
-    let paths = match resolve_lightweight_app_paths() {
-        Some(p) => p,
+    let app_dirs = match uc_bootstrap::assembly::get_default_app_dirs().ok() {
+        Some(d) => d,
         None => return None, // Can't resolve — let daemon handle it
     };
 
-    let marker_file = paths.encryption_marker_path();
+    let marker_file = AppPaths::from_app_dirs(&app_dirs).encryption_marker_path();
     if marker_file.exists() {
         return None; // Setup complete — proceed
     }
@@ -73,17 +74,6 @@ fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
         );
     }
     Some(exit_codes::EXIT_ERROR)
-}
-
-/// Resolve application paths without building a full runtime.
-///
-/// Uses `resolve_app_config()` which reads config.toml (dev mode) or falls
-/// back to platform-specific app data directory, then builds `AppPaths`
-/// for consistent path resolution.
-fn resolve_lightweight_app_paths() -> Option<uc_app::app_paths::AppPaths> {
-    let config = uc_bootstrap::config_resolution::resolve_app_config().ok()?;
-    let platform_dirs = uc_bootstrap::assembly::get_default_app_dirs().ok()?;
-    uc_bootstrap::assembly::resolve_app_paths(&platform_dirs, &config).ok()
 }
 
 async fn run_background(json: bool) -> i32 {
@@ -124,7 +114,7 @@ async fn run_foreground(json: bool, _verbose: bool) -> i32 {
         return exit_codes::EXIT_SUCCESS;
     }
 
-    let daemon_binary = match local_daemon::resolve_daemon_binary_path() {
+    let cli_exe = match local_daemon::resolve_cli_exe_path() {
         Ok(path) => path,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -136,7 +126,8 @@ async fn run_foreground(json: bool, _verbose: bool) -> i32 {
         println!("Starting daemon in foreground... (press Ctrl+C to stop)");
     }
 
-    let mut child = match std::process::Command::new(&daemon_binary)
+    let mut child = match std::process::Command::new(&cli_exe)
+        .arg("daemon")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

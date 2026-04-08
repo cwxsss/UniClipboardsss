@@ -90,6 +90,7 @@ export function useClipboardEvents(currentFilter: Filter): UseClipboardEventsRet
     currentFilterRef.current = currentFilter
     if (!encryptionReady) {
       pendingInitialLoadRef.current = true
+      loadInFlightRef.current = false // Deferred — no in-flight request, so reset flag.
       console.log('[useClipboardEvents] Encryption not ready, deferring clipboard load')
       return
     }

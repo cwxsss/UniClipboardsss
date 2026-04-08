@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, trace};
 
 use uc_core::ports::clipboard::ProcessingUpdateOutcome;
 use uc_core::{
@@ -76,10 +76,10 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
                 .await
                 .context("failed to decrypt inline_data")?;
 
-            debug!(
-                "Decrypted inline_data for rep {} ({} bytes)",
-                representation_id.as_ref(),
-                plaintext.len()
+            trace!(
+                representation_id = %representation_id.as_ref(),
+                bytes = plaintext.len(),
+                "Decrypted inline_data for representation"
             );
 
             Some(plaintext)
@@ -117,9 +117,9 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
         };
 
         if rep.inline_data.is_some() {
-            debug!(
-                "Skipping inline_data decryption for rep {}: event_id unavailable",
-                representation_id.as_ref()
+            trace!(
+                representation_id = %representation_id.as_ref(),
+                "Skipping inline_data decryption: event_id unavailable"
             );
         }
 
@@ -137,9 +137,9 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
         };
 
         if rep.inline_data.is_some() {
-            debug!(
-                "Skipping inline_data decryption for blob {}: event_id unavailable",
-                blob_id.as_ref()
+            trace!(
+                blob_id = %blob_id.as_ref(),
+                "Skipping inline_data decryption: event_id unavailable"
             );
         }
 
@@ -187,6 +187,9 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
         event_id: &EventId,
     ) -> Result<Vec<PersistedClipboardRepresentation>> {
         let reps = self.inner.get_representations_for_event(event_id).await?;
+        let input_count = reps.len();
+        let mut decrypted_count = 0usize;
+        let mut decrypted_bytes = 0usize;
         let mut result = Vec::with_capacity(reps.len());
         for rep in reps {
             if let Some(ref encrypted_bytes) = rep.inline_data {
@@ -204,6 +207,8 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
                             .await
                         {
                             Ok(plaintext) => {
+                                decrypted_count += 1;
+                                decrypted_bytes += plaintext.len();
                                 result.push(PersistedClipboardRepresentation::new_with_state(
                                     rep.id,
                                     rep.format_id,
@@ -229,6 +234,15 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
             } else {
                 result.push(rep);
             }
+        }
+        if decrypted_count > 0 {
+            debug!(
+                event_id = %event_id.as_ref(),
+                representations = input_count,
+                decrypted = decrypted_count,
+                decrypted_bytes,
+                "Decrypted representations for event"
+            );
         }
         Ok(result)
     }

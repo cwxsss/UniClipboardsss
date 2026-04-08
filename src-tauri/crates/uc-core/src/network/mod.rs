@@ -1,13 +1,15 @@
 //! Network protocol types.
 
+pub mod address_registry;
 pub mod connection_policy;
+pub mod daemon_api_strings;
 pub mod events;
 pub mod paired_device;
 pub mod pairing_state_machine;
 pub mod protocol;
-pub mod daemon_api_strings;
 pub mod protocol_ids;
 
+pub use address_registry::{AddressRecord, AddressRegistry, AddressScope, AddressSource};
 pub use connection_policy::{
     AllowedProtocols, ConnectionPolicy, ProtocolKind, ResolvedConnectionPolicy,
 };

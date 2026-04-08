@@ -1,14 +1,14 @@
 //! File transfer event-loop orchestration for durable status transitions.
 //!
 //! Handles pending/transferring/completed/failed lifecycle through the
-//! `TrackInboundTransfersUseCase`, emits `file-transfer://status-changed`
-//! events, runs periodic timeout sweeps, and performs startup reconciliation.
+//! `TrackInboundTransfersUseCase`, emits `file-transfer.status_changed`
+//! events via WS, runs periodic timeout sweeps, and performs startup reconciliation.
 //!
 //! The orchestrator holds a shared swappable emitter cell
 //! `Arc<RwLock<Arc<dyn HostEventEmitterPort>>>` — matching the `HostEventSetupPort`
 //! pattern in assembly.rs. This eliminates any emitter timing problem: the
 //! orchestrator can be constructed at wire time with the `LoggingEventEmitter`
-//! inside the cell, and automatically uses the `TauriEventEmitter` after the swap.
+//! inside the cell, and automatically uses the `DaemonApiEventEmitter` after the swap.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -79,7 +79,7 @@ pub struct FileTransferStatusPayload {
 /// Orchestrator for file transfer lifecycle management.
 ///
 /// Holds a shared swappable emitter cell so it can be constructed at wire
-/// time and automatically pick up the real `TauriEventEmitter` after bootstrap
+/// time and automatically pick up the real `DaemonApiEventEmitter` after bootstrap
 /// swaps the cell, without needing `Option` or deferred construction.
 pub struct FileTransferOrchestrator {
     tracker: Arc<TrackInboundTransfersUseCase>,
@@ -93,7 +93,7 @@ impl FileTransferOrchestrator {
     ///
     /// `emitter_cell` is the shared `Arc<RwLock<Arc<dyn HostEventEmitterPort>>>` created
     /// once at wire time. The cell initially holds a `LoggingEventEmitter`; bootstrap
-    /// later swaps it to a `TauriEventEmitter` — and this orchestrator automatically
+    /// later swaps it to a `DaemonApiEventEmitter` — and this orchestrator automatically
     /// sees the new emitter on every call.
     pub fn new(
         tracker: Arc<TrackInboundTransfersUseCase>,

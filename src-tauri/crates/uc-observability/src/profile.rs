@@ -34,6 +34,12 @@ const NOISE_FILTERS: &[&str] = &[
     "ipc::request=off",
     "hyper_util=info",
     "hyper=info",
+    "quinn=info",
+    "quinn_proto=info",
+    "quinn_udp=info",
+    "Connection::poll=warn",
+    "Pool::poll=warn",
+    "Swarm::poll=warn",
 ];
 
 impl LogProfile {
@@ -69,6 +75,18 @@ impl LogProfile {
             return EnvFilter::new("off");
         }
         self.build_filter()
+    }
+
+    /// Build the `EnvFilter` for the OTLP export layer.
+    ///
+    /// Always INFO-and-above regardless of profile. Debug/trace spans must
+    /// never leave the machine via OTLP telemetry.
+    pub fn otlp_filter(&self) -> EnvFilter {
+        let mut directives = vec!["info".to_string()];
+        for &filter in NOISE_FILTERS {
+            directives.push(filter.to_string());
+        }
+        EnvFilter::new(directives.join(","))
     }
 
     /// Build the `EnvFilter` for the JSON file layer.
@@ -306,6 +324,30 @@ mod tests {
             assert!(
                 directives.contains("hyper=info"),
                 "Missing hyper=info in {profile}"
+            );
+            assert!(
+                directives.contains("Connection::poll=warn"),
+                "Missing Connection::poll=warn in {profile}"
+            );
+            assert!(
+                directives.contains("Pool::poll=warn"),
+                "Missing Pool::poll=warn in {profile}"
+            );
+            assert!(
+                directives.contains("Swarm::poll=warn"),
+                "Missing Swarm::poll=warn in {profile}"
+            );
+            assert!(
+                directives.contains("quinn=info"),
+                "Missing quinn=info in {profile}"
+            );
+            assert!(
+                directives.contains("quinn_proto=info"),
+                "Missing quinn_proto=info in {profile}"
+            );
+            assert!(
+                directives.contains("quinn_udp=info"),
+                "Missing quinn_udp=info in {profile}"
             );
         }
     }

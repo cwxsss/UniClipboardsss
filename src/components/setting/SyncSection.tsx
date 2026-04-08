@@ -2,15 +2,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { SettingGroup } from './SettingGroup'
 import { SettingRow } from './SettingRow'
-import {
-  Switch,
-  Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui'
+import { Switch, Input, Badge } from '@/components/ui'
 import { useSetting } from '@/hooks/useSetting'
 
 const MB = 1024 * 1024
@@ -27,39 +19,27 @@ const SyncSection: React.FC = () => {
   const { setting, error, updateSyncSetting, updateFileSyncSetting } = useSetting()
 
   // Local state for UI display - initialize from setting to avoid flash
-  const [autoSync, setAutoSync] = useState(setting?.sync.auto_sync ?? true)
-  const [syncFrequency, setSyncFrequency] = useState<string>(
-    setting?.sync.sync_frequency ?? 'realtime'
-  )
-
-  const [maxFileSize, setMaxFileSize] = useState(setting?.sync.max_file_size_mb ?? 10)
-  const [maxFileSizeError, setMaxFileSizeError] = useState<string | null>(null)
+  const [autoSync, setAutoSync] = useState(setting?.sync.autoSync ?? true)
 
   // File sync local state
-  const [fileSyncEnabled, setFileSyncEnabled] = useState(
-    setting?.file_sync?.file_sync_enabled ?? true
-  )
+  const [fileSyncEnabled, setFileSyncEnabled] = useState(setting?.fileSync?.fileSyncEnabled ?? true)
   const [smallFileThreshold, setSmallFileThreshold] = useState(
-    bytesToMb(setting?.file_sync?.small_file_threshold ?? 10 * MB)
+    bytesToMb(setting?.fileSync?.smallFileThreshold ?? 10 * MB)
   )
   const [smallFileThresholdError, setSmallFileThresholdError] = useState<string | null>(null)
   const [maxFileSizeLimit, setMaxFileSizeLimit] = useState(
-    bytesToMb(setting?.file_sync?.max_file_size ?? 5120 * MB)
+    bytesToMb(setting?.fileSync?.maxFileSize ?? 5120 * MB)
   )
   const [maxFileSizeLimitError, setMaxFileSizeLimitError] = useState<string | null>(null)
   const [cacheQuota, setCacheQuota] = useState(
-    bytesToMb(setting?.file_sync?.file_cache_quota_per_device ?? 500 * MB)
+    bytesToMb(setting?.fileSync?.fileCacheQuotaPerDevice ?? 500 * MB)
   )
   const [cacheQuotaError, setCacheQuotaError] = useState<string | null>(null)
-  const [retentionHours, setRetentionHours] = useState(
-    setting?.file_sync?.file_retention_hours ?? 24
-  )
+  const [retentionHours, setRetentionHours] = useState(setting?.fileSync?.fileRetentionHours ?? 24)
   const [retentionHoursError, setRetentionHoursError] = useState<string | null>(null)
-  const [fileAutoCleanup, setFileAutoCleanup] = useState(
-    setting?.file_sync?.file_auto_cleanup ?? true
-  )
+  const [fileAutoCleanup, setFileAutoCleanup] = useState(setting?.fileSync?.fileAutoCleanup ?? true)
 
-  // Sync frequency options
+  // Sync frequency options (for display in coming-soon label)
   const syncFrequencyOptions = [
     { value: 'realtime', label: t('settings.sections.sync.syncFrequency.realtime') },
     { value: '30s', label: t('settings.sections.sync.syncFrequency.30s') },
@@ -71,65 +51,29 @@ const SyncSection: React.FC = () => {
   // Update local state when settings are loaded
   useEffect(() => {
     if (setting) {
-      setAutoSync(setting.sync.auto_sync)
-      setSyncFrequency(setting.sync.sync_frequency)
-      setMaxFileSize(setting.sync.max_file_size_mb)
+      setAutoSync(setting.sync.autoSync)
 
       // File sync settings
-      setFileSyncEnabled(setting.file_sync?.file_sync_enabled ?? true)
-      setSmallFileThreshold(bytesToMb(setting.file_sync?.small_file_threshold ?? 10 * MB))
-      setMaxFileSizeLimit(bytesToMb(setting.file_sync?.max_file_size ?? 5120 * MB))
-      setCacheQuota(bytesToMb(setting.file_sync?.file_cache_quota_per_device ?? 500 * MB))
-      setRetentionHours(setting.file_sync?.file_retention_hours ?? 24)
-      setFileAutoCleanup(setting.file_sync?.file_auto_cleanup ?? true)
+      setFileSyncEnabled(setting.fileSync?.fileSyncEnabled ?? true)
+      setSmallFileThreshold(bytesToMb(setting.fileSync?.smallFileThreshold ?? 10 * MB))
+      setMaxFileSizeLimit(bytesToMb(setting.fileSync?.maxFileSize ?? 5120 * MB))
+      setCacheQuota(bytesToMb(setting.fileSync?.fileCacheQuotaPerDevice ?? 500 * MB))
+      setRetentionHours(setting.fileSync?.fileRetentionHours ?? 24)
+      setFileAutoCleanup(setting.fileSync?.fileAutoCleanup ?? true)
     }
   }, [setting])
 
   // Handle auto sync switch change
   const handleAutoSyncChange = (checked: boolean) => {
     setAutoSync(checked)
-    updateSyncSetting({ auto_sync: checked })
-  }
-
-  // Handle sync frequency change
-  const handleSyncFrequencyChange = (value: string) => {
-    setSyncFrequency(value)
-    updateSyncSetting({ sync_frequency: value as 'realtime' | 'interval' })
-  }
-
-  // Handle max file size change
-  const handleMaxFileSizeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value
-
-    if (!value.trim()) {
-      setMaxFileSizeError(null)
-      setMaxFileSize(0)
-      return
-    }
-
-    if (!/^\d+$/.test(value)) {
-      setMaxFileSizeError(t('settings.sections.sync.maxFileSize.errors.invalid'))
-      setMaxFileSize(parseInt(value) || 0)
-      return
-    }
-
-    const size = parseInt(value)
-    setMaxFileSize(size)
-
-    if (size < 1 || size > 50) {
-      setMaxFileSizeError(t('settings.sections.sync.maxFileSize.errors.range'))
-      return
-    }
-
-    setMaxFileSizeError(null)
-    updateSyncSetting({ max_file_size_mb: size })
+    updateSyncSetting({ autoSync: checked })
   }
 
   // --- File sync handlers ---
 
   const handleFileSyncEnabledChange = (checked: boolean) => {
     setFileSyncEnabled(checked)
-    updateFileSyncSetting({ file_sync_enabled: checked })
+    updateFileSyncSetting({ fileSyncEnabled: checked })
   }
 
   const handleSmallFileThresholdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -167,7 +111,7 @@ const SyncSection: React.FC = () => {
     }
 
     setSmallFileThresholdError(null)
-    updateFileSyncSetting({ small_file_threshold: mbToBytes(size) })
+    updateFileSyncSetting({ smallFileThreshold: mbToBytes(size) })
   }
 
   const handleMaxFileSizeLimitChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -194,7 +138,7 @@ const SyncSection: React.FC = () => {
     }
 
     setMaxFileSizeLimitError(null)
-    updateFileSyncSetting({ max_file_size: mbToBytes(size) })
+    updateFileSyncSetting({ maxFileSize: mbToBytes(size) })
   }
 
   const handleCacheQuotaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -221,7 +165,7 @@ const SyncSection: React.FC = () => {
     }
 
     setCacheQuotaError(null)
-    updateFileSyncSetting({ file_cache_quota_per_device: mbToBytes(size) })
+    updateFileSyncSetting({ fileCacheQuotaPerDevice: mbToBytes(size) })
   }
 
   const handleRetentionHoursChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -248,12 +192,12 @@ const SyncSection: React.FC = () => {
     }
 
     setRetentionHoursError(null)
-    updateFileSyncSetting({ file_retention_hours: hours })
+    updateFileSyncSetting({ fileRetentionHours: hours })
   }
 
   const handleFileAutoCleanupChange = (checked: boolean) => {
     setFileAutoCleanup(checked)
-    updateFileSyncSetting({ file_auto_cleanup: checked })
+    updateFileSyncSetting({ fileAutoCleanup: checked })
   }
 
   // Show error message if any
@@ -279,35 +223,13 @@ const SyncSection: React.FC = () => {
           label={t('settings.sections.sync.syncFrequency.label')}
           description={t('settings.sections.sync.syncFrequency.description')}
         >
-          <Select value={syncFrequency} onValueChange={handleSyncFrequencyChange}>
-            <SelectTrigger className="w-52">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {syncFrequencyOptions.map(option => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </SettingRow>
-
-        <SettingRow
-          label={t('settings.sections.sync.maxFileSize.label')}
-          description={t('settings.sections.sync.maxFileSize.description')}
-        >
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex items-center gap-2">
-              <Input
-                type="text"
-                value={maxFileSize.toString()}
-                onChange={handleMaxFileSizeChange}
-                className={maxFileSizeError ? 'border-red-500 w-32' : 'w-32'}
-              />
-              <span className="text-sm text-muted-foreground">MB</span>
-            </div>
-            {maxFileSizeError && <p className="text-xs text-red-500">{maxFileSizeError}</p>}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">
+              {syncFrequencyOptions.find(
+                o => o.value === (setting?.sync.syncFrequency ?? 'realtime')
+              )?.label ?? t('settings.sections.sync.syncFrequency.realtime')}
+            </span>
+            <Badge variant="secondary">{t('devices.settings.badges.comingSoon')}</Badge>
           </div>
         </SettingRow>
       </SettingGroup>

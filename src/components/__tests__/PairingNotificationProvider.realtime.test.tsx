@@ -276,4 +276,168 @@ describe('PairingNotificationProvider realtime', () => {
     // getSetupStateMock should never have been called during render
     expect(getSetupStateMock).not.toHaveBeenCalled()
   })
+
+  // ── Observability path tests ────────────────────────────────────────────────────────
+
+  it('ignores verification event when session does not match active session', async () => {
+    const consoleSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    const { PairingNotificationProvider } = await import('@/components/PairingNotificationProvider')
+    render(<PairingNotificationProvider />)
+
+    // Accept request to set the active session
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'request',
+        sessionId: 'session-active',
+        peerId: 'peer-1',
+        deviceName: 'Phone',
+      })
+    })
+    const toastOptions = toastMock.mock.calls[0]?.[1]
+    await act(async () => {
+      await toastOptions?.action?.onClick()
+    })
+
+    // Now send a verification for a DIFFERENT session — must be ignored
+    await act(async () => {
+      capturedVerificationCallback?.({
+        kind: 'verification',
+        sessionId: 'session-other',
+        peerId: 'peer-1',
+        deviceName: 'Phone',
+        code: '999888',
+      })
+    })
+
+    // The dialog must NOT show the mismatched session's code
+    const dialogContent = screen.getByTestId('pairing-pin-dialog').textContent ?? ''
+    expect(dialogContent).not.toContain('"pinCode":"999888"')
+
+    // Observability: logProviderDecision should have emitted an 'ignored' decision log
+    const ignoredLogs = consoleSpy.mock.calls
+      .map(args => (args[0] as string) || '')
+      .filter(msg => msg.includes('ignored') && msg.includes('session_mismatch'))
+    expect(ignoredLogs.length).toBeGreaterThan(0)
+
+    consoleSpy.mockRestore()
+  })
+
+  it('records logProviderDecision for session_mismatch on complete event from wrong session', async () => {
+    const consoleSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    const { PairingNotificationProvider } = await import('@/components/PairingNotificationProvider')
+    render(<PairingNotificationProvider />)
+
+    // Accept a request to establish active session
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'request',
+        sessionId: 'session-real',
+        peerId: 'peer-1',
+        deviceName: 'Laptop',
+      })
+    })
+    const toastOptions = toastMock.mock.calls[0]?.[1]
+    await act(async () => {
+      await toastOptions?.action?.onClick()
+    })
+
+    // Send complete for a different session — must be ignored and logged
+    act(() => {
+      capturedVerificationCallback?.({ kind: 'complete', sessionId: 'session-interloper' })
+    })
+
+    const ignoredLogs = consoleSpy.mock.calls
+      .map(args => (args[0] as string) || '')
+      .filter(
+        msg =>
+          msg.includes('[PairingNotificationProvider] ignored') && msg.includes('session_mismatch')
+      )
+    expect(ignoredLogs.length).toBeGreaterThan(0)
+
+    consoleSpy.mockRestore()
+  })
+
+  it('records success decision log when space access completes for active session', async () => {
+    vi.useFakeTimers()
+    const consoleSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    const { PairingNotificationProvider } = await import('@/components/PairingNotificationProvider')
+    render(<PairingNotificationProvider />)
+
+    // Establish active session via accept
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'request',
+        sessionId: 'session-success',
+        peerId: 'peer-1',
+        deviceName: 'Watch',
+      })
+    })
+    const toastOptions = toastMock.mock.calls[0]?.[1]
+    await act(async () => {
+      await toastOptions?.action?.onClick()
+    })
+
+    // Complete via space access
+    act(() => {
+      capturedSpaceAccessCallback?.({ sessionId: 'session-success', success: true })
+    })
+
+    // Observability: success decision logged for spaceAccessCompleted path
+    const successLogs = consoleSpy.mock.calls
+      .map(args => (args[0] as string) || '')
+      .filter(
+        msg =>
+          msg.includes('[PairingNotificationProvider] success') &&
+          msg.includes('spaceAccessCompleted')
+      )
+    expect(successLogs.length).toBeGreaterThan(0)
+
+    consoleSpy.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('records failure decision log when space access fails for active session', async () => {
+    const consoleSpy = vi.spyOn(console, 'debug').mockImplementation(() => {})
+
+    const { PairingNotificationProvider } = await import('@/components/PairingNotificationProvider')
+    render(<PairingNotificationProvider />)
+
+    // Establish active session via accept
+    act(() => {
+      capturedVerificationCallback?.({
+        kind: 'request',
+        sessionId: 'session-fail',
+        peerId: 'peer-1',
+        deviceName: 'Tablet',
+      })
+    })
+    const toastOptions = toastMock.mock.calls[0]?.[1]
+    await act(async () => {
+      await toastOptions?.action?.onClick()
+    })
+
+    // Fail via space access
+    act(() => {
+      capturedSpaceAccessCallback?.({
+        sessionId: 'session-fail',
+        success: false,
+        reason: 'space_denied',
+      })
+    })
+
+    // Observability: failure decision logged for spaceAccessCompleted path
+    const failureLogs = consoleSpy.mock.calls
+      .map(args => (args[0] as string) || '')
+      .filter(
+        msg =>
+          msg.includes('[PairingNotificationProvider] failure') &&
+          msg.includes('spaceAccessCompleted')
+      )
+    expect(failureLogs.length).toBeGreaterThan(0)
+
+    consoleSpy.mockRestore()
+  })
 })

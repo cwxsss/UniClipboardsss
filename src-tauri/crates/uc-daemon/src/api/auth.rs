@@ -2,19 +2,21 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use rand::RngCore;
-
-use crate::socket::resolve_daemon_token_path_from;
+use tracing::debug;
 
 /// Connection details for loopback daemon clients.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonConnectionInfo {
     pub base_url: String,
     pub ws_url: String,
+    /// Raw bearer token (used only to exchange for session JWT).
     pub token: String,
+    /// PID of the client process (used for daemon JWT PID whitelist verification).
+    pub pid: u32,
 }
 
 /// Internal daemon bearer token.
@@ -27,13 +29,9 @@ impl DaemonAuthToken {
     }
 }
 
-/// Resolve the explicit daemon-local token filename within the provided base dir.
-pub fn resolve_daemon_token_path(base_dir: &Path) -> PathBuf {
-    resolve_daemon_token_path_from(base_dir)
-}
-
 /// Load the daemon auth token from disk or create a new restricted file when missing.
 pub fn load_or_create_auth_token(token_path: &Path) -> Result<DaemonAuthToken> {
+    debug!(token_path = %token_path.display(), token_path_exists = token_path.exists(), "load_or_create_auth_token: entering");
     if token_path.exists() {
         let existing = fs::read_to_string(token_path).with_context(|| {
             format!(
@@ -58,11 +56,13 @@ pub fn build_connection_info(
     host: &str,
     port: u16,
     token: &DaemonAuthToken,
+    pid: u32,
 ) -> DaemonConnectionInfo {
     DaemonConnectionInfo {
         base_url: format!("http://{host}:{port}"),
         ws_url: format!("ws://{host}:{port}/ws"),
         token: token.as_str().to_string(),
+        pid,
     }
 }
 

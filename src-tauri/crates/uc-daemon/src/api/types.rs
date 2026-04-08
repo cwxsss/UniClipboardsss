@@ -6,8 +6,6 @@ use uc_app::usecases::pairing::get_p2p_peers_snapshot::P2pPeerSnapshot;
 use uc_core::network::PairedDevice;
 use uc_core::security::space_access::state::SpaceAccessState;
 
-use crate::state::DaemonPairingSessionSnapshot;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
@@ -54,56 +52,12 @@ pub struct PairedDeviceDto {
     pub connected: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PairingSessionSummaryDto {
-    pub session_id: String,
-    pub peer_id: Option<String>,
-    pub device_name: Option<String>,
-    pub state: String,
-    pub updated_at_ms: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupStateResponse {
-    pub state: Value,
-    pub session_id: Option<String>,
-    pub next_step_hint: String,
-    pub profile: String,
-    pub clipboard_mode: String,
-    pub device_name: String,
-    pub peer_id: String,
-    pub selected_peer_id: Option<String>,
-    pub selected_peer_name: Option<String>,
-    pub has_completed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupSelectPeerRequest {
-    pub peer_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupSubmitPassphraseRequest {
-    pub passphrase: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupActionAckResponse {
     pub state: Value,
     pub session_id: Option<String>,
     pub next_step_hint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupResetResponse {
-    pub profile: String,
-    pub daemon_kept_running: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -210,6 +164,16 @@ pub struct SpaceAccessStateResponse {
     pub state: SpaceAccessState,
 }
 
+/// Response payload for GET /lifecycle/status.
+/// Mirrors the frontend LifecycleStatusDto shape so the HTTP endpoint
+/// can replace the Tauri get_lifecycle_status command without frontend type changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleStatusResponse {
+    /// Current lifecycle state.
+    pub state: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonWsSubscribeRequest {
@@ -255,14 +219,11 @@ impl From<PairedDevice> for PairedDeviceDto {
     }
 }
 
-impl From<DaemonPairingSessionSnapshot> for PairingSessionSummaryDto {
-    fn from(value: DaemonPairingSessionSnapshot) -> Self {
-        Self {
-            session_id: value.session_id,
-            peer_id: value.peer_id,
-            device_name: value.device_name,
-            state: value.state,
-            updated_at_ms: value.updated_at_ms,
-        }
-    }
-}
+pub use crate::api::dto::device::LocalDeviceInfoDto;
+pub use crate::api::dto::pairing::PairingSessionSummaryDto;
+
+// Re-export setup DTOs for backward compatibility with internal consumers.
+pub use crate::api::dto::setup::{
+    GetSetupStateResponse, SetupActionResponse, SetupResetResponse, SetupSelectPeerRequest,
+    SetupStateResponse, SetupStateResponseDto, SetupSubmitPassphraseRequest,
+};

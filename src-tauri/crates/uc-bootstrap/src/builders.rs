@@ -38,7 +38,6 @@ use crate::assembly::{
     get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
     BackgroundRuntimeDeps, SetupAssemblyPorts,
 };
-use crate::config_resolution::resolve_app_config;
 
 /// Context for GUI entry point. Contains everything needed to construct
 /// AppRuntime EXCEPT tauri::AppHandle. uc-tauri calls AppRuntime::with_setup()
@@ -96,7 +95,7 @@ fn build_core(
     // Idempotent -- safe to call multiple times
     crate::tracing::init_tracing_subscriber()?;
 
-    let config = resolve_app_config().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let config = AppConfig::empty();
 
     let wired = wire_dependencies(&config, pairing_runtime_owner)
         .map_err(|e| anyhow::anyhow!("Dependency wiring failed: {}", e))?;

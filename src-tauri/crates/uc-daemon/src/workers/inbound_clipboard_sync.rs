@@ -18,13 +18,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use uc_app::runtime::CoreRuntime;
+use uc_app::usecases::clipboard::clipboard_write_coordinator::ClipboardWriteCoordinator;
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::file_sync::FileTransferOrchestrator;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::network::ClipboardMessage;
 use uc_core::ports::file_transfer_repository::PendingInboundTransfer;
-use uc_core::ports::ClipboardChangeOriginPort;
 use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
 
 use crate::api::types::DaemonWsEvent;
@@ -61,9 +61,10 @@ struct ClipboardNewContentPayload {
 pub struct InboundClipboardSyncWorker {
     runtime: Arc<CoreRuntime>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
-    /// Shared clipboard change origin for write-back loop prevention.
-    /// MUST be the SAME Arc instance used by DaemonClipboardChangeHandler.
-    clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    /// Coordinator for Full-mode OS clipboard writes and write-back loop prevention.
+    /// MUST wrap the SAME Arc<ClipboardChangeOriginPort> instance used by
+    /// DaemonClipboardChangeHandler to share guard state.
+    clipboard_write_coordinator: Arc<ClipboardWriteCoordinator>,
     file_cache_dir: Option<PathBuf>,
     file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
 }
@@ -71,21 +72,21 @@ pub struct InboundClipboardSyncWorker {
 impl InboundClipboardSyncWorker {
     /// Create a new InboundClipboardSyncWorker.
     ///
-    /// The `clipboard_change_origin` MUST be the same Arc instance used by
-    /// `DaemonClipboardChangeHandler` in the daemon composition root. Sharing
-    /// the same instance is what prevents write-back loops between inbound sync
-    /// and the ClipboardWatcher.
+    /// The `clipboard_write_coordinator` MUST wrap the same `ClipboardChangeOriginPort`
+    /// instance used by `DaemonClipboardChangeHandler` in the daemon composition root.
+    /// Sharing the same origin port instance is what prevents write-back loops between
+    /// inbound sync and the ClipboardWatcher.
     pub fn new(
         runtime: Arc<CoreRuntime>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
-        clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+        clipboard_write_coordinator: Arc<ClipboardWriteCoordinator>,
         file_cache_dir: Option<PathBuf>,
         file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
     ) -> Self {
         Self {
             runtime,
             event_tx,
-            clipboard_change_origin,
+            clipboard_write_coordinator,
             file_cache_dir,
             file_transfer_orchestrator,
         }
@@ -95,8 +96,6 @@ impl InboundClipboardSyncWorker {
         let deps = self.runtime.wiring_deps();
         SyncInboundClipboardUseCase::with_capture_dependencies(
             ClipboardIntegrationMode::Full,
-            deps.clipboard.system_clipboard.clone(),
-            self.clipboard_change_origin.clone(),
             deps.security.encryption_session.clone(),
             deps.security.encryption.clone(),
             deps.device.device_identity.clone(),
@@ -110,6 +109,7 @@ impl InboundClipboardSyncWorker {
             self.file_cache_dir.clone(),
             deps.settings.clone(),
         )
+        .with_clipboard_write_coordinator(self.clipboard_write_coordinator.clone())
     }
 }
 
@@ -303,6 +303,7 @@ impl InboundClipboardSyncWorker {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -311,19 +312,24 @@ mod tests {
     use anyhow::Result;
     use async_trait::async_trait;
     use chrono::Utc;
+    use uc_app::usecases::clipboard::clipboard_write_coordinator::ClipboardWriteCoordinator;
     use uc_app::usecases::clipboard::ClipboardIntegrationMode;
-    use uc_core::ids::{EntryId, FormatId, RepresentationId};
+    use uc_core::ids::{EntryId, RepresentationId};
     use uc_core::network::protocol::{
         BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion,
     };
     use uc_core::network::ClipboardMessage;
+    use uc_core::ports::{ClipboardChangeOriginPort, SystemClipboardPort};
     use uc_core::security::model::{EncryptionError, KdfParams, Kek, MasterKey, Passphrase};
     use uc_core::{
-        ClipboardChangeOrigin, ClipboardEntry, ClipboardEvent, ClipboardSelectionDecision,
-        DeviceId, MimeType, ObservedClipboardRepresentation, PersistedClipboardRepresentation,
-        SystemClipboardSnapshot,
+        ClipboardEntry, ClipboardEvent, ClipboardSelectionDecision, DeviceId,
+        ObservedClipboardRepresentation, PersistedClipboardRepresentation, SystemClipboardSnapshot,
     };
-    use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
+    use uc_infra::clipboard::{new_in_memory_change_origin, TransferPayloadDecryptorAdapter};
+
+    fn test_origin() -> Arc<dyn ClipboardChangeOriginPort> {
+        new_in_memory_change_origin()
+    }
 
     // -------------------------------------------------------------------------
     // Mock ports for SyncInboundClipboardUseCase construction
@@ -343,29 +349,6 @@ mod tests {
         fn write_snapshot(&self, snapshot: SystemClipboardSnapshot) -> Result<()> {
             self.writes.lock().unwrap().push(snapshot);
             Ok(())
-        }
-    }
-
-    struct MockChangeOrigin {
-        _calls: Arc<Mutex<Vec<&'static str>>>,
-    }
-
-    #[async_trait]
-    impl uc_core::ports::ClipboardChangeOriginPort for MockChangeOrigin {
-        async fn set_next_origin(&self, _: ClipboardChangeOrigin, _: std::time::Duration) {}
-        async fn consume_origin_or_default(
-            &self,
-            default: ClipboardChangeOrigin,
-        ) -> ClipboardChangeOrigin {
-            default
-        }
-        async fn remember_remote_snapshot_hash(&self, _: String, _: std::time::Duration) {}
-        async fn consume_origin_for_snapshot_or_default(
-            &self,
-            _: &str,
-            default: ClipboardChangeOrigin,
-        ) -> ClipboardChangeOrigin {
-            default
         }
     }
 
@@ -663,6 +646,7 @@ mod tests {
             origin_device_name: "test-peer".to_string(),
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id: None,
+            traceparent: None,
             file_transfers: vec![],
         };
         (message, plaintext)
@@ -672,12 +656,6 @@ mod tests {
     fn build_passive_usecase() -> SyncInboundClipboardUseCase {
         SyncInboundClipboardUseCase::with_capture_dependencies(
             ClipboardIntegrationMode::Passive,
-            Arc::new(MockSystemClipboard {
-                writes: Arc::new(Mutex::new(vec![])),
-            }),
-            Arc::new(MockChangeOrigin {
-                _calls: Arc::new(Mutex::new(vec![])),
-            }),
             Arc::new(MockEncryptionSession),
             Arc::new(MockEncryption),
             Arc::new(MockDeviceIdentity),
@@ -700,14 +678,16 @@ mod tests {
 
     /// Build a SyncInboundClipboardUseCase for Full mode tests (returns entry_id: None for text).
     fn build_full_usecase() -> SyncInboundClipboardUseCase {
+        let clipboard: Arc<dyn SystemClipboardPort> = Arc::new(MockSystemClipboard {
+            writes: Arc::new(Mutex::new(vec![])),
+        });
+        let origin: Arc<dyn ClipboardChangeOriginPort> = test_origin();
+        let coordinator = Arc::new(ClipboardWriteCoordinator::new(
+            clipboard.clone(),
+            origin.clone(),
+        ));
         SyncInboundClipboardUseCase::with_capture_dependencies(
             ClipboardIntegrationMode::Full,
-            Arc::new(MockSystemClipboard {
-                writes: Arc::new(Mutex::new(vec![])),
-            }),
-            Arc::new(MockChangeOrigin {
-                _calls: Arc::new(Mutex::new(vec![])),
-            }),
             Arc::new(MockEncryptionSession),
             Arc::new(MockEncryption),
             Arc::new(MockDeviceIdentity),
@@ -726,6 +706,7 @@ mod tests {
             None,
             Arc::new(MockSettings),
         )
+        .with_clipboard_write_coordinator(coordinator)
     }
 
     // -------------------------------------------------------------------------
@@ -864,37 +845,15 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // PH62-05: Shared clipboard_change_origin Arc enforced by constructor signature
+    // PH73-02: coordinator field type enforced by constructor signature
     // -------------------------------------------------------------------------
 
     #[test]
-    fn constructor_requires_clipboard_change_origin_arc() {
-        // This is a compile-time verification that the constructor requires
-        // Arc<dyn ClipboardChangeOriginPort>. If the field type changes (e.g., to a
-        // concrete type or a different Arc), this test will fail to compile.
-        //
-        // We verify it compiles by creating a struct with the expected field type.
-        struct WorkerWithOriginField {
-            clipboard_change_origin: Arc<dyn uc_core::ports::ClipboardChangeOriginPort>,
-        }
-
-        // This assertion passes if the InboundClipboardSyncWorker struct field type
-        // is exactly Arc<dyn ClipboardChangeOriginPort>.
+    fn constructor_requires_clipboard_write_coordinator_arc() {
+        // Compile-time verification that the constructor requires Arc<ClipboardWriteCoordinator>.
+        // If the field type changes this test will fail to compile.
         fn _assert_type_matches(worker: &InboundClipboardSyncWorker) {
-            let _ = &worker.clipboard_change_origin;
-            // The type of worker.clipboard_change_origin must be exactly
-            // Arc<dyn ClipboardChangeOriginPort> for this to type-check.
-            let _: &Arc<dyn uc_core::ports::ClipboardChangeOriginPort> =
-                &worker.clipboard_change_origin;
-        }
-
-        // Verify the assertion compiles (it does because the field type matches).
-        fn _type_check() {
-            let origin: Arc<dyn uc_core::ports::ClipboardChangeOriginPort> =
-                Arc::new(MockChangeOrigin {
-                    _calls: Arc::new(Mutex::new(vec![])),
-                });
-            let _ = origin;
+            let _: &Arc<ClipboardWriteCoordinator> = &worker.clipboard_write_coordinator;
         }
     }
 }

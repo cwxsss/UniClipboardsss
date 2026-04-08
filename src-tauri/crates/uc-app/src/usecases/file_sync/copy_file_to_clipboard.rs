@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{bail, Result};
 use tracing::{info, info_span, warn, Instrument};
@@ -9,11 +8,11 @@ use uc_core::clipboard::{
     ClipboardIntegrationMode, MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
 };
 use uc_core::ids::{EntryId, FormatId, RepresentationId};
-use uc_core::ports::{
-    ClipboardChangeOriginPort, ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort,
-    SystemClipboardPort,
+use uc_core::ports::{ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort};
+
+use crate::usecases::clipboard::clipboard_write_coordinator::{
+    ClipboardWriteCoordinator, ClipboardWriteIntent,
 };
-use uc_core::ClipboardChangeOrigin;
 
 /// Use case for copying file references from a clipboard entry back to the system clipboard.
 ///
@@ -22,8 +21,7 @@ use uc_core::ClipboardChangeOrigin;
 pub struct CopyFileToClipboardUseCase {
     entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
     representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-    local_clipboard: Arc<dyn SystemClipboardPort>,
-    clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    coordinator: Arc<ClipboardWriteCoordinator>,
     mode: ClipboardIntegrationMode,
 }
 
@@ -31,15 +29,13 @@ impl CopyFileToClipboardUseCase {
     pub fn new(
         entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
         representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-        local_clipboard: Arc<dyn SystemClipboardPort>,
-        clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+        coordinator: Arc<ClipboardWriteCoordinator>,
         mode: ClipboardIntegrationMode,
     ) -> Self {
         Self {
             entry_repo,
             representation_repo,
-            local_clipboard,
-            clipboard_change_origin,
+            coordinator,
             mode,
         }
     }
@@ -162,37 +158,26 @@ impl CopyFileToClipboardUseCase {
     async fn write_files_to_clipboard(&self, file_paths: &[PathBuf]) -> Result<()> {
         let path_list = build_path_list(file_paths);
         let snapshot = build_file_snapshot(&path_list);
-
-        // Set origin to LocalRestore so the clipboard watcher skips capture entirely.
-        // The entry already exists in the database (created during inbound sync or
-        // already present when user clicks "Copy"), so we must not create a duplicate.
-        // RemotePush would still create a new entry; only LocalRestore skips capture.
-        self.clipboard_change_origin
-            .set_next_origin(ClipboardChangeOrigin::LocalRestore, Duration::from_secs(2))
-            .await;
-
-        if let Err(err) = self.local_clipboard.write_snapshot(snapshot) {
-            // On error, consume origin back to default to avoid stale origin
-            self.clipboard_change_origin
-                .consume_origin_or_default(ClipboardChangeOrigin::LocalCapture)
-                .await;
-            return Err(err);
-        }
-
+        self.coordinator
+            .write(snapshot, ClipboardWriteIntent::LocalRestore)
+            .await?;
         info!(
             file_count = file_paths.len(),
             "Files written to system clipboard"
         );
-
         Ok(())
     }
 }
 
-/// Build a newline-separated list of native file paths.
+/// Build a newline-separated `text/uri-list`.
 pub fn build_path_list(file_paths: &[PathBuf]) -> String {
     file_paths
         .iter()
-        .map(|p| p.to_string_lossy())
+        .map(|path| {
+            url::Url::from_file_path(path)
+                .map(|url| url.to_string())
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -207,5 +192,18 @@ pub fn build_file_snapshot(uri_list: &str) -> SystemClipboardSnapshot {
             Some(MimeType::uri_list()),
             uri_list.as_bytes().to_vec(),
         )],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_path_list_uses_file_uris_for_origin_guard_roundtrip() {
+        let path = std::env::temp_dir().join("uniclipboard-origin-guard.txt");
+        let uri = url::Url::from_file_path(&path).expect("absolute temp path should convert");
+
+        assert_eq!(build_path_list(&[path]), uri.to_string());
     }
 }

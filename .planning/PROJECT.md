@@ -24,8 +24,8 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 ## Current State
 
 - **Latest shipped milestone:** v0.3.0 Log Observability & Feature Expansion (2026-03-17)
-- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase; daemon handles file transfer lifecycle (progress, completion, failure, timeout sweeps, startup reconciliation)
-- **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established; CLI start/stop commands for daemon lifecycle management (background/foreground modes, PID-based stop with SIGTERM); daemon encryption state recovery via existing AutoUnlockEncryptionSession use case; peer discovery deduplication fixed (local_peer_id filtering + full-snapshot peers.changed events); daemon gates PeerDiscoveryWorker on encryption state (deferred start for uninitialized devices via oneshot channel); dual-product release pipeline — CLI binary builds in parallel with App, included in GitHub Release and R2
+- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase; daemon handles file transfer lifecycle (progress, completion, failure, timeout sweeps, startup reconciliation); clipboard restore delegated to daemon for in-process origin tracking; unified auth architecture — CLI/GUI/Daemon all use POST /auth/connect session exchange with independent token scopes
+- **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established; CLI start/stop commands for daemon lifecycle management (background/foreground modes, PID-based stop with SIGTERM); daemon encryption state recovery via existing AutoUnlockEncryptionSession use case; peer discovery deduplication fixed (local_peer_id filtering + full-snapshot peers.changed events); daemon gates PeerDiscoveryWorker on encryption state (deferred start for uninitialized devices via oneshot channel); dual-product release pipeline — CLI binary builds in parallel with App, included in GitHub Release and R2; GUI restore_clipboard_entry is thin daemon proxy (cross-process origin desync eliminated); frontend p2p.ts facade removed — all callers migrated to daemon modules and hooks (daemon/pairing, daemon/events, daemon/ws, usePairingEvents, useSetupFlow)
 - **LOC:** ~135K Rust + ~20K TypeScript (estimated)
 - **Supported content types:** Text, Image, Link, File (all with per-device sync toggles)
 
@@ -62,7 +62,8 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - ✓ Keyboard shortcuts settings UI with click-to-record and conflict detection — v0.3.0
 - ✓ macOS keychain auto-unlock confirmation modal — v0.3.0
 - ✓ Event-driven device discovery replacing polling — v0.3.0
-- ✓ Consolidated outbound sync planner — v0.3.0
+- ✓ Unified CLI/GUI/Daemon auth architecture (session exchange via /auth/connect, bare bearer rejection on L2+ routes, independent token scopes) — Phase 84
+- ✓ OpenTelemetry OTLP/HTTP-protobuf pipeline replaces legacy Seq/CLEF layer; clipboard spans restructured into `clipboard.flow` parent-child tree with dotted OTel semconv stage names; W3C traceparent inject/extract across device sync boundaries — Phase 87
 
 ### Active
 
@@ -73,7 +74,13 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - [ ] uc-bootstrap crate as sole composition root with scene-specific builders
 - [ ] uc-daemon skeleton with worker lifecycle and local RPC
 - [ ] uc-cli skeleton with command routing, direct/daemon dispatch, and output rendering
-- [x] CLI clipboard list/get/clear commands with direct-mode bootstrap — Validated in Phase 42
+- [x] CLI clipboard list/get/clear commands with direct-mode bootstrap — Phase 42
+- [x] Frontend p2p.ts facade removed, all callers migrated to daemon modules and hooks — Phase 83
+- [x] usePairingEvents extended with space access events, type-safe payloads, dual topic subscription — Phase 83
+- [x] useDeviceDiscovery refactored to Redux via daemonWs.subscribe + diffPeerSnapshots — Phase 83
+- [x] useSetupFlow hook extracted from SetupPage.tsx — Phase 83
+- [x] CLI session exchange migration (bare bearer → /auth/connect, "Session " prefix) — Phase 84
+- [x] Unified auth architecture integration tests (AUTH-01 through AUTH-06) — Phase 84
 
 ### Deferred
 
@@ -114,6 +121,9 @@ Phase 63 complete — daemon file transfer orchestration: DaemonApiEventEmitter 
 Phase 64 complete — Tauri sync retirement: removed 896 lines of daemon-duplicated sync loops from wiring.rs (clipboard_receive, pairing_events, file_transfer_reconcile, timeout_sweep); gated restore_clipboard_entry outbound sync on Full mode to prevent double-sync with daemon; removed dead sync_inbound_clipboard accessor and blake3 dependency from uc-tauri.
 Phase 66 complete — Fixed daemon WS topic registration for clipboard and file-transfer subscriptions; added WS reconnection compensation with bridge_state_monitor and DaemonReconnected event; Dashboard auto-refreshes clipboard list on reconnect.
 Phase 69 complete — CLI `setup` → "Create new Space" performs encryption initialization locally via `build_cli_runtime()` + `CoreUseCases::initialize_encryption()` instead of starting daemon; eliminates macOS Keychain popup during first-time setup.
+Phase 73 complete — ClipboardWriteCoordinator introduced as single write boundary for all programmatic clipboard writes (LocalRestore, RemotePush, LocalCapture intents); InMemoryClipboardChangeOrigin locked to pub(crate) via factory; all 4 write callsites migrated (RestoreClipboardSelectionUseCase, CopyFileToClipboardUseCase, SyncInboundClipboardUseCase, FileSyncOrchestratorWorker); dead guard code removed.
+Phase 87 complete — OTLP migration: legacy `uc_observability::seq`/CLEF pipeline hard-deleted (~1082 LoC); new `uc_observability::otlp` module provides OTLP/HTTP-protobuf exporter, W3C TraceContextPropagator, and semconv resource builder; bootstrap wires `init_otlp_provider()` with `OtlpGuard` shutdown; `ClipboardMessage.traceparent: Option<String>` added with backward-compatible serde and `origin_flow_id` deprecated; clipboard capture pipeline restructured into `clipboard.flow` root with 6 child stage spans using dotted OTel names; outbound `sync_outbound` injects current trace context, inbound `sync_inbound` extracts and links via `set_parent()` with rate-limited fallback warning; docs/Seq saved searches/docker-compose updated for new data model.
+Phase 86 complete — CLI host/join flow refactored: ParsedSetupState centralized in uc-daemon-client/setup; HostCliPhase/JoinCliPhase enums introduced with pure derive_*_phase() functions; run_pair and run_connect rewritten as phase-driven loops (poll→parse→derive→match→sleep pattern); Phase 0 bugs eliminated (double-negative clearing condition, verbose Debug impl); old inline parsing helpers migrated to daemon-client module and deleted from uc-cli.
 
 ## Key Decisions
 
@@ -150,4 +160,4 @@ Phase 69 complete — CLI `setup` → "Create new Space" performs encryption ini
 
 ---
 
-_Last updated: 2026-03-28 after Phase 71 completion_
+_Last updated: 2026-04-05 after Phase 87 completion_

@@ -35,23 +35,13 @@
 
 use std::sync::Arc;
 use tauri::async_runtime;
-use tracing::info;
+use tokio::time::{self, Duration};
+use tracing::{info, warn};
 
 use uc_app::task_registry::TaskRegistry;
-use uc_daemon_client::realtime::start_realtime_runtime;
+use uc_app::usecases::file_sync::CleanupExpiredFilesUseCase;
+use uc_daemon_client::{DaemonConnectionState, DaemonPairingClient};
 
-#[cfg(test)]
-use uc_app::usecases::space_access::SpaceAccessOrchestrator;
-use uc_app::AppDeps;
-use uc_core::ports::host_event_emitter::HostEventEmitterPort;
-#[cfg(test)]
-use uc_core::ports::space::ProofPort;
-#[cfg(test)]
-use uc_core::ports::*;
-#[cfg(test)]
-use uc_core::security::model::{KeySlot, KeySlotFile};
-#[cfg(test)]
-use uc_core::security::space_access::event::SpaceAccessEvent;
 // Re-export assembly types from uc-bootstrap.
 pub use uc_bootstrap::assembly::{
     get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
@@ -62,320 +52,189 @@ pub use uc_bootstrap::assembly::{
 // Re-export BackgroundRuntimeDeps from uc-bootstrap (definition moved in Phase 40).
 pub use uc_bootstrap::BackgroundRuntimeDeps;
 
-/// Start background spooler and blob worker tasks.
-/// 启动后台假脱机写入和 blob 物化任务。
-///
-/// All long-lived tasks are spawned through the `TaskRegistry` for centralized
-/// lifecycle management and graceful shutdown via cooperative cancellation.
+const GUI_PAIRING_LEASE_TTL_MS: u64 = 300_000;
+const GUI_PAIRING_LEASE_REFRESH_INTERVAL: Duration = Duration::from_secs(120);
+
+/// Start the file cache cleanup task (runs once at startup, fire-and-forget).
 pub fn start_background_tasks(
-    background: BackgroundRuntimeDeps,
-    deps: &AppDeps,
-    event_emitter: Arc<dyn HostEventEmitterPort>,
-    daemon_connection_state: uc_daemon_client::DaemonConnectionState,
-    setup_pairing_event_hub: Arc<uc_app::realtime::SetupPairingEventHub>,
+    settings: Arc<dyn uc_core::ports::SettingsPort>,
+    file_cache_dir: std::path::PathBuf,
     task_registry: &Arc<TaskRegistry>,
 ) {
-    // Clones for GUI-only tasks
-    let deps_settings = deps.settings.clone();
-    let cleanup_file_cache_dir = background.file_cache_dir.clone();
-    let blob_ports = uc_bootstrap::BlobProcessingPorts::from_app_deps(deps);
-
-    // Spawn all long-lived tasks through the TaskRegistry for lifecycle management.
-    // We use a single orchestration spawn to set up all registry tasks, since
-    // registry.spawn() is async and start_background_tasks is sync.
     let registry = task_registry.clone();
     async_runtime::spawn(async move {
-        // --- Shared blob processing tasks (SpoolScanner + SpoolerTask + BackgroundBlobWorker + SpoolJanitor) ---
-        uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &registry).await;
-
-        // --- Unified realtime runtime (daemon WebSocket bridge + app consumers) ---
-        start_realtime_runtime(
-            daemon_connection_state,
-            event_emitter.clone(),
-            setup_pairing_event_hub,
-            &registry,
-        )
-        .await;
-        info!("Started unified daemon realtime runtime");
-
-        // --- File cache cleanup (runs once at startup, fire-and-forget) ---
-        {
-            use tracing::warn;
-            let cleanup_settings = deps_settings.clone();
-            let cleanup_cache_dir = cleanup_file_cache_dir.clone();
-            registry
-                .spawn("file_cache_cleanup", |_token| async move {
-                    let uc = uc_app::usecases::file_sync::CleanupExpiredFilesUseCase::new(
-                        cleanup_settings,
-                        cleanup_cache_dir,
-                    );
-                    match uc.execute().await {
-                        Ok(result) => {
-                            if result.files_removed > 0 {
-                                info!(
-                                    files_removed = result.files_removed,
-                                    bytes_reclaimed = result.bytes_reclaimed,
-                                    "Startup file cache cleanup completed"
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Startup file cache cleanup failed (non-fatal)");
+        registry
+            .spawn("file_cache_cleanup", |_token| async move {
+                let uc = CleanupExpiredFilesUseCase::new(settings, file_cache_dir.clone());
+                match uc.execute().await {
+                    Ok(result) => {
+                        if result.files_removed > 0 {
+                            info!(
+                                files_removed = result.files_removed,
+                                bytes_reclaimed = result.bytes_reclaimed,
+                                "Startup file cache cleanup completed"
+                            );
                         }
                     }
-                })
-                .await;
-        }
-
+                    Err(e) => {
+                        warn!(error = %e, "Startup file cache cleanup failed (non-fatal)");
+                    }
+                }
+            })
+            .await;
         info!("All background tasks registered with TaskRegistry");
     });
 }
 
-#[derive(Clone)]
-#[cfg(test)]
-struct RuntimeSpaceAccessPorts {
-    transport: Arc<tokio::sync::Mutex<dyn uc_core::ports::space::SpaceAccessTransportPort>>,
-    proof: Arc<dyn ProofPort>,
-    timer: Arc<tokio::sync::Mutex<dyn TimerPort>>,
-    persistence: Arc<tokio::sync::Mutex<dyn uc_core::ports::space::PersistencePort>>,
+/// Keep the GUI discoverability/participant lease alive for the daemon pairing host.
+///
+/// This task is owned by the GUI lifecycle rather than any specific frontend page.
+/// As long as the desktop app is running, the daemon should treat the GUI as
+/// ready to receive inbound pairing requests.
+pub fn start_gui_pairing_lease_task(
+    connection_state: DaemonConnectionState,
+    task_registry: &Arc<TaskRegistry>,
+) {
+    let registry = task_registry.clone();
+    async_runtime::spawn(async move {
+        registry
+            .spawn("gui_pairing_lease", move |token| async move {
+                let client = DaemonPairingClient::new(connection_state);
+                run_gui_pairing_lease_loop(
+                    token,
+                    GUI_PAIRING_LEASE_TTL_MS,
+                    GUI_PAIRING_LEASE_REFRESH_INTERVAL,
+                    move |enabled, ttl_ms| {
+                        let client = client.clone();
+                        async move { client.register_gui_participant(enabled, ttl_ms).await }
+                    },
+                )
+                .await;
+            })
+            .await;
+    });
 }
 
-#[cfg(test)]
-async fn dispatch_space_access_busy_event(
-    orchestrator: &SpaceAccessOrchestrator,
-    runtime_ports: &RuntimeSpaceAccessPorts,
-    event: SpaceAccessEvent,
-    session_id: &str,
-) -> Result<(), uc_app::usecases::space_access::SpaceAccessError> {
-    let noop_crypto = NoopSpaceAccessCrypto;
-    let mut transport = runtime_ports.transport.lock().await;
-    let mut timer = runtime_ports.timer.lock().await;
-    let mut store = runtime_ports.persistence.lock().await;
+async fn run_gui_pairing_lease_loop<F, Fut>(
+    token: tokio_util::sync::CancellationToken,
+    lease_ttl_ms: u64,
+    renew_interval: Duration,
+    mut set_gui_lease: F,
+) where
+    F: FnMut(bool, Option<u64>) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
+    if let Err(error) = set_gui_lease(true, Some(lease_ttl_ms)).await {
+        warn!(error = %error, "failed to register GUI pairing lease");
+    } else {
+        info!(lease_ttl_ms, "registered GUI pairing lease");
+    }
 
-    orchestrator
-        .dispatch(
-            &mut uc_app::usecases::space_access::SpaceAccessExecutor {
-                crypto: &noop_crypto,
-                transport: &mut *transport,
-                proof: runtime_ports.proof.as_ref(),
-                timer: &mut *timer,
-                store: &mut *store,
-            },
-            event,
-            Some(session_id.to_string()),
-        )
-        .await
-        .map(|_| ())
-}
+    let mut ticker = time::interval(renew_interval);
+    ticker.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
+    ticker.tick().await;
 
-#[cfg(test)]
-const BUSY_PAYLOAD_PREVIEW_MAX_CHARS: usize = 256;
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg(test)]
-struct SpaceAccessBusyOfferPayload {
-    kind: String,
-    space_id: String,
-    nonce: Vec<u8>,
-    keyslot: KeySlot,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg(test)]
-struct SpaceAccessBusyProofPayload {
-    kind: String,
-    pairing_session_id: String,
-    space_id: String,
-    challenge_nonce: Vec<u8>,
-    proof_bytes: Vec<u8>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-#[cfg(test)]
-struct SpaceAccessBusyResultPayload {
-    kind: String,
-    space_id: String,
-    #[serde(default)]
-    sponsor_peer_id: Option<String>,
-    success: bool,
-    #[serde(default)]
-    deny_reason: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-#[cfg(test)]
-enum SpaceAccessBusyPayload {
-    Offer(SpaceAccessBusyOfferPayload),
-    Proof(SpaceAccessBusyProofPayload),
-    Result(SpaceAccessBusyResultPayload),
-}
-
-#[derive(Debug, thiserror::Error)]
-#[cfg(test)]
-enum ParseError {
-    #[error("busy payload is not valid json: {source}")]
-    InvalidJson {
-        #[source]
-        source: serde_json::Error,
-    },
-    #[error("busy payload missing string field `kind`")]
-    MissingKind,
-    #[error("busy payload kind `{kind}` is not supported")]
-    UnknownKind { kind: String },
-    #[error("busy payload kind `{kind}` has invalid structure: {source}")]
-    InvalidStructure {
-        kind: String,
-        #[source]
-        source: serde_json::Error,
-    },
-}
-
-#[cfg(test)]
-impl ParseError {
-    fn payload_kind(&self) -> Option<&str> {
-        match self {
-            Self::UnknownKind { kind } | Self::InvalidStructure { kind, .. } => Some(kind.as_str()),
-            Self::InvalidJson { .. } | Self::MissingKind => None,
+    loop {
+        tokio::select! {
+            _ = token.cancelled() => {
+                if let Err(error) = set_gui_lease(false, None).await {
+                    warn!(error = %error, "failed to release GUI pairing lease during shutdown");
+                } else {
+                    info!("released GUI pairing lease");
+                }
+                return;
+            }
+            _ = ticker.tick() => {
+                if let Err(error) = set_gui_lease(true, Some(lease_ttl_ms)).await {
+                    warn!(error = %error, "failed to renew GUI pairing lease");
+                }
+            }
         }
-    }
-}
-
-#[cfg(test)]
-fn parse_space_access_busy_payload(json: &str) -> Result<SpaceAccessBusyPayload, ParseError> {
-    let payload: serde_json::Value =
-        serde_json::from_str(json).map_err(|source| ParseError::InvalidJson { source })?;
-
-    let kind = payload
-        .get("kind")
-        .and_then(serde_json::Value::as_str)
-        .ok_or(ParseError::MissingKind)?
-        .to_string();
-
-    match kind.as_str() {
-        "space_access_offer" => serde_json::from_value::<SpaceAccessBusyOfferPayload>(payload)
-            .map(SpaceAccessBusyPayload::Offer)
-            .map_err(|source| ParseError::InvalidStructure {
-                kind: kind.clone(),
-                source,
-            }),
-        "space_access_proof" => serde_json::from_value::<SpaceAccessBusyProofPayload>(payload)
-            .map(SpaceAccessBusyPayload::Proof)
-            .map_err(|source| ParseError::InvalidStructure {
-                kind: kind.clone(),
-                source,
-            }),
-        "space_access_result" => serde_json::from_value::<SpaceAccessBusyResultPayload>(payload)
-            .map(SpaceAccessBusyPayload::Result)
-            .map_err(|source| ParseError::InvalidStructure {
-                kind: kind.clone(),
-                source,
-            }),
-        _ => Err(ParseError::UnknownKind { kind }),
-    }
-}
-
-#[cfg(test)]
-fn extract_space_access_busy_payload_kind(json: &str) -> Option<String> {
-    let payload: serde_json::Value = serde_json::from_str(json).ok()?;
-    payload
-        .get("kind")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned)
-}
-
-#[cfg(test)]
-fn raw_payload_preview(payload: &str) -> String {
-    let mut chars = payload.chars();
-    let mut preview: String = chars
-        .by_ref()
-        .take(BUSY_PAYLOAD_PREVIEW_MAX_CHARS)
-        .collect();
-    if chars.next().is_some() {
-        preview.push_str("...");
-    }
-    preview
-}
-
-#[cfg(test)]
-struct NoopSpaceAccessCrypto;
-
-#[cfg(test)]
-struct LoadedKeyslotSpaceAccessCrypto {
-    keyslot_file: KeySlotFile,
-}
-
-#[cfg(test)]
-impl LoadedKeyslotSpaceAccessCrypto {
-    fn new(keyslot_file: KeySlotFile) -> Self {
-        Self { keyslot_file }
-    }
-}
-
-#[async_trait::async_trait]
-#[cfg(test)]
-impl uc_core::ports::space::CryptoPort for NoopSpaceAccessCrypto {
-    async fn generate_nonce32(&self) -> [u8; 32] {
-        [0u8; 32]
-    }
-
-    async fn export_keyslot_blob(
-        &self,
-        _space_id: &uc_core::ids::SpaceId,
-    ) -> anyhow::Result<uc_core::security::model::KeySlot> {
-        Err(anyhow::anyhow!(
-            "noop crypto port cannot export keyslot blob"
-        ))
-    }
-
-    async fn derive_master_key_from_keyslot(
-        &self,
-        _keyslot_blob: &[u8],
-        _passphrase: uc_core::security::SecretString,
-    ) -> anyhow::Result<uc_core::security::model::MasterKey> {
-        Err(anyhow::anyhow!("noop crypto port cannot derive master key"))
-    }
-}
-
-#[async_trait::async_trait]
-#[cfg(test)]
-impl uc_core::ports::space::CryptoPort for LoadedKeyslotSpaceAccessCrypto {
-    async fn generate_nonce32(&self) -> [u8; 32] {
-        [0u8; 32]
-    }
-
-    async fn export_keyslot_blob(
-        &self,
-        _space_id: &uc_core::ids::SpaceId,
-    ) -> anyhow::Result<uc_core::security::model::KeySlot> {
-        Ok(self.keyslot_file.clone().into())
-    }
-
-    async fn derive_master_key_from_keyslot(
-        &self,
-        _keyslot_blob: &[u8],
-        _passphrase: uc_core::security::SecretString,
-    ) -> anyhow::Result<uc_core::security::model::MasterKey> {
-        Err(anyhow::anyhow!(
-            "loaded keyslot crypto cannot derive master key in sponsor flow"
-        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc as StdArc;
+    use tokio::sync::Mutex;
+    use tokio::time::{advance, Duration};
+    use tokio_util::sync::CancellationToken;
 
     #[test]
     fn test_wiring_error_display() {
         let err = WiringError::DatabaseInit("connection failed".to_string());
         assert!(err.to_string().contains("Database initialization"));
         assert!(err.to_string().contains("connection failed"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gui_pairing_lease_loop_registers_immediately_and_renews() {
+        let calls = StdArc::new(Mutex::new(Vec::<(bool, Option<u64>)>::new()));
+        let calls_for_loop = calls.clone();
+        let token = CancellationToken::new();
+
+        let handle = tokio::spawn(async move {
+            run_gui_pairing_lease_loop(
+                token,
+                300_000,
+                Duration::from_secs(120),
+                move |enabled, ttl_ms| {
+                    let calls = calls_for_loop.clone();
+                    async move {
+                        calls.lock().await.push((enabled, ttl_ms));
+                        Ok::<(), anyhow::Error>(())
+                    }
+                },
+            )
+            .await;
+        });
+
+        tokio::task::yield_now().await;
+        assert_eq!(&*calls.lock().await, &vec![(true, Some(300_000))]);
+
+        advance(Duration::from_secs(120)).await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(
+            &*calls.lock().await,
+            &vec![(true, Some(300_000)), (true, Some(300_000))]
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gui_pairing_lease_loop_disables_lease_when_cancelled() {
+        let calls = StdArc::new(Mutex::new(Vec::<(bool, Option<u64>)>::new()));
+        let calls_for_loop = calls.clone();
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+
+        let handle = tokio::spawn(async move {
+            run_gui_pairing_lease_loop(
+                token,
+                300_000,
+                Duration::from_secs(120),
+                move |enabled, ttl_ms| {
+                    let calls = calls_for_loop.clone();
+                    async move {
+                        calls.lock().await.push((enabled, ttl_ms));
+                        Ok::<(), anyhow::Error>(())
+                    }
+                },
+            )
+            .await;
+        });
+
+        tokio::task::yield_now().await;
+        cancel.cancel();
+        tokio::task::yield_now().await;
+        handle.await.expect("lease loop should exit cleanly");
+
+        assert_eq!(
+            &*calls.lock().await,
+            &vec![(true, Some(300_000)), (false, None)]
+        );
     }
 }

@@ -34,10 +34,12 @@ impl DirsAppDirsAdapter {
         }
     }
 
-    /// Creates a test-only adapter that overrides the base local data directory.
+    /// Creates an adapter that overrides the base local data directory.
     ///
     /// The provided `base` path will be used instead of the system data local directory
     /// when resolving application directories for this adapter.
+    ///
+    /// This is useful for testing, where you want to redirect paths to a temp directory.
     ///
     /// # Examples
     ///
@@ -47,7 +49,6 @@ impl DirsAppDirsAdapter {
     ///
     /// let adapter = DirsAppDirsAdapter::with_base_data_local_dir(PathBuf::from("/tmp"));
     /// ```
-    #[cfg(test)]
     pub fn with_base_data_local_dir(base: PathBuf) -> Self {
         Self {
             base_data_local_dir_override: Some(base),
@@ -116,6 +117,13 @@ impl AppDirsPort for DirsAppDirsAdapter {
             app_cache_root: base_cache.join(&self.cached_app_dir_name),
         })
     }
+}
+
+/// Returns the default application directories using the system data directory.
+pub fn default_app_dirs() -> AppDirs {
+    DirsAppDirsAdapter::new()
+        .get_app_dirs()
+        .expect("data directory must be available")
 }
 
 #[cfg(test)]

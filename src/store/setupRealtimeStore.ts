@@ -6,6 +6,36 @@ import {
   onSpaceAccessCompleted,
   type SetupState,
 } from '@/api/setup'
+import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
+
+// ── Store-level realtime diagnostics ───────────────────────────────────────
+
+/**
+ * Record a store-level decision for setup realtime sync lifecycle events.
+ *
+ * Decisions:
+ * - "started"    — sync initialization beginning
+ * - "running"    — sync is active
+ * - "skipped"    — action suppressed (already running, stale generation, etc.)
+ * - "scheduled"  — retry timer scheduled after failure
+ * - "failure"    — initialization error
+ *
+ * Security: never logs passphrase or encryption key material.
+ */
+function logStoreDecision(
+  decision: 'started' | 'running' | 'skipped' | 'scheduled' | 'failure' | 'space_access_ignored',
+  context: {
+    reason?: string
+    generation?: number
+  } = {}
+) {
+  const { reason, generation } = context
+  const parts: string[] = [`[setupRealtimeStore] ${decision}`]
+  if (generation !== undefined) parts.push(`gen=${generation}`)
+  if (reason) parts.push(`reason=${reason}`)
+
+  console.debug(parts.join(' '))
+}
 
 type SetupRealtimeSnapshot = {
   setupState: SetupState | null
@@ -72,23 +102,31 @@ function scheduleRetry() {
 
 export async function ensureSetupRealtimeSync(): Promise<void> {
   if (syncPhase === 'running') {
+    logStoreDecision('skipped', { reason: 'already_running' })
     return
   }
 
   if (startPromise) {
+    logStoreDecision('skipped', { reason: 'start_in_progress' })
     return startPromise
   }
 
   syncPhase = 'starting'
   const generation = ++syncGeneration
+  logStoreDecision('started', { generation })
 
   startPromise = (async () => {
     try {
       clearRetryTimer()
 
+      // Ensure daemon is connected before making API calls — the connection may not
+      // have been established yet if this fires before AppContent calls connectDaemonWs().
+      await connectDaemonWs()
+
       if (!snapshot.hydrated) {
         const initialState = await getSetupState()
         if (generation !== syncGeneration) {
+          logStoreDecision('skipped', { reason: 'stale_generation_after_hydrate', generation })
           return
         }
         updateSnapshot(initialState, null)
@@ -96,6 +134,7 @@ export async function ensureSetupRealtimeSync(): Promise<void> {
 
       const unlisten = await onSetupStateChanged(event => {
         if (generation !== syncGeneration) {
+          logStoreDecision('skipped', { reason: 'stale_generation_in_state_changed', generation })
           return
         }
 
@@ -103,18 +142,21 @@ export async function ensureSetupRealtimeSync(): Promise<void> {
       })
 
       if (generation !== syncGeneration) {
+        logStoreDecision('skipped', { reason: 'stale_generation_after_state_listener', generation })
         unlisten()
         return
       }
 
       const unlistenSpaceAccess = await onSpaceAccessCompleted(async event => {
         if (generation !== syncGeneration) {
+          logStoreDecision('skipped', { reason: 'stale_generation_in_space_access', generation })
           return
         }
 
         // Skip if setup is already completed (sponsor role — this event fires on both
         // sponsor and joiner sides, but only the joiner needs to finalize setup here).
         if (snapshot.setupState === 'Completed') {
+          logStoreDecision('space_access_ignored', { reason: 'setup_already_completed' })
           return
         }
 
@@ -122,11 +164,16 @@ export async function ensureSetupRealtimeSync(): Promise<void> {
           const newState = await handleSpaceAccessCompleted()
           updateSnapshot(newState, event.sessionId)
         } catch (error) {
+          logStoreDecision('failure', { reason: 'handleSpaceAccessCompleted_error' })
           console.error('Failed to handle space access completed:', error)
         }
       })
 
       if (generation !== syncGeneration) {
+        logStoreDecision('skipped', {
+          reason: 'stale_generation_after_space_access_listener',
+          generation,
+        })
         unlisten()
         unlistenSpaceAccess()
         return
@@ -135,14 +182,17 @@ export async function ensureSetupRealtimeSync(): Promise<void> {
       stopListening = unlisten
       stopListeningSpaceAccess = unlistenSpaceAccess
       syncPhase = 'running'
+      logStoreDecision('running', { generation })
     } catch (error) {
       if (generation !== syncGeneration) {
         return
       }
 
+      logStoreDecision('failure', { reason: 'initialization_error', generation })
       console.error('Failed to initialize setup realtime store:', error)
       syncPhase = 'idle'
       scheduleRetry()
+      logStoreDecision('scheduled', { reason: 'retry_after_init_failure', generation })
     } finally {
       if (syncPhase !== 'running') {
         startPromise = null

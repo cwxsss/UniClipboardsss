@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.4.0
 milestone_name: Runtime Mode Separation
-status: 'Phase 71 shipped — PR #323'
-stopped_at: Completed 71-03-PLAN.md
-last_updated: '2026-03-29T02:04:04.638Z'
+status: Milestone complete
+stopped_at: Completed 87-06-PLAN.md
+last_updated: "2026-04-05T04:52:21.545Z"
 progress:
-  total_phases: 42
-  completed_phases: 35
-  total_plans: 93
-  completed_plans: 90
+  total_phases: 58
+  completed_phases: 44
+  total_plans: 128
+  completed_plans: 119
 ---
 
 # Project State
@@ -19,20 +19,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-09)
 
 **Core value:** Seamless clipboard synchronization across devices -- copy on one, paste on another
-**Current focus:** Phase 71 — dual-product-release-pipeline-for-cli-and-app
 
 ## Current Position
 
-Phase: 71
+Phase: 87
+Plan: Not started
+
+## Current Position
+
+Phase: 83
 Plan: Not started
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 2
-- Average duration: 6.5min
-- Total execution time: 0.22 hours
+- Total plans completed: 4
+- Average duration: 5.8min
+- Total execution time: 0.26 hours
 
 **By Phase:**
 
@@ -101,6 +105,32 @@ Plan: Not started
   | Phase 71 P02 | 52s | 1 tasks | 1 files |
   | Phase 71 P01 | 2 | 2 tasks | 4 files |
   | Phase 71 P03 | 2 | 2 tasks | 4 files |
+  | Phase 72 P02 | 6 | 1 tasks | 1 files |
+  | Phase 73 P01 | 14 | 2 tasks | 14 files |
+  | Phase 73 P02 | 90 | 2 tasks | 6 files |
+  | Phase 74 P01 | 4 | 2 tasks | 5 files |
+  | Phase 74 P02 | 149 | 1 tasks | 1 files |
+  | Phase 75 P01 | 1194 | 2 tasks | 17 files |
+  | Phase 75 P02 | 60 | 3 tasks | 11 files |
+  | Phase 75 P03 | 10 | 2 tasks | 3 files |
+  | Phase 83 P02 | 8 | 4 tasks | 2 files |
+  | Phase 83 P03 | 17 | 3 tasks | 13 files |
+  | Phase 84 P02 | 384 | 2 tasks | 2 files |
+  | Phase 84 P03 | 15 | 3 tasks | 4 files |
+  | Phase 86 P01 | 95 | 3 tasks | 2 files |
+  | Phase 86 P02 | 8 | 3 tasks | 6 files |
+  | Phase 86 P03 | 131 | 3 tasks | 3 files |
+  | Phase 86 P04 | 1106 | 2 tasks | 1 files |
+  | Phase 85 P01 | 6 | 3 tasks | 5 files |
+  | Phase 85 P02 | 7 | 3 tasks | 6 files |
+  | Phase 85 P03 | 15 | 3 tasks | 4 files |
+  | Phase 85 P04 | 2 | 2 tasks | 2 files |
+| Phase 87 P01 | 470 | 2 tasks | 7 files |
+| Phase 87 P02 | 6 | 1 tasks | 6 files |
+| Phase 87 P03 | 1523 | 2 tasks | 11 files |
+| Phase 87 P04 | 529 | 2 tasks | 5 files |
+| Phase 87 P05 | 3 | 1 tasks | 6 files |
+| Phase 87 P06 | 394 | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -235,6 +265,48 @@ Recent decisions affecting current work:
 - [Phase 71]: cargo update steps in release.yml gated with if: github.event_name == 'workflow_dispatch' to avoid running on tag-push events
 - [Phase 71]: CLI artifact collection uses separate find loop with no collision handling — CLI archives have unique names (version + target triple in filename)
 - [Phase 71]: buildCliInstallerLines() detects artifacts by uniclipboard-cli- prefix + target triple patterns (aarch64-apple-darwin, x86_64-apple-darwin, linux-gnu, windows-msvc)
+- [Phase 72]: restore_clipboard_entry delegates fully to daemon via DaemonClipboardClient — origin tracking, restore, touch, outbound sync all in daemon handler
+- [Phase 72]: forward_clipboard_event preserved as ONLY frontend update after daemon restore success (LocalRestore skips capture, no WS clipboard.new_content event emitted)
+- [Phase 73]: ClipboardWriteCoordinator centralises guard-registration + write + cleanup-on-error for all programmatic clipboard writes; InMemoryClipboardChangeOrigin locked to pub(crate) via new_clipboard_change_origin() factory
+- [Phase 73]: SyncInboundClipboardUseCase keeps legacy constructor params with #[allow(dead_code)] for e2e test compatibility; coordinator wired via with_clipboard_write_coordinator() builder
+- [Phase 73]: REMOTE_SNAPSHOT_HASH_TTL_MS removed from sync_inbound.rs — TTL semantics now exclusively owned by ClipboardWriteCoordinator
+- [Phase 73]: FileSyncOrchestratorWorker consolidates system_clipboard + clipboard_change_origin into single clipboard_write_coordinator field
+- [Phase 74]: 74-01: EntryDetailResult needed serde::Serialize added as Rule 2 auto-fix
+- [Phase 75]: Used rust_crypto feature for jsonwebtoken (aws_lc_rs version conflict)
+- [Phase 75]: Used tokio::time::Instant for rate limiter (testable time control)
+- [Phase 75]: Subject validation done manually after JWT decode (no set_subject in jsonwebtoken 10.x)
+- [Phase 75]: ClientId typed marker for request extensions (http::Extensions uses type-based keys)
+- [Phase 75]: Option<ConnectInfo<SocketAddr>> used for IP rate limiting at /auth/connect so tests using tower::ServiceExt::oneshot compile without real TCP connection
+- [Phase 75]: SecurityState::new_with_pid() and make_session_token_for_pid() kept without #[cfg(test)] because integration tests in tests/ directory cannot see cfg(test) items
+- [Phase 75]: WS upgrade validates Session JWT not Bearer token — consistent with L2 HTTP middleware pattern
+- [Phase 75]: Rate limit WS upgrades by PID from validated JWT claims for trustworthy rate limiting on authenticated routes
+- [Phase 84]: authorized_daemon_request_with_type: GUI uses cached get_session_token, CLI/others use exchange_session_token directly
+- [Phase 84]: Phase 84: authorized_daemon_request_with_type routes gui to get_session_token (caching), others to exchange_session_token (no cache)
+- [Phase 84]: Phase 84-03: All 6 AUTH requirements now have automated integration test coverage via cli_auth.rs and security_middleware.rs
+- [Phase 86]: D-01: Changed first clearing condition from OR to AND to prevent premature clearing of decision session when in NeedVerification state
+- [Phase 85]: 85-01: PairingRoutingRecord uses static str for routed_event_class (Rust variant names, zero-alloc, no imports needed)
+- [Phase 85]: 85-01: log_bridge_routing() is a free function in ws_bridge.rs — single helper for consistent bridge mapping diagnostics across all pairing routing branches
+- [Phase 85]: 85-01: pairing.failed decode errors now use explicit match + warn! instead of .ok() silent discard — matches visibility pattern of all other branches
+- [Phase 85]: 85-02: logPairingRouting/logProviderDecision/logSetupRouting/logStoreDecision all use console.debug for zero-overhead frontend observability without Sentry dependency
+- [Phase 85]: 85-02: Provider session mismatch logs include both session_id (incoming) and active_session_id (current) so drop cause is immediately diagnosable
+- [Phase 85]: 85-02: space_access_ignored is a distinct decision type (not dropped) to document intentional sponsor-side behavior in setup flow
+- [Phase 85]: 85-03: Backend timing test uses Instant::now() + wait_for_setup_response with < 1000ms assertion for low-latency regression guard
+- [Phase 85]: 85-03: Frontend observability tests use vi.spyOn(console, debug) to assert logProvider/logStore helpers without test output pollution
+- [Phase 85]: 85-04: PairingRoutingRecord documented as forward-compatibility contract rather than wiring to live log_bridge_routing()
+- [Phase 87]: 87-01: Used non-generic init_otlp_pipeline stub (Box<dyn Layer<Registry>> alias) to avoid type-inference errors in wave-0 tests that cannot instantiate S
+- [Phase 87]: 87-01: opentelemetry/opentelemetry_sdk/tracing-opentelemetry added to [dependencies] (not dev-only) because otlp.rs stub module is in src/ and uses their public types
+- [Phase 87]: 87-02: Dual public API for init_otlp_pipeline — boxed OtlpLayer version for test/simple callers, generic version for typed bootstrap composition
+- [Phase 87]: 87-02: tonic appears as indirect dep via opentelemetry-proto/gen-tonic-messages (prost support); unavoidable with http-proto feature but not gRPC transport — D-12 intent satisfied
+- [Phase 87]: 87-03: Two-phase OTLP init with OtlpConcreteLayer<S> type alias enables Rust type inference in .with() chain composition
+- [Phase 87]: 87-03: init_otlp_provider() separates async provider setup from layer creation, otlp::layer pub with concrete type for bootstrap use
+- [Phase 87]: 87-03: UC_SEQ_URL warn emitted via tracing::warn! after subscriber init for structured capture
+- [Phase 87]: 87-04: Stage constants renamed to dotted OTel semconv form (clipboard.normalize, etc.)
+- [Phase 87]: 87-04: clipboard.flow root span wraps all pipeline stages; old usecase.capture_clipboard.execute span removed
+- [Phase 87]: 87-04: tracing-opentelemetry added as direct dep to uc-app for OpenTelemetrySpanExt::set_parent in sync_inbound
+- [Phase 87]: 87-05: span_fields.rs kept as pub(crate) — format.rs FlatJsonFormat still uses collect_span_fields internally; only seq/ and clef_format.rs deleted
+- [Phase 87]: 87-05: seq/ module (3 files) + clef_format.rs hard-deleted; OTLP is now the sole telemetry exporter in uc-observability
+- [Phase 87]: 87-06: UC_SEQ_URL documented as removed in Phase 87 with single controlled migration-note occurrence; OTEL_EXPORTER_OTLP_ENDPOINT is the canonical replacement
+- [Phase 87]: 87-06: Seq signal queries use SpanName/TraceId (OTel PascalCase) instead of flow_id/origin_flow_id (legacy CLEF fields)
 
 ### Roadmap Evolution
 
@@ -260,6 +332,23 @@ Recent decisions affecting current work:
 - Phase 69 added: CLI setup flow: first-time encryption init before daemon spawn
 - Phase 70 added: CLI start/stop commands for daemon lifecycle management
 - Phase 71 added: Dual-product release pipeline for CLI and App
+- Phase 71 added: Migrate restore-clipboard to daemon — eliminate cross-process origin desync
+- Phase 73 added: Refactor clipboard restore loop prevention: introduce ClipboardWriteCoordinator as single write boundary owning origin guard registration, derive meaningful content key, and remove composition-time re-creation risk of origin store
+- Phase 73 discussed: ClipboardWriteCoordinator.write(snapshot, intent) as sole clipboard write API; snapshot building stays in use cases; Coordinator is only caller of origin_guard_key(); coordinator built in bootstrap assembly
+- Phase 74 added: Daemon Clipboard HTTP API — add list, detail, delete, favorite, stats endpoints
+- Phase 75 added: Daemon Security Middleware — JWT session token, PID verification, rate limiting, permission levels
+- Phase 76 added: Daemon Settings, Encryption & Storage HTTP API
+- Phase 77 added: Frontend Daemon HTTP Client & Auth Module
+- Phase 78 added: Frontend Clipboard API Migration — Tauri invoke to daemon HTTP
+- Phase 79 added: Frontend WebSocket Direct Connection & Event Migration
+- Phase 80 added: uc-tauri Command Cleanup — remove migrated commands
+- Phase 81 added: Frontend-Daemon Integration Testing & Security Audit
+- Phase 82 added: Replace uc:// custom protocol with daemon HTTP blob endpoints
+- Phase 83 added: 分析前端 Peer 配对请求，简化事件流架构，分离关注点,创建配对状态管理,提取业务逻辑
+- Phase 84 added: 统一 CLI/GUI 与 Daemon 的认证架构 — daemon 作为唯一入口，local key 做身份确认后发短时通行证，CLI/GUI 各自独立拿证
+- Phase 85 added: Improve pairing observability across daemon, event routing, and UI state transitions
+- Phase 86 added: CLI 层重构：收口远端状态解析，拆分 host/join flow phase
+- Phase 87 added: 全面迁移 otlp, 兼容 seq 展示, 采用 otlp 的最佳实践
 
 ### Pending Todos
 
@@ -279,6 +368,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-28T14:15:39.318Z
-Stopped at: Completed 71-03-PLAN.md
+Last session: 2026-04-05T04:40:52.291Z
+Stopped at: Completed 87-06-PLAN.md
 Resume file: None

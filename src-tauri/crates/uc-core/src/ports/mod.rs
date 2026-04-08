@@ -77,7 +77,7 @@ pub use file_transfer_repository::{
 pub use file_transport::{FileTransportPort, NoopFileTransportPort};
 pub use host_event_emitter::{
     ClipboardHostEvent, ClipboardOriginKind, EmitError, HostEvent, HostEventEmitterPort,
-    PeerConnectionHostEvent, PeerDiscoveryHostEvent, TransferHostEvent,
+    TransferHostEvent,
 };
 pub use network_control::NetworkControlPort;
 pub use network_events::NetworkEventPort;
@@ -87,9 +87,8 @@ pub use peer_directory::PeerDirectoryPort;
 pub use realtime::{
     PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
     PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
-    PeerNameUpdatedEvent, RealtimeEvent, RealtimeFrontendEvent, RealtimeFrontendPayload,
-    RealtimePairedDeviceSummary, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
-    FRONTEND_REALTIME_EVENT,
+    PeerNameUpdatedEvent, RealtimeEvent, RealtimePairedDeviceSummary, RealtimePeerSummary,
+    RealtimeTopic, RealtimeTopicPort,
 };
 pub use security::encryption::EncryptionPort;
 pub use security::encryption_session::EncryptionSessionPort;

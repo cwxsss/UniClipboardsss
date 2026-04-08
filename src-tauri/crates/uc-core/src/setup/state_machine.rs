@@ -70,6 +70,12 @@ impl SetupStateMachine {
                 },
                 vec![SetupAction::StartJoinSpaceAccess {}],
             ),
+            (SetupState::JoinSpaceInputPassphrase { .. }, SetupEvent::VerifyPassphrase { .. }) => (
+                SetupState::ProcessingJoinSpace {
+                    message: Some("Verifying passphrase…".into()),
+                },
+                vec![SetupAction::StartJoinSpaceAccess {}],
+            ),
             (SetupState::JoinSpaceInputPassphrase { .. }, SetupEvent::CancelSetup) => {
                 (SetupState::JoinSpaceSelectDevice { error: None }, vec![])
             }
@@ -244,6 +250,17 @@ mod tests {
                 "submit join passphrase",
                 SetupState::JoinSpaceInputPassphrase { error: None },
                 || SetupEvent::SubmitPassphrase {
+                    passphrase: "secret".into(),
+                },
+                SetupState::ProcessingJoinSpace {
+                    message: Some("Verifying passphrase…".into()),
+                },
+                vec![SetupAction::StartJoinSpaceAccess {}],
+            ),
+            (
+                "verify join passphrase",
+                SetupState::JoinSpaceInputPassphrase { error: None },
+                || SetupEvent::VerifyPassphrase {
                     passphrase: "secret".into(),
                 },
                 SetupState::ProcessingJoinSpace {

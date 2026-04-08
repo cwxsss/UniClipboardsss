@@ -1,5 +1,11 @@
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
-import { getClipboardStats, ClipboardStats } from '@/api/clipboardItems'
+import { getClipboardStats, type ClipboardStats as DaemonClipboardStats } from '@/api/daemon'
+// Tauri API — kept as commented reference during transition
+
+// import { getClipboardStats as getClipboardStatsTauri } from '@/api/clipboardItems'
+
+// Alias to the ClipboardStats name used throughout the slice
+type ClipboardStats = DaemonClipboardStats
 
 interface StatsState {
   stats: ClipboardStats
@@ -9,8 +15,8 @@ interface StatsState {
 
 const initialState: StatsState = {
   stats: {
-    total_items: 0,
-    total_size: 0,
+    totalItems: 0,
+    totalSize: 0,
   },
   loading: false,
   error: null,

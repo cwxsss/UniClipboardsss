@@ -81,15 +81,16 @@ export function updateCargoToml(newVersion, dryRun) {
   const cargoPath = path.join(process.cwd(), 'src-tauri', 'Cargo.toml')
   const content = fs.readFileSync(cargoPath, 'utf8')
 
-  const versionRegex = /^version\s*=\s*"([^"]+)"/m
-  const match = content.match(versionRegex)
+  // Match ALL lines with version = "..." — covers [package] and [workspace.package]
+  const versionLineRegex = /^version\s*=\s*"[^"]+"/gm
+  const matches = content.match(versionLineRegex)
 
-  if (!match) {
+  if (!matches || matches.length === 0) {
     throw new Error('Could not find version in Cargo.toml')
   }
 
-  const oldVersion = match[1]
-  const newContent = content.replace(versionRegex, `version = "${newVersion}"`)
+  const oldVersion = matches[0].match(/^version\s*=\s*"([^"]+)"/)[1]
+  const newContent = content.replace(versionLineRegex, `version = "${newVersion}"`)
 
   if (!dryRun) {
     fs.writeFileSync(cargoPath, newContent, 'utf8')

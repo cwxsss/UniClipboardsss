@@ -14,16 +14,18 @@ use uc_daemon::api::query::DaemonQueryService;
 use uc_daemon::api::server::{build_router, DaemonApiState};
 use uc_daemon::api::types::{
     DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload, PairingVerificationPayload,
-    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload, PeerSnapshotDto,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeerSnapshotDto, PeersChangedFullPayload,
     SetupStateChangedPayload,
 };
 use uc_daemon::pairing::session_projection::upsert_pairing_snapshot;
+use uc_daemon::security::SecurityState;
 use uc_daemon::state::RuntimeState;
 
 struct PairingWsHarness {
     app: axum::Router,
     url: String,
-    token: String,
+    /// JWT session token for HTTP route authentication (L2 middleware requires Session token).
+    session_token: String,
     event_tx: tokio::sync::broadcast::Sender<DaemonWsEvent>,
     state: Arc<RwLock<RuntimeState>>,
     handle: tokio::task::JoinHandle<()>,
@@ -35,6 +37,15 @@ fn build_runtime() -> Arc<uc_app::runtime::CoreRuntime> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Give each test invocation its own DB to prevent intra-binary SQLite contention.
+    let profile = format!(
+        "test_pairing_ws_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    );
+    std::env::set_var("UC_PROFILE", &profile);
     Arc::new(uc_bootstrap::build_cli_runtime(None).unwrap())
 }
 
@@ -45,8 +56,11 @@ async fn spawn_server() -> PairingWsHarness {
     let tempdir = tempfile::tempdir().unwrap();
     let token_path = tempdir.path().join("daemon.token");
     let token = load_or_create_auth_token(&token_path).unwrap();
-    let token_value = std::fs::read_to_string(&token_path).unwrap();
-    let api_state = DaemonApiState::new(query_service, token, None);
+    // Pre-register the test process PID so session tokens pass the whitelist check.
+    let pid = std::process::id();
+    let security = Arc::new(SecurityState::new_with_pid(pid));
+    let session_token = security.make_session_token_for_pid(pid);
+    let api_state = DaemonApiState::new(query_service, token, None, security);
     let event_tx = api_state.event_tx.clone();
     let app = build_router(api_state);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -61,7 +75,7 @@ async fn spawn_server() -> PairingWsHarness {
     PairingWsHarness {
         app,
         url: format!("ws://{}/ws", addr),
-        token: token_value,
+        session_token,
         event_tx,
         state,
         handle,
@@ -73,9 +87,10 @@ async fn connect_with_token(
     token: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let mut request = url.into_client_request().unwrap();
+    // Phase 75+: WS upgrade uses "Session <token>" prefix (JWT session token), not "Bearer".
     request.headers_mut().insert(
         "Authorization",
-        format!("Bearer {}", token.trim()).parse().unwrap(),
+        format!("Session {}", token.trim()).parse().unwrap(),
     );
     let (socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
     socket
@@ -102,13 +117,40 @@ async fn next_json(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
 ) -> Value {
-    serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap()
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .expect("next_json timed out waiting for WebSocket message")
+            .expect("WebSocket stream ended")
+            .expect("WebSocket message error");
+        match &msg {
+            tokio_tungstenite::tungstenite::Message::Text(text) => {
+                return serde_json::from_str(text)
+                    .expect("failed to parse WebSocket message as JSON");
+            }
+            tokio_tungstenite::tungstenite::Message::Close(reason) => {
+                panic!(
+                    "server unexpectedly closed WebSocket connection: {:?}",
+                    reason
+                );
+            }
+            tokio_tungstenite::tungstenite::Message::Ping(_)
+            | tokio_tungstenite::tungstenite::Message::Pong(_) => {
+                // Skip control frames and wait for the next data message.
+                continue;
+            }
+            other => {
+                panic!("unexpected WebSocket message type: {:?}", other);
+            }
+        }
+    }
 }
 
-fn authed_get_request(uri: &str, token: &str) -> Request<Body> {
+fn authed_get_request(uri: &str, session_token: &str) -> Request<Body> {
+    // Uses JWT session token for L2 HTTP routes (auth_extractor_middleware requires Session prefix)
     Request::builder()
         .uri(uri)
-        .header("Authorization", format!("Bearer {}", token.trim()))
+        .header("Authorization", format!("Session {}", session_token.trim()))
         .body(Body::empty())
         .unwrap()
 }
@@ -126,7 +168,7 @@ async fn snapshot_contains_session_id_and_omits_verification_secrets() {
     )
     .await;
 
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing"]).await;
 
     let event = next_json(&mut socket).await;
@@ -146,7 +188,7 @@ async fn snapshot_contains_session_id_and_omits_verification_secrets() {
 #[tokio::test]
 async fn incremental_verification_event_contains_code_and_fingerprints() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing"]).await;
     let _snapshot = next_json(&mut socket).await;
 
@@ -184,7 +226,7 @@ async fn incremental_verification_event_contains_code_and_fingerprints() {
 #[tokio::test]
 async fn peers_and_paired_devices_incremental_events_preserve_bridge_fields() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["peers", "paired-devices"]).await;
     let _peers_snapshot = next_json(&mut socket).await;
     let _paired_devices_snapshot = next_json(&mut socket).await;
@@ -289,7 +331,7 @@ async fn peers_and_paired_devices_incremental_events_preserve_bridge_fields() {
 #[tokio::test]
 async fn websocket_event_uses_type_not_event_type() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing"]).await;
     let _snapshot = next_json(&mut socket).await;
 
@@ -330,7 +372,7 @@ async fn pairing_session_http_response_omits_verification_secrets_even_with_real
     )
     .await;
 
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing"]).await;
     let _snapshot = next_json(&mut socket).await;
 
@@ -361,7 +403,7 @@ async fn pairing_session_http_response_omits_verification_secrets_even_with_real
         .clone()
         .oneshot(authed_get_request(
             "/pairing/sessions/session-4",
-            &harness.token,
+            &harness.session_token,
         ))
         .await
         .unwrap();
@@ -381,7 +423,7 @@ async fn pairing_session_http_response_omits_verification_secrets_even_with_real
 #[tokio::test]
 async fn granular_pairing_topic_subscription_receives_session_events() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["pairing/session"]).await;
     let _snapshot = next_json(&mut socket).await;
 
@@ -412,18 +454,144 @@ async fn granular_pairing_topic_subscription_receives_session_events() {
     assert_eq!(event["payload"]["peerId"], "peer-5");
 }
 
+/// Verifies that a `pairing.verification_required` with kind=`verifying` is routed to
+/// `pairing.updated` (not `pairing.verification_required`) by the bridge.
+/// This makes the bridge's kind-based mapping decision explicit and test-covered.
+#[tokio::test]
+async fn bridge_routes_verification_required_verifying_kind_to_pairing_updated() {
+    let harness = spawn_server().await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
+    subscribe(&mut socket, &["pairing"]).await;
+    let _snapshot = next_json(&mut socket).await;
+
+    harness
+        .event_tx
+        .send(DaemonWsEvent {
+            topic: "pairing/verification".to_string(),
+            event_type: "pairing.verification_required".to_string(),
+            session_id: Some("session-v".to_string()),
+            ts: 10,
+            payload: serde_json::to_value(PairingVerificationPayload {
+                session_id: "session-v".to_string(),
+                kind: "verifying".to_string(),
+                peer_id: Some("peer-v".to_string()),
+                device_name: Some("Laptop".to_string()),
+                code: None,
+                error: None,
+                local_fingerprint: None,
+                peer_fingerprint: None,
+            })
+            .unwrap(),
+        })
+        .unwrap();
+
+    let event = next_json(&mut socket).await;
+    harness.handle.abort();
+
+    // kind=verifying must route to pairing.updated, not pairing.verification_required
+    assert_eq!(
+        event["type"], "pairing.updated",
+        "kind=verifying must be routed to pairing.updated"
+    );
+    assert_eq!(event["payload"]["sessionId"], "session-v");
+    assert_eq!(event["payload"]["stage"], "verifying");
+}
+
+/// Verifies that a `pairing.verification_required` with kind=`complete` is routed to
+/// `pairing.complete` by the bridge.
+#[tokio::test]
+async fn bridge_routes_verification_required_complete_kind_to_pairing_complete() {
+    let harness = spawn_server().await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
+    subscribe(&mut socket, &["pairing"]).await;
+    let _snapshot = next_json(&mut socket).await;
+
+    harness
+        .event_tx
+        .send(DaemonWsEvent {
+            topic: "pairing/verification".to_string(),
+            event_type: "pairing.verification_required".to_string(),
+            session_id: Some("session-c".to_string()),
+            ts: 11,
+            payload: serde_json::to_value(PairingVerificationPayload {
+                session_id: "session-c".to_string(),
+                kind: "complete".to_string(),
+                peer_id: Some("peer-c".to_string()),
+                device_name: Some("Desktop".to_string()),
+                code: None,
+                error: None,
+                local_fingerprint: None,
+                peer_fingerprint: None,
+            })
+            .unwrap(),
+        })
+        .unwrap();
+
+    let event = next_json(&mut socket).await;
+    harness.handle.abort();
+
+    // kind=complete must route to pairing.complete
+    assert_eq!(
+        event["type"], "pairing.complete",
+        "kind=complete must be routed to pairing.complete"
+    );
+    assert_eq!(event["payload"]["sessionId"], "session-c");
+}
+
+/// Verifies that a `pairing.verification_required` with kind=`failed` is routed to
+/// `pairing.failed` by the bridge, and that the error field is forwarded as the reason.
+#[tokio::test]
+async fn bridge_routes_verification_required_failed_kind_to_pairing_failed() {
+    let harness = spawn_server().await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
+    subscribe(&mut socket, &["pairing"]).await;
+    let _snapshot = next_json(&mut socket).await;
+
+    harness
+        .event_tx
+        .send(DaemonWsEvent {
+            topic: "pairing/verification".to_string(),
+            event_type: "pairing.verification_required".to_string(),
+            session_id: Some("session-f".to_string()),
+            ts: 12,
+            payload: serde_json::to_value(PairingVerificationPayload {
+                session_id: "session-f".to_string(),
+                kind: "failed".to_string(),
+                peer_id: Some("peer-f".to_string()),
+                device_name: None,
+                code: None,
+                error: Some("verification_timeout".to_string()),
+                local_fingerprint: None,
+                peer_fingerprint: None,
+            })
+            .unwrap(),
+        })
+        .unwrap();
+
+    let event = next_json(&mut socket).await;
+    harness.handle.abort();
+
+    // kind=failed must route to pairing.failed
+    assert_eq!(
+        event["type"], "pairing.failed",
+        "kind=failed must be routed to pairing.failed"
+    );
+    assert_eq!(event["payload"]["sessionId"], "session-f");
+}
+
 #[tokio::test]
 async fn setup_topic_subscription_receives_setup_state_changed_events() {
     let harness = spawn_server().await;
-    let mut socket = connect_with_token(&harness.url, &harness.token).await;
+    let mut socket = connect_with_token(&harness.url, &harness.session_token).await;
     subscribe(&mut socket, &["setup"]).await;
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // setup has no snapshot event, so wait for the subscribe to be processed.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     harness
         .event_tx
         .send(DaemonWsEvent {
             topic: "setup".to_string(),
-            event_type: "setup.state_changed".to_string(),
+            event_type: "setup.stateChanged".to_string(),
             session_id: Some("session-setup".to_string()),
             ts: 8,
             payload: serde_json::to_value(SetupStateChangedPayload {
@@ -443,7 +611,7 @@ async fn setup_topic_subscription_receives_setup_state_changed_events() {
     let event = next_json(&mut socket).await;
     harness.handle.abort();
 
-    assert_eq!(event["type"], "setup.state_changed");
+    assert_eq!(event["type"], "setup.stateChanged");
     assert_eq!(event["payload"]["sessionId"], "session-setup");
     assert_eq!(
         event["payload"]["state"]["JoinSpaceConfirmPeer"]["short_code"],

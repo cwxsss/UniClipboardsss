@@ -1,6 +1,6 @@
 [package]
 name = "uniclipboard"
-version = "0.4.0-alpha.1"
+version = "0.4.0-alpha.5"
 description = "一个剪切板同步工具"
 authors = ["mkdir700@gmail.com"]
 edition = "2021"
@@ -88,12 +88,13 @@ members = [
   "crates/uc-bootstrap",
   "crates/uc-daemon",
   "crates/uc-cli",
+  "crates/uc-cli-macros",
   "crates/uc-daemon-client",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.0-alpha.1"
+version = "0.4.0-alpha.5"
 
 # Dependencies for workspace crates, mainly for tauri plugins
 [workspace.dependencies]

@@ -7,8 +7,9 @@ import {
   Image as ImageIcon,
   Loader2,
 } from 'lucide-react'
-import React, { useState, useEffect } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import VirtualizedText from './VirtualizedText'
 import {
   ClipboardTextItem,
   ClipboardImageItem,
@@ -16,13 +17,72 @@ import {
   ClipboardCodeItem,
   ClipboardFileItem,
   fetchClipboardResourceText,
-  getClipboardEntryResource,
-  getResourceImageUrl,
+  resolveResourceImageUrl,
 } from '@/api/clipboardItems'
+import { getClipboardEntryResource } from '@/api/daemon/clipboard'
 import { toast } from '@/components/ui/toast'
-import { resolveUcUrl } from '@/lib/protocol'
 import { cn } from '@/lib/utils'
 import { formatFileSize } from '@/utils'
+
+/** Threshold above which we switch to chunked rendering for performance. */
+const LARGE_TEXT_THRESHOLD = 50_000
+
+/** Target characters per group for content-visibility optimization. */
+const GROUP_TARGET_SIZE = 5000
+
+/**
+ * Renders large text with performance optimization.
+ * - Multi-line text: groups lines into block divs with content-visibility: auto
+ * - Single-line huge text (no/few newlines): falls back to react-virtuoso
+ *   with a fixed-height container since it's impossible to render 500KB+
+ *   in one DOM node without freezing
+ */
+const ChunkedText: React.FC<{ text: string }> = ({ text }) => {
+  const lines = useMemo(() => text.split('\n'), [text])
+  const hasLongLine = useMemo(() => lines.some(line => line.length > LARGE_TEXT_THRESHOLD), [lines])
+  const groups = useMemo(() => {
+    if (hasLongLine) return []
+    const result: string[] = []
+    let current: string[] = []
+    let currentSize = 0
+    for (const line of lines) {
+      current.push(line)
+      currentSize += line.length
+      if (currentSize >= GROUP_TARGET_SIZE) {
+        result.push(current.join('\n'))
+        current = []
+        currentSize = 0
+      }
+    }
+    if (current.length > 0) {
+      result.push(current.join('\n'))
+    }
+    return result
+  }, [lines, hasLongLine])
+
+  // Single-line or few-line huge text: use virtualized rendering
+  if (hasLongLine) {
+    return <VirtualizedText text={text} className="h-96" />
+  }
+
+  return (
+    <div>
+      {groups.map((group, i) => (
+        <div
+          key={i}
+          className="whitespace-pre-wrap font-mono text-sm leading-relaxed text-foreground/90"
+          style={{
+            wordBreak: 'break-all',
+            contentVisibility: 'auto',
+            containIntrinsicSize: 'auto 3em',
+          }}
+        >
+          {group}
+        </div>
+      ))}
+    </div>
+  )
+}
 
 interface ClipboardItemProps {
   index: number
@@ -70,7 +130,7 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
     getClipboardEntryResource(entryId)
       .then(resource => {
         if (!cancelled) {
-          setOriginalImageUrl(getResourceImageUrl(resource))
+          setOriginalImageUrl(resource ? resolveResourceImageUrl(resource) : null)
         }
       })
       .catch(e => {
@@ -129,6 +189,9 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
       setIsLoadingDetail(true)
       try {
         const resource = await getClipboardEntryResource(entryId)
+        if (!resource) {
+          throw new Error('Resource not found')
+        }
         const fullText = await fetchClipboardResourceText(resource)
         setDetailContent(fullText)
         setIsExpanded(true)
@@ -187,6 +250,20 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
         // Use detail content when expanded and available, otherwise use preview
         const textToShow = isExpanded && detailContent ? detailContent : textItem.display_text
 
+        if (isLoadingDetail) {
+          return (
+            <p className="whitespace-pre-wrap font-mono text-sm leading-relaxed text-foreground/90 wrap-break-word">
+              {t('clipboard.item.loading')}
+            </p>
+          )
+        }
+
+        // When expanded with large text, render in small block-level chunks
+        // with content-visibility: auto so browser skips layout for off-screen chunks.
+        if (isExpanded && textToShow.length > LARGE_TEXT_THRESHOLD) {
+          return <ChunkedText text={textToShow} />
+        }
+
         return (
           <p
             className={cn(
@@ -194,12 +271,12 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
               !isExpanded && 'line-clamp-5'
             )}
           >
-            {isLoadingDetail ? t('clipboard.item.loading') : textToShow}
+            {textToShow}
           </p>
         )
       }
       case 'image': {
-        const imageUrl = originalImageUrl ? resolveUcUrl(originalImageUrl) : null
+        const imageUrl = originalImageUrl
         return imageUrl ? (
           <img
             src={imageUrl}

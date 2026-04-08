@@ -23,6 +23,7 @@ use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_infra::clipboard::TransferPayloadEncryptorAdapter;
+use uc_observability::FlowId;
 use uc_platform::clipboard::watcher::{ClipboardWatcher, PlatformEvent, PlatformEventSender};
 
 use crate::api::types::DaemonWsEvent;
@@ -180,9 +181,10 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
             return Ok(());
         }
         let usecase = self.build_capture_use_case();
+        let flow_id = FlowId::generate().to_string();
 
         // 1. Compute snapshot hash for write-back loop prevention.
-        let snapshot_hash = snapshot.snapshot_hash().to_string();
+        let origin_guard_key = snapshot.origin_guard_key();
 
         // 2. Check if this clipboard change was triggered by daemon inbound sync (RemotePush)
         //    or by the local user (LocalCapture). This prevents re-capturing content that
@@ -190,10 +192,18 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
         let origin = self
             .clipboard_change_origin
             .consume_origin_for_snapshot_or_default(
-                &snapshot_hash,
+                &origin_guard_key,
                 ClipboardChangeOrigin::LocalCapture,
             )
             .await;
+
+        debug!(
+            origin_guard_key = %origin_guard_key,
+            rep_count = snapshot.representations.len(),
+            origin = ?origin,
+            flow_id = %flow_id,
+            "daemon clipboard watcher resolved origin for snapshot"
+        );
 
         // 3. Determine the origin string for the WS event payload.
         let origin_str = match origin {
@@ -204,7 +214,10 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
         // 4. Clone snapshot BEFORE execute_with_origin which takes ownership.
         let outbound_snapshot = snapshot.clone();
 
-        match usecase.execute_with_origin(snapshot, origin).await {
+        match usecase
+            .execute_with_origin(snapshot, origin, Some(flow_id.clone()))
+            .await
+        {
             Ok(Some(entry_id)) => {
                 debug!(entry_id = %entry_id, ?origin, "Daemon clipboard capture succeeded");
 
@@ -276,11 +289,12 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                 // Dispatch clipboard sync via spawn_blocking (execute() uses executor::block_on internally).
                 if let Some(clipboard_intent) = plan.clipboard {
                     let outbound_sync_uc = self.build_sync_outbound_clipboard_use_case();
+                    let flow_id_clone = flow_id.clone();
                     tokio::task::spawn_blocking(move || {
                         match outbound_sync_uc.execute(
                             clipboard_intent.snapshot,
                             origin,
-                            None, // no flow_id in daemon context
+                            Some(flow_id_clone),
                             clipboard_intent.file_transfers,
                         ) {
                             Ok(()) => info!("Daemon outbound clipboard sync completed"),
@@ -324,10 +338,10 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
             }
             Ok(None) => {
                 // Dedup at use-case level (e.g. unsupported representation) — skip silently.
-                debug!("Clipboard capture returned None (dedup or unsupported)");
+                debug!(origin_guard_key = %origin_guard_key, ?origin, "Clipboard capture returned None");
             }
             Err(e) => {
-                warn!(error = %e, "Daemon clipboard capture failed");
+                warn!(error = %e, origin_guard_key = %origin_guard_key, ?origin, "Daemon clipboard capture failed");
             }
         }
 

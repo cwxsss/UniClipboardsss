@@ -1,13 +1,6 @@
 pub mod autostart;
-pub mod clipboard;
-pub mod encryption;
 pub mod error;
-pub mod lifecycle;
-pub mod pairing;
-pub mod preview_panel;
 pub mod quick_panel;
-pub mod settings;
-pub mod setup;
 pub mod startup;
 pub mod storage;
 pub mod tray;
@@ -16,14 +9,26 @@ pub mod updater;
 use tracing::Span;
 use uc_platform::ports::observability::TraceMetadata;
 
+/// Get the OS process ID of the Tauri application.
+///
+/// 获取 Tauri 应用的操作系统进程 ID。
+#[tauri::command]
+pub fn get_tauri_pid() -> u32 {
+    std::process::id()
+}
+
+/// Get the stable local device identifier used for telemetry correlation.
+#[tauri::command]
+pub async fn get_device_id(
+    runtime: tauri::State<'_, std::sync::Arc<crate::bootstrap::AppRuntime>>,
+    _trace: Option<TraceMetadata>,
+) -> Result<String, CommandError> {
+    Ok(runtime.device_id())
+}
+
 // Re-export commonly used types
 pub use autostart::*;
-pub use clipboard::*;
-pub use encryption::*;
-pub use lifecycle::*;
-pub use pairing::*;
-pub use settings::*;
-pub use setup::*;
+
 pub use startup::*;
 pub use storage::*;
 pub use updater::*;

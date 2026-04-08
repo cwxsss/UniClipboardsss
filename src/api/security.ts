@@ -1,85 +1,81 @@
-import { invokeWithTrace } from '@/lib/tauri-command'
+/**
+ * Security API module — typed accessors for daemon encryption endpoints.
+ *
+ * 安全 API 模块 — daemon 加密端点的类型化访问器。
+ *
+ * # Daemon Endpoints / Daemon 端点
+ * - `GET /encryption/state` → current encryption initialization & session state
+ * - `POST /encryption/unlock` → auto-unlock encryption session (keyring-based, no passphrase)
+ * - `POST /encryption/lock` → lock encryption session (clear master key)
+ * - `GET /encryption/keychain-access` → verify Keychain "Always Allow" permission
+ */
 
+import {
+  getEncryptionState as daemonGetEncryptionState,
+  unlockEncryption as daemonUnlockEncryption,
+  verifyKeychainAccess as daemonVerifyKeychainAccess,
+} from './daemon/encryption'
+
+// ── Types ─────────────────────────────────────────────────────
+
+/**
+ * Encryption session status.
+ *
+ * 加密会话状态。
+ *
+ * Field names match the daemon API response (camelCase).
+ */
 export interface EncryptionSessionStatus {
   initialized: boolean
-  session_ready: boolean
+  sessionReady: boolean
 }
 
-/**
- * 获取加密口令
- * @returns Promise，返回加密口令
- */
-export async function getEncryptionPassword(): Promise<string> {
-  try {
-    return await invokeWithTrace('get_encryption_password')
-  } catch (error) {
-    console.error('获取加密口令失败:', error)
-    throw error
-  }
-}
+// ── Daemon-based functions ─────────────────────────────────────
 
 /**
- * 设置加密口令
- * @param password 要设置的加密口令
- * @returns Promise，成功返回true
- */
-export async function setEncryptionPassword(password: string): Promise<boolean> {
-  try {
-    return await invokeWithTrace('set_encryption_password', { password })
-  } catch (error) {
-    console.error('设置加密口令失败:', error)
-    throw error
-  }
-}
-
-/**
- * 删除加密口令
- * @returns Promise，成功返回true
- */
-export async function deleteEncryptionPassword(): Promise<boolean> {
-  try {
-    return await invokeWithTrace('delete_encryption_password')
-  } catch (error) {
-    console.error('删除加密口令失败:', error)
-    throw error
-  }
-}
-
-/**
- * 获取加密会话状态
- * @returns Promise，返回加密初始化状态与会话就绪状态
+ * Fetch encryption session status from the daemon.
+ *
+ * 从 daemon 获取加密会话状态。
+ *
+ * Uses daemon HTTP API: `GET /encryption/state`
+ *
+ * @returns Encryption initialization and session readiness.
+ * @throws {DaemonApiError} On HTTP or session errors.
  */
 export async function getEncryptionSessionStatus(): Promise<EncryptionSessionStatus> {
-  try {
-    return await invokeWithTrace('get_encryption_session_status')
-  } catch (error) {
-    console.error('获取加密会话状态失败:', error)
-    throw error
-  }
+  return daemonGetEncryptionState()
 }
 
 /**
- * 解锁加密会话
- * @returns Promise，成功返回true
+ * Auto-unlock the encryption session via the daemon.
+ *
+ * 通过 daemon 自动解锁加密会话（从 keychain 获取 KEK，无需 passphrase）。
+ *
+ * Uses daemon HTTP API: `POST /encryption/unlock`
+ *
+ * @returns True on success, false if encryption not initialized.
+ * @throws On unlock errors.
  */
 export async function unlockEncryptionSession(): Promise<boolean> {
   try {
-    return await invokeWithTrace('unlock_encryption_session')
+    await daemonUnlockEncryption()
+    return true
   } catch (error) {
-    console.error('解锁加密会话失败:', error)
+    console.error('Failed to unlock encryption session:', error)
     throw error
   }
 }
 
 /**
- * 验证 macOS Keychain "Always Allow" 权限
- * @returns Promise，返回是否已授权
+ * Verify macOS Keychain "Always Allow" permission for this app.
+ *
+ * 验证此应用的 macOS Keychain "始终允许" 权限。
+ *
+ * Uses daemon HTTP API: `GET /encryption/keychain-access`
+ *
+ * @returns True if permission is granted.
+ * @throws {DaemonApiError} On permission check errors.
  */
 export async function verifyKeychainAccess(): Promise<boolean> {
-  try {
-    return await invokeWithTrace('verify_keychain_access')
-  } catch (error) {
-    console.error('Keychain verification failed:', error)
-    throw error
-  }
+  return daemonVerifyKeychainAccess()
 }

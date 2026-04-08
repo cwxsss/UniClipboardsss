@@ -49,6 +49,7 @@ mod tests {
             base_url: "http://127.0.0.1:42715".to_string(),
             ws_url: "ws://127.0.0.1:42715/ws".to_string(),
             token: "test-token".to_string(),
+            pid: 12345,
         });
 
         let info = state.get().expect("should have connection info");

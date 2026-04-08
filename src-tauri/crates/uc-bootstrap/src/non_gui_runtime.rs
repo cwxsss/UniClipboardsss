@@ -39,20 +39,8 @@ impl HostEventEmitterPort for LoggingHostEventEmitter {
             HostEvent::Clipboard(_) => {
                 tracing::debug!(event_type = "clipboard", "host event (non-gui)");
             }
-            HostEvent::PeerDiscovery(_) => {
-                tracing::debug!(event_type = "peer_discovery", "host event (non-gui)");
-            }
-            HostEvent::PeerConnection(_) => {
-                tracing::debug!(event_type = "peer_connection", "host event (non-gui)");
-            }
             HostEvent::Transfer(_) => {
                 tracing::debug!(event_type = "transfer", "host event (non-gui)");
-            }
-            HostEvent::Pairing(_) => {
-                tracing::debug!(event_type = "pairing", "host event (non-gui)");
-            }
-            HostEvent::Realtime(_) => {
-                tracing::debug!(event_type = "realtime", "host event (non-gui)");
             }
             HostEvent::Setup(_) => {
                 tracing::debug!(event_type = "setup", "host event (non-gui)");
@@ -200,10 +188,6 @@ pub fn resolve_clipboard_integration_mode() -> ClipboardIntegrationMode {
 mod tests {
     use super::*;
     use uc_core::ports::host_event_emitter::*;
-    use uc_core::ports::realtime::{
-        PeerChangedEvent, RealtimeFrontendEvent, RealtimeFrontendPayload, RealtimeTopic,
-    };
-    use uc_core::ports::transfer_progress::{TransferDirection, TransferProgress};
     use uc_core::setup::SetupState;
 
     fn clipboard_mode_env_lock() -> &'static Mutex<()> {
@@ -221,40 +205,12 @@ mod tests {
                 preview: "hello".to_string(),
                 origin: ClipboardOriginKind::Local,
             }),
-            HostEvent::PeerDiscovery(PeerDiscoveryHostEvent::Discovered {
-                peer_id: "p1".to_string(),
-                device_name: None,
-                addresses: vec![],
-            }),
-            HostEvent::PeerConnection(PeerConnectionHostEvent::Connected {
-                peer_id: "p2".to_string(),
-                device_name: Some("Desk".to_string()),
-            }),
-            HostEvent::Transfer(TransferHostEvent::Progress(TransferProgress {
+            HostEvent::Transfer(TransferHostEvent::StatusChanged {
                 transfer_id: "t1".to_string(),
-                peer_id: "p3".to_string(),
-                direction: TransferDirection::Sending,
-                chunks_completed: 0,
-                total_chunks: 1,
-                bytes_transferred: 0,
-                total_bytes: Some(100),
-            })),
-            HostEvent::Pairing(PairingHostEvent::Verification {
-                session_id: "s1".to_string(),
-                kind: PairingVerificationKind::Request,
-                peer_id: None,
-                device_name: None,
-                code: None,
-                local_fingerprint: None,
-                peer_fingerprint: None,
-                error: None,
+                entry_id: "e2".to_string(),
+                status: "pending".to_string(),
+                reason: None,
             }),
-            HostEvent::Realtime(RealtimeFrontendEvent::new(
-                RealtimeTopic::Peers,
-                "peers.changed",
-                0,
-                RealtimeFrontendPayload::PeersChanged(PeerChangedEvent { peers: vec![] }),
-            )),
             HostEvent::Setup(SetupHostEvent::StateChanged {
                 state: SetupState::Welcome,
                 session_id: None,

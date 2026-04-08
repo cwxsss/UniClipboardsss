@@ -3,10 +3,6 @@
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::http::header::{
-    HeaderValue, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE,
-};
-use tauri::http::{Request, Response, StatusCode};
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
@@ -18,246 +14,21 @@ use tracing::{error, info, warn};
 
 use uc_bootstrap::GuiBootstrapContext;
 use uc_daemon_client::daemon_lifecycle::GuiOwnedDaemonState;
-use uc_daemon_client::{realtime::install_daemon_setup_pairing_facade, DaemonConnectionState};
+use uc_daemon_client::DaemonConnectionState;
 use uc_tauri::bootstrap::{
-    bootstrap_daemon_connection, emit_daemon_connection_info_if_ready, ensure_default_device_name,
-    start_background_tasks, supervise_daemon, AppRuntime,
+    bootstrap_daemon_connection, ensure_default_device_name, start_background_tasks,
+    start_gui_pairing_lease_task, supervise_daemon, AppRuntime,
 };
 use uc_tauri::commands::updater::PendingUpdate;
-use uc_tauri::protocol::{parse_uc_request, UcRoute};
 use uc_tauri::tray::TrayState;
 
 // Platform-specific command modules
 mod plugins;
 
-use uc_tauri::preview_panel;
 use uc_tauri::quick_panel;
 
 const DAEMON_EXIT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
 const DAEMON_EXIT_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-fn is_allowed_cors_origin(origin: &str) -> bool {
-    origin == "tauri://localhost"
-        || origin == "http://tauri.localhost"
-        || origin == "https://tauri.localhost"
-        || origin.starts_with("http://localhost:")
-        || origin.starts_with("http://127.0.0.1:")
-        || origin.starts_with("http://[::1]:")
-}
-
-fn set_cors_headers(response: &mut Response<Vec<u8>>, origin: Option<&str>) {
-    let origin = match origin {
-        Some(origin) if is_allowed_cors_origin(origin) => origin,
-        _ => return,
-    };
-
-    match HeaderValue::from_str(origin) {
-        Ok(value) => {
-            response
-                .headers_mut()
-                .insert(ACCESS_CONTROL_ALLOW_ORIGIN, value);
-        }
-        Err(err) => {
-            error!(error = %err, "Invalid origin for CORS response");
-        }
-    }
-
-    if let Ok(value) = HeaderValue::from_str("GET") {
-        response
-            .headers_mut()
-            .insert(ACCESS_CONTROL_ALLOW_METHODS, value);
-    }
-}
-
-fn build_response(
-    status: StatusCode,
-    content_type: Option<&str>,
-    body: Vec<u8>,
-    origin: Option<&str>,
-) -> Response<Vec<u8>> {
-    let mut response = Response::new(body);
-    *response.status_mut() = status;
-
-    if let Some(content_type) = content_type {
-        match HeaderValue::from_str(content_type) {
-            Ok(value) => {
-                response.headers_mut().insert(CONTENT_TYPE, value);
-            }
-            Err(err) => {
-                error!(error = %err, "Invalid content type for response");
-            }
-        }
-    }
-
-    set_cors_headers(&mut response, origin);
-
-    response
-}
-
-fn text_response(status: StatusCode, message: &str, origin: Option<&str>) -> Response<Vec<u8>> {
-    build_response(
-        status,
-        Some("text/plain"),
-        message.as_bytes().to_vec(),
-        origin,
-    )
-}
-
-async fn resolve_uc_request(
-    app_handle: tauri::AppHandle,
-    request: Request<Vec<u8>>,
-) -> Response<Vec<u8>> {
-    let uri = request.uri();
-    let host = uri.host().unwrap_or_default();
-    let path = uri.path();
-    let origin = request
-        .headers()
-        .get("Origin")
-        .and_then(|value| value.to_str().ok());
-
-    let route = match parse_uc_request(&request) {
-        Ok(route) => route,
-        Err(err) => {
-            error!(
-                error = %err,
-                host = %host,
-                path = %path,
-                "Failed to parse uc URI request"
-            );
-            return text_response(err.status_code(), err.response_message(), origin);
-        }
-    };
-
-    match route {
-        UcRoute::Blob { blob_id } => resolve_uc_blob_request(app_handle, blob_id, origin).await,
-        UcRoute::Thumbnail { representation_id } => {
-            resolve_uc_thumbnail_request(app_handle, representation_id, origin).await
-        }
-    }
-}
-
-async fn resolve_uc_blob_request(
-    app_handle: tauri::AppHandle,
-    blob_id: uc_core::BlobId,
-    origin: Option<&str>,
-) -> Response<Vec<u8>> {
-    let runtime = match app_handle.try_state::<Arc<AppRuntime>>() {
-        Some(state) => state,
-        None => {
-            error!("AppRuntime state not managed for uc URI handling");
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Runtime not ready",
-                origin,
-            );
-        }
-    };
-
-    let use_case = runtime.usecases().resolve_blob_resource();
-    match use_case.execute(&blob_id).await {
-        Ok(result) => build_response(
-            StatusCode::OK,
-            Some(
-                result
-                    .mime_type
-                    .as_deref()
-                    .unwrap_or("application/octet-stream"),
-            ),
-            result.bytes,
-            origin,
-        ),
-        Err(err) => {
-            let err_msg = err.to_string();
-            error!(error = %err, blob_id = %blob_id, "Failed to resolve blob resource");
-            let status = if err_msg.contains("not found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            text_response(status, "Failed to resolve blob resource", origin)
-        }
-    }
-}
-
-async fn resolve_uc_thumbnail_request(
-    app_handle: tauri::AppHandle,
-    representation_id: uc_core::ids::RepresentationId,
-    origin: Option<&str>,
-) -> Response<Vec<u8>> {
-    let runtime = match app_handle.try_state::<Arc<AppRuntime>>() {
-        Some(state) => state,
-        None => {
-            error!("AppRuntime state not managed for uc URI handling");
-            return text_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Runtime not ready",
-                origin,
-            );
-        }
-    };
-
-    let use_case = runtime.usecases().resolve_thumbnail_resource();
-    match use_case.execute(&representation_id).await {
-        Ok(result) => build_response(
-            StatusCode::OK,
-            Some(
-                result
-                    .mime_type
-                    .as_deref()
-                    .unwrap_or("application/octet-stream"),
-            ),
-            result.bytes,
-            origin,
-        ),
-        Err(err) => {
-            let err_msg = err.to_string();
-            error!(
-                error = %err,
-                representation_id = %representation_id,
-                "Failed to resolve thumbnail resource"
-            );
-            let status = if err_msg.contains("not found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            text_response(status, "Failed to resolve thumbnail resource", origin)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cors_headers_are_set_for_dev_origin() {
-        let origin = "http://localhost:1420";
-        let response = build_response(StatusCode::OK, None, vec![], Some(origin));
-
-        let headers = response.headers();
-        assert_eq!(
-            headers
-                .get(ACCESS_CONTROL_ALLOW_ORIGIN)
-                .and_then(|value| value.to_str().ok()),
-            Some(origin)
-        );
-        assert_eq!(
-            headers
-                .get(ACCESS_CONTROL_ALLOW_METHODS)
-                .and_then(|value| value.to_str().ok()),
-            Some("GET")
-        );
-    }
-
-    #[test]
-    fn test_cors_headers_not_set_for_untrusted_origin() {
-        let response = build_response(StatusCode::OK, None, vec![], Some("https://example.com"));
-
-        let headers = response.headers();
-        assert!(headers.get(ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
-    }
-}
 
 fn main() {
     // Tracing and config are handled inside build_gui_app()
@@ -291,13 +62,11 @@ fn run_app(ctx: GuiBootstrapContext) {
 
     let daemon_connection_state = DaemonConnectionState::default();
     let gui_owned_daemon_state = GuiOwnedDaemonState::default();
-    let mut setup_ports = setup_ports;
-    let setup_pairing_event_hub =
-        install_daemon_setup_pairing_facade(&mut setup_ports, daemon_connection_state.clone());
 
     let event_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
-        std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::LoggingEventEmitter);
-    let runtime = AppRuntime::with_setup(deps, setup_ports, storage_paths, event_emitter);
+        std::sync::Arc::new(uc_bootstrap::LoggingHostEventEmitter);
+    let runtime = AppRuntime::with_setup(deps, setup_ports, storage_paths, event_emitter)
+        .with_clipboard_write_coordinator(background.clipboard_write_coordinator.clone());
     let runtime = Arc::new(runtime);
 
     // Startup barrier used to coordinate backend readiness and main window show timing.
@@ -307,9 +76,6 @@ fn run_app(ctx: GuiBootstrapContext) {
 
     // Store TaskRegistry reference for exit hook registration
     let task_registry = runtime.task_registry().clone();
-    let startup_barrier_for_page_load = startup_barrier.clone();
-    let daemon_connection_state_for_page_load = daemon_connection_state.clone();
-
     let builder = Builder::default()
         // Register AppRuntime for Tauri commands
         .manage(runtime.clone())
@@ -347,31 +113,8 @@ fn run_app(ctx: GuiBootstrapContext) {
                 "[StartupTiming] main webview page load"
             );
 
-            if matches!(payload.event(), PageLoadEvent::Finished) {
-                startup_barrier_for_page_load.mark_frontend_ready();
-                if let Err(error) = emit_daemon_connection_info_if_ready(
-                    &webview.app_handle(),
-                    &daemon_connection_state_for_page_load,
-                    &startup_barrier_for_page_load,
-                ) {
-                    error!(
-                        error = %error,
-                        "Failed to emit daemon connection info after main webview load"
-                    );
-                }
-            }
+            if matches!(payload.event(), PageLoadEvent::Finished) {}
         })
-        .register_asynchronous_uri_scheme_protocol("uc", move |ctx, request, responder| {
-            let app_handle = ctx.app_handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let response = resolve_uc_request(app_handle, request).await;
-                responder.respond(response);
-            });
-        })
-        // Manual verification (dev):
-        // 1) In frontend devtools: fetch("uc://blob/<blob_id>")
-        // 2) In frontend devtools: fetch("uc://thumbnail/<representation_id>")
-        // 3) Network should show 200 with Access-Control-Allow-Origin matching http://localhost:1420
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init());
@@ -405,20 +148,11 @@ fn run_app(ctx: GuiBootstrapContext) {
             runtime.set_app_handle(app.handle().clone());
             info!("AppHandle set on AppRuntime for event emission");
 
-            // Swap event emitter from LoggingEventEmitter to TauriEventEmitter
-            // now that AppHandle is available
-            let tauri_emitter: std::sync::Arc<dyn uc_core::ports::HostEventEmitterPort> =
-                std::sync::Arc::new(uc_tauri::adapters::host_event_emitter::TauriEventEmitter::new(
-                    app.handle().clone(),
-                ));
-            runtime.set_event_emitter(tauri_emitter);
-            info!("Event emitter swapped to TauriEventEmitter");
-
             let daemon_connection_state_for_setup = daemon_connection_state.clone();
             let gui_owned_daemon_state_for_setup = gui_owned_daemon_state.clone();
-            let startup_barrier_for_daemon = startup_barrier.clone();
             let app_handle_for_daemon = app.handle().clone();
             let supervisor_token = task_registry.token().clone();
+            let runtime_for_daemon = runtime.clone();
             tauri::async_runtime::spawn(async move {
                 match bootstrap_daemon_connection(
                     &app_handle_for_daemon,
@@ -428,13 +162,10 @@ fn run_app(ctx: GuiBootstrapContext) {
                 .await
                 {
                     Ok(_connection_info) => {
-                        if let Err(error) = emit_daemon_connection_info_if_ready(
-                            &app_handle_for_daemon,
-                            &daemon_connection_state_for_setup,
-                            &startup_barrier_for_daemon,
-                        ) {
-                            warn!(error = %error, "Failed to deliver daemon connection info to main webview");
-                        }
+                        start_gui_pairing_lease_task(
+                            daemon_connection_state_for_setup.clone(),
+                            runtime_for_daemon.task_registry(),
+                        );
 
                         // Start daemon supervisor to respawn if daemon dies unexpectedly.
                         let supervisor_state = daemon_connection_state_for_setup.clone();
@@ -509,10 +240,9 @@ fn run_app(ctx: GuiBootstrapContext) {
                 }
             }
 
-            // Pre-create quick panel and preview panel (hidden) so the first
+            // Pre-create quick panel (hidden) so the first
             // shortcut press doesn't activate the app via WebviewWindowBuilder::build()
             quick_panel::pre_create(app.handle());
-            preview_panel::pre_create(app.handle());
 
             // Show window based on silent_start setting
             if !silent_start {
@@ -528,13 +258,10 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             app.manage(PendingUpdate(Mutex::new(None)));
 
-            // Start background spooler and blob worker tasks
+            // Start file cache cleanup task (runs once at startup)
             start_background_tasks(
-                background,
-                runtime.wiring_deps(),
-                runtime.event_emitter(),
-                daemon_connection_state.clone(),
-                setup_pairing_event_hub.clone(),
+                runtime.wiring_deps().settings.clone(),
+                background.file_cache_dir.clone(),
                 runtime.task_registry(),
             );
 
@@ -564,9 +291,8 @@ fn run_app(ctx: GuiBootstrapContext) {
                     info!("[Startup] Silent start: skipping startup barrier window show");
                 }
 
-                // 1. Auto-unlock (non-blocking) if enabled in settings
+                // 1. Auto-unlock (non-blocking) via daemon API if enabled in settings
                 let runtime_for_auto_unlock = runtime.clone();
-                let app_handle_for_unlock = app_handle_for_startup.clone();
                 let daemon_conn_for_unlock = daemon_connection_state.clone();
                 tauri::async_runtime::spawn(async move {
                     let auto_unlock_enabled =
@@ -583,16 +309,24 @@ fn run_app(ctx: GuiBootstrapContext) {
                         return;
                     }
 
-                    if let Err(e) =
-                        uc_tauri::commands::encryption::unlock_encryption_session_with_runtime(
-                            &runtime_for_auto_unlock,
-                            &app_handle_for_unlock,
-                            None,
-                            Some(&daemon_conn_for_unlock),
-                        )
-                        .await
-                    {
-                        warn!("[Startup] Auto unlock failed: {}", e);
+                    let client = uc_daemon_client::DaemonQueryClient::new(daemon_conn_for_unlock);
+                    match client.unlock_encryption().await {
+                        Ok(true) => {
+                            info!("[Startup] Daemon encryption auto-unlocked");
+                        }
+                        Ok(false) => {
+                            info!("[Startup] Encryption not initialized, skip");
+                        }
+                        Err(e) => {
+                            warn!("[Startup] Daemon encryption unlock failed: {}", e);
+                            return;
+                        }
+                    }
+
+                    if let Err(e) = client.lifecycle_retry().await {
+                        warn!("[Startup] Daemon lifecycle retry failed: {}", e);
+                    } else {
+                        info!("[Startup] Daemon lifecycle boot completed");
                     }
                 });
             });
@@ -601,56 +335,12 @@ fn run_app(ctx: GuiBootstrapContext) {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Clipboard commands
-            uc_tauri::commands::clipboard::get_clipboard_entries,
-            uc_tauri::commands::clipboard::get_clipboard_entry,
-            uc_tauri::commands::clipboard::get_clipboard_entry_detail,
-            uc_tauri::commands::clipboard::get_clipboard_entry_resource,
-            uc_tauri::commands::clipboard::delete_clipboard_entry,
-            uc_tauri::commands::clipboard::restore_clipboard_entry,
-            uc_tauri::commands::clipboard::sync_clipboard_items,
-            uc_tauri::commands::clipboard::get_clipboard_stats,
-            uc_tauri::commands::clipboard::toggle_favorite_clipboard_item,
-            uc_tauri::commands::clipboard::get_clipboard_item,
-            uc_tauri::commands::clipboard::copy_file_to_clipboard,
-            // Encryption commands
-            uc_tauri::commands::encryption::initialize_encryption,
-            uc_tauri::commands::encryption::get_encryption_session_status,
-            uc_tauri::commands::encryption::unlock_encryption_session,
-            uc_tauri::commands::encryption::verify_keychain_access,
-            // Settings commands
-            uc_tauri::commands::settings::get_settings,
-            uc_tauri::commands::settings::update_settings,
-            // Setup commands
-            uc_tauri::commands::setup::get_setup_state,
-            uc_tauri::commands::setup::start_new_space,
-            uc_tauri::commands::setup::start_join_space,
-            uc_tauri::commands::setup::select_device,
-            uc_tauri::commands::setup::submit_passphrase,
-            uc_tauri::commands::setup::verify_passphrase,
-            uc_tauri::commands::setup::confirm_peer_trust,
-            uc_tauri::commands::setup::cancel_setup,
-            uc_tauri::commands::setup::handle_space_access_completed,
-            // Pairing commands
-            uc_tauri::commands::pairing::get_local_peer_id,
-            uc_tauri::commands::pairing::get_p2p_peers,
-            uc_tauri::commands::pairing::get_local_device_info,
-            uc_tauri::commands::pairing::get_paired_peers,
-            uc_tauri::commands::pairing::get_paired_peers_with_status,
-            uc_tauri::commands::pairing::initiate_p2p_pairing,
-            uc_tauri::commands::pairing::verify_p2p_pairing_pin,
-            uc_tauri::commands::pairing::reject_p2p_pairing,
-            uc_tauri::commands::pairing::accept_p2p_pairing,
-            uc_tauri::commands::pairing::unpair_p2p_device,
-            uc_tauri::commands::pairing::list_paired_devices,
-            uc_tauri::commands::pairing::set_pairing_state,
-            uc_tauri::commands::pairing::get_device_sync_settings,
-            uc_tauri::commands::pairing::update_device_sync_settings,
             // Tray commands
             uc_tauri::commands::tray::set_tray_language,
             // Lifecycle commands
-            uc_tauri::commands::lifecycle::retry_lifecycle,
-            uc_tauri::commands::lifecycle::get_lifecycle_status,
+            uc_tauri::commands::get_tauri_pid,
+            uc_tauri::commands::get_device_id,
+            uc_tauri::commands::get_daemon_connection_info,
             // Autostart commands
             uc_tauri::commands::autostart::enable_autostart,
             uc_tauri::commands::autostart::disable_autostart,
@@ -659,9 +349,6 @@ fn run_app(ctx: GuiBootstrapContext) {
             uc_tauri::commands::updater::check_for_update,
             uc_tauri::commands::updater::install_update,
             // Storage commands
-            uc_tauri::commands::storage::get_storage_stats,
-            uc_tauri::commands::storage::clear_cache,
-            uc_tauri::commands::storage::clear_all_clipboard_history,
             uc_tauri::commands::storage::open_data_directory,
             // macOS-specific commands (conditionally compiled)
             #[cfg(target_os = "macos")]
@@ -673,9 +360,7 @@ fn run_app(ctx: GuiBootstrapContext) {
             // Quick panel commands
             uc_tauri::commands::quick_panel::paste_to_previous_app,
             uc_tauri::commands::quick_panel::dismiss_quick_panel,
-            // Preview panel commands
-            uc_tauri::commands::preview_panel::show_preview_panel,
-            uc_tauri::commands::preview_panel::dismiss_preview_panel,
+            uc_tauri::commands::quick_panel::set_quick_panel_preview_expanded,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

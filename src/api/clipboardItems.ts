@@ -1,4 +1,10 @@
-import { resolveUcUrl } from '@/lib/protocol'
+import { daemonClient } from '@/api/daemon/client'
+import {
+  extractDomainFromUrl,
+  isFileContentType,
+  isImageContentType,
+  parseFileNamesFromUriList,
+} from '@/lib/clipboard-utils'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
 // Backend projection type
@@ -44,12 +50,12 @@ export interface ClipboardEntryDetail {
 }
 
 export interface ClipboardEntryResource {
-  blob_id: string | null
-  mime_type: string
-  size_bytes: number
+  blobId: string | null
+  mimeType: string
+  sizeBytes: number
   url: string | null
   /** Base64-encoded inline data (present when content is stored inline, not in blob) */
-  inline_data: string | null
+  inlineData: string | null
 }
 
 /**
@@ -137,25 +143,13 @@ export interface ClipboardStats {
 }
 
 /**
- * Extract hostname from a URL string. Returns the raw string on failure.
- */
-function extractDomainFromUrl(url: string): string {
-  try {
-    return new URL(url).hostname
-  } catch {
-    return url
-  }
-}
-
-/**
- * Transform a backend ClipboardEntryProjection to frontend ClipboardItemResponse.
- * Shared by getClipboardItems and getClipboardEntry to avoid duplication.
+ * Transform a backend ClipboardEntryProjection (snake_case, from Tauri commands)
+ * to frontend ClipboardItemResponse.
  */
 function transformProjectionToResponse(entry: ClipboardEntryProjection): ClipboardItemResponse {
-  const isFile = entry.content_type.includes('uri-list')
-  const isImage = !isFile && isImageType(entry.content_type)
+  const isFile = isFileContentType(entry.content_type)
+  const isImage = !isFile && isImageContentType(entry.content_type)
 
-  // Use pre-parsed link data from backend (built from full representation, not preview)
   const hasLinkData = !isImage && entry.link_urls && entry.link_urls.length > 0
   let linkItem: ClipboardLinkItem | null = null
   if (hasLinkData) {
@@ -184,16 +178,7 @@ function transformProjectionToResponse(entry: ClipboardEntryProjection): Clipboa
         : null,
     file: isFile
       ? {
-          file_names: entry.preview
-            .split('\n')
-            .filter(Boolean)
-            .map(uri => {
-              try {
-                return decodeURIComponent(new URL(uri).pathname.split('/').pop() || uri)
-              } catch {
-                return uri
-              }
-            }),
+          file_names: parseFileNamesFromUriList(entry.preview),
           file_sizes: entry.file_sizes ?? [],
         }
       : (null as unknown as ClipboardFileItem),
@@ -345,16 +330,16 @@ export async function fetchClipboardResourceText(
 ): Promise<string> {
   try {
     // Use inline data when available (small content stored directly)
-    if (resource.inline_data) {
-      const bytes = Uint8Array.from(atob(resource.inline_data), c => c.charCodeAt(0))
+    if (resource.inlineData) {
+      const bytes = Uint8Array.from(atob(resource.inlineData), c => c.charCodeAt(0))
       return new TextDecoder('utf-8').decode(bytes)
     }
 
     // Fall back to URL fetch for blob-backed content
     if (!resource.url) {
-      throw new Error('Resource has neither inline_data nor url')
+      throw new Error('Resource has neither inlineData nor url')
     }
-    const resolvedUrl = resolveUcUrl(resource.url)
+    const resolvedUrl = daemonClient.blobUrl(resource.url!) ?? resource.url!
     const response = await fetch(resolvedUrl)
     if (!response.ok) {
       throw new Error(`Failed to fetch clipboard resource: ${response.status}`)
@@ -376,10 +361,22 @@ export function getResourceImageUrl(resource: ClipboardEntryResource): string | 
   if (resource.url) {
     return resource.url
   }
-  if (resource.inline_data) {
-    return `data:${resource.mime_type};base64,${resource.inline_data}`
+  if (resource.inlineData) {
+    return `data:${resource.mimeType};base64,${resource.inlineData}`
   }
   return null
+}
+
+/**
+ * Resolve a clipboard image resource into a displayable <img src> URL.
+ * - Inline image data stays as a data URL.
+ * - Blob-backed daemon paths are upgraded to authenticated daemon URLs.
+ */
+export function resolveResourceImageUrl(resource: ClipboardEntryResource): string | null {
+  const rawUrl = getResourceImageUrl(resource)
+  if (!rawUrl) return null
+  if (rawUrl.startsWith('data:')) return rawUrl
+  return daemonClient.blobUrl(rawUrl) ?? rawUrl
 }
 
 /**

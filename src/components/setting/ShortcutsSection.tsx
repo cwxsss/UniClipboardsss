@@ -16,7 +16,7 @@ const SCOPE_ORDER: ShortcutScope[] = ['global', 'clipboard', 'settings', 'device
 const ShortcutsSection: React.FC = () => {
   const { t } = useTranslation()
   const { setting, updateKeyboardShortcuts } = useSetting()
-  const overrides = setting?.keyboard_shortcuts ?? {}
+  const overrides = setting?.keyboardShortcuts ?? {}
 
   const groupedShortcuts = useMemo(() => {
     const groups = new Map<ShortcutScope, ShortcutDefinition[]>()

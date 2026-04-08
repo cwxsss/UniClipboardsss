@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -18,6 +18,21 @@ fn build_host() -> (
     Arc<PairingOrchestrator>,
     String,
 ) {
+    static RUNTIME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = RUNTIME_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // Give each test invocation its own DB to prevent SQLite contention.
+    let profile = format!(
+        "test_pairing_host_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    );
+    std::env::set_var("UC_PROFILE", &profile);
     let ctx = build_daemon_app().unwrap();
     let local_peer_id = ctx.deps.network_ports.peers.local_peer_id();
     let setup_ports = SetupAssemblyPorts::from_network(
@@ -28,12 +43,7 @@ fn build_host() -> (
         Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
     );
     let runtime = Arc::new(
-        build_non_gui_runtime_with_setup(
-            ctx.deps,
-            ctx.storage_paths.clone(),
-            setup_ports,
-        )
-        .unwrap(),
+        build_non_gui_runtime_with_setup(ctx.deps, ctx.storage_paths.clone(), setup_ports).unwrap(),
     );
     let state = Arc::new(RwLock::new(RuntimeState::new(vec![])));
     let orchestrator = ctx.pairing_orchestrator.clone();
@@ -67,7 +77,7 @@ fn inbound_request(session_id: &str, local_peer_id: &str) -> PairingRequest {
         device_name: "Remote Device".to_string(),
         device_id: "remote-device-id".to_string(),
         peer_id: local_peer_id.to_string(),
-        identity_pubkey: vec![1, 2, 3],
+        identity_pubkey: vec![1; 32],
         nonce: vec![7; 32],
     }
 }
@@ -251,8 +261,8 @@ async fn daemon_pairing_host_register_gui_participant_updates_both_leases() {
 }
 
 #[tokio::test]
-async fn daemon_pairing_host_accept_pairing_projects_verifying_stage() {
-    let (host, state, orchestrator, local_peer_id) = build_host_async().await;
+async fn daemon_pairing_host_accept_pairing_keeps_active_session_after_accepting() {
+    let (host, _state, orchestrator, local_peer_id) = build_host_async().await;
 
     orchestrator
         .handle_incoming_request(
@@ -266,13 +276,11 @@ async fn daemon_pairing_host_accept_pairing_projects_verifying_stage() {
         .await
         .expect("accept should succeed");
 
-    let snapshot = state
-        .read()
-        .await
-        .pairing_session("session-verifying")
-        .cloned()
-        .expect("snapshot should exist");
-    assert_eq!(snapshot.state, "verifying");
+    assert!(orchestrator.has_session("session-verifying").await);
+    assert_eq!(
+        host.active_session_id().await.as_deref(),
+        Some("session-verifying")
+    );
 }
 
 #[tokio::test]

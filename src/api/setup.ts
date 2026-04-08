@@ -1,45 +1,77 @@
-import { onDaemonRealtimeEvent } from '@/api/realtime'
-import { invokeWithTrace } from '@/lib/tauri-command'
+/**
+ * Setup API — stable facade layer delegating to daemon HTTP endpoints.
+ *
+ * This module is the public API surface for setup functionality.
+ * All calls go through daemon HTTP; event listeners use the daemon
+ * realtime WebSocket bridge.
+ */
 
-export type SetupError =
-  | 'PassphraseMismatch'
-  | 'PassphraseEmpty'
-  | { PassphraseTooShort: { min_len: number } }
-  | 'PassphraseInvalidOrMismatch'
-  | 'NetworkTimeout'
-  | 'PeerUnavailable'
-  | 'PairingRejected'
-  | 'PairingFailed'
+// ── Setup realtime diagnostics ──────────────────────────────────────────────
 
-export type SetupState =
-  | 'Welcome'
-  | { CreateSpaceInputPassphrase: { error: SetupError | null } }
-  | { JoinSpaceSelectDevice: { error: SetupError | null } }
-  | {
-      JoinSpaceConfirmPeer: {
-        short_code: string
-        peer_fingerprint?: string | null
-        error: SetupError | null
-      }
-    }
-  | { JoinSpaceInputPassphrase: { error: SetupError | null } }
-  | { ProcessingCreateSpace: { message: string | null } }
-  | { ProcessingJoinSpace: { message: string | null } }
-  | 'Completed'
+/**
+ * Record a setup realtime routing decision for diagnosability.
+ *
+ * Decisions:
+ * - "applied"     — event was passed to the caller's callback
+ * - "dropped"     — event was suppressed (dedupe, missing session id, etc.)
+ * - "session_switched" — session id changed, dedupe key set cleared
+ *
+ * Security: never logs passphrase, short_code, or fingerprint fields.
+ */
+function logSetupRouting(
+  decision: 'applied' | 'dropped' | 'session_switched',
+  context: {
+    eventType: string
+    sessionId?: string | null
+    activeSessionId?: string | null
+    state?: string
+    reason?: string
+  }
+) {
+  const { eventType, sessionId, activeSessionId, state, reason } = context
+  const parts: string[] = [`[setup.ts] ${decision}`, `event_type=${eventType}`]
+  if (sessionId !== undefined) parts.push(`session_id=${sessionId ?? 'null'}`)
+  if (activeSessionId !== undefined) parts.push(`active_session_id=${activeSessionId ?? 'null'}`)
+  if (state !== undefined) parts.push(`state=${state}`)
+  if (reason) parts.push(`reason=${reason}`)
 
-export interface SetupStateChangedEvent {
-  sessionId: string
-  state: SetupState
-  source?: string
-  ts: number
+  console.debug(parts.join(' '))
 }
+
+import {
+  getSetupState as daemonGetSetupState,
+  startNewSpace as daemonStartNewSpace,
+  startJoinSpace as daemonStartJoinSpace,
+  selectJoinPeer as daemonSelectJoinPeer,
+  submitPassphrase as daemonSubmitPassphrase,
+  verifyPassphrase as daemonVerifyPassphrase,
+  confirmPeerTrust as daemonConfirmPeerTrust,
+  cancelSetup as daemonCancelSetup,
+  completeSpaceAccess as daemonCompleteSpaceAccess,
+} from '@/api/daemon/setup'
+import type {
+  SetupState,
+  SetupStateChangedEvent,
+  SpaceAccessCompletedEvent,
+} from '@/api/daemon/setup'
+import { onDaemonRealtimeEvent } from '@/api/realtime'
+
+// Types are defined in the daemon module to avoid circular imports.
+// Re-export them so consumers can import from either location.
+export type {
+  SetupError,
+  SetupState,
+  SetupStateChangedEvent,
+  SetupStateResponse,
+  SpaceAccessCompletedEvent,
+} from '@/api/daemon/setup'
 
 /**
  * Get current setup state
  * 获取当前设置流程状态
  */
 export async function getSetupState(): Promise<SetupState> {
-  return (await invokeWithTrace('get_setup_state')) as SetupState
+  return daemonGetSetupState()
 }
 
 /**
@@ -47,7 +79,7 @@ export async function getSetupState(): Promise<SetupState> {
  * 启动新空间流程
  */
 export async function startNewSpace(): Promise<SetupState> {
-  return (await invokeWithTrace('start_new_space')) as SetupState
+  return daemonStartNewSpace()
 }
 
 /**
@@ -55,7 +87,7 @@ export async function startNewSpace(): Promise<SetupState> {
  * 启动加入空间流程
  */
 export async function startJoinSpace(): Promise<SetupState> {
-  return (await invokeWithTrace('start_join_space')) as SetupState
+  return daemonStartJoinSpace()
 }
 
 /**
@@ -63,7 +95,7 @@ export async function startJoinSpace(): Promise<SetupState> {
  * 选择加入空间的设备
  */
 export async function selectJoinPeer(peerId: string): Promise<SetupState> {
-  return (await invokeWithTrace('select_device', { peerId })) as SetupState
+  return daemonSelectJoinPeer(peerId)
 }
 
 /**
@@ -74,7 +106,8 @@ export async function submitPassphrase(
   passphrase1: string,
   passphrase2: string
 ): Promise<SetupState> {
-  return (await invokeWithTrace('submit_passphrase', { passphrase1, passphrase2 })) as SetupState
+  // Local mismatch check is handled inside daemonSubmitPassphrase.
+  return daemonSubmitPassphrase(passphrase1, passphrase2)
 }
 
 /**
@@ -82,7 +115,7 @@ export async function submitPassphrase(
  * 校验加入空间口令
  */
 export async function verifyPassphrase(passphrase: string): Promise<SetupState> {
-  return (await invokeWithTrace('verify_passphrase', { passphrase })) as SetupState
+  return daemonVerifyPassphrase(passphrase)
 }
 
 /**
@@ -90,7 +123,7 @@ export async function verifyPassphrase(passphrase: string): Promise<SetupState> 
  * 确认选中设备的可信度
  */
 export async function confirmPeerTrust(): Promise<SetupState> {
-  return (await invokeWithTrace('confirm_peer_trust')) as SetupState
+  return daemonConfirmPeerTrust()
 }
 
 /**
@@ -98,15 +131,7 @@ export async function confirmPeerTrust(): Promise<SetupState> {
  * 取消设置流程
  */
 export async function cancelSetup(): Promise<SetupState> {
-  return (await invokeWithTrace('cancel_setup')) as SetupState
-}
-
-export interface SpaceAccessCompletedEvent {
-  sessionId: string
-  peerId: string
-  success: boolean
-  reason?: string | null
-  ts: number
+  return daemonCancelSetup()
 }
 
 /**
@@ -116,7 +141,7 @@ export interface SpaceAccessCompletedEvent {
  * `Completed`.
  */
 export async function handleSpaceAccessCompleted(): Promise<SetupState> {
-  return (await invokeWithTrace('handle_space_access_completed')) as SetupState
+  return daemonCompleteSpaceAccess()
 }
 
 /**
@@ -157,20 +182,41 @@ export async function onSetupStateChanged(
     }
 
     if (!enrichedEvent.sessionId) {
+      logSetupRouting('dropped', { eventType: 'setup.stateChanged', reason: 'missing_session_id' })
       return
     }
 
     if (activeSessionId !== enrichedEvent.sessionId) {
+      logSetupRouting('session_switched', {
+        eventType: 'setup.stateChanged',
+        sessionId: enrichedEvent.sessionId,
+        activeSessionId,
+      })
       activeSessionId = enrichedEvent.sessionId
       seenEventKeys.clear()
     }
 
+    const stateKey =
+      typeof enrichedEvent.state === 'string'
+        ? enrichedEvent.state
+        : (Object.keys(enrichedEvent.state as object)[0] ?? 'unknown')
     const dedupeKey = `${enrichedEvent.sessionId}:${JSON.stringify(enrichedEvent.state)}:${enrichedEvent.ts}`
     if (seenEventKeys.has(dedupeKey)) {
+      logSetupRouting('dropped', {
+        eventType: 'setup.stateChanged',
+        sessionId: enrichedEvent.sessionId,
+        state: stateKey,
+        reason: 'duplicate_state_event',
+      })
       return
     }
     seenEventKeys.add(dedupeKey)
 
+    logSetupRouting('applied', {
+      eventType: 'setup.stateChanged',
+      sessionId: enrichedEvent.sessionId,
+      state: stateKey,
+    })
     callback(enrichedEvent)
 
     if (enrichedEvent.state === 'Completed') {

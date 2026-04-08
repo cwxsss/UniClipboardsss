@@ -1,12 +1,14 @@
-import { listen } from '@tauri-apps/api/event'
 import React, { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { SettingContext } from './setting-context'
+import { getSettings, updateSettings } from '@/api/daemon'
 import { DEFAULT_THEME_COLOR } from '@/constants/theme'
 import i18n, { normalizeLanguage, persistLanguage } from '@/i18n'
+import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
+import { emitSettingsChanged } from '@/lib/settings-events'
 import { invokeWithTrace } from '@/lib/tauri-command'
 import { applyThemePreset } from '@/lib/theme-engine'
 import { startThemeTransition } from '@/lib/theme-transition'
-import type { SettingChangedEvent } from '@/types/events'
+import { setFrontendTelemetryEnabled } from '@/observability/otlp'
 import type { SettingContextType, Settings } from '@/types/setting'
 
 // 设置提供者属性接口
@@ -24,7 +26,10 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
   const loadSetting = useCallback(async () => {
     try {
       setLoading(true)
-      const settingObj = await invokeWithTrace<Settings>('get_settings')
+      // Ensure daemon is connected before making API calls — the connection may not
+      // have been established yet if this fires before AppContent calls connectDaemonWs().
+      await connectDaemonWs()
+      const settingObj = await getSettings()
       setSetting(settingObj)
       setError(null)
     } catch (err) {
@@ -39,10 +44,14 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
   const saveSetting = async (newSetting: Settings) => {
     try {
       setLoading(true)
-      // New command: update_settings, takes JSON object directly
-      await invokeWithTrace('update_settings', { settings: newSetting })
+      await updateSettings(newSetting)
       setSetting(newSetting)
       setError(null)
+      try {
+        await emitSettingsChanged(newSetting)
+      } catch (err) {
+        console.error('Failed to broadcast settings change:', err)
+      }
     } catch (err) {
       console.error('保存设置失败:', err)
       setError(`保存设置失败: ${err}`)
@@ -66,7 +75,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
         ...setting.general,
         ...newGeneralSetting,
       },
-    }
+    } as Settings
     await saveSetting(updatedSetting)
   }
 
@@ -79,7 +88,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
         ...setting.sync,
         ...newSyncSetting,
       },
-    }
+    } as Settings
     await saveSetting(updatedSetting)
   }
 
@@ -92,38 +101,38 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
         ...setting.security,
         ...newSecuritySetting,
       },
-    }
+    } as Settings
     await saveSetting(updatedSetting)
   }
 
   // 更新保留策略
-  const updateRetentionPolicy = async (newPolicy: Partial<Settings['retention_policy']>) => {
+  const updateRetentionPolicy = async (newPolicy: Partial<Settings['retentionPolicy']>) => {
     if (!setting) return
     const updatedSetting: Settings = {
       ...setting,
-      retention_policy: {
-        ...setting.retention_policy,
+      retentionPolicy: {
+        ...setting.retentionPolicy,
         ...newPolicy,
       },
-    }
+    } as Settings
     await saveSetting(updatedSetting)
   }
 
   // Update file sync settings
   const updateFileSyncSetting = async (
-    newFileSyncSetting: Partial<Settings['file_sync'] & object>
+    newFileSyncSetting: Partial<Settings['fileSync'] & object>
   ) => {
     if (!setting) return
     const updatedSetting: Settings = {
       ...setting,
-      file_sync: {
-        ...(setting.file_sync ?? {
-          file_sync_enabled: true,
-          small_file_threshold: 10 * 1024 * 1024,
-          max_file_size: 5 * 1024 * 1024 * 1024,
-          file_cache_quota_per_device: 500 * 1024 * 1024,
-          file_retention_hours: 24,
-          file_auto_cleanup: true,
+      fileSync: {
+        ...(setting.fileSync ?? {
+          fileSyncEnabled: true,
+          smallFileThreshold: 10 * 1024 * 1024,
+          maxFileSize: 5 * 1024 * 1024 * 1024,
+          fileCacheQuotaPerDevice: 500 * 1024 * 1024,
+          fileRetentionHours: 24,
+          fileAutoCleanup: true,
         }),
         ...newFileSyncSetting,
       },
@@ -136,7 +145,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     if (!setting) {
       throw new Error('No settings loaded')
     }
-    const updatedSetting: Settings = { ...setting, keyboard_shortcuts: overrides }
+    const updatedSetting: Settings = { ...setting, keyboardShortcuts: overrides }
     try {
       await saveSetting(updatedSetting)
     } catch (err) {
@@ -150,38 +159,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     void loadSetting()
   }, [loadSetting])
 
-  // 监听来自其他窗口的设置变更事件
-  useEffect(() => {
-    let unlisten: (() => void) | undefined
-
-    const setupSettingChangeListener = async () => {
-      try {
-        unlisten = await listen<SettingChangedEvent>('setting-changed', event => {
-          console.log('收到设置变更事件:', event.payload)
-
-          // 解析新的设置
-          try {
-            const newSetting = JSON.parse(event.payload.settingJson) as Settings
-
-            // 更新本地状态 (不触发再次保存)
-            setSetting(newSetting)
-          } catch (err) {
-            console.error('解析设置变更事件失败:', err)
-          }
-        })
-      } catch (err) {
-        console.error('设置设置变更监听器失败:', err)
-      }
-    }
-
-    setupSettingChangeListener()
-
-    return () => {
-      if (unlisten) {
-        unlisten()
-      }
-    }
-  }, [])
+  // Note: Cross-window settings sync via daemon WebSocket events (future enhancement)
 
   // 监听主题变化并应用
   const prevThemeRef = React.useRef<string | undefined>()
@@ -198,7 +176,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
 
     const applyTheme = () => {
       const theme = setting.general.theme
-      const themeColor = setting.general.theme_color || DEFAULT_THEME_COLOR
+      const themeColor = setting.general.themeColor || DEFAULT_THEME_COLOR
 
       // 1. Apply Mode (Light/Dark)
       root.classList.remove('light', 'dark')
@@ -221,10 +199,10 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     // Use view transition animation only for user-initiated theme changes (not initial load)
     const hasChanged =
       prevThemeRef.current !== setting.general.theme ||
-      prevThemeColorRef.current !== (setting.general.theme_color || DEFAULT_THEME_COLOR)
+      prevThemeColorRef.current !== (setting.general.themeColor || DEFAULT_THEME_COLOR)
 
     prevThemeRef.current = setting.general.theme
-    prevThemeColorRef.current = setting.general.theme_color || DEFAULT_THEME_COLOR
+    prevThemeColorRef.current = setting.general.themeColor || DEFAULT_THEME_COLOR
 
     if (!hasAppliedOnceRef.current || !hasChanged) {
       hasAppliedOnceRef.current = true
@@ -244,7 +222,7 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
     return () => {
       systemThemeMedia.removeEventListener('change', handleSystemThemeChange)
     }
-  }, [setting?.general.theme, setting?.general.theme_color])
+  }, [setting?.general.theme, setting?.general.themeColor])
 
   // 监听语言变化并应用
   useEffect(() => {
@@ -258,6 +236,10 @@ export const SettingProvider: React.FC<SettingProviderProps> = ({ children }) =>
       console.error('Failed to sync tray language:', err)
     })
   }, [setting?.general?.language])
+
+  useEffect(() => {
+    setFrontendTelemetryEnabled(setting?.general?.telemetryEnabled ?? false)
+  }, [setting?.general?.telemetryEnabled])
 
   const value: SettingContextType = {
     setting,

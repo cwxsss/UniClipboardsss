@@ -1,0 +1,218 @@
+import { configureStore } from '@reduxjs/toolkit'
+import { act, renderHook, waitFor } from '@testing-library/react'
+import React from 'react'
+import { Provider } from 'react-redux'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useTransferProgress } from '../useTransferProgress'
+import fileTransferReducer from '@/store/slices/fileTransferSlice'
+
+// ── Mock daemon WS ────────────────────────────────────────────
+
+let capturedHandler: ((event: { eventType: string; payload: unknown }) => void) | null = null
+
+vi.mock('@/lib/daemon-ws', () => ({
+  daemonWs: {
+    subscribe: vi.fn(
+      (_topics: string[], handler: (event: { eventType: string; payload: unknown }) => void) => {
+        capturedHandler = handler
+        return () => {
+          capturedHandler = null
+        }
+      }
+    ),
+  },
+}))
+
+// ── Store helper ─────────────────────────────────────────────
+
+function createTestStore() {
+  return configureStore({
+    reducer: {
+      fileTransfer: fileTransferReducer,
+    },
+  })
+}
+
+function createWrapper() {
+  const store = createTestStore()
+  const Wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(Provider, { store, children })
+  return { Wrapper, store }
+}
+
+// ── Emit helper ─────────────────────────────────────────────
+
+function emitWsEvent(eventType: string, payload: unknown) {
+  if (capturedHandler) {
+    capturedHandler({ eventType, payload })
+  }
+}
+
+// ── Tests ────────────────────────────────────────────────────
+
+describe('useTransferProgress', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    capturedHandler = null
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('subscribes to file-transfer and clipboard topics on mount', async () => {
+    const { daemonWs } = await import('@/lib/daemon-ws')
+    const { Wrapper } = createWrapper()
+    renderHook(() => useTransferProgress(), { wrapper: Wrapper })
+
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull()
+    })
+
+    expect(daemonWs.subscribe).toHaveBeenCalledWith(
+      ['file-transfer', 'clipboard'],
+      expect.any(Function)
+    )
+  })
+
+  describe('durable transfer status', () => {
+    it('dispatches setEntryTransferStatus on status-changed event', async () => {
+      const { Wrapper, store } = createWrapper()
+      renderHook(() => useTransferProgress(), { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(capturedHandler).not.toBeNull()
+      })
+
+      act(() => {
+        emitWsEvent('file-transfer.status_changed', {
+          transferId: 'tx-1',
+          entryId: 'entry-abc',
+          status: 'completed',
+        })
+      })
+
+      const state = store.getState().fileTransfer
+      expect(state.entryStatusById['entry-abc']).toMatchObject({
+        status: 'completed',
+        reason: null,
+      })
+    })
+
+    it('stores failed reason from status-changed event', async () => {
+      const { Wrapper, store } = createWrapper()
+      renderHook(() => useTransferProgress(), { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(capturedHandler).not.toBeNull()
+      })
+
+      act(() => {
+        emitWsEvent('file-transfer.status_changed', {
+          transferId: 'tx-fail',
+          entryId: 'entry-fail',
+          status: 'failed',
+          reason: 'timeout after 60s',
+        })
+      })
+
+      const state = store.getState().fileTransfer
+      expect(state.entryStatusById['entry-fail']).toMatchObject({
+        status: 'failed',
+        reason: 'timeout after 60s',
+      })
+    })
+
+    it('marks transfer as failed in progress state when status is failed', async () => {
+      const { Wrapper, store } = createWrapper()
+      renderHook(() => useTransferProgress(), { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(capturedHandler).not.toBeNull()
+      })
+
+      act(() => {
+        emitWsEvent('file-transfer.status_changed', {
+          transferId: 'tx-mark-fail',
+          entryId: 'entry-fail2',
+          status: 'failed',
+          reason: 'connection reset by peer',
+        })
+      })
+
+      expect(store.getState().fileTransfer.entryStatusById['entry-fail2']).toMatchObject({
+        status: 'failed',
+        reason: 'connection reset by peer',
+      })
+    })
+
+    it('ignores events with invalid status values', async () => {
+      const { Wrapper, store } = createWrapper()
+      renderHook(() => useTransferProgress(), { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(capturedHandler).not.toBeNull()
+      })
+
+      act(() => {
+        emitWsEvent('file-transfer.status_changed', {
+          transferId: 'tx-invalid',
+          entryId: 'entry-invalid',
+          status: 'unknown_status',
+        })
+      })
+
+      expect(store.getState().fileTransfer.entryStatusById['entry-invalid']).toBeUndefined()
+    })
+  })
+
+  describe('clipboard write cancellation', () => {
+    it('cancels clipboard write on clipboard.new_content event', async () => {
+      const { Wrapper } = createWrapper()
+      renderHook(() => useTransferProgress(), { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(capturedHandler).not.toBeNull()
+      })
+
+      // Should not throw on clipboard.new_content
+      act(() => {
+        emitWsEvent('clipboard.new_content', {
+          entryId: 'entry-new',
+          preview: 'new content',
+          origin: 'remote',
+        })
+      })
+    })
+
+    it('ignores non-new-content clipboard events without error', async () => {
+      const { Wrapper, store } = createWrapper()
+      renderHook(() => useTransferProgress(), { wrapper: Wrapper })
+
+      await waitFor(() => {
+        expect(capturedHandler).not.toBeNull()
+      })
+
+      act(() => {
+        emitWsEvent('clipboard.deleted', {
+          entryId: 'entry-del',
+        })
+      })
+
+      expect(store.getState().fileTransfer).toBeDefined()
+    })
+  })
+
+  it('cleans up daemon WS subscription on unmount', async () => {
+    const { Wrapper } = createWrapper()
+    const { unmount } = renderHook(() => useTransferProgress(), { wrapper: Wrapper })
+
+    await waitFor(() => {
+      expect(capturedHandler).not.toBeNull()
+    })
+
+    unmount()
+
+    expect(capturedHandler).toBeNull()
+  })
+})

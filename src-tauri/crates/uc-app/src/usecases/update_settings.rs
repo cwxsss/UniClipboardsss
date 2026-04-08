@@ -37,7 +37,7 @@ impl UpdateSettings {
     /// # Returns / 返回值
     /// - `Ok(())` if settings are saved successfully
     /// - `Err(e)` if validation or save fails
-    pub async fn execute(&self, settings: Settings) -> Result<()> {
+    pub async fn execute(&self, settings: &Settings) -> Result<()> {
         let span = info_span!("usecase.update_settings.execute");
 
         async {
@@ -45,7 +45,7 @@ impl UpdateSettings {
             let old_settings = self.settings.load().await?;
 
             // Calculate and log changes
-            let changes = SettingsDiff::diff(&old_settings, &settings);
+            let changes = SettingsDiff::diff(&old_settings, settings);
             if !changes.is_empty() {
                 info!(
                     changed_fields = %changes.to_log_string(),
@@ -66,7 +66,7 @@ impl UpdateSettings {
             }
 
             // Persist settings
-            self.settings.save(&settings).await?;
+            self.settings.save(settings).await?;
 
             info!(
                 changed_fields = %changes.to_log_string(),
@@ -142,6 +142,7 @@ struct GeneralSettingsDiff {
     theme_color: Option<(Option<String>, Option<String>)>,
     language: Option<(Option<String>, Option<String>)>,
     device_name: Option<(Option<String>, Option<String>)>,
+    telemetry_enabled: Option<(bool, bool)>,
 }
 
 impl GeneralSettingsDiff {
@@ -160,6 +161,8 @@ impl GeneralSettingsDiff {
             (old.language != new.language).then_some((old.language.clone(), new.language.clone()));
         let device_name = (old.device_name != new.device_name)
             .then_some((old.device_name.clone(), new.device_name.clone()));
+        let telemetry_enabled = (old.telemetry_enabled != new.telemetry_enabled)
+            .then_some((old.telemetry_enabled, new.telemetry_enabled));
 
         if auto_start.is_none()
             && silent_start.is_none()
@@ -168,6 +171,7 @@ impl GeneralSettingsDiff {
             && theme_color.is_none()
             && language.is_none()
             && device_name.is_none()
+            && telemetry_enabled.is_none()
         {
             None
         } else {
@@ -179,6 +183,7 @@ impl GeneralSettingsDiff {
                 theme_color,
                 language,
                 device_name,
+                telemetry_enabled,
             })
         }
     }
@@ -207,6 +212,9 @@ impl GeneralSettingsDiff {
         if let Some((old, new)) = &self.device_name {
             parts.push(format!("{}.device_name: {:?} → {:?}", prefix, old, new));
         }
+        if let Some((old, new)) = &self.telemetry_enabled {
+            parts.push(format!("{}.telemetry_enabled: {} → {}", prefix, old, new));
+        }
 
         parts.join(", ")
     }
@@ -215,7 +223,6 @@ impl GeneralSettingsDiff {
 struct SyncSettingsDiff {
     auto_sync: Option<(bool, bool)>,
     sync_frequency: Option<(String, String)>,
-    max_file_size_mb: Option<(u32, u32)>,
     content_types: Option<(ContentTypes, ContentTypes)>,
 }
 
@@ -226,8 +233,6 @@ impl SyncSettingsDiff {
             format!("{:?}", old.sync_frequency),
             format!("{:?}", new.sync_frequency),
         ));
-        let max_file_size_mb = (old.max_file_size_mb != new.max_file_size_mb)
-            .then_some((old.max_file_size_mb, new.max_file_size_mb));
         let content_types_changed = old.content_types.text != new.content_types.text
             || old.content_types.image != new.content_types.image
             || old.content_types.link != new.content_types.link
@@ -237,17 +242,12 @@ impl SyncSettingsDiff {
         let content_types =
             content_types_changed.then_some((old.content_types.clone(), new.content_types.clone()));
 
-        if auto_sync.is_none()
-            && sync_frequency.is_none()
-            && max_file_size_mb.is_none()
-            && content_types.is_none()
-        {
+        if auto_sync.is_none() && sync_frequency.is_none() && content_types.is_none() {
             None
         } else {
             Some(Self {
                 auto_sync,
                 sync_frequency,
-                max_file_size_mb,
                 content_types,
             })
         }
@@ -261,9 +261,6 @@ impl SyncSettingsDiff {
         }
         if let Some((old, new)) = &self.sync_frequency {
             parts.push(format!("{}.sync_frequency: {} → {}", prefix, old, new));
-        }
-        if let Some((old, new)) = &self.max_file_size_mb {
-            parts.push(format!("{}.max_file_size_mb: {} → {}", prefix, old, new));
         }
         if let Some((old, new)) = &self.content_types {
             parts.push(format!("{}.content_types: {:?} → {:?}", prefix, old, new));
@@ -410,7 +407,7 @@ mod tests {
         updated.general.device_name = Some("device-1".to_string());
 
         let usecase = UpdateSettings::new(repo.clone());
-        usecase.execute(updated.clone()).await.unwrap();
+        usecase.execute(&updated).await.unwrap();
 
         assert_eq!(repo.load_count(), 1);
         assert_eq!(repo.save_count(), 1);

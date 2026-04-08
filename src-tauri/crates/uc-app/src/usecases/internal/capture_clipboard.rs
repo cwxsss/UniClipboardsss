@@ -121,7 +121,7 @@ impl CaptureClipboardUseCase {
     /// - Avoids redundant system clipboard reads
     /// - 避免重复读取系统剪贴板
     pub async fn execute(&self, snapshot: SystemClipboardSnapshot) -> Result<EntryId> {
-        self.execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture)
+        self.execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture, None)
             .await?
             .ok_or_else(|| anyhow::anyhow!("local capture should always persist an entry"))
     }
@@ -130,13 +130,15 @@ impl CaptureClipboardUseCase {
         &self,
         snapshot: SystemClipboardSnapshot,
         origin: ClipboardChangeOrigin,
+        _flow_id: Option<String>,
     ) -> Result<Option<EntryId>> {
-        let span = info_span!(
-            "usecase.capture_clipboard.execute",
-            source = "callback",
+        // Root span: all pipeline stages are children of clipboard.flow.
+        // The origin field distinguishes local capture from remote push.
+        let root = info_span!(
+            "clipboard.flow",
             origin = ?origin,
-            representations = snapshot.representations.len(),
         );
+
         async move {
             if origin == ClipboardChangeOrigin::LocalRestore {
                 info!(origin = ?origin, "Skipping clipboard capture");
@@ -174,15 +176,42 @@ impl CaptureClipboardUseCase {
                     .collect();
                 try_join_all(normalized_futures).await
             }
-            .instrument(info_span!("normalize", stage = stages::NORMALIZE))
+            .instrument(info_span!(stages::NORMALIZE)) // matches stages::NORMALIZE = "clipboard.normalize"
             .await?;
+
+            // Aggregated summary per capture (per-representation details at trace level)
+            {
+                let mut inline = 0usize;
+                let mut staged_with_preview = 0usize;
+                let mut staged = 0usize;
+                let mut total_bytes: i64 = 0;
+                for rep in &normalized_reps {
+                    total_bytes += rep.size_bytes;
+                    match rep.payload_state() {
+                        PayloadAvailability::Inline => inline += 1,
+                        PayloadAvailability::Staged if rep.inline_data.is_some() => {
+                            staged_with_preview += 1
+                        }
+                        PayloadAvailability::Staged => staged += 1,
+                        _ => {}
+                    }
+                }
+                debug!(
+                    representations = normalized_reps.len(),
+                    inline,
+                    staged_with_preview,
+                    staged,
+                    total_bytes,
+                    "Normalized clipboard representations"
+                );
+            }
 
             async {
                 self.event_writer
                     .insert_event(&new_event, &normalized_reps)
                     .await
             }
-            .instrument(info_span!("persist_event", stage = stages::PERSIST_EVENT))
+            .instrument(info_span!(stages::PERSIST_EVENT)) // matches stages::PERSIST_EVENT = "clipboard.persist_event"
             .await?;
 
             // Cache representations for immediate access by the background blob worker.
@@ -202,15 +231,12 @@ impl CaptureClipboardUseCase {
                 }
                 Ok::<(), anyhow::Error>(())
             }
-            .instrument(info_span!(
-                "cache_representations",
-                stage = stages::CACHE_REPRESENTATIONS
-            ))
+            .instrument(info_span!(stages::CACHE_REPRESENTATIONS)) // matches stages::CACHE_REPRESENTATIONS
             .await?;
 
-            // 4. policy.select(snapshot)
+            // 4. policy.select(snapshot) — purely sync, .entered() is safe (no .await inside)
             let (entry_id, new_selection) = {
-                let _guard = info_span!("select_policy", stage = stages::SELECT_POLICY).entered();
+                let _guard = info_span!(stages::SELECT_POLICY).entered(); // matches stages::SELECT_POLICY
                 let entry_id = EntryId::new();
                 let selection = self.representation_policy.select(&snapshot)?;
                 let new_selection = ClipboardSelectionDecision::new(entry_id.clone(), selection);
@@ -241,7 +267,7 @@ impl CaptureClipboardUseCase {
                     .save_entry_and_selection(&new_entry, &new_selection)
                     .await
             }
-            .instrument(info_span!("persist_entry", stage = stages::PERSIST_ENTRY))
+            .instrument(info_span!(stages::PERSIST_ENTRY)) // matches stages::PERSIST_ENTRY = "clipboard.persist_entry"
             .await?;
 
             info!(event_id = %event_id, entry_id = %entry_id, "Clipboard capture completed");
@@ -280,13 +306,13 @@ impl CaptureClipboardUseCase {
                             }
                         }
                     }
-                    .instrument(info_span!("spool_blobs", stage = stages::SPOOL_BLOBS)),
+                    .instrument(info_span!(stages::SPOOL_BLOBS)), // matches stages::SPOOL_BLOBS = "clipboard.spool_blobs"
                 );
             }
 
             Ok(Some(entry_id))
         }
-        .instrument(span)
+        .instrument(root)
         .await
     }
 
@@ -571,7 +597,7 @@ mod tests {
         };
 
         let _ = use_case
-            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalRestore)
+            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalRestore, None)
             .await
             .expect("expected ok result");
 
@@ -625,7 +651,7 @@ mod tests {
         };
 
         let result = use_case
-            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture)
+            .execute_with_origin(snapshot, ClipboardChangeOrigin::LocalCapture, None)
             .await
             .expect("expected ok result");
 

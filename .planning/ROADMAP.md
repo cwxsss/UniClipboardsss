@@ -747,6 +747,8 @@ Plans:
 
 - [x] 70-01-PLAN.md — Implement start and stop commands with background/foreground modes, PID-based SIGTERM, and idempotent behavior
 
+<<<<<<< Updated upstream
+
 ### Phase 71: Dual-product release pipeline for CLI and App
 
 **Goal:** Align CLI version to workspace inheritance, create a parallel CLI build workflow, and integrate CLI artifacts into the existing release pipeline so every release ships both App bundles and CLI binaries.
@@ -768,3 +770,246 @@ Plans:
 - [x] 71-01-PLAN.md — Version alignment: uc-cli workspace version, bump-version.js Cargo.lock workspace refresh, CI workflow comments
 - [x] 71-02-PLAN.md — Create build-cli.yml reusable workflow for cross-platform CLI binary compilation and packaging
 - [x] 71-03-PLAN.md — Wire release pipeline: add build-cli job to release.yml, extend release notes template and generator with CLI section
+
+### Phase 72: Migrate restore-clipboard to daemon — eliminate cross-process origin desync
+
+**Goal:** Move the clipboard restore operation from GUI Tauri process to daemon, so that ClipboardChangeOriginPort::set_next_origin(LocalRestore) is armed in-process before the OS clipboard write, eliminating cross-process origin tracker desync.
+**Requirements**: PH72-01, PH72-02, PH72-03, PH72-04, PH72-05
+**Depends on:** Phase 71
+**Plans:** 2/2 plans complete
+
+**Success Criteria** (what must be TRUE):
+
+1. Daemon exposes POST /clipboard/restore/:entry_id with bearer auth, returning 200 {success:true} or 404/401
+2. DaemonClipboardClient in uc-daemon-client can call the restore endpoint
+3. GUI restore_clipboard_entry Tauri command proxies to daemon HTTP API (not direct use case)
+4. Direct RestoreClipboardSelectionUseCase invocation removed from uc-tauri command layer
+5. Outbound sync handled by daemon's ClipboardWatcherWorker chain (not GUI command)
+
+Plans:
+
+- [ ] 72-01-PLAN.md — Add daemon HTTP restore route, http_route constant, and DaemonClipboardClient
+- [ ] 72-02-PLAN.md — Rewire GUI restore_clipboard_entry to daemon proxy, remove dead code
+
+### Phase 73: Refactor clipboard restore loop prevention: introduce ClipboardWriteCoordinator as single write boundary owning origin guard registration, derive meaningful content key, and remove composition-time re-creation risk of origin store
+
+**Goal:** Centralise all programmatic clipboard writes behind a single ClipboardWriteCoordinator that owns guard registration, key derivation, and write orchestration. Lock down InMemoryClipboardChangeOrigin to prevent accidental second-instance construction.
+**Requirements**: PH73-01, PH73-02, PH73-03, PH73-04, PH73-05, PH73-06, PH73-07, PH73-08, PH73-09, PH73-10
+**Depends on:** Phase 72
+**Plans:** 2/2 plans complete
+
+**Success Criteria** (what must be TRUE):
+
+1. ClipboardWriteCoordinator exists with write(snapshot, intent) as sole clipboard write API
+2. All 4 callsites (RestoreClipboardSelection, CopyFileToClipboard, SyncInboundClipboard, FileSyncOrchestrator) route through coordinator
+3. No code outside coordinator calls remember_local/remote_snapshot_hash or origin_guard_key on write path
+4. InMemoryClipboardChangeOrigin is pub(crate) — cannot be constructed outside uc-infra
+5. Daemon workers accept Arc<ClipboardWriteCoordinator> instead of raw Arc<dyn ClipboardChangeOriginPort>
+
+Plans:
+
+- [x] 73-01-PLAN.md — Create ClipboardWriteCoordinator with unit tests, wire into bootstrap and CoreUseCases, lock down InMemoryClipboardChangeOrigin
+- [x] 73-02-PLAN.md — Refactor all 4 clipboard write callsites to use coordinator, update daemon workers and entrypoint
+
+### Phase 74: Daemon Clipboard HTTP API — add list, detail, delete, favorite, stats endpoints
+
+**Goal:** Extend daemon HTTP API with full clipboard CRUD endpoints: list entries with pagination, get entry detail, delete entry, toggle favorite, get stats, and get entry resource/blob content.
+**Requirements**: TBD
+**Depends on:** Phase 72
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [x] TBD (run /gsd:plan-phase 74 to break down) (completed 2026-03-29)
+
+### Phase 75: Daemon Security Middleware -- JWT session token, PID verification, rate limiting, permission levels
+
+**Goal:** Add production-grade security middleware to daemon: short-lived JWT session tokens (5min TTL) exchanged from bearer token, optional PID whitelist verification, per-client rate limiting (100 req/min), and L1-L4 permission level enforcement on all endpoints.
+**Requirements**: TBD
+**Depends on:** Phase 74
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 75-01-PLAN.md -- Core security types: SessionTokenClaims (JWT), PermissionLevel, SlidingWindowRateLimiter, SecurityState, middleware functions
+- [x] 75-02-PLAN.md -- POST /auth/connect endpoint, L1/L2 router split, middleware wiring, remove per-handler is_authorized checks
+- [x] 75-03-PLAN.md -- WebSocket upgrade uses session token validation, PID whitelist check, rate limiting
+
+### Phase 76: Daemon Settings, Encryption & Storage HTTP API — read/write settings, encryption state, storage stats
+
+**Goal:** Add daemon HTTP endpoints for settings (GET/PUT), encryption state management (get state, unlock, lock), and storage statistics (stats, clear cache). Complete the daemon API surface required for frontend direct connection.
+**Requirements**: PH76-01, PH76-02, PH76-03, PH76-04, PH76-05, PH76-06, PH76-07, PH76-08, PH76-09, PH76-10, PH76-11
+**Depends on:** Phase 75
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 76-01-PLAN.md — Foundation: L3/L4 permission levels, daemon_api_strings constants, UnlockEncryptionWithPassphrase use case
+- [ ] 76-02-PLAN.md — Settings GET/PUT and Encryption state/unlock/lock HTTP handlers
+- [ ] 76-03-PLAN.md — Storage stats and clear-cache HTTP handlers with L4 confirmation
+
+### Phase 77: Frontend Daemon HTTP Client & Auth Module — create client framework with session management
+
+**Goal:** Create frontend DaemonClient class with automatic session token management (refresh before expiry), connection initialization via Tauri invoke for bootstrap info, and typed request/error handling. Replace Tauri invoke() as the primary API transport.
+**Requirements**: TBD
+**Depends on:** Phase 76
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 77 to break down)
+
+### Phase 78: Frontend Clipboard API Migration — switch clipboard operations from Tauri invoke to daemon HTTP
+
+**Goal:** Migrate all frontend clipboard API calls (list, detail, delete, restore, favorite, stats, resource) from Tauri invoke() to daemon HTTP client. Preserve existing UI behavior and data contracts.
+**Requirements**: PH78-01, PH78-02, PH78-03, PH78-04, PH78-05
+**Depends on:** Phase 77
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 78-01-PLAN.md — Create daemon clipboard API module (src/api/daemon/clipboard.ts)
+- [ ] 78-02-PLAN.md — Migrate Redux slices (clipboardSlice, statsSlice) to daemon API
+
+### Phase 79: Frontend WebSocket Direct Connection & Event Migration — replace Tauri event bridge with daemon WS
+
+**Goal:** Create DaemonWsClient for direct WebSocket connection to daemon, implement topic-based subscription with reconnect/backoff, migrate clipboard/encryption/lifecycle event listeners from Tauri listen() to daemon WS, and add React hooks for event consumption.
+**Requirements**: TBD
+**Depends on:** Phase 78
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 79 to break down)
+
+### Phase 80: uc-tauri Command Cleanup — remove migrated commands, retain only Tauri-specific functionality
+
+**Goal:** Remove all Tauri commands that have been migrated to daemon HTTP API (clipboard, settings, encryption, storage). Retain only Tauri-specific commands: daemon lifecycle, auth bootstrap, system tray, quick panel, preview panel, updater, and protocol handler.
+**Requirements**: TBD
+**Depends on:** Phase 79
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 80 to break down)
+
+### Phase 81: Frontend-Daemon Integration Testing & Security Audit — end-to-end validation and security review
+
+**Goal:** End-to-end integration tests for the full frontend-daemon direct connection stack: HTTP API correctness, WebSocket event delivery, session token lifecycle, reconnection recovery, and security audit (token leakage, rate limiting effectiveness, permission enforcement).
+**Requirements**: TBD
+**Depends on:** Phase 80
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] # TBD (run /gsd:plan-phase 81 to break down)
+
+### Phase 71: Migrate restore-clipboard to daemon — eliminate cross-process origin desync
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 70
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 71 to break down)
+  > > > > > > > Stashed changes
+
+### Phase 82: Replace uc:// custom protocol with daemon HTTP blob endpoints
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 81
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 82 to break down)
+
+### Phase 83: 分析前端 Peer 配对请求，简化事件流架构，分离关注点,创建配对状态管理,提取业务逻辑
+
+**Goal:** 分析前端配对请求，简化事件流架构，分离关注点，创建配对状态管理，提取业务逻辑
+**Requirements**: TBD
+**Depends on:** Phase 82
+**Plans:** 3/3 plans complete
+
+Plans:
+
+- [x] 83-01-PLAN.md — Foundation: daemon/events.ts (diffPeerSnapshots, classifyPairingError) + discoveredPeers Redux state + test scaffolds
+- [x] 83-02-PLAN.md — Hook implementation: extend usePairingEvents + migrate useDeviceDiscovery to Redux + extract useSetupFlow
+- [x] 83-03-PLAN.md — Caller migration + p2p.ts facade deletion
+
+### Phase 84: 统一 CLI/GUI 与 Daemon 的认证架构
+
+**Goal:** Unify the CLI/GUI authentication architecture so both clients use daemon as the sole entry point. CLI currently sends raw bearer tokens directly; GUI properly exchanges for JWT via `POST /auth/connect`. This phase consolidates both to use the same session exchange flow.
+**Requirements**: AUTH-01, AUTH-02, AUTH-03, AUTH-04, AUTH-05, AUTH-06
+**Depends on:** Phase 83
+**Plans:** 3/3 plans complete
+
+**Success Criteria** (what must be TRUE):
+
+1. CLI uses POST /auth/connect exchange instead of direct bearer (AUTH-01)
+2. CLI PID registered in daemon PID whitelist (AUTH-02)
+3. CLI rate limited same as GUI via PID-based rate limiting (AUTH-03)
+4. Daemon L2+ routes reject bare bearer tokens with explicit error (AUTH-04)
+5. CLI and GUI get independent session tokens (different jti, different PIDs) (AUTH-05)
+6. Bearer token only accepted at /auth/connect, not at L2+ routes (AUTH-06)
+
+Plans:
+
+- [x] 84-01-PLAN.md — Daemon middleware hardening: reject bare bearer tokens explicitly (Wave 1)
+- [x] 84-02-PLAN.md — CLI migration: replace direct bearer with session exchange (Wave 2)
+- [x] 84-03-PLAN.md — Verification: integration tests for all auth requirements (Wave 3)
+
+### Phase 85: Improve pairing observability across daemon, event routing, and UI state transitions
+
+**Goal:** Add end-to-end, session-centered observability for pairing/setup flows so daemon emission, bridge routing, and frontend state transitions can be correlated and diagnosed without guesswork.
+**Requirements**: PH85-01, PH85-02, PH85-03, PH85-04, PH85-05, PH85-06
+**Depends on:** Phase 84
+**Plans:** 4/4 plans complete
+
+**Success Criteria** (what must be TRUE):
+
+1. A single pairing session can be followed across daemon emission, websocket bridge routing, and frontend handling using stable structured fields (PH85-01)
+2. Frontend pairing/setup consumers explicitly record accept/ignore/dedupe decisions instead of silently dropping events (PH85-02)
+3. Bridge routing decisions for `pairing.verification_required` are explicit and diagnosable (PH85-03)
+4. Pairing-driven setup transitions remain observable through to UI-facing state changes (PH85-04)
+5. New observability records do not leak secrets, raw key material, or sensitive verification payloads (PH85-05)
+6. Existing low-latency race fixes remain covered and verified after observability work lands (PH85-06)
+
+Plans:
+
+- [x] 85-01-PLAN.md — Backend observability contract for daemon emission and bridge routing (Wave 1)
+- [x] 85-02-PLAN.md — Frontend pairing/setup consumption diagnostics and shared event handling visibility (Wave 2)
+- [x] 85-03-PLAN.md — Regression coverage and validation evidence for end-to-end pairing observability (Wave 3)
+- [x] 85-04-PLAN.md — Gap closure: add PH85-xx entries to REQUIREMENTS.md and clarify PairingRoutingRecord doc comment (Wave 1)
+
+### Phase 86: CLI 层重构：收口远端状态解析，拆分 host/join flow phase
+
+**Goal:** Refactor CLI setup flow (run_pair / run_connect) to centralize remote state parsing into typed `ParsedSetupState`, introduce lightweight `HostCliPhase` / `JoinCliPhase` enums, and restructure the main loop as "poll -> parse -> derive phase -> execute action"
+**Requirements**: REQ-86-01 (Phase 0 bug fixes), REQ-86-02 (ParsedSetupState in uc-daemon-client), REQ-86-03 (HostCliPhase/JoinCliPhase enums), REQ-86-04 (Phase-driven loops)
+**Depends on:** Phase 85
+**Plans:** 4/4 plans complete
+
+Plans:
+
+- [x] 86-01-PLAN.md — Phase 0: Fix broken if/else in run_pair, add Debug impl for state change detection (Wave 1)
+- [x] 86-02-PLAN.md — Phase 1: Create uc-daemon-client/src/setup/ module with ParsedSetupState, delete old helpers (Wave 1)
+- [x] 86-03-PLAN.md — Phase 2: Create HostCliPhase/JoinCliPhase enums and derive\_\*\_phase() functions (Wave 2)
+- [x] 86-04-PLAN.md — Phase 3: Phase-driven loops for run_pair and run_connect (Wave 3)
+
+### Phase 87: 全面迁移 otlp, 兼容 seq 展示, 采用 otlp 的最佳实践
+
+**Goal:** Replace the custom Seq/CLEF telemetry exporter with OpenTelemetry SDK + OTLP/HTTP-protobuf, restructure clipboard pipeline spans into a parent-child tree rooted at `clipboard.flow`, adopt OTel semantic conventions, and switch cross-device correlation to W3C traceparent — while keeping Seq as the local visualization backend.
+**Requirements**: REQ-87-01, REQ-87-02, REQ-87-03, REQ-87-04, REQ-87-05, REQ-87-06, REQ-87-07, REQ-87-08, REQ-87-09, REQ-87-10, REQ-87-11, REQ-87-12, REQ-87-13, REQ-87-14, REQ-87-15
+**Depends on:** Phase 86
+**Plans:** 6/6 plans complete
+
+Plans:
+- [x] 87-01-PLAN.md — Wave 0 test scaffolds + dev-deps for OTLP pipeline (Wave 1)
+- [x] 87-02-PLAN.md — uc-observability::otlp module (resource, propagator, pipeline init) (Wave 2)
+- [x] 87-03-PLAN.md — ClipboardMessage.traceparent field + uc-bootstrap OTLP wiring + legacy UC_SEQ_URL warn (Wave 3)
+- [x] 87-04-PLAN.md — Root flow span refactor + traceparent inject/extract in sync use cases (Wave 4)
+- [x] 87-05-PLAN.md — Delete legacy seq/, clef_format.rs, span_fields.rs (Wave 5)
+- [x] 87-06-PLAN.md — Rewrite Seq signals, logging-architecture.md, docker-compose.seq.yml (Wave 5)

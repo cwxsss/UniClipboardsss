@@ -259,7 +259,6 @@ impl GuiOwnedDaemonState {
             }
         }
     }
-
 }
 
 #[cfg(test)]

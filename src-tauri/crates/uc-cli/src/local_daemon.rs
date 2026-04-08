@@ -1,6 +1,6 @@
 use std::fmt;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -8,10 +8,9 @@ use reqwest::Client;
 use uc_daemon::api::types::HealthResponse;
 use uc_daemon::socket::try_resolve_daemon_http_addr;
 
-const DAEMON_BINARY_NAME: &str = "uniclipboard-daemon";
 const HEALTH_PATH: &str = "/health";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,10 +52,10 @@ impl fmt::Display for LocalDaemonError {
             Self::ResolveBinary(error) => {
                 write!(
                     f,
-                    "failed to resolve local uniclipboard-daemon binary: {error}"
+                    "failed to resolve CLI executable for daemon spawn: {error}"
                 )
             }
-            Self::Spawn(error) => write!(f, "failed to spawn local uniclipboard-daemon: {error}"),
+            Self::Spawn(error) => write!(f, "failed to spawn daemon process: {error}"),
             Self::StartupTimeout {
                 timeout_ms,
                 profile,
@@ -91,18 +90,80 @@ pub async fn ensure_local_daemon_running() -> Result<LocalDaemonSession, LocalDa
         .build()
         .map_err(|error| LocalDaemonError::ProbeClient(error.into()))?;
     let base_url = resolve_base_url()?;
-    let probe_base_url = base_url.clone();
 
-    ensure_local_daemon_running_with(
-        || probe_daemon_health(&client, &probe_base_url),
-        || spawn_daemon_process().map(|_| ()),
-        base_url,
-        STARTUP_TIMEOUT,
-        POLL_INTERVAL,
-    )
-    .await
+    // Fast path: daemon is already running.
+    if probe_daemon_health(&client, &base_url).await? {
+        return Ok(LocalDaemonSession {
+            base_url,
+            spawned: false,
+        });
+    }
+
+    // Slow path: spawn + wait for health. Show a spinner so the user sees
+    // progress — daemon cold start can take many seconds in debug builds.
+    let spinner = crate::ui::spinner("Starting local daemon…");
+
+    if let Err(error) = spawn_daemon_process() {
+        crate::ui::spinner_finish_error(&spinner, "Failed to spawn local daemon");
+        return Err(error);
+    }
+
+    let mut probe = || probe_daemon_health(&client, &base_url);
+    match wait_for_daemon_health(&mut probe, STARTUP_TIMEOUT, POLL_INTERVAL, &base_url).await {
+        Ok(()) => {
+            crate::ui::spinner_finish_success(&spinner, "Local daemon ready");
+            Ok(LocalDaemonSession {
+                base_url,
+                spawned: true,
+            })
+        }
+        Err(error) => {
+            crate::ui::spinner_finish_error(&spinner, "Local daemon failed to start");
+            Err(error)
+        }
+    }
 }
 
+/// Capture variant used by the `#[autostop]` proc-macro.
+///
+/// Behaves like [`ensure_local_daemon_running`] but, on success, arms an
+/// [`AutostopGuard`](crate::autostop::AutostopGuard) and stores it into the
+/// caller-provided `slot`. The guard is dropped when the caller's function
+/// returns, sending SIGTERM to the daemon iff this invocation spawned it.
+///
+/// Intended to be called only via `#[autostop]` rewrite. Direct use works too
+/// but is awkward — prefer the macro for ergonomics.
+pub async fn ensure_local_daemon_running_capture(
+    slot: &mut Option<crate::autostop::AutostopGuard>,
+) -> Result<LocalDaemonSession, LocalDaemonError> {
+    let session = ensure_local_daemon_running().await?;
+    *slot = Some(crate::autostop::AutostopGuard::arm(&session));
+    Ok(session)
+}
+
+/// One-shot variant of [`ensure_local_daemon_running`] that pairs the session
+/// with an [`AutostopGuard`](crate::autostop::AutostopGuard).
+///
+/// The guard is armed iff the daemon was spawned by this call. Callers must bind
+/// the returned tuple to two local variables so the guard lives for the whole
+/// command body:
+///
+/// ```ignore
+/// let (session, _autostop) = ensure_local_daemon_running_for_oneshot().await?;
+/// ```
+///
+/// The `#[autostop]` attribute macro in `uc-cli-macros` rewrites plain
+/// `ensure_local_daemon_running` calls into this form automatically.
+#[allow(dead_code)]
+#[cfg(test)]
+pub async fn ensure_local_daemon_running_for_oneshot(
+) -> Result<(LocalDaemonSession, crate::autostop::AutostopGuard), LocalDaemonError> {
+    let session = ensure_local_daemon_running().await?;
+    let guard = crate::autostop::AutostopGuard::arm(&session);
+    Ok((session, guard))
+}
+
+#[cfg(test)]
 async fn ensure_local_daemon_running_with<Probe, ProbeFuture, Spawn>(
     mut probe: Probe,
     spawn: Spawn,
@@ -194,91 +255,38 @@ fn resolve_base_url() -> Result<String, LocalDaemonError> {
 }
 
 fn spawn_daemon_process() -> Result<Child, LocalDaemonError> {
-    let daemon_binary = resolve_daemon_binary_path()?;
+    let cli_exe = resolve_cli_exe_path()?;
 
-    Command::new(&daemon_binary)
+    Command::new(&cli_exe)
+        .arg("daemon")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| {
             LocalDaemonError::Spawn(anyhow::Error::new(error).context(format!(
-                "failed to spawn {} from {}",
-                daemon_binary_name(),
-                daemon_binary.display()
+                "failed to spawn daemon via `{} daemon`",
+                cli_exe.display()
             )))
         })
 }
 
-pub(crate) fn resolve_daemon_binary_path() -> Result<PathBuf, LocalDaemonError> {
-    let current_exe = std::env::current_exe().map_err(|error| {
+/// Resolve the path to the current CLI executable (used to spawn itself with `daemon` subcommand).
+pub(crate) fn resolve_cli_exe_path() -> Result<PathBuf, LocalDaemonError> {
+    std::env::current_exe().map_err(|error| {
         LocalDaemonError::ResolveBinary(
             anyhow::Error::new(error).context("failed to resolve current CLI executable"),
         )
-    })?;
-
-    Ok(resolve_daemon_binary_path_from(&current_exe))
-}
-
-fn resolve_daemon_binary_path_from(current_exe: &Path) -> PathBuf {
-    let binary_name = daemon_binary_name();
-    current_exe
-        .parent()
-        .map(|parent| parent.join(binary_name))
-        .filter(|candidate| candidate.exists())
-        .unwrap_or_else(|| PathBuf::from(binary_name))
-}
-
-fn daemon_binary_name() -> &'static str {
-    #[cfg(target_os = "windows")]
-    {
-        "uniclipboard-daemon.exe"
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        DAEMON_BINARY_NAME
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
-
-    struct TestTempDir {
-        path: PathBuf,
-    }
-
-    impl TestTempDir {
-        fn new() -> Self {
-            let unique = format!(
-                "uc-cli-local-daemon-{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("system time should be after epoch")
-                    .as_nanos()
-            );
-            let path = std::env::temp_dir().join(unique);
-            fs::create_dir_all(&path).expect("test temp dir should be created");
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-    }
-
-    impl Drop for TestTempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
 
     #[tokio::test]
     async fn ensure_local_daemon_running_returns_without_spawn_when_probe_is_healthy() {
@@ -375,20 +383,5 @@ mod tests {
 
         assert!(is_healthy);
         server.await.expect("server should finish");
-    }
-
-    #[test]
-    fn resolve_daemon_binary_path_prefers_cli_sibling_binary() {
-        let tempdir = TestTempDir::new();
-        let exe_dir = tempdir.path().join("bin");
-        fs::create_dir_all(&exe_dir).expect("bin dir should exist");
-        let current_exe = exe_dir.join("uniclipboard-cli");
-        fs::write(&current_exe, b"").expect("current exe placeholder should be written");
-        let sibling = exe_dir.join(daemon_binary_name());
-        fs::write(&sibling, b"").expect("daemon sibling placeholder should be written");
-
-        let resolved = resolve_daemon_binary_path_from(&current_exe);
-
-        assert_eq!(resolved, sibling);
     }
 }

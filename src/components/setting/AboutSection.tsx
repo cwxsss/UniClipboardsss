@@ -56,7 +56,7 @@ const AboutSection: React.FC = () => {
   const { updateInfo, isCheckingUpdate, checkForUpdates, installUpdate, downloadProgress } =
     useUpdate()
   const [appVersion, setAppVersion] = useState<string>('')
-  const [autoCheckUpdate, setAutoCheckUpdate] = useState(setting?.general.auto_check_update ?? true)
+  const [autoCheckUpdate, setAutoCheckUpdate] = useState(setting?.general.autoCheckUpdate ?? true)
   const [updateChannel, setUpdateChannel] = useState<UpdateChannel | null>(null)
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -76,12 +76,12 @@ const AboutSection: React.FC = () => {
 
   useEffect(() => {
     if (!setting?.general) return
-    setAutoCheckUpdate(setting.general.auto_check_update)
+    setAutoCheckUpdate(setting.general.autoCheckUpdate)
   }, [setting])
 
   useEffect(() => {
     if (!setting?.general) return
-    setUpdateChannel(setting.general.update_channel ?? null)
+    setUpdateChannel(setting.general.updateChannel ?? null)
   }, [setting])
 
   const handleAutoCheckUpdateChange = async (checked: boolean) => {
@@ -89,7 +89,7 @@ const AboutSection: React.FC = () => {
     try {
       setSaving(true)
       setAutoCheckUpdate(checked)
-      await updateGeneralSetting({ auto_check_update: checked })
+      await updateGeneralSetting({ autoCheckUpdate: checked })
     } catch (error) {
       console.error('更改自动检查更新状态失败:', error)
       setAutoCheckUpdate(previous)
@@ -104,7 +104,7 @@ const AboutSection: React.FC = () => {
       setSaving(true)
       const newChannel = value === 'auto' ? null : (value as UpdateChannel)
       setUpdateChannel(newChannel)
-      await updateGeneralSetting({ update_channel: newChannel })
+      await updateGeneralSetting({ updateChannel: newChannel })
       // Immediately check for updates on the new channel
       checkForUpdates().catch(console.error)
     } catch (error) {

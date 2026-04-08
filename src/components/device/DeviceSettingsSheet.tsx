@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { contentTypeEntries, getDeviceIcon } from './device-utils'
-import type { ContentTypes, PairedPeer } from '@/api/p2p'
+import type { PairedPeer } from '@/api/daemon/pairing'
+import type { ContentTypes } from '@/api/daemon/device'
 import { SettingRow } from '@/components/setting/SettingRow'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -59,7 +60,7 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
       dispatch(
         updateDeviceSyncSettings({
           peerId: deviceId,
-          settings: { ...settings, auto_sync: checked },
+          settings: { ...settings, autoSync: checked },
         })
       )
     },
@@ -74,8 +75,8 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
           peerId: deviceId,
           settings: {
             ...settings,
-            content_types: {
-              ...settings.content_types,
+            contentTypes: {
+              ...settings.contentTypes,
               [field]: checked,
             },
           },
@@ -141,7 +142,7 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
                   >
                     <Switch
                       size="sm"
-                      checked={settings?.auto_sync ?? true}
+                      checked={settings?.autoSync ?? true}
                       onCheckedChange={handleAutoSyncToggle}
                       disabled={globalAutoSyncOff || isLoading}
                     />
@@ -150,7 +151,7 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
                   {/* Content type toggles */}
                   {contentTypeEntries.map(({ field, i18nKey, status }) => {
                     const isComingSoon = status === 'coming_soon'
-                    const isAutoSyncOff = !settings?.auto_sync
+                    const isAutoSyncOff = !settings?.autoSync
                     const isGlobalFileSyncDisabled = field === 'file' && globalFileSyncOff
                     const isDisabled =
                       isComingSoon ||
@@ -184,7 +185,7 @@ const DeviceSettingsSheet: React.FC<DeviceSettingsSheetProps> = ({
                       >
                         <Switch
                           size="sm"
-                          checked={settings?.content_types[field] ?? true}
+                          checked={settings?.contentTypes[field] ?? true}
                           onCheckedChange={checked => handleContentTypeToggle(field, checked)}
                           disabled={isDisabled}
                         />

@@ -1,5 +1,5 @@
+mod autostop;
 mod commands;
-mod daemon_client;
 mod exit_codes;
 mod local_daemon;
 mod output;
@@ -56,6 +56,13 @@ enum Commands {
     Devices,
     /// Show space and encryption status (direct mode, no daemon required)
     SpaceStatus,
+    /// Run the daemon process inline (used internally by `start`)
+    #[command(hide = true)]
+    Daemon {
+        /// Launched by a GUI parent that keeps stdin open for lifecycle detection
+        #[arg(long)]
+        gui_managed: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -77,6 +84,12 @@ fn main() -> anyhow::Result<()> {
         std::env::set_var("UNICLIPBOARD_ENV", "development");
     }
 
+    // Handle `daemon` subcommand before creating the tokio runtime —
+    // the daemon entrypoint creates its own runtime internally.
+    if let Commands::Daemon { gui_managed } = cli.command {
+        return uc_daemon::entrypoint::run(gui_managed);
+    }
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -90,9 +103,9 @@ fn main() -> anyhow::Result<()> {
             Commands::Status => commands::status::run(cli.json, cli.verbose).await,
             Commands::Setup { subcommand } => match subcommand {
                 None => commands::setup::run_interactive(cli.json, cli.verbose).await,
-                Some(SetupCommands::Pair) => commands::setup::run_host(cli.json, cli.verbose).await,
+                Some(SetupCommands::Pair) => commands::setup::run_pair(cli.json, cli.verbose).await,
                 Some(SetupCommands::Connect) => {
-                    commands::setup::run_join(cli.json, cli.verbose).await
+                    commands::setup::run_connect(cli.json, cli.verbose).await
                 }
                 Some(SetupCommands::Status) => {
                     commands::setup::run_status(cli.json, cli.verbose).await
@@ -103,6 +116,7 @@ fn main() -> anyhow::Result<()> {
             },
             Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
             Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,
+            Commands::Daemon { .. } => unreachable!("handled above"),
         }
     });
 

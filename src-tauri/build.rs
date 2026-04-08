@@ -1,58 +1,167 @@
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const DAEMON_PACKAGE: &str = "uc-daemon";
+const DAEMON_BINARY: &str = "uniclipboard-daemon";
+const DAEMON_BUILD_INPUT_CRATES: &[&str] = &[
+    "uc-daemon",
+    "uc-bootstrap",
+    "uc-app",
+    "uc-core",
+    "uc-infra",
+    "uc-platform",
+    "uc-observability",
+];
+
 fn main() {
-    // Stage daemon binary first so tauri_build::build() can validate externalBin paths.
-    copy_daemon_binary_to_binaries();
+    prepare_daemon_sidecar().unwrap_or_else(|error| {
+        panic!("failed to prepare daemon sidecar: {error}");
+    });
     tauri_build::build();
 }
 
-/// Copies the compiled `uniclipboard-daemon` binary to `src-tauri/binaries/`
-/// with the Tauri-required target-triple suffix for sidecar bundling.
-///
-/// Non-fatal if the daemon binary doesn't exist yet (first build or clean checkout).
-fn copy_daemon_binary_to_binaries() {
-    let target_triple =
-        std::env::var("TAURI_ENV_TARGET_TRIPLE").unwrap_or_else(|_| construct_triple_from_cfg());
-
+fn prepare_daemon_sidecar() -> Result<(), String> {
+    let manifest_dir =
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let manifest_dir = std::path::PathBuf::from(
-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"),
-    );
+    let target_triple = std::env::var("TARGET")
+        .or_else(|_| std::env::var("TAURI_ENV_TARGET_TRIPLE"))
+        .unwrap_or_else(|_| construct_triple_from_cfg());
 
-    // Source: target/{profile}/uniclipboard-daemon
-    let target_dir = manifest_dir.join("target").join(&profile);
-    let src_name = if cfg!(target_os = "windows") {
+    emit_rerun_directives(&manifest_dir);
+
+    let built_binary = build_daemon_binary(&manifest_dir, &profile, &target_triple)?;
+    stage_daemon_binary(&manifest_dir, &built_binary, &target_triple)?;
+    Ok(())
+}
+
+fn emit_rerun_directives(manifest_dir: &Path) {
+    for env_key in ["CARGO", "PROFILE", "TARGET", "TAURI_ENV_TARGET_TRIPLE"] {
+        println!("cargo:rerun-if-env-changed={env_key}");
+    }
+
+    for path in [
+        manifest_dir.join("Cargo.toml"),
+        manifest_dir.join("Cargo.lock"),
+    ] {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+
+    for crate_name in DAEMON_BUILD_INPUT_CRATES {
+        for path in [
+            manifest_dir
+                .join("crates")
+                .join(crate_name)
+                .join("Cargo.toml"),
+            manifest_dir.join("crates").join(crate_name).join("src"),
+        ] {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+}
+
+fn build_daemon_binary(
+    manifest_dir: &Path,
+    profile: &str,
+    target_triple: &str,
+) -> Result<PathBuf, String> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let daemon_target_dir = manifest_dir.join("target").join("daemon-sidecar");
+
+    let mut command = Command::new(cargo);
+    command
+        .current_dir(manifest_dir)
+        .arg("build")
+        .arg("-p")
+        .arg(DAEMON_PACKAGE)
+        .arg("--bin")
+        .arg(DAEMON_BINARY)
+        .arg("--target")
+        .arg(target_triple)
+        .arg("--target-dir")
+        .arg(&daemon_target_dir);
+
+    match profile {
+        "debug" => {}
+        "release" => {
+            command.arg("--release");
+        }
+        other => {
+            command.arg("--profile").arg(other);
+        }
+    }
+
+    let output = command
+        .output()
+        .map_err(|error| format!("failed to invoke cargo for daemon build: {error}"))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "daemon build command failed with status {}.\nstdout:\n{}\nstderr:\n{}",
+            output.status, stdout, stderr
+        ));
+    }
+
+    let built_binary = daemon_target_dir
+        .join(target_triple)
+        .join(profile)
+        .join(daemon_binary_name());
+
+    if !built_binary.exists() {
+        return Err(format!(
+            "daemon build finished without producing {}",
+            built_binary.display()
+        ));
+    }
+
+    Ok(built_binary)
+}
+
+fn stage_daemon_binary(
+    manifest_dir: &Path,
+    built_binary: &Path,
+    target_triple: &str,
+) -> Result<(), String> {
+    let binaries_dir = manifest_dir.join("binaries");
+    std::fs::create_dir_all(&binaries_dir).map_err(|error| {
+        format!(
+            "failed to create Tauri binaries directory {}: {error}",
+            binaries_dir.display()
+        )
+    })?;
+
+    let dest = binaries_dir.join(format!(
+        "{DAEMON_BINARY}-{target_triple}{}",
+        executable_suffix()
+    ));
+    std::fs::copy(built_binary, &dest).map_err(|error| {
+        format!(
+            "failed to stage daemon sidecar from {} to {}: {error}",
+            built_binary.display(),
+            dest.display()
+        )
+    })?;
+
+    println!("cargo:warning=Daemon binary staged to {}", dest.display());
+    Ok(())
+}
+
+fn daemon_binary_name() -> &'static str {
+    if cfg!(target_os = "windows") {
         "uniclipboard-daemon.exe"
     } else {
         "uniclipboard-daemon"
-    };
-    let src = target_dir.join(src_name);
-
-    // Destination: src-tauri/binaries/uniclipboard-daemon-{triple}[.exe]
-    let binaries_dir = manifest_dir.join("binaries");
-    if let Err(e) = std::fs::create_dir_all(&binaries_dir) {
-        println!("cargo:warning=Failed to create binaries dir: {e}");
-        return;
     }
-    let ext = if cfg!(target_os = "windows") {
+}
+
+fn executable_suffix() -> &'static str {
+    if cfg!(target_os = "windows") {
         ".exe"
     } else {
         ""
-    };
-    let dest_name = format!("uniclipboard-daemon-{target_triple}{ext}");
-    let dest = binaries_dir.join(&dest_name);
-
-    if src.exists() {
-        match std::fs::copy(&src, &dest) {
-            Ok(_) => println!("cargo:warning=Daemon binary staged to {}", dest.display()),
-            Err(e) => println!("cargo:warning=Failed to copy daemon binary: {e}"),
-        }
-    } else {
-        println!(
-            "cargo:warning=Daemon binary not found at {} — build uc-daemon first",
-            src.display()
-        );
     }
-
-    println!("cargo:rerun-if-changed={}", src.display());
 }
 
 fn construct_triple_from_cfg() -> String {

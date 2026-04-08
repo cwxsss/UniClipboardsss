@@ -1,25 +1,11 @@
-import { listen } from '@tauri-apps/api/event'
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
+import { daemonWs } from '@/lib/daemon-ws'
 import { useAppDispatch } from '@/store/hooks'
 import {
-  updateTransferProgress,
-  removeTransfer,
   markTransferFailed,
   cancelClipboardWrite,
   setEntryTransferStatus,
 } from '@/store/slices/fileTransferSlice'
-
-const COMPLETED_CLEAR_DELAY_MS = 3000
-
-interface TransferProgressEvent {
-  transferId: string
-  peerId: string
-  direction: 'Sending' | 'Receiving'
-  chunksCompleted: number
-  totalChunks: number
-  bytesTransferred: number
-  totalBytes?: number | null
-}
 
 interface FileTransferStatusEvent {
   transferId: string
@@ -29,115 +15,58 @@ interface FileTransferStatusEvent {
 }
 
 /**
- * Hook that listens to file-transfer:// Tauri events and dispatches
- * progress updates and durable status changes to the Redux fileTransfer slice.
+ * Hook that listens to file-transfer and clipboard events from the daemon WS,
+ * dispatching durable status changes to the Redux fileTransfer slice.
  *
- * Call once in a top-level component (e.g., ClipboardContent) to activate.
+ * - `file-transfer.status_changed` events update entry transfer status.
+ * - `clipboard.new_content` events cancel pending clipboard auto-writes.
+ *
+ * Call once in a top-level component (e.g. ClipboardContent) to activate.
  */
 export function useTransferProgress(): void {
   const dispatch = useAppDispatch()
-  const clearTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   useEffect(() => {
     let cancelled = false
 
-    const setup = async () => {
-      try {
-        // Listen for durable status-changed events (pending/transferring/completed/failed)
-        const unlistenStatusChanged = await listen<FileTransferStatusEvent>(
-          'file-transfer://status-changed',
-          event => {
-            if (cancelled) return
-            const { entryId, status, reason } = event.payload
-            const validStatuses = ['pending', 'transferring', 'completed', 'failed'] as const
-            if (validStatuses.includes(status as (typeof validStatuses)[number])) {
-              dispatch(
-                setEntryTransferStatus({
-                  entryId,
-                  status: status as (typeof validStatuses)[number],
-                  reason: reason ?? null,
-                })
-              )
-            }
+    const handler = (event: { eventType: string; payload: unknown }) => {
+      if (cancelled) return
 
-            // If status is failed, also mark the transfer as failed in progress state
-            if (status === 'failed') {
-              dispatch(
-                markTransferFailed({
-                  transferId: event.payload.transferId,
-                  error: reason ?? undefined,
-                })
-              )
-            }
-          }
-        )
+      if (event.eventType === 'clipboard.new_content') {
+        dispatch(cancelClipboardWrite())
+        return
+      }
 
-        // Listen for clipboard changes to cancel auto-write on active transfers
-        const unlistenClipboard = await listen('clipboard://new-content', () => {
-          if (cancelled) return
-          dispatch(cancelClipboardWrite())
-        })
-
-        const unlisten = await listen<TransferProgressEvent>('file-transfer://progress', event => {
-          if (cancelled) return
-
-          const payload = event.payload
+      if (event.eventType === 'file-transfer.status_changed') {
+        const payload = event.payload as FileTransferStatusEvent
+        const { entryId, status, reason } = payload
+        const validStatuses = ['pending', 'transferring', 'completed', 'failed'] as const
+        if (validStatuses.includes(status as (typeof validStatuses)[number])) {
           dispatch(
-            updateTransferProgress({
-              transferId: payload.transferId,
-              peerId: payload.peerId,
-              direction: payload.direction,
-              chunksCompleted: payload.chunksCompleted,
-              totalChunks: payload.totalChunks,
-              bytesTransferred: payload.bytesTransferred,
-              totalBytes: payload.totalBytes,
+            setEntryTransferStatus({
+              entryId,
+              status: status as (typeof validStatuses)[number],
+              reason: reason ?? null,
             })
           )
+        }
 
-          // Auto-clear completed transfers after delay
-          // NOTE: this only clears the ephemeral progress state, NOT the durable entryStatusById
-          const isCompleted =
-            payload.chunksCompleted === payload.totalChunks && payload.totalChunks > 0
-          if (isCompleted) {
-            // Clear any existing timeout for this transfer
-            const existing = clearTimeoutsRef.current.get(payload.transferId)
-            if (existing) clearTimeout(existing)
-
-            const timeout = setTimeout(() => {
-              if (!cancelled) {
-                dispatch(removeTransfer(payload.transferId))
-              }
-              clearTimeoutsRef.current.delete(payload.transferId)
-            }, COMPLETED_CLEAR_DELAY_MS)
-
-            clearTimeoutsRef.current.set(payload.transferId, timeout)
-          }
-        })
-
-        return { unlisten, unlistenStatusChanged, unlistenClipboard }
-      } catch (err) {
-        console.error('[useTransferProgress] Failed to setup transfer progress listener:', err)
-        return undefined
+        if (status === 'failed') {
+          dispatch(
+            markTransferFailed({
+              transferId: payload.transferId,
+              error: reason ?? undefined,
+            })
+          )
+        }
       }
     }
 
-    const setupPromise = setup()
+    const unsubscribe = daemonWs.subscribe(['file-transfer', 'clipboard'], handler)
 
     return () => {
       cancelled = true
-      // Clear all pending timeouts
-      for (const timeout of clearTimeoutsRef.current.values()) {
-        clearTimeout(timeout)
-      }
-      clearTimeoutsRef.current.clear()
-      // Unlisten all
-      setupPromise.then(listeners => {
-        if (listeners) {
-          listeners.unlisten()
-          listeners.unlistenStatusChanged()
-          listeners.unlistenClipboard()
-        }
-      })
+      unsubscribe()
     }
   }, [dispatch])
 }

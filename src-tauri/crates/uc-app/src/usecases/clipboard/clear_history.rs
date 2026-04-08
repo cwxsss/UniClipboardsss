@@ -2,6 +2,7 @@
 //! 清除所有剪贴板历史的用例。
 
 use anyhow::Result;
+use serde::Serialize;
 use std::sync::Arc;
 use tracing::{info, info_span, warn, Instrument};
 use uc_core::ports::{
@@ -11,7 +12,8 @@ use uc_core::ports::{
 
 /// Result of a bulk clipboard history clear operation.
 /// 批量清除剪贴板历史操作的结果。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClearHistoryResult {
     /// Number of entries successfully deleted.
     pub deleted_count: u64,

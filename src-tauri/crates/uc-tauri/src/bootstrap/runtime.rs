@@ -150,7 +150,7 @@ impl AppRuntime {
     pub fn new(deps: AppDeps, storage_paths: uc_app::app_paths::AppPaths) -> Self {
         let setup_ports = uc_bootstrap::assembly::SetupAssemblyPorts::placeholder(&deps);
         let event_emitter: Arc<dyn HostEventEmitterPort> =
-            Arc::new(crate::adapters::host_event_emitter::LoggingEventEmitter);
+            Arc::new(uc_bootstrap::LoggingHostEventEmitter);
         Self::with_setup(deps, setup_ports, storage_paths, event_emitter)
     }
 
@@ -176,10 +176,9 @@ impl AppRuntime {
         // so that HostEventSetupPort reads the current emitter after swap.
         let emitter_cell = Arc::new(std::sync::RwLock::new(event_emitter));
 
-        // Build session_ready_emitter from app_handle BEFORE build_setup_orchestrator.
-        let session_ready_emitter: Arc<dyn uc_app::usecases::SessionReadyEmitter> = Arc::new(
-            crate::adapters::lifecycle::TauriSessionReadyEmitter::new(app_handle.clone()),
-        );
+        // Build session_ready_emitter — emits "Session ready" log, no frontend event.
+        let session_ready_emitter: Arc<dyn uc_app::usecases::SessionReadyEmitter> =
+            Arc::new(uc_app::usecases::app_lifecycle::adapters::LoggingSessionReadyEmitter);
 
         // Pass shared state + adapters to build_setup_orchestrator as SEPARATE params.
         let setup_orchestrator = uc_bootstrap::assembly::build_setup_orchestrator(
@@ -202,6 +201,26 @@ impl AppRuntime {
         ));
 
         Self { core, app_handle }
+    }
+
+    /// Wire a `ClipboardWriteCoordinator` into the inner `CoreRuntime`.
+    ///
+    /// Must be called BEFORE `Arc::new(runtime)` (i.e. while the runtime is still
+    /// uniquely owned). GUI bootstrap calls this with
+    /// `background.clipboard_write_coordinator.clone()` after `with_setup()`.
+    pub fn with_clipboard_write_coordinator(
+        mut self,
+        coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
+    ) -> Self {
+        // Arc::get_mut succeeds here because the caller has not yet shared the Arc.
+        if let Some(core) = Arc::get_mut(&mut self.core) {
+            core.set_clipboard_write_coordinator(coordinator);
+        } else {
+            tracing::warn!(
+                "with_clipboard_write_coordinator called after Arc was shared — coordinator not set"
+            );
+        }
+        self
     }
 
     /// Set the Tauri AppHandle for event emission.
@@ -230,7 +249,6 @@ impl AppRuntime {
     }
 
     /// Returns a clone of the shared app_handle cell.
-    /// Used by consumers (like TauriSessionReadyEmitter) that need to hold onto the handle.
     pub fn app_handle_cell(&self) -> Arc<std::sync::RwLock<Option<tauri::AppHandle>>> {
         self.app_handle.clone()
     }
@@ -238,14 +256,13 @@ impl AppRuntime {
     /// Get the current event emitter (clones the inner Arc).
     ///
     /// Returns the active [`HostEventEmitterPort`] implementation. During early bootstrap,
-    /// this is a [`LoggingEventEmitter`]; after setup, a `TauriEventEmitter`.
+    /// this is a [`LoggingEventEmitter`]; after daemon setup, a `DaemonApiEventEmitter`.
     pub fn event_emitter(&self) -> Arc<dyn HostEventEmitterPort> {
         self.core.event_emitter()
     }
 
-    /// Swap the event emitter. Called from setup callback to replace the
-    /// initial [`LoggingEventEmitter`] with a [`TauriEventEmitter`] once the
-    /// Tauri `AppHandle` is available.
+    /// Swap the event emitter. Called from daemon setup to replace the
+    /// initial [`LoggingEventEmitter`] with a [`DaemonApiEventEmitter`].
     pub fn set_event_emitter(&self, emitter: Arc<dyn HostEventEmitterPort>) {
         self.core.set_event_emitter(emitter);
     }
@@ -310,7 +327,7 @@ impl AppRuntime {
 /// Provides transparent access to all CoreUseCases methods (via Deref) plus
 /// 3 non-core accessors that cannot live in uc-app:
 /// - apply_autostart (needs AppHandle)
-/// - app_lifecycle_coordinator (needs TauriSessionReadyEmitter)
+/// - app_lifecycle_coordinator (needs LoggingSessionReadyEmitter)
 /// - sync_outbound_clipboard (needs uc_infra TransferPayloadEncryptorAdapter)
 pub struct AppUseCases<'a> {
     app_runtime: &'a AppRuntime,
@@ -350,9 +367,9 @@ impl<'a> AppUseCases<'a> {
             uc_app::usecases::AppLifecycleCoordinatorDeps {
                 network: Arc::new(self.core.start_network_after_unlock()),
                 announcer: Some(announcer),
-                emitter: Arc::new(crate::adapters::lifecycle::TauriSessionReadyEmitter::new(
-                    self.app_runtime.app_handle_cell(),
-                )),
+                emitter: Arc::new(
+                    uc_app::usecases::app_lifecycle::adapters::LoggingSessionReadyEmitter,
+                ),
                 status: self.app_runtime.core.lifecycle_status().clone(),
                 lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
             },
@@ -516,7 +533,12 @@ mod tests {
         Blob, BlobId, ContentHash, DeviceId, PersistedClipboardRepresentation,
         SystemClipboardSnapshot,
     };
-    use uc_infra::clipboard::InMemoryClipboardChangeOrigin;
+    use uc_infra::clipboard::new_in_memory_change_origin;
+
+    fn test_origin() -> std::sync::Arc<dyn uc_core::ports::clipboard::ClipboardChangeOriginPort> {
+        new_in_memory_change_origin()
+    }
+
     use uc_platform::ports::{AutostartPort, UiPort};
 
     struct MockEntryRepository {
@@ -542,10 +564,6 @@ mod tests {
     struct MockSpoolQueue {
         enqueue_calls: Arc<AtomicUsize>,
     }
-
-    struct SuccessfulRepresentationPolicy;
-
-    struct SuccessfulNormalizer;
 
     #[derive(Default)]
     struct RecordingEmitter {
@@ -656,45 +674,6 @@ mod tests {
         async fn enqueue(&self, _request: SpoolRequest) -> anyhow::Result<()> {
             self.enqueue_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
-        }
-    }
-
-    impl SelectRepresentationPolicyPort for SuccessfulRepresentationPolicy {
-        fn select(
-            &self,
-            snapshot: &SystemClipboardSnapshot,
-        ) -> std::result::Result<uc_core::clipboard::ClipboardSelection, PolicyError> {
-            let rep_id = snapshot
-                .representations
-                .first()
-                .expect("snapshot should contain one representation")
-                .id
-                .clone();
-
-            Ok(uc_core::clipboard::ClipboardSelection {
-                primary_rep_id: rep_id.clone(),
-                secondary_rep_ids: vec![],
-                preview_rep_id: rep_id.clone(),
-                paste_rep_id: rep_id,
-                policy_version: uc_core::clipboard::SelectionPolicyVersion::V1,
-            })
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardRepresentationNormalizerPort for SuccessfulNormalizer {
-        async fn normalize(
-            &self,
-            observed: &uc_core::clipboard::ObservedClipboardRepresentation,
-        ) -> anyhow::Result<uc_core::PersistedClipboardRepresentation> {
-            Ok(uc_core::PersistedClipboardRepresentation::new(
-                observed.id.clone(),
-                observed.format_id.clone(),
-                observed.mime.clone(),
-                observed.size_bytes(),
-                Some(observed.bytes.clone()),
-                None,
-            ))
         }
     }
 
@@ -1277,7 +1256,7 @@ mod tests {
             cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache"),
             file_cache_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/file-cache"),
             spool_dir: std::path::PathBuf::from("/tmp/uniclipboard-test-cache/spool"),
-            app_data_root: std::path::PathBuf::from("/tmp/uniclipboard-test"),
+            app_data_root_dir: std::path::PathBuf::from("/tmp/uniclipboard-test"),
         }
     }
 
@@ -1308,7 +1287,7 @@ mod tests {
                     enqueue_calls: Arc::new(AtomicUsize::new(0)),
                 }),
                 worker_tx: mpsc::channel(1).0,
-                clipboard_change_origin: Arc::new(InMemoryClipboardChangeOrigin::new()),
+                clipboard_change_origin: test_origin(),
                 payload_resolver: Arc::new(NoopPort),
             },
             security: uc_app::SecurityPorts {
@@ -1356,21 +1335,21 @@ mod tests {
         runtime.set_event_emitter(swapped_emitter.clone());
         runtime
             .event_emitter()
-            .emit(HostEvent::Clipboard(
-                ClipboardHostEvent::InboundSubscribeRecovered {
-                    recovered_after_attempts: 2,
-                },
-            ))
+            .emit(HostEvent::Clipboard(ClipboardHostEvent::NewContent {
+                entry_id: "entry-swap".to_string(),
+                preview: "swapped".to_string(),
+                origin: uc_core::ports::host_event_emitter::ClipboardOriginKind::Local,
+            }))
             .expect("emit through swapped emitter");
 
         assert!(initial_emitter.events.lock().unwrap().is_empty());
         let swapped_events = swapped_emitter.events.lock().unwrap();
         assert_eq!(swapped_events.len(), 1);
         match &swapped_events[0] {
-            HostEvent::Clipboard(ClipboardHostEvent::InboundSubscribeRecovered {
-                recovered_after_attempts,
-            }) => assert_eq!(*recovered_after_attempts, 2),
-            other => panic!("expected recovered event on swapped emitter, got {other:?}"),
+            HostEvent::Clipboard(ClipboardHostEvent::NewContent { entry_id, .. }) => {
+                assert_eq!(entry_id, "entry-swap");
+            }
+            other => panic!("expected NewContent event on swapped emitter, got {other:?}"),
         }
     }
 }

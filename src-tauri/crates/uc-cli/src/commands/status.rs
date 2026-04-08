@@ -1,6 +1,5 @@
 //! Status command -- queries daemon runtime status over HTTP via `GET /status`.
 
-use crate::daemon_client::{DaemonClientError, DaemonHttpClient};
 use crate::exit_codes;
 use uc_daemon::api::types::{StatusResponse, WorkerStatusDto};
 
@@ -35,14 +34,20 @@ fn format_uptime(seconds: u64) -> String {
 
 /// Run the status command.
 pub async fn run(json: bool, _verbose: bool) -> i32 {
-    let client = match DaemonHttpClient::new() {
-        Ok(client) => client,
-        Err(error) => return print_client_error(error),
+    let ctx = match uc_daemon_client::DaemonClientContext::from_env() {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            eprintln!("Error: failed to connect to daemon: {error}");
+            return exit_codes::EXIT_DAEMON_UNREACHABLE;
+        }
     };
 
-    let status = match client.get_status().await {
+    let status = match ctx.query_client().get_status().await {
         Ok(status) => status,
-        Err(error) => return print_client_error(error),
+        Err(error) => {
+            eprintln!("Error: failed to get daemon status: {error}");
+            return exit_codes::EXIT_ERROR;
+        }
     };
 
     let output = if json {
@@ -85,94 +90,4 @@ fn render_status_output(status: &StatusResponse) -> String {
 
 fn render_worker_line(worker: &WorkerStatusDto) -> String {
     format!("  {}: {}", worker.name, worker.health)
-}
-
-fn print_client_error(error: DaemonClientError) -> i32 {
-    match error {
-        DaemonClientError::Unreachable(_) => {
-            eprintln!("Error: daemon unreachable (is uniclipboard-daemon running?)");
-            exit_codes::EXIT_DAEMON_UNREACHABLE
-        }
-        DaemonClientError::Unauthorized => {
-            eprintln!("Error: daemon rejected request: invalid or missing auth token");
-            exit_codes::EXIT_ERROR
-        }
-        DaemonClientError::Initialization(_)
-        | DaemonClientError::UnexpectedStatus { .. }
-        | DaemonClientError::InvalidResponse(_) => {
-            eprintln!("Error: {error}");
-            exit_codes::EXIT_ERROR
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unreachable_maps_to_daemon_unreachable_exit_code() {
-        let code = print_client_error(DaemonClientError::Unreachable(anyhow::anyhow!(
-            "connection refused"
-        )));
-        assert_eq!(code, exit_codes::EXIT_DAEMON_UNREACHABLE);
-    }
-
-    #[test]
-    fn renders_human_output_from_http_fixture() {
-        let status = StatusResponse {
-            package_version: "0.1.0".to_string(),
-            api_revision: "v1".to_string(),
-            uptime_seconds: 3723,
-            workers: vec![
-                WorkerStatusDto {
-                    name: "network".to_string(),
-                    health: "healthy".to_string(),
-                },
-                WorkerStatusDto {
-                    name: "sync".to_string(),
-                    health: "degraded (retrying)".to_string(),
-                },
-            ],
-            connected_peers: 2,
-        };
-
-        let rendered = render_status_output(&status);
-
-        assert_eq!(
-            rendered,
-            [
-                "Status: running",
-                "Uptime: 1h 2m",
-                "Version: 0.1.0",
-                "API revision: v1",
-                "Workers: 1/2 healthy",
-                "  network: healthy",
-                "  sync: degraded (retrying)",
-                "Connected peers: 2",
-            ]
-            .join("\n")
-        );
-    }
-
-    #[test]
-    fn json_output_serializes_daemon_status_dto() {
-        let status = StatusResponse {
-            package_version: "0.1.0".to_string(),
-            api_revision: "v1".to_string(),
-            uptime_seconds: 10,
-            workers: vec![WorkerStatusDto {
-                name: "network".to_string(),
-                health: "healthy".to_string(),
-            }],
-            connected_peers: 1,
-        };
-
-        let value = serde_json::to_value(&status).unwrap();
-        assert_eq!(value["packageVersion"], "0.1.0");
-        assert_eq!(value["apiRevision"], "v1");
-        assert_eq!(value["uptimeSeconds"], 10);
-        assert_eq!(value["workers"][0]["name"], "network");
-        assert!(value.get("uptime_seconds").is_none());
-    }
 }

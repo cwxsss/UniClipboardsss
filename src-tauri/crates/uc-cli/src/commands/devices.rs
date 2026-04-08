@@ -1,22 +1,28 @@
 //! Devices command -- lists paired devices via daemon HTTP API via `GET /paired-devices`.
 
-use crate::daemon_client::{DaemonClientError, DaemonHttpClient};
 use crate::exit_codes;
 use uc_daemon::api::types::PairedDeviceDto;
+use uc_daemon_client::DaemonClientContext;
 
 /// Run the devices command.
 ///
 pub async fn run(json: bool, verbose: bool) -> i32 {
     let _ = verbose;
 
-    let client = match DaemonHttpClient::new() {
-        Ok(client) => client,
-        Err(error) => return print_client_error(error),
+    let ctx = match DaemonClientContext::from_env() {
+        Ok(ctx) => ctx,
+        Err(error) => {
+            eprintln!("Error: failed to connect to daemon: {error}");
+            return exit_codes::EXIT_DAEMON_UNREACHABLE;
+        }
     };
 
-    let devices = match client.get_paired_devices().await {
+    let devices = match ctx.query_client().get_paired_devices().await {
         Ok(devices) => devices,
-        Err(error) => return print_client_error(error),
+        Err(error) => {
+            eprintln!("Error: failed to get paired devices: {error}");
+            return exit_codes::EXIT_ERROR;
+        }
     };
 
     if json {
@@ -42,25 +48,6 @@ fn render_devices_output(devices: &[PairedDeviceDto]) -> String {
             .map(|device| format!("  {} (id: {})", device.device_name, device.peer_id)),
     );
     lines.join("\n")
-}
-
-fn print_client_error(error: DaemonClientError) -> i32 {
-    match error {
-        DaemonClientError::Unreachable(_) => {
-            eprintln!("Error: daemon unreachable (is uniclipboard-daemon running?)");
-            exit_codes::EXIT_DAEMON_UNREACHABLE
-        }
-        DaemonClientError::Unauthorized => {
-            eprintln!("Error: daemon rejected request: invalid or missing auth token");
-            exit_codes::EXIT_ERROR
-        }
-        DaemonClientError::Initialization(_)
-        | DaemonClientError::UnexpectedStatus { .. }
-        | DaemonClientError::InvalidResponse(_) => {
-            eprintln!("Error: {error}");
-            exit_codes::EXIT_ERROR
-        }
-    }
 }
 
 #[cfg(test)]

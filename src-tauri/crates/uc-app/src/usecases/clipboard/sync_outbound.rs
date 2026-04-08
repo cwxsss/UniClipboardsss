@@ -17,6 +17,7 @@ use uc_core::ports::{
     PeerDirectoryPort, SettingsPort, SystemClipboardPort, TransferPayloadEncryptorPort,
 };
 use uc_core::{ClipboardChangeOrigin, PeerId, SystemClipboardSnapshot};
+use uc_observability::otlp::propagator::inject_current_context;
 
 pub struct SyncOutboundClipboardUseCase {
     local_clipboard: Arc<dyn SystemClipboardPort>,
@@ -70,6 +71,8 @@ impl SyncOutboundClipboardUseCase {
             Ok(s) => Some(s),
             Err(err) => {
                 warn!(
+                    error_kind = "settings_load_failed",
+                    retryable = true,
                     error = %err,
                     "Failed to load global settings for per-device sync policy check; proceeding with all peers"
                 );
@@ -129,6 +132,8 @@ impl SyncOutboundClipboardUseCase {
                 }
                 Err(err) => {
                     warn!(
+                        error_kind = "paired_device_load_failed",
+                        retryable = true,
                         peer_id = %peer.peer_id,
                         error = %err,
                         "Failed to load paired device for sync policy check; proceeding with sync"
@@ -202,6 +207,8 @@ impl SyncOutboundClipboardUseCase {
             Ok(peers) => peers.len(),
             Err(err) => {
                 warn!(
+                    error_kind = "peer_directory_query_failed",
+                    retryable = true,
                     error = %err,
                     "get_discovered_peers failed during outbound clipboard peer evaluation"
                 );
@@ -216,6 +223,7 @@ impl SyncOutboundClipboardUseCase {
             return Ok(());
         } else {
             info!(
+                event = "clipboard.outbound_peer_evaluated",
                 discovered_peer_count,
                 sendable_peer_count = sendable_peers.len(),
                 "Evaluated outbound clipboard sendable peers"
@@ -227,6 +235,7 @@ impl SyncOutboundClipboardUseCase {
         }
 
         let message_id = Uuid::new_v4().to_string();
+        let representation_count = snapshot.representations.len();
 
         // Extract content_hash and ts_ms BEFORE consuming representations via into_iter().
         let content_hash = snapshot.snapshot_hash().to_string();
@@ -268,6 +277,8 @@ impl SyncOutboundClipboardUseCase {
                 .unwrap_or_else(|| "Unknown Device".to_string()),
             Err(err) => {
                 warn!(
+                    error_kind = "settings_load_failed",
+                    retryable = true,
                     error = %err,
                     "Failed to load settings for outbound sync; using fallback device name"
                 );
@@ -275,7 +286,12 @@ impl SyncOutboundClipboardUseCase {
             }
         };
 
+        // Inject the current span's W3C traceparent for cross-device distributed tracing.
+        // This MUST run after the outbound flow span is active so Span::current() is non-trivial.
+        let traceparent = inject_current_context();
+
         // Build the JSON header (V3: encrypted payload goes as raw trailing bytes)
+        #[allow(deprecated)]
         let clipboard_header = ClipboardMessage {
             id: message_id,
             content_hash,
@@ -285,6 +301,7 @@ impl SyncOutboundClipboardUseCase {
             origin_device_name,
             payload_version: ClipboardPayloadVersion::V3,
             origin_flow_id,
+            traceparent,
             file_transfers,
         };
 
@@ -298,6 +315,16 @@ impl SyncOutboundClipboardUseCase {
         let raw_bytes = plaintext_bytes.len();
         let mut connect_failures = Vec::new();
         let mut connect_success_count = 0usize;
+
+        info!(
+            event = "clipboard.outbound_attempt",
+            target_peer_count = sendable_peers.len(),
+            first_target_peer_id = %first_peer.peer_id,
+            first_target_address_count = first_peer.addresses.len(),
+            representation_count,
+            raw_bytes,
+            "starting outbound clipboard fanout"
+        );
 
         // Parallel: run prepare path in its own task so CPU-heavy encrypt/frame work
         // cannot starve the business-path ensure branch.
@@ -315,6 +342,7 @@ impl SyncOutboundClipboardUseCase {
                 })?;
 
             info!(
+                event = "clipboard.outbound_payload_encrypted",
                 raw_bytes,
                 encrypted_bytes = encrypted_content.len(),
                 "outbound payload encrypted"
@@ -327,9 +355,8 @@ impl SyncOutboundClipboardUseCase {
             Ok::<Arc<[u8]>, anyhow::Error>(Arc::from(framed.into_boxed_slice()))
         }
         .instrument(info_span!(
-            "outbound.prepare",
+            uc_observability::stages::OUTBOUND_PREPARE, // "clipboard.outbound_prepare"
             raw_bytes,
-            stage = uc_observability::stages::OUTBOUND_PREPARE
         ));
 
         let outbound_bytes = if tokio::runtime::Handle::try_current().is_ok() {
@@ -345,7 +372,11 @@ impl SyncOutboundClipboardUseCase {
                 }
                 Err(err) => {
                     warn!(
+                        event = "clipboard.outbound_business_path_failed",
+                        error_kind = "peer_connection_failed",
+                        retryable = true,
                         peer_id = %first_peer.peer_id,
+                        peer_address_count = first_peer.addresses.len(),
                         error = %err,
                         "failed to ensure outbound business path for first peer; skipping send"
                     );
@@ -368,7 +399,11 @@ impl SyncOutboundClipboardUseCase {
                 }
                 Err(err) => {
                     warn!(
+                        event = "clipboard.outbound_business_path_failed",
+                        error_kind = "peer_connection_failed",
+                        retryable = true,
                         peer_id = %first_peer.peer_id,
+                        peer_address_count = first_peer.addresses.len(),
                         error = %err,
                         "failed to ensure outbound business path for first peer; skipping send"
                     );
@@ -387,11 +422,17 @@ impl SyncOutboundClipboardUseCase {
                     .send_clipboard(&first_peer.peer_id, outbound_bytes.clone())
                     .await
             }
-            .instrument(info_span!("outbound.send", peer_id = %first_peer.peer_id, stage = uc_observability::stages::OUTBOUND_SEND))
+            .instrument(
+                info_span!(uc_observability::stages::OUTBOUND_SEND, peer_id = %first_peer.peer_id),
+            ) // "clipboard.outbound_send"
             .await
             {
                 warn!(
+                    event = "clipboard.outbound_send_failed",
+                    error_kind = "peer_send_failed",
+                    retryable = true,
                     peer_id = %first_peer.peer_id,
+                    peer_address_count = first_peer.addresses.len(),
                     error = %err,
                     "failed to send outbound clipboard message to first peer"
                 );
@@ -409,7 +450,11 @@ impl SyncOutboundClipboardUseCase {
                 .await
             {
                 warn!(
+                    event = "clipboard.outbound_business_path_failed",
+                    error_kind = "peer_connection_failed",
+                    retryable = true,
                     peer_id = %peer.peer_id,
+                    peer_address_count = peer.addresses.len(),
                     error = %err,
                     "failed to ensure outbound business path; skipping send for this peer"
                 );
@@ -423,11 +468,17 @@ impl SyncOutboundClipboardUseCase {
                     .send_clipboard(&peer.peer_id, outbound_bytes.clone())
                     .await
             }
-            .instrument(info_span!("outbound.send", peer_id = %peer.peer_id, stage = uc_observability::stages::OUTBOUND_SEND))
+            .instrument(
+                info_span!(uc_observability::stages::OUTBOUND_SEND, peer_id = %peer.peer_id),
+            ) // "clipboard.outbound_send"
             .await
             {
                 warn!(
+                    event = "clipboard.outbound_send_failed",
+                    error_kind = "peer_send_failed",
+                    retryable = true,
                     peer_id = %peer.peer_id,
+                    peer_address_count = peer.addresses.len(),
                     error = %err,
                     "failed to send outbound clipboard message to peer; continuing best-effort fanout"
                 );
@@ -455,13 +506,16 @@ impl SyncOutboundClipboardUseCase {
             failures.extend(send_failures);
             let failure_count = failures.len();
             warn!(
+                event = "clipboard.outbound_partial_failure",
                 sent_count,
                 failure_count,
                 "outbound clipboard fanout partially failed after best-effort retries"
             );
             info!(
+                event = "clipboard.outbound_partial_success",
                 sent_count,
-                connect_success_count, "Outbound clipboard sync sent to sendable peers (partial)"
+                connect_success_count,
+                "Outbound clipboard sync sent to sendable peers (partial)"
             );
             return Err(anyhow::anyhow!(
                 "outbound clipboard fanout partially failed: {sent_count} sent, {failure_count} failed ({})",
@@ -470,8 +524,8 @@ impl SyncOutboundClipboardUseCase {
         }
 
         info!(
-            sent_count,
-            connect_success_count, "Outbound clipboard sync sent to sendable peers"
+            event = "clipboard.outbound_success",
+            sent_count, connect_success_count, "Outbound clipboard sync sent to sendable peers"
         );
         Ok(())
     }
@@ -1473,7 +1527,6 @@ mod tests {
                     auto_sync: false,
                     sync_frequency: SyncFrequency::Realtime,
                     content_types: ContentTypes::default(),
-                    max_file_size_mb: 100,
                 }),
             ),
         );
@@ -1510,7 +1563,6 @@ mod tests {
                         code_snippet: true,
                         rich_text: true,
                     },
-                    max_file_size_mb: 100,
                 }),
             ),
         );
@@ -1547,7 +1599,6 @@ mod tests {
                         code_snippet: false,
                         rich_text: false,
                     },
-                    max_file_size_mb: 100,
                 }),
             ),
         );
@@ -1584,7 +1635,6 @@ mod tests {
                         code_snippet: true,
                         rich_text: true,
                     },
-                    max_file_size_mb: 100,
                 }),
             ),
         );

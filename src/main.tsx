@@ -5,11 +5,12 @@ import { Provider } from 'react-redux'
 import App from './App'
 import './i18n'
 import { store } from './store'
+import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
+import { initFrontendOtlp } from '@/observability/otlp'
 import { initSentry, Sentry } from '@/observability/sentry'
-import { initSeq } from '@/observability/seq'
 
 initSentry()
-initSeq()
+initFrontendOtlp()
 
 const startupTimingOrigin = Date.now()
 const logStartupTiming = (label: string) => {
@@ -68,6 +69,13 @@ const initLogging = async () => {
 // 执行日志初始化
 initLogging().then(() => {
   console.log('[Tauri Log] Logging system initialized')
+})
+
+// Connect the frontend WebSocket client to the daemon.
+// This must run before React renders so that daemonWs is connected by the time
+// hooks (useEncryptionState, usePairingEvents, useClipboardNewContent) mount.
+connectDaemonWs().catch(err => {
+  console.error('[main] daemon WS bootstrap failed:', err)
 })
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
