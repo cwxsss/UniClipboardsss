@@ -16,6 +16,8 @@ use uc_core::ports::{
     ClipboardTransportPort, DeviceIdentityPort, EncryptionSessionPort, PairedDeviceRepositoryPort,
     PeerDirectoryPort, SettingsPort, SystemClipboardPort, TransferPayloadEncryptorPort,
 };
+
+use crate::usecases::pairing::list_sendable_peers::ListSendablePeers;
 use uc_core::{ClipboardChangeOrigin, PeerId, SystemClipboardSnapshot};
 use uc_observability::otlp::propagator::inject_current_context;
 
@@ -195,11 +197,11 @@ impl SyncOutboundClipboardUseCase {
             return Ok(());
         }
 
-        let all_sendable_peers = self
-            .peer_directory
-            .list_sendable_peers()
-            .await
-            .context("failed to load sendable peers for outbound sync")?;
+        let all_sendable_peers =
+            ListSendablePeers::new(self.paired_device_repo.clone(), self.peer_directory.clone())
+                .execute()
+                .await
+                .context("failed to load sendable peers for outbound sync")?;
 
         // Filter out peers whose effective sync policy disallows this content
         let sendable_peers = self.apply_sync_policy(&all_sendable_peers, &snapshot).await;
@@ -574,11 +576,9 @@ mod tests {
     }
 
     struct TestNetwork {
-        sendable_peers: Vec<DiscoveredPeer>,
         failing_peers: HashSet<String>,
         ensure_failing_peers: HashSet<String>,
         send_calls: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
-        list_sendable_peers_calls: Arc<AtomicUsize>,
         ensure_business_path_calls: Arc<AtomicUsize>,
     }
 
@@ -634,12 +634,6 @@ mod tests {
 
         async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
             Ok(Vec::new())
-        }
-
-        async fn list_sendable_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-            self.list_sendable_peers_calls
-                .fetch_add(1, Ordering::SeqCst);
-            Ok(self.sendable_peers.clone())
         }
 
         fn local_peer_id(&self) -> String {
@@ -720,21 +714,46 @@ mod tests {
         }
     }
 
-    struct TestPairedDeviceRepo;
+    struct TestPairedDeviceRepo {
+        devices: Vec<uc_core::network::PairedDevice>,
+    }
+
+    impl TestPairedDeviceRepo {
+        fn empty() -> Self {
+            Self { devices: vec![] }
+        }
+
+        fn with_trusted(peer_ids: &[&str]) -> Self {
+            Self {
+                devices: peer_ids
+                    .iter()
+                    .map(|id| uc_core::network::PairedDevice {
+                        peer_id: uc_core::PeerId::from(*id),
+                        pairing_state: PairingState::Trusted,
+                        identity_fingerprint: "test-fp".to_string(),
+                        paired_at: Utc::now(),
+                        last_seen_at: None,
+                        device_name: format!("Device-{id}"),
+                        sync_settings: None,
+                    })
+                    .collect(),
+            }
+        }
+    }
 
     #[async_trait]
     impl PairedDeviceRepositoryPort for TestPairedDeviceRepo {
         async fn get_by_peer_id(
             &self,
-            _peer_id: &uc_core::PeerId,
+            peer_id: &uc_core::PeerId,
         ) -> Result<Option<uc_core::network::PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(None)
+            Ok(self.devices.iter().find(|d| d.peer_id == *peer_id).cloned())
         }
 
         async fn list_all(
             &self,
         ) -> Result<Vec<uc_core::network::PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(vec![])
+            Ok(self.devices.clone())
         }
 
         async fn upsert(
@@ -824,27 +843,19 @@ mod tests {
         Arc<Mutex<Vec<(String, Vec<u8>)>>>,
         Arc<AtomicUsize>,
         Arc<AtomicUsize>,
-        Arc<AtomicUsize>,
     ) {
         let send_calls = Arc::new(Mutex::new(Vec::new()));
-        let list_sendable_peers_calls = Arc::new(AtomicUsize::new(0));
         let ensure_business_path_calls = Arc::new(AtomicUsize::new(0));
         let encrypt_calls = Arc::new(AtomicUsize::new(0));
-        let sendable_peers = connected_peers
-            .iter()
-            .map(|peer| DiscoveredPeer {
-                peer_id: peer.peer_id.clone(),
-                device_name: Some(peer.device_name.clone()),
-                device_id: None,
-                addresses: Vec::new(),
-                discovered_at: Utc::now(),
-                last_seen: Utc::now(),
-                is_paired: true,
-            })
-            .collect();
+
+        let paired_device_repo = Arc::new(TestPairedDeviceRepo::with_trusted(
+            &connected_peers
+                .iter()
+                .map(|p| p.peer_id.as_str())
+                .collect::<Vec<_>>(),
+        ));
 
         let network = Arc::new(TestNetwork {
-            sendable_peers,
             failing_peers: failing_peers
                 .iter()
                 .map(|peer| (*peer).to_string())
@@ -854,7 +865,6 @@ mod tests {
                 .map(|peer| (*peer).to_string())
                 .collect(),
             send_calls: send_calls.clone(),
-            list_sendable_peers_calls: list_sendable_peers_calls.clone(),
             ensure_business_path_calls: ensure_business_path_calls.clone(),
         });
 
@@ -872,13 +882,12 @@ mod tests {
                 settings: Settings::default(),
             }),
             Arc::new(TransferPayloadEncryptorAdapter),
-            Arc::new(TestPairedDeviceRepo),
+            paired_device_repo,
         );
 
         (
             usecase,
             send_calls,
-            list_sendable_peers_calls,
             ensure_business_path_calls,
             encrypt_calls,
         )
@@ -886,7 +895,7 @@ mod tests {
 
     #[test]
     fn sends_exactly_once_for_local_capture_when_peer_exists() {
-        let (usecase, send_calls, _, _, _) = build_usecase(
+        let (usecase, send_calls, _, _) = build_usecase(
             vec![ConnectedPeer {
                 peer_id: "peer-1".to_string(),
                 device_name: "Desk".to_string(),
@@ -911,7 +920,7 @@ mod tests {
 
     #[test]
     fn does_not_send_for_remote_push() {
-        let (usecase, send_calls, _, _, _) = build_usecase(
+        let (usecase, send_calls, _, _) = build_usecase(
             vec![ConnectedPeer {
                 peer_id: "peer-1".to_string(),
                 device_name: "Desk".to_string(),
@@ -936,7 +945,7 @@ mod tests {
 
     #[test]
     fn sends_for_local_restore() {
-        let (usecase, send_calls, _, _, _) = build_usecase(
+        let (usecase, send_calls, _, _) = build_usecase(
             vec![ConnectedPeer {
                 peer_id: "peer-1".to_string(),
                 device_name: "Desk".to_string(),
@@ -961,17 +970,16 @@ mod tests {
 
     #[test]
     fn no_op_when_encryption_session_not_ready() {
-        let (usecase, send_calls, list_sendable_peers_calls, ensure_calls, encrypt_calls) =
-            build_usecase(
-                vec![ConnectedPeer {
-                    peer_id: "peer-1".to_string(),
-                    device_name: "Desk".to_string(),
-                    connected_at: Utc::now(),
-                }],
-                false,
-                &[],
-                &[],
-            );
+        let (usecase, send_calls, ensure_calls, encrypt_calls) = build_usecase(
+            vec![ConnectedPeer {
+                peer_id: "peer-1".to_string(),
+                device_name: "Desk".to_string(),
+                connected_at: Utc::now(),
+            }],
+            false,
+            &[],
+            &[],
+        );
 
         usecase
             .execute(
@@ -983,14 +991,14 @@ mod tests {
             .expect("execute should no-op");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
-        assert_eq!(list_sendable_peers_calls.load(Ordering::SeqCst), 0);
+        // ListSendablePeers use case is called inline, no longer tracked via counter
         assert_eq!(ensure_calls.load(Ordering::SeqCst), 0);
         assert_eq!(encrypt_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn execute_current_snapshot_reads_from_clipboard() {
-        let (usecase, send_calls, _, _, _) = build_usecase(
+        let (usecase, send_calls, _, _) = build_usecase(
             vec![ConnectedPeer {
                 peer_id: "peer-1".to_string(),
                 device_name: "Desk".to_string(),
@@ -1011,7 +1019,7 @@ mod tests {
     #[test]
     fn outbound_bytes_decode_as_v3_protocol_message_clipboard() {
         let test_master_key = MasterKey([7; 32]); // matches TestEncryptionSession
-        let (usecase, send_calls, _, _, _) = build_usecase(
+        let (usecase, send_calls, _, _) = build_usecase(
             vec![ConnectedPeer {
                 peer_id: "peer-1".to_string(),
                 device_name: "Desk".to_string(),
@@ -1072,17 +1080,16 @@ mod tests {
             representations: vec![],
         };
 
-        let (usecase, send_calls, list_sendable_peers_calls, ensure_calls, encrypt_calls) =
-            build_usecase(
-                vec![ConnectedPeer {
-                    peer_id: "peer-1".to_string(),
-                    device_name: "Desk".to_string(),
-                    connected_at: Utc::now(),
-                }],
-                true,
-                &[],
-                &[],
-            );
+        let (usecase, send_calls, ensure_calls, encrypt_calls) = build_usecase(
+            vec![ConnectedPeer {
+                peer_id: "peer-1".to_string(),
+                device_name: "Desk".to_string(),
+                connected_at: Utc::now(),
+            }],
+            true,
+            &[],
+            &[],
+        );
 
         usecase
             .execute(
@@ -1094,12 +1101,6 @@ mod tests {
             .expect("empty snapshot should no-op without error");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
-        // Should return early before peer lookup when there are no representations
-        assert_eq!(
-            list_sendable_peers_calls.load(Ordering::SeqCst),
-            0,
-            "should not query peers for empty snapshot"
-        );
         assert_eq!(ensure_calls.load(Ordering::SeqCst), 0);
         assert_eq!(encrypt_calls.load(Ordering::SeqCst), 0);
     }
@@ -1127,7 +1128,7 @@ mod tests {
 
         let expected_hash = multi_rep_snapshot.snapshot_hash().to_string();
 
-        let (usecase, send_calls, _, _, encrypt_calls) = build_usecase(
+        let (usecase, send_calls, _, encrypt_calls) = build_usecase(
             vec![ConnectedPeer {
                 peer_id: "peer-1".to_string(),
                 device_name: "Desk".to_string(),
@@ -1189,7 +1190,7 @@ mod tests {
 
     #[test]
     fn continues_sending_to_other_peers_after_single_peer_failure() {
-        let (usecase, send_calls, _, _, _) = build_usecase(
+        let (usecase, send_calls, _, _) = build_usecase(
             vec![
                 ConnectedPeer {
                     peer_id: "peer-1".to_string(),
@@ -1232,7 +1233,7 @@ mod tests {
 
     #[test]
     fn returns_error_when_all_sendable_peers_fail_business_path_ensure() {
-        let (usecase, send_calls, _, ensure_calls, _) = build_usecase(
+        let (usecase, send_calls, ensure_calls, _) = build_usecase(
             vec![
                 ConnectedPeer {
                     peer_id: "peer-1".to_string(),
@@ -1278,7 +1279,7 @@ mod tests {
 
     #[test]
     fn returns_error_with_partial_send_when_some_ensure_business_path_fail() {
-        let (usecase, send_calls, _, ensure_calls, _) = build_usecase(
+        let (usecase, send_calls, ensure_calls, _) = build_usecase(
             vec![
                 ConnectedPeer {
                     peer_id: "peer-1".to_string(),
@@ -1323,7 +1324,7 @@ mod tests {
 
     #[test]
     fn no_op_when_no_sendable_peers() {
-        let (usecase, send_calls, list_sendable_peers_calls, ensure_calls, encrypt_calls) =
+        let (usecase, send_calls, ensure_calls, encrypt_calls) =
             build_usecase(vec![], true, &[], &[]);
 
         usecase
@@ -1336,7 +1337,6 @@ mod tests {
             .expect("should no-op");
 
         assert_eq!(send_calls.lock().expect("send calls lock").len(), 0);
-        assert_eq!(list_sendable_peers_calls.load(Ordering::SeqCst), 1);
         assert_eq!(ensure_calls.load(Ordering::SeqCst), 0);
         assert_eq!(encrypt_calls.load(Ordering::SeqCst), 0);
     }
@@ -1421,15 +1421,13 @@ mod tests {
     }
 
     fn build_policy_usecase(
-        sendable_peers: Vec<DiscoveredPeer>,
+        _sendable_peers: Vec<DiscoveredPeer>,
         paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
     ) -> SyncOutboundClipboardUseCase {
         let network = Arc::new(TestNetwork {
-            sendable_peers,
             failing_peers: HashSet::new(),
             ensure_failing_peers: HashSet::new(),
             send_calls: Arc::new(Mutex::new(Vec::new())),
-            list_sendable_peers_calls: Arc::new(AtomicUsize::new(0)),
             ensure_business_path_calls: Arc::new(AtomicUsize::new(0)),
         });
 
@@ -1690,7 +1688,7 @@ mod tests {
 
     #[test]
     fn returns_error_when_all_sendable_peers_fail() {
-        let (usecase, send_calls, _, _, _) = build_usecase(
+        let (usecase, send_calls, _, _) = build_usecase(
             vec![
                 ConnectedPeer {
                     peer_id: "peer-1".to_string(),
@@ -1746,16 +1744,14 @@ mod tests {
     }
 
     fn build_policy_usecase_with_settings(
-        sendable_peers: Vec<DiscoveredPeer>,
+        _sendable_peers: Vec<DiscoveredPeer>,
         paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
         settings: Settings,
     ) -> SyncOutboundClipboardUseCase {
         let network = Arc::new(TestNetwork {
-            sendable_peers,
             failing_peers: HashSet::new(),
             ensure_failing_peers: HashSet::new(),
             send_calls: Arc::new(Mutex::new(Vec::new())),
-            list_sendable_peers_calls: Arc::new(AtomicUsize::new(0)),
             ensure_business_path_calls: Arc::new(AtomicUsize::new(0)),
         });
 

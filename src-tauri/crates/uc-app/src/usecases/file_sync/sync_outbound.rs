@@ -9,6 +9,8 @@ use uc_core::ports::{
     FileTransportPort, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort,
 };
 
+use crate::usecases::pairing::list_sendable_peers::ListSendablePeers;
+
 use super::sync_policy::apply_file_sync_policy;
 
 /// Result of an outbound file sync operation.
@@ -89,11 +91,13 @@ impl SyncOutboundFileUseCase {
             }
 
             // 5. Get sendable peers
-            let peers = self
-                .peer_directory
-                .list_sendable_peers()
-                .await
-                .context("Failed to list sendable peers")?;
+            let peers = ListSendablePeers::new(
+                self.paired_device_repo.clone(),
+                self.peer_directory.clone(),
+            )
+            .execute()
+            .await
+            .context("Failed to list sendable peers")?;
 
             // 6. Apply sync policy
             let eligible =
@@ -294,6 +298,18 @@ mod tests {
         }
     }
 
+    fn make_trusted_device(id: &str) -> PairedDevice {
+        PairedDevice {
+            peer_id: PeerId::from(id),
+            pairing_state: PairingState::Trusted,
+            identity_fingerprint: "fp".to_string(),
+            paired_at: Utc::now(),
+            last_seen_at: None,
+            device_name: format!("Device {}", id),
+            sync_settings: None,
+        }
+    }
+
     fn make_peer(id: &str) -> DiscoveredPeer {
         DiscoveredPeer {
             peer_id: id.to_string(),
@@ -390,21 +406,21 @@ mod tests {
         let peers = vec![make_peer("p1"), make_peer("p2"), make_peer("p3")];
 
         // p2 has auto_sync disabled
-        let device_p2 = PairedDevice {
-            peer_id: PeerId::from("p2"),
-            pairing_state: PairingState::Trusted,
-            identity_fingerprint: "fp".to_string(),
-            paired_at: Utc::now(),
-            last_seen_at: None,
-            device_name: "Device p2".to_string(),
-            sync_settings: Some(SyncSettings {
-                auto_sync: false,
-                sync_frequency: SyncFrequency::Realtime,
-                content_types: ContentTypes::default(),
-            }),
-        };
+        let mut device_p2 = make_trusted_device("p2");
+        device_p2.sync_settings = Some(SyncSettings {
+            auto_sync: false,
+            sync_frequency: SyncFrequency::Realtime,
+            content_types: ContentTypes::default(),
+        });
 
-        let uc = make_use_case(peers, vec![device_p2]);
+        let uc = make_use_case(
+            peers,
+            vec![
+                make_trusted_device("p1"),
+                device_p2,
+                make_trusted_device("p3"),
+            ],
+        );
         let result = uc.execute(tmp.path().to_path_buf(), None).await.unwrap();
         // p1 and p3 are unknown (kept), p2 is filtered
         assert_eq!(result.peer_count, 2);
@@ -547,7 +563,12 @@ mod tests {
             calls: Arc::clone(&calls),
         });
 
-        let uc = make_use_case_with_transport(peers, vec![], transport);
+        let devices = vec![
+            make_trusted_device("p1"),
+            make_trusted_device("p2"),
+            make_trusted_device("p3"),
+        ];
+        let uc = make_use_case_with_transport(peers, devices, transport);
         let result = uc.execute(file_path.clone(), None).await.unwrap();
 
         let recorded = calls.lock().unwrap();
@@ -587,7 +608,12 @@ mod tests {
             attempted: Arc::clone(&attempted),
         });
 
-        let uc = make_use_case_with_transport(peers, vec![], transport);
+        let devices = vec![
+            make_trusted_device("p1"),
+            make_trusted_device("p2"),
+            make_trusted_device("p3"),
+        ];
+        let uc = make_use_case_with_transport(peers, devices, transport);
         let result = uc.execute(tmp.path().to_path_buf(), None).await;
 
         // The use case should succeed despite p2 failing
