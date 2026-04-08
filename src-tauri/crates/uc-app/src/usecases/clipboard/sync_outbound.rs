@@ -719,10 +719,6 @@ mod tests {
     }
 
     impl TestPairedDeviceRepo {
-        fn empty() -> Self {
-            Self { devices: vec![] }
-        }
-
         fn with_trusted(peer_ids: &[&str]) -> Self {
             Self {
                 devices: peer_ids
