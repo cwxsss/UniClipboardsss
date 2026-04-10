@@ -443,7 +443,7 @@ pub fn set_layout(app: &tauri::AppHandle, scale: f64, preview_expanded: bool) {
 mod tests {
     use super::{
         centered_panel_position_from_monitor, panel_dimensions, resolve_panel_origin,
-        BASE_PANEL_HEIGHT, BASE_PANEL_WIDTH, MAX_UI_SCALE, MIN_UI_SCALE,
+        BASE_PANEL_HEIGHT, BASE_PANEL_WIDTH, MAX_UI_SCALE, MIN_UI_SCALE, WINDOW_PADDING,
     };
 
     #[test]
@@ -463,12 +463,21 @@ mod tests {
     #[test]
     fn panel_dimensions_clamp_scale_and_expand_width() {
         let (collapsed_width, collapsed_height) = panel_dimensions(0.1, false);
-        assert_eq!(collapsed_width, BASE_PANEL_WIDTH * MIN_UI_SCALE);
-        assert_eq!(collapsed_height, BASE_PANEL_HEIGHT * MIN_UI_SCALE);
+        assert_eq!(
+            collapsed_width,
+            BASE_PANEL_WIDTH * MIN_UI_SCALE + WINDOW_PADDING * 2.0
+        );
+        assert_eq!(
+            collapsed_height,
+            BASE_PANEL_HEIGHT * MIN_UI_SCALE + WINDOW_PADDING * 2.0
+        );
 
         let (expanded_width, expanded_height) = panel_dimensions(9.0, true);
         assert!(expanded_width > BASE_PANEL_WIDTH * MAX_UI_SCALE);
-        assert_eq!(expanded_height, BASE_PANEL_HEIGHT * MAX_UI_SCALE);
+        assert_eq!(
+            expanded_height,
+            BASE_PANEL_HEIGHT * MAX_UI_SCALE + WINDOW_PADDING * 2.0
+        );
     }
 
     #[test]
