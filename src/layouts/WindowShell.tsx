@@ -20,12 +20,12 @@ interface WindowShellProps {
  */
 export const WindowShell: React.FC<WindowShellProps> = ({ titleBar, children }) => {
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-background text-foreground transition-colors duration-200">
+    <div className="relative h-screen flex flex-col overflow-hidden bg-muted/40 text-foreground transition-colors duration-200">
       {/* Window Chrome Layer - Full width titlebar */}
       {titleBar}
 
       {/* Content Area Layer - Sidebar + Main */}
-      <div className="flex-1 flex overflow-hidden">{children}</div>
+      <div className="relative z-10 flex-1 flex overflow-hidden">{children}</div>
     </div>
   )
 }
