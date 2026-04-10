@@ -270,7 +270,7 @@ const HistoryPane: React.FC<HistoryPaneProps> = React.memo(
 )
 
 const quickCardClassName =
-  'flex h-screen w-full min-w-0 flex-col overflow-hidden rounded-xl border border-border/50 bg-background/95 shadow-xl backdrop-blur-xl'
+  'flex h-full w-full min-w-0 flex-col overflow-hidden rounded-xl border border-border/50 bg-background/95 shadow-xl backdrop-blur-xl'
 
 type PreviewMode = 'closed' | 'reserving' | 'expanded'
 type PreviewFocusSource = 'selection' | 'hover'
@@ -732,7 +732,7 @@ const ClipboardHistoryPanel: React.FC = () => {
   }, [])
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-transparent">
+    <div className="flex h-screen w-screen overflow-hidden bg-transparent p-4">
       <div
         ref={historyPaneRef}
         className={
@@ -770,7 +770,7 @@ const ClipboardHistoryPanel: React.FC = () => {
 
       <div
         className={[
-          'min-w-0 overflow-hidden',
+          'min-w-0',
           previewExpanded
             ? 'ml-2 flex-1 basis-0 opacity-100 translate-x-0'
             : previewReservingSpace && historyLockedWidth != null

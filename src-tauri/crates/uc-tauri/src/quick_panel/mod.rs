@@ -60,6 +60,10 @@ const PANEL_GAP: f64 = 8.0;
 const MIN_UI_SCALE: f64 = 0.8;
 const MAX_UI_SCALE: f64 = 1.5;
 
+/// Space (logical pixels) reserved around the cards for shadows and rounded corners.
+/// This padding is included in the window size but remains transparent in the UI.
+const WINDOW_PADDING: f64 = 16.0;
+
 /// Tauri window label for the quick panel.
 pub(crate) const PANEL_LABEL: &str = "quick-panel";
 
@@ -162,11 +166,15 @@ fn panel_dimensions(scale: f64, preview_expanded: bool) -> (f64, f64) {
     let normalized_scale = normalize_ui_scale(scale);
     let width = if preview_expanded {
         (BASE_PANEL_WIDTH + PANEL_GAP + BASE_PREVIEW_WIDTH) * normalized_scale
+            + (WINDOW_PADDING * 2.0)
     } else {
-        BASE_PANEL_WIDTH * normalized_scale
+        (BASE_PANEL_WIDTH * normalized_scale) + (WINDOW_PADDING * 2.0)
     };
 
-    (width, BASE_PANEL_HEIGHT * normalized_scale)
+    (
+        width,
+        (BASE_PANEL_HEIGHT * normalized_scale) + (WINDOW_PADDING * 2.0),
+    )
 }
 
 fn remember_panel_origin(x: f64, y: f64) {
@@ -205,9 +213,10 @@ pub fn pre_create(app: &tauri::AppHandle) {
 
     // Position off-screen; will be repositioned on first show()
     let url = WebviewUrl::App("quick-panel.html".into());
+    let (initial_width, initial_height) = panel_dimensions(1.0, false);
     match WebviewWindowBuilder::new(app, PANEL_LABEL, url)
         .title("Quick Panel")
-        .inner_size(BASE_PANEL_WIDTH, BASE_PANEL_HEIGHT)
+        .inner_size(initial_width, initial_height)
         .position(-9999.0, -9999.0)
         .decorations(false)
         .transparent(true)
@@ -308,8 +317,9 @@ pub fn toggle(app: &tauri::AppHandle) {
 ///
 /// 在屏幕中央显示快捷面板（类似 Raycast）。
 pub fn show(app: &tauri::AppHandle) {
-    let (panel_x, panel_y) =
-        panel_position_for_cursor_screen(app, BASE_PANEL_WIDTH, BASE_PANEL_HEIGHT);
+    let (width, height) = panel_dimensions(1.0, false);
+    let (panel_x, panel_y) = panel_position_for_cursor_screen(app, width, height);
+
     info!(
         panel_x,
         panel_y, "Showing quick panel centered on the monitor containing the cursor"
@@ -325,9 +335,7 @@ pub fn show(app: &tauri::AppHandle) {
         #[cfg(target_os = "windows")]
         windows::remember_previous_foreground(&window);
 
-        if let Err(e) =
-            window.set_size(tauri::LogicalSize::new(BASE_PANEL_WIDTH, BASE_PANEL_HEIGHT))
-        {
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
             warn!(error = %e, "Failed to reset quick panel size");
         }
 
