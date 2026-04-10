@@ -79,6 +79,21 @@ vi.mock('@/api/daemon/client', () => ({
   },
 }))
 
+vi.mock('../ClipboardPreviewPane', () => ({
+  default: ({ entryId }: { entryId: string | null }) =>
+    entryId ? <div>Full preview text</div> : <div data-testid="preview-empty" />,
+}))
+
+function deferred() {
+  let resolve!: () => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 describe('ClipboardHistoryPanel single-window preview', () => {
   beforeEach(() => {
     vi.useRealTimers()
@@ -97,11 +112,81 @@ describe('ClipboardHistoryPanel single-window preview', () => {
     expect(await screen.findByText('Full preview text')).toBeInTheDocument()
 
     await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('set_quick_panel_preview_expanded', {
-        expanded: true,
+      expect(invokeMock).toHaveBeenCalledWith('set_quick_panel_layout', {
+        scale: 1,
+        previewExpanded: true,
       })
     })
     expect(invokeMock).not.toHaveBeenCalledWith('show_preview_panel', expect.anything())
+  })
+
+  it('keeps history and preview panes flexible when the inline preview opens', async () => {
+    const { container } = render(<ClipboardHistoryPanel />)
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 550))
+    })
+
+    expect(await screen.findByText('Full preview text')).toBeInTheDocument()
+
+    const rootLayout = container.firstElementChild as HTMLDivElement | null
+    const historyWrapper = rootLayout?.children.item(0) as HTMLDivElement | null
+    const previewWrapper = rootLayout?.children.item(1) as HTMLDivElement | null
+
+    expect(historyWrapper?.className).toContain('basis-0')
+    expect(historyWrapper?.className).toContain('min-w-0')
+
+    expect(previewWrapper?.className).toContain('basis-0')
+    expect(previewWrapper?.className).toContain('flex-1')
+    expect(previewWrapper?.className).not.toContain('transition-all')
+    expect(previewWrapper?.firstElementChild?.className).toContain('transition-[opacity,transform]')
+  })
+
+  it('waits for the backend layout resize before expanding the preview column', async () => {
+    const pendingResize = deferred()
+    invokeMock.mockImplementation((command: string, payload?: { previewExpanded?: boolean }) => {
+      if (command === 'set_quick_panel_layout' && payload?.previewExpanded) {
+        return pendingResize.promise
+      }
+      return Promise.resolve(undefined)
+    })
+
+    const { container } = render(<ClipboardHistoryPanel />)
+    const rootLayout = container.firstElementChild as HTMLDivElement | null
+    const historyWrapper = rootLayout?.children.item(0) as HTMLDivElement | null
+    historyWrapper!.getBoundingClientRect = vi.fn(() => ({
+      width: 360,
+      height: 420,
+      top: 0,
+      right: 360,
+      bottom: 420,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }))
+
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 550))
+    })
+
+    const previewWrapper = rootLayout?.children.item(1) as HTMLDivElement | null
+
+    expect(previewWrapper?.getAttribute('aria-hidden')).toBe('true')
+    expect(historyWrapper?.className).toContain('shrink-0')
+    expect(historyWrapper?.style.width).toBe('360px')
+    expect(previewWrapper?.className).toContain('shrink-0')
+
+    await act(async () => {
+      pendingResize.resolve()
+      await Promise.resolve()
+    })
+
+    expect(previewWrapper?.getAttribute('aria-hidden')).toBe('false')
+    expect(historyWrapper?.className).toContain('flex-1')
+    expect(historyWrapper?.style.width).toBe('')
+    expect(previewWrapper?.className).toContain('flex-1')
+    expect(previewWrapper?.style.width).toBe('')
   })
 
   it('dismisses the quick window immediately when escape is pressed with preview open', async () => {
@@ -120,8 +205,9 @@ describe('ClipboardHistoryPanel single-window preview', () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('dismiss_quick_panel')
     })
-    expect(invokeMock).not.toHaveBeenCalledWith('set_quick_panel_preview_expanded', {
-      expanded: false,
+    expect(invokeMock).not.toHaveBeenCalledWith('set_quick_panel_layout', {
+      scale: 1,
+      previewExpanded: false,
     })
   })
 })
