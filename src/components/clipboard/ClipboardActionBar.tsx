@@ -1,3 +1,4 @@
+import { motion, AnimatePresence } from 'framer-motion'
 import { Check, Copy, Download, Loader2, Trash2 } from 'lucide-react'
 import React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -36,69 +37,106 @@ const ClipboardActionBar: React.FC<ClipboardActionBarProps> = ({
     activeItemType === 'file' && isActiveItemDownloaded === false && onSyncToClipboard
 
   return (
-    <div className="flex items-center justify-end border-t border-border/40 bg-card px-4 py-2 shrink-0">
-      <div className="flex items-center gap-3">
+    <div className="flex items-center justify-end px-4 py-3 shrink-0 bg-transparent">
+      <div className="flex items-center gap-1">
         {showSyncButton ? (
-          <button
+          <motion.button
+            whileTap={{ scale: 0.97 }}
             className={cn(
-              'flex items-center gap-1.5 text-sm transition-colors',
+              'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors duration-200',
               hasActiveItem && !isActiveItemTransferring
-                ? 'text-foreground hover:text-primary cursor-pointer'
-                : 'text-muted-foreground/50 cursor-default'
+                ? 'text-primary hover:bg-primary/5 cursor-pointer'
+                : 'text-muted-foreground/30 cursor-default'
             )}
             onClick={hasActiveItem && !isActiveItemTransferring ? onSyncToClipboard : undefined}
             disabled={!hasActiveItem || isActiveItemTransferring}
           >
             {isActiveItemTransferring ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Download className="h-4 w-4" />
+              <Download className="h-3.5 w-3.5" />
             )}
-            <span>
+            <span className="font-medium">
               {isActiveItemTransferring
                 ? t('clipboard.actionBar.syncing')
                 : t('clipboard.actionBar.syncToClipboard')}
             </span>
-          </button>
+          </motion.button>
         ) : (
-          <button
+          <motion.button
+            whileTap={{ scale: 0.97 }}
             className={cn(
-              'flex items-center gap-1.5 text-sm transition-colors',
+              'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-all duration-200 relative group',
               hasActiveItem && !isCopyBlocked
-                ? 'text-foreground hover:text-primary cursor-pointer'
-                : 'text-muted-foreground/50 cursor-default'
+                ? 'text-foreground hover:bg-muted cursor-pointer'
+                : 'text-muted-foreground/30 cursor-default'
             )}
             onClick={hasActiveItem && !isCopyBlocked ? onCopy : undefined}
             disabled={!hasActiveItem || isCopyBlocked}
             aria-disabled={isCopyBlocked}
             title={copyBlockedReason || undefined}
           >
-            {copySuccess ? (
-              <Check className="h-4 w-4 text-green-500" />
-            ) : (
-              <Copy className="h-4 w-4" />
+            <AnimatePresence mode="wait" initial={false}>
+              {copySuccess ? (
+                <motion.div
+                  key="check"
+                  initial={{ scale: 0.5, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.5, opacity: 0 }}
+                  transition={{ duration: 0.1 }}
+                >
+                  <Check className="h-3.5 w-3.5 text-green-500" />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="copy"
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.8, opacity: 0 }}
+                  transition={{ duration: 0.1 }}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <span
+              className={cn(
+                'font-medium transition-colors',
+                copySuccess ? 'text-green-600 dark:text-green-400' : ''
+              )}
+            >
+              {copyBlockedReason ||
+                (copySuccess
+                  ? t('clipboard.actionBar.copied', '已复制')
+                  : t('clipboard.actionBar.copy'))}
+            </span>
+            {!isCopyBlocked && hasActiveItem && (
+              <Kbd className="bg-transparent opacity-40 group-hover:opacity-100 transition-opacity border-none h-4 min-w-4 p-0 text-[10px]">
+                C
+              </Kbd>
             )}
-            <span>{copyBlockedReason || t('clipboard.actionBar.copy')}</span>
-            {!isCopyBlocked && <Kbd>C</Kbd>}
-          </button>
+          </motion.button>
         )}
 
-        <div className="w-px h-4 bg-border" />
-
-        <button
+        <motion.button
+          whileTap={{ scale: 0.97 }}
           className={cn(
-            'flex items-center gap-1.5 text-sm transition-colors',
+            'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-all duration-200 group',
             hasActiveItem
-              ? 'text-foreground hover:text-destructive cursor-pointer'
-              : 'text-muted-foreground/50 cursor-default'
+              ? 'text-muted-foreground hover:text-destructive hover:bg-destructive/5 cursor-pointer'
+              : 'text-muted-foreground/30 cursor-default'
           )}
           onClick={hasActiveItem ? onDelete : undefined}
           disabled={!hasActiveItem}
         >
-          <Trash2 className="h-4 w-4" />
-          <span>{t('clipboard.actionBar.delete')}</span>
-          <Kbd>D</Kbd>
-        </button>
+          <Trash2 className="h-3.5 w-3.5" />
+          <span className="font-medium">{t('clipboard.actionBar.delete')}</span>
+          {hasActiveItem && (
+            <Kbd className="bg-transparent opacity-40 group-hover:opacity-100 transition-opacity border-none h-4 min-w-4 p-0 text-[10px]">
+              D
+            </Kbd>
+          )}
+        </motion.button>
       </div>
     </div>
   )

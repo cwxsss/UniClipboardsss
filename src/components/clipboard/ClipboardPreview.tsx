@@ -460,20 +460,23 @@ const ClipboardPreview: React.FC<ClipboardPreviewProps> = ({ item }) => {
 
       {/* Information section */}
       {infoRows.length > 0 && (
-        <div className="shrink-0">
-          <Separator className="bg-border/40" />
-          <div className="p-4">
-            <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+        <div className="shrink-0 p-4 pt-0">
+          <div className="rounded-xl bg-muted/30 border border-border/20 p-4 transition-colors hover:bg-muted/40">
+            <h4 className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-[0.15em] mb-4 flex items-center gap-2">
+              <span className="h-px w-4 bg-muted-foreground/20" />
               {t('clipboard.preview.information')}
             </h4>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+            <div className="space-y-3">
               {infoRows.map((row, i) => (
-                <React.Fragment key={i}>
-                  <span className="text-sm text-muted-foreground">{row.label}</span>
-                  <span className="text-sm text-foreground font-medium text-right">
+                <div key={i} className="flex items-center justify-between group">
+                  <span className="text-xs text-muted-foreground/80 group-hover:text-muted-foreground transition-colors">
+                    {row.label}
+                  </span>
+                  <div className="flex-1 border-b border-dotted border-muted-foreground/10 mx-3 mb-1" />
+                  <span className="text-xs text-foreground font-semibold tabular-nums">
                     {row.value}
                   </span>
-                </React.Fragment>
+                </div>
               ))}
             </div>
           </div>
