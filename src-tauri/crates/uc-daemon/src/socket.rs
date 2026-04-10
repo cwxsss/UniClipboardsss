@@ -10,7 +10,8 @@ pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
 pub const DEFAULT_HTTP_PORT: u16 = 42715;
 const PROFILE_A_HTTP_PORT: u16 = 42716;
 const PROFILE_B_HTTP_PORT: u16 = 42717;
-const PROFILE_HTTP_PORT_START: u16 = 42718;
+const PROFILE_DEV_HTTP_PORT: u16 = 42718;
+const PROFILE_HTTP_PORT_START: u16 = 42719;
 
 /// Resolve the loopback-only daemon HTTP listen address.
 pub fn resolve_daemon_http_addr() -> SocketAddr {
@@ -31,6 +32,10 @@ fn resolve_daemon_http_port() -> Result<u16> {
         Ok(profile) if profile.trim().is_empty() => Ok(DEFAULT_HTTP_PORT),
         Ok(profile) if profile.eq_ignore_ascii_case("a") => Ok(PROFILE_A_HTTP_PORT),
         Ok(profile) if profile.eq_ignore_ascii_case("b") => Ok(PROFILE_B_HTTP_PORT),
+        // `package.json` runs `tauri:dev` with `UC_PROFILE=dev`.
+        // Keep that common profile on a stable reserved port instead of hashing it
+        // into the general high-port space, which can collide with unrelated local services.
+        Ok(profile) if profile.eq_ignore_ascii_case("dev") => Ok(PROFILE_DEV_HTTP_PORT),
         Ok(profile) => resolve_hashed_profile_http_port(&profile),
         Err(_) => Ok(DEFAULT_HTTP_PORT),
     }
@@ -103,15 +108,18 @@ mod tests {
         let default_addr = with_uc_profile(None, resolve_daemon_http_addr);
         let addr_a = with_uc_profile(Some("a"), resolve_daemon_http_addr);
         let addr_b = with_uc_profile(Some("b"), resolve_daemon_http_addr);
+        let addr_dev = with_uc_profile(Some("dev"), resolve_daemon_http_addr);
         let addr_team = with_uc_profile(Some("team-alpha"), resolve_daemon_http_addr);
         let addr_team_repeat = with_uc_profile(Some("team-alpha"), resolve_daemon_http_addr);
 
         assert_eq!(default_addr.port(), 42715);
         assert_eq!(addr_a.port(), 42716);
         assert_eq!(addr_b.port(), 42717);
+        assert_eq!(addr_dev.port(), 42718);
         assert_ne!(addr_team.port(), default_addr.port());
         assert_ne!(addr_team.port(), addr_a.port());
         assert_ne!(addr_team.port(), addr_b.port());
+        assert_ne!(addr_team.port(), addr_dev.port());
         assert_eq!(addr_team.port(), addr_team_repeat.port());
     }
 }
