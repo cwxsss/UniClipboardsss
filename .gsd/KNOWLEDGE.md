@@ -410,3 +410,40 @@ test('idempotency: second call does not reconnect', async () => {
 **Lesson:** Vitest runs each test file as a separate module, but if the test file uses a module-level `let` variable that accumulates state during test execution, subsequent tests within the same file that expect the initial state will fail. Use `beforeEach` to reset state, `vi.resetModules()` to clear between isolation boundaries, or move mutable state into a singleton whose `reset()` method is called in `beforeEach`. The `DaemonWsClient` singleton pattern (with a `reset()` method) works for state inside the class — but module-level variables outside the class also need explicit reset.
 
 **Seen in:** M003-fbgash / S07 / T02 — `daemon-ws-bootstrap.test.ts` (2 idempotency tests fail due to `connectionEstablished` flag persisting across test suites).
+
+---
+
+## Cross-crate DTO conversions cannot use foreign `From` impls; enum string rules must be centralized
+
+**Pattern:** If a crate re-exports DTO types from another crate, those DTOs are still foreign types in the current crate. Writing `impl From<ExternalA> for ExternalB` is invalid when both types are foreign and the trait (`From`) is also foreign. Re-export does not change orphan-rule ownership.
+
+```rust
+// ❌ Invalid in uc-daemon after DTOs moved to uc-daemon-contract
+impl From<P2pPeerSnapshot> for PeerSnapshotDto { ... }
+impl From<PairedDevice> for PairedDeviceDto { ... }
+```
+
+**Lesson:** Keep transport projection ownership in the transport crate via a local projection layer, not foreign `From` impls. For pure projections, a local trait is cleaner than spreading `*_from/*_to` helpers:
+
+```rust
+pub trait IntoApiDto<T> {
+    fn into_api_dto(self) -> T;
+}
+```
+
+If a string mapping for an enum appears in more than one crate, that is no longer a local helper — it is a shared business rule. Move it to the enum's owning crate with `Display` and `FromStr`, then replace duplicated helpers with `value.to_string()` and `Enum::from_str(raw)`.
+
+**Anti-patterns found:**
+
+- repeated `pairing_state_to_string`, `pairing_state_to_str`, and `pairing_state_from_str` helpers across `uc-app`, `uc-daemon`, and `uc-infra`
+- temptation to replace invalid `From` impls with many mechanical helpers like `peer_snapshot_dto_from(...)`
+- keeping the duplicated local helpers after the enum authority was identified
+
+**Preferred handling:**
+
+1. Put cross-crate transport mapping in a dedicated projection module owned by the boundary crate.
+2. Use a local trait for pure projections (`IntoApiDto<T>`), and local mapper functions only when extra context is required.
+3. Put stable enum string rules on the enum itself (`Display` / `FromStr`) in the owning crate.
+4. Delete the old helper paths; do not keep dual conversion routes.
+
+**Seen in:** 2026-04-10 — `uc-daemon` orphan-rule review on `api/types.rs`, followed by `PairingState` string-rule consolidation into `uc-core/src/network/paired_device.rs` and call-site cleanup in `uc-app`, `uc-daemon`, and `uc-infra`.
