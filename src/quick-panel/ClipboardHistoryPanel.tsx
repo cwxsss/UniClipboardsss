@@ -128,7 +128,7 @@ interface HistoryPaneProps {
   onSearchChange: (value: string) => void
   onSelect: (index: number) => void
   onUnlock: () => void
-  searchInputRef: React.RefObject<HTMLInputElement | null>
+  searchInputRef: React.Ref<HTMLInputElement>
   searchQuery: string
   selectedIndex: number
   setHoveredIndex: React.Dispatch<React.SetStateAction<number | null>>
