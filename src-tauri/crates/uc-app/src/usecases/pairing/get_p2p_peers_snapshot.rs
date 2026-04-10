@@ -40,7 +40,27 @@ impl GetP2pPeersSnapshot {
         }
     }
 
-    /// Execute the use case - fetches and merges all peer data sources.
+    /// Produce a merged snapshot of discovered, connected, and paired peers.
+    ///
+    /// The result contains one entry per relevant peer (excluding the local peer).
+    /// - Discovered peers appear with their discovered addresses and `is_connected` reflecting the connected list.
+    /// - If a paired record exists for a discovered peer, the snapshot uses the paired `device_name` when non-empty and includes the paired `pairing_state` and `identity_fingerprint`.
+    /// - Peers present only in the paired repository are included with an empty address list, `is_paired = true`, and `is_connected = false`.
+    /// The `pairing_state` field is emitted as one of the stable strings `"Pending"`, `"Trusted"`, `"Revoked"`, or `"NotPaired"` when no paired record exists.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Vec<P2pPeerSnapshot>)` with the merged snapshots; `Err` if listing discovered peers, connected peers, or paired devices fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use futures::executor::block_on;
+    /// // `svc` must be a constructed GetP2pPeersSnapshot instance
+    /// # let svc: GetP2pPeersSnapshot = unimplemented!();
+    /// let snapshots = block_on(svc.execute()).unwrap();
+    /// println!("Found {} peers", snapshots.len());
+    /// ```
     pub async fn execute(&self) -> Result<Vec<P2pPeerSnapshot>> {
         let local_id = self.peer_dir.local_peer_id();
 
@@ -95,7 +115,7 @@ impl GetP2pPeersSnapshot {
                 is_paired: peer.is_paired,
                 is_connected: connected_ids.contains(&peer_id),
                 pairing_state: paired_dev
-                    .map(|p| format!("{:?}", p.pairing_state))
+                    .map(|p| p.pairing_state.to_string())
                     .unwrap_or_else(|| "NotPaired".to_string()),
                 identity_fingerprint: paired_dev
                     .map(|p| p.identity_fingerprint.clone())
@@ -119,7 +139,7 @@ impl GetP2pPeersSnapshot {
                     addresses: vec![],
                     is_paired: true,
                     is_connected: false,
-                    pairing_state: format!("{:?}", dev.pairing_state),
+                    pairing_state: dev.pairing_state.to_string(),
                     identity_fingerprint: dev.identity_fingerprint.clone(),
                 });
             }

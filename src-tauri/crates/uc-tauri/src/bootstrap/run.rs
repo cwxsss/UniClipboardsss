@@ -1,57 +1,52 @@
 use anyhow::Result;
-use std::future::Future;
 use std::time::Duration;
 
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
-use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use uc_daemon::api::auth::DaemonConnectionInfo;
-use uc_daemon::api::types::HealthResponse;
-use uc_daemon::process_metadata::read_pid_file;
-use uc_daemon::socket::try_resolve_daemon_http_addr;
-use uc_daemon::DAEMON_API_REVISION;
 use uc_daemon_client::DaemonConnectionState;
-
-use super::runtime::DaemonBootstrapOwnershipState;
-pub use uc_daemon_client::daemon_lifecycle::terminate_local_daemon_pid;
-use uc_daemon_client::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
+use uc_daemon_contract::api::auth::DaemonConnectionInfo;
+use uc_daemon_contract::api::types::HealthResponse;
+use uc_daemon_contract::DAEMON_API_REVISION;
+use uc_daemon_local::daemon_bootstrap::{
+    bootstrap_daemon_connection_with_hooks, wait_for_daemon_health, DaemonBootstrapError,
+    ProbeOutcome,
+};
+use uc_daemon_local::daemon_lifecycle::terminate_local_daemon_pid;
+use uc_daemon_local::daemon_lifecycle::{GuiOwnedDaemonState, SpawnReason};
+use uc_daemon_local::process_metadata::read_pid_file;
+use uc_daemon_local::socket::try_resolve_daemon_http_addr;
 
 const HEALTH_PATH: &str = "/health";
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const INCOMPATIBLE_DAEMON_EXIT_TIMEOUT: Duration = Duration::from_millis(1500);
-const MAX_INCOMPATIBLE_REPLACEMENT_ATTEMPTS: u8 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProbeOutcome {
-    Absent,
-    Compatible(HealthResponse),
-    Incompatible {
-        details: String,
-        observed_package_version: Option<String>,
-        observed_api_revision: Option<String>,
-    },
-}
-
-#[derive(Debug, Error)]
-pub enum DaemonBootstrapError {
-    #[error("failed to initialize daemon HTTP probe client: {0}")]
-    Client(anyhow::Error),
-    #[error("failed to probe daemon health: {0}")]
-    Probe(anyhow::Error),
-    #[error("incompatible daemon is already running: {details}")]
-    IncompatibleDaemon { details: String },
-    #[error("failed to spawn uniclipboard-daemon: {0}")]
-    Spawn(anyhow::Error),
-    #[error("daemon startup timed out after {timeout_ms}ms")]
-    StartupTimeout { timeout_ms: u64 },
-    #[error("failed to load daemon connection info: {0}")]
-    ConnectionInfo(anyhow::Error),
-}
-
+/// Bootstraps a connection to the local daemon, starting or reconnecting the daemon as needed and recording the resulting connection information in `state`.
+///
+/// This function builds an HTTP probe client, uses the daemon-bootstrap helpers to ensure a compatible daemon is running (spawning one when necessary), and then stores the established `DaemonConnectionInfo` into `state`.
+///
+/// # Returns
+///
+/// `Ok(DaemonConnectionInfo)` with the established connection information on success, or a `DaemonBootstrapError` describing why bootstrapping failed.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use uc_tauri::bootstrap::run::bootstrap_daemon_connection;
+/// # use tauri::AppHandle;
+/// # use uc_tauri::state::DaemonConnectionState;
+/// # use uc_tauri::state::GuiOwnedDaemonState;
+/// # async fn example(app: AppHandle<tauri::Wry>, state: DaemonConnectionState, gui_state: GuiOwnedDaemonState) {
+/// let conn = bootstrap_daemon_connection(&app, &state, &gui_state).await;
+/// match conn {
+///     Ok(info) => println!("Connected to daemon at {}", info.base_url),
+///     Err(e) => eprintln!("Failed to bootstrap daemon: {}", e),
+/// }
+/// # }
+/// ```
 pub async fn bootstrap_daemon_connection<R: Runtime>(
     app: &AppHandle<R>,
     state: &DaemonConnectionState,
@@ -67,10 +62,7 @@ pub async fn bootstrap_daemon_connection<R: Runtime>(
         })?;
 
     let app = app.clone();
-    let ownership = DaemonBootstrapOwnershipState::default();
-    bootstrap_daemon_connection_with_hooks(
-        state,
-        &ownership,
+    let connection_info = bootstrap_daemon_connection_with_hooks(
         gui_owned_daemon_state,
         || {
             let (child, pid) = spawn_daemon_process(&app)?;
@@ -83,17 +75,41 @@ pub async fn bootstrap_daemon_connection<R: Runtime>(
         HEALTH_CHECK_TIMEOUT,
         HEALTH_POLL_INTERVAL,
     )
-    .await
+    .await?;
+
+    state.set(connection_info.clone());
+    Ok(connection_info)
 }
 
 const SUPERVISOR_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const SUPERVISOR_RESPAWN_BACKOFF_INITIAL: Duration = Duration::from_secs(2);
 const SUPERVISOR_RESPAWN_BACKOFF_MAX: Duration = Duration::from_secs(30);
 
-/// Continuously monitors the owned daemon process and respawns it if it dies.
+/// Supervises the GUI-owned daemon: monitors its health and respawns it if it stops running.
 ///
-/// Runs until the cancellation token is triggered (app exit). After a successful
-/// respawn, updates `DaemonConnectionState` so the WS bridge can reconnect.
+/// The function runs until the provided cancellation token is cancelled. After successfully
+/// respawning and verifying the daemon's health, it updates `DaemonConnectionState` so other
+/// components (for example the WebSocket bridge) can reconnect to the new daemon instance.
+///
+/// # Examples
+///
+/// ```
+/// # use tokio::time::{sleep, Duration};
+/// # use tokio_util::sync::CancellationToken;
+/// # async fn example() {
+/// // `app`, `state`, and `gui_owned_daemon_state` need to be created according to application setup.
+/// // Here we only illustrate supervisor lifecycle control with a cancellation token.
+/// let token = CancellationToken::new();
+/// let cancel_child = token.clone();
+///
+/// // Spawn supervisor (types omitted for brevity).
+/// // tokio::spawn(supervise_daemon(&app, &state, &gui_owned_daemon_state, token));
+///
+/// // Let supervisor run briefly, then request shutdown.
+/// sleep(Duration::from_millis(100)).await;
+/// cancel_child.cancel();
+/// # }
+/// ```
 pub async fn supervise_daemon<R: Runtime>(
     app: &AppHandle<R>,
     state: &DaemonConnectionState,
@@ -145,9 +161,7 @@ pub async fn supervise_daemon<R: Runtime>(
 
         match spawn_daemon_process(app) {
             Ok((child, pid)) => {
-                let ownership = DaemonBootstrapOwnershipState::default();
                 gui_owned_daemon_state.record_spawned(child, pid, SpawnReason::Replacement);
-                ownership.record_spawned_child(gui_owned_daemon_state.snapshot_pid());
 
                 // Wait for it to become healthy.
                 let mut probe_fn = || probe_daemon_health(&client);
@@ -191,200 +205,21 @@ pub async fn supervise_daemon<R: Runtime>(
     }
 }
 
-pub async fn bootstrap_daemon_connection_with_hooks<
-    Spawn,
-    Probe,
-    ProbeFuture,
-    LoadInfo,
-    Terminate,
->(
-    state: &DaemonConnectionState,
-    ownership: &DaemonBootstrapOwnershipState,
-    gui_owned_daemon_state: &GuiOwnedDaemonState,
-    mut spawn: Spawn,
-    mut probe: Probe,
-    load_connection_info: LoadInfo,
-    mut terminate_incompatible: Terminate,
-    incompatible_exit_timeout: Duration,
-    timeout: Duration,
-    poll_interval: Duration,
-) -> Result<DaemonConnectionInfo, DaemonBootstrapError>
-where
-    Spawn: FnMut() -> Result<Option<(CommandChild, u32)>, DaemonBootstrapError>,
-    Probe: FnMut() -> ProbeFuture,
-    ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
-    LoadInfo: Fn() -> Result<DaemonConnectionInfo, DaemonBootstrapError>,
-    Terminate: FnMut() -> Result<(), DaemonBootstrapError>,
-{
-    match probe().await? {
-        ProbeOutcome::Compatible(_) => {
-            let _ = gui_owned_daemon_state.clear();
-        }
-        ProbeOutcome::Absent => {
-            spawn_and_wait_for_compatible(
-                ownership,
-                gui_owned_daemon_state,
-                &mut spawn,
-                &mut probe,
-                timeout,
-                poll_interval,
-                SpawnReason::Absent,
-            )
-            .await?;
-        }
-        ProbeOutcome::Incompatible { details, .. } => {
-            replace_incompatible_daemon(
-                ownership,
-                gui_owned_daemon_state,
-                details,
-                &mut terminate_incompatible,
-                &mut spawn,
-                &mut probe,
-                incompatible_exit_timeout,
-                timeout,
-                poll_interval,
-            )
-            .await?;
-        }
-    }
-
-    let connection_info = load_connection_info()?;
-    state.set(connection_info.clone());
-    Ok(connection_info)
-}
-
-async fn spawn_and_wait_for_compatible<Spawn, Probe, ProbeFuture>(
-    ownership: &DaemonBootstrapOwnershipState,
-    gui_owned_daemon_state: &GuiOwnedDaemonState,
-    spawn: &mut Spawn,
-    probe: &mut Probe,
-    timeout: Duration,
-    poll_interval: Duration,
-    spawn_reason: SpawnReason,
-) -> Result<(), DaemonBootstrapError>
-where
-    Spawn: FnMut() -> Result<Option<(CommandChild, u32)>, DaemonBootstrapError>,
-    Probe: FnMut() -> ProbeFuture,
-    ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
-{
-    match spawn()? {
-        Some((child, pid)) => {
-            gui_owned_daemon_state.record_spawned(child, pid, spawn_reason);
-            ownership.record_spawned_child(Some(pid));
-        }
-        None => {
-            let _ = gui_owned_daemon_state.clear();
-            ownership.clear_spawned_child();
-        }
-    }
-
-    let wait_result = wait_for_daemon_health(probe, timeout, poll_interval).await;
-    if wait_result.is_err() {
-        let _ = gui_owned_daemon_state.clear();
-        ownership.clear_spawned_child();
-    }
-    wait_result
-}
-
-async fn replace_incompatible_daemon<Terminate, Spawn, Probe, ProbeFuture>(
-    ownership: &DaemonBootstrapOwnershipState,
-    gui_owned_daemon_state: &GuiOwnedDaemonState,
-    details: String,
-    terminate_incompatible: &mut Terminate,
-    spawn: &mut Spawn,
-    probe: &mut Probe,
-    incompatible_exit_timeout: Duration,
-    timeout: Duration,
-    poll_interval: Duration,
-) -> Result<(), DaemonBootstrapError>
-where
-    Terminate: FnMut() -> Result<(), DaemonBootstrapError>,
-    Spawn: FnMut() -> Result<Option<(CommandChild, u32)>, DaemonBootstrapError>,
-    Probe: FnMut() -> ProbeFuture,
-    ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
-{
-    if ownership.snapshot().replacement_attempt >= MAX_INCOMPATIBLE_REPLACEMENT_ATTEMPTS {
-        return Err(DaemonBootstrapError::IncompatibleDaemon { details });
-    }
-
-    ownership.record_replacement_attempt(details.clone());
-    terminate_incompatible()?;
-    wait_for_endpoint_absent(probe, incompatible_exit_timeout, poll_interval, &details).await?;
-    let _ = gui_owned_daemon_state.clear();
-    ownership.clear_spawned_child();
-    spawn_and_wait_for_compatible(
-        ownership,
-        gui_owned_daemon_state,
-        spawn,
-        probe,
-        timeout,
-        poll_interval,
-        SpawnReason::Replacement,
-    )
-    .await
-}
-
-async fn wait_for_daemon_health<Probe, ProbeFuture>(
-    probe: &mut Probe,
-    timeout: Duration,
-    poll_interval: Duration,
-) -> Result<(), DaemonBootstrapError>
-where
-    Probe: FnMut() -> ProbeFuture,
-    ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
-{
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        match probe().await? {
-            ProbeOutcome::Compatible(_) => return Ok(()),
-            ProbeOutcome::Absent => {}
-            ProbeOutcome::Incompatible { details, .. } => {
-                return Err(DaemonBootstrapError::IncompatibleDaemon { details });
-            }
-        }
-
-        if tokio::time::Instant::now() >= deadline {
-            return Err(DaemonBootstrapError::StartupTimeout {
-                timeout_ms: timeout.as_millis() as u64,
-            });
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
-}
-
-async fn wait_for_endpoint_absent<Probe, ProbeFuture>(
-    probe: &mut Probe,
-    timeout: Duration,
-    poll_interval: Duration,
-    last_reason: &str,
-) -> Result<(), DaemonBootstrapError>
-where
-    Probe: FnMut() -> ProbeFuture,
-    ProbeFuture: Future<Output = Result<ProbeOutcome, DaemonBootstrapError>>,
-{
-    let deadline = tokio::time::Instant::now() + timeout;
-
-    loop {
-        match probe().await? {
-            ProbeOutcome::Absent => return Ok(()),
-            ProbeOutcome::Compatible(_) | ProbeOutcome::Incompatible { .. } => {}
-        }
-
-        if tokio::time::Instant::now() >= deadline {
-            return Err(DaemonBootstrapError::IncompatibleDaemon {
-                details: format!(
-                    "incompatible daemon did not exit within {}ms after replacement attempt: {}",
-                    timeout.as_millis(),
-                    last_reason
-                ),
-            });
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
-}
-
+/// Probes the daemon HTTP health endpoint for the active profile and classifies its health.
+///
+/// Resolves the profile-aware daemon HTTP address and performs an HTTP probe; on success returns a `ProbeOutcome` describing whether the daemon is compatible, incompatible, or absent, and on failure returns `DaemonBootstrapError::Probe` with context about the resolution or probe error.
+///
+/// # Examples
+///
+/// ```no_run
+/// # tokio_test::block_on(async {
+/// let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(2)).build().unwrap();
+/// match probe_daemon_health(&client).await {
+///     Ok(outcome) => println!("probe outcome: {:?}", outcome),
+///     Err(err) => eprintln!("probe error: {}", err),
+/// }
+/// # });
+/// ```
 async fn probe_daemon_health(
     client: &reqwest::Client,
 ) -> Result<ProbeOutcome, DaemonBootstrapError> {
@@ -756,15 +591,11 @@ mod tests {
             .unwrap();
 
         let incompatible_outcome = probe_daemon_health_at(&client, addr).await.unwrap();
-        let state = DaemonConnectionState::default();
-        let ownership = DaemonBootstrapOwnershipState::default();
         let gui_owned_daemon_state = GuiOwnedDaemonState::default();
         // terminate_incompatible is called but daemon stays incompatible (probe never returns
         // Absent), so wait_for_endpoint_absent times out with IncompatibleDaemon.
         // spawn is never reached because the replacement path fails first.
         let result = bootstrap_daemon_connection_with_hooks(
-            &state,
-            &ownership,
             &gui_owned_daemon_state,
             || panic!("spawn should not run when incompatible daemon does not exit"),
             || {
@@ -813,12 +644,8 @@ mod tests {
 
     #[tokio::test]
     async fn startup_helper_treats_spawn_failure_as_error() {
-        let state = DaemonConnectionState::default();
-        let ownership = DaemonBootstrapOwnershipState::default();
         let gui_owned_daemon_state = GuiOwnedDaemonState::default();
         let result = bootstrap_daemon_connection_with_hooks(
-            &state,
-            &ownership,
             &gui_owned_daemon_state,
             || Err(DaemonBootstrapError::Spawn(anyhow::anyhow!("spawn failed"))),
             || async { Ok(ProbeOutcome::Absent) },
@@ -835,14 +662,10 @@ mod tests {
 
     #[tokio::test]
     async fn startup_helper_treats_timeout_as_error() {
-        let state = DaemonConnectionState::default();
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempts_for_probe = attempts.clone();
-        let ownership = DaemonBootstrapOwnershipState::default();
         let gui_owned_daemon_state = GuiOwnedDaemonState::default();
         let result = bootstrap_daemon_connection_with_hooks(
-            &state,
-            &ownership,
             &gui_owned_daemon_state,
             || Ok(None),
             move || {

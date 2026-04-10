@@ -12,9 +12,9 @@ use uc_app::usecases::CoreUseCases;
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 
+use crate::api::conversion::IntoApiDto;
 use crate::api::dto::clipboard::{
-    ClearHistoryResponse, ClearHistoryResultDto, ClipboardStatsDto, EntryDetailDto,
-    EntryProjectionResponseDto, EntryResourceDto, GetClipboardStatsResponse,
+    ClearHistoryResponse, EntryProjectionResponseDto, GetClipboardStatsResponse,
     GetEntryDetailResponse, GetEntryResourceResponse, ListEntriesResponse, ToggleFavoriteRequest,
     ToggleFavoriteResponse, ToggleFavoriteResultDto,
 };
@@ -89,7 +89,7 @@ async fn list_entries(
     }
 
     let response_entries: Vec<EntryProjectionResponseDto> =
-        entries.into_iter().map(Into::into).collect();
+        entries.into_iter().map(IntoApiDto::into_api_dto).collect();
 
     Ok(Json(ListEntriesResponse {
         data: response_entries,
@@ -143,7 +143,7 @@ async fn get_entry(
         })?;
 
     Ok(Json(GetEntryDetailResponse {
-        data: EntryDetailDto::from(detail),
+        data: detail.into_api_dto(),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
@@ -261,7 +261,7 @@ async fn get_stats(
     let stats = compute_clipboard_stats(&entries);
 
     Ok(Json(GetClipboardStatsResponse {
-        data: ClipboardStatsDto::from(stats),
+        data: stats.into_api_dto(),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
@@ -303,7 +303,7 @@ async fn get_entry_resource(
         })?;
 
     Ok(Json(GetEntryResourceResponse {
-        data: EntryResourceDto::from(resource),
+        data: resource.into_api_dto(),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
@@ -334,7 +334,7 @@ async fn clear_history(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     Ok(Json(ClearHistoryResponse {
-        data: ClearHistoryResultDto::from(result),
+        data: result.into_api_dto(),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
