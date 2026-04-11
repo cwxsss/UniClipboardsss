@@ -15,10 +15,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use serde::Serialize;
-use tracing::{info, info_span, warn, Instrument};
+use tracing::{debug, info, info_span, trace, warn, Instrument};
 
 use uc_core::ports::host_event_emitter::{HostEvent, HostEventEmitterPort, TransferHostEvent};
-use uc_core::ports::transfer_progress::TransferDirection;
+use uc_core::ports::transfer_progress::{TransferDirection, TransferProgress};
 use uc_core::ports::ClockPort;
 
 use crate::usecases::clipboard::sync_inbound::PendingTransferLinkage;
@@ -63,6 +63,89 @@ impl EarlyCompletionCache {
     }
 }
 
+/// Thread-safe cache for sender-side transfer linkage.
+///
+/// Sender progress events do not have durable transfer rows, so we keep an
+/// in-memory transfer_id -> entry_id mapping long enough to enrich live events
+/// for the frontend.
+#[derive(Default)]
+pub struct OutboundTransferLinkCache {
+    inner: Mutex<HashMap<String, String>>,
+}
+
+impl OutboundTransferLinkCache {
+    pub fn insert(&self, transfer_id: String, entry_id: String) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(transfer_id, entry_id);
+    }
+
+    pub fn get(&self, transfer_id: &str) -> Option<String> {
+        let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(transfer_id).cloned()
+    }
+
+    pub fn remove(&self, transfer_id: &str) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(transfer_id);
+    }
+}
+
+const RECEIVER_ACTIVITY_REFRESH_MIN_INTERVAL_MS: i64 = 2_000;
+
+#[derive(Default)]
+struct TransferEntryCache {
+    inner: Mutex<HashMap<String, String>>,
+}
+
+impl TransferEntryCache {
+    fn insert(&self, transfer_id: String, entry_id: String) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(transfer_id, entry_id);
+    }
+
+    fn get(&self, transfer_id: &str) -> Option<String> {
+        let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(transfer_id).cloned()
+    }
+
+    fn remove(&self, transfer_id: &str) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(transfer_id);
+    }
+}
+
+#[derive(Default)]
+struct InboundActivityRefreshCache {
+    inner: Mutex<HashMap<String, i64>>,
+}
+
+impl InboundActivityRefreshCache {
+    fn should_refresh(&self, transfer_id: &str, now_ms: i64) -> bool {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match map.get_mut(transfer_id) {
+            Some(last_refresh_ms)
+                if now_ms.saturating_sub(*last_refresh_ms)
+                    < RECEIVER_ACTIVITY_REFRESH_MIN_INTERVAL_MS =>
+            {
+                false
+            }
+            Some(last_refresh_ms) => {
+                *last_refresh_ms = now_ms;
+                true
+            }
+            None => {
+                map.insert(transfer_id.to_string(), now_ms);
+                true
+            }
+        }
+    }
+
+    fn remove(&self, transfer_id: &str) {
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(transfer_id);
+    }
+}
+
 /// Event payload for `file-transfer://status-changed`.
 ///
 /// Emitted whenever a transfer transitions between durable states.
@@ -86,6 +169,9 @@ pub struct FileTransferOrchestrator {
     emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>,
     clock: Arc<dyn ClockPort>,
     early_completion_cache: EarlyCompletionCache,
+    outbound_link_cache: OutboundTransferLinkCache,
+    transfer_entry_cache: TransferEntryCache,
+    inbound_activity_refresh_cache: InboundActivityRefreshCache,
 }
 
 impl FileTransferOrchestrator {
@@ -105,6 +191,9 @@ impl FileTransferOrchestrator {
             emitter_cell,
             clock,
             early_completion_cache: EarlyCompletionCache::default(),
+            outbound_link_cache: OutboundTransferLinkCache::default(),
+            transfer_entry_cache: TransferEntryCache::default(),
+            inbound_activity_refresh_cache: InboundActivityRefreshCache::default(),
         }
     }
 
@@ -118,6 +207,17 @@ impl FileTransferOrchestrator {
     /// receive loop.
     pub fn early_completion_cache(&self) -> &EarlyCompletionCache {
         &self.early_completion_cache
+    }
+
+    /// Register sender-side transfer linkage so outbound progress can be mapped
+    /// back to the originating clipboard entry.
+    pub fn register_outbound_transfer(&self, transfer_id: &str, entry_id: &str) {
+        debug!(
+            transfer_id,
+            entry_id, "Registered outbound transfer linkage for live progress routing"
+        );
+        self.outbound_link_cache
+            .insert(transfer_id.to_string(), entry_id.to_string());
     }
 
     /// Get the current timestamp in milliseconds from the orchestrator's clock.
@@ -157,36 +257,60 @@ impl FileTransferOrchestrator {
         }
     }
 
-    /// Handle a receiving-side `TransferProgress` event.
+    /// Handle a transfer `TransferProgress` event.
     ///
     /// On first chunk (chunks_completed == 1), promotes to `transferring`.
     /// On subsequent chunks, refreshes durable liveness.
     ///
     /// Returns `true` if promoted to `transferring` (first time).
-    pub async fn handle_transfer_progress(
-        &self,
-        transfer_id: &str,
-        direction: TransferDirection,
-        chunks_completed: u32,
-    ) -> bool {
-        // Only track receiving-side progress
-        if direction != TransferDirection::Receiving {
+    pub async fn handle_transfer_progress(&self, progress: &TransferProgress) -> bool {
+        let entry_id = self.resolve_entry_id(&progress.transfer_id).await;
+
+        trace!(
+            transfer_id = %progress.transfer_id,
+            peer_id = %progress.peer_id,
+            direction = ?progress.direction,
+            chunks_completed = progress.chunks_completed,
+            total_chunks = progress.total_chunks,
+            resolved_entry_id = ?entry_id,
+            "Resolved transfer progress linkage before host event emission"
+        );
+
+        let emitter = self
+            .emitter_cell
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Err(err) = emitter.emit(HostEvent::Transfer(TransferHostEvent::Progress {
+            transfer_id: progress.transfer_id.clone(),
+            entry_id: entry_id.clone(),
+            peer_id: progress.peer_id.clone(),
+            direction: progress.direction.clone(),
+            chunks_completed: progress.chunks_completed,
+            total_chunks: progress.total_chunks,
+            bytes_transferred: progress.bytes_transferred,
+            total_bytes: progress.total_bytes,
+        })) {
+            warn!(error = %err, transfer_id = %progress.transfer_id, "Failed to emit transfer progress");
+        }
+
+        // Only track receiving-side progress durably.
+        if progress.direction != TransferDirection::Receiving {
             return false;
         }
 
         let now_ms = self.clock.now_ms();
 
-        if chunks_completed == 1 {
+        if progress.chunks_completed == 1 {
             // First chunk: promote to transferring
-            match self.tracker.mark_transferring(transfer_id, now_ms).await {
+            match self
+                .tracker
+                .mark_transferring(&progress.transfer_id, now_ms)
+                .await
+            {
                 Ok(true) => {
-                    info!(transfer_id, "Transfer promoted to transferring");
-                    // We need the entry_id to emit status. The tracker can look it up.
-                    if let Ok(Some(entry_id)) = self
-                        .tracker
-                        .get_entry_summary_by_transfer(transfer_id)
-                        .await
-                    {
+                    info!(transfer_id = %progress.transfer_id, "Transfer promoted to transferring");
+                    if let Some(entry_id) = entry_id {
                         let emitter = self
                             .emitter_cell
                             .read()
@@ -194,7 +318,7 @@ impl FileTransferOrchestrator {
                             .clone();
                         if let Err(err) =
                             emitter.emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
-                                transfer_id: transfer_id.to_string(),
+                                transfer_id: progress.transfer_id.clone(),
                                 entry_id,
                                 status: "transferring".to_string(),
                                 reason: None,
@@ -206,18 +330,16 @@ impl FileTransferOrchestrator {
                     return true;
                 }
                 Ok(false) => {
-                    // Already transferring or terminal, just refresh activity
-                    let _ = self.tracker.refresh_activity(transfer_id, now_ms).await;
+                    self.refresh_inbound_activity_if_due(&progress.transfer_id, now_ms)
+                        .await;
                 }
                 Err(err) => {
-                    warn!(error = %err, transfer_id, "Failed to mark transferring");
+                    warn!(error = %err, transfer_id = %progress.transfer_id, "Failed to mark transferring");
                 }
             }
         } else {
-            // Later chunk: refresh liveness
-            if let Err(err) = self.tracker.refresh_activity(transfer_id, now_ms).await {
-                warn!(error = %err, transfer_id, "Failed to refresh transfer activity");
-            }
+            self.refresh_inbound_activity_if_due(&progress.transfer_id, now_ms)
+                .await;
         }
 
         false
@@ -229,6 +351,13 @@ impl FileTransferOrchestrator {
     /// If the pending record hasn't been seeded yet (race condition), stores
     /// the completion in `early_completion_cache` for later reconciliation.
     pub async fn handle_transfer_completed(&self, transfer_id: &str, content_hash: Option<&str>) {
+        debug!(
+            transfer_id,
+            "Removing outbound transfer linkage on completion"
+        );
+        self.outbound_link_cache.remove(transfer_id);
+        self.transfer_entry_cache.remove(transfer_id);
+        self.inbound_activity_refresh_cache.remove(transfer_id);
         let now_ms = self.clock.now_ms();
 
         // Mark durable row completed
@@ -289,6 +418,13 @@ impl FileTransferOrchestrator {
     /// Marks the durable row failed with the error reason, cleans partial cache,
     /// and emits `file-transfer://status-changed`.
     pub async fn handle_transfer_failed(&self, transfer_id: &str, error_reason: &str) {
+        debug!(
+            transfer_id,
+            error_reason, "Removing outbound transfer linkage on failure"
+        );
+        self.outbound_link_cache.remove(transfer_id);
+        self.transfer_entry_cache.remove(transfer_id);
+        self.inbound_activity_refresh_cache.remove(transfer_id);
         let now_ms = self.clock.now_ms();
 
         // Mark durable row failed
@@ -459,6 +595,50 @@ impl FileTransferOrchestrator {
             }
         }
     }
+
+    async fn resolve_entry_id(&self, transfer_id: &str) -> Option<String> {
+        if let Some(entry_id) = self.outbound_link_cache.get(transfer_id) {
+            return Some(entry_id);
+        }
+
+        if let Some(entry_id) = self.transfer_entry_cache.get(transfer_id) {
+            return Some(entry_id);
+        }
+
+        match self
+            .tracker
+            .get_entry_summary_by_transfer(transfer_id)
+            .await
+        {
+            Ok(Some(entry_id)) => {
+                self.transfer_entry_cache
+                    .insert(transfer_id.to_string(), entry_id.clone());
+                Some(entry_id)
+            }
+            Ok(None) => None,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    transfer_id,
+                    "Failed to resolve transfer entry from tracker"
+                );
+                None
+            }
+        }
+    }
+
+    async fn refresh_inbound_activity_if_due(&self, transfer_id: &str, now_ms: i64) {
+        if !self
+            .inbound_activity_refresh_cache
+            .should_refresh(transfer_id, now_ms)
+        {
+            return;
+        }
+
+        if let Err(err) = self.tracker.refresh_activity(transfer_id, now_ms).await {
+            warn!(error = %err, transfer_id, "Failed to refresh transfer activity");
+        }
+    }
 }
 
 /// Best-effort cleanup of a cached file or transfer directory.
@@ -489,6 +669,7 @@ async fn cleanup_cached_path(cached_path: &str) {
 mod tests {
     use super::*;
     use std::sync::RwLock;
+    use uc_core::ports::file_transfer_repository::FileTransferRepositoryPort;
     use uc_core::ports::file_transfer_repository::PendingInboundTransfer;
     use uc_core::ports::host_event_emitter::{EmitError, HostEventEmitterPort};
 
@@ -516,12 +697,16 @@ mod tests {
     struct MockFileTransferRepo {
         transfers:
             std::sync::Mutex<Vec<uc_core::ports::file_transfer_repository::TrackedFileTransfer>>,
+        refresh_activity_calls: std::sync::atomic::AtomicUsize,
+        get_entry_id_for_transfer_calls: std::sync::atomic::AtomicUsize,
     }
 
     impl MockFileTransferRepo {
         fn new() -> Self {
             Self {
                 transfers: std::sync::Mutex::new(Vec::new()),
+                refresh_activity_calls: std::sync::atomic::AtomicUsize::new(0),
+                get_entry_id_for_transfer_calls: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
@@ -582,6 +767,8 @@ mod tests {
         }
 
         async fn refresh_activity(&self, transfer_id: &str, now_ms: i64) -> anyhow::Result<()> {
+            self.refresh_activity_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut store = self.transfers.lock().unwrap();
             if let Some(t) = store.iter_mut().find(|t| t.transfer_id == transfer_id) {
                 t.updated_at_ms = now_ms;
@@ -739,6 +926,8 @@ mod tests {
             &self,
             transfer_id: &str,
         ) -> anyhow::Result<Option<String>> {
+            self.get_entry_id_for_transfer_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let store = self.transfers.lock().unwrap();
             Ok(store
                 .iter()
@@ -848,6 +1037,105 @@ mod tests {
                 other => panic!("expected transfer status event, got {other:?}"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn outbound_progress_uses_registered_entry_linkage() {
+        let repo = Arc::new(MockFileTransferRepo::new());
+        let emitter = Arc::new(RecordingEmitter::default());
+        let orch = make_orchestrator(repo, emitter.clone());
+
+        orch.register_outbound_transfer("transfer-outbound-1", "entry-outbound-1");
+
+        let promoted = orch
+            .handle_transfer_progress(&TransferProgress {
+                transfer_id: "transfer-outbound-1".to_string(),
+                peer_id: "peer-1".to_string(),
+                direction: TransferDirection::Sending,
+                chunks_completed: 1,
+                total_chunks: 4,
+                bytes_transferred: 1024,
+                total_bytes: Some(4096),
+            })
+            .await;
+
+        assert!(
+            !promoted,
+            "sender-side progress should not touch receiver durable state"
+        );
+
+        let events = emitter.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            HostEvent::Transfer(TransferHostEvent::Progress {
+                transfer_id,
+                entry_id,
+                direction,
+                chunks_completed,
+                ..
+            }) => {
+                assert_eq!(transfer_id, "transfer-outbound-1");
+                assert_eq!(entry_id.as_deref(), Some("entry-outbound-1"));
+                assert_eq!(direction, &TransferDirection::Sending);
+                assert_eq!(*chunks_completed, 1);
+            }
+            other => panic!("expected progress event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn inbound_progress_caches_entry_lookup_and_throttles_activity_refresh() {
+        let repo = Arc::new(MockFileTransferRepo::new());
+        repo.insert_pending_transfers(&[PendingInboundTransfer {
+            transfer_id: "transfer-inbound-1".to_string(),
+            entry_id: "entry-inbound-1".to_string(),
+            origin_device_id: "device-1".to_string(),
+            filename: "movie.mp4".to_string(),
+            cached_path: "/tmp/movie.mp4".to_string(),
+            created_at_ms: 1_000,
+        }])
+        .await
+        .unwrap();
+
+        let emitter = Arc::new(RecordingEmitter::default());
+        let emitter_cell = Arc::new(RwLock::new(emitter as Arc<dyn HostEventEmitterPort>));
+        let tracker = Arc::new(TrackInboundTransfersUseCase::new(repo.clone()));
+        let clock = Arc::new(FixedClock(10_000));
+        let orch = FileTransferOrchestrator::new(tracker, emitter_cell, clock);
+
+        orch.handle_transfer_progress(&TransferProgress {
+            transfer_id: "transfer-inbound-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: TransferDirection::Receiving,
+            chunks_completed: 2,
+            total_chunks: 10,
+            bytes_transferred: 2_048,
+            total_bytes: Some(10_240),
+        })
+        .await;
+
+        orch.handle_transfer_progress(&TransferProgress {
+            transfer_id: "transfer-inbound-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: TransferDirection::Receiving,
+            chunks_completed: 3,
+            total_chunks: 10,
+            bytes_transferred: 3_072,
+            total_bytes: Some(10_240),
+        })
+        .await;
+
+        assert_eq!(
+            repo.get_entry_id_for_transfer_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            repo.refresh_activity_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 
     #[tokio::test]

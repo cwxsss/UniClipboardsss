@@ -8,8 +8,8 @@
 use anyhow::{anyhow, Result};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-/// Maximum frame size: 256KB data + 1KB metadata overhead.
-pub const MAX_FILE_FRAME_BYTES: usize = 256 * 1024 + 1024;
+/// Maximum frame size: 1MB data + 64KB metadata overhead.
+pub const MAX_FILE_FRAME_BYTES: usize = 1024 * 1024 + 64 * 1024;
 
 /// Message type tags for file transfer protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,6 @@ where
     writer.write_all(&[msg_type as u8]).await?;
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(payload).await?;
-    writer.flush().await?;
     Ok(())
 }
 

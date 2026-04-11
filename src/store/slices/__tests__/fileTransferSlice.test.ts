@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import fileTransferReducer, {
+  resolveEntryTransferStatus,
   setEntryTransferStatus,
   hydrateEntryTransferStatuses,
   removeEntryTransferStatus,
+  selectTransferByTransferIds,
   updateTransferProgress,
   removeTransfer,
 } from '../fileTransferSlice'
@@ -123,6 +125,173 @@ describe('fileTransferSlice - file transfer status', () => {
         status: 'completed',
         reason: null,
       })
+    })
+  })
+
+  describe('updateTransferProgress', () => {
+    it('computes speed and remaining time from live progress updates', () => {
+      let state = fileTransferReducer(
+        initialState,
+        updateTransferProgress({
+          transferId: 'tx-speed',
+          entryId: 'entry-speed',
+          peerId: 'peer-1',
+          direction: 'Receiving',
+          chunksCompleted: 1,
+          totalChunks: 4,
+          bytesTransferred: 1024,
+          totalBytes: 4096,
+          eventTs: 1000,
+        })
+      )
+
+      state = fileTransferReducer(
+        state,
+        updateTransferProgress({
+          transferId: 'tx-speed',
+          entryId: 'entry-speed',
+          peerId: 'peer-1',
+          direction: 'Receiving',
+          chunksCompleted: 2,
+          totalChunks: 4,
+          bytesTransferred: 2048,
+          totalBytes: 4096,
+          eventTs: 2000,
+        })
+      )
+
+      expect(state.entryTransferMap['entry-speed']).toBe('tx-speed')
+      expect(state.activeTransfers['tx-speed'].bytesPerSecond).toBe(2048)
+      expect(state.activeTransfers['tx-speed'].estimatedRemainingSeconds).toBe(1)
+    })
+  })
+
+  describe('resolveEntryTransferStatus', () => {
+    it('prefers live active progress over durable pending state', () => {
+      const entryStatus: EntryTransferStatus = {
+        status: 'pending',
+        reason: null,
+      }
+
+      const transfer = {
+        transferId: 'tx-live',
+        entryId: 'entry-live',
+        peerId: 'peer-1',
+        direction: 'Sending' as const,
+        chunksCompleted: 2,
+        totalChunks: 10,
+        bytesTransferred: 2048,
+        totalBytes: 10240,
+        status: 'active' as const,
+        startedAt: 1000,
+        updatedAt: 2000,
+        bytesPerSecond: 2048,
+        estimatedRemainingSeconds: 4,
+      }
+
+      expect(resolveEntryTransferStatus(entryStatus, transfer)).toBe('transferring')
+    })
+
+    it('keeps durable failed state when no live progress exists', () => {
+      const entryStatus: EntryTransferStatus = {
+        status: 'failed',
+        reason: 'timeout',
+      }
+
+      expect(resolveEntryTransferStatus(entryStatus, undefined)).toBe('failed')
+    })
+  })
+
+  describe('selectTransferByTransferIds', () => {
+    it('prefers an active transfer over earlier terminal transfers', () => {
+      const state = {
+        fileTransfer: {
+          activeTransfers: {
+            'tx-completed': {
+              transferId: 'tx-completed',
+              entryId: 'entry-1',
+              peerId: 'peer-1',
+              direction: 'Receiving' as const,
+              chunksCompleted: 5,
+              totalChunks: 5,
+              bytesTransferred: 5000,
+              totalBytes: 5000,
+              status: 'completed' as const,
+              startedAt: 1000,
+              updatedAt: 2000,
+              bytesPerSecond: 2500,
+              estimatedRemainingSeconds: 0,
+            },
+            'tx-active': {
+              transferId: 'tx-active',
+              entryId: 'entry-1',
+              peerId: 'peer-1',
+              direction: 'Receiving' as const,
+              chunksCompleted: 2,
+              totalChunks: 5,
+              bytesTransferred: 2000,
+              totalBytes: 5000,
+              status: 'active' as const,
+              startedAt: 3000,
+              updatedAt: 3500,
+              bytesPerSecond: 4000,
+              estimatedRemainingSeconds: 1,
+            },
+          },
+          entryTransferMap: {},
+          entryStatusById: {},
+        },
+      }
+
+      expect(selectTransferByTransferIds(state as never, ['tx-completed', 'tx-active'])).toEqual(
+        state.fileTransfer.activeTransfers['tx-active']
+      )
+    })
+
+    it('falls back to the first terminal transfer when no active transfer exists', () => {
+      const state = {
+        fileTransfer: {
+          activeTransfers: {
+            'tx-failed': {
+              transferId: 'tx-failed',
+              entryId: 'entry-2',
+              peerId: 'peer-2',
+              direction: 'Sending' as const,
+              chunksCompleted: 3,
+              totalChunks: 5,
+              bytesTransferred: 3000,
+              totalBytes: 5000,
+              status: 'failed' as const,
+              errorMessage: 'network closed',
+              startedAt: 1000,
+              updatedAt: 2500,
+              bytesPerSecond: 1200,
+              estimatedRemainingSeconds: null,
+            },
+            'tx-completed': {
+              transferId: 'tx-completed',
+              entryId: 'entry-2',
+              peerId: 'peer-2',
+              direction: 'Sending' as const,
+              chunksCompleted: 5,
+              totalChunks: 5,
+              bytesTransferred: 5000,
+              totalBytes: 5000,
+              status: 'completed' as const,
+              startedAt: 3000,
+              updatedAt: 4500,
+              bytesPerSecond: 3333,
+              estimatedRemainingSeconds: 0,
+            },
+          },
+          entryTransferMap: {},
+          entryStatusById: {},
+        },
+      }
+
+      expect(selectTransferByTransferIds(state as never, ['tx-failed', 'tx-completed'])).toEqual(
+        state.fileTransfer.activeTransfers['tx-failed']
+      )
     })
   })
 })

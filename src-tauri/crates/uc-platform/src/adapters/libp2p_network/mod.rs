@@ -30,7 +30,8 @@ use uc_core::network::{
 use uc_core::ports::{
     ClipboardTransportPort, ConnectionPolicyResolverPort, EncryptionSessionPort,
     NetworkControlPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort,
-    TransferPayloadDecryptorPort, TransferPayloadEncryptorPort,
+    TransferPayloadDecryptorPort, TransferPayloadEncryptorPort, TransferProgress,
+    TransferProgressPort,
 };
 
 use super::file_transfer::service::{FileTransferConfig, FileTransferService};
@@ -68,10 +69,29 @@ const BUSINESS_COMMAND_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(5);
 const BUSINESS_SEND_COMMAND_RESULT_TIMEOUT: Duration = Duration::from_secs(150);
 const BUSINESS_ENSURE_COMMAND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_IN_FLIGHT_BUSINESS_COMMANDS: usize = 16;
+const QUIC_MAX_IDLE_TIMEOUT_MS: u32 = 30_000;
+const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const QUIC_MAX_CONCURRENT_STREAM_LIMIT: u32 = 1024;
+const QUIC_MAX_STREAM_DATA_BYTES: u32 = 32 * 1024 * 1024;
+const QUIC_MAX_CONNECTION_DATA_BYTES: u32 = 128 * 1024 * 1024;
 const START_STATE_IDLE: u8 = 0;
 const START_STATE_STARTING: u8 = 1;
 const START_STATE_STARTED: u8 = 2;
 const START_STATE_FAILED: u8 = 3;
+
+struct NetworkEventTransferProgressPort {
+    event_tx: mpsc::Sender<NetworkEvent>,
+}
+
+#[async_trait]
+impl TransferProgressPort for NetworkEventTransferProgressPort {
+    async fn report_progress(&self, progress: TransferProgress) -> Result<()> {
+        self.event_tx
+            .send(NetworkEvent::TransferProgress(progress))
+            .await
+            .map_err(|err| anyhow!("failed to publish transfer progress event: {err}"))
+    }
+}
 
 #[derive(Debug)]
 enum BusinessCommand {
@@ -251,7 +271,7 @@ impl Libp2pNetworkAdapter {
                 yamux::Config::default,
             )
             .map_err(|e| anyhow!("failed to configure tcp transport: {e}"))?
-            .with_quic()
+            .with_quic_config(build_quic_config)
             .with_behaviour(move |_| behaviour)
             .map_err(|e| anyhow!("failed to attach libp2p behaviour: {e}"))?
             .build();
@@ -288,7 +308,9 @@ impl Libp2pNetworkAdapter {
         let file_transfer_service = FileTransferService::new(
             stream_control.clone(),
             self.event_tx.clone(),
-            Arc::new(uc_core::ports::transfer_progress::NoopTransferProgressPort),
+            Arc::new(NetworkEventTransferProgressPort {
+                event_tx: self.event_tx.clone(),
+            }),
             FileTransferConfig::new(self.file_cache_dir.clone()),
         );
         file_transfer_service.spawn_accept_loop();
@@ -397,6 +419,47 @@ impl Libp2pNetworkAdapter {
                 tracing::error!("{name} receiver already taken — backtrace:\n{bt}");
                 Err(anyhow!("{name} receiver already taken"))
             }
+        }
+    }
+}
+
+fn build_quic_config(mut config: libp2p::quic::Config) -> libp2p::quic::Config {
+    config.max_idle_timeout = QUIC_MAX_IDLE_TIMEOUT_MS;
+    config.keep_alive_interval = QUIC_KEEP_ALIVE_INTERVAL;
+    config.max_concurrent_stream_limit = QUIC_MAX_CONCURRENT_STREAM_LIMIT;
+    config.max_stream_data = QUIC_MAX_STREAM_DATA_BYTES;
+    config.max_connection_data = QUIC_MAX_CONNECTION_DATA_BYTES;
+    config
+}
+
+#[cfg(test)]
+mod transfer_progress_tests {
+    use super::*;
+    use uc_core::ports::TransferDirection;
+
+    #[tokio::test]
+    async fn network_event_transfer_progress_port_forwards_progress_event() {
+        let (event_tx, mut event_rx) = mpsc::channel(1);
+        let port = NetworkEventTransferProgressPort { event_tx };
+
+        port.report_progress(TransferProgress {
+            transfer_id: "xfer-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: TransferDirection::Receiving,
+            chunks_completed: 1,
+            total_chunks: 4,
+            bytes_transferred: 262_144,
+            total_bytes: Some(1_048_576),
+        })
+        .await
+        .expect("progress should be forwarded");
+
+        match event_rx.recv().await {
+            Some(NetworkEvent::TransferProgress(progress)) => {
+                assert_eq!(progress.transfer_id, "xfer-1");
+                assert_eq!(progress.chunks_completed, 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
         }
     }
 }
