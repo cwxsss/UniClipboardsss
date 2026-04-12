@@ -288,6 +288,21 @@
           "description": "Open the folder where application data is stored",
           "button": "Open in file manager"
         },
+        "searchIndex": {
+          "label": "Search index",
+          "status": "Index status",
+          "statusDescription": "Current state of the full-text search index",
+          "ready": "Ready",
+          "rebuilding": "Rebuilding…",
+          "unavailable": "Unavailable",
+          "lastRebuilt": "Last rebuilt",
+          "lastRebuiltDescription": "Time of the last successful index rebuild",
+          "never": "Never",
+          "rebuild": "Rebuild index",
+          "rebuildDescription": "Manually trigger a full rebuild of the search index",
+          "rebuildButton": "Rebuild",
+          "rebuildingButton": "Rebuilding…"
+        },
         "loadError": "Failed to load storage settings:",
         "placeholder": "Storage settings are not yet available."
       },
@@ -412,7 +427,8 @@
     }
   },
   "header": {
-    "searchPlaceholder": "Search clipboard content...",
+    "searchPlaceholder": "Search by keywords...",
+    "resultsCount": "{{count}} results",
     "filters": {
       "all": "All",
       "favorited": "Favorites",
@@ -421,9 +437,26 @@
       "link": "Link",
       "file": "File",
       "code": "Code"
+    },
+    "timeRange": {
+      "all_time": "All time",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "last_7d": "Last 7 days",
+      "last_30d": "Last 30 days",
+      "this_week": "This week",
+      "this_month": "This month"
     }
   },
   "clipboard": {
+    "search": {
+      "noResults": "No results for \"{{query}}\"",
+      "noResultsSub": "Try a full word or a different keyword",
+      "empty": "Your clipboard history is empty",
+      "emptySub": "Copy something to get started",
+      "resultsCount": "results",
+      "searching": "Searching…"
+    },
     "content": {
       "filterCondition": "Filter condition:",
       "queryResults": "Query results:",
@@ -767,6 +800,47 @@
     "empty": "Hover over an item to preview",
     "imageAlt": "Clipboard image",
     "deleteHint": "{{modifier}}⌫ delete"
+  },
+  "quickPanel": {
+    "loading": "Connecting clipboard history...",
+    "unavailable": "Clipboard history is unavailable right now.",
+    "history": {
+      "searchPlaceholder": "Search (':' for advanced)...",
+      "advancedPlaceholder": "Filter...",
+      "filters": {
+        "all": "All",
+        "text": "Text",
+        "image": "Image",
+        "link": "Link",
+        "file": "File",
+        "code": "Code"
+      },
+      "timeRange": {
+        "all_time": "All time",
+        "today": "Today",
+        "yesterday": "Yesterday",
+        "last_7d": "Last 7 days",
+        "last_30d": "Last 30 days",
+        "this_week": "This week",
+        "this_month": "This month"
+      },
+      "locked": {
+        "title": "Clipboard is locked",
+        "description": "Unlock to access your clipboard history",
+        "action": "Unlock",
+        "unlocking": "Unlocking..."
+      },
+      "status": {
+        "close": "esc close",
+        "loading": "Loading…",
+        "searching": "Searching…",
+        "navigatePaste": "↑↓ navigate · ⏎ paste"
+      },
+      "empty": {
+        "title": "No results found",
+        "description": "Try different keywords or filters"
+      }
+    }
   },
   "setup": {
     "page": {
