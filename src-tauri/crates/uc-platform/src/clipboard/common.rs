@@ -1,6 +1,6 @@
 use anyhow::{anyhow, ensure, Result};
 use clipboard_rs::{common::RustImage, Clipboard, ContentFormat};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uc_core::clipboard::{MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot};
 use uc_core::ids::RepresentationId;
 
@@ -134,13 +134,61 @@ fn map_clipboard_err<T>(
 }
 
 impl CommonClipboardImpl {
+    /// Maximum number of retry attempts when clipboard data is declared but not
+    /// yet readable (macOS lazy/promised data providers).
+    ///
+    /// On macOS, apps (especially browsers) can declare pasteboard types via
+    /// `setDataProvider:forTypes:` before the data is actually resolved. Our
+    /// watcher may detect the `changeCount` change and try to read before the
+    /// data provider has fulfilled the promise. A short retry closes this gap.
+    const LAZY_DATA_MAX_RETRIES: u32 = 2;
+
+    /// Delay between retry attempts (milliseconds).
+    const LAZY_DATA_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
     pub fn read_snapshot(
         ctx: &mut clipboard_rs::ClipboardContext,
     ) -> Result<SystemClipboardSnapshot> {
+        for attempt in 0..=Self::LAZY_DATA_MAX_RETRIES {
+            let (snapshot, had_unreadable_format) = Self::read_snapshot_once(ctx)?;
+
+            if !had_unreadable_format || attempt == Self::LAZY_DATA_MAX_RETRIES {
+                if attempt > 0 && !had_unreadable_format {
+                    info!(
+                        attempt = attempt + 1,
+                        representations = snapshot.representations.len(),
+                        "Clipboard retry succeeded"
+                    );
+                }
+                return Ok(snapshot);
+            }
+
+            warn!(
+                attempt = attempt + 1,
+                max_retries = Self::LAZY_DATA_MAX_RETRIES,
+                "Clipboard formats declared but data unreadable (lazy data provider?), retrying after delay"
+            );
+            std::thread::sleep(Self::LAZY_DATA_RETRY_DELAY);
+        }
+        unreachable!()
+    }
+
+    /// Perform a single attempt to read the clipboard snapshot.
+    ///
+    /// Returns `(snapshot, had_unreadable_format)` where `had_unreadable_format`
+    /// is true if at least one high-level format (text/rtf/html) was declared as
+    /// available via `has()` but the actual data read failed.
+    fn read_snapshot_once(
+        ctx: &mut clipboard_rs::ClipboardContext,
+    ) -> Result<(SystemClipboardSnapshot, bool)> {
         let available = map_clipboard_err(ctx.available_formats())?;
         debug!(formats = ?available, "Clipboard available formats");
 
         let mut reps = Vec::new();
+
+        // Track whether any high-level format was declared available but
+        // could not be read — the signal for a lazy data provider retry.
+        let mut had_unreadable_format = false;
 
         if ctx.has(ContentFormat::Text) {
             match ctx.get_text() {
@@ -160,6 +208,7 @@ impl CommonClipboardImpl {
                 }
                 Err(err) => {
                     warn!(error = %err, "Failed to read text representation");
+                    had_unreadable_format = true;
                 }
             }
         }
@@ -182,6 +231,7 @@ impl CommonClipboardImpl {
                 }
                 Err(err) => {
                     warn!(error = %err, "Failed to read rtf representation");
+                    had_unreadable_format = true;
                 }
             }
         }
@@ -204,6 +254,7 @@ impl CommonClipboardImpl {
                 }
                 Err(err) => {
                     warn!(error = %err, "Failed to read html representation");
+                    had_unreadable_format = true;
                 }
             }
         }
@@ -508,10 +559,13 @@ impl CommonClipboardImpl {
             }
         }
 
-        Ok(SystemClipboardSnapshot {
-            ts_ms: chrono::Utc::now().timestamp_millis(),
-            representations: reps,
-        })
+        Ok((
+            SystemClipboardSnapshot {
+                ts_ms: chrono::Utc::now().timestamp_millis(),
+                representations: reps,
+            },
+            had_unreadable_format,
+        ))
     }
 
     /// TODO(clipboard/multi-representation):
