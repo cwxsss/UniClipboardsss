@@ -1,4 +1,4 @@
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use tracing::{debug, debug_span, Instrument};
 use uc_core::blob::BlobStorageLocator;
@@ -94,93 +94,55 @@ where
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use mockall::{mock, Sequence};
     use std::path::PathBuf;
     use uc_core::blob::BlobStorageLocator;
 
-    /// Mock BlobStorePort
-    struct MockBlobStore {
-        storage_path: PathBuf,
-    }
+    mock! {
+        BlobStore {}
 
-    impl MockBlobStore {
-        fn new() -> Self {
-            Self {
-                storage_path: PathBuf::from("/test/storage"),
-            }
+        #[async_trait]
+        impl BlobStorePort for BlobStore {
+            async fn put(&self, blob_id: &BlobId, data: &[u8]) -> Result<(PathBuf, Option<i64>)>;
+            async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>>;
         }
     }
 
-    #[async_trait]
-    impl BlobStorePort for MockBlobStore {
-        async fn put(&self, _blob_id: &BlobId, _data: &[u8]) -> Result<(PathBuf, Option<i64>)> {
-            Ok((self.storage_path.clone(), None))
-        }
+    mock! {
+        BlobRepo {}
 
-        async fn get(&self, _blob_id: &BlobId) -> Result<Vec<u8>> {
-            Ok(vec![])
-        }
-    }
-
-    /// Mock BlobRepositoryPort
-    struct MockBlobRepo {
-        existing_blob: Option<Blob>,
-        should_fail_insert: bool,
-    }
-
-    impl MockBlobRepo {
-        fn new() -> Self {
-            Self {
-                existing_blob: None,
-                should_fail_insert: false,
-            }
-        }
-
-        fn with_existing_blob(mut self, blob: Blob) -> Self {
-            self.existing_blob = Some(blob);
-            self
-        }
-
-        fn with_insert_failure(mut self) -> Self {
-            self.should_fail_insert = true;
-            self
+        #[async_trait]
+        impl BlobRepositoryPort for BlobRepo {
+            async fn insert_blob(&self, blob: &Blob) -> Result<()>;
+            async fn find_by_hash(&self, content_hash: &ContentHash) -> Result<Option<Blob>>;
         }
     }
 
-    #[async_trait]
-    impl BlobRepositoryPort for MockBlobRepo {
-        async fn insert_blob(&self, _blob: &Blob) -> Result<()> {
-            if self.should_fail_insert {
-                Err(anyhow::anyhow!("Insert failed"))
-            } else {
-                Ok(())
-            }
-        }
+    mock! {
+        Clock {}
 
-        async fn find_by_hash(&self, _content_hash: &ContentHash) -> Result<Option<Blob>> {
-            Ok(self.existing_blob.clone())
-        }
-    }
-
-    /// Mock ClockPort
-    struct MockClock;
-
-    impl MockClock {
-        fn new() -> Self {
-            Self
-        }
-    }
-
-    impl ClockPort for MockClock {
-        fn now_ms(&self) -> i64 {
-            1234567890
+        impl ClockPort for Clock {
+            fn now_ms(&self) -> i64;
         }
     }
 
     #[tokio::test]
     async fn test_write_if_absent_creates_new_blob() {
-        let blob_store = MockBlobStore::new();
-        let blob_repo = MockBlobRepo::new();
-        let clock = MockClock::new();
+        let mut blob_store = MockBlobStore::new();
+        blob_store
+            .expect_put()
+            .once()
+            .returning(|_, _| Ok((PathBuf::from("/test/storage"), None)));
+
+        let mut blob_repo = MockBlobRepo::new();
+        blob_repo
+            .expect_find_by_hash()
+            .once()
+            .returning(|_| Ok(None));
+        blob_repo.expect_insert_blob().once().returning(|_| Ok(()));
+
+        let mut clock = MockClock::new();
+        clock.expect_now_ms().once().return_const(1234567890);
 
         let writer = BlobWriter::new(blob_store, blob_repo, clock);
 
@@ -211,7 +173,11 @@ mod tests {
             1111111111,
             None,
         );
-        let blob_repo = MockBlobRepo::new().with_existing_blob(existing_blob);
+        let mut blob_repo = MockBlobRepo::new();
+        blob_repo
+            .expect_find_by_hash()
+            .once()
+            .return_once(move |_| Ok(Some(existing_blob)));
         let clock = MockClock::new();
 
         let writer = BlobWriter::new(blob_store, blob_repo, clock);
@@ -231,7 +197,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_if_absent_handles_race_condition() {
-        let blob_store = MockBlobStore::new();
+        let mut blob_store = MockBlobStore::new();
+        blob_store
+            .expect_put()
+            .once()
+            .returning(|_, _| Ok((PathBuf::from("/test/storage"), None)));
+
         let existing_blob = Blob::new(
             BlobId::new(),
             BlobStorageLocator::new_local_fs(PathBuf::from("/existing")),
@@ -242,10 +213,25 @@ mod tests {
             2222222222,
             None,
         );
-        let blob_repo = MockBlobRepo::new()
-            .with_existing_blob(existing_blob)
-            .with_insert_failure();
-        let clock = MockClock::new();
+        let mut blob_repo = MockBlobRepo::new();
+        let mut seq = Sequence::new();
+        blob_repo
+            .expect_find_by_hash()
+            .once()
+            .in_sequence(&mut seq)
+            .return_once(|_| Ok(None));
+        blob_repo
+            .expect_insert_blob()
+            .once()
+            .in_sequence(&mut seq)
+            .return_once(|_| Err(anyhow::anyhow!("Insert failed")));
+        blob_repo
+            .expect_find_by_hash()
+            .once()
+            .in_sequence(&mut seq)
+            .return_once(move |_| Ok(Some(existing_blob)));
+        let mut clock = MockClock::new();
+        clock.expect_now_ms().once().return_const(1234567890);
 
         let writer = BlobWriter::new(blob_store, blob_repo, clock);
 
@@ -268,9 +254,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_if_absent_fails_when_insert_fails_without_existing() {
-        let blob_store = MockBlobStore::new();
-        let blob_repo = MockBlobRepo::new().with_insert_failure();
-        let clock = MockClock::new();
+        let mut blob_store = MockBlobStore::new();
+        blob_store
+            .expect_put()
+            .once()
+            .returning(|_, _| Ok((PathBuf::from("/test/storage"), None)));
+
+        let mut blob_repo = MockBlobRepo::new();
+        blob_repo
+            .expect_find_by_hash()
+            .once()
+            .returning(|_| Ok(None));
+        blob_repo
+            .expect_insert_blob()
+            .once()
+            .return_once(|_| Err(anyhow::anyhow!("Insert failed")));
+        blob_repo
+            .expect_find_by_hash()
+            .once()
+            .returning(|_| Ok(None));
+        let mut clock = MockClock::new();
+        clock.expect_now_ms().once().return_const(1234567890);
 
         let writer = BlobWriter::new(blob_store, blob_repo, clock);
 

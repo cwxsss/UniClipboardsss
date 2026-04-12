@@ -279,19 +279,7 @@ mod tests {
     use tempfile::TempDir;
     use uc_core::settings::model::Settings;
 
-    struct MockSettings {
-        settings: Settings,
-    }
-
-    #[async_trait::async_trait]
-    impl SettingsPort for MockSettings {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            Ok(self.settings.clone())
-        }
-        async fn save(&self, _settings: &Settings) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::test_mocks::MockSettings;
 
     fn make_settings(
         retention_hours: u32,
@@ -302,7 +290,12 @@ mod tests {
         settings.file_sync.file_retention_hours = retention_hours;
         settings.file_sync.file_auto_cleanup = auto_cleanup;
         settings.file_sync.file_cache_quota_per_device = quota;
-        Arc::new(MockSettings { settings })
+        let settings_data = settings.clone();
+        let mut mock = MockSettings::new();
+        mock.expect_load()
+            .returning(move || Ok(settings_data.clone()));
+        mock.expect_save().returning(|_| Ok(()));
+        Arc::new(mock)
     }
 
     #[tokio::test]

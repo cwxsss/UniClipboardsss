@@ -213,44 +213,8 @@ impl ProofPort for HmacProofAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_mocks::MockEncryptionSession;
     use uc_core::security::model::EncryptionError;
-
-    struct TestEncryptionSessionPort {
-        master_key: Mutex<Option<MasterKey>>,
-    }
-
-    impl TestEncryptionSessionPort {
-        fn with_master_key(master_key: MasterKey) -> Self {
-            Self {
-                master_key: Mutex::new(Some(master_key)),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl EncryptionSessionPort for TestEncryptionSessionPort {
-        async fn is_ready(&self) -> bool {
-            self.master_key.lock().await.is_some()
-        }
-
-        async fn get_master_key(&self) -> Result<MasterKey, EncryptionError> {
-            self.master_key
-                .lock()
-                .await
-                .clone()
-                .ok_or_else(|| EncryptionError::NotInitialized)
-        }
-
-        async fn set_master_key(&self, master_key: MasterKey) -> Result<(), EncryptionError> {
-            *self.master_key.lock().await = Some(master_key);
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), EncryptionError> {
-            *self.master_key.lock().await = None;
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn build_and_verify_round_trip_succeeds() {
@@ -328,9 +292,23 @@ mod tests {
             .await
             .expect("build proof");
 
-        let verifier = HmacProofAdapter::new_with_encryption_session(Arc::new(
-            TestEncryptionSessionPort::with_master_key(master_key),
-        ));
+        // Use MockEncryptionSession to provide the master key via fallback
+        let stored_key = Arc::new(std::sync::Mutex::new(Some(master_key)));
+        let mut session = MockEncryptionSession::new();
+        let key_clone = stored_key.clone();
+        session
+            .expect_is_ready()
+            .returning(move || key_clone.lock().unwrap().is_some());
+        let key_clone = stored_key.clone();
+        session.expect_get_master_key().returning(move || {
+            key_clone
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(EncryptionError::NotInitialized)
+        });
+
+        let verifier = HmacProofAdapter::new_with_encryption_session(Arc::new(session));
 
         let valid = verifier
             .verify_proof(&proof, nonce)

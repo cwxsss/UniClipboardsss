@@ -36,87 +36,37 @@ impl RemoveIndexedEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::MockSearchIndex;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
     use uc_core::ids::EntryId;
-    use uc_core::search::{
-        RebuildProgress, SearchDocument, SearchError, SearchIndexMeta, SearchPosting, SearchQuery,
-        SearchResultsPage,
-    };
-
-    struct MockSearchIndex {
-        captured_entry_id: Arc<Mutex<Option<EntryId>>>,
-        fail_next: Arc<Mutex<Option<SearchError>>>,
-    }
-
-    impl MockSearchIndex {
-        fn new() -> Self {
-            Self {
-                captured_entry_id: Arc::new(Mutex::new(None)),
-                fail_next: Arc::new(Mutex::new(None)),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl SearchIndexPort for MockSearchIndex {
-        async fn index_entry(
-            &self,
-            _d: SearchDocument,
-            _p: Vec<SearchPosting>,
-        ) -> Result<(), SearchError> {
-            Ok(())
-        }
-
-        async fn remove_entry(&self, id: &EntryId) -> Result<(), SearchError> {
-            if let Some(e) = self.fail_next.lock().await.take() {
-                return Err(e);
-            }
-            *self.captured_entry_id.lock().await = Some(id.clone());
-            Ok(())
-        }
-
-        async fn search(&self, _q: SearchQuery) -> Result<SearchResultsPage, SearchError> {
-            Ok(SearchResultsPage {
-                items: vec![],
-                total: 0,
-                has_more: false,
-            })
-        }
-
-        async fn rebuild(
-            &self,
-            _e: Vec<(SearchDocument, Vec<SearchPosting>)>,
-            _tx: tokio::sync::mpsc::Sender<RebuildProgress>,
-        ) -> Result<(), SearchError> {
-            Ok(())
-        }
-
-        async fn get_index_meta(&self) -> Result<SearchIndexMeta, SearchError> {
-            unimplemented!("not exercised in this test")
-        }
-    }
+    use uc_core::search::SearchError;
 
     #[tokio::test]
     async fn execute_forwards_entry_id_to_port() {
-        let mock = Arc::new(MockSearchIndex::new());
-        let captured = mock.captured_entry_id.clone();
+        let captured = Arc::new(std::sync::Mutex::new(None::<EntryId>));
+        let captured_clone = captured.clone();
 
-        let uc = RemoveIndexedEntry::from_port(mock as Arc<dyn SearchIndexPort>);
+        let mut mock = MockSearchIndex::new();
+        mock.expect_remove_entry().returning(move |id| {
+            *captured_clone.lock().unwrap() = Some(id.clone());
+            Ok(())
+        });
+
+        let uc = RemoveIndexedEntry::from_port(Arc::new(mock));
         let entry_id = EntryId::from("entry-to-remove");
 
         let result = uc.execute(&entry_id).await;
         assert!(result.is_ok());
-        assert_eq!(*captured.lock().await, Some(entry_id));
+        assert_eq!(*captured.lock().unwrap(), Some(entry_id));
     }
 
     #[tokio::test]
     async fn execute_propagates_port_error() {
-        let mock = Arc::new(MockSearchIndex::new());
-        *mock.fail_next.lock().await = Some(SearchError::IndexNotReady);
+        let mut mock = MockSearchIndex::new();
+        mock.expect_remove_entry()
+            .returning(|_| Err(SearchError::IndexNotReady));
 
-        let uc = RemoveIndexedEntry::from_port(mock as Arc<dyn SearchIndexPort>);
+        let uc = RemoveIndexedEntry::from_port(Arc::new(mock));
         let result = uc.execute(&EntryId::from("entry-error")).await;
 
         assert!(matches!(result, Err(SearchError::IndexNotReady)));

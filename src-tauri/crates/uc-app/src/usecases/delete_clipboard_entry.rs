@@ -228,307 +228,63 @@ impl DeleteClipboardEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::{
+        MockClipboardEntryRepository, MockClipboardEventWriter,
+        MockClipboardRepresentationRepository, MockClipboardSelectionRepository, MockSearchIndex,
+    };
     use uc_core::clipboard::{ClipboardEntry, PersistedClipboardRepresentation};
+    use uc_core::clipboard::{MimeType, PayloadAvailability};
     use uc_core::ids::{EntryId, EventId};
+    use uc_core::ids::{FormatId, RepresentationId};
+    use uc_core::ports::ProcessingUpdateOutcome;
 
-    // Mock entry repository
-    struct MockEntryRepo {
-        entry: Option<ClipboardEntry>,
-        should_fail_get: bool,
-        should_fail_delete: bool,
-        delete_called: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    fn build_entry(entry_id: EntryId, event_id: EventId) -> ClipboardEntry {
+        ClipboardEntry::new(
+            entry_id,
+            event_id,
+            1234567890,
+            Some("Test Entry".to_string()),
+            1024,
+        )
     }
 
-    #[async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepo {
-        /// Mock implementation of `get_entry` used by tests.
-        ///
-        /// Returns the configured `entry` wrapped in `Ok(Some(_))` when `should_fail_get` is `false`,
-        /// returns `Ok(None)` if no entry is configured, and returns an `Err` when `should_fail_get` is `true`.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// // Construct a mock repository that will return a clipboard entry.
-        /// let entry = ClipboardEntry { /* fields omitted */ };
-        /// let repo = MockEntryRepo { entry: Some(entry.clone()), should_fail_get: false };
-        /// let fetched = futures::executor::block_on(repo.get_entry(&entry.id)).unwrap();
-        /// assert_eq!(fetched, Some(entry));
-        /// ```
-        async fn get_entry(&self, _entry_id: &EntryId) -> Result<Option<ClipboardEntry>> {
-            if self.should_fail_get {
-                return Err(anyhow::anyhow!("Mock get_entry error"));
-            }
-            Ok(self.entry.clone())
-        }
-
-        async fn delete_entry(&self, _entry_id: &EntryId) -> Result<()> {
-            self.delete_called
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            if self.should_fail_delete {
-                return Err(anyhow::anyhow!("Mock delete_entry error"));
-            }
-            Ok(())
-        }
-
-        /// Persists a clipboard entry together with its selection decision to the underlying stores.
-
-        ///
-
-        /// This saves both the provided `ClipboardEntry` and its associated `ClipboardSelectionDecision`.
-
-        ///
-
-        /// # Arguments
-
-        ///
-
-        /// * `entry` - The clipboard entry to persist.
-
-        /// * `selection` - The selection decision associated with the entry.
-
-        ///
-
-        /// # Returns
-
-        ///
-
-        /// `Ok(())` on success, or an error if persistence fails.
-
-        ///
-
-        /// # Examples
-
-        ///
-
-        /// ```no_run
-
-        /// # use std::sync::Arc;
-
-        /// # async fn _example() -> Result<(), Box<dyn std::error::Error>> {
-
-        /// // assuming `repo` is an implementation that provides this async method:
-
-        /// // repo.save_entry_and_selection(&entry, &selection).await?;
-
-        /// # Ok(())
-
-        /// # }
-
-        /// ```
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &ClipboardEntry,
-            _selection: &uc_core::clipboard::ClipboardSelectionDecision,
-        ) -> Result<()> {
-            unimplemented!("Not used in tests")
-        }
-
-        /// Returns a page of clipboard entries using pagination parameters.
-        ///
-        /// # Parameters
-        ///
-        /// - `limit`: Maximum number of entries to return.
-        /// - `offset`: Number of entries to skip before collecting results.
-        ///
-        /// # Returns
-        ///
-        /// A vector of `ClipboardEntry` containing up to `limit` entries starting at `offset`.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// # use futures::executor::block_on;
-        /// # // `usecase` and `ClipboardEntry` would be available in real usage.
-        /// # async fn _demo(usecase: &impl std::fmt::Debug) {}
-        /// // let entries = block_on(usecase.list_entries(10, 0)).unwrap();
-        /// // assert!(entries.len() <= 10);
-        /// ```
-        async fn list_entries(&self, _limit: usize, _offset: usize) -> Result<Vec<ClipboardEntry>> {
-            unimplemented!("Not used in tests")
-        }
+    fn make_default_representation_repo() -> MockClipboardRepresentationRepository {
+        let mut repo = MockClipboardRepresentationRepository::new();
+        repo.expect_get_representation()
+            .returning(|_: &EventId, _: &RepresentationId| Ok(None));
+        repo.expect_get_representation_by_id()
+            .returning(|_: &RepresentationId| Ok(None));
+        repo.expect_get_representation_by_blob_id()
+            .returning(|_: &uc_core::BlobId| Ok(None));
+        repo.expect_update_blob_id()
+            .returning(|_: &RepresentationId, _: &uc_core::BlobId| Ok(()));
+        repo.expect_update_blob_id_if_none()
+            .returning(|_: &RepresentationId, _: &uc_core::BlobId| Ok(false));
+        repo.expect_update_processing_result().returning(
+            |_: &RepresentationId,
+             _: &[PayloadAvailability],
+             _: Option<&uc_core::BlobId>,
+             _: PayloadAvailability,
+             _: Option<&str>| Ok(ProcessingUpdateOutcome::NotFound),
+        );
+        repo.expect_update_mime_type()
+            .returning(|_: &RepresentationId, _: &MimeType| Ok(()));
+        repo
     }
 
-    // Mock selection repository
-    struct MockSelectionRepo {
-        should_fail_delete: bool,
-        delete_called: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    #[async_trait]
-    impl ClipboardSelectionRepositoryPort for MockSelectionRepo {
-        /// Retrieves the clipboard selection decision for the specified entry.
-        ///
-        /// Returns `Some(ClipboardSelectionDecision)` if a selection exists for the given entry, `None` otherwise.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// # async fn example<S: ClipboardSelectionRepositoryPort>(repo: &S, entry_id: &EntryId) {
-        /// let decision = repo.get_selection(entry_id).await.unwrap();
-        /// if let Some(d) = decision {
-        ///     // use d
-        /// } else {
-        ///     // no selection for this entry
-        /// }
-        /// # }
-        /// ```
-        async fn get_selection(
-            &self,
-            _entry_id: &EntryId,
-        ) -> Result<Option<uc_core::clipboard::ClipboardSelectionDecision>> {
-            unimplemented!("Not used in tests")
-        }
-
-        /// Mock implementation of deleting a selection used in tests.
-        ///
-        /// Records that a deletion was attempted and, if configured, returns an error to simulate failure.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// // setup
-        /// let mock = MockSelectionRepo { delete_called: std::sync::atomic::AtomicBool::new(false), should_fail_delete: false };
-        /// // call (inside an async context)
-        /// futures::executor::block_on(async {
-        ///     mock.delete_selection(&EntryId::new()).await.unwrap();
-        ///     assert!(mock.delete_called.load(std::sync::atomic::Ordering::SeqCst));
-        /// });
-        /// ```
-        async fn delete_selection(&self, _entry_id: &EntryId) -> Result<()> {
-            self.delete_called
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            if self.should_fail_delete {
-                return Err(anyhow::anyhow!("Mock delete_selection error"));
-            }
-            Ok(())
-        }
-    }
-
-    // Mock event writer
-    struct MockEventWriter {
-        should_fail_delete: bool,
-        delete_called: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    #[async_trait]
-    impl ClipboardEventWriterPort for MockEventWriter {
-        /// Placeholder implementation of `insert_event` for the mock event writer that panics if invoked.
-        ///
-        /// This mock method is not used in tests and will panic with the message `"Not used in tests"` when called.
-        ///
-        /// # Examples
-        ///
-        /// ```should_panic
-        /// // In tests the mock's `insert_event` is not used; calling it will panic.
-        /// // let mock = MockEventWriter::new();
-        /// // futures::executor::block_on(mock.insert_event(&event, &representations));
-        /// panic!("Not used in tests");
-        /// ```
-        async fn insert_event(
-            &self,
-            _event: &uc_core::clipboard::ClipboardEvent,
-            _representations: &Vec<uc_core::clipboard::PersistedClipboardRepresentation>,
-        ) -> Result<()> {
-            unimplemented!("Not used in tests")
-        }
-
-        /// Simulates deletion of an event and its representations for testing.
-        ///
-        /// This mock marks that a deletion was attempted and either succeeds or returns an error
-        /// based on the mock's configuration.
-        ///
-        /// # Parameters
-        ///
-        /// - `event_id`: Identifier of the event to delete (may be unused by the mock).
-        ///
-        /// # Returns
-        ///
-        /// `Ok(())` on success, `Err` with a descriptive message if the mock is configured to fail.
-        ///
-        /// # Examples
-        ///
-        /// ```rust,ignore
-        /// // Construct a mock configured to succeed and verify deletion is recorded.
-        /// let mock = MockEventWriter { delete_called: std::sync::atomic::AtomicBool::new(false), should_fail_delete: false };
-        /// let event_id = EventId::new(); // example placeholder
-        /// tokio::runtime::Runtime::new().unwrap().block_on(async {
-        ///     let res = mock.delete_event_and_representations(&event_id).await;
-        ///     assert!(res.is_ok());
-        ///     assert!(mock.delete_called.load(std::sync::atomic::Ordering::SeqCst));
-        /// });
-        /// ```
-        async fn delete_event_and_representations(&self, _event_id: &EventId) -> Result<()> {
-            self.delete_called
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            if self.should_fail_delete {
-                return Err(anyhow::anyhow!(
-                    "Mock delete_event_and_representations error"
-                ));
-            }
-            Ok(())
-        }
-    }
-
-    // Mock representation repository (returns empty by default)
-    struct MockRepresentationRepo;
-
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepo {
-        async fn get_representation(
-            &self,
-            _event_id: &EventId,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &uc_core::ids::RepresentationId,
-            _expected_states: &[uc_core::clipboard::PayloadAvailability],
-            _blob_id: Option<&uc_core::BlobId>,
-            _new_state: uc_core::clipboard::PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<uc_core::ports::clipboard::ProcessingUpdateOutcome> {
-            Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
-        }
+    fn build_uri_list_rep(uri_list_content: &str) -> PersistedClipboardRepresentation {
+        PersistedClipboardRepresentation::new(
+            RepresentationId::new(),
+            FormatId::from("files"),
+            Some(MimeType::uri_list()),
+            uri_list_content.len() as i64,
+            Some(uri_list_content.as_bytes().to_vec()),
+            None,
+        )
     }
 
     #[tokio::test]
     async fn test_execute_deletes_all_related_data() {
-        // Setup: Create mock repositories
         let delete_entry_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let delete_selection_called =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -536,47 +292,48 @@ mod tests {
 
         let entry_id = EntryId::from("test-entry".to_string());
         let event_id = EventId::from("test-event".to_string());
+        let entry = build_entry(entry_id.clone(), event_id.clone());
 
-        let entry = ClipboardEntry::new(
-            entry_id.clone(),
-            event_id.clone(),
-            1234567890,
-            Some("Test Entry".to_string()),
-            1024,
-        );
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        let entry_for_get = entry.clone();
+        entry_repo
+            .expect_get_entry()
+            .returning(move |_| Ok(Some(entry_for_get.clone())));
+        let delete_entry_called_for_closure = delete_entry_called.clone();
+        entry_repo.expect_delete_entry().returning(move |_| {
+            delete_entry_called_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
 
-        let entry_repo = MockEntryRepo {
-            entry: Some(entry),
-            should_fail_get: false,
-            should_fail_delete: false,
-            delete_called: delete_entry_called.clone(),
-        };
+        let mut selection_repo = MockClipboardSelectionRepository::new();
+        let delete_selection_called_for_closure = delete_selection_called.clone();
+        selection_repo
+            .expect_delete_selection()
+            .returning(move |_| {
+                delete_selection_called_for_closure
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
 
-        let selection_repo = MockSelectionRepo {
-            should_fail_delete: false,
-            delete_called: delete_selection_called.clone(),
-        };
+        let mut event_writer = MockClipboardEventWriter::new();
+        let delete_event_called_for_closure = delete_event_called.clone();
+        event_writer
+            .expect_delete_event_and_representations()
+            .returning(move |_| {
+                delete_event_called_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
 
-        let event_writer = MockEventWriter {
-            should_fail_delete: false,
-            delete_called: delete_event_called.clone(),
-        };
-
-        // Create use case with mocks
         let use_case = DeleteClipboardEntry::from_ports(
             Arc::new(entry_repo),
             Arc::new(selection_repo),
             Arc::new(event_writer),
-            Arc::new(MockRepresentationRepo),
+            Arc::new(make_default_representation_repo()),
         );
 
-        // Execute deletion
         let result = use_case.execute(&entry_id).await;
 
-        // Verify success
         assert!(result.is_ok(), "Deletion should succeed");
-
-        // Verify all repositories were called in correct order
         assert!(delete_selection_called.load(std::sync::atomic::Ordering::SeqCst));
         assert!(delete_event_called.load(std::sync::atomic::Ordering::SeqCst));
         assert!(delete_entry_called.load(std::sync::atomic::Ordering::SeqCst));
@@ -584,7 +341,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_returns_not_found_for_nonexistent_entry() {
-        // Setup: Mock entry repo returns None
         let delete_entry_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let delete_selection_called =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -592,34 +348,37 @@ mod tests {
 
         let entry_id = EntryId::from("nonexistent".to_string());
 
-        let entry_repo = MockEntryRepo {
-            entry: None,
-            should_fail_get: false,
-            should_fail_delete: false,
-            delete_called: delete_entry_called.clone(),
-        };
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        entry_repo.expect_get_entry().returning(|_| Ok(None));
 
-        let selection_repo = MockSelectionRepo {
-            should_fail_delete: false,
-            delete_called: delete_selection_called.clone(),
-        };
+        let mut selection_repo = MockClipboardSelectionRepository::new();
+        let delete_selection_called_for_closure = delete_selection_called.clone();
+        selection_repo
+            .expect_delete_selection()
+            .returning(move |_| {
+                delete_selection_called_for_closure
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
 
-        let event_writer = MockEventWriter {
-            should_fail_delete: false,
-            delete_called: delete_event_called.clone(),
-        };
+        let mut event_writer = MockClipboardEventWriter::new();
+        let delete_event_called_for_closure = delete_event_called.clone();
+        event_writer
+            .expect_delete_event_and_representations()
+            .returning(move |_| {
+                delete_event_called_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
 
         let use_case = DeleteClipboardEntry::from_ports(
             Arc::new(entry_repo),
             Arc::new(selection_repo),
             Arc::new(event_writer),
-            Arc::new(MockRepresentationRepo),
+            Arc::new(make_default_representation_repo()),
         );
 
-        // Execute deletion
         let result = use_case.execute(&entry_id).await;
 
-        // Assert error contains "not found"
         assert!(result.is_err(), "Should return error for nonexistent entry");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -628,118 +387,41 @@ mod tests {
             err
         );
 
-        // Verify delete methods were NOT called (entry didn't exist)
         assert!(!delete_selection_called.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!delete_event_called.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!delete_entry_called.load(std::sync::atomic::Ordering::SeqCst));
-    }
-
-    /// A representation repository that returns a single text/uri-list representation
-    /// with configurable inline content. Used for file-ownership tests.
-    struct MockRepresentationRepoWithUriList {
-        uri_list_content: String,
-    }
-
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepoWithUriList {
-        async fn get_representation(
-            &self,
-            _event_id: &EventId,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &uc_core::ids::RepresentationId,
-            _expected_states: &[uc_core::clipboard::PayloadAvailability],
-            _blob_id: Option<&uc_core::BlobId>,
-            _new_state: uc_core::clipboard::PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<uc_core::ports::clipboard::ProcessingUpdateOutcome> {
-            Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
-        }
-
-        async fn get_representations_for_event(
-            &self,
-            _event_id: &EventId,
-        ) -> Result<Vec<PersistedClipboardRepresentation>> {
-            use uc_core::clipboard::MimeType;
-            use uc_core::ids::{FormatId, RepresentationId};
-            let rep = PersistedClipboardRepresentation::new(
-                RepresentationId::new(),
-                FormatId::from("files"),
-                Some(MimeType::uri_list()),
-                self.uri_list_content.len() as i64,
-                Some(self.uri_list_content.as_bytes().to_vec()),
-                None,
-            );
-            Ok(vec![rep])
-        }
     }
 
     fn make_test_use_case_with_uri_list(
         uri_list: &str,
         file_cache_dir: Option<std::path::PathBuf>,
     ) -> DeleteClipboardEntry {
-        use std::sync::atomic::AtomicBool;
         let entry_id = EntryId::from("test-entry".to_string());
         let event_id = EventId::from("test-event".to_string());
-        let entry = ClipboardEntry::new(
-            entry_id.clone(),
-            event_id.clone(),
-            1234567890,
-            Some("Test Entry".to_string()),
-            1024,
-        );
-        let entry_repo = MockEntryRepo {
-            entry: Some(entry),
-            should_fail_get: false,
-            should_fail_delete: false,
-            delete_called: Arc::new(AtomicBool::new(false)),
-        };
-        let selection_repo = MockSelectionRepo {
-            should_fail_delete: false,
-            delete_called: Arc::new(AtomicBool::new(false)),
-        };
-        let event_writer = MockEventWriter {
-            should_fail_delete: false,
-            delete_called: Arc::new(AtomicBool::new(false)),
-        };
-        let rep_repo = MockRepresentationRepoWithUriList {
-            uri_list_content: uri_list.to_string(),
-        };
+        let entry = build_entry(entry_id.clone(), event_id.clone());
+
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        let entry_for_get = entry.clone();
+        entry_repo
+            .expect_get_entry()
+            .returning(move |_| Ok(Some(entry_for_get.clone())));
+        entry_repo.expect_delete_entry().returning(|_| Ok(()));
+
+        let mut selection_repo = MockClipboardSelectionRepository::new();
+        selection_repo
+            .expect_delete_selection()
+            .returning(|_| Ok(()));
+
+        let mut event_writer = MockClipboardEventWriter::new();
+        event_writer
+            .expect_delete_event_and_representations()
+            .returning(|_| Ok(()));
+
+        let mut rep_repo = make_default_representation_repo();
+        let uri_list_owned = uri_list.to_string();
+        rep_repo
+            .expect_get_representations_for_event()
+            .returning(move |_| Ok(vec![build_uri_list_rep(&uri_list_owned)]));
 
         let uc = DeleteClipboardEntry::from_ports(
             Arc::new(entry_repo),
@@ -859,93 +541,33 @@ mod tests {
         );
     }
 
-    // ---- SpySearchIndex for search-index tests ----
-
-    struct SpySearchIndex {
-        last_remove: std::sync::Arc<tokio::sync::Mutex<Option<EntryId>>>,
-        fail_next: std::sync::Arc<tokio::sync::Mutex<Option<uc_core::search::SearchError>>>,
-    }
-
-    #[async_trait]
-    impl uc_core::ports::SearchIndexPort for SpySearchIndex {
-        async fn remove_entry(
-            &self,
-            entry_id: &EntryId,
-        ) -> Result<(), uc_core::search::SearchError> {
-            if let Some(e) = self.fail_next.lock().await.take() {
-                return Err(e);
-            }
-            *self.last_remove.lock().await = Some(entry_id.clone());
-            Ok(())
-        }
-
-        async fn index_entry(
-            &self,
-            _document: uc_core::search::SearchDocument,
-            _postings: Vec<uc_core::search::SearchPosting>,
-        ) -> Result<(), uc_core::search::SearchError> {
-            Ok(())
-        }
-
-        async fn search(
-            &self,
-            _query: uc_core::search::SearchQuery,
-        ) -> Result<uc_core::search::SearchResultsPage, uc_core::search::SearchError> {
-            Ok(uc_core::search::SearchResultsPage {
-                items: vec![],
-                total: 0,
-                has_more: false,
-            })
-        }
-
-        async fn rebuild(
-            &self,
-            _entries: Vec<(
-                uc_core::search::SearchDocument,
-                Vec<uc_core::search::SearchPosting>,
-            )>,
-            _progress_tx: tokio::sync::mpsc::Sender<uc_core::search::RebuildProgress>,
-        ) -> Result<(), uc_core::search::SearchError> {
-            Ok(())
-        }
-
-        async fn get_index_meta(
-            &self,
-        ) -> Result<uc_core::search::SearchIndexMeta, uc_core::search::SearchError> {
-            unimplemented!("not exercised in this test")
-        }
-    }
-
     fn make_test_entry_and_use_case() -> (EntryId, DeleteClipboardEntry) {
-        use std::sync::atomic::AtomicBool;
         let entry_id = EntryId::from("test-entry-search".to_string());
         let event_id = EventId::from("test-event-search".to_string());
-        let entry = ClipboardEntry::new(
-            entry_id.clone(),
-            event_id.clone(),
-            1234567890,
-            Some("Test Entry".to_string()),
-            1024,
-        );
-        let entry_repo = MockEntryRepo {
-            entry: Some(entry),
-            should_fail_get: false,
-            should_fail_delete: false,
-            delete_called: Arc::new(AtomicBool::new(false)),
-        };
-        let selection_repo = MockSelectionRepo {
-            should_fail_delete: false,
-            delete_called: Arc::new(AtomicBool::new(false)),
-        };
-        let event_writer = MockEventWriter {
-            should_fail_delete: false,
-            delete_called: Arc::new(AtomicBool::new(false)),
-        };
+        let entry = build_entry(entry_id.clone(), event_id.clone());
+
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        let entry_for_get = entry.clone();
+        entry_repo
+            .expect_get_entry()
+            .returning(move |_| Ok(Some(entry_for_get.clone())));
+        entry_repo.expect_delete_entry().returning(|_| Ok(()));
+
+        let mut selection_repo = MockClipboardSelectionRepository::new();
+        selection_repo
+            .expect_delete_selection()
+            .returning(|_| Ok(()));
+
+        let mut event_writer = MockClipboardEventWriter::new();
+        event_writer
+            .expect_delete_event_and_representations()
+            .returning(|_| Ok(()));
+
         let uc = DeleteClipboardEntry::from_ports(
             Arc::new(entry_repo),
             Arc::new(selection_repo),
             Arc::new(event_writer),
-            Arc::new(MockRepresentationRepo),
+            Arc::new(make_default_representation_repo()),
         );
         (entry_id, uc)
     }
@@ -954,16 +576,18 @@ mod tests {
     async fn delete_with_search_index_calls_remove_entry() {
         let (entry_id, uc) = make_test_entry_and_use_case();
 
-        let last_remove = std::sync::Arc::new(tokio::sync::Mutex::new(None));
-        let spy = SpySearchIndex {
-            last_remove: last_remove.clone(),
-            fail_next: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
-        };
+        let last_remove = std::sync::Arc::new(std::sync::Mutex::new(None::<EntryId>));
+        let last_remove_for_closure = last_remove.clone();
+        let mut search_index = MockSearchIndex::new();
+        search_index.expect_remove_entry().returning(move |id| {
+            *last_remove_for_closure.lock().unwrap() = Some(id.clone());
+            Ok(())
+        });
 
-        let uc = uc.with_search_index(Arc::new(spy));
+        let uc = uc.with_search_index(Arc::new(search_index));
         uc.execute(&entry_id).await.unwrap();
 
-        let captured = last_remove.lock().await.clone();
+        let captured = last_remove.lock().unwrap().clone();
         assert_eq!(
             captured.as_ref(),
             Some(&entry_id),
@@ -989,47 +613,56 @@ mod tests {
 
         let entry_id = EntryId::from("test-entry-warn".to_string());
         let event_id = EventId::from("test-event-warn".to_string());
-        let entry = ClipboardEntry::new(
-            entry_id.clone(),
-            event_id.clone(),
-            1234567890,
-            Some("Test Entry".to_string()),
-            1024,
-        );
+        let entry = build_entry(entry_id.clone(), event_id.clone());
 
         let delete_entry_called = Arc::new(AtomicBool::new(false));
         let delete_selection_called = Arc::new(AtomicBool::new(false));
         let delete_event_called = Arc::new(AtomicBool::new(false));
 
-        let entry_repo = MockEntryRepo {
-            entry: Some(entry),
-            should_fail_get: false,
-            should_fail_delete: false,
-            delete_called: delete_entry_called.clone(),
-        };
-        let selection_repo = MockSelectionRepo {
-            should_fail_delete: false,
-            delete_called: delete_selection_called.clone(),
-        };
-        let event_writer = MockEventWriter {
-            should_fail_delete: false,
-            delete_called: delete_event_called.clone(),
-        };
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        let entry_for_get = entry.clone();
+        entry_repo
+            .expect_get_entry()
+            .returning(move |_| Ok(Some(entry_for_get.clone())));
+        let delete_entry_called_for_closure = delete_entry_called.clone();
+        entry_repo.expect_delete_entry().returning(move |_| {
+            delete_entry_called_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
 
-        let spy = SpySearchIndex {
-            last_remove: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
-            fail_next: std::sync::Arc::new(tokio::sync::Mutex::new(Some(
-                uc_core::search::SearchError::Internal("simulated failure".into()),
-            ))),
-        };
+        let mut selection_repo = MockClipboardSelectionRepository::new();
+        let delete_selection_called_for_closure = delete_selection_called.clone();
+        selection_repo
+            .expect_delete_selection()
+            .returning(move |_| {
+                delete_selection_called_for_closure
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
+
+        let mut event_writer = MockClipboardEventWriter::new();
+        let delete_event_called_for_closure = delete_event_called.clone();
+        event_writer
+            .expect_delete_event_and_representations()
+            .returning(move |_| {
+                delete_event_called_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
+
+        let mut search_index = MockSearchIndex::new();
+        search_index.expect_remove_entry().returning(|_| {
+            Err(uc_core::search::SearchError::Internal(
+                "simulated failure".into(),
+            ))
+        });
 
         let uc = DeleteClipboardEntry::from_ports(
             Arc::new(entry_repo),
             Arc::new(selection_repo),
             Arc::new(event_writer),
-            Arc::new(MockRepresentationRepo),
+            Arc::new(make_default_representation_repo()),
         )
-        .with_search_index(Arc::new(spy));
+        .with_search_index(Arc::new(search_index));
 
         let result = uc.execute(&entry_id).await;
 
@@ -1055,7 +688,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_propagates_repository_errors() {
-        // Setup: Mock returns error
         let delete_entry_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let delete_selection_called =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1063,43 +695,47 @@ mod tests {
 
         let entry_id = EntryId::from("test-entry".to_string());
         let event_id = EventId::from("test-event".to_string());
+        let entry = build_entry(entry_id.clone(), event_id.clone());
 
-        let entry = ClipboardEntry::new(
-            entry_id.clone(),
-            event_id.clone(),
-            1234567890,
-            Some("Test Entry".to_string()),
-            1024,
-        );
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        let entry_for_get = entry.clone();
+        entry_repo
+            .expect_get_entry()
+            .returning(move |_| Ok(Some(entry_for_get.clone())));
+        let delete_entry_called_for_closure = delete_entry_called.clone();
+        entry_repo.expect_delete_entry().returning(move |_| {
+            delete_entry_called_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
 
-        let entry_repo = MockEntryRepo {
-            entry: Some(entry),
-            should_fail_get: false,
-            should_fail_delete: false,
-            delete_called: delete_entry_called.clone(),
-        };
+        let mut selection_repo = MockClipboardSelectionRepository::new();
+        let delete_selection_called_for_closure = delete_selection_called.clone();
+        selection_repo
+            .expect_delete_selection()
+            .returning(move |_| {
+                delete_selection_called_for_closure
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Err(anyhow::anyhow!("Mock delete_selection error"))
+            });
 
-        let selection_repo = MockSelectionRepo {
-            should_fail_delete: true, // Will fail on delete_selection
-            delete_called: delete_selection_called.clone(),
-        };
-
-        let event_writer = MockEventWriter {
-            should_fail_delete: false,
-            delete_called: delete_event_called.clone(),
-        };
+        let mut event_writer = MockClipboardEventWriter::new();
+        let delete_event_called_for_closure = delete_event_called.clone();
+        event_writer
+            .expect_delete_event_and_representations()
+            .returning(move |_| {
+                delete_event_called_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
 
         let use_case = DeleteClipboardEntry::from_ports(
             Arc::new(entry_repo),
             Arc::new(selection_repo),
             Arc::new(event_writer),
-            Arc::new(MockRepresentationRepo),
+            Arc::new(make_default_representation_repo()),
         );
 
-        // Execute deletion
         let result = use_case.execute(&entry_id).await;
 
-        // Assert error is propagated
         assert!(result.is_err(), "Should return error when repo fails");
         let err = result.unwrap_err().to_string();
         assert!(

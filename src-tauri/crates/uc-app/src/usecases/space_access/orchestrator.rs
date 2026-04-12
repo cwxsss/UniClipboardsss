@@ -464,6 +464,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use chrono::{Duration, Utc};
+    use mockall::mock;
+    use std::sync::{Arc, Mutex as StdMutex};
     use tokio::time::{timeout, Duration as TokioDuration};
     use uc_core::ids::{SessionId as CoreSessionId, SpaceId};
     use uc_core::network::SessionId as NetSessionId;
@@ -523,13 +525,148 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
+    #[derive(Default, Clone)]
+    struct AccessCallTracker {
+        offers: Vec<String>,
+        proofs: Vec<String>,
+        results: Vec<String>,
+        start_calls: Vec<(String, u64)>,
+        stop_calls: Vec<String>,
+        joiner_access: Vec<(SpaceId, String)>,
+        sponsor_access: Vec<(SpaceId, String)>,
+    }
+
     struct AccessTestHarness {
         crypto: MockCrypto,
         transport: MockTransport,
         proof: MockProof,
         timer: MockTimer,
         store: MockStore,
+        tracker: Arc<StdMutex<AccessCallTracker>>,
+    }
+
+    impl Default for AccessTestHarness {
+        fn default() -> Self {
+            let tracker = Arc::new(StdMutex::new(AccessCallTracker::default()));
+
+            let mut crypto = MockCrypto::new();
+            crypto.expect_generate_nonce32().returning(|| [42u8; 32]);
+            crypto
+                .expect_export_keyslot_blob()
+                .returning(|_| Ok(sample_keyslot()));
+            crypto
+                .expect_derive_master_key_from_keyslot()
+                .returning(|_, _| Ok(MasterKey([7u8; 32])));
+
+            let mut proof = MockProof::new();
+            proof.expect_build_proof().returning(
+                |pairing_session_id, space_id, challenge_nonce, _master_key| {
+                    Ok(SpaceAccessProofArtifact {
+                        pairing_session_id: pairing_session_id.clone(),
+                        space_id: space_id.clone(),
+                        challenge_nonce,
+                        proof_bytes: vec![9, 9, 9],
+                    })
+                },
+            );
+            proof.expect_verify_proof().returning(|_, _| Ok(true));
+
+            let mut transport = MockTransport::new();
+            {
+                let tracker = Arc::clone(&tracker);
+                transport.expect_send_offer().returning(move |session_id| {
+                    tracker
+                        .lock()
+                        .expect("tracker lock poisoned")
+                        .offers
+                        .push(session_id.clone());
+                    Ok(())
+                });
+            }
+            {
+                let tracker = Arc::clone(&tracker);
+                transport.expect_send_proof().returning(move |session_id| {
+                    tracker
+                        .lock()
+                        .expect("tracker lock poisoned")
+                        .proofs
+                        .push(session_id.clone());
+                    Ok(())
+                });
+            }
+            {
+                let tracker = Arc::clone(&tracker);
+                transport.expect_send_result().returning(move |session_id| {
+                    tracker
+                        .lock()
+                        .expect("tracker lock poisoned")
+                        .results
+                        .push(session_id.clone());
+                    Ok(())
+                });
+            }
+
+            let mut timer = MockTimer::new();
+            {
+                let tracker = Arc::clone(&tracker);
+                timer.expect_start().returning(move |session_id, ttl_secs| {
+                    tracker
+                        .lock()
+                        .expect("tracker lock poisoned")
+                        .start_calls
+                        .push((session_id.to_string(), ttl_secs));
+                    Ok(())
+                });
+            }
+            {
+                let tracker = Arc::clone(&tracker);
+                timer.expect_stop().returning(move |session_id| {
+                    tracker
+                        .lock()
+                        .expect("tracker lock poisoned")
+                        .stop_calls
+                        .push(session_id.to_string());
+                    Ok(())
+                });
+            }
+
+            let mut store = MockStore::new();
+            {
+                let tracker = Arc::clone(&tracker);
+                store
+                    .expect_persist_joiner_access()
+                    .returning(move |space_id, peer_id| {
+                        tracker
+                            .lock()
+                            .expect("tracker lock poisoned")
+                            .joiner_access
+                            .push((space_id.clone(), peer_id.to_string()));
+                        Ok(())
+                    });
+            }
+            {
+                let tracker = Arc::clone(&tracker);
+                store
+                    .expect_persist_sponsor_access()
+                    .returning(move |space_id, peer_id| {
+                        tracker
+                            .lock()
+                            .expect("tracker lock poisoned")
+                            .sponsor_access
+                            .push((space_id.clone(), peer_id.to_string()));
+                        Ok(())
+                    });
+            }
+
+            Self {
+                crypto,
+                transport,
+                proof,
+                timer,
+                store,
+                tracker,
+            }
+        }
     }
 
     impl AccessTestHarness {
@@ -541,6 +678,62 @@ mod tests {
                 timer: &mut self.timer,
                 store: &mut self.store,
             }
+        }
+
+        fn offers(&self) -> Vec<String> {
+            self.tracker
+                .lock()
+                .expect("tracker lock poisoned")
+                .offers
+                .clone()
+        }
+
+        fn proofs(&self) -> Vec<String> {
+            self.tracker
+                .lock()
+                .expect("tracker lock poisoned")
+                .proofs
+                .clone()
+        }
+
+        fn results(&self) -> Vec<String> {
+            self.tracker
+                .lock()
+                .expect("tracker lock poisoned")
+                .results
+                .clone()
+        }
+
+        fn start_calls_len(&self) -> usize {
+            self.tracker
+                .lock()
+                .expect("tracker lock poisoned")
+                .start_calls
+                .len()
+        }
+
+        fn stop_calls_len(&self) -> usize {
+            self.tracker
+                .lock()
+                .expect("tracker lock poisoned")
+                .stop_calls
+                .len()
+        }
+
+        fn joiner_access(&self) -> Vec<(SpaceId, String)> {
+            self.tracker
+                .lock()
+                .expect("tracker lock poisoned")
+                .joiner_access
+                .clone()
+        }
+
+        fn sponsor_access(&self) -> Vec<(SpaceId, String)> {
+            self.tracker
+                .lock()
+                .expect("tracker lock poisoned")
+                .sponsor_access
+                .clone()
         }
     }
 
@@ -597,12 +790,12 @@ mod tests {
 
         run_access_steps(&orchestrator, &mut executor, &session_id, &steps).await;
 
-        assert_eq!(harness.transport.proofs(), vec![session_id.clone()]);
-        assert!(harness.transport.results().is_empty());
-        assert_eq!(harness.timer.start_calls.len(), 2);
-        assert_eq!(harness.timer.stop_calls.len(), 2);
+        assert_eq!(harness.proofs(), vec![session_id.clone()]);
+        assert!(harness.results().is_empty());
+        assert_eq!(harness.start_calls_len(), 2);
+        assert_eq!(harness.stop_calls_len(), 2);
         assert_eq!(
-            harness.store.joiner_access,
+            harness.joiner_access(),
             vec![(space_id.clone(), "peer-join".to_string())]
         );
     }
@@ -664,10 +857,10 @@ mod tests {
 
         run_access_steps(&orchestrator, &mut executor, &session_id, &steps).await;
 
-        assert_eq!(harness.transport.proofs(), vec![session_id.clone()]);
-        assert!(harness.transport.results().is_empty());
-        assert_eq!(harness.store.joiner_access.len(), 0);
-        assert_eq!(harness.timer.stop_calls.len(), 2);
+        assert_eq!(harness.proofs(), vec![session_id.clone()]);
+        assert!(harness.results().is_empty());
+        assert_eq!(harness.joiner_access().len(), 0);
+        assert_eq!(harness.stop_calls_len(), 2);
     }
 
     #[tokio::test]
@@ -706,14 +899,14 @@ mod tests {
 
         run_access_steps(&orchestrator, &mut executor, &session_id, &steps).await;
 
-        assert_eq!(harness.transport.offers(), vec![session_id.clone()]);
-        assert_eq!(harness.transport.results(), vec![session_id.clone()]);
+        assert_eq!(harness.offers(), vec![session_id.clone()]);
+        assert_eq!(harness.results(), vec![session_id.clone()]);
         assert_eq!(
-            harness.store.sponsor_access,
+            harness.sponsor_access(),
             vec![(space_id.clone(), "peer-sponsor".into())]
         );
-        assert_eq!(harness.timer.start_calls.len(), 1);
-        assert_eq!(harness.timer.stop_calls.len(), 1);
+        assert_eq!(harness.start_calls_len(), 1);
+        assert_eq!(harness.stop_calls_len(), 1);
 
         let completion = timeout(TokioDuration::from_secs(1), completion_rx.recv())
             .await
@@ -766,10 +959,10 @@ mod tests {
 
         run_access_steps(&orchestrator, &mut executor, &session_id, &steps).await;
 
-        assert_eq!(harness.transport.offers(), vec![session_id.clone()]);
-        assert_eq!(harness.transport.results(), vec![session_id.clone()]);
-        assert!(harness.store.sponsor_access.is_empty());
-        assert_eq!(harness.timer.stop_calls.len(), 1);
+        assert_eq!(harness.offers(), vec![session_id.clone()]);
+        assert_eq!(harness.results(), vec![session_id.clone()]);
+        assert!(harness.sponsor_access().is_empty());
+        assert_eq!(harness.stop_calls_len(), 1);
 
         let completion = timeout(TokioDuration::from_secs(1), completion_rx.recv())
             .await
@@ -922,25 +1115,18 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct MockCrypto;
+    mock! {
+        Crypto {}
 
-    #[async_trait]
-    impl CryptoPort for MockCrypto {
-        async fn generate_nonce32(&self) -> [u8; 32] {
-            [42u8; 32]
-        }
-
-        async fn export_keyslot_blob(&self, _space_id: &SpaceId) -> anyhow::Result<KeySlot> {
-            Ok(sample_keyslot())
-        }
-
-        async fn derive_master_key_from_keyslot(
-            &self,
-            _keyslot_blob: &[u8],
-            _passphrase: SecretString,
-        ) -> anyhow::Result<MasterKey> {
-            Ok(MasterKey([7u8; 32]))
+        #[async_trait]
+        impl CryptoPort for Crypto {
+            async fn generate_nonce32(&self) -> [u8; 32];
+            async fn export_keyslot_blob(&self, space_id: &SpaceId) -> anyhow::Result<KeySlot>;
+            async fn derive_master_key_from_keyslot(
+                &self,
+                keyslot_blob: &[u8],
+                passphrase: SecretString,
+            ) -> anyhow::Result<MasterKey>;
         }
     }
 
@@ -964,119 +1150,62 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct MockProof;
+    mock! {
+        Proof {}
 
-    #[async_trait]
-    impl ProofPort for MockProof {
-        async fn build_proof(
-            &self,
-            pairing_session_id: &CoreSessionId,
-            space_id: &SpaceId,
-            challenge_nonce: [u8; 32],
-            _master_key: &MasterKey,
-        ) -> anyhow::Result<SpaceAccessProofArtifact> {
-            Ok(SpaceAccessProofArtifact {
-                pairing_session_id: pairing_session_id.clone(),
-                space_id: space_id.clone(),
-                challenge_nonce,
-                proof_bytes: vec![9, 9, 9],
-            })
-        }
-
-        async fn verify_proof(
-            &self,
-            _proof: &SpaceAccessProofArtifact,
-            _expected_nonce: [u8; 32],
-        ) -> anyhow::Result<bool> {
-            Ok(true)
+        #[async_trait]
+        impl ProofPort for Proof {
+            async fn build_proof(
+                &self,
+                pairing_session_id: &CoreSessionId,
+                space_id: &SpaceId,
+                challenge_nonce: [u8; 32],
+                master_key: &MasterKey,
+            ) -> anyhow::Result<SpaceAccessProofArtifact>;
+            async fn verify_proof(
+                &self,
+                proof: &SpaceAccessProofArtifact,
+                expected_nonce: [u8; 32],
+            ) -> anyhow::Result<bool>;
         }
     }
 
-    #[derive(Default)]
-    struct MockTransport {
-        offers: Vec<String>,
-        proofs: Vec<String>,
-        results: Vec<String>,
-    }
+    mock! {
+        Transport {}
 
-    impl MockTransport {
-        fn offers(&self) -> Vec<String> {
-            self.offers.clone()
-        }
-
-        fn proofs(&self) -> Vec<String> {
-            self.proofs.clone()
-        }
-
-        fn results(&self) -> Vec<String> {
-            self.results.clone()
+        #[async_trait]
+        impl SpaceAccessTransportPort for Transport {
+            async fn send_offer(&mut self, session_id: &NetSessionId) -> anyhow::Result<()>;
+            async fn send_proof(&mut self, session_id: &NetSessionId) -> anyhow::Result<()>;
+            async fn send_result(&mut self, session_id: &NetSessionId) -> anyhow::Result<()>;
         }
     }
 
-    #[async_trait]
-    impl SpaceAccessTransportPort for MockTransport {
-        async fn send_offer(&mut self, session_id: &NetSessionId) -> anyhow::Result<()> {
-            self.offers.push(session_id.clone());
-            Ok(())
-        }
+    mock! {
+        Timer {}
 
-        async fn send_proof(&mut self, session_id: &NetSessionId) -> anyhow::Result<()> {
-            self.proofs.push(session_id.clone());
-            Ok(())
-        }
-
-        async fn send_result(&mut self, session_id: &NetSessionId) -> anyhow::Result<()> {
-            self.results.push(session_id.clone());
-            Ok(())
+        #[async_trait]
+        impl TimerPort for Timer {
+            async fn start(&mut self, session_id: &CoreSessionId, ttl_secs: u64) -> anyhow::Result<()>;
+            async fn stop(&mut self, session_id: &CoreSessionId) -> anyhow::Result<()>;
         }
     }
 
-    #[derive(Default)]
-    struct MockTimer {
-        start_calls: Vec<(String, u64)>,
-        stop_calls: Vec<String>,
-    }
+    mock! {
+        Store {}
 
-    #[async_trait]
-    impl TimerPort for MockTimer {
-        async fn start(&mut self, session_id: &CoreSessionId, ttl_secs: u64) -> anyhow::Result<()> {
-            self.start_calls.push((session_id.to_string(), ttl_secs));
-            Ok(())
-        }
-
-        async fn stop(&mut self, session_id: &CoreSessionId) -> anyhow::Result<()> {
-            self.stop_calls.push(session_id.to_string());
-            Ok(())
-        }
-    }
-
-    #[derive(Default)]
-    struct MockStore {
-        joiner_access: Vec<(SpaceId, String)>,
-        sponsor_access: Vec<(SpaceId, String)>,
-    }
-
-    #[async_trait]
-    impl PersistencePort for MockStore {
-        async fn persist_joiner_access(
-            &mut self,
-            space_id: &SpaceId,
-            peer_id: &str,
-        ) -> anyhow::Result<()> {
-            self.joiner_access
-                .push((space_id.clone(), peer_id.to_string()));
-            Ok(())
-        }
-
-        async fn persist_sponsor_access(
-            &mut self,
-            space_id: &SpaceId,
-            peer_id: &str,
-        ) -> anyhow::Result<()> {
-            self.sponsor_access
-                .push((space_id.clone(), peer_id.to_string()));
-            Ok(())
+        #[async_trait]
+        impl PersistencePort for Store {
+            async fn persist_joiner_access(
+                &mut self,
+                space_id: &SpaceId,
+                peer_id: &str,
+            ) -> anyhow::Result<()>;
+            async fn persist_sponsor_access(
+                &mut self,
+                space_id: &SpaceId,
+                peer_id: &str,
+            ) -> anyhow::Result<()>;
         }
     }
 }

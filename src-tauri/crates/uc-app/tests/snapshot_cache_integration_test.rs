@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Result};
+use mockall::mock;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
 
@@ -147,27 +148,42 @@ impl ThumbnailRepositoryPort for InMemoryThumbnailRepo {
     }
 }
 
-struct NoopThumbnailGenerator;
+mock! {
+    ThumbnailGenerator {}
 
-#[async_trait::async_trait]
-impl ThumbnailGeneratorPort for NoopThumbnailGenerator {
-    async fn generate_thumbnail(&self, _image_bytes: &[u8]) -> Result<GeneratedThumbnail> {
+    #[async_trait::async_trait]
+    impl ThumbnailGeneratorPort for ThumbnailGenerator {
+        async fn generate_thumbnail(&self, image_bytes: &[u8]) -> Result<GeneratedThumbnail>;
+        async fn generate_thumbnail_from_rgba(
+            &self,
+            rgba_bytes: &[u8],
+            width: u32,
+            height: u32,
+        ) -> Result<GeneratedThumbnail>;
+    }
+}
+
+fn make_thumbnail_generator() -> Arc<dyn ThumbnailGeneratorPort> {
+    let mut generator = MockThumbnailGenerator::new();
+    generator.expect_generate_thumbnail().returning(|_| {
         Ok(GeneratedThumbnail {
             thumbnail_bytes: vec![1],
             thumbnail_mime_type: MimeType("image/webp".to_string()),
             original_width: 1,
             original_height: 1,
         })
-    }
-
-    async fn generate_thumbnail_from_rgba(
-        &self,
-        _rgba_bytes: &[u8],
-        _width: u32,
-        _height: u32,
-    ) -> Result<GeneratedThumbnail> {
-        self.generate_thumbnail(&[]).await
-    }
+    });
+    generator
+        .expect_generate_thumbnail_from_rgba()
+        .returning(|_, _, _| {
+            Ok(GeneratedThumbnail {
+                thumbnail_bytes: vec![1],
+                thumbnail_mime_type: MimeType("image/webp".to_string()),
+                original_width: 1,
+                original_height: 1,
+            })
+        });
+    Arc::new(generator)
 }
 
 struct FixedClock {
@@ -527,7 +543,7 @@ async fn test_worker_reverts_to_staged_on_cache_spool_miss() -> Result<()> {
     let spool = Arc::new(SpoolManager::new(spool_dir.path(), 1_000_000)?);
     let (worker_tx, worker_rx) = mpsc::channel(4);
     let thumbnail_repo: Arc<dyn ThumbnailRepositoryPort> = Arc::new(InMemoryThumbnailRepo::new());
-    let thumbnail_generator: Arc<dyn ThumbnailGeneratorPort> = Arc::new(NoopThumbnailGenerator);
+    let thumbnail_generator = make_thumbnail_generator();
     let clock: Arc<dyn ClockPort> = Arc::new(FixedClock { now_ms: 1 });
 
     let worker = BackgroundBlobWorker::new(
@@ -600,7 +616,7 @@ async fn test_worker_materializes_after_spool_eviction_with_cache_hit() -> Resul
     let spool_queue: Arc<dyn SpoolQueuePort> = Arc::new(MpscSpoolQueue::new(spool_tx));
     let (worker_tx, worker_rx) = mpsc::channel(8);
     let thumbnail_repo: Arc<dyn ThumbnailRepositoryPort> = Arc::new(InMemoryThumbnailRepo::new());
-    let thumbnail_generator: Arc<dyn ThumbnailGeneratorPort> = Arc::new(NoopThumbnailGenerator);
+    let thumbnail_generator = make_thumbnail_generator();
     let clock: Arc<dyn ClockPort> = Arc::new(FixedClock { now_ms: 1 });
 
     let spooler = uc_infra::clipboard::SpoolerTask::new(
@@ -716,7 +732,7 @@ async fn test_worker_materializes_blob_from_cache() -> Result<()> {
     let spool_queue: Arc<dyn SpoolQueuePort> = Arc::new(MpscSpoolQueue::new(spool_tx));
     let (worker_tx, worker_rx) = mpsc::channel(8);
     let thumbnail_repo: Arc<dyn ThumbnailRepositoryPort> = Arc::new(InMemoryThumbnailRepo::new());
-    let thumbnail_generator: Arc<dyn ThumbnailGeneratorPort> = Arc::new(NoopThumbnailGenerator);
+    let thumbnail_generator = make_thumbnail_generator();
     let clock: Arc<dyn ClockPort> = Arc::new(FixedClock { now_ms: 1 });
 
     let spooler = uc_infra::clipboard::SpoolerTask::new(

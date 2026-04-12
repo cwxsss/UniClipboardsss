@@ -58,45 +58,9 @@ impl ClearCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use uc_core::ports::cache_fs::DirEntry;
-
-    struct MockCacheFs {
-        entries: Vec<DirEntry>,
-        size_before: u64,
-        size_after: u64,
-        exists: bool,
-        dir_size_call_count: AtomicU32,
-    }
-
-    #[async_trait::async_trait]
-    impl CacheFsPort for MockCacheFs {
-        async fn exists(&self, _path: &Path) -> bool {
-            self.exists
-        }
-
-        async fn read_dir(&self, _path: &Path) -> Result<Vec<DirEntry>> {
-            Ok(self.entries.clone())
-        }
-
-        async fn remove_dir_all(&self, _path: &Path) -> Result<()> {
-            Ok(())
-        }
-
-        async fn remove_file(&self, _path: &Path) -> Result<()> {
-            Ok(())
-        }
-
-        async fn dir_size(&self, _path: &Path) -> Result<u64> {
-            let call = self.dir_size_call_count.fetch_add(1, Ordering::SeqCst);
-            if call == 0 {
-                Ok(self.size_before)
-            } else {
-                Ok(self.size_after)
-            }
-        }
-    }
+    use crate::test_mocks::MockCacheFs;
+    use std::path::PathBuf;
+    use uc_core::ports::CacheFsDirEntry;
 
     fn test_storage_paths() -> AppPaths {
         AppPaths {
@@ -113,39 +77,42 @@ mod tests {
 
     #[tokio::test]
     async fn execute_returns_freed_bytes_when_cache_exists() {
-        let cache_fs = Arc::new(MockCacheFs {
-            entries: vec![
-                DirEntry {
+        let mut cache_fs = MockCacheFs::new();
+        // exists → true
+        cache_fs.expect_exists().returning(|_| true);
+        // read_dir → two entries
+        cache_fs.expect_read_dir().returning(|_| {
+            Ok(vec![
+                CacheFsDirEntry {
                     path: PathBuf::from("/tmp/test-cache/subdir"),
                     is_dir: true,
                 },
-                DirEntry {
+                CacheFsDirEntry {
                     path: PathBuf::from("/tmp/test-cache/file.tmp"),
                     is_dir: false,
                 },
-            ],
-            size_before: 1024,
-            size_after: 0,
-            exists: true,
-            dir_size_call_count: AtomicU32::new(0),
+            ])
         });
+        cache_fs.expect_remove_dir_all().returning(|_| Ok(()));
+        cache_fs.expect_remove_file().returning(|_| Ok(()));
+        // dir_size: first call returns 1024, second call returns 0
+        cache_fs.expect_dir_size().once().returning(|_| Ok(1024));
+        cache_fs.expect_dir_size().once().returning(|_| Ok(0));
 
-        let uc = ClearCache::new(test_storage_paths(), cache_fs);
+        let uc = ClearCache::new(test_storage_paths(), Arc::new(cache_fs));
         let freed = uc.execute().await.unwrap();
         assert_eq!(freed, 1024);
     }
 
     #[tokio::test]
     async fn execute_returns_zero_when_cache_dir_missing() {
-        let cache_fs = Arc::new(MockCacheFs {
-            entries: vec![],
-            size_before: 0,
-            size_after: 0,
-            exists: false,
-            dir_size_call_count: AtomicU32::new(0),
-        });
+        let mut cache_fs = MockCacheFs::new();
+        cache_fs.expect_exists().returning(|_| false);
+        // dir_size: called twice, both return 0 (no entries to clear)
+        cache_fs.expect_dir_size().once().returning(|_| Ok(0));
+        cache_fs.expect_dir_size().once().returning(|_| Ok(0));
 
-        let uc = ClearCache::new(test_storage_paths(), cache_fs);
+        let uc = ClearCache::new(test_storage_paths(), Arc::new(cache_fs));
         let freed = uc.execute().await.unwrap();
         assert_eq!(freed, 0);
     }

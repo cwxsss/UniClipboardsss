@@ -50,61 +50,38 @@ impl StartNetwork {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::MockNetworkControl;
     use std::sync::Arc;
-
-    /// Mock NetworkControlPort
-    struct MockNetworkControl {
-        started: Arc<std::sync::atomic::AtomicBool>,
-        should_fail: bool,
-    }
-
-    impl MockNetworkControl {
-        fn new() -> Self {
-            Self {
-                started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                should_fail: false,
-            }
-        }
-
-        fn fail_on_start() -> Self {
-            Self {
-                started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                should_fail: true,
-            }
-        }
-
-        fn was_started(&self) -> bool {
-            self.started.load(std::sync::atomic::Ordering::SeqCst)
-        }
-    }
-
-    #[async_trait]
-    impl NetworkControlPort for MockNetworkControl {
-        async fn start_network(&self) -> anyhow::Result<()> {
-            if self.should_fail {
-                return Err(anyhow::anyhow!("mock start failure"));
-            }
-            self.started
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn test_start_network_succeeds() {
-        let control = Arc::new(MockNetworkControl::new());
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let started_clone = started.clone();
+        let mut control = MockNetworkControl::new();
+        control.expect_start_network().times(1).returning(move || {
+            started_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        });
+        let control = Arc::new(control);
         let use_case = StartNetwork::new(control.clone());
 
         let result = use_case.execute().await;
 
         assert!(result.is_ok(), "start_network should succeed");
-        assert!(control.was_started(), "network should be started");
+        assert!(
+            started.load(std::sync::atomic::Ordering::SeqCst),
+            "network should be started"
+        );
     }
 
     #[tokio::test]
     async fn test_start_network_propagates_error() {
-        let control = Arc::new(MockNetworkControl::fail_on_start());
+        let mut control = MockNetworkControl::new();
+        control
+            .expect_start_network()
+            .times(1)
+            .returning(|| Err(anyhow::anyhow!("mock start failure")));
+        let control = Arc::new(control);
         let use_case = StartNetwork::new(control);
 
         let result = use_case.execute().await;
@@ -116,7 +93,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_from_port_creates_use_case() {
-        let control = Arc::new(MockNetworkControl::new());
+        let mut control = MockNetworkControl::new();
+        control.expect_start_network().times(1).returning(|| Ok(()));
+        let control = Arc::new(control);
         let use_case = StartNetwork::from_port(control.clone());
 
         let result = use_case.execute().await;

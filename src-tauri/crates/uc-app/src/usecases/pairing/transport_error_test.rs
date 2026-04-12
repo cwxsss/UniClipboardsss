@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::testing::NoopPairedDeviceRepository;
+    use crate::test_mocks::MockPairedDeviceRepository;
     use crate::usecases::pairing::orchestrator::{PairingConfig, PairingOrchestrator};
     use crate::usecases::pairing::staged_paired_device_store::StagedPairedDeviceStore;
     use std::sync::Arc;
@@ -9,10 +9,22 @@ mod tests {
     use uc_core::network::pairing_state_machine::PairingAction;
     use uc_core::network::protocol::PairingChallenge;
 
+    fn noop_repo() -> MockPairedDeviceRepository {
+        let mut repo = MockPairedDeviceRepository::new();
+        repo.expect_get_by_peer_id().returning(|_| Ok(None));
+        repo.expect_list_all().returning(|| Ok(vec![]));
+        repo.expect_upsert().returning(|_| Ok(()));
+        repo.expect_set_state().returning(|_, _| Ok(()));
+        repo.expect_update_last_seen().returning(|_, _| Ok(()));
+        repo.expect_delete().returning(|_| Ok(()));
+        repo.expect_update_sync_settings().returning(|_, _| Ok(()));
+        repo
+    }
+
     #[tokio::test]
     async fn transport_error_aborts_waiting_confirm() {
         let config = PairingConfig::default();
-        let device_repo = Arc::new(NoopPairedDeviceRepository);
+        let device_repo = Arc::new(noop_repo());
         let (orchestrator, mut action_rx) = PairingOrchestrator::new(
             config,
             device_repo,

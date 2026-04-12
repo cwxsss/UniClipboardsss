@@ -41,70 +41,10 @@ impl IndexClipboardEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::MockSearchIndex;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
     use uc_core::ids::{EntryId, EventId};
-    use uc_core::search::{
-        ContentType, RebuildProgress, SearchDocument, SearchError, SearchIndexMeta, SearchPosting,
-        SearchQuery, SearchResultsPage,
-    };
-
-    struct MockSearchIndex {
-        last_doc: Arc<Mutex<Option<SearchDocument>>>,
-        last_postings: Arc<Mutex<Option<Vec<SearchPosting>>>>,
-        fail_next: Arc<Mutex<Option<SearchError>>>,
-    }
-
-    impl MockSearchIndex {
-        fn new() -> Self {
-            Self {
-                last_doc: Arc::new(Mutex::new(None)),
-                last_postings: Arc::new(Mutex::new(None)),
-                fail_next: Arc::new(Mutex::new(None)),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl SearchIndexPort for MockSearchIndex {
-        async fn index_entry(
-            &self,
-            d: SearchDocument,
-            p: Vec<SearchPosting>,
-        ) -> Result<(), SearchError> {
-            if let Some(e) = self.fail_next.lock().await.take() {
-                return Err(e);
-            }
-            *self.last_doc.lock().await = Some(d);
-            *self.last_postings.lock().await = Some(p);
-            Ok(())
-        }
-
-        async fn remove_entry(&self, _id: &EntryId) -> Result<(), SearchError> {
-            Ok(())
-        }
-
-        async fn search(&self, _q: SearchQuery) -> Result<SearchResultsPage, SearchError> {
-            Ok(SearchResultsPage {
-                items: vec![],
-                total: 0,
-                has_more: false,
-            })
-        }
-
-        async fn rebuild(
-            &self,
-            _e: Vec<(SearchDocument, Vec<SearchPosting>)>,
-            _tx: tokio::sync::mpsc::Sender<RebuildProgress>,
-        ) -> Result<(), SearchError> {
-            Ok(())
-        }
-
-        async fn get_index_meta(&self) -> Result<SearchIndexMeta, SearchError> {
-            unimplemented!("not exercised in this test")
-        }
-    }
+    use uc_core::search::{ContentType, SearchDocument, SearchError, SearchPosting};
 
     fn make_test_document(entry_id: &str) -> SearchDocument {
         SearchDocument {
@@ -132,26 +72,35 @@ mod tests {
 
     #[tokio::test]
     async fn execute_delegates_to_port_and_propagates_ok() {
-        let mock = Arc::new(MockSearchIndex::new());
-        let last_doc = mock.last_doc.clone();
-        let last_postings = mock.last_postings.clone();
+        let last_doc = Arc::new(std::sync::Mutex::new(None::<SearchDocument>));
+        let last_postings = Arc::new(std::sync::Mutex::new(None::<Vec<SearchPosting>>));
+        let last_doc_clone = last_doc.clone();
+        let last_postings_clone = last_postings.clone();
 
-        let uc = IndexClipboardEntry::from_port(mock as Arc<dyn SearchIndexPort>);
+        let mut mock = MockSearchIndex::new();
+        mock.expect_index_entry().returning(move |d, p| {
+            *last_doc_clone.lock().unwrap() = Some(d);
+            *last_postings_clone.lock().unwrap() = Some(p);
+            Ok(())
+        });
+
+        let uc = IndexClipboardEntry::from_port(Arc::new(mock));
         let doc = make_test_document("entry-1");
         let postings = make_test_postings("entry-1");
 
         let result = uc.execute(doc.clone(), postings.clone()).await;
         assert!(result.is_ok());
-        assert_eq!(*last_doc.lock().await, Some(doc));
-        assert_eq!(*last_postings.lock().await, Some(postings));
+        assert_eq!(*last_doc.lock().unwrap(), Some(doc));
+        assert_eq!(*last_postings.lock().unwrap(), Some(postings));
     }
 
     #[tokio::test]
     async fn execute_propagates_port_error() {
-        let mock = Arc::new(MockSearchIndex::new());
-        *mock.fail_next.lock().await = Some(SearchError::IndexUnavailable);
+        let mut mock = MockSearchIndex::new();
+        mock.expect_index_entry()
+            .returning(|_, _| Err(SearchError::IndexUnavailable));
 
-        let uc = IndexClipboardEntry::from_port(mock as Arc<dyn SearchIndexPort>);
+        let uc = IndexClipboardEntry::from_port(Arc::new(mock));
         let result = uc
             .execute(make_test_document("entry-2"), make_test_postings("entry-2"))
             .await;

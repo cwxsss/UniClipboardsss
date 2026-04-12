@@ -166,137 +166,14 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
-    use uc_core::network::protocol::FileTransferMessage;
     use uc_core::network::DiscoveredPeer;
-    use uc_core::network::{ConnectedPeer, PairedDevice, PairingState};
-    use uc_core::ports::errors::PairedDeviceRepositoryError;
-    use uc_core::ports::{PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort};
+    use uc_core::network::{PairedDevice, PairingState};
     use uc_core::settings::model::{ContentTypes, Settings, SyncFrequency, SyncSettings};
     use uc_core::PeerId;
 
-    // --- Mock types ---
-
-    struct MockSettings {
-        settings: Settings,
-    }
-
-    #[async_trait::async_trait]
-    impl SettingsPort for MockSettings {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            Ok(self.settings.clone())
-        }
-        async fn save(&self, _settings: &Settings) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct MockPairedDeviceRepo {
-        devices: Vec<PairedDevice>,
-    }
-
-    #[async_trait::async_trait]
-    impl PairedDeviceRepositoryPort for MockPairedDeviceRepo {
-        async fn get_by_peer_id(
-            &self,
-            peer_id: &PeerId,
-        ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(self.devices.iter().find(|d| d.peer_id == *peer_id).cloned())
-        }
-        async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(self.devices.clone())
-        }
-        async fn upsert(&self, _device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-        async fn set_state(
-            &self,
-            _peer_id: &PeerId,
-            _state: PairingState,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-        async fn update_last_seen(
-            &self,
-            _peer_id: &PeerId,
-            _last_seen_at: chrono::DateTime<Utc>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-        async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-        async fn update_sync_settings(
-            &self,
-            _peer_id: &PeerId,
-            _settings: Option<SyncSettings>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-    }
-
-    struct MockPeerDirectory {
-        peers: Vec<DiscoveredPeer>,
-    }
-
-    #[async_trait::async_trait]
-    impl PeerDirectoryPort for MockPeerDirectory {
-        async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-            Ok(self.peers.clone())
-        }
-        async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
-            Ok(vec![])
-        }
-        fn local_peer_id(&self) -> String {
-            "local-peer".to_string()
-        }
-        async fn announce_device_name(&self, _device_name: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct MockFileTransport;
-
-    #[async_trait::async_trait]
-    impl FileTransportPort for MockFileTransport {
-        async fn send_file_announce(
-            &self,
-            _peer_id: &str,
-            _announce: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file_data(
-            &self,
-            _peer_id: &str,
-            _data: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file_complete(
-            &self,
-            _peer_id: &str,
-            _complete: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn cancel_transfer(
-            &self,
-            _peer_id: &str,
-            _cancel: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file(
-            &self,
-            _peer_id: &str,
-            _file_path: std::path::PathBuf,
-            _transfer_id: String,
-            _batch_id: Option<String>,
-            _batch_total: Option<u32>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::test_mocks::{
+        MockFileTransport, MockPairedDeviceRepository, MockPeerDirectory, MockSettings,
+    };
 
     fn make_trusted_device(id: &str) -> PairedDevice {
         PairedDevice {
@@ -328,17 +205,77 @@ mod tests {
         s
     }
 
+    fn build_settings_port(settings: Settings) -> Arc<dyn SettingsPort> {
+        let mut mock = MockSettings::new();
+        mock.expect_load().returning(move || Ok(settings.clone()));
+        mock.expect_save().returning(|_| Ok(()));
+        Arc::new(mock)
+    }
+
+    fn build_paired_device_repo(devices: Vec<PairedDevice>) -> Arc<dyn PairedDeviceRepositoryPort> {
+        let mut mock = MockPairedDeviceRepository::new();
+        let devices_for_get = devices.clone();
+        mock.expect_get_by_peer_id().returning(move |peer_id| {
+            Ok(devices_for_get
+                .iter()
+                .find(|d| d.peer_id == *peer_id)
+                .cloned())
+        });
+        let devices_for_list = devices.clone();
+        mock.expect_list_all()
+            .returning(move || Ok(devices_for_list.clone()));
+        mock.expect_upsert().returning(|_| Ok(()));
+        mock.expect_set_state().returning(|_, _| Ok(()));
+        mock.expect_update_last_seen().returning(|_, _| Ok(()));
+        mock.expect_delete().returning(|_| Ok(()));
+        mock.expect_update_sync_settings().returning(|_, _| Ok(()));
+        Arc::new(mock)
+    }
+
+    fn build_peer_directory(peers: Vec<DiscoveredPeer>) -> Arc<dyn PeerDirectoryPort> {
+        let mut mock = MockPeerDirectory::new();
+        let peers_clone = peers.clone();
+        mock.expect_get_discovered_peers()
+            .returning(move || Ok(peers_clone.clone()));
+        mock.expect_get_connected_peers().returning(|| Ok(vec![]));
+        mock.expect_local_peer_id()
+            .returning(|| "local-peer".to_string());
+        mock.expect_announce_device_name().returning(|_| Ok(()));
+        Arc::new(mock)
+    }
+
+    fn make_noop_transport() -> Arc<dyn FileTransportPort> {
+        let mut mock = MockFileTransport::new();
+        mock.expect_send_file().returning(|_, _, _, _, _| Ok(()));
+        mock.expect_send_file_announce().returning(|_, _| Ok(()));
+        mock.expect_send_file_data().returning(|_, _| Ok(()));
+        mock.expect_send_file_complete().returning(|_, _| Ok(()));
+        mock.expect_cancel_transfer().returning(|_, _| Ok(()));
+        Arc::new(mock)
+    }
+
     fn make_use_case(
         peers: Vec<DiscoveredPeer>,
         devices: Vec<PairedDevice>,
     ) -> SyncOutboundFileUseCase {
         SyncOutboundFileUseCase::new(
-            Arc::new(MockSettings {
-                settings: make_settings(),
-            }),
-            Arc::new(MockPairedDeviceRepo { devices }),
-            Arc::new(MockPeerDirectory { peers }),
-            Arc::new(MockFileTransport),
+            build_settings_port(make_settings()),
+            build_paired_device_repo(devices),
+            build_peer_directory(peers),
+            make_noop_transport(),
+        )
+    }
+
+    fn make_use_case_with_transport(
+        peers: Vec<DiscoveredPeer>,
+        devices: Vec<PairedDevice>,
+        transport: Arc<dyn FileTransportPort>,
+    ) -> SyncOutboundFileUseCase {
+        SyncOutboundFileUseCase::new(
+            build_settings_port(make_settings()),
+            build_paired_device_repo(devices),
+            build_peer_directory(peers),
+            transport,
         )
     }
 
@@ -427,148 +364,41 @@ mod tests {
         assert!(!result.transfer_id.is_empty());
     }
 
-    // --- Tracking mock for argument verification ---
-
-    struct TrackingFileTransport {
-        calls: Arc<std::sync::Mutex<Vec<(String, PathBuf, String, Option<String>, Option<u32>)>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl FileTransportPort for TrackingFileTransport {
-        async fn send_file_announce(
-            &self,
-            _peer_id: &str,
-            _announce: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file_data(
-            &self,
-            _peer_id: &str,
-            _data: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file_complete(
-            &self,
-            _peer_id: &str,
-            _complete: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn cancel_transfer(
-            &self,
-            _peer_id: &str,
-            _cancel: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file(
-            &self,
-            peer_id: &str,
-            file_path: PathBuf,
-            transfer_id: String,
-            batch_id: Option<String>,
-            batch_total: Option<u32>,
-        ) -> anyhow::Result<()> {
-            self.calls.lock().unwrap().push((
-                peer_id.to_string(),
-                file_path,
-                transfer_id,
-                batch_id,
-                batch_total,
-            ));
-            Ok(())
-        }
-    }
-
-    // --- Partial-failure mock ---
-
-    struct PartialFailFileTransport {
-        fail_peer_id: String,
-        attempted: Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl FileTransportPort for PartialFailFileTransport {
-        async fn send_file_announce(
-            &self,
-            _peer_id: &str,
-            _announce: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file_data(
-            &self,
-            _peer_id: &str,
-            _data: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file_complete(
-            &self,
-            _peer_id: &str,
-            _complete: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn cancel_transfer(
-            &self,
-            _peer_id: &str,
-            _cancel: FileTransferMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn send_file(
-            &self,
-            peer_id: &str,
-            _file_path: PathBuf,
-            _transfer_id: String,
-            _batch_id: Option<String>,
-            _batch_total: Option<u32>,
-        ) -> anyhow::Result<()> {
-            self.attempted.lock().unwrap().push(peer_id.to_string());
-            if peer_id == self.fail_peer_id {
-                anyhow::bail!("connection refused");
-            }
-            Ok(())
-        }
-    }
-
-    fn make_use_case_with_transport(
-        peers: Vec<DiscoveredPeer>,
-        devices: Vec<PairedDevice>,
-        transport: Arc<dyn FileTransportPort>,
-    ) -> SyncOutboundFileUseCase {
-        SyncOutboundFileUseCase::new(
-            Arc::new(MockSettings {
-                settings: make_settings(),
-            }),
-            Arc::new(MockPairedDeviceRepo { devices }),
-            Arc::new(MockPeerDirectory { peers }),
-            transport,
-        )
-    }
-
     #[tokio::test]
     async fn test_outbound_calls_send_file_with_correct_args() {
         let tmp = NamedTempFile::new().unwrap();
         let file_path = tmp.path().to_path_buf();
         let peers = vec![make_peer("p1"), make_peer("p2"), make_peer("p3")];
 
-        let calls: Arc<
-            std::sync::Mutex<Vec<(String, PathBuf, String, Option<String>, Option<u32>)>>,
-        > = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let transport = Arc::new(TrackingFileTransport {
-            calls: Arc::clone(&calls),
-        });
+        let calls: Arc<std::sync::Mutex<Vec<(String, PathBuf, String)>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let calls_clone = calls.clone();
+
+        let mut transport = MockFileTransport::new();
+        transport.expect_send_file().returning(
+            move |peer_id, file_path, transfer_id, _batch_id, _batch_total| {
+                calls_clone
+                    .lock()
+                    .unwrap()
+                    .push((peer_id.to_string(), file_path, transfer_id));
+                Ok(())
+            },
+        );
+        transport
+            .expect_send_file_announce()
+            .returning(|_, _| Ok(()));
+        transport.expect_send_file_data().returning(|_, _| Ok(()));
+        transport
+            .expect_send_file_complete()
+            .returning(|_, _| Ok(()));
+        transport.expect_cancel_transfer().returning(|_, _| Ok(()));
 
         let devices = vec![
             make_trusted_device("p1"),
             make_trusted_device("p2"),
             make_trusted_device("p3"),
         ];
-        let uc = make_use_case_with_transport(peers, devices, transport);
+        let uc = make_use_case_with_transport(peers, devices, Arc::new(transport));
         let result = uc.execute(file_path.clone(), None).await.unwrap();
 
         let recorded = calls.lock().unwrap();
@@ -603,17 +433,33 @@ mod tests {
 
         let attempted: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
-        let transport = Arc::new(PartialFailFileTransport {
-            fail_peer_id: "p2".to_string(),
-            attempted: Arc::clone(&attempted),
-        });
+        let attempted_clone = attempted.clone();
+
+        let mut transport = MockFileTransport::new();
+        transport.expect_send_file().returning(
+            move |peer_id, _file_path, _transfer_id, _batch_id, _batch_total| {
+                attempted_clone.lock().unwrap().push(peer_id.to_string());
+                if peer_id == "p2" {
+                    anyhow::bail!("connection refused");
+                }
+                Ok(())
+            },
+        );
+        transport
+            .expect_send_file_announce()
+            .returning(|_, _| Ok(()));
+        transport.expect_send_file_data().returning(|_, _| Ok(()));
+        transport
+            .expect_send_file_complete()
+            .returning(|_, _| Ok(()));
+        transport.expect_cancel_transfer().returning(|_, _| Ok(()));
 
         let devices = vec![
             make_trusted_device("p1"),
             make_trusted_device("p2"),
             make_trusted_device("p3"),
         ];
-        let uc = make_use_case_with_transport(peers, devices, transport);
+        let uc = make_use_case_with_transport(peers, devices, Arc::new(transport));
         let result = uc.execute(tmp.path().to_path_buf(), None).await;
 
         // The use case should succeed despite p2 failing

@@ -296,195 +296,46 @@ impl RestoreClipboardSelectionUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::{
+        MockBlobStore, MockClipboardEntryRepository, MockClipboardRepresentationRepository,
+        MockClipboardSelectionRepository, MockSystemClipboard,
+    };
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::sync::Arc;
     use uc_core::clipboard::{
         ClipboardEntry, ClipboardSelection, ClipboardSelectionDecision, MimeType,
-        PersistedClipboardRepresentation, SelectionPolicyVersion,
+        PersistedClipboardRepresentation, SelectionPolicyVersion, SystemClipboardSnapshot,
     };
     use uc_core::ids::{EventId, FormatId, RepresentationId};
-    use uc_core::ports::clipboard::ClipboardChangeOriginPort;
-    use uc_core::ports::clipboard::ProcessingUpdateOutcome;
-    use uc_core::ports::SystemClipboardPort;
-    use uc_core::ClipboardChangeOrigin;
     use uc_infra::clipboard::new_in_memory_change_origin;
 
     fn test_origin() -> std::sync::Arc<dyn uc_core::ports::clipboard::ClipboardChangeOriginPort> {
         new_in_memory_change_origin()
     }
 
-    struct MockEntryRepository {
-        entry: Option<ClipboardEntry>,
+    fn make_entry_repo_with(entry: Option<ClipboardEntry>) -> MockClipboardEntryRepository {
+        let mut repo = MockClipboardEntryRepository::new();
+        repo.expect_get_entry()
+            .returning(move |_| Ok(entry.clone()));
+        repo
     }
 
-    struct MockSelectionRepository {
+    fn make_selection_repo_with(
         selection: Option<ClipboardSelectionDecision>,
+    ) -> MockClipboardSelectionRepository {
+        let mut repo = MockClipboardSelectionRepository::new();
+        repo.expect_get_selection()
+            .returning(move |_| Ok(selection.clone()));
+        repo
     }
 
-    struct MockRepresentationRepository {
+    fn make_rep_repo_with(
         reps: HashMap<RepresentationId, PersistedClipboardRepresentation>,
-    }
-
-    struct MockBlobStore;
-
-    struct MockSystemClipboard;
-
-    struct FailingSystemClipboard {
-        calls: Arc<Mutex<Vec<&'static str>>>,
-    }
-
-    struct TrackingSystemClipboard {
-        write_calls: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepository {
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &ClipboardEntry,
-            _selection: &ClipboardSelectionDecision,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn get_entry(&self, _entry_id: &EntryId) -> Result<Option<ClipboardEntry>> {
-            Ok(self.entry.clone())
-        }
-
-        async fn list_entries(&self, _limit: usize, _offset: usize) -> Result<Vec<ClipboardEntry>> {
-            Ok(vec![])
-        }
-
-        async fn delete_entry(&self, _entry_id: &EntryId) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardSelectionRepositoryPort for MockSelectionRepository {
-        async fn get_selection(
-            &self,
-            _entry_id: &EntryId,
-        ) -> Result<Option<ClipboardSelectionDecision>> {
-            Ok(self.selection.clone())
-        }
-
-        async fn delete_selection(&self, _entry_id: &EntryId) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepository {
-        async fn get_representation(
-            &self,
-            _event_id: &EventId,
-            representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self.reps.get(representation_id).cloned())
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &RepresentationId,
-            _expected_states: &[uc_core::clipboard::PayloadAvailability],
-            _blob_id: Option<&uc_core::BlobId>,
-            _new_state: uc_core::clipboard::PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<ProcessingUpdateOutcome> {
-            Ok(ProcessingUpdateOutcome::NotFound)
-        }
-    }
-
-    #[async_trait]
-    impl BlobStorePort for MockBlobStore {
-        async fn put(
-            &self,
-            _blob_id: &uc_core::BlobId,
-            _data: &[u8],
-        ) -> Result<(std::path::PathBuf, Option<i64>)> {
-            Ok((std::path::PathBuf::from("/tmp/mock"), None))
-        }
-
-        async fn get(&self, _blob_id: &uc_core::BlobId) -> Result<Vec<u8>> {
-            Err(anyhow::anyhow!("unexpected blob fetch"))
-        }
-    }
-
-    impl SystemClipboardPort for MockSystemClipboard {
-        fn read_snapshot(&self) -> Result<SystemClipboardSnapshot> {
-            Ok(SystemClipboardSnapshot {
-                ts_ms: 0,
-                representations: vec![],
-            })
-        }
-
-        fn write_snapshot(&self, _snapshot: SystemClipboardSnapshot) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    impl SystemClipboardPort for FailingSystemClipboard {
-        fn read_snapshot(&self) -> Result<SystemClipboardSnapshot> {
-            Ok(SystemClipboardSnapshot {
-                ts_ms: 0,
-                representations: vec![],
-            })
-        }
-
-        fn write_snapshot(&self, _snapshot: SystemClipboardSnapshot) -> Result<()> {
-            if let Ok(mut calls) = self.calls.lock() {
-                calls.push("write_snapshot");
-            }
-            Err(anyhow::anyhow!("write failed"))
-        }
-    }
-
-    impl SystemClipboardPort for TrackingSystemClipboard {
-        fn read_snapshot(&self) -> Result<SystemClipboardSnapshot> {
-            Ok(SystemClipboardSnapshot {
-                ts_ms: 0,
-                representations: vec![],
-            })
-        }
-
-        fn write_snapshot(&self, _snapshot: SystemClipboardSnapshot) -> Result<()> {
-            self.write_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
+    ) -> MockClipboardRepresentationRepository {
+        let mut repo = MockClipboardRepresentationRepository::new();
+        repo.expect_get_representation()
+            .returning(move |_, rep_id| Ok(reps.get(rep_id).cloned()));
+        repo
     }
 
     #[tokio::test]
@@ -522,24 +373,36 @@ mod tests {
             None,
         );
 
+        let mut mock_clipboard = MockSystemClipboard::new();
+        mock_clipboard.expect_write_snapshot().returning(|_| Ok(()));
+        mock_clipboard.expect_read_snapshot().returning(|| {
+            Ok(SystemClipboardSnapshot {
+                ts_ms: 0,
+                representations: vec![],
+            })
+        });
+
         let coordinator = Arc::new(ClipboardWriteCoordinator::new(
-            Arc::new(MockSystemClipboard),
+            Arc::new(mock_clipboard),
             test_origin(),
         ));
 
         let uc = RestoreClipboardSelectionUseCase::new(
-            Arc::new(MockEntryRepository { entry: Some(entry) }),
+            Arc::new(make_entry_repo_with(Some(entry))),
             coordinator,
-            Arc::new(MockSelectionRepository {
-                selection: Some(ClipboardSelectionDecision::new(entry_id.clone(), selection)),
+            Arc::new(make_selection_repo_with(Some(
+                ClipboardSelectionDecision::new(entry_id.clone(), selection),
+            ))),
+            Arc::new(make_rep_repo_with(HashMap::from([
+                (paste_rep_id.clone(), primary_representation),
+                (secondary_rep_id.clone(), secondary_representation),
+            ]))),
+            Arc::new({
+                let mut b = MockBlobStore::new();
+                b.expect_get()
+                    .returning(|_| Err(anyhow::anyhow!("unexpected blob fetch")));
+                b
             }),
-            Arc::new(MockRepresentationRepository {
-                reps: HashMap::from([
-                    (paste_rep_id.clone(), primary_representation),
-                    (secondary_rep_id.clone(), secondary_representation),
-                ]),
-            }),
-            Arc::new(MockBlobStore),
             ClipboardIntegrationMode::Full,
         );
 
@@ -584,24 +447,36 @@ mod tests {
             None,
         );
 
+        let mut mock_clipboard = MockSystemClipboard::new();
+        mock_clipboard.expect_write_snapshot().returning(|_| Ok(()));
+        mock_clipboard.expect_read_snapshot().returning(|| {
+            Ok(SystemClipboardSnapshot {
+                ts_ms: 0,
+                representations: vec![],
+            })
+        });
+
         let coordinator = Arc::new(ClipboardWriteCoordinator::new(
-            Arc::new(MockSystemClipboard),
+            Arc::new(mock_clipboard),
             test_origin(),
         ));
 
         let uc = RestoreClipboardSelectionUseCase::new(
-            Arc::new(MockEntryRepository { entry: Some(entry) }),
+            Arc::new(make_entry_repo_with(Some(entry))),
             coordinator,
-            Arc::new(MockSelectionRepository {
-                selection: Some(ClipboardSelectionDecision::new(entry_id.clone(), selection)),
+            Arc::new(make_selection_repo_with(Some(
+                ClipboardSelectionDecision::new(entry_id.clone(), selection),
+            ))),
+            Arc::new(make_rep_repo_with(HashMap::from([
+                (plain_rep_id.clone(), plain_representation),
+                (rich_rep_id.clone(), rich_representation),
+            ]))),
+            Arc::new({
+                let mut b = MockBlobStore::new();
+                b.expect_get()
+                    .returning(|_| Err(anyhow::anyhow!("unexpected blob fetch")));
+                b
             }),
-            Arc::new(MockRepresentationRepository {
-                reps: HashMap::from([
-                    (plain_rep_id.clone(), plain_representation),
-                    (rich_rep_id.clone(), rich_representation),
-                ]),
-            }),
-            Arc::new(MockBlobStore),
             ClipboardIntegrationMode::Full,
         );
 
@@ -613,23 +488,31 @@ mod tests {
 
     #[tokio::test]
     async fn execute_clears_origin_on_write_error() {
-        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut mock_clipboard = MockSystemClipboard::new();
+        mock_clipboard.expect_write_snapshot().never();
+        mock_clipboard.expect_read_snapshot().returning(|| {
+            Ok(SystemClipboardSnapshot {
+                ts_ms: 0,
+                representations: vec![],
+            })
+        });
 
         let coordinator = Arc::new(ClipboardWriteCoordinator::new(
-            Arc::new(FailingSystemClipboard {
-                calls: calls.clone(),
-            }),
+            Arc::new(mock_clipboard),
             test_origin(),
         ));
 
         let uc = RestoreClipboardSelectionUseCase::new(
-            Arc::new(MockEntryRepository { entry: None }),
+            Arc::new(make_entry_repo_with(None)),
             coordinator,
-            Arc::new(MockSelectionRepository { selection: None }),
-            Arc::new(MockRepresentationRepository {
-                reps: HashMap::new(),
+            Arc::new(make_selection_repo_with(None)),
+            Arc::new(make_rep_repo_with(HashMap::new())),
+            Arc::new({
+                let mut b = MockBlobStore::new();
+                b.expect_get()
+                    .returning(|_| Err(anyhow::anyhow!("unexpected blob fetch")));
+                b
             }),
-            Arc::new(MockBlobStore),
             ClipboardIntegrationMode::Full,
         );
 
@@ -644,23 +527,31 @@ mod tests {
 
     #[tokio::test]
     async fn execute_returns_error_in_passive_mode_without_writing() {
-        let write_calls = Arc::new(AtomicUsize::new(0));
+        let mut mock_clipboard = MockSystemClipboard::new();
+        mock_clipboard.expect_write_snapshot().never();
+        mock_clipboard.expect_read_snapshot().returning(|| {
+            Ok(SystemClipboardSnapshot {
+                ts_ms: 0,
+                representations: vec![],
+            })
+        });
 
         let coordinator = Arc::new(ClipboardWriteCoordinator::new(
-            Arc::new(TrackingSystemClipboard {
-                write_calls: write_calls.clone(),
-            }),
+            Arc::new(mock_clipboard),
             test_origin(),
         ));
 
         let uc = RestoreClipboardSelectionUseCase::new(
-            Arc::new(MockEntryRepository { entry: None }),
+            Arc::new(make_entry_repo_with(None)),
             coordinator,
-            Arc::new(MockSelectionRepository { selection: None }),
-            Arc::new(MockRepresentationRepository {
-                reps: HashMap::new(),
+            Arc::new(make_selection_repo_with(None)),
+            Arc::new(make_rep_repo_with(HashMap::new())),
+            Arc::new({
+                let mut b = MockBlobStore::new();
+                b.expect_get()
+                    .returning(|_| Err(anyhow::anyhow!("unexpected blob fetch")));
+                b
             }),
-            Arc::new(MockBlobStore),
             ClipboardIntegrationMode::Passive,
         );
 
@@ -671,22 +562,5 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("System clipboard writes disabled (UC_CLIPBOARD_MODE=passive)"));
-        assert_eq!(write_calls.load(Ordering::SeqCst), 0);
-    }
-
-    // Keep the ClipboardChangeOriginPort impls in scope for any future direct mock tests.
-    #[allow(dead_code)]
-    struct NoopClipboardChangeOrigin;
-
-    #[async_trait]
-    impl ClipboardChangeOriginPort for NoopClipboardChangeOrigin {
-        async fn set_next_origin(&self, _origin: ClipboardChangeOrigin, _ttl: Duration) {}
-
-        async fn consume_origin_or_default(
-            &self,
-            default_origin: ClipboardChangeOrigin,
-        ) -> ClipboardChangeOrigin {
-            default_origin
-        }
     }
 }

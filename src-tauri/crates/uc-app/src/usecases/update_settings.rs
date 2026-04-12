@@ -356,63 +356,46 @@ impl SecuritySettingsDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    struct MockSettingsPort {
-        stored: Mutex<Settings>,
-        load_count: AtomicUsize,
-        save_count: AtomicUsize,
-    }
-
-    impl MockSettingsPort {
-        fn new(initial: Settings) -> Self {
-            Self {
-                stored: Mutex::new(initial),
-                load_count: AtomicUsize::new(0),
-                save_count: AtomicUsize::new(0),
-            }
-        }
-
-        fn load_count(&self) -> usize {
-            self.load_count.load(Ordering::SeqCst)
-        }
-
-        fn save_count(&self) -> usize {
-            self.save_count.load(Ordering::SeqCst)
-        }
-    }
-
-    #[async_trait]
-    impl SettingsPort for MockSettingsPort {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            self.load_count.fetch_add(1, Ordering::SeqCst);
-            Ok(self.stored.lock().unwrap().clone())
-        }
-
-        async fn save(&self, settings: &Settings) -> anyhow::Result<()> {
-            self.save_count.fetch_add(1, Ordering::SeqCst);
-            *self.stored.lock().unwrap() = settings.clone();
-            Ok(())
-        }
-    }
+    use crate::test_mocks::MockSettings;
 
     #[tokio::test]
     async fn test_update_settings_loads_before_save() {
         let initial = Settings::default();
-        let repo = Arc::new(MockSettingsPort::new(initial));
+        let stored = Arc::new(Mutex::new(initial.clone()));
+        let load_count = Arc::new(AtomicUsize::new(0));
+        let save_count = Arc::new(AtomicUsize::new(0));
+
+        let stored_for_load = stored.clone();
+        let load_count_clone = load_count.clone();
+        let stored_for_save = stored.clone();
+        let save_count_clone = save_count.clone();
+
+        let mut mock = MockSettings::new();
+        mock.expect_load().returning(move || {
+            load_count_clone.fetch_add(1, Ordering::SeqCst);
+            Ok(stored_for_load.lock().unwrap().clone())
+        });
+        mock.expect_save().returning(move |s: &Settings| {
+            save_count_clone.fetch_add(1, Ordering::SeqCst);
+            *stored_for_save.lock().unwrap() = s.clone();
+            Ok(())
+        });
+
+        let repo = Arc::new(mock);
 
         let mut updated = Settings::default();
         updated.general.device_name = Some("device-1".to_string());
 
-        let usecase = UpdateSettings::new(repo.clone());
+        let usecase = UpdateSettings::new(repo);
         usecase.execute(&updated).await.unwrap();
 
-        assert_eq!(repo.load_count(), 1);
-        assert_eq!(repo.save_count(), 1);
+        assert_eq!(load_count.load(Ordering::SeqCst), 1);
+        assert_eq!(save_count.load(Ordering::SeqCst), 1);
         assert_eq!(
-            repo.stored.lock().unwrap().general.device_name,
+            stored.lock().unwrap().general.device_name,
             updated.general.device_name
         );
     }

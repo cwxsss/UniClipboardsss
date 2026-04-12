@@ -59,67 +59,16 @@ pub enum ToggleFavoriteError {
 #[cfg(test)]
 mod tests {
     use super::ToggleFavoriteClipboardEntryUseCase;
-    use async_trait::async_trait;
+    use crate::test_mocks::MockClipboardEntryRepository;
     use std::sync::Arc;
-    use uc_core::clipboard::{ClipboardEntry, ClipboardSelectionDecision};
+    use uc_core::clipboard::ClipboardEntry;
     use uc_core::ids::{EntryId, EventId};
-    use uc_core::ports::ClipboardEntryRepositoryPort;
-
-    struct MockEntryRepository {
-        existing_ids: Vec<String>,
-    }
-
-    #[async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepository {
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &ClipboardEntry,
-            _selection: &ClipboardSelectionDecision,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn get_entry(&self, entry_id: &EntryId) -> anyhow::Result<Option<ClipboardEntry>> {
-            if self.existing_ids.contains(entry_id.inner()) {
-                Ok(Some(ClipboardEntry::new(
-                    entry_id.clone(),
-                    EventId::from("test-event"),
-                    1000,
-                    None,
-                    64,
-                )))
-            } else {
-                Ok(None)
-            }
-        }
-
-        async fn list_entries(
-            &self,
-            _limit: usize,
-            _offset: usize,
-        ) -> anyhow::Result<Vec<ClipboardEntry>> {
-            Ok(vec![])
-        }
-
-        async fn touch_entry(
-            &self,
-            _entry_id: &EntryId,
-            _active_time_ms: i64,
-        ) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-
-        async fn delete_entry(&self, _entry_id: &EntryId) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn execute_returns_false_when_entry_not_found() {
-        let repo = Arc::new(MockEntryRepository {
-            existing_ids: vec![],
-        });
-        let uc = ToggleFavoriteClipboardEntryUseCase::new(repo);
+        let mut repo = MockClipboardEntryRepository::new();
+        repo.expect_get_entry().returning(|_| Ok(None));
+        let uc = ToggleFavoriteClipboardEntryUseCase::new(Arc::new(repo));
         let entry_id = EntryId::from("missing-entry");
 
         let result = uc
@@ -132,10 +81,22 @@ mod tests {
 
     #[tokio::test]
     async fn execute_returns_true_when_entry_exists_and_updates_flag() {
-        let repo = Arc::new(MockEntryRepository {
-            existing_ids: vec!["existing-entry".to_string()],
+        let entry_id_str = "existing-entry".to_string();
+        let mut repo = MockClipboardEntryRepository::new();
+        repo.expect_get_entry().returning(move |id| {
+            if id.inner() == &entry_id_str {
+                Ok(Some(ClipboardEntry::new(
+                    id.clone(),
+                    EventId::from("test-event"),
+                    1000,
+                    None,
+                    64,
+                )))
+            } else {
+                Ok(None)
+            }
         });
-        let uc = ToggleFavoriteClipboardEntryUseCase::new(repo.clone());
+        let uc = ToggleFavoriteClipboardEntryUseCase::new(Arc::new(repo));
         let entry_id = EntryId::from("existing-entry");
 
         let result = uc

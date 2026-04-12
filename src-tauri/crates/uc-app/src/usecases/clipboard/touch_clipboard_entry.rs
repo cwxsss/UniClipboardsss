@@ -30,72 +30,27 @@ impl TouchClipboardEntryUseCase {
 #[cfg(test)]
 mod tests {
     use super::TouchClipboardEntryUseCase;
-    use async_trait::async_trait;
+    use crate::test_mocks::{MockClipboardEntryRepository, MockClock};
     use std::sync::{Arc, Mutex};
-    use uc_core::clipboard::{ClipboardEntry, ClipboardSelectionDecision};
     use uc_core::ids::EntryId;
-    use uc_core::ports::{ClipboardEntryRepositoryPort, ClockPort};
-
-    struct MockEntryRepository {
-        touched_at: Arc<Mutex<Option<i64>>>,
-    }
-
-    struct MockClock {
-        now_ms: i64,
-    }
-
-    #[async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepository {
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &ClipboardEntry,
-            _selection: &ClipboardSelectionDecision,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn get_entry(&self, _entry_id: &EntryId) -> anyhow::Result<Option<ClipboardEntry>> {
-            Ok(None)
-        }
-
-        async fn list_entries(
-            &self,
-            _limit: usize,
-            _offset: usize,
-        ) -> anyhow::Result<Vec<ClipboardEntry>> {
-            Ok(vec![])
-        }
-
-        async fn touch_entry(
-            &self,
-            _entry_id: &EntryId,
-            active_time_ms: i64,
-        ) -> anyhow::Result<bool> {
-            if let Ok(mut touched_at) = self.touched_at.lock() {
-                *touched_at = Some(active_time_ms);
-            }
-            Ok(true)
-        }
-
-        async fn delete_entry(&self, _entry_id: &EntryId) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl ClockPort for MockClock {
-        fn now_ms(&self) -> i64 {
-            self.now_ms
-        }
-    }
 
     #[tokio::test]
     async fn execute_uses_clock_now_ms_for_touch() {
-        let touched_at = Arc::new(Mutex::new(None));
-        let entry_repo = Arc::new(MockEntryRepository {
-            touched_at: touched_at.clone(),
-        });
-        let clock = Arc::new(MockClock { now_ms: 1234 });
-        let uc = TouchClipboardEntryUseCase::new(entry_repo, clock);
+        let touched_at = Arc::new(Mutex::new(None::<i64>));
+        let touched_at_clone = touched_at.clone();
+
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        entry_repo
+            .expect_touch_entry()
+            .returning(move |_entry_id, active_time_ms| {
+                *touched_at_clone.lock().unwrap() = Some(active_time_ms);
+                Ok(true)
+            });
+
+        let mut clock = MockClock::new();
+        clock.expect_now_ms().returning(|| 1234);
+
+        let uc = TouchClipboardEntryUseCase::new(Arc::new(entry_repo), Arc::new(clock));
         let entry_id = EntryId::from("entry-1");
 
         let result = uc.execute(&entry_id).await.unwrap();

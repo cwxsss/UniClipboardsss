@@ -597,73 +597,60 @@ impl SetupOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{
-        NoopDiscoveryPort, NoopLifecycleEventEmitter, NoopLifecycleStatus, NoopNetworkControl,
-        NoopPairedDeviceRepository, NoopPairingTransport, NoopProofPort, NoopSessionReadyEmitter,
-        NoopSpaceAccessPersistence, NoopSpaceAccessTransport, NoopTimerPort,
+    use crate::test_mocks::{
+        MockDiscovery, MockEncryption, MockEncryptionSession, MockEncryptionState, MockKeyMaterial,
+        MockKeyScope, MockLifecycleEventEmitterMock, MockLifecycleStatus, MockNetworkControl,
+        MockPairedDeviceRepository, MockPairingTransport, MockSessionReady, MockSetupEvent,
+        MockSetupStatus, MockSpaceAccessCrypto, MockSpaceAccessPersistence, MockSpaceAccessProof,
+        MockSpaceAccessTransport, MockTimer,
     };
     use crate::usecases::pairing::{PairingConfig, PairingOrchestrator};
     use crate::usecases::setup::action_executor::SetupActionExecutor;
     use crate::usecases::space_access::{SpaceAccessExecutor, SpaceAccessOrchestrator};
     use crate::usecases::{AppLifecycleCoordinatorDeps, StartNetworkAfterUnlock};
     use async_trait::async_trait;
+    use mockall::mock;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex as StdMutex};
-    use tokio::sync::{Mutex, Notify};
+    use std::sync::{Arc, Condvar, Mutex as StdMutex};
+    use tokio::sync::Mutex;
     use tokio::time::{sleep, Duration, Instant};
     use uc_core::network::pairing_state_machine::FailureReason;
-    use uc_core::ports::security::encryption::EncryptionPort;
-    use uc_core::ports::security::encryption_session::EncryptionSessionPort;
-    use uc_core::ports::security::encryption_state::EncryptionStatePort;
-    use uc_core::ports::security::key_material::KeyMaterialPort;
-    use uc_core::ports::security::key_scope::{KeyScopePort, ScopeError};
+    use uc_core::ports::security::key_scope::ScopeError;
     use uc_core::ports::space::CryptoPort;
     use uc_core::ports::SetupEventPort;
     use uc_core::security::model::{
         EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfAlgorithm,
-        KdfParams, KdfParamsV1, Kek, KeyScope, KeySlot, KeySlotFile, KeySlotVersion, MasterKey,
-        Passphrase,
+        KdfParams, KdfParamsV1, Kek, KeyScope, KeySlotFile, KeySlotVersion, MasterKey, Passphrase,
     };
     use uc_core::security::space_access::event::SpaceAccessEvent;
     use uc_core::security::state::{EncryptionState, EncryptionStateError};
     use uc_core::setup::{SetupError as SetupDomainError, SetupStatus};
 
-    struct MockSetupStatusPort {
-        status: StdMutex<SetupStatus>,
-        set_calls: AtomicUsize,
+    #[derive(Clone)]
+    struct SetupStatusTracker {
+        status: Arc<StdMutex<SetupStatus>>,
+        get_calls: Arc<AtomicUsize>,
+        set_calls: Arc<AtomicUsize>,
     }
 
-    struct BlockingSetupStatusPort {
-        status: SetupStatus,
-        entered_get_status: Notify,
-        release_get_status: Notify,
-        get_calls: AtomicUsize,
-    }
-
-    #[derive(Default)]
-    struct MockSetupEventPort {
-        emitted: tokio::sync::Mutex<Vec<(SetupState, Option<String>)>>,
-    }
-
-    impl MockSetupEventPort {
-        async fn snapshot(&self) -> Vec<(SetupState, Option<String>)> {
-            self.emitted.lock().await.clone()
-        }
-    }
-
-    #[async_trait]
-    impl SetupEventPort for MockSetupEventPort {
-        async fn emit_setup_state_changed(&self, state: SetupState, session_id: Option<String>) {
-            self.emitted.lock().await.push((state, session_id));
-        }
-    }
-
-    impl MockSetupStatusPort {
-        fn new(status: SetupStatus) -> Self {
+    impl SetupStatusTracker {
+        fn new(initial_status: SetupStatus) -> Self {
             Self {
-                status: StdMutex::new(status),
-                set_calls: AtomicUsize::new(0),
+                status: Arc::new(StdMutex::new(initial_status)),
+                get_calls: Arc::new(AtomicUsize::new(0)),
+                set_calls: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        fn status(&self) -> SetupStatus {
+            self.status
+                .lock()
+                .expect("lock setup status tracker")
+                .clone()
+        }
+
+        fn get_call_count(&self) -> usize {
+            self.get_calls.load(Ordering::SeqCst)
         }
 
         fn set_call_count(&self) -> usize {
@@ -671,201 +658,214 @@ mod tests {
         }
     }
 
-    impl BlockingSetupStatusPort {
-        fn new(status: SetupStatus) -> Self {
+    #[derive(Clone)]
+    struct SetupStatusBlockingControl {
+        entered_get_status: Arc<(StdMutex<bool>, Condvar)>,
+        release_get_status: Arc<(StdMutex<bool>, Condvar)>,
+    }
+
+    impl SetupStatusBlockingControl {
+        fn new() -> Self {
             Self {
-                status,
-                entered_get_status: Notify::new(),
-                release_get_status: Notify::new(),
-                get_calls: AtomicUsize::new(0),
+                entered_get_status: Arc::new((StdMutex::new(false), Condvar::new())),
+                release_get_status: Arc::new((StdMutex::new(false), Condvar::new())),
             }
         }
 
         async fn wait_until_get_status_called(&self) {
-            self.entered_get_status.notified().await;
+            let entered_get_status = self.entered_get_status.clone();
+            tokio::task::spawn_blocking(move || {
+                let (lock, condvar) = &*entered_get_status;
+                let mut entered = lock.lock().expect("lock entered_get_status");
+                while !*entered {
+                    entered = condvar.wait(entered).expect("wait on entered_get_status");
+                }
+            })
+            .await
+            .expect("join wait_until_get_status_called");
         }
 
         fn release_blocked_get_status(&self) {
-            self.release_get_status.notify_waiters();
-        }
-
-        fn get_call_count(&self) -> usize {
-            self.get_calls.load(Ordering::SeqCst)
-        }
-    }
-
-    #[async_trait]
-    impl SetupStatusPort for MockSetupStatusPort {
-        async fn get_status(&self) -> anyhow::Result<SetupStatus> {
-            Ok(self.status.lock().unwrap().clone())
-        }
-
-        async fn set_status(&self, status: &SetupStatus) -> anyhow::Result<()> {
-            *self.status.lock().unwrap() = status.clone();
-            self.set_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            let (lock, condvar) = &*self.release_get_status;
+            let mut released = lock.lock().expect("lock release_get_status");
+            *released = true;
+            condvar.notify_all();
         }
     }
 
-    #[async_trait]
-    impl SetupStatusPort for BlockingSetupStatusPort {
-        async fn get_status(&self) -> anyhow::Result<SetupStatus> {
-            self.get_calls.fetch_add(1, Ordering::SeqCst);
-            self.entered_get_status.notify_one();
-            self.release_get_status.notified().await;
-            Ok(self.status.clone())
-        }
+    fn build_setup_status_port(status: SetupStatus) -> (Arc<MockSetupStatus>, SetupStatusTracker) {
+        let tracker = SetupStatusTracker::new(status);
+        let mut mock = MockSetupStatus::new();
 
-        async fn set_status(&self, _status: &SetupStatus) -> anyhow::Result<()> {
-            Ok(())
+        let get_tracker = tracker.clone();
+        mock.expect_get_status().times(0..).returning(move || {
+            get_tracker.get_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(get_tracker.status())
+        });
+
+        let set_tracker = tracker.clone();
+        mock.expect_set_status()
+            .times(0..)
+            .returning(move |status| {
+                *set_tracker
+                    .status
+                    .lock()
+                    .expect("lock setup status tracker") = status.clone();
+                set_tracker.set_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            });
+
+        (Arc::new(mock), tracker)
+    }
+
+    fn build_blocking_setup_status_port(
+        status: SetupStatus,
+    ) -> (
+        Arc<MockSetupStatus>,
+        SetupStatusTracker,
+        SetupStatusBlockingControl,
+    ) {
+        let tracker = SetupStatusTracker::new(status);
+        let blocking = SetupStatusBlockingControl::new();
+        let mut mock = MockSetupStatus::new();
+
+        let get_tracker = tracker.clone();
+        let entered_get_status = blocking.entered_get_status.clone();
+        let release_get_status = blocking.release_get_status.clone();
+        mock.expect_get_status().times(0..).returning(move || {
+            get_tracker.get_calls.fetch_add(1, Ordering::SeqCst);
+            {
+                let (lock, condvar) = &*entered_get_status;
+                let mut entered = lock.lock().expect("lock entered_get_status");
+                *entered = true;
+                condvar.notify_all();
+            }
+
+            let (lock, condvar) = &*release_get_status;
+            let mut released = lock.lock().expect("lock release_get_status");
+            while !*released {
+                released = condvar.wait(released).expect("wait on release_get_status");
+            }
+            Ok(get_tracker.status())
+        });
+
+        let set_tracker = tracker.clone();
+        mock.expect_set_status()
+            .times(0..)
+            .returning(move |status| {
+                *set_tracker
+                    .status
+                    .lock()
+                    .expect("lock setup status tracker") = status.clone();
+                set_tracker.set_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            });
+
+        (Arc::new(mock), tracker, blocking)
+    }
+
+    #[derive(Clone, Default)]
+    struct SetupEventTracker {
+        emitted: Arc<StdMutex<Vec<(SetupState, Option<String>)>>>,
+    }
+
+    impl SetupEventTracker {
+        fn snapshot(&self) -> Vec<(SetupState, Option<String>)> {
+            self.emitted
+                .lock()
+                .expect("lock setup event tracker")
+                .clone()
         }
     }
 
-    struct NoopEncryption;
+    fn build_setup_event_port_with_tracker() -> (Arc<MockSetupEvent>, SetupEventTracker) {
+        let tracker = SetupEventTracker::default();
+        let mut mock = MockSetupEvent::new();
 
-    #[async_trait]
-    impl EncryptionPort for NoopEncryption {
-        async fn derive_kek(
-            &self,
-            _passphrase: &Passphrase,
-            _salt: &[u8],
-            _kdf_params: &uc_core::security::model::KdfParams,
-        ) -> Result<Kek, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
+        let emit_tracker = tracker.clone();
+        mock.expect_emit_setup_state_changed()
+            .times(0..)
+            .returning(move |state, session_id| {
+                emit_tracker
+                    .emitted
+                    .lock()
+                    .expect("lock setup event tracker")
+                    .push((state, session_id));
+            });
 
-        async fn wrap_master_key(
-            &self,
-            _kek: &Kek,
-            _master_key: &MasterKey,
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn unwrap_master_key(
-            &self,
-            _kek: &Kek,
-            _blob: &EncryptedBlob,
-        ) -> Result<MasterKey, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn encrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _plaintext: &[u8],
-            _aad: &[u8],
-            _algo: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn decrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _blob: &EncryptedBlob,
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
+        (Arc::new(mock), tracker)
     }
 
-    struct NoopKeyMaterial;
-
-    #[async_trait]
-    impl KeyMaterialPort for NoopKeyMaterial {
-        async fn load_keyslot(&self, _scope: &KeyScope) -> Result<KeySlot, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_keyslot(&self, _keyslot: &KeySlot) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn load_kek(&self, _scope: &KeyScope) -> Result<Kek, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_kek(&self, _scope: &KeyScope, _kek: &Kek) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn delete_kek(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
+    fn make_noop_encryption() -> MockEncryption {
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_derive_kek()
+            .returning(|_, _, _| Err(EncryptionError::NotInitialized));
+        encryption
+            .expect_wrap_master_key()
+            .returning(|_, _, _| Err(EncryptionError::NotInitialized));
+        encryption
+            .expect_unwrap_master_key()
+            .returning(|_, _| Err(EncryptionError::NotInitialized));
+        encryption
+            .expect_encrypt_blob()
+            .returning(|_, _, _, _| Err(EncryptionError::NotInitialized));
+        encryption
+            .expect_decrypt_blob()
+            .returning(|_, _, _| Err(EncryptionError::NotInitialized));
+        encryption
     }
 
-    struct NoopKeyScope;
-
-    #[async_trait]
-    impl KeyScopePort for NoopKeyScope {
-        async fn current_scope(&self) -> Result<KeyScope, ScopeError> {
-            Err(ScopeError::FailedToGetCurrentScope)
-        }
+    fn make_noop_key_material() -> MockKeyMaterial {
+        let mut key_material = MockKeyMaterial::new();
+        key_material
+            .expect_load_keyslot()
+            .returning(|_| Err(EncryptionError::KeyNotFound));
+        key_material.expect_store_keyslot().returning(|_| Ok(()));
+        key_material.expect_delete_keyslot().returning(|_| Ok(()));
+        key_material
+            .expect_load_kek()
+            .returning(|_| Err(EncryptionError::KeyNotFound));
+        key_material.expect_store_kek().returning(|_, _| Ok(()));
+        key_material.expect_delete_kek().returning(|_| Ok(()));
+        key_material
     }
 
-    struct NoopEncryptionState;
-
-    #[async_trait]
-    impl EncryptionStatePort for NoopEncryptionState {
-        async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError> {
-            Err(EncryptionStateError::LoadError("noop".to_string()))
-        }
-
-        async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
-
-        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
+    fn make_noop_key_scope() -> MockKeyScope {
+        let mut key_scope = MockKeyScope::new();
+        key_scope
+            .expect_current_scope()
+            .returning(|| Err(ScopeError::FailedToGetCurrentScope));
+        key_scope
     }
 
-    struct NoopEncryptionSession;
-
-    #[async_trait]
-    impl EncryptionSessionPort for NoopEncryptionSession {
-        async fn is_ready(&self) -> bool {
-            false
-        }
-
-        async fn get_master_key(&self) -> Result<MasterKey, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn set_master_key(&self, _master_key: MasterKey) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), EncryptionError> {
-            Ok(())
-        }
+    fn make_noop_encryption_state() -> MockEncryptionState {
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Err(EncryptionStateError::LoadError("noop".to_string())));
+        state.expect_persist_initialized().returning(|| Ok(()));
+        state.expect_clear_initialized().returning(|| Ok(()));
+        state
     }
 
-    struct SucceedEncryption;
+    fn make_noop_encryption_session() -> MockEncryptionSession {
+        let mut session = MockEncryptionSession::new();
+        session.expect_is_ready().returning(|| false);
+        session
+            .expect_get_master_key()
+            .returning(|| Err(EncryptionError::NotInitialized));
+        session.expect_set_master_key().returning(|_| Ok(()));
+        session.expect_clear().returning(|| Ok(()));
+        session
+    }
 
-    #[async_trait]
-    impl EncryptionPort for SucceedEncryption {
-        async fn derive_kek(
-            &self,
-            _passphrase: &Passphrase,
-            _salt: &[u8],
-            _kdf_params: &uc_core::security::model::KdfParams,
-        ) -> Result<Kek, EncryptionError> {
-            Ok(Kek([0u8; 32]))
-        }
-
-        async fn wrap_master_key(
-            &self,
-            _kek: &Kek,
-            _master_key: &MasterKey,
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
+    fn make_success_encryption() -> MockEncryption {
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_derive_kek()
+            .returning(|_, _, _| Ok(Kek([0u8; 32])));
+        encryption.expect_wrap_master_key().returning(|_, _, _| {
             Ok(EncryptedBlob {
                 version: uc_core::security::model::EncryptionFormatVersion::V1,
                 aead: EncryptionAlgo::XChaCha20Poly1305,
@@ -873,23 +873,11 @@ mod tests {
                 ciphertext: vec![1u8; 32],
                 aad_fingerprint: None,
             })
-        }
-
-        async fn unwrap_master_key(
-            &self,
-            _kek: &Kek,
-            _blob: &EncryptedBlob,
-        ) -> Result<MasterKey, EncryptionError> {
-            Ok(MasterKey([0u8; 32]))
-        }
-
-        async fn encrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _plaintext: &[u8],
-            _aad: &[u8],
-            _algo: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
+        });
+        encryption
+            .expect_unwrap_master_key()
+            .returning(|_, _| Ok(MasterKey([0u8; 32])));
+        encryption.expect_encrypt_blob().returning(|_, _, _, _| {
             Ok(EncryptedBlob {
                 version: uc_core::security::model::EncryptionFormatVersion::V1,
                 aead: EncryptionAlgo::XChaCha20Poly1305,
@@ -897,205 +885,131 @@ mod tests {
                 ciphertext: vec![1u8; 32],
                 aad_fingerprint: None,
             })
-        }
-
-        async fn decrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _blob: &EncryptedBlob,
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, EncryptionError> {
-            Ok(vec![0u8; 32])
-        }
+        });
+        encryption
+            .expect_decrypt_blob()
+            .returning(|_, _, _| Ok(vec![0u8; 32]));
+        encryption
     }
 
-    struct SucceedKeyMaterial;
-
-    #[async_trait]
-    impl KeyMaterialPort for SucceedKeyMaterial {
-        async fn load_keyslot(&self, _scope: &KeyScope) -> Result<KeySlot, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_keyslot(&self, _keyslot: &KeySlot) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn load_kek(&self, _scope: &KeyScope) -> Result<Kek, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_kek(&self, _scope: &KeyScope, _kek: &Kek) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn delete_kek(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
+    fn make_success_key_material() -> MockKeyMaterial {
+        let mut key_material = MockKeyMaterial::new();
+        key_material
+            .expect_load_keyslot()
+            .returning(|_| Err(EncryptionError::KeyNotFound));
+        key_material.expect_store_keyslot().returning(|_| Ok(()));
+        key_material.expect_delete_keyslot().returning(|_| Ok(()));
+        key_material
+            .expect_load_kek()
+            .returning(|_| Err(EncryptionError::KeyNotFound));
+        key_material.expect_store_kek().returning(|_, _| Ok(()));
+        key_material.expect_delete_kek().returning(|_| Ok(()));
+        key_material
     }
 
-    struct SucceedKeyScope;
-
-    #[async_trait]
-    impl KeyScopePort for SucceedKeyScope {
-        async fn current_scope(&self) -> Result<KeyScope, ScopeError> {
+    fn make_success_key_scope() -> MockKeyScope {
+        let mut key_scope = MockKeyScope::new();
+        key_scope.expect_current_scope().returning(|| {
             Ok(KeyScope {
                 profile_id: "default".to_string(),
             })
-        }
+        });
+        key_scope
     }
 
-    struct SucceedEncryptionState;
-
-    #[async_trait]
-    impl EncryptionStatePort for SucceedEncryptionState {
-        async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError> {
-            Ok(EncryptionState::Uninitialized)
-        }
-
-        async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
-
-        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
+    fn make_success_encryption_state() -> MockEncryptionState {
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Ok(EncryptionState::Uninitialized));
+        state.expect_persist_initialized().returning(|| Ok(()));
+        state.expect_clear_initialized().returning(|| Ok(()));
+        state
     }
 
-    struct SucceedEncryptionSession;
-
-    #[async_trait]
-    impl EncryptionSessionPort for SucceedEncryptionSession {
-        async fn is_ready(&self) -> bool {
-            false
-        }
-
-        async fn get_master_key(&self) -> Result<MasterKey, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn set_master_key(&self, _master_key: MasterKey) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), EncryptionError> {
-            Ok(())
-        }
+    fn make_success_encryption_session() -> MockEncryptionSession {
+        let mut session = MockEncryptionSession::new();
+        session.expect_is_ready().returning(|| false);
+        session
+            .expect_get_master_key()
+            .returning(|| Err(EncryptionError::NotInitialized));
+        session.expect_set_master_key().returning(|_| Ok(()));
+        session.expect_clear().returning(|| Ok(()));
+        session
     }
 
-    // -- Lifecycle mocks -------------------------------------------------------
-    // NoopNetworkControl, NoopSessionReadyEmitter, NoopLifecycleStatus,
-    // NoopLifecycleEventEmitter, NoopPairedDeviceRepository, NoopDiscoveryPort
-    // — imported from crate::testing.
-    struct NoopSpaceAccessCrypto;
+    mock! {
+        SpaceAccessCryptoFactory {}
 
-    #[async_trait]
-    impl CryptoPort for NoopSpaceAccessCrypto {
-        async fn generate_nonce32(&self) -> [u8; 32] {
-            [0u8; 32]
-        }
-
-        async fn export_keyslot_blob(
-            &self,
-            _space_id: &uc_core::ids::SpaceId,
-        ) -> anyhow::Result<KeySlot> {
-            Err(anyhow::anyhow!("noop crypto export_keyslot_blob"))
-        }
-
-        async fn derive_master_key_from_keyslot(
-            &self,
-            _keyslot_blob: &[u8],
-            _passphrase: SecretString,
-        ) -> anyhow::Result<MasterKey> {
-            Err(anyhow::anyhow!(
-                "noop crypto derive_master_key_from_keyslot"
-            ))
-        }
-    }
-
-    struct NoopSpaceAccessCryptoFactory;
-
-    impl SpaceAccessCryptoFactory for NoopSpaceAccessCryptoFactory {
-        fn build(&self, _passphrase: SecretString) -> Box<dyn CryptoPort> {
-            Box::new(NoopSpaceAccessCrypto)
-        }
-    }
-
-    struct SucceedSpaceAccessCrypto;
-
-    #[async_trait]
-    impl CryptoPort for SucceedSpaceAccessCrypto {
-        async fn generate_nonce32(&self) -> [u8; 32] {
-            [1u8; 32]
-        }
-
-        async fn export_keyslot_blob(
-            &self,
-            _space_id: &uc_core::ids::SpaceId,
-        ) -> anyhow::Result<KeySlot> {
-            Err(anyhow::anyhow!("unused in joiner flow"))
-        }
-
-        async fn derive_master_key_from_keyslot(
-            &self,
-            _keyslot_blob: &[u8],
-            _passphrase: SecretString,
-        ) -> anyhow::Result<MasterKey> {
-            MasterKey::from_bytes(&[7u8; 32]).map_err(|err| anyhow::anyhow!(err.to_string()))
-        }
-    }
-
-    struct SucceedSpaceAccessCryptoFactory;
-
-    impl SpaceAccessCryptoFactory for SucceedSpaceAccessCryptoFactory {
-        fn build(&self, _passphrase: SecretString) -> Box<dyn CryptoPort> {
-            Box::new(SucceedSpaceAccessCrypto)
+        impl SpaceAccessCryptoFactory for SpaceAccessCryptoFactory {
+            fn build(&self, passphrase: SecretString) -> Box<dyn CryptoPort>;
         }
     }
 
     // NoopPairingTransport, NoopSpaceAccessTransport, NoopProofPort,
-    // NoopTimerPort, NoopSpaceAccessPersistence — all imported from crate::testing
+    // NoopTimerPort, NoopSpaceAccessPersistence — built from crate::test_mocks
 
     fn build_mock_lifecycle() -> Arc<AppLifecycleCoordinator> {
+        let mut network_control = MockNetworkControl::new();
+        network_control.expect_start_network().returning(|| Ok(()));
+
+        let mut emitter = MockSessionReady::new();
+        emitter.expect_emit_ready().returning(|| Ok(()));
+
+        let mut status = MockLifecycleStatus::new();
+        status.expect_set_state().returning(|_| Ok(()));
+        status
+            .expect_get_state()
+            .returning(|| crate::usecases::LifecycleState::Idle);
+
+        let mut lifecycle_emitter = MockLifecycleEventEmitterMock::new();
+        lifecycle_emitter
+            .expect_emit_lifecycle_event()
+            .returning(|_| Ok(()));
+
         Arc::new(AppLifecycleCoordinator::from_deps(
             AppLifecycleCoordinatorDeps {
-                network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(NoopNetworkControl))),
+                network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(network_control))),
                 announcer: None,
-                emitter: Arc::new(NoopSessionReadyEmitter),
-                status: Arc::new(NoopLifecycleStatus),
-                lifecycle_emitter: Arc::new(NoopLifecycleEventEmitter),
+                emitter: Arc::new(emitter),
+                status: Arc::new(status),
+                lifecycle_emitter: Arc::new(lifecycle_emitter),
             },
         ))
     }
 
     fn build_initialize_encryption() -> Arc<InitializeEncryption> {
         Arc::new(InitializeEncryption::from_ports(
-            Arc::new(NoopEncryption),
-            Arc::new(NoopKeyMaterial),
-            Arc::new(NoopKeyScope),
-            Arc::new(NoopEncryptionState),
-            Arc::new(NoopEncryptionSession),
+            Arc::new(make_noop_encryption()),
+            Arc::new(make_noop_key_material()),
+            Arc::new(make_noop_key_scope()),
+            Arc::new(make_noop_encryption_state()),
+            Arc::new(make_noop_encryption_session()),
         ))
     }
 
     fn build_initialize_encryption_success() -> Arc<InitializeEncryption> {
         Arc::new(InitializeEncryption::from_ports(
-            Arc::new(SucceedEncryption),
-            Arc::new(SucceedKeyMaterial),
-            Arc::new(SucceedKeyScope),
-            Arc::new(SucceedEncryptionState),
-            Arc::new(SucceedEncryptionSession),
+            Arc::new(make_success_encryption()),
+            Arc::new(make_success_key_material()),
+            Arc::new(make_success_key_scope()),
+            Arc::new(make_success_encryption_state()),
+            Arc::new(make_success_encryption_session()),
         ))
     }
 
     type PairingTestOrchestrator = std::sync::Arc<crate::usecases::pairing::PairingOrchestrator>;
 
     fn build_pairing_orchestrator() -> PairingTestOrchestrator {
-        let repo = Arc::new(NoopPairedDeviceRepository);
+        let mut repo = MockPairedDeviceRepository::new();
+        repo.expect_get_by_peer_id().returning(|_| Ok(None));
+        repo.expect_list_all().returning(|| Ok(vec![]));
+        repo.expect_upsert().returning(|_| Ok(()));
+        repo.expect_set_state().returning(|_, _| Ok(()));
+        repo.expect_update_last_seen().returning(|_, _| Ok(()));
+        repo.expect_delete().returning(|_| Ok(()));
+        repo.expect_update_sync_settings().returning(|_, _| Ok(()));
+        let repo = Arc::new(repo);
         let (orchestrator, _rx) = PairingOrchestrator::new(
             PairingConfig::default(),
             repo,
@@ -1114,7 +1028,15 @@ mod tests {
             tokio::sync::mpsc::Receiver<uc_core::network::pairing_state_machine::PairingAction>,
         >,
     ) {
-        let repo = Arc::new(NoopPairedDeviceRepository);
+        let mut repo = MockPairedDeviceRepository::new();
+        repo.expect_get_by_peer_id().returning(|_| Ok(None));
+        repo.expect_list_all().returning(|| Ok(vec![]));
+        repo.expect_upsert().returning(|_| Ok(()));
+        repo.expect_set_state().returning(|_, _| Ok(()));
+        repo.expect_update_last_seen().returning(|_, _| Ok(()));
+        repo.expect_delete().returning(|_| Ok(()));
+        repo.expect_update_sync_settings().returning(|_, _| Ok(()));
+        let repo = Arc::new(repo);
         let (orchestrator, rx) = PairingOrchestrator::new(
             PairingConfig::default(),
             repo,
@@ -1132,39 +1054,127 @@ mod tests {
     }
 
     fn build_discovery_port() -> Arc<dyn DiscoveryPort> {
-        Arc::new(NoopDiscoveryPort)
+        let mut discovery = MockDiscovery::new();
+        discovery
+            .expect_list_discovered_peers()
+            .returning(|| Ok(vec![]));
+        Arc::new(discovery)
     }
 
     fn build_network_control() -> Arc<dyn NetworkControlPort> {
-        Arc::new(NoopNetworkControl)
+        let mut network_control = MockNetworkControl::new();
+        network_control.expect_start_network().returning(|| Ok(()));
+        Arc::new(network_control)
     }
 
     fn build_crypto_factory() -> Arc<dyn SpaceAccessCryptoFactory> {
-        Arc::new(NoopSpaceAccessCryptoFactory)
+        let mut factory = MockSpaceAccessCryptoFactory::new();
+        factory.expect_build().returning(|_| {
+            let mut crypto = MockSpaceAccessCrypto::new();
+            crypto.expect_generate_nonce32().returning(|| [0u8; 32]);
+            crypto
+                .expect_export_keyslot_blob()
+                .returning(|_| Err(anyhow::anyhow!("noop crypto export_keyslot_blob")));
+            crypto
+                .expect_derive_master_key_from_keyslot()
+                .returning(|_, _| {
+                    Err(anyhow::anyhow!(
+                        "noop crypto derive_master_key_from_keyslot"
+                    ))
+                });
+            Box::new(crypto)
+        });
+        Arc::new(factory)
     }
 
     fn build_success_crypto_factory() -> Arc<dyn SpaceAccessCryptoFactory> {
-        Arc::new(SucceedSpaceAccessCryptoFactory)
+        let mut factory = MockSpaceAccessCryptoFactory::new();
+        factory.expect_build().returning(|_| {
+            let mut crypto = MockSpaceAccessCrypto::new();
+            crypto.expect_generate_nonce32().returning(|| [1u8; 32]);
+            crypto
+                .expect_export_keyslot_blob()
+                .returning(|_| Err(anyhow::anyhow!("unused in joiner flow")));
+            crypto
+                .expect_derive_master_key_from_keyslot()
+                .returning(|_, _| {
+                    MasterKey::from_bytes(&[7u8; 32])
+                        .map_err(|err| anyhow::anyhow!(err.to_string()))
+                });
+            Box::new(crypto)
+        });
+        Arc::new(factory)
+    }
+
+    fn make_success_space_access_crypto() -> MockSpaceAccessCrypto {
+        let mut crypto = MockSpaceAccessCrypto::new();
+        crypto.expect_generate_nonce32().returning(|| [1u8; 32]);
+        crypto
+            .expect_export_keyslot_blob()
+            .returning(|_| Err(anyhow::anyhow!("unused in joiner flow")));
+        crypto
+            .expect_derive_master_key_from_keyslot()
+            .returning(|_, _| {
+                MasterKey::from_bytes(&[7u8; 32]).map_err(|err| anyhow::anyhow!(err.to_string()))
+            });
+        crypto
     }
 
     fn build_pairing_transport() -> Arc<dyn PairingTransportPort> {
-        Arc::new(NoopPairingTransport)
+        let mut transport = MockPairingTransport::new();
+        transport
+            .expect_open_pairing_session()
+            .returning(|_, _| Ok(()));
+        transport
+            .expect_send_pairing_on_session()
+            .returning(|_| Ok(()));
+        transport
+            .expect_close_pairing_session()
+            .returning(|_, _| Ok(()));
+        transport.expect_unpair_device().returning(|_| Ok(()));
+        Arc::new(transport)
     }
 
     fn build_transport_port() -> Arc<Mutex<dyn SpaceAccessTransportPort>> {
-        Arc::new(Mutex::new(NoopSpaceAccessTransport))
+        let mut transport = MockSpaceAccessTransport::new();
+        transport.expect_send_offer().returning(|_| Ok(()));
+        transport.expect_send_proof().returning(|_| Ok(()));
+        transport.expect_send_result().returning(|_| Ok(()));
+        Arc::new(Mutex::new(transport))
     }
 
     fn build_proof_port() -> Arc<dyn ProofPort> {
-        Arc::new(NoopProofPort)
+        let mut proof = MockSpaceAccessProof::new();
+        proof
+            .expect_build_proof()
+            .returning(|sid, space_id, nonce, _| {
+                Ok(SpaceAccessProofArtifact {
+                    pairing_session_id: sid.clone(),
+                    space_id: space_id.clone(),
+                    challenge_nonce: nonce,
+                    proof_bytes: vec![],
+                })
+            });
+        proof.expect_verify_proof().returning(|_, _| Ok(true));
+        Arc::new(proof)
     }
 
     fn build_timer_port() -> Arc<Mutex<dyn TimerPort>> {
-        Arc::new(Mutex::new(NoopTimerPort))
+        let mut timer = MockTimer::new();
+        timer.expect_start().returning(|_, _| Ok(()));
+        timer.expect_stop().returning(|_| Ok(()));
+        Arc::new(Mutex::new(timer))
     }
 
     fn build_persistence_port() -> Arc<Mutex<dyn PersistencePort>> {
-        Arc::new(Mutex::new(NoopSpaceAccessPersistence))
+        let mut persistence = MockSpaceAccessPersistence::new();
+        persistence
+            .expect_persist_joiner_access()
+            .returning(|_, _| Ok(()));
+        persistence
+            .expect_persist_sponsor_access()
+            .returning(|_, _| Ok(()));
+        Arc::new(Mutex::new(persistence))
     }
 
     #[derive(Default)]
@@ -1265,7 +1275,8 @@ mod tests {
     }
 
     fn build_setup_event_port() -> Arc<dyn SetupEventPort> {
-        Arc::new(MockSetupEventPort::default())
+        let (setup_event_port, _tracker) = build_setup_event_port_with_tracker();
+        setup_event_port
     }
 
     fn build_orchestrator_with_initialize_encryption_and_crypto_factory(
@@ -1364,9 +1375,9 @@ mod tests {
 
     #[tokio::test]
     async fn completed_host_sponsor_authorization_sends_offer_from_loaded_keyslot() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus {
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus {
             has_completed: true,
-        }));
+        });
         let (transport, transport_state) = RecordingSpaceAccessTransport::new();
         let orchestrator = build_orchestrator_with_space_access_runtime(
             setup_status,
@@ -1408,9 +1419,9 @@ mod tests {
 
     #[tokio::test]
     async fn host_space_access_proof_verification_sends_result() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus {
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus {
             has_completed: true,
-        }));
+        });
         let (transport, transport_state) = RecordingSpaceAccessTransport::new();
         let orchestrator = build_orchestrator_with_space_access_runtime(
             setup_status,
@@ -1450,7 +1461,7 @@ mod tests {
 
     #[tokio::test]
     async fn joiner_space_access_result_advances_waiting_decision_to_granted() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let (transport, _transport_state) = RecordingSpaceAccessTransport::new();
         let orchestrator = build_orchestrator_with_space_access_runtime(
             setup_status,
@@ -1476,7 +1487,7 @@ mod tests {
             guard.sponsor_peer_id = Some("peer-host".to_string());
         }
 
-        let crypto = SucceedSpaceAccessCrypto;
+        let crypto = make_success_space_access_crypto();
         let mut transport = orchestrator.action_executor.transport_port.lock().await;
         let mut timer = orchestrator.action_executor.timer_port.lock().await;
         let mut store = orchestrator.action_executor.persistence_port.lock().await;
@@ -1549,9 +1560,9 @@ mod tests {
 
     #[tokio::test]
     async fn get_state_seeds_completed_when_setup_status_completed() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus {
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus {
             has_completed: true,
-        }));
+        });
         let orchestrator = build_orchestrator(setup_status);
 
         let state = orchestrator.get_state().await;
@@ -1559,11 +1570,12 @@ mod tests {
         assert_eq!(state, SetupState::Completed);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn concurrent_get_state_waits_for_seed_completion() {
-        let setup_status = Arc::new(BlockingSetupStatusPort::new(SetupStatus {
-            has_completed: true,
-        }));
+        let (setup_status, setup_status_tracker, blocking_control) =
+            build_blocking_setup_status_port(SetupStatus {
+                has_completed: true,
+            });
         let orchestrator = Arc::new(build_orchestrator(setup_status.clone()));
 
         let first_call = {
@@ -1571,14 +1583,14 @@ mod tests {
             tokio::spawn(async move { orchestrator.get_state().await })
         };
 
-        setup_status.wait_until_get_status_called().await;
+        blocking_control.wait_until_get_status_called().await;
 
         let second_call = {
             let orchestrator = orchestrator.clone();
             tokio::spawn(async move { orchestrator.get_state().await })
         };
 
-        setup_status.release_blocked_get_status();
+        blocking_control.release_blocked_get_status();
 
         let first_state = first_call
             .await
@@ -1589,12 +1601,12 @@ mod tests {
 
         assert_eq!(first_state, SetupState::Completed);
         assert_eq!(second_state, SetupState::Completed);
-        assert_eq!(setup_status.get_call_count(), 1);
+        assert_eq!(setup_status_tracker.get_call_count(), 1);
     }
 
     #[tokio::test]
     async fn clear_transient_state_returns_uncompleted_device_to_welcome() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status.clone());
 
         orchestrator
@@ -1616,14 +1628,14 @@ mod tests {
         assert!(orchestrator.pairing_session_id.lock().await.is_none());
         assert!(orchestrator.passphrase.lock().await.is_none());
         assert!(!setup_status.get_status().await.unwrap().has_completed);
-        assert_eq!(setup_status.set_call_count(), 0);
+        assert_eq!(setup_status_tracker.set_call_count(), 0);
     }
 
     #[tokio::test]
     async fn clear_transient_state_preserves_completed_base_state() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus {
+        let (setup_status, setup_status_tracker) = build_setup_status_port(SetupStatus {
             has_completed: true,
-        }));
+        });
         let orchestrator = build_orchestrator(setup_status.clone());
 
         orchestrator
@@ -1647,12 +1659,12 @@ mod tests {
         assert!(orchestrator.selected_peer_id.lock().await.is_none());
         assert!(orchestrator.pairing_session_id.lock().await.is_none());
         assert!(setup_status.get_status().await.unwrap().has_completed);
-        assert_eq!(setup_status.set_call_count(), 0);
+        assert_eq!(setup_status_tracker.set_call_count(), 0);
     }
 
     #[tokio::test]
     async fn join_space_success_marks_setup_complete() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status.clone());
 
         orchestrator
@@ -1668,12 +1680,12 @@ mod tests {
         let status = setup_status.get_status().await.unwrap();
 
         assert!(status.has_completed);
-        assert_eq!(setup_status.set_call_count(), 1);
+        assert_eq!(setup_status_tracker.set_call_count(), 1);
     }
 
     #[tokio::test]
     async fn create_space_success_marks_setup_complete() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator_with_initialize_encryption(
             setup_status.clone(),
             build_initialize_encryption_success(),
@@ -1688,14 +1700,14 @@ mod tests {
         assert_eq!(state, SetupState::Completed);
         let status = setup_status.get_status().await.unwrap();
         assert!(status.has_completed);
-        assert_eq!(setup_status.set_call_count(), 1);
+        assert_eq!(setup_status_tracker.set_call_count(), 1);
     }
 
     #[tokio::test]
     async fn select_device_dispatch_emits_processing_join_space_event() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
-        let setup_event_port = Arc::new(MockSetupEventPort::default());
+        let (setup_event_port, setup_event_tracker) = build_setup_event_port_with_tracker();
         let (pairing_orchestrator, action_rx) = build_pairing_orchestrator_with_actions();
         let orchestrator = SetupOrchestrator::new(
             build_initialize_encryption(),
@@ -1731,7 +1743,7 @@ mod tests {
 
         assert!(matches!(state, SetupState::ProcessingJoinSpace { .. }));
 
-        let emitted = setup_event_port.snapshot().await;
+        let emitted = setup_event_tracker.snapshot();
         assert!(emitted
             .iter()
             .any(|(state, _)| matches!(state, SetupState::ProcessingJoinSpace { .. })));
@@ -1739,9 +1751,9 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_verification_listener_emits_join_space_confirm_peer_event() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
-        let setup_event_port = Arc::new(MockSetupEventPort::default());
+        let (setup_event_port, setup_event_tracker) = build_setup_event_port_with_tracker();
         let (pairing_orchestrator, action_rx) = build_pairing_orchestrator_with_actions();
         let orchestrator = SetupOrchestrator::new(
             build_initialize_encryption(),
@@ -1805,7 +1817,7 @@ mod tests {
 
         let emit_deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            let emitted = setup_event_port.snapshot().await;
+            let emitted = setup_event_tracker.snapshot();
             let found = emitted.iter().any(|(state, sid)| {
                 matches!(state, SetupState::JoinSpaceConfirmPeer { .. })
                     && sid.as_ref() == Some(&session_id)
@@ -1823,9 +1835,9 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_verification_listener_keeps_listening_for_keyslot_after_verification() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
-        let setup_event_port = Arc::new(MockSetupEventPort::default());
+        let (setup_event_port, setup_event_tracker) = build_setup_event_port_with_tracker();
         let (pairing_orchestrator, action_rx) = build_pairing_orchestrator_with_actions();
         let orchestrator = SetupOrchestrator::new(
             build_initialize_encryption(),
@@ -1889,7 +1901,7 @@ mod tests {
 
         let emit_deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            let emitted = setup_event_port.snapshot().await;
+            let emitted = setup_event_tracker.snapshot();
             let found = emitted.iter().any(|(state, sid)| {
                 matches!(state, SetupState::JoinSpaceConfirmPeer { .. })
                     && sid.as_ref() == Some(&session_id)
@@ -1932,9 +1944,9 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_verification_listener_emits_join_space_failed_event_on_pairing_failure() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
-        let setup_event_port = Arc::new(MockSetupEventPort::default());
+        let (setup_event_port, setup_event_tracker) = build_setup_event_port_with_tracker();
         let (pairing_orchestrator, action_rx) = build_pairing_orchestrator_with_actions();
         let orchestrator = SetupOrchestrator::new(
             build_initialize_encryption(),
@@ -1987,7 +1999,7 @@ mod tests {
 
         let emit_deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            let emitted = setup_event_port.snapshot().await;
+            let emitted = setup_event_tracker.snapshot();
             let found = emitted.iter().any(|(state, sid)| {
                 matches!(
                     state,
@@ -2009,7 +2021,7 @@ mod tests {
 
     #[tokio::test]
     async fn capture_context_preserves_verify_passphrase_events() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status);
 
         let event = orchestrator
@@ -2054,7 +2066,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_join_space_access_maps_space_access_error() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status);
         let space_id = uc_core::ids::SpaceId::new();
         let pairing_session_id = "session-join".to_string();
@@ -2124,7 +2136,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_join_space_access_reads_offer_from_space_access_context() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status);
 
         let offer = SpaceAccessJoinerOffer {
@@ -2169,7 +2181,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_passphrase_waits_for_late_joiner_offer() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator_with_initialize_encryption_and_crypto_factory(
             setup_status,
             build_initialize_encryption(),
@@ -2240,7 +2252,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_passphrase_does_not_complete_before_space_access_result() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator_with_initialize_encryption_and_crypto_factory(
             setup_status.clone(),
             build_initialize_encryption(),
@@ -2291,7 +2303,7 @@ mod tests {
 
     #[tokio::test]
     async fn setup_completes_after_access_granted_result_arrives() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator_with_initialize_encryption_and_crypto_factory(
             setup_status.clone(),
             build_initialize_encryption(),
@@ -2337,7 +2349,7 @@ mod tests {
 
     #[tokio::test]
     async fn setup_returns_to_passphrase_on_access_denied_result() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator_with_initialize_encryption_and_crypto_factory(
             setup_status.clone(),
             build_initialize_encryption(),
@@ -2531,7 +2543,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_space_happy_path() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status.clone());
 
         let steps = vec![
@@ -2590,7 +2602,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_space_pairing_fails() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status);
 
         let steps = vec![
@@ -2629,7 +2641,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_space_passphrase_wrong() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status);
 
         let steps = vec![
@@ -2689,7 +2701,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_space_cancel_during_pairing() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let orchestrator = build_orchestrator(setup_status);
 
         let steps = vec![
@@ -2733,9 +2745,9 @@ mod tests {
     /// instead of staying on the spinning ProcessingJoinSpace screen."
     #[tokio::test]
     async fn join_space_initial_request_rejected_by_peer_returns_pairing_rejected_error() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
-        let setup_event_port = Arc::new(MockSetupEventPort::default());
+        let (setup_event_port, setup_event_tracker) = build_setup_event_port_with_tracker();
         let (pairing_orchestrator, action_rx) = build_pairing_orchestrator_with_actions();
         let orchestrator = SetupOrchestrator::new(
             build_initialize_encryption(),
@@ -2796,7 +2808,7 @@ mod tests {
         // error=PairingRejected.
         let emit_deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            let emitted = setup_event_port.snapshot().await;
+            let emitted = setup_event_tracker.snapshot();
             let found = emitted.iter().any(|(state, sid)| {
                 matches!(
                     state,
@@ -2824,9 +2836,9 @@ mod tests {
     /// verification event arrives before the listener was subscribed."
     #[tokio::test]
     async fn join_space_low_latency_verification_advances_to_confirm_peer() {
-        let setup_status = Arc::new(MockSetupStatusPort::new(SetupStatus::default()));
+        let (setup_status, _setup_status_tracker) = build_setup_status_port(SetupStatus::default());
         let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
-        let setup_event_port = Arc::new(MockSetupEventPort::default());
+        let (setup_event_port, setup_event_tracker) = build_setup_event_port_with_tracker();
         let (pairing_orchestrator, action_rx) = build_pairing_orchestrator_with_actions();
         let orchestrator = SetupOrchestrator::new(
             build_initialize_encryption(),
@@ -2898,7 +2910,7 @@ mod tests {
         // Setup state should advance to JoinSpaceConfirmPeer.
         let emit_deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            let emitted = setup_event_port.snapshot().await;
+            let emitted = setup_event_tracker.snapshot();
             let found = emitted.iter().any(|(state, sid)| {
                 matches!(state, SetupState::JoinSpaceConfirmPeer { .. })
                     && sid.as_ref() == Some(&session_id)

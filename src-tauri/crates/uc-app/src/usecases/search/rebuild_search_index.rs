@@ -44,76 +44,12 @@ impl RebuildSearchIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::MockSearchIndex;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
     use uc_core::ids::{EntryId, EventId};
     use uc_core::search::{
-        ContentType, RebuildProgress, RebuildStage, SearchDocument, SearchError, SearchIndexMeta,
-        SearchPosting, SearchQuery, SearchResultsPage,
+        ContentType, RebuildProgress, RebuildStage, SearchDocument, SearchError,
     };
-
-    struct MockSearchIndex {
-        /// Number of entries received in last rebuild call.
-        last_entry_count: Arc<Mutex<Option<usize>>>,
-        fail_next: Arc<Mutex<Option<SearchError>>>,
-    }
-
-    impl MockSearchIndex {
-        fn new() -> Self {
-            Self {
-                last_entry_count: Arc::new(Mutex::new(None)),
-                fail_next: Arc::new(Mutex::new(None)),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl SearchIndexPort for MockSearchIndex {
-        async fn index_entry(
-            &self,
-            _d: SearchDocument,
-            _p: Vec<SearchPosting>,
-        ) -> Result<(), SearchError> {
-            Ok(())
-        }
-
-        async fn remove_entry(&self, _id: &EntryId) -> Result<(), SearchError> {
-            Ok(())
-        }
-
-        async fn search(&self, _q: SearchQuery) -> Result<SearchResultsPage, SearchError> {
-            Ok(SearchResultsPage {
-                items: vec![],
-                total: 0,
-                has_more: false,
-            })
-        }
-
-        async fn rebuild(
-            &self,
-            e: Vec<(SearchDocument, Vec<SearchPosting>)>,
-            tx: tokio::sync::mpsc::Sender<RebuildProgress>,
-        ) -> Result<(), SearchError> {
-            if let Some(err) = self.fail_next.lock().await.take() {
-                return Err(err);
-            }
-            *self.last_entry_count.lock().await = Some(e.len());
-            // Send a progress event through the forwarded Sender to prove it was not dropped.
-            let _ = tx
-                .send(RebuildProgress {
-                    stage: RebuildStage::Started,
-                    indexed: 0,
-                    total: e.len() as u32,
-                })
-                .await;
-            Ok(())
-        }
-
-        async fn get_index_meta(&self) -> Result<SearchIndexMeta, SearchError> {
-            unimplemented!("not exercised in this test")
-        }
-    }
 
     fn make_test_document(entry_id: &str) -> SearchDocument {
         SearchDocument {
@@ -132,10 +68,23 @@ mod tests {
 
     #[tokio::test]
     async fn execute_forwards_sender_and_entries_to_port() {
-        let mock = Arc::new(MockSearchIndex::new());
-        let last_count = mock.last_entry_count.clone();
+        let last_count = Arc::new(std::sync::Mutex::new(None::<usize>));
+        let last_count_clone = last_count.clone();
 
-        let uc = RebuildSearchIndex::from_port(mock as Arc<dyn SearchIndexPort>);
+        let mut mock = MockSearchIndex::new();
+        mock.expect_rebuild().returning(move |entries, tx| {
+            let count = entries.len();
+            *last_count_clone.lock().unwrap() = Some(count);
+            // Send a progress event through the forwarded Sender to prove it was not dropped.
+            let _ = tx.try_send(RebuildProgress {
+                stage: RebuildStage::Started,
+                indexed: 0,
+                total: count as u32,
+            });
+            Ok(())
+        });
+
+        let uc = RebuildSearchIndex::from_port(Arc::new(mock));
         let entries = vec![
             (make_test_document("e1"), vec![]),
             (make_test_document("e2"), vec![]),
@@ -150,15 +99,16 @@ mod tests {
         assert_eq!(progress.stage, RebuildStage::Started);
         assert_eq!(progress.total, 2);
 
-        assert_eq!(*last_count.lock().await, Some(2));
+        assert_eq!(*last_count.lock().unwrap(), Some(2));
     }
 
     #[tokio::test]
     async fn execute_propagates_port_error() {
-        let mock = Arc::new(MockSearchIndex::new());
-        *mock.fail_next.lock().await = Some(SearchError::IndexNotReady);
+        let mut mock = MockSearchIndex::new();
+        mock.expect_rebuild()
+            .returning(|_, _| Err(SearchError::IndexNotReady));
 
-        let uc = RebuildSearchIndex::from_port(mock as Arc<dyn SearchIndexPort>);
+        let uc = RebuildSearchIndex::from_port(Arc::new(mock));
         let (tx, _rx) = tokio::sync::mpsc::channel::<RebuildProgress>(4);
 
         let result = uc.execute(vec![], tx).await;

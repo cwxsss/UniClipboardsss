@@ -306,12 +306,12 @@ impl InboundClipboardSyncWorker {
 #[allow(deprecated)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use anyhow::Result;
     use async_trait::async_trait;
     use chrono::Utc;
+    use mockall::mock;
     use uc_app::usecases::clipboard::clipboard_write_coordinator::ClipboardWriteCoordinator;
     use uc_app::usecases::clipboard::ClipboardIntegrationMode;
     use uc_core::ids::{EntryId, RepresentationId};
@@ -335,157 +335,214 @@ mod tests {
     // Mock ports for SyncInboundClipboardUseCase construction
     // -------------------------------------------------------------------------
 
-    struct MockSystemClipboard {
-        writes: Arc<Mutex<Vec<SystemClipboardSnapshot>>>,
-    }
-
-    impl uc_core::ports::SystemClipboardPort for MockSystemClipboard {
-        fn read_snapshot(&self) -> Result<SystemClipboardSnapshot> {
-            Ok(SystemClipboardSnapshot {
-                ts_ms: 0,
-                representations: vec![],
-            })
-        }
-        fn write_snapshot(&self, snapshot: SystemClipboardSnapshot) -> Result<()> {
-            self.writes.lock().unwrap().push(snapshot);
-            Ok(())
+    mock! {
+        SystemClipboard {}
+        impl uc_core::ports::SystemClipboardPort for SystemClipboard {
+            fn read_snapshot(&self) -> Result<SystemClipboardSnapshot>;
+            fn write_snapshot(&self, snapshot: SystemClipboardSnapshot) -> Result<()>;
         }
     }
 
-    struct MockEncryptionSession;
-
-    #[async_trait]
-    impl uc_core::ports::EncryptionSessionPort for MockEncryptionSession {
-        async fn is_ready(&self) -> bool {
-            true
-        }
-        async fn get_master_key(&self) -> std::result::Result<MasterKey, EncryptionError> {
-            Ok(MasterKey([3; 32]))
-        }
-        async fn set_master_key(&self, _: MasterKey) -> std::result::Result<(), EncryptionError> {
-            Ok(())
-        }
-        async fn clear(&self) -> std::result::Result<(), EncryptionError> {
-            Ok(())
+    mock! {
+        EncryptionSession {}
+        #[async_trait]
+        impl uc_core::ports::EncryptionSessionPort for EncryptionSession {
+            async fn is_ready(&self) -> bool;
+            async fn get_master_key(&self) -> std::result::Result<MasterKey, EncryptionError>;
+            async fn set_master_key(&self, key: MasterKey) -> std::result::Result<(), EncryptionError>;
+            async fn clear(&self) -> std::result::Result<(), EncryptionError>;
         }
     }
 
-    struct MockEncryption;
-
-    #[async_trait]
-    impl uc_core::ports::EncryptionPort for MockEncryption {
-        async fn derive_kek(
-            &self,
-            _: &Passphrase,
-            _: &[u8],
-            _: &KdfParams,
-        ) -> std::result::Result<Kek, EncryptionError> {
-            Err(EncryptionError::UnsupportedKdfAlgorithm)
-        }
-        async fn wrap_master_key(
-            &self,
-            _: &Kek,
-            _: &MasterKey,
-            _: uc_core::security::model::EncryptionAlgo,
-        ) -> std::result::Result<uc_core::security::model::EncryptedBlob, EncryptionError> {
-            Err(EncryptionError::EncryptFailed)
-        }
-        async fn unwrap_master_key(
-            &self,
-            _: &Kek,
-            _: &uc_core::security::model::EncryptedBlob,
-        ) -> std::result::Result<MasterKey, EncryptionError> {
-            Err(EncryptionError::WrongPassphrase)
-        }
-        async fn encrypt_blob(
-            &self,
-            _: &MasterKey,
-            _: &[u8],
-            _: &[u8],
-            _: uc_core::security::model::EncryptionAlgo,
-        ) -> std::result::Result<uc_core::security::model::EncryptedBlob, EncryptionError> {
-            Err(EncryptionError::EncryptFailed)
-        }
-        async fn decrypt_blob(
-            &self,
-            _: &MasterKey,
-            encrypted: &uc_core::security::model::EncryptedBlob,
-            _: &[u8],
-        ) -> std::result::Result<Vec<u8>, EncryptionError> {
-            Ok(encrypted.ciphertext.clone())
+    mock! {
+        Encryption {}
+        #[async_trait]
+        impl uc_core::ports::EncryptionPort for Encryption {
+            async fn derive_kek(
+                &self,
+                passphrase: &Passphrase,
+                salt: &[u8],
+                params: &KdfParams,
+            ) -> std::result::Result<Kek, EncryptionError>;
+            async fn wrap_master_key(
+                &self,
+                kek: &Kek,
+                mk: &MasterKey,
+                algo: uc_core::security::model::EncryptionAlgo,
+            ) -> std::result::Result<uc_core::security::model::EncryptedBlob, EncryptionError>;
+            async fn unwrap_master_key(
+                &self,
+                kek: &Kek,
+                wrapped: &uc_core::security::model::EncryptedBlob,
+            ) -> std::result::Result<MasterKey, EncryptionError>;
+            async fn encrypt_blob(
+                &self,
+                mk: &MasterKey,
+                plaintext: &[u8],
+                aad: &[u8],
+                algo: uc_core::security::model::EncryptionAlgo,
+            ) -> std::result::Result<uc_core::security::model::EncryptedBlob, EncryptionError>;
+            async fn decrypt_blob(
+                &self,
+                mk: &MasterKey,
+                encrypted: &uc_core::security::model::EncryptedBlob,
+                aad: &[u8],
+            ) -> std::result::Result<Vec<u8>, EncryptionError>;
         }
     }
 
-    struct MockDeviceIdentity;
-
-    impl uc_core::ports::DeviceIdentityPort for MockDeviceIdentity {
-        fn current_device_id(&self) -> DeviceId {
-            DeviceId::new("local-device-id")
+    mock! {
+        DeviceIdentity {}
+        impl uc_core::ports::DeviceIdentityPort for DeviceIdentity {
+            fn current_device_id(&self) -> DeviceId;
         }
     }
 
-    struct MockEntryRepo {
-        save_calls: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl uc_core::ports::ClipboardEntryRepositoryPort for MockEntryRepo {
-        async fn save_entry_and_selection(
-            &self,
-            _: &ClipboardEntry,
-            _: &ClipboardSelectionDecision,
-        ) -> Result<()> {
-            self.save_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-        async fn get_entry(&self, _: &EntryId) -> Result<Option<ClipboardEntry>> {
-            Ok(None)
-        }
-        async fn list_entries(&self, _: usize, _: usize) -> Result<Vec<ClipboardEntry>> {
-            Ok(vec![])
-        }
-        async fn delete_entry(&self, _: &EntryId) -> Result<()> {
-            Ok(())
+    mock! {
+        EntryRepo {}
+        #[async_trait]
+        impl uc_core::ports::ClipboardEntryRepositoryPort for EntryRepo {
+            async fn save_entry_and_selection(
+                &self,
+                entry: &ClipboardEntry,
+                decision: &ClipboardSelectionDecision,
+            ) -> Result<()>;
+            async fn get_entry(&self, id: &EntryId) -> Result<Option<ClipboardEntry>>;
+            async fn list_entries(&self, page: usize, page_size: usize) -> Result<Vec<ClipboardEntry>>;
+            async fn delete_entry(&self, entry_id: &EntryId) -> Result<()>;
         }
     }
 
-    struct MockEventWriter {
-        insert_calls: Arc<AtomicUsize>,
-        /// If set, returns Err instead of Ok — used to simulate Skipped outcomes.
-        error_on_nth_call: Option<Arc<AtomicUsize>>,
-    }
-
-    #[async_trait]
-    impl uc_core::ports::ClipboardEventWriterPort for MockEventWriter {
-        async fn insert_event(
-            &self,
-            _: &ClipboardEvent,
-            _: &Vec<PersistedClipboardRepresentation>,
-        ) -> Result<()> {
-            self.insert_calls.fetch_add(1, Ordering::SeqCst);
-            if let Some(ref counter) = self.error_on_nth_call {
-                let n = counter.fetch_add(1, Ordering::SeqCst);
-                if n > 0 {
-                    return Err(anyhow::anyhow!("Simulated capture failure for test"));
-                }
-            }
-            Ok(())
-        }
-        async fn delete_event_and_representations(&self, _: &uc_core::ids::EventId) -> Result<()> {
-            Ok(())
+    mock! {
+        EventWriter {}
+        #[async_trait]
+        impl uc_core::ports::ClipboardEventWriterPort for EventWriter {
+            async fn insert_event(
+                &self,
+                event: &ClipboardEvent,
+                reps: &Vec<PersistedClipboardRepresentation>,
+            ) -> Result<()>;
+            async fn delete_event_and_representations(&self, event_id: &uc_core::ids::EventId) -> Result<()>;
         }
     }
 
-    struct MockRepresentationPolicy;
+    mock! {
+        RepresentationPolicy {}
+        impl uc_core::ports::SelectRepresentationPolicyPort for RepresentationPolicy {
+            fn select(
+                &self,
+                snapshot: &SystemClipboardSnapshot,
+            ) -> std::result::Result<
+                uc_core::clipboard::ClipboardSelection,
+                uc_core::clipboard::PolicyError,
+            >;
+        }
+    }
 
-    impl uc_core::ports::SelectRepresentationPolicyPort for MockRepresentationPolicy {
-        fn select(
-            &self,
-            snapshot: &SystemClipboardSnapshot,
-        ) -> std::result::Result<
-            uc_core::clipboard::ClipboardSelection,
-            uc_core::clipboard::PolicyError,
-        > {
+    mock! {
+        Normalizer {}
+        #[async_trait]
+        impl uc_core::ports::ClipboardRepresentationNormalizerPort for Normalizer {
+            async fn normalize(
+                &self,
+                observed: &ObservedClipboardRepresentation,
+            ) -> Result<PersistedClipboardRepresentation>;
+        }
+    }
+
+    mock! {
+        RepresentationCache {}
+        #[async_trait]
+        impl uc_core::ports::clipboard::RepresentationCachePort for RepresentationCache {
+            async fn put(&self, representation_id: &RepresentationId, bytes: Vec<u8>);
+            async fn get(&self, representation_id: &RepresentationId) -> Option<Vec<u8>>;
+            async fn mark_completed(&self, representation_id: &RepresentationId);
+            async fn mark_spooling(&self, representation_id: &RepresentationId);
+            async fn remove(&self, representation_id: &RepresentationId);
+        }
+    }
+
+    mock! {
+        SpoolQueue {}
+        #[async_trait]
+        impl uc_core::ports::clipboard::SpoolQueuePort for SpoolQueue {
+            async fn enqueue(&self, request: uc_core::ports::clipboard::SpoolRequest) -> Result<()>;
+        }
+    }
+
+    mock! {
+        Settings {}
+        #[async_trait]
+        impl uc_core::ports::SettingsPort for Settings {
+            async fn load(&self) -> Result<uc_core::settings::model::Settings>;
+            async fn save(&self, settings: &uc_core::settings::model::Settings) -> Result<()>;
+        }
+    }
+
+    fn build_encryption_session() -> Arc<dyn uc_core::ports::EncryptionSessionPort> {
+        let mut session = MockEncryptionSession::new();
+        session.expect_is_ready().returning(|| true);
+        session
+            .expect_get_master_key()
+            .returning(|| Ok(MasterKey([3; 32])));
+        session.expect_set_master_key().returning(|_| Ok(()));
+        session.expect_clear().returning(|| Ok(()));
+        Arc::new(session)
+    }
+
+    fn build_encryption() -> Arc<dyn uc_core::ports::EncryptionPort> {
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_derive_kek()
+            .returning(|_, _, _| Err(EncryptionError::UnsupportedKdfAlgorithm));
+        encryption
+            .expect_wrap_master_key()
+            .returning(|_, _, _| Err(EncryptionError::EncryptFailed));
+        encryption
+            .expect_unwrap_master_key()
+            .returning(|_, _| Err(EncryptionError::WrongPassphrase));
+        encryption
+            .expect_encrypt_blob()
+            .returning(|_, _, _, _| Err(EncryptionError::EncryptFailed));
+        encryption
+            .expect_decrypt_blob()
+            .returning(|_, encrypted, _| Ok(encrypted.ciphertext.clone()));
+        Arc::new(encryption)
+    }
+
+    fn build_device_identity() -> Arc<dyn uc_core::ports::DeviceIdentityPort> {
+        let mut identity = MockDeviceIdentity::new();
+        identity
+            .expect_current_device_id()
+            .returning(|| DeviceId::new("local-device-id"));
+        Arc::new(identity)
+    }
+
+    fn build_entry_repo() -> Arc<dyn uc_core::ports::ClipboardEntryRepositoryPort> {
+        let mut entry_repo = MockEntryRepo::new();
+        entry_repo
+            .expect_save_entry_and_selection()
+            .returning(|_, _| Ok(()));
+        entry_repo.expect_get_entry().returning(|_| Ok(None));
+        entry_repo
+            .expect_list_entries()
+            .returning(|_, _| Ok(vec![]));
+        entry_repo.expect_delete_entry().returning(|_| Ok(()));
+        Arc::new(entry_repo)
+    }
+
+    fn build_event_writer() -> Arc<dyn uc_core::ports::ClipboardEventWriterPort> {
+        let mut event_writer = MockEventWriter::new();
+        event_writer.expect_insert_event().returning(|_, _| Ok(()));
+        event_writer
+            .expect_delete_event_and_representations()
+            .returning(|_| Ok(()));
+        Arc::new(event_writer)
+    }
+
+    fn build_representation_policy() -> Arc<dyn uc_core::ports::SelectRepresentationPolicyPort> {
+        let mut policy = MockRepresentationPolicy::new();
+        policy.expect_select().returning(|snapshot| {
             let rep = snapshot
                 .representations
                 .first()
@@ -497,17 +554,13 @@ mod tests {
                 paste_rep_id: rep.id.clone(),
                 policy_version: uc_core::clipboard::SelectionPolicyVersion::V1,
             })
-        }
+        });
+        Arc::new(policy)
     }
 
-    struct MockNormalizer;
-
-    #[async_trait]
-    impl uc_core::ports::ClipboardRepresentationNormalizerPort for MockNormalizer {
-        async fn normalize(
-            &self,
-            observed: &ObservedClipboardRepresentation,
-        ) -> Result<PersistedClipboardRepresentation> {
+    fn build_normalizer() -> Arc<dyn uc_core::ports::ClipboardRepresentationNormalizerPort> {
+        let mut normalizer = MockNormalizer::new();
+        normalizer.expect_normalize().returning(|observed| {
             Ok(PersistedClipboardRepresentation::new(
                 observed.id.clone(),
                 observed.format_id.clone(),
@@ -516,41 +569,33 @@ mod tests {
                 Some(observed.bytes.clone()),
                 None,
             ))
-        }
+        });
+        Arc::new(normalizer)
     }
 
-    struct MockRepresentationCache;
-
-    #[async_trait]
-    impl uc_core::ports::clipboard::RepresentationCachePort for MockRepresentationCache {
-        async fn put(&self, _: &RepresentationId, _: Vec<u8>) {}
-        async fn get(&self, _: &RepresentationId) -> Option<Vec<u8>> {
-            None
-        }
-        async fn mark_completed(&self, _: &RepresentationId) {}
-        async fn mark_spooling(&self, _: &RepresentationId) {}
-        async fn remove(&self, _: &RepresentationId) {}
+    fn build_representation_cache() -> Arc<dyn uc_core::ports::clipboard::RepresentationCachePort> {
+        let mut cache = MockRepresentationCache::new();
+        cache.expect_put().returning(|_, _| ());
+        cache.expect_get().returning(|_| None);
+        cache.expect_mark_completed().returning(|_| ());
+        cache.expect_mark_spooling().returning(|_| ());
+        cache.expect_remove().returning(|_| ());
+        Arc::new(cache)
     }
 
-    struct MockSpoolQueue;
-
-    #[async_trait]
-    impl uc_core::ports::clipboard::SpoolQueuePort for MockSpoolQueue {
-        async fn enqueue(&self, _: uc_core::ports::clipboard::SpoolRequest) -> Result<()> {
-            Ok(())
-        }
+    fn build_spool_queue() -> Arc<dyn uc_core::ports::clipboard::SpoolQueuePort> {
+        let mut spool = MockSpoolQueue::new();
+        spool.expect_enqueue().returning(|_| Ok(()));
+        Arc::new(spool)
     }
 
-    struct MockSettings;
-
-    #[async_trait]
-    impl uc_core::ports::SettingsPort for MockSettings {
-        async fn load(&self) -> Result<uc_core::settings::model::Settings> {
-            Ok(uc_core::settings::model::Settings::default())
-        }
-        async fn save(&self, _: &uc_core::settings::model::Settings) -> Result<()> {
-            Ok(())
-        }
+    fn build_settings() -> Arc<dyn uc_core::ports::SettingsPort> {
+        let mut settings = MockSettings::new();
+        settings
+            .expect_load()
+            .returning(|| Ok(uc_core::settings::model::Settings::default()));
+        settings.expect_save().returning(|_| Ok(()));
+        Arc::new(settings)
     }
 
     // -------------------------------------------------------------------------
@@ -656,31 +701,32 @@ mod tests {
     fn build_passive_usecase() -> SyncInboundClipboardUseCase {
         SyncInboundClipboardUseCase::with_capture_dependencies(
             ClipboardIntegrationMode::Passive,
-            Arc::new(MockEncryptionSession),
-            Arc::new(MockEncryption),
-            Arc::new(MockDeviceIdentity),
+            build_encryption_session(),
+            build_encryption(),
+            build_device_identity(),
             Arc::new(TransferPayloadDecryptorAdapter),
-            Arc::new(MockEntryRepo {
-                save_calls: Arc::new(AtomicUsize::new(0)),
-            }),
-            Arc::new(MockEventWriter {
-                insert_calls: Arc::new(AtomicUsize::new(0)),
-                error_on_nth_call: None,
-            }),
-            Arc::new(MockRepresentationPolicy),
-            Arc::new(MockNormalizer),
-            Arc::new(MockRepresentationCache),
-            Arc::new(MockSpoolQueue),
+            build_entry_repo(),
+            build_event_writer(),
+            build_representation_policy(),
+            build_normalizer(),
+            build_representation_cache(),
+            build_spool_queue(),
             None,
-            Arc::new(MockSettings),
+            build_settings(),
         )
     }
 
     /// Build a SyncInboundClipboardUseCase for Full mode tests (returns entry_id: None for text).
     fn build_full_usecase() -> SyncInboundClipboardUseCase {
-        let clipboard: Arc<dyn SystemClipboardPort> = Arc::new(MockSystemClipboard {
-            writes: Arc::new(Mutex::new(vec![])),
+        let mut clipboard = MockSystemClipboard::new();
+        clipboard.expect_read_snapshot().returning(|| {
+            Ok(SystemClipboardSnapshot {
+                ts_ms: 0,
+                representations: vec![],
+            })
         });
+        clipboard.expect_write_snapshot().returning(|_| Ok(()));
+        let clipboard: Arc<dyn SystemClipboardPort> = Arc::new(clipboard);
         let origin: Arc<dyn ClipboardChangeOriginPort> = test_origin();
         let coordinator = Arc::new(ClipboardWriteCoordinator::new(
             clipboard.clone(),
@@ -688,23 +734,18 @@ mod tests {
         ));
         SyncInboundClipboardUseCase::with_capture_dependencies(
             ClipboardIntegrationMode::Full,
-            Arc::new(MockEncryptionSession),
-            Arc::new(MockEncryption),
-            Arc::new(MockDeviceIdentity),
+            build_encryption_session(),
+            build_encryption(),
+            build_device_identity(),
             Arc::new(TransferPayloadDecryptorAdapter),
-            Arc::new(MockEntryRepo {
-                save_calls: Arc::new(AtomicUsize::new(0)),
-            }),
-            Arc::new(MockEventWriter {
-                insert_calls: Arc::new(AtomicUsize::new(0)),
-                error_on_nth_call: None,
-            }),
-            Arc::new(MockRepresentationPolicy),
-            Arc::new(MockNormalizer),
-            Arc::new(MockRepresentationCache),
-            Arc::new(MockSpoolQueue),
+            build_entry_repo(),
+            build_event_writer(),
+            build_representation_policy(),
+            build_normalizer(),
+            build_representation_cache(),
+            build_spool_queue(),
             None,
-            Arc::new(MockSettings),
+            build_settings(),
         )
         .with_clipboard_write_coordinator(coordinator)
     }

@@ -61,88 +61,12 @@ impl ResolveClipboardSelectionPayloadUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::{MockClipboardPayloadResolver, MockSelectionResolver};
     use std::sync::Arc;
     use uc_core::clipboard::{ClipboardEntry, PersistedClipboardRepresentation};
     use uc_core::ids::{EntryId, EventId, FormatId, RepresentationId};
     use uc_core::BlobId;
     use uc_core::MimeType;
-
-    /// Mock SelectionResolverPort
-    struct MockSelectionResolver {
-        entry: Option<ClipboardEntry>,
-        representation: Option<PersistedClipboardRepresentation>,
-    }
-
-    impl MockSelectionResolver {
-        fn new() -> Self {
-            Self {
-                entry: None,
-                representation: None,
-            }
-        }
-
-        fn with_entry(mut self, entry: ClipboardEntry) -> Self {
-            self.entry = Some(entry);
-            self
-        }
-
-        fn with_representation(mut self, rep: PersistedClipboardRepresentation) -> Self {
-            self.representation = Some(rep);
-            self
-        }
-    }
-
-    #[async_trait]
-    impl SelectionResolverPort for MockSelectionResolver {
-        async fn resolve_selection(
-            &self,
-            _entry_id: &EntryId,
-        ) -> Result<(ClipboardEntry, PersistedClipboardRepresentation)> {
-            let entry = self
-                .entry
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("Entry not found"))?;
-            let rep = self
-                .representation
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("Representation not found"))?;
-            Ok((entry, rep))
-        }
-    }
-
-    /// Mock ClipboardPayloadResolverPort
-    struct MockPayloadResolver {
-        payload: Option<ResolvedClipboardPayload>,
-    }
-
-    impl MockPayloadResolver {
-        fn new() -> Self {
-            Self { payload: None }
-        }
-
-        fn with_inline_payload(mut self, mime: String, bytes: Vec<u8>) -> Self {
-            self.payload = Some(ResolvedClipboardPayload::Inline { mime, bytes });
-            self
-        }
-
-        fn with_blob_ref_payload(mut self, mime: String, blob_id: BlobId) -> Self {
-            self.payload = Some(ResolvedClipboardPayload::BlobRef { mime, blob_id });
-            self
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardPayloadResolverPort for MockPayloadResolver {
-        async fn resolve(
-            &self,
-            _representation: &PersistedClipboardRepresentation,
-        ) -> Result<ResolvedClipboardPayload> {
-            self.payload
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("Payload not available"))
-        }
-    }
 
     fn create_test_entry(entry_id: EntryId) -> ClipboardEntry {
         ClipboardEntry::new(
@@ -171,17 +95,27 @@ mod tests {
         let entry = create_test_entry(entry_id.clone());
         let representation = create_test_representation();
 
-        let selection_resolver = Arc::new(
-            MockSelectionResolver::new()
-                .with_entry(entry)
-                .with_representation(representation),
-        );
-        let payload_resolver = Arc::new(
-            MockPayloadResolver::new().with_inline_payload("text/plain".to_string(), vec![1, 2, 3]),
-        );
+        let mut selection_resolver = MockSelectionResolver::new();
+        {
+            let entry = entry.clone();
+            let representation = representation.clone();
+            selection_resolver
+                .expect_resolve_selection()
+                .returning(move |_| Ok((entry.clone(), representation.clone())));
+        }
 
-        let use_case =
-            ResolveClipboardSelectionPayloadUseCase::new(selection_resolver, payload_resolver);
+        let mut payload_resolver = MockClipboardPayloadResolver::new();
+        payload_resolver.expect_resolve().returning(|_| {
+            Ok(ResolvedClipboardPayload::Inline {
+                mime: "text/plain".to_string(),
+                bytes: vec![1, 2, 3],
+            })
+        });
+
+        let use_case = ResolveClipboardSelectionPayloadUseCase::new(
+            Arc::new(selection_resolver),
+            Arc::new(payload_resolver),
+        );
 
         let result = use_case.execute(&entry_id).await;
 
@@ -203,18 +137,28 @@ mod tests {
         let representation = create_test_representation();
         let blob_id = BlobId::new();
 
-        let selection_resolver = Arc::new(
-            MockSelectionResolver::new()
-                .with_entry(entry)
-                .with_representation(representation),
-        );
-        let payload_resolver = Arc::new(
-            MockPayloadResolver::new()
-                .with_blob_ref_payload("image/png".to_string(), blob_id.clone()),
-        );
+        let mut selection_resolver = MockSelectionResolver::new();
+        {
+            let entry = entry.clone();
+            let representation = representation.clone();
+            selection_resolver
+                .expect_resolve_selection()
+                .returning(move |_| Ok((entry.clone(), representation.clone())));
+        }
 
-        let use_case =
-            ResolveClipboardSelectionPayloadUseCase::new(selection_resolver, payload_resolver);
+        let blob_id_clone = blob_id.clone();
+        let mut payload_resolver = MockClipboardPayloadResolver::new();
+        payload_resolver.expect_resolve().returning(move |_| {
+            Ok(ResolvedClipboardPayload::BlobRef {
+                mime: "image/png".to_string(),
+                blob_id: blob_id_clone.clone(),
+            })
+        });
+
+        let use_case = ResolveClipboardSelectionPayloadUseCase::new(
+            Arc::new(selection_resolver),
+            Arc::new(payload_resolver),
+        );
 
         let result = use_case.execute(&entry_id).await;
 
@@ -236,11 +180,17 @@ mod tests {
     async fn test_execute_fails_when_selection_resolver_fails() {
         let entry_id = EntryId::from("missing-entry");
 
-        let selection_resolver = Arc::new(MockSelectionResolver::new());
-        let payload_resolver = Arc::new(MockPayloadResolver::new());
+        let mut selection_resolver = MockSelectionResolver::new();
+        selection_resolver
+            .expect_resolve_selection()
+            .returning(|_| Err(anyhow::anyhow!("Entry not found")));
 
-        let use_case =
-            ResolveClipboardSelectionPayloadUseCase::new(selection_resolver, payload_resolver);
+        let payload_resolver = MockClipboardPayloadResolver::new();
+
+        let use_case = ResolveClipboardSelectionPayloadUseCase::new(
+            Arc::new(selection_resolver),
+            Arc::new(payload_resolver),
+        );
 
         let result = use_case.execute(&entry_id).await;
 
@@ -259,15 +209,24 @@ mod tests {
         let entry = create_test_entry(entry_id.clone());
         let representation = create_test_representation();
 
-        let selection_resolver = Arc::new(
-            MockSelectionResolver::new()
-                .with_entry(entry)
-                .with_representation(representation),
-        );
-        let payload_resolver = Arc::new(MockPayloadResolver::new());
+        let mut selection_resolver = MockSelectionResolver::new();
+        {
+            let entry = entry.clone();
+            let representation = representation.clone();
+            selection_resolver
+                .expect_resolve_selection()
+                .returning(move |_| Ok((entry.clone(), representation.clone())));
+        }
 
-        let use_case =
-            ResolveClipboardSelectionPayloadUseCase::new(selection_resolver, payload_resolver);
+        let mut payload_resolver = MockClipboardPayloadResolver::new();
+        payload_resolver
+            .expect_resolve()
+            .returning(|_| Err(anyhow::anyhow!("Payload not available")));
+
+        let use_case = ResolveClipboardSelectionPayloadUseCase::new(
+            Arc::new(selection_resolver),
+            Arc::new(payload_resolver),
+        );
 
         let result = use_case.execute(&entry_id).await;
 

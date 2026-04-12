@@ -50,70 +50,25 @@ impl GetLocalDeviceInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use uc_core::network::{ConnectedPeer, DiscoveredPeer};
-    use uc_core::ports::PeerDirectoryPort;
+    use crate::test_mocks::{MockPeerDirectory, MockSettings};
     use uc_core::settings::model::Settings;
-
-    enum SettingsOutcome {
-        Ok(Settings),
-        Err(String),
-    }
-
-    struct TestSettings {
-        outcome: SettingsOutcome,
-    }
-
-    #[async_trait]
-    impl SettingsPort for TestSettings {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            match &self.outcome {
-                SettingsOutcome::Ok(settings) => Ok(settings.clone()),
-                SettingsOutcome::Err(message) => Err(anyhow::anyhow!(message.clone())),
-            }
-        }
-
-        async fn save(&self, _settings: &Settings) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct TestNetwork {
-        peer_id: String,
-    }
-
-    #[async_trait]
-    impl PeerDirectoryPort for TestNetwork {
-        async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-            Ok(Vec::new())
-        }
-
-        async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
-            Ok(Vec::new())
-        }
-
-        fn local_peer_id(&self) -> String {
-            self.peer_id.clone()
-        }
-
-        async fn announce_device_name(&self, _device_name: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn uses_device_name_from_settings() {
         let mut settings = Settings::default();
         settings.general.device_name = Some("Desk".to_string());
 
-        let usecase = GetLocalDeviceInfo::new(
-            Arc::new(TestNetwork {
-                peer_id: "peer-1".to_string(),
-            }),
-            Arc::new(TestSettings {
-                outcome: SettingsOutcome::Ok(settings),
-            }),
-        );
+        let mut network = MockPeerDirectory::new();
+        network
+            .expect_local_peer_id()
+            .returning(|| "peer-1".to_string());
+
+        let mut settings_port = MockSettings::new();
+        settings_port
+            .expect_load()
+            .returning(move || Ok(settings.clone()));
+
+        let usecase = GetLocalDeviceInfo::new(Arc::new(network), Arc::new(settings_port));
 
         let info = usecase.execute().await.expect("load device info");
         assert_eq!(info.peer_id, "peer-1");
@@ -125,14 +80,17 @@ mod tests {
         let mut settings = Settings::default();
         settings.general.device_name = Some("  Desk  ".to_string());
 
-        let usecase = GetLocalDeviceInfo::new(
-            Arc::new(TestNetwork {
-                peer_id: "peer-2".to_string(),
-            }),
-            Arc::new(TestSettings {
-                outcome: SettingsOutcome::Ok(settings),
-            }),
-        );
+        let mut network = MockPeerDirectory::new();
+        network
+            .expect_local_peer_id()
+            .returning(|| "peer-2".to_string());
+
+        let mut settings_port = MockSettings::new();
+        settings_port
+            .expect_load()
+            .returning(move || Ok(settings.clone()));
+
+        let usecase = GetLocalDeviceInfo::new(Arc::new(network), Arc::new(settings_port));
 
         let info = usecase.execute().await.expect("load device info");
         assert_eq!(info.device_name, "Desk");
@@ -143,14 +101,17 @@ mod tests {
         let mut settings = Settings::default();
         settings.general.device_name = Some("   ".to_string());
 
-        let usecase = GetLocalDeviceInfo::new(
-            Arc::new(TestNetwork {
-                peer_id: "peer-3".to_string(),
-            }),
-            Arc::new(TestSettings {
-                outcome: SettingsOutcome::Ok(settings),
-            }),
-        );
+        let mut network = MockPeerDirectory::new();
+        network
+            .expect_local_peer_id()
+            .returning(|| "peer-3".to_string());
+
+        let mut settings_port = MockSettings::new();
+        settings_port
+            .expect_load()
+            .returning(move || Ok(settings.clone()));
+
+        let usecase = GetLocalDeviceInfo::new(Arc::new(network), Arc::new(settings_port));
 
         let info = usecase.execute().await.expect("load device info");
         assert_eq!(info.device_name, DEFAULT_PAIRING_DEVICE_NAME);
@@ -158,14 +119,17 @@ mod tests {
 
     #[tokio::test]
     async fn uses_default_name_when_settings_fail_to_load() {
-        let usecase = GetLocalDeviceInfo::new(
-            Arc::new(TestNetwork {
-                peer_id: "peer-4".to_string(),
-            }),
-            Arc::new(TestSettings {
-                outcome: SettingsOutcome::Err("load failed".to_string()),
-            }),
-        );
+        let mut network = MockPeerDirectory::new();
+        network
+            .expect_local_peer_id()
+            .returning(|| "peer-4".to_string());
+
+        let mut settings_port = MockSettings::new();
+        settings_port
+            .expect_load()
+            .returning(|| Err(anyhow::anyhow!("load failed")));
+
+        let usecase = GetLocalDeviceInfo::new(Arc::new(network), Arc::new(settings_port));
 
         let info = usecase.execute().await.expect("load device info");
         assert_eq!(info.device_name, DEFAULT_PAIRING_DEVICE_NAME);

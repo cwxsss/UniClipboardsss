@@ -98,169 +98,97 @@ impl ClipboardEventRepositoryPort for DecryptingClipboardEventRepository {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use std::sync::{Arc, Mutex};
+    use mockall::mock;
+    use std::sync::Arc;
     use uc_core::{
         clipboard::ObservedClipboardRepresentation,
         ids::{EventId, RepresentationId},
+        ports::{ClipboardEventRepositoryPort, EncryptionPort, EncryptionSessionPort},
         security::aad,
-        security::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion, MasterKey},
+        security::model::{
+            EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfParams,
+            Kek, MasterKey, Passphrase,
+        },
     };
 
-    /// Mock ClipboardEventRepositoryPort
-    struct MockEventRepo {
-        storage: Arc<
-            Mutex<std::collections::HashMap<(EventId, String), ObservedClipboardRepresentation>>,
-        >,
-    }
+    mock! {
+        EventRepo {}
 
-    impl MockEventRepo {
-        fn new() -> Self {
-            Self {
-                storage: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            }
-        }
-
-        fn store(&self, event_id: &EventId, rep_id: &str, rep: ObservedClipboardRepresentation) {
-            self.storage
-                .lock()
-                .unwrap()
-                .insert((event_id.clone(), rep_id.to_string()), rep);
+        #[async_trait]
+        impl ClipboardEventRepositoryPort for EventRepo {
+            async fn get_representation(
+                &self,
+                id: &EventId,
+                representation_id: &str,
+            ) -> Result<ObservedClipboardRepresentation>;
         }
     }
 
-    #[async_trait]
-    impl ClipboardEventRepositoryPort for MockEventRepo {
-        async fn get_representation(
-            &self,
-            event_id: &EventId,
-            representation_id: &str,
-        ) -> Result<ObservedClipboardRepresentation> {
-            self.storage
-                .lock()
-                .unwrap()
-                .get(&(event_id.clone(), representation_id.to_string()))
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("representation not found"))
+    mock! {
+        Encryption {}
+
+        #[async_trait]
+        impl EncryptionPort for Encryption {
+            async fn derive_kek(
+                &self,
+                passphrase: &Passphrase,
+                salt: &[u8],
+                kdf: &KdfParams,
+            ) -> Result<Kek, EncryptionError>;
+            async fn wrap_master_key(
+                &self,
+                kek: &Kek,
+                master_key: &MasterKey,
+                aead: EncryptionAlgo,
+            ) -> Result<EncryptedBlob, EncryptionError>;
+            async fn unwrap_master_key(
+                &self,
+                kek: &Kek,
+                wrapped: &EncryptedBlob,
+            ) -> Result<MasterKey, EncryptionError>;
+            async fn encrypt_blob(
+                &self,
+                master_key: &MasterKey,
+                plaintext: &[u8],
+                aad: &[u8],
+                aead: EncryptionAlgo,
+            ) -> Result<EncryptedBlob, EncryptionError>;
+            async fn decrypt_blob(
+                &self,
+                master_key: &MasterKey,
+                encrypted: &EncryptedBlob,
+                aad: &[u8],
+            ) -> Result<Vec<u8>, EncryptionError>;
         }
     }
 
-    /// Mock EncryptionPort
-    struct MockEncryption {
-        should_fail_decrypt: bool,
-    }
+    mock! {
+        EncryptionSession {}
 
-    impl MockEncryption {
-        fn new() -> Self {
-            Self {
-                should_fail_decrypt: false,
-            }
+        #[async_trait]
+        impl EncryptionSessionPort for EncryptionSession {
+            async fn is_ready(&self) -> bool;
+            async fn get_master_key(&self) -> Result<MasterKey, EncryptionError>;
+            async fn set_master_key(&self, master_key: MasterKey) -> Result<(), EncryptionError>;
+            async fn clear(&self) -> Result<(), EncryptionError>;
         }
     }
 
-    #[async_trait]
-    impl uc_core::ports::EncryptionPort for MockEncryption {
-        async fn derive_kek(
-            &self,
-            _passphrase: &uc_core::security::model::Passphrase,
-            _salt: &[u8],
-            _kdf_params: &uc_core::security::model::KdfParams,
-        ) -> Result<uc_core::security::model::Kek, uc_core::security::model::EncryptionError>
-        {
-            Ok(uc_core::security::model::Kek([0u8; 32]))
-        }
-
-        async fn wrap_master_key(
-            &self,
-            _kek: &uc_core::security::model::Kek,
-            _master_key: &MasterKey,
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, uc_core::security::model::EncryptionError> {
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: vec![0u8; 32],
-                aad_fingerprint: None,
-            })
-        }
-
-        async fn unwrap_master_key(
-            &self,
-            _kek: &uc_core::security::model::Kek,
-            _blob: &EncryptedBlob,
-        ) -> Result<MasterKey, uc_core::security::model::EncryptionError> {
-            MasterKey::from_bytes(&[0u8; 32])
-        }
-
-        async fn encrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _plaintext: &[u8],
-            _aad: &[u8],
-            _algo: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, uc_core::security::model::EncryptionError> {
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: vec![],
-                aad_fingerprint: None,
-            })
-        }
-
-        async fn decrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            blob: &EncryptedBlob,
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, uc_core::security::model::EncryptionError> {
-            if self.should_fail_decrypt {
-                return Err(uc_core::security::model::EncryptionError::CorruptedBlob);
-            }
-            Ok(blob.ciphertext.clone())
-        }
+    fn make_passthrough_encryption() -> MockEncryption {
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_decrypt_blob()
+            .returning(|_, blob, _| Ok(blob.ciphertext.clone()));
+        encryption
     }
 
-    /// Mock EncryptionSessionPort
-    struct MockEncryptionSession {
-        master_key: Option<MasterKey>,
-    }
-
-    impl MockEncryptionSession {
-        fn new() -> Self {
-            Self { master_key: None }
-        }
-
-        fn with_master_key(mut self, key: MasterKey) -> Self {
-            self.master_key = Some(key);
-            self
-        }
-    }
-
-    #[async_trait]
-    impl EncryptionSessionPort for MockEncryptionSession {
-        async fn is_ready(&self) -> bool {
-            self.master_key.is_some()
-        }
-
-        async fn get_master_key(
-            &self,
-        ) -> Result<MasterKey, uc_core::security::model::EncryptionError> {
-            self.master_key
-                .clone()
-                .ok_or(uc_core::security::model::EncryptionError::Locked)
-        }
-
-        async fn set_master_key(
-            &self,
-            _master_key: MasterKey,
-        ) -> Result<(), uc_core::security::model::EncryptionError> {
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), uc_core::security::model::EncryptionError> {
-            Ok(())
-        }
+    fn make_session_with_master_key(master_key: MasterKey) -> MockEncryptionSession {
+        let mut session = MockEncryptionSession::new();
+        session
+            .expect_get_master_key()
+            .once()
+            .return_once(move || Ok(master_key));
+        session
     }
 
     /// Creates an encrypted representation for testing
@@ -299,28 +227,31 @@ mod tests {
     #[tokio::test]
     async fn test_decrypting_repo_decrypts_bytes() {
         // Test that bytes are decrypted when retrieved
-        let inner = Arc::new(MockEventRepo::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
-
-        let repo = DecryptingClipboardEventRepository::new(inner.clone(), encryption, session);
-
         let event_id = EventId::new();
-        let rep_id = "test-rep";
+        let rep_id = String::from("test-rep");
         let plaintext = b"test plaintext data";
+        let stored_representation = create_encrypted_observed_representation(plaintext);
 
-        // Store an encrypted representation
-        inner.store(
-            &event_id,
-            rep_id,
-            create_encrypted_observed_representation(plaintext),
+        let mut inner = MockEventRepo::new();
+        let expected_event_id = event_id.clone();
+        let expected_rep_id = rep_id.clone();
+        inner
+            .expect_get_representation()
+            .withf(move |id, rid| id == &expected_event_id && rid == expected_rep_id)
+            .once()
+            .return_once(move |_, _| Ok(stored_representation));
+
+        let encryption = make_passthrough_encryption();
+        let session =
+            make_session_with_master_key(MasterKey::from_bytes(&[0u8; 32]).expect("valid key"));
+        let repo = DecryptingClipboardEventRepository::new(
+            Arc::new(inner),
+            Arc::new(encryption),
+            Arc::new(session),
         );
 
         // Retrieve it - should be decrypted
-        let result = repo.get_representation(&event_id, rep_id).await;
+        let result = repo.get_representation(&event_id, &rep_id).await;
 
         assert!(result.is_ok(), "get_representation should succeed");
         let observed = result.unwrap();
@@ -334,28 +265,30 @@ mod tests {
     #[tokio::test]
     async fn test_decrypting_repo_fails_for_unencrypted_data() {
         // Test that unencrypted data causes an error
-        let inner = Arc::new(MockEventRepo::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
-
-        let repo = DecryptingClipboardEventRepository::new(inner.clone(), encryption, session);
-
         let event_id = EventId::new();
-        let rep_id = "test-rep";
+        let rep_id = String::from("test-rep");
         let plaintext = b"test data";
+        let stored_representation = create_unencrypted_observed_representation(plaintext);
 
-        // Store an unencrypted representation
-        inner.store(
-            &event_id,
-            rep_id,
-            create_unencrypted_observed_representation(plaintext),
+        let mut inner = MockEventRepo::new();
+        let expected_event_id = event_id.clone();
+        let expected_rep_id = rep_id.clone();
+        inner
+            .expect_get_representation()
+            .withf(move |id, rid| id == &expected_event_id && rid == expected_rep_id)
+            .once()
+            .return_once(move |_, _| Ok(stored_representation));
+
+        let encryption = MockEncryption::new();
+        let session = MockEncryptionSession::new();
+        let repo = DecryptingClipboardEventRepository::new(
+            Arc::new(inner),
+            Arc::new(encryption),
+            Arc::new(session),
         );
 
         // Try to retrieve it - should fail
-        let result = repo.get_representation(&event_id, rep_id).await;
+        let result = repo.get_representation(&event_id, &rep_id).await;
 
         assert!(
             result.is_err(),
@@ -372,25 +305,34 @@ mod tests {
     #[tokio::test]
     async fn test_decrypting_repo_fails_when_session_not_ready() {
         // Test that an error is returned when the encryption session is not ready
-        let inner = Arc::new(MockEventRepo::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new()); // No master key
-
-        let repo = DecryptingClipboardEventRepository::new(inner.clone(), encryption, session);
-
         let event_id = EventId::new();
-        let rep_id = "test-rep";
+        let rep_id = String::from("test-rep");
         let plaintext = b"test data";
+        let stored_representation = create_encrypted_observed_representation(plaintext);
 
-        // Store an encrypted representation
-        inner.store(
-            &event_id,
-            rep_id,
-            create_encrypted_observed_representation(plaintext),
+        let mut inner = MockEventRepo::new();
+        let expected_event_id = event_id.clone();
+        let expected_rep_id = rep_id.clone();
+        inner
+            .expect_get_representation()
+            .withf(move |id, rid| id == &expected_event_id && rid == expected_rep_id)
+            .once()
+            .return_once(move |_, _| Ok(stored_representation));
+
+        let mut session = MockEncryptionSession::new();
+        session
+            .expect_get_master_key()
+            .once()
+            .return_once(|| Err(EncryptionError::Locked));
+        let encryption = MockEncryption::new();
+        let repo = DecryptingClipboardEventRepository::new(
+            Arc::new(inner),
+            Arc::new(encryption),
+            Arc::new(session),
         );
 
         // Try to retrieve it - should fail
-        let result = repo.get_representation(&event_id, rep_id).await;
+        let result = repo.get_representation(&event_id, &rep_id).await;
 
         assert!(
             result.is_err(),

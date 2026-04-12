@@ -84,95 +84,108 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    use mockall::mock;
     use tokio::sync::mpsc;
     use tokio::time::{timeout, Duration};
     use uc_core::network::{ConnectedPeer, DiscoveredPeer};
     use uc_core::ports::SettingsPort;
     use uc_core::settings::model::Settings;
 
-    struct MockNetworkControl {
-        calls: Arc<Mutex<u32>>,
-    }
-
-    #[async_trait]
-    impl NetworkControlPort for MockNetworkControl {
-        async fn start_network(&self) -> anyhow::Result<()> {
-            *self.calls.lock().unwrap() += 1;
-            Ok(())
+    mock! {
+        NetworkControl {}
+        #[async_trait]
+        impl NetworkControlPort for NetworkControl {
+            async fn start_network(&self) -> anyhow::Result<()>;
         }
     }
 
-    struct MockNetworkEvents {
-        rx: Mutex<Option<mpsc::Receiver<NetworkEvent>>>,
-    }
-
-    #[async_trait]
-    impl NetworkEventPort for MockNetworkEvents {
-        async fn subscribe_events(&self) -> anyhow::Result<mpsc::Receiver<NetworkEvent>> {
-            self.rx
-                .lock()
-                .unwrap()
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("receiver already taken"))
+    mock! {
+        NetworkEvents {}
+        #[async_trait]
+        impl NetworkEventPort for NetworkEvents {
+            async fn subscribe_events(&self) -> anyhow::Result<mpsc::Receiver<NetworkEvent>>;
         }
     }
 
-    struct MockPeerDirectory {
-        announced_names: Arc<Mutex<Vec<String>>>,
-    }
-
-    #[async_trait]
-    impl PeerDirectoryPort for MockPeerDirectory {
-        async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-            Ok(vec![])
-        }
-
-        async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
-            Ok(vec![])
-        }
-
-        fn local_peer_id(&self) -> String {
-            "local-peer".to_string()
-        }
-
-        async fn announce_device_name(&self, device_name: String) -> anyhow::Result<()> {
-            self.announced_names.lock().unwrap().push(device_name);
-            Ok(())
+    mock! {
+        PeerDirectory {}
+        #[async_trait]
+        impl PeerDirectoryPort for PeerDirectory {
+            async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>>;
+            async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>>;
+            fn local_peer_id(&self) -> String;
+            async fn announce_device_name(&self, device_name: String) -> anyhow::Result<()>;
         }
     }
 
-    struct MockSettings;
-
-    #[async_trait]
-    impl SettingsPort for MockSettings {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            let mut settings = Settings::default();
-            settings.general.device_name = Some("Daemon Desk".to_string());
-            Ok(settings)
-        }
-
-        async fn save(&self, _settings: &Settings) -> anyhow::Result<()> {
-            Ok(())
+    mock! {
+        Settings {}
+        #[async_trait]
+        impl SettingsPort for Settings {
+            async fn load(&self) -> anyhow::Result<Settings>;
+            async fn save(&self, settings: &Settings) -> anyhow::Result<()>;
         }
     }
 
     #[tokio::test]
     async fn peer_discovery_worker_starts_network_and_announces_device_name() {
-        let start_calls = Arc::new(Mutex::new(0));
         let announced_names = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = mpsc::channel(8);
+        let rx = Arc::new(Mutex::new(Some(rx)));
+
+        let mut network_control = MockNetworkControl::new();
+        network_control
+            .expect_start_network()
+            .times(1)
+            .returning(|| Ok(()));
+
+        let mut network_events = MockNetworkEvents::new();
+        network_events
+            .expect_subscribe_events()
+            .times(1)
+            .returning({
+                let rx = Arc::clone(&rx);
+                move || {
+                    rx.lock()
+                        .unwrap()
+                        .take()
+                        .ok_or_else(|| anyhow::anyhow!("receiver already taken"))
+                }
+            });
+
+        let mut peer_directory = MockPeerDirectory::new();
+        peer_directory
+            .expect_get_discovered_peers()
+            .returning(|| Ok(vec![]));
+        peer_directory
+            .expect_get_connected_peers()
+            .returning(|| Ok(vec![]));
+        peer_directory
+            .expect_local_peer_id()
+            .returning(|| "local-peer".to_string());
+        peer_directory
+            .expect_announce_device_name()
+            .times(1)
+            .returning({
+                let announced_names = Arc::clone(&announced_names);
+                move |device_name| {
+                    announced_names.lock().unwrap().push(device_name);
+                    Ok(())
+                }
+            });
+
+        let mut settings = MockSettings::new();
+        settings.expect_load().times(1).returning(|| {
+            let mut settings = Settings::default();
+            settings.general.device_name = Some("Daemon Desk".to_string());
+            Ok(settings)
+        });
 
         let worker = PeerDiscoveryWorker::new(
-            Arc::new(MockNetworkControl {
-                calls: start_calls.clone(),
-            }),
-            Arc::new(MockNetworkEvents {
-                rx: Mutex::new(Some(rx)),
-            }),
-            Arc::new(MockPeerDirectory {
-                announced_names: announced_names.clone(),
-            }),
-            Arc::new(MockSettings),
+            Arc::new(network_control),
+            Arc::new(network_events),
+            Arc::new(peer_directory),
+            Arc::new(settings),
         );
 
         let cancel = CancellationToken::new();
@@ -202,7 +215,6 @@ mod tests {
         .await
         .expect("worker should announce device name");
 
-        assert_eq!(*start_calls.lock().unwrap(), 1);
         assert_eq!(
             announced_names.lock().unwrap().as_slice(),
             ["Daemon Desk".to_string()]

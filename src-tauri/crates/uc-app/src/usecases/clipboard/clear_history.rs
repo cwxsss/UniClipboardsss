@@ -178,196 +178,125 @@ impl ClearClipboardHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Result;
-    use async_trait::async_trait;
+    use crate::test_mocks::{
+        MockClipboardEntryRepository, MockClipboardEventWriter,
+        MockClipboardRepresentationRepository, MockClipboardSelectionRepository, MockSearchIndex,
+    };
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tokio::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use uc_core::clipboard::{ClipboardEntry, ClipboardEvent, PersistedClipboardRepresentation};
     use uc_core::ids::{EntryId, EventId, RepresentationId};
     use uc_core::ports::ProcessingUpdateOutcome;
     use uc_core::search::{
-        RebuildProgress, SearchDocument, SearchError, SearchIndexMeta, SearchPosting, SearchQuery,
-        SearchResultsPage,
+        SearchDocument, SearchIndexMeta, SearchPosting, SearchQuery, SearchResultsPage,
     };
 
-    struct MockEntryRepo {
-        entries: Mutex<HashMap<String, ClipboardEntry>>,
-    }
-
-    impl MockEntryRepo {
-        fn new(entries: Vec<ClipboardEntry>) -> Self {
-            Self {
-                entries: Mutex::new(
-                    entries
-                        .into_iter()
-                        .map(|entry| (entry.entry_id.to_string(), entry))
-                        .collect(),
-                ),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepo {
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &ClipboardEntry,
-            _selection: &uc_core::ClipboardSelectionDecision,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn get_entry(&self, entry_id: &EntryId) -> Result<Option<ClipboardEntry>> {
-            Ok(self.entries.lock().await.get(entry_id.as_str()).cloned())
-        }
-
-        async fn list_entries(&self, _limit: usize, _offset: usize) -> Result<Vec<ClipboardEntry>> {
-            Ok(self.entries.lock().await.values().cloned().collect())
-        }
-
-        async fn delete_entry(&self, entry_id: &EntryId) -> Result<()> {
-            self.entries.lock().await.remove(entry_id.as_str());
-            Ok(())
-        }
-    }
-
-    struct MockSelectionRepo;
-
-    #[async_trait]
-    impl ClipboardSelectionRepositoryPort for MockSelectionRepo {
-        async fn get_selection(
-            &self,
-            _entry_id: &EntryId,
-        ) -> Result<Option<uc_core::ClipboardSelectionDecision>> {
-            Ok(None)
-        }
-
-        async fn delete_selection(&self, _entry_id: &EntryId) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    struct MockEventWriter {
-        deleted_events: AtomicUsize,
-    }
-
-    #[async_trait]
-    impl ClipboardEventWriterPort for MockEventWriter {
-        async fn insert_event(
-            &self,
-            _event: &ClipboardEvent,
-            _representations: &Vec<PersistedClipboardRepresentation>,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn delete_event_and_representations(&self, _event_id: &EventId) -> Result<()> {
-            self.deleted_events.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    struct MockRepresentationRepo;
-
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepo {
-        async fn get_representation(
-            &self,
-            _event_id: &EventId,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &RepresentationId,
-            _expected_states: &[uc_core::clipboard::PayloadAvailability],
-            _blob_id: Option<&uc_core::BlobId>,
-            _new_state: uc_core::clipboard::PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<ProcessingUpdateOutcome> {
-            Ok(ProcessingUpdateOutcome::NotFound)
-        }
-    }
-
-    struct MockSearchIndex {
-        removed_entry_ids: Mutex<Vec<String>>,
-    }
-
-    #[async_trait]
-    impl SearchIndexPort for MockSearchIndex {
-        async fn index_entry(
-            &self,
-            _document: SearchDocument,
-            _postings: Vec<SearchPosting>,
-        ) -> Result<(), SearchError> {
-            Ok(())
-        }
-
-        async fn remove_entry(&self, entry_id: &EntryId) -> Result<(), SearchError> {
-            self.removed_entry_ids
+    fn make_entry_repo(
+        entries: Vec<ClipboardEntry>,
+    ) -> (
+        MockClipboardEntryRepository,
+        Arc<Mutex<HashMap<String, ClipboardEntry>>>,
+    ) {
+        let store = Arc::new(Mutex::new(
+            entries
+                .into_iter()
+                .map(|entry| (entry.entry_id.to_string(), entry))
+                .collect::<HashMap<_, _>>(),
+        ));
+        let mut repo = MockClipboardEntryRepository::new();
+        repo.expect_save_entry_and_selection()
+            .returning(|_, _| Ok(()));
+        let store_for_get = store.clone();
+        repo.expect_get_entry().returning(move |entry_id| {
+            Ok(store_for_get
                 .lock()
-                .await
-                .push(entry_id.to_string());
+                .unwrap()
+                .get(entry_id.as_str())
+                .cloned())
+        });
+        let store_for_list = store.clone();
+        repo.expect_list_entries()
+            .returning(move |_, _| Ok(store_for_list.lock().unwrap().values().cloned().collect()));
+        let store_for_delete = store.clone();
+        repo.expect_delete_entry().returning(move |entry_id| {
+            store_for_delete.lock().unwrap().remove(entry_id.as_str());
             Ok(())
-        }
+        });
+        (repo, store)
+    }
 
-        async fn search(&self, _query: SearchQuery) -> Result<SearchResultsPage, SearchError> {
+    fn make_selection_repo() -> MockClipboardSelectionRepository {
+        let mut repo = MockClipboardSelectionRepository::new();
+        repo.expect_get_selection().returning(|_| Ok(None));
+        repo.expect_delete_selection().returning(|_| Ok(()));
+        repo
+    }
+
+    fn make_event_writer(deleted_events: Arc<AtomicUsize>) -> MockClipboardEventWriter {
+        let mut writer = MockClipboardEventWriter::new();
+        writer
+            .expect_insert_event()
+            .returning(|_: &ClipboardEvent, _: &Vec<PersistedClipboardRepresentation>| Ok(()));
+        writer
+            .expect_delete_event_and_representations()
+            .returning(move |_: &EventId| {
+                deleted_events.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            });
+        writer
+    }
+
+    fn make_representation_repo() -> MockClipboardRepresentationRepository {
+        let mut repo = MockClipboardRepresentationRepository::new();
+        repo.expect_get_representation()
+            .returning(|_: &EventId, _: &RepresentationId| Ok(None));
+        repo.expect_get_representation_by_id()
+            .returning(|_: &RepresentationId| Ok(None));
+        repo.expect_get_representation_by_blob_id()
+            .returning(|_: &uc_core::BlobId| Ok(None));
+        repo.expect_update_blob_id()
+            .returning(|_: &RepresentationId, _: &uc_core::BlobId| Ok(()));
+        repo.expect_update_blob_id_if_none()
+            .returning(|_: &RepresentationId, _: &uc_core::BlobId| Ok(false));
+        repo.expect_update_processing_result().returning(
+            |_: &RepresentationId,
+             _: &[uc_core::clipboard::PayloadAvailability],
+             _: Option<&uc_core::BlobId>,
+             _: uc_core::clipboard::PayloadAvailability,
+             _: Option<&str>| Ok(ProcessingUpdateOutcome::NotFound),
+        );
+        repo
+    }
+
+    fn make_search_index(removed_entry_ids: Arc<Mutex<Vec<String>>>) -> MockSearchIndex {
+        let mut index = MockSearchIndex::new();
+        index
+            .expect_index_entry()
+            .returning(|_: SearchDocument, _: Vec<SearchPosting>| Ok(()));
+        index.expect_remove_entry().returning(move |entry_id| {
+            removed_entry_ids.lock().unwrap().push(entry_id.to_string());
+            Ok(())
+        });
+        index.expect_search().returning(|_: SearchQuery| {
             Ok(SearchResultsPage {
                 items: vec![],
                 total: 0,
                 has_more: false,
             })
-        }
-
-        async fn rebuild(
-            &self,
-            _entries: Vec<(SearchDocument, Vec<SearchPosting>)>,
-            _progress_tx: tokio::sync::mpsc::Sender<RebuildProgress>,
-        ) -> Result<(), SearchError> {
-            Ok(())
-        }
-
-        async fn get_index_meta(&self) -> Result<SearchIndexMeta, SearchError> {
+        });
+        index
+            .expect_rebuild()
+            .returning(|_: Vec<(SearchDocument, Vec<SearchPosting>)>, _| Ok(()));
+        index.expect_get_index_meta().returning(|| {
             Ok(SearchIndexMeta {
                 index_version: "search-v2".into(),
                 search_blocked: false,
                 last_rebuild_started_at_ms: None,
                 last_rebuild_completed_at_ms: None,
             })
-        }
+        });
+        index
     }
 
     #[tokio::test]
@@ -379,19 +308,17 @@ mod tests {
             Some("bulk clear".into()),
             42,
         );
-        let entry_repo = Arc::new(MockEntryRepo::new(vec![entry.clone()]));
-        let event_writer = Arc::new(MockEventWriter {
-            deleted_events: AtomicUsize::new(0),
-        });
-        let search_index = Arc::new(MockSearchIndex {
-            removed_entry_ids: Mutex::new(Vec::new()),
-        });
+        let (entry_repo, store) = make_entry_repo(vec![entry.clone()]);
+        let deleted_events = Arc::new(AtomicUsize::new(0));
+        let removed_entry_ids = Arc::new(Mutex::new(Vec::new()));
+        let event_writer = Arc::new(make_event_writer(deleted_events.clone()));
+        let search_index = Arc::new(make_search_index(removed_entry_ids.clone()));
 
         let result = ClearClipboardHistory::from_ports(
-            entry_repo.clone(),
-            Arc::new(MockSelectionRepo),
+            Arc::new(entry_repo),
+            Arc::new(make_selection_repo()),
             event_writer.clone(),
-            Arc::new(MockRepresentationRepo),
+            Arc::new(make_representation_repo()),
         )
         .with_search_index(search_index.clone())
         .execute()
@@ -400,15 +327,14 @@ mod tests {
 
         assert_eq!(result.deleted_count, 1);
         assert!(result.failed_entries.is_empty());
-        assert!(entry_repo
-            .get_entry(&entry.entry_id)
-            .await
-            .expect("get_entry should succeed")
-            .is_none());
+        assert!(
+            store.lock().unwrap().is_empty(),
+            "bulk clear should delete stored entries"
+        );
         assert_eq!(
-            *search_index.removed_entry_ids.lock().await,
+            *removed_entry_ids.lock().unwrap(),
             vec![entry.entry_id.to_string()]
         );
-        assert_eq!(event_writer.deleted_events.load(Ordering::SeqCst), 1);
+        assert_eq!(deleted_events.load(Ordering::SeqCst), 1);
     }
 }

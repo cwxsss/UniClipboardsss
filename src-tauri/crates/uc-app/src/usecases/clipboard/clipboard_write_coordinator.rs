@@ -173,120 +173,10 @@ impl ClipboardWriteCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use std::sync::Mutex;
+    use crate::test_mocks::{MockClipboardChangeOrigin, MockSystemClipboard};
+    use std::sync::{Arc, Mutex};
     use uc_core::clipboard::{MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot};
     use uc_core::ids::{FormatId, RepresentationId};
-
-    // ---------------------------------------------------------------------------
-    // Mock: SystemClipboardPort
-    // ---------------------------------------------------------------------------
-
-    #[derive(Default)]
-    struct MockSystemClipboard {
-        calls: Mutex<Vec<String>>,
-        /// When Some(err), write_snapshot returns that error.
-        fail_with: Option<String>,
-    }
-
-    impl MockSystemClipboard {
-        fn fail(msg: &str) -> Self {
-            Self {
-                calls: Mutex::new(vec![]),
-                fail_with: Some(msg.to_string()),
-            }
-        }
-
-        fn calls_count(&self) -> usize {
-            self.calls.lock().unwrap().len()
-        }
-    }
-
-    impl SystemClipboardPort for MockSystemClipboard {
-        fn write_snapshot(&self, snapshot: SystemClipboardSnapshot) -> anyhow::Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("write:{}", snapshot.origin_guard_key()));
-            if let Some(ref err_msg) = self.fail_with {
-                return Err(anyhow::anyhow!("{}", err_msg));
-            }
-            Ok(())
-        }
-
-        fn read_snapshot(&self) -> anyhow::Result<SystemClipboardSnapshot> {
-            Ok(make_snapshot("read-back"))
-        }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Mock: ClipboardChangeOriginPort
-    // ---------------------------------------------------------------------------
-
-    #[derive(Default)]
-    struct MockOriginPort {
-        calls: Mutex<Vec<String>>,
-    }
-
-    impl MockOriginPort {
-        fn calls(&self) -> Vec<String> {
-            self.calls.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardChangeOriginPort for MockOriginPort {
-        async fn set_next_origin(&self, origin: ClipboardChangeOrigin, ttl: Duration) {
-            self.calls.lock().unwrap().push(format!(
-                "set_next_origin:{:?}:{}ms",
-                origin,
-                ttl.as_millis()
-            ));
-        }
-
-        async fn consume_origin_or_default(
-            &self,
-            default_origin: ClipboardChangeOrigin,
-        ) -> ClipboardChangeOrigin {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("consume_default:{:?}", default_origin));
-            default_origin
-        }
-
-        async fn remember_remote_snapshot_hash(&self, snapshot_hash: String, ttl: Duration) {
-            self.calls.lock().unwrap().push(format!(
-                "remember_remote:{}:{}ms",
-                snapshot_hash,
-                ttl.as_millis()
-            ));
-        }
-
-        async fn remember_local_snapshot_hash(&self, snapshot_hash: String, ttl: Duration) {
-            self.calls.lock().unwrap().push(format!(
-                "remember_local:{}:{}ms",
-                snapshot_hash,
-                ttl.as_millis()
-            ));
-        }
-
-        async fn consume_origin_for_snapshot_or_default(
-            &self,
-            snapshot_hash: &str,
-            default_origin: ClipboardChangeOrigin,
-        ) -> ClipboardChangeOrigin {
-            self.calls.lock().unwrap().push(format!(
-                "consume_snapshot:{}:{:?}",
-                snapshot_hash, default_origin
-            ));
-            default_origin
-        }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Test helpers
-    // ---------------------------------------------------------------------------
 
     fn make_snapshot(text: &str) -> SystemClipboardSnapshot {
         SystemClipboardSnapshot {
@@ -298,6 +188,97 @@ mod tests {
                 text.as_bytes().to_vec(),
             )],
         }
+    }
+
+    fn make_clipboard(
+        fail_with: Option<&str>,
+    ) -> (Arc<MockSystemClipboard>, Arc<Mutex<Vec<String>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_clone = calls.clone();
+        let fail_with = fail_with.map(ToString::to_string);
+
+        let mut clipboard = MockSystemClipboard::new();
+        clipboard
+            .expect_write_snapshot()
+            .returning(move |snapshot| {
+                calls_clone
+                    .lock()
+                    .unwrap()
+                    .push(format!("write:{}", snapshot.origin_guard_key()));
+                if let Some(err_msg) = &fail_with {
+                    return Err(anyhow::anyhow!("{err_msg}"));
+                }
+                Ok(())
+            });
+        clipboard
+            .expect_read_snapshot()
+            .returning(|| Ok(make_snapshot("read-back")));
+
+        (Arc::new(clipboard), calls)
+    }
+
+    fn make_origin() -> (Arc<MockClipboardChangeOrigin>, Arc<Mutex<Vec<String>>>) {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut origin = MockClipboardChangeOrigin::new();
+
+        let calls_clone = calls.clone();
+        origin
+            .expect_set_next_origin()
+            .returning(move |origin, ttl| {
+                calls_clone.lock().unwrap().push(format!(
+                    "set_next_origin:{:?}:{}ms",
+                    origin,
+                    ttl.as_millis()
+                ));
+            });
+
+        let calls_clone = calls.clone();
+        origin
+            .expect_consume_origin_or_default()
+            .returning(move |default_origin| {
+                calls_clone
+                    .lock()
+                    .unwrap()
+                    .push(format!("consume_default:{:?}", default_origin));
+                default_origin
+            });
+
+        let calls_clone = calls.clone();
+        origin
+            .expect_remember_remote_snapshot_hash()
+            .returning(move |snapshot_hash, ttl| {
+                calls_clone.lock().unwrap().push(format!(
+                    "remember_remote:{}:{}ms",
+                    snapshot_hash,
+                    ttl.as_millis()
+                ));
+            });
+
+        let calls_clone = calls.clone();
+        origin
+            .expect_remember_local_snapshot_hash()
+            .returning(move |snapshot_hash, ttl| {
+                calls_clone.lock().unwrap().push(format!(
+                    "remember_local:{}:{}ms",
+                    snapshot_hash,
+                    ttl.as_millis()
+                ));
+            });
+
+        origin.expect_has_pending_origin().returning(|| false);
+
+        let calls_clone = calls.clone();
+        origin
+            .expect_consume_origin_for_snapshot_or_default()
+            .returning(move |snapshot_hash, default_origin| {
+                calls_clone.lock().unwrap().push(format!(
+                    "consume_snapshot:{}:{:?}",
+                    snapshot_hash, default_origin
+                ));
+                default_origin
+            });
+
+        (Arc::new(origin), calls)
     }
 
     fn coordinator(
@@ -314,8 +295,8 @@ mod tests {
 
     #[tokio::test]
     async fn test1_local_restore_registers_local_guard_writes_and_sets_next_origin() {
-        let clipboard = Arc::new(MockSystemClipboard::default());
-        let origin = Arc::new(MockOriginPort::default());
+        let (clipboard, clipboard_calls) = make_clipboard(None);
+        let (origin, origin_calls) = make_origin();
         let coord = coordinator(clipboard.clone(), origin.clone());
 
         let snapshot = make_snapshot("hello");
@@ -326,7 +307,7 @@ mod tests {
             .await
             .expect("write should succeed");
 
-        let calls = origin.calls();
+        let calls = origin_calls.lock().unwrap().clone();
         // First call must be remember_local with 2000ms TTL
         assert!(
             calls[0].starts_with(&format!("remember_local:{}:2000ms", expected_key)),
@@ -335,7 +316,7 @@ mod tests {
         );
         // write_snapshot must have been called once
         assert_eq!(
-            clipboard.calls_count(),
+            clipboard_calls.lock().unwrap().len(),
             1,
             "write_snapshot must be called once"
         );
@@ -355,8 +336,8 @@ mod tests {
 
     #[tokio::test]
     async fn test2_remote_push_registers_remote_guard_writes_and_sets_next_origin() {
-        let clipboard = Arc::new(MockSystemClipboard::default());
-        let origin = Arc::new(MockOriginPort::default());
+        let (clipboard, clipboard_calls) = make_clipboard(None);
+        let (origin, origin_calls) = make_origin();
         let coord = coordinator(clipboard.clone(), origin.clone());
 
         let snapshot = make_snapshot("remote content");
@@ -367,7 +348,7 @@ mod tests {
             .await
             .expect("write should succeed");
 
-        let calls = origin.calls();
+        let calls = origin_calls.lock().unwrap().clone();
         // First: remember_remote with 60000ms TTL
         assert!(
             calls[0].starts_with(&format!("remember_remote:{}:60000ms", expected_key)),
@@ -375,7 +356,7 @@ mod tests {
             calls
         );
         // write_snapshot called
-        assert_eq!(clipboard.calls_count(), 1);
+        assert_eq!(clipboard_calls.lock().unwrap().len(), 1);
         // set_next_origin called with RemotePush and 60s TTL
         let has_set_next = calls
             .iter()
@@ -393,8 +374,8 @@ mod tests {
 
     #[tokio::test]
     async fn test3_local_capture_registers_local_guard_and_writes() {
-        let clipboard = Arc::new(MockSystemClipboard::default());
-        let origin = Arc::new(MockOriginPort::default());
+        let (clipboard, clipboard_calls) = make_clipboard(None);
+        let (origin, origin_calls) = make_origin();
         let coord = coordinator(clipboard.clone(), origin.clone());
 
         let snapshot = make_snapshot("local capture");
@@ -405,13 +386,13 @@ mod tests {
             .await
             .expect("write should succeed");
 
-        let calls = origin.calls();
+        let calls = origin_calls.lock().unwrap().clone();
         assert!(
             calls[0].starts_with(&format!("remember_local:{}:2000ms", expected_key)),
             "expected remember_local:...:2000ms for LocalCapture, got: {:?}",
             calls
         );
-        assert_eq!(clipboard.calls_count(), 1);
+        assert_eq!(clipboard_calls.lock().unwrap().len(), 1);
         assert!(
             !calls.iter().any(|c| c.starts_with("set_next_origin")),
             "set_next_origin must NOT be called for LocalCapture: {:?}",
@@ -425,8 +406,8 @@ mod tests {
 
     #[tokio::test]
     async fn test4_write_failure_consumes_guard_and_returns_error() {
-        let clipboard = Arc::new(MockSystemClipboard::fail("disk full"));
-        let origin = Arc::new(MockOriginPort::default());
+        let (clipboard, _clipboard_calls) = make_clipboard(Some("disk full"));
+        let (origin, origin_calls) = make_origin();
         let coord = coordinator(clipboard.clone(), origin.clone());
 
         let snapshot = make_snapshot("failing write");
@@ -437,7 +418,7 @@ mod tests {
             .await;
         assert!(result.is_err(), "should return error on write failure");
 
-        let calls = origin.calls();
+        let calls = origin_calls.lock().unwrap().clone();
         // Guard was registered
         assert!(
             calls[0].starts_with("remember_local:"),
@@ -461,8 +442,8 @@ mod tests {
 
     #[tokio::test]
     async fn test5_remote_push_write_failure_does_not_call_set_next_origin() {
-        let clipboard = Arc::new(MockSystemClipboard::fail("network error"));
-        let origin = Arc::new(MockOriginPort::default());
+        let (clipboard, _clipboard_calls) = make_clipboard(Some("network error"));
+        let (origin, origin_calls) = make_origin();
         let coord = coordinator(clipboard.clone(), origin.clone());
 
         let snapshot = make_snapshot("remote fail");
@@ -472,7 +453,7 @@ mod tests {
             .await;
         assert!(result.is_err(), "should return error on write failure");
 
-        let calls = origin.calls();
+        let calls = origin_calls.lock().unwrap().clone();
         // Guard registered
         assert!(
             calls[0].starts_with("remember_remote:"),

@@ -79,3 +79,5 @@ uc-platform = { path = "../uc-platform", features = ["test-helpers"] }
 sentry = { version = "0.46.1", features = ["test"] }
 tauri = { workspace = true, features = ["test"] }
 tempfile = "3"
+mockall = "0.13"
+tokio = { version = "1", features = ["full", "test-util"] }

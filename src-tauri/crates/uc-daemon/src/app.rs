@@ -542,6 +542,8 @@ mod tests {
     // ---------------------------------------------------------------------------
 
     use async_trait::async_trait;
+    use mockall::mock;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use uc_app::usecases::AutoUnlockEncryptionSession;
     use uc_core::ports::security::key_scope::ScopeError;
@@ -559,83 +561,144 @@ mod tests {
         },
     };
 
-    struct MockEncryptionState {
-        state: EncryptionState,
-    }
-    #[async_trait]
-    impl EncryptionStatePort for MockEncryptionState {
-        async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError> {
-            Ok(self.state.clone())
-        }
-        async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
-        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
+    mock! {
+        EncryptionState {}
+        #[async_trait]
+        impl EncryptionStatePort for EncryptionState {
+            async fn load_state(&self) -> std::result::Result<EncryptionState, EncryptionStateError>;
+            async fn persist_initialized(&self) -> std::result::Result<(), EncryptionStateError>;
+            async fn clear_initialized(&self) -> std::result::Result<(), EncryptionStateError>;
         }
     }
 
-    struct MockKeyScope {
-        scope: Option<KeyScope>,
-    }
-    #[async_trait]
-    impl KeyScopePort for MockKeyScope {
-        async fn current_scope(&self) -> Result<KeyScope, ScopeError> {
-            self.scope
-                .clone()
-                .ok_or(ScopeError::FailedToGetCurrentScope)
+    mock! {
+        KeyScope {}
+        #[async_trait]
+        impl KeyScopePort for KeyScope {
+            async fn current_scope(&self) -> std::result::Result<KeyScope, ScopeError>;
         }
     }
 
-    struct MockKeyMaterial {
+    mock! {
+        KeyMaterial {}
+        #[async_trait]
+        impl KeyMaterialPort for KeyMaterial {
+            async fn load_keyslot(
+                &self,
+                s: &KeyScope,
+            ) -> std::result::Result<uc_core::security::model::KeySlot, EncryptionError>;
+            async fn store_keyslot(
+                &self,
+                keyslot: &uc_core::security::model::KeySlot,
+            ) -> std::result::Result<(), EncryptionError>;
+            async fn delete_keyslot(
+                &self,
+                scope: &KeyScope,
+            ) -> std::result::Result<(), EncryptionError>;
+            async fn load_kek(&self, scope: &KeyScope) -> std::result::Result<Kek, EncryptionError>;
+            async fn store_kek(
+                &self,
+                scope: &KeyScope,
+                kek: &Kek,
+            ) -> std::result::Result<(), EncryptionError>;
+            async fn delete_kek(&self, scope: &KeyScope) -> std::result::Result<(), EncryptionError>;
+        }
+    }
+
+    mock! {
+        Encryption {}
+        #[async_trait]
+        impl EncryptionPort for Encryption {
+            async fn derive_kek(
+                &self,
+                passphrase: &uc_core::security::model::Passphrase,
+                salt: &[u8],
+                params: &uc_core::security::model::KdfParams,
+            ) -> std::result::Result<Kek, EncryptionError>;
+            async fn wrap_master_key(
+                &self,
+                kek: &Kek,
+                mk: &MasterKey,
+                algo: EncryptionAlgo,
+            ) -> std::result::Result<EncryptedBlob, EncryptionError>;
+            async fn unwrap_master_key(
+                &self,
+                kek: &Kek,
+                wrapped: &EncryptedBlob,
+            ) -> std::result::Result<MasterKey, EncryptionError>;
+            async fn encrypt_blob(
+                &self,
+                mk: &MasterKey,
+                plaintext: &[u8],
+                aad: &[u8],
+                algo: EncryptionAlgo,
+            ) -> std::result::Result<EncryptedBlob, EncryptionError>;
+            async fn decrypt_blob(
+                &self,
+                mk: &MasterKey,
+                encrypted: &EncryptedBlob,
+                aad: &[u8],
+            ) -> std::result::Result<Vec<u8>, EncryptionError>;
+        }
+    }
+
+    mock! {
+        EncryptionSession {}
+        #[async_trait]
+        impl EncryptionSessionPort for EncryptionSession {
+            async fn is_ready(&self) -> bool;
+            async fn get_master_key(&self) -> std::result::Result<MasterKey, EncryptionError>;
+            async fn set_master_key(&self, key: MasterKey) -> std::result::Result<(), EncryptionError>;
+            async fn clear(&self) -> std::result::Result<(), EncryptionError>;
+        }
+    }
+
+    fn build_encryption_state(state: EncryptionState) -> Arc<dyn EncryptionStatePort> {
+        let mut encryption_state = MockEncryptionState::new();
+        encryption_state
+            .expect_load_state()
+            .returning(move || Ok(state.clone()));
+        encryption_state
+            .expect_persist_initialized()
+            .returning(|| Ok(()));
+        encryption_state
+            .expect_clear_initialized()
+            .returning(|| Ok(()));
+        Arc::new(encryption_state)
+    }
+
+    fn build_key_scope(scope: Option<KeyScope>) -> Arc<dyn KeyScopePort> {
+        let mut key_scope = MockKeyScope::new();
+        key_scope
+            .expect_current_scope()
+            .returning(move || scope.clone().ok_or(ScopeError::FailedToGetCurrentScope));
+        Arc::new(key_scope)
+    }
+
+    fn build_key_material(
         keyslot: Option<uc_core::security::model::KeySlot>,
         kek: Option<Kek>,
-    }
-    #[async_trait]
-    impl KeyMaterialPort for MockKeyMaterial {
-        async fn load_keyslot(
-            &self,
-            _s: &KeyScope,
-        ) -> Result<uc_core::security::model::KeySlot, EncryptionError> {
-            self.keyslot.clone().ok_or(EncryptionError::KeyNotFound)
-        }
-        async fn store_keyslot(
-            &self,
-            _: &uc_core::security::model::KeySlot,
-        ) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-        async fn delete_keyslot(&self, _: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-        async fn load_kek(&self, _: &KeyScope) -> Result<Kek, EncryptionError> {
-            self.kek.clone().ok_or(EncryptionError::KeyNotFound)
-        }
-        async fn store_kek(&self, _: &KeyScope, _: &Kek) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-        async fn delete_kek(&self, _: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
+    ) -> Arc<dyn KeyMaterialPort> {
+        let mut key_material = MockKeyMaterial::new();
+        key_material
+            .expect_load_keyslot()
+            .returning(move |_| keyslot.clone().ok_or(EncryptionError::KeyNotFound));
+        key_material.expect_store_keyslot().returning(|_| Ok(()));
+        key_material.expect_delete_keyslot().returning(|_| Ok(()));
+        key_material
+            .expect_load_kek()
+            .returning(move |_| kek.clone().ok_or(EncryptionError::KeyNotFound));
+        key_material.expect_store_kek().returning(|_, _| Ok(()));
+        key_material.expect_delete_kek().returning(|_| Ok(()));
+        Arc::new(key_material)
     }
 
-    struct MockEncryptionPort;
-    #[async_trait]
-    impl EncryptionPort for MockEncryptionPort {
-        async fn derive_kek(
-            &self,
-            _: &uc_core::security::model::Passphrase,
-            _: &[u8],
-            _: &uc_core::security::model::KdfParams,
-        ) -> Result<Kek, EncryptionError> {
-            Ok(Kek([0u8; 32]))
-        }
-        async fn wrap_master_key(
-            &self,
-            _: &Kek,
-            _: &MasterKey,
-            _: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
+    fn build_encryption() -> Arc<dyn EncryptionPort> {
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_derive_kek()
+            .returning(|_, _, _| Ok(Kek([0u8; 32])));
+        encryption.expect_wrap_master_key().returning(|_, _, _| {
             Ok(EncryptedBlob {
                 version: EncryptionFormatVersion::V1,
                 aead: EncryptionAlgo::XChaCha20Poly1305,
@@ -643,21 +706,11 @@ mod tests {
                 ciphertext: vec![0; 32],
                 aad_fingerprint: None,
             })
-        }
-        async fn unwrap_master_key(
-            &self,
-            _: &Kek,
-            _: &EncryptedBlob,
-        ) -> Result<MasterKey, EncryptionError> {
-            MasterKey::from_bytes(&[0u8; 32])
-        }
-        async fn encrypt_blob(
-            &self,
-            _: &MasterKey,
-            _: &[u8],
-            _: &[u8],
-            _: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
+        });
+        encryption
+            .expect_unwrap_master_key()
+            .returning(|_, _| MasterKey::from_bytes(&[0u8; 32]));
+        encryption.expect_encrypt_blob().returning(|_, _, _, _| {
             Ok(EncryptedBlob {
                 version: EncryptionFormatVersion::V1,
                 aead: EncryptionAlgo::XChaCha20Poly1305,
@@ -665,57 +718,44 @@ mod tests {
                 ciphertext: vec![],
                 aad_fingerprint: None,
             })
-        }
-        async fn decrypt_blob(
-            &self,
-            _: &MasterKey,
-            _: &EncryptedBlob,
-            _: &[u8],
-        ) -> Result<Vec<u8>, EncryptionError> {
-            Ok(vec![])
-        }
+        });
+        encryption
+            .expect_decrypt_blob()
+            .returning(|_, _, _| Ok(vec![]));
+        Arc::new(encryption)
     }
 
-    struct MockEncryptionSession {
-        master_key_set: Arc<std::sync::atomic::AtomicBool>,
-    }
-    impl MockEncryptionSession {
-        fn new() -> Self {
-            Self {
-                master_key_set: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            }
-        }
-        fn was_set(&self) -> bool {
-            self.master_key_set
-                .load(std::sync::atomic::Ordering::SeqCst)
-        }
-    }
-    #[async_trait]
-    impl EncryptionSessionPort for MockEncryptionSession {
-        async fn is_ready(&self) -> bool {
-            self.master_key_set
-                .load(std::sync::atomic::Ordering::SeqCst)
-        }
-        async fn get_master_key(&self) -> Result<MasterKey, EncryptionError> {
-            if self
-                .master_key_set
-                .load(std::sync::atomic::Ordering::SeqCst)
-            {
+    fn build_encryption_session() -> (Arc<dyn EncryptionSessionPort>, Arc<AtomicBool>) {
+        let was_set = Arc::new(AtomicBool::new(false));
+        let mut session = MockEncryptionSession::new();
+
+        let ready_flag = Arc::clone(&was_set);
+        session
+            .expect_is_ready()
+            .returning(move || ready_flag.load(Ordering::SeqCst));
+
+        let get_flag = Arc::clone(&was_set);
+        session.expect_get_master_key().returning(move || {
+            if get_flag.load(Ordering::SeqCst) {
                 MasterKey::from_bytes(&[0u8; 32])
             } else {
                 Err(EncryptionError::Locked)
             }
-        }
-        async fn set_master_key(&self, _: MasterKey) -> Result<(), EncryptionError> {
-            self.master_key_set
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let set_flag = Arc::clone(&was_set);
+        session.expect_set_master_key().returning(move |_| {
+            set_flag.store(true, Ordering::SeqCst);
             Ok(())
-        }
-        async fn clear(&self) -> Result<(), EncryptionError> {
-            self.master_key_set
-                .store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        let clear_flag = Arc::clone(&was_set);
+        session.expect_clear().returning(move || {
+            clear_flag.store(false, Ordering::SeqCst);
             Ok(())
-        }
+        });
+
+        (Arc::new(session), was_set)
     }
 
     fn make_test_keyslot() -> uc_core::security::model::KeySlot {
@@ -745,20 +785,13 @@ mod tests {
         let scope = KeyScope {
             profile_id: "test".to_string(),
         };
-        let session = Arc::new(MockEncryptionSession::new());
+        let (session, session_was_set) = build_encryption_session();
         let uc = AutoUnlockEncryptionSession::from_ports(
-            Arc::new(MockEncryptionState {
-                state: EncryptionState::Initialized,
-            }),
-            Arc::new(MockKeyScope {
-                scope: Some(scope.clone()),
-            }),
-            Arc::new(MockKeyMaterial {
-                keyslot: Some(make_test_keyslot()),
-                kek: Some(Kek([0u8; 32])),
-            }),
-            Arc::new(MockEncryptionPort),
-            session.clone(),
+            build_encryption_state(EncryptionState::Initialized),
+            build_key_scope(Some(scope.clone())),
+            build_key_material(Some(make_test_keyslot()), Some(Kek([0u8; 32]))),
+            build_encryption(),
+            session,
         );
 
         // This exercises the Ok(true) arm of recover_encryption_session
@@ -773,7 +806,7 @@ mod tests {
             "should return true when session recovered"
         );
         assert!(
-            session.was_set(),
+            session_was_set.load(Ordering::SeqCst),
             "encryption session must be set on recovery"
         );
     }
@@ -782,22 +815,15 @@ mod tests {
     /// Uninitialized (maps to Ok(false) arm — first run, no recovery needed).
     #[tokio::test]
     async fn recover_encryption_session_ok_false_when_uninitialized() {
-        let session = Arc::new(MockEncryptionSession::new());
+        let (session, session_was_set) = build_encryption_session();
         let uc = AutoUnlockEncryptionSession::from_ports(
-            Arc::new(MockEncryptionState {
-                state: EncryptionState::Uninitialized,
-            }),
-            Arc::new(MockKeyScope {
-                scope: Some(KeyScope {
-                    profile_id: "test".to_string(),
-                }),
-            }),
-            Arc::new(MockKeyMaterial {
-                keyslot: None,
-                kek: None,
-            }),
-            Arc::new(MockEncryptionPort),
-            session.clone(),
+            build_encryption_state(EncryptionState::Uninitialized),
+            build_key_scope(Some(KeyScope {
+                profile_id: "test".to_string(),
+            })),
+            build_key_material(None, None),
+            build_encryption(),
+            session,
         );
 
         // This exercises the Ok(false) arm of recover_encryption_session
@@ -812,7 +838,7 @@ mod tests {
             "should return false when uninitialized (skip)"
         );
         assert!(
-            !session.was_set(),
+            !session_was_set.load(Ordering::SeqCst),
             "encryption session must NOT be set when uninitialized"
         );
     }
@@ -825,19 +851,12 @@ mod tests {
             profile_id: "test".to_string(),
         };
         let uc = AutoUnlockEncryptionSession::from_ports(
-            Arc::new(MockEncryptionState {
-                state: EncryptionState::Initialized,
-            }),
-            Arc::new(MockKeyScope {
-                scope: Some(scope.clone()),
-            }),
+            build_encryption_state(EncryptionState::Initialized),
+            build_key_scope(Some(scope.clone())),
             // Has keyslot but no KEK — triggers KekLoadFailed error
-            Arc::new(MockKeyMaterial {
-                keyslot: Some(make_test_keyslot()),
-                kek: None,
-            }),
-            Arc::new(MockEncryptionPort),
-            Arc::new(MockEncryptionSession::new()),
+            build_key_material(Some(make_test_keyslot()), None),
+            build_encryption(),
+            build_encryption_session().0,
         );
 
         // This exercises the Err arm of recover_encryption_session

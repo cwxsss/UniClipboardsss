@@ -52,95 +52,17 @@ impl ConnectionPolicyResolverPort for ResolveConnectionPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_mocks::MockPairedDeviceRepository;
     use std::sync::Arc;
     use uc_core::network::{PairedDevice, PairingState, ProtocolKind};
-    use uc_core::ports::{PairedDeviceRepositoryError, PairedDeviceRepositoryPort};
-
-    struct MockRepo {
-        state: Option<PairingState>,
-        should_fail: bool,
-    }
-
-    impl MockRepo {
-        fn new(state: Option<PairingState>) -> Self {
-            Self {
-                state,
-                should_fail: false,
-            }
-        }
-
-        fn failing() -> Self {
-            Self {
-                state: None,
-                should_fail: true,
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl PairedDeviceRepositoryPort for MockRepo {
-        async fn get_by_peer_id(
-            &self,
-            peer_id: &PeerId,
-        ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
-            if self.should_fail {
-                return Err(PairedDeviceRepositoryError::Storage(
-                    "repo failure".to_string(),
-                ));
-            }
-
-            Ok(self.state.clone().map(|state| PairedDevice {
-                peer_id: peer_id.clone(),
-                pairing_state: state,
-                identity_fingerprint: "fp".to_string(),
-                paired_at: chrono::Utc::now(),
-                last_seen_at: None,
-                device_name: "Mock Device".to_string(),
-                sync_settings: None,
-            }))
-        }
-
-        async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(Vec::new())
-        }
-
-        async fn upsert(&self, _device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn set_state(
-            &self,
-            _peer_id: &PeerId,
-            _state: PairingState,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn update_last_seen(
-            &self,
-            _peer_id: &PeerId,
-            _last_seen_at: chrono::DateTime<chrono::Utc>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn update_sync_settings(
-            &self,
-            _peer_id: &PeerId,
-            _settings: Option<uc_core::settings::model::SyncSettings>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-    }
+    use uc_core::ports::PairedDeviceRepositoryError;
 
     #[tokio::test]
     async fn unpaired_peer_allows_pairing_only() {
-        let repo = Arc::new(MockRepo::new(None));
-        let uc = ResolveConnectionPolicy::new(repo);
+        let mut repo = MockPairedDeviceRepository::new();
+        repo.expect_get_by_peer_id().returning(|_| Ok(None));
+
+        let uc = ResolveConnectionPolicy::new(Arc::new(repo));
         let resolved = uc.execute(PeerId::from("peer-1")).await.unwrap();
         assert_eq!(resolved.pairing_state, PairingState::Pending);
         assert!(resolved.allowed.allows(ProtocolKind::Pairing));
@@ -149,8 +71,20 @@ mod tests {
 
     #[tokio::test]
     async fn trusted_peer_allows_business() {
-        let repo = Arc::new(MockRepo::new(Some(PairingState::Trusted)));
-        let uc = ResolveConnectionPolicy::new(repo);
+        let mut repo = MockPairedDeviceRepository::new();
+        repo.expect_get_by_peer_id().returning(|peer_id| {
+            Ok(Some(PairedDevice {
+                peer_id: peer_id.clone(),
+                pairing_state: PairingState::Trusted,
+                identity_fingerprint: "fp".to_string(),
+                paired_at: chrono::Utc::now(),
+                last_seen_at: None,
+                device_name: "Mock Device".to_string(),
+                sync_settings: None,
+            }))
+        });
+
+        let uc = ResolveConnectionPolicy::new(Arc::new(repo));
         let resolved = uc.execute(PeerId::from("peer-1")).await.unwrap();
         assert_eq!(resolved.pairing_state, PairingState::Trusted);
         assert!(resolved.allowed.allows(ProtocolKind::Business));
@@ -158,8 +92,14 @@ mod tests {
 
     #[tokio::test]
     async fn repo_failure_returns_error() {
-        let repo = Arc::new(MockRepo::failing());
-        let uc = ResolveConnectionPolicy::new(repo);
+        let mut repo = MockPairedDeviceRepository::new();
+        repo.expect_get_by_peer_id().returning(|_| {
+            Err(PairedDeviceRepositoryError::Storage(
+                "repo failure".to_string(),
+            ))
+        });
+
+        let uc = ResolveConnectionPolicy::new(Arc::new(repo));
         let result = uc.execute(PeerId::from("peer-1")).await;
         assert!(result.is_err());
     }

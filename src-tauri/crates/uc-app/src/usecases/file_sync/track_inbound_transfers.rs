@@ -156,12 +156,12 @@ mod tests {
         TrackedFileTransfer, TrackedFileTransferStatus,
     };
 
-    /// In-memory mock for FileTransferRepositoryPort.
-    struct MockFileTransferRepo {
+    /// In-memory implementation for FileTransferRepositoryPort.
+    struct InMemoryFileTransferRepo {
         transfers: Mutex<Vec<TrackedFileTransfer>>,
     }
 
-    impl MockFileTransferRepo {
+    impl InMemoryFileTransferRepo {
         fn new() -> Self {
             Self {
                 transfers: Mutex::new(Vec::new()),
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl FileTransferRepositoryPort for MockFileTransferRepo {
+    impl FileTransferRepositoryPort for InMemoryFileTransferRepo {
         async fn insert_pending_transfers(
             &self,
             transfers: &[PendingInboundTransfer],
@@ -375,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_pending_and_mark_transferring() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         let transfers = vec![PendingInboundTransfer {
@@ -402,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_refresh_activity_updates_timestamp() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         let transfers = vec![PendingInboundTransfer {
@@ -425,7 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mark_completed() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         let transfers = vec![PendingInboundTransfer {
@@ -447,7 +447,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mark_failed() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         let transfers = vec![PendingInboundTransfer {
@@ -469,7 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_expired_inflight() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         let transfers = vec![
@@ -503,7 +503,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reconcile_inflight_after_startup() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         let transfers = vec![
@@ -541,7 +541,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_entry_summary_aggregate() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         let transfers = vec![
@@ -576,7 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_entry_summary_returns_none_for_unknown_entry() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         let summary = uc.get_entry_summary("nonexistent").await.unwrap();
@@ -585,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_record_pending_empty_is_noop() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         let uc = TrackInboundTransfersUseCase::new(repo.clone());
 
         uc.record_pending_from_clipboard(vec![]).await.unwrap();

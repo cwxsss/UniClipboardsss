@@ -131,182 +131,137 @@ impl ClipboardEventWriterPort for EncryptingClipboardEventWriter {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use mockall::mock;
     use std::sync::{Arc, Mutex};
     use uc_core::{
         clipboard::{ClipboardEvent, MimeType, PersistedClipboardRepresentation, SnapshotHash},
         ids::{BlobId, DeviceId, EventId, FormatId, RepresentationId},
         security::aad,
-        security::model::{EncryptedBlob, EncryptionFormatVersion, MasterKey},
+        security::model::{EncryptedBlob, EncryptionError, EncryptionFormatVersion, MasterKey},
         ContentHash,
     };
 
-    /// Mock ClipboardEventWriterPort that captures inserted representations
-    struct MockEventWriter {
+    mock! {
+        EventWriter {}
+
+        #[async_trait]
+        impl ClipboardEventWriterPort for EventWriter {
+            async fn insert_event(
+                &self,
+                event: &ClipboardEvent,
+                representations: &Vec<PersistedClipboardRepresentation>,
+            ) -> Result<()>;
+            async fn delete_event_and_representations(&self, event_id: &EventId) -> Result<()>;
+        }
+    }
+
+    mock! {
+        Encryption {}
+
+        #[async_trait]
+        impl uc_core::ports::EncryptionPort for Encryption {
+            async fn derive_kek(
+                &self,
+                passphrase: &uc_core::security::model::Passphrase,
+                salt: &[u8],
+                kdf_params: &uc_core::security::model::KdfParams,
+            ) -> Result<uc_core::security::model::Kek, EncryptionError>;
+            async fn wrap_master_key(
+                &self,
+                kek: &uc_core::security::model::Kek,
+                master_key: &MasterKey,
+                aead: uc_core::security::model::EncryptionAlgo,
+            ) -> Result<EncryptedBlob, EncryptionError>;
+            async fn unwrap_master_key(
+                &self,
+                kek: &uc_core::security::model::Kek,
+                blob: &EncryptedBlob,
+            ) -> Result<MasterKey, EncryptionError>;
+            async fn encrypt_blob(
+                &self,
+                master_key: &MasterKey,
+                plaintext: &[u8],
+                aad: &[u8],
+                algo: uc_core::security::model::EncryptionAlgo,
+            ) -> Result<EncryptedBlob, EncryptionError>;
+            async fn decrypt_blob(
+                &self,
+                master_key: &MasterKey,
+                blob: &EncryptedBlob,
+                aad: &[u8],
+            ) -> Result<Vec<u8>, EncryptionError>;
+        }
+    }
+
+    mock! {
+        EncryptionSession {}
+
+        #[async_trait]
+        impl EncryptionSessionPort for EncryptionSession {
+            async fn is_ready(&self) -> bool;
+            async fn get_master_key(&self) -> Result<MasterKey, EncryptionError>;
+            async fn set_master_key(&self, master_key: MasterKey) -> Result<(), EncryptionError>;
+            async fn clear(&self) -> Result<(), EncryptionError>;
+        }
+    }
+
+    fn make_event_writer_with_capture(
         inserted_reps: Arc<Mutex<Vec<PersistedClipboardRepresentation>>>,
         deleted_event_ids: Arc<Mutex<Vec<EventId>>>,
-    }
+    ) -> MockEventWriter {
+        let mut writer = MockEventWriter::new();
 
-    impl MockEventWriter {
-        fn new() -> Self {
-            Self {
-                inserted_reps: Arc::new(Mutex::new(Vec::new())),
-                deleted_event_ids: Arc::new(Mutex::new(Vec::new())),
-            }
-        }
-
-        fn get_inserted_reps(&self) -> Vec<PersistedClipboardRepresentation> {
-            self.inserted_reps.lock().unwrap().clone()
-        }
-
-        fn get_deleted_event_ids(&self) -> Vec<EventId> {
-            self.deleted_event_ids.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardEventWriterPort for MockEventWriter {
-        async fn insert_event(
-            &self,
-            _event: &ClipboardEvent,
-            representations: &Vec<PersistedClipboardRepresentation>,
-        ) -> Result<()> {
-            self.inserted_reps
-                .lock()
-                .unwrap()
-                .extend(representations.clone());
+        let inserted_reps_capture = inserted_reps.clone();
+        writer.expect_insert_event().returning(move |_, reps| {
+            inserted_reps_capture.lock().unwrap().extend(reps.clone());
             Ok(())
-        }
+        });
 
-        async fn delete_event_and_representations(&self, event_id: &EventId) -> Result<()> {
-            self.deleted_event_ids
-                .lock()
-                .unwrap()
-                .push(event_id.clone());
-            Ok(())
-        }
+        writer
+            .expect_delete_event_and_representations()
+            .returning(move |event_id| {
+                deleted_event_ids.lock().unwrap().push(event_id.clone());
+                Ok(())
+            });
+
+        writer
     }
 
-    /// Mock EncryptionPort
-    struct MockEncryption {
-        should_fail: bool,
+    fn make_encryption(should_fail: bool) -> MockEncryption {
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_encrypt_blob()
+            .returning(move |_, plaintext, _, _| {
+                if should_fail {
+                    return Err(EncryptionError::EncryptFailed);
+                }
+                Ok(EncryptedBlob {
+                    version: EncryptionFormatVersion::V1,
+                    aead: uc_core::security::model::EncryptionAlgo::XChaCha20Poly1305,
+                    nonce: vec![0u8; 24],
+                    ciphertext: plaintext.to_vec(),
+                    aad_fingerprint: None,
+                })
+            });
+        encryption
     }
 
-    impl MockEncryption {
-        fn new() -> Self {
-            Self { should_fail: false }
-        }
-
-        fn fail_on_encrypt(mut self) -> Self {
-            self.should_fail = true;
-            self
-        }
+    fn make_session_with_master_key(master_key: MasterKey) -> MockEncryptionSession {
+        let mut session = MockEncryptionSession::new();
+        session
+            .expect_get_master_key()
+            .once()
+            .return_once(move || Ok(master_key));
+        session
     }
 
-    #[async_trait]
-    impl uc_core::ports::EncryptionPort for MockEncryption {
-        async fn derive_kek(
-            &self,
-            _passphrase: &uc_core::security::model::Passphrase,
-            _salt: &[u8],
-            _kdf_params: &uc_core::security::model::KdfParams,
-        ) -> Result<uc_core::security::model::Kek, uc_core::security::model::EncryptionError>
-        {
-            Ok(uc_core::security::model::Kek([0u8; 32]))
-        }
-
-        async fn wrap_master_key(
-            &self,
-            _kek: &uc_core::security::model::Kek,
-            _master_key: &MasterKey,
-            _aead: uc_core::security::model::EncryptionAlgo,
-        ) -> Result<EncryptedBlob, uc_core::security::model::EncryptionError> {
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: uc_core::security::model::EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: vec![0u8; 32],
-                aad_fingerprint: None,
-            })
-        }
-
-        async fn unwrap_master_key(
-            &self,
-            _kek: &uc_core::security::model::Kek,
-            _blob: &EncryptedBlob,
-        ) -> Result<MasterKey, uc_core::security::model::EncryptionError> {
-            MasterKey::from_bytes(&[0u8; 32])
-        }
-
-        async fn encrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            plaintext: &[u8],
-            _aad: &[u8],
-            _algo: uc_core::security::model::EncryptionAlgo,
-        ) -> Result<EncryptedBlob, uc_core::security::model::EncryptionError> {
-            if self.should_fail {
-                return Err(uc_core::security::model::EncryptionError::EncryptFailed);
-            }
-            // Return a deterministic encrypted blob
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: uc_core::security::model::EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: plaintext.to_vec(),
-                aad_fingerprint: None,
-            })
-        }
-
-        async fn decrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _blob: &EncryptedBlob,
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, uc_core::security::model::EncryptionError> {
-            Ok(vec![])
-        }
-    }
-
-    /// Mock EncryptionSessionPort
-    struct MockEncryptionSession {
-        master_key: Option<MasterKey>,
-    }
-
-    impl MockEncryptionSession {
-        fn new() -> Self {
-            Self { master_key: None }
-        }
-
-        fn with_master_key(mut self, key: MasterKey) -> Self {
-            self.master_key = Some(key);
-            self
-        }
-    }
-
-    #[async_trait]
-    impl EncryptionSessionPort for MockEncryptionSession {
-        async fn is_ready(&self) -> bool {
-            self.master_key.is_some()
-        }
-
-        async fn get_master_key(
-            &self,
-        ) -> Result<MasterKey, uc_core::security::model::EncryptionError> {
-            self.master_key
-                .clone()
-                .ok_or(uc_core::security::model::EncryptionError::Locked)
-        }
-
-        async fn set_master_key(
-            &self,
-            _master_key: MasterKey,
-        ) -> Result<(), uc_core::security::model::EncryptionError> {
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), uc_core::security::model::EncryptionError> {
-            Ok(())
-        }
+    fn make_locked_session() -> MockEncryptionSession {
+        let mut session = MockEncryptionSession::new();
+        session
+            .expect_get_master_key()
+            .once()
+            .return_once(|| Err(EncryptionError::Locked));
+        session
     }
 
     /// Creates a test clipboard event
@@ -347,12 +302,16 @@ mod tests {
     #[tokio::test]
     async fn test_encrypting_writer_encrypts_inline_data() {
         // Test that inline data is encrypted before being passed to inner writer
-        let inner = Arc::new(MockEventWriter::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
+        let inserted_reps = Arc::new(Mutex::new(Vec::new()));
+        let deleted_event_ids = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(make_event_writer_with_capture(
+            inserted_reps.clone(),
+            deleted_event_ids,
+        ));
+        let encryption = Arc::new(make_encryption(false));
+        let session = Arc::new(make_session_with_master_key(
+            MasterKey::from_bytes(&[0u8; 32]).unwrap(),
+        ));
 
         let writer = EncryptingClipboardEventWriter::new(inner.clone(), encryption, session);
 
@@ -363,7 +322,7 @@ mod tests {
 
         assert!(result.is_ok(), "insert_event should succeed");
 
-        let inserted_reps = inner.get_inserted_reps();
+        let inserted_reps = inserted_reps.lock().unwrap().clone();
         assert_eq!(
             inserted_reps.len(),
             1,
@@ -394,12 +353,16 @@ mod tests {
     #[tokio::test]
     async fn test_encrypting_writer_preserves_representation_without_inline_data() {
         // Test that representations without inline data are passed through unchanged
-        let inner = Arc::new(MockEventWriter::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
+        let inserted_reps = Arc::new(Mutex::new(Vec::new()));
+        let deleted_event_ids = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(make_event_writer_with_capture(
+            inserted_reps.clone(),
+            deleted_event_ids,
+        ));
+        let encryption = Arc::new(make_encryption(false));
+        let session = Arc::new(make_session_with_master_key(
+            MasterKey::from_bytes(&[0u8; 32]).unwrap(),
+        ));
 
         let writer = EncryptingClipboardEventWriter::new(inner.clone(), encryption, session);
 
@@ -410,7 +373,7 @@ mod tests {
 
         assert!(result.is_ok(), "insert_event should succeed");
 
-        let inserted_reps = inner.get_inserted_reps();
+        let inserted_reps = inserted_reps.lock().unwrap().clone();
         assert_eq!(
             inserted_reps.len(),
             1,
@@ -428,12 +391,16 @@ mod tests {
     #[tokio::test]
     async fn test_encrypting_writer_handles_multiple_representations() {
         // Test that multiple representations are encrypted correctly
-        let inner = Arc::new(MockEventWriter::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
+        let inserted_reps = Arc::new(Mutex::new(Vec::new()));
+        let deleted_event_ids = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(make_event_writer_with_capture(
+            inserted_reps.clone(),
+            deleted_event_ids,
+        ));
+        let encryption = Arc::new(make_encryption(false));
+        let session = Arc::new(make_session_with_master_key(
+            MasterKey::from_bytes(&[0u8; 32]).unwrap(),
+        ));
 
         let writer = EncryptingClipboardEventWriter::new(inner.clone(), encryption, session);
 
@@ -448,7 +415,7 @@ mod tests {
 
         assert!(result.is_ok(), "insert_event should succeed");
 
-        let inserted_reps = inner.get_inserted_reps();
+        let inserted_reps = inserted_reps.lock().unwrap().clone();
         assert_eq!(
             inserted_reps.len(),
             3,
@@ -468,9 +435,14 @@ mod tests {
     #[tokio::test]
     async fn test_encrypting_writer_fails_when_session_not_ready() {
         // Test that an error is returned when the encryption session is not ready
-        let inner = Arc::new(MockEventWriter::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new()); // No master key
+        let inserted_reps = Arc::new(Mutex::new(Vec::new()));
+        let deleted_event_ids = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(make_event_writer_with_capture(
+            inserted_reps,
+            deleted_event_ids,
+        ));
+        let encryption = Arc::new(make_encryption(false));
+        let session = Arc::new(make_locked_session());
 
         let writer = EncryptingClipboardEventWriter::new(inner.clone(), encryption, session);
 
@@ -494,12 +466,16 @@ mod tests {
     #[tokio::test]
     async fn test_encrypting_writer_propagates_encryption_errors() {
         // Test that encryption errors are propagated
-        let inner = Arc::new(MockEventWriter::new());
-        let encryption = Arc::new(MockEncryption::new().fail_on_encrypt());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
+        let inserted_reps = Arc::new(Mutex::new(Vec::new()));
+        let deleted_event_ids = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(make_event_writer_with_capture(
+            inserted_reps,
+            deleted_event_ids,
+        ));
+        let encryption = Arc::new(make_encryption(true));
+        let session = Arc::new(make_session_with_master_key(
+            MasterKey::from_bytes(&[0u8; 32]).unwrap(),
+        ));
 
         let writer = EncryptingClipboardEventWriter::new(inner.clone(), encryption, session);
 
@@ -523,7 +499,12 @@ mod tests {
     #[tokio::test]
     async fn test_encrypting_writer_delegates_deletion() {
         // Test that deletion is delegated to inner writer without modification
-        let inner = Arc::new(MockEventWriter::new());
+        let inserted_reps = Arc::new(Mutex::new(Vec::new()));
+        let deleted_event_ids = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(make_event_writer_with_capture(
+            inserted_reps,
+            deleted_event_ids.clone(),
+        ));
         let encryption = Arc::new(MockEncryption::new());
         let session = Arc::new(MockEncryptionSession::new());
 
@@ -538,7 +519,7 @@ mod tests {
             "delete_event_and_representations should succeed"
         );
 
-        let deleted_ids = inner.get_deleted_event_ids();
+        let deleted_ids = deleted_event_ids.lock().unwrap().clone();
         assert_eq!(deleted_ids.len(), 1, "should have deleted one event");
         assert_eq!(deleted_ids[0], event_id, "should delete the correct event");
     }

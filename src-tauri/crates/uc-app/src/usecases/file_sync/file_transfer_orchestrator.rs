@@ -671,18 +671,23 @@ mod tests {
     use std::sync::RwLock;
     use uc_core::ports::file_transfer_repository::FileTransferRepositoryPort;
     use uc_core::ports::file_transfer_repository::PendingInboundTransfer;
-    use uc_core::ports::host_event_emitter::{EmitError, HostEventEmitterPort};
+    use uc_core::ports::host_event_emitter::HostEventEmitterPort;
 
-    #[derive(Default)]
-    struct RecordingEmitter {
-        events: std::sync::Mutex<Vec<HostEvent>>,
-    }
+    use crate::test_mocks::MockHostEventEmitter;
 
-    impl HostEventEmitterPort for RecordingEmitter {
-        fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
-            self.events.lock().unwrap().push(event);
+    fn make_recording_emitter() -> (
+        Arc<MockHostEventEmitter>,
+        Arc<std::sync::Mutex<Vec<HostEvent>>>,
+    ) {
+        let events: Arc<std::sync::Mutex<Vec<HostEvent>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        let mut mock = MockHostEventEmitter::new();
+        mock.expect_emit().returning(move |event| {
+            events_clone.lock().unwrap().push(event);
             Ok(())
-        }
+        });
+        (Arc::new(mock), events)
     }
 
     struct FixedClock(i64);
@@ -693,15 +698,15 @@ mod tests {
         }
     }
 
-    /// In-memory mock for FileTransferRepositoryPort.
-    struct MockFileTransferRepo {
+    /// In-memory implementation for FileTransferRepositoryPort.
+    struct InMemoryFileTransferRepo {
         transfers:
             std::sync::Mutex<Vec<uc_core::ports::file_transfer_repository::TrackedFileTransfer>>,
         refresh_activity_calls: std::sync::atomic::AtomicUsize,
         get_entry_id_for_transfer_calls: std::sync::atomic::AtomicUsize,
     }
 
-    impl MockFileTransferRepo {
+    impl InMemoryFileTransferRepo {
         fn new() -> Self {
             Self {
                 transfers: std::sync::Mutex::new(Vec::new()),
@@ -712,7 +717,9 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl uc_core::ports::file_transfer_repository::FileTransferRepositoryPort for MockFileTransferRepo {
+    impl uc_core::ports::file_transfer_repository::FileTransferRepositoryPort
+        for InMemoryFileTransferRepo
+    {
         async fn insert_pending_transfers(
             &self,
             transfers: &[PendingInboundTransfer],
@@ -937,8 +944,8 @@ mod tests {
     }
 
     fn make_orchestrator(
-        repo: Arc<MockFileTransferRepo>,
-        emitter: Arc<RecordingEmitter>,
+        repo: Arc<InMemoryFileTransferRepo>,
+        emitter: Arc<MockHostEventEmitter>,
     ) -> FileTransferOrchestrator {
         let emitter_cell = Arc::new(RwLock::new(emitter.clone() as Arc<dyn HostEventEmitterPort>));
         let tracker = Arc::new(TrackInboundTransfersUseCase::new(repo));
@@ -999,9 +1006,9 @@ mod tests {
 
     #[test]
     fn emit_pending_status_emits_one_status_changed_event_per_transfer() {
-        let repo = Arc::new(MockFileTransferRepo::new());
-        let emitter = Arc::new(RecordingEmitter::default());
-        let orch = make_orchestrator(repo, emitter.clone());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
+        let (emitter, events) = make_recording_emitter();
+        let orch = make_orchestrator(repo, emitter);
 
         let pending_transfers = vec![
             PendingTransferLinkage {
@@ -1018,7 +1025,7 @@ mod tests {
 
         orch.emit_pending_status("entry-77", &pending_transfers);
 
-        let events = emitter.events.lock().unwrap();
+        let events = events.lock().unwrap();
         assert_eq!(events.len(), 2);
 
         for (event, transfer_id) in events.iter().zip(["transfer-1", "transfer-2"]) {
@@ -1041,9 +1048,9 @@ mod tests {
 
     #[tokio::test]
     async fn outbound_progress_uses_registered_entry_linkage() {
-        let repo = Arc::new(MockFileTransferRepo::new());
-        let emitter = Arc::new(RecordingEmitter::default());
-        let orch = make_orchestrator(repo, emitter.clone());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
+        let (emitter, events) = make_recording_emitter();
+        let orch = make_orchestrator(repo, emitter);
 
         orch.register_outbound_transfer("transfer-outbound-1", "entry-outbound-1");
 
@@ -1064,7 +1071,7 @@ mod tests {
             "sender-side progress should not touch receiver durable state"
         );
 
-        let events = emitter.events.lock().unwrap();
+        let events = events.lock().unwrap();
         assert_eq!(events.len(), 1);
 
         match &events[0] {
@@ -1077,7 +1084,7 @@ mod tests {
             }) => {
                 assert_eq!(transfer_id, "transfer-outbound-1");
                 assert_eq!(entry_id.as_deref(), Some("entry-outbound-1"));
-                assert_eq!(direction, &TransferDirection::Sending);
+                assert_eq!(*direction, TransferDirection::Sending);
                 assert_eq!(*chunks_completed, 1);
             }
             other => panic!("expected progress event, got {other:?}"),
@@ -1086,7 +1093,7 @@ mod tests {
 
     #[tokio::test]
     async fn inbound_progress_caches_entry_lookup_and_throttles_activity_refresh() {
-        let repo = Arc::new(MockFileTransferRepo::new());
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
         repo.insert_pending_transfers(&[PendingInboundTransfer {
             transfer_id: "transfer-inbound-1".to_string(),
             entry_id: "entry-inbound-1".to_string(),
@@ -1098,7 +1105,7 @@ mod tests {
         .await
         .unwrap();
 
-        let emitter = Arc::new(RecordingEmitter::default());
+        let (emitter, _events) = make_recording_emitter();
         let emitter_cell = Arc::new(RwLock::new(emitter as Arc<dyn HostEventEmitterPort>));
         let tracker = Arc::new(TrackInboundTransfersUseCase::new(repo.clone()));
         let clock = Arc::new(FixedClock(10_000));
@@ -1141,23 +1148,18 @@ mod tests {
     #[tokio::test]
     async fn emitter_cell_swap_is_visible_to_orchestrator() {
         // Build orchestrator with a noop emitter initially
-        struct NoopEmitter;
-        impl HostEventEmitterPort for NoopEmitter {
-            fn emit(&self, _event: HostEvent) -> Result<(), EmitError> {
-                Ok(())
-            }
-        }
-
-        let repo = Arc::new(MockFileTransferRepo::new());
-        let noop: Arc<dyn HostEventEmitterPort> = Arc::new(NoopEmitter);
+        let repo = Arc::new(InMemoryFileTransferRepo::new());
+        let mut noop = MockHostEventEmitter::new();
+        noop.expect_emit().returning(|_| Ok(()));
+        let noop: Arc<dyn HostEventEmitterPort> = Arc::new(noop);
         let emitter_cell = Arc::new(RwLock::new(noop));
         let tracker = Arc::new(TrackInboundTransfersUseCase::new(repo));
         let clock = Arc::new(FixedClock(1_000_000));
         let orch = FileTransferOrchestrator::new(tracker, emitter_cell.clone(), clock);
 
         // Swap to a recording emitter
-        let recording = Arc::new(RecordingEmitter::default());
-        *emitter_cell.write().unwrap() = recording.clone() as Arc<dyn HostEventEmitterPort>;
+        let (recording, events) = make_recording_emitter();
+        *emitter_cell.write().unwrap() = recording as Arc<dyn HostEventEmitterPort>;
 
         // Emit via orchestrator — should reach the recording emitter
         orch.emit_pending_status(
@@ -1169,7 +1171,7 @@ mod tests {
             }],
         );
 
-        let events = recording.events.lock().unwrap();
+        let events = events.lock().unwrap();
         assert_eq!(
             events.len(),
             1,

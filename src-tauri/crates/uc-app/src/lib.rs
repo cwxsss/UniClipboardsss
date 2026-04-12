@@ -10,6 +10,8 @@ pub mod deps;
 pub mod models;
 pub mod runtime;
 pub mod task_registry;
+#[cfg(test)]
+pub mod test_mocks;
 pub mod testing;
 pub mod usecases;
 
