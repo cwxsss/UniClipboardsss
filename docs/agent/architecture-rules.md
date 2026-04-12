@@ -10,6 +10,7 @@ Use this document when changes touch module boundaries, cross-crate types, commi
   - `uc-core` must **not** depend on any external implementations.
 - **All external capabilities go through Ports (no exceptions):**
   - DB, FS, Clipboard, Network, Crypto
+  - See [`docs/architecture/ports.md`](../architecture/ports.md) for port definition, granularity, naming, and evolution rules.
 
 ## Cross-Crate Type Conversion Rules
 
