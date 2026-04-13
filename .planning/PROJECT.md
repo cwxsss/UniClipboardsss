@@ -2,42 +2,30 @@
 
 ## What This Is
 
-A cross-platform clipboard synchronization app built with Tauri 2, React, and Rust. It provides encrypted LAN clipboard sync for text, images, links, and files, with hexagonal architecture, full observability pipeline, per-device sync control, and file transfer with eventual consistency.
+A cross-platform clipboard synchronization app built with Tauri 2, React, and Rust. It provides encrypted LAN clipboard sync for text, images, links, and files, local encrypted clipboard search, CLI and daemon runtime modes, and observability tooling for debugging and support.
 
 ## Core Value
 
 Seamless clipboard synchronization across devices — users can copy on one device and paste on another without interrupting their workflow.
 
-## Current Milestone: v0.5.0 Local Encrypted Search
+## Current Milestone
 
-**Goal:** Add searchable clipboard history via a local HMAC-keyed inverted index, so users can find past clipboard entries by keyword without exposing plaintext on disk.
-
-**Target features:**
-
-- Local encrypted inverted index (SQLite, HMAC-keyed term tags)
-- Exact keyword search with AND/OR boolean operators
-- Time range filtering (presets + absolute ms range)
-- File type multi-select filtering (text/html/link/file/image/other)
-- File extension filtering as first-class filter
-- Incremental index updates (add on capture, delete on remove)
-- Full index rebuild in unlocked state
-- Search UI — query input + results display
+No active milestone is currently defined.
 
 ## Current State
 
-- **Active milestone:** v0.5.0 Local Encrypted Search (started 2026-04-10)
-- **Latest shipped milestone:** v0.4.0 Runtime Mode Separation (archived 2026-04-09)
-- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history commands (list/get/clear); daemon auto-recovers encryption session on startup; daemon triggers outbound clipboard sync to peers after local capture; daemon receives inbound clipboard from peers via ClipboardTransportPort and applies via SyncInboundClipboardUseCase; daemon handles file transfer lifecycle (progress, completion, failure, timeout sweeps, startup reconciliation); clipboard restore delegated to daemon for in-process origin tracking; unified auth architecture — CLI/GUI/Daemon all use POST /auth/connect session exchange with independent token scopes; four search use cases (IndexClipboardEntry, RemoveIndexedEntry, SearchClipboardEntries, RebuildSearchIndex) in uc-app as thin SearchIndexPort orchestrators; DeleteClipboardEntry cascades to search index via optional SearchIndexPort with warn-and-continue error policy (Phase 89 complete 2026-04-10); profile-scoped SQLite search schema (search_document/search_posting/search_index_meta) with Diesel migration and row structs; HKDF-SHA256 key derivation + HMAC term tagging + deterministic text/HTML/URL/file extractor + NFKC tokenizer + SearchPipeline emitting ready-to-persist postings (Phase 90 complete 2026-04-11)
-- **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, and consolidated sync planner; CLI direct-mode bootstrap pattern established; CLI start/stop commands for daemon lifecycle management (background/foreground modes, PID-based stop with SIGTERM); daemon encryption state recovery via existing AutoUnlockEncryptionSession use case; peer discovery deduplication fixed (local_peer_id filtering + full-snapshot peers.changed events); daemon gates PeerDiscoveryWorker on encryption state (deferred start for uninitialized devices via oneshot channel); dual-product release pipeline — CLI binary builds in parallel with App, included in GitHub Release and R2; GUI restore_clipboard_entry is thin daemon proxy (cross-process origin desync eliminated); frontend p2p.ts facade removed — all callers migrated to daemon modules and hooks (daemon/pairing, daemon/events, daemon/ws, usePairingEvents, useSetupFlow)
-- **LOC:** ~135K Rust + ~20K TypeScript (estimated)
-- **Supported content types:** Text, Image, Link, File (all with per-device sync toggles)
-- **Archive note:** v0.4.0 was archived with accepted known gaps in planning cleanup, OTLP GUI→daemon env forwarding, and some stale verification bookkeeping
+- **Latest shipped milestone:** v0.5.0 Local Encrypted Search (archived 2026-04-13)
+- **Current capability level:** Full-featured clipboard sync with text, image, link, and file support; structured observability; per-device sync control; CLI clipboard history and search commands; daemon auto-recovers encryption session on startup; local encrypted search is available through daemon routes, CLI commands, QuickPanel keyword search, and Dashboard search with content-type and time-range filters
+- **Architecture status:** Hexagonal architecture with compiler-enforced boundaries, typed command surfaces, lifecycle governance, daemon-first runtime ownership, and consolidated sync planning
+- **LOC:** ~324K Rust + ~39K TypeScript (estimated)
+- **Supported content types:** Text, Image, Link, File
+- **Archive note:** v0.5.0 was archived after Phase 93 was completed manually and planning records were backfilled during archive; no separate milestone audit file exists for this milestone
 
 ## Next Milestone Goals
 
-- Clean up planning truth so roadmap, requirements, and verification files agree again
-- Finish the remaining GUI direct-to-daemon path cleanup and missing verification work
-- Define the next milestone before starting new phase execution
+- Define the next milestone before new phase execution starts
+- Carry forward any post-release cleanup that does not belong in the shipped v0.5.0 archive
+- Reintroduce a fresh `.planning/REQUIREMENTS.md` as part of next-milestone setup
 
 ## Requirements
 
@@ -72,21 +60,14 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - ✓ Keyboard shortcuts settings UI with click-to-record and conflict detection — v0.3.0
 - ✓ macOS keychain auto-unlock confirmation modal — v0.3.0
 - ✓ Event-driven device discovery replacing polling — v0.3.0
-- ✓ Unified CLI/GUI/Daemon auth architecture (session exchange via /auth/connect, bare bearer rejection on L2+ routes, independent token scopes) — Phase 84
-- ✓ OpenTelemetry OTLP/HTTP-protobuf pipeline replaces legacy Seq/CLEF layer; clipboard spans restructured into `clipboard.flow` parent-child tree with dotted OTel semconv stage names; W3C traceparent inject/extract across device sync boundaries — Phase 87
+- ✓ Unified CLI/GUI/Daemon auth architecture (session exchange via /auth/connect, bare bearer rejection on L2+ routes, independent token scopes) — v0.4.0
+- ✓ OpenTelemetry OTLP/HTTP-protobuf pipeline replaces legacy Seq/CLEF layer and propagates trace context across device sync boundaries — v0.4.0
+- ✓ Local encrypted clipboard search backend with HKDF-derived keying, HMAC-tagged index terms, exact keyword search, time-range filtering, file-type filtering, rebuild flow, and locked-session enforcement — v0.5.0
+- ✓ Local encrypted clipboard search UI across QuickPanel and Dashboard, including result counts and time-range controls — v0.5.0
 
 ### Active
 
-- ✓ SQLite schema migration (search_document, search_posting, search_index_meta with profile_id) + row helpers — Validated in Phase 90 (SIDX-07)
-- ✓ HKDF search key derivation, HMAC term tagging, text/HTML/URL/file extractor, NFKC tokenizer, SearchPipeline — Validated in Phase 90 (SIDX-03, SIDX-04, SIDX-05, SIDX-06)
-- [ ] Local encrypted inverted index adapter with live SQLite INSERT/SELECT (Phase 91)
-- [ ] Exact keyword search with AND/OR boolean operators
-- [ ] Time range filtering (presets: today/yesterday/last_7d/last_30d + absolute ms range)
-- [ ] File type multi-select filtering (text/html/link/file/image/other)
-- [ ] File extension filtering as first-class filter
-- [ ] Incremental index updates (build on capture, delete on entry removal)
-- [ ] Full index rebuild in unlocked state (atomic table swap)
-- [ ] Search UI — query input + results display in dashboard or quick-panel
+No active milestone is currently defined.
 
 ### Deferred
 
@@ -96,8 +77,7 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 - [ ] Wire lifecycle events to frontend (currently polling, not event-driven)
 - [ ] Expand typed error migration to port surfaces (ARCHNEXT-01)
 - [ ] Domain model refinement for anemic models (ARCHNEXT-02)
-- [ ] OTel trace/log layer (Phase 3 of Issue #213)
-- [ ] Collector & multi-backend support (Phase 4 of Issue #213)
+- [ ] Collector & multi-backend support for observability
 - [ ] WebDAV cross-internet sync
 - [ ] Runtime log profile switching (OBS-01)
 
@@ -105,86 +85,38 @@ Seamless clipboard synchronization across devices — users can copy on one devi
 
 - Mobile app — desktop-first
 - OAuth/third-party login — not required for current product model
-- Full OpenTelemetry integration — deferred to dedicated observability milestone
 - Remote/cloud log shipping — clipboard logs may contain sensitive content
 - In-app log viewer UI — Seq provides dedicated log UI
 
 ## Context
 
-Archived v0.4.0 on 2026-04-09 after the runtime split, daemon-first flow work, and OTLP migration landed.
+Archived v0.5.0 on 2026-04-13 after local encrypted search shipped across backend, CLI, QuickPanel, and Dashboard.
 Tech stack: Tauri 2 + React 18 + Rust + libp2p + XChaCha20-Poly1305.
-Hexagonal boundaries compiler-enforced. All sync policy consolidated into OutboundSyncPlanner.
-Four content types supported: Text, Image, Link, File — each with per-device toggles.
-Full file sync pipeline from chunked transfer through clipboard integration with eventual consistency.
-Structured observability from dual-output logging through Seq cross-device tracing.
-Phase 52 complete — daemon is now the single source of truth for space access state (WS broadcast + HTTP query), GUI no longer owns SpaceAccessOrchestrator.
-Phase 56.1 complete — all daemon wire-protocol string constants centralized in `uc-core::network::daemon_api_strings`, eliminating hardcoded string drift between uc-daemon and uc-daemon-client.
-Phase 57 complete — daemon is now the sole clipboard observer via real ClipboardWatcherWorker (clipboard_rs + CaptureClipboardUseCase + WS event broadcast); GUI operates in Passive mode receiving clipboard updates via DaemonWsBridge → RealtimeEvent::ClipboardNewContent → clipboard://event pipeline; write-back loop prevention via ClipboardChangeOriginPort.
-Phase 60 complete — FileTransferOrchestrator extracted from uc-tauri to uc-app, wired into uc-bootstrap assembly; file_transfer_wiring.rs deleted.
-Phase 61 complete — daemon triggers outbound clipboard sync to peers via OutboundSyncPlanner + SyncOutboundClipboardUseCase + SyncOutboundFileUseCase after local capture; ClipboardWatcherWorker delegates to DaemonClipboardChangeHandler.
-Phase 62 complete — daemon receives inbound clipboard from peers via ClipboardTransportPort::subscribe_clipboard(); InboundClipboardSyncWorker applies via SyncInboundClipboardUseCase::with_capture_dependencies(ClipboardIntegrationMode::Full); WS events emitted only for Applied { entry_id: Some } outcomes; shared clipboard_change_origin Arc prevents write-back loops.
-Phase 63 complete — daemon file transfer orchestration: DaemonApiEventEmitter forwards Transfer StatusChanged as WS events on file-transfer topic; InboundClipboardSyncWorker seeds pending transfer records via FileTransferOrchestrator with early completion cache reconciliation; FileSyncOrchestratorWorker subscribes to network events for transfer lifecycle management (progress/completed/failed), startup reconciliation, timeout sweeps, and clipboard restore.
-Phase 64 complete — Tauri sync retirement: removed 896 lines of daemon-duplicated sync loops from wiring.rs (clipboard_receive, pairing_events, file_transfer_reconcile, timeout_sweep); gated restore_clipboard_entry outbound sync on Full mode to prevent double-sync with daemon; removed dead sync_inbound_clipboard accessor and blake3 dependency from uc-tauri.
-Phase 66 complete — Fixed daemon WS topic registration for clipboard and file-transfer subscriptions; added WS reconnection compensation with bridge_state_monitor and DaemonReconnected event; Dashboard auto-refreshes clipboard list on reconnect.
-Phase 69 complete — CLI `setup` → "Create new Space" performs encryption initialization locally via `build_cli_runtime()` + `CoreUseCases::initialize_encryption()` instead of starting daemon; eliminates macOS Keychain popup during first-time setup.
-Phase 73 complete — ClipboardWriteCoordinator introduced as single write boundary for all programmatic clipboard writes (LocalRestore, RemotePush, LocalCapture intents); InMemoryClipboardChangeOrigin locked to pub(crate) via factory; all 4 write callsites migrated (RestoreClipboardSelectionUseCase, CopyFileToClipboardUseCase, SyncInboundClipboardUseCase, FileSyncOrchestratorWorker); dead guard code removed.
-Phase 87 complete — OTLP migration: legacy `uc_observability::seq`/CLEF pipeline hard-deleted (~1082 LoC); new `uc_observability::otlp` module provides OTLP/HTTP-protobuf exporter, W3C TraceContextPropagator, and semconv resource builder; bootstrap wires `init_otlp_provider()` with `OtlpGuard` shutdown; `ClipboardMessage.traceparent: Option<String>` added with backward-compatible serde and `origin_flow_id` deprecated; clipboard capture pipeline restructured into `clipboard.flow` root with 6 child stage spans using dotted OTel names; outbound `sync_outbound` injects current trace context, inbound `sync_inbound` extracts and links via `set_parent()` with rate-limited fallback warning; docs/Seq saved searches/docker-compose updated for new data model.
-Phase 86 complete — CLI host/join flow refactored: ParsedSetupState centralized in uc-daemon-client/setup; HostCliPhase/JoinCliPhase enums introduced with pure derive_*_phase() functions; run_pair and run_connect rewritten as phase-driven loops (poll→parse→derive→match→sleep pattern); Phase 0 bugs eliminated (double-negative clearing condition, verbose Debug impl); old inline parsing helpers migrated to daemon-client module and deleted from uc-cli.
+Hexagonal boundaries are compiler-enforced. Daemon is the main runtime authority for sync, search, and space state.
+Clipboard search now supports exact keyword search, time-range presets, content-type filters, file-extension filters, rebuild operations, and locked-session handling.
 
 ## Key Decisions
 
-| Decision                                          | Rationale                                                    | Outcome |
-| ------------------------------------------------- | ------------------------------------------------------------ | ------- |
-| Two-segment framing for clipboard wire format     | Reduce overhead and enable stream decode                     | ✓ Good  |
-| V3 binary protocol with Arc fanout                | Improve large payload performance and memory behavior        | ✓ Good  |
-| Manual uc:// URL resolution strategy              | Ensure Windows/WebView compatibility                         | ✓ Good  |
-| Background TIFF conversion                        | Keep clipboard capture path responsive                       | ✓ Good  |
-| Private deps + facade accessors on AppRuntime     | Compiler-enforced boundary: commands cannot access internals | ✓ Good  |
-| CommandError serde tag=code content=message       | Frontend discriminated union handling                        | ✓ Good  |
-| TaskRegistry with CancellationToken cascade       | Deterministic shutdown without orphaned tasks                | ✓ Good  |
-| StagedPairedDeviceStore as Arc-injected struct    | Replace OnceLock global with lifecycle-owned state           | ✓ Good  |
-| AppDeps domain sub-structs (5 groups)             | Reduce god-container coupling                                | ✓ Good  |
-| Origin-aware clipboard events                     | Enable local-prepend vs remote-throttle routing              | ✓ Good  |
-| Runtime TS theme presets (not static CSS)         | Single source of truth, dynamic switching                    | ✓ Good  |
-| Chunked 256KB network writes with progress events | Support large payload transfer with UX feedback              | ✓ Good  |
-| UUID v7 for FlowId (time-ordered)                 | Enables time-sorted log querying                             | ✓ Good  |
-| Option<Layer> pattern for Seq layer               | Zero overhead when disabled                                  | ✓ Good  |
-| SeqLayer implements Layer directly                | Full control over CLEF format without FormatEvent adapter    | ✓ Good  |
-| ContentTypes::default() all-true                  | New devices sync everything by default                       | ✓ Good  |
-| OutboundSyncPlanner consolidation                 | Single policy decision point, runtime as thin dispatcher     | ✓ Good  |
-| Binary codec for FileTransferMessage              | Consistent with clipboard_payload_v3 pattern                 | ✓ Good  |
-| Blake3 hash verification for file transfer        | Fast cryptographic integrity check                           | ✓ Good  |
-| Durable transfer lifecycle (pending→completed)    | Truthful UI state survives restart                           | ✓ Good  |
-| Event-driven device discovery                     | Eliminated 3s polling; immediate responsive UX               | ✓ Good  |
+| Decision | Rationale | Outcome |
+| --- | --- | --- |
+| Two-segment framing for clipboard wire format | Reduce overhead and enable stream decode | ✓ Good |
+| V3 binary protocol with Arc fanout | Improve large payload performance and memory behavior | ✓ Good |
+| Manual uc:// URL resolution strategy | Ensure Windows/WebView compatibility | ✓ Good |
+| Background TIFF conversion | Keep clipboard capture path responsive | ✓ Good |
+| Private deps + facade accessors on AppRuntime | Compiler-enforced boundary: commands cannot access internals | ✓ Good |
+| CommandError serde tag=code content=message | Frontend discriminated union handling | ✓ Good |
+| TaskRegistry with CancellationToken cascade | Deterministic shutdown without orphaned tasks | ✓ Good |
+| OutboundSyncPlanner consolidation | Single policy decision point, runtime as thin dispatcher | ✓ Good |
+| HKDF-derived search key + HMAC-tagged exact-token index | Preserve local search without storing plaintext terms | ✓ Good |
+| Search rebuild via version-flag atomic swap | Avoid SQLite table rename lock contention | ✓ Good |
 
 ## Constraints
 
-- **Tech stack:** Tauri 2 + React + Rust (fixed)
+- **Tech stack:** Tauri 2 + React + Rust
 - **Sync domain:** LAN-first with libp2p
 - **Security:** XChaCha20-Poly1305 remains mandatory
 - **Platform support:** macOS primary; Windows/Linux supported
 
 ---
 
-## Evolution
-
-This document evolves at phase transitions and milestone boundaries.
-
-**After each phase transition** (via `/gsd:transition`):
-
-1. Requirements invalidated? → Move to Out of Scope with reason
-2. Requirements validated? → Move to Validated with phase reference
-3. New requirements emerged? → Add to Active
-4. Decisions to log? → Add to Key Decisions
-5. "What This Is" still accurate? → Update if drifted
-
-**After each milestone** (via `/gsd:complete-milestone`):
-
-1. Full review of all sections
-2. Core Value check — still the right priority?
-3. Audit Out of Scope — reasons still valid?
-4. Update Context with current state
-
----
-
-_Last updated: 2026-04-11 after Phase 90 complete_
+_Last updated: 2026-04-13 after v0.5.0 milestone archive_
