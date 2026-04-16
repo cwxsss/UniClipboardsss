@@ -52,10 +52,9 @@ pub use initialize_encryption::InitializeEncryption;
 pub use list_clipboard_entries::ListClipboardEntries;
 pub use pairing::{
     AnnounceDeviceName, GetDeviceSyncSettings, GetLocalDeviceInfo, GetLocalPeerId,
-    GetP2pPeersSnapshot, ListConnectedPeers, ListDiscoveredPeers, ListPairedDevices,
-    ListSendablePeers, LocalDeviceInfo, PairingConfig, PairingOrchestrator,
-    ResolveConnectionPolicy, SetPairingState, StagedPairedDeviceStore, UnpairDevice,
-    UpdateDeviceSyncSettings,
+    GetP2pPeersSnapshot, ListDiscoveredPeers, ListPairedDevices, ListSendablePeers,
+    LocalDeviceInfo, PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, SetPairingState,
+    StagedPairedDeviceStore, UnpairDevice, UpdateDeviceSyncSettings,
 };
 pub use search::{
     IndexClipboardEntry, RebuildSearchIndex, RemoveIndexedEntry, SearchClipboardEntries,
@@ -248,11 +247,6 @@ impl<'a> CoreUseCases<'a> {
     /// List discovered peers from network.
     pub fn list_discovered_peers(&self) -> crate::usecases::ListDiscoveredPeers {
         crate::usecases::ListDiscoveredPeers::new(self.runtime.deps.network_ports.peers.clone())
-    }
-
-    /// List connected peers from network.
-    pub fn list_connected_peers(&self) -> crate::usecases::ListConnectedPeers {
-        crate::usecases::ListConnectedPeers::new(self.runtime.deps.network_ports.peers.clone())
     }
 
     /// Get unified P2P peer snapshot combining discovered, connected, and paired peers.
