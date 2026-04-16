@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use uc_core::network::PairedDevice;
+use uc_core::pairing::PairedDevice;
 
 /// Injectable store for staging paired devices during the pairing flow.
 ///

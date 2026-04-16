@@ -1,5 +1,5 @@
 use uc_app::usecases::pairing::get_p2p_peers_snapshot::P2pPeerSnapshot;
-use uc_core::network::PairedDevice;
+use uc_core::pairing::PairedDevice;
 
 use crate::api::types::{PairedDeviceDto, PeerSnapshotDto};
 

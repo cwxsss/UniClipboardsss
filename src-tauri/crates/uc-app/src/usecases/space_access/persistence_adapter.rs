@@ -5,7 +5,7 @@ use tracing::{info, warn};
 
 use crate::usecases::pairing::staged_paired_device_store::StagedPairedDeviceStore;
 use uc_core::ids::{PeerId, SpaceId};
-use uc_core::network::PairingState;
+use uc_core::pairing::PairingState;
 use uc_core::ports::paired_device_repository::PairedDeviceRepositoryPort;
 use uc_core::ports::security::encryption_state::EncryptionStatePort;
 use uc_core::ports::space::PersistencePort;

@@ -1,5 +1,6 @@
 use std::sync::Arc;
-use uc_core::network::{ConnectionPolicy, PairingState, ResolvedConnectionPolicy};
+use uc_core::network::{ConnectionPolicy, ResolvedConnectionPolicy};
+use uc_core::pairing::PairingState;
 use uc_core::ports::{
     ConnectionPolicyResolverError, ConnectionPolicyResolverPort, PairedDeviceRepositoryPort,
 };

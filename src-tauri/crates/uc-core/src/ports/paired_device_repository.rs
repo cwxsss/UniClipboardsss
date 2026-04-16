@@ -1,4 +1,4 @@
-use crate::network::{PairedDevice, PairingState};
+use crate::pairing::{PairedDevice, PairingState};
 use crate::settings::model::SyncSettings;
 use crate::PeerId;
 use async_trait::async_trait;

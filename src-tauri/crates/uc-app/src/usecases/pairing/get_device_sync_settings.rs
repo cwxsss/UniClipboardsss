@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
-use uc_core::network::paired_device::resolve_sync_settings;
+use uc_core::pairing::resolve_sync_settings;
 use uc_core::ports::{PairedDeviceRepositoryPort, SettingsPort};
 use uc_core::settings::model::SyncSettings;
 use uc_core::PeerId;

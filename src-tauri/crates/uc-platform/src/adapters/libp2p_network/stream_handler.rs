@@ -371,7 +371,7 @@ pub(super) async fn emit_protocol_denied(
     event_tx: &mpsc::Sender<NetworkEvent>,
     peer_id: String,
     protocol_id: &str,
-    pairing_state: uc_core::network::PairingState,
+    pairing_state: uc_core::pairing::PairingState,
     direction: ProtocolDirection,
     reason: uc_core::network::ProtocolDenyReason,
 ) {
@@ -397,7 +397,8 @@ pub(super) async fn handle_pairing_open_error(
 ) {
     use super::super::pairing_stream::service::PairingStreamError;
     use crate::adapters::protocol_ids::ProtocolId;
-    use uc_core::network::{PairingState, ProtocolDenyReason};
+    use uc_core::network::ProtocolDenyReason;
+    use uc_core::pairing::PairingState;
 
     if let Some(pairing_error) = error.downcast_ref::<PairingStreamError>() {
         if matches!(pairing_error, PairingStreamError::UnsupportedProtocol) {

@@ -1,4 +1,4 @@
-use crate::network::PairingState;
+use crate::pairing::PairingState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProtocolKind {

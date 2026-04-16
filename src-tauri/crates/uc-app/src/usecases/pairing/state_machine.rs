@@ -30,7 +30,6 @@ use serde::{Deserialize, Serialize};
 use uc_core::crypto::pin_hash::{hash_pin, verify_pin};
 use uc_core::crypto::{IdentityFingerprint, ShortCodeGenerator};
 use uc_core::network::{
-    paired_device::{PairedDevice, PairingState as PairedDeviceState},
     protocol::{
         PairingCancel, PairingChallenge, PairingConfirm, PairingMessage, PairingReject,
         PairingRequest, PairingResponse,
@@ -38,6 +37,7 @@ use uc_core::network::{
     SessionId,
 };
 use uc_core::pairing::PairingRole;
+use uc_core::pairing::{PairedDevice, PairingState as PairedDeviceState};
 use uc_core::settings::model::PairingSettings;
 use uc_core::PeerId;
 

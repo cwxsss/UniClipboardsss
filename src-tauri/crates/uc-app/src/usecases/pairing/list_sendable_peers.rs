@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use uc_core::network::{DiscoveredPeer, PairingState};
+use uc_core::network::DiscoveredPeer;
+use uc_core::pairing::PairingState;
 use uc_core::ports::{PairedDeviceRepositoryPort, PeerDirectoryPort};
 
 /// List peers eligible for outbound data sync.

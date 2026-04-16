@@ -7,11 +7,11 @@ use tracing::{debug, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
-use uc_core::network::paired_device::resolve_sync_settings;
 use uc_core::network::protocol::{
     BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion,
 };
 use uc_core::network::{ClipboardMessage, ProtocolMessage};
+use uc_core::pairing::resolve_sync_settings;
 use uc_core::ports::{
     ClipboardOutboundTransportPort, DeviceIdentityPort, EncryptionSessionPort,
     OutboundClipboardFrame, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort,

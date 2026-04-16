@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
-use uc_core::network::PairedDevice;
+use uc_core::pairing::PairedDevice;
 use uc_core::ports::PairedDeviceRepositoryPort;
 
 pub struct ListPairedDevices {

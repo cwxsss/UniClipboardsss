@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use tracing::{debug, info, warn};
-use uc_core::network::paired_device::resolve_sync_settings;
 use uc_core::network::DiscoveredPeer;
+use uc_core::pairing::resolve_sync_settings;
 use uc_core::ports::{PairedDeviceRepositoryPort, SettingsPort};
 use uc_core::settings::content_type_filter::{is_content_type_allowed, ContentTypeCategory};
 use uc_core::PeerId;

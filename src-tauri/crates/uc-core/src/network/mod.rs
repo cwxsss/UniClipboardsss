@@ -2,7 +2,6 @@
 
 pub mod connection_policy;
 pub mod events;
-pub mod paired_device;
 pub mod protocol;
 pub mod session;
 
@@ -13,7 +12,6 @@ pub use events::{
     ConnectedPeer, DiscoveredPeer, NetworkEvent, NetworkStatus, ProtocolDenyReason,
     ProtocolDirection,
 };
-pub use paired_device::{PairedDevice, PairingState};
 pub use protocol::{BinaryRepresentation, ClipboardBinaryPayload};
 pub use protocol::{
     ClipboardMessage, DeviceAnnounceMessage, HeartbeatMessage, PairingBusy, PairingCancel,

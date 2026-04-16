@@ -27,9 +27,10 @@ use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
 use uc_core::network::{
-    ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage, PairingState, ProtocolDirection,
-    ProtocolKind, ProtocolMessage, ResolvedConnectionPolicy,
+    ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage, ProtocolDirection, ProtocolKind,
+    ProtocolMessage, ResolvedConnectionPolicy,
 };
+use uc_core::pairing::PairingState;
 use uc_core::ports::{
     ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
     ClipboardTransportError, ConnectionPolicyResolverPort, EncryptionSessionPort,

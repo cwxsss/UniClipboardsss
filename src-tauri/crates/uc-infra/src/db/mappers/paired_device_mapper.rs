@@ -3,7 +3,7 @@ use crate::db::ports::{InsertMapper, RowMapper};
 use anyhow::{anyhow, Result};
 use chrono::{TimeZone, Utc};
 use std::str::FromStr;
-use uc_core::network::{PairedDevice, PairingState};
+use uc_core::pairing::{PairedDevice, PairingState};
 use uc_core::PeerId;
 
 pub struct PairedDeviceRowMapper;

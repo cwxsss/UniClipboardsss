@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock, Semaphore};
 
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
-use uc_core::network::{NetworkEvent, PairingState};
+use uc_core::network::NetworkEvent;
+use uc_core::pairing::PairingState;
 use uc_core::ports::ConnectionPolicyResolverPort;
 
 use super::address_registry;

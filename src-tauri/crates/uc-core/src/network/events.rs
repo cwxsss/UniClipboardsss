@@ -123,7 +123,7 @@ pub enum NetworkEvent {
     ProtocolDenied {
         peer_id: String,
         protocol_id: String,
-        pairing_state: crate::network::PairingState,
+        pairing_state: crate::pairing::PairingState,
         direction: ProtocolDirection,
         reason: ProtocolDenyReason,
     },

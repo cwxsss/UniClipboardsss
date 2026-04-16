@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use diesel::prelude::*;
 
-use uc_core::network::{PairedDevice, PairingState};
+use uc_core::pairing::{PairedDevice, PairingState};
 use uc_core::ports::{PairedDeviceRepositoryError, PairedDeviceRepositoryPort};
 use uc_core::settings::model::SyncSettings;
 use uc_core::PeerId;
