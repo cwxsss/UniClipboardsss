@@ -128,12 +128,20 @@ pub enum NetworkEvent {
         reason: ProtocolDenyReason,
     },
     // File transfer lifecycle events
+    #[deprecated(
+        since = "0.6.0",
+        note = "use crate::file_transfer::FileTransferEvent::Started instead"
+    )]
     FileTransferStarted {
         transfer_id: String,
         peer_id: String,
         filename: String,
         file_size: u64,
     },
+    #[deprecated(
+        since = "0.6.0",
+        note = "use crate::file_transfer::FileTransferEvent::Completed instead"
+    )]
     FileTransferCompleted {
         transfer_id: String,
         peer_id: String,
@@ -142,11 +150,19 @@ pub enum NetworkEvent {
         batch_id: Option<String>,
         batch_total: Option<u32>,
     },
+    #[deprecated(
+        since = "0.6.0",
+        note = "use crate::file_transfer::FileTransferEvent::Failed instead"
+    )]
     FileTransferFailed {
         transfer_id: String,
         peer_id: String,
         error: String,
     },
+    #[deprecated(
+        since = "0.6.0",
+        note = "use crate::file_transfer::FileTransferEvent::Cancelled instead"
+    )]
     FileTransferCancelled {
         transfer_id: String,
         peer_id: String,
@@ -154,6 +170,10 @@ pub enum NetworkEvent {
     },
 
     // Transfer progress events
+    #[deprecated(
+        since = "0.6.0",
+        note = "use crate::file_transfer::FileTransferEvent::Progress instead"
+    )]
     TransferProgress(TransferProgress),
 
     #[allow(dead_code)]
