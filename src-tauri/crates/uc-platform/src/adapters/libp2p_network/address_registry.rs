@@ -323,5 +323,3 @@ fn compute_cooldown_secs(failure_count: u32) -> i64 {
     let raw = COOLDOWN_BASE_SECS * (1i64 << failure_count.saturating_sub(1).min(4));
     raw.min(COOLDOWN_MAX_SECS)
 }
-
-// ── Tests ──────────────────────────────────────────────────────

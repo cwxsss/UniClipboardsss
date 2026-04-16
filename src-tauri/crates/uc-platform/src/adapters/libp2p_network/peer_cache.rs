@@ -4,9 +4,9 @@
 use chrono::{DateTime, Utc};
 use libp2p::swarm::ConnectionId;
 use std::collections::{HashMap, HashSet};
-use uc_core::network::address_registry::{AddressRegistry, AddressScope, AddressSource};
 use uc_core::network::DiscoveredPeer;
 
+use super::address_registry::{AddressRegistry, AddressScope, AddressSource};
 use super::dial_strategy::{
     effective_priority_for_addr, infer_address_scope, sort_addresses_quic_first,
 };

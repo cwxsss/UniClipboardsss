@@ -1,3 +1,4 @@
+mod address_registry;
 mod behaviour;
 mod business_command;
 mod business_stream;

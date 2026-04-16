@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock, Semaphore};
 
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
-use uc_core::network::address_registry;
 use uc_core::network::events::PeerRuntimeState;
 use uc_core::network::{NetworkEvent, PairingState};
 use uc_core::ports::ConnectionPolicyResolverPort;
 
+use super::address_registry;
 use super::behaviour::{Libp2pBehaviour, Libp2pBehaviourEvent};
 use super::business_command::{
     business_command_log_fields, deliver_business_command_result, execute_business_command,

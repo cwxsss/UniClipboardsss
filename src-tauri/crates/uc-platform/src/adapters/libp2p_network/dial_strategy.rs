@@ -3,8 +3,8 @@
 
 use chrono::{DateTime, Utc};
 use libp2p::Multiaddr;
-use uc_core::network::address_registry::AddressScope;
 
+use super::address_registry::AddressScope;
 use super::peer_cache::{PeerAddressSnapshot, PeerDialObservation};
 
 // ── Address classification ───────────────────────────────────
