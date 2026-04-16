@@ -26,7 +26,10 @@ pub use blob::Blob;
 pub use clipboard::*;
 pub use config::AppConfig;
 pub use device::{Device, DeviceId, DeviceName, DeviceStatus, Platform};
-pub use file_transfer::FileTransferEvent;
+pub use file_transfer::{
+    FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
+    FileTransferFailureReason, FileTransferProgress,
+};
 pub use ids::BlobId;
 pub use ids::{PeerId, SessionId};
 pub use network::{NetworkEvent, NetworkStatus, ProtocolMessage};
