@@ -10,7 +10,6 @@ pub mod deps;
 pub mod models;
 pub mod runtime;
 pub mod task_registry;
-pub mod testing;
 pub mod usecases;
 
 pub use deps::{
