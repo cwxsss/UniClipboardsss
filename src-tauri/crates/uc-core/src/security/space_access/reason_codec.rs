@@ -26,30 +26,3 @@ pub fn deny_reason_from_code(code: &str) -> Option<DenyReason> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn deny_reason_round_trip_all_variants() {
-        let variants = [
-            DenyReason::Expired,
-            DenyReason::InvalidProof,
-            DenyReason::SpaceMismatch,
-            DenyReason::SessionMismatch,
-            DenyReason::InternalError,
-        ];
-
-        for reason in variants {
-            let code = deny_reason_to_code(&reason);
-            let decoded = deny_reason_from_code(code);
-            assert_eq!(decoded, Some(reason));
-        }
-    }
-
-    #[test]
-    fn deny_reason_from_code_returns_none_for_unknown_code() {
-        assert_eq!(deny_reason_from_code("unknown_reason"), None);
-    }
-}

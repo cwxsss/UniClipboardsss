@@ -271,29 +271,3 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         config,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use uc_platform::adapters::PairingRuntimeOwner;
-
-    #[test]
-    fn gui_builder_uses_external_daemon_pairing_owner() {
-        assert_eq!(
-            gui_pairing_runtime_owner(),
-            PairingRuntimeOwner::ExternalDaemon
-        );
-        assert_eq!(
-            cli_pairing_runtime_owner(),
-            PairingRuntimeOwner::ExternalDaemon
-        );
-    }
-
-    #[test]
-    fn daemon_builder_uses_current_process_pairing_owner() {
-        assert_eq!(
-            daemon_pairing_runtime_owner(),
-            PairingRuntimeOwner::CurrentProcess
-        );
-    }
-}

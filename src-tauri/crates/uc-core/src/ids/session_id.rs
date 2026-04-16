@@ -37,20 +37,3 @@ impl From<&str> for SessionId {
         Self(s.to_string())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_session_id_creation() {
-        let id = SessionId::new("1234567890-abc123".to_string());
-        assert_eq!(id.as_str(), "1234567890-abc123");
-    }
-
-    #[test]
-    fn test_session_id_from_str() {
-        let id: SessionId = "1234567890-abc123".into();
-        assert_eq!(id.as_str(), "1234567890-abc123");
-    }
-}

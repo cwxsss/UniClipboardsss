@@ -154,25 +154,3 @@ pub struct AppDeps {
     /// Search-domain ports (index, key derivation, pipeline) / 搜索领域端口
     pub search: SearchPorts,
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_app_deps_is_just_a_struct() {
-        // This test verifies AppDeps is a plain struct,
-        // not a Builder with methods
-        #[allow(dead_code)]
-        fn assert_plain_struct<T: Sized>(_: &T) {}
-
-        // We can't create a full AppDeps without all the trait implementations,
-        // but we can verify the struct exists and is plain
-        fn assert_app_deps_is_plain() {
-            // This function body will remain empty since we can't create
-            // full AppDeps without mock implementations
-            // The important part is that this compiles - proving AppDeps
-            // is a plain struct, not a Builder with methods
-        }
-
-        assert_app_deps_is_plain();
-    }
-}

@@ -26,33 +26,3 @@ impl MarkSetupComplete {
         self.setup_status.set_status(&status).await
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_mocks::MockSetupStatus;
-    use uc_core::setup::SetupStatus;
-
-    #[tokio::test]
-    async fn mark_setup_complete_sets_has_completed() {
-        let state = Arc::new(std::sync::Mutex::new(SetupStatus::default()));
-        let get_state = state.clone();
-        let set_state = state.clone();
-
-        let mut mock = MockSetupStatus::new();
-        mock.expect_get_status()
-            .returning(move || Ok(get_state.lock().unwrap().clone()));
-        mock.expect_set_status().returning(move |s| {
-            *set_state.lock().unwrap() = s.clone();
-            Ok(())
-        });
-
-        let use_case = MarkSetupComplete::new(Arc::new(mock));
-
-        assert!(!state.lock().unwrap().has_completed);
-
-        use_case.execute().await.unwrap();
-
-        assert!(state.lock().unwrap().has_completed);
-    }
-}

@@ -16,13 +16,3 @@ pub trait IdentityStorePort: Send + Sync {
     /// Store identity bytes. Must be idempotent (overwrite if exists).
     fn store_identity(&self, identity: &[u8]) -> Result<(), IdentityStoreError>;
 }
-
-#[cfg(test)]
-mockall::mock! {
-    pub IdentityStore {}
-
-    impl IdentityStorePort for IdentityStore {
-        fn load_identity(&self) -> Result<Option<Vec<u8>>, IdentityStoreError>;
-        fn store_identity(&self, identity: &[u8]) -> Result<(), IdentityStoreError>;
-    }
-}

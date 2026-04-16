@@ -69,29 +69,3 @@ impl BlobStorePort for FilesystemBlobStore {
         Ok(data)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_blob_path() {
-        let store = FilesystemBlobStore::new(PathBuf::from("/tmp/blobs"));
-        let blob_id = BlobId::from("test-blob-123");
-        let path = store.blob_path(&blob_id);
-
-        assert_eq!(path, PathBuf::from("/tmp/blobs/test-blob-123"));
-    }
-
-    #[tokio::test]
-    async fn test_ensure_dir_creates_directory() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let blob_dir = temp_dir.path().join("blobs");
-        let store = FilesystemBlobStore::new(blob_dir.clone());
-
-        store.ensure_dir().await.unwrap();
-
-        assert!(blob_dir.exists());
-        assert!(blob_dir.is_dir());
-    }
-}

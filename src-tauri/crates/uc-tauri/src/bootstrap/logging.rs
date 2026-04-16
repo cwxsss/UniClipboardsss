@@ -116,21 +116,3 @@ pub fn get_builder() -> tauri_plugin_log::Builder {
 
     builder
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_logger_builder() {
-        // Verify the builder can be constructed without panicking
-        let _builder = get_builder();
-    }
-
-    #[test]
-    fn test_development_detection() {
-        // In test builds, this will be false (tests run in release mode by default)
-        // But we're testing the function works, not the value
-        let _is_dev = is_development();
-    }
-}

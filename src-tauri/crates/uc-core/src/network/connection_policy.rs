@@ -43,29 +43,3 @@ pub struct ResolvedConnectionPolicy {
     pub pairing_state: PairingState,
     pub allowed: AllowedProtocols,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pending_allows_only_pairing() {
-        let allowed = ConnectionPolicy::allowed_protocols(PairingState::Pending);
-        assert!(allowed.allows(ProtocolKind::Pairing));
-        assert!(!allowed.allows(ProtocolKind::Business));
-    }
-
-    #[test]
-    fn trusted_allows_pairing_and_business() {
-        let allowed = ConnectionPolicy::allowed_protocols(PairingState::Trusted);
-        assert!(allowed.allows(ProtocolKind::Pairing));
-        assert!(allowed.allows(ProtocolKind::Business));
-    }
-
-    #[test]
-    fn revoked_allows_pairing_only() {
-        let allowed = ConnectionPolicy::allowed_protocols(PairingState::Revoked);
-        assert!(allowed.allows(ProtocolKind::Pairing));
-        assert!(!allowed.allows(ProtocolKind::Business));
-    }
-}

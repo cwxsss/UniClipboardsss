@@ -35,9 +35,6 @@ use crate::usecases::SetupPairingFacadePort;
 
 use super::orchestrator::SetupError;
 
-#[cfg(test)]
-const JOINER_OFFER_WAIT_TIMEOUT: Duration = Duration::from_millis(300);
-#[cfg(not(test))]
 const JOINER_OFFER_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
 const JOINER_OFFER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 

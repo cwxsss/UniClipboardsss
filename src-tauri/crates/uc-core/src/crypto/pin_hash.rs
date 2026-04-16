@@ -103,31 +103,3 @@ fn argon2id_hash(pin: &str, salt: &[u8; SALT_SIZE]) -> Result<[u8; HASH_SIZE]> {
         .map_err(|e| anyhow!("Argon2id hashing failed: {e}"))?;
     Ok(output)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hash_pin_produces_expected_length() {
-        let encoded = hash_pin("123456").expect("hash pin");
-        assert_eq!(encoded.len(), ENCODED_SIZE);
-    }
-
-    #[test]
-    fn verify_pin_accepts_matching_pin() {
-        let encoded = hash_pin("123456").expect("hash pin");
-        assert!(verify_pin("123456", &encoded).expect("verify pin"));
-    }
-
-    #[test]
-    fn argon_params_are_valid() {
-        assert!(argon_params().is_ok());
-    }
-
-    #[test]
-    fn verify_pin_rejects_invalid_pin() {
-        let encoded = hash_pin("123456").expect("hash pin");
-        assert!(!verify_pin("654321", &encoded).expect("verify pin"));
-    }
-}

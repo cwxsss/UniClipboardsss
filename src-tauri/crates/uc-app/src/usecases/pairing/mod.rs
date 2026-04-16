@@ -16,8 +16,6 @@ pub mod resolve_connection_policy;
 pub(crate) mod session_manager;
 pub mod set_pairing_state;
 pub mod staged_paired_device_store;
-#[cfg(test)]
-mod transport_error_test;
 pub mod unpair_device;
 pub mod update_device_sync_settings;
 

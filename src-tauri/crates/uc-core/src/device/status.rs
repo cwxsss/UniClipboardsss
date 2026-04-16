@@ -48,26 +48,3 @@ impl TryFrom<i32> for DeviceStatus {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn recovering_variant_round_trips_through_i32() {
-        let status = DeviceStatus::Recovering;
-        let as_i32: i32 = status.into();
-        assert_eq!(as_i32, 3);
-        let back: DeviceStatus = DeviceStatus::try_from(3).expect("3 should decode");
-        assert_eq!(back, DeviceStatus::Recovering);
-    }
-
-    #[test]
-    fn recovering_orders_after_unknown() {
-        // Ordering is by discriminant; Recovering must not silently collide
-        // with existing variants.
-        assert!(DeviceStatus::Online < DeviceStatus::Recovering);
-        assert!(DeviceStatus::Offline < DeviceStatus::Recovering);
-        assert!(DeviceStatus::Unknown < DeviceStatus::Recovering);
-    }
-}

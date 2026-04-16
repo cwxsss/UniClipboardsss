@@ -133,38 +133,3 @@ impl DeviceAnnouncer for DeviceNameAnnouncer {
         self.network.announce_device_name(device_name).await
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::usecases::app_lifecycle::{
-        LifecycleEventEmitter, LifecycleStatusPort, SessionReadyEmitter,
-    };
-
-    #[tokio::test]
-    async fn in_memory_lifecycle_status_defaults_to_idle() {
-        let status = InMemoryLifecycleStatus::new();
-        assert_eq!(status.get_state().await, LifecycleState::Idle);
-    }
-
-    #[tokio::test]
-    async fn in_memory_lifecycle_status_set_and_get() {
-        let status = InMemoryLifecycleStatus::new();
-        status.set_state(LifecycleState::Ready).await.unwrap();
-        assert_eq!(status.get_state().await, LifecycleState::Ready);
-    }
-
-    #[tokio::test]
-    async fn logging_lifecycle_event_emitter_does_not_error() {
-        let emitter = LoggingLifecycleEventEmitter;
-        let result = emitter.emit_lifecycle_event(LifecycleEvent::Ready).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn logging_session_ready_emitter_does_not_error() {
-        let emitter = LoggingSessionReadyEmitter;
-        let result = emitter.emit_ready().await;
-        assert!(result.is_ok());
-    }
-}

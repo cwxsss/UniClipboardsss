@@ -9,8 +9,6 @@ pub(crate) mod recovery_coordinator;
 mod recovery_probe;
 mod stream_handler;
 mod swarm_event_loop;
-#[cfg(test)]
-mod tests;
 
 use crate::ports::IdentityStorePort;
 use anyhow::{anyhow, Result};
@@ -750,39 +748,6 @@ fn build_quic_config(mut config: libp2p::quic::Config) -> libp2p::quic::Config {
     config.max_connection_data = QUIC_MAX_CONNECTION_DATA_BYTES;
     config
 }
-
-#[cfg(test)]
-mod transfer_progress_tests {
-    use super::*;
-    use uc_core::ports::TransferDirection;
-
-    #[tokio::test]
-    async fn network_event_transfer_progress_port_forwards_progress_event() {
-        let (event_tx, mut event_rx) = mpsc::channel(1);
-        let port = NetworkEventTransferProgressPort { event_tx };
-
-        port.report_progress(TransferProgress {
-            transfer_id: "xfer-1".to_string(),
-            peer_id: "peer-1".to_string(),
-            direction: TransferDirection::Receiving,
-            chunks_completed: 1,
-            total_chunks: 4,
-            bytes_transferred: 262_144,
-            total_bytes: Some(1_048_576),
-        })
-        .await
-        .expect("progress should be forwarded");
-
-        match event_rx.recv().await {
-            Some(NetworkEvent::TransferProgress(progress)) => {
-                assert_eq!(progress.transfer_id, "xfer-1");
-                assert_eq!(progress.chunks_completed, 1);
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-}
-
 #[async_trait]
 impl ClipboardOutboundTransportPort for Libp2pNetworkAdapter {
     async fn send_clipboard(

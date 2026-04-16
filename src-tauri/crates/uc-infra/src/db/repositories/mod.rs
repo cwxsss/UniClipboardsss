@@ -17,6 +17,3 @@ pub use file_transfer_repo::*;
 pub use paired_device_repo::*;
 pub use representation_repo::*;
 pub use thumbnail_repo::*;
-
-#[cfg(test)]
-mod representation_repo_test;

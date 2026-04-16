@@ -21,6 +21,4 @@ pub mod net_utils;
 pub mod ports;
 pub mod secure_storage;
 pub mod system_secure_storage;
-#[cfg(any(test, feature = "test-helpers"))]
-pub mod test_support;
 pub mod usecases;

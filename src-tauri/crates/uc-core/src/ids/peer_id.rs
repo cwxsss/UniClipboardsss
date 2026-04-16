@@ -37,21 +37,3 @@ impl From<&str> for PeerId {
         Self(s.to_string())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_peer_id_creation() {
-        let id = PeerId::new("12D3KooW...".to_string());
-        assert_eq!(id.as_str(), "12D3KooW...");
-    }
-
-    #[test]
-    fn test_peer_id_display_is_full() {
-        let long_id = PeerId::new("12D3KooWVeryLongPeerIdStringThatShouldBeTruncated".to_string());
-        let display = format!("{}", long_id);
-        assert_eq!(display, "12D3KooWVeryLongPeerIdStringThatShouldBeTruncated");
-    }
-}

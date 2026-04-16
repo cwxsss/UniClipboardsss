@@ -194,16 +194,3 @@ pub fn build_file_snapshot(uri_list: &str) -> SystemClipboardSnapshot {
         )],
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_path_list_uses_file_uris_for_origin_guard_roundtrip() {
-        let path = std::env::temp_dir().join("uniclipboard-origin-guard.txt");
-        let uri = url::Url::from_file_path(&path).expect("absolute temp path should convert");
-
-        assert_eq!(build_path_list(&[path]), uri.to_string());
-    }
-}

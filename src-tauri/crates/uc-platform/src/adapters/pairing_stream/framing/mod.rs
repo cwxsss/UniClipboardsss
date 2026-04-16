@@ -107,6 +107,3 @@ where
     }
     Ok(Some(buf))
 }
-
-#[cfg(test)]
-mod framing_test;

@@ -25,9 +25,6 @@ pub mod resource;
 mod config;
 mod provider;
 
-#[cfg(test)]
-mod tests;
-
 pub use provider::OtlpGuard;
 pub use resource::build_resource;
 

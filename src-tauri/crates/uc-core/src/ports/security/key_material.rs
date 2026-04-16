@@ -29,18 +29,3 @@ pub trait KeyMaterialPort: Send + Sync {
     /// Optional reset flow
     async fn delete_keyslot(&self, scope: &KeyScope) -> Result<(), EncryptionError>;
 }
-
-#[cfg(test)]
-mockall::mock! {
-    pub KeyMaterial {}
-
-    #[async_trait]
-    impl KeyMaterialPort for KeyMaterial {
-        async fn load_kek(&self, scope: &KeyScope) -> Result<Kek, EncryptionError>;
-        async fn store_kek(&self, scope: &KeyScope, kek: &Kek) -> Result<(), EncryptionError>;
-        async fn delete_kek(&self, scope: &KeyScope) -> Result<(), EncryptionError>;
-        async fn load_keyslot(&self, scope: &KeyScope) -> Result<KeySlot, EncryptionError>;
-        async fn store_keyslot(&self, keyslot: &KeySlot) -> Result<(), EncryptionError>;
-        async fn delete_keyslot(&self, scope: &KeyScope) -> Result<(), EncryptionError>;
-    }
-}

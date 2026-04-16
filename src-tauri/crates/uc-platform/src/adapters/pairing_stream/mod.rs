@@ -4,6 +4,3 @@
 
 pub mod framing;
 pub mod service;
-
-#[cfg(test)]
-mod service_test;

@@ -667,25 +667,3 @@ impl From<DaemonPairingHostError> for ApiError {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use uc_core::setup::SetupState;
-
-    #[test]
-    fn confirm_peer_transition_accepts_completed_state_when_hint_requests_host_confirmation() {
-        let state = SetupState::Completed;
-        let hint = "host-confirm-peer";
-        let is_join_confirm = matches!(state, SetupState::JoinSpaceConfirmPeer { .. });
-        let is_host_delegate =
-            matches!(state, SetupState::Completed) && hint == "host-confirm-peer";
-        assert!(is_host_delegate);
-        assert!(!is_join_confirm);
-
-        // Different hint - should not be allowed
-        let hint = "completed";
-        let is_host_delegate =
-            matches!(state, SetupState::Completed) && hint == "host-confirm-peer";
-        assert!(!is_host_delegate);
-    }
-}

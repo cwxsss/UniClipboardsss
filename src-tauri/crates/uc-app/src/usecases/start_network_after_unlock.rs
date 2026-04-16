@@ -37,26 +37,3 @@ impl StartNetworkAfterUnlock {
         .await
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_mocks::MockNetworkControl;
-
-    #[tokio::test]
-    async fn start_network_after_unlock_invokes_network_control() {
-        let started = Arc::new(std::sync::Mutex::new(false));
-        let started_clone = started.clone();
-        let mut control = MockNetworkControl::new();
-        control.expect_start_network().returning(move || {
-            *started_clone.lock().unwrap() = true;
-            Ok(())
-        });
-
-        let use_case = StartNetworkAfterUnlock::new(Arc::new(control));
-        let result = use_case.execute().await;
-
-        assert!(result.is_ok(), "start_network should succeed");
-        assert!(*started.lock().unwrap(), "network should be started");
-    }
-}

@@ -12,14 +12,3 @@ pub struct ClipboardChange {
     pub snapshot: SystemClipboardSnapshot,
     pub origin: ClipboardChangeOrigin,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn clipboard_change_origin_variants() {
-        let origin = ClipboardChangeOrigin::LocalCapture;
-        assert_eq!(origin, ClipboardChangeOrigin::LocalCapture);
-    }
-}

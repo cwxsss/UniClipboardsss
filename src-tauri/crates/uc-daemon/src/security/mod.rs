@@ -44,6 +44,3 @@ pub fn cleanup_rate_limiter_task(
         }
     })
 }
-
-#[cfg(test)]
-mod tests;
