@@ -386,14 +386,15 @@ mock! {
 }
 
 mock! {
-    pub ClipboardTransport {}
+    pub ClipboardOutboundTransport {}
 
     #[async_trait]
-    impl uc_core::ports::ClipboardTransportPort for ClipboardTransport {
-        async fn send_clipboard(&self, peer_id: &str, encrypted_data: std::sync::Arc<[u8]>) -> anyhow::Result<()>;
-        async fn broadcast_clipboard(&self, encrypted_data: std::sync::Arc<[u8]>) -> anyhow::Result<()>;
-        async fn subscribe_clipboard(&self) -> anyhow::Result<tokio::sync::mpsc::Receiver<(uc_core::network::ClipboardMessage, Option<Vec<u8>>)>>;
-        async fn ensure_business_path(&self, peer_id: &str) -> anyhow::Result<()>;
+    impl uc_core::ports::ClipboardOutboundTransportPort for ClipboardOutboundTransport {
+        async fn send_clipboard(
+            &self,
+            target: &uc_core::ports::SyncTargetId,
+            frame: uc_core::ports::OutboundClipboardFrame,
+        ) -> Result<(), uc_core::ports::ClipboardTransportError>;
     }
 }
 

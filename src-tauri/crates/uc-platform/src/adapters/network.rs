@@ -6,12 +6,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use libp2p::PeerId;
 use tracing::error;
-use uc_core::network::{
-    ClipboardMessage, ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage,
-};
+use uc_core::network::{ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage};
 use uc_core::ports::{
-    ClipboardTransportPort, NetworkControlPort, NetworkEventPort, PairingTransportPort,
-    PeerDirectoryPort,
+    ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
+    ClipboardTransportError, NetworkControlPort, NetworkEventPort, OutboundClipboardFrame,
+    PairingTransportPort, PeerDirectoryPort, SyncTargetId,
 };
 
 use crate::identity_store::load_or_create_identity;
@@ -75,30 +74,23 @@ impl PlaceholderNetworkPort {
 }
 
 #[async_trait]
-impl ClipboardTransportPort for PlaceholderNetworkPort {
+impl ClipboardOutboundTransportPort for PlaceholderNetworkPort {
     async fn send_clipboard(
         &self,
-        _peer_id: &str,
-        _encrypted_data: std::sync::Arc<[u8]>,
-    ) -> Result<()> {
-        Err(anyhow::anyhow!(
-            "ClipboardTransportPort::send_clipboard not implemented yet"
-        ))
+        _target: &SyncTargetId,
+        _frame: OutboundClipboardFrame,
+    ) -> std::result::Result<(), ClipboardTransportError> {
+        Err(ClipboardTransportError::Unsupported)
     }
+}
 
-    async fn broadcast_clipboard(&self, _encrypted_data: std::sync::Arc<[u8]>) -> Result<()> {
-        Err(anyhow::anyhow!(
-            "ClipboardTransportPort::broadcast_clipboard not implemented yet"
-        ))
-    }
-
+#[async_trait]
+impl ClipboardInboundTransportPort for PlaceholderNetworkPort {
     async fn subscribe_clipboard(
         &self,
-    ) -> Result<tokio::sync::mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>> {
-        error!("ClipboardTransportPort::subscribe_clipboard not implemented");
-        Err(anyhow::anyhow!(
-            "ClipboardTransportPort::subscribe_clipboard not implemented yet"
-        ))
+    ) -> std::result::Result<Box<dyn ClipboardInboundMessageSource>, ClipboardTransportError> {
+        error!("ClipboardInboundTransportPort::subscribe_clipboard not implemented");
+        Err(ClipboardTransportError::Unsupported)
     }
 }
 

@@ -10,7 +10,6 @@ mod recovery_probe;
 mod stream_handler;
 mod swarm_event_loop;
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests;
 
 use crate::ports::IdentityStorePort;
@@ -27,14 +26,15 @@ use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
 use uc_core::network::{
-    ClipboardMessage, ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage, PairingState,
-    ProtocolDirection, ProtocolId, ProtocolKind, ProtocolMessage, ResolvedConnectionPolicy,
+    ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage, PairingState, ProtocolDirection,
+    ProtocolId, ProtocolKind, ProtocolMessage, ResolvedConnectionPolicy,
 };
 use uc_core::ports::{
-    ClipboardTransportPort, ConnectionPolicyResolverPort, EncryptionSessionPort,
-    NetworkControlPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort,
-    TransferPayloadDecryptorPort, TransferPayloadEncryptorPort, TransferProgress,
-    TransferProgressPort,
+    ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
+    ClipboardTransportError, ConnectionPolicyResolverPort, EncryptionSessionPort,
+    InboundClipboardFrame, NetworkControlPort, NetworkEventPort, OutboundClipboardFrame,
+    PairingTransportPort, PeerDirectoryPort, SyncTargetId, TransferPayloadDecryptorPort,
+    TransferPayloadEncryptorPort, TransferProgress, TransferProgressPort,
 };
 
 use super::file_transfer::service::{FileTransferConfig, FileTransferService};
@@ -70,7 +70,7 @@ const BUSINESS_STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const BUSINESS_STREAM_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
 const BUSINESS_COMMAND_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(5);
 const BUSINESS_SEND_COMMAND_RESULT_TIMEOUT: Duration = Duration::from_secs(150);
-const BUSINESS_ENSURE_COMMAND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
+const BUSINESS_CONTROL_COMMAND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_IN_FLIGHT_BUSINESS_COMMANDS: usize = 16;
 const QUIC_MAX_IDLE_TIMEOUT_MS: u32 = 30_000;
 const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -123,10 +123,6 @@ enum BusinessCommand {
         data: Arc<[u8]>,
         result_tx: oneshot::Sender<Result<()>>,
     },
-    EnsureBusinessPath {
-        peer_id: uc_core::PeerId,
-        result_tx: oneshot::Sender<Result<()>>,
-    },
     AnnounceDeviceName {
         device_name: String,
     },
@@ -155,10 +151,26 @@ const MAX_JSON_HEADER_SIZE: usize = 64 * 1024;
 
 /// Result of processing a single inbound business stream message.
 enum ProcessedMessage {
-    /// Clipboard with pre-decoded plaintext from transport-level streaming decode.
-    StreamingClipboard(ClipboardMessage, Vec<u8>),
-    /// All other messages (DeviceAnnounce, Heartbeat, Pairing).
-    Standard(ProtocolMessage),
+    Framed {
+        message: ProtocolMessage,
+        raw_frame: Vec<u8>,
+    },
+}
+
+struct ClipboardFrameMessageSource {
+    rx: mpsc::Receiver<InboundClipboardFrame>,
+}
+
+#[async_trait]
+impl ClipboardInboundMessageSource for ClipboardFrameMessageSource {
+    async fn recv(
+        &mut self,
+    ) -> std::result::Result<InboundClipboardFrame, ClipboardTransportError> {
+        self.rx
+            .recv()
+            .await
+            .ok_or(ClipboardTransportError::SubscriptionClosed)
+    }
 }
 
 pub struct Libp2pNetworkAdapter {
@@ -169,8 +181,8 @@ pub struct Libp2pNetworkAdapter {
     event_ingress_rx: Mutex<Option<mpsc::Receiver<NetworkEvent>>>,
     event_bus_tx: broadcast::Sender<NetworkEvent>,
     event_fanout_started: AtomicBool,
-    clipboard_tx: mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>,
-    clipboard_rx: Mutex<Option<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>>>,
+    clipboard_frame_tx: mpsc::Sender<InboundClipboardFrame>,
+    clipboard_frame_rx: Mutex<Option<mpsc::Receiver<InboundClipboardFrame>>>,
     business_tx: mpsc::Sender<BusinessCommand>,
     business_rx: Mutex<Option<mpsc::Receiver<BusinessCommand>>>,
     dial_tx: mpsc::Sender<DialRequest>,
@@ -178,8 +190,8 @@ pub struct Libp2pNetworkAdapter {
     keypair: Mutex<identity::Keypair>,
     start_state: Arc<AtomicU8>,
     policy_resolver: Arc<dyn ConnectionPolicyResolverPort>,
-    encryption_session: Arc<dyn EncryptionSessionPort>,
-    transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
+    _encryption_session: Arc<dyn EncryptionSessionPort>,
+    _transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
     _transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
     /// Wrapped in `Arc` so the swarm restart loop can update this handle when
     /// rebuilding the session without needing a reference back to `self`.
@@ -213,7 +225,7 @@ impl Libp2pNetworkAdapter {
             .to_vec();
         let (event_tx, event_ingress_rx) = mpsc::channel(64);
         let (event_bus_tx, _) = broadcast::channel(64);
-        let (clipboard_tx, clipboard_rx) = mpsc::channel(64);
+        let (clipboard_frame_tx, clipboard_frame_rx) = mpsc::channel(64);
         let (business_tx, business_rx) = mpsc::channel(64);
         let (dial_tx, dial_rx) = mpsc::channel(32);
         Ok(Self {
@@ -224,8 +236,8 @@ impl Libp2pNetworkAdapter {
             event_ingress_rx: Mutex::new(Some(event_ingress_rx)),
             event_bus_tx,
             event_fanout_started: AtomicBool::new(false),
-            clipboard_tx,
-            clipboard_rx: Mutex::new(Some(clipboard_rx)),
+            clipboard_frame_tx,
+            clipboard_frame_rx: Mutex::new(Some(clipboard_frame_rx)),
             business_tx,
             business_rx: Mutex::new(Some(business_rx)),
             dial_tx,
@@ -233,8 +245,8 @@ impl Libp2pNetworkAdapter {
             keypair: Mutex::new(keypair),
             start_state: Arc::new(AtomicU8::new(START_STATE_IDLE)),
             policy_resolver,
-            encryption_session,
-            transfer_decryptor,
+            _encryption_session: encryption_session,
+            _transfer_decryptor: transfer_decryptor,
             _transfer_encryptor: transfer_encryptor,
             stream_control: Arc::new(Mutex::new(None)),
             pairing_runtime_owner,
@@ -362,10 +374,8 @@ impl Libp2pNetworkAdapter {
             stream_control.clone(),
             self.caches.clone(),
             self.event_tx.clone(),
-            self.clipboard_tx.clone(),
+            self.clipboard_frame_tx.clone(),
             self.policy_resolver.clone(),
-            self.encryption_session.clone(),
-            self.transfer_decryptor.clone(),
         );
 
         let listen_ip = match crate::net_utils::get_physical_lan_ip() {
@@ -410,9 +420,7 @@ impl Libp2pNetworkAdapter {
         let caches = self.caches.clone();
         let event_tx = self.event_tx.clone();
         let policy_resolver = self.policy_resolver.clone();
-        let clipboard_tx = self.clipboard_tx.clone();
-        let encryption_session = self.encryption_session.clone();
-        let transfer_decryptor = self.transfer_decryptor.clone();
+        let clipboard_frame_tx = self.clipboard_frame_tx.clone();
         let file_cache_dir = self.file_cache_dir.clone();
         let pairing_runtime_owner = self.pairing_runtime_owner;
         let stream_control_holder = Arc::clone(&self.stream_control);
@@ -483,10 +491,8 @@ impl Libp2pNetworkAdapter {
                             pairing_runtime_owner,
                             &caches,
                             &event_tx,
-                            &clipboard_tx,
+                            &clipboard_frame_tx,
                             &policy_resolver,
-                            &encryption_session,
-                            &transfer_decryptor,
                             &file_cache_dir,
                             &stream_control_holder,
                             &pairing_service_holder,
@@ -545,6 +551,79 @@ impl Libp2pNetworkAdapter {
             }
         }
     }
+
+    fn map_transport_error(error: anyhow::Error) -> ClipboardTransportError {
+        let message = error.to_string();
+        if message.contains("timed out") {
+            ClipboardTransportError::Timeout
+        } else if message.contains("receiver already taken") {
+            ClipboardTransportError::SubscriptionClosed
+        } else if message.contains("local peer_id") || message.contains("invalid peer id") {
+            ClipboardTransportError::TargetUnavailable
+        } else {
+            ClipboardTransportError::Internal(message)
+        }
+    }
+
+    async fn send_clipboard_command(&self, peer_id: &str, payload: Arc<[u8]>) -> Result<()> {
+        if peer_id == self.local_peer_id {
+            warn!(peer_id = peer_id, "skip send_clipboard to local peer");
+            return Err(anyhow!("send_clipboard target is local peer_id"));
+        }
+
+        let peer = uc_core::PeerId::from(peer_id);
+        let (result_tx, result_rx) = oneshot::channel();
+        let command = BusinessCommand::SendClipboard {
+            peer_id: peer,
+            data: payload,
+            result_tx,
+        };
+        let enqueue_result = timeout(
+            BUSINESS_COMMAND_ENQUEUE_TIMEOUT,
+            self.business_tx.send(command),
+        )
+        .await;
+        match enqueue_result {
+            Ok(Ok(())) => {}
+            Ok(Err(tokio::sync::mpsc::error::SendError(command))) => {
+                let message = "failed to queue business stream: business command channel closed";
+                error!(
+                    peer_id = peer_id,
+                    error = message,
+                    "business command enqueue failed"
+                );
+                notify_enqueue_failure(command, message, "clipboard", peer_id);
+                return Err(anyhow!(message));
+            }
+            Err(_) => {
+                let message = "timed out queueing business stream command";
+                error!(
+                    peer_id = peer_id,
+                    timeout_ms = BUSINESS_COMMAND_ENQUEUE_TIMEOUT.as_millis() as u64,
+                    error = message,
+                    "business command enqueue timed out"
+                );
+                return Err(anyhow!(message));
+            }
+        }
+
+        match timeout(BUSINESS_SEND_COMMAND_RESULT_TIMEOUT, result_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(err)) => Err(anyhow!("failed to receive business stream result: {err}")),
+            Err(_) => Err(anyhow!("timed out waiting for business command result")),
+        }
+    }
+
+    async fn subscribe_clipboard_frame_source(
+        &self,
+    ) -> std::result::Result<Box<dyn ClipboardInboundMessageSource>, ClipboardTransportError> {
+        if self.clipboard_frame_tx.is_closed() {
+            warn!("clipboard frame channel sender is closed");
+        }
+        let rx = Self::take_receiver(&self.clipboard_frame_rx, "clipboard frame")
+            .map_err(Self::map_transport_error)?;
+        Ok(Box::new(ClipboardFrameMessageSource { rx }))
+    }
 }
 
 /// Build a fresh libp2p swarm, register all services, and start listening.
@@ -562,10 +641,8 @@ fn build_swarm_for_restart(
     pairing_runtime_owner: PairingRuntimeOwner,
     caches: &Arc<RwLock<PeerCaches>>,
     event_tx: &mpsc::Sender<NetworkEvent>,
-    clipboard_tx: &mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>,
+    clipboard_frame_tx: &mpsc::Sender<InboundClipboardFrame>,
     policy_resolver: &Arc<dyn ConnectionPolicyResolverPort>,
-    encryption_session: &Arc<dyn EncryptionSessionPort>,
-    transfer_decryptor: &Arc<dyn TransferPayloadDecryptorPort>,
     file_cache_dir: &PathBuf,
     stream_control_holder: &Arc<Mutex<Option<stream::Control>>>,
     pairing_service_holder: &Arc<Mutex<Option<PairingStreamService>>>,
@@ -634,10 +711,8 @@ fn build_swarm_for_restart(
         stream_control,
         caches.clone(),
         event_tx.clone(),
-        clipboard_tx.clone(),
+        clipboard_frame_tx.clone(),
         policy_resolver.clone(),
-        encryption_session.clone(),
-        transfer_decryptor.clone(),
     );
 
     // Bind to a fresh port for the rebuild.
@@ -709,115 +784,24 @@ mod transfer_progress_tests {
 }
 
 #[async_trait]
-impl ClipboardTransportPort for Libp2pNetworkAdapter {
-    async fn send_clipboard(&self, _peer_id: &str, _encrypted_data: Arc<[u8]>) -> Result<()> {
-        if _peer_id == self.local_peer_id {
-            warn!(peer_id = _peer_id, "skip send_clipboard to local peer");
-            return Err(anyhow!("send_clipboard target is local peer_id"));
-        }
-        let peer = uc_core::PeerId::from(_peer_id);
-        let (result_tx, result_rx) = oneshot::channel();
-        let command = BusinessCommand::SendClipboard {
-            peer_id: peer,
-            data: _encrypted_data,
-            result_tx,
-        };
-        let enqueue_result = timeout(
-            BUSINESS_COMMAND_ENQUEUE_TIMEOUT,
-            self.business_tx.send(command),
-        )
-        .await;
-        match enqueue_result {
-            Ok(Ok(())) => {}
-            Ok(Err(tokio::sync::mpsc::error::SendError(command))) => {
-                let message = "failed to queue business stream: business command channel closed";
-                error!(
-                    peer_id = _peer_id,
-                    error = message,
-                    "business command enqueue failed"
-                );
-                notify_enqueue_failure(command, message, "clipboard", _peer_id);
-                return Err(anyhow!(message));
-            }
-            Err(_) => {
-                // Cancelling the send future drops the unsent command and closes its result_tx.
-                let message = "timed out queueing business stream command";
-                error!(
-                    peer_id = _peer_id,
-                    timeout_ms = BUSINESS_COMMAND_ENQUEUE_TIMEOUT.as_millis() as u64,
-                    error = message,
-                    "business command enqueue timed out"
-                );
-                return Err(anyhow!(message));
-            }
-        }
-        match timeout(BUSINESS_SEND_COMMAND_RESULT_TIMEOUT, result_rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(err)) => Err(anyhow!("failed to receive business stream result: {err}")),
-            Err(_) => Err(anyhow!("timed out waiting for business command result")),
-        }
+impl ClipboardOutboundTransportPort for Libp2pNetworkAdapter {
+    async fn send_clipboard(
+        &self,
+        target: &SyncTargetId,
+        frame: OutboundClipboardFrame,
+    ) -> std::result::Result<(), ClipboardTransportError> {
+        self.send_clipboard_command(&target.0, frame.0)
+            .await
+            .map_err(Self::map_transport_error)
     }
+}
 
-    async fn broadcast_clipboard(&self, _encrypted_data: Arc<[u8]>) -> Result<()> {
-        Err(anyhow!(
-            "ClipboardTransportPort::broadcast_clipboard not implemented yet"
-        ))
-    }
-
+#[async_trait]
+impl ClipboardInboundTransportPort for Libp2pNetworkAdapter {
     async fn subscribe_clipboard(
         &self,
-    ) -> Result<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>> {
-        if self.clipboard_tx.is_closed() {
-            warn!("clipboard channel sender is closed");
-        }
-        Self::take_receiver(&self.clipboard_rx, "clipboard")
-    }
-
-    async fn ensure_business_path(&self, peer_id: &str) -> Result<()> {
-        let peer = uc_core::PeerId::from(peer_id);
-        let (result_tx, result_rx) = oneshot::channel();
-        let command = BusinessCommand::EnsureBusinessPath {
-            peer_id: peer,
-            result_tx,
-        };
-        let enqueue_result = timeout(
-            BUSINESS_COMMAND_ENQUEUE_TIMEOUT,
-            self.business_tx.send(command),
-        )
-        .await;
-        match enqueue_result {
-            Ok(Ok(())) => {}
-            Ok(Err(tokio::sync::mpsc::error::SendError(command))) => {
-                let message =
-                    "failed to queue ensure business path command: business command channel closed";
-                error!(
-                    peer_id = peer_id,
-                    error = message,
-                    "business command enqueue failed"
-                );
-                notify_enqueue_failure(command, message, "ensure", peer_id);
-                return Err(anyhow!(message));
-            }
-            Err(_) => {
-                // Cancelling the send future drops the unsent command and closes its result_tx.
-                let message = "timed out queueing ensure business path command";
-                error!(
-                    peer_id = peer_id,
-                    timeout_ms = BUSINESS_COMMAND_ENQUEUE_TIMEOUT.as_millis() as u64,
-                    error = message,
-                    "business command enqueue timed out"
-                );
-                return Err(anyhow!(message));
-            }
-        }
-
-        match timeout(BUSINESS_ENSURE_COMMAND_RESULT_TIMEOUT, result_rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(err)) => Err(anyhow!(
-                "failed to receive ensure business path result: {err}"
-            )),
-            Err(_) => Err(anyhow!("timed out waiting for business command result")),
-        }
+    ) -> std::result::Result<Box<dyn ClipboardInboundMessageSource>, ClipboardTransportError> {
+        self.subscribe_clipboard_frame_source().await
     }
 }
 
@@ -1105,7 +1089,8 @@ impl PairingTransportPort for Libp2pNetworkAdapter {
                 ));
             }
         }
-        let unpair_result = match timeout(BUSINESS_ENSURE_COMMAND_RESULT_TIMEOUT, result_rx).await {
+        let unpair_result = match timeout(BUSINESS_CONTROL_COMMAND_RESULT_TIMEOUT, result_rx).await
+        {
             Ok(Ok(result)) => result,
             Ok(Err(err)) => Err(anyhow!("failed to receive unpair command result: {err}")),
             Err(_) => Err(anyhow!("timed out waiting for unpair command result")),

@@ -13,6 +13,7 @@ mod selection_resolver;
 mod spool_queue;
 mod thumbnail_generator;
 mod thumbnail_repository;
+mod transport;
 
 pub use clipboard_change_origin::ClipboardChangeOriginPort;
 pub use clipboard_entry_repository::ClipboardEntryRepositoryPort;
@@ -31,3 +32,7 @@ pub use selection_resolver::SelectionResolverPort;
 pub use spool_queue::{SpoolQueuePort, SpoolRequest};
 pub use thumbnail_generator::{GeneratedThumbnail, ThumbnailGeneratorPort};
 pub use thumbnail_repository::ThumbnailRepositoryPort;
+pub use transport::{
+    ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
+    ClipboardTransportError, InboundClipboardFrame, OutboundClipboardFrame, SyncTargetId,
+};

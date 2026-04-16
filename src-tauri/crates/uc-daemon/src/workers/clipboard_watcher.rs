@@ -169,7 +169,7 @@ impl DaemonClipboardChangeHandler {
         let deps = self.runtime.wiring_deps();
         SyncOutboundClipboardUseCase::new(
             deps.clipboard.system_clipboard.clone(),
-            deps.network_ports.clipboard.clone(),
+            deps.network_ports.clipboard_outbound.clone(),
             deps.network_ports.peers.clone(),
             deps.security.encryption_session.clone(),
             deps.device.device_identity.clone(),

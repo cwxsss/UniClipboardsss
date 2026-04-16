@@ -16,9 +16,10 @@ use uc_core::network::{
 };
 use uc_core::network::{PairedDevice, PairingState};
 use uc_core::ports::{
-    ClipboardTransportPort, DeviceIdentityPort, EncryptionPort, EncryptionSessionPort,
-    NetworkEventPort, PairedDeviceRepositoryError, PairedDeviceRepositoryPort,
-    PairingTransportPort, PeerDirectoryPort, SettingsPort, SystemClipboardPort,
+    ClipboardOutboundTransportPort, ClipboardTransportError, DeviceIdentityPort, EncryptionPort,
+    EncryptionSessionPort, NetworkEventPort, OutboundClipboardFrame, PairedDeviceRepositoryError,
+    PairedDeviceRepositoryPort, PairingTransportPort, PeerDirectoryPort, SettingsPort,
+    SyncTargetId, SystemClipboardPort,
 };
 use uc_core::security::model::{
     EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfParams, Kek,
@@ -192,39 +193,43 @@ struct InProcessNetwork {
 }
 
 #[async_trait]
-impl ClipboardTransportPort for InProcessNetwork {
+impl ClipboardOutboundTransportPort for InProcessNetwork {
     async fn send_clipboard(
         &self,
-        peer_id: &str,
-        outbound_bytes: std::sync::Arc<[u8]>,
-    ) -> anyhow::Result<()> {
+        target: &SyncTargetId,
+        outbound_frame: OutboundClipboardFrame,
+    ) -> std::result::Result<(), ClipboardTransportError> {
         self.send_count.fetch_add(1, Ordering::SeqCst);
 
-        if peer_id != self.remote_peer.peer_id {
-            return Err(anyhow!(
+        if target.0 != self.remote_peer.peer_id {
+            return Err(ClipboardTransportError::Internal(format!(
                 "unexpected peer id; expected {}, got {}",
-                self.remote_peer.peer_id,
-                peer_id
-            ));
+                self.remote_peer.peer_id, target.0
+            )));
         }
+
+        let outbound_bytes = outbound_frame.0;
 
         // Parse two-segment wire format: [4-byte JSON len LE][JSON header][optional trailing V2 payload]
         if outbound_bytes.len() < 4 {
-            return Err(anyhow!("outbound bytes too short for framed format"));
+            return Err(ClipboardTransportError::Internal(
+                "outbound bytes too short for framed format".to_string(),
+            ));
         }
         let json_len = u32::from_le_bytes(outbound_bytes[0..4].try_into().unwrap()) as usize;
         if outbound_bytes.len() < 4 + json_len {
-            return Err(anyhow!(
+            return Err(ClipboardTransportError::Internal(format!(
                 "outbound bytes truncated: expected {} JSON bytes, have {}",
                 json_len,
                 outbound_bytes.len() - 4
-            ));
+            )));
         }
         let json_bytes = &outbound_bytes[4..4 + json_len];
         let v2_trailing = &outbound_bytes[4 + json_len..];
 
         let message = ProtocolMessage::from_bytes(json_bytes)
-            .context("failed to decode framed JSON header as ProtocolMessage")?;
+            .context("failed to decode framed JSON header as ProtocolMessage")
+            .map_err(|err| ClipboardTransportError::Internal(err.to_string()))?;
         match message {
             ProtocolMessage::Clipboard(mut clipboard_message) => {
                 // For V2: the real encrypted payload is in the trailing bytes, not in the JSON header.
@@ -232,38 +237,15 @@ impl ClipboardTransportPort for InProcessNetwork {
                 if !v2_trailing.is_empty() {
                     clipboard_message.encrypted_content = v2_trailing.to_vec();
                 }
-                self.remote_inbound.execute(clipboard_message, None).await
+                self.remote_inbound
+                    .execute(clipboard_message, None)
+                    .await
+                    .map_err(|err| ClipboardTransportError::Internal(err.to_string()))
             }
-            _ => Err(anyhow!(
-                "expected ProtocolMessage::Clipboard for in-process routing"
+            _ => Err(ClipboardTransportError::Internal(
+                "expected ProtocolMessage::Clipboard for in-process routing".to_string(),
             )),
         }
-    }
-
-    async fn broadcast_clipboard(
-        &self,
-        _encrypted_data: std::sync::Arc<[u8]>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn subscribe_clipboard(
-        &self,
-    ) -> anyhow::Result<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn ensure_business_path(&self, peer_id: &str) -> anyhow::Result<()> {
-        if peer_id == self.remote_peer.peer_id {
-            return Ok(());
-        }
-
-        Err(anyhow!(
-            "unexpected peer id for business path; expected {}, got {}",
-            self.remote_peer.peer_id,
-            peer_id
-        ))
     }
 }
 
@@ -568,7 +550,7 @@ async fn clipboard_sync_e2e_dual_peer_in_process() -> Result<()> {
         Arc::new(TransferPayloadEncryptorAdapter);
     let outbound_a = SyncOutboundClipboardUseCase::new(
         clipboard_a.clone(),
-        network_a.clone() as Arc<dyn uc_core::ports::ClipboardTransportPort>,
+        network_a.clone() as Arc<dyn ClipboardOutboundTransportPort>,
         network_a.clone() as Arc<dyn uc_core::ports::PeerDirectoryPort>,
         session_a,
         identity_a,
@@ -578,7 +560,7 @@ async fn clipboard_sync_e2e_dual_peer_in_process() -> Result<()> {
     );
     let outbound_b = SyncOutboundClipboardUseCase::new(
         clipboard_b.clone(),
-        network_b.clone() as Arc<dyn uc_core::ports::ClipboardTransportPort>,
+        network_b.clone() as Arc<dyn ClipboardOutboundTransportPort>,
         network_b.clone() as Arc<dyn uc_core::ports::PeerDirectoryPort>,
         session_b,
         identity_b,
@@ -683,7 +665,7 @@ async fn clipboard_sync_e2e_image_single_rep() -> Result<()> {
         Arc::new(TransferPayloadEncryptorAdapter);
     let outbound_a = SyncOutboundClipboardUseCase::new(
         clipboard_a.clone(),
-        network_a.clone() as Arc<dyn uc_core::ports::ClipboardTransportPort>,
+        network_a.clone() as Arc<dyn ClipboardOutboundTransportPort>,
         network_a.clone() as Arc<dyn uc_core::ports::PeerDirectoryPort>,
         session_a,
         identity_a,
@@ -789,7 +771,7 @@ async fn clipboard_sync_e2e_windows_image_multi_rep() -> Result<()> {
         Arc::new(TransferPayloadEncryptorAdapter);
     let outbound_a = SyncOutboundClipboardUseCase::new(
         clipboard_a.clone(),
-        network_a.clone() as Arc<dyn uc_core::ports::ClipboardTransportPort>,
+        network_a.clone() as Arc<dyn ClipboardOutboundTransportPort>,
         network_a.clone() as Arc<dyn uc_core::ports::PeerDirectoryPort>,
         session_a,
         identity_a,
@@ -843,51 +825,41 @@ struct CapturingNetwork {
 }
 
 #[async_trait]
-impl ClipboardTransportPort for CapturingNetwork {
+impl ClipboardOutboundTransportPort for CapturingNetwork {
     async fn send_clipboard(
         &self,
-        _peer_id: &str,
-        outbound_bytes: std::sync::Arc<[u8]>,
-    ) -> anyhow::Result<()> {
+        _target: &SyncTargetId,
+        outbound_frame: OutboundClipboardFrame,
+    ) -> std::result::Result<(), ClipboardTransportError> {
+        let outbound_bytes = outbound_frame.0;
         if outbound_bytes.len() < 4 {
-            return Err(anyhow!("outbound bytes too short for framed format"));
+            return Err(ClipboardTransportError::Internal(
+                "outbound bytes too short for framed format".to_string(),
+            ));
         }
         let json_len = u32::from_le_bytes(outbound_bytes[0..4].try_into().unwrap()) as usize;
         if outbound_bytes.len() < 4 + json_len {
-            return Err(anyhow!("outbound bytes truncated"));
+            return Err(ClipboardTransportError::Internal(
+                "outbound bytes truncated".to_string(),
+            ));
         }
         let json_bytes = &outbound_bytes[4..4 + json_len];
 
         let message = ProtocolMessage::from_bytes(json_bytes)
-            .context("failed to decode framed JSON header as ProtocolMessage")?;
+            .context("failed to decode framed JSON header as ProtocolMessage")
+            .map_err(|err| ClipboardTransportError::Internal(err.to_string()))?;
         match message {
             ProtocolMessage::Clipboard(clipboard_message) => {
                 self.captured_messages
                     .lock()
-                    .map_err(|_| anyhow!("lock poisoned"))?
+                    .map_err(|_| ClipboardTransportError::Internal("lock poisoned".to_string()))?
                     .push(clipboard_message);
                 Ok(())
             }
-            _ => Err(anyhow!("expected ProtocolMessage::Clipboard")),
+            _ => Err(ClipboardTransportError::Internal(
+                "expected ProtocolMessage::Clipboard".to_string(),
+            )),
         }
-    }
-
-    async fn broadcast_clipboard(
-        &self,
-        _encrypted_data: std::sync::Arc<[u8]>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn subscribe_clipboard(
-        &self,
-    ) -> anyhow::Result<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn ensure_business_path(&self, _peer_id: &str) -> anyhow::Result<()> {
-        Ok(())
     }
 }
 
@@ -1012,7 +984,7 @@ async fn test_outbound_file_transfers_empty_when_file_sync_disabled() -> Result<
         Arc::new(TransferPayloadEncryptorAdapter);
     let outbound_a = SyncOutboundClipboardUseCase::new(
         clipboard_a,
-        network_a.clone() as Arc<dyn ClipboardTransportPort>,
+        network_a.clone() as Arc<dyn ClipboardOutboundTransportPort>,
         network_a.clone() as Arc<dyn PeerDirectoryPort>,
         session_a,
         identity_a,
@@ -1079,7 +1051,7 @@ async fn test_outbound_file_transfers_present_when_file_sync_enabled() -> Result
         Arc::new(TransferPayloadEncryptorAdapter);
     let outbound_a = SyncOutboundClipboardUseCase::new(
         clipboard_a,
-        network_a.clone() as Arc<dyn ClipboardTransportPort>,
+        network_a.clone() as Arc<dyn ClipboardOutboundTransportPort>,
         network_a.clone() as Arc<dyn PeerDirectoryPort>,
         session_a,
         identity_a,

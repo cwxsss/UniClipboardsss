@@ -31,11 +31,11 @@ They must not embed transport/storage implementation details.
 - Use `uc-core` ports only. No concrete `uc-infra` or `uc-platform` types in usecases.
 - Keep each usecase single-intent and observable with structured `tracing` spans.
 - For remote clipboard apply path, always respect `ClipboardChangeOrigin` contract to prevent re-capture loops.
-- For outbound clipboard sync, do serialization/encryption decisions in usecase layer, transport send via `ClipboardTransportPort` + peer lookup via `PeerDirectoryPort`.
+- For outbound clipboard sync, do serialization/encryption decisions in usecase layer, transport send via `ClipboardOutboundTransportPort` + peer lookup via `PeerDirectoryPort`.
 - Protocol-level literals (MIME names, protocol tags, field identifiers) must come from shared `uc-core` constants/types, not duplicated string literals.
 - If command-side workflow needs "read current system state then execute", expose a dedicated usecase entrypoint instead of building flow in command handlers.
 - Propagate errors with context; no silent `Ok(())` fallbacks for failed sync actions.
-- In outbound sync fanout, keep stage-level failure semantics explicit (ensure/connect vs payload send); do not collapse into ambiguous "network failed".
+- In outbound sync fanout, keep target-level send failures explicit and attributable; do not collapse them into ambiguous "network failed".
 - Retry/backoff policy belongs to usecase decisions, not platform adapters.
 
 ## ANTI-PATTERNS

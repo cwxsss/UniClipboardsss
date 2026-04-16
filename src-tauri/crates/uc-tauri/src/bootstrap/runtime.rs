@@ -388,7 +388,7 @@ impl<'a> AppUseCases<'a> {
             self.app_runtime
                 .wiring_deps()
                 .network_ports
-                .clipboard
+                .clipboard_outbound
                 .clone(),
             self.app_runtime.wiring_deps().network_ports.peers.clone(),
             self.app_runtime

@@ -5,15 +5,13 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::Utc;
 use mockall::mock;
-use tokio::sync::mpsc;
 use uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase;
 use uc_core::ids::{FormatId, RepresentationId};
-use uc_core::network::{
-    ClipboardMessage, ConnectedPeer, DiscoveredPeer, PairedDevice, PairingState,
-};
+use uc_core::network::{ConnectedPeer, DiscoveredPeer, PairedDevice, PairingState};
 use uc_core::ports::{
-    ClipboardTransportPort, DeviceIdentityPort, EncryptionSessionPort, PairedDeviceRepositoryError,
-    PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort, SystemClipboardPort,
+    ClipboardOutboundTransportPort, ClipboardTransportError, DeviceIdentityPort,
+    EncryptionSessionPort, OutboundClipboardFrame, PairedDeviceRepositoryError,
+    PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort, SyncTargetId, SystemClipboardPort,
     TransferCryptoError, TransferPayloadEncryptorPort,
 };
 use uc_core::security::model::MasterKey;
@@ -32,23 +30,15 @@ mock! {
 }
 
 mock! {
-    ClipboardTransport {}
+    ClipboardOutboundTransport {}
 
     #[async_trait]
-    impl ClipboardTransportPort for ClipboardTransport {
+    impl ClipboardOutboundTransportPort for ClipboardOutboundTransport {
         async fn send_clipboard(
             &self,
-            peer_id: &str,
-            encrypted_data: std::sync::Arc<[u8]>,
-        ) -> anyhow::Result<()>;
-        async fn broadcast_clipboard(
-            &self,
-            encrypted_data: std::sync::Arc<[u8]>,
-        ) -> anyhow::Result<()>;
-        async fn subscribe_clipboard(
-            &self,
-        ) -> anyhow::Result<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>>;
-        async fn ensure_business_path(&self, peer_id: &str) -> anyhow::Result<()>;
+            target: &SyncTargetId,
+            frame: OutboundClipboardFrame,
+        ) -> Result<(), ClipboardTransportError>;
     }
 }
 
@@ -158,27 +148,12 @@ fn noop_clipboard_mock() -> Arc<MockSystemClipboard> {
     Arc::new(clipboard)
 }
 
-fn noop_transport_mock() -> Arc<MockClipboardTransport> {
-    let mut transport = MockClipboardTransport::new();
+fn noop_transport_mock() -> Arc<MockClipboardOutboundTransport> {
+    let mut transport = MockClipboardOutboundTransport::new();
     transport
         .expect_send_clipboard()
         .times(0..)
         .returning(|_, _| Ok(()));
-    transport
-        .expect_broadcast_clipboard()
-        .times(0..)
-        .returning(|_| Ok(()));
-    transport
-        .expect_subscribe_clipboard()
-        .times(0..)
-        .returning(|| {
-            let (_tx, rx) = mpsc::channel(1);
-            Ok(rx)
-        });
-    transport
-        .expect_ensure_business_path()
-        .times(0..)
-        .returning(|_| Ok(()));
     Arc::new(transport)
 }
 

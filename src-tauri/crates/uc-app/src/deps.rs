@@ -28,9 +28,12 @@ use uc_infra::search::pipeline::SearchPipeline;
 /// Focused network capability bundle for dependency injection.
 /// 用于依赖注入的网络能力聚合。
 pub struct NetworkPorts {
-    /// Clipboard transport capability (`Arc<dyn ClipboardTransportPort>`).
-    /// 剪贴板传输能力（`Arc<dyn ClipboardTransportPort>`）。
-    pub clipboard: Arc<dyn ClipboardTransportPort>,
+    /// Outbound clipboard transport capability (`Arc<dyn ClipboardOutboundTransportPort>`).
+    /// 出站剪贴板传输能力（`Arc<dyn ClipboardOutboundTransportPort>`）。
+    pub clipboard_outbound: Arc<dyn ClipboardOutboundTransportPort>,
+    /// Inbound clipboard transport capability (`Arc<dyn ClipboardInboundTransportPort>`).
+    /// 入站剪贴板传输能力（`Arc<dyn ClipboardInboundTransportPort>`）。
+    pub clipboard_inbound: Arc<dyn ClipboardInboundTransportPort>,
     /// Peer directory capability (`Arc<dyn PeerDirectoryPort>`).
     /// 对等端目录能力（`Arc<dyn PeerDirectoryPort>`）。
     pub peers: Arc<dyn PeerDirectoryPort>,

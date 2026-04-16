@@ -1,8 +1,9 @@
 //! Inbound clipboard sync worker for the daemon.
 //!
-//! Subscribes to incoming clipboard messages from peers via ClipboardTransportPort,
-//! applies them through SyncInboundClipboardUseCase in Full mode, and broadcasts
-//! clipboard.new_content WS events when a new entry is persisted.
+//! Subscribes to incoming clipboard transport frames from peers,
+//! parses clipboard protocol frames in the worker boundary, applies them through
+//! SyncInboundClipboardUseCase in Full mode, and broadcasts clipboard.new_content
+//! WS events when a new entry is persisted.
 //!
 //! Write-back loop prevention: the shared `clipboard_change_origin` Arc prevents
 //! the daemon's own OS clipboard writes from triggering re-capture via ClipboardWatcher.
@@ -10,9 +11,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use serde::Serialize;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -23,8 +25,11 @@ use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInbound
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::file_sync::FileTransferOrchestrator;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
-use uc_core::network::ClipboardMessage;
+use uc_core::network::{ClipboardMessage, ProtocolMessage};
 use uc_core::ports::file_transfer_repository::PendingInboundTransfer;
+use uc_core::ports::{
+    ClipboardInboundMessageSource, ClipboardTransportError, InboundClipboardFrame,
+};
 use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
 
 use crate::api::types::DaemonWsEvent;
@@ -53,7 +58,7 @@ struct ClipboardNewContentPayload {
 /// daemon-mode execution as a `DaemonService`.
 ///
 /// Key behaviors:
-/// - Subscribes to `ClipboardTransportPort::subscribe_clipboard()` for incoming messages
+/// - Subscribes to `ClipboardInboundTransportPort::subscribe_clipboard()` for raw inbound frames
 /// - Uses `SyncInboundClipboardUseCase::with_capture_dependencies` in Full mode
 /// - Emits `clipboard.new_content` WS event only for `Applied { entry_id: Some(_) }`
 /// - Does NOT emit WS event for `Applied { entry_id: None }` — ClipboardWatcher handles it
@@ -122,7 +127,12 @@ impl DaemonService for InboundClipboardSyncWorker {
     async fn start(&self, cancel: CancellationToken) -> anyhow::Result<()> {
         info!("inbound clipboard sync starting");
         let usecase = Arc::new(self.build_sync_inbound_usecase());
-        let clipboard_network = self.runtime.wiring_deps().network_ports.clipboard.clone();
+        let clipboard_network = self
+            .runtime
+            .wiring_deps()
+            .network_ports
+            .clipboard_inbound
+            .clone();
         let event_tx = self.event_tx.clone();
         let orchestrator = self.file_transfer_orchestrator.clone();
 
@@ -178,7 +188,7 @@ impl DaemonService for InboundClipboardSyncWorker {
 impl InboundClipboardSyncWorker {
     /// Receive loop: processes messages until the channel closes or cancellation.
     async fn run_receive_loop(
-        mut rx: mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>,
+        mut source: Box<dyn ClipboardInboundMessageSource>,
         usecase: Arc<SyncInboundClipboardUseCase>,
         cancel: CancellationToken,
         event_tx: broadcast::Sender<DaemonWsEvent>,
@@ -190,13 +200,21 @@ impl InboundClipboardSyncWorker {
                     info!("inbound clipboard receive loop cancelled");
                     break;
                 }
-                item = rx.recv() => {
+                item = source.recv() => {
                     match item {
-                        Some((message, pre_decoded)) => {
+                        Ok(frame) => {
+                            let source_id = frame.source.0.clone();
+                            let message = match Self::parse_clipboard_frame(frame) {
+                                Ok(message) => message,
+                                Err(err) => {
+                                    warn!(error = %err, source = %source_id, "Failed to parse inbound clipboard frame");
+                                    continue;
+                                }
+                            };
                             // Capture origin_device_id before message is consumed by execute_with_outcome.
                             let message_origin_device_id = message.origin_device_id.clone();
 
-                            let outcome = match usecase.execute_with_outcome(message, pre_decoded).await {
+                            let outcome = match usecase.execute_with_outcome(message, None).await {
                                 Ok(o) => o,
                                 Err(e) => {
                                     warn!(error = %e, "Failed to apply inbound clipboard message");
@@ -260,13 +278,47 @@ impl InboundClipboardSyncWorker {
                             // InboundApplyOutcome::Applied { entry_id: None } — ClipboardWatcher handles it
                             // InboundApplyOutcome::Skipped — nothing to do
                         }
-                        None => {
+                        Err(ClipboardTransportError::SubscriptionClosed) => {
                             info!("inbound clipboard receive channel closed");
                             break;
+                        }
+                        Err(err) => {
+                            warn!(error = %err, "inbound clipboard source recv failed; continuing");
                         }
                     }
                 }
             }
+        }
+    }
+
+    fn parse_clipboard_frame(frame: InboundClipboardFrame) -> anyhow::Result<ClipboardMessage> {
+        let bytes = frame.frame;
+        if bytes.len() < 4 {
+            bail!("clipboard frame too short: missing 4-byte JSON prefix");
+        }
+
+        let json_len = u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as usize;
+        if bytes.len() < 4 + json_len {
+            bail!(
+                "clipboard frame truncated: expected {} JSON bytes, have {}",
+                json_len,
+                bytes.len().saturating_sub(4)
+            );
+        }
+
+        let json_bytes = &bytes[4..4 + json_len];
+        let trailing = &bytes[4 + json_len..];
+        let message = ProtocolMessage::from_bytes(json_bytes)
+            .context("failed to decode framed JSON header as ProtocolMessage")?;
+
+        match message {
+            ProtocolMessage::Clipboard(mut clipboard_message) => {
+                if !trailing.is_empty() {
+                    clipboard_message.encrypted_content = trailing.to_vec();
+                }
+                Ok(clipboard_message)
+            }
+            other => bail!("expected clipboard frame, got {:?}", other),
         }
     }
 

@@ -405,7 +405,8 @@ fn build_network_ports(
     };
 
     Arc::new(NetworkPorts {
-        clipboard: libp2p_network.clone(),
+        clipboard_outbound: libp2p_network.clone(),
+        clipboard_inbound: libp2p_network.clone(),
         peers: libp2p_network.clone(),
         pairing,
         events: libp2p_network.clone(),

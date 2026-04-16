@@ -29,10 +29,13 @@ use tracing_subscriber::registry::LookupSpan;
 use uc_core::network::address_registry::{AddressScope, AddressSource};
 use uc_core::network::protocol::ClipboardPayloadVersion;
 use uc_core::network::{
-    ConnectionPolicy, DeviceAnnounceMessage, PairingState, ProtocolDenyReason, ProtocolId,
-    ResolvedConnectionPolicy,
+    ClipboardMessage, ConnectionPolicy, DeviceAnnounceMessage, PairingState, ProtocolDenyReason,
+    ProtocolId, ResolvedConnectionPolicy,
 };
-use uc_core::ports::{ConnectionPolicyResolverError, ConnectionPolicyResolverPort};
+use uc_core::ports::{
+    ClipboardInboundTransportPort, ClipboardOutboundTransportPort, ConnectionPolicyResolverError,
+    ConnectionPolicyResolverPort, InboundClipboardFrame, OutboundClipboardFrame, SyncTargetId,
+};
 use uc_core::security::MasterKey;
 
 struct PassthroughTransferPayloadDecryptor;
@@ -82,7 +85,7 @@ fn business_command_timeouts_cover_stream_operation_budgets() {
         + BUSINESS_STREAM_WRITE_TIMEOUT
         + BUSINESS_STREAM_CLOSE_TIMEOUT
         + BUSINESS_COMMAND_ENQUEUE_TIMEOUT;
-    let ensure_budget = BUSINESS_STREAM_OPEN_TIMEOUT
+    let control_budget = BUSINESS_STREAM_OPEN_TIMEOUT
         + BUSINESS_STREAM_CLOSE_TIMEOUT
         + BUSINESS_COMMAND_ENQUEUE_TIMEOUT;
     assert!(
@@ -90,8 +93,8 @@ fn business_command_timeouts_cover_stream_operation_budgets() {
         "send command timeout must exceed open/write/close/enqueue total budget"
     );
     assert!(
-        BUSINESS_ENSURE_COMMAND_RESULT_TIMEOUT > ensure_budget,
-        "ensure command timeout must exceed open/close/enqueue total budget"
+        BUSINESS_CONTROL_COMMAND_RESULT_TIMEOUT > control_budget,
+        "control command timeout must exceed open/close/enqueue total budget"
     );
 }
 
@@ -963,7 +966,7 @@ async fn start_network_can_retry_after_failed_start() {
 async fn device_announce_updates_cache_and_emits_event() {
     let caches = Arc::new(RwLock::new(PeerCaches::new()));
     let (event_tx, mut event_rx) = mpsc::channel(1);
-    let (clipboard_tx, _clipboard_rx) = mpsc::channel(1);
+    let (clipboard_frame_tx, _clipboard_frame_rx) = mpsc::channel(1);
     let announce = ProtocolMessage::DeviceAnnounce(DeviceAnnounceMessage {
         peer_id: "peer-1".to_string(),
         device_name: "Desk".to_string(),
@@ -973,9 +976,10 @@ async fn device_announce_updates_cache_and_emits_event() {
     handle_standard_message(
         caches.clone(),
         event_tx,
-        clipboard_tx,
+        clipboard_frame_tx,
         "peer-1".to_string(),
         announce,
+        vec![1, 2, 3],
     )
     .await;
 
@@ -1004,7 +1008,7 @@ async fn device_announce_updates_cache_and_emits_event() {
 async fn v3_clipboard_with_header_payload_uses_standard_forward_path() {
     let caches = Arc::new(RwLock::new(PeerCaches::new()));
     let (event_tx, mut event_rx) = mpsc::channel(1);
-    let (clipboard_tx, mut clipboard_rx) = mpsc::channel(1);
+    let (clipboard_frame_tx, mut clipboard_frame_rx) = mpsc::channel(1);
     let message = ClipboardMessage {
         id: "msg-header-v3".to_string(),
         content_hash: "hash-header-v3".to_string(),
@@ -1021,19 +1025,25 @@ async fn v3_clipboard_with_header_payload_uses_standard_forward_path() {
     handle_standard_message(
         caches,
         event_tx,
-        clipboard_tx,
+        clipboard_frame_tx,
         "peer-1".to_string(),
         ProtocolMessage::Clipboard(message.clone()),
+        ProtocolMessage::Clipboard(message.clone())
+            .frame_to_bytes(None)
+            .expect("build raw frame"),
     )
     .await;
 
-    let (forwarded, pre_decoded) = clipboard_rx.recv().await.expect("clipboard payload");
-    assert_eq!(forwarded.id, message.id);
-    assert_eq!(forwarded.content_hash, message.content_hash);
-    assert_eq!(forwarded.encrypted_content, message.encrypted_content);
-    assert!(
-        pre_decoded.is_none(),
-        "standard path should not attach plaintext"
+    let raw_frame = clipboard_frame_rx
+        .recv()
+        .await
+        .expect("clipboard raw frame");
+    assert_eq!(raw_frame.source, SyncTargetId("peer-1".to_string()));
+    assert_eq!(
+        raw_frame.frame,
+        ProtocolMessage::Clipboard(message.clone())
+            .frame_to_bytes(None)
+            .expect("build expected raw frame")
     );
 
     let event = event_rx.recv().await.expect("clipboard received event");
@@ -1073,9 +1083,6 @@ async fn announce_device_name_queues_command() {
         }
         BusinessCommand::SendClipboard { .. } => {
             panic!("unexpected clipboard command")
-        }
-        BusinessCommand::EnsureBusinessPath { .. } => {
-            panic!("unexpected ensure command")
         }
         BusinessCommand::UnpairPeer { .. } => {
             panic!("unexpected unpair command")
@@ -1317,7 +1324,7 @@ async fn legacy_pairing_denied_emits_protocol_id() {
 }
 
 #[tokio::test]
-async fn send_clipboard_opens_business_stream() {
+async fn split_outbound_send_clipboard_queues_send_without_ensure_command() {
     let adapter = Libp2pNetworkAdapter::new(
         Arc::new(TestIdentityStore::default()),
         Arc::new(FakeResolver),
@@ -1328,12 +1335,20 @@ async fn send_clipboard_opens_business_stream() {
         PairingRuntimeOwner::CurrentProcess,
     )
     .expect("create adapter");
-    let payload: Arc<[u8]> = Arc::from(vec![1u8, 2, 3, 4].into_boxed_slice());
+    let payload: Arc<[u8]> = Arc::from(vec![9u8, 8, 7].into_boxed_slice());
     let expected_payload = payload.clone();
     let mut rx = Libp2pNetworkAdapter::take_receiver(&adapter.business_rx, "business")
         .expect("business receiver");
 
-    let send_task = tokio::spawn(async move { adapter.send_clipboard("peer-2", payload).await });
+    let send_task = tokio::spawn(async move {
+        ClipboardOutboundTransportPort::send_clipboard(
+            &adapter,
+            &SyncTargetId("peer-2".to_string()),
+            OutboundClipboardFrame(payload),
+        )
+        .await
+    });
+
     let command = rx.recv().await.expect("business command");
     match command {
         BusinessCommand::SendClipboard {
@@ -1346,27 +1361,19 @@ async fn send_clipboard_opens_business_stream() {
             assert_eq!(&*data, &*expected_payload);
             result_tx
                 .send(Ok(()))
-                .expect("deliver send result to send_clipboard caller");
+                .expect("deliver split outbound send result");
         }
-        BusinessCommand::AnnounceDeviceName { .. } => {
-            panic!("unexpected announce command")
-        }
-        BusinessCommand::EnsureBusinessPath { .. } => {
-            panic!("unexpected ensure command")
-        }
-        BusinessCommand::UnpairPeer { .. } => {
-            panic!("unexpected unpair command")
-        }
+        other => panic!("unexpected command: {other:?}"),
     }
 
     send_task
         .await
         .expect("send task join")
-        .expect("send clipboard");
+        .expect("split outbound send");
 }
 
 #[tokio::test]
-async fn subscribe_clipboard_receiver_is_open() {
+async fn split_inbound_subscribe_returns_raw_frame_source() {
     let adapter = Libp2pNetworkAdapter::new(
         Arc::new(TestIdentityStore::default()),
         Arc::new(FakeResolver),
@@ -1378,12 +1385,22 @@ async fn subscribe_clipboard_receiver_is_open() {
     )
     .expect("create adapter");
 
-    let receiver = adapter
-        .subscribe_clipboard()
+    let mut source = ClipboardInboundTransportPort::subscribe_clipboard(&adapter)
         .await
-        .expect("subscribe clipboard");
+        .expect("subscribe split inbound");
 
-    assert!(!receiver.is_closed());
+    adapter
+        .clipboard_frame_tx
+        .send(InboundClipboardFrame {
+            source: SyncTargetId("peer-1".to_string()),
+            frame: vec![1, 2, 3, 4],
+        })
+        .await
+        .expect("send raw frame into adapter");
+
+    let received = source.recv().await.expect("receive raw frame");
+    assert_eq!(received.source, SyncTargetId("peer-1".to_string()));
+    assert_eq!(received.frame, vec![1, 2, 3, 4]);
 }
 
 #[test]
@@ -1489,76 +1506,6 @@ async fn mdns_e2e_discovers_peers() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ensure_business_path_opens_stream_without_blocking_swarm_poll() {
-    let adapter_a = Libp2pNetworkAdapter::new(
-        Arc::new(TestIdentityStore::default()),
-        Arc::new(FakeResolver),
-        Arc::new(InMemoryEncryptionSessionPort::default()),
-        Arc::new(PassthroughTransferPayloadDecryptor),
-        Arc::new(PassthroughTransferPayloadEncryptor),
-        PathBuf::from("/tmp/test-file-cache"),
-        PairingRuntimeOwner::CurrentProcess,
-    )
-    .expect("create adapter a");
-    let adapter_b = Libp2pNetworkAdapter::new(
-        Arc::new(TestIdentityStore::default()),
-        Arc::new(FakeResolver),
-        Arc::new(InMemoryEncryptionSessionPort::default()),
-        Arc::new(PassthroughTransferPayloadDecryptor),
-        Arc::new(PassthroughTransferPayloadEncryptor),
-        PathBuf::from("/tmp/test-file-cache"),
-        PairingRuntimeOwner::CurrentProcess,
-    )
-    .expect("create adapter b");
-    let rx_a = adapter_a.subscribe_events().await.expect("subscribe a");
-    let rx_b = adapter_b.subscribe_events().await.expect("subscribe b");
-    adapter_a.spawn_swarm().expect("start swarm a");
-    adapter_b.spawn_swarm().expect("start swarm b");
-
-    let peer_a = adapter_a.local_peer_id();
-    let peer_b = adapter_b.local_peer_id();
-
-    sleep(Duration::from_millis(200)).await;
-
-    if wait_for_mutual_discovery_or_skip(rx_a, rx_b, &peer_a, &peer_b)
-        .await
-        .is_none()
-    {
-        return;
-    }
-
-    match timeout(
-        Duration::from_secs(20),
-        ClipboardTransportPort::ensure_business_path(&adapter_a, &peer_b),
-    )
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(err)) => panic!("ensure business path failed unexpectedly: {err}"),
-        Err(_) => panic!("ensure business path timed out"),
-    }
-
-    let connected = timeout(Duration::from_secs(5), async {
-        loop {
-            let peers = adapter_a
-                .get_connected_peers()
-                .await
-                .expect("query connected peers");
-            if peers.iter().any(|peer| peer.peer_id == peer_b) {
-                return true;
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .unwrap_or(false);
-    assert!(
-        connected,
-        "ensure business path should mark peer as reachable after stream success"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn libp2p_network_clipboard_wire_roundtrip_delivers_clipboard_message() {
     let adapter_a = Libp2pNetworkAdapter::new(
         Arc::new(TestIdentityStore::default()),
@@ -1588,10 +1535,9 @@ async fn libp2p_network_clipboard_wire_roundtrip_delivers_clipboard_message() {
         .subscribe_events()
         .await
         .expect("subscribe events b");
-    let mut clipboard_rx_b = adapter_b
-        .subscribe_clipboard()
+    let mut clipboard_source_b = ClipboardInboundTransportPort::subscribe_clipboard(&adapter_b)
         .await
-        .expect("subscribe clipboard b");
+        .expect("subscribe clipboard source b");
     adapter_a.spawn_swarm().expect("start swarm a");
     adapter_b.spawn_swarm().expect("start swarm b");
 
@@ -1638,17 +1584,33 @@ async fn libp2p_network_clipboard_wire_roundtrip_delivers_clipboard_message() {
 
     let mut received = None;
     for _attempt in 0..20 {
-        ClipboardTransportPort::send_clipboard(&adapter_a, &peer_b, payload.clone())
-            .await
-            .expect("send clipboard protocol payload");
+        ClipboardOutboundTransportPort::send_clipboard(
+            &adapter_a,
+            &SyncTargetId(peer_b.clone()),
+            OutboundClipboardFrame(payload.clone()),
+        )
+        .await
+        .expect("send clipboard protocol payload");
 
-        match timeout(Duration::from_millis(500), clipboard_rx_b.recv()).await {
-            Ok(Some((message, _pre_decoded))) => {
-                // This is a test-only scenario without actual encrypted trailing payload
+        match timeout(Duration::from_millis(500), clipboard_source_b.recv()).await {
+            Ok(Ok(frame)) => {
+                let bytes = frame.frame;
+                let json_len =
+                    u32::from_le_bytes(bytes[0..4].try_into().expect("json length")) as usize;
+                let json_bytes = &bytes[4..4 + json_len];
+                let trailing = &bytes[4 + json_len..];
+                let ProtocolMessage::Clipboard(mut message) =
+                    ProtocolMessage::from_bytes(json_bytes).expect("decode raw frame")
+                else {
+                    panic!("expected clipboard message");
+                };
+                if !trailing.is_empty() {
+                    message.encrypted_content = trailing.to_vec();
+                }
                 received = Some(message);
                 break;
             }
-            Ok(None) => break,
+            Ok(Err(err)) => panic!("clipboard source recv failed: {err}"),
             Err(_) => {
                 sleep(Duration::from_millis(100)).await;
             }

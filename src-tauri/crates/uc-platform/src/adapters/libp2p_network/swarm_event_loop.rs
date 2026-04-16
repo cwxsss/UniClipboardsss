@@ -390,7 +390,6 @@ pub(super) async fn run_swarm(
     if let Some((_cmd_id, cmd)) = pending_business_command {
         match cmd {
             BusinessCommand::SendClipboard { result_tx, .. }
-            | BusinessCommand::EnsureBusinessPath { result_tx, .. }
             | BusinessCommand::UnpairPeer { result_tx, .. } => {
                 let _ = result_tx.send(Err(anyhow!("session rebuild in progress")));
             }

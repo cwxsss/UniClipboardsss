@@ -6,10 +6,10 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, warn};
 use uc_core::network::protocol::ClipboardPayloadVersion;
-use uc_core::network::{ClipboardMessage, NetworkEvent, ProtocolDirection, ProtocolMessage};
+use uc_core::network::{NetworkEvent, ProtocolDirection, ProtocolMessage};
 use uc_core::ports::{
-    ConnectionPolicyResolverPort, EncryptionSessionPort, TransferDirection,
-    TransferPayloadDecryptorPort, TransferProgress,
+    ConnectionPolicyResolverPort, InboundClipboardFrame, SyncTargetId, TransferDirection,
+    TransferProgress,
 };
 
 use super::peer_cache::PeerCaches;
@@ -24,10 +24,8 @@ pub(super) fn spawn_business_stream_handler(
     mut control: stream::Control,
     caches: Arc<RwLock<PeerCaches>>,
     event_tx: mpsc::Sender<NetworkEvent>,
-    clipboard_tx: mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>,
+    clipboard_frame_tx: mpsc::Sender<InboundClipboardFrame>,
     policy_resolver: Arc<dyn ConnectionPolicyResolverPort>,
-    encryption_session: Arc<dyn EncryptionSessionPort>,
-    transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
 ) {
     let mut incoming = match control.accept(StreamProtocol::new(BUSINESS_PROTOCOL_ID)) {
         Ok(incoming) => incoming,
@@ -41,11 +39,9 @@ pub(super) fn spawn_business_stream_handler(
         while let Some((_peer, stream)) = incoming.next().await {
             let peer_id = _peer.to_string();
             let event_tx = event_tx.clone();
-            let clipboard_tx = clipboard_tx.clone();
+            let clipboard_frame_tx = clipboard_frame_tx.clone();
             let policy_resolver = policy_resolver.clone();
             let caches = caches.clone();
-            let encryption_session = encryption_session.clone();
-            let transfer_decryptor = transfer_decryptor.clone();
             tokio::spawn(async move {
                 // Policy check is deferred until after reading the message type.
                 // DeviceAnnounce is allowed from any peer (even unpaired) so that
@@ -63,7 +59,7 @@ pub(super) fn spawn_business_stream_handler(
 
                     // Step 1: Read 4-byte JSON header length (u32 LE)
                     // An immediate EOF here means the peer opened the stream as a
-                    // connectivity probe (ensure_business_path) and closed it without
+                    // transport health probe and closed it without
                     // sending data — not an error.
                     let mut len_buf = [0u8; 4];
                     match TokioAsyncReadExt::read_exact(&mut reader, &mut len_buf).await {
@@ -110,17 +106,6 @@ pub(super) fn spawn_business_stream_handler(
                             {
                                 return Err("denied by policy".into());
                             }
-
-                            // Streaming decode uses a blocking read-to-end, then async decrypt
-                            // via injected TransferPayloadDecryptorPort.
-                            let master_key = match encryption_session.get_master_key().await {
-                                Ok(k) => k,
-                                Err(e) => {
-                                    return Err(format!(
-                                        "inbound: encryption session not ready: {e}"
-                                    ));
-                                }
-                            };
 
                             // Clone event_tx for progress reporting inside spawn_blocking
                             let progress_event_tx = event_tx.clone();
@@ -233,14 +218,22 @@ pub(super) fn spawn_business_stream_handler(
                             .map_err(|e| format!("buffer task panicked: {e}"))?
                             .map_err(|e| format!("inbound: stream read failed: {e}"))?;
 
-                            let plaintext = transfer_decryptor
-                                .decrypt(&encrypted, &master_key)
-                                .map_err(|e| format!("inbound: chunk decrypt failed: {e}"))?;
-                            Ok(ProcessedMessage::StreamingClipboard(msg, plaintext))
+                            let mut raw_frame = len_buf.to_vec();
+                            raw_frame.extend_from_slice(&json_buf);
+                            raw_frame.extend_from_slice(&encrypted);
+                            Ok(ProcessedMessage::Framed {
+                                message: ProtocolMessage::Clipboard(msg),
+                                raw_frame,
+                            })
                         }
                         other => {
                             // DeviceAnnounce, Heartbeat, Pairing — no trailing payload
-                            Ok(ProcessedMessage::Standard(other))
+                            let mut raw_frame = len_buf.to_vec();
+                            raw_frame.extend_from_slice(&json_buf);
+                            Ok(ProcessedMessage::Framed {
+                                message: other,
+                                raw_frame,
+                            })
                         }
                     }
                 })
@@ -253,33 +246,22 @@ pub(super) fn spawn_business_stream_handler(
                 // For non-clipboard messages, the reader is dropped when the async block completes.
 
                 match result {
-                    Ok(Ok(ProcessedMessage::StreamingClipboard(msg, plaintext))) => {
-                        // Policy already checked inside the streaming branch before
-                        // get_master_key / spawn_blocking / decrypt.
-                        handle_v2_clipboard(
-                            caches,
-                            event_tx,
-                            clipboard_tx,
-                            peer_id,
-                            msg,
-                            plaintext,
-                        )
-                        .await;
-                    }
-                    Ok(Ok(ProcessedMessage::Standard(ProtocolMessage::DeviceAnnounce(
-                        announce,
-                    )))) => {
+                    Ok(Ok(ProcessedMessage::Framed {
+                        message: ProtocolMessage::DeviceAnnounce(announce),
+                        raw_frame,
+                    })) => {
                         // DeviceAnnounce is allowed from any peer (even unpaired)
                         handle_standard_message(
                             caches,
                             event_tx,
-                            clipboard_tx,
+                            clipboard_frame_tx,
                             peer_id,
                             ProtocolMessage::DeviceAnnounce(announce),
+                            raw_frame,
                         )
                         .await;
                     }
-                    Ok(Ok(ProcessedMessage::Standard(message))) => {
+                    Ok(Ok(ProcessedMessage::Framed { message, raw_frame })) => {
                         // All other standard messages require pairing
                         if check_business_allowed(
                             &policy_resolver,
@@ -292,11 +274,18 @@ pub(super) fn spawn_business_stream_handler(
                         {
                             return;
                         }
-                        handle_standard_message(caches, event_tx, clipboard_tx, peer_id, message)
-                            .await;
+                        handle_standard_message(
+                            caches,
+                            event_tx,
+                            clipboard_frame_tx,
+                            peer_id,
+                            message,
+                            raw_frame,
+                        )
+                        .await;
                     }
                     Ok(Err(err)) if err == "probe" => {
-                        debug!(peer_id = %peer_id, "business stream probe (ensure_business_path)");
+                        debug!(peer_id = %peer_id, "business stream probe");
                     }
                     Ok(Err(err)) => {
                         warn!(peer_id = %peer_id, error = %err, "business stream processing failed");
@@ -314,9 +303,10 @@ pub(super) fn spawn_business_stream_handler(
 pub(super) async fn handle_standard_message(
     caches: Arc<RwLock<PeerCaches>>,
     event_tx: mpsc::Sender<NetworkEvent>,
-    clipboard_tx: mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>,
+    clipboard_frame_tx: mpsc::Sender<InboundClipboardFrame>,
     peer_id: String,
     message: ProtocolMessage,
+    raw_frame: Vec<u8>,
 ) {
     match message {
         ProtocolMessage::DeviceAnnounce(announce) => {
@@ -348,9 +338,14 @@ pub(super) async fn handle_standard_message(
             }
         }
         ProtocolMessage::Clipboard(message) => {
-            // Fallback path — send with None for pre-decoded plaintext
-            if let Err(err) = clipboard_tx.send((message.clone(), None)).await {
-                warn!("Failed to forward clipboard payload: {err}");
+            if let Err(err) = clipboard_frame_tx
+                .send(InboundClipboardFrame {
+                    source: SyncTargetId(peer_id.clone()),
+                    frame: raw_frame,
+                })
+                .await
+            {
+                warn!("Failed to forward clipboard raw frame: {err}");
             }
             if let Err(err) = try_send_event(
                 &event_tx,
@@ -369,27 +364,6 @@ pub(super) async fn handle_standard_message(
                 peer_id
             );
         }
-    }
-}
-
-/// Handle clipboard message with pre-decoded plaintext from transport-level streaming decode.
-pub(super) async fn handle_v2_clipboard(
-    _caches: Arc<RwLock<PeerCaches>>,
-    event_tx: mpsc::Sender<NetworkEvent>,
-    clipboard_tx: mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>,
-    _peer_id: String,
-    message: ClipboardMessage,
-    plaintext: Vec<u8>,
-) {
-    if let Err(err) = clipboard_tx.send((message.clone(), Some(plaintext))).await {
-        warn!("Failed to forward clipboard payload: {err}");
-    }
-    if let Err(err) = try_send_event(
-        &event_tx,
-        NetworkEvent::ClipboardReceived(message),
-        "ClipboardReceived",
-    ) {
-        warn!("failed to send ClipboardReceived event: {err}");
     }
 }
 

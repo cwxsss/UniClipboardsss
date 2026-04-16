@@ -3,14 +3,14 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
-use uc_core::network::{
-    ClipboardMessage, ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage,
-};
+use uc_core::network::{ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage};
 use uc_core::ports::{
-    ClipboardTransportPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort,
+    ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
+    InboundClipboardFrame, NetworkEventPort, OutboundClipboardFrame, PairingTransportPort,
+    PeerDirectoryPort, SyncTargetId,
 };
 
-type ClipboardSubscription = mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>;
+type ClipboardSubscription = mpsc::Sender<InboundClipboardFrame>;
 type EventSubscription = mpsc::Sender<NetworkEvent>;
 
 fn clipboard_subscribers() -> &'static Mutex<Vec<ClipboardSubscription>> {
@@ -26,24 +26,44 @@ fn event_subscribers() -> &'static Mutex<Vec<EventSubscription>> {
 pub struct NoopClipboardTransport;
 
 #[async_trait]
-impl ClipboardTransportPort for NoopClipboardTransport {
-    async fn send_clipboard(&self, _peer_id: &str, _encrypted_data: Arc<[u8]>) -> Result<()> {
+impl ClipboardOutboundTransportPort for NoopClipboardTransport {
+    async fn send_clipboard(
+        &self,
+        _target: &SyncTargetId,
+        _frame: OutboundClipboardFrame,
+    ) -> Result<(), uc_core::ports::ClipboardTransportError> {
         Ok(())
     }
+}
 
-    async fn broadcast_clipboard(&self, _encrypted_data: Arc<[u8]>) -> Result<()> {
-        Ok(())
+struct NoopClipboardSource {
+    rx: mpsc::Receiver<InboundClipboardFrame>,
+}
+
+#[async_trait]
+impl ClipboardInboundMessageSource for NoopClipboardSource {
+    async fn recv(
+        &mut self,
+    ) -> Result<InboundClipboardFrame, uc_core::ports::ClipboardTransportError> {
+        self.rx
+            .recv()
+            .await
+            .ok_or(uc_core::ports::ClipboardTransportError::SubscriptionClosed)
     }
+}
 
+#[async_trait]
+impl ClipboardInboundTransportPort for NoopClipboardTransport {
     async fn subscribe_clipboard(
         &self,
-    ) -> Result<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>> {
+    ) -> Result<Box<dyn ClipboardInboundMessageSource>, uc_core::ports::ClipboardTransportError>
+    {
         let (tx, rx) = mpsc::channel(1);
         clipboard_subscribers()
             .lock()
             .expect("clipboard subscribers mutex poisoned")
             .push(tx);
-        Ok(rx)
+        Ok(Box::new(NoopClipboardSource { rx }))
     }
 }
 
@@ -109,7 +129,8 @@ impl NetworkEventPort for NoopNetworkEvents {
 
 pub fn noop_network_ports() -> Arc<uc_app::deps::NetworkPorts> {
     Arc::new(uc_app::deps::NetworkPorts {
-        clipboard: Arc::new(NoopClipboardTransport),
+        clipboard_outbound: Arc::new(NoopClipboardTransport),
+        clipboard_inbound: Arc::new(NoopClipboardTransport),
         peers: Arc::new(NoopPeerDirectory),
         pairing: Arc::new(NoopPairingTransport),
         events: Arc::new(NoopNetworkEvents),

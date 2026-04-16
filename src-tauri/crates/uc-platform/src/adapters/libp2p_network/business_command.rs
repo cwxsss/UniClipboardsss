@@ -27,7 +27,6 @@ pub(super) fn business_command_log_fields(
 ) -> (&'static str, Option<&str>) {
     match command {
         BusinessCommand::SendClipboard { peer_id, .. } => ("clipboard", Some(peer_id.as_str())),
-        BusinessCommand::EnsureBusinessPath { peer_id, .. } => ("ensure", Some(peer_id.as_str())),
         BusinessCommand::AnnounceDeviceName { .. } => ("announce_device_name", None),
         BusinessCommand::UnpairPeer { peer_id, .. } => ("unpair", Some(peer_id.as_str())),
     }
@@ -41,7 +40,6 @@ pub(super) fn notify_enqueue_failure(
 ) {
     let result_tx = match command {
         BusinessCommand::SendClipboard { result_tx, .. } => result_tx,
-        BusinessCommand::EnsureBusinessPath { result_tx, .. } => result_tx,
         BusinessCommand::UnpairPeer { result_tx, .. } => result_tx,
         BusinessCommand::AnnounceDeviceName { .. } => return,
     };
@@ -150,62 +148,6 @@ pub(super) async fn execute_business_command(
                 "clipboard",
                 &peer_id_str,
             );
-        }
-        BusinessCommand::EnsureBusinessPath { peer_id, result_tx } => {
-            let started_at = std::time::Instant::now();
-            let peer_id_str = peer_id.as_str().to_string();
-            debug!(
-                cmd_id = command_id,
-                op = "ensure",
-                peer_id = %peer_id_str,
-                "business command started"
-            );
-
-            let result = match peer_id_str.parse::<PeerId>() {
-                Ok(peer) => {
-                    execute_business_stream(
-                        &control,
-                        &caches,
-                        &policy_resolver,
-                        &event_tx,
-                        &dial_tx,
-                        &peer_id,
-                        peer,
-                        None,
-                        BUSINESS_STREAM_OPEN_TIMEOUT,
-                        BUSINESS_STREAM_WRITE_TIMEOUT,
-                        BUSINESS_STREAM_CLOSE_TIMEOUT,
-                        "ensure",
-                    )
-                    .await
-                }
-                Err(err) => Err(anyhow!("invalid peer id for ensure business path: {err}")),
-            };
-
-            let elapsed_ms = started_at.elapsed().as_millis() as u64;
-            match &result {
-                Ok(()) => {
-                    debug!(
-                        cmd_id = command_id,
-                        op = "ensure",
-                        peer_id = %peer_id_str,
-                        elapsed_ms,
-                        "business command completed"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        cmd_id = command_id,
-                        op = "ensure",
-                        peer_id = %peer_id_str,
-                        elapsed_ms,
-                        error = %err,
-                        "business command failed"
-                    );
-                }
-            }
-
-            deliver_business_command_result(result_tx, result, command_id, "ensure", &peer_id_str);
         }
         BusinessCommand::AnnounceDeviceName { device_name } => {
             let started_at = std::time::Instant::now();
