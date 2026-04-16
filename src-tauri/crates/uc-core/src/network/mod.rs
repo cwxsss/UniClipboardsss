@@ -16,8 +16,8 @@ pub use events::{
 };
 pub use paired_device::{PairedDevice, PairingState};
 pub use pairing_state_machine::{
-    CancellationBy, FailureReason, PairingAction, PairingEvent, PairingRole, PairingStateMachine,
-    SessionId, TimeoutKind,
+    CancellationBy, FailureReason, PairingAction, PairingEvent, PairingStateMachine, SessionId,
+    TimeoutKind,
 };
 pub use protocol::{BinaryRepresentation, ClipboardBinaryPayload};
 pub use protocol::{

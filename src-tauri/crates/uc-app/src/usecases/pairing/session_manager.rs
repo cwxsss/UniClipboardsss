@@ -12,8 +12,9 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug_span, Instrument};
 
 use uc_core::network::pairing_state_machine::{
-    PairingEvent, PairingPolicy, PairingRole, PairingStateMachine, SessionId, TimeoutKind,
+    PairingEvent, PairingPolicy, PairingStateMachine, SessionId, TimeoutKind,
 };
+use uc_core::pairing::PairingRole;
 
 use super::orchestrator::PairingConfig;
 

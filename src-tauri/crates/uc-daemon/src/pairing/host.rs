@@ -14,10 +14,11 @@ use uc_app::usecases::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
 };
 use uc_app::usecases::SetupOrchestrator;
-use uc_core::network::pairing_state_machine::{PairingAction, PairingRole};
+use uc_core::network::pairing_state_machine::PairingAction;
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
 };
+use uc_core::pairing::PairingRole;
 use uc_core::security::model::{KeySlot, KeySlotFile};
 use uc_core::security::space_access::{deny_reason_from_code, SpaceAccessProofArtifact};
 use uc_daemon_contract::constants::{pairing_busy_reason, pairing_stage, ws_event, ws_topic};

@@ -35,14 +35,13 @@ use super::session_manager::{LocalDeviceInfo, PairingSessionContext, PairingSess
 
 use uc_core::{
     network::{
-        pairing_state_machine::{
-            PairingAction, PairingEvent, PairingRole, PairingState, SessionId,
-        },
+        pairing_state_machine::{PairingAction, PairingEvent, PairingState, SessionId},
         protocol::{
             PairingChallenge, PairingChallengeResponse, PairingConfirm, PairingKeyslotOffer,
             PairingRequest,
         },
     },
+    pairing::PairingRole,
     ports::PairedDeviceRepositoryPort,
     settings::model::Settings,
 };
