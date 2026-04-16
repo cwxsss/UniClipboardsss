@@ -11,10 +11,10 @@ use reqwest::{Method, RequestBuilder, StatusCode};
 
 use crate::http::authorized_daemon_request_with_type;
 use crate::DaemonConnectionState;
-use uc_core::network::daemon_api_strings::http_route;
 use uc_daemon_contract::api::dto::search::{
     SearchQueryResponse, SearchRebuildAcceptedResponse, SearchStatusResponse,
 };
+use uc_daemon_contract::constants::http_route;
 
 /// Search query parameters sent to the daemon `GET /search/query` endpoint.
 ///

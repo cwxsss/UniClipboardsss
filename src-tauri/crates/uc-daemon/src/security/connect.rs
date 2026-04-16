@@ -57,7 +57,7 @@ pub fn router() -> Router<DaemonApiState> {
     // NOTE: cors_middleware is applied once at the outermost layer in
     // `build_router`; do not re-layer it here.
     Router::new().route(
-        uc_core::network::daemon_api_strings::auth_route::AUTH_CONNECT,
+        uc_daemon_contract::constants::auth_route::AUTH_CONNECT,
         post(connect_handler),
     )
 }

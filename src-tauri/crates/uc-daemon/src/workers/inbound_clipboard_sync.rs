@@ -24,12 +24,12 @@ use uc_app::usecases::clipboard::clipboard_write_coordinator::ClipboardWriteCoor
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
 use uc_app::usecases::file_sync::FileTransferOrchestrator;
-use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::network::{ClipboardMessage, ProtocolMessage};
 use uc_core::ports::file_transfer_repository::PendingInboundTransfer;
 use uc_core::ports::{
     ClipboardInboundMessageSource, ClipboardTransportError, InboundClipboardFrame,
 };
+use uc_daemon_contract::constants::{ws_event, ws_topic};
 use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
 
 use crate::api::types::DaemonWsEvent;

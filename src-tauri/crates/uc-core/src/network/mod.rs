@@ -1,7 +1,6 @@
 //! Network protocol types.
 
 pub mod connection_policy;
-pub mod daemon_api_strings;
 pub mod events;
 pub mod paired_device;
 pub mod pairing_state_machine;

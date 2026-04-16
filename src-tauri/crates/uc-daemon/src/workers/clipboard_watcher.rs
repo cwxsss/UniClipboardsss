@@ -21,9 +21,9 @@ use uc_app::usecases::file_sync::FileTransferOrchestrator;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::sync_planner::{FileCandidate, OutboundSyncPlanner};
 use uc_app::usecases::CoreUseCases;
-use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+use uc_daemon_contract::constants::{ws_event, ws_topic};
 
 use crate::search::projection::SearchProjectionBuilder;
 use uc_infra::clipboard::TransferPayloadEncryptorAdapter;

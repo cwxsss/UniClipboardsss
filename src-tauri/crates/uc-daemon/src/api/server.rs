@@ -24,7 +24,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
-use uc_core::network::daemon_api_strings::pairing_error_code;
+use uc_daemon_contract::constants::pairing_error_code;
 
 use crate::api::auth::{build_connection_info, DaemonAuthToken, DaemonConnectionInfo};
 use crate::api::dto::error::ApiError;

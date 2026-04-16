@@ -13,8 +13,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use tracing::{debug, info, instrument};
 use uc_app::usecases::CoreUseCases;
-use uc_core::network::daemon_api_strings::http_route;
 use uc_core::search::{ContentType, QueryOperator, SearchQuery, TimeRangeFilter};
+use uc_daemon_contract::constants::http_route;
 
 use crate::api::dto::error::ApiError;
 use crate::api::dto::search::{

@@ -21,7 +21,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
 use uc_app::usecases::CoreUseCases;
-use uc_core::network::daemon_api_strings::http_route;
+use uc_daemon_contract::constants::http_route;
 
 use crate::api::server::DaemonApiState;
 use crate::security::middleware::{auth_extractor_middleware, rate_limit_middleware};

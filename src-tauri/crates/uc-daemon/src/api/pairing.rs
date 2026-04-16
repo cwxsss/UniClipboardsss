@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use utoipa;
 
 use uc_app::usecases::CoreUseCases;
-use uc_core::network::daemon_api_strings::pairing_stage;
+use uc_daemon_contract::constants::pairing_stage;
 
 use crate::api::dto::error::ApiError;
 use crate::api::dto::pairing::{

@@ -6,7 +6,7 @@ use axum::{
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use uc_core::network::daemon_api_strings::pairing_error_code;
+use uc_daemon_contract::constants::pairing_error_code;
 
 use crate::pairing::host::DaemonPairingHostError;
 

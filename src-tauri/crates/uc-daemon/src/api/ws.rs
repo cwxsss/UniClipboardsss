@@ -21,7 +21,7 @@ use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Instant};
 use tracing::{debug, info, info_span, warn, Instrument};
-use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
+use uc_daemon_contract::constants::{ws_event, ws_topic};
 use utoipa;
 
 use crate::api::dto::error::ApiError;

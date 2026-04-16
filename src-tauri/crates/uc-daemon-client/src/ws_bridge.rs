@@ -13,7 +13,6 @@ use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
-use uc_core::network::daemon_api_strings::{pairing_stage, ws_event, ws_topic};
 use uc_core::ports::realtime::{
     ClipboardNewContentEvent, PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent,
     PairingUpdatedEvent, PairingVerificationRequiredEvent, PeerChangedEvent,
@@ -28,6 +27,7 @@ use uc_daemon_contract::api::types::{
     PeerNameUpdatedPayload, PeersChangedFullPayload, SetupSpaceAccessCompletedPayload,
     SetupStateChangedPayload, SpaceAccessStateChangedPayload,
 };
+use uc_daemon_contract::constants::{pairing_stage, ws_event, ws_topic};
 
 use crate::DaemonConnectionState;
 

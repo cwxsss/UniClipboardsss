@@ -1,10 +1,10 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
-use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::ports::host_event_emitter::{
     ClipboardHostEvent, EmitError, HostEvent, HostEventEmitterPort, SetupHostEvent,
     SpaceAccessHostEvent, TransferHostEvent,
 };
+use uc_daemon_contract::constants::{ws_event, ws_topic};
 
 use crate::api::types::{
     DaemonWsEvent, FileTransferProgressPayload, SetupSpaceAccessCompletedPayload,

@@ -7,8 +7,8 @@ use serde_json::json;
 use tokio::sync::broadcast::error::SendError;
 use tracing::{info, warn};
 use uc_app::usecases::CoreUseCases;
-use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::security::state::EncryptionState;
+use uc_daemon_contract::constants::{ws_event, ws_topic};
 use utoipa;
 
 use crate::api::dto::encryption::{

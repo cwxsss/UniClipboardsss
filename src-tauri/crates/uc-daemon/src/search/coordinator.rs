@@ -16,8 +16,8 @@ use tracing::{debug, info, info_span, instrument, warn, Instrument};
 
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
-use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::search::RebuildProgress;
+use uc_daemon_contract::constants::{ws_event, ws_topic};
 use uc_infra::search::constants::CURRENT_INDEX_VERSION;
 
 use crate::api::types::DaemonWsEvent;
