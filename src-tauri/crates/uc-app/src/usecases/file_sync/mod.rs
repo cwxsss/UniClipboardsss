@@ -9,7 +9,6 @@ pub mod track_inbound_transfers;
 pub use cleanup::{
     check_device_quota, CleanupExpiredFilesUseCase, CleanupResult, QuotaExceededError,
 };
-pub use copy_file_to_clipboard::CopyFileToClipboardUseCase;
 pub use file_transfer_orchestrator::{
     EarlyCompletionCache, EarlyCompletionInfo, FileTransferOrchestrator, FileTransferStatusPayload,
 };

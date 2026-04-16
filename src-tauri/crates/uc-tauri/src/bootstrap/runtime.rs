@@ -17,7 +17,7 @@
 //!
 //! #[tauri::command]
 //! async fn my_command(runtime: State<'_, AppRuntime>) -> Result<(), String> {
-//!     let uc = runtime.usecases().list_clipboard_entries();
+//!     let uc = runtime.usecases().list_entry_projections();
 //!     uc.execute(50, 0).await.map_err(|e| e.to_string())?;
 //!     Ok(())
 //! }
@@ -127,7 +127,7 @@ impl DaemonBootstrapOwnershipState {
 ///
 /// #[tauri::command]
 /// async fn get_entries(runtime: State<'_, AppRuntime>) -> Result<(), String> {
-///     let uc = runtime.usecases().list_clipboard_entries();
+///     let uc = runtime.usecases().list_entry_projections();
 ///     let entries = uc.execute(50, 0).await.map_err(|e| e.to_string())?;
 ///     Ok(())
 /// }

@@ -22,7 +22,6 @@ pub mod file_sync;
 pub mod get_settings;
 pub mod initialize_encryption;
 pub mod internal;
-pub mod list_clipboard_entries;
 pub mod pairing;
 pub mod search;
 pub mod settings;
@@ -32,7 +31,6 @@ pub mod start_network;
 pub mod start_network_after_unlock;
 pub mod storage;
 pub mod sync_planner;
-pub mod unlock_encryption_with_passphrase;
 pub mod update_settings;
 pub mod verify_keychain_access;
 
@@ -49,22 +47,14 @@ pub use clipboard::list_entry_projections::{
 pub use delete_clipboard_entry::DeleteClipboardEntry;
 pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
-pub use list_clipboard_entries::ListClipboardEntries;
 pub use pairing::{
-    AnnounceDeviceName, GetDeviceSyncSettings, GetLocalDeviceInfo, GetLocalPeerId,
-    GetP2pPeersSnapshot, ListDiscoveredPeers, ListPairedDevices, ListSendablePeers,
-    LocalDeviceInfo, PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, SetPairingState,
-    StagedPairedDeviceStore, UnpairDevice, UpdateDeviceSyncSettings,
+    GetDeviceSyncSettings, GetLocalDeviceInfo, GetP2pPeersSnapshot, ListPairedDevices,
+    ListSendablePeers, LocalDeviceInfo, PairingConfig, PairingOrchestrator,
+    ResolveConnectionPolicy, StagedPairedDeviceStore, UnpairDevice, UpdateDeviceSyncSettings,
 };
-pub use search::{
-    IndexClipboardEntry, RebuildSearchIndex, RemoveIndexedEntry, SearchClipboardEntries,
-};
+pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator, SetupPairingFacadePort};
-pub use start_network::StartNetwork;
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
-pub use unlock_encryption_with_passphrase::{
-    UnlockEncryptionWithPassphrase, UnlockWithPassphraseError,
-};
 pub use update_settings::UpdateSettings;
 pub use verify_keychain_access::VerifyKeychainAccess;
 
@@ -98,13 +88,6 @@ impl<'a> CoreUseCases<'a> {
         Self { runtime }
     }
 
-    /// Accesses the use case for querying clipboard history.
-    pub fn list_clipboard_entries(&self) -> crate::usecases::ListClipboardEntries {
-        crate::usecases::ListClipboardEntries::from_arc(
-            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
-        )
-    }
-
     /// Create a `DeleteClipboardEntry` use case (with search cleanup wired by default).
     pub fn delete_clipboard_entry(&self) -> crate::usecases::DeleteClipboardEntry {
         crate::usecases::DeleteClipboardEntry::from_ports(
@@ -120,13 +103,6 @@ impl<'a> CoreUseCases<'a> {
     /// Create an `IndexClipboardEntry` use case.
     pub fn index_clipboard_entry(&self) -> crate::usecases::IndexClipboardEntry {
         crate::usecases::IndexClipboardEntry::from_port(
-            self.runtime.deps.search.search_index.clone(),
-        )
-    }
-
-    /// Create a `RemoveIndexedEntry` use case.
-    pub fn remove_indexed_entry(&self) -> crate::usecases::RemoveIndexedEntry {
-        crate::usecases::RemoveIndexedEntry::from_port(
             self.runtime.deps.search.search_index.clone(),
         )
     }
@@ -213,22 +189,9 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
-    /// List peers eligible for outbound data sync.
-    pub fn list_sendable_peers(&self) -> crate::usecases::ListSendablePeers {
-        crate::usecases::ListSendablePeers::new(
-            self.runtime.deps.device.paired_device_repo.clone(),
-            self.runtime.deps.network_ports.peers.clone(),
-        )
-    }
-
     /// List paired devices from repository.
     pub fn list_paired_devices(&self) -> crate::usecases::ListPairedDevices {
         crate::usecases::ListPairedDevices::new(self.runtime.deps.device.paired_device_repo.clone())
-    }
-
-    /// Get local peer id from network port.
-    pub fn get_local_peer_id(&self) -> crate::usecases::GetLocalPeerId {
-        crate::usecases::GetLocalPeerId::new(self.runtime.deps.network_ports.peers.clone())
     }
 
     /// Get local device info (peer id + device name).
@@ -239,27 +202,12 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
-    /// Announce local device name through the network port.
-    pub fn announce_device_name(&self) -> crate::usecases::AnnounceDeviceName {
-        crate::usecases::AnnounceDeviceName::new(self.runtime.deps.network_ports.peers.clone())
-    }
-
-    /// List discovered peers from network.
-    pub fn list_discovered_peers(&self) -> crate::usecases::ListDiscoveredPeers {
-        crate::usecases::ListDiscoveredPeers::new(self.runtime.deps.network_ports.peers.clone())
-    }
-
     /// Get unified P2P peer snapshot combining discovered, connected, and paired peers.
     pub fn get_p2p_peers_snapshot(&self) -> crate::usecases::GetP2pPeersSnapshot {
         crate::usecases::GetP2pPeersSnapshot::new(
             self.runtime.deps.network_ports.peers.clone(),
             self.runtime.deps.device.paired_device_repo.clone(),
         )
-    }
-
-    /// Update pairing state for a peer.
-    pub fn set_pairing_state(&self) -> crate::usecases::SetPairingState {
-        crate::usecases::SetPairingState::new(self.runtime.deps.device.paired_device_repo.clone())
     }
 
     /// Get resolved sync settings for a specific device.
@@ -333,24 +281,6 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
-    /// Get the UnlockEncryptionWithPassphrase use case.
-    pub fn unlock_encryption_with_passphrase(
-        &self,
-    ) -> crate::usecases::UnlockEncryptionWithPassphrase {
-        crate::usecases::UnlockEncryptionWithPassphrase::from_ports(
-            self.runtime.deps.security.encryption_state.clone(),
-            self.runtime.deps.security.key_scope.clone(),
-            self.runtime.deps.security.key_material.clone(),
-            self.runtime.deps.security.encryption.clone(),
-            self.runtime.deps.security.encryption_session.clone(),
-        )
-    }
-
-    /// Get the SetupOrchestrator.
-    pub fn setup_orchestrator(&self) -> Arc<crate::usecases::SetupOrchestrator> {
-        self.runtime.setup_orchestrator().clone()
-    }
-
     /// Get application settings.
     pub fn get_settings(&self) -> crate::usecases::GetSettings {
         crate::usecases::GetSettings::new(self.runtime.deps.settings.clone())
@@ -359,11 +289,6 @@ impl<'a> CoreUseCases<'a> {
     /// Update application settings.
     pub fn update_settings(&self) -> crate::usecases::UpdateSettings {
         crate::usecases::UpdateSettings::new(self.runtime.deps.settings.clone())
-    }
-
-    /// Start the network runtime.
-    pub fn start_network(&self) -> crate::usecases::StartNetwork {
-        crate::usecases::StartNetwork::from_port(self.runtime.deps.network_control.clone())
     }
 
     /// Start the network runtime after unlock.
@@ -427,68 +352,5 @@ impl<'a> CoreUseCases<'a> {
     /// Get the lifecycle status port directly (for status queries).
     pub fn get_lifecycle_status(&self) -> Arc<dyn crate::usecases::LifecycleStatusPort> {
         self.runtime.lifecycle_status().clone()
-    }
-
-    /// Create a `TrackInboundTransfersUseCase`.
-    pub fn track_inbound_transfers(
-        &self,
-    ) -> crate::usecases::file_sync::TrackInboundTransfersUseCase {
-        crate::usecases::file_sync::TrackInboundTransfersUseCase::new(
-            self.runtime.deps.storage.file_transfer_repo.clone(),
-        )
-    }
-
-    /// Create a `SyncOutboundFileUseCase`.
-    pub fn sync_outbound_file(&self) -> crate::usecases::file_sync::SyncOutboundFileUseCase {
-        crate::usecases::file_sync::SyncOutboundFileUseCase::new(
-            self.runtime.deps.settings.clone(),
-            self.runtime.deps.device.paired_device_repo.clone(),
-            self.runtime.deps.network_ports.peers.clone(),
-            self.runtime.deps.network_ports.file_transfer.clone(),
-        )
-    }
-
-    /// Create a `SyncInboundFileUseCase`.
-    pub fn sync_inbound_file(&self) -> crate::usecases::file_sync::SyncInboundFileUseCase {
-        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
-        crate::usecases::file_sync::SyncInboundFileUseCase::new(
-            self.runtime.deps.settings.clone(),
-            file_cache_dir,
-        )
-    }
-
-    /// Create a `CopyFileToClipboardUseCase`.
-    pub fn copy_file_to_clipboard(
-        &self,
-    ) -> anyhow::Result<crate::usecases::file_sync::CopyFileToClipboardUseCase> {
-        let coordinator = self
-            .runtime
-            .clipboard_write_coordinator()
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("clipboard_write_coordinator not available — clipboard writes require daemon/GUI runtime"))?;
-        Ok(crate::usecases::file_sync::CopyFileToClipboardUseCase::new(
-            self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
-            self.runtime.deps.clipboard.representation_repo.clone(),
-            coordinator,
-            self.runtime.clipboard_integration_mode,
-        ))
-    }
-
-    /// Get the `ClipboardWriteCoordinator` (clipboard write boundary).
-    ///
-    /// Returns `None` for CLI-only runtimes that do not perform clipboard writes.
-    pub fn clipboard_write_coordinator(
-        &self,
-    ) -> Option<Arc<crate::usecases::ClipboardWriteCoordinator>> {
-        self.runtime.clipboard_write_coordinator().cloned()
-    }
-
-    /// Create a `CleanupExpiredFilesUseCase`.
-    pub fn cleanup_expired_files(&self) -> crate::usecases::file_sync::CleanupExpiredFilesUseCase {
-        let file_cache_dir = self.runtime.storage_paths.file_cache_dir.clone();
-        crate::usecases::file_sync::CleanupExpiredFilesUseCase::new(
-            self.runtime.deps.settings.clone(),
-            file_cache_dir,
-        )
     }
 }
