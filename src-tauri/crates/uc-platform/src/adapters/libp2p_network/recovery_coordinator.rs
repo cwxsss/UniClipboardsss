@@ -44,9 +44,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-use uc_core::network::events::{PeerRuntimeState, RecoveryProof, RecoveryTrigger};
-use uc_core::network::NetworkEvent;
-
+use super::recovery_events::{PeerRuntimeState, RecoveryEvent, RecoveryProof, RecoveryTrigger};
 use super::{
     RECOVERY_MULTI_PEER_REBUILD_OFFSET, RECOVERY_PROBE_CADENCE, RECOVERY_SILENT_PHASE_DURATION,
     RECOVERY_SILENT_PHASE_MAX_PROBES, RECOVERY_TIMED_REBUILD_PROBE_THRESHOLD, RECOVERY_WINDOW,
@@ -77,8 +75,9 @@ pub(crate) enum CoordinatorCmd {
         /// Peer IDs whose cycles are participating in this rebuild.
         participating_peer_ids: Vec<String>,
     },
-    /// Emit a `NetworkEvent` to the application via the event channel.
-    EmitEvent(NetworkEvent),
+    /// Emit a recovery-layer event for in-process observability (tracing/
+    /// logging). These events never leave the libp2p adapter.
+    EmitEvent(RecoveryEvent),
 }
 
 /// Reason a session rebuild was triggered.
@@ -265,12 +264,12 @@ impl RecoveryCoordinator {
         self.check_reset_multi_peer_tracking();
 
         vec![
-            CoordinatorCmd::EmitEvent(NetworkEvent::PeerStateChanged {
+            CoordinatorCmd::EmitEvent(RecoveryEvent::PeerStateChanged {
                 peer_id: peer_id.to_string(),
                 state: PeerRuntimeState::Online,
                 cycle_id: None,
             }),
-            CoordinatorCmd::EmitEvent(NetworkEvent::PeerRecovered {
+            CoordinatorCmd::EmitEvent(RecoveryEvent::PeerRecovered {
                 peer_id: peer_id.to_string(),
                 cycle_id: cycle.cycle_id,
                 elapsed_ms,
@@ -330,12 +329,12 @@ impl RecoveryCoordinator {
             );
             self.check_reset_multi_peer_tracking();
             return vec![
-                CoordinatorCmd::EmitEvent(NetworkEvent::PeerStateChanged {
+                CoordinatorCmd::EmitEvent(RecoveryEvent::PeerStateChanged {
                     peer_id: peer_id.to_string(),
                     state: PeerRuntimeState::Online,
                     cycle_id: None,
                 }),
-                CoordinatorCmd::EmitEvent(NetworkEvent::PeerRecovered {
+                CoordinatorCmd::EmitEvent(RecoveryEvent::PeerRecovered {
                     peer_id: peer_id.to_string(),
                     cycle_id: cid,
                     elapsed_ms,
@@ -521,7 +520,7 @@ impl RecoveryCoordinator {
         // During silent phase the user-facing state stays Online.
         // We still emit PeerRecoveryStarted so tracing can follow the cycle.
         vec![CoordinatorCmd::EmitEvent(
-            NetworkEvent::PeerRecoveryStarted {
+            RecoveryEvent::PeerRecoveryStarted {
                 peer_id: peer_id.clone(),
                 cycle_id: cycle_id.clone(),
                 trigger,
@@ -555,7 +554,7 @@ impl RecoveryCoordinator {
                     "silent phase ended; escalating to Step 2 broad dial"
                 );
 
-                cmds.push(CoordinatorCmd::EmitEvent(NetworkEvent::PeerStateChanged {
+                cmds.push(CoordinatorCmd::EmitEvent(RecoveryEvent::PeerStateChanged {
                     peer_id: peer_id.to_string(),
                     state: PeerRuntimeState::Recovering,
                     cycle_id: Some(cid.clone()),
@@ -599,13 +598,13 @@ impl RecoveryCoordinator {
                 self.cycles.remove(peer_id);
                 self.check_reset_multi_peer_tracking();
 
-                cmds.push(CoordinatorCmd::EmitEvent(NetworkEvent::PeerStateChanged {
+                cmds.push(CoordinatorCmd::EmitEvent(RecoveryEvent::PeerStateChanged {
                     peer_id: peer_id.to_string(),
                     state: PeerRuntimeState::Offline,
                     cycle_id: None,
                 }));
                 cmds.push(CoordinatorCmd::EmitEvent(
-                    NetworkEvent::PeerRecoveryFailed {
+                    RecoveryEvent::PeerRecoveryFailed {
                         peer_id: peer_id.to_string(),
                         cycle_id: cid,
                         elapsed_ms,
@@ -708,7 +707,7 @@ impl RecoveryCoordinator {
             );
 
             return vec![
-                CoordinatorCmd::EmitEvent(NetworkEvent::PeerStateChanged {
+                CoordinatorCmd::EmitEvent(RecoveryEvent::PeerStateChanged {
                     peer_id: peer_id.to_string(),
                     state: PeerRuntimeState::Recovering,
                     cycle_id: Some(cid),
@@ -803,7 +802,7 @@ impl RecoveryCoordinator {
             .iter()
             .filter_map(|pid| {
                 self.cycles.get(pid).map(|c| {
-                    CoordinatorCmd::EmitEvent(NetworkEvent::PeerStateChanged {
+                    CoordinatorCmd::EmitEvent(RecoveryEvent::PeerStateChanged {
                         peer_id: pid.clone(),
                         state: PeerRuntimeState::Recovering,
                         cycle_id: Some(c.cycle_id.clone()),

@@ -7,6 +7,7 @@ mod discovery;
 pub(crate) mod peer_cache;
 mod platform_signals;
 pub(crate) mod recovery_coordinator;
+pub(crate) mod recovery_events;
 mod recovery_probe;
 mod stream_handler;
 mod swarm_event_loop;

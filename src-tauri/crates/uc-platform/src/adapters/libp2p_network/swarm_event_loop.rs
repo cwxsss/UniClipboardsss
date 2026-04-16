@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock, Semaphore};
 
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
-use uc_core::network::events::PeerRuntimeState;
 use uc_core::network::{NetworkEvent, PairingState};
 use uc_core::ports::ConnectionPolicyResolverPort;
 
@@ -132,7 +131,7 @@ pub(super) async fn run_swarm(
                         // Obtain stream control BEFORE the await boundary (Swarm is !Sync).
                         let sc = swarm.behaviour().stream.new_control();
                         if dispatch_coordinator_cmds(
-                            recovery_cmds, sc, &caches, &event_tx, &dial_tx,
+                            recovery_cmds, sc, &caches, &dial_tx,
                             &probe_outcome_tx,
                         ).await {
                             should_rebuild = true;
@@ -197,7 +196,7 @@ pub(super) async fn run_swarm(
                                     );
                                     let sc = swarm.behaviour().stream.new_control();
                                     if dispatch_coordinator_cmds(
-                                        recovery_cmds, sc, &caches, &event_tx, &dial_tx,
+                                        recovery_cmds, sc, &caches, &dial_tx,
                                         &probe_outcome_tx,
                                     ).await {
                                         should_rebuild = true;
@@ -233,7 +232,7 @@ pub(super) async fn run_swarm(
                 let cmds = coordinator.tick(Instant::now());
                 let sc = swarm.behaviour().stream.new_control();
                 if dispatch_coordinator_cmds(
-                    cmds, sc, &caches, &event_tx, &dial_tx,
+                    cmds, sc, &caches, &dial_tx,
                     &probe_outcome_tx,
                 ).await {
                     should_rebuild = true;
@@ -260,7 +259,7 @@ pub(super) async fn run_swarm(
                 );
                 let sc = swarm.behaviour().stream.new_control();
                 if dispatch_coordinator_cmds(
-                    cmds, sc, &caches, &event_tx, &dial_tx,
+                    cmds, sc, &caches, &dial_tx,
                     &probe_outcome_tx,
                 ).await {
                     should_rebuild = true;
@@ -287,7 +286,7 @@ pub(super) async fn run_swarm(
                 };
                 let sc = swarm.behaviour().stream.new_control();
                 if dispatch_coordinator_cmds(
-                    cmds, sc, &caches, &event_tx, &dial_tx,
+                    cmds, sc, &caches, &dial_tx,
                     &probe_outcome_tx,
                 ).await {
                     should_rebuild = true;
@@ -450,25 +449,18 @@ async fn dispatch_coordinator_cmds(
     cmds: Vec<CoordinatorCmd>,
     stream_control: libp2p_stream::Control,
     caches: &Arc<RwLock<PeerCaches>>,
-    event_tx: &mpsc::Sender<NetworkEvent>,
     dial_tx: &mpsc::Sender<DialRequest>,
     probe_outcome_tx: &mpsc::Sender<ProbeOutcome>,
 ) -> bool {
     for cmd in cmds {
         match cmd {
             CoordinatorCmd::EmitEvent(event) => {
-                let label = match &event {
-                    NetworkEvent::PeerStateChanged { state, .. } => match state {
-                        PeerRuntimeState::Online => "PeerStateOnline",
-                        PeerRuntimeState::Recovering => "PeerStateRecovering",
-                        PeerRuntimeState::Offline => "PeerStateOffline",
-                    },
-                    NetworkEvent::PeerRecoveryStarted { .. } => "PeerRecoveryStarted",
-                    NetworkEvent::PeerRecovered { .. } => "PeerRecovered",
-                    NetworkEvent::PeerRecoveryFailed { .. } => "PeerRecoveryFailed",
-                    _ => "recovery_event",
-                };
-                let _ = try_send_event(event_tx, event, label);
+                debug!(
+                    event = "recovery.event_emitted",
+                    label = event.label(),
+                    detail = ?event,
+                    "recovery event emitted"
+                );
             }
 
             CoordinatorCmd::SendProbe {
@@ -775,7 +767,12 @@ async fn handle_mdns_expired(
                     coordinator.on_mdns_expired(peer_id_str.clone(), Instant::now());
                 for cmd in recovery_cmds {
                     if let CoordinatorCmd::EmitEvent(ev) = cmd {
-                        let _ = try_send_event(event_tx, ev, "PeerRecoveryStarted");
+                        debug!(
+                            event = "recovery.event_emitted",
+                            label = ev.label(),
+                            detail = ?ev,
+                            "recovery event emitted from mDNS expiry"
+                        );
                     }
                 }
                 continue;
