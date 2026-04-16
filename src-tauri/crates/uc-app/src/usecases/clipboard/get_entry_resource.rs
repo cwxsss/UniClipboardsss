@@ -1,20 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
-
-#[cfg(not(test))]
 use uc_core::{
-    ids::EntryId,
-    ports::clipboard::ResolvedClipboardPayload,
-    ports::{
-        ClipboardEntryRepositoryPort, ClipboardPayloadResolverPort,
-        ClipboardRepresentationRepositoryPort, ClipboardSelectionRepositoryPort,
-    },
-    BlobId,
-};
-
-#[cfg(test)]
-use uc_core::{
-    clipboard::MimeType,
     ids::EntryId,
     ports::clipboard::ResolvedClipboardPayload,
     ports::{
@@ -112,146 +98,16 @@ impl GetEntryResourceUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::{
+        MockClipboardEntryRepository, MockClipboardPayloadResolver,
+        MockClipboardRepresentationRepository, MockClipboardSelectionRepository,
+    };
     use uc_core::clipboard::{
-        ClipboardEntry, ClipboardSelection, ClipboardSelectionDecision,
-        PersistedClipboardRepresentation, SelectionPolicyVersion,
+        ClipboardEntry, ClipboardSelection, ClipboardSelectionDecision, MimeType,
+        SelectionPolicyVersion,
     };
     use uc_core::ids::{EventId, FormatId, RepresentationId};
     use uc_core::ports::clipboard::ResolvedClipboardPayload;
-
-    struct MockEntryRepository {
-        entry: Option<ClipboardEntry>,
-    }
-
-    struct MockSelectionRepository {
-        selection: Option<ClipboardSelectionDecision>,
-    }
-
-    struct MockRepresentationRepository {
-        rep: Option<PersistedClipboardRepresentation>,
-    }
-
-    struct MockPayloadResolver {
-        payload: Option<ResolvedClipboardPayload>,
-    }
-
-    impl MockPayloadResolver {
-        fn new() -> Self {
-            Self { payload: None }
-        }
-
-        fn with_inline_payload(mut self, mime: String, bytes: Vec<u8>) -> Self {
-            self.payload = Some(ResolvedClipboardPayload::Inline { mime, bytes });
-            self
-        }
-
-        fn with_blob_ref_payload(mut self, mime: String, blob_id: BlobId) -> Self {
-            self.payload = Some(ResolvedClipboardPayload::BlobRef { mime, blob_id });
-            self
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardPayloadResolverPort for MockPayloadResolver {
-        async fn resolve(
-            &self,
-            _representation: &PersistedClipboardRepresentation,
-        ) -> anyhow::Result<ResolvedClipboardPayload> {
-            self.payload
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("Payload not available"))
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepository {
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &ClipboardEntry,
-            _selection: &ClipboardSelectionDecision,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn get_entry(&self, _entry_id: &EntryId) -> Result<Option<ClipboardEntry>> {
-            Ok(self.entry.clone())
-        }
-
-        async fn list_entries(&self, _limit: usize, _offset: usize) -> Result<Vec<ClipboardEntry>> {
-            Ok(vec![])
-        }
-
-        async fn delete_entry(&self, _entry_id: &EntryId) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardSelectionRepositoryPort for MockSelectionRepository {
-        async fn get_selection(
-            &self,
-            _entry_id: &EntryId,
-        ) -> Result<Option<ClipboardSelectionDecision>> {
-            Ok(self.selection.clone())
-        }
-
-        async fn delete_selection(&self, _entry_id: &EntryId) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepository {
-        async fn get_representation(
-            &self,
-            _event_id: &EventId,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self.rep.clone())
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &BlobId,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &RepresentationId,
-            _expected_states: &[uc_core::clipboard::PayloadAvailability],
-            _blob_id: Option<&BlobId>,
-            _new_state: uc_core::clipboard::PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<uc_core::ports::clipboard::ProcessingUpdateOutcome> {
-            Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
-        }
-    }
 
     #[tokio::test]
     async fn test_get_entry_resource_returns_blob_info() {
@@ -270,7 +126,7 @@ mod tests {
                 policy_version: SelectionPolicyVersion::V1,
             },
         );
-        let representation = PersistedClipboardRepresentation::new(
+        let representation = uc_core::clipboard::PersistedClipboardRepresentation::new(
             rep_id,
             FormatId::from("public.utf8-plain-text"),
             Some(MimeType::text_plain()),
@@ -279,18 +135,34 @@ mod tests {
             Some(BlobId::from("blob-1")),
         );
 
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        entry_repo
+            .expect_get_entry()
+            .returning(move |_| Ok(Some(entry.clone())));
+
+        let mut selection_repo = MockClipboardSelectionRepository::new();
+        selection_repo
+            .expect_get_selection()
+            .returning(move |_| Ok(Some(selection.clone())));
+
+        let mut rep_repo = MockClipboardRepresentationRepository::new();
+        rep_repo
+            .expect_get_representation()
+            .returning(move |_, _| Ok(Some(representation.clone())));
+
+        let mut payload_resolver = MockClipboardPayloadResolver::new();
+        payload_resolver.expect_resolve().returning(|_| {
+            Ok(ResolvedClipboardPayload::BlobRef {
+                mime: "text/plain".to_string(),
+                blob_id: BlobId::from("blob-1"),
+            })
+        });
+
         let uc = GetEntryResourceUseCase::new(
-            Arc::new(MockEntryRepository { entry: Some(entry) }),
-            Arc::new(MockSelectionRepository {
-                selection: Some(selection),
-            }),
-            Arc::new(MockRepresentationRepository {
-                rep: Some(representation),
-            }),
-            Arc::new(
-                MockPayloadResolver::new()
-                    .with_blob_ref_payload("text/plain".to_string(), BlobId::from("blob-1")),
-            ),
+            Arc::new(entry_repo),
+            Arc::new(selection_repo),
+            Arc::new(rep_repo),
+            Arc::new(payload_resolver),
         );
 
         let result = uc.execute(&entry_id).await.unwrap();
@@ -321,7 +193,7 @@ mod tests {
             },
         );
         // Inline representation: has inline_data but no blob_id
-        let representation = PersistedClipboardRepresentation::new(
+        let representation = uc_core::clipboard::PersistedClipboardRepresentation::new(
             rep_id,
             FormatId::from("public.utf8-plain-text"),
             Some(MimeType::text_plain()),
@@ -330,18 +202,34 @@ mod tests {
             None, // No blob_id
         );
 
+        let mut entry_repo = MockClipboardEntryRepository::new();
+        entry_repo
+            .expect_get_entry()
+            .returning(move |_| Ok(Some(entry.clone())));
+
+        let mut selection_repo = MockClipboardSelectionRepository::new();
+        selection_repo
+            .expect_get_selection()
+            .returning(move |_| Ok(Some(selection.clone())));
+
+        let mut rep_repo = MockClipboardRepresentationRepository::new();
+        rep_repo
+            .expect_get_representation()
+            .returning(move |_, _| Ok(Some(representation.clone())));
+
+        let mut payload_resolver = MockClipboardPayloadResolver::new();
+        payload_resolver.expect_resolve().returning(|_| {
+            Ok(ResolvedClipboardPayload::Inline {
+                mime: "text/plain".to_string(),
+                bytes: b"Hello, world!".to_vec(),
+            })
+        });
+
         let uc = GetEntryResourceUseCase::new(
-            Arc::new(MockEntryRepository { entry: Some(entry) }),
-            Arc::new(MockSelectionRepository {
-                selection: Some(selection),
-            }),
-            Arc::new(MockRepresentationRepository {
-                rep: Some(representation),
-            }),
-            Arc::new(
-                MockPayloadResolver::new()
-                    .with_inline_payload("text/plain".to_string(), b"Hello, world!".to_vec()),
-            ),
+            Arc::new(entry_repo),
+            Arc::new(selection_repo),
+            Arc::new(rep_repo),
+            Arc::new(payload_resolver),
         );
 
         let result = uc.execute(&entry_id).await.unwrap();

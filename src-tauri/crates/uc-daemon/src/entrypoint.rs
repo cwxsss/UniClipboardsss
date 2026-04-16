@@ -20,6 +20,7 @@ use crate::api::types::DaemonWsEvent;
 use crate::app::{DaemonApp, SetupCompletionEmitter};
 use crate::pairing::host::DaemonPairingHost;
 use crate::peers::monitor::PeerMonitor;
+use crate::search::coordinator::SearchCoordinator;
 use crate::service::DaemonService;
 use crate::service::ServiceHealth;
 use crate::state::{DaemonServiceSnapshot, RuntimeState};
@@ -67,11 +68,12 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         None,
         Arc::new(LoggingLifecycleEventEmitter),
     );
-    // Extract file_cache_dir, file_transfer_orchestrator, and clipboard_write_coordinator
-    // before ctx is consumed by build_non_gui_runtime_with_emitter (which moves ctx.deps).
+    // Extract file_cache_dir, file_transfer_orchestrator, clipboard_write_coordinator,
+    // and emitter_cell before ctx is consumed by runtime construction.
     let file_cache_dir = ctx.storage_paths.file_cache_dir.clone();
     let file_transfer_orchestrator = ctx.background.file_transfer_orchestrator.clone();
     let clipboard_write_coordinator = ctx.background.clipboard_write_coordinator.clone();
+    let emitter_cell = ctx.emitter_cell.clone();
 
     // Extract blob processing ports before ctx.deps is moved.
     let blob_ports = BlobProcessingPorts::from_app_deps(&ctx.deps);
@@ -91,6 +93,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             ctx.storage_paths.clone(),
             setup_ports,
             setup_completion_emitter,
+            emitter_cell,
         )?
         .with_clipboard_write_coordinator(clipboard_write_coordinator.clone()),
     );
@@ -122,6 +125,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         runtime.clone(),
         event_tx.clone(),
         clipboard_change_origin.clone(),
+        file_transfer_orchestrator.clone(),
         clipboard_capture_gate.clone(),
     ));
     let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
@@ -189,6 +193,9 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
 
     let should_defer_clipboard = gui_managed || !encryption_unlocked;
 
+    // Construct the search coordinator before building the service snapshots.
+    let search_coordinator = Arc::new(SearchCoordinator::new(runtime.clone(), event_tx.clone()));
+
     let initial_statuses: Vec<DaemonServiceSnapshot> = vec![
         DaemonServiceSnapshot {
             name: "clipboard-watcher".to_string(),
@@ -226,6 +233,14 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             name: "peer-monitor".to_string(),
             health: ServiceHealth::Healthy,
         },
+        DaemonServiceSnapshot {
+            name: "search-coordinator".to_string(),
+            health: if should_defer_clipboard {
+                ServiceHealth::Stopped
+            } else {
+                ServiceHealth::Healthy
+            },
+        },
     ];
     let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses)));
 
@@ -252,9 +267,12 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         if should_defer_clipboard {
             deferred.push(Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>);
             deferred.push(Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>);
+            // Defer search coordinator alongside clipboard services when locked/GUI-managed
+            deferred.push(Arc::clone(&search_coordinator) as Arc<dyn DaemonService>);
         } else {
             initial.push(Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>);
             initial.push(Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>);
+            initial.push(Arc::clone(&search_coordinator) as Arc<dyn DaemonService>);
         }
 
         if encryption_unlocked {
@@ -283,6 +301,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         deferred_notify_opt,
         external_shutdown,
         Some(clipboard_capture_gate),
+        Some(search_coordinator),
     );
 
     rt.block_on(daemon.run())

@@ -40,7 +40,27 @@ impl GetP2pPeersSnapshot {
         }
     }
 
-    /// Execute the use case - fetches and merges all peer data sources.
+    /// Produce a merged snapshot of discovered, connected, and paired peers.
+    ///
+    /// The result contains one entry per relevant peer (excluding the local peer).
+    /// - Discovered peers appear with their discovered addresses and `is_connected` reflecting the connected list.
+    /// - If a paired record exists for a discovered peer, the snapshot uses the paired `device_name` when non-empty and includes the paired `pairing_state` and `identity_fingerprint`.
+    /// - Peers present only in the paired repository are included with an empty address list, `is_paired = true`, and `is_connected = false`.
+    /// The `pairing_state` field is emitted as one of the stable strings `"Pending"`, `"Trusted"`, `"Revoked"`, or `"NotPaired"` when no paired record exists.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Vec<P2pPeerSnapshot>)` with the merged snapshots; `Err` if listing discovered peers, connected peers, or paired devices fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use futures::executor::block_on;
+    /// // `svc` must be a constructed GetP2pPeersSnapshot instance
+    /// # let svc: GetP2pPeersSnapshot = unimplemented!();
+    /// let snapshots = block_on(svc.execute()).unwrap();
+    /// println!("Found {} peers", snapshots.len());
+    /// ```
     pub async fn execute(&self) -> Result<Vec<P2pPeerSnapshot>> {
         let local_id = self.peer_dir.local_peer_id();
 
@@ -95,7 +115,7 @@ impl GetP2pPeersSnapshot {
                 is_paired: peer.is_paired,
                 is_connected: connected_ids.contains(&peer_id),
                 pairing_state: paired_dev
-                    .map(|p| format!("{:?}", p.pairing_state))
+                    .map(|p| p.pairing_state.to_string())
                     .unwrap_or_else(|| "NotPaired".to_string()),
                 identity_fingerprint: paired_dev
                     .map(|p| p.identity_fingerprint.clone())
@@ -119,7 +139,7 @@ impl GetP2pPeersSnapshot {
                     addresses: vec![],
                     is_paired: true,
                     is_connected: false,
-                    pairing_state: format!("{:?}", dev.pairing_state),
+                    pairing_state: dev.pairing_state.to_string(),
                     identity_fingerprint: dev.identity_fingerprint.clone(),
                 });
             }
@@ -132,95 +152,28 @@ impl GetP2pPeersSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::{MockPairedDeviceRepository, MockPeerDirectory};
     use chrono::Utc;
     use uc_core::network::{ConnectedPeer, DiscoveredPeer, PairedDevice, PairingState};
-    use uc_core::ports::{PairedDeviceRepositoryError, PairedDeviceRepositoryPort};
     use uc_core::PeerId;
-
-    struct MockPeerDirectory {
-        discovered: Vec<DiscoveredPeer>,
-        connected: Vec<ConnectedPeer>,
-    }
-
-    #[async_trait]
-    impl PeerDirectoryPort for MockPeerDirectory {
-        async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-            Ok(self.discovered.clone())
-        }
-
-        async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
-            Ok(self.connected.clone())
-        }
-
-        fn local_peer_id(&self) -> String {
-            "local-peer".to_string()
-        }
-
-        async fn announce_device_name(&self, _device_name: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct MockPairedRepo {
-        devices: Vec<PairedDevice>,
-    }
-
-    #[async_trait]
-    impl PairedDeviceRepositoryPort for MockPairedRepo {
-        async fn get_by_peer_id(
-            &self,
-            _peer_id: &PeerId,
-        ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(None)
-        }
-
-        async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(self.devices.clone())
-        }
-
-        async fn upsert(&self, _device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn set_state(
-            &self,
-            _peer_id: &PeerId,
-            _state: PairingState,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn update_last_seen(
-            &self,
-            _peer_id: &PeerId,
-            _last_seen_at: chrono::DateTime<Utc>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn update_sync_settings(
-            &self,
-            _peer_id: &PeerId,
-            _settings: Option<uc_core::settings::model::SyncSettings>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn test_empty_snapshot() {
-        let peer_dir = Arc::new(MockPeerDirectory {
-            discovered: vec![],
-            connected: vec![],
-        });
-        let paired_repo = Arc::new(MockPairedRepo { devices: vec![] });
+        let mut peer_dir = MockPeerDirectory::new();
+        peer_dir
+            .expect_local_peer_id()
+            .returning(|| "local-peer".to_string());
+        peer_dir
+            .expect_get_discovered_peers()
+            .returning(|| Ok(vec![]));
+        peer_dir
+            .expect_get_connected_peers()
+            .returning(|| Ok(vec![]));
 
-        let use_case = GetP2pPeersSnapshot::new(peer_dir, paired_repo);
+        let mut paired_repo = MockPairedDeviceRepository::new();
+        paired_repo.expect_list_all().returning(|| Ok(vec![]));
+
+        let use_case = GetP2pPeersSnapshot::new(Arc::new(peer_dir), Arc::new(paired_repo));
         let result = use_case.execute().await.unwrap();
 
         assert!(result.is_empty());
@@ -228,31 +181,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovered_peer_marked_paired() {
-        let peer_dir = Arc::new(MockPeerDirectory {
-            discovered: vec![DiscoveredPeer {
-                peer_id: "peer-1".to_string(),
-                device_name: Some("Discovered Device".to_string()),
-                device_id: Some("abc123".to_string()),
-                addresses: vec!["/ip4/127.0.0.1".to_string()],
-                discovered_at: Utc::now(),
-                last_seen: Utc::now(),
-                is_paired: true,
-            }],
-            connected: vec![],
-        });
-        let paired_repo = Arc::new(MockPairedRepo {
-            devices: vec![PairedDevice {
-                peer_id: PeerId::from("peer-1"),
-                device_name: "Paired Device Name".to_string(),
-                pairing_state: PairingState::Trusted,
-                identity_fingerprint: "fp123".to_string(),
-                paired_at: Utc::now(),
-                last_seen_at: Some(Utc::now()),
-                sync_settings: None,
-            }],
-        });
+        let discovered = vec![DiscoveredPeer {
+            peer_id: "peer-1".to_string(),
+            device_name: Some("Discovered Device".to_string()),
+            device_id: Some("abc123".to_string()),
+            addresses: vec!["/ip4/127.0.0.1".to_string()],
+            discovered_at: Utc::now(),
+            last_seen: Utc::now(),
+            is_paired: true,
+        }];
+        let paired_devices = vec![PairedDevice {
+            peer_id: PeerId::from("peer-1"),
+            device_name: "Paired Device Name".to_string(),
+            pairing_state: PairingState::Trusted,
+            identity_fingerprint: "fp123".to_string(),
+            paired_at: Utc::now(),
+            last_seen_at: Some(Utc::now()),
+            sync_settings: None,
+        }];
 
-        let use_case = GetP2pPeersSnapshot::new(peer_dir, paired_repo);
+        let mut peer_dir = MockPeerDirectory::new();
+        peer_dir
+            .expect_local_peer_id()
+            .returning(|| "local-peer".to_string());
+        peer_dir
+            .expect_get_discovered_peers()
+            .returning(move || Ok(discovered.clone()));
+        peer_dir
+            .expect_get_connected_peers()
+            .returning(|| Ok(vec![]));
+
+        let mut paired_repo = MockPairedDeviceRepository::new();
+        paired_repo
+            .expect_list_all()
+            .returning(move || Ok(paired_devices.clone()));
+
+        let use_case = GetP2pPeersSnapshot::new(Arc::new(peer_dir), Arc::new(paired_repo));
         let result = use_case.execute().await.unwrap();
 
         assert_eq!(result.len(), 1);
@@ -263,25 +227,36 @@ mod tests {
 
     #[tokio::test]
     async fn test_connected_status_reflected() {
-        let peer_dir = Arc::new(MockPeerDirectory {
-            discovered: vec![DiscoveredPeer {
-                peer_id: "peer-1".to_string(),
-                device_name: Some("Device".to_string()),
-                device_id: Some("abc".to_string()),
-                addresses: vec![],
-                discovered_at: Utc::now(),
-                last_seen: Utc::now(),
-                is_paired: false,
-            }],
-            connected: vec![ConnectedPeer {
-                peer_id: "peer-1".to_string(),
-                device_name: "Connected Device".to_string(),
-                connected_at: Utc::now(),
-            }],
-        });
-        let paired_repo = Arc::new(MockPairedRepo { devices: vec![] });
+        let discovered = vec![DiscoveredPeer {
+            peer_id: "peer-1".to_string(),
+            device_name: Some("Device".to_string()),
+            device_id: Some("abc".to_string()),
+            addresses: vec![],
+            discovered_at: Utc::now(),
+            last_seen: Utc::now(),
+            is_paired: false,
+        }];
+        let connected = vec![ConnectedPeer {
+            peer_id: "peer-1".to_string(),
+            device_name: "Connected Device".to_string(),
+            connected_at: Utc::now(),
+        }];
 
-        let use_case = GetP2pPeersSnapshot::new(peer_dir, paired_repo);
+        let mut peer_dir = MockPeerDirectory::new();
+        peer_dir
+            .expect_local_peer_id()
+            .returning(|| "local-peer".to_string());
+        peer_dir
+            .expect_get_discovered_peers()
+            .returning(move || Ok(discovered.clone()));
+        peer_dir
+            .expect_get_connected_peers()
+            .returning(move || Ok(connected.clone()));
+
+        let mut paired_repo = MockPairedDeviceRepository::new();
+        paired_repo.expect_list_all().returning(|| Ok(vec![]));
+
+        let use_case = GetP2pPeersSnapshot::new(Arc::new(peer_dir), Arc::new(paired_repo));
         let result = use_case.execute().await.unwrap();
 
         assert_eq!(result.len(), 1);
@@ -290,33 +265,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_excludes_local_peer() {
-        // local_peer_id() returns "local-peer" per MockPeerDirectory
-        let peer_dir = Arc::new(MockPeerDirectory {
-            discovered: vec![
-                DiscoveredPeer {
-                    peer_id: "local-peer".to_string(), // This is the local peer — must be excluded
-                    device_name: Some("Self".to_string()),
-                    device_id: None,
-                    addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
-                    discovered_at: Utc::now(),
-                    last_seen: Utc::now(),
-                    is_paired: false,
-                },
-                DiscoveredPeer {
-                    peer_id: "remote-peer".to_string(), // This is a remote peer — must be included
-                    device_name: Some("Remote".to_string()),
-                    device_id: None,
-                    addresses: vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
-                    discovered_at: Utc::now(),
-                    last_seen: Utc::now(),
-                    is_paired: false,
-                },
-            ],
-            connected: vec![],
-        });
-        let paired_repo = Arc::new(MockPairedRepo { devices: vec![] });
+        let discovered = vec![
+            DiscoveredPeer {
+                peer_id: "local-peer".to_string(), // This is the local peer — must be excluded
+                device_name: Some("Self".to_string()),
+                device_id: None,
+                addresses: vec!["/ip4/127.0.0.1/tcp/4001".to_string()],
+                discovered_at: Utc::now(),
+                last_seen: Utc::now(),
+                is_paired: false,
+            },
+            DiscoveredPeer {
+                peer_id: "remote-peer".to_string(), // This is a remote peer — must be included
+                device_name: Some("Remote".to_string()),
+                device_id: None,
+                addresses: vec!["/ip4/192.168.1.2/tcp/4001".to_string()],
+                discovered_at: Utc::now(),
+                last_seen: Utc::now(),
+                is_paired: false,
+            },
+        ];
 
-        let use_case = GetP2pPeersSnapshot::new(peer_dir, paired_repo);
+        let mut peer_dir = MockPeerDirectory::new();
+        peer_dir
+            .expect_local_peer_id()
+            .returning(|| "local-peer".to_string());
+        peer_dir
+            .expect_get_discovered_peers()
+            .returning(move || Ok(discovered.clone()));
+        peer_dir
+            .expect_get_connected_peers()
+            .returning(|| Ok(vec![]));
+
+        let mut paired_repo = MockPairedDeviceRepository::new();
+        paired_repo.expect_list_all().returning(|| Ok(vec![]));
+
+        let use_case = GetP2pPeersSnapshot::new(Arc::new(peer_dir), Arc::new(paired_repo));
         let result = use_case.execute().await.unwrap();
 
         // local-peer must be excluded
@@ -330,23 +314,33 @@ mod tests {
 
     #[tokio::test]
     async fn test_paired_not_discovered_still_shown() {
-        let peer_dir = Arc::new(MockPeerDirectory {
-            discovered: vec![],
-            connected: vec![],
-        });
-        let paired_repo = Arc::new(MockPairedRepo {
-            devices: vec![PairedDevice {
-                peer_id: PeerId::from("paired-only-peer"),
-                device_name: "Paired Only Device".to_string(),
-                pairing_state: PairingState::Trusted,
-                identity_fingerprint: "fp456".to_string(),
-                paired_at: Utc::now(),
-                last_seen_at: Some(Utc::now()),
-                sync_settings: None,
-            }],
-        });
+        let paired_devices = vec![PairedDevice {
+            peer_id: PeerId::from("paired-only-peer"),
+            device_name: "Paired Only Device".to_string(),
+            pairing_state: PairingState::Trusted,
+            identity_fingerprint: "fp456".to_string(),
+            paired_at: Utc::now(),
+            last_seen_at: Some(Utc::now()),
+            sync_settings: None,
+        }];
 
-        let use_case = GetP2pPeersSnapshot::new(peer_dir, paired_repo);
+        let mut peer_dir = MockPeerDirectory::new();
+        peer_dir
+            .expect_local_peer_id()
+            .returning(|| "local-peer".to_string());
+        peer_dir
+            .expect_get_discovered_peers()
+            .returning(|| Ok(vec![]));
+        peer_dir
+            .expect_get_connected_peers()
+            .returning(|| Ok(vec![]));
+
+        let mut paired_repo = MockPairedDeviceRepository::new();
+        paired_repo
+            .expect_list_all()
+            .returning(move || Ok(paired_devices.clone()));
+
+        let use_case = GetP2pPeersSnapshot::new(Arc::new(peer_dir), Arc::new(paired_repo));
         let result = use_case.execute().await.unwrap();
 
         assert_eq!(result.len(), 1);

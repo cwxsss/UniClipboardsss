@@ -37,33 +37,9 @@ impl OpenDataDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
+    use crate::test_mocks::MockFileManager;
+    use std::path::PathBuf;
     use uc_core::ports::file_manager::FileManagerError;
-
-    struct MockFileManager {
-        opened: Mutex<Vec<PathBuf>>,
-        should_fail: bool,
-    }
-
-    impl MockFileManager {
-        fn new(should_fail: bool) -> Self {
-            Self {
-                opened: Mutex::new(Vec::new()),
-                should_fail,
-            }
-        }
-    }
-
-    impl FileManagerPort for MockFileManager {
-        fn open_directory(&self, path: &Path) -> Result<(), FileManagerError> {
-            if self.should_fail {
-                return Err(FileManagerError::OpenFailed(path.display().to_string()));
-            }
-            self.opened.lock().unwrap().push(path.to_path_buf());
-            Ok(())
-        }
-    }
 
     fn test_paths() -> AppPaths {
         AppPaths {
@@ -80,23 +56,33 @@ mod tests {
 
     #[tokio::test]
     async fn opens_app_data_root_directory() {
-        let fm = Arc::new(MockFileManager::new(false));
+        let opened = Arc::new(std::sync::Mutex::new(Vec::<PathBuf>::new()));
+        let opened_clone = opened.clone();
+
+        let mut fm = MockFileManager::new();
+        fm.expect_open_directory().returning(move |path| {
+            opened_clone.lock().unwrap().push(path.to_path_buf());
+            Ok(())
+        });
+
         let paths = test_paths();
         let expected = paths.app_data_root_dir.clone();
 
-        let uc = OpenDataDirectory::new(paths, fm.clone());
+        let uc = OpenDataDirectory::new(paths, Arc::new(fm));
         uc.execute().await.unwrap();
 
-        let opened = fm.opened.lock().unwrap();
+        let opened = opened.lock().unwrap();
         assert_eq!(opened.len(), 1);
         assert_eq!(opened[0], expected);
     }
 
     #[tokio::test]
     async fn returns_error_when_file_manager_fails() {
-        let fm = Arc::new(MockFileManager::new(true));
-        let uc = OpenDataDirectory::new(test_paths(), fm);
+        let mut fm = MockFileManager::new();
+        fm.expect_open_directory()
+            .returning(|path| Err(FileManagerError::OpenFailed(path.display().to_string())));
 
+        let uc = OpenDataDirectory::new(test_paths(), Arc::new(fm));
         let result = uc.execute().await;
         assert!(result.is_err());
     }

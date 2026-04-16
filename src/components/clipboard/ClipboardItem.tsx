@@ -21,8 +21,11 @@ import {
 } from '@/api/clipboardItems'
 import { getClipboardEntryResource } from '@/api/daemon/clipboard'
 import { toast } from '@/components/ui/toast'
+import { createLogger } from '@/lib/logger'
 import { cn } from '@/lib/utils'
 import { formatFileSize } from '@/utils'
+
+const log = createLogger('clipboard-item')
 
 /** Threshold above which we switch to chunked rendering for performance. */
 const LARGE_TEXT_THRESHOLD = 50_000
@@ -122,27 +125,11 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
     null
   )
 
-  // Eagerly fetch original image URL on mount for image items
   useEffect(() => {
-    if (type !== 'image') return
-    let cancelled = false
-    setIsLoadingImage(true)
-    getClipboardEntryResource(entryId)
-      .then(resource => {
-        if (!cancelled) {
-          setOriginalImageUrl(resource ? resolveResourceImageUrl(resource) : null)
-        }
-      })
-      .catch(e => {
-        console.error('Failed to load original image URL:', e)
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoadingImage(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [type, entryId])
+    setOriginalImageUrl(null)
+    setIsLoadingImage(false)
+    setImageDimensions(null)
+  }, [entryId, type])
 
   // Determine if expand button should show (based on UI display needs)
   const shouldShowExpandButton = (): boolean => {
@@ -196,7 +183,7 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
         setDetailContent(fullText)
         setIsExpanded(true)
       } catch (e) {
-        console.error('Failed to load detail:', e)
+        log.error({ err: e }, 'Failed to load detail')
         toast.error(t('clipboard.errors.loadDetailFailed'), {
           description: e instanceof Error ? e.message : t('clipboard.errors.unknown'),
         })
@@ -207,8 +194,25 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
     }
 
     if (type === 'image') {
-      // Original image is already fetched on mount, just toggle expand
-      setIsExpanded(true)
+      if (originalImageUrl) {
+        setIsExpanded(true)
+        return
+      }
+
+      setIsLoadingImage(true)
+      try {
+        const resource = await getClipboardEntryResource(entryId)
+        const imageUrl = resource ? resolveResourceImageUrl(resource) : null
+        setOriginalImageUrl(imageUrl)
+        setIsExpanded(true)
+      } catch (e) {
+        log.error({ err: e }, 'Failed to load original image URL')
+        toast.error(t('clipboard.errors.loadDetailFailed'), {
+          description: e instanceof Error ? e.message : t('clipboard.errors.unknown'),
+        })
+      } finally {
+        setIsLoadingImage(false)
+      }
       return
     }
 
@@ -277,6 +281,7 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
       }
       case 'image': {
         const imageUrl = originalImageUrl
+        const showLoadingState = isLoadingImage && !imageUrl
         return imageUrl ? (
           <img
             src={imageUrl}
@@ -295,12 +300,14 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
           />
         ) : (
           <div className="flex flex-col items-center justify-center gap-2 h-32 w-full rounded-md bg-muted/30 border border-border/30">
-            {isLoadingImage ? (
+            {showLoadingState ? (
               <Loader2 className="h-6 w-6 text-muted-foreground/70 animate-spin" />
             ) : (
               <ImageIcon className="h-6 w-6 text-muted-foreground/70" />
             )}
-            <span className="text-xs text-muted-foreground/70">{t('clipboard.item.loading')}</span>
+            <span className="text-xs text-muted-foreground/70">
+              {showLoadingState ? t('clipboard.item.loading') : t('clipboard.preview.selectItem')}
+            </span>
           </div>
         )
       }
@@ -314,7 +321,7 @@ const ClipboardItem: React.FC<ClipboardItemProps> = ({
               className="text-left text-primary font-medium hover:underline break-all text-sm leading-relaxed flex items-center gap-2 cursor-pointer"
               onClick={e => {
                 e.stopPropagation()
-                openUrl(firstUrl).catch(console.error)
+                openUrl(firstUrl).catch(err => log.error({ err }, 'Failed to open URL'))
               }}
             >
               <ExternalLink size={14} />

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::Utc;
+use mockall::mock;
 use tokio::sync::mpsc;
 use uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase;
 use uc_core::ids::{FormatId, RepresentationId};
@@ -16,265 +16,281 @@ use uc_core::ports::{
     PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort, SystemClipboardPort,
     TransferCryptoError, TransferPayloadEncryptorPort,
 };
-use uc_core::security::model::{EncryptionError, MasterKey};
-use uc_core::settings::model::{Settings, SyncSettings};
+use uc_core::security::model::MasterKey;
+use uc_core::settings::model::Settings;
 use uc_core::{
     DeviceId, MimeType, ObservedClipboardRepresentation, PeerId, SystemClipboardSnapshot,
 };
 
-struct NoopClipboard;
+mock! {
+    SystemClipboard {}
 
-impl SystemClipboardPort for NoopClipboard {
-    fn read_snapshot(&self) -> anyhow::Result<SystemClipboardSnapshot> {
-        Ok(text_snapshot())
-    }
-
-    fn write_snapshot(&self, _snapshot: SystemClipboardSnapshot) -> anyhow::Result<()> {
-        Ok(())
+    impl SystemClipboardPort for SystemClipboard {
+        fn read_snapshot(&self) -> anyhow::Result<SystemClipboardSnapshot>;
+        fn write_snapshot(&self, snapshot: SystemClipboardSnapshot) -> anyhow::Result<()>;
     }
 }
 
-struct NoopClipboardTransport;
+mock! {
+    ClipboardTransport {}
 
-#[async_trait]
-impl ClipboardTransportPort for NoopClipboardTransport {
-    async fn send_clipboard(
-        &self,
-        _peer_id: &str,
-        _encrypted_data: std::sync::Arc<[u8]>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn broadcast_clipboard(
-        &self,
-        _encrypted_data: std::sync::Arc<[u8]>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn subscribe_clipboard(
-        &self,
-    ) -> anyhow::Result<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>> {
-        let (_tx, rx) = mpsc::channel(1);
-        Ok(rx)
-    }
-
-    async fn ensure_business_path(&self, _peer_id: &str) -> anyhow::Result<()> {
-        Ok(())
+    #[async_trait]
+    impl ClipboardTransportPort for ClipboardTransport {
+        async fn send_clipboard(
+            &self,
+            peer_id: &str,
+            encrypted_data: std::sync::Arc<[u8]>,
+        ) -> anyhow::Result<()>;
+        async fn broadcast_clipboard(
+            &self,
+            encrypted_data: std::sync::Arc<[u8]>,
+        ) -> anyhow::Result<()>;
+        async fn subscribe_clipboard(
+            &self,
+        ) -> anyhow::Result<mpsc::Receiver<(ClipboardMessage, Option<Vec<u8>>)>>;
+        async fn ensure_business_path(&self, peer_id: &str) -> anyhow::Result<()>;
     }
 }
 
-struct NoopPeerDirectory;
+mock! {
+    PeerDirectory {}
 
-#[async_trait]
-impl PeerDirectoryPort for NoopPeerDirectory {
-    async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-        Ok(vec![])
-    }
-
-    async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
-        Ok(vec![])
-    }
-
-    fn local_peer_id(&self) -> String {
-        "local-peer".to_string()
-    }
-
-    async fn announce_device_name(&self, _device_name: String) -> anyhow::Result<()> {
-        Ok(())
+    #[async_trait]
+    impl PeerDirectoryPort for PeerDirectory {
+        async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>>;
+        async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>>;
+        fn local_peer_id(&self) -> String;
+        async fn announce_device_name(&self, device_name: String) -> anyhow::Result<()>;
     }
 }
 
-struct ReadyEncryptionSession;
+mock! {
+    EncryptionSession {}
 
-#[async_trait]
-impl EncryptionSessionPort for ReadyEncryptionSession {
-    async fn is_ready(&self) -> bool {
-        true
-    }
-
-    async fn get_master_key(&self) -> std::result::Result<MasterKey, EncryptionError> {
-        Ok(MasterKey([7; 32]))
-    }
-
-    async fn set_master_key(
-        &self,
-        _master_key: MasterKey,
-    ) -> std::result::Result<(), EncryptionError> {
-        Ok(())
-    }
-
-    async fn clear(&self) -> std::result::Result<(), EncryptionError> {
-        Ok(())
+    #[async_trait]
+    impl EncryptionSessionPort for EncryptionSession {
+        async fn is_ready(&self) -> bool;
+        async fn get_master_key(&self) -> Result<MasterKey, uc_core::security::model::EncryptionError>;
+        async fn set_master_key(&self, master_key: MasterKey) -> Result<(), uc_core::security::model::EncryptionError>;
+        async fn clear(&self) -> Result<(), uc_core::security::model::EncryptionError>;
     }
 }
 
-struct StaticDeviceIdentity;
+mock! {
+    DeviceIdentity {}
 
-impl DeviceIdentityPort for StaticDeviceIdentity {
-    fn current_device_id(&self) -> DeviceId {
-        DeviceId::new("device-a")
+    impl DeviceIdentityPort for DeviceIdentity {
+        fn current_device_id(&self) -> DeviceId;
     }
 }
 
-struct PassthroughTransferEncryptor;
+mock! {
+    AppSettings {}
 
-impl TransferPayloadEncryptorPort for PassthroughTransferEncryptor {
-    fn encrypt(
-        &self,
-        _master_key: &MasterKey,
-        plaintext: &[u8],
-    ) -> Result<Vec<u8>, TransferCryptoError> {
-        Ok(plaintext.to_vec())
+    #[async_trait]
+    impl SettingsPort for AppSettings {
+        async fn load(&self) -> anyhow::Result<uc_core::settings::model::Settings>;
+        async fn save(&self, settings: &uc_core::settings::model::Settings) -> anyhow::Result<()>;
     }
 }
 
-struct ConfigurableSettingsPort {
-    settings: Arc<Mutex<Settings>>,
-}
+mock! {
+    PairedDeviceRepository {}
 
-impl ConfigurableSettingsPort {
-    fn new(initial: Settings) -> Self {
-        Self {
-            settings: Arc::new(Mutex::new(initial)),
-        }
-    }
-
-    fn set_auto_sync(&self, enabled: bool) {
-        let mut settings = self.settings.lock().expect("settings lock");
-        settings.sync.auto_sync = enabled;
-    }
-}
-
-#[async_trait]
-impl SettingsPort for ConfigurableSettingsPort {
-    async fn load(&self) -> anyhow::Result<Settings> {
-        Ok(self.settings.lock().expect("settings lock").clone())
-    }
-
-    async fn save(&self, settings: &Settings) -> anyhow::Result<()> {
-        *self.settings.lock().expect("settings lock") = settings.clone();
-        Ok(())
-    }
-}
-
-struct FailingSettingsPort;
-
-#[async_trait]
-impl SettingsPort for FailingSettingsPort {
-    async fn load(&self) -> anyhow::Result<Settings> {
-        Err(anyhow!("forced settings load failure"))
-    }
-
-    async fn save(&self, _settings: &Settings) -> anyhow::Result<()> {
-        Ok(())
+    #[async_trait]
+    impl PairedDeviceRepositoryPort for PairedDeviceRepository {
+        async fn get_by_peer_id(
+            &self,
+            peer_id: &PeerId,
+        ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError>;
+        async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError>;
+        async fn upsert(&self, device: PairedDevice) -> Result<(), PairedDeviceRepositoryError>;
+        async fn set_state(
+            &self,
+            peer_id: &PeerId,
+            state: PairingState,
+        ) -> Result<(), PairedDeviceRepositoryError>;
+        async fn update_last_seen(
+            &self,
+            peer_id: &PeerId,
+            last_seen_at: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), PairedDeviceRepositoryError>;
+        async fn delete(&self, peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError>;
+        async fn update_sync_settings(
+            &self,
+            peer_id: &PeerId,
+            settings: Option<uc_core::settings::model::SyncSettings>,
+        ) -> Result<(), PairedDeviceRepositoryError>;
     }
 }
 
-struct TrackingPairedDeviceRepo {
-    devices_by_peer: Arc<Mutex<HashMap<String, PairedDevice>>>,
-    write_count: Arc<AtomicUsize>,
-}
+mock! {
+    TransferPayloadEncryptor {}
 
-impl TrackingPairedDeviceRepo {
-    fn new(devices: Vec<PairedDevice>) -> Self {
-        let mut by_peer = HashMap::new();
-        for device in devices {
-            by_peer.insert(device.peer_id.as_str().to_string(), device);
-        }
-        Self {
-            devices_by_peer: Arc::new(Mutex::new(by_peer)),
-            write_count: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
-    fn write_count(&self) -> usize {
-        self.write_count.load(Ordering::SeqCst)
+    impl TransferPayloadEncryptorPort for TransferPayloadEncryptor {
+        fn encrypt(
+            &self,
+            master_key: &MasterKey,
+            plaintext: &[u8],
+        ) -> Result<Vec<u8>, TransferCryptoError>;
     }
 }
 
-#[async_trait]
-impl PairedDeviceRepositoryPort for TrackingPairedDeviceRepo {
-    async fn get_by_peer_id(
-        &self,
-        peer_id: &PeerId,
-    ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
-        let devices = self.devices_by_peer.lock().expect("repo lock");
-        Ok(devices.get(peer_id.as_str()).cloned())
-    }
+fn passthrough_encryptor_mock() -> Arc<MockTransferPayloadEncryptor> {
+    let mut encryptor = MockTransferPayloadEncryptor::new();
+    encryptor
+        .expect_encrypt()
+        .times(0..)
+        .returning(|_, plaintext| Ok(plaintext.to_vec()));
+    Arc::new(encryptor)
+}
 
-    async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
-        let devices = self.devices_by_peer.lock().expect("repo lock");
-        Ok(devices.values().cloned().collect())
-    }
+fn noop_clipboard_mock() -> Arc<MockSystemClipboard> {
+    let mut clipboard = MockSystemClipboard::new();
+    clipboard
+        .expect_read_snapshot()
+        .times(0..)
+        .returning(|| Ok(text_snapshot()));
+    clipboard
+        .expect_write_snapshot()
+        .times(0..)
+        .returning(|_| Ok(()));
+    Arc::new(clipboard)
+}
 
-    async fn upsert(&self, device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
-        self.write_count.fetch_add(1, Ordering::SeqCst);
-        self.devices_by_peer
-            .lock()
-            .expect("repo lock")
-            .insert(device.peer_id.as_str().to_string(), device);
-        Ok(())
-    }
+fn noop_transport_mock() -> Arc<MockClipboardTransport> {
+    let mut transport = MockClipboardTransport::new();
+    transport
+        .expect_send_clipboard()
+        .times(0..)
+        .returning(|_, _| Ok(()));
+    transport
+        .expect_broadcast_clipboard()
+        .times(0..)
+        .returning(|_| Ok(()));
+    transport
+        .expect_subscribe_clipboard()
+        .times(0..)
+        .returning(|| {
+            let (_tx, rx) = mpsc::channel(1);
+            Ok(rx)
+        });
+    transport
+        .expect_ensure_business_path()
+        .times(0..)
+        .returning(|_| Ok(()));
+    Arc::new(transport)
+}
 
-    async fn set_state(
-        &self,
-        _peer_id: &PeerId,
-        _state: PairingState,
-    ) -> Result<(), PairedDeviceRepositoryError> {
-        self.write_count.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
+fn noop_peer_directory_mock() -> Arc<MockPeerDirectory> {
+    let mut directory = MockPeerDirectory::new();
+    directory
+        .expect_get_discovered_peers()
+        .times(0..)
+        .returning(|| Ok(vec![]));
+    directory
+        .expect_get_connected_peers()
+        .times(0..)
+        .returning(|| Ok(vec![]));
+    directory
+        .expect_local_peer_id()
+        .times(0..)
+        .returning(|| "local-peer".to_string());
+    directory
+        .expect_announce_device_name()
+        .times(0..)
+        .returning(|_| Ok(()));
+    Arc::new(directory)
+}
 
-    async fn update_last_seen(
-        &self,
-        _peer_id: &PeerId,
-        _last_seen_at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), PairedDeviceRepositoryError> {
-        self.write_count.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
+fn ready_encryption_session_mock() -> Arc<MockEncryptionSession> {
+    let mut session = MockEncryptionSession::new();
+    session.expect_is_ready().times(0..).returning(|| true);
+    session
+        .expect_get_master_key()
+        .times(0..)
+        .returning(|| Ok(MasterKey([7; 32])));
+    session
+        .expect_set_master_key()
+        .times(0..)
+        .returning(|_| Ok(()));
+    session.expect_clear().times(0..).returning(|| Ok(()));
+    Arc::new(session)
+}
 
-    async fn delete(&self, peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
-        self.write_count.fetch_add(1, Ordering::SeqCst);
-        self.devices_by_peer
-            .lock()
-            .expect("repo lock")
-            .remove(peer_id.as_str());
-        Ok(())
-    }
+fn static_device_identity_mock() -> Arc<MockDeviceIdentity> {
+    let mut identity = MockDeviceIdentity::new();
+    identity
+        .expect_current_device_id()
+        .times(0..)
+        .returning(|| DeviceId::new("device-a"));
+    Arc::new(identity)
+}
 
-    async fn update_sync_settings(
-        &self,
-        peer_id: &PeerId,
-        settings: Option<SyncSettings>,
-    ) -> Result<(), PairedDeviceRepositoryError> {
-        self.write_count.fetch_add(1, Ordering::SeqCst);
-        if let Some(device) = self
-            .devices_by_peer
-            .lock()
-            .expect("repo lock")
-            .get_mut(peer_id.as_str())
-        {
-            device.sync_settings = settings;
-        }
-        Ok(())
+fn configurable_settings_mock(
+    initial: Settings,
+    expected_load_calls: usize,
+) -> (Arc<MockAppSettings>, Arc<Mutex<Settings>>) {
+    let state = Arc::new(Mutex::new(initial));
+    let mut settings = MockAppSettings::new();
+    let state_for_load = Arc::clone(&state);
+    settings
+        .expect_load()
+        .times(expected_load_calls)
+        .returning(move || Ok(state_for_load.lock().expect("settings lock").clone()));
+    (Arc::new(settings), state)
+}
+
+fn failing_settings_mock(expected_load_calls: usize) -> Arc<MockAppSettings> {
+    let mut settings = MockAppSettings::new();
+    settings
+        .expect_load()
+        .times(expected_load_calls)
+        .returning(|| Err(anyhow!("forced settings load failure")));
+    Arc::new(settings)
+}
+
+fn paired_repo_mock(
+    devices: Vec<PairedDevice>,
+    assert_no_mutation: bool,
+) -> Arc<MockPairedDeviceRepository> {
+    let devices_by_peer = Arc::new(
+        devices
+            .into_iter()
+            .map(|device| (device.peer_id.as_str().to_string(), device))
+            .collect::<HashMap<_, _>>(),
+    );
+    let mut repo = MockPairedDeviceRepository::new();
+    let devices_for_get = Arc::clone(&devices_by_peer);
+    repo.expect_get_by_peer_id()
+        .times(0..)
+        .returning(move |peer_id| Ok(devices_for_get.get(peer_id.as_str()).cloned()));
+    let devices_for_list = Arc::clone(&devices_by_peer);
+    repo.expect_list_all()
+        .times(0..)
+        .returning(move || Ok(devices_for_list.values().cloned().collect()));
+    if assert_no_mutation {
+        repo.expect_upsert().times(0);
+        repo.expect_set_state().times(0);
+        repo.expect_update_last_seen().times(0);
+        repo.expect_delete().times(0);
+        repo.expect_update_sync_settings().times(0);
     }
+    Arc::new(repo)
 }
 
 fn build_use_case(
     settings: Arc<dyn SettingsPort>,
-    paired_repo: Arc<TrackingPairedDeviceRepo>,
+    paired_repo: Arc<dyn PairedDeviceRepositoryPort>,
 ) -> SyncOutboundClipboardUseCase {
     SyncOutboundClipboardUseCase::new(
-        Arc::new(NoopClipboard),
-        Arc::new(NoopClipboardTransport),
-        Arc::new(NoopPeerDirectory),
-        Arc::new(ReadyEncryptionSession),
-        Arc::new(StaticDeviceIdentity),
+        noop_clipboard_mock(),
+        noop_transport_mock(),
+        noop_peer_directory_mock(),
+        ready_encryption_session_mock(),
+        static_device_identity_mock(),
         settings,
-        Arc::new(PassthroughTransferEncryptor),
+        passthrough_encryptor_mock(),
         paired_repo,
     )
 }
@@ -334,8 +350,8 @@ fn peer_ids(peers: &[DiscoveredPeer]) -> Vec<String> {
 
 #[tokio::test]
 async fn sync_outbound_global_toggle() {
-    let settings = Arc::new(ConfigurableSettingsPort::new(with_global_auto_sync(false)));
-    let repo = Arc::new(TrackingPairedDeviceRepo::new(vec![]));
+    let (settings, _settings_state) = configurable_settings_mock(with_global_auto_sync(false), 1);
+    let repo = paired_repo_mock(vec![], true);
     let use_case = build_use_case(settings, repo);
     let input_peers = peers(&["peer-a", "peer-b", "peer-c"]);
 
@@ -351,11 +367,11 @@ async fn sync_outbound_global_toggle() {
 
 #[tokio::test]
 async fn sync_outbound_global_override() {
-    let settings = Arc::new(ConfigurableSettingsPort::new(with_global_auto_sync(false)));
-    let repo = Arc::new(TrackingPairedDeviceRepo::new(vec![
-        paired_device("peer-a", true),
-        paired_device("peer-b", true),
-    ]));
+    let (settings, _settings_state) = configurable_settings_mock(with_global_auto_sync(false), 1);
+    let repo = paired_repo_mock(
+        vec![paired_device("peer-a", true), paired_device("peer-b", true)],
+        true,
+    );
     let use_case = build_use_case(settings, repo);
     let input_peers = peers(&["peer-a", "peer-b"]);
 
@@ -371,11 +387,14 @@ async fn sync_outbound_global_override() {
 
 #[tokio::test]
 async fn sync_outbound_global_enabled() {
-    let settings = Arc::new(ConfigurableSettingsPort::new(with_global_auto_sync(true)));
-    let repo = Arc::new(TrackingPairedDeviceRepo::new(vec![
-        paired_device("peer-a", true),
-        paired_device("peer-b", false),
-    ]));
+    let (settings, _settings_state) = configurable_settings_mock(with_global_auto_sync(true), 1);
+    let repo = paired_repo_mock(
+        vec![
+            paired_device("peer-a", true),
+            paired_device("peer-b", false),
+        ],
+        true,
+    );
     let use_case = build_use_case(settings, repo);
     let input_peers = peers(&["peer-a", "peer-b", "peer-c"]);
 
@@ -391,11 +410,14 @@ async fn sync_outbound_global_enabled() {
 
 #[tokio::test]
 async fn sync_outbound_settings_fallback() {
-    let settings = Arc::new(FailingSettingsPort);
-    let repo = Arc::new(TrackingPairedDeviceRepo::new(vec![
-        paired_device("peer-a", false),
-        paired_device("peer-b", false),
-    ]));
+    let settings = failing_settings_mock(1);
+    let repo = paired_repo_mock(
+        vec![
+            paired_device("peer-a", false),
+            paired_device("peer-b", false),
+        ],
+        true,
+    );
     let use_case = build_use_case(settings, repo);
     let input_peers = peers(&["peer-a", "peer-b", "peer-c"]);
 
@@ -408,12 +430,15 @@ async fn sync_outbound_settings_fallback() {
 
 #[tokio::test]
 async fn sync_outbound_no_device_mutation() {
-    let settings = Arc::new(ConfigurableSettingsPort::new(with_global_auto_sync(false)));
-    let repo = Arc::new(TrackingPairedDeviceRepo::new(vec![
-        paired_device("peer-a", true),
-        paired_device("peer-b", false),
-    ]));
-    let use_case = build_use_case(settings.clone(), repo.clone());
+    let (settings, settings_state) = configurable_settings_mock(with_global_auto_sync(false), 2);
+    let repo = paired_repo_mock(
+        vec![
+            paired_device("peer-a", true),
+            paired_device("peer-b", false),
+        ],
+        true,
+    );
+    let use_case = build_use_case(settings.clone(), repo);
     let input_peers = peers(&["peer-a", "peer-b"]);
 
     let first = use_case
@@ -421,26 +446,23 @@ async fn sync_outbound_no_device_mutation() {
         .await;
     assert!(first.is_empty());
 
-    settings.set_auto_sync(true);
+    settings_state.lock().expect("settings lock").sync.auto_sync = true;
     let _second = use_case
         .apply_sync_policy(&input_peers, &text_snapshot())
         .await;
-
-    assert_eq!(
-        repo.write_count(),
-        0,
-        "policy filtering must not mutate paired device settings"
-    );
 }
 
 #[tokio::test]
 async fn sync_outbound_resume() {
-    let settings = Arc::new(ConfigurableSettingsPort::new(with_global_auto_sync(false)));
-    let repo = Arc::new(TrackingPairedDeviceRepo::new(vec![
-        paired_device("peer-a", true),
-        paired_device("peer-b", false),
-        paired_device("peer-c", true),
-    ]));
+    let (settings, settings_state) = configurable_settings_mock(with_global_auto_sync(false), 2);
+    let repo = paired_repo_mock(
+        vec![
+            paired_device("peer-a", true),
+            paired_device("peer-b", false),
+            paired_device("peer-c", true),
+        ],
+        true,
+    );
     let use_case = build_use_case(settings.clone(), repo);
     let input_peers = peers(&["peer-a", "peer-b", "peer-c"]);
 
@@ -452,7 +474,7 @@ async fn sync_outbound_resume() {
         "global auto_sync=false must block outbound sync"
     );
 
-    settings.set_auto_sync(true);
+    settings_state.lock().expect("settings lock").sync.auto_sync = true;
     let resumed = use_case
         .apply_sync_policy(&input_peers, &text_snapshot())
         .await;

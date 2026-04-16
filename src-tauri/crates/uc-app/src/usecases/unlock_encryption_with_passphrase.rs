@@ -198,7 +198,9 @@ impl UnlockEncryptionWithPassphrase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::{
+        MockEncryption, MockEncryptionSession, MockEncryptionState, MockKeyMaterial, MockKeyScope,
+    };
     use std::sync::Arc;
     use uc_core::{
         ports::security::key_scope::ScopeError,
@@ -208,249 +210,6 @@ mod tests {
         },
         security::state::EncryptionStateError,
     };
-
-    // ---------------------------------------------------------------------------
-    // Mock implementations
-    // ---------------------------------------------------------------------------
-
-    struct MockEncryptionState {
-        state: EncryptionState,
-    }
-
-    impl MockEncryptionState {
-        fn new(state: EncryptionState) -> Self {
-            Self { state }
-        }
-    }
-
-    #[async_trait]
-    impl EncryptionStatePort for MockEncryptionState {
-        async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError> {
-            Ok(self.state.clone())
-        }
-
-        async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
-
-        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
-    }
-
-    struct MockKeyScope {
-        scope: Option<KeyScope>,
-    }
-
-    impl MockKeyScope {
-        fn succeed_with(scope: KeyScope) -> Self {
-            Self { scope: Some(scope) }
-        }
-
-        fn fail() -> Self {
-            Self { scope: None }
-        }
-    }
-
-    #[async_trait]
-    impl KeyScopePort for MockKeyScope {
-        async fn current_scope(&self) -> Result<KeyScope, ScopeError> {
-            self.scope
-                .clone()
-                .ok_or(ScopeError::FailedToGetCurrentScope)
-        }
-    }
-
-    struct MockKeyMaterial {
-        keyslot: Option<uc_core::security::model::KeySlot>,
-    }
-
-    impl MockKeyMaterial {
-        fn new() -> Self {
-            Self { keyslot: None }
-        }
-
-        fn with_keyslot(mut self, keyslot: uc_core::security::model::KeySlot) -> Self {
-            self.keyslot = Some(keyslot);
-            self
-        }
-    }
-
-    #[async_trait]
-    impl KeyMaterialPort for MockKeyMaterial {
-        async fn load_keyslot(
-            &self,
-            _scope: &KeyScope,
-        ) -> Result<uc_core::security::model::KeySlot, EncryptionError> {
-            self.keyslot.clone().ok_or(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_keyslot(
-            &self,
-            _keyslot: &uc_core::security::model::KeySlot,
-        ) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn load_kek(&self, _scope: &KeyScope) -> Result<Kek, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_kek(&self, _scope: &KeyScope, _kek: &Kek) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn delete_kek(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-    }
-
-    struct MockEncryption {
-        should_fail_derive: bool,
-        should_fail_unwrap: bool,
-    }
-
-    impl MockEncryption {
-        fn new() -> Self {
-            Self {
-                should_fail_derive: false,
-                should_fail_unwrap: false,
-            }
-        }
-
-        fn fail_on_unwrap(mut self) -> Self {
-            self.should_fail_unwrap = true;
-            self
-        }
-    }
-
-    #[async_trait]
-    impl EncryptionPort for MockEncryption {
-        async fn derive_kek(
-            &self,
-            _passphrase: &Passphrase,
-            _salt: &[u8],
-            _kdf_params: &KdfParams,
-        ) -> Result<Kek, EncryptionError> {
-            if self.should_fail_derive {
-                return Err(EncryptionError::KdfFailed);
-            }
-            Ok(Kek([0u8; 32]))
-        }
-
-        async fn wrap_master_key(
-            &self,
-            _kek: &Kek,
-            _master_key: &MasterKey,
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: vec![0u8; 32],
-                aad_fingerprint: None,
-            })
-        }
-
-        async fn unwrap_master_key(
-            &self,
-            _kek: &Kek,
-            _blob: &EncryptedBlob,
-        ) -> Result<MasterKey, EncryptionError> {
-            if self.should_fail_unwrap {
-                return Err(EncryptionError::WrongPassphrase);
-            }
-            MasterKey::from_bytes(&[0u8; 32])
-        }
-
-        async fn encrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _plaintext: &[u8],
-            _aad: &[u8],
-            _algo: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: vec![],
-                aad_fingerprint: None,
-            })
-        }
-
-        async fn decrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _blob: &EncryptedBlob,
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, EncryptionError> {
-            Ok(vec![])
-        }
-    }
-
-    struct MockEncryptionSession {
-        should_fail_set: bool,
-        master_key_set: Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl MockEncryptionSession {
-        fn new() -> Self {
-            Self {
-                should_fail_set: false,
-                master_key_set: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            }
-        }
-
-        fn fail_on_set(mut self) -> Self {
-            self.should_fail_set = true;
-            self
-        }
-
-        fn was_master_key_set(&self) -> bool {
-            self.master_key_set
-                .load(std::sync::atomic::Ordering::SeqCst)
-        }
-    }
-
-    #[async_trait]
-    impl EncryptionSessionPort for MockEncryptionSession {
-        async fn is_ready(&self) -> bool {
-            self.master_key_set
-                .load(std::sync::atomic::Ordering::SeqCst)
-        }
-
-        async fn get_master_key(&self) -> Result<MasterKey, EncryptionError> {
-            if self
-                .master_key_set
-                .load(std::sync::atomic::Ordering::SeqCst)
-            {
-                MasterKey::from_bytes(&[0u8; 32])
-            } else {
-                Err(EncryptionError::Locked)
-            }
-        }
-
-        async fn set_master_key(&self, _master_key: MasterKey) -> Result<(), EncryptionError> {
-            if self.should_fail_set {
-                return Err(EncryptionError::CryptoFailure);
-            }
-            self.master_key_set
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), EncryptionError> {
-            self.master_key_set
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-    }
 
     // ---------------------------------------------------------------------------
     // Test helpers
@@ -491,15 +250,23 @@ mod tests {
     #[tokio::test]
     async fn test_unlock_returns_not_initialized_error_when_uninitialized() {
         // When encryption state is Uninitialized, should return NotInitialized error
-        let state = Arc::new(MockEncryptionState::new(EncryptionState::Uninitialized));
-        let scope = Arc::new(MockKeyScope::succeed_with(KeyScope {
-            profile_id: "test".to_string(),
-        }));
-        let key_material = Arc::new(MockKeyMaterial::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new());
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Ok(EncryptionState::Uninitialized));
 
-        let use_case = make_use_case(state, scope, key_material, encryption, session);
+        let scope = MockKeyScope::new();
+        let key_material = MockKeyMaterial::new();
+        let encryption = MockEncryption::new();
+        let session = MockEncryptionSession::new();
+
+        let use_case = make_use_case(
+            Arc::new(state),
+            Arc::new(scope),
+            Arc::new(key_material),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
         let result = use_case
             .execute(Passphrase("test-passphrase".to_string()))
             .await;
@@ -522,23 +289,50 @@ mod tests {
         let scope_value = KeyScope {
             profile_id: "test".to_string(),
         };
-        let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
-        let scope = Arc::new(MockKeyScope::succeed_with(scope_value.clone()));
-        let key_material =
-            Arc::new(MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)));
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new());
+        let test_keyslot = create_test_keyslot(scope_value.clone());
 
-        let use_case = make_use_case(state, scope, key_material, encryption, session.clone());
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Ok(EncryptionState::Initialized));
+
+        let mut scope = MockKeyScope::new();
+        scope
+            .expect_current_scope()
+            .returning(move || Ok(scope_value.clone()));
+
+        let mut key_material = MockKeyMaterial::new();
+        key_material
+            .expect_load_keyslot()
+            .returning(move |_| Ok(test_keyslot.clone()));
+
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_derive_kek()
+            .returning(|_, _, _| Ok(Kek([0u8; 32])));
+        encryption
+            .expect_unwrap_master_key()
+            .returning(|_, _| MasterKey::from_bytes(&[0u8; 32]));
+
+        let mut session = MockEncryptionSession::new();
+        // Expect set_master_key to be called exactly once (verifies master key was set)
+        session
+            .expect_set_master_key()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let use_case = make_use_case(
+            Arc::new(state),
+            Arc::new(scope),
+            Arc::new(key_material),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
         let result = use_case
             .execute(Passphrase("correct-passphrase".to_string()))
             .await;
 
         assert!(result.is_ok(), "should succeed on happy path");
-        assert!(
-            session.was_master_key_set(),
-            "master key should be set in session"
-        );
     }
 
     #[tokio::test]
@@ -547,14 +341,40 @@ mod tests {
         let scope_value = KeyScope {
             profile_id: "test".to_string(),
         };
-        let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
-        let scope = Arc::new(MockKeyScope::succeed_with(scope_value.clone()));
-        let key_material =
-            Arc::new(MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)));
-        let encryption = Arc::new(MockEncryption::new().fail_on_unwrap());
-        let session = Arc::new(MockEncryptionSession::new());
+        let test_keyslot = create_test_keyslot(scope_value.clone());
 
-        let use_case = make_use_case(state, scope, key_material, encryption, session);
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Ok(EncryptionState::Initialized));
+
+        let mut scope = MockKeyScope::new();
+        scope
+            .expect_current_scope()
+            .returning(move || Ok(scope_value.clone()));
+
+        let mut key_material = MockKeyMaterial::new();
+        key_material
+            .expect_load_keyslot()
+            .returning(move |_| Ok(test_keyslot.clone()));
+
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_derive_kek()
+            .returning(|_, _, _| Ok(Kek([0u8; 32])));
+        encryption
+            .expect_unwrap_master_key()
+            .returning(|_, _| Err(EncryptionError::WrongPassphrase));
+
+        let session = MockEncryptionSession::new();
+
+        let use_case = make_use_case(
+            Arc::new(state),
+            Arc::new(scope),
+            Arc::new(key_material),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
         let result = use_case
             .execute(Passphrase("wrong-passphrase".to_string()))
             .await;
@@ -574,13 +394,33 @@ mod tests {
         let scope_value = KeyScope {
             profile_id: "test".to_string(),
         };
-        let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
-        let scope = Arc::new(MockKeyScope::succeed_with(scope_value));
-        let key_material = Arc::new(MockKeyMaterial::new()); // No keyslot = load fails
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new());
 
-        let use_case = make_use_case(state, scope, key_material, encryption, session);
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Ok(EncryptionState::Initialized));
+
+        let mut scope = MockKeyScope::new();
+        scope
+            .expect_current_scope()
+            .returning(move || Ok(scope_value.clone()));
+
+        let mut key_material = MockKeyMaterial::new();
+        // No keyslot = load fails
+        key_material
+            .expect_load_keyslot()
+            .returning(|_| Err(EncryptionError::KeyNotFound));
+
+        let encryption = MockEncryption::new();
+        let session = MockEncryptionSession::new();
+
+        let use_case = make_use_case(
+            Arc::new(state),
+            Arc::new(scope),
+            Arc::new(key_material),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
         let result = use_case
             .execute(Passphrase("test-passphrase".to_string()))
             .await;
@@ -605,13 +445,31 @@ mod tests {
         });
         keyslot.wrapped_master_key = None; // Remove wrapped master key
 
-        let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
-        let scope = Arc::new(MockKeyScope::succeed_with(scope_value));
-        let key_material = Arc::new(MockKeyMaterial::new().with_keyslot(keyslot));
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new());
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Ok(EncryptionState::Initialized));
 
-        let use_case = make_use_case(state, scope, key_material, encryption, session);
+        let mut scope = MockKeyScope::new();
+        scope
+            .expect_current_scope()
+            .returning(move || Ok(scope_value.clone()));
+
+        let mut key_material = MockKeyMaterial::new();
+        key_material
+            .expect_load_keyslot()
+            .returning(move |_| Ok(keyslot.clone()));
+
+        let encryption = MockEncryption::new();
+        let session = MockEncryptionSession::new();
+
+        let use_case = make_use_case(
+            Arc::new(state),
+            Arc::new(scope),
+            Arc::new(key_material),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
         let result = use_case
             .execute(Passphrase("test-passphrase".to_string()))
             .await;
@@ -631,13 +489,27 @@ mod tests {
     #[tokio::test]
     async fn test_unlock_fails_when_scope_resolution_fails() {
         // When scope resolution fails, should return ScopeFailed error
-        let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
-        let scope = Arc::new(MockKeyScope::fail());
-        let key_material = Arc::new(MockKeyMaterial::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new());
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Ok(EncryptionState::Initialized));
 
-        let use_case = make_use_case(state, scope, key_material, encryption, session);
+        let mut scope = MockKeyScope::new();
+        scope
+            .expect_current_scope()
+            .returning(|| Err(ScopeError::FailedToGetCurrentScope));
+
+        let key_material = MockKeyMaterial::new();
+        let encryption = MockEncryption::new();
+        let session = MockEncryptionSession::new();
+
+        let use_case = make_use_case(
+            Arc::new(state),
+            Arc::new(scope),
+            Arc::new(key_material),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
         let result = use_case
             .execute(Passphrase("test-passphrase".to_string()))
             .await;
@@ -657,14 +529,43 @@ mod tests {
         let scope_value = KeyScope {
             profile_id: "test".to_string(),
         };
-        let state = Arc::new(MockEncryptionState::new(EncryptionState::Initialized));
-        let scope = Arc::new(MockKeyScope::succeed_with(scope_value.clone()));
-        let key_material =
-            Arc::new(MockKeyMaterial::new().with_keyslot(create_test_keyslot(scope_value)));
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new().fail_on_set());
+        let test_keyslot = create_test_keyslot(scope_value.clone());
 
-        let use_case = make_use_case(state, scope, key_material, encryption, session);
+        let mut state = MockEncryptionState::new();
+        state
+            .expect_load_state()
+            .returning(|| Ok(EncryptionState::Initialized));
+
+        let mut scope = MockKeyScope::new();
+        scope
+            .expect_current_scope()
+            .returning(move || Ok(scope_value.clone()));
+
+        let mut key_material = MockKeyMaterial::new();
+        key_material
+            .expect_load_keyslot()
+            .returning(move |_| Ok(test_keyslot.clone()));
+
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_derive_kek()
+            .returning(|_, _, _| Ok(Kek([0u8; 32])));
+        encryption
+            .expect_unwrap_master_key()
+            .returning(|_, _| MasterKey::from_bytes(&[0u8; 32]));
+
+        let mut session = MockEncryptionSession::new();
+        session
+            .expect_set_master_key()
+            .returning(|_| Err(EncryptionError::CryptoFailure));
+
+        let use_case = make_use_case(
+            Arc::new(state),
+            Arc::new(scope),
+            Arc::new(key_material),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
         let result = use_case
             .execute(Passphrase("test-passphrase".to_string()))
             .await;
@@ -681,34 +582,25 @@ mod tests {
     #[tokio::test]
     async fn test_unlock_propagates_state_check_error() {
         // When state check fails, should return StateCheckFailed error
-        struct FailingState;
+        let mut state = MockEncryptionState::new();
+        state.expect_load_state().returning(|| {
+            Err(EncryptionStateError::LoadError(
+                "state check failed".to_string(),
+            ))
+        });
 
-        #[async_trait]
-        impl EncryptionStatePort for FailingState {
-            async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError> {
-                Err(EncryptionStateError::LoadError(
-                    "state check failed".to_string(),
-                ))
-            }
+        let scope = MockKeyScope::new();
+        let key_material = MockKeyMaterial::new();
+        let encryption = MockEncryption::new();
+        let session = MockEncryptionSession::new();
 
-            async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
-                Ok(())
-            }
-
-            async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
-                Ok(())
-            }
-        }
-
-        let state = Arc::new(FailingState);
-        let scope = Arc::new(MockKeyScope::succeed_with(KeyScope {
-            profile_id: "test".to_string(),
-        }));
-        let key_material = Arc::new(MockKeyMaterial::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new());
-
-        let use_case = make_use_case(state, scope, key_material, encryption, session);
+        let use_case = make_use_case(
+            Arc::new(state),
+            Arc::new(scope),
+            Arc::new(key_material),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
         let result = use_case
             .execute(Passphrase("test-passphrase".to_string()))
             .await;

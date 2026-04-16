@@ -20,7 +20,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, info_span, warn, Instrument};
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use utoipa;
 
@@ -180,188 +180,198 @@ fn ws_rate_limited() -> (StatusCode, Json<WsErrorResponse>) {
 // ---------------------------------------------------------------------------
 
 async fn handle_connection(socket: WebSocket, state: DaemonApiState, claims: SessionTokenClaims) {
-    let topics = Arc::new(RwLock::new(HashSet::<String>::new()));
-    tracing::info!(
+    let conn_span = info_span!(
+        "daemon.ws.connection",
+        session_token_jti = %claims.jti,
         pid = claims.pid,
-        client_type = %claims.client_type,
-        "websocket connection authenticated",
     );
 
-    let (outbound_tx, mut outbound_rx) = mpsc::channel::<DaemonWsEvent>(32);
-    let mut broadcast_rx = state.event_tx.subscribe();
-    let fanout_topics = Arc::clone(&topics);
-    let fanout_tx = outbound_tx.clone();
+    async move {
+        let topics = Arc::new(RwLock::new(HashSet::<String>::new()));
+        tracing::info!(
+            pid = claims.pid,
+            client_type = %claims.client_type,
+            "websocket connection authenticated",
+        );
 
-    // Fanout task: receives daemon events and forwards them to the client via outbound_tx.
-    let fanout_task = tokio::spawn(async move {
-        loop {
-            match broadcast_rx.recv().await {
-                Ok(event) => {
-                    let matched_topics = {
-                        let guard = fanout_topics.read().await;
-                        guard
-                            .iter()
-                            .filter(|topic| topic_matches(topic, event.topic.as_str()))
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    };
+        let (outbound_tx, mut outbound_rx) = mpsc::channel::<DaemonWsEvent>(32);
+        let mut broadcast_rx = state.event_tx.subscribe();
+        let fanout_topics = Arc::clone(&topics);
+        let fanout_tx = outbound_tx.clone();
 
-                    if !matched_topics.is_empty() {
-                        let event = bridge_verification_event(event);
-                        info!(
-                            event_topic = %event.topic,
-                            event_type = %event.event_type,
-                            session_id = event.session_id.as_deref().unwrap_or(""),
-                            matched_topics = ?matched_topics,
-                            "forwarding daemon websocket event to subscribed client"
-                        );
-                        if fanout_tx.send(event).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    warn!(
-                        skipped,
-                        "websocket client lagged behind daemon event stream"
-                    );
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
+        // Fanout task: receives daemon events and forwards them to the client via outbound_tx.
+        let fanout_task = tokio::spawn(async move {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(event) => {
+                        let matched_topics = {
+                            let guard = fanout_topics.read().await;
+                            guard
+                                .iter()
+                                .filter(|topic| topic_matches(topic, event.topic.as_str()))
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        };
 
-    // Heartbeat channel: the heartbeat task signals `Stale` when the client
-    // fails to respond to a ping within CLIENT_TIMEOUT.
-    let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel::<HeartbeatSignal>(1);
-
-    // Unified send channel: both daemon events and heartbeat pings are sent here.
-    // This avoids needing to share the SplitSink across tasks.
-    let (send_tx, mut send_rx) = mpsc::channel::<SendMsg>(16);
-    let send_tx_for_heartbeat = send_tx.clone();
-
-    // Heartbeat task: sends a ping frame every HEARTBEAT_INTERVAL seconds.
-    // If no pong is received within CLIENT_TIMEOUT after a ping, the task
-    // signals `Stale` which causes the receive loop to close the socket.
-    let heartbeat_task = tokio::spawn(async move {
-        let mut ping_interval = interval(HEARTBEAT_INTERVAL);
-        // Wait for the initial interval tick before the first ping.
-        ping_interval.tick().await;
-
-        loop {
-            // Send a ping.
-            if send_tx_for_heartbeat.send(SendMsg::Ping).await.is_err() {
-                debug!("heartbeat: send channel closed, exiting");
-                break;
-            }
-            debug!("heartbeat: ping sent");
-
-            // Wait for the next interval or the deadline.
-            let deadline = Instant::now() + CLIENT_TIMEOUT;
-            tokio::select! {
-                _ = ping_interval.tick() => {
-                    // Interval elapsed — time for the next ping.
-                }
-                _ = tokio::time::sleep_until(deadline) => {
-                    // Timeout — no pong received.
-                    debug!("heartbeat: deadline expired, connection stale");
-                    if heartbeat_tx.send(HeartbeatSignal::Stale).await.is_err() {
-                        debug!("heartbeat: heartbeat_rx dropped, exiting");
-                    }
-                    return;
-                }
-            }
-        }
-    });
-
-    let (mut sender, mut receiver) = socket.split();
-
-    // Send task: drives the actual socket writes.
-    // Receives both daemon events (via outbound_rx) and heartbeat pings (via send_rx).
-    let send_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                // Daemon event to forward to the client.
-                Some(event) = outbound_rx.recv() => {
-                    let payload = match serde_json::to_string(&event) {
-                        Ok(payload) => payload,
-                        Err(error) => {
-                            warn!(error = %error, "failed to serialize websocket event");
-                            continue;
-                        }
-                    };
-                    if sender.send(Message::Text(payload.into())).await.is_err() {
-                        break;
-                    }
-                }
-                // Heartbeat ping or close request.
-                Some(msg) = send_rx.recv() => {
-                    match msg {
-                        SendMsg::Ping => {
-                            if sender.send(Message::Ping(b"".into())).await.is_err() {
+                        if !matched_topics.is_empty() {
+                            let event = bridge_verification_event(event);
+                            info!(
+                                event_topic = %event.topic,
+                                event_type = %event.event_type,
+                                session_id = event.session_id.as_deref().unwrap_or(""),
+                                matched_topics = ?matched_topics,
+                                "forwarding daemon websocket event to subscribed client"
+                            );
+                            if fanout_tx.send(event).await.is_err() {
                                 break;
                             }
                         }
-                        SendMsg::Close => {
-                            let _ = sender.send(Message::Close(None)).await;
-                            break;
-                        }
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(
+                            skipped,
+                            "websocket client lagged behind daemon event stream"
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-        }
-    });
+        });
 
-    // Receive loop: handles client messages (subscribe requests, pong frames).
-    // Also drains the heartbeat channel to detect stale connections.
-    loop {
-        tokio::select! {
-            // Incoming message from the client socket.
-            msg = receiver.next() => {
-                match msg {
-                    Some(Ok(Message::Text(payload))) => {
-                        if let Err(error) =
-                            handle_client_message(payload.as_str(), &state, &topics, &outbound_tx).await
-                        {
-                            warn!(error = %error, "failed to handle websocket client message");
+        // Heartbeat channel: the heartbeat task signals `Stale` when the client
+        // fails to respond to a ping within CLIENT_TIMEOUT.
+        let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel::<HeartbeatSignal>(1);
+
+        // Unified send channel: both daemon events and heartbeat pings are sent here.
+        // This avoids needing to share the SplitSink across tasks.
+        let (send_tx, mut send_rx) = mpsc::channel::<SendMsg>(16);
+        let send_tx_for_heartbeat = send_tx.clone();
+
+        // Heartbeat task: sends a ping frame every HEARTBEAT_INTERVAL seconds.
+        // If no pong is received within CLIENT_TIMEOUT after a ping, the task
+        // signals `Stale` which causes the receive loop to close the socket.
+        let heartbeat_task = tokio::spawn(async move {
+            let mut ping_interval = interval(HEARTBEAT_INTERVAL);
+            // Wait for the initial interval tick before the first ping.
+            ping_interval.tick().await;
+
+            loop {
+                // Send a ping.
+                if send_tx_for_heartbeat.send(SendMsg::Ping).await.is_err() {
+                    debug!("heartbeat: send channel closed, exiting");
+                    break;
+                }
+                debug!("heartbeat: ping sent");
+
+                // Wait for the next interval or the deadline.
+                let deadline = Instant::now() + CLIENT_TIMEOUT;
+                tokio::select! {
+                    _ = ping_interval.tick() => {
+                        // Interval elapsed — time for the next ping.
+                    }
+                    _ = tokio::time::sleep_until(deadline) => {
+                        // Timeout — no pong received.
+                        debug!("heartbeat: deadline expired, connection stale");
+                        if heartbeat_tx.send(HeartbeatSignal::Stale).await.is_err() {
+                            debug!("heartbeat: heartbeat_rx dropped, exiting");
+                        }
+                        return;
+                    }
+                }
+            }
+        });
+
+        let (mut sender, mut receiver) = socket.split();
+
+        // Send task: drives the actual socket writes.
+        // Receives both daemon events (via outbound_rx) and heartbeat pings (via send_rx).
+        let send_task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    // Daemon event to forward to the client.
+                    Some(event) = outbound_rx.recv() => {
+                        let payload = match serde_json::to_string(&event) {
+                            Ok(payload) => payload,
+                            Err(error) => {
+                                warn!(error = %error, "failed to serialize websocket event");
+                                continue;
+                            }
+                        };
+                        if sender.send(Message::Text(payload.into())).await.is_err() {
                             break;
                         }
                     }
-                    Some(Ok(Message::Pong(_))) => {
-                        debug!("heartbeat: pong received");
+                    // Heartbeat ping or close request.
+                    Some(msg) = send_rx.recv() => {
+                        match msg {
+                            SendMsg::Ping => {
+                                if sender.send(Message::Ping(b"".into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            SendMsg::Close => {
+                                let _ = sender.send(Message::Close(None)).await;
+                                break;
+                            }
+                        }
                     }
-                    Some(Ok(Message::Close(_))) => break,
-                    // Ping: axum/tokio-tungstenite automatically replies with a Pong.
-                    // Binary frames are ignored.
-                    Some(Ok(Message::Ping(_))) | Some(Ok(Message::Binary(_))) => {}
-                    Some(Err(error)) => {
-                        warn!(error = %error, "websocket receive loop failed");
-                        break;
-                    }
-                    None => break,
                 }
             }
-            // Signal from the heartbeat task that the connection is stale.
-            sig = heartbeat_rx.recv() => {
-                match sig {
-                    Some(HeartbeatSignal::Stale) => {
-                        warn!("heartbeat: client missed pong, closing stale connection");
-                        let _ = send_tx.send(SendMsg::Close).await;
-                        break;
+        });
+
+        // Receive loop: handles client messages (subscribe requests, pong frames).
+        // Also drains the heartbeat channel to detect stale connections.
+        loop {
+            tokio::select! {
+                // Incoming message from the client socket.
+                msg = receiver.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(payload))) => {
+                            if let Err(error) =
+                                handle_client_message(payload.as_str(), &state, &topics, &outbound_tx).await
+                            {
+                                warn!(error = %error, "failed to handle websocket client message");
+                                break;
+                            }
+                        }
+                        Some(Ok(Message::Pong(_))) => {
+                            debug!("heartbeat: pong received");
+                        }
+                        Some(Ok(Message::Close(_))) => break,
+                        // Ping: axum/tokio-tungstenite automatically replies with a Pong.
+                        // Binary frames are ignored.
+                        Some(Ok(Message::Ping(_))) | Some(Ok(Message::Binary(_))) => {}
+                        Some(Err(error)) => {
+                            warn!(error = %error, "websocket receive loop failed");
+                            break;
+                        }
+                        None => break,
                     }
-                    None => break,
+                }
+                // Signal from the heartbeat task that the connection is stale.
+                sig = heartbeat_rx.recv() => {
+                    match sig {
+                        Some(HeartbeatSignal::Stale) => {
+                            warn!("heartbeat: client missed pong, closing stale connection");
+                            let _ = send_tx.send(SendMsg::Close).await;
+                            break;
+                        }
+                        None => break,
+                    }
                 }
             }
         }
+
+        drop(outbound_tx);
+        drop(send_tx);
+        fanout_task.abort();
+        heartbeat_task.abort();
+        let _ = fanout_task.await;
+        let _ = send_task.await;
+        debug!("daemon websocket connection closed");
     }
-
-    drop(outbound_tx);
-    drop(send_tx);
-    fanout_task.abort();
-    heartbeat_task.abort();
-    let _ = fanout_task.await;
-    let _ = send_task.await;
-    debug!("daemon websocket connection closed");
+    .instrument(conn_span)
+    .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -439,6 +449,7 @@ fn is_supported_topic(topic: &str) -> bool {
             | ws_topic::CLIPBOARD
             | ws_topic::FILE_TRANSFER
             | ws_topic::ENCRYPTION
+            | ws_topic::SEARCH
     )
 }
 
@@ -558,6 +569,53 @@ async fn build_snapshot_event(
             Ok(None)
         }
 
+        ws_topic::SEARCH => {
+            // Build a combined snapshot from coordinator status + index meta timestamps.
+            let coordinator = match state.search_coordinator() {
+                Some(c) => c,
+                None => return Ok(None),
+            };
+            let status_snapshot = coordinator.status_snapshot().await;
+
+            // Get index meta for timestamps; log and return partial snapshot on failure.
+            let (last_rebuild_started_at_ms, last_rebuild_completed_at_ms) =
+                if let Some(runtime) = state.runtime.clone() {
+                    match runtime
+                        .wiring_deps()
+                        .search
+                        .search_index
+                        .get_index_meta()
+                        .await
+                    {
+                        Ok(meta) => (
+                            meta.last_rebuild_started_at_ms,
+                            meta.last_rebuild_completed_at_ms,
+                        ),
+                        Err(e) => {
+                            warn!(error = %e, "search ws snapshot: failed to get index meta");
+                            (None, None)
+                        }
+                    }
+                } else {
+                    (None, None)
+                };
+
+            let payload = crate::api::dto::search::SearchStatusData {
+                state: status_snapshot.status,
+                reason: status_snapshot.reason,
+                last_rebuild_started_at_ms,
+                last_rebuild_completed_at_ms,
+            };
+
+            snapshot_event(
+                ws_topic::SEARCH,
+                ws_event::SEARCH_STATUS_SNAPSHOT,
+                None,
+                payload,
+            )
+            .map(Some)
+        }
+
         unsupported => anyhow::bail!("unsupported websocket topic: {unsupported}"),
     }
 }
@@ -586,6 +644,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn search_topic_subscription_receives_status_snapshot() {
+        // Test that a search snapshot event has the correct topic, event_type,
+        // and camelCase payload fields using the snapshot_event helper directly.
+        let payload = crate::api::dto::search::SearchStatusData {
+            state: "ready".to_string(),
+            reason: None,
+            last_rebuild_started_at_ms: Some(1_000_000),
+            last_rebuild_completed_at_ms: Some(2_000_000),
+        };
+
+        let event = snapshot_event(
+            ws_topic::SEARCH,
+            ws_event::SEARCH_STATUS_SNAPSHOT,
+            None,
+            payload,
+        )
+        .expect("snapshot_event should succeed");
+
+        assert_eq!(event.topic, ws_topic::SEARCH);
+        assert_eq!(event.event_type, ws_event::SEARCH_STATUS_SNAPSHOT);
+
+        // Verify camelCase field names in the serialized payload
+        let payload_json = event.payload.to_string();
+        assert!(
+            payload_json.contains("lastRebuildStartedAtMs"),
+            "payload should contain lastRebuildStartedAtMs, got: {payload_json}"
+        );
+        assert!(
+            payload_json.contains("lastRebuildCompletedAtMs"),
+            "payload should contain lastRebuildCompletedAtMs, got: {payload_json}"
+        );
+        assert!(
+            payload_json.contains("1000000"),
+            "payload should contain the started_at value"
+        );
+        assert!(
+            payload_json.contains("2000000"),
+            "payload should contain the completed_at value"
+        );
+    }
+
+    #[test]
     fn is_supported_topic_includes_clipboard() {
         assert!(is_supported_topic(ws_topic::CLIPBOARD));
     }
@@ -598,6 +698,11 @@ mod tests {
     #[test]
     fn is_supported_topic_includes_encryption() {
         assert!(is_supported_topic(ws_topic::ENCRYPTION));
+    }
+
+    #[test]
+    fn search_topic_is_supported_for_websocket_subscriptions() {
+        assert!(is_supported_topic(ws_topic::SEARCH));
     }
 
     #[test]
@@ -620,6 +725,7 @@ mod tests {
             ws_topic::CLIPBOARD,
             ws_topic::FILE_TRANSFER,
             ws_topic::ENCRYPTION,
+            ws_topic::SEARCH,
         ];
         for topic in known {
             assert!(

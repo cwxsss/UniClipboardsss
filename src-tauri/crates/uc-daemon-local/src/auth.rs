@@ -1,0 +1,247 @@
+//! Daemon-local auth token persistence and helpers.
+
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
+
+use anyhow::{Context, Result};
+use rand::RngCore;
+use tracing::debug;
+use uc_daemon_contract::api::auth::DaemonConnectionInfo;
+
+/// Internal daemon bearer token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonAuthToken(String);
+
+impl DaemonAuthToken {
+    /// Get a string slice of the inner daemon token.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let t = crate::auth::DaemonAuthToken("abcd1234".into());
+    /// assert_eq!(t.as_str(), "abcd1234");
+    /// ```
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Ensure a daemon authentication token exists at the provided path and return it.
+///
+/// If a non-empty token file exists at `token_path`, the function repairs its permissions (on Unix)
+/// and returns the contained token. If the file is missing or contains no token, a new
+/// cryptographically-random token is generated, persisted to `token_path`, and returned. On Unix,
+/// persisted token files are created with permission mode `0o600`.
+///
+/// # Parameters
+///
+/// - `token_path`: Filesystem path where the daemon token is read from or written to.
+///
+/// # Returns
+///
+/// `DaemonAuthToken` containing the token read from disk or the newly generated token.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// // Ensure a token exists at "./daemon.token" and obtain it
+/// let token = load_or_create_auth_token(Path::new("./daemon.token")).unwrap();
+/// println!("token = {}", token.as_str());
+/// ```
+pub fn load_or_create_auth_token(token_path: &Path) -> Result<DaemonAuthToken> {
+    debug!(token_path = %token_path.display(), token_path_exists = token_path.exists(), "load_or_create_auth_token: entering");
+    if token_path.exists() {
+        let existing = fs::read_to_string(token_path).with_context(|| {
+            format!(
+                "failed to read daemon auth token at {}",
+                token_path.display()
+            )
+        })?;
+        let token = existing.trim().to_string();
+        if !token.is_empty() {
+            repair_token_permissions(token_path)?;
+            return Ok(DaemonAuthToken(token));
+        }
+    }
+
+    let token = generate_auth_token();
+    persist_auth_token(token_path, &token)?;
+    Ok(DaemonAuthToken(token))
+}
+
+/// Constructs connection metadata for the local daemon.
+///
+/// The returned `DaemonConnectionInfo` contains:
+/// - `base_url`: `http://{host}:{port}`
+/// - `ws_url`: `ws://{host}:{port}/ws`
+/// - `token`: the provided daemon token as a `String`
+/// - `pid`: the provided process id
+///
+/// # Examples
+///
+/// ```
+/// let token = DaemonAuthToken("deadbeef".into());
+/// let info = build_connection_info("127.0.0.1", 8080, &token, 12345);
+/// assert_eq!(info.base_url, "http://127.0.0.1:8080");
+/// assert_eq!(info.ws_url, "ws://127.0.0.1:8080/ws");
+/// assert_eq!(info.token, "deadbeef");
+/// assert_eq!(info.pid, 12345);
+/// ```
+pub fn build_connection_info(
+    host: &str,
+    port: u16,
+    token: &DaemonAuthToken,
+    pid: u32,
+) -> DaemonConnectionInfo {
+    DaemonConnectionInfo {
+        base_url: format!("http://{host}:{port}"),
+        ws_url: format!("ws://{host}:{port}/ws"),
+        token: token.as_str().to_string(),
+        pid,
+    }
+}
+
+/// Extracts the bearer token from an HTTP `Authorization` header value.
+///
+/// Returns `Some(&str)` with the token when the header uses the `Bearer` scheme
+/// (case-sensitive) and contains a non-empty token, otherwise returns `None`.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(parse_bearer_token("Bearer abc123"), Some("abc123"));
+/// assert_eq!(parse_bearer_token("bearer xyz"), None);
+/// assert_eq!(parse_bearer_token("Basic abc"), None);
+/// assert_eq!(parse_bearer_token("Bearer "), None);
+/// assert_eq!(parse_bearer_token("JustOnePart"), None);
+/// ```
+pub fn parse_bearer_token(header_value: &str) -> Option<&str> {
+    let parts: Vec<&str> = header_value.splitn(2, ' ').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    if parts[0] != "Bearer" {
+        return None;
+    }
+    let token = parts[1];
+    if token.is_empty() {
+        return None;
+    }
+    Some(token)
+}
+
+/// Creates a 64-character lowercase hexadecimal authentication token using cryptographically secure randomness.
+///
+/// The returned string encodes 32 random bytes as two-digit lowercase hex characters (64 hex characters total).
+///
+/// # Examples
+///
+/// ```
+/// let token = generate_auth_token();
+/// assert_eq!(token.len(), 64);
+/// assert!(token.chars().all(|c| c.is_ascii_hexdigit() && c.is_ascii_lowercase()));
+/// ```
+fn generate_auth_token() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Persists the daemon auth token to disk, creating parent directories if needed and restricting file permissions.
+///
+/// Writes `token` to `token_path`, truncating any existing file, flushes the file, and (on Unix) ensures the file mode is set to `0o600`. This function will create any missing parent directories before writing.
+///
+/// # Errors
+///
+/// Returns an error if creating directories, opening the file, writing, flushing, or repairing file permissions fails.
+///
+/// # Examples
+///
+/// ```
+/// use tempfile::tempdir;
+/// let tmp = tempdir().unwrap();
+/// let path = tmp.path().join("auth_token");
+/// persist_auth_token(&path, "0123abcd").unwrap();
+/// assert!(path.exists());
+/// ```
+fn persist_auth_token(token_path: &Path, token: &str) -> Result<()> {
+    if let Some(parent) = token_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create daemon auth token directory {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let mut file = options.open(token_path).with_context(|| {
+        format!(
+            "failed to open daemon auth token file {}",
+            token_path.display()
+        )
+    })?;
+
+    file.write_all(token.as_bytes()).with_context(|| {
+        format!(
+            "failed to write daemon auth token file {}",
+            token_path.display()
+        )
+    })?;
+    file.flush().with_context(|| {
+        format!(
+            "failed to flush daemon auth token file {}",
+            token_path.display()
+        )
+    })?;
+
+    repair_token_permissions(token_path)?;
+    Ok(())
+}
+
+/// Ensure the token file has restrictive Unix permissions (mode `0o600`) when running on Unix; on non-Unix platforms this is a no-op.
+///
+/// Attempts to read the file metadata and, if the file's permission bits are not `0o600`, set them to `0o600`. Errors are returned with contextual messages if metadata cannot be read or permissions cannot be changed.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// // After creating or writing the token file:
+/// let _ = repair_token_permissions(Path::new("/path/to/daemon_token")).unwrap();
+/// ```
+fn repair_token_permissions(token_path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let metadata = fs::metadata(token_path).with_context(|| {
+            format!(
+                "failed to read daemon auth token metadata {}",
+                token_path.display()
+            )
+        })?;
+        let current_mode = metadata.permissions().mode() & 0o777;
+        if current_mode != 0o600 {
+            let permissions = std::fs::Permissions::from_mode(0o600);
+            fs::set_permissions(token_path, permissions).with_context(|| {
+                format!(
+                    "failed to repair daemon auth token permissions {}",
+                    token_path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}

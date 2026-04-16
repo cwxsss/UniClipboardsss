@@ -55,6 +55,12 @@ pub struct EntryProjectionDto {
     /// None for non-file entries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_sizes: Option<Vec<i64>>,
+    /// Original image width in pixels (0 or None for non-image entries).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_width: Option<i32>,
+    /// Original image height in pixels (0 or None for non-image entries).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_height: Option<i32>,
 }
 
 /// Error type for list projections use case
@@ -263,25 +269,29 @@ impl ListClipboardEntryProjections {
             .map(|mt| mt.as_str().to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let thumbnail_url = if is_image {
+        let (thumbnail_url, image_width, image_height) = if is_image {
             match self
                 .thumbnail_repo
                 .get_by_representation_id(&selection.selection.preview_rep_id)
                 .await
             {
-                Ok(Some(_metadata)) => Some(format!("/clipboard/thumbnails/{}", preview_rep_id)),
-                Ok(None) => None,
+                Ok(Some(metadata)) => (
+                    Some(format!("/clipboard/thumbnails/{}", preview_rep_id)),
+                    Some(metadata.original_width),
+                    Some(metadata.original_height),
+                ),
+                Ok(None) => (None, None, None),
                 Err(err) => {
                     tracing::error!(
                         error = %err,
                         entry_id = %entry_id_str,
                         "Failed to fetch thumbnail metadata"
                     );
-                    None
+                    (None, None, None)
                 }
             }
         } else {
-            None
+            (None, None, None)
         };
 
         let is_uri_list = content_type
@@ -344,6 +354,8 @@ impl ListClipboardEntryProjections {
             link_urls,
             link_domains: None,
             file_sizes,
+            image_width,
+            image_height,
         }))
     }
 
@@ -462,27 +474,29 @@ impl ListClipboardEntryProjections {
                 .map(|mt| mt.as_str().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let thumbnail_url = if is_image {
+            let (thumbnail_url, image_width, image_height) = if is_image {
                 match self
                     .thumbnail_repo
                     .get_by_representation_id(&selection.selection.preview_rep_id)
                     .await
                 {
-                    Ok(Some(_metadata)) => {
-                        Some(format!("/clipboard/thumbnails/{}", preview_rep_id))
-                    }
-                    Ok(None) => None,
+                    Ok(Some(metadata)) => (
+                        Some(format!("/clipboard/thumbnails/{}", preview_rep_id)),
+                        Some(metadata.original_width),
+                        Some(metadata.original_height),
+                    ),
+                    Ok(None) => (None, None, None),
                     Err(err) => {
                         tracing::error!(
                             error = %err,
                             entry_id = %entry_id_str,
                             "Failed to fetch thumbnail metadata"
                         );
-                        None
+                        (None, None, None)
                     }
                 }
             } else {
-                None
+                (None, None, None)
             };
 
             let is_uri_list = content_type
@@ -547,6 +561,8 @@ impl ListClipboardEntryProjections {
                 link_urls,
                 link_domains: None,
                 file_sizes,
+                image_width,
+                image_height,
             });
         }
 
@@ -564,6 +580,10 @@ impl ListClipboardEntryProjections {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_mocks::{
+        MockClipboardEntryRepository, MockClipboardRepresentationRepository,
+        MockClipboardSelectionRepository, MockFileTransferRepository, MockThumbnailRepository,
+    };
     use std::collections::{HashMap, HashSet};
     use uc_core::clipboard::{
         ClipboardEntry, ClipboardSelection, MimeType, PersistedClipboardRepresentation,
@@ -574,227 +594,97 @@ mod tests {
     use uc_core::ClipboardSelectionDecision;
 
     use uc_core::ports::file_transfer_repository::{
-        EntryTransferSummary, ExpiredInflightTransfer, PendingInboundTransfer, TrackedFileTransfer,
-        TrackedFileTransferStatus,
+        EntryTransferSummary, TrackedFileTransferStatus,
     };
 
     /// Helper to create a noop file transfer repo for tests that don't care about transfer state.
     fn noop_file_transfer_repo() -> Arc<dyn FileTransferRepositoryPort> {
-        Arc::new(uc_core::ports::NoopFileTransferRepositoryPort)
+        make_file_transfer_repo(HashMap::new())
     }
 
-    /// Mock file transfer repo that returns configurable summaries per entry.
-    struct MockFileTransferRepo {
-        summaries: HashMap<String, EntryTransferSummary>,
-    }
-
-    #[async_trait::async_trait]
-    impl FileTransferRepositoryPort for MockFileTransferRepo {
-        async fn insert_pending_transfers(&self, _: &[PendingInboundTransfer]) -> Result<()> {
-            Ok(())
-        }
-        async fn backfill_announce_metadata(&self, _: &str, _: i64, _: &str) -> Result<()> {
-            Ok(())
-        }
-        async fn mark_transferring(&self, _: &str, _: i64) -> Result<bool> {
-            Ok(false)
-        }
-        async fn refresh_activity(&self, _: &str, _: i64) -> Result<()> {
-            Ok(())
-        }
-        async fn mark_completed(&self, _: &str, _: Option<&str>, _: i64) -> Result<bool> {
-            Ok(false)
-        }
-        async fn mark_failed(&self, _: &str, _: &str, _: i64) -> Result<()> {
-            Ok(())
-        }
-        async fn list_expired_inflight(
-            &self,
-            _: i64,
-            _: i64,
-        ) -> Result<Vec<ExpiredInflightTransfer>> {
-            Ok(vec![])
-        }
-        async fn bulk_fail_inflight(
-            &self,
-            _: &str,
-            _: i64,
-        ) -> Result<Vec<ExpiredInflightTransfer>> {
-            Ok(vec![])
-        }
-        async fn get_entry_transfer_summary(
-            &self,
-            entry_id: &str,
-        ) -> Result<Option<EntryTransferSummary>> {
-            Ok(self.summaries.get(entry_id).cloned())
-        }
-        async fn list_transfers_for_entry(&self, _: &str) -> Result<Vec<TrackedFileTransfer>> {
-            Ok(vec![])
-        }
-        async fn get_entry_id_for_transfer(&self, _: &str) -> Result<Option<String>> {
-            Ok(None)
-        }
-    }
-
-    // Mock repositories for testing
-    struct MockEntryRepository {
-        entries: Vec<ClipboardEntry>,
-    }
-
-    struct MockSelectionRepository {
-        selections: std::collections::HashMap<String, uc_core::ClipboardSelectionDecision>,
-    }
-
-    struct MockRepresentationRepository {
-        representations:
-            std::collections::HashMap<(String, String), uc_core::PersistedClipboardRepresentation>,
-        fail_keys: HashSet<(String, String)>,
-    }
-
-    struct MockThumbnailRepository {
-        thumbnails: HashMap<String, ThumbnailMetadata>,
-    }
-
-    #[async_trait::async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepository {
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &ClipboardEntry,
-            _selection: &ClipboardSelectionDecision,
-        ) -> Result<()> {
-            unimplemented!()
-        }
-
-        async fn get_entry(&self, entry_id: &EntryId) -> Result<Option<ClipboardEntry>> {
-            Ok(self
-                .entries
+    fn make_entry_repo(entries: Vec<ClipboardEntry>) -> Arc<dyn ClipboardEntryRepositoryPort> {
+        let mut repo = MockClipboardEntryRepository::new();
+        let entries = Arc::new(entries);
+        let entries_for_get = Arc::clone(&entries);
+        repo.expect_get_entry().returning(move |entry_id| {
+            Ok(entries_for_get
                 .iter()
-                .find(|e| e.entry_id == *entry_id)
+                .find(|entry| entry.entry_id == *entry_id)
                 .cloned())
-        }
-
-        async fn list_entries(&self, limit: usize, offset: usize) -> Result<Vec<ClipboardEntry>> {
-            Ok(self
-                .entries
+        });
+        let entries_for_list = Arc::clone(&entries);
+        repo.expect_list_entries().returning(move |limit, offset| {
+            Ok(entries_for_list
                 .iter()
                 .skip(offset)
                 .take(limit)
                 .cloned()
                 .collect())
-        }
-
-        async fn delete_entry(&self, _entry_id: &EntryId) -> Result<()> {
-            unimplemented!()
-        }
+        });
+        Arc::new(repo)
     }
 
-    #[async_trait::async_trait]
-    impl ClipboardSelectionRepositoryPort for MockSelectionRepository {
-        async fn get_selection(
-            &self,
-            entry_id: &EntryId,
-        ) -> Result<Option<uc_core::ClipboardSelectionDecision>> {
-            Ok(self.selections.get(entry_id.inner()).cloned())
-        }
-
-        async fn delete_selection(&self, _entry_id: &EntryId) -> Result<()> {
-            unimplemented!()
-        }
+    fn make_selection_repo(
+        selections: HashMap<String, uc_core::ClipboardSelectionDecision>,
+    ) -> Arc<dyn ClipboardSelectionRepositoryPort> {
+        let mut repo = MockClipboardSelectionRepository::new();
+        repo.expect_get_selection()
+            .returning(move |entry_id| Ok(selections.get(entry_id.inner()).cloned()));
+        Arc::new(repo)
     }
 
-    #[async_trait::async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepository {
-        async fn get_representation(
-            &self,
-            event_id: &EventId,
-            rep_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            let key = (event_id.inner().clone(), rep_id.inner().clone());
-            if self.fail_keys.contains(&key) {
-                return Err(anyhow::anyhow!("payload_state BlobReady requires blob_id"));
-            }
-            Ok(self.representations.get(&key).cloned())
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<()> {
-            unimplemented!()
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<bool> {
-            unimplemented!()
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &RepresentationId,
-            _expected_states: &[uc_core::clipboard::PayloadAvailability],
-            _blob_id: Option<&uc_core::BlobId>,
-            _new_state: uc_core::clipboard::PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<uc_core::ports::clipboard::ProcessingUpdateOutcome> {
-            unimplemented!()
-        }
+    fn make_representation_repo(
+        representations: HashMap<(String, String), uc_core::PersistedClipboardRepresentation>,
+        fail_keys: HashSet<(String, String)>,
+    ) -> Arc<dyn ClipboardRepresentationRepositoryPort> {
+        let mut repo = MockClipboardRepresentationRepository::new();
+        repo.expect_get_representation()
+            .returning(move |event_id, rep_id| {
+                let key = (event_id.inner().clone(), rep_id.inner().clone());
+                if fail_keys.contains(&key) {
+                    return Err(anyhow::anyhow!("payload_state BlobReady requires blob_id"));
+                }
+                Ok(representations.get(&key).cloned())
+            });
+        Arc::new(repo)
     }
 
-    #[async_trait::async_trait]
-    impl uc_core::ports::clipboard::ThumbnailRepositoryPort for MockThumbnailRepository {
-        async fn get_by_representation_id(
-            &self,
-            representation_id: &RepresentationId,
-        ) -> Result<Option<ThumbnailMetadata>> {
-            Ok(self.thumbnails.get(representation_id.inner()).map(|meta| {
-                ThumbnailMetadata::new(
-                    meta.representation_id.clone(),
-                    meta.thumbnail_blob_id.clone(),
-                    meta.thumbnail_mime_type.clone(),
-                    meta.original_width,
-                    meta.original_height,
-                    meta.original_size_bytes,
-                    meta.created_at_ms,
-                )
-            }))
-        }
+    fn make_thumbnail_repo(
+        thumbnails: HashMap<String, ThumbnailMetadata>,
+    ) -> Arc<dyn ThumbnailRepositoryPort> {
+        let mut repo = MockThumbnailRepository::new();
+        repo.expect_get_by_representation_id()
+            .returning(move |representation_id| {
+                Ok(thumbnails.get(representation_id.inner()).map(|meta| {
+                    ThumbnailMetadata::new(
+                        meta.representation_id.clone(),
+                        meta.thumbnail_blob_id.clone(),
+                        meta.thumbnail_mime_type.clone(),
+                        meta.original_width,
+                        meta.original_height,
+                        meta.original_size_bytes,
+                        meta.created_at_ms,
+                    )
+                }))
+            });
+        Arc::new(repo)
+    }
 
-        async fn insert_thumbnail(&self, _metadata: &ThumbnailMetadata) -> Result<()> {
-            unimplemented!()
-        }
+    fn make_file_transfer_repo(
+        summaries: HashMap<String, EntryTransferSummary>,
+    ) -> Arc<dyn FileTransferRepositoryPort> {
+        let mut repo = MockFileTransferRepository::new();
+        repo.expect_get_entry_transfer_summary()
+            .returning(move |entry_id| Ok(summaries.get(entry_id).cloned()));
+        Arc::new(repo)
     }
 
     #[tokio::test]
     async fn test_validates_limit_zero() {
-        let entry_repo = Arc::new(MockEntryRepository { entries: vec![] });
-        let selection_repo = Arc::new(MockSelectionRepository {
-            selections: std::collections::HashMap::new(),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepository {
-            representations: std::collections::HashMap::new(),
-            fail_keys: HashSet::new(),
-        });
-        let thumbnail_repo = Arc::new(MockThumbnailRepository {
-            thumbnails: HashMap::new(),
-        });
+        let entry_repo = make_entry_repo(vec![]);
+        let selection_repo = make_selection_repo(HashMap::new());
+        let representation_repo = make_representation_repo(HashMap::new(), HashSet::new());
+        let thumbnail_repo = make_thumbnail_repo(HashMap::new());
 
         let use_case = ListClipboardEntryProjections::new(
             entry_repo,
@@ -813,17 +703,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_validates_limit_exceeds_max() {
-        let entry_repo = Arc::new(MockEntryRepository { entries: vec![] });
-        let selection_repo = Arc::new(MockSelectionRepository {
-            selections: std::collections::HashMap::new(),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepository {
-            representations: std::collections::HashMap::new(),
-            fail_keys: HashSet::new(),
-        });
-        let thumbnail_repo = Arc::new(MockThumbnailRepository {
-            thumbnails: HashMap::new(),
-        });
+        let entry_repo = make_entry_repo(vec![]);
+        let selection_repo = make_selection_repo(HashMap::new());
+        let representation_repo = make_representation_repo(HashMap::new(), HashSet::new());
+        let thumbnail_repo = make_thumbnail_repo(HashMap::new());
 
         let use_case = ListClipboardEntryProjections::new(
             entry_repo,
@@ -842,15 +725,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_representation_repo_requires_blob_lookup() {
-        // 编译期失败即为预期：新增方法未实现
-        let representation_repo = MockRepresentationRepository {
-            representations: std::collections::HashMap::new(),
-            fail_keys: HashSet::new(),
-        };
+        let mut representation_repo = MockClipboardRepresentationRepository::new();
+        representation_repo
+            .expect_get_representation_by_blob_id()
+            .returning(|_| Ok(None));
         let blob_id = uc_core::BlobId::from("test-blob");
-        let _ = representation_repo
+        let result = representation_repo
             .get_representation_by_blob_id(&blob_id)
             .await;
+        assert!(result.expect("blob lookup should succeed").is_none());
     }
 
     #[tokio::test]
@@ -892,22 +775,18 @@ mod tests {
             None,
         );
 
-        let entry_repo = Arc::new(MockEntryRepository {
-            entries: vec![entry],
-        });
-        let selection_repo = Arc::new(MockSelectionRepository {
-            selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepository {
-            representations: HashMap::from([(
+        let entry_repo = make_entry_repo(vec![entry]);
+        let selection_repo =
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)]));
+        let representation_repo = make_representation_repo(
+            HashMap::from([(
                 (event_id.inner().clone(), rep_id.inner().clone()),
                 representation,
             )]),
-            fail_keys: HashSet::new(),
-        });
-        let thumbnail_repo = Arc::new(MockThumbnailRepository {
-            thumbnails: HashMap::from([(rep_id.inner().clone(), thumbnail)]),
-        });
+            HashSet::new(),
+        );
+        let thumbnail_repo =
+            make_thumbnail_repo(HashMap::from([(rep_id.inner().clone(), thumbnail)]));
 
         let use_case = ListClipboardEntryProjections::new(
             entry_repo,
@@ -963,22 +842,17 @@ mod tests {
         )
         .expect("valid staged representation");
 
-        let entry_repo = Arc::new(MockEntryRepository {
-            entries: vec![entry],
-        });
-        let selection_repo = Arc::new(MockSelectionRepository {
-            selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepository {
-            representations: HashMap::from([(
+        let entry_repo = make_entry_repo(vec![entry]);
+        let selection_repo =
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)]));
+        let representation_repo = make_representation_repo(
+            HashMap::from([(
                 (event_id.inner().clone(), rep_id.inner().clone()),
                 representation,
             )]),
-            fail_keys: HashSet::new(),
-        });
-        let thumbnail_repo = Arc::new(MockThumbnailRepository {
-            thumbnails: HashMap::new(),
-        });
+            HashSet::new(),
+        );
+        let thumbnail_repo = make_thumbnail_repo(HashMap::new());
 
         let use_case = ListClipboardEntryProjections::new(
             entry_repo,
@@ -1051,25 +925,19 @@ mod tests {
             None,
         );
 
-        let entry_repo = Arc::new(MockEntryRepository {
-            entries: vec![bad_entry, good_entry],
-        });
-        let selection_repo = Arc::new(MockSelectionRepository {
-            selections: HashMap::from([
-                (good_entry_id.inner().clone(), good_selection),
-                (bad_entry_id.inner().clone(), bad_selection),
-            ]),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepository {
-            representations: HashMap::from([(
+        let entry_repo = make_entry_repo(vec![bad_entry, good_entry]);
+        let selection_repo = make_selection_repo(HashMap::from([
+            (good_entry_id.inner().clone(), good_selection),
+            (bad_entry_id.inner().clone(), bad_selection),
+        ]));
+        let representation_repo = make_representation_repo(
+            HashMap::from([(
                 (good_event_id.inner().clone(), good_rep_id.inner().clone()),
                 good_representation,
             )]),
-            fail_keys: HashSet::from([(bad_event_id.inner().clone(), bad_rep_id.inner().clone())]),
-        });
-        let thumbnail_repo = Arc::new(MockThumbnailRepository {
-            thumbnails: HashMap::new(),
-        });
+            HashSet::from([(bad_event_id.inner().clone(), bad_rep_id.inner().clone())]),
+        );
+        let thumbnail_repo = make_thumbnail_repo(HashMap::new());
 
         let use_case = ListClipboardEntryProjections::new(
             entry_repo,
@@ -1123,22 +991,17 @@ mod tests {
             None,
         );
 
-        let entry_repo = Arc::new(MockEntryRepository {
-            entries: vec![entry],
-        });
-        let selection_repo = Arc::new(MockSelectionRepository {
-            selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepository {
-            representations: HashMap::from([(
+        let entry_repo = make_entry_repo(vec![entry]);
+        let selection_repo =
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)]));
+        let representation_repo = make_representation_repo(
+            HashMap::from([(
                 (event_id.inner().clone(), rep_id.inner().clone()),
                 representation,
             )]),
-            fail_keys: HashSet::new(),
-        });
-        let thumbnail_repo = Arc::new(MockThumbnailRepository {
-            thumbnails: HashMap::new(),
-        });
+            HashSet::new(),
+        );
+        let thumbnail_repo = make_thumbnail_repo(HashMap::new());
 
         let use_case = ListClipboardEntryProjections::new(
             entry_repo,
@@ -1177,6 +1040,8 @@ mod tests {
                 link_urls: None,
                 link_domains: None,
                 file_sizes: None,
+                image_width: None,
+                image_height: None,
             },
             EntryProjectionDto {
                 id: "2".to_string(),
@@ -1196,6 +1061,8 @@ mod tests {
                 link_urls: None,
                 link_domains: None,
                 file_sizes: None,
+                image_width: None,
+                image_height: None,
             },
         ];
 
@@ -1239,22 +1106,17 @@ mod tests {
             None,
         );
 
-        let entry_repo = Arc::new(MockEntryRepository {
-            entries: vec![entry],
-        });
-        let selection_repo = Arc::new(MockSelectionRepository {
-            selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepository {
-            representations: HashMap::from([(
+        let entry_repo = make_entry_repo(vec![entry]);
+        let selection_repo =
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)]));
+        let representation_repo = make_representation_repo(
+            HashMap::from([(
                 (event_id.inner().clone(), rep_id.inner().clone()),
                 representation,
             )]),
-            fail_keys: HashSet::new(),
-        });
-        let thumbnail_repo = Arc::new(MockThumbnailRepository {
-            thumbnails: HashMap::new(),
-        });
+            HashSet::new(),
+        );
+        let thumbnail_repo = make_thumbnail_repo(HashMap::new());
 
         let use_case = ListClipboardEntryProjections::new(
             entry_repo,
@@ -1276,17 +1138,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_single_returns_none_for_nonexistent_entry() {
-        let entry_repo = Arc::new(MockEntryRepository { entries: vec![] });
-        let selection_repo = Arc::new(MockSelectionRepository {
-            selections: HashMap::new(),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepository {
-            representations: HashMap::new(),
-            fail_keys: HashSet::new(),
-        });
-        let thumbnail_repo = Arc::new(MockThumbnailRepository {
-            thumbnails: HashMap::new(),
-        });
+        let entry_repo = make_entry_repo(vec![]);
+        let selection_repo = make_selection_repo(HashMap::new());
+        let representation_repo = make_representation_repo(HashMap::new(), HashSet::new());
+        let thumbnail_repo = make_thumbnail_repo(HashMap::new());
 
         let use_case = ListClipboardEntryProjections::new(
             entry_repo,
@@ -1356,35 +1211,27 @@ mod tests {
         let (entry, selection, representation, entry_id, event_id, rep_id) =
             make_test_entry_fixtures("file-pending");
 
-        let file_transfer_repo = Arc::new(MockFileTransferRepo {
-            summaries: HashMap::from([(
-                entry_id.inner().clone(),
-                EntryTransferSummary {
-                    entry_id: entry_id.inner().clone(),
-                    aggregate_status: TrackedFileTransferStatus::Pending,
-                    failure_reason: None,
-                    transfer_ids: vec!["t1".to_string()],
-                },
-            )]),
-        });
+        let file_transfer_repo = make_file_transfer_repo(HashMap::from([(
+            entry_id.inner().clone(),
+            EntryTransferSummary {
+                entry_id: entry_id.inner().clone(),
+                aggregate_status: TrackedFileTransferStatus::Pending,
+                failure_reason: None,
+                transfer_ids: vec!["t1".to_string()],
+            },
+        )]));
 
         let use_case = ListClipboardEntryProjections::new(
-            Arc::new(MockEntryRepository {
-                entries: vec![entry],
-            }),
-            Arc::new(MockSelectionRepository {
-                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-            }),
-            Arc::new(MockRepresentationRepository {
-                representations: HashMap::from([(
+            make_entry_repo(vec![entry]),
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)])),
+            make_representation_repo(
+                HashMap::from([(
                     (event_id.inner().clone(), rep_id.inner().clone()),
                     representation,
                 )]),
-                fail_keys: HashSet::new(),
-            }),
-            Arc::new(MockThumbnailRepository {
-                thumbnails: HashMap::new(),
-            }),
+                HashSet::new(),
+            ),
+            make_thumbnail_repo(HashMap::new()),
             file_transfer_repo,
         );
 
@@ -1401,35 +1248,27 @@ mod tests {
         let (entry, selection, representation, entry_id, event_id, rep_id) =
             make_test_entry_fixtures("file-multi-fail");
 
-        let file_transfer_repo = Arc::new(MockFileTransferRepo {
-            summaries: HashMap::from([(
-                entry_id.inner().clone(),
-                EntryTransferSummary {
-                    entry_id: entry_id.inner().clone(),
-                    aggregate_status: TrackedFileTransferStatus::Failed,
-                    failure_reason: Some("timeout".to_string()),
-                    transfer_ids: vec!["t1".to_string(), "t2".to_string()],
-                },
-            )]),
-        });
+        let file_transfer_repo = make_file_transfer_repo(HashMap::from([(
+            entry_id.inner().clone(),
+            EntryTransferSummary {
+                entry_id: entry_id.inner().clone(),
+                aggregate_status: TrackedFileTransferStatus::Failed,
+                failure_reason: Some("timeout".to_string()),
+                transfer_ids: vec!["t1".to_string(), "t2".to_string()],
+            },
+        )]));
 
         let use_case = ListClipboardEntryProjections::new(
-            Arc::new(MockEntryRepository {
-                entries: vec![entry],
-            }),
-            Arc::new(MockSelectionRepository {
-                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-            }),
-            Arc::new(MockRepresentationRepository {
-                representations: HashMap::from([(
+            make_entry_repo(vec![entry]),
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)])),
+            make_representation_repo(
+                HashMap::from([(
                     (event_id.inner().clone(), rep_id.inner().clone()),
                     representation,
                 )]),
-                fail_keys: HashSet::new(),
-            }),
-            Arc::new(MockThumbnailRepository {
-                thumbnails: HashMap::new(),
-            }),
+                HashSet::new(),
+            ),
+            make_thumbnail_repo(HashMap::new()),
             file_transfer_repo,
         );
 
@@ -1445,35 +1284,27 @@ mod tests {
         let (entry, selection, representation, entry_id, event_id, rep_id) =
             make_test_entry_fixtures("file-complete");
 
-        let file_transfer_repo = Arc::new(MockFileTransferRepo {
-            summaries: HashMap::from([(
-                entry_id.inner().clone(),
-                EntryTransferSummary {
-                    entry_id: entry_id.inner().clone(),
-                    aggregate_status: TrackedFileTransferStatus::Completed,
-                    failure_reason: None,
-                    transfer_ids: vec!["t1".to_string(), "t2".to_string()],
-                },
-            )]),
-        });
+        let file_transfer_repo = make_file_transfer_repo(HashMap::from([(
+            entry_id.inner().clone(),
+            EntryTransferSummary {
+                entry_id: entry_id.inner().clone(),
+                aggregate_status: TrackedFileTransferStatus::Completed,
+                failure_reason: None,
+                transfer_ids: vec!["t1".to_string(), "t2".to_string()],
+            },
+        )]));
 
         let use_case = ListClipboardEntryProjections::new(
-            Arc::new(MockEntryRepository {
-                entries: vec![entry],
-            }),
-            Arc::new(MockSelectionRepository {
-                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-            }),
-            Arc::new(MockRepresentationRepository {
-                representations: HashMap::from([(
+            make_entry_repo(vec![entry]),
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)])),
+            make_representation_repo(
+                HashMap::from([(
                     (event_id.inner().clone(), rep_id.inner().clone()),
                     representation,
                 )]),
-                fail_keys: HashSet::new(),
-            }),
-            Arc::new(MockThumbnailRepository {
-                thumbnails: HashMap::new(),
-            }),
+                HashSet::new(),
+            ),
+            make_thumbnail_repo(HashMap::new()),
             file_transfer_repo,
         );
 
@@ -1489,37 +1320,29 @@ mod tests {
             make_test_entry_fixtures("file-timeout");
 
         // A timed-out transfer is already marked failed by the timeout sweep
-        let file_transfer_repo = Arc::new(MockFileTransferRepo {
-            summaries: HashMap::from([(
-                entry_id.inner().clone(),
-                EntryTransferSummary {
-                    entry_id: entry_id.inner().clone(),
-                    aggregate_status: TrackedFileTransferStatus::Failed,
-                    failure_reason: Some(
-                        "orphaned: app restarted while transfer was in-flight".to_string(),
-                    ),
-                    transfer_ids: vec!["t1".to_string()],
-                },
-            )]),
-        });
+        let file_transfer_repo = make_file_transfer_repo(HashMap::from([(
+            entry_id.inner().clone(),
+            EntryTransferSummary {
+                entry_id: entry_id.inner().clone(),
+                aggregate_status: TrackedFileTransferStatus::Failed,
+                failure_reason: Some(
+                    "orphaned: app restarted while transfer was in-flight".to_string(),
+                ),
+                transfer_ids: vec!["t1".to_string()],
+            },
+        )]));
 
         let use_case = ListClipboardEntryProjections::new(
-            Arc::new(MockEntryRepository {
-                entries: vec![entry],
-            }),
-            Arc::new(MockSelectionRepository {
-                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-            }),
-            Arc::new(MockRepresentationRepository {
-                representations: HashMap::from([(
+            make_entry_repo(vec![entry]),
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)])),
+            make_representation_repo(
+                HashMap::from([(
                     (event_id.inner().clone(), rep_id.inner().clone()),
                     representation,
                 )]),
-                fail_keys: HashSet::new(),
-            }),
-            Arc::new(MockThumbnailRepository {
-                thumbnails: HashMap::new(),
-            }),
+                HashSet::new(),
+            ),
+            make_thumbnail_repo(HashMap::new()),
             file_transfer_repo,
         );
 
@@ -1568,27 +1391,19 @@ mod tests {
         );
 
         // No summaries in the mock = non-file entry
-        let file_transfer_repo = Arc::new(MockFileTransferRepo {
-            summaries: HashMap::new(),
-        });
+        let file_transfer_repo = make_file_transfer_repo(HashMap::new());
 
         let use_case = ListClipboardEntryProjections::new(
-            Arc::new(MockEntryRepository {
-                entries: vec![entry],
-            }),
-            Arc::new(MockSelectionRepository {
-                selections: HashMap::from([(entry_id.inner().clone(), selection)]),
-            }),
-            Arc::new(MockRepresentationRepository {
-                representations: HashMap::from([(
+            make_entry_repo(vec![entry]),
+            make_selection_repo(HashMap::from([(entry_id.inner().clone(), selection)])),
+            make_representation_repo(
+                HashMap::from([(
                     (event_id.inner().clone(), rep_id.inner().clone()),
                     representation,
                 )]),
-                fail_keys: HashSet::new(),
-            }),
-            Arc::new(MockThumbnailRepository {
-                thumbnails: HashMap::new(),
-            }),
+                HashSet::new(),
+            ),
+            make_thumbnail_repo(HashMap::new()),
             file_transfer_repo,
         );
 

@@ -259,267 +259,248 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use mockall::mock;
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use uc_core::{
         clipboard::{MimeType, PersistedClipboardRepresentation},
         ids::{BlobId, EventId, FormatId, RepresentationId},
+        ports::clipboard::ClipboardRepresentationRepositoryPort,
         security::aad,
-        security::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion, MasterKey},
+        security::model::{
+            EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfParams,
+            Kek, MasterKey, Passphrase,
+        },
     };
 
-    /// Mock ClipboardRepresentationRepositoryPort
-    struct MockRepresentationRepo {
-        storage: Arc<
-            Mutex<
-                std::collections::HashMap<
-                    (EventId, RepresentationId),
-                    PersistedClipboardRepresentation,
-                >,
-            >,
-        >,
-    }
+    type RepresentationStore =
+        Arc<Mutex<HashMap<(EventId, RepresentationId), PersistedClipboardRepresentation>>>;
 
-    impl MockRepresentationRepo {
-        fn new() -> Self {
-            Self {
-                storage: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            }
-        }
+    mock! {
+        RepresentationRepo {}
 
-        fn store(&self, event_id: &EventId, rep: PersistedClipboardRepresentation) {
-            self.storage
-                .lock()
-                .unwrap()
-                .insert((event_id.clone(), rep.id.clone()), rep);
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepo {
-        async fn get_representation(
-            &self,
-            event_id: &EventId,
-            representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self
-                .storage
-                .lock()
-                .unwrap()
-                .get(&(event_id.clone(), representation_id.clone()))
-                .cloned())
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self
-                .storage
-                .lock()
-                .unwrap()
-                .iter()
-                .find_map(|((_event_id, rep_id), rep)| {
-                    if rep_id == representation_id {
-                        Some(rep.clone())
-                    } else {
-                        None
-                    }
-                }))
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            representation_id: &RepresentationId,
-            blob_id: &BlobId,
-        ) -> Result<()> {
-            // Update blob_id in all stored representations
-            for (_, rep) in self.storage.lock().unwrap().iter_mut() {
-                if rep.id == *representation_id {
-                    rep.blob_id = Some(blob_id.clone());
-                }
-            }
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            representation_id: &RepresentationId,
-            blob_id: &BlobId,
-        ) -> Result<bool> {
-            // Update blob_id only if it's None
-            let mut updated = false;
-            for (_, rep) in self.storage.lock().unwrap().iter_mut() {
-                if rep.id == *representation_id {
-                    if rep.blob_id.is_none() {
-                        rep.blob_id = Some(blob_id.clone());
-                        updated = true;
-                    }
-                }
-            }
-            Ok(updated)
-        }
-
-        async fn update_processing_result(
-            &self,
-            rep_id: &RepresentationId,
-            expected_states: &[PayloadAvailability],
-            blob_id: Option<&BlobId>,
-            new_state: PayloadAvailability,
-            last_error: Option<&str>,
-        ) -> Result<ProcessingUpdateOutcome> {
-            // Find and update representation
-            for ((_, id), rep) in self.storage.lock().unwrap().iter_mut() {
-                if id == rep_id {
-                    // Check if current state is in expected_states
-                    let current_state = rep.payload_state();
-                    if !expected_states.contains(&current_state) {
-                        return Ok(ProcessingUpdateOutcome::StateMismatch);
-                    }
-
-                    // Update fields and return new representation with updated state
-                    return Ok(ProcessingUpdateOutcome::Updated(
-                        PersistedClipboardRepresentation::new_with_state(
-                            rep.id.clone(),
-                            rep.format_id.clone(),
-                            rep.mime_type.clone(),
-                            rep.size_bytes,
-                            rep.inline_data.clone(),
-                            blob_id.cloned(),
-                            new_state,
-                            last_error.map(|s| s.to_string()),
-                        )?,
-                    ));
-                }
-            }
-            Ok(ProcessingUpdateOutcome::NotFound)
+        #[async_trait::async_trait]
+        impl ClipboardRepresentationRepositoryPort for RepresentationRepo {
+            async fn get_representation(
+                &self,
+                event_id: &EventId,
+                representation_id: &RepresentationId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn get_representation_by_id(
+                &self,
+                representation_id: &RepresentationId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn get_representation_by_blob_id(
+                &self,
+                blob_id: &BlobId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn update_blob_id(
+                &self,
+                representation_id: &RepresentationId,
+                blob_id: &BlobId,
+            ) -> Result<()>;
+            async fn update_blob_id_if_none(
+                &self,
+                representation_id: &RepresentationId,
+                blob_id: &BlobId,
+            ) -> Result<bool>;
+            #[mockall::concretize]
+            async fn update_processing_result(
+                &self,
+                rep_id: &RepresentationId,
+                expected_states: &[PayloadAvailability],
+                blob_id: Option<&BlobId>,
+                new_state: PayloadAvailability,
+                last_error: Option<&str>,
+            ) -> Result<ProcessingUpdateOutcome>;
         }
     }
 
-    /// Mock EncryptionPort
-    struct MockEncryption {
-        should_fail_decrypt: bool,
-    }
+    mock! {
+        Encryption {}
 
-    impl MockEncryption {
-        fn new() -> Self {
-            Self {
-                should_fail_decrypt: false,
-            }
+        #[async_trait::async_trait]
+        impl uc_core::ports::EncryptionPort for Encryption {
+            async fn derive_kek(
+                &self,
+                passphrase: &Passphrase,
+                salt: &[u8],
+                kdf_params: &KdfParams,
+            ) -> Result<Kek, EncryptionError>;
+            async fn wrap_master_key(
+                &self,
+                kek: &Kek,
+                master_key: &MasterKey,
+                aead: EncryptionAlgo,
+            ) -> Result<EncryptedBlob, EncryptionError>;
+            async fn unwrap_master_key(
+                &self,
+                kek: &Kek,
+                blob: &EncryptedBlob,
+            ) -> Result<MasterKey, EncryptionError>;
+            async fn encrypt_blob(
+                &self,
+                master_key: &MasterKey,
+                plaintext: &[u8],
+                aad: &[u8],
+                algo: EncryptionAlgo,
+            ) -> Result<EncryptedBlob, EncryptionError>;
+            async fn decrypt_blob(
+                &self,
+                master_key: &MasterKey,
+                blob: &EncryptedBlob,
+                aad: &[u8],
+            ) -> Result<Vec<u8>, EncryptionError>;
         }
     }
 
-    #[async_trait]
-    impl uc_core::ports::EncryptionPort for MockEncryption {
-        async fn derive_kek(
-            &self,
-            _passphrase: &uc_core::security::model::Passphrase,
-            _salt: &[u8],
-            _kdf_params: &uc_core::security::model::KdfParams,
-        ) -> Result<uc_core::security::model::Kek, uc_core::security::model::EncryptionError>
+    mock! {
+        EncryptionSession {}
+
+        #[async_trait::async_trait]
+        impl EncryptionSessionPort for EncryptionSession {
+            async fn is_ready(&self) -> bool;
+            async fn get_master_key(&self) -> Result<MasterKey, EncryptionError>;
+            async fn set_master_key(&self, master_key: MasterKey) -> Result<(), EncryptionError>;
+            async fn clear(&self) -> Result<(), EncryptionError>;
+        }
+    }
+
+    fn make_representation_repo_with_store() -> (MockRepresentationRepo, RepresentationStore) {
+        let store: RepresentationStore = Arc::new(Mutex::new(HashMap::new()));
+        let mut repo = MockRepresentationRepo::new();
+
         {
-            Ok(uc_core::security::model::Kek([0u8; 32]))
+            let store = Arc::clone(&store);
+            repo.expect_get_representation()
+                .returning(move |event_id, representation_id| {
+                    let entries = store.lock().expect("representation store poisoned");
+                    Ok(entries
+                        .get(&(event_id.clone(), representation_id.clone()))
+                        .cloned())
+                });
         }
 
-        async fn wrap_master_key(
-            &self,
-            _kek: &uc_core::security::model::Kek,
-            _master_key: &MasterKey,
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, uc_core::security::model::EncryptionError> {
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: vec![0u8; 32],
-                aad_fingerprint: None,
-            })
+        {
+            let store = Arc::clone(&store);
+            repo.expect_get_representation_by_id()
+                .returning(move |representation_id| {
+                    let entries = store.lock().expect("representation store poisoned");
+                    Ok(entries.iter().find_map(|((_event_id, rep_id), rep)| {
+                        if rep_id == representation_id {
+                            Some(rep.clone())
+                        } else {
+                            None
+                        }
+                    }))
+                });
         }
 
-        async fn unwrap_master_key(
-            &self,
-            _kek: &uc_core::security::model::Kek,
-            _blob: &EncryptedBlob,
-        ) -> Result<MasterKey, uc_core::security::model::EncryptionError> {
-            MasterKey::from_bytes(&[0u8; 32])
+        repo.expect_get_representation_by_blob_id()
+            .returning(|_| Ok(None));
+
+        {
+            let store = Arc::clone(&store);
+            repo.expect_update_blob_id()
+                .returning(move |representation_id, blob_id| {
+                    let mut entries = store.lock().expect("representation store poisoned");
+                    for ((_event_id, rep_id), rep) in entries.iter_mut() {
+                        if rep_id == representation_id {
+                            rep.blob_id = Some(blob_id.clone());
+                        }
+                    }
+                    Ok(())
+                });
         }
 
-        async fn encrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _plaintext: &[u8],
-            _aad: &[u8],
-            _algo: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, uc_core::security::model::EncryptionError> {
-            Ok(EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: EncryptionAlgo::XChaCha20Poly1305,
-                nonce: vec![0u8; 24],
-                ciphertext: vec![],
-                aad_fingerprint: None,
-            })
+        {
+            let store = Arc::clone(&store);
+            repo.expect_update_blob_id_if_none()
+                .returning(move |representation_id, blob_id| {
+                    let mut entries = store.lock().expect("representation store poisoned");
+                    let mut updated = false;
+                    for ((_event_id, rep_id), rep) in entries.iter_mut() {
+                        if rep_id == representation_id && rep.blob_id.is_none() {
+                            rep.blob_id = Some(blob_id.clone());
+                            updated = true;
+                        }
+                    }
+                    Ok(updated)
+                });
         }
 
-        async fn decrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            blob: &EncryptedBlob,
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, uc_core::security::model::EncryptionError> {
-            if self.should_fail_decrypt {
-                return Err(uc_core::security::model::EncryptionError::CorruptedBlob);
-            }
-            Ok(blob.ciphertext.clone())
+        {
+            let store = Arc::clone(&store);
+            repo.expect_update_processing_result().returning(
+                move |rep_id, expected_states, blob_id, new_state, last_error| {
+                    let mut entries = store.lock().expect("representation store poisoned");
+                    for ((_event_id, candidate_id), rep) in entries.iter_mut() {
+                        if candidate_id == rep_id {
+                            let current_state = rep.payload_state();
+                            if !expected_states.contains(&current_state) {
+                                return Ok(ProcessingUpdateOutcome::StateMismatch);
+                            }
+
+                            return Ok(ProcessingUpdateOutcome::Updated(
+                                PersistedClipboardRepresentation::new_with_state(
+                                    rep.id.clone(),
+                                    rep.format_id.clone(),
+                                    rep.mime_type.clone(),
+                                    rep.size_bytes,
+                                    rep.inline_data.clone(),
+                                    blob_id.cloned(),
+                                    new_state,
+                                    last_error.map(|value| value.to_string()),
+                                )?,
+                            ));
+                        }
+                    }
+                    Ok(ProcessingUpdateOutcome::NotFound)
+                },
+            );
         }
+
+        (repo, store)
     }
 
-    /// Mock EncryptionSessionPort
-    struct MockEncryptionSession {
-        master_key: Option<MasterKey>,
+    fn store_representation(
+        store: &RepresentationStore,
+        event_id: &EventId,
+        rep: PersistedClipboardRepresentation,
+    ) {
+        store
+            .lock()
+            .expect("representation store poisoned")
+            .insert((event_id.clone(), rep.id.clone()), rep);
     }
 
-    impl MockEncryptionSession {
-        fn new() -> Self {
-            Self { master_key: None }
-        }
-
-        fn with_master_key(mut self, key: MasterKey) -> Self {
-            self.master_key = Some(key);
-            self
-        }
+    fn make_encryption(should_fail_decrypt: bool) -> MockEncryption {
+        let mut encryption = MockEncryption::new();
+        encryption
+            .expect_decrypt_blob()
+            .returning(move |_, blob, _| {
+                if should_fail_decrypt {
+                    return Err(EncryptionError::CorruptedBlob);
+                }
+                Ok(blob.ciphertext.clone())
+            });
+        encryption
     }
 
-    #[async_trait]
-    impl EncryptionSessionPort for MockEncryptionSession {
-        async fn is_ready(&self) -> bool {
-            self.master_key.is_some()
-        }
+    fn make_session_with_master_key(master_key: MasterKey) -> MockEncryptionSession {
+        let mut session = MockEncryptionSession::new();
+        session
+            .expect_get_master_key()
+            .returning(move || Ok(master_key.clone()));
+        session
+    }
 
-        async fn get_master_key(
-            &self,
-        ) -> Result<MasterKey, uc_core::security::model::EncryptionError> {
-            self.master_key
-                .clone()
-                .ok_or(uc_core::security::model::EncryptionError::Locked)
-        }
-
-        async fn set_master_key(
-            &self,
-            _master_key: MasterKey,
-        ) -> Result<(), uc_core::security::model::EncryptionError> {
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), uc_core::security::model::EncryptionError> {
-            Ok(())
-        }
+    fn make_locked_session() -> MockEncryptionSession {
+        let mut session = MockEncryptionSession::new();
+        session
+            .expect_get_master_key()
+            .returning(|| Err(EncryptionError::Locked));
+        session
     }
 
     /// Creates an encrypted representation for testing
@@ -549,22 +530,23 @@ mod tests {
     #[tokio::test]
     async fn test_decrypting_repo_decrypts_inline_data() {
         // Test that inline data is decrypted when retrieved
-        let inner = Arc::new(MockRepresentationRepo::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
+        let (inner, store) = make_representation_repo_with_store();
+        let encryption = make_encryption(false);
+        let session = make_session_with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap());
 
-        let repo =
-            DecryptingClipboardRepresentationRepository::new(inner.clone(), encryption, session);
+        let repo = DecryptingClipboardRepresentationRepository::new(
+            Arc::new(inner),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
 
         let event_id = EventId::new();
         let rep_id = RepresentationId::new();
         let plaintext = b"test plaintext data";
 
         // Store an encrypted representation
-        inner.store(
+        store_representation(
+            &store,
             &event_id,
             create_encrypted_representation(rep_id.clone(), plaintext),
         );
@@ -587,15 +569,15 @@ mod tests {
     #[tokio::test]
     async fn test_decrypting_repo_preserves_representation_without_inline_data() {
         // Test that representations without inline data are passed through unchanged
-        let inner = Arc::new(MockRepresentationRepo::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
+        let (inner, store) = make_representation_repo_with_store();
+        let encryption = make_encryption(false);
+        let session = make_session_with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap());
 
-        let repo =
-            DecryptingClipboardRepresentationRepository::new(inner.clone(), encryption, session);
+        let repo = DecryptingClipboardRepresentationRepository::new(
+            Arc::new(inner),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
 
         let event_id = EventId::new();
         let rep_id = RepresentationId::new();
@@ -609,7 +591,7 @@ mod tests {
             None,
             Some(BlobId::from("blob-123")),
         );
-        inner.store(&event_id, rep);
+        store_representation(&store, &event_id, rep);
 
         // Retrieve it - should be unchanged
         let result = repo.get_representation(&event_id, &rep_id).await;
@@ -629,14 +611,15 @@ mod tests {
     #[tokio::test]
     async fn test_decrypting_repo_returns_none_for_missing_representation() {
         // Test that None is returned for non-existent representations
-        let inner = Arc::new(MockRepresentationRepo::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(
-            MockEncryptionSession::new()
-                .with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap()),
-        );
+        let (inner, _store) = make_representation_repo_with_store();
+        let encryption = make_encryption(false);
+        let session = make_session_with_master_key(MasterKey::from_bytes(&[0u8; 32]).unwrap());
 
-        let repo = DecryptingClipboardRepresentationRepository::new(inner, encryption, session);
+        let repo = DecryptingClipboardRepresentationRepository::new(
+            Arc::new(inner),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
 
         let event_id = EventId::new();
         let rep_id = RepresentationId::new();
@@ -650,19 +633,23 @@ mod tests {
     #[tokio::test]
     async fn test_decrypting_repo_fails_when_session_not_ready() {
         // Test that an error is returned when the encryption session is not ready
-        let inner = Arc::new(MockRepresentationRepo::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new()); // No master key
+        let (inner, store) = make_representation_repo_with_store();
+        let encryption = make_encryption(false);
+        let session = make_locked_session();
 
-        let repo =
-            DecryptingClipboardRepresentationRepository::new(inner.clone(), encryption, session);
+        let repo = DecryptingClipboardRepresentationRepository::new(
+            Arc::new(inner),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
 
         let event_id = EventId::new();
         let rep_id = RepresentationId::new();
         let plaintext = b"test data";
 
         // Store an encrypted representation
-        inner.store(
+        store_representation(
+            &store,
             &event_id,
             create_encrypted_representation(rep_id.clone(), plaintext),
         );
@@ -685,12 +672,15 @@ mod tests {
     #[tokio::test]
     async fn test_decrypting_repo_delegates_update_blob_id() {
         // Test that update_blob_id is delegated without modification
-        let inner = Arc::new(MockRepresentationRepo::new());
-        let encryption = Arc::new(MockEncryption::new());
-        let session = Arc::new(MockEncryptionSession::new());
+        let (inner, _store) = make_representation_repo_with_store();
+        let encryption = make_encryption(false);
+        let session = make_locked_session();
 
-        let repo =
-            DecryptingClipboardRepresentationRepository::new(inner.clone(), encryption, session);
+        let repo = DecryptingClipboardRepresentationRepository::new(
+            Arc::new(inner),
+            Arc::new(encryption),
+            Arc::new(session),
+        );
 
         let rep_id = RepresentationId::new();
         let blob_id = BlobId::from("new-blob");

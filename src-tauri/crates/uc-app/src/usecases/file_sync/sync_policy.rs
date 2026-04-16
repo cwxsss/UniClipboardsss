@@ -87,70 +87,43 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
     use uc_core::network::{DiscoveredPeer, PairedDevice, PairingState};
-    use uc_core::ports::errors::PairedDeviceRepositoryError;
     use uc_core::settings::model::{ContentTypes, Settings, SyncFrequency, SyncSettings};
 
-    // --- Mock types ---
+    use crate::test_mocks::{MockPairedDeviceRepository, MockSettings};
 
-    struct MockSettings {
-        settings: Option<Settings>,
-    }
-
-    #[async_trait::async_trait]
-    impl SettingsPort for MockSettings {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            match &self.settings {
-                Some(s) => Ok(s.clone()),
-                None => Err(anyhow::anyhow!("settings load error")),
+    fn make_settings_port(settings: Option<Settings>) -> Arc<dyn SettingsPort> {
+        let mut mock = MockSettings::new();
+        match settings {
+            Some(s) => {
+                mock.expect_load().returning(move || Ok(s.clone()));
+            }
+            None => {
+                mock.expect_load()
+                    .returning(|| Err(anyhow::anyhow!("settings load error")));
             }
         }
-        async fn save(&self, _settings: &Settings) -> anyhow::Result<()> {
-            Ok(())
-        }
+        mock.expect_save().returning(|_| Ok(()));
+        Arc::new(mock)
     }
 
-    struct MockPairedDeviceRepo {
-        devices: Vec<PairedDevice>,
-    }
-
-    #[async_trait::async_trait]
-    impl PairedDeviceRepositoryPort for MockPairedDeviceRepo {
-        async fn get_by_peer_id(
-            &self,
-            peer_id: &PeerId,
-        ) -> Result<Option<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(self.devices.iter().find(|d| d.peer_id == *peer_id).cloned())
-        }
-        async fn list_all(&self) -> Result<Vec<PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(self.devices.clone())
-        }
-        async fn upsert(&self, _device: PairedDevice) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-        async fn set_state(
-            &self,
-            _peer_id: &PeerId,
-            _state: PairingState,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-        async fn update_last_seen(
-            &self,
-            _peer_id: &PeerId,
-            _last_seen_at: chrono::DateTime<Utc>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-        async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-        async fn update_sync_settings(
-            &self,
-            _peer_id: &PeerId,
-            _settings: Option<SyncSettings>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
+    fn make_paired_device_repo(devices: Vec<PairedDevice>) -> Arc<dyn PairedDeviceRepositoryPort> {
+        let mut mock = MockPairedDeviceRepository::new();
+        let devices_for_get = devices.clone();
+        mock.expect_get_by_peer_id().returning(move |peer_id| {
+            Ok(devices_for_get
+                .iter()
+                .find(|d| d.peer_id == *peer_id)
+                .cloned())
+        });
+        let devices_for_list = devices.clone();
+        mock.expect_list_all()
+            .returning(move || Ok(devices_for_list.clone()));
+        mock.expect_upsert().returning(|_| Ok(()));
+        mock.expect_set_state().returning(|_, _| Ok(()));
+        mock.expect_update_last_seen().returning(|_, _| Ok(()));
+        mock.expect_delete().returning(|_| Ok(()));
+        mock.expect_update_sync_settings().returning(|_, _| Ok(()));
+        Arc::new(mock)
     }
 
     fn make_peer(id: &str) -> DiscoveredPeer {
@@ -185,11 +158,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_policy_global_off_returns_empty() {
-        let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings {
-            settings: Some(make_settings_with_auto_sync(false)),
-        });
-        let repo: Arc<dyn PairedDeviceRepositoryPort> =
-            Arc::new(MockPairedDeviceRepo { devices: vec![] });
+        let settings = make_settings_port(Some(make_settings_with_auto_sync(false)));
+        let repo = make_paired_device_repo(vec![]);
         let peers = vec![make_peer("peer-1"), make_peer("peer-2")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
@@ -198,9 +168,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_policy_peer_file_disabled_filtered() {
-        let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings {
-            settings: Some(make_settings_with_auto_sync(true)),
-        });
+        let settings = make_settings_port(Some(make_settings_with_auto_sync(true)));
         let device_sync = SyncSettings {
             auto_sync: true,
             sync_frequency: SyncFrequency::Realtime,
@@ -213,9 +181,7 @@ mod tests {
                 rich_text: true,
             },
         };
-        let repo: Arc<dyn PairedDeviceRepositoryPort> = Arc::new(MockPairedDeviceRepo {
-            devices: vec![make_paired_device("peer-1", Some(device_sync))],
-        });
+        let repo = make_paired_device_repo(vec![make_paired_device("peer-1", Some(device_sync))]);
         let peers = vec![make_peer("peer-1")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
@@ -224,17 +190,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_policy_peer_auto_sync_disabled_filtered() {
-        let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings {
-            settings: Some(make_settings_with_auto_sync(true)),
-        });
+        let settings = make_settings_port(Some(make_settings_with_auto_sync(true)));
         let device_sync = SyncSettings {
             auto_sync: false, // auto_sync off for this device
             sync_frequency: SyncFrequency::Realtime,
             content_types: ContentTypes::default(),
         };
-        let repo: Arc<dyn PairedDeviceRepositoryPort> = Arc::new(MockPairedDeviceRepo {
-            devices: vec![make_paired_device("peer-1", Some(device_sync))],
-        });
+        let repo = make_paired_device_repo(vec![make_paired_device("peer-1", Some(device_sync))]);
         let peers = vec![make_peer("peer-1")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
@@ -243,9 +205,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_policy_settings_error_keeps_all_peers() {
-        let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings { settings: None });
-        let repo: Arc<dyn PairedDeviceRepositoryPort> =
-            Arc::new(MockPairedDeviceRepo { devices: vec![] });
+        let settings = make_settings_port(None);
+        let repo = make_paired_device_repo(vec![]);
         let peers = vec![make_peer("peer-1"), make_peer("peer-2")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
@@ -254,12 +215,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_policy_unknown_peer_kept() {
-        let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings {
-            settings: Some(make_settings_with_auto_sync(true)),
-        });
+        let settings = make_settings_port(Some(make_settings_with_auto_sync(true)));
         // No devices in repo -- unknown peer
-        let repo: Arc<dyn PairedDeviceRepositoryPort> =
-            Arc::new(MockPairedDeviceRepo { devices: vec![] });
+        let repo = make_paired_device_repo(vec![]);
         let peers = vec![make_peer("peer-unknown")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
@@ -269,13 +227,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_policy_global_file_sync_disabled_returns_empty() {
-        let mut settings = make_settings_with_auto_sync(true);
-        settings.file_sync.file_sync_enabled = false;
-        let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings {
-            settings: Some(settings),
-        });
-        let repo: Arc<dyn PairedDeviceRepositoryPort> =
-            Arc::new(MockPairedDeviceRepo { devices: vec![] });
+        let mut s = make_settings_with_auto_sync(true);
+        s.file_sync.file_sync_enabled = false;
+        let settings = make_settings_port(Some(s));
+        let repo = make_paired_device_repo(vec![]);
         let peers = vec![make_peer("peer-1"), make_peer("peer-2")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;
@@ -284,13 +239,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_policy_global_file_sync_enabled_keeps_eligible() {
-        let mut settings = make_settings_with_auto_sync(true);
-        settings.file_sync.file_sync_enabled = true;
-        let settings: Arc<dyn SettingsPort> = Arc::new(MockSettings {
-            settings: Some(settings),
-        });
-        let repo: Arc<dyn PairedDeviceRepositoryPort> =
-            Arc::new(MockPairedDeviceRepo { devices: vec![] });
+        let mut s = make_settings_with_auto_sync(true);
+        s.file_sync.file_sync_enabled = true;
+        let settings = make_settings_port(Some(s));
+        let repo = make_paired_device_repo(vec![]);
         let peers = vec![make_peer("peer-1")];
 
         let result = apply_file_sync_policy(&settings, &repo, &peers).await;

@@ -13,6 +13,7 @@
 //! - [`HostEventEmitterPort`] is synchronous (fire-and-forget semantics).
 //! - Emit failures are best-effort: callers log the error and continue.
 
+use crate::ports::transfer_progress::TransferDirection;
 use crate::setup::SetupState;
 
 // ---------------------------------------------------------------------------
@@ -58,6 +59,17 @@ pub enum TransferHostEvent {
         entry_id: String,
         status: String,
         reason: Option<String>,
+    },
+    /// Continuous transfer progress update.
+    Progress {
+        transfer_id: String,
+        entry_id: Option<String>,
+        peer_id: String,
+        direction: TransferDirection,
+        chunks_completed: u32,
+        total_chunks: u32,
+        bytes_transferred: u64,
+        total_bytes: Option<u64>,
     },
 }
 
@@ -190,6 +202,16 @@ mod tests {
                 status: "pending".to_string(),
                 reason: None,
             }),
+            HostEvent::Transfer(TransferHostEvent::Progress {
+                transfer_id: "transfer-4".to_string(),
+                entry_id: Some("entry-4".to_string()),
+                peer_id: "peer-4".to_string(),
+                direction: TransferDirection::Sending,
+                chunks_completed: 3,
+                total_chunks: 7,
+                bytes_transferred: 1_024,
+                total_bytes: Some(2_048),
+            }),
             // --- Setup ---
             HostEvent::Setup(SetupHostEvent::StateChanged {
                 state: SetupState::Welcome,
@@ -218,7 +240,7 @@ mod tests {
 
         assert_eq!(
             emitter.events.lock().unwrap().len(),
-            5,
+            6,
             "all HostEvent variants should be deliverable through the core port"
         );
     }

@@ -123,6 +123,8 @@ impl SpoolScanner {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use async_trait::async_trait;
+    use mockall::mock;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::mpsc;
@@ -133,60 +135,65 @@ mod tests {
     use uc_core::ports::ClipboardRepresentationRepositoryPort;
     use uc_core::{BlobId, MimeType};
 
-    struct MockRepresentationRepo {
-        reps_by_id: HashMap<String, PersistedClipboardRepresentation>,
+    mock! {
+        RepresentationRepo {}
+
+        #[async_trait]
+        impl ClipboardRepresentationRepositoryPort for RepresentationRepo {
+            async fn get_representation(
+                &self,
+                event_id: &uc_core::ids::EventId,
+                representation_id: &RepresentationId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn get_representation_by_id(
+                &self,
+                representation_id: &RepresentationId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn get_representation_by_blob_id(
+                &self,
+                blob_id: &BlobId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn update_blob_id(
+                &self,
+                representation_id: &RepresentationId,
+                blob_id: &BlobId,
+            ) -> Result<()>;
+            async fn update_blob_id_if_none(
+                &self,
+                representation_id: &RepresentationId,
+                blob_id: &BlobId,
+            ) -> Result<bool>;
+            #[mockall::concretize]
+            async fn update_processing_result(
+                &self,
+                rep_id: &RepresentationId,
+                expected_states: &[PayloadAvailability],
+                blob_id: Option<&BlobId>,
+                new_state: PayloadAvailability,
+                last_error: Option<&str>,
+            ) -> Result<ProcessingUpdateOutcome>;
+        }
     }
 
-    #[async_trait::async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepo {
-        async fn get_representation(
-            &self,
-            _event_id: &uc_core::ids::EventId,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self.reps_by_id.get(representation_id.as_ref()).cloned())
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &BlobId,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &RepresentationId,
-            _expected_states: &[PayloadAvailability],
-            _blob_id: Option<&BlobId>,
-            _new_state: PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<ProcessingUpdateOutcome> {
-            Ok(ProcessingUpdateOutcome::StateMismatch)
-        }
+    fn make_repo(
+        reps_by_id: HashMap<String, PersistedClipboardRepresentation>,
+    ) -> MockRepresentationRepo {
+        let reps_by_id = Arc::new(reps_by_id);
+        let mut repo = MockRepresentationRepo::new();
+        repo.expect_get_representation().returning(|_, _| Ok(None));
+        let reps_for_lookup = Arc::clone(&reps_by_id);
+        repo.expect_get_representation_by_id()
+            .returning(move |representation_id| {
+                Ok(reps_for_lookup.get(representation_id.as_ref()).cloned())
+            });
+        repo.expect_get_representation_by_blob_id()
+            .returning(|_| Ok(None));
+        repo.expect_update_blob_id().returning(|_, _| Ok(()));
+        repo.expect_update_blob_id_if_none()
+            .returning(|_, _| Ok(false));
+        repo.expect_update_processing_result()
+            .returning(|_, _, _, _, _| Ok(ProcessingUpdateOutcome::StateMismatch));
+        repo
     }
 
     fn staged_rep(rep_id: &RepresentationId) -> PersistedClipboardRepresentation {
@@ -226,7 +233,7 @@ mod tests {
 
         let mut reps_by_id = HashMap::new();
         reps_by_id.insert(rep_id.to_string(), staged_rep(&rep_id));
-        let repo = Arc::new(MockRepresentationRepo { reps_by_id });
+        let repo = Arc::new(make_repo(reps_by_id));
 
         let (worker_tx, mut worker_rx) = mpsc::channel(4);
 
@@ -249,7 +256,7 @@ mod tests {
 
         let mut reps_by_id = HashMap::new();
         reps_by_id.insert(rep_id.to_string(), blob_ready_rep(&rep_id));
-        let repo = Arc::new(MockRepresentationRepo { reps_by_id });
+        let repo = Arc::new(make_repo(reps_by_id));
 
         let (worker_tx, mut worker_rx) = mpsc::channel(4);
 
@@ -271,9 +278,7 @@ mod tests {
         let file_path = temp_dir.path().join(rep_id.to_string());
         tokio::fs::write(&file_path, b"payload").await?;
 
-        let repo = Arc::new(MockRepresentationRepo {
-            reps_by_id: HashMap::new(),
-        });
+        let repo = Arc::new(make_repo(HashMap::new()));
 
         let (worker_tx, mut worker_rx) = mpsc::channel(4);
 

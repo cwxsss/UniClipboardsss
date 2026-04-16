@@ -12,16 +12,20 @@ use async_trait::async_trait;
 use serde::Serialize;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn, Instrument};
 
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase;
+use uc_app::usecases::file_sync::FileTransferOrchestrator;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::sync_planner::{FileCandidate, OutboundSyncPlanner};
+use uc_app::usecases::CoreUseCases;
 use uc_core::network::daemon_api_strings::{ws_event, ws_topic};
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+
+use crate::search::projection::SearchProjectionBuilder;
 use uc_infra::clipboard::TransferPayloadEncryptorAdapter;
 use uc_observability::FlowId;
 use uc_platform::clipboard::watcher::{ClipboardWatcher, PlatformEvent, PlatformEventSender};
@@ -123,6 +127,7 @@ pub struct DaemonClipboardChangeHandler {
     runtime: Arc<CoreRuntime>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+    file_transfer_orchestrator: Arc<FileTransferOrchestrator>,
     /// Gate that controls whether clipboard capture is active.
     /// When false, clipboard change events are silently dropped.
     /// Used in `--gui-managed` mode to defer clipboard capture until
@@ -135,12 +140,14 @@ impl DaemonClipboardChangeHandler {
         runtime: Arc<CoreRuntime>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
+        file_transfer_orchestrator: Arc<FileTransferOrchestrator>,
         capture_gate: Arc<AtomicBool>,
     ) -> Self {
         Self {
             runtime,
             event_tx,
             clipboard_change_origin,
+            file_transfer_orchestrator,
             capture_gate,
         }
     }
@@ -175,6 +182,12 @@ impl DaemonClipboardChangeHandler {
 
 #[async_trait]
 impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
+    #[instrument(
+        name = "daemon.on_clipboard_changed",
+        level = "info",
+        skip(self, snapshot),
+        fields(trace_id = %FlowId::generate())
+    )]
     async fn on_clipboard_changed(&self, snapshot: SystemClipboardSnapshot) -> Result<()> {
         if !self.capture_gate.load(Ordering::Relaxed) {
             debug!("Clipboard capture gate closed, skipping clipboard change");
@@ -248,6 +261,102 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                     debug!(error = %e, "No WS subscribers for clipboard.new_content");
                 }
 
+                // --- Search indexing ---
+                // Build search document for the captured entry using the projection builder.
+                // We use a clone of the snapshot made before execute_with_origin consumed it.
+                {
+                    let search_span =
+                        tracing::info_span!("search.live_index", entry_id = %entry_id);
+                    let deps = self.runtime.wiring_deps();
+                    async {
+                    // Fetch the persisted ClipboardEntry to get event_id and timestamps
+                    match deps.clipboard.clipboard_entry_repo.get_entry(&entry_id).await {
+                        Ok(Some(entry)) => {
+                            // Compute the selection policy result for the live snapshot
+                            let selection_result =
+                                deps.clipboard.representation_policy.select(&outbound_snapshot);
+                            match selection_result {
+                                Ok(selection) => {
+                                    // Build SearchPipelineInput via the single projection authority
+                                    match SearchProjectionBuilder::build_from_capture(
+                                        &entry,
+                                        &outbound_snapshot,
+                                        &selection,
+                                    ) {
+                                        Some(pipeline_input) => {
+                                            // Derive search key and build postings
+                                            match deps.search.search_key_derivation.derive_search_key().await {
+                                                Ok(search_key) => {
+                                                    match deps.search.search_pipeline.build(&pipeline_input, &search_key) {
+                                                        Ok((document, postings)) => {
+                                                            if postings.is_empty() {
+                                                                debug!(
+                                                                    entry_id = %entry_id,
+                                                                    "search: no postings generated, skipping index"
+                                                                );
+                                                            } else {
+                                                                let uc = CoreUseCases::new(self.runtime.as_ref());
+                                                                if let Err(e) = uc.index_clipboard_entry().execute(document, postings).await {
+                                                                    warn!(
+                                                                        error = %e,
+                                                                        entry_id = %entry_id,
+                                                                        "search: index_clipboard_entry failed"
+                                                                    );
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            warn!(
+                                                                error = %e,
+                                                                entry_id = %entry_id,
+                                                                "search: pipeline.build failed"
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    debug!(
+                                                        error = %e,
+                                                        entry_id = %entry_id,
+                                                        "search: key derivation failed (session likely locked)"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            debug!(
+                                                entry_id = %entry_id,
+                                                "search: no searchable content in capture, skipping"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    debug!(
+                                        error = %e,
+                                        entry_id = %entry_id,
+                                        "search: representation policy selection failed, skipping"
+                                    );
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            debug!(
+                                entry_id = %entry_id,
+                                "search: captured entry not found in repo, skipping"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                error = %e,
+                                entry_id = %entry_id,
+                                "search: failed to fetch entry from repo"
+                            );
+                        }
+                    }
+                    }.instrument(search_span).await;
+                }
+
                 // --- Outbound sync dispatch (mirrors AppRuntime::on_clipboard_changed) ---
 
                 // Extract file paths only for LocalCapture (RemotePush must not re-sync).
@@ -291,15 +400,20 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                     let outbound_sync_uc = self.build_sync_outbound_clipboard_use_case();
                     let flow_id_clone = flow_id.clone();
                     tokio::task::spawn_blocking(move || {
-                        match outbound_sync_uc.execute(
-                            clipboard_intent.snapshot,
-                            origin,
-                            Some(flow_id_clone),
-                            clipboard_intent.file_transfers,
-                        ) {
-                            Ok(()) => info!("Daemon outbound clipboard sync completed"),
-                            Err(e) => warn!(error = %e, "Daemon outbound clipboard sync failed"),
+                        {
+                            match outbound_sync_uc.execute(
+                                clipboard_intent.snapshot,
+                                origin,
+                                Some(flow_id_clone),
+                                clipboard_intent.file_transfers,
+                            ) {
+                                Ok(()) => info!("Daemon outbound clipboard sync completed"),
+                                Err(e) => {
+                                    warn!(error = %e, "Daemon outbound clipboard sync failed")
+                                }
+                            }
                         }
+                        .in_current_span()
                     });
                 }
 
@@ -314,11 +428,24 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                             deps.network_ports.file_transfer.clone(),
                         )
                     };
+                    let file_transfer_orchestrator = self.file_transfer_orchestrator.clone();
+                    let entry_id_string = entry_id.to_string();
                     tokio::spawn(async move {
                         for file_intent in plan.files {
+                            let transfer_id = file_intent.transfer_id.clone();
+                            let path = file_intent.path.clone();
+                            let file_name = path.display().to_string();
+                            file_transfer_orchestrator
+                                .register_outbound_transfer(&transfer_id, &entry_id_string);
+                            info!(
+                                transfer_id = %transfer_id,
+                                entry_id = %entry_id_string,
+                                file = %file_name,
+                                "Registered outbound transfer linkage from clipboard capture"
+                            );
                             info!(file = %file_intent.path.display(), transfer_id = %file_intent.transfer_id, "Daemon sending file to peers");
                             match outbound_file_uc
-                                .execute(file_intent.path.clone(), Some(file_intent.transfer_id))
+                                .execute(file_intent.path, Some(transfer_id))
                                 .await
                             {
                                 Ok(result) => info!(
@@ -328,12 +455,13 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                                 ),
                                 Err(e) => warn!(
                                     error = %e,
-                                    file = %file_intent.path.display(),
+                                    file = %file_name,
                                     "Daemon outbound file sync failed"
                                 ),
                             }
                         }
-                    });
+                    }
+                    .in_current_span());
                 }
             }
             Ok(None) => {

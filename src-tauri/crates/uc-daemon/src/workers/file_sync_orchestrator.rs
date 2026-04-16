@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, info_span, warn, Instrument};
+use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 
 use uc_app::usecases::clipboard::clipboard_write_coordinator::{
     ClipboardWriteCoordinator, ClipboardWriteIntent,
@@ -121,16 +121,7 @@ impl FileSyncOrchestratorWorker {
         match event {
             NetworkEvent::TransferProgress(progress) => {
                 // Track durable status transitions (pending->transferring, liveness refresh)
-                self.orchestrator
-                    .handle_transfer_progress(
-                        &progress.transfer_id,
-                        progress.direction.clone(),
-                        progress.chunks_completed,
-                    )
-                    .await;
-                // Note: transient progress events are NOT forwarded to WS here;
-                // the orchestrator's emitter_cell handles StatusChanged events.
-                // Phase 64 will add WS-based progress forwarding if needed.
+                self.orchestrator.handle_transfer_progress(&progress).await;
             }
             NetworkEvent::FileTransferCompleted {
                 transfer_id,
@@ -140,7 +131,7 @@ impl FileSyncOrchestratorWorker {
                 batch_id,
                 batch_total,
             } => {
-                info!(
+                debug!(
                     transfer_id = %transfer_id,
                     peer_id = %peer_id,
                     filename = %filename,
@@ -287,6 +278,12 @@ impl FileSyncOrchestratorWorker {
 ///
 /// Canonicalizes paths to absolute paths, then delegates guard-registration + write
 /// to the ClipboardWriteCoordinator with LocalRestore intent.
+#[instrument(
+    name = "inbound_file_sync.restore_to_clipboard",
+    level = "info",
+    skip(file_paths, coordinator),
+    fields(file_count = file_paths.len())
+)]
 async fn restore_file_to_clipboard_after_transfer(
     file_paths: Vec<PathBuf>,
     coordinator: &Arc<ClipboardWriteCoordinator>,
@@ -322,14 +319,6 @@ async fn restore_file_to_clipboard_after_transfer(
     // Verify all files exist before attempting clipboard write
     let files_exist: Vec<bool> = file_paths.iter().map(|p| p.exists()).collect();
     let all_exist = files_exist.iter().all(|&e| e);
-    info!(
-        file_count = file_paths.len(),
-        paths = ?file_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-        files_exist = ?files_exist,
-        all_exist,
-        "restore_file_to_clipboard_after_transfer: starting restore"
-    );
-
     if !all_exist {
         warn!(
             paths = ?file_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
@@ -346,7 +335,7 @@ async fn restore_file_to_clipboard_after_transfer(
     // call is actively executing — not merely because attribution guards from
     // a previous completed write are still within their TTL window.
     if coordinator.is_write_in_progress() {
-        info!(
+        warn!(
             file_count = file_paths.len(),
             "Concurrent clipboard write in progress, skipping auto-restore. Files available in Dashboard."
         );
@@ -354,28 +343,19 @@ async fn restore_file_to_clipboard_after_transfer(
     }
 
     // Restore to system clipboard via coordinator (handles guard + write + cleanup-on-error)
-    info!(
-        path_list = %path_list,
-        "restore_file_to_clipboard_after_transfer: restoring to OS clipboard"
-    );
     if let Err(err) = coordinator
         .write(snapshot, ClipboardWriteIntent::LocalRestore)
         .await
     {
         warn!(error = %err, "Failed to write file URIs to system clipboard");
-    } else {
-        info!(
-            file_count = file_paths.len(),
-            "File URIs written to system clipboard"
-        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
+    use mockall::mock;
     use tokio::sync::mpsc;
     use tokio::time::{timeout, Duration};
     use uc_core::network::NetworkEvent;
@@ -386,56 +366,72 @@ mod tests {
         new_in_memory_change_origin()
     }
 
-    struct MockNetworkEvents {
-        rx: Mutex<Option<mpsc::Receiver<NetworkEvent>>>,
-    }
+    mock! {
+        NetworkEvents {}
 
-    #[async_trait]
-    impl NetworkEventPort for MockNetworkEvents {
-        async fn subscribe_events(&self) -> anyhow::Result<mpsc::Receiver<NetworkEvent>> {
-            self.rx
-                .lock()
-                .unwrap()
-                .take()
-                .ok_or_else(|| anyhow::anyhow!("receiver already taken"))
+        #[async_trait]
+        impl NetworkEventPort for NetworkEvents {
+            async fn subscribe_events(&self) -> anyhow::Result<mpsc::Receiver<NetworkEvent>>;
         }
     }
 
-    struct MockSystemClipboard;
+    mock! {
+        SystemClipboard {}
 
-    impl uc_core::ports::SystemClipboardPort for MockSystemClipboard {
-        fn read_snapshot(&self) -> anyhow::Result<uc_core::clipboard::SystemClipboardSnapshot> {
-            Ok(uc_core::clipboard::SystemClipboardSnapshot {
-                ts_ms: 0,
-                representations: vec![],
-            })
-        }
-
-        fn write_snapshot(
-            &self,
-            _snapshot: uc_core::clipboard::SystemClipboardSnapshot,
-        ) -> anyhow::Result<()> {
-            Ok(())
+        impl uc_core::ports::SystemClipboardPort for SystemClipboard {
+            fn read_snapshot(&self) -> anyhow::Result<uc_core::clipboard::SystemClipboardSnapshot>;
+            fn write_snapshot(&self, snapshot: uc_core::clipboard::SystemClipboardSnapshot) -> anyhow::Result<()>;
         }
     }
 
-    struct MockSettings;
+    mock! {
+        Settings {}
 
-    #[async_trait]
-    impl uc_core::ports::SettingsPort for MockSettings {
-        async fn load(&self) -> anyhow::Result<uc_core::settings::model::Settings> {
-            Ok(uc_core::settings::model::Settings::default())
+        #[async_trait]
+        impl SettingsPort for Settings {
+            async fn load(&self) -> anyhow::Result<uc_core::settings::model::Settings>;
+            async fn save(&self, settings: &uc_core::settings::model::Settings) -> anyhow::Result<()>;
         }
+    }
 
-        async fn save(&self, _settings: &uc_core::settings::model::Settings) -> anyhow::Result<()> {
-            Ok(())
+    mock! {
+        Clock {}
+
+        impl uc_core::ports::ClockPort for Clock {
+            fn now_ms(&self) -> i64;
         }
+    }
+
+    fn build_test_network_events(rx: mpsc::Receiver<NetworkEvent>) -> Arc<dyn NetworkEventPort> {
+        let mut network_events = MockNetworkEvents::new();
+        network_events
+            .expect_subscribe_events()
+            .times(1)
+            .return_once(move || Ok(rx));
+        Arc::new(network_events)
+    }
+
+    fn build_test_settings() -> Arc<dyn SettingsPort> {
+        let mut settings = MockSettings::new();
+        settings
+            .expect_load()
+            .returning(|| Ok(uc_core::settings::model::Settings::default()));
+        settings.expect_save().returning(|_| Ok(()));
+        Arc::new(settings)
     }
 
     /// Build a test ClipboardWriteCoordinator with no-op ports.
     fn build_test_coordinator() -> Arc<ClipboardWriteCoordinator> {
+        let mut clipboard = MockSystemClipboard::new();
+        clipboard.expect_read_snapshot().returning(|| {
+            Ok(uc_core::clipboard::SystemClipboardSnapshot {
+                ts_ms: 0,
+                representations: vec![],
+            })
+        });
+        clipboard.expect_write_snapshot().returning(|_| Ok(()));
         Arc::new(ClipboardWriteCoordinator::new(
-            Arc::new(MockSystemClipboard),
+            Arc::new(clipboard),
             test_origin(),
         ))
     }
@@ -448,19 +444,16 @@ mod tests {
         use uc_core::ports::file_transfer_repository::NoopFileTransferRepositoryPort;
         use uc_core::ports::ClockPort;
 
-        struct SystemClock;
-        impl ClockPort for SystemClock {
-            fn now_ms(&self) -> i64 {
-                chrono::Utc::now().timestamp_millis()
-            }
-        }
-
         let repo = Arc::new(NoopFileTransferRepositoryPort);
         let tracker = Arc::new(TrackInboundTransfersUseCase::new(repo));
         let emitter: Arc<dyn uc_core::ports::host_event_emitter::HostEventEmitterPort> =
             Arc::new(LoggingHostEventEmitter);
         let emitter_cell = Arc::new(RwLock::new(emitter));
-        let clock: Arc<dyn ClockPort> = Arc::new(SystemClock);
+        let mut clock = MockClock::new();
+        clock
+            .expect_now_ms()
+            .returning(|| chrono::Utc::now().timestamp_millis());
+        let clock: Arc<dyn ClockPort> = Arc::new(clock);
 
         Arc::new(FileTransferOrchestrator::new(tracker, emitter_cell, clock))
     }
@@ -472,12 +465,10 @@ mod tests {
 
         let worker = FileSyncOrchestratorWorker::new(
             build_test_orchestrator(),
-            Arc::new(MockNetworkEvents {
-                rx: Mutex::new(Some(rx)),
-            }),
+            build_test_network_events(rx),
             build_test_coordinator(),
             std::env::temp_dir(),
-            Arc::new(MockSettings),
+            build_test_settings(),
         );
 
         let worker_cancel = cancel.clone();
@@ -510,12 +501,10 @@ mod tests {
 
         let worker = FileSyncOrchestratorWorker::new(
             build_test_orchestrator(),
-            Arc::new(MockNetworkEvents {
-                rx: Mutex::new(Some(rx)),
-            }),
+            build_test_network_events(rx),
             build_test_coordinator(),
             std::env::temp_dir(),
-            Arc::new(MockSettings),
+            build_test_settings(),
         );
 
         let worker_cancel = cancel.clone();
@@ -552,12 +541,10 @@ mod tests {
 
         let worker = FileSyncOrchestratorWorker::new(
             build_test_orchestrator(),
-            Arc::new(MockNetworkEvents {
-                rx: Mutex::new(Some(rx)),
-            }),
+            build_test_network_events(rx),
             build_test_coordinator(),
             std::env::temp_dir(),
-            Arc::new(MockSettings),
+            build_test_settings(),
         );
 
         let worker_cancel = cancel.clone();

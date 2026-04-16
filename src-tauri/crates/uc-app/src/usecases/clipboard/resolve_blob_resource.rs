@@ -66,91 +66,10 @@ impl ResolveBlobResourceUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use uc_core::clipboard::{MimeType, PayloadAvailability, PersistedClipboardRepresentation};
-    use uc_core::ids::{EventId, RepresentationId};
-    use uc_core::ports::clipboard::ProcessingUpdateOutcome;
+    use crate::test_mocks::{MockBlobStore, MockClipboardRepresentationRepository};
+    use uc_core::clipboard::{MimeType, PersistedClipboardRepresentation};
+    use uc_core::ids::RepresentationId;
     use uc_core::BlobId;
-
-    struct MockRepresentationRepository {
-        rep: Option<PersistedClipboardRepresentation>,
-    }
-
-    struct MockBlobStore {
-        blob_id: BlobId,
-        bytes: Vec<u8>,
-    }
-
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepository {
-        async fn get_representation(
-            &self,
-            _event_id: &EventId,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self.rep.clone())
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &BlobId,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &RepresentationId,
-            _expected_states: &[PayloadAvailability],
-            _blob_id: Option<&BlobId>,
-            _new_state: PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<ProcessingUpdateOutcome> {
-            Ok(ProcessingUpdateOutcome::NotFound)
-        }
-    }
-
-    #[async_trait]
-    impl BlobStorePort for MockBlobStore {
-        async fn put(
-            &self,
-            _blob_id: &BlobId,
-            _data: &[u8],
-        ) -> Result<(std::path::PathBuf, Option<i64>)> {
-            Ok((std::path::PathBuf::from("/tmp/mock"), None))
-        }
-
-        async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>> {
-            if *blob_id == self.blob_id {
-                Ok(self.bytes.clone())
-            } else {
-                Err(anyhow::anyhow!("Blob not found"))
-            }
-        }
-    }
 
     #[tokio::test]
     async fn test_resolve_blob_resource_returns_bytes() {
@@ -165,15 +84,22 @@ mod tests {
             Some(blob_id.clone()),
         );
 
-        let uc = ResolveBlobResourceUseCase::new(
-            Arc::new(MockRepresentationRepository {
-                rep: Some(representation),
-            }),
-            Arc::new(MockBlobStore {
-                blob_id: blob_id.clone(),
-                bytes: vec![1, 2, 3],
-            }),
-        );
+        let mut rep_repo = MockClipboardRepresentationRepository::new();
+        rep_repo
+            .expect_get_representation_by_blob_id()
+            .returning(move |_| Ok(Some(representation.clone())));
+
+        let expected_blob_id = blob_id.clone();
+        let mut blob_store = MockBlobStore::new();
+        blob_store.expect_get().returning(move |id| {
+            if *id == expected_blob_id {
+                Ok(vec![1, 2, 3])
+            } else {
+                Err(anyhow::anyhow!("Blob not found"))
+            }
+        });
+
+        let uc = ResolveBlobResourceUseCase::new(Arc::new(rep_repo), Arc::new(blob_store));
 
         let result = uc.execute(&blob_id).await.unwrap();
 

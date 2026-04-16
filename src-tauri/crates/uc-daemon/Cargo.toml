@@ -19,8 +19,11 @@ uc-core = { path = "../uc-core" }
 uc-infra = { path = "../uc-infra" }
 uc-platform = { path = "../uc-platform", features = ["test-helpers"] }
 uc-observability = { path = "../uc-observability" }
+uc-daemon-contract = { path = "../uc-daemon-contract" }
+uc-daemon-local = { path = "../uc-daemon-local" }
 clipboard-rs = { version = "0.3.3", features = ["default"] }
 axum = { version = "0.7", features = ["ws", "tokio", "http1", "http2"] }
+base64 = "0.22"
 tokio = { version = "1", features = ["full", "test-util"] }
 tokio-util = "0.7"
 serde = { version = "1", features = ["derive"] }
@@ -38,11 +41,13 @@ utoipa = { version = "4", features = ["uuid", "chrono", "url"] }
 utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
 serde_with = "3.18.0"
-base64 = "0.22"
 
 [dev-dependencies]
+uc-daemon-local = { path = "../uc-daemon-local", features = ["test-helpers"] }
 tempfile = "3"
 chrono = { version = "0.4", default-features = true }
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
 percent-encoding = "2"
+diesel = { version = "2.3.5", features = ["sqlite"] }
+mockall = "0.13"

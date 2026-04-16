@@ -31,8 +31,8 @@ const SettingsSidebar: FC<SettingsSidebarProps> = ({ activeCategory, onCategoryC
   }
 
   return (
-    <Sidebar collapsible="none" className="border-r border-border/50 bg-muted/30">
-      <SidebarContent>
+    <Sidebar collapsible="none" className="bg-transparent border-none">
+      <SidebarContent className="bg-transparent">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>

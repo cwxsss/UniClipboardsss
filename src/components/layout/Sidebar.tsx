@@ -20,8 +20,11 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ReleaseNotes } from '@/components/update/ReleaseNotes'
 import { useSetting } from '@/hooks/useSetting'
 import { useUpdate } from '@/hooks/useUpdate'
+import { createLogger } from '@/lib/logger'
 import { cn } from '@/lib/utils'
 import { sentryEnabled } from '@/observability/sentry'
+
+const log = createLogger('sidebar')
 
 const NavButton: React.FC<{
   to: string
@@ -90,7 +93,11 @@ const NavButton: React.FC<{
   )
 }
 
-const Sidebar: React.FC = () => {
+interface SidebarProps {
+  className?: string
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ className }) => {
   const { t } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
@@ -117,7 +124,7 @@ const Sidebar: React.FC = () => {
       await installUpdate()
       setUpdateDialogOpen(false)
     } catch (error) {
-      console.error('更新失败:', error)
+      log.error({ err: error }, '更新失败')
       toast.error(t('update.installFailed'))
     }
   }
@@ -127,11 +134,13 @@ const Sidebar: React.FC = () => {
       <aside
         data-tauri-drag-region
         className={cn(
-          'w-14 h-full flex flex-col items-center py-4 bg-muted/40 border-r border-border/40 backdrop-blur-xl shrink-0'
+          'relative z-10 w-14 h-full shrink-0 flex flex-col items-center py-4',
+          'bg-transparent',
+          className
         )}
       >
         {/* Main Navigation */}
-        <div className="flex flex-col gap-3 w-full items-center">
+        <div className="relative z-10 flex flex-col gap-3 w-full items-center">
           {navItems.map(item => (
             <NavButton
               key={item.to}
@@ -147,7 +156,7 @@ const Sidebar: React.FC = () => {
         <div data-tauri-drag-region className="flex-1 w-full min-h-0" />
 
         {/* Bottom Navigation */}
-        <div className="flex flex-col gap-3 w-full items-center">
+        <div className="relative z-10 flex flex-col gap-3 w-full items-center">
           {updateInfo && (
             <TooltipProvider delayDuration={0}>
               <Tooltip>

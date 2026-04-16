@@ -6,6 +6,7 @@
 - ✅ **v0.2.0 Architecture Remediation** — shipped 2026-03-09
 - ✅ **v0.3.0 Log Observability & Feature Expansion** — shipped 2026-03-17
 - ✅ **v0.4.0 Runtime Mode Separation** — archived 2026-04-09 with known gaps accepted
+- ✅ **v0.5.0 Local Encrypted Search** — archived 2026-04-13
 
 ## Archived Milestones
 
@@ -63,6 +64,22 @@ Archive note:
 
 </details>
 
-## Next Milestone
+<details>
+<summary>✅ v0.5.0 Local Encrypted Search</summary>
 
-Not defined yet.
+See:
+
+- `.planning/milestones/v0.5.0-ROADMAP.md`
+- `.planning/milestones/v0.5.0-REQUIREMENTS.md`
+
+Archive note:
+
+- Archived on 2026-04-13
+- Phase 93 was completed manually and backfilled during milestone archive
+- Archived without a standalone milestone audit file
+
+</details>
+
+## Next Step
+
+No active milestone is defined. Start the next one with `$gsd-new-milestone`.

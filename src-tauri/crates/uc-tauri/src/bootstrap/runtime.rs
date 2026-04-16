@@ -514,7 +514,7 @@ mod tests {
     use super::*;
     use crate::test_utils::noop_network_ports;
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use mockall::mock;
     use std::sync::{Arc, Mutex};
     use tokio::sync::mpsc;
     use uc_core::clipboard::PolicyError;
@@ -539,712 +539,913 @@ mod tests {
         new_in_memory_change_origin()
     }
 
-    use uc_platform::ports::{AutostartPort, UiPort};
+    mock! {
+        EntryRepository {}
 
-    struct MockEntryRepository {
-        save_calls: Arc<AtomicUsize>,
+        #[async_trait]
+        impl ClipboardEntryRepositoryPort for EntryRepository {
+            async fn save_entry_and_selection(
+                &self,
+                entry: &uc_core::ClipboardEntry,
+                selection: &uc_core::ClipboardSelectionDecision,
+            ) -> anyhow::Result<()>;
+            async fn get_entry(
+                &self,
+                entry_id: &uc_core::ids::EntryId,
+            ) -> anyhow::Result<Option<uc_core::ClipboardEntry>>;
+            async fn list_entries(
+                &self,
+                limit: usize,
+                offset: usize,
+            ) -> anyhow::Result<Vec<uc_core::ClipboardEntry>>;
+            async fn touch_entry(
+                &self,
+                entry_id: &uc_core::ids::EntryId,
+                active_time_ms: i64,
+            ) -> anyhow::Result<bool>;
+            async fn delete_entry(&self, entry_id: &uc_core::ids::EntryId) -> anyhow::Result<()>;
+        }
     }
 
-    struct MockEventWriter {
-        insert_calls: Arc<AtomicUsize>,
+    mock! {
+        EventWriter {}
+
+        #[async_trait]
+        impl ClipboardEventWriterPort for EventWriter {
+            async fn insert_event(
+                &self,
+                event: &uc_core::ClipboardEvent,
+                representations: &Vec<uc_core::PersistedClipboardRepresentation>,
+            ) -> anyhow::Result<()>;
+            async fn delete_event_and_representations(
+                &self,
+                event_id: &uc_core::ids::EventId,
+            ) -> anyhow::Result<()>;
+        }
     }
 
-    struct MockRepresentationPolicy {
-        select_calls: Arc<AtomicUsize>,
+    mock! {
+        RepresentationPolicy {}
+
+        impl SelectRepresentationPolicyPort for RepresentationPolicy {
+            fn select(
+                &self,
+                snapshot: &SystemClipboardSnapshot,
+            ) -> std::result::Result<uc_core::clipboard::ClipboardSelection, PolicyError>;
+        }
     }
 
-    struct MockNormalizer {
-        normalize_calls: Arc<AtomicUsize>,
+    mock! {
+        Normalizer {}
+
+        #[async_trait]
+        impl ClipboardRepresentationNormalizerPort for Normalizer {
+            async fn normalize(
+                &self,
+                observed: &uc_core::clipboard::ObservedClipboardRepresentation,
+            ) -> anyhow::Result<uc_core::PersistedClipboardRepresentation>;
+        }
     }
 
-    struct MockRepresentationCache {
-        put_calls: Arc<AtomicUsize>,
+    mock! {
+        RepresentationCache {}
+
+        #[async_trait]
+        impl RepresentationCachePort for RepresentationCache {
+            async fn put(&self, rep_id: &uc_core::ids::RepresentationId, bytes: Vec<u8>);
+            async fn get(&self, rep_id: &uc_core::ids::RepresentationId) -> Option<Vec<u8>>;
+            async fn mark_completed(&self, rep_id: &uc_core::ids::RepresentationId);
+            async fn mark_spooling(&self, rep_id: &uc_core::ids::RepresentationId);
+            async fn remove(&self, rep_id: &uc_core::ids::RepresentationId);
+        }
     }
 
-    struct MockSpoolQueue {
-        enqueue_calls: Arc<AtomicUsize>,
+    mock! {
+        SpoolQueue {}
+
+        #[async_trait]
+        impl SpoolQueuePort for SpoolQueue {
+            async fn enqueue(&self, request: SpoolRequest) -> anyhow::Result<()>;
+        }
     }
 
-    #[derive(Default)]
-    struct RecordingEmitter {
-        events: Mutex<Vec<HostEvent>>,
+    mock! {
+        HostEventEmitter {}
+
+        impl HostEventEmitterPort for HostEventEmitter {
+            fn emit(
+                &self,
+                event: HostEvent,
+            ) -> Result<(), uc_core::ports::host_event_emitter::EmitError>;
+        }
     }
 
-    struct MockDeviceIdentity;
+    mock! {
+        DeviceIdentity {}
 
-    struct NoopClipboard;
-    struct NoopPort;
+        impl DeviceIdentityPort for DeviceIdentity {
+            fn current_device_id(&self) -> DeviceId;
+        }
+    }
 
-    #[async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepository {
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &uc_core::ClipboardEntry,
-            _selection: &uc_core::ClipboardSelectionDecision,
-        ) -> anyhow::Result<()> {
-            self.save_calls.fetch_add(1, Ordering::SeqCst);
+    mock! {
+        SystemClipboard {}
+
+        #[async_trait]
+        impl SystemClipboardPort for SystemClipboard {
+            fn read_snapshot(&self) -> anyhow::Result<SystemClipboardSnapshot>;
+            fn write_snapshot(&self, snapshot: SystemClipboardSnapshot) -> anyhow::Result<()>;
+        }
+    }
+
+    mock! {
+        SelectionRepo {}
+
+        #[async_trait]
+        impl ClipboardSelectionRepositoryPort for SelectionRepo {
+            async fn get_selection(
+                &self,
+                entry_id: &uc_core::ids::EntryId,
+            ) -> anyhow::Result<Option<uc_core::ClipboardSelectionDecision>>;
+            async fn delete_selection(&self, entry_id: &uc_core::ids::EntryId) -> anyhow::Result<()>;
+        }
+    }
+
+    mock! {
+        RepresentationRepo {}
+
+        #[async_trait]
+        impl ClipboardRepresentationRepositoryPort for RepresentationRepo {
+            async fn get_representation(
+                &self,
+                event_id: &uc_core::ids::EventId,
+                representation_id: &uc_core::ids::RepresentationId,
+            ) -> anyhow::Result<Option<uc_core::PersistedClipboardRepresentation>>;
+            async fn get_representation_by_id(
+                &self,
+                representation_id: &uc_core::ids::RepresentationId,
+            ) -> anyhow::Result<Option<uc_core::PersistedClipboardRepresentation>>;
+            async fn get_representation_by_blob_id(
+                &self,
+                blob_id: &BlobId,
+            ) -> anyhow::Result<Option<uc_core::PersistedClipboardRepresentation>>;
+            async fn update_blob_id(
+                &self,
+                representation_id: &uc_core::ids::RepresentationId,
+                blob_id: &BlobId,
+            ) -> anyhow::Result<()>;
+            async fn update_blob_id_if_none(
+                &self,
+                representation_id: &uc_core::ids::RepresentationId,
+                blob_id: &BlobId,
+            ) -> anyhow::Result<bool>;
+            #[mockall::concretize]
+            async fn update_processing_result(
+                &self,
+                rep_id: &uc_core::ids::RepresentationId,
+                expected_states: &[uc_core::clipboard::PayloadAvailability],
+                blob_id: Option<&BlobId>,
+                new_state: uc_core::clipboard::PayloadAvailability,
+                last_error: Option<&str>,
+            ) -> anyhow::Result<uc_core::ports::clipboard::ProcessingUpdateOutcome>;
+        }
+    }
+
+    mock! {
+        PayloadResolver {}
+
+        #[async_trait]
+        impl ClipboardPayloadResolverPort for PayloadResolver {
+            async fn resolve(
+                &self,
+                representation: &PersistedClipboardRepresentation,
+            ) -> anyhow::Result<ResolvedClipboardPayload>;
+        }
+    }
+
+    mock! {
+        Encryption {}
+
+        #[async_trait]
+        impl EncryptionPort for Encryption {
+            async fn derive_kek(
+                &self,
+                passphrase: &Passphrase,
+                salt: &[u8],
+                kdf: &KdfParams,
+            ) -> Result<Kek, EncryptionError>;
+            async fn wrap_master_key(
+                &self,
+                kek: &Kek,
+                master_key: &MasterKey,
+                aead: EncryptionAlgo,
+            ) -> Result<EncryptedBlob, EncryptionError>;
+            async fn unwrap_master_key(
+                &self,
+                kek: &Kek,
+                wrapped: &EncryptedBlob,
+            ) -> Result<MasterKey, EncryptionError>;
+            async fn encrypt_blob(
+                &self,
+                master_key: &MasterKey,
+                plaintext: &[u8],
+                aad: &[u8],
+                aead: EncryptionAlgo,
+            ) -> Result<EncryptedBlob, EncryptionError>;
+            async fn decrypt_blob(
+                &self,
+                master_key: &MasterKey,
+                encrypted: &EncryptedBlob,
+                aad: &[u8],
+            ) -> Result<Vec<u8>, EncryptionError>;
+        }
+    }
+
+    mock! {
+        EncryptionSession {}
+
+        #[async_trait]
+        impl EncryptionSessionPort for EncryptionSession {
+            async fn is_ready(&self) -> bool;
+            async fn get_master_key(&self) -> Result<MasterKey, EncryptionError>;
+            async fn set_master_key(&self, master_key: MasterKey) -> Result<(), EncryptionError>;
+            async fn clear(&self) -> Result<(), EncryptionError>;
+        }
+    }
+
+    mock! {
+        EncryptionState {}
+
+        #[async_trait]
+        impl EncryptionStatePort for EncryptionState {
+            async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError>;
+            async fn persist_initialized(&self) -> Result<(), EncryptionStateError>;
+            async fn clear_initialized(&self) -> Result<(), EncryptionStateError>;
+        }
+    }
+
+    mock! {
+        KeyScope {}
+
+        #[async_trait]
+        impl KeyScopePort for KeyScope {
+            async fn current_scope(
+                &self,
+            ) -> Result<KeyScope, uc_core::ports::security::key_scope::ScopeError>;
+        }
+    }
+
+    mock! {
+        KeyMaterial {}
+
+        #[async_trait]
+        impl KeyMaterialPort for KeyMaterial {
+            async fn load_kek(&self, scope: &KeyScope) -> Result<Kek, EncryptionError>;
+            async fn store_kek(&self, scope: &KeyScope, kek: &Kek) -> Result<(), EncryptionError>;
+            async fn delete_kek(&self, scope: &KeyScope) -> Result<(), EncryptionError>;
+            async fn load_keyslot(&self, scope: &KeyScope) -> Result<KeySlot, EncryptionError>;
+            async fn store_keyslot(&self, keyslot: &KeySlot) -> Result<(), EncryptionError>;
+            async fn delete_keyslot(&self, scope: &KeyScope) -> Result<(), EncryptionError>;
+        }
+    }
+
+    mock! {
+        DeviceRepo {}
+
+        #[async_trait]
+        impl DeviceRepositoryPort for DeviceRepo {
+            async fn find_by_id(
+                &self,
+                id: &uc_core::device::DeviceId,
+            ) -> Result<Option<uc_core::device::Device>, uc_core::ports::errors::DeviceRepositoryError>;
+            async fn save(
+                &self,
+                device: uc_core::device::Device,
+            ) -> Result<(), uc_core::ports::errors::DeviceRepositoryError>;
+            async fn delete(
+                &self,
+                id: &uc_core::device::DeviceId,
+            ) -> Result<(), uc_core::ports::errors::DeviceRepositoryError>;
+            async fn list_all(
+                &self,
+            ) -> Result<Vec<uc_core::device::Device>, uc_core::ports::errors::DeviceRepositoryError>;
+        }
+    }
+
+    mock! {
+        NetworkControl {}
+
+        #[async_trait]
+        impl uc_core::ports::NetworkControlPort for NetworkControl {
+            async fn start_network(&self) -> anyhow::Result<()>;
+        }
+    }
+
+    mock! {
+        SetupStatus {}
+
+        #[async_trait]
+        impl SetupStatusPort for SetupStatus {
+            async fn get_status(&self) -> anyhow::Result<uc_core::setup::SetupStatus>;
+            async fn set_status(&self, status: &uc_core::setup::SetupStatus) -> anyhow::Result<()>;
+        }
+    }
+
+    mock! {
+        SecureStorage {}
+
+        impl uc_core::ports::SecureStoragePort for SecureStorage {
+            fn get(&self, key: &str) -> Result<Option<Vec<u8>>, uc_core::ports::SecureStorageError>;
+            fn set(&self, key: &str, value: &[u8]) -> Result<(), uc_core::ports::SecureStorageError>;
+            fn delete(&self, key: &str) -> Result<(), uc_core::ports::SecureStorageError>;
+        }
+    }
+
+    mock! {
+        BlobStore {}
+
+        #[async_trait]
+        impl BlobStorePort for BlobStore {
+            async fn put(
+                &self,
+                blob_id: &BlobId,
+                data: &[u8],
+            ) -> anyhow::Result<(std::path::PathBuf, Option<i64>)>;
+            async fn get(&self, blob_id: &BlobId) -> anyhow::Result<Vec<u8>>;
+        }
+    }
+
+    mock! {
+        BlobRepo {}
+
+        #[async_trait]
+        impl BlobRepositoryPort for BlobRepo {
+            async fn insert_blob(&self, blob: &Blob) -> anyhow::Result<()>;
+            async fn find_by_hash(&self, content_hash: &ContentHash) -> anyhow::Result<Option<Blob>>;
+        }
+    }
+
+    mock! {
+        BlobWriter {}
+
+        #[async_trait]
+        impl BlobWriterPort for BlobWriter {
+            async fn write_if_absent(
+                &self,
+                content_id: &ContentHash,
+                plaintext_bytes: &[u8],
+            ) -> anyhow::Result<Blob>;
+        }
+    }
+
+    mock! {
+        ThumbnailRepo {}
+
+        #[async_trait]
+        impl ThumbnailRepositoryPort for ThumbnailRepo {
+            async fn get_by_representation_id(
+                &self,
+                representation_id: &uc_core::ids::RepresentationId,
+            ) -> anyhow::Result<Option<uc_core::clipboard::ThumbnailMetadata>>;
+            async fn insert_thumbnail(
+                &self,
+                metadata: &uc_core::clipboard::ThumbnailMetadata,
+            ) -> anyhow::Result<()>;
+        }
+    }
+
+    mock! {
+        ThumbnailGenerator {}
+
+        #[async_trait]
+        impl ThumbnailGeneratorPort for ThumbnailGenerator {
+            async fn generate_thumbnail(
+                &self,
+                image_bytes: &[u8],
+            ) -> anyhow::Result<uc_core::ports::clipboard::GeneratedThumbnail>;
+            async fn generate_thumbnail_from_rgba(
+                &self,
+                rgba_bytes: &[u8],
+                width: u32,
+                height: u32,
+            ) -> anyhow::Result<uc_core::ports::clipboard::GeneratedThumbnail>;
+        }
+    }
+
+    mock! {
+        Settings {}
+
+        #[async_trait]
+        impl SettingsPort for Settings {
+            async fn load(&self) -> anyhow::Result<uc_core::settings::model::Settings>;
+            async fn save(&self, settings: &uc_core::settings::model::Settings) -> anyhow::Result<()>;
+        }
+    }
+
+    mock! {
+        PairedDeviceRepo {}
+
+        #[async_trait]
+        impl PairedDeviceRepositoryPort for PairedDeviceRepo {
+            async fn get_by_peer_id(
+                &self,
+                peer_id: &PeerId,
+            ) -> Result<Option<uc_core::network::PairedDevice>, PairedDeviceRepositoryError>;
+            async fn list_all(
+                &self,
+            ) -> Result<Vec<uc_core::network::PairedDevice>, PairedDeviceRepositoryError>;
+            async fn upsert(
+                &self,
+                device: uc_core::network::PairedDevice,
+            ) -> Result<(), PairedDeviceRepositoryError>;
+            async fn set_state(
+                &self,
+                peer_id: &PeerId,
+                state: uc_core::network::PairingState,
+            ) -> Result<(), PairedDeviceRepositoryError>;
+            async fn update_last_seen(
+                &self,
+                peer_id: &PeerId,
+                last_seen_at: chrono::DateTime<chrono::Utc>,
+            ) -> Result<(), PairedDeviceRepositoryError>;
+            async fn delete(&self, peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError>;
+            async fn update_sync_settings(
+                &self,
+                peer_id: &PeerId,
+                settings: Option<uc_core::settings::model::SyncSettings>,
+            ) -> Result<(), PairedDeviceRepositoryError>;
+        }
+    }
+
+    mock! {
+        Clock {}
+
+        impl ClockPort for Clock {
+            fn now_ms(&self) -> i64;
+        }
+    }
+
+    mock! {
+        ContentHash {}
+
+        impl ContentHashPort for ContentHash {
+            fn hash_bytes(&self, bytes: &[u8]) -> anyhow::Result<ContentHash>;
+        }
+    }
+
+    mock! {
+        FileManager {}
+
+        impl uc_core::ports::FileManagerPort for FileManager {
+            fn open_directory(
+                &self,
+                path: &std::path::Path,
+            ) -> Result<(), uc_core::ports::FileManagerError>;
+        }
+    }
+
+    mock! {
+        CacheFs {}
+
+        #[async_trait]
+        impl uc_core::ports::CacheFsPort for CacheFs {
+            async fn exists(&self, path: &std::path::Path) -> bool;
+            async fn read_dir(
+                &self,
+                path: &std::path::Path,
+            ) -> anyhow::Result<Vec<uc_core::ports::CacheFsDirEntry>>;
+            async fn remove_dir_all(&self, path: &std::path::Path) -> anyhow::Result<()>;
+            async fn remove_file(&self, path: &std::path::Path) -> anyhow::Result<()>;
+            async fn dir_size(&self, path: &std::path::Path) -> anyhow::Result<u64>;
+        }
+    }
+
+    mock! {
+        SearchIndex {}
+
+        #[async_trait]
+        impl uc_core::ports::search::search_index::SearchIndexPort for SearchIndex {
+            async fn index_entry(
+                &self,
+                d: uc_core::search::SearchDocument,
+                p: Vec<uc_core::search::SearchPosting>,
+            ) -> Result<(), uc_core::search::SearchError>;
+            async fn remove_entry(
+                &self,
+                id: &uc_core::ids::EntryId,
+            ) -> Result<(), uc_core::search::SearchError>;
+            async fn search(
+                &self,
+                q: uc_core::search::SearchQuery,
+            ) -> Result<uc_core::search::SearchResultsPage, uc_core::search::SearchError>;
+            async fn rebuild(
+                &self,
+                e: Vec<(
+                    uc_core::search::SearchDocument,
+                    Vec<uc_core::search::SearchPosting>,
+                )>,
+                tx: tokio::sync::mpsc::Sender<uc_core::search::RebuildProgress>,
+            ) -> Result<(), uc_core::search::SearchError>;
+            async fn get_index_meta(
+                &self,
+            ) -> Result<uc_core::search::SearchIndexMeta, uc_core::search::SearchError>;
+        }
+    }
+
+    mock! {
+        SearchKeyDerivation {}
+
+        #[async_trait]
+        impl uc_core::ports::search::search_key::SearchKeyDerivationPort for SearchKeyDerivation {
+            async fn derive_search_key(
+                &self,
+            ) -> Result<uc_core::search::SearchKey, uc_core::search::SearchError>;
+        }
+    }
+
+    fn build_entry_repository_mock() -> MockEntryRepository {
+        let mut mock = MockEntryRepository::new();
+        mock.expect_save_entry_and_selection()
+            .times(0..)
+            .returning(|_, _| Ok(()));
+        mock.expect_get_entry().times(0..).returning(|_| Ok(None));
+        mock.expect_list_entries()
+            .times(0..)
+            .returning(|_, _| Ok(vec![]));
+        mock.expect_touch_entry()
+            .times(0..)
+            .returning(|_, _| Ok(false));
+        mock.expect_delete_entry().times(0..).returning(|_| Ok(()));
+        mock
+    }
+
+    fn build_event_writer_mock() -> MockEventWriter {
+        let mut mock = MockEventWriter::new();
+        mock.expect_insert_event()
+            .times(0..)
+            .returning(|_, _| Ok(()));
+        mock.expect_delete_event_and_representations()
+            .times(0..)
+            .returning(|_| Ok(()));
+        mock
+    }
+
+    fn build_representation_policy_mock() -> MockRepresentationPolicy {
+        let mut mock = MockRepresentationPolicy::new();
+        mock.expect_select()
+            .times(0..)
+            .returning(|_| Err(PolicyError::NoUsableRepresentation));
+        mock
+    }
+
+    fn build_normalizer_mock() -> MockNormalizer {
+        let mut mock = MockNormalizer::new();
+        mock.expect_normalize()
+            .times(0..)
+            .returning(|_| Err(anyhow::anyhow!("normalize should not be called")));
+        mock
+    }
+
+    fn build_representation_cache_mock() -> MockRepresentationCache {
+        let mut mock = MockRepresentationCache::new();
+        mock.expect_put().times(0..).returning(|_, _| ());
+        mock.expect_get().times(0..).returning(|_| None);
+        mock.expect_mark_completed().times(0..).returning(|_| ());
+        mock.expect_mark_spooling().times(0..).returning(|_| ());
+        mock.expect_remove().times(0..).returning(|_| ());
+        mock
+    }
+
+    fn build_spool_queue_mock() -> MockSpoolQueue {
+        let mut mock = MockSpoolQueue::new();
+        mock.expect_enqueue().times(0..).returning(|_| Ok(()));
+        mock
+    }
+
+    fn build_device_identity_mock() -> MockDeviceIdentity {
+        let mut mock = MockDeviceIdentity::new();
+        mock.expect_current_device_id()
+            .times(0..)
+            .returning(|| DeviceId::new("device-test"));
+        mock
+    }
+
+    fn build_recording_emitter_mock(events: Arc<Mutex<Vec<HostEvent>>>) -> MockHostEventEmitter {
+        let mut mock = MockHostEventEmitter::new();
+        mock.expect_emit().times(0..).returning(move |event| {
+            events.lock().unwrap().push(event);
             Ok(())
-        }
-
-        async fn get_entry(
-            &self,
-            _entry_id: &uc_core::ids::EntryId,
-        ) -> anyhow::Result<Option<uc_core::ClipboardEntry>> {
-            Ok(None)
-        }
-
-        async fn list_entries(
-            &self,
-            _limit: usize,
-            _offset: usize,
-        ) -> anyhow::Result<Vec<uc_core::ClipboardEntry>> {
-            Ok(vec![])
-        }
-
-        async fn delete_entry(&self, _entry_id: &uc_core::ids::EntryId) -> anyhow::Result<()> {
-            Ok(())
-        }
+        });
+        mock
     }
 
-    #[async_trait]
-    impl ClipboardEventWriterPort for MockEventWriter {
-        async fn insert_event(
-            &self,
-            _event: &uc_core::ClipboardEvent,
-            _representations: &Vec<uc_core::PersistedClipboardRepresentation>,
-        ) -> anyhow::Result<()> {
-            self.insert_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn delete_event_and_representations(
-            &self,
-            _event_id: &uc_core::ids::EventId,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl SelectRepresentationPolicyPort for MockRepresentationPolicy {
-        fn select(
-            &self,
-            _snapshot: &SystemClipboardSnapshot,
-        ) -> std::result::Result<uc_core::clipboard::ClipboardSelection, PolicyError> {
-            self.select_calls.fetch_add(1, Ordering::SeqCst);
-            Err(PolicyError::NoUsableRepresentation)
-        }
-    }
-
-    #[async_trait]
-    impl ClipboardRepresentationNormalizerPort for MockNormalizer {
-        async fn normalize(
-            &self,
-            _observed: &uc_core::clipboard::ObservedClipboardRepresentation,
-        ) -> anyhow::Result<uc_core::PersistedClipboardRepresentation> {
-            self.normalize_calls.fetch_add(1, Ordering::SeqCst);
-            Err(anyhow::anyhow!("normalize should not be called"))
-        }
-    }
-
-    impl DeviceIdentityPort for MockDeviceIdentity {
-        fn current_device_id(&self) -> DeviceId {
-            DeviceId::new("device-test")
-        }
-    }
-
-    #[async_trait]
-    impl RepresentationCachePort for MockRepresentationCache {
-        async fn put(&self, _rep_id: &uc_core::ids::RepresentationId, _bytes: Vec<u8>) {
-            self.put_calls.fetch_add(1, Ordering::SeqCst);
-        }
-
-        async fn get(&self, _rep_id: &uc_core::ids::RepresentationId) -> Option<Vec<u8>> {
-            None
-        }
-
-        async fn mark_completed(&self, _rep_id: &uc_core::ids::RepresentationId) {}
-
-        async fn mark_spooling(&self, _rep_id: &uc_core::ids::RepresentationId) {}
-
-        async fn remove(&self, _rep_id: &uc_core::ids::RepresentationId) {}
-    }
-
-    #[async_trait]
-    impl SpoolQueuePort for MockSpoolQueue {
-        async fn enqueue(&self, _request: SpoolRequest) -> anyhow::Result<()> {
-            self.enqueue_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    impl HostEventEmitterPort for RecordingEmitter {
-        fn emit(
-            &self,
-            event: HostEvent,
-        ) -> Result<(), uc_core::ports::host_event_emitter::EmitError> {
-            self.events.lock().unwrap().push(event);
-            Ok(())
-        }
-    }
-
-    impl SystemClipboardPort for NoopClipboard {
-        fn read_snapshot(&self) -> anyhow::Result<SystemClipboardSnapshot> {
+    fn build_system_clipboard_mock() -> MockSystemClipboard {
+        let mut mock = MockSystemClipboard::new();
+        mock.expect_read_snapshot().times(0..).returning(|| {
             Ok(SystemClipboardSnapshot {
                 ts_ms: 0,
                 representations: vec![],
             })
-        }
-
-        fn write_snapshot(&self, _snapshot: SystemClipboardSnapshot) -> anyhow::Result<()> {
-            Ok(())
-        }
+        });
+        mock.expect_write_snapshot()
+            .times(0..)
+            .returning(|_| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl ClipboardSelectionRepositoryPort for NoopPort {
-        async fn get_selection(
-            &self,
-            _entry_id: &uc_core::ids::EntryId,
-        ) -> anyhow::Result<Option<uc_core::ClipboardSelectionDecision>> {
-            Ok(None)
-        }
-
-        async fn delete_selection(&self, _entry_id: &uc_core::ids::EntryId) -> anyhow::Result<()> {
-            Ok(())
-        }
+    fn build_selection_repo_mock() -> MockSelectionRepo {
+        let mut mock = MockSelectionRepo::new();
+        mock.expect_get_selection()
+            .times(0..)
+            .returning(|_| Ok(None));
+        mock.expect_delete_selection()
+            .times(0..)
+            .returning(|_| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for NoopPort {
-        async fn get_representation(
-            &self,
-            _event_id: &uc_core::ids::EventId,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> anyhow::Result<Option<uc_core::PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> anyhow::Result<Option<uc_core::PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &BlobId,
-        ) -> anyhow::Result<Option<uc_core::PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-            _blob_id: &BlobId,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-            _blob_id: &BlobId,
-        ) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &uc_core::ids::RepresentationId,
-            _expected_states: &[uc_core::clipboard::PayloadAvailability],
-            _blob_id: Option<&BlobId>,
-            _new_state: uc_core::clipboard::PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> anyhow::Result<uc_core::ports::clipboard::ProcessingUpdateOutcome> {
-            Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
-        }
+    fn build_representation_repo_mock() -> MockRepresentationRepo {
+        let mut mock = MockRepresentationRepo::new();
+        mock.expect_get_representation()
+            .times(0..)
+            .returning(|_, _| Ok(None));
+        mock.expect_get_representation_by_id()
+            .times(0..)
+            .returning(|_| Ok(None));
+        mock.expect_get_representation_by_blob_id()
+            .times(0..)
+            .returning(|_| Ok(None));
+        mock.expect_update_blob_id()
+            .times(0..)
+            .returning(|_, _| Ok(()));
+        mock.expect_update_blob_id_if_none()
+            .times(0..)
+            .returning(|_, _| Ok(false));
+        mock.expect_update_processing_result()
+            .times(0..)
+            .returning(|_, _, _, _, _| {
+                Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
+            });
+        mock
     }
 
-    #[async_trait]
-    impl ClipboardPayloadResolverPort for NoopPort {
-        async fn resolve(
-            &self,
-            _representation: &PersistedClipboardRepresentation,
-        ) -> anyhow::Result<ResolvedClipboardPayload> {
-            Err(anyhow::anyhow!("noop payload resolver"))
-        }
+    fn build_payload_resolver_mock() -> MockPayloadResolver {
+        let mut mock = MockPayloadResolver::new();
+        mock.expect_resolve()
+            .times(0..)
+            .returning(|_| Err(anyhow::anyhow!("noop payload resolver")));
+        mock
     }
 
-    #[async_trait]
-    impl EncryptionPort for NoopPort {
-        async fn derive_kek(
-            &self,
-            _passphrase: &Passphrase,
-            _salt: &[u8],
-            _kdf: &KdfParams,
-        ) -> Result<Kek, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn wrap_master_key(
-            &self,
-            _kek: &Kek,
-            _master_key: &MasterKey,
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn unwrap_master_key(
-            &self,
-            _kek: &Kek,
-            _wrapped: &EncryptedBlob,
-        ) -> Result<MasterKey, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn encrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _plaintext: &[u8],
-            _aad: &[u8],
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn decrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _encrypted: &EncryptedBlob,
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
+    fn build_encryption_mock() -> MockEncryption {
+        let mut mock = MockEncryption::new();
+        mock.expect_derive_kek()
+            .times(0..)
+            .returning(|_, _, _| Err(EncryptionError::NotInitialized));
+        mock.expect_wrap_master_key()
+            .times(0..)
+            .returning(|_, _, _| Err(EncryptionError::NotInitialized));
+        mock.expect_unwrap_master_key()
+            .times(0..)
+            .returning(|_, _| Err(EncryptionError::NotInitialized));
+        mock.expect_encrypt_blob()
+            .times(0..)
+            .returning(|_, _, _, _| Err(EncryptionError::NotInitialized));
+        mock.expect_decrypt_blob()
+            .times(0..)
+            .returning(|_, _, _| Err(EncryptionError::NotInitialized));
+        mock
     }
 
-    #[async_trait]
-    impl EncryptionSessionPort for NoopPort {
-        async fn is_ready(&self) -> bool {
-            false
-        }
-
-        async fn get_master_key(&self) -> Result<MasterKey, EncryptionError> {
-            Err(EncryptionError::NotInitialized)
-        }
-
-        async fn set_master_key(&self, _master_key: MasterKey) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn clear(&self) -> Result<(), EncryptionError> {
-            Ok(())
-        }
+    fn build_encryption_session_mock() -> MockEncryptionSession {
+        let mut mock = MockEncryptionSession::new();
+        mock.expect_is_ready().times(0..).returning(|| false);
+        mock.expect_get_master_key()
+            .times(0..)
+            .returning(|| Err(EncryptionError::NotInitialized));
+        mock.expect_set_master_key()
+            .times(0..)
+            .returning(|_| Ok(()));
+        mock.expect_clear().times(0..).returning(|| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl EncryptionStatePort for NoopPort {
-        async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError> {
-            Err(EncryptionStateError::LoadError("noop".to_string()))
-        }
-
-        async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
-
-        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
+    fn build_encryption_state_mock() -> MockEncryptionState {
+        let mut mock = MockEncryptionState::new();
+        mock.expect_load_state()
+            .times(0..)
+            .returning(|| Err(EncryptionStateError::LoadError("noop".to_string())));
+        mock.expect_persist_initialized()
+            .times(0..)
+            .returning(|| Ok(()));
+        mock.expect_clear_initialized()
+            .times(0..)
+            .returning(|| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl KeyScopePort for NoopPort {
-        async fn current_scope(
-            &self,
-        ) -> Result<KeyScope, uc_core::ports::security::key_scope::ScopeError> {
+    fn build_key_scope_mock() -> MockKeyScope {
+        let mut mock = MockKeyScope::new();
+        mock.expect_current_scope().times(0..).returning(|| {
             Err(uc_core::ports::security::key_scope::ScopeError::FailedToGetCurrentScope)
-        }
+        });
+        mock
     }
 
-    #[async_trait]
-    impl KeyMaterialPort for NoopPort {
-        async fn load_kek(&self, _scope: &KeyScope) -> Result<Kek, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_kek(&self, _scope: &KeyScope, _kek: &Kek) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn delete_kek(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn load_keyslot(&self, _scope: &KeyScope) -> Result<KeySlot, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_keyslot(&self, _keyslot: &KeySlot) -> Result<(), EncryptionError> {
-            Ok(())
-        }
-
-        async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            Ok(())
-        }
+    fn build_key_material_mock() -> MockKeyMaterial {
+        let mut mock = MockKeyMaterial::new();
+        mock.expect_load_kek()
+            .times(0..)
+            .returning(|_| Err(EncryptionError::KeyNotFound));
+        mock.expect_store_kek().times(0..).returning(|_, _| Ok(()));
+        mock.expect_delete_kek().times(0..).returning(|_| Ok(()));
+        mock.expect_load_keyslot()
+            .times(0..)
+            .returning(|_| Err(EncryptionError::KeyNotFound));
+        mock.expect_store_keyslot().times(0..).returning(|_| Ok(()));
+        mock.expect_delete_keyslot()
+            .times(0..)
+            .returning(|_| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl DeviceRepositoryPort for NoopPort {
-        async fn find_by_id(
-            &self,
-            _id: &uc_core::device::DeviceId,
-        ) -> Result<Option<uc_core::device::Device>, uc_core::ports::errors::DeviceRepositoryError>
-        {
-            Ok(None)
-        }
-
-        async fn save(
-            &self,
-            _device: uc_core::device::Device,
-        ) -> Result<(), uc_core::ports::errors::DeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn delete(
-            &self,
-            _id: &uc_core::device::DeviceId,
-        ) -> Result<(), uc_core::ports::errors::DeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn list_all(
-            &self,
-        ) -> Result<Vec<uc_core::device::Device>, uc_core::ports::errors::DeviceRepositoryError>
-        {
-            Ok(vec![])
-        }
+    fn build_device_repo_mock() -> MockDeviceRepo {
+        let mut mock = MockDeviceRepo::new();
+        mock.expect_find_by_id().times(0..).returning(|_| Ok(None));
+        mock.expect_save().times(0..).returning(|_| Ok(()));
+        mock.expect_delete().times(0..).returning(|_| Ok(()));
+        mock.expect_list_all().times(0..).returning(|| Ok(vec![]));
+        mock
     }
 
-    #[async_trait]
-    impl ClipboardTransportPort for NoopPort {
-        async fn send_clipboard(
-            &self,
-            _peer_id: &str,
-            _encrypted_data: Arc<[u8]>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn broadcast_clipboard(&self, _encrypted_data: Arc<[u8]>) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn subscribe_clipboard(
-            &self,
-        ) -> anyhow::Result<
-            tokio::sync::mpsc::Receiver<(uc_core::network::ClipboardMessage, Option<Vec<u8>>)>,
-        > {
-            let (_tx, rx) = mpsc::channel(1);
-            Ok(rx)
-        }
+    fn build_network_control_mock() -> MockNetworkControl {
+        let mut mock = MockNetworkControl::new();
+        mock.expect_start_network().times(0..).returning(|| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl PeerDirectoryPort for NoopPort {
-        async fn get_discovered_peers(
-            &self,
-        ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>> {
-            Ok(vec![])
-        }
-
-        async fn get_connected_peers(
-            &self,
-        ) -> anyhow::Result<Vec<uc_core::network::ConnectedPeer>> {
-            Ok(vec![])
-        }
-
-        fn local_peer_id(&self) -> String {
-            "noop".to_string()
-        }
-
-        async fn announce_device_name(&self, _device_name: String) -> anyhow::Result<()> {
-            Ok(())
-        }
+    fn build_setup_status_mock() -> MockSetupStatus {
+        let mut mock = MockSetupStatus::new();
+        mock.expect_get_status()
+            .times(0..)
+            .returning(|| Ok(uc_core::setup::SetupStatus::default()));
+        mock.expect_set_status().times(0..).returning(|_| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl PairingTransportPort for NoopPort {
-        async fn open_pairing_session(
-            &self,
-            _peer_id: String,
-            _session_id: String,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn send_pairing_on_session(
-            &self,
-            _message: uc_core::network::PairingMessage,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn close_pairing_session(
-            &self,
-            _session_id: String,
-            _reason: Option<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn unpair_device(&self, _peer_id: String) -> anyhow::Result<()> {
-            Ok(())
-        }
+    fn build_secure_storage_mock() -> MockSecureStorage {
+        let mut mock = MockSecureStorage::new();
+        mock.expect_get().times(0..).returning(|_| Ok(None));
+        mock.expect_set().times(0..).returning(|_, _| Ok(()));
+        mock.expect_delete().times(0..).returning(|_| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl NetworkEventPort for NoopPort {
-        async fn subscribe_events(
-            &self,
-        ) -> anyhow::Result<tokio::sync::mpsc::Receiver<uc_core::network::NetworkEvent>> {
-            let (_tx, rx) = mpsc::channel(1);
-            Ok(rx)
-        }
-    }
-
-    #[async_trait]
-    impl uc_core::ports::NetworkControlPort for NoopPort {
-        async fn start_network(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl SetupStatusPort for NoopPort {
-        async fn get_status(&self) -> anyhow::Result<uc_core::setup::SetupStatus> {
-            Ok(uc_core::setup::SetupStatus::default())
-        }
-
-        async fn set_status(&self, _status: &uc_core::setup::SetupStatus) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl uc_core::ports::SecureStoragePort for NoopPort {
-        fn get(&self, _key: &str) -> Result<Option<Vec<u8>>, uc_core::ports::SecureStorageError> {
-            Ok(None)
-        }
-
-        fn set(&self, _key: &str, _value: &[u8]) -> Result<(), uc_core::ports::SecureStorageError> {
-            Ok(())
-        }
-
-        fn delete(&self, _key: &str) -> Result<(), uc_core::ports::SecureStorageError> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl BlobStorePort for NoopPort {
-        async fn put(
-            &self,
-            _blob_id: &BlobId,
-            _data: &[u8],
-        ) -> anyhow::Result<(std::path::PathBuf, Option<i64>)> {
+    fn build_blob_store_mock() -> MockBlobStore {
+        let mut mock = MockBlobStore::new();
+        mock.expect_put().times(0..).returning(|_, data| {
             Ok((
                 std::path::PathBuf::from("/tmp/noop"),
-                i64::try_from(_data.len()).ok(),
+                i64::try_from(data.len()).ok(),
             ))
-        }
-
-        async fn get(&self, _blob_id: &BlobId) -> anyhow::Result<Vec<u8>> {
-            Ok(vec![])
-        }
+        });
+        mock.expect_get().times(0..).returning(|_| Ok(vec![]));
+        mock
     }
 
-    #[async_trait]
-    impl BlobRepositoryPort for NoopPort {
-        async fn insert_blob(&self, _blob: &Blob) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn find_by_hash(&self, _content_hash: &ContentHash) -> anyhow::Result<Option<Blob>> {
-            Ok(None)
-        }
+    fn build_blob_repo_mock() -> MockBlobRepo {
+        let mut mock = MockBlobRepo::new();
+        mock.expect_insert_blob().times(0..).returning(|_| Ok(()));
+        mock.expect_find_by_hash()
+            .times(0..)
+            .returning(|_| Ok(None));
+        mock
     }
 
-    #[async_trait]
-    impl BlobWriterPort for NoopPort {
-        async fn write_if_absent(
-            &self,
-            _content_id: &ContentHash,
-            _plaintext_bytes: &[u8],
-        ) -> anyhow::Result<Blob> {
-            Err(anyhow::anyhow!("noop blob writer"))
-        }
+    fn build_blob_writer_mock() -> MockBlobWriter {
+        let mut mock = MockBlobWriter::new();
+        mock.expect_write_if_absent()
+            .times(0..)
+            .returning(|_, _| Err(anyhow::anyhow!("noop blob writer")));
+        mock
     }
 
-    #[async_trait]
-    impl ThumbnailRepositoryPort for NoopPort {
-        async fn get_by_representation_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> anyhow::Result<Option<uc_core::clipboard::ThumbnailMetadata>> {
-            Ok(None)
-        }
-
-        async fn insert_thumbnail(
-            &self,
-            _metadata: &uc_core::clipboard::ThumbnailMetadata,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
+    fn build_thumbnail_repo_mock() -> MockThumbnailRepo {
+        let mut mock = MockThumbnailRepo::new();
+        mock.expect_get_by_representation_id()
+            .times(0..)
+            .returning(|_| Ok(None));
+        mock.expect_insert_thumbnail()
+            .times(0..)
+            .returning(|_| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl ThumbnailGeneratorPort for NoopPort {
-        async fn generate_thumbnail(
-            &self,
-            _image_bytes: &[u8],
-        ) -> anyhow::Result<uc_core::ports::clipboard::GeneratedThumbnail> {
-            Err(anyhow::anyhow!("noop thumbnail generator"))
-        }
-
-        async fn generate_thumbnail_from_rgba(
-            &self,
-            _rgba_bytes: &[u8],
-            _width: u32,
-            _height: u32,
-        ) -> anyhow::Result<uc_core::ports::clipboard::GeneratedThumbnail> {
-            self.generate_thumbnail(&[]).await
-        }
+    fn build_thumbnail_generator_mock() -> MockThumbnailGenerator {
+        let mut mock = MockThumbnailGenerator::new();
+        mock.expect_generate_thumbnail()
+            .times(0..)
+            .returning(|_| Err(anyhow::anyhow!("noop thumbnail generator")));
+        mock.expect_generate_thumbnail_from_rgba()
+            .times(0..)
+            .returning(|_, _, _| Err(anyhow::anyhow!("noop thumbnail generator")));
+        mock
     }
 
-    #[async_trait]
-    impl SettingsPort for NoopPort {
-        async fn load(&self) -> anyhow::Result<uc_core::settings::model::Settings> {
-            Err(anyhow::anyhow!("noop settings"))
-        }
-
-        async fn save(&self, _settings: &uc_core::settings::model::Settings) -> anyhow::Result<()> {
-            Ok(())
-        }
+    fn build_settings_mock() -> MockSettings {
+        let mut mock = MockSettings::new();
+        mock.expect_load()
+            .times(0..)
+            .returning(|| Err(anyhow::anyhow!("noop settings")));
+        mock.expect_save().times(0..).returning(|_| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl PairedDeviceRepositoryPort for NoopPort {
-        async fn get_by_peer_id(
-            &self,
-            _peer_id: &PeerId,
-        ) -> Result<Option<uc_core::network::PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(None)
-        }
-
-        async fn list_all(
-            &self,
-        ) -> Result<Vec<uc_core::network::PairedDevice>, PairedDeviceRepositoryError> {
-            Ok(Vec::new())
-        }
-
-        async fn upsert(
-            &self,
-            _device: uc_core::network::PairedDevice,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn set_state(
-            &self,
-            _peer_id: &PeerId,
-            _state: uc_core::network::PairingState,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn update_last_seen(
-            &self,
-            _peer_id: &PeerId,
-            _last_seen_at: chrono::DateTime<chrono::Utc>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn delete(&self, _peer_id: &PeerId) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
-
-        async fn update_sync_settings(
-            &self,
-            _peer_id: &PeerId,
-            _settings: Option<uc_core::settings::model::SyncSettings>,
-        ) -> Result<(), PairedDeviceRepositoryError> {
-            Ok(())
-        }
+    fn build_paired_device_repo_mock() -> MockPairedDeviceRepo {
+        let mut mock = MockPairedDeviceRepo::new();
+        mock.expect_get_by_peer_id()
+            .times(0..)
+            .returning(|_| Ok(None));
+        mock.expect_list_all()
+            .times(0..)
+            .returning(|| Ok(Vec::new()));
+        mock.expect_upsert().times(0..).returning(|_| Ok(()));
+        mock.expect_set_state().times(0..).returning(|_, _| Ok(()));
+        mock.expect_update_last_seen()
+            .times(0..)
+            .returning(|_, _| Ok(()));
+        mock.expect_delete().times(0..).returning(|_| Ok(()));
+        mock.expect_update_sync_settings()
+            .times(0..)
+            .returning(|_, _| Ok(()));
+        mock
     }
 
-    #[async_trait]
-    impl UiPort for NoopPort {
-        async fn open_settings(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
+    fn build_clock_mock() -> MockClock {
+        let mut mock = MockClock::new();
+        mock.expect_now_ms().times(0..).returning(|| 0);
+        mock
     }
 
-    impl AutostartPort for NoopPort {
-        fn is_enabled(&self) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-
-        fn enable(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn disable(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
+    fn build_content_hash_mock() -> MockContentHash {
+        let mut mock = MockContentHash::new();
+        mock.expect_hash_bytes()
+            .times(0..)
+            .returning(|_| Err(anyhow::anyhow!("noop hash")));
+        mock
     }
 
-    impl ClockPort for NoopPort {
-        fn now_ms(&self) -> i64 {
-            0
-        }
+    fn build_file_manager_mock() -> MockFileManager {
+        let mut mock = MockFileManager::new();
+        mock.expect_open_directory()
+            .times(0..)
+            .returning(|_| Ok(()));
+        mock
     }
 
-    impl ContentHashPort for NoopPort {
-        fn hash_bytes(&self, _bytes: &[u8]) -> anyhow::Result<ContentHash> {
-            Err(anyhow::anyhow!("noop hash"))
-        }
+    fn build_cache_fs_mock() -> MockCacheFs {
+        let mut mock = MockCacheFs::new();
+        mock.expect_exists().times(0..).returning(|_| false);
+        mock.expect_read_dir().times(0..).returning(|_| Ok(vec![]));
+        mock.expect_remove_dir_all()
+            .times(0..)
+            .returning(|_| Ok(()));
+        mock.expect_remove_file().times(0..).returning(|_| Ok(()));
+        mock.expect_dir_size().times(0..).returning(|_| Ok(0));
+        mock
     }
 
-    impl uc_core::ports::FileManagerPort for NoopPort {
-        fn open_directory(
-            &self,
-            _path: &std::path::Path,
-        ) -> Result<(), uc_core::ports::FileManagerError> {
-            Ok(())
-        }
+    fn build_search_index_mock() -> MockSearchIndex {
+        let mut mock = MockSearchIndex::new();
+        mock.expect_index_entry()
+            .times(0..)
+            .returning(|_, _| Ok(()));
+        mock.expect_remove_entry().times(0..).returning(|_| Ok(()));
+        mock.expect_search().times(0..).returning(|_| {
+            Ok(uc_core::search::SearchResultsPage {
+                items: vec![],
+                total: 0,
+                has_more: false,
+            })
+        });
+        mock.expect_rebuild().times(0..).returning(|_, _| Ok(()));
+        mock.expect_get_index_meta().times(0..).returning(|| {
+            Ok(uc_core::search::SearchIndexMeta {
+                index_version: "noop".into(),
+                search_blocked: false,
+                last_rebuild_started_at_ms: None,
+                last_rebuild_completed_at_ms: None,
+            })
+        });
+        mock
     }
 
-    #[async_trait::async_trait]
-    impl uc_core::ports::CacheFsPort for NoopPort {
-        async fn exists(&self, _path: &std::path::Path) -> bool {
-            false
-        }
-        async fn read_dir(
-            &self,
-            _path: &std::path::Path,
-        ) -> anyhow::Result<Vec<uc_core::ports::CacheFsDirEntry>> {
-            Ok(vec![])
-        }
-        async fn remove_dir_all(&self, _path: &std::path::Path) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn remove_file(&self, _path: &std::path::Path) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn dir_size(&self, _path: &std::path::Path) -> anyhow::Result<u64> {
-            Ok(0)
-        }
+    fn build_search_key_derivation_mock() -> MockSearchKeyDerivation {
+        let mut mock = MockSearchKeyDerivation::new();
+        mock.expect_derive_search_key()
+            .times(0..)
+            .returning(|| Ok(uc_core::search::SearchKey([0u8; 32])));
+        mock
     }
 
     fn test_storage_paths() -> uc_app::app_paths::AppPaths {
@@ -1264,67 +1465,64 @@ mod tests {
     fn runtime_event_emitter_can_be_swapped_after_setup() {
         let deps = AppDeps {
             clipboard: uc_app::ClipboardPorts {
-                clipboard: Arc::new(NoopClipboard),
-                system_clipboard: Arc::new(NoopClipboard),
-                clipboard_entry_repo: Arc::new(MockEntryRepository {
-                    save_calls: Arc::new(AtomicUsize::new(0)),
-                }),
-                clipboard_event_repo: Arc::new(MockEventWriter {
-                    insert_calls: Arc::new(AtomicUsize::new(0)),
-                }),
-                representation_repo: Arc::new(NoopPort),
-                representation_normalizer: Arc::new(MockNormalizer {
-                    normalize_calls: Arc::new(AtomicUsize::new(0)),
-                }),
-                selection_repo: Arc::new(NoopPort),
-                representation_policy: Arc::new(MockRepresentationPolicy {
-                    select_calls: Arc::new(AtomicUsize::new(0)),
-                }),
-                representation_cache: Arc::new(MockRepresentationCache {
-                    put_calls: Arc::new(AtomicUsize::new(0)),
-                }),
-                spool_queue: Arc::new(MockSpoolQueue {
-                    enqueue_calls: Arc::new(AtomicUsize::new(0)),
-                }),
+                clipboard: Arc::new(build_system_clipboard_mock()),
+                system_clipboard: Arc::new(build_system_clipboard_mock()),
+                clipboard_entry_repo: Arc::new(build_entry_repository_mock()),
+                clipboard_event_repo: Arc::new(build_event_writer_mock()),
+                representation_repo: Arc::new(build_representation_repo_mock()),
+                representation_normalizer: Arc::new(build_normalizer_mock()),
+                selection_repo: Arc::new(build_selection_repo_mock()),
+                representation_policy: Arc::new(build_representation_policy_mock()),
+                representation_cache: Arc::new(build_representation_cache_mock()),
+                spool_queue: Arc::new(build_spool_queue_mock()),
                 worker_tx: mpsc::channel(1).0,
                 clipboard_change_origin: test_origin(),
-                payload_resolver: Arc::new(NoopPort),
+                payload_resolver: Arc::new(build_payload_resolver_mock()),
             },
             security: uc_app::SecurityPorts {
-                encryption: Arc::new(NoopPort),
-                encryption_session: Arc::new(NoopPort),
-                encryption_state: Arc::new(NoopPort),
-                key_scope: Arc::new(NoopPort),
-                secure_storage: Arc::new(NoopPort),
-                key_material: Arc::new(NoopPort),
+                encryption: Arc::new(build_encryption_mock()),
+                encryption_session: Arc::new(build_encryption_session_mock()),
+                encryption_state: Arc::new(build_encryption_state_mock()),
+                key_scope: Arc::new(build_key_scope_mock()),
+                secure_storage: Arc::new(build_secure_storage_mock()),
+                key_material: Arc::new(build_key_material_mock()),
             },
             device: uc_app::DevicePorts {
-                device_repo: Arc::new(NoopPort),
-                device_identity: Arc::new(MockDeviceIdentity),
-                paired_device_repo: Arc::new(NoopPort),
+                device_repo: Arc::new(build_device_repo_mock()),
+                device_identity: Arc::new(build_device_identity_mock()),
+                paired_device_repo: Arc::new(build_paired_device_repo_mock()),
             },
             network_ports: noop_network_ports(),
-            network_control: Arc::new(NoopPort),
-            setup_status: Arc::new(NoopPort),
+            network_control: Arc::new(build_network_control_mock()),
+            setup_status: Arc::new(build_setup_status_mock()),
             storage: uc_app::StoragePorts {
-                blob_store: Arc::new(NoopPort),
-                blob_repository: Arc::new(NoopPort),
-                blob_writer: Arc::new(NoopPort),
-                thumbnail_repo: Arc::new(NoopPort),
-                thumbnail_generator: Arc::new(NoopPort),
+                blob_store: Arc::new(build_blob_store_mock()),
+                blob_repository: Arc::new(build_blob_repo_mock()),
+                blob_writer: Arc::new(build_blob_writer_mock()),
+                thumbnail_repo: Arc::new(build_thumbnail_repo_mock()),
+                thumbnail_generator: Arc::new(build_thumbnail_generator_mock()),
                 file_transfer_repo: Arc::new(uc_core::ports::NoopFileTransferRepositoryPort),
             },
-            settings: Arc::new(NoopPort),
+            settings: Arc::new(build_settings_mock()),
             system: uc_app::SystemPorts {
-                clock: Arc::new(NoopPort),
-                hash: Arc::new(NoopPort),
-                file_manager: Arc::new(NoopPort),
-                cache_fs: Arc::new(NoopPort),
+                clock: Arc::new(build_clock_mock()),
+                hash: Arc::new(build_content_hash_mock()),
+                file_manager: Arc::new(build_file_manager_mock()),
+                cache_fs: Arc::new(build_cache_fs_mock()),
+            },
+            search: uc_app::deps::SearchPorts {
+                search_index: Arc::new(build_search_index_mock()),
+                search_key_derivation: Arc::new(build_search_key_derivation_mock()),
+                search_pipeline: std::sync::Arc::new(uc_infra::search::SearchPipeline::new()),
             },
         };
         let setup_ports = uc_bootstrap::assembly::SetupAssemblyPorts::placeholder(&deps);
-        let initial_emitter = Arc::new(RecordingEmitter::default());
-        let swapped_emitter = Arc::new(RecordingEmitter::default());
+        let initial_events = Arc::new(Mutex::new(Vec::new()));
+        let swapped_events = Arc::new(Mutex::new(Vec::new()));
+        let initial_emitter: Arc<dyn HostEventEmitterPort> =
+            Arc::new(build_recording_emitter_mock(initial_events.clone()));
+        let swapped_emitter: Arc<dyn HostEventEmitterPort> =
+            Arc::new(build_recording_emitter_mock(swapped_events.clone()));
         let runtime = AppRuntime::with_setup(
             deps,
             setup_ports,
@@ -1342,10 +1540,10 @@ mod tests {
             }))
             .expect("emit through swapped emitter");
 
-        assert!(initial_emitter.events.lock().unwrap().is_empty());
-        let swapped_events = swapped_emitter.events.lock().unwrap();
-        assert_eq!(swapped_events.len(), 1);
-        match &swapped_events[0] {
+        assert!(initial_events.lock().unwrap().is_empty());
+        let recorded_swapped_events = swapped_events.lock().unwrap();
+        assert_eq!(recorded_swapped_events.len(), 1);
+        match &recorded_swapped_events[0] {
             HostEvent::Clipboard(ClipboardHostEvent::NewContent { entry_id, .. }) => {
                 assert_eq!(entry_id, "entry-swap");
             }

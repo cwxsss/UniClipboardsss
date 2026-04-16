@@ -33,3 +33,4 @@ base64 = "0.22"
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
+mockall = "0.13"

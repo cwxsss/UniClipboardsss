@@ -1,5 +1,34 @@
 # Milestones
 
+## v0.5.0 Local Encrypted Search (Shipped: 2026-04-13)
+
+**Phases completed:** 7 phases including inserted Phase 92.1, 14 planned items, plus manual Phase 93 completion backfilled during archive
+
+### Delivered
+
+This milestone added local encrypted clipboard search across the product. Search is now available through the daemon, CLI, QuickPanel, and Dashboard, with protected on-disk terms, rebuild support, and filtering by time range and content type.
+
+### Accomplishments
+
+1. A full local encrypted search backend was added, including protected term storage, query support, and rebuild flows.
+2. Clipboard delete now cleans up search records so history and search stay aligned.
+3. Daemon routes and WebSocket events expose search query, status, and rebuild behavior end to end.
+4. CLI search commands now cover query, status, and rebuild workflows.
+5. QuickPanel now uses backend-backed keyword search instead of only local substring filtering.
+6. Dashboard search shipped with visible result counts, content-type filters, and time-range controls.
+
+### Known Gaps
+
+- This milestone was archived without a standalone milestone audit file.
+- Phase 93 was completed manually, and the planning record for that work was backfilled during archive rather than maintained live.
+
+### Archive Files
+
+- `.planning/milestones/v0.5.0-ROADMAP.md`
+- `.planning/milestones/v0.5.0-REQUIREMENTS.md`
+
+---
+
 ## v0.4.0 Runtime Mode Separation (Shipped: 2026-04-09)
 
 **Phases completed:** 52 phases, 129 plans, 224 tasks

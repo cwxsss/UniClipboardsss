@@ -290,52 +290,19 @@ impl CryptoPort for SpaceAccessCryptoAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::{
+        MockEncryption, MockEncryptionSession, MockEncryptionState, MockKeyMaterial, MockKeyScope,
+    };
     use std::sync::{Arc, Mutex};
     use uc_core::security::model::{
-        EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfParams, Kek,
-        KeyScope,
+        EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, Kek, KeyScope,
     };
 
-    struct EncryptionPortState {
-        unwrapped_master_key: Option<MasterKey>,
-    }
-
-    struct TestEncryptionPort {
-        state: Arc<Mutex<EncryptionPortState>>,
-    }
-
-    impl TestEncryptionPort {
-        fn new(unwrapped_master_key: Option<MasterKey>) -> (Self, Arc<Mutex<EncryptionPortState>>) {
-            let state = Arc::new(Mutex::new(EncryptionPortState {
-                unwrapped_master_key,
-            }));
-            (
-                Self {
-                    state: state.clone(),
-                },
-                state,
-            )
-        }
-    }
-
-    #[async_trait]
-    impl EncryptionPort for TestEncryptionPort {
-        async fn derive_kek(
-            &self,
-            _passphrase: &Passphrase,
-            _salt: &[u8],
-            _kdf: &KdfParams,
-        ) -> Result<Kek, EncryptionError> {
-            Ok(Kek([3u8; 32]))
-        }
-
-        async fn wrap_master_key(
-            &self,
-            _kek: &Kek,
-            _master_key: &MasterKey,
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
+    fn make_encryption_ok(unwrapped_master_key: Option<MasterKey>) -> MockEncryption {
+        let mut enc = MockEncryption::new();
+        enc.expect_derive_kek()
+            .returning(|_, _, _| Ok(Kek([3u8; 32])));
+        enc.expect_wrap_master_key().returning(|_, _, _| {
             Ok(EncryptedBlob {
                 version: EncryptionFormatVersion::V1,
                 aead: EncryptionAlgo::XChaCha20Poly1305,
@@ -343,239 +310,169 @@ mod tests {
                 ciphertext: vec![1u8; 32],
                 aad_fingerprint: None,
             })
+        });
+        if let Some(mk) = unwrapped_master_key {
+            enc.expect_unwrap_master_key()
+                .returning(move |_, _| Ok(mk.clone()));
+        } else {
+            enc.expect_unwrap_master_key()
+                .returning(|_, _| Err(EncryptionError::KeyMaterialCorrupt));
         }
-
-        async fn unwrap_master_key(
-            &self,
-            _kek: &Kek,
-            _wrapped: &EncryptedBlob,
-        ) -> Result<MasterKey, EncryptionError> {
-            let guard = self.state.lock().expect("lock encryption port state");
-            match &guard.unwrapped_master_key {
-                Some(master_key) => Ok(master_key.clone()),
-                None => Err(EncryptionError::KeyMaterialCorrupt),
-            }
-        }
-
-        async fn encrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _plaintext: &[u8],
-            _aad: &[u8],
-            _aead: EncryptionAlgo,
-        ) -> Result<EncryptedBlob, EncryptionError> {
-            Err(EncryptionError::KeyMaterialCorrupt)
-        }
-
-        async fn decrypt_blob(
-            &self,
-            _master_key: &MasterKey,
-            _encrypted: &EncryptedBlob,
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, EncryptionError> {
-            Err(EncryptionError::KeyMaterialCorrupt)
-        }
+        enc
     }
 
-    struct TestKeyScopePort;
-
-    #[async_trait]
-    impl KeyScopePort for TestKeyScopePort {
-        async fn current_scope(&self) -> Result<KeyScope, ScopeError> {
+    fn make_key_scope() -> MockKeyScope {
+        let mut ks = MockKeyScope::new();
+        ks.expect_current_scope().returning(|| {
             Ok(KeyScope {
                 profile_id: "profile-test".to_string(),
             })
-        }
+        });
+        ks
     }
 
-    struct KeyMaterialState {
+    /// Track calls to store/delete methods on a key material mock.
+    struct KeyMaterialTracker {
         store_kek_called: bool,
         store_keyslot_called: bool,
-        store_kek_error: Option<EncryptionError>,
         delete_kek_called: bool,
         delete_keyslot_called: bool,
+    }
+
+    fn make_key_material(
+        store_kek_error: Option<EncryptionError>,
         store_keyslot_error: Option<EncryptionError>,
-    }
+    ) -> (MockKeyMaterial, Arc<Mutex<KeyMaterialTracker>>) {
+        let tracker = Arc::new(Mutex::new(KeyMaterialTracker {
+            store_kek_called: false,
+            store_keyslot_called: false,
+            delete_kek_called: false,
+            delete_keyslot_called: false,
+        }));
 
-    struct TestKeyMaterialPort {
-        state: Arc<Mutex<KeyMaterialState>>,
-    }
+        let mut km = MockKeyMaterial::new();
 
-    impl TestKeyMaterialPort {
-        fn new(
-            store_kek_error: Option<EncryptionError>,
-            store_keyslot_error: Option<EncryptionError>,
-        ) -> (Self, Arc<Mutex<KeyMaterialState>>) {
-            let state = Arc::new(Mutex::new(KeyMaterialState {
-                store_kek_called: false,
-                store_keyslot_called: false,
-                store_kek_error,
-                delete_kek_called: false,
-                delete_keyslot_called: false,
-                store_keyslot_error,
-            }));
-            (
-                Self {
-                    state: state.clone(),
-                },
-                state,
-            )
-        }
-    }
+        // load_kek / load_keyslot — always fail (not used in these tests)
+        km.expect_load_kek()
+            .returning(|_| Err(EncryptionError::KeyNotFound));
+        km.expect_load_keyslot()
+            .returning(|_| Err(EncryptionError::KeyNotFound));
 
-    #[async_trait]
-    impl KeyMaterialPort for TestKeyMaterialPort {
-        async fn load_kek(&self, _scope: &KeyScope) -> Result<Kek, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_kek(&self, _scope: &KeyScope, _kek: &Kek) -> Result<(), EncryptionError> {
-            let mut guard = self.state.lock().expect("lock key material state");
-            guard.store_kek_called = true;
-            match guard.store_kek_error.take() {
-                Some(error) => Err(error),
+        let t = tracker.clone();
+        let err = Arc::new(Mutex::new(store_kek_error));
+        km.expect_store_kek().returning(move |_, _| {
+            t.lock().unwrap().store_kek_called = true;
+            match err.lock().unwrap().take() {
+                Some(e) => Err(e),
                 None => Ok(()),
             }
-        }
+        });
 
-        async fn delete_kek(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            let mut guard = self.state.lock().expect("lock key material state");
-            guard.delete_kek_called = true;
-            Ok(())
-        }
-
-        async fn load_keyslot(&self, _scope: &KeyScope) -> Result<KeySlot, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn store_keyslot(&self, _keyslot: &KeySlot) -> Result<(), EncryptionError> {
-            let mut guard = self.state.lock().expect("lock key material state");
-            guard.store_keyslot_called = true;
-            match guard.store_keyslot_error.take() {
-                Some(error) => Err(error),
+        let t = tracker.clone();
+        let err = Arc::new(Mutex::new(store_keyslot_error));
+        km.expect_store_keyslot().returning(move |_| {
+            t.lock().unwrap().store_keyslot_called = true;
+            match err.lock().unwrap().take() {
+                Some(e) => Err(e),
                 None => Ok(()),
             }
-        }
+        });
 
-        async fn delete_keyslot(&self, _scope: &KeyScope) -> Result<(), EncryptionError> {
-            let mut guard = self.state.lock().expect("lock key material state");
-            guard.delete_keyslot_called = true;
+        let t = tracker.clone();
+        km.expect_delete_kek().returning(move |_| {
+            t.lock().unwrap().delete_kek_called = true;
             Ok(())
-        }
+        });
+
+        let t = tracker.clone();
+        km.expect_delete_keyslot().returning(move |_| {
+            t.lock().unwrap().delete_keyslot_called = true;
+            Ok(())
+        });
+
+        (km, tracker)
     }
 
-    struct EncryptionStateState {
+    /// Track calls to persist_initialized / clear_initialized on encryption state mock.
+    struct EncryptionStateTracker {
         persist_initialized_called: bool,
-        persist_initialized_error: Option<EncryptionStateError>,
     }
 
-    struct TestEncryptionStatePort {
-        state: Arc<Mutex<EncryptionStateState>>,
-    }
+    fn make_encryption_state(
+        persist_error: Option<EncryptionStateError>,
+    ) -> (MockEncryptionState, Arc<Mutex<EncryptionStateTracker>>) {
+        let tracker = Arc::new(Mutex::new(EncryptionStateTracker {
+            persist_initialized_called: false,
+        }));
 
-    impl TestEncryptionStatePort {
-        fn new(
-            persist_initialized_error: Option<EncryptionStateError>,
-        ) -> (Self, Arc<Mutex<EncryptionStateState>>) {
-            let state = Arc::new(Mutex::new(EncryptionStateState {
-                persist_initialized_called: false,
-                persist_initialized_error,
-            }));
-            (
-                Self {
-                    state: state.clone(),
-                },
-                state,
-            )
-        }
-    }
+        let mut es = MockEncryptionState::new();
+        es.expect_load_state()
+            .returning(|| Ok(uc_core::security::state::EncryptionState::Uninitialized));
+        es.expect_clear_initialized().returning(|| Ok(()));
 
-    #[async_trait]
-    impl EncryptionStatePort for TestEncryptionStatePort {
-        async fn load_state(&self) -> Result<EncryptionState, EncryptionStateError> {
-            Ok(EncryptionState::Uninitialized)
-        }
-
-        async fn persist_initialized(&self) -> Result<(), EncryptionStateError> {
-            let mut guard = self.state.lock().expect("lock encryption state");
-            guard.persist_initialized_called = true;
-            match guard.persist_initialized_error.take() {
-                Some(error) => Err(error),
+        let t = tracker.clone();
+        let err = Arc::new(Mutex::new(persist_error));
+        es.expect_persist_initialized().returning(move || {
+            t.lock().unwrap().persist_initialized_called = true;
+            match err.lock().unwrap().take() {
+                Some(e) => Err(e),
                 None => Ok(()),
             }
-        }
+        });
 
-        async fn clear_initialized(&self) -> Result<(), EncryptionStateError> {
-            Ok(())
-        }
+        (es, tracker)
     }
 
-    struct EncryptionSessionState {
+    /// Track calls to set_master_key / clear on encryption session mock.
+    struct EncryptionSessionTracker {
         set_master_key_called: bool,
         clear_called: bool,
+    }
+
+    fn make_encryption_session(
         set_master_key_error: Option<EncryptionError>,
-    }
+    ) -> (MockEncryptionSession, Arc<Mutex<EncryptionSessionTracker>>) {
+        let tracker = Arc::new(Mutex::new(EncryptionSessionTracker {
+            set_master_key_called: false,
+            clear_called: false,
+        }));
 
-    struct TestEncryptionSessionPort {
-        state: Arc<Mutex<EncryptionSessionState>>,
-    }
+        let mut sess = MockEncryptionSession::new();
+        sess.expect_is_ready().returning(|| false);
+        sess.expect_get_master_key()
+            .returning(|| Err(EncryptionError::KeyNotFound));
 
-    impl TestEncryptionSessionPort {
-        fn new(
-            set_master_key_error: Option<EncryptionError>,
-        ) -> (Self, Arc<Mutex<EncryptionSessionState>>) {
-            let state = Arc::new(Mutex::new(EncryptionSessionState {
-                set_master_key_called: false,
-                clear_called: false,
-                set_master_key_error,
-            }));
-            (
-                Self {
-                    state: state.clone(),
-                },
-                state,
-            )
-        }
-    }
-
-    #[async_trait]
-    impl EncryptionSessionPort for TestEncryptionSessionPort {
-        async fn is_ready(&self) -> bool {
-            false
-        }
-
-        async fn get_master_key(&self) -> Result<MasterKey, EncryptionError> {
-            Err(EncryptionError::KeyNotFound)
-        }
-
-        async fn set_master_key(&self, _master_key: MasterKey) -> Result<(), EncryptionError> {
-            let mut guard = self.state.lock().expect("lock encryption session");
-            guard.set_master_key_called = true;
-            match guard.set_master_key_error.take() {
-                Some(error) => Err(error),
+        let t = tracker.clone();
+        let err = Arc::new(Mutex::new(set_master_key_error));
+        sess.expect_set_master_key().returning(move |_| {
+            t.lock().unwrap().set_master_key_called = true;
+            match err.lock().unwrap().take() {
+                Some(e) => Err(e),
                 None => Ok(()),
             }
-        }
+        });
 
-        async fn clear(&self) -> Result<(), EncryptionError> {
-            let mut guard = self.state.lock().expect("lock encryption session");
-            guard.clear_called = true;
+        let t = tracker.clone();
+        sess.expect_clear().returning(move || {
+            t.lock().unwrap().clear_called = true;
             Ok(())
-        }
+        });
+
+        (sess, tracker)
     }
 
     #[tokio::test]
     async fn space_access_keychain_rollback_on_keyslot_failure() {
-        let (encryption, _) = TestEncryptionPort::new(None);
-        let (key_material, state) =
-            TestKeyMaterialPort::new(None, Some(EncryptionError::IoFailure));
-        let (encryption_state, _) = TestEncryptionStatePort::new(None);
-        let (encryption_session, _) = TestEncryptionSessionPort::new(None);
+        let encryption = make_encryption_ok(None);
+        let (key_material, km_tracker) = make_key_material(None, Some(EncryptionError::IoFailure));
+        let (encryption_state, _) = make_encryption_state(None);
+        let (encryption_session, _) = make_encryption_session(None);
+
         let adapter = SpaceAccessCryptoAdapter::new(
             SecretString::from("passphrase"),
             Arc::new(encryption),
             Arc::new(key_material),
-            Arc::new(TestKeyScopePort),
+            Arc::new(make_key_scope()),
             Arc::new(encryption_state),
             Arc::new(encryption_session),
         );
@@ -583,7 +480,7 @@ mod tests {
         let result = adapter.export_keyslot_blob(&SpaceId::new()).await;
 
         assert!(result.is_err());
-        let guard = state.lock().expect("lock key material state");
+        let guard = km_tracker.lock().unwrap();
         assert!(guard.delete_kek_called, "expected KEK rollback");
         assert!(guard.delete_keyslot_called, "expected keyslot cleanup");
     }
@@ -591,10 +488,10 @@ mod tests {
     #[tokio::test]
     async fn derive_master_key_from_keyslot_succeeds_and_persists_state() {
         let expected_master_key = MasterKey::from_bytes(&[9u8; 32]).expect("valid master key");
-        let (encryption, _) = TestEncryptionPort::new(Some(expected_master_key.clone()));
-        let (key_material, key_material_state) = TestKeyMaterialPort::new(None, None);
-        let (encryption_state, encryption_state_state) = TestEncryptionStatePort::new(None);
-        let (encryption_session, encryption_session_state) = TestEncryptionSessionPort::new(None);
+        let encryption = make_encryption_ok(Some(expected_master_key.clone()));
+        let (key_material, km_tracker) = make_key_material(None, None);
+        let (encryption_state, state_tracker) = make_encryption_state(None);
+        let (encryption_session, session_tracker) = make_encryption_session(None);
 
         let keyslot = KeySlot::draft_v1(KeyScope {
             profile_id: "profile-joiner".to_string(),
@@ -615,7 +512,7 @@ mod tests {
             SecretString::from("unused"),
             Arc::new(encryption),
             Arc::new(key_material),
-            Arc::new(TestKeyScopePort),
+            Arc::new(make_key_scope()),
             Arc::new(encryption_state),
             Arc::new(encryption_session),
         );
@@ -630,7 +527,7 @@ mod tests {
             expected_master_key.as_bytes()
         );
 
-        let km_guard = key_material_state.lock().expect("lock key material state");
+        let km_guard = km_tracker.lock().unwrap();
         assert!(km_guard.store_kek_called, "expected KEK to be stored");
         assert!(
             km_guard.store_keyslot_called,
@@ -638,18 +535,14 @@ mod tests {
         );
         drop(km_guard);
 
-        let session_guard = encryption_session_state
-            .lock()
-            .expect("lock encryption session state");
+        let session_guard = session_tracker.lock().unwrap();
         assert!(
             session_guard.set_master_key_called,
             "expected session master key to be set"
         );
         drop(session_guard);
 
-        let state_guard = encryption_state_state
-            .lock()
-            .expect("lock encryption state state");
+        let state_guard = state_tracker.lock().unwrap();
         assert!(
             state_guard.persist_initialized_called,
             "expected encryption initialization to be persisted"
@@ -659,11 +552,11 @@ mod tests {
     #[tokio::test]
     async fn derive_master_key_from_keyslot_rolls_back_when_persist_initialized_fails() {
         let expected_master_key = MasterKey::from_bytes(&[8u8; 32]).expect("valid master key");
-        let (encryption, _) = TestEncryptionPort::new(Some(expected_master_key));
-        let (key_material, key_material_state) = TestKeyMaterialPort::new(None, None);
+        let encryption = make_encryption_ok(Some(expected_master_key));
+        let (key_material, km_tracker) = make_key_material(None, None);
         let (encryption_state, _) =
-            TestEncryptionStatePort::new(Some(EncryptionStateError::PersistError("boom".into())));
-        let (encryption_session, encryption_session_state) = TestEncryptionSessionPort::new(None);
+            make_encryption_state(Some(EncryptionStateError::PersistError("boom".into())));
+        let (encryption_session, session_tracker) = make_encryption_session(None);
 
         let keyslot = KeySlot::draft_v1(KeyScope {
             profile_id: "profile-joiner".to_string(),
@@ -684,7 +577,7 @@ mod tests {
             SecretString::from("unused"),
             Arc::new(encryption),
             Arc::new(key_material),
-            Arc::new(TestKeyScopePort),
+            Arc::new(make_key_scope()),
             Arc::new(encryption_state),
             Arc::new(encryption_session),
         );
@@ -694,14 +587,12 @@ mod tests {
             .await;
 
         assert!(result.is_err(), "expected derive failure");
-        let km_guard = key_material_state.lock().expect("lock key material state");
+        let km_guard = km_tracker.lock().unwrap();
         assert!(km_guard.delete_kek_called, "expected KEK rollback");
         assert!(km_guard.delete_keyslot_called, "expected keyslot rollback");
         drop(km_guard);
 
-        let session_guard = encryption_session_state
-            .lock()
-            .expect("lock encryption session state");
+        let session_guard = session_tracker.lock().unwrap();
         assert!(
             session_guard.clear_called,
             "expected encryption session clear rollback"

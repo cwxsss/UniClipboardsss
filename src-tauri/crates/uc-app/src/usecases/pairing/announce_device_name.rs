@@ -27,48 +27,23 @@ impl AnnounceDeviceName {
 #[cfg(test)]
 mod tests {
     use super::AnnounceDeviceName;
-    use async_trait::async_trait;
+    use crate::test_mocks::MockPeerDirectory;
     use std::sync::{Arc, Mutex};
-    use uc_core::network::{ConnectedPeer, DiscoveredPeer};
-    use uc_core::ports::PeerDirectoryPort;
-
-    struct TestNetwork {
-        called: Arc<Mutex<Vec<String>>>,
-        result: anyhow::Result<()>,
-    }
-
-    #[async_trait]
-    impl PeerDirectoryPort for TestNetwork {
-        async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-            Ok(vec![])
-        }
-
-        async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
-            Ok(vec![])
-        }
-
-        fn local_peer_id(&self) -> String {
-            "local-peer".to_string()
-        }
-
-        async fn announce_device_name(&self, device_name: String) -> anyhow::Result<()> {
-            let mut called = self.called.lock().expect("called lock");
-            called.push(device_name);
-            match &self.result {
-                Ok(()) => Ok(()),
-                Err(error) => Err(anyhow::anyhow!(error.to_string())),
-            }
-        }
-    }
 
     #[tokio::test]
     async fn announce_device_name_invokes_network_port() {
-        let called = Arc::new(Mutex::new(Vec::new()));
-        let network = Arc::new(TestNetwork {
-            called: called.clone(),
-            result: Ok(()),
-        });
-        let uc = AnnounceDeviceName::new(network);
+        let called: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let called_clone = called.clone();
+
+        let mut network = MockPeerDirectory::new();
+        network
+            .expect_announce_device_name()
+            .returning(move |device_name| {
+                called_clone.lock().expect("called lock").push(device_name);
+                Ok(())
+            });
+
+        let uc = AnnounceDeviceName::new(Arc::new(network));
 
         uc.execute("Desk".to_string())
             .await
@@ -80,12 +55,12 @@ mod tests {
 
     #[tokio::test]
     async fn announce_device_name_propagates_error() {
-        let called = Arc::new(Mutex::new(Vec::new()));
-        let network = Arc::new(TestNetwork {
-            called: called.clone(),
-            result: Err(anyhow::anyhow!("announce failed")),
-        });
-        let uc = AnnounceDeviceName::new(network);
+        let mut network = MockPeerDirectory::new();
+        network
+            .expect_announce_device_name()
+            .returning(|_| Err(anyhow::anyhow!("announce failed")));
+
+        let uc = AnnounceDeviceName::new(Arc::new(network));
 
         let result = uc.execute("Desk".to_string()).await;
 

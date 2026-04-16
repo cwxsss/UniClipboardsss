@@ -75,6 +75,7 @@ impl SelectionResolverPort for SelectionResolver {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use mockall::mock;
     use std::sync::Arc;
     use uc_core::clipboard::{
         ClipboardEntry, ClipboardSelection, ClipboardSelectionDecision,
@@ -82,108 +83,114 @@ mod tests {
     };
     use uc_core::ids::{EntryId, EventId, FormatId, RepresentationId};
 
-    /// Mock ClipboardEntryRepositoryPort
-    struct MockEntryRepo {
-        entry: Option<ClipboardEntry>,
-    }
+    mock! {
+        EntryRepo {}
 
-    #[async_trait]
-    impl ClipboardEntryRepositoryPort for MockEntryRepo {
-        async fn save_entry_and_selection(
-            &self,
-            _entry: &ClipboardEntry,
-            _selection: &ClipboardSelectionDecision,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn get_entry(&self, _entry_id: &EntryId) -> Result<Option<ClipboardEntry>> {
-            Ok(self.entry.clone())
-        }
-
-        async fn list_entries(&self, _limit: usize, _offset: usize) -> Result<Vec<ClipboardEntry>> {
-            Ok(vec![])
-        }
-
-        async fn delete_entry(&self, _entry_id: &EntryId) -> Result<()> {
-            Ok(())
+        #[async_trait]
+        impl ClipboardEntryRepositoryPort for EntryRepo {
+            async fn save_entry_and_selection(
+                &self,
+                entry: &ClipboardEntry,
+                selection: &ClipboardSelectionDecision,
+            ) -> Result<()>;
+            async fn get_entry(&self, entry_id: &EntryId) -> Result<Option<ClipboardEntry>>;
+            async fn list_entries(&self, limit: usize, offset: usize) -> Result<Vec<ClipboardEntry>>;
+            async fn delete_entry(&self, entry_id: &EntryId) -> Result<()>;
         }
     }
 
-    /// Mock ClipboardSelectionRepositoryPort
-    struct MockSelectionRepo {
-        selection: Option<ClipboardSelectionDecision>,
-    }
+    mock! {
+        SelectionRepo {}
 
-    #[async_trait]
-    impl ClipboardSelectionRepositoryPort for MockSelectionRepo {
-        async fn get_selection(
-            &self,
-            _entry_id: &EntryId,
-        ) -> Result<Option<ClipboardSelectionDecision>> {
-            Ok(self.selection.clone())
-        }
-
-        async fn delete_selection(&self, _entry_id: &EntryId) -> Result<()> {
-            Ok(())
+        #[async_trait]
+        impl ClipboardSelectionRepositoryPort for SelectionRepo {
+            async fn get_selection(
+                &self,
+                entry_id: &EntryId,
+            ) -> Result<Option<ClipboardSelectionDecision>>;
+            async fn delete_selection(&self, entry_id: &EntryId) -> Result<()>;
         }
     }
 
-    /// Mock ClipboardRepresentationRepositoryPort
-    struct MockRepresentationRepo {
+    mock! {
+        RepresentationRepo {}
+
+        #[async_trait]
+        impl ClipboardRepresentationRepositoryPort for RepresentationRepo {
+            async fn get_representation(
+                &self,
+                event_id: &EventId,
+                representation_id: &uc_core::ids::RepresentationId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn get_representation_by_id(
+                &self,
+                representation_id: &uc_core::ids::RepresentationId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn get_representation_by_blob_id(
+                &self,
+                blob_id: &uc_core::BlobId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn update_blob_id(
+                &self,
+                representation_id: &uc_core::ids::RepresentationId,
+                blob_id: &uc_core::BlobId,
+            ) -> Result<()>;
+            async fn update_blob_id_if_none(
+                &self,
+                representation_id: &uc_core::ids::RepresentationId,
+                blob_id: &uc_core::BlobId,
+            ) -> Result<bool>;
+            #[mockall::concretize]
+            async fn update_processing_result(
+                &self,
+                rep_id: &uc_core::ids::RepresentationId,
+                expected_states: &[uc_core::clipboard::PayloadAvailability],
+                blob_id: Option<&uc_core::BlobId>,
+                new_state: uc_core::clipboard::PayloadAvailability,
+                last_error: Option<&str>,
+            ) -> Result<uc_core::ports::clipboard::ProcessingUpdateOutcome>;
+        }
+    }
+
+    fn make_entry_repo(entry: Option<ClipboardEntry>) -> MockEntryRepo {
+        let mut repo = MockEntryRepo::new();
+        repo.expect_save_entry_and_selection()
+            .returning(|_, _| Ok(()));
+        repo.expect_get_entry()
+            .returning(move |_| Ok(entry.clone()));
+        repo.expect_list_entries().returning(|_, _| Ok(vec![]));
+        repo.expect_delete_entry().returning(|_| Ok(()));
+        repo
+    }
+
+    fn make_selection_repo(selection: Option<ClipboardSelectionDecision>) -> MockSelectionRepo {
+        let mut repo = MockSelectionRepo::new();
+        repo.expect_get_selection()
+            .returning(move |_| Ok(selection.clone()));
+        repo.expect_delete_selection().returning(|_| Ok(()));
+        repo
+    }
+
+    fn make_representation_repo(
         representation: Option<PersistedClipboardRepresentation>,
-    }
-
-    #[async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepo {
-        async fn get_representation(
-            &self,
-            _event_id: &EventId,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self.representation.clone())
-        }
-
-        async fn get_representation_by_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self.representation.clone())
-        }
-
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
-
-        async fn update_blob_id(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<()> {
-            Ok(())
-        }
-
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &uc_core::ids::RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            _rep_id: &uc_core::ids::RepresentationId,
-            _expected_states: &[uc_core::clipboard::PayloadAvailability],
-            _blob_id: Option<&uc_core::BlobId>,
-            _new_state: uc_core::clipboard::PayloadAvailability,
-            _last_error: Option<&str>,
-        ) -> Result<uc_core::ports::clipboard::ProcessingUpdateOutcome> {
-            Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
-        }
+    ) -> MockRepresentationRepo {
+        let mut repo = MockRepresentationRepo::new();
+        let representation_for_get = representation.clone();
+        repo.expect_get_representation()
+            .returning(move |_, _| Ok(representation_for_get.clone()));
+        let representation_by_id = representation.clone();
+        repo.expect_get_representation_by_id()
+            .returning(move |_| Ok(representation_by_id.clone()));
+        repo.expect_get_representation_by_blob_id()
+            .returning(|_| Ok(None));
+        repo.expect_update_blob_id().returning(|_, _| Ok(()));
+        repo.expect_update_blob_id_if_none()
+            .returning(|_, _| Ok(false));
+        repo.expect_update_processing_result()
+            .returning(|_, _, _, _, _| {
+                Ok(uc_core::ports::clipboard::ProcessingUpdateOutcome::NotFound)
+            });
+        repo
     }
 
     fn create_test_entry(entry_id: EntryId) -> ClipboardEntry {
@@ -228,13 +235,9 @@ mod tests {
         let selection = create_test_selection(entry_id.clone());
         let representation = create_test_representation();
 
-        let entry_repo = Arc::new(MockEntryRepo { entry: Some(entry) });
-        let selection_repo = Arc::new(MockSelectionRepo {
-            selection: Some(selection),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepo {
-            representation: Some(representation),
-        });
+        let entry_repo = Arc::new(make_entry_repo(Some(entry)));
+        let selection_repo = Arc::new(make_selection_repo(Some(selection)));
+        let representation_repo = Arc::new(make_representation_repo(Some(representation)));
 
         let resolver = SelectionResolver::new(entry_repo, selection_repo, representation_repo);
 
@@ -252,13 +255,9 @@ mod tests {
         let selection = create_test_selection(entry_id.clone());
         let representation = create_test_representation();
 
-        let entry_repo = Arc::new(MockEntryRepo { entry: None });
-        let selection_repo = Arc::new(MockSelectionRepo {
-            selection: Some(selection),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepo {
-            representation: Some(representation),
-        });
+        let entry_repo = Arc::new(make_entry_repo(None));
+        let selection_repo = Arc::new(make_selection_repo(Some(selection)));
+        let representation_repo = Arc::new(make_representation_repo(Some(representation)));
 
         let resolver = SelectionResolver::new(entry_repo, selection_repo, representation_repo);
 
@@ -279,11 +278,9 @@ mod tests {
         let entry = create_test_entry(entry_id.clone());
         let representation = create_test_representation();
 
-        let entry_repo = Arc::new(MockEntryRepo { entry: Some(entry) });
-        let selection_repo = Arc::new(MockSelectionRepo { selection: None });
-        let representation_repo = Arc::new(MockRepresentationRepo {
-            representation: Some(representation),
-        });
+        let entry_repo = Arc::new(make_entry_repo(Some(entry)));
+        let selection_repo = Arc::new(make_selection_repo(None));
+        let representation_repo = Arc::new(make_representation_repo(Some(representation)));
 
         let resolver = SelectionResolver::new(entry_repo, selection_repo, representation_repo);
 
@@ -304,13 +301,9 @@ mod tests {
         let entry = create_test_entry(entry_id.clone());
         let selection = create_test_selection(entry_id.clone());
 
-        let entry_repo = Arc::new(MockEntryRepo { entry: Some(entry) });
-        let selection_repo = Arc::new(MockSelectionRepo {
-            selection: Some(selection),
-        });
-        let representation_repo = Arc::new(MockRepresentationRepo {
-            representation: None,
-        });
+        let entry_repo = Arc::new(make_entry_repo(Some(entry)));
+        let selection_repo = Arc::new(make_selection_repo(Some(selection)));
+        let representation_repo = Arc::new(make_representation_repo(None));
 
         let resolver = SelectionResolver::new(entry_repo, selection_repo, representation_repo);
 

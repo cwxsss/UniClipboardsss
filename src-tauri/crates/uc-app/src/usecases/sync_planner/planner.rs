@@ -152,24 +152,9 @@ mod tests {
         ObservedClipboardRepresentation, SystemClipboardSnapshot,
     };
 
+    use crate::test_mocks::MockSettings;
+
     // ── Test helpers ─────────────────────────────────────────────────────────
-
-    struct MockSettings {
-        settings: Option<Settings>,
-    }
-
-    #[async_trait::async_trait]
-    impl SettingsPort for MockSettings {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            match &self.settings {
-                Some(s) => Ok(s.clone()),
-                None => Err(anyhow::anyhow!("settings load error")),
-            }
-        }
-        async fn save(&self, _settings: &Settings) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
 
     fn make_settings(file_sync_enabled: bool, max_file_size: u64) -> Settings {
         let mut s = Settings::default();
@@ -198,7 +183,18 @@ mod tests {
     }
 
     fn make_planner(settings: Option<Settings>) -> OutboundSyncPlanner {
-        OutboundSyncPlanner::new(Arc::new(MockSettings { settings }))
+        let mut mock = MockSettings::new();
+        match settings {
+            Some(s) => {
+                mock.expect_load().returning(move || Ok(s.clone()));
+            }
+            None => {
+                mock.expect_load()
+                    .returning(|| Err(anyhow::anyhow!("settings load error")));
+            }
+        }
+        mock.expect_save().returning(|_| Ok(()));
+        OutboundSyncPlanner::new(Arc::new(mock))
     }
 
     // ── Test 1: RemotePush → clipboard: None, files: [] ──────────────────────

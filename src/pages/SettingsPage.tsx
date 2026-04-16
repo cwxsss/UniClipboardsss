@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import InsetSurface from '@/components/layout/InsetSurface'
 import {
   DEFAULT_CATEGORY,
   SETTINGS_CATEGORIES,
@@ -66,17 +67,19 @@ function SettingsPage() {
       className="min-h-0 h-full"
     >
       <SettingsSidebar activeCategory={activeCategory} onCategoryChange={handleCategoryChange} />
-      <SidebarInset className="min-h-0">
-        <ScrollArea className="flex-1 min-h-0">
-          <div className="p-6">
-            {ActiveSection && (
-              <SettingContentLayout>
-                <ActiveSection />
-              </SettingContentLayout>
-            )}
-          </div>
-        </ScrollArea>
-      </SidebarInset>
+      <InsetSurface className="m-2">
+        <SidebarInset className="min-h-0 bg-transparent">
+          <ScrollArea className="flex-1 min-h-0">
+            <div className="p-6">
+              {ActiveSection && (
+                <SettingContentLayout>
+                  <ActiveSection />
+                </SettingContentLayout>
+              )}
+            </div>
+          </ScrollArea>
+        </SidebarInset>
+      </InsetSurface>
     </SidebarProvider>
   )
 }

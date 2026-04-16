@@ -24,41 +24,8 @@ impl ListConnectedPeers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::MockPeerDirectory;
     use chrono::Utc;
-    use uc_core::network::DiscoveredPeer;
-    use uc_core::ports::PeerDirectoryPort;
-
-    enum ConnectedOutcome {
-        Ok(Vec<ConnectedPeer>),
-        Err(String),
-    }
-
-    struct TestNetwork {
-        outcome: ConnectedOutcome,
-    }
-
-    #[async_trait]
-    impl PeerDirectoryPort for TestNetwork {
-        async fn get_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-            Ok(Vec::new())
-        }
-
-        async fn get_connected_peers(&self) -> anyhow::Result<Vec<ConnectedPeer>> {
-            match &self.outcome {
-                ConnectedOutcome::Ok(peers) => Ok(peers.clone()),
-                ConnectedOutcome::Err(message) => Err(anyhow::anyhow!(message.clone())),
-            }
-        }
-
-        fn local_peer_id(&self) -> String {
-            "peer-local".to_string()
-        }
-
-        async fn announce_device_name(&self, _device_name: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
 
     #[tokio::test]
     async fn returns_connected_peers_on_success() {
@@ -67,10 +34,14 @@ mod tests {
             device_name: "Desk".to_string(),
             connected_at: Utc::now(),
         }];
+        let peers_clone = peers.clone();
 
-        let usecase = ListConnectedPeers::new(Arc::new(TestNetwork {
-            outcome: ConnectedOutcome::Ok(peers.clone()),
-        }));
+        let mut network = MockPeerDirectory::new();
+        network
+            .expect_get_connected_peers()
+            .returning(move || Ok(peers_clone.clone()));
+
+        let usecase = ListConnectedPeers::new(Arc::new(network));
 
         let result = usecase.execute().await.expect("list connected peers");
         assert_eq!(result.len(), 1);
@@ -80,9 +51,12 @@ mod tests {
 
     #[tokio::test]
     async fn wraps_errors_with_context() {
-        let usecase = ListConnectedPeers::new(Arc::new(TestNetwork {
-            outcome: ConnectedOutcome::Err("boom".to_string()),
-        }));
+        let mut network = MockPeerDirectory::new();
+        network
+            .expect_get_connected_peers()
+            .returning(|| Err(anyhow::anyhow!("boom")));
+
+        let usecase = ListConnectedPeers::new(Arc::new(network));
 
         let err = usecase.execute().await.expect_err("expected error");
         let message = err.to_string();

@@ -10,22 +10,23 @@ use uc_core::ports::{
     ClipboardTransportPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort,
 };
 
-pub struct NoopPort;
+type ClipboardSubscription = mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>;
+type EventSubscription = mpsc::Sender<NetworkEvent>;
 
-fn clipboard_subscribers() -> &'static Mutex<Vec<mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>>>
-{
-    static SUBSCRIBERS: OnceLock<Mutex<Vec<mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>>>> =
-        OnceLock::new();
+fn clipboard_subscribers() -> &'static Mutex<Vec<ClipboardSubscription>> {
+    static SUBSCRIBERS: OnceLock<Mutex<Vec<ClipboardSubscription>>> = OnceLock::new();
     SUBSCRIBERS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn event_subscribers() -> &'static Mutex<Vec<mpsc::Sender<NetworkEvent>>> {
-    static SUBSCRIBERS: OnceLock<Mutex<Vec<mpsc::Sender<NetworkEvent>>>> = OnceLock::new();
+fn event_subscribers() -> &'static Mutex<Vec<EventSubscription>> {
+    static SUBSCRIBERS: OnceLock<Mutex<Vec<EventSubscription>>> = OnceLock::new();
     SUBSCRIBERS.get_or_init(|| Mutex::new(Vec::new()))
 }
+
+pub struct NoopClipboardTransport;
 
 #[async_trait]
-impl ClipboardTransportPort for NoopPort {
+impl ClipboardTransportPort for NoopClipboardTransport {
     async fn send_clipboard(&self, _peer_id: &str, _encrypted_data: Arc<[u8]>) -> Result<()> {
         Ok(())
     }
@@ -46,8 +47,10 @@ impl ClipboardTransportPort for NoopPort {
     }
 }
 
+pub struct NoopPeerDirectory;
+
 #[async_trait]
-impl PeerDirectoryPort for NoopPort {
+impl PeerDirectoryPort for NoopPeerDirectory {
     async fn get_discovered_peers(&self) -> Result<Vec<DiscoveredPeer>> {
         Ok(Vec::new())
     }
@@ -65,8 +68,10 @@ impl PeerDirectoryPort for NoopPort {
     }
 }
 
+pub struct NoopPairingTransport;
+
 #[async_trait]
-impl PairingTransportPort for NoopPort {
+impl PairingTransportPort for NoopPairingTransport {
     async fn open_pairing_session(&self, _peer_id: String, _session_id: String) -> Result<()> {
         Ok(())
     }
@@ -88,8 +93,10 @@ impl PairingTransportPort for NoopPort {
     }
 }
 
+pub struct NoopNetworkEvents;
+
 #[async_trait]
-impl NetworkEventPort for NoopPort {
+impl NetworkEventPort for NoopNetworkEvents {
     async fn subscribe_events(&self) -> Result<mpsc::Receiver<NetworkEvent>> {
         let (tx, rx) = mpsc::channel(1);
         event_subscribers()
@@ -101,12 +108,11 @@ impl NetworkEventPort for NoopPort {
 }
 
 pub fn noop_network_ports() -> Arc<uc_app::deps::NetworkPorts> {
-    let network = Arc::new(NoopPort);
     Arc::new(uc_app::deps::NetworkPorts {
-        clipboard: network.clone(),
-        peers: network.clone(),
-        pairing: network.clone(),
-        events: network.clone(),
+        clipboard: Arc::new(NoopClipboardTransport),
+        peers: Arc::new(NoopPeerDirectory),
+        pairing: Arc::new(NoopPairingTransport),
+        events: Arc::new(NoopNetworkEvents),
         // TODO(phase-30): provide FileTransportPort adapter
         file_transfer: Arc::new(uc_core::ports::NoopFileTransportPort),
     })

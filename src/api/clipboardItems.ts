@@ -1,38 +1,26 @@
 import { daemonClient } from '@/api/daemon/client'
 import {
+  type ClipboardEntryDto,
+  getClipboardEntries as daemonGetEntries,
+  getClipboardEntry as daemonGetEntry,
+  deleteClipboardEntry as daemonDeleteEntry,
+  restoreClipboardEntry as daemonRestoreEntry,
+  toggleFavorite as daemonToggleFavorite,
+  clearClipboardHistory as daemonClearHistory,
+  getClipboardStats as daemonGetStats,
+  getClipboardEntryResource as daemonGetResource,
+  getEntryDetail as daemonGetDetail,
+} from '@/api/daemon/clipboard'
+import {
   extractDomainFromUrl,
   isFileContentType,
   isImageContentType,
   parseFileNamesFromUriList,
 } from '@/lib/clipboard-utils'
+import { createLogger } from '@/lib/logger'
 import { invokeWithTrace } from '@/lib/tauri-command'
 
-// Backend projection type
-interface ClipboardEntryProjection {
-  id: string
-  preview: string // Preview content (may be truncated)
-  has_detail: boolean // Whether full detail is available
-  size_bytes: number
-  captured_at: number
-  content_type: string
-  is_encrypted: boolean
-  is_favorited: boolean
-  updated_at: number
-  active_time: number
-  thumbnail_url?: string | null
-  file_transfer_status?: string | null
-  file_transfer_reason?: string | null
-  /** Parsed link URLs (built from full representation data, not preview) */
-  link_urls?: string[] | null
-  /** Extracted domains for link entries */
-  link_domains?: string[] | null
-  /** Per-file sizes in bytes for file (uri-list) entries. -1 means unknown. */
-  file_sizes?: number[] | null
-}
-
-type ClipboardEntriesResponse =
-  | { status: 'ready'; entries: ClipboardEntryProjection[] }
-  | { status: 'not_ready' }
+const log = createLogger('clipboard-items')
 
 export type ClipboardItemsResult =
   | { status: 'ready'; items: ClipboardItemResponse[] }
@@ -135,6 +123,7 @@ export interface ClipboardItemResponse {
   file_transfer_status?: string | null
   /** Failure reason when file_transfer_status is "failed" */
   file_transfer_reason?: string | null
+  file_transfer_ids?: string[]
 }
 
 export interface ClipboardStats {
@@ -143,43 +132,43 @@ export interface ClipboardStats {
 }
 
 /**
- * Transform a backend ClipboardEntryProjection (snake_case, from Tauri commands)
+ * Transform a daemon ClipboardEntryDto (camelCase, from daemon HTTP)
  * to frontend ClipboardItemResponse.
  */
-function transformProjectionToResponse(entry: ClipboardEntryProjection): ClipboardItemResponse {
-  const isFile = isFileContentType(entry.content_type)
-  const isImage = !isFile && isImageContentType(entry.content_type)
+function transformDtoToResponse(entry: ClipboardEntryDto): ClipboardItemResponse {
+  const isFile = isFileContentType(entry.contentType)
+  const isImage = !isFile && isImageContentType(entry.contentType)
 
-  const hasLinkData = !isImage && entry.link_urls && entry.link_urls.length > 0
+  const hasLinkData = !isImage && entry.linkUrls && entry.linkUrls.length > 0
   let linkItem: ClipboardLinkItem | null = null
   if (hasLinkData) {
     linkItem = {
-      urls: entry.link_urls!,
-      domains: entry.link_domains ?? entry.link_urls!.map(extractDomainFromUrl),
+      urls: entry.linkUrls!,
+      domains: entry.linkDomains ?? entry.linkUrls!.map(extractDomainFromUrl),
     }
   }
 
   const item: ClipboardItem = {
     image: isImage
       ? {
-          thumbnail: entry.thumbnail_url ?? null,
-          size: entry.size_bytes,
-          width: 0,
-          height: 0,
+          thumbnail: entry.thumbnailUrl ?? null,
+          size: entry.sizeBytes,
+          width: entry.imageWidth ?? 0,
+          height: entry.imageHeight ?? 0,
         }
       : null,
     text:
       !isImage && !isFile && !hasLinkData
         ? {
             display_text: entry.preview,
-            has_detail: entry.has_detail,
-            size: entry.size_bytes,
+            has_detail: entry.hasDetail,
+            size: entry.sizeBytes,
           }
         : null,
     file: isFile
       ? {
           file_names: parseFileNamesFromUriList(entry.preview),
-          file_sizes: entry.file_sizes ?? [],
+          file_sizes: entry.fileSizes ?? [],
         }
       : (null as unknown as ClipboardFileItem),
     link: linkItem as unknown as ClipboardLinkItem,
@@ -190,36 +179,31 @@ function transformProjectionToResponse(entry: ClipboardEntryProjection): Clipboa
   return {
     id: entry.id,
     is_downloaded: true,
-    is_favorited: entry.is_favorited,
-    created_at: entry.captured_at,
-    updated_at: entry.updated_at,
-    active_time: entry.active_time,
+    is_favorited: entry.isFavorited,
+    created_at: entry.capturedAt,
+    updated_at: entry.updatedAt,
+    active_time: entry.activeTime,
     item,
-    file_transfer_status: entry.file_transfer_status ?? null,
-    file_transfer_reason: entry.file_transfer_reason ?? null,
+    file_transfer_status: entry.fileTransferStatus ?? null,
+    file_transfer_reason: entry.fileTransferReason ?? null,
   }
 }
 
 /**
  * 获取剪贴板统计信息
- * @returns Promise，返回剪贴板统计信息
  */
 export async function getClipboardStats(): Promise<ClipboardStats> {
   try {
-    return await invokeWithTrace('get_clipboard_stats')
+    const stats = await daemonGetStats()
+    return { total_items: stats.totalItems, total_size: stats.totalSize }
   } catch (error) {
-    console.error('获取剪贴板统计信息失败:', error)
+    log.error({ err: error }, '获取剪贴板统计信息失败')
     throw error
   }
 }
 
 /**
  * 获取剪贴板历史记录
- * @param orderBy 排序方式（暂未实现）
- * @param limit 限制返回的条目数
- * @param offset 偏移量，用于分页（暂未实现）
- * @param filter 过滤选项（暂未实现）
- * @returns Promise，返回剪贴板条目数组
  */
 export async function getClipboardItems(
   _orderBy?: OrderBy,
@@ -228,102 +212,72 @@ export async function getClipboardItems(
   _filter?: Filter
 ): Promise<ClipboardItemsResult> {
   try {
-    // Note: orderBy and filter are not yet implemented in the backend command
-    // Map Filter enum to backend format if needed (for future use)
-    // const mappedFilter = filter === Filter.All ? undefined : filter
-
-    // Use new command name: get_clipboard_entries
-    const response = await invokeWithTrace<ClipboardEntriesResponse>('get_clipboard_entries', {
-      limit: limit ?? 50,
-      offset: offset ?? 0,
-    })
+    const response = await daemonGetEntries(limit ?? 50, offset ?? 0)
 
     if (response.status === 'not_ready') {
       return { status: 'not_ready' }
     }
 
-    // Transform backend projection to frontend response format
-    const items = response.entries.map(transformProjectionToResponse)
-
+    const items = (response.entries ?? []).map(transformDtoToResponse)
     return { status: 'ready', items }
   } catch (error) {
-    console.error('获取剪贴板历史记录失败:', error)
+    log.error({ err: error }, '获取剪贴板历史记录失败')
     throw error
   }
 }
 
 /**
- * Fetch a single clipboard entry by ID using the new get_clipboard_entry command.
- * Returns the transformed ClipboardItemResponse, or null if not ready / not found.
+ * Fetch a single clipboard entry by ID.
  */
 export async function getClipboardEntry(entryId: string): Promise<ClipboardItemResponse | null> {
   try {
-    const response = await invokeWithTrace<ClipboardEntriesResponse>('get_clipboard_entry', {
-      entryId,
-    })
-
-    if (response.status === 'not_ready' || response.entries.length === 0) {
-      return null
-    }
-
-    return transformProjectionToResponse(response.entries[0])
+    const entry = await daemonGetEntry(entryId)
+    if (!entry) return null
+    return transformDtoToResponse(entry)
   } catch (error) {
-    console.error('Failed to get clipboard entry:', error)
+    log.error({ err: error }, 'Failed to get clipboard entry')
     return null
   }
 }
 
 /**
- * 获取单个剪贴板条目
- * @param id 剪贴板条目ID
- * @param fullContent 是否获取完整内容，不进行截断
- * @returns Promise，返回剪贴板条目，若不存在则返回null
- */
-export async function getClipboardItem(
-  id: string,
-  fullContent: boolean = false
-): Promise<ClipboardItemResponse | null> {
-  try {
-    return await invokeWithTrace('get_clipboard_item', { id, fullContent })
-  } catch (error) {
-    console.error('获取剪贴板条目失败:', error)
-    throw error
-  }
-}
-
-/**
  * Get clipboard entry detail (full content)
- * 获取剪切板条目详情（完整内容）
- * @param id Entry ID
- * @returns Promise with full entry detail
  */
 export async function getClipboardEntryDetail(id: string): Promise<ClipboardEntryDetail> {
   try {
-    return await invokeWithTrace('get_clipboard_entry_detail', { entryId: id })
+    const detail = await daemonGetDetail(id)
+    if (!detail) throw new Error('Entry detail not found')
+    return {
+      id: detail.id,
+      content: detail.content,
+      content_type: detail.mimeType ?? 'text/plain',
+      size_bytes: detail.sizeBytes,
+      is_favorited: false,
+      updated_at: detail.activeTimeMs,
+      active_time: detail.activeTimeMs,
+    }
   } catch (error) {
-    console.error('Failed to get clipboard entry detail:', error)
+    log.error({ err: error }, 'Failed to get clipboard entry detail')
     throw error
   }
 }
 
 /**
  * Get clipboard entry resource metadata
- * 获取剪切板条目资源元信息
- * @param id Entry ID
- * @returns Promise with resource metadata
  */
 export async function getClipboardEntryResource(id: string): Promise<ClipboardEntryResource> {
   try {
-    return await invokeWithTrace('get_clipboard_entry_resource', { entryId: id })
+    const resource = await daemonGetResource(id)
+    if (!resource) throw new Error('Entry resource not found')
+    return resource
   } catch (error) {
-    console.error('Failed to get clipboard entry resource:', error)
+    log.error({ err: error }, 'Failed to get clipboard entry resource')
     throw error
   }
 }
 
 /**
  * Fetch clipboard entry text content via resource URL or inline data
- * 通过资源 URL 或内联数据拉取并解码剪贴板文本内容
  */
 export async function fetchClipboardResourceText(
   resource: ClipboardEntryResource
@@ -347,15 +301,13 @@ export async function fetchClipboardResourceText(
     const buffer = await response.arrayBuffer()
     return new TextDecoder('utf-8').decode(buffer)
   } catch (error) {
-    console.error('Failed to fetch clipboard resource text:', error)
+    log.error({ err: error }, 'Failed to fetch clipboard resource text')
     throw error
   }
 }
 
 /**
  * Get a displayable image URL from a clipboard resource.
- * Uses blob URL when available, falls back to data URL from inline data.
- * 从剪贴板资源获取可显示的图片 URL。
  */
 export function getResourceImageUrl(resource: ClipboardEntryResource): string | null {
   if (resource.url) {
@@ -369,8 +321,6 @@ export function getResourceImageUrl(resource: ClipboardEntryResource): string | 
 
 /**
  * Resolve a clipboard image resource into a displayable <img src> URL.
- * - Inline image data stays as a data URL.
- * - Blob-backed daemon paths are upgraded to authenticated daemon URLs.
  */
 export function resolveResourceImageUrl(resource: ClipboardEntryResource): string | null {
   const rawUrl = getResourceImageUrl(resource)
@@ -381,62 +331,57 @@ export function resolveResourceImageUrl(resource: ClipboardEntryResource): strin
 
 /**
  * 删除剪贴板条目
- * @param id 剪贴板条目ID
- * @returns Promise，成功返回true
  */
 export async function deleteClipboardItem(id: string): Promise<boolean> {
   try {
-    return await invokeWithTrace('delete_clipboard_entry', { entryId: id })
+    await daemonDeleteEntry(id)
+    return true
   } catch (error) {
-    console.error('删除剪贴板条目失败:', error)
+    log.error({ err: error }, '删除剪贴板条目失败')
     throw error
   }
 }
 
 /**
  * 清空所有剪贴板历史记录
- * @returns Promise，成功返回删除的条目数
  */
 export async function clearClipboardItems(): Promise<number> {
   try {
-    return await invokeWithTrace('clear_clipboard_items')
+    const result = await daemonClearHistory()
+    return result.deletedCount
   } catch (error) {
-    console.error('清空剪贴板历史记录失败:', error)
+    log.error({ err: error }, '清空剪贴板历史记录失败')
     throw error
   }
 }
 
 /**
  * 同步剪贴板内容
- * @returns Promise，成功返回true
  */
 export async function syncClipboardItems(): Promise<boolean> {
   try {
     return await invokeWithTrace('sync_clipboard_items')
   } catch (error) {
-    console.error('同步剪贴板内容失败:', error)
+    log.error({ err: error }, '同步剪贴板内容失败')
     throw error
   }
 }
 
 /**
- * 复制剪贴板内容
- * @param id 剪贴板条目ID
- * @returns Promise，成功返回true
+ * 复制剪贴板内容（恢复到系统剪贴板）
  */
 export async function copyClipboardItem(id: string): Promise<boolean> {
   try {
-    return await invokeWithTrace('restore_clipboard_entry', { entryId: id })
+    await daemonRestoreEntry(id)
+    return true
   } catch (error) {
-    console.error('复制剪贴板记录失败:', error)
+    log.error({ err: error }, '复制剪贴板记录失败')
     throw error
   }
 }
 
 /**
  * 根据内容类型获取符合前端显示的类型
- * @param contentType 内容类型字符串
- * @returns 适合UI显示的类型
  */
 export function getDisplayType(
   item: ClipboardItem
@@ -458,8 +403,6 @@ export function getDisplayType(
 
 /**
  * 判断是否为图片类型
- * @param contentType 内容类型
- * @returns 是否为图片
  */
 export function isImageType(contentType: string): boolean {
   return contentType === 'image' || contentType.startsWith('image/')
@@ -467,8 +410,6 @@ export function isImageType(contentType: string): boolean {
 
 /**
  * 判断是否为文本类型
- * @param contentType 内容类型
- * @returns 是否为文本
  */
 export function isTextType(contentType: string): boolean {
   return contentType === 'text' || contentType.startsWith('text/')
@@ -476,36 +417,32 @@ export function isTextType(contentType: string): boolean {
 
 /**
  * 收藏剪贴板条目
- * @param id 剪贴板条目ID
- * @returns Promise，成功返回true
  */
 export async function favoriteClipboardItem(id: string): Promise<boolean> {
   try {
-    return await invokeWithTrace('toggle_favorite_clipboard_item', { id, is_favorited: true })
+    await daemonToggleFavorite(id, true)
+    return true
   } catch (error) {
-    console.error('收藏剪贴板条目失败:', error)
+    log.error({ err: error }, '收藏剪贴板条目失败')
     throw error
   }
 }
 
 /**
  * 取消收藏剪贴板条目
- * @param id 剪贴板条目ID
- * @returns Promise，成功返回true
  */
 export async function unfavoriteClipboardItem(id: string): Promise<boolean> {
   try {
-    return await invokeWithTrace('toggle_favorite_clipboard_item', { id, is_favorited: false })
+    await daemonToggleFavorite(id, false)
+    return true
   } catch (error) {
-    console.error('取消收藏剪贴板条目失败:', error)
+    log.error({ err: error }, '取消收藏剪贴板条目失败')
     throw error
   }
 }
 
 /**
  * Copy a file entry to the system clipboard via the daemon restore endpoint.
- * The restore endpoint detects file entries and uses file-specific restore strategy
- * (validates file existence, writes with proper file clipboard format).
  */
 export async function copyFileToClipboard(entryId: string): Promise<void> {
   await daemonClient.request(`/clipboard/restore/${entryId}`, { method: 'POST' })
@@ -519,7 +456,7 @@ export async function downloadFileEntry(entryId: string): Promise<{ transfer_id:
   try {
     return await invokeWithTrace('download_file_entry', { entryId })
   } catch (error) {
-    console.error('Failed to download file entry:', error)
+    log.error({ err: error }, 'Failed to download file entry')
     throw error
   }
 }
@@ -531,7 +468,7 @@ export async function openFileLocation(entryId: string): Promise<void> {
   try {
     await invokeWithTrace('open_file_location', { entryId })
   } catch (error) {
-    console.error('Failed to open file location:', error)
+    log.error({ err: error }, 'Failed to open file location')
     throw error
   }
 }

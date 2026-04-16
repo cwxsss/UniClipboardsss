@@ -1,5 +1,6 @@
 import React, { ReactNode } from 'react'
 import { Sidebar } from '@/components'
+import InsetSurface from '@/components/layout/InsetSurface'
 
 interface MainLayoutProps {
   children: ReactNode
@@ -22,7 +23,9 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       <Sidebar />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col overflow-hidden relative">{children}</main>
+      <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden p-2">
+        <InsetSurface className="flex-1 w-full h-full">{children}</InsetSurface>
+      </main>
     </>
   )
 }

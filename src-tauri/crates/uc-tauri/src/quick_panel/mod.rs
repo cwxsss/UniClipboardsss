@@ -22,6 +22,14 @@ use tracing::{debug, error, info, warn};
 /// the "show → instant blur → hide" race on Windows/Linux.
 static LAST_SHOW_TIME: Mutex<Option<Instant>> = Mutex::new(None);
 
+/// The logical top-left origin used for the currently shown quick panel.
+///
+/// `show()` centers the history-only panel and records that origin. Later
+/// inline preview expand/collapse operations reuse the same origin so the
+/// window grows and shrinks relative to the history pane instead of jumping
+/// to re-center the full width.
+static PANEL_ORIGIN: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+
 /// How long (ms) after `show()` to suppress blur events.
 const BLUR_DEBOUNCE_MS: u128 = 300;
 
@@ -44,48 +52,148 @@ pub const DEFAULT_SHORTCUT: &str = "ctrl+alt+v";
 /// Settings key used to store the quick panel shortcut override.
 pub const SHORTCUT_SETTINGS_KEY: &str = "global.toggleQuickPanel";
 
-/// Panel dimensions (logical pixels).
-const PANEL_WIDTH: f64 = 360.0;
-const PANEL_HEIGHT: f64 = 420.0;
-const PREVIEW_WIDTH: f64 = 360.0;
-const PANEL_GAP: f64 = 4.0;
-const EXPANDED_PANEL_WIDTH: f64 = PANEL_WIDTH + PANEL_GAP + PREVIEW_WIDTH;
+/// Panel base dimensions (logical pixels at 100% UI scale).
+const BASE_PANEL_WIDTH: f64 = 360.0;
+const BASE_PANEL_HEIGHT: f64 = 420.0;
+const BASE_PREVIEW_WIDTH: f64 = 360.0;
+const PANEL_GAP: f64 = 8.0;
+const MIN_UI_SCALE: f64 = 0.8;
+const MAX_UI_SCALE: f64 = 1.5;
+
+/// Space (logical pixels) reserved around the cards for shadows and rounded corners.
+/// This padding is included in the window size but remains transparent in the UI.
+const WINDOW_PADDING: f64 = 16.0;
 
 /// Tauri window label for the quick panel.
 pub(crate) const PANEL_LABEL: &str = "quick-panel";
 
 // ── Cross-platform helpers ─────────────────────────────────────────────
 
-/// Get screen center position for the panel (top-left corner of the panel
-/// such that it appears centered on screen, like Raycast/Spotlight).
+fn centered_panel_position_from_monitor(
+    monitor_origin_x: i32,
+    monitor_origin_y: i32,
+    monitor_width_px: u32,
+    monitor_height_px: u32,
+    scale_factor: f64,
+    panel_width: f64,
+    panel_height: f64,
+) -> (f64, f64) {
+    let monitor_x = monitor_origin_x as f64 / scale_factor;
+    let monitor_y = monitor_origin_y as f64 / scale_factor;
+    let monitor_width = monitor_width_px as f64 / scale_factor;
+    let monitor_height = monitor_height_px as f64 / scale_factor;
+
+    (
+        monitor_x + (monitor_width - panel_width) / 2.0,
+        monitor_y + (monitor_height - panel_height) / 2.0,
+    )
+}
+
+/// Get the quick panel position centered on the monitor that currently
+/// contains the mouse cursor.
 ///
-/// 获取面板在屏幕居中时的左上角坐标（类似 Raycast/Spotlight 的位置）。
-fn screen_center_position(app: &tauri::AppHandle) -> (f64, f64) {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app; // used only on non-macOS
-        macos::get_screen_center(PANEL_WIDTH, PANEL_HEIGHT)
+/// 获取鼠标所在屏幕上的面板居中位置。
+fn panel_position_for_cursor_screen(app: &tauri::AppHandle, width: f64, height: f64) -> (f64, f64) {
+    let target_monitor = match app.cursor_position() {
+        Ok(cursor) => match app.monitor_from_point(cursor.x, cursor.y) {
+            Ok(Some(monitor)) => Some(monitor),
+            Ok(None) => {
+                warn!(
+                    cursor_x = cursor.x,
+                    cursor_y = cursor.y,
+                    "No monitor found for cursor position; falling back to primary monitor"
+                );
+                None
+            }
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    cursor_x = cursor.x,
+                    cursor_y = cursor.y,
+                    "Failed to resolve monitor from cursor position; falling back to primary monitor"
+                );
+                None
+            }
+        },
+        Err(error) => {
+            warn!(
+                error = %error,
+                "Failed to read cursor position; falling back to primary monitor"
+            );
+            None
+        }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        // Query the primary monitor for its size; fall back to 800x600 if unavailable.
-        let (screen_w, screen_h) = app
-            .get_webview_window(PANEL_LABEL)
-            .and_then(|w| w.primary_monitor().ok().flatten())
-            .map(|m| {
-                let size = m.size();
-                let scale = m.scale_factor();
-                (size.width as f64 / scale, size.height as f64 / scale)
-            })
-            .unwrap_or_else(|| {
-                warn!("No primary monitor detected, using 800x600 fallback for panel centering");
-                (800.0, 600.0)
-            });
-        (
-            (screen_w - PANEL_WIDTH) / 2.0,
-            (screen_h - PANEL_HEIGHT) / 2.0,
-        )
+    .or_else(|| match app.primary_monitor() {
+        Ok(monitor) => monitor,
+        Err(error) => {
+            warn!(
+                error = %error,
+                "Failed to resolve primary monitor for quick panel positioning"
+            );
+            None
+        }
+    });
+
+    target_monitor
+        .map(|monitor| {
+            let size = monitor.size();
+            let position = monitor.position();
+            centered_panel_position_from_monitor(
+                position.x,
+                position.y,
+                size.width,
+                size.height,
+                monitor.scale_factor(),
+                width,
+                height,
+            )
+        })
+        .unwrap_or_else(|| {
+            warn!("No monitor detected, using 800x600 fallback for quick panel positioning");
+            centered_panel_position_from_monitor(0, 0, 800, 600, 1.0, width, height)
+        })
+}
+
+fn normalize_ui_scale(scale: f64) -> f64 {
+    if !scale.is_finite() {
+        return 1.0;
     }
+
+    scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE)
+}
+
+fn panel_dimensions(scale: f64, preview_expanded: bool) -> (f64, f64) {
+    let normalized_scale = normalize_ui_scale(scale);
+    let width = if preview_expanded {
+        (BASE_PANEL_WIDTH + PANEL_GAP + BASE_PREVIEW_WIDTH) * normalized_scale
+            + (WINDOW_PADDING * 2.0)
+    } else {
+        (BASE_PANEL_WIDTH * normalized_scale) + (WINDOW_PADDING * 2.0)
+    };
+
+    (
+        width,
+        (BASE_PANEL_HEIGHT * normalized_scale) + (WINDOW_PADDING * 2.0),
+    )
+}
+
+fn remember_panel_origin(x: f64, y: f64) {
+    if let Ok(mut guard) = PANEL_ORIGIN.lock() {
+        *guard = Some((x, y));
+    }
+}
+
+fn resolve_panel_origin(
+    remembered_origin: Option<(f64, f64)>,
+    centered_origin: (f64, f64),
+) -> (f64, f64) {
+    remembered_origin.unwrap_or(centered_origin)
+}
+
+fn panel_origin_or_center(app: &tauri::AppHandle, width: f64, height: f64) -> (f64, f64) {
+    let remembered_origin = PANEL_ORIGIN.lock().ok().and_then(|guard| *guard);
+    let centered_origin = panel_position_for_cursor_screen(app, width, height);
+    resolve_panel_origin(remembered_origin, centered_origin)
 }
 
 // ── Public API ─────────────────────────────────────────────────────────
@@ -105,12 +213,14 @@ pub fn pre_create(app: &tauri::AppHandle) {
 
     // Position off-screen; will be repositioned on first show()
     let url = WebviewUrl::App("quick-panel.html".into());
+    let (initial_width, initial_height) = panel_dimensions(1.0, false);
     match WebviewWindowBuilder::new(app, PANEL_LABEL, url)
         .title("Quick Panel")
-        .inner_size(PANEL_WIDTH, PANEL_HEIGHT)
+        .inner_size(initial_width, initial_height)
         .position(-9999.0, -9999.0)
         .decorations(false)
         .transparent(true)
+        .shadow(false)
         .always_on_top(true)
         .visible(false)
         .resizable(false)
@@ -199,10 +309,21 @@ pub fn toggle(app: &tauri::AppHandle) {
 /// Expects the panel to already exist (via `pre_create`). Falls back to
 /// creating inline if it doesn't exist yet.
 ///
+/// Two-phase show: this function prepares the window (size, position) and
+/// emits a `quick-panel://prepare-show` event.  The frontend clears stale
+/// state and then calls the `finalize_quick_panel_show` command, which
+/// makes the window visible.  This prevents a one-frame flash of old
+/// preview content when the panel reopens.
+///
 /// 在屏幕中央显示快捷面板（类似 Raycast）。
 pub fn show(app: &tauri::AppHandle) {
-    let (panel_x, panel_y) = screen_center_position(app);
-    info!(panel_x, panel_y, "Showing quick panel centered on screen");
+    let (width, height) = panel_dimensions(1.0, false);
+    let (panel_x, panel_y) = panel_position_for_cursor_screen(app, width, height);
+
+    info!(
+        panel_x,
+        panel_y, "Showing quick panel centered on the monitor containing the cursor"
+    );
 
     // If panel doesn't exist yet (pre_create wasn't called), create it now
     if app.get_webview_window(PANEL_LABEL).is_none() {
@@ -214,7 +335,7 @@ pub fn show(app: &tauri::AppHandle) {
         #[cfg(target_os = "windows")]
         windows::remember_previous_foreground(&window);
 
-        if let Err(e) = window.set_size(tauri::LogicalSize::new(PANEL_WIDTH, PANEL_HEIGHT)) {
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
             warn!(error = %e, "Failed to reset quick panel size");
         }
 
@@ -223,34 +344,43 @@ pub fn show(app: &tauri::AppHandle) {
             panel_x, panel_y,
         ))) {
             warn!(error = %e, "Failed to set quick panel position");
+        } else {
+            remember_panel_origin(panel_x, panel_y);
         }
 
-        // Record show timestamp *before* showing so the blur handler can
-        // debounce any spurious Focused(false) events that fire during the
-        // show + focus sequence on Windows/Linux.
+        // Record show timestamp *before* the frontend finalizes show so the
+        // blur handler can debounce spurious Focused(false) events.
         if let Ok(mut guard) = LAST_SHOW_TIME.lock() {
             *guard = Some(Instant::now());
         }
 
-        // Show panel without activating the app (macOS uses orderFrontRegardless)
+        // Ask frontend to clear stale state; it will call
+        // `finalize_quick_panel_show` once it has repainted.
+        if let Err(e) = app.emit_to(PANEL_LABEL, "quick-panel://prepare-show", ()) {
+            warn!(error = %e, "Failed to emit prepare-show event to quick panel");
+        }
+    }
+}
+
+/// Actually make the quick panel window visible.
+///
+/// Called by the frontend after it has cleared stale preview state and
+/// repainted in response to the `quick-panel://prepare-show` event.
+///
+/// 实际显示快捷面板窗口（由前端在状态清理后调用）。
+pub fn finalize_show(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(PANEL_LABEL) {
         #[cfg(target_os = "macos")]
         macos::show_panel(&window);
         #[cfg(target_os = "windows")]
         {
             let _ = window.show();
-            // Use Win32 AttachThreadInput trick to reliably claim foreground,
-            // bypassing SetForegroundWindow restrictions.
             windows::force_foreground(&window);
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = window.show();
             let _ = window.set_focus();
-        }
-
-        // Notify the frontend to refresh data
-        if let Err(e) = app.emit_to(PANEL_LABEL, "quick-panel://refresh", ()) {
-            warn!(error = %e, "Failed to emit refresh event to quick panel");
         }
     }
 }
@@ -273,20 +403,93 @@ pub fn dismiss(app: &tauri::AppHandle) {
     }
 }
 
-/// Expand or collapse the quick panel width for inline preview.
-pub fn set_preview_expanded(app: &tauri::AppHandle, expanded: bool) {
+/// Update quick panel size and center position from the current UI scale.
+pub fn set_layout(app: &tauri::AppHandle, scale: f64, preview_expanded: bool) {
     let Some(window) = app.get_webview_window(PANEL_LABEL) else {
         return;
     };
 
-    let width = if expanded {
-        EXPANDED_PANEL_WIDTH
+    let (width, height) = panel_dimensions(scale, preview_expanded);
+    let (panel_x, panel_y) = panel_origin_or_center(app, width, height);
+
+    if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
+        warn!(
+            error = %e,
+            preview_expanded,
+            scale,
+            width,
+            height,
+            "Failed to update quick panel size"
+        );
+    }
+
+    if let Err(e) = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+        panel_x, panel_y,
+    ))) {
+        warn!(
+            error = %e,
+            preview_expanded,
+            scale,
+            panel_x,
+            panel_y,
+            "Failed to update quick panel position"
+        );
     } else {
-        PANEL_WIDTH
+        remember_panel_origin(panel_x, panel_y);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        centered_panel_position_from_monitor, panel_dimensions, resolve_panel_origin,
+        BASE_PANEL_HEIGHT, BASE_PANEL_WIDTH, MAX_UI_SCALE, MIN_UI_SCALE, WINDOW_PADDING,
     };
 
-    if let Err(e) = window.set_size(tauri::LogicalSize::new(width, PANEL_HEIGHT)) {
-        warn!(error = %e, expanded, "Failed to update quick panel size");
+    #[test]
+    fn centers_panel_on_primary_monitor_origin() {
+        let (x, y) = centered_panel_position_from_monitor(0, 0, 1920, 1080, 1.0, 360.0, 420.0);
+
+        assert_eq!((x, y), (780.0, 330.0));
+    }
+
+    #[test]
+    fn centers_panel_on_scaled_secondary_monitor() {
+        let (x, y) = centered_panel_position_from_monitor(2560, 0, 2560, 1440, 2.0, 360.0, 420.0);
+
+        assert_eq!((x, y), (1740.0, 150.0));
+    }
+
+    #[test]
+    fn panel_dimensions_clamp_scale_and_expand_width() {
+        let (collapsed_width, collapsed_height) = panel_dimensions(0.1, false);
+        assert_eq!(
+            collapsed_width,
+            BASE_PANEL_WIDTH * MIN_UI_SCALE + WINDOW_PADDING * 2.0
+        );
+        assert_eq!(
+            collapsed_height,
+            BASE_PANEL_HEIGHT * MIN_UI_SCALE + WINDOW_PADDING * 2.0
+        );
+
+        let (expanded_width, expanded_height) = panel_dimensions(9.0, true);
+        assert!(expanded_width > BASE_PANEL_WIDTH * MAX_UI_SCALE);
+        assert_eq!(
+            expanded_height,
+            BASE_PANEL_HEIGHT * MAX_UI_SCALE + WINDOW_PADDING * 2.0
+        );
+    }
+
+    #[test]
+    fn remembered_origin_wins_over_recentered_origin() {
+        let resolved = resolve_panel_origin(Some((120.0, 48.0)), (300.0, 90.0));
+        assert_eq!(resolved, (120.0, 48.0));
+    }
+
+    #[test]
+    fn centered_origin_is_used_when_no_anchor_is_recorded() {
+        let resolved = resolve_panel_origin(None, (300.0, 90.0));
+        assert_eq!(resolved, (300.0, 90.0));
     }
 }
 

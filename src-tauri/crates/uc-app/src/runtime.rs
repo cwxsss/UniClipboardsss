@@ -175,41 +175,29 @@ impl CoreRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_mocks::MockHostEventEmitter;
     use std::sync::Mutex as StdMutex;
-    use uc_core::ports::host_event_emitter::{EmitError, HostEvent, SetupHostEvent};
-
-    struct NoopEmitter;
-
-    impl HostEventEmitterPort for NoopEmitter {
-        fn emit(&self, _event: HostEvent) -> Result<(), EmitError> {
-            Ok(())
-        }
-    }
-
-    struct RecordingEmitter {
-        events: Arc<StdMutex<Vec<String>>>,
-    }
-
-    impl HostEventEmitterPort for RecordingEmitter {
-        fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
-            self.events.lock().unwrap().push(format!("{:?}", event));
-            Ok(())
-        }
-    }
+    use uc_core::ports::host_event_emitter::{HostEvent, SetupHostEvent};
 
     #[test]
     fn emitter_cell_reflects_swap() {
         // This tests the underlying shared-cell pattern: a cloned Arc<RwLock<...>>
         // sees changes made through the original. This is the foundation for the
         // stale-emitter fix, but does NOT test HostEventSetupPort itself.
-        let initial: Arc<dyn HostEventEmitterPort> = Arc::new(NoopEmitter);
+        let mut initial = MockHostEventEmitter::new();
+        initial.expect_emit().returning(|_| Ok(()));
+        let initial: Arc<dyn HostEventEmitterPort> = Arc::new(initial);
         let cell = Arc::new(std::sync::RwLock::new(initial));
         let cell_clone = cell.clone();
 
         let events = Arc::new(StdMutex::new(vec![]));
-        let recording: Arc<dyn HostEventEmitterPort> = Arc::new(RecordingEmitter {
-            events: events.clone(),
+        let events_clone = events.clone();
+        let mut recording = MockHostEventEmitter::new();
+        recording.expect_emit().times(1).returning(move |event| {
+            events_clone.lock().unwrap().push(format!("{:?}", event));
+            Ok(())
         });
+        let recording: Arc<dyn HostEventEmitterPort> = Arc::new(recording);
 
         // Swap via original
         *cell.write().unwrap() = recording;

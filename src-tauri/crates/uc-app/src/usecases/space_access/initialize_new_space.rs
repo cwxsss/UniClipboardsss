@@ -81,125 +81,99 @@ impl StartSponsorAuthorization {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
+    use crate::test_mocks::{
+        MockSpaceAccessCrypto, MockSpaceAccessPersistence, MockSpaceAccessProof,
+        MockSpaceAccessTransport, MockTimer,
+    };
+    use mockall::mock;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use uc_core::ids::SessionId as CoreSessionId;
-    use uc_core::network::SessionId as NetworkSessionId;
-    use uc_core::ports::space::{ProofPort, SpaceAccessTransportPort};
     use uc_core::security::model::{
         EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion, KeyScope, KeySlot, WrappedMasterKey,
     };
-    use uc_core::security::space_access::SpaceAccessProofArtifact;
     use uc_core::security::{MasterKey, SecretString};
 
-    struct MockCryptoPort {
-        exported: Arc<AtomicBool>,
-    }
+    mock! {
+        CryptoFactory {}
 
-    impl MockCryptoPort {
-        fn new(exported: Arc<AtomicBool>) -> Self {
-            Self { exported }
-        }
-    }
-
-    struct MockCryptoFactory {
-        exported: Arc<AtomicBool>,
-    }
-
-    impl SpaceAccessCryptoFactory for MockCryptoFactory {
-        fn build(&self, _passphrase: SecretString) -> Box<dyn CryptoPort> {
-            Box::new(MockCryptoPort::new(self.exported.clone()))
-        }
-    }
-
-    #[async_trait]
-    impl CryptoPort for MockCryptoPort {
-        async fn generate_nonce32(&self) -> [u8; 32] {
-            [7u8; 32]
-        }
-
-        async fn export_keyslot_blob(&self, _space_id: &SpaceId) -> anyhow::Result<KeySlot> {
-            self.exported.store(true, Ordering::SeqCst);
-            let draft = KeySlot::draft_v1(KeyScope {
-                profile_id: "test".to_string(),
-            })?;
-            Ok(draft.finalize(WrappedMasterKey {
-                blob: EncryptedBlob {
-                    version: EncryptionFormatVersion::V1,
-                    aead: EncryptionAlgo::XChaCha20Poly1305,
-                    nonce: vec![0u8; 24],
-                    ciphertext: vec![1u8; 32],
-                    aad_fingerprint: None,
-                },
-            }))
-        }
-
-        async fn derive_master_key_from_keyslot(
-            &self,
-            _keyslot_blob: &[u8],
-            _passphrase: SecretString,
-        ) -> anyhow::Result<MasterKey> {
-            MasterKey::from_bytes(&[0u8; 32]).map_err(|e| anyhow::anyhow!(e))
-        }
-    }
-
-    struct MockTimerPort;
-
-    #[async_trait]
-    impl TimerPort for MockTimerPort {
-        async fn start(
-            &mut self,
-            _session_id: &CoreSessionId,
-            _ttl_secs: u64,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn stop(&mut self, _session_id: &CoreSessionId) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct MockStorePort;
-
-    #[async_trait]
-    impl PersistencePort for MockStorePort {
-        async fn persist_joiner_access(
-            &mut self,
-            _space_id: &SpaceId,
-            _peer_id: &str,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn persist_sponsor_access(
-            &mut self,
-            _space_id: &SpaceId,
-            _peer_id: &str,
-        ) -> anyhow::Result<()> {
-            Ok(())
+        impl SpaceAccessCryptoFactory for CryptoFactory {
+            fn build(&self, passphrase: SecretString) -> Box<dyn CryptoPort>;
         }
     }
 
     #[tokio::test]
     async fn start_sponsor_authorization_exports_keyslot() {
         let exported = Arc::new(AtomicBool::new(false));
-        let crypto_factory = Arc::new(MockCryptoFactory {
-            exported: exported.clone(),
+        let exported_clone = exported.clone();
+        let mut crypto_factory = MockCryptoFactory::new();
+        crypto_factory.expect_build().returning(move |_| {
+            let mut crypto = MockSpaceAccessCrypto::new();
+            crypto.expect_generate_nonce32().returning(|| [7u8; 32]);
+
+            let exported = exported_clone.clone();
+            crypto.expect_export_keyslot_blob().returning(move |_| {
+                exported.store(true, Ordering::SeqCst);
+                let draft = KeySlot::draft_v1(KeyScope {
+                    profile_id: "test".to_string(),
+                })?;
+                Ok(draft.finalize(WrappedMasterKey {
+                    blob: EncryptedBlob {
+                        version: EncryptionFormatVersion::V1,
+                        aead: EncryptionAlgo::XChaCha20Poly1305,
+                        nonce: vec![0u8; 24],
+                        ciphertext: vec![1u8; 32],
+                        aad_fingerprint: None,
+                    },
+                }))
+            });
+            crypto
+                .expect_derive_master_key_from_keyslot()
+                .returning(|_, _| {
+                    MasterKey::from_bytes(&[0u8; 32]).map_err(|e| anyhow::anyhow!(e))
+                });
+
+            Box::new(crypto)
         });
-        let transport = Arc::new(Mutex::new(MockTransportPort));
-        let proof = Arc::new(MockProofPort);
-        let timer = Arc::new(Mutex::new(MockTimerPort));
-        let store = Arc::new(Mutex::new(MockStorePort));
+        let crypto_factory = Arc::new(crypto_factory);
+
+        let mut transport = MockSpaceAccessTransport::new();
+        transport.expect_send_offer().returning(|_| Ok(()));
+        transport.expect_send_proof().returning(|_| Ok(()));
+        transport.expect_send_result().returning(|_| Ok(()));
+
+        let mut proof = MockSpaceAccessProof::new();
+        proof
+            .expect_build_proof()
+            .returning(|sid, space_id, nonce, _| {
+                Ok(uc_core::security::space_access::SpaceAccessProofArtifact {
+                    pairing_session_id: sid.clone(),
+                    space_id: space_id.clone(),
+                    challenge_nonce: nonce,
+                    proof_bytes: vec![],
+                })
+            });
+        proof.expect_verify_proof().returning(|_, _| Ok(true));
+
+        let mut timer = MockTimer::new();
+        timer.expect_start().returning(|_, _| Ok(()));
+        timer.expect_stop().returning(|_| Ok(()));
+
+        let mut store = MockSpaceAccessPersistence::new();
+        store
+            .expect_persist_sponsor_access()
+            .returning(|_, _| Ok(()));
+        store
+            .expect_persist_joiner_access()
+            .returning(|_, _| Ok(()));
+
         let orchestrator = Arc::new(SpaceAccessOrchestrator::new());
 
         let uc = StartSponsorAuthorization::new(
             orchestrator,
             crypto_factory,
-            transport,
-            proof,
-            timer,
-            store,
+            Arc::new(Mutex::new(transport)),
+            Arc::new(proof),
+            Arc::new(Mutex::new(timer)),
+            Arc::new(Mutex::new(store)),
         );
 
         let result = uc.execute(SecretString::from("passphrase")).await;
@@ -209,50 +183,5 @@ mod tests {
             "expected sponsor authorization start to succeed"
         );
         assert!(exported.load(Ordering::SeqCst));
-    }
-
-    struct MockTransportPort;
-
-    #[async_trait]
-    impl SpaceAccessTransportPort for MockTransportPort {
-        async fn send_offer(&mut self, _session_id: &NetworkSessionId) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn send_proof(&mut self, _session_id: &NetworkSessionId) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn send_result(&mut self, _session_id: &NetworkSessionId) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct MockProofPort;
-
-    #[async_trait]
-    impl ProofPort for MockProofPort {
-        async fn build_proof(
-            &self,
-            pairing_session_id: &CoreSessionId,
-            space_id: &SpaceId,
-            challenge_nonce: [u8; 32],
-            _master_key: &MasterKey,
-        ) -> anyhow::Result<SpaceAccessProofArtifact> {
-            Ok(SpaceAccessProofArtifact {
-                pairing_session_id: pairing_session_id.clone(),
-                space_id: space_id.clone(),
-                challenge_nonce,
-                proof_bytes: vec![],
-            })
-        }
-
-        async fn verify_proof(
-            &self,
-            _proof: &SpaceAccessProofArtifact,
-            _expected_nonce: [u8; 32],
-        ) -> anyhow::Result<bool> {
-            Ok(true)
-        }
     }
 }

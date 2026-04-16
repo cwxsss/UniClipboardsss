@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use tracing::{info, warn};
 
-use uc_app::deps::NetworkPorts;
+use uc_app::deps::{NetworkPorts, SearchPorts};
 use uc_app::usecases::{PairingConfig, ResolveConnectionPolicy};
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
@@ -58,6 +58,7 @@ use uc_infra::db::repositories::{
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
+use uc_infra::search::{HkdfSearchKeyDerivation, SearchPipeline, SqliteSearchIndex};
 use uc_infra::security::{
     Blake3Hasher, DecryptingClipboardRepresentationRepository, DefaultKeyMaterialService,
     EncryptedBlobStore, EncryptingClipboardEventWriter, EncryptionRepository,
@@ -667,6 +668,8 @@ pub fn wire_dependencies_with_identity_store(
 
     let db_path = paths.db_path;
     let db_pool = create_db_pool(&db_path)?;
+    // Clone pool before infra layer consumes it — search bundle needs the same pool.
+    let db_pool_for_search = db_pool.clone();
 
     let vault_path = paths.vault_dir;
     let settings_path = paths.settings_path;
@@ -697,6 +700,21 @@ pub fn wire_dependencies_with_identity_store(
         paths.file_cache_dir.clone(),
         pairing_runtime_owner,
     )?;
+
+    // Wire the search bundle (Phase 92).
+    // All three pieces are grouped under AppDeps.search to prevent uc-daemon
+    // from constructing search infrastructure ad hoc.
+    let search_key_derivation: Arc<dyn SearchKeyDerivationPort> =
+        Arc::new(HkdfSearchKeyDerivation::new(
+            platform.encryption_session.clone(),
+            platform.key_scope.clone(),
+        ));
+    let search_index: Arc<dyn SearchIndexPort> = Arc::new(SqliteSearchIndex::new(
+        db_pool_for_search,
+        platform.key_scope.clone(),
+        search_key_derivation.clone(),
+    ));
+    let search_pipeline = Arc::new(SearchPipeline::new());
 
     // Wrap ports with encryption decorators
     let encrypting_event_writer: Arc<dyn ClipboardEventWriterPort> =
@@ -797,6 +815,11 @@ pub fn wire_dependencies_with_identity_store(
             hash: infra.hash,
             file_manager: Arc::new(uc_platform::file_manager::NativeFileManagerAdapter::new()),
             cache_fs: Arc::new(uc_infra::fs::TokioCacheFsAdapter::new()),
+        },
+        search: SearchPorts {
+            search_index,
+            search_key_derivation,
+            search_pipeline,
         },
     };
 
@@ -1118,6 +1141,7 @@ pub fn build_setup_orchestrator(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mockall::mock;
     use std::sync::Mutex as StdMutex;
     use tokio::sync::mpsc;
     use uc_app::usecases::setup::SetupPairingFacadePort;
@@ -1129,59 +1153,63 @@ mod tests {
     use uc_platform::adapters::{InMemoryEncryptionSessionPort, PairingRuntimeOwner};
     use uc_platform::ports::IdentityStoreError;
 
-    struct RecordingEmitter {
-        events: Arc<StdMutex<Vec<String>>>,
-    }
+    mock! {
+        EventEmitter {}
 
-    impl HostEventEmitterPort for RecordingEmitter {
-        fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
-            self.events.lock().unwrap().push(format!("{:?}", event));
-            Ok(())
+        impl HostEventEmitterPort for EventEmitter {
+            fn emit(&self, event: HostEvent) -> Result<(), EmitError>;
         }
     }
 
-    /// Local noop emitter for tests (replaces LoggingEventEmitter from uc-tauri)
-    struct NoopEventEmitter;
+    mock! {
+        SetupPairingFacade {}
 
-    impl HostEventEmitterPort for NoopEventEmitter {
-        fn emit(&self, _event: HostEvent) -> Result<(), EmitError> {
-            Ok(())
+        #[async_trait::async_trait]
+        impl SetupPairingFacadePort for SetupPairingFacade {
+            async fn subscribe(
+                &self,
+            ) -> anyhow::Result<mpsc::Receiver<uc_app::usecases::pairing::PairingDomainEvent>>;
+            async fn initiate_pairing(&self, peer_id: String) -> anyhow::Result<String>;
+            async fn accept_pairing(&self, session_id: &str) -> anyhow::Result<()>;
+            async fn reject_pairing(&self, session_id: &str) -> anyhow::Result<()>;
+            async fn cancel_pairing(&self, session_id: &str) -> anyhow::Result<()>;
+            async fn verify_pairing(
+                &self,
+                session_id: &str,
+                pin_matches: bool,
+            ) -> anyhow::Result<()>;
         }
     }
 
-    struct RecordingSetupPairingFacade;
+    mock! {
+        DiscoveryPortForFacadeTest {}
 
-    #[async_trait::async_trait]
-    impl SetupPairingFacadePort for RecordingSetupPairingFacade {
-        async fn subscribe(
-            &self,
-        ) -> anyhow::Result<mpsc::Receiver<uc_app::usecases::pairing::PairingDomainEvent>> {
-            let (_tx, rx) = mpsc::channel(1);
-            Ok(rx)
+        #[async_trait::async_trait]
+        impl DiscoveryPort for DiscoveryPortForFacadeTest {
+            async fn list_discovered_peers(
+                &self,
+            ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>>;
         }
+    }
 
-        async fn initiate_pairing(&self, _peer_id: String) -> anyhow::Result<String> {
-            Ok("session-1".to_string())
+    mock! {
+        IdentityStore {}
+
+        impl IdentityStorePort for IdentityStore {
+            fn load_identity(&self) -> Result<Option<Vec<u8>>, IdentityStoreError>;
+            fn store_identity(&self, identity: &[u8]) -> Result<(), IdentityStoreError>;
         }
+    }
 
-        async fn accept_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
+    mock! {
+        ConnectionPolicyResolver {}
 
-        async fn reject_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn cancel_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn verify_pairing(
-            &self,
-            _session_id: &str,
-            _pin_matches: bool,
-        ) -> anyhow::Result<()> {
-            Ok(())
+        #[async_trait::async_trait]
+        impl ConnectionPolicyResolverPort for ConnectionPolicyResolver {
+            async fn resolve_for_peer(
+                &self,
+                peer_id: &uc_core::PeerId,
+            ) -> Result<ResolvedConnectionPolicy, ConnectionPolicyResolverError>;
         }
     }
 
@@ -1191,7 +1219,9 @@ mod tests {
     #[tokio::test]
     async fn setup_state_emission_survives_emitter_swap() {
         // 1. Create cell with initial noop emitter
-        let initial: Arc<dyn HostEventEmitterPort> = Arc::new(NoopEventEmitter);
+        let mut initial = MockEventEmitter::new();
+        initial.expect_emit().returning(|_| Ok(()));
+        let initial: Arc<dyn HostEventEmitterPort> = Arc::new(initial);
         let cell = Arc::new(std::sync::RwLock::new(initial));
 
         // 2. Create HostEventSetupPort with the cell
@@ -1199,9 +1229,13 @@ mod tests {
 
         // 3. Swap emitter to recording emitter
         let events = Arc::new(StdMutex::new(vec![]));
-        let recording: Arc<dyn HostEventEmitterPort> = Arc::new(RecordingEmitter {
-            events: events.clone(),
+        let events_clone = events.clone();
+        let mut recording = MockEventEmitter::new();
+        recording.expect_emit().returning(move |event| {
+            events_clone.lock().unwrap().push(format!("{:?}", event));
+            Ok(())
         });
+        let recording: Arc<dyn HostEventEmitterPort> = Arc::new(recording);
         *cell.write().unwrap() = recording;
 
         // 4. Emit through setup_port — should reach recording emitter
@@ -1225,10 +1259,31 @@ mod tests {
 
     #[test]
     fn setup_assembly_ports_accept_app_layer_pairing_facade() {
+        let (_pairing_tx, pairing_rx) = mpsc::channel(1);
+        let mut setup_pairing_facade = MockSetupPairingFacade::new();
+        setup_pairing_facade
+            .expect_subscribe()
+            .return_once(move || Ok(pairing_rx));
+        setup_pairing_facade
+            .expect_initiate_pairing()
+            .returning(|_| Ok("session-1".to_string()));
+        setup_pairing_facade
+            .expect_accept_pairing()
+            .returning(|_| Ok(()));
+        setup_pairing_facade
+            .expect_reject_pairing()
+            .returning(|_| Ok(()));
+        setup_pairing_facade
+            .expect_cancel_pairing()
+            .returning(|_| Ok(()));
+        setup_pairing_facade
+            .expect_verify_pairing()
+            .returning(|_, _| Ok(()));
+
         let ports = SetupAssemblyPorts {
-            setup_pairing_facade: Arc::new(RecordingSetupPairingFacade),
+            setup_pairing_facade: Arc::new(setup_pairing_facade),
             space_access_orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
-            discovery_port: Arc::new(EmptyDiscoveryPortForFacadeTest),
+            discovery_port: Arc::new(MockDiscoveryPortForFacadeTest::new()),
             device_announcer: None,
             lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
         };
@@ -1236,54 +1291,26 @@ mod tests {
         let _facade = ports.setup_pairing_facade.clone();
     }
 
-    struct EmptyDiscoveryPortForFacadeTest;
+    #[tokio::test]
+    async fn gui_network_ports_pairing_is_disabled_transport() {
+        let mut identity_store = MockIdentityStore::new();
+        identity_store
+            .expect_load_identity()
+            .returning(|| Ok(None::<Vec<u8>>));
+        identity_store.expect_store_identity().returning(|_| Ok(()));
 
-    #[async_trait::async_trait]
-    impl DiscoveryPort for EmptyDiscoveryPortForFacadeTest {
-        async fn list_discovered_peers(
-            &self,
-        ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>> {
-            Ok(Vec::new())
-        }
-    }
-
-    #[derive(Default)]
-    struct TestIdentityStore {
-        data: StdMutex<Option<Vec<u8>>>,
-    }
-
-    impl IdentityStorePort for TestIdentityStore {
-        fn load_identity(&self) -> Result<Option<Vec<u8>>, IdentityStoreError> {
-            Ok(self.data.lock().expect("lock test identity store").clone())
-        }
-
-        fn store_identity(&self, identity: &[u8]) -> Result<(), IdentityStoreError> {
-            *self.data.lock().expect("lock test identity store") = Some(identity.to_vec());
-            Ok(())
-        }
-    }
-
-    struct TrustedResolver;
-
-    #[async_trait::async_trait]
-    impl ConnectionPolicyResolverPort for TrustedResolver {
-        async fn resolve_for_peer(
-            &self,
-            _peer_id: &uc_core::PeerId,
-        ) -> Result<ResolvedConnectionPolicy, ConnectionPolicyResolverError> {
+        let mut resolver = MockConnectionPolicyResolver::new();
+        resolver.expect_resolve_for_peer().returning(|_| {
             Ok(ResolvedConnectionPolicy {
                 pairing_state: PairingState::Trusted,
                 allowed: ConnectionPolicy::allowed_protocols(PairingState::Trusted),
             })
-        }
-    }
+        });
 
-    #[tokio::test]
-    async fn gui_network_ports_pairing_is_disabled_transport() {
         let libp2p_network = Arc::new(
             Libp2pNetworkAdapter::new(
-                Arc::new(TestIdentityStore::default()),
-                Arc::new(TrustedResolver),
+                Arc::new(identity_store),
+                Arc::new(resolver),
                 Arc::new(InMemoryEncryptionSessionPort::default()),
                 Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter),
                 Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter),

@@ -12,7 +12,8 @@ uc-infra = { path = "../uc-infra" }
 uc-platform = { path = "../uc-platform" }
 uc-observability = { path = "../uc-observability" }
 uc-bootstrap = { path = "../uc-bootstrap" }
-uc-daemon = { path = "../uc-daemon" }
+uc-daemon-contract = { path = "../uc-daemon-contract" }
+uc-daemon-local = { path = "../uc-daemon-local", features = ["sidecar-lifecycle"] }
 uc-daemon-client = { path = "../uc-daemon-client" }
 
 # System utilities
@@ -78,3 +79,5 @@ uc-platform = { path = "../uc-platform", features = ["test-helpers"] }
 sentry = { version = "0.46.1", features = ["test"] }
 tauri = { workspace = true, features = ["test"] }
 tempfile = "3"
+mockall = "0.13"
+tokio = { version = "1", features = ["full", "test-util"] }

@@ -24,6 +24,7 @@ pub mod initialize_encryption;
 pub mod internal;
 pub mod list_clipboard_entries;
 pub mod pairing;
+pub mod search;
 pub mod settings;
 pub mod setup;
 pub mod space_access;
@@ -52,8 +53,12 @@ pub use list_clipboard_entries::ListClipboardEntries;
 pub use pairing::{
     AnnounceDeviceName, GetDeviceSyncSettings, GetLocalDeviceInfo, GetLocalPeerId,
     GetP2pPeersSnapshot, ListConnectedPeers, ListDiscoveredPeers, ListPairedDevices,
-    LocalDeviceInfo, PairingConfig, PairingOrchestrator, ResolveConnectionPolicy, SetPairingState,
-    StagedPairedDeviceStore, UnpairDevice, UpdateDeviceSyncSettings,
+    ListSendablePeers, LocalDeviceInfo, PairingConfig, PairingOrchestrator,
+    ResolveConnectionPolicy, SetPairingState, StagedPairedDeviceStore, UnpairDevice,
+    UpdateDeviceSyncSettings,
+};
+pub use search::{
+    IndexClipboardEntry, RebuildSearchIndex, RemoveIndexedEntry, SearchClipboardEntries,
 };
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator, SetupPairingFacadePort};
 pub use start_network::StartNetwork;
@@ -101,7 +106,7 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
-    /// Create a `DeleteClipboardEntry` use case.
+    /// Create a `DeleteClipboardEntry` use case (with search cleanup wired by default).
     pub fn delete_clipboard_entry(&self) -> crate::usecases::DeleteClipboardEntry {
         crate::usecases::DeleteClipboardEntry::from_ports(
             self.runtime.deps.clipboard.clipboard_entry_repo.clone(),
@@ -110,6 +115,35 @@ impl<'a> CoreUseCases<'a> {
             self.runtime.deps.clipboard.representation_repo.clone(),
         )
         .with_file_cache_dir(self.runtime.storage_paths.file_cache_dir.clone())
+        .with_search_index(self.runtime.deps.search.search_index.clone())
+    }
+
+    /// Create an `IndexClipboardEntry` use case.
+    pub fn index_clipboard_entry(&self) -> crate::usecases::IndexClipboardEntry {
+        crate::usecases::IndexClipboardEntry::from_port(
+            self.runtime.deps.search.search_index.clone(),
+        )
+    }
+
+    /// Create a `RemoveIndexedEntry` use case.
+    pub fn remove_indexed_entry(&self) -> crate::usecases::RemoveIndexedEntry {
+        crate::usecases::RemoveIndexedEntry::from_port(
+            self.runtime.deps.search.search_index.clone(),
+        )
+    }
+
+    /// Create a `SearchClipboardEntries` use case.
+    pub fn search_clipboard_entries(&self) -> crate::usecases::SearchClipboardEntries {
+        crate::usecases::SearchClipboardEntries::from_port(
+            self.runtime.deps.search.search_index.clone(),
+        )
+    }
+
+    /// Create a `RebuildSearchIndex` use case.
+    pub fn rebuild_search_index(&self) -> crate::usecases::RebuildSearchIndex {
+        crate::usecases::RebuildSearchIndex::from_port(
+            self.runtime.deps.search.search_index.clone(),
+        )
     }
 
     /// Create a `ClearClipboardHistory` use case.
@@ -120,6 +154,8 @@ impl<'a> CoreUseCases<'a> {
             self.runtime.deps.clipboard.clipboard_event_repo.clone(),
             self.runtime.deps.clipboard.representation_repo.clone(),
         )
+        .with_file_cache_dir(self.runtime.storage_paths.file_cache_dir.clone())
+        .with_search_index(self.runtime.deps.search.search_index.clone())
     }
 
     /// Get the GetEntryDetail use case.
@@ -175,6 +211,14 @@ impl<'a> CoreUseCases<'a> {
         crate::usecases::storage::OpenDataDirectory::new(
             self.runtime.storage_paths.clone(),
             self.runtime.deps.system.file_manager.clone(),
+        )
+    }
+
+    /// List peers eligible for outbound data sync.
+    pub fn list_sendable_peers(&self) -> crate::usecases::ListSendablePeers {
+        crate::usecases::ListSendablePeers::new(
+            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.network_ports.peers.clone(),
         )
     }
 

@@ -4,6 +4,9 @@ mod business_stream;
 mod dial_strategy;
 mod discovery;
 pub(crate) mod peer_cache;
+mod platform_signals;
+pub(crate) mod recovery_coordinator;
+mod recovery_probe;
 mod stream_handler;
 mod swarm_event_loop;
 #[cfg(test)]
@@ -30,7 +33,8 @@ use uc_core::network::{
 use uc_core::ports::{
     ClipboardTransportPort, ConnectionPolicyResolverPort, EncryptionSessionPort,
     NetworkControlPort, NetworkEventPort, PairingTransportPort, PeerDirectoryPort,
-    TransferPayloadDecryptorPort, TransferPayloadEncryptorPort,
+    TransferPayloadDecryptorPort, TransferPayloadEncryptorPort, TransferProgress,
+    TransferProgressPort,
 };
 
 use super::file_transfer::service::{FileTransferConfig, FileTransferService};
@@ -68,10 +72,49 @@ const BUSINESS_COMMAND_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(5);
 const BUSINESS_SEND_COMMAND_RESULT_TIMEOUT: Duration = Duration::from_secs(150);
 const BUSINESS_ENSURE_COMMAND_RESULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_IN_FLIGHT_BUSINESS_COMMANDS: usize = 16;
+const QUIC_MAX_IDLE_TIMEOUT_MS: u32 = 30_000;
+const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const QUIC_MAX_CONCURRENT_STREAM_LIMIT: u32 = 1024;
+const QUIC_MAX_STREAM_DATA_BYTES: u32 = 32 * 1024 * 1024;
+const QUIC_MAX_CONNECTION_DATA_BYTES: u32 = 128 * 1024 * 1024;
+// ── Connection Stability Recovery timing constants ─────────────────────────
+// See docs/p2p/2026-04-11-connection-stability-recovery-prd.md §Constants Location
+/// Silent phase: recovery is in progress but the user-facing state stays
+/// `Online`. After this window the state transitions to `Recovering`.
+pub(crate) const RECOVERY_SILENT_PHASE_DURATION: Duration = Duration::from_secs(15);
+/// Total recovery window. After this elapses and all escalation steps have
+/// been exhausted the peer is allowed to transition to `Offline`.
+pub(crate) const RECOVERY_WINDOW: Duration = Duration::from_secs(120);
+/// Interval between consecutive recovery probes.
+pub(crate) const RECOVERY_PROBE_CADENCE: Duration = Duration::from_secs(5);
+/// Maximum number of probe attempts during the silent phase (0-15 s).
+pub(crate) const RECOVERY_SILENT_PHASE_MAX_PROBES: u32 = 3;
+/// Consecutive probe failure count that triggers the timed session rebuild.
+pub(crate) const RECOVERY_TIMED_REBUILD_PROBE_THRESHOLD: u32 = 3;
+/// Consecutive outgoing dial failures for a paired peer before starting a
+/// recovery cycle via `on_dial_failure_streak`.
+pub(crate) const DIAL_FAILURE_STREAK_THRESHOLD: u32 = 3;
+/// Offset from the first peer's recovery start used to evaluate the
+/// multi-peer rebuild trigger (coincides with the silent-phase duration).
+pub(crate) const RECOVERY_MULTI_PEER_REBUILD_OFFSET: Duration = Duration::from_secs(15);
 const START_STATE_IDLE: u8 = 0;
 const START_STATE_STARTING: u8 = 1;
 const START_STATE_STARTED: u8 = 2;
 const START_STATE_FAILED: u8 = 3;
+
+struct NetworkEventTransferProgressPort {
+    event_tx: mpsc::Sender<NetworkEvent>,
+}
+
+#[async_trait]
+impl TransferProgressPort for NetworkEventTransferProgressPort {
+    async fn report_progress(&self, progress: TransferProgress) -> Result<()> {
+        self.event_tx
+            .send(NetworkEvent::TransferProgress(progress))
+            .await
+            .map_err(|err| anyhow!("failed to publish transfer progress event: {err}"))
+    }
+}
 
 #[derive(Debug)]
 enum BusinessCommand {
@@ -100,6 +143,10 @@ pub(super) struct DialRequest {
     pub peer: PeerId,
     pub addresses: Vec<Multiaddr>,
     pub allow_connected_dial: bool,
+    /// When `true`, skip the live-address filter in `handle_dial_request` so
+    /// historical addresses (e.g. from `last_dial_observations`) are not
+    /// discarded by the mDNS registry check.  Used by recovery probes.
+    pub bypass_address_filter: bool,
     pub result_tx: oneshot::Sender<Result<()>>,
 }
 
@@ -129,15 +176,19 @@ pub struct Libp2pNetworkAdapter {
     dial_tx: mpsc::Sender<DialRequest>,
     dial_rx: Mutex<Option<mpsc::Receiver<DialRequest>>>,
     keypair: Mutex<identity::Keypair>,
-    start_state: AtomicU8,
+    start_state: Arc<AtomicU8>,
     policy_resolver: Arc<dyn ConnectionPolicyResolverPort>,
     encryption_session: Arc<dyn EncryptionSessionPort>,
     transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
     _transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
-    stream_control: Mutex<Option<stream::Control>>,
+    /// Wrapped in `Arc` so the swarm restart loop can update this handle when
+    /// rebuilding the session without needing a reference back to `self`.
+    stream_control: Arc<Mutex<Option<stream::Control>>>,
     pairing_runtime_owner: PairingRuntimeOwner,
-    pairing_service: Mutex<Option<PairingStreamService>>,
-    file_transfer_service: Mutex<Option<FileTransferService>>,
+    /// Same `Arc` rationale as `stream_control`.
+    pairing_service: Arc<Mutex<Option<PairingStreamService>>>,
+    /// Same `Arc` rationale as `stream_control`.
+    file_transfer_service: Arc<Mutex<Option<FileTransferService>>>,
     file_cache_dir: PathBuf,
 }
 
@@ -165,8 +216,6 @@ impl Libp2pNetworkAdapter {
         let (clipboard_tx, clipboard_rx) = mpsc::channel(64);
         let (business_tx, business_rx) = mpsc::channel(64);
         let (dial_tx, dial_rx) = mpsc::channel(32);
-        let pairing_service = Mutex::new(None);
-
         Ok(Self {
             local_peer_id,
             local_identity_pubkey,
@@ -182,15 +231,15 @@ impl Libp2pNetworkAdapter {
             dial_tx,
             dial_rx: Mutex::new(Some(dial_rx)),
             keypair: Mutex::new(keypair),
-            start_state: AtomicU8::new(START_STATE_IDLE),
+            start_state: Arc::new(AtomicU8::new(START_STATE_IDLE)),
             policy_resolver,
             encryption_session,
             transfer_decryptor,
             _transfer_encryptor: transfer_encryptor,
-            stream_control: Mutex::new(None),
+            stream_control: Arc::new(Mutex::new(None)),
             pairing_runtime_owner,
-            pairing_service,
-            file_transfer_service: Mutex::new(None),
+            pairing_service: Arc::new(Mutex::new(None)),
+            file_transfer_service: Arc::new(Mutex::new(None)),
             file_cache_dir,
         })
     }
@@ -229,6 +278,13 @@ impl Libp2pNetworkAdapter {
         Ok(())
     }
 
+    /// Build and spawn the libp2p swarm event loop.
+    ///
+    /// # Panics
+    ///
+    /// Must be called from within an entered Tokio runtime — the function calls
+    /// `tokio::spawn` internally (via `spawn_platform_signal_listener` and
+    /// directly).
     pub fn spawn_swarm(&self) -> Result<()> {
         let mdns_config = build_mdns_config();
         info!(
@@ -243,7 +299,7 @@ impl Libp2pNetworkAdapter {
         let behaviour = Libp2pBehaviour::new(local_peer_id)
             .map_err(|e| anyhow!("failed to create libp2p behaviour: {e}"))?;
 
-        let mut swarm = SwarmBuilder::with_existing_identity(keypair)
+        let mut swarm = SwarmBuilder::with_existing_identity(keypair.clone())
             .with_tokio()
             .with_tcp(
                 tcp::Config::default().nodelay(true),
@@ -251,7 +307,7 @@ impl Libp2pNetworkAdapter {
                 yamux::Config::default,
             )
             .map_err(|e| anyhow!("failed to configure tcp transport: {e}"))?
-            .with_quic()
+            .with_quic_config(build_quic_config)
             .with_behaviour(move |_| behaviour)
             .map_err(|e| anyhow!("failed to attach libp2p behaviour: {e}"))?
             .build();
@@ -288,7 +344,9 @@ impl Libp2pNetworkAdapter {
         let file_transfer_service = FileTransferService::new(
             stream_control.clone(),
             self.event_tx.clone(),
-            Arc::new(uc_core::ports::transfer_progress::NoopTransferProgressPort),
+            Arc::new(NetworkEventTransferProgressPort {
+                event_tx: self.event_tx.clone(),
+            }),
             FileTransferConfig::new(self.file_cache_dir.clone()),
         );
         file_transfer_service.spawn_accept_loop();
@@ -352,22 +410,110 @@ impl Libp2pNetworkAdapter {
         let caches = self.caches.clone();
         let event_tx = self.event_tx.clone();
         let policy_resolver = self.policy_resolver.clone();
+        let clipboard_tx = self.clipboard_tx.clone();
+        let encryption_session = self.encryption_session.clone();
+        let transfer_decryptor = self.transfer_decryptor.clone();
+        let file_cache_dir = self.file_cache_dir.clone();
+        let pairing_runtime_owner = self.pairing_runtime_owner;
+        let stream_control_holder = Arc::clone(&self.stream_control);
+        let pairing_service_holder = Arc::clone(&self.pairing_service);
+        let file_transfer_service_holder = Arc::clone(&self.file_transfer_service);
         let business_rx = Self::take_receiver(&self.business_rx, "business command")?;
         let dial_rx = Self::take_receiver(&self.dial_rx, "dial request")?;
         let dial_tx = self.dial_tx.clone();
-        let local_peer_id = self.local_peer_id.clone();
+        let local_peer_id: Arc<str> = self.local_peer_id.clone().into();
+
+        // Spawn platform-signal listeners (network-change polling on all
+        // platforms, IOKit sleep/wake on macOS). The returned receiver lives
+        // for the whole restart loop lifetime and is threaded through each
+        // `run_swarm` invocation so sleep/wake and IP-change events survive
+        // session rebuilds.
+        let platform_signal_rx = platform_signals::spawn_platform_signal_listener();
+
+        // The initial swarm was already built above; move it into the restart
+        // loop along with the keypair so the loop can rebuild on demand.
+        let keypair_for_restart = keypair.clone();
+        let spawn_start_state = Arc::clone(&self.start_state);
+
         tokio::spawn(async move {
-            run_swarm(
-                swarm,
-                caches,
-                event_tx,
-                policy_resolver,
-                business_rx,
-                dial_rx,
-                dial_tx,
-                local_peer_id,
-            )
-            .await;
+            let mut current_business_rx = business_rx;
+            let mut current_dial_rx = dial_rx;
+            let mut current_platform_signal_rx: Option<_> = Some(platform_signal_rx);
+
+            // Track how many times we have rebuilt so we can log it.
+            let mut rebuild_count: u32 = 0;
+            let mut current_swarm = swarm;
+
+            loop {
+                let result = run_swarm(
+                    current_swarm,
+                    caches.clone(),
+                    event_tx.clone(),
+                    policy_resolver.clone(),
+                    current_business_rx,
+                    current_dial_rx,
+                    dial_tx.clone(),
+                    local_peer_id.clone(),
+                    current_platform_signal_rx.take(),
+                )
+                .await;
+
+                match result {
+                    None => {
+                        // Normal exit (channel closed or swarm stopped).
+                        info!("swarm event loop exited normally");
+                        spawn_start_state.store(START_STATE_IDLE, Ordering::Release);
+                        break;
+                    }
+                    Some((returned_business_rx, returned_dial_rx, returned_platform_signal_rx)) => {
+                        // The recovery coordinator requested a session rebuild.
+                        rebuild_count += 1;
+                        info!(
+                            event = "network.session_rebuild_attempt",
+                            rebuild_count, "rebuilding local network session"
+                        );
+
+                        current_business_rx = returned_business_rx;
+                        current_dial_rx = returned_dial_rx;
+                        current_platform_signal_rx = returned_platform_signal_rx;
+
+                        // Build a fresh swarm and re-register all services.
+                        match build_swarm_for_restart(
+                            keypair_for_restart.clone(),
+                            pairing_runtime_owner,
+                            &caches,
+                            &event_tx,
+                            &clipboard_tx,
+                            &policy_resolver,
+                            &encryption_session,
+                            &transfer_decryptor,
+                            &file_cache_dir,
+                            &stream_control_holder,
+                            &pairing_service_holder,
+                            &file_transfer_service_holder,
+                        ) {
+                            Ok(new_swarm) => {
+                                info!(
+                                    event = "network.session_rebuild_succeeded",
+                                    rebuild_count,
+                                    "new swarm built successfully; resuming event loop"
+                                );
+                                current_swarm = new_swarm;
+                            }
+                            Err(err) => {
+                                error!(
+                                    event = "network.session_rebuild_failed",
+                                    rebuild_count,
+                                    error = %err,
+                                    "failed to rebuild swarm; giving up"
+                                );
+                                spawn_start_state.store(START_STATE_IDLE, Ordering::Release);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         });
         Ok(())
     }
@@ -397,6 +543,167 @@ impl Libp2pNetworkAdapter {
                 tracing::error!("{name} receiver already taken — backtrace:\n{bt}");
                 Err(anyhow!("{name} receiver already taken"))
             }
+        }
+    }
+}
+
+/// Build a fresh libp2p swarm, register all services, and start listening.
+///
+/// Used by the swarm restart loop in `spawn_swarm` after the recovery
+/// coordinator has requested a full session rebuild.  All service handles
+/// stored in the shared `Arc<Mutex<...>>` holders are replaced with fresh
+/// instances backed by the new swarm's `stream::Control`.
+///
+/// The old swarm has already been dropped by the time this is called (it is
+/// consumed by `run_swarm` and is gone once that future returns).
+#[allow(clippy::too_many_arguments)]
+fn build_swarm_for_restart(
+    keypair: identity::Keypair,
+    pairing_runtime_owner: PairingRuntimeOwner,
+    caches: &Arc<RwLock<PeerCaches>>,
+    event_tx: &mpsc::Sender<NetworkEvent>,
+    clipboard_tx: &mpsc::Sender<(ClipboardMessage, Option<Vec<u8>>)>,
+    policy_resolver: &Arc<dyn ConnectionPolicyResolverPort>,
+    encryption_session: &Arc<dyn EncryptionSessionPort>,
+    transfer_decryptor: &Arc<dyn TransferPayloadDecryptorPort>,
+    file_cache_dir: &PathBuf,
+    stream_control_holder: &Arc<Mutex<Option<stream::Control>>>,
+    pairing_service_holder: &Arc<Mutex<Option<PairingStreamService>>>,
+    file_transfer_service_holder: &Arc<Mutex<Option<FileTransferService>>>,
+) -> Result<libp2p::swarm::Swarm<Libp2pBehaviour>> {
+    let local_peer_id = PeerId::from(keypair.public());
+    let behaviour = Libp2pBehaviour::new(local_peer_id)
+        .map_err(|e| anyhow!("rebuild: failed to create libp2p behaviour: {e}"))?;
+
+    let mut swarm = SwarmBuilder::with_existing_identity(keypair)
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default().nodelay(true),
+            noise::Config::new,
+            yamux::Config::default,
+        )
+        .map_err(|e| anyhow!("rebuild: failed to configure tcp transport: {e}"))?
+        .with_quic_config(build_quic_config)
+        .with_behaviour(move |_| behaviour)
+        .map_err(|e| anyhow!("rebuild: failed to attach libp2p behaviour: {e}"))?
+        .build();
+
+    let stream_control = swarm.behaviour().stream.new_control();
+
+    // Update shared stream control handle.
+    {
+        let mut guard = stream_control_holder
+            .lock()
+            .map_err(|_| anyhow!("rebuild: stream_control mutex poisoned"))?;
+        *guard = Some(stream_control.clone());
+    }
+
+    // Recreate pairing service if this process owns the pairing runtime.
+    if pairing_runtime_owner == PairingRuntimeOwner::CurrentProcess {
+        let pairing_service = PairingStreamService::new(
+            stream_control.clone(),
+            event_tx.clone(),
+            PairingStreamConfig::default(),
+        );
+        pairing_service.spawn_accept_loop();
+        let mut guard = pairing_service_holder
+            .lock()
+            .map_err(|_| anyhow!("rebuild: pairing_service mutex poisoned"))?;
+        *guard = Some(pairing_service);
+    }
+
+    // Recreate file transfer service.
+    let file_transfer_service = FileTransferService::new(
+        stream_control.clone(),
+        event_tx.clone(),
+        Arc::new(NetworkEventTransferProgressPort {
+            event_tx: event_tx.clone(),
+        }),
+        FileTransferConfig::new(file_cache_dir.clone()),
+    );
+    file_transfer_service.spawn_accept_loop();
+    {
+        let mut guard = file_transfer_service_holder
+            .lock()
+            .map_err(|_| anyhow!("rebuild: file_transfer_service mutex poisoned"))?;
+        *guard = Some(file_transfer_service);
+    }
+
+    // Spawn new business stream handler backed by the new stream control.
+    spawn_business_stream_handler(
+        stream_control,
+        caches.clone(),
+        event_tx.clone(),
+        clipboard_tx.clone(),
+        policy_resolver.clone(),
+        encryption_session.clone(),
+        transfer_decryptor.clone(),
+    );
+
+    // Bind to a fresh port for the rebuild.
+    let listen_ip = match crate::net_utils::get_physical_lan_ip() {
+        Some(ip) => ip.to_string(),
+        None => {
+            warn!("rebuild: no physical LAN IP detected, falling back to 0.0.0.0");
+            "0.0.0.0".to_string()
+        }
+    };
+    let quic_addr: libp2p::Multiaddr = format!("/ip4/{listen_ip}/udp/0/quic-v1")
+        .parse()
+        .map_err(|e| anyhow!("rebuild: failed to parse quic address: {e}"))?;
+    let tcp_addr: libp2p::Multiaddr = format!("/ip4/{listen_ip}/tcp/0")
+        .parse()
+        .map_err(|e| anyhow!("rebuild: failed to parse tcp address: {e}"))?;
+
+    let quic_ok = listen_on_swarm(&mut swarm, quic_addr).is_ok();
+    let tcp_ok = listen_on_swarm(&mut swarm, tcp_addr).is_ok();
+
+    if !quic_ok && !tcp_ok {
+        return Err(anyhow!(
+            "rebuild: failed to listen on any transport (tried QUIC and TCP)"
+        ));
+    }
+
+    Ok(swarm)
+}
+
+fn build_quic_config(mut config: libp2p::quic::Config) -> libp2p::quic::Config {
+    config.max_idle_timeout = QUIC_MAX_IDLE_TIMEOUT_MS;
+    config.keep_alive_interval = QUIC_KEEP_ALIVE_INTERVAL;
+    config.max_concurrent_stream_limit = QUIC_MAX_CONCURRENT_STREAM_LIMIT;
+    config.max_stream_data = QUIC_MAX_STREAM_DATA_BYTES;
+    config.max_connection_data = QUIC_MAX_CONNECTION_DATA_BYTES;
+    config
+}
+
+#[cfg(test)]
+mod transfer_progress_tests {
+    use super::*;
+    use uc_core::ports::TransferDirection;
+
+    #[tokio::test]
+    async fn network_event_transfer_progress_port_forwards_progress_event() {
+        let (event_tx, mut event_rx) = mpsc::channel(1);
+        let port = NetworkEventTransferProgressPort { event_tx };
+
+        port.report_progress(TransferProgress {
+            transfer_id: "xfer-1".to_string(),
+            peer_id: "peer-1".to_string(),
+            direction: TransferDirection::Receiving,
+            chunks_completed: 1,
+            total_chunks: 4,
+            bytes_transferred: 262_144,
+            total_bytes: Some(1_048_576),
+        })
+        .await
+        .expect("progress should be forwarded");
+
+        match event_rx.recv().await {
+            Some(NetworkEvent::TransferProgress(progress)) => {
+                assert_eq!(progress.transfer_id, "xfer-1");
+                assert_eq!(progress.chunks_completed, 1);
+            }
+            other => panic!("unexpected event: {other:?}"),
         }
     }
 }
@@ -554,42 +861,6 @@ impl PeerDirectoryPort for Libp2pNetworkAdapter {
             });
         }
         Ok(peers)
-    }
-
-    async fn list_sendable_peers(&self) -> Result<Vec<DiscoveredPeer>> {
-        let discovered: Vec<DiscoveredPeer> = {
-            let caches = self.caches.read().await;
-            caches.discovered_peers.values().cloned().collect()
-        };
-
-        let mut sendable = Vec::new();
-        for mut peer in discovered {
-            if peer.peer_id == self.local_peer_id {
-                debug!(peer_id = %peer.peer_id, "skip local peer in sendable peer list");
-                continue;
-            }
-            let policy = match self
-                .policy_resolver
-                .resolve_for_peer(&uc_core::PeerId::from(peer.peer_id.as_str()))
-                .await
-            {
-                Ok(policy) => policy,
-                Err(err) => {
-                    warn!(
-                        peer_id = %peer.peer_id,
-                        error = %err,
-                        "failed to resolve connection policy while listing sendable peers"
-                    );
-                    continue;
-                }
-            };
-
-            if policy.allowed.allows(ProtocolKind::Business) {
-                peer.is_paired = matches!(policy.pairing_state, PairingState::Trusted);
-                sendable.push(peer);
-            }
-        }
-        Ok(sendable)
     }
 
     fn local_peer_id(&self) -> String {
@@ -851,7 +1122,7 @@ impl PairingTransportPort for Libp2pNetworkAdapter {
         let event = {
             let mut caches = self.caches.write().await;
             caches
-                .remove_discovered(&peer_id)
+                .forget_peer(&peer_id)
                 .map(|_| NetworkEvent::PeerLost(peer_id.clone()))
         };
         if let Some(event) = event {

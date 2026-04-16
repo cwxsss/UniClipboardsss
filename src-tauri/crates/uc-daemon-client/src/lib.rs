@@ -7,22 +7,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub mod connection;
-pub mod daemon_lifecycle;
 pub mod http;
 pub mod setup;
 pub mod ws_bridge;
 
 use anyhow::{Context, Result};
-use uc_daemon::api::auth::DaemonConnectionInfo;
-use uc_daemon::socket::resolve_daemon_http_addr;
+use uc_daemon_contract::api::auth::DaemonConnectionInfo;
+use uc_daemon_local::socket::resolve_daemon_http_addr;
 
 pub use connection::DaemonConnectionState;
-pub use daemon_lifecycle::{
-    DaemonExitCleanupError, GuiOwnedDaemonState, OwnedDaemonChild, SpawnReason,
-};
 pub use http::{
     DaemonClipboardClient, DaemonPairingClient, DaemonPairingRequestError, DaemonQueryClient,
-    DaemonSetupClient,
+    DaemonSearchClient, DaemonSearchRequestError, DaemonSetupClient, SearchQueryRequest,
 };
 pub use ws_bridge::{BridgeState, DaemonWsBridge, DaemonWsBridgeConfig, DaemonWsBridgeError};
 
@@ -46,10 +42,21 @@ fn resolve_base_url() -> Result<String> {
     Ok(format!("http://{}:{}", addr.ip(), addr.port()))
 }
 
-/// Resolve the daemon auth token path for client connections.
+/// Resolve the filesystem path to the daemon authentication token.
 ///
-/// Checks `UNICLIPBOARD_DAEMON_TOKEN_PATH` env var first, then resolves from
-/// the data directory (profile-aware).
+/// Checks the `UNICLIPBOARD_DAEMON_TOKEN_PATH` environment variable first (if set and non-empty);
+/// otherwise uses the platform/profile-aware daemon token location.
+///
+/// # Returns
+///
+/// The resolved `PathBuf` pointing to the daemon token on success.
+///
+/// # Examples
+///
+/// ```no_run
+/// let path = uc_daemon_client::resolve_token_path().unwrap();
+/// eprintln!("daemon token path: {}", path.display());
+/// ```
 fn resolve_token_path() -> Result<PathBuf> {
     if let Ok(value) = std::env::var(ENV_TOKEN_PATH) {
         let trimmed = value.trim();
@@ -58,7 +65,7 @@ fn resolve_token_path() -> Result<PathBuf> {
         }
     }
 
-    uc_daemon::socket::resolve_daemon_token_path().map_err(anyhow::Error::from)
+    uc_daemon_local::socket::resolve_daemon_token_path().map_err(anyhow::Error::from)
 }
 
 /// Resolve the daemon connection info from environment for CLI clients.
@@ -194,6 +201,15 @@ impl DaemonClientContext {
     /// Spawn a [`DaemonClipboardClient`] that shares this context's connection state and HTTP client.
     pub fn clipboard_client(&self) -> DaemonClipboardClient {
         DaemonClipboardClient::with_http_conn_state_and_type(
+            self.http.clone(),
+            self.connection_state.clone(),
+            self.client_type.clone(),
+        )
+    }
+
+    /// Spawn a [`DaemonSearchClient`] that shares this context's connection state and HTTP client.
+    pub fn search_client(&self) -> DaemonSearchClient {
+        DaemonSearchClient::with_http_conn_state_and_type(
             self.http.clone(),
             self.connection_state.clone(),
             self.client_type.clone(),

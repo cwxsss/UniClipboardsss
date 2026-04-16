@@ -127,48 +127,31 @@ impl SpaceAccessTransportPort for SpaceAccessNetworkAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_mocks::MockPairingTransport;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use uc_core::network::{PairingBusy, PairingMessage};
 
-    struct RecordingPairingTransport {
-        messages: Arc<Mutex<Vec<PairingMessage>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl PairingTransportPort for RecordingPairingTransport {
-        async fn open_pairing_session(
-            &self,
-            _peer_id: String,
-            _session_id: SessionId,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn send_pairing_on_session(&self, message: PairingMessage) -> anyhow::Result<()> {
-            self.messages.lock().await.push(message);
-            Ok(())
-        }
-
-        async fn close_pairing_session(
-            &self,
-            _session_id: SessionId,
-            _reason: Option<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn unpair_device(&self, _peer_id: String) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
     #[tokio::test]
     async fn send_result_omits_sponsor_peer_id_and_relies_on_sender_identity() {
-        let messages = Arc::new(Mutex::new(Vec::new()));
-        let transport = Arc::new(RecordingPairingTransport {
-            messages: Arc::clone(&messages),
-        });
+        let messages = Arc::new(std::sync::Mutex::new(Vec::<PairingMessage>::new()));
+        let messages_clone = messages.clone();
+
+        let mut transport = MockPairingTransport::new();
+        transport
+            .expect_open_pairing_session()
+            .returning(|_, _| Ok(()));
+        transport
+            .expect_close_pairing_session()
+            .returning(|_, _| Ok(()));
+        transport.expect_unpair_device().returning(|_| Ok(()));
+        transport
+            .expect_send_pairing_on_session()
+            .returning(move |msg| {
+                messages_clone.lock().unwrap().push(msg);
+                Ok(())
+            });
+
         let context = Arc::new(Mutex::new(SpaceAccessContext {
             sponsor_peer_id: Some("peer-remote-joiner".to_string()),
             result_success: Some(true),
@@ -180,13 +163,13 @@ mod tests {
             ..SpaceAccessContext::default()
         }));
 
-        let mut adapter = SpaceAccessNetworkAdapter::new(transport, context);
+        let mut adapter = SpaceAccessNetworkAdapter::new(Arc::new(transport), context);
         adapter
             .send_result(&"session-1".to_string())
             .await
             .expect("send result");
 
-        let message = messages.lock().await.pop().expect("recorded message");
+        let message = messages.lock().unwrap().pop().expect("recorded message");
         let PairingMessage::Busy(PairingBusy {
             reason: Some(payload),
             ..

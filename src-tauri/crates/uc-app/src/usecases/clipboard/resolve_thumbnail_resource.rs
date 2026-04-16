@@ -62,63 +62,10 @@ impl ResolveThumbnailResourceUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Result;
-    use async_trait::async_trait;
+    use crate::test_mocks::{MockBlobStore, MockThumbnailRepository};
     use uc_core::clipboard::{MimeType, ThumbnailMetadata};
     use uc_core::ids::RepresentationId;
     use uc_core::BlobId;
-
-    struct MockThumbnailRepo {
-        metadata: Option<ThumbnailMetadata>,
-    }
-
-    struct MockBlobStore {
-        blob_id: BlobId,
-        bytes: Vec<u8>,
-    }
-
-    #[async_trait]
-    impl ThumbnailRepositoryPort for MockThumbnailRepo {
-        async fn get_by_representation_id(
-            &self,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<ThumbnailMetadata>> {
-            Ok(self.metadata.as_ref().map(|meta| {
-                ThumbnailMetadata::new(
-                    meta.representation_id.clone(),
-                    meta.thumbnail_blob_id.clone(),
-                    meta.thumbnail_mime_type.clone(),
-                    meta.original_width,
-                    meta.original_height,
-                    meta.original_size_bytes,
-                    meta.created_at_ms,
-                )
-            }))
-        }
-
-        async fn insert_thumbnail(&self, _metadata: &ThumbnailMetadata) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[async_trait]
-    impl BlobStorePort for MockBlobStore {
-        async fn put(
-            &self,
-            _blob_id: &BlobId,
-            _data: &[u8],
-        ) -> Result<(std::path::PathBuf, Option<i64>)> {
-            Ok((std::path::PathBuf::from("/tmp/mock"), None))
-        }
-
-        async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>> {
-            if *blob_id == self.blob_id {
-                Ok(self.bytes.clone())
-            } else {
-                Err(anyhow::anyhow!("Blob not found"))
-            }
-        }
-    }
 
     #[tokio::test]
     async fn test_resolve_thumbnail_resource_returns_bytes() {
@@ -134,15 +81,42 @@ mod tests {
             None,
         );
 
-        let uc = ResolveThumbnailResourceUseCase::new(
-            Arc::new(MockThumbnailRepo {
-                metadata: Some(metadata),
-            }),
-            Arc::new(MockBlobStore {
-                blob_id: blob_id.clone(),
-                bytes: vec![1, 2, 3],
-            }),
-        );
+        let metadata_rep_id = metadata.representation_id.clone();
+        let metadata_blob_id = metadata.thumbnail_blob_id.clone();
+        let metadata_mime = metadata.thumbnail_mime_type.clone();
+        let metadata_w = metadata.original_width;
+        let metadata_h = metadata.original_height;
+        let metadata_size = metadata.original_size_bytes;
+        let metadata_created = metadata.created_at_ms;
+
+        let mut thumbnail_repo = MockThumbnailRepository::new();
+        thumbnail_repo
+            .expect_get_by_representation_id()
+            .returning(move |_| {
+                Ok(Some(ThumbnailMetadata::new(
+                    metadata_rep_id.clone(),
+                    metadata_blob_id.clone(),
+                    metadata_mime.clone(),
+                    metadata_w,
+                    metadata_h,
+                    metadata_size,
+                    metadata_created,
+                )))
+            });
+
+        let expected_bytes = vec![1u8, 2, 3];
+        let expected_blob_id = blob_id.clone();
+        let mut blob_store = MockBlobStore::new();
+        blob_store.expect_get().returning(move |id| {
+            if *id == expected_blob_id {
+                Ok(expected_bytes.clone())
+            } else {
+                Err(anyhow::anyhow!("Blob not found"))
+            }
+        });
+
+        let uc =
+            ResolveThumbnailResourceUseCase::new(Arc::new(thumbnail_repo), Arc::new(blob_store));
 
         let result = uc.execute(&rep_id).await.unwrap();
         assert_eq!(result.mime_type, Some("image/webp".to_string()));

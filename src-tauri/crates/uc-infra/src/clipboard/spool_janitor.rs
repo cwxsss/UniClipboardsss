@@ -91,12 +91,12 @@ mod tests {
     use super::*;
     use crate::clipboard::SpoolManager;
     use anyhow::Result;
+    use mockall::mock;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::Mutex as TokioMutex;
     use uc_core::clipboard::{PayloadAvailability, PersistedClipboardRepresentation};
-    use uc_core::ids::{FormatId, RepresentationId};
+    use uc_core::ids::{EventId, FormatId, RepresentationId};
     use uc_core::ports::clipboard::{
         ClipboardRepresentationRepositoryPort, ProcessingUpdateOutcome,
     };
@@ -113,92 +113,101 @@ mod tests {
         }
     }
 
-    struct MockRepresentationRepo {
-        reps: TokioMutex<HashMap<RepresentationId, PersistedClipboardRepresentation>>,
+    type RepresentationStore =
+        Arc<Mutex<HashMap<RepresentationId, PersistedClipboardRepresentation>>>;
+
+    mock! {
+        RepresentationRepo {}
+
+        #[async_trait::async_trait]
+        impl ClipboardRepresentationRepositoryPort for RepresentationRepo {
+            async fn get_representation(
+                &self,
+                event_id: &EventId,
+                representation_id: &RepresentationId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn get_representation_by_id(
+                &self,
+                representation_id: &RepresentationId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn get_representation_by_blob_id(
+                &self,
+                blob_id: &uc_core::BlobId,
+            ) -> Result<Option<PersistedClipboardRepresentation>>;
+            async fn update_blob_id(
+                &self,
+                representation_id: &RepresentationId,
+                blob_id: &uc_core::BlobId,
+            ) -> Result<()>;
+            async fn update_blob_id_if_none(
+                &self,
+                representation_id: &RepresentationId,
+                blob_id: &uc_core::BlobId,
+            ) -> Result<bool>;
+            #[mockall::concretize]
+            async fn update_processing_result(
+                &self,
+                rep_id: &RepresentationId,
+                expected_states: &[PayloadAvailability],
+                blob_id: Option<&uc_core::BlobId>,
+                new_state: PayloadAvailability,
+                last_error: Option<&str>,
+            ) -> Result<ProcessingUpdateOutcome>;
+        }
     }
 
-    impl MockRepresentationRepo {
-        fn new(reps: HashMap<RepresentationId, PersistedClipboardRepresentation>) -> Self {
-            Self {
-                reps: TokioMutex::new(reps),
-            }
+    fn make_representation_repo(
+        reps: HashMap<RepresentationId, PersistedClipboardRepresentation>,
+    ) -> (MockRepresentationRepo, RepresentationStore) {
+        let store = Arc::new(Mutex::new(reps));
+        let mut repo = MockRepresentationRepo::new();
+
+        repo.expect_get_representation().returning(|_, _| Ok(None));
+
+        {
+            let store = Arc::clone(&store);
+            repo.expect_get_representation_by_id()
+                .returning(move |representation_id| {
+                    let reps = store.lock().expect("representation store poisoned");
+                    Ok(reps.get(representation_id).cloned())
+                });
         }
 
-        async fn get(&self, rep_id: &RepresentationId) -> Option<PersistedClipboardRepresentation> {
-            let reps = self.reps.lock().await;
-            reps.get(rep_id).cloned()
-        }
-    }
+        repo.expect_get_representation_by_blob_id()
+            .returning(|_| Ok(None));
+        repo.expect_update_blob_id().returning(|_, _| Ok(()));
+        repo.expect_update_blob_id_if_none()
+            .returning(|_, _| Ok(false));
 
-    #[async_trait::async_trait]
-    impl ClipboardRepresentationRepositoryPort for MockRepresentationRepo {
-        async fn get_representation(
-            &self,
-            _event_id: &uc_core::ids::EventId,
-            _representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
+        {
+            let store = Arc::clone(&store);
+            repo.expect_update_processing_result().returning(
+                move |rep_id, expected_states, blob_id, new_state, last_error| {
+                    let mut reps = store.lock().expect("representation store poisoned");
+                    let current = match reps.get_mut(rep_id) {
+                        Some(rep) => rep,
+                        None => return Ok(ProcessingUpdateOutcome::NotFound),
+                    };
 
-        async fn get_representation_by_id(
-            &self,
-            representation_id: &RepresentationId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(self.get(representation_id).await)
-        }
+                    let expected_state_strs: Vec<&str> =
+                        expected_states.iter().map(|s| s.as_str()).collect();
+                    if !expected_state_strs.contains(&current.payload_state.as_str()) {
+                        return Ok(ProcessingUpdateOutcome::StateMismatch);
+                    }
 
-        async fn get_representation_by_blob_id(
-            &self,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<Option<PersistedClipboardRepresentation>> {
-            Ok(None)
-        }
+                    current.payload_state = new_state.clone();
+                    current.last_error = last_error.map(|value| value.to_string());
 
-        async fn update_blob_id(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<()> {
-            Ok(())
+                    if let Some(blob_id) = blob_id {
+                        current.blob_id = Some(blob_id.clone());
+                    }
+
+                    Ok(ProcessingUpdateOutcome::Updated(current.clone()))
+                },
+            );
         }
 
-        async fn update_blob_id_if_none(
-            &self,
-            _representation_id: &RepresentationId,
-            _blob_id: &uc_core::BlobId,
-        ) -> Result<bool> {
-            Ok(false)
-        }
-
-        async fn update_processing_result(
-            &self,
-            rep_id: &RepresentationId,
-            expected_states: &[PayloadAvailability],
-            blob_id: Option<&uc_core::BlobId>,
-            new_state: PayloadAvailability,
-            last_error: Option<&str>,
-        ) -> Result<ProcessingUpdateOutcome> {
-            let mut reps = self.reps.lock().await;
-            let current = match reps.get_mut(rep_id) {
-                Some(rep) => rep,
-                None => return Ok(ProcessingUpdateOutcome::NotFound),
-            };
-
-            let expected_state_strs: Vec<&str> =
-                expected_states.iter().map(|s| s.as_str()).collect();
-            if !expected_state_strs.contains(&current.payload_state.as_str()) {
-                return Ok(ProcessingUpdateOutcome::StateMismatch);
-            }
-
-            current.payload_state = new_state.clone();
-            current.last_error = last_error.map(|value| value.to_string());
-
-            if let Some(blob_id) = blob_id {
-                current.blob_id = Some(blob_id.clone());
-            }
-
-            Ok(ProcessingUpdateOutcome::Updated(current.clone()))
-        }
+        (repo, store)
     }
 
     fn create_representation(rep_id: &RepresentationId) -> PersistedClipboardRepresentation {
@@ -221,7 +230,8 @@ mod tests {
         let mut reps = HashMap::new();
         reps.insert(rep_id.clone(), create_representation(&rep_id));
 
-        let repo = Arc::new(MockRepresentationRepo::new(reps));
+        let (repo, store) = make_representation_repo(reps);
+        let repo = Arc::new(repo);
         let ttl_days = 1u64;
         let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as i64;
         let clock = Arc::new(FixedClock {
@@ -232,7 +242,10 @@ mod tests {
         let removed = janitor.run_once().await?;
 
         assert_eq!(removed, 1);
-        let updated = repo.get(&rep_id).await;
+        let updated = {
+            let reps = store.lock().expect("representation store poisoned");
+            reps.get(&rep_id).cloned()
+        };
         let updated = updated.expect("representation missing");
         assert_eq!(updated.payload_state(), PayloadAvailability::Lost);
         let remaining = spool.read(&rep_id).await?;

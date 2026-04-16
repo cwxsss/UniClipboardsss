@@ -279,19 +279,7 @@ mod tests {
     use tempfile::TempDir;
     use uc_core::settings::model::Settings;
 
-    struct MockSettings {
-        settings: Settings,
-    }
-
-    #[async_trait::async_trait]
-    impl SettingsPort for MockSettings {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            Ok(self.settings.clone())
-        }
-        async fn save(&self, _settings: &Settings) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::test_mocks::MockSettings;
 
     fn make_use_case(
         cache_dir: PathBuf,
@@ -301,15 +289,23 @@ mod tests {
         let mut settings = Settings::default();
         settings.file_sync.small_file_threshold = small_threshold;
         settings.file_sync.file_cache_quota_per_device = quota;
-
-        SyncInboundFileUseCase::new(Arc::new(MockSettings { settings }), cache_dir)
+        let settings_data = settings.clone();
+        let mut mock = MockSettings::new();
+        mock.expect_load()
+            .returning(move || Ok(settings_data.clone()));
+        mock.expect_save().returning(|_| Ok(()));
+        SyncInboundFileUseCase::new(Arc::new(mock), cache_dir)
     }
 
     fn make_use_case_disabled(cache_dir: PathBuf) -> SyncInboundFileUseCase {
         let mut settings = Settings::default();
         settings.file_sync.file_sync_enabled = false;
-
-        SyncInboundFileUseCase::new(Arc::new(MockSettings { settings }), cache_dir)
+        let settings_data = settings.clone();
+        let mut mock = MockSettings::new();
+        mock.expect_load()
+            .returning(move || Ok(settings_data.clone()));
+        mock.expect_save().returning(|_| Ok(()));
+        SyncInboundFileUseCase::new(Arc::new(mock), cache_dir)
     }
 
     #[tokio::test]

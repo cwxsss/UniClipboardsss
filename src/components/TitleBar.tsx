@@ -6,7 +6,10 @@ import { useTranslation } from 'react-i18next'
 import { useLocation } from 'react-router-dom'
 import { Input } from '@/components/ui/input'
 import { usePlatform } from '@/hooks/usePlatform'
+import { createLogger } from '@/lib/logger'
 import { cn } from '@/lib/utils'
+
+const log = createLogger('title-bar')
 
 interface TitleBarProps {
   className?: string
@@ -38,7 +41,7 @@ const TitleBarButton = ({
     aria-label={ariaLabel}
     data-tauri-drag-region="false"
     onClick={e => {
-      console.log('[TitleBarButton] Button clicked:', ariaLabel)
+      log.debug({ ariaLabel }, 'Button clicked')
       e.stopPropagation()
       onClick()
     }}
@@ -80,7 +83,7 @@ export const TitleBar = ({
     // Enable macOS rounded corners
     if (isMac) {
       enableModernWindowStyle(MAC_WINDOW_STYLE).catch(error => {
-        console.error('[TitleBar] Failed to enable rounded corners:', error)
+        log.error({ err: error }, 'Failed to enable rounded corners')
       })
     }
 
@@ -100,44 +103,44 @@ export const TitleBar = ({
   }, [isTauri, isMac, windowRef])
 
   const handleMinimize = async () => {
-    console.log('[TitleBar] Minimize clicked, isTauri:', isTauri)
+    log.debug({ isTauri }, 'Minimize clicked')
     if (!isTauri || !windowRef) return
     try {
-      console.log('[TitleBar] Calling minimize...')
+      log.debug('Calling minimize')
       await windowRef.minimize()
-      console.log('[TitleBar] Minimize succeeded')
+      log.debug('Minimize succeeded')
     } catch (error) {
-      console.error('[TitleBar] Minimize failed:', error)
+      log.error({ err: error }, 'Minimize failed')
     }
   }
 
   const handleToggleMaximize = async () => {
-    console.log('[TitleBar] Toggle maximize clicked, isTauri:', isTauri)
+    log.debug({ isTauri }, 'Toggle maximize clicked')
     if (!isTauri || !windowRef) return
     try {
       const maximized = await windowRef.isMaximized()
-      console.log('[TitleBar] Current maximized state:', maximized)
+      log.debug({ maximized }, 'Current maximized state')
       if (maximized) {
         await windowRef.unmaximize()
       } else {
         await windowRef.maximize()
       }
       setIsMaximized(!maximized)
-      console.log('[TitleBar] Toggle maximize succeeded')
+      log.debug('Toggle maximize succeeded')
     } catch (error) {
-      console.error('[TitleBar] Toggle maximize failed:', error)
+      log.error({ err: error }, 'Toggle maximize failed')
     }
   }
 
   const handleClose = async () => {
-    console.log('[TitleBar] Close clicked, isTauri:', isTauri)
+    log.debug({ isTauri }, 'Close clicked')
     if (!isTauri || !windowRef) return
     try {
-      console.log('[TitleBar] Calling close...')
+      log.debug('Calling close')
       await windowRef.close()
-      console.log('[TitleBar] Close succeeded')
+      log.debug('Close succeeded')
     } catch (error) {
-      console.error('[TitleBar] Close failed:', error)
+      log.error({ err: error }, 'Close failed')
     }
   }
 
@@ -154,13 +157,13 @@ export const TitleBar = ({
         // Window chrome layer - sits in normal document flow (not fixed)
         // No z-index needed - proper layering via DOM hierarchy
         'h-10 w-full flex-shrink-0 select-none',
-        'bg-background/70 backdrop-blur border-b border-border/60',
+        'relative z-20 bg-transparent',
         className
       )}
     >
       <div
         data-tauri-drag-region
-        className="h-full flex items-center justify-between cursor-default"
+        className="relative z-10 h-full flex items-center justify-between cursor-default"
       >
         <div
           data-tauri-drag-region
@@ -170,7 +173,7 @@ export const TitleBar = ({
             // On macOS, add left padding to avoid traffic lights
             // On other platforms, use default padding
             isMac
-              ? `pl-16`
+              ? 'pl-16'
               : 'px-3' /* MVP: justify-center removed - restore with: , isDashboardPage ? 'justify-center' : '' */
           )}
         >
@@ -228,7 +231,7 @@ export const TitleBar = ({
           ) : null}
         </div>
         {isWindows && (
-          <div className="flex items-center h-full" data-tauri-drag-region="false">
+          <div className="flex items-center h-full bg-transparent" data-tauri-drag-region="false">
             <TitleBarButton aria-label="最小化" onClick={handleMinimize}>
               <Minus className="h-4 w-4" />
             </TitleBarButton>

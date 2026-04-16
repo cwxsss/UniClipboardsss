@@ -5,6 +5,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
+use mockall::mock;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::time::{sleep, Duration, Instant};
@@ -39,6 +40,53 @@ use uc_daemon::api::types::DaemonWsEvent;
 use uc_daemon::pairing::host::DaemonPairingHost;
 use uc_daemon::security::SecurityState;
 use uc_daemon::state::RuntimeState;
+
+mock! {
+    SetupStatusLocal {}
+
+    #[async_trait]
+    impl SetupStatusPort for SetupStatusLocal {
+        async fn get_status(&self) -> Result<SetupStatus>;
+        async fn set_status(&self, status: &SetupStatus) -> Result<()>;
+    }
+}
+
+mock! {
+    SetupPairingFacadeLocal {}
+
+    #[async_trait]
+    impl SetupPairingFacadePort for SetupPairingFacadeLocal {
+        async fn subscribe(&self) -> Result<mpsc::Receiver<PairingDomainEvent>>;
+        async fn initiate_pairing(&self, peer_id: String) -> Result<String>;
+        async fn accept_pairing(&self, session_id: &str) -> Result<()>;
+        async fn reject_pairing(&self, session_id: &str) -> Result<()>;
+        async fn cancel_pairing(&self, session_id: &str) -> Result<()>;
+        async fn verify_pairing(&self, session_id: &str, pin_matches: bool) -> Result<()>;
+    }
+}
+
+mock! {
+    SpaceAccessCryptoFactoryLocal {}
+
+    impl SpaceAccessCryptoFactory for SpaceAccessCryptoFactoryLocal {
+        fn build(&self, passphrase: uc_core::security::SecretString) -> Box<dyn CryptoPort>;
+    }
+}
+
+mock! {
+    SpaceAccessCryptoLocal {}
+
+    #[async_trait]
+    impl CryptoPort for SpaceAccessCryptoLocal {
+        async fn generate_nonce32(&self) -> [u8; 32];
+        async fn export_keyslot_blob(&self, space_id: &uc_core::ids::SpaceId) -> Result<KeySlot>;
+        async fn derive_master_key_from_keyslot(
+            &self,
+            keyslot_blob: &[u8],
+            passphrase: uc_core::security::SecretString,
+        ) -> Result<MasterKey>;
+    }
+}
 
 fn build_runtime() -> Arc<CoreRuntime> {
     static RUNTIME: OnceLock<Arc<CoreRuntime>> = OnceLock::new();
@@ -180,8 +228,8 @@ async fn build_reset_router_async() -> (axum::Router, String) {
 fn build_setup_orchestrator(runtime: Arc<CoreRuntime>) -> Arc<SetupOrchestrator> {
     build_setup_orchestrator_with_overrides(
         runtime,
-        Arc::new(FakeSetupPairingFacade::default()),
-        Arc::new(NoopSpaceAccessCryptoFactory),
+        build_noop_setup_pairing_facade_mock(),
+        build_noop_space_access_crypto_factory_mock(),
     )
 }
 
@@ -198,7 +246,7 @@ fn build_setup_orchestrator_with_overrides(
         wiring.security.encryption_state.clone(),
         wiring.security.encryption_session.clone(),
     ));
-    let setup_status = Arc::new(InMemorySetupStatus::default());
+    let setup_status = build_in_memory_setup_status_mock();
     let mark_setup_complete = Arc::new(MarkSetupComplete::new(setup_status.clone()));
 
     Arc::new(SetupOrchestrator::new(
@@ -330,73 +378,13 @@ fn assert_setup_state_metadata_shape(body: &Value) {
     ));
 }
 
-#[derive(Default)]
-struct InMemorySetupStatus {
-    status: Mutex<SetupStatus>,
-}
-
-#[async_trait]
-impl SetupStatusPort for InMemorySetupStatus {
-    async fn get_status(&self) -> Result<SetupStatus> {
-        Ok(self.status.lock().await.clone())
-    }
-
-    async fn set_status(&self, status: &SetupStatus) -> Result<()> {
-        *self.status.lock().await = status.clone();
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct FakeSetupPairingFacade;
-
-#[async_trait]
-impl SetupPairingFacadePort for FakeSetupPairingFacade {
-    async fn subscribe(&self) -> Result<mpsc::Receiver<PairingDomainEvent>> {
-        let (_tx, rx) = mpsc::channel(8);
-        Ok(rx)
-    }
-
-    async fn initiate_pairing(&self, _peer_id: String) -> Result<String> {
-        Ok("session-test".to_string())
-    }
-
-    async fn accept_pairing(&self, _session_id: &str) -> Result<()> {
-        Ok(())
-    }
-
-    async fn reject_pairing(&self, _session_id: &str) -> Result<()> {
-        Ok(())
-    }
-
-    async fn cancel_pairing(&self, _session_id: &str) -> Result<()> {
-        Ok(())
-    }
-
-    async fn verify_pairing(&self, _session_id: &str, _pin_matches: bool) -> Result<()> {
-        Ok(())
-    }
-}
-
 #[derive(Clone)]
-struct RecordingSetupPairingFacade {
-    session_id: String,
+struct RecordingSetupPairingFacadeController {
     tx: mpsc::Sender<PairingDomainEvent>,
-    rx: Arc<Mutex<Option<mpsc::Receiver<PairingDomainEvent>>>>,
     accepted_sessions: Arc<StdMutex<Vec<String>>>,
 }
 
-impl RecordingSetupPairingFacade {
-    fn new(session_id: &str) -> Self {
-        let (tx, rx) = mpsc::channel(8);
-        Self {
-            session_id: session_id.to_string(),
-            tx,
-            rx: Arc::new(Mutex::new(Some(rx))),
-            accepted_sessions: Arc::new(StdMutex::new(Vec::new())),
-        }
-    }
-
+impl RecordingSetupPairingFacadeController {
     async fn emit(&self, event: PairingDomainEvent) {
         self.tx
             .send(event)
@@ -412,76 +400,137 @@ impl RecordingSetupPairingFacade {
     }
 }
 
-#[async_trait]
-impl SetupPairingFacadePort for RecordingSetupPairingFacade {
-    async fn subscribe(&self) -> Result<mpsc::Receiver<PairingDomainEvent>> {
-        self.rx
+fn build_in_memory_setup_status_mock() -> Arc<dyn SetupStatusPort> {
+    let status_state = Arc::new(StdMutex::new(SetupStatus::default()));
+    let mut setup_status = MockSetupStatusLocal::new();
+
+    let state_for_get = Arc::clone(&status_state);
+    setup_status.expect_get_status().returning(move || {
+        Ok(state_for_get
             .lock()
-            .await
+            .expect("setup status state lock for get")
+            .clone())
+    });
+
+    let state_for_set = Arc::clone(&status_state);
+    setup_status.expect_set_status().returning(move |status| {
+        *state_for_set
+            .lock()
+            .expect("setup status state lock for set") = status.clone();
+        Ok(())
+    });
+
+    Arc::new(setup_status)
+}
+
+fn build_noop_setup_pairing_facade_mock() -> Arc<dyn SetupPairingFacadePort> {
+    let mut facade = MockSetupPairingFacadeLocal::new();
+    facade.expect_subscribe().returning(|| {
+        let (_tx, rx) = mpsc::channel(8);
+        Ok(rx)
+    });
+    facade
+        .expect_initiate_pairing()
+        .returning(|_| Ok("session-test".to_string()));
+    facade.expect_accept_pairing().returning(|_| Ok(()));
+    facade.expect_reject_pairing().returning(|_| Ok(()));
+    facade.expect_cancel_pairing().returning(|_| Ok(()));
+    facade.expect_verify_pairing().returning(|_, _| Ok(()));
+    Arc::new(facade)
+}
+
+fn build_recording_setup_pairing_facade(
+    session_id: &str,
+) -> (
+    Arc<dyn SetupPairingFacadePort>,
+    RecordingSetupPairingFacadeController,
+) {
+    let (tx, rx) = mpsc::channel(8);
+    let rx = Arc::new(StdMutex::new(Some(rx)));
+    let accepted_sessions = Arc::new(StdMutex::new(Vec::new()));
+
+    let mut facade = MockSetupPairingFacadeLocal::new();
+
+    let rx_for_subscribe = Arc::clone(&rx);
+    facade.expect_subscribe().returning(move || {
+        rx_for_subscribe
+            .lock()
+            .expect("pairing receiver lock")
             .take()
             .ok_or_else(|| anyhow::anyhow!("pairing event receiver already taken"))
-    }
+    });
 
-    async fn initiate_pairing(&self, _peer_id: String) -> Result<String> {
-        Ok(self.session_id.clone())
-    }
+    let session_id_owned = session_id.to_string();
+    facade
+        .expect_initiate_pairing()
+        .returning(move |_| Ok(session_id_owned.clone()));
 
-    async fn accept_pairing(&self, session_id: &str) -> Result<()> {
-        self.accepted_sessions
+    let accepted_for_accept = Arc::clone(&accepted_sessions);
+    facade.expect_accept_pairing().returning(move |session_id| {
+        accepted_for_accept
             .lock()
             .expect("accepted sessions lock")
             .push(session_id.to_string());
         Ok(())
-    }
+    });
+    facade.expect_reject_pairing().returning(|_| Ok(()));
+    facade.expect_cancel_pairing().returning(|_| Ok(()));
+    facade.expect_verify_pairing().returning(|_, _| Ok(()));
 
-    async fn reject_pairing(&self, _session_id: &str) -> Result<()> {
-        Ok(())
-    }
+    let controller = RecordingSetupPairingFacadeController {
+        tx,
+        accepted_sessions,
+    };
 
-    async fn cancel_pairing(&self, _session_id: &str) -> Result<()> {
-        Ok(())
-    }
-
-    async fn verify_pairing(&self, _session_id: &str, _pin_matches: bool) -> Result<()> {
-        Ok(())
-    }
+    (Arc::new(facade), controller)
 }
 
-struct WorkingSpaceAccessCryptoFactory;
-
-impl SpaceAccessCryptoFactory for WorkingSpaceAccessCryptoFactory {
-    fn build(&self, _passphrase: uc_core::security::SecretString) -> Box<dyn CryptoPort> {
-        Box::new(WorkingSpaceAccessCrypto)
-    }
-}
-
-struct WorkingSpaceAccessCrypto;
-
-#[async_trait]
-impl CryptoPort for WorkingSpaceAccessCrypto {
-    async fn generate_nonce32(&self) -> [u8; 32] {
-        [7u8; 32]
-    }
-
-    async fn export_keyslot_blob(&self, _space_id: &uc_core::ids::SpaceId) -> Result<KeySlot> {
+fn build_working_space_access_crypto_mock() -> MockSpaceAccessCryptoLocal {
+    let mut crypto = MockSpaceAccessCryptoLocal::new();
+    crypto.expect_generate_nonce32().return_const([7u8; 32]);
+    crypto.expect_export_keyslot_blob().returning(|_| {
         Err(anyhow::anyhow!(
             "working test crypto does not export keyslots"
         ))
-    }
+    });
+    crypto
+        .expect_derive_master_key_from_keyslot()
+        .returning(|_, _| MasterKey::from_bytes(&[5u8; 32]).map_err(anyhow::Error::from));
+    crypto
+}
 
-    async fn derive_master_key_from_keyslot(
-        &self,
-        _keyslot_blob: &[u8],
-        _passphrase: uc_core::security::SecretString,
-    ) -> Result<MasterKey> {
-        MasterKey::from_bytes(&[5u8; 32]).map_err(anyhow::Error::from)
-    }
+fn build_working_space_access_crypto_factory_mock() -> Arc<dyn SpaceAccessCryptoFactory> {
+    let mut factory = MockSpaceAccessCryptoFactoryLocal::new();
+    factory
+        .expect_build()
+        .returning(|_| Box::new(build_working_space_access_crypto_mock()));
+    Arc::new(factory)
+}
+
+fn build_noop_space_access_crypto_mock() -> MockSpaceAccessCryptoLocal {
+    let mut crypto = MockSpaceAccessCryptoLocal::new();
+    crypto.expect_generate_nonce32().return_const([0u8; 32]);
+    crypto
+        .expect_export_keyslot_blob()
+        .returning(|_| Err(anyhow::anyhow!("noop export_keyslot_blob")));
+    crypto
+        .expect_derive_master_key_from_keyslot()
+        .returning(|_, _| Err(anyhow::anyhow!("noop derive_master_key_from_keyslot")));
+    crypto
+}
+
+fn build_noop_space_access_crypto_factory_mock() -> Arc<dyn SpaceAccessCryptoFactory> {
+    let mut factory = MockSpaceAccessCryptoFactoryLocal::new();
+    factory
+        .expect_build()
+        .returning(|_| Box::new(build_noop_space_access_crypto_mock()));
+    Arc::new(factory)
 }
 
 struct JoinSetupFixture {
     app: axum::Router,
     token: String,
-    facade: Arc<RecordingSetupPairingFacade>,
+    facade: RecordingSetupPairingFacadeController,
 }
 
 struct HostSetupFixture {
@@ -544,11 +593,11 @@ fn build_join_setup_fixture() -> JoinSetupFixture {
     let token_path = tempdir.path().join("daemon.token");
     let token = load_or_create_auth_token(&token_path).expect("load auth token");
     let _token_value = std::fs::read_to_string(token_path).expect("read auth token");
-    let facade = Arc::new(RecordingSetupPairingFacade::new("session-test"));
+    let (setup_pairing_facade, facade) = build_recording_setup_pairing_facade("session-test");
     let setup_orchestrator = build_setup_orchestrator_with_overrides(
         runtime,
-        facade.clone(),
-        Arc::new(WorkingSpaceAccessCryptoFactory),
+        setup_pairing_facade,
+        build_working_space_access_crypto_factory_mock(),
     );
     let pid = std::process::id();
     let security = Arc::new(SecurityState::new_with_pid(pid));
@@ -637,35 +686,6 @@ async fn build_host_setup_fixture_async() -> HostSetupFixture {
     tokio::task::spawn_blocking(build_host_setup_fixture)
         .await
         .expect("host setup fixture join failed")
-}
-
-struct NoopSpaceAccessCryptoFactory;
-
-impl SpaceAccessCryptoFactory for NoopSpaceAccessCryptoFactory {
-    fn build(&self, _passphrase: uc_core::security::SecretString) -> Box<dyn CryptoPort> {
-        Box::new(NoopSpaceAccessCrypto)
-    }
-}
-
-struct NoopSpaceAccessCrypto;
-
-#[async_trait]
-impl CryptoPort for NoopSpaceAccessCrypto {
-    async fn generate_nonce32(&self) -> [u8; 32] {
-        [0u8; 32]
-    }
-
-    async fn export_keyslot_blob(&self, _space_id: &uc_core::ids::SpaceId) -> Result<KeySlot> {
-        Err(anyhow::anyhow!("noop export_keyslot_blob"))
-    }
-
-    async fn derive_master_key_from_keyslot(
-        &self,
-        _keyslot_blob: &[u8],
-        _passphrase: uc_core::security::SecretString,
-    ) -> Result<MasterKey> {
-        Err(anyhow::anyhow!("noop derive_master_key_from_keyslot"))
-    }
 }
 
 async fn wait_for_setup_response(

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use mockall::mock;
 use tempfile::TempDir;
 use uc_app::testing::{
     NoopDiscoveryPort, NoopLifecycleEventEmitter, NoopLifecycleStatus, NoopNetworkControl,
@@ -18,11 +19,7 @@ use uc_app::usecases::{
 };
 use uc_core::network::pairing_state_machine::PairingAction;
 use uc_core::network::protocol::{PairingChallenge, PairingMessage};
-use uc_core::network::DiscoveredPeer;
-use uc_core::ports::network_control::NetworkControlPort;
-use uc_core::ports::security::key_scope::{KeyScopePort, ScopeError};
-use uc_core::ports::security::secure_storage::{SecureStorageError, SecureStoragePort};
-use uc_core::ports::space::{CryptoPort, SpaceAccessTransportPort};
+use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{DiscoveryPort, EncryptionSessionPort, SetupStatusPort, TimerPort};
 use uc_core::security::model::KeyScope;
 use uc_core::security::space_access::event::SpaceAccessEvent;
@@ -38,91 +35,122 @@ use uc_platform::adapters::InMemoryEncryptionSessionPort;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration, Instant};
 
-#[derive(Default)]
-struct InMemorySecureStorage {
-    data: Mutex<HashMap<String, Vec<u8>>>,
-}
-
-impl SecureStoragePort for InMemorySecureStorage {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, SecureStorageError> {
-        Ok(self.data.lock().unwrap().get(key).cloned())
-    }
-
-    fn set(&self, key: &str, value: &[u8]) -> Result<(), SecureStorageError> {
-        self.data
-            .lock()
-            .unwrap()
-            .insert(key.to_string(), value.to_vec());
-        Ok(())
-    }
-
-    fn delete(&self, key: &str) -> Result<(), SecureStorageError> {
-        self.data.lock().unwrap().remove(key);
-        Ok(())
-    }
-}
-
-struct TestKeyScope {
-    scope: KeyScope,
-}
-
-impl Default for TestKeyScope {
-    fn default() -> Self {
-        Self {
-            scope: KeyScope {
-                profile_id: "default".to_string(),
-            },
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl KeyScopePort for TestKeyScope {
-    async fn current_scope(&self) -> Result<KeyScope, ScopeError> {
-        Ok(self.scope.clone())
-    }
-}
-
 // NoopNetworkControl, NoopSessionReadyEmitter, NoopLifecycleStatus,
 // NoopLifecycleEventEmitter, NoopPairedDeviceRepository, NoopDiscoveryPort,
 // NoopSetupEventPort, NoopSpaceAccessTransport, NoopPairingTransport
 // — imported from uc_app::testing.
-struct OrderedNetworkControl {
-    calls: Arc<Mutex<Vec<&'static str>>>,
+mock! {
+    SecureStorageLocal {}
+
+    impl uc_core::ports::security::secure_storage::SecureStoragePort for SecureStorageLocal {
+        fn get(
+            &self,
+            key: &str,
+        ) -> Result<Option<Vec<u8>>, uc_core::ports::security::secure_storage::SecureStorageError>;
+        fn set(
+            &self,
+            key: &str,
+            value: &[u8],
+        ) -> Result<(), uc_core::ports::security::secure_storage::SecureStorageError>;
+        fn delete(
+            &self,
+            key: &str,
+        ) -> Result<(), uc_core::ports::security::secure_storage::SecureStorageError>;
+    }
 }
 
-#[async_trait]
-impl NetworkControlPort for OrderedNetworkControl {
-    async fn start_network(&self) -> anyhow::Result<()> {
-        self.calls.lock().unwrap().push("network");
+mock! {
+    KeyScopeLocal {}
+
+    #[async_trait]
+    impl uc_core::ports::security::key_scope::KeyScopePort for KeyScopeLocal {
+        async fn current_scope(
+            &self,
+        ) -> Result<KeyScope, uc_core::ports::security::key_scope::ScopeError>;
+    }
+}
+
+mock! {
+    NetworkControlLocal {}
+
+    #[async_trait]
+    impl uc_core::ports::network_control::NetworkControlPort for NetworkControlLocal {
+        async fn start_network(&self) -> anyhow::Result<()>;
+    }
+}
+
+mock! {
+    DiscoveryLocal {}
+
+    #[async_trait]
+    impl DiscoveryPort for DiscoveryLocal {
+        async fn list_discovered_peers(&self) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>>;
+    }
+}
+
+mock! {
+    SpaceAccessCryptoLocal {}
+
+    #[async_trait]
+    impl uc_core::ports::space::CryptoPort for SpaceAccessCryptoLocal {
+        async fn generate_nonce32(&self) -> [u8; 32];
+        async fn export_keyslot_blob(
+            &self,
+            space_id: &uc_core::ids::SpaceId,
+        ) -> anyhow::Result<uc_core::security::model::KeySlot>;
+        async fn derive_master_key_from_keyslot(
+            &self,
+            keyslot_blob: &[u8],
+            passphrase: uc_core::security::SecretString,
+        ) -> anyhow::Result<uc_core::security::model::MasterKey>;
+    }
+}
+
+fn build_secure_storage_mock() -> Arc<MockSecureStorageLocal> {
+    let data = Arc::new(Mutex::new(HashMap::<String, Vec<u8>>::new()));
+
+    let mut secure_storage = MockSecureStorageLocal::new();
+
+    let data_for_get = Arc::clone(&data);
+    secure_storage
+        .expect_get()
+        .returning(move |key| Ok(data_for_get.lock().unwrap().get(key).cloned()));
+
+    let data_for_set = Arc::clone(&data);
+    secure_storage
+        .expect_set()
+        .returning(move |key: &str, value: &[u8]| {
+            data_for_set
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), value.to_vec());
+            Ok(())
+        });
+
+    let data_for_delete = Arc::clone(&data);
+    secure_storage.expect_delete().returning(move |key| {
+        data_for_delete.lock().unwrap().remove(key);
         Ok(())
-    }
+    });
+
+    Arc::new(secure_storage)
 }
 
-struct OrderedDiscoveryPort {
-    calls: Arc<Mutex<Vec<&'static str>>>,
+fn build_key_scope_mock(profile_id: &str) -> Arc<MockKeyScopeLocal> {
+    let mut key_scope = MockKeyScopeLocal::new();
+    let profile = profile_id.to_string();
+    key_scope.expect_current_scope().returning(move || {
+        Ok(KeyScope {
+            profile_id: profile.clone(),
+        })
+    });
+    Arc::new(key_scope)
 }
 
-#[async_trait]
-impl DiscoveryPort for OrderedDiscoveryPort {
-    async fn list_discovered_peers(&self) -> anyhow::Result<Vec<DiscoveredPeer>> {
-        self.calls.lock().unwrap().push("discovery");
-        Ok(Vec::new())
-    }
-}
-
-struct DeterministicSpaceAccessCrypto;
-
-#[async_trait]
-impl CryptoPort for DeterministicSpaceAccessCrypto {
-    async fn generate_nonce32(&self) -> [u8; 32] {
-        [1; 32]
-    }
-
-    async fn export_keyslot_blob(
-        &self,
-        _space_id: &uc_core::ids::SpaceId,
-    ) -> anyhow::Result<uc_core::security::model::KeySlot> {
+fn build_deterministic_space_access_crypto() -> MockSpaceAccessCryptoLocal {
+    let mut crypto = MockSpaceAccessCryptoLocal::new();
+    crypto.expect_generate_nonce32().return_const([1; 32]);
+    crypto.expect_export_keyslot_blob().returning(|_| {
         Ok(uc_core::security::model::KeySlot {
             version: uc_core::security::model::KeySlotVersion::V1,
             scope: uc_core::security::model::KeyScope {
@@ -132,16 +160,14 @@ impl CryptoPort for DeterministicSpaceAccessCrypto {
             salt: vec![2; 16],
             wrapped_master_key: None,
         })
-    }
-
-    async fn derive_master_key_from_keyslot(
-        &self,
-        _keyslot_blob: &[u8],
-        _passphrase: uc_core::security::SecretString,
-    ) -> anyhow::Result<uc_core::security::model::MasterKey> {
-        uc_core::security::model::MasterKey::from_bytes(&[3; 32])
-            .map_err(|err| anyhow::anyhow!(err.to_string()))
-    }
+    });
+    crypto
+        .expect_derive_master_key_from_keyslot()
+        .returning(|_, _| {
+            uc_core::security::model::MasterKey::from_bytes(&[3; 32])
+                .map_err(|err| anyhow::anyhow!(err.to_string()))
+        });
+    crypto
 }
 
 // NoopSpaceAccessPersistence replaced by NoopSpaceAccessPersistence from uc_app::testing
@@ -165,7 +191,7 @@ async fn drive_space_access_to_waiting_decision(
         guard.sponsor_peer_id = Some("peer-join".to_string());
     }
 
-    let crypto = DeterministicSpaceAccessCrypto;
+    let crypto = build_deterministic_space_access_crypto();
     let mut transport = NoopSpaceAccessTransport;
     let proof = HmacProofAdapter::new();
     let mut timer = Timer::new();
@@ -219,9 +245,12 @@ async fn drive_space_access_to_waiting_decision(
 }
 
 fn build_mock_lifecycle() -> Arc<AppLifecycleCoordinator> {
+    let mut network_control = MockNetworkControlLocal::new();
+    network_control.expect_start_network().returning(|| Ok(()));
+
     Arc::new(AppLifecycleCoordinator::from_deps(
         AppLifecycleCoordinatorDeps {
-            network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(NoopNetworkControl))),
+            network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(network_control))),
             announcer: None,
             emitter: Arc::new(NoopSessionReadyEmitter),
             status: Arc::new(NoopLifecycleStatus),
@@ -233,11 +262,15 @@ fn build_mock_lifecycle() -> Arc<AppLifecycleCoordinator> {
 fn build_ordered_mock_lifecycle(
     calls: Arc<Mutex<Vec<&'static str>>>,
 ) -> Arc<AppLifecycleCoordinator> {
+    let mut network_control = MockNetworkControlLocal::new();
+    network_control.expect_start_network().returning(move || {
+        calls.lock().unwrap().push("network");
+        Ok(())
+    });
+
     Arc::new(AppLifecycleCoordinator::from_deps(
         AppLifecycleCoordinatorDeps {
-            network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(
-                OrderedNetworkControl { calls },
-            ))),
+            network: Arc::new(StartNetworkAfterUnlock::new(Arc::new(network_control))),
             announcer: None,
             emitter: Arc::new(NoopSessionReadyEmitter),
             status: Arc::new(NoopLifecycleStatus),
@@ -294,14 +327,14 @@ async fn create_space_flow_marks_setup_complete_and_persists_state() {
     std::fs::create_dir_all(&vault_dir).expect("create vault dir");
 
     let keyslot_store = Arc::new(JsonKeySlotStore::new(vault_dir.clone()));
-    let secure_storage = Arc::new(InMemorySecureStorage::default());
+    let secure_storage = build_secure_storage_mock();
     let key_material = Arc::new(DefaultKeyMaterialService::new(
         secure_storage,
         keyslot_store,
     ));
 
     let encryption = Arc::new(EncryptionRepository);
-    let key_scope = Arc::new(TestKeyScope::default());
+    let key_scope = build_key_scope_mock("default");
     let encryption_state = Arc::new(FileEncryptionStateRepository::new(vault_dir.clone()));
     let encryption_session = Arc::new(InMemoryEncryptionSessionPort::new());
 
@@ -436,13 +469,13 @@ async fn ensure_discovery_starts_network_before_listing_peers() {
     std::fs::create_dir_all(&vault_dir).expect("create vault dir");
 
     let keyslot_store = Arc::new(JsonKeySlotStore::new(vault_dir.clone()));
-    let secure_storage = Arc::new(InMemorySecureStorage::default());
+    let secure_storage = build_secure_storage_mock();
     let key_material = Arc::new(DefaultKeyMaterialService::new(
         secure_storage,
         keyslot_store,
     ));
     let encryption = Arc::new(EncryptionRepository);
-    let key_scope = Arc::new(TestKeyScope::default());
+    let key_scope = build_key_scope_mock("default");
     let encryption_state = Arc::new(FileEncryptionStateRepository::new(vault_dir.clone()));
     let encryption_session = Arc::new(InMemoryEncryptionSessionPort::new());
 
@@ -476,6 +509,13 @@ async fn ensure_discovery_starts_network_before_listing_peers() {
             Arc::new(uc_app::usecases::StagedPairedDeviceStore::new()),
         )));
     let calls = Arc::new(Mutex::new(Vec::new()));
+    let discovery_calls = Arc::clone(&calls);
+    let mut network_control = MockNetworkControlLocal::new();
+    let network_calls = Arc::clone(&calls);
+    network_control.expect_start_network().returning(move || {
+        network_calls.lock().unwrap().push("network");
+        Ok(())
+    });
 
     let orchestrator = SetupOrchestrator::new(
         initialize_encryption,
@@ -485,12 +525,15 @@ async fn ensure_discovery_starts_network_before_listing_peers() {
         build_pairing_orchestrator(),
         Arc::new(NoopSetupEventPort),
         build_space_access_orchestrator(),
-        Arc::new(OrderedDiscoveryPort {
-            calls: calls.clone(),
-        }),
-        Arc::new(OrderedNetworkControl {
-            calls: calls.clone(),
-        }),
+        {
+            let mut discovery = MockDiscoveryLocal::new();
+            discovery.expect_list_discovered_peers().returning(move || {
+                discovery_calls.lock().unwrap().push("discovery");
+                Ok(Vec::new())
+            });
+            Arc::new(discovery)
+        },
+        Arc::new(network_control),
         crypto_factory,
         Arc::new(NoopPairingTransport),
         transport_port,
@@ -511,14 +554,14 @@ async fn join_space_access_invokes_space_access_orchestrator() {
     std::fs::create_dir_all(&vault_dir).expect("create vault dir");
 
     let keyslot_store = Arc::new(JsonKeySlotStore::new(vault_dir.clone()));
-    let secure_storage = Arc::new(InMemorySecureStorage::default());
+    let secure_storage = build_secure_storage_mock();
     let key_material = Arc::new(DefaultKeyMaterialService::new(
         secure_storage,
         keyslot_store,
     ));
 
     let encryption = Arc::new(EncryptionRepository);
-    let key_scope = Arc::new(TestKeyScope::default());
+    let key_scope = build_key_scope_mock("default");
     let encryption_state = Arc::new(FileEncryptionStateRepository::new(vault_dir.clone()));
     let encryption_session = Arc::new(InMemoryEncryptionSessionPort::new());
 
@@ -591,14 +634,14 @@ async fn join_space_access_propagates_space_access_error() {
     std::fs::create_dir_all(&vault_dir).expect("create vault dir");
 
     let keyslot_store = Arc::new(JsonKeySlotStore::new(vault_dir.clone()));
-    let secure_storage = Arc::new(InMemorySecureStorage::default());
+    let secure_storage = build_secure_storage_mock();
     let key_material = Arc::new(DefaultKeyMaterialService::new(
         secure_storage,
         keyslot_store,
     ));
 
     let encryption = Arc::new(EncryptionRepository);
-    let key_scope = Arc::new(TestKeyScope::default());
+    let key_scope = build_key_scope_mock("default");
     let encryption_state = Arc::new(FileEncryptionStateRepository::new(vault_dir.clone()));
     let encryption_session = Arc::new(InMemoryEncryptionSessionPort::new());
 
@@ -720,7 +763,7 @@ async fn join_space_flow_converges_to_granted_on_access_granted_result() {
     )
     .await;
 
-    let crypto = DeterministicSpaceAccessCrypto;
+    let crypto = build_deterministic_space_access_crypto();
     let mut transport = NoopSpaceAccessTransport;
     let proof = HmacProofAdapter::new();
     let mut timer = Timer::new();
@@ -764,7 +807,7 @@ async fn join_space_flow_converges_to_denied_on_access_denied_result() {
     )
     .await;
 
-    let crypto = DeterministicSpaceAccessCrypto;
+    let crypto = build_deterministic_space_access_crypto();
     let mut transport = NoopSpaceAccessTransport;
     let proof = HmacProofAdapter::new();
     let mut timer = Timer::new();
@@ -812,7 +855,7 @@ async fn join_space_flow_times_out_when_result_does_not_arrive() {
     )
     .await;
 
-    let crypto = DeterministicSpaceAccessCrypto;
+    let crypto = build_deterministic_space_access_crypto();
     let mut transport = NoopSpaceAccessTransport;
     let proof = HmacProofAdapter::new();
     let mut timer = Timer::new();

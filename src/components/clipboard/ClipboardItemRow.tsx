@@ -16,7 +16,6 @@ import {
 import React from 'react'
 import { useTranslation } from 'react-i18next'
 import type { DisplayClipboardItem } from './ClipboardContent'
-import TransferProgressBar from './TransferProgressBar'
 import {
   ClipboardCodeItem,
   ClipboardFileItem,
@@ -28,7 +27,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { cn } from '@/lib/utils'
 import { useAppSelector } from '@/store/hooks'
 import {
+  resolveEntryTransferStatus,
   selectEntryTransferStatus,
+  selectTransferByTransferIds,
   selectTransferByEntryId,
 } from '@/store/slices/fileTransferSlice'
 
@@ -90,7 +91,7 @@ function getFileExt(item: DisplayClipboardItem): string {
 }
 
 function getPreviewText(item: DisplayClipboardItem): string {
-  if (!item.content) return ''
+  if (!item.content) return item.textPreview ?? ''
   switch (item.type) {
     case 'text':
       return (item.content as ClipboardTextItem).display_text.slice(0, 80)
@@ -121,17 +122,19 @@ const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>
   ({ item, isActive, isStale, onClick, elementRef, className: extraClassName, ...rest }, ref) => {
     const { t } = useTranslation()
     const Icon = FILE_EXT_ICON_MAP[getFileExt(item)] ?? typeIcons[item.type] ?? FileText
-    const transfer = useAppSelector(state => selectTransferByEntryId(state, item.id))
+    const transfer = useAppSelector(
+      state =>
+        selectTransferByEntryId(state, item.id) ??
+        selectTransferByTransferIds(state, item.fileTransferIds ?? [])
+    )
     const entryStatus = useAppSelector(state => selectEntryTransferStatus(state, item.id))
 
-    // Derive display state: durable entryStatus takes priority, fall back to ephemeral transfer
+    // Live progress must override stale pending state so the UI reflects actual movement.
     const isFile = item.type === 'file'
-    const durableStatus = entryStatus?.status
-    const isTransferring =
-      durableStatus === 'transferring' || (transfer?.status === 'active' && !durableStatus)
-    const isTransferFailed =
-      durableStatus === 'failed' || (transfer?.status === 'failed' && !durableStatus)
-    const isPending = durableStatus === 'pending'
+    const effectiveStatus = resolveEntryTransferStatus(entryStatus, transfer)
+    const isTransferring = effectiveStatus === 'transferring'
+    const isTransferFailed = effectiveStatus === 'failed'
+    const isPending = effectiveStatus === 'pending'
 
     return (
       <div
@@ -227,11 +230,6 @@ const ClipboardItemRow = React.forwardRef<HTMLDivElement, ClipboardItemRowProps>
             )
           )}
         </div>
-        {isTransferring && transfer && (
-          <div className="pl-7">
-            <TransferProgressBar progress={transfer} variant="compact" />
-          </div>
-        )}
       </div>
     )
   }
