@@ -8,6 +8,7 @@ use super::protocol::{
     FileAcceptance, FileAnnounce, FileAnnounceV2, LegacyFileTransferProtocol,
     StreamingFileTransferProtocol, CHUNK_SIZE,
 };
+use crate::adapters::protocol_ids::ProtocolId;
 use anyhow::{anyhow, Result};
 use libp2p::{futures::StreamExt, PeerId, Stream, StreamProtocol};
 use libp2p_stream as stream;
@@ -19,7 +20,7 @@ use tokio::sync::{mpsc, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Duration, Instant};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, info_span, instrument, warn, Instrument};
-use uc_core::network::{NetworkEvent, ProtocolId};
+use uc_core::network::NetworkEvent;
 use uc_core::ports::transfer_progress::{
     TransferDirection, TransferProgress, TransferProgressPort,
 };

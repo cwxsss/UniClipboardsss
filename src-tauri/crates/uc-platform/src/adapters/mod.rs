@@ -18,6 +18,7 @@ pub mod file_transfer;
 pub mod libp2p_network;
 pub mod network;
 pub mod pairing_stream;
+pub mod protocol_ids;
 
 pub use blob::PlaceholderBlobWriterPort;
 pub use blob_store::FilesystemBlobStore;

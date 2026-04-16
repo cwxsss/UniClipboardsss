@@ -12,6 +12,7 @@ mod recovery_probe;
 mod stream_handler;
 mod swarm_event_loop;
 
+use crate::adapters::protocol_ids::ProtocolId;
 use crate::ports::IdentityStorePort;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -27,7 +28,7 @@ use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
 use uc_core::network::{
     ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage, PairingState, ProtocolDirection,
-    ProtocolId, ProtocolKind, ProtocolMessage, ResolvedConnectionPolicy,
+    ProtocolKind, ProtocolMessage, ResolvedConnectionPolicy,
 };
 use uc_core::ports::{
     ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,

@@ -1,3 +1,5 @@
+//! libp2p stream protocol identifiers shared across network adapters.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolId {
     Pairing,

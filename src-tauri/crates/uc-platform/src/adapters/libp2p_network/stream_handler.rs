@@ -396,7 +396,8 @@ pub(super) async fn handle_pairing_open_error(
     error: &anyhow::Error,
 ) {
     use super::super::pairing_stream::service::PairingStreamError;
-    use uc_core::network::{PairingState, ProtocolDenyReason, ProtocolId};
+    use crate::adapters::protocol_ids::ProtocolId;
+    use uc_core::network::{PairingState, ProtocolDenyReason};
 
     if let Some(pairing_error) = error.downcast_ref::<PairingStreamError>() {
         if matches!(pairing_error, PairingStreamError::UnsupportedProtocol) {

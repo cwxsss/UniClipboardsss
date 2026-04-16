@@ -4,7 +4,6 @@ pub mod connection_policy;
 pub mod events;
 pub mod paired_device;
 pub mod protocol;
-pub mod protocol_ids;
 pub mod session;
 
 pub use connection_policy::{
@@ -22,5 +21,4 @@ pub use protocol::{
     PairingMessage, PairingReject, PairingRequest, PairingResponse, ProtocolMessage,
     MIME_IMAGE_PREFIX, MIME_TEXT_HTML, MIME_TEXT_PLAIN, MIME_TEXT_RTF,
 };
-pub use protocol_ids::ProtocolId;
 pub use session::SessionId;
