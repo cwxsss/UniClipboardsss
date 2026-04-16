@@ -16,7 +16,6 @@
 //! If all three answers are **yes**, place it in `uc-core/ports`.
 //! Otherwise, place it in the relevant `domain` submodule.
 
-pub mod app_runtime;
 pub mod blob_repository;
 mod blob_store;
 mod blob_writer;
@@ -61,7 +60,6 @@ pub use discovery::DiscoveryPort;
 pub use hash::*;
 pub use timer::TimerPort;
 
-pub use app_runtime::AppRuntimePort;
 pub use clipboard::*;
 pub use clipboard_change_handler::ClipboardChangeHandler;
 pub use device_identity::DeviceIdentityPort;
