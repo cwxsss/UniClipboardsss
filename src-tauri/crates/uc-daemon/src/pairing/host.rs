@@ -9,12 +9,12 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
+use uc_app::usecases::pairing::PairingAction;
 use uc_app::usecases::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
 use uc_app::usecases::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
 };
 use uc_app::usecases::SetupOrchestrator;
-use uc_core::network::pairing_state_machine::PairingAction;
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
 };
@@ -1773,24 +1773,18 @@ async fn run_space_access_event_loop(
     }
 }
 
-fn pairing_failure_message(
-    reason: &uc_core::network::pairing_state_machine::FailureReason,
-) -> String {
+fn pairing_failure_message(reason: &uc_app::usecases::pairing::FailureReason) -> String {
     match reason {
-        uc_core::network::pairing_state_machine::FailureReason::Other(message)
-        | uc_core::network::pairing_state_machine::FailureReason::TransportError(message)
-        | uc_core::network::pairing_state_machine::FailureReason::MessageParseError(message)
-        | uc_core::network::pairing_state_machine::FailureReason::PersistenceError(message)
-        | uc_core::network::pairing_state_machine::FailureReason::CryptoError(message) => {
-            message.clone()
-        }
-        uc_core::network::pairing_state_machine::FailureReason::Timeout(kind) => {
+        uc_app::usecases::pairing::FailureReason::Other(message)
+        | uc_app::usecases::pairing::FailureReason::TransportError(message)
+        | uc_app::usecases::pairing::FailureReason::MessageParseError(message)
+        | uc_app::usecases::pairing::FailureReason::PersistenceError(message)
+        | uc_app::usecases::pairing::FailureReason::CryptoError(message) => message.clone(),
+        uc_app::usecases::pairing::FailureReason::Timeout(kind) => {
             format!("timeout:{kind:?}")
         }
-        uc_core::network::pairing_state_machine::FailureReason::RetryExhausted => {
-            "retry_exhausted".to_string()
-        }
-        uc_core::network::pairing_state_machine::FailureReason::PeerBusy => "busy".to_string(),
+        uc_app::usecases::pairing::FailureReason::RetryExhausted => "retry_exhausted".to_string(),
+        uc_app::usecases::pairing::FailureReason::PeerBusy => "busy".to_string(),
     }
 }
 

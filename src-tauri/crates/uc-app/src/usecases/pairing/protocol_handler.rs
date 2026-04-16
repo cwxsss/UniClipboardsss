@@ -12,10 +12,10 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{info_span, Instrument};
 
-use uc_core::network::pairing_state_machine::{
-    FailureReason, PairingAction, PairingEvent, SessionId, TimeoutKind,
-};
+use uc_core::network::SessionId;
 use uc_core::ports::PairedDeviceRepositoryPort;
+
+use super::state_machine::{FailureReason, PairingAction, PairingEvent, TimeoutKind};
 
 use super::events::PairingDomainEvent;
 use super::session_manager::{PairingPeerInfo, PairingSessionContext};

@@ -11,6 +11,7 @@ mod protocol_handler;
 pub mod resolve_connection_policy;
 pub(crate) mod session_manager;
 pub mod staged_paired_device_store;
+pub mod state_machine;
 pub mod unpair_device;
 pub mod update_device_sync_settings;
 
@@ -25,5 +26,9 @@ pub use list_sendable_peers::ListSendablePeers;
 pub use orchestrator::{PairingConfig, PairingOrchestrator};
 pub use resolve_connection_policy::ResolveConnectionPolicy;
 pub use staged_paired_device_store::StagedPairedDeviceStore;
+pub use state_machine::{
+    CancellationBy, FailureReason, PairingAction, PairingEvent, PairingPolicy, PairingState,
+    PairingStateMachine, TimeoutKind,
+};
 pub use unpair_device::UnpairDevice;
 pub use update_device_sync_settings::UpdateDeviceSyncSettings;

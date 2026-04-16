@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
-use uc_core::network::pairing_state_machine::SessionId;
 use uc_core::network::protocol::PairingChallengeResponse;
+use uc_core::network::SessionId;
 
 #[async_trait]
 pub trait PairingFacade: Send + Sync {

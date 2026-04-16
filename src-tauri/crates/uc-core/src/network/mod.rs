@@ -3,9 +3,9 @@
 pub mod connection_policy;
 pub mod events;
 pub mod paired_device;
-pub mod pairing_state_machine;
 pub mod protocol;
 pub mod protocol_ids;
+pub mod session;
 
 pub use connection_policy::{
     AllowedProtocols, ConnectionPolicy, ProtocolKind, ResolvedConnectionPolicy,
@@ -15,10 +15,6 @@ pub use events::{
     ProtocolDirection,
 };
 pub use paired_device::{PairedDevice, PairingState};
-pub use pairing_state_machine::{
-    CancellationBy, FailureReason, PairingAction, PairingEvent, PairingStateMachine, SessionId,
-    TimeoutKind,
-};
 pub use protocol::{BinaryRepresentation, ClipboardBinaryPayload};
 pub use protocol::{
     ClipboardMessage, DeviceAnnounceMessage, HeartbeatMessage, PairingBusy, PairingCancel,
@@ -27,3 +23,4 @@ pub use protocol::{
     MIME_IMAGE_PREFIX, MIME_TEXT_HTML, MIME_TEXT_PLAIN, MIME_TEXT_RTF,
 };
 pub use protocol_ids::ProtocolId;
+pub use session::SessionId;

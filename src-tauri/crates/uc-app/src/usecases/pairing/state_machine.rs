@@ -12,7 +12,7 @@
 //! # Architecture / 架构
 //!
 //! ```text
-//! PairingStateMachine (uc-core)
+//! PairingStateMachine (uc-app, application-layer orchestration state)
 //!   ├── State: 配对流程的当前状态
 //!   ├── Event: 触发状态转换的事件
 //!   └── Action: 状态转换产生的动作
@@ -24,24 +24,22 @@
 //!   └── 执行 actions (发送消息/启动定时器/持久化等)
 //! ```
 
-use crate::crypto::pin_hash::{hash_pin, verify_pin};
-use crate::crypto::{IdentityFingerprint, ShortCodeGenerator};
-use crate::network::{
+use chrono::{DateTime, Duration, Utc};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use uc_core::crypto::pin_hash::{hash_pin, verify_pin};
+use uc_core::crypto::{IdentityFingerprint, ShortCodeGenerator};
+use uc_core::network::{
     paired_device::{PairedDevice, PairingState as PairedDeviceState},
     protocol::{
         PairingCancel, PairingChallenge, PairingConfirm, PairingMessage, PairingReject,
         PairingRequest, PairingResponse,
     },
+    SessionId,
 };
-use crate::pairing::PairingRole;
-use crate::settings::model::PairingSettings;
-use crate::PeerId;
-use chrono::{DateTime, Duration, Utc};
-use rand::Rng;
-use serde::{Deserialize, Serialize};
-
-/// 配对会话的唯一标识符
-pub type SessionId = String;
+use uc_core::pairing::PairingRole;
+use uc_core::settings::model::PairingSettings;
+use uc_core::PeerId;
 
 /// 配对状态机的核心状态
 ///
@@ -179,25 +177,25 @@ pub enum PairingEvent {
         session_id: SessionId,
         /// 发送方 PeerID (从网络层获取,可信)
         sender_peer_id: String,
-        request: crate::network::protocol::PairingRequest,
+        request: PairingRequest,
     },
 
     /// 收到 Challenge (包含PIN)
     RecvChallenge {
         session_id: SessionId,
-        challenge: crate::network::protocol::PairingChallenge,
+        challenge: PairingChallenge,
     },
 
     /// 收到 Response (包含PIN哈希)
     RecvResponse {
         session_id: SessionId,
-        response: crate::network::protocol::PairingResponse,
+        response: PairingResponse,
     },
 
     /// 收到 Confirm
     RecvConfirm {
         session_id: SessionId,
-        confirm: crate::network::protocol::PairingConfirm,
+        confirm: PairingConfirm,
     },
 
     /// 收到拒绝
@@ -1586,9 +1584,9 @@ fn pairing_failure_message(reason: &FailureReason) -> String {
 const PIN_LENGTH: usize = 6;
 
 fn generate_pin() -> String {
-    let mut rng = rand::rng();
+    let mut rng = rand::thread_rng();
     (0..PIN_LENGTH)
-        .map(|_| rng.random_range(0..10).to_string())
+        .map(|_| rng.gen_range(0..10).to_string())
         .collect()
 }
 

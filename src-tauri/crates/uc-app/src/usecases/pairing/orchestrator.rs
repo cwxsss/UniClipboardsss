@@ -35,16 +35,18 @@ use super::session_manager::{LocalDeviceInfo, PairingSessionContext, PairingSess
 
 use uc_core::{
     network::{
-        pairing_state_machine::{PairingAction, PairingEvent, PairingState, SessionId},
         protocol::{
             PairingChallenge, PairingChallengeResponse, PairingConfirm, PairingKeyslotOffer,
             PairingRequest,
         },
+        SessionId,
     },
     pairing::PairingRole,
     ports::PairedDeviceRepositoryPort,
     settings::model::Settings,
 };
+
+use super::state_machine::{PairingAction, PairingEvent, PairingState};
 
 /// Pairing orchestrator configuration
 #[derive(Debug, Clone)]

@@ -11,10 +11,10 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug_span, Instrument};
 
-use uc_core::network::pairing_state_machine::{
-    PairingEvent, PairingPolicy, PairingStateMachine, SessionId, TimeoutKind,
-};
+use uc_core::network::SessionId;
 use uc_core::pairing::PairingRole;
+
+use super::state_machine::{PairingEvent, PairingPolicy, PairingStateMachine, TimeoutKind};
 
 use super::orchestrator::PairingConfig;
 
@@ -171,7 +171,7 @@ impl PairingSessionManager {
         &self,
         session_id: &str,
         event: PairingEvent,
-    ) -> Result<Vec<uc_core::network::pairing_state_machine::PairingAction>> {
+    ) -> Result<Vec<super::state_machine::PairingAction>> {
         let mut sessions = self.sessions.write().await;
         let context = sessions.get_mut(session_id).context("Session not found")?;
         let (_state, actions) = context.state_machine.handle_event(event, Utc::now());
@@ -184,7 +184,7 @@ impl PairingSessionManager {
         &self,
         session_id: &str,
         event: PairingEvent,
-    ) -> Vec<uc_core::network::pairing_state_machine::PairingAction> {
+    ) -> Vec<super::state_machine::PairingAction> {
         let mut sessions = self.sessions.write().await;
         if let Some(context) = sessions.get_mut(session_id) {
             let (_state, actions) = context.state_machine.handle_event(event, Utc::now());

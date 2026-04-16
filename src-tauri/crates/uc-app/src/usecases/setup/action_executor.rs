@@ -12,7 +12,6 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
 use uc_core::{
-    network::pairing_state_machine::FailureReason,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
     ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, TimerPort},
     security::space_access::{
@@ -23,7 +22,7 @@ use uc_core::{
     setup::{SetupAction, SetupError as SetupDomainError, SetupEvent, SetupState},
 };
 
-use crate::usecases::pairing::PairingDomainEvent;
+use crate::usecases::pairing::{FailureReason, PairingDomainEvent};
 use crate::usecases::setup::context::SetupContext;
 use crate::usecases::setup::MarkSetupComplete;
 use crate::usecases::space_access::{

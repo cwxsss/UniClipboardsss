@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use uc_core::network::pairing_state_machine::FailureReason;
+use super::state_machine::FailureReason;
 use uc_core::security::model::KeySlotFile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
