@@ -22,6 +22,7 @@
 
 use anyhow::Result;
 
+use super::crypto::PairingCryptoPorts;
 use super::{PairingDomainEvent, PairingEventPort, PairingFacade};
 use crate::usecases::pairing::staged_paired_device_store::StagedPairedDeviceStore;
 use chrono::Utc;
@@ -111,6 +112,7 @@ impl PairingOrchestrator {
         local_peer_id: String,
         local_identity_pubkey: Vec<u8>,
         staged_store: Arc<StagedPairedDeviceStore>,
+        crypto: Arc<PairingCryptoPorts>,
     ) -> (Self, mpsc::Receiver<PairingAction>) {
         let (action_tx, action_rx) = mpsc::channel(100);
         let event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>> =
@@ -123,7 +125,7 @@ impl PairingOrchestrator {
             peer_id: local_peer_id,
         };
 
-        let session_manager = PairingSessionManager::new(config, local_identity);
+        let session_manager = PairingSessionManager::new(config, local_identity, crypto);
         let protocol_handler =
             PairingProtocolHandler::new(action_tx, device_repo, staged_store, event_senders);
 

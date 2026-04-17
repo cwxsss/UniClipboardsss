@@ -27,6 +27,7 @@
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uc_core::network::{
     protocol::{
         PairingCancel, PairingChallenge, PairingConfirm, PairingMessage, PairingReject,
@@ -38,8 +39,8 @@ use uc_core::pairing::PairingRole;
 use uc_core::pairing::{PairedDevice, PairingState as PairedDeviceState};
 use uc_core::settings::model::PairingSettings;
 use uc_core::PeerId;
-use uc_infra::security::{hash_pin, verify_pin};
-use uc_infra::security::{IdentityFingerprint, ShortCodeGenerator};
+
+use super::crypto::PairingCryptoPorts;
 
 /// 配对状态机的核心状态
 ///
@@ -339,19 +340,6 @@ impl Default for PairingPolicy {
 /// 配对状态机
 ///
 /// 维护配对会话的状态,并根据事件产生状态转换和动作。
-///
-/// # Example / 示例
-///
-/// ```ignore
-/// let mut sm = PairingStateMachine::new();
-/// let (new_state, actions) = sm.handle_event(
-///     PairingEvent::StartPairing {
-///         role: PairingRole::Initiator,
-///         peer_id: "12D3KooW...".to_string(),
-///     },
-///     Utc::now(),
-/// );
-/// ```
 #[derive(Debug, Clone)]
 pub struct PairingStateMachine {
     /// 当前状态
@@ -360,6 +348,8 @@ pub struct PairingStateMachine {
     context: PairingContext,
     /// 配对策略
     policy: PairingPolicy,
+    /// 加密原语依赖(PIN 哈希、短码、指纹)
+    crypto: Arc<PairingCryptoPorts>,
 }
 
 /// 配对流程的上下文信息
@@ -420,41 +410,13 @@ impl Default for PairingContext {
 }
 
 impl PairingStateMachine {
-    /// 创建新的状态机实例
-    pub fn new() -> Self {
-        let policy = PairingPolicy::default();
-        let context = PairingContext::default();
-        Self {
-            state: PairingState::Idle,
-            context,
-            policy,
-        }
-    }
-
-    /// 创建新的状态机实例并注入本地设备信息
-    pub fn new_with_local_identity(
-        local_device_name: String,
-        local_device_id: String,
-        local_identity_pubkey: Vec<u8>,
-    ) -> Self {
-        let policy = PairingPolicy::default();
-        let mut context = PairingContext::default();
-        context.local_device_name = Some(local_device_name);
-        context.local_device_id = Some(local_device_id);
-        context.local_identity_pubkey = Some(local_identity_pubkey);
-        Self {
-            state: PairingState::Idle,
-            context,
-            policy,
-        }
-    }
-
-    /// 创建新的状态机实例并注入本地设备信息与策略
+    /// 创建新的状态机实例并注入本地设备信息、策略与加密原语依赖
     pub fn new_with_local_identity_and_policy(
         local_device_name: String,
         local_device_id: String,
         local_identity_pubkey: Vec<u8>,
         policy: PairingPolicy,
+        crypto: Arc<PairingCryptoPorts>,
     ) -> Self {
         let mut context = PairingContext::default();
         context.local_device_name = Some(local_device_name);
@@ -464,6 +426,7 @@ impl PairingStateMachine {
             state: PairingState::Idle,
             context,
             policy,
+            crypto,
         }
     }
 
@@ -667,27 +630,33 @@ impl PairingStateMachine {
                     .unwrap_or_else(generate_nonce);
                 self.context.local_nonce = Some(local_nonce.clone());
 
-                let local_fingerprint =
-                    match IdentityFingerprint::from_public_key(&local_identity_pubkey) {
-                        Ok(fingerprint) => fingerprint.to_string(),
-                        Err(err) => {
-                            return self.fail_with_reason(
-                                session_id,
-                                FailureReason::CryptoError(err.to_string()),
-                            )
-                        }
-                    };
-                let peer_fingerprint =
-                    match IdentityFingerprint::from_public_key(&challenge.identity_pubkey) {
-                        Ok(fingerprint) => fingerprint.to_string(),
-                        Err(err) => {
-                            return self.fail_with_reason(
-                                session_id,
-                                FailureReason::CryptoError(err.to_string()),
-                            )
-                        }
-                    };
-                let short_code = match ShortCodeGenerator::generate(
+                let local_fingerprint = match self
+                    .crypto
+                    .fingerprint
+                    .from_public_key(&local_identity_pubkey)
+                {
+                    Ok(fingerprint) => fingerprint,
+                    Err(err) => {
+                        return self.fail_with_reason(
+                            session_id,
+                            FailureReason::CryptoError(err.to_string()),
+                        )
+                    }
+                };
+                let peer_fingerprint = match self
+                    .crypto
+                    .fingerprint
+                    .from_public_key(&challenge.identity_pubkey)
+                {
+                    Ok(fingerprint) => fingerprint,
+                    Err(err) => {
+                        return self.fail_with_reason(
+                            session_id,
+                            FailureReason::CryptoError(err.to_string()),
+                        )
+                    }
+                };
+                let short_code = match self.crypto.short_code.generate(
                     &challenge.session_id,
                     &local_nonce,
                     &challenge.nonce,
@@ -762,7 +731,7 @@ impl PairingStateMachine {
                     }
                 };
 
-                let pin_hash = match hash_pin(&pin) {
+                let pin_hash = match self.crypto.pin_hasher.hash(&pin) {
                     Ok(hash) => hash,
                     Err(err) => {
                         return self.fail_with_reason(
@@ -1073,27 +1042,33 @@ impl PairingStateMachine {
                         )
                     }
                 };
-                let local_fingerprint =
-                    match IdentityFingerprint::from_public_key(&local_identity_pubkey) {
-                        Ok(fingerprint) => fingerprint.to_string(),
-                        Err(err) => {
-                            return self.fail_with_reason(
-                                session_id,
-                                FailureReason::CryptoError(err.to_string()),
-                            )
-                        }
-                    };
-                let peer_fingerprint =
-                    match IdentityFingerprint::from_public_key(&peer_identity_pubkey) {
-                        Ok(fingerprint) => fingerprint.to_string(),
-                        Err(err) => {
-                            return self.fail_with_reason(
-                                session_id,
-                                FailureReason::CryptoError(err.to_string()),
-                            )
-                        }
-                    };
-                let short_code = match ShortCodeGenerator::generate(
+                let local_fingerprint = match self
+                    .crypto
+                    .fingerprint
+                    .from_public_key(&local_identity_pubkey)
+                {
+                    Ok(fingerprint) => fingerprint,
+                    Err(err) => {
+                        return self.fail_with_reason(
+                            session_id,
+                            FailureReason::CryptoError(err.to_string()),
+                        )
+                    }
+                };
+                let peer_fingerprint = match self
+                    .crypto
+                    .fingerprint
+                    .from_public_key(&peer_identity_pubkey)
+                {
+                    Ok(fingerprint) => fingerprint,
+                    Err(err) => {
+                        return self.fail_with_reason(
+                            session_id,
+                            FailureReason::CryptoError(err.to_string()),
+                        )
+                    }
+                };
+                let short_code = match self.crypto.short_code.generate(
                     &session_id,
                     &peer_nonce,
                     &nonce,
@@ -1285,7 +1260,7 @@ impl PairingStateMachine {
                     Ok(value) => value,
                     Err(reason) => return self.fail_with_reason(session_id, reason),
                 };
-                let verified = match verify_pin(pin, &response.pin_hash) {
+                let verified = match self.crypto.pin_hasher.verify(pin, &response.pin_hash) {
                     Ok(result) => result,
                     Err(err) => {
                         return self.fail_with_reason(
@@ -1538,8 +1513,12 @@ impl PairingStateMachine {
             .peer_identity_pubkey
             .clone()
             .ok_or_else(|| FailureReason::Other("Missing peer identity pubkey".to_string()))?;
-        let fingerprint = match IdentityFingerprint::from_public_key(&peer_identity_pubkey) {
-            Ok(value) => value.to_string(),
+        let fingerprint = match self
+            .crypto
+            .fingerprint
+            .from_public_key(&peer_identity_pubkey)
+        {
+            Ok(value) => value,
             Err(err) => return Err(FailureReason::CryptoError(err.to_string())),
         };
 
@@ -1592,10 +1571,4 @@ fn generate_pin() -> String {
 
 fn generate_nonce() -> Vec<u8> {
     uuid::Uuid::new_v4().as_bytes().to_vec()
-}
-
-impl Default for PairingStateMachine {
-    fn default() -> Self {
-        Self::new()
-    }
 }

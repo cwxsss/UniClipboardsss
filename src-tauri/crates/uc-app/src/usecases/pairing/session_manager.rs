@@ -14,6 +14,7 @@ use tracing::{debug_span, Instrument};
 use uc_core::network::SessionId;
 use uc_core::pairing::PairingRole;
 
+use super::crypto::PairingCryptoPorts;
 use super::state_machine::{PairingEvent, PairingPolicy, PairingStateMachine, TimeoutKind};
 
 use super::orchestrator::PairingConfig;
@@ -59,16 +60,23 @@ pub(crate) struct PairingSessionManager {
     session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
     /// Local device identity
     local_identity: LocalDeviceInfo,
+    /// Shared crypto ports passed into every state machine
+    crypto: Arc<PairingCryptoPorts>,
 }
 
 impl PairingSessionManager {
     /// Create a new session manager.
-    pub(crate) fn new(config: PairingConfig, local_identity: LocalDeviceInfo) -> Self {
+    pub(crate) fn new(
+        config: PairingConfig,
+        local_identity: LocalDeviceInfo,
+        crypto: Arc<PairingCryptoPorts>,
+    ) -> Self {
         Self {
             config,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             session_peers: Arc::new(RwLock::new(HashMap::new())),
             local_identity,
+            crypto,
         }
     }
 
@@ -92,13 +100,14 @@ impl PairingSessionManager {
         }
     }
 
-    /// Create a new state machine with local identity and policy.
+    /// Create a new state machine with local identity, policy, and shared crypto ports.
     pub(crate) fn new_state_machine(&self) -> PairingStateMachine {
         PairingStateMachine::new_with_local_identity_and_policy(
             self.local_identity.device_name.clone(),
             self.local_identity.device_id.clone(),
             self.local_identity.identity_pubkey.clone(),
             self.build_policy(),
+            self.crypto.clone(),
         )
     }
 

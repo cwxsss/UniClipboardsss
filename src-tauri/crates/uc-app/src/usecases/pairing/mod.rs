@@ -1,3 +1,4 @@
+pub mod crypto;
 pub mod dto;
 pub mod events;
 pub mod facade;
@@ -15,6 +16,7 @@ pub mod state_machine;
 pub mod unpair_device;
 pub mod update_device_sync_settings;
 
+pub use crypto::PairingCryptoPorts;
 pub use dto::{P2PPeerInfo, PairedPeer};
 pub use events::{PairingDomainEvent, PairingEventPort};
 pub use facade::PairingFacade;
