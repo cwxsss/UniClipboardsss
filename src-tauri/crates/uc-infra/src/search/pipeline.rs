@@ -47,12 +47,14 @@ impl SearchPipeline {
             tokenizer: SearchTokenizer,
         }
     }
+}
 
+impl SearchPipelinePort for SearchPipeline {
     /// Build a `SearchDocument` from the input (no key needed).
     ///
     /// Sets `index_version` to `CURRENT_INDEX_VERSION`.
     /// Deduplicates and sorts `file_extensions`.
-    pub fn build_document(&self, input: &SearchPipelineInput) -> SearchDocument {
+    fn build_document(&self, input: &SearchPipelineInput) -> SearchDocument {
         let extracted = self.extractor.extract(input);
 
         // Deduplicate and sort file_extensions
@@ -81,7 +83,7 @@ impl SearchPipeline {
     /// occurrences across all fields (including duplicates within a segment).
     ///
     /// Output is sorted by `term_tag` (then `field_mask`) for deterministic ordering.
-    pub fn build_postings(
+    fn build_postings(
         &self,
         input: &SearchPipelineInput,
         search_key: &SearchKey,
@@ -154,7 +156,7 @@ impl SearchPipeline {
     }
 
     /// Build both `SearchDocument` and `Vec<SearchPosting>` in one call.
-    pub fn build(
+    fn build(
         &self,
         input: &SearchPipelineInput,
         search_key: &SearchKey,
@@ -162,28 +164,6 @@ impl SearchPipeline {
         let document = self.build_document(input);
         let postings = self.build_postings(input, search_key)?;
         Ok((document, postings))
-    }
-}
-
-impl SearchPipelinePort for SearchPipeline {
-    fn build_document(&self, input: &SearchPipelineInput) -> SearchDocument {
-        SearchPipeline::build_document(self, input)
-    }
-
-    fn build_postings(
-        &self,
-        input: &SearchPipelineInput,
-        search_key: &SearchKey,
-    ) -> Result<Vec<SearchPosting>> {
-        SearchPipeline::build_postings(self, input, search_key)
-    }
-
-    fn build(
-        &self,
-        input: &SearchPipelineInput,
-        search_key: &SearchKey,
-    ) -> Result<(SearchDocument, Vec<SearchPosting>)> {
-        SearchPipeline::build(self, input, search_key)
     }
 }
 
