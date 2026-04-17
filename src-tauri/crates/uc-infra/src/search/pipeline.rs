@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use unicode_normalization::UnicodeNormalization;
 
+use uc_core::ports::search::search_pipeline::SearchPipelinePort;
 use uc_core::search::document::{SearchDocument, SearchPosting};
 use uc_core::search::key::SearchKey;
 
@@ -161,6 +162,28 @@ impl SearchPipeline {
         let document = self.build_document(input);
         let postings = self.build_postings(input, search_key)?;
         Ok((document, postings))
+    }
+}
+
+impl SearchPipelinePort for SearchPipeline {
+    fn build_document(&self, input: &SearchPipelineInput) -> SearchDocument {
+        SearchPipeline::build_document(self, input)
+    }
+
+    fn build_postings(
+        &self,
+        input: &SearchPipelineInput,
+        search_key: &SearchKey,
+    ) -> Result<Vec<SearchPosting>> {
+        SearchPipeline::build_postings(self, input, search_key)
+    }
+
+    fn build(
+        &self,
+        input: &SearchPipelineInput,
+        search_key: &SearchKey,
+    ) -> Result<(SearchDocument, Vec<SearchPosting>)> {
+        SearchPipeline::build(self, input, search_key)
     }
 }
 
