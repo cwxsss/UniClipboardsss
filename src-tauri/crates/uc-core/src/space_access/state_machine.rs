@@ -1,9 +1,9 @@
 use chrono::{DateTime, Duration, Utc};
 use tracing::warn;
 
-use crate::crypto::space_access::action::SpaceAccessAction;
-use crate::crypto::space_access::event::SpaceAccessEvent;
-use crate::crypto::space_access::state::{CancelReason, SpaceAccessState};
+use crate::space_access::action::SpaceAccessAction;
+use crate::space_access::event::SpaceAccessEvent;
+use crate::space_access::state::{CancelReason, SpaceAccessState};
 
 pub struct SpaceAccessStateMachine;
 

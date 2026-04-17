@@ -12,14 +12,14 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
 use uc_core::{
-    crypto::space_access::{
-        event::SpaceAccessEvent,
-        state::{DenyReason, SpaceAccessState},
-    },
     crypto::{model::Passphrase, SecretString},
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
     ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, TimerPort},
     setup::{SetupAction, SetupError as SetupDomainError, SetupEvent, SetupState},
+    space_access::{
+        event::SpaceAccessEvent,
+        state::{DenyReason, SpaceAccessState},
+    },
 };
 
 use crate::usecases::pairing::{FailureReason, PairingDomainEvent};

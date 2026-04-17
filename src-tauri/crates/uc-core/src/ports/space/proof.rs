@@ -1,4 +1,4 @@
-use crate::crypto::space_access::SpaceAccessProofArtifact;
+use crate::space_access::SpaceAccessProofArtifact;
 use crate::{
     crypto::MasterKey,
     ids::{SessionId, SpaceId},

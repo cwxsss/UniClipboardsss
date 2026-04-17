@@ -12,14 +12,9 @@ use tokio::sync::Mutex;
 use tracing::{error, info, info_span, warn, Instrument};
 
 use uc_core::{
-    crypto::{model::Passphrase, SecretString},
     crypto::{
-        model::{KeySlot, KeySlotFile},
-        space_access::{
-            event::SpaceAccessEvent,
-            state::{DenyReason, SpaceAccessState},
-            SpaceAccessProofArtifact,
-        },
+        model::{KeySlot, KeySlotFile, Passphrase},
+        SecretString,
     },
     ids::SpaceId,
     ports::space::CryptoPort,
@@ -29,6 +24,11 @@ use uc_core::{
         TimerPort,
     },
     setup::{SetupEvent, SetupState, SetupStateMachine, SetupStatus},
+    space_access::{
+        event::SpaceAccessEvent,
+        state::{DenyReason, SpaceAccessState},
+        SpaceAccessProofArtifact,
+    },
 };
 
 use crate::usecases::initialize_encryption::InitializeEncryptionError;

@@ -19,6 +19,7 @@ pub mod ports;
 pub mod search;
 pub mod settings;
 pub mod setup;
+pub mod space_access;
 
 // Re-export commonly used types at the crate root
 pub use blob::Blob;

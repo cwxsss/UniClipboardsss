@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use uc_core::crypto::space_access::state::SpaceAccessState;
 use uc_core::crypto::SecretString;
 use uc_core::ids::SpaceId;
 use uc_core::ports::space::{CryptoPort, PersistencePort, ProofPort, SpaceAccessTransportPort};
 use uc_core::ports::TimerPort;
+use uc_core::space_access::state::SpaceAccessState;
 
 use super::executor::SpaceAccessExecutor;
 use super::orchestrator::{SpaceAccessError, SpaceAccessOrchestrator};

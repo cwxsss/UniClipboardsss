@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use uc_core::{crypto::space_access::state::DenyReason, ids::SpaceId, network::SessionId};
+use uc_core::{ids::SpaceId, network::SessionId, space_access::state::DenyReason};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SpaceAccessMsg {
