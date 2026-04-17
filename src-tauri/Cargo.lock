@@ -9662,7 +9662,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uc-core",
- "uc-infra",
  "uc-observability",
  "uc-platform",
  "url",

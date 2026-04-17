@@ -6,9 +6,6 @@ edition = "2021"
 [dependencies]
 # Core domain models
 uc-core = { path = "../uc-core" }
-# Infrastructure (pragmatic exception: SearchPipeline is a concrete infra helper
-# grouped in AppDeps.search for single-ownership, per Phase 92 plan decision)
-uc-infra = { path = "../uc-infra" }
 
 # Observability (flow correlation, stage constants)
 uc-observability = { path = "../uc-observability" }
@@ -48,7 +45,6 @@ version = "1.10.0"
 features = ["v4"]
 
 [dev-dependencies]
-uc-infra = { path = "../uc-infra" }
 uc-platform = { path = "../uc-platform" }
 mockall = "0.13"
 tempfile = "3"

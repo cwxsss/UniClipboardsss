@@ -51,16 +51,6 @@ impl GetP2pPeersSnapshot {
     /// # Returns
     ///
     /// `Ok(Vec<P2pPeerSnapshot>)` with the merged snapshots; `Err` if listing discovered peers, connected peers, or paired devices fails.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use futures::executor::block_on;
-    /// // `svc` must be a constructed GetP2pPeersSnapshot instance
-    /// # let svc: GetP2pPeersSnapshot = unimplemented!();
-    /// let snapshots = block_on(svc.execute()).unwrap();
-    /// println!("Found {} peers", snapshots.len());
-    /// ```
     pub async fn execute(&self) -> Result<Vec<P2pPeerSnapshot>> {
         let local_id = self.peer_dir.local_peer_id();
 
