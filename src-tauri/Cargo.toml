@@ -68,6 +68,7 @@ tokio = { version = "1", features = ["full"] }
 members = [
   "crates/uc-core",
   "crates/uc-app",
+  "crates/uc-application",
   "crates/uc-platform",
   "crates/uc-infra",
   "crates/uc-clipboard-probe",
