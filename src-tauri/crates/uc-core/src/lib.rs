@@ -6,6 +6,7 @@
 
 // Public module exports
 pub mod app_dirs;
+pub mod blob;
 pub mod clipboard;
 pub mod config;
 pub mod crypto;
