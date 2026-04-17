@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 
-use crate::{ids::SpaceId, network::SessionId, space_access::state::DenyReason};
+use crate::{
+    ids::{SessionId, SpaceId},
+    space_access::state::DenyReason,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SpaceAccessEvent {

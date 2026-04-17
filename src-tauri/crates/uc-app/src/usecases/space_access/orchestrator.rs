@@ -8,14 +8,12 @@ use chrono::Utc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info_span, Instrument};
 
-use uc_core::ids::SpaceId;
-use uc_core::network::SessionId;
+use uc_core::ids::{SessionId, SpaceId};
 use uc_core::space_access::action::SpaceAccessAction;
 use uc_core::space_access::deny_reason_to_code;
 use uc_core::space_access::event::SpaceAccessEvent;
 use uc_core::space_access::state::{CancelReason, DenyReason, SpaceAccessState};
 use uc_core::space_access::state_machine::SpaceAccessStateMachine;
-use uc_core::SessionId as CoreSessionId;
 
 use super::context::{SpaceAccessContext, SpaceAccessOffer};
 use super::events::{SpaceAccessCompletedEvent, SpaceAccessEventPort};
@@ -200,17 +198,18 @@ impl SpaceAccessOrchestrator {
         };
 
         if let Some(reason) = action_error_reason {
-            self.emit_completion(&session_id, false, Some(reason)).await;
+            self.emit_completion(session_id.as_str(), false, Some(reason))
+                .await;
             return;
         }
 
         match next {
             SpaceAccessState::Granted { .. } => {
                 if sponsor_persisted {
-                    self.emit_completion(&session_id, true, None).await;
+                    self.emit_completion(session_id.as_str(), true, None).await;
                 } else {
                     self.emit_completion(
-                        &session_id,
+                        session_id.as_str(),
                         false,
                         Some("sponsor_persist_not_executed".to_string()),
                     )
@@ -218,12 +217,20 @@ impl SpaceAccessOrchestrator {
                 }
             }
             SpaceAccessState::Denied { reason, .. } => {
-                self.emit_completion(&session_id, false, Some(Self::deny_reason_code(reason)))
-                    .await;
+                self.emit_completion(
+                    session_id.as_str(),
+                    false,
+                    Some(Self::deny_reason_code(reason)),
+                )
+                .await;
             }
             SpaceAccessState::Cancelled { reason, .. } => {
-                self.emit_completion(&session_id, false, Some(Self::cancel_reason_code(reason)))
-                    .await;
+                self.emit_completion(
+                    session_id.as_str(),
+                    false,
+                    Some(Self::cancel_reason_code(reason)),
+                )
+                .await;
             }
             _ => {}
         }
@@ -232,7 +239,7 @@ impl SpaceAccessOrchestrator {
     fn resolve_session_id(
         state: &SpaceAccessState,
         fallback_session_id: Option<&SessionId>,
-    ) -> Option<String> {
+    ) -> Option<SessionId> {
         match state {
             SpaceAccessState::WaitingOffer {
                 pairing_session_id, ..
@@ -340,20 +347,18 @@ impl SpaceAccessOrchestrator {
                 SpaceAccessAction::StartTimer { ttl_secs } => {
                     let session_id =
                         pairing_session_id.ok_or(SpaceAccessError::MissingPairingSessionId)?;
-                    let session_id = CoreSessionId::from(session_id.as_str());
                     executor
                         .timer
-                        .start(&session_id, ttl_secs)
+                        .start(session_id, ttl_secs)
                         .await
                         .map_err(SpaceAccessError::Timer)?;
                 }
                 SpaceAccessAction::StopTimer => {
                     let session_id =
                         pairing_session_id.ok_or(SpaceAccessError::MissingPairingSessionId)?;
-                    let session_id = CoreSessionId::from(session_id.as_str());
                     executor
                         .timer
-                        .stop(&session_id)
+                        .stop(session_id)
                         .await
                         .map_err(SpaceAccessError::Timer)?;
                 }
@@ -389,12 +394,7 @@ impl SpaceAccessOrchestrator {
 
                     let proof = executor
                         .proof
-                        .build_proof(
-                            &CoreSessionId::from(session_id.as_str()),
-                            &space_id,
-                            offer.challenge_nonce,
-                            &master_key,
-                        )
+                        .build_proof(session_id, &space_id, offer.challenge_nonce, &master_key)
                         .await?;
 
                     let mut context = self.context.lock().await;

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use uc_core::network::{PairingBusy, PairingMessage, SessionId};
+use uc_core::ids::SessionId;
+use uc_core::network::{PairingBusy, PairingMessage};
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::PairingTransportPort;
 use uc_core::space_access::deny_reason_to_code;

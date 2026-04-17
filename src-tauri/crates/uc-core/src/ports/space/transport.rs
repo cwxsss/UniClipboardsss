@@ -1,4 +1,4 @@
-use crate::network::SessionId;
+use crate::ids::SessionId;
 
 #[async_trait::async_trait]
 pub trait SpaceAccessTransportPort: Send {

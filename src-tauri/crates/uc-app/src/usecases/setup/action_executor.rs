@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use uc_core::{
     crypto::{model::Passphrase, SecretString},
+    ids::SessionId,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
     ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, TimerPort},
     setup::{SetupAction, SetupError as SetupDomainError, SetupEvent, SetupState},
@@ -260,15 +261,16 @@ impl SetupActionExecutor {
         };
 
         let space_id = offer.space_id.clone();
+        let typed_session_id = SessionId::from(session_id.clone());
 
         self.space_access_orchestrator
             .dispatch(
                 &mut executor,
                 SpaceAccessEvent::JoinRequested {
-                    pairing_session_id: session_id.clone(),
+                    pairing_session_id: typed_session_id.clone(),
                     ttl_secs: 60,
                 },
-                Some(session_id.clone()),
+                Some(typed_session_id.clone()),
             )
             .await
             .map_err(|err| {
@@ -284,11 +286,11 @@ impl SetupActionExecutor {
             .dispatch(
                 &mut executor,
                 SpaceAccessEvent::OfferAccepted {
-                    pairing_session_id: session_id.clone(),
+                    pairing_session_id: typed_session_id.clone(),
                     space_id: space_id.clone(),
                     expires_at: Utc::now() + ChronoDuration::seconds(60),
                 },
-                Some(session_id.clone()),
+                Some(typed_session_id.clone()),
             )
             .await
             .map_err(|err| {
@@ -304,7 +306,7 @@ impl SetupActionExecutor {
             .dispatch(
                 &mut executor,
                 SpaceAccessEvent::PassphraseSubmitted,
-                Some(session_id.clone()),
+                Some(typed_session_id),
             )
             .await
             .map_err(|err| {
@@ -445,17 +447,17 @@ impl SetupActionExecutor {
         match space_access_state {
             SpaceAccessState::Granted {
                 pairing_session_id, ..
-            } if pairing_session_id == session_id => Some(SetupEvent::JoinSpaceSucceeded),
+            } if pairing_session_id.as_str() == session_id => Some(SetupEvent::JoinSpaceSucceeded),
             SpaceAccessState::Denied {
                 pairing_session_id,
                 reason,
                 ..
-            } if pairing_session_id == session_id => Some(SetupEvent::JoinSpaceFailed {
+            } if pairing_session_id.as_str() == session_id => Some(SetupEvent::JoinSpaceFailed {
                 error: Self::map_space_access_deny_reason(reason),
             }),
             SpaceAccessState::Cancelled {
                 pairing_session_id, ..
-            } if pairing_session_id == session_id => Some(SetupEvent::JoinSpaceFailed {
+            } if pairing_session_id.as_str() == session_id => Some(SetupEvent::JoinSpaceFailed {
                 error: SetupDomainError::PairingFailed,
             }),
             _ => None,

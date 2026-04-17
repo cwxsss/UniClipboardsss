@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use uc_core::crypto::SecretString;
-use uc_core::ids::SpaceId;
+use uc_core::ids::{SessionId, SpaceId};
 use uc_core::ports::space::{CryptoPort, PersistencePort, ProofPort, SpaceAccessTransportPort};
 use uc_core::ports::TimerPort;
 use uc_core::space_access::state::SpaceAccessState;
@@ -56,7 +56,7 @@ impl StartSponsorAuthorization {
         passphrase: SecretString,
     ) -> Result<SpaceAccessState, StartSponsorAuthorizationError> {
         let space_id = SpaceId::new();
-        let pairing_session_id = format!("setup-{}", uuid::Uuid::new_v4());
+        let pairing_session_id = SessionId::from(format!("setup-{}", uuid::Uuid::new_v4()));
         let crypto = self.crypto_factory.build(passphrase);
         let mut timer = self.timer.lock().await;
         let mut store = self.store.lock().await;

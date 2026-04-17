@@ -49,7 +49,7 @@ impl SpaceAccessStateMachine {
                 let expires_at = now + Duration::seconds(ttl_secs as i64);
                 let actions = vec![
                     SpaceAccessAction::RequestOfferPreparation {
-                        pairing_session_id: pairing_session_id.clone().into(),
+                        pairing_session_id: pairing_session_id.clone(),
                         space_id: space_id.clone(),
                         expires_at,
                     },
@@ -345,7 +345,7 @@ impl SpaceAccessStateMachine {
                 let expires_at = now + Duration::seconds(ttl_secs as i64);
                 let actions = vec![
                     SpaceAccessAction::RequestOfferPreparation {
-                        pairing_session_id: pairing_session_id.clone().into(),
+                        pairing_session_id: pairing_session_id.clone(),
                         space_id: space_id.clone(),
                         expires_at,
                     },

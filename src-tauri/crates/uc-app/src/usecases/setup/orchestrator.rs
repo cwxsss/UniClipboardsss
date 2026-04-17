@@ -16,7 +16,7 @@ use uc_core::{
         model::{KeySlot, KeySlotFile, Passphrase},
         SecretString,
     },
-    ids::SpaceId,
+    ids::{SessionId, SpaceId},
     ports::space::CryptoPort,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
     ports::{
@@ -305,14 +305,15 @@ impl SetupOrchestrator {
         }
 
         let space_id = SpaceId::from(keyslot_file.scope.profile_id.as_str());
+        let typed_session_id = SessionId::from(pairing_session_id);
         self.dispatch_space_access_event_with_crypto(
             LoadedKeyslotSpaceAccessCrypto { keyslot_file },
             SpaceAccessEvent::SponsorAuthorizationRequested {
-                pairing_session_id: pairing_session_id.clone(),
+                pairing_session_id: typed_session_id.clone(),
                 space_id,
                 ttl_secs: 60,
             },
-            pairing_session_id,
+            typed_session_id,
         )
         .await
     }
@@ -346,15 +347,15 @@ impl SetupOrchestrator {
             offer
         };
 
-        let event = if proof.pairing_session_id.as_str() != current_pairing_session_id {
+        let event = if proof.pairing_session_id != current_pairing_session_id {
             SpaceAccessEvent::ProofRejected {
-                pairing_session_id: proof.pairing_session_id.as_str().to_string(),
+                pairing_session_id: proof.pairing_session_id.clone(),
                 space_id: proof.space_id.clone(),
                 reason: DenyReason::SessionMismatch,
             }
         } else if proof.space_id != expected.space_id {
             SpaceAccessEvent::ProofRejected {
-                pairing_session_id: proof.pairing_session_id.as_str().to_string(),
+                pairing_session_id: proof.pairing_session_id.clone(),
                 space_id: proof.space_id.clone(),
                 reason: DenyReason::SpaceMismatch,
             }
@@ -368,12 +369,12 @@ impl SetupOrchestrator {
 
             if verified {
                 SpaceAccessEvent::ProofVerified {
-                    pairing_session_id: proof.pairing_session_id.as_str().to_string(),
+                    pairing_session_id: proof.pairing_session_id.clone(),
                     space_id: proof.space_id.clone(),
                 }
             } else {
                 SpaceAccessEvent::ProofRejected {
-                    pairing_session_id: proof.pairing_session_id.as_str().to_string(),
+                    pairing_session_id: proof.pairing_session_id.clone(),
                     space_id: proof.space_id.clone(),
                     reason: DenyReason::InvalidProof,
                 }
@@ -383,7 +384,7 @@ impl SetupOrchestrator {
         self.dispatch_space_access_event_with_crypto(
             NoopRuntimeSpaceAccessCrypto,
             event,
-            proof.pairing_session_id.as_str().to_string(),
+            proof.pairing_session_id.clone(),
         )
         .await
     }
@@ -401,14 +402,15 @@ impl SetupOrchestrator {
             context.lock().await.sponsor_peer_id = Some(peer_id);
         }
 
+        let typed_session_id = SessionId::from(pairing_session_id);
         let event = if success {
             SpaceAccessEvent::AccessGranted {
-                pairing_session_id: pairing_session_id.clone(),
+                pairing_session_id: typed_session_id.clone(),
                 space_id,
             }
         } else {
             SpaceAccessEvent::AccessDenied {
-                pairing_session_id: pairing_session_id.clone(),
+                pairing_session_id: typed_session_id.clone(),
                 space_id,
                 reason: deny_reason.unwrap_or(DenyReason::InternalError),
             }
@@ -417,7 +419,7 @@ impl SetupOrchestrator {
         self.dispatch_space_access_event_with_crypto(
             NoopRuntimeSpaceAccessCrypto,
             event,
-            pairing_session_id,
+            typed_session_id,
         )
         .await
     }
@@ -492,7 +494,7 @@ impl SetupOrchestrator {
         &self,
         crypto: C,
         event: SpaceAccessEvent,
-        pairing_session_id: String,
+        pairing_session_id: SessionId,
     ) -> Result<SpaceAccessState, SetupError>
     where
         C: CryptoPort,
