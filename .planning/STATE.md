@@ -32,7 +32,9 @@ Last activity: 2026-04-13
 
 ## Pending Todos
 
-None recorded in state.
+2 pending (see `.planning/todos/pending/`):
+- 修复 setup 配对确认提示缺失 (ui)
+- 统一 TransferDirection 与 FileTransferDirection 枚举 (core)
 
 ## Blockers/Concerns
 
