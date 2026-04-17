@@ -1,14 +1,13 @@
 //! File sync orchestrator worker for the daemon.
 //!
-//! Subscribes to NetworkEventPort for file transfer lifecycle events
-//! (TransferProgress, FileTransferCompleted, FileTransferFailed),
-//! delegates to FileTransferOrchestrator for durable state tracking,
-//! and restores completed files to the OS clipboard.
+//! Subscribes to `FileTransferEventInboundPort` for domain-level
+//! file-transfer lifecycle events and delegates to the lifecycle use cases
+//! for durable state tracking. Restores completed files to the OS clipboard
+//! by reading the `cached_path` back from the receiver projection.
 //!
 //! Also runs startup reconciliation (orphaned in-flight → failed) and
 //! periodic timeout sweeps (stalled pending/transferring → failed).
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,15 +23,18 @@ use uc_application::file_transfer::{
     CompleteTransfer, FailTransfer, ReportTransferProgress, StartTransfer,
 };
 use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
-use uc_core::file_transfer::{FileTransferFailureReason, FileTransferProgress};
-use uc_core::network::NetworkEvent;
-use uc_core::ports::{NetworkEventPort, SettingsPort};
+use uc_core::file_transfer::{
+    FileTransferEvent, FileTransferEventInboundPort, FileTransferFailureReason,
+};
+use uc_core::ports::file_transfer_repository::FileTransferRepositoryPort;
+use uc_core::ports::SettingsPort;
 
 use crate::service::{DaemonService, ServiceHealth};
 
 pub struct FileSyncOrchestratorWorker {
     lifecycle: Arc<FileTransferLifecycle>,
-    network_events: Arc<dyn NetworkEventPort>,
+    file_transfer_events: Arc<dyn FileTransferEventInboundPort>,
+    file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
     clipboard_write_coordinator: Arc<ClipboardWriteCoordinator>,
     file_cache_dir: PathBuf,
     settings: Arc<dyn SettingsPort>,
@@ -41,14 +43,16 @@ pub struct FileSyncOrchestratorWorker {
 impl FileSyncOrchestratorWorker {
     pub fn new(
         lifecycle: Arc<FileTransferLifecycle>,
-        network_events: Arc<dyn NetworkEventPort>,
+        file_transfer_events: Arc<dyn FileTransferEventInboundPort>,
+        file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
         clipboard_write_coordinator: Arc<ClipboardWriteCoordinator>,
         file_cache_dir: PathBuf,
         settings: Arc<dyn SettingsPort>,
     ) -> Self {
         Self {
             lifecycle,
-            network_events,
+            file_transfer_events,
+            file_transfer_repo,
             clipboard_write_coordinator,
             file_cache_dir,
             settings,
@@ -72,8 +76,8 @@ impl DaemonService for FileSyncOrchestratorWorker {
         let (sweep_cancel_tx, sweep_cancel_rx) = tokio::sync::watch::channel(false);
         let _sweep_handle = self.lifecycle.spawn_timeout_sweep(sweep_cancel_rx);
 
-        // 3. Subscribe to network events
-        let mut event_rx = match self.network_events.subscribe_events().await {
+        // 3. Subscribe to file-transfer domain events
+        let mut event_rx = match self.file_transfer_events.subscribe().await {
             Ok(rx) => rx,
             Err(err) => {
                 let _ = sweep_cancel_tx.send(true);
@@ -81,12 +85,9 @@ impl DaemonService for FileSyncOrchestratorWorker {
             }
         };
 
-        info!("file sync orchestrator subscribed to network events");
+        info!("file sync orchestrator subscribed to file-transfer events");
 
-        // 4. Batch accumulator: batch_id -> (completed_paths, expected_total, peer_id)
-        let mut batch_accumulator: HashMap<String, (Vec<PathBuf>, u32, String)> = HashMap::new();
-
-        // 5. Event loop
+        // 4. Event loop
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
@@ -96,11 +97,11 @@ impl DaemonService for FileSyncOrchestratorWorker {
                 }
                 maybe_event = event_rx.recv() => {
                     let Some(event) = maybe_event else {
-                        warn!("network event channel closed");
+                        warn!("file-transfer event channel closed");
                         let _ = sweep_cancel_tx.send(true);
                         return Ok(());
                     };
-                    self.handle_network_event(event, &mut batch_accumulator).await;
+                    self.handle_event(event).await;
                 }
             }
         }
@@ -117,14 +118,9 @@ impl DaemonService for FileSyncOrchestratorWorker {
 }
 
 impl FileSyncOrchestratorWorker {
-    async fn handle_network_event(
-        &self,
-        event: NetworkEvent,
-        batch_accumulator: &mut HashMap<String, (Vec<PathBuf>, u32, String)>,
-    ) {
-        #[allow(deprecated)]
+    async fn handle_event(&self, event: FileTransferEvent) {
         match event {
-            NetworkEvent::FileTransferStarted {
+            FileTransferEvent::Started {
                 transfer_id,
                 peer_id,
                 filename,
@@ -149,17 +145,18 @@ impl FileSyncOrchestratorWorker {
                     );
                 }
             }
-            NetworkEvent::TransferProgress(progress) => {
-                let transfer_id = progress.transfer_id.clone();
-                let peer_id = progress.peer_id.clone();
-                let domain_progress: FileTransferProgress = progress.into();
+            FileTransferEvent::Progress {
+                transfer_id,
+                peer_id,
+                progress,
+            } => {
                 if let Err(err) = self
                     .lifecycle
                     .report_progress
                     .execute(ReportTransferProgress {
                         transfer_id: transfer_id.clone(),
                         peer_id,
-                        progress: domain_progress,
+                        progress,
                     })
                     .await
                 {
@@ -172,200 +169,187 @@ impl FileSyncOrchestratorWorker {
                     );
                 }
             }
-            NetworkEvent::FileTransferCompleted {
+            FileTransferEvent::Completed {
                 transfer_id,
                 peer_id,
-                filename,
-                file_path,
-                batch_id,
-                batch_total,
             } => {
-                debug!(
-                    transfer_id = %transfer_id,
-                    peer_id = %peer_id,
-                    filename = %filename,
-                    file_path = %file_path.display(),
-                    batch_id = ?batch_id,
-                    batch_total = ?batch_total,
-                    "File transfer completed, processing inbound file"
-                );
-
-                let inbound_uc =
-                    SyncInboundFileUseCase::new(self.settings.clone(), self.file_cache_dir.clone());
-
-                let lifecycle = Arc::clone(&self.lifecycle);
-                let coordinator = self.clipboard_write_coordinator.clone();
-                let is_batch = batch_id.is_some() && batch_total.is_some();
-                let span_tid = transfer_id.clone();
-                let file_path_for_spawn = file_path.clone();
-                let transfer_id_for_spawn = transfer_id.clone();
-                let peer_id_for_spawn = peer_id.clone();
-
-                tokio::spawn(
-                    async move {
-                        let file_bytes = match tokio::fs::read(&file_path_for_spawn).await {
-                            Ok(bytes) => bytes,
-                            Err(err) => {
-                                error!(
-                                    transfer_id = %transfer_id_for_spawn,
-                                    error = %err,
-                                    "Failed to read transferred file for hash verification"
-                                );
-                                fail_transfer(
-                                    &lifecycle,
-                                    &transfer_id_for_spawn,
-                                    &peer_id_for_spawn,
-                                    FileTransferFailureReason::StorageUnavailable,
-                                    Some(format!("Failed to read file: {err}")),
-                                )
-                                .await;
-                                return;
-                            }
-                        };
-
-                        let expected_hash = blake3::hash(&file_bytes).to_hex().to_string();
-
-                        match inbound_uc
-                            .handle_transfer_complete(
-                                &transfer_id_for_spawn,
-                                &file_path_for_spawn,
-                                &expected_hash,
-                            )
-                            .await
-                        {
-                            Ok(result) => {
-                                info!(
-                                    transfer_id = %result.transfer_id,
-                                    file_size = result.file_size,
-                                    auto_pulled = result.auto_pulled,
-                                    "Inbound file sync processed"
-                                );
-
-                                if let Err(err) = lifecycle
-                                    .complete
-                                    .execute(CompleteTransfer {
-                                        transfer_id: result.transfer_id.clone(),
-                                        peer_id: peer_id_for_spawn.clone(),
-                                    })
-                                    .await
-                                {
-                                    warn!(
-                                        error = %err,
-                                        transfer_id = %result.transfer_id,
-                                        "Failed to record transfer completion"
-                                    );
-                                }
-
-                                // Drop sender-side entry hint once the transfer finishes.
-                                lifecycle.outbound_entry_cache.remove(&result.transfer_id);
-
-                                if !is_batch {
-                                    restore_file_to_clipboard_after_transfer(
-                                        vec![result.file_path],
-                                        &coordinator,
-                                    )
-                                    .await;
-                                }
-                            }
-                            Err(err) => {
-                                error!(
-                                    transfer_id = %transfer_id_for_spawn,
-                                    error = %err,
-                                    "Inbound file sync processing failed"
-                                );
-                                fail_transfer(
-                                    &lifecycle,
-                                    &transfer_id_for_spawn,
-                                    &peer_id_for_spawn,
-                                    FileTransferFailureReason::Unknown,
-                                    Some(format!("Inbound file sync failed: {err}")),
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                    .instrument(info_span!("inbound_file_sync", transfer_id = %span_tid)),
-                );
-
-                // Handle batch accumulation (outside spawn for state access)
-                if let (Some(bid), Some(total)) = (batch_id, batch_total) {
-                    let entry = batch_accumulator
-                        .entry(bid.clone())
-                        .or_insert_with(|| (Vec::new(), total, peer_id.clone()));
-                    entry.0.push(file_path.clone());
-
-                    if entry.0.len() < total as usize {
-                        info!(
-                            batch_id = %bid,
-                            completed = entry.0.len(),
-                            total = total,
-                            "Batch file received, waiting for remaining files"
-                        );
-                    } else {
-                        let all_paths = entry.0.clone();
-                        batch_accumulator.remove(&bid);
-                        info!(
-                            batch_id = %bid,
-                            total = total,
-                            "Batch complete, restoring all files to clipboard"
-                        );
-
-                        let coordinator_batch = self.clipboard_write_coordinator.clone();
-                        tokio::spawn(async move {
-                            restore_file_to_clipboard_after_transfer(all_paths, &coordinator_batch)
-                                .await;
-                        });
-                    }
-                }
+                self.handle_completed(transfer_id, peer_id).await;
             }
-            NetworkEvent::FileTransferFailed {
+            FileTransferEvent::Failed {
                 transfer_id,
                 peer_id,
-                error: error_msg,
+                reason,
+                detail,
             } => {
                 warn!(
                     transfer_id = %transfer_id,
                     peer_id = %peer_id,
-                    error = %error_msg,
+                    reason = ?reason,
+                    detail = ?detail,
                     "File transfer failed"
                 );
+                fail_transfer(&self.lifecycle, &transfer_id, &peer_id, reason, detail).await;
+                self.lifecycle.outbound_entry_cache.remove(&transfer_id);
+            }
+            FileTransferEvent::Cancelled {
+                transfer_id,
+                peer_id,
+                reason,
+            } => {
+                info!(
+                    transfer_id = %transfer_id,
+                    peer_id = %peer_id,
+                    reason = ?reason,
+                    "File transfer cancelled"
+                );
+                // No adapter currently emits Cancelled; the cancel use case is
+                // wired but not invoked from this event loop yet. Route through
+                // the fail path with a typed detail so the projection still
+                // settles, mirroring the deprecated Cancelled → Failed fold on
+                // the receiver projection.
                 fail_transfer(
                     &self.lifecycle,
                     &transfer_id,
                     &peer_id,
-                    classify_failure_reason(&error_msg),
-                    Some(error_msg),
+                    FileTransferFailureReason::Unknown,
+                    Some(format!("cancelled: {reason:?}")),
                 )
                 .await;
                 self.lifecycle.outbound_entry_cache.remove(&transfer_id);
             }
-            // All other network events (PeerDiscovered, PeerLost, PeerReady, etc.)
-            // are handled by PeerDiscoveryWorker and PeerMonitor
-            _ => {}
         }
     }
-}
 
-/// Best-effort mapping of a free-text failure string to a typed reason.
-///
-/// The string originates from several unrelated code sites (I/O errors,
-/// protocol-layer rejection strings, timeout sweep output, etc.). The
-/// mapping here captures the well-known prefixes produced by the daemon and
-/// platform layers; any unfamiliar shape falls back to `Unknown`.
-fn classify_failure_reason(message: &str) -> FileTransferFailureReason {
-    let lowered = message.to_ascii_lowercase();
-    if lowered.contains("timeout") {
-        FileTransferFailureReason::TimedOut
-    } else if lowered.contains("failed to read file") || lowered.contains("storage") {
-        FileTransferFailureReason::StorageUnavailable
-    } else if lowered.contains("hash") || lowered.contains("integrity") {
-        FileTransferFailureReason::IntegrityCheckFailed
-    } else if lowered.contains("rejected") || lowered.contains("access") {
-        FileTransferFailureReason::AccessDenied
-    } else if lowered.contains("network") || lowered.contains("closed") {
-        FileTransferFailureReason::NetworkUnavailable
-    } else {
-        FileTransferFailureReason::Unknown
+    async fn handle_completed(&self, transfer_id: String, peer_id: String) {
+        let tracked = match self.file_transfer_repo.get_transfer(&transfer_id).await {
+            Ok(Some(row)) => row,
+            Ok(None) => {
+                // No receiver projection row — typically a sender-side transfer
+                // whose Completed event still needs to advance the event store.
+                if let Err(err) = self
+                    .lifecycle
+                    .complete
+                    .execute(CompleteTransfer {
+                        transfer_id: transfer_id.clone(),
+                        peer_id: peer_id.clone(),
+                    })
+                    .await
+                {
+                    warn!(
+                        error = %err,
+                        transfer_id = %transfer_id,
+                        "Failed to record sender-side transfer completion"
+                    );
+                }
+                self.lifecycle.outbound_entry_cache.remove(&transfer_id);
+                return;
+            }
+            Err(err) => {
+                error!(
+                    error = %err,
+                    transfer_id = %transfer_id,
+                    "Failed to look up transfer projection for completion"
+                );
+                return;
+            }
+        };
+
+        debug!(
+            transfer_id = %transfer_id,
+            peer_id = %peer_id,
+            filename = %tracked.filename,
+            cached_path = %tracked.cached_path,
+            "File transfer completed, processing inbound file"
+        );
+
+        let inbound_uc =
+            SyncInboundFileUseCase::new(self.settings.clone(), self.file_cache_dir.clone());
+
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let coordinator = self.clipboard_write_coordinator.clone();
+        let file_path = PathBuf::from(&tracked.cached_path);
+        let transfer_id_for_spawn = transfer_id.clone();
+        let peer_id_for_spawn = peer_id.clone();
+        let span_tid = transfer_id.clone();
+
+        tokio::spawn(
+            async move {
+                let file_bytes = match tokio::fs::read(&file_path).await {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        error!(
+                            transfer_id = %transfer_id_for_spawn,
+                            error = %err,
+                            "Failed to read transferred file for hash verification"
+                        );
+                        fail_transfer(
+                            &lifecycle,
+                            &transfer_id_for_spawn,
+                            &peer_id_for_spawn,
+                            FileTransferFailureReason::StorageUnavailable,
+                            Some(format!("Failed to read file: {err}")),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+
+                let expected_hash = blake3::hash(&file_bytes).to_hex().to_string();
+
+                match inbound_uc
+                    .handle_transfer_complete(&transfer_id_for_spawn, &file_path, &expected_hash)
+                    .await
+                {
+                    Ok(result) => {
+                        info!(
+                            transfer_id = %result.transfer_id,
+                            file_size = result.file_size,
+                            auto_pulled = result.auto_pulled,
+                            "Inbound file sync processed"
+                        );
+
+                        if let Err(err) = lifecycle
+                            .complete
+                            .execute(CompleteTransfer {
+                                transfer_id: result.transfer_id.clone(),
+                                peer_id: peer_id_for_spawn.clone(),
+                            })
+                            .await
+                        {
+                            warn!(
+                                error = %err,
+                                transfer_id = %result.transfer_id,
+                                "Failed to record transfer completion"
+                            );
+                        }
+
+                        lifecycle.outbound_entry_cache.remove(&result.transfer_id);
+
+                        restore_file_to_clipboard_after_transfer(
+                            vec![result.file_path],
+                            &coordinator,
+                        )
+                        .await;
+                    }
+                    Err(err) => {
+                        error!(
+                            transfer_id = %transfer_id_for_spawn,
+                            error = %err,
+                            "Inbound file sync processing failed"
+                        );
+                        fail_transfer(
+                            &lifecycle,
+                            &transfer_id_for_spawn,
+                            &peer_id_for_spawn,
+                            FileTransferFailureReason::Unknown,
+                            Some(format!("Inbound file sync failed: {err}")),
+                        )
+                        .await;
+                    }
+                }
+            }
+            .instrument(info_span!("inbound_file_sync", transfer_id = %span_tid)),
+        );
     }
 }
 

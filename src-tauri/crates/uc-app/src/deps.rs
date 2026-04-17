@@ -46,6 +46,9 @@ pub struct NetworkPorts {
     /// File transfer transport capability (`Arc<dyn FileTransportPort>`).
     /// 文件传输能力（`Arc<dyn FileTransportPort>`）。
     pub file_transfer: Arc<dyn FileTransportPort>,
+    /// File-transfer domain event inbound stream from the platform layer.
+    /// 文件传输领域事件入站流（由平台层产出）。
+    pub file_transfer_events: Arc<dyn uc_core::file_transfer::FileTransferEventInboundPort>,
 }
 
 /// Clipboard-domain ports bundle.

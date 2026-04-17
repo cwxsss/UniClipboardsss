@@ -59,6 +59,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let ctx = build_daemon_app()?;
     let daemon_network_control = ctx.deps.network_control.clone();
     let daemon_network_events = ctx.deps.network_ports.events.clone();
+    let daemon_file_transfer_events = ctx.deps.network_ports.file_transfer_events.clone();
+    let daemon_file_transfer_repo = ctx.deps.storage.file_transfer_repo.clone();
     let daemon_peer_directory = ctx.deps.network_ports.peers.clone();
     let daemon_settings = ctx.deps.settings.clone();
     let setup_ports = SetupAssemblyPorts::from_network(
@@ -143,7 +145,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
 
     let file_sync_orchestrator_worker = Arc::new(FileSyncOrchestratorWorker::new(
         file_transfer_lifecycle,
-        daemon_network_events.clone(),
+        daemon_file_transfer_events,
+        daemon_file_transfer_repo,
         clipboard_write_coordinator,
         file_cache_dir,
         daemon_settings.clone(),

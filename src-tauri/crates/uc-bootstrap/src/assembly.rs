@@ -425,6 +425,7 @@ fn build_network_ports(
         pairing,
         events: libp2p_network.clone(),
         file_transfer: libp2p_network.clone(),
+        file_transfer_events: libp2p_network.clone(),
     })
 }
 
