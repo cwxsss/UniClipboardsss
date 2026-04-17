@@ -9726,6 +9726,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uc-app",
+ "uc-application",
  "uc-core",
  "uc-infra",
  "uc-observability",

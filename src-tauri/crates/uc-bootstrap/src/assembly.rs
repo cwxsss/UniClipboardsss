@@ -128,6 +128,12 @@ pub struct BackgroundRuntimeDeps {
     /// File transfer lifecycle orchestrator. Holds a clone of the shared emitter_cell so
     /// it automatically sees emitter swaps (LoggingEventEmitter → DaemonApiEventEmitter).
     pub file_transfer_orchestrator: Arc<uc_app::usecases::file_sync::FileTransferOrchestrator>,
+    /// Event-sourced file transfer lifecycle: durable store + host-event publisher + 6 use cases.
+    ///
+    /// Wired here but not yet routed from the daemon workers — the legacy
+    /// `file_transfer_orchestrator` above still drives the runtime path until Phase 3
+    /// swaps the call sites.
+    pub file_transfer_lifecycle: crate::file_transfer_lifecycle::FileTransferLifecycle,
     /// Single write boundary for all programmatic clipboard writes.
     /// Centralises guard-registration + write + cleanup-on-error.
     pub clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
@@ -216,8 +222,15 @@ struct InfraLayer {
     clock: Arc<dyn ClockPort>,
     hash: Arc<dyn ContentHashPort>,
 
-    // File transfer tracking
+    // File transfer tracking (projection/read-model port).
     file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
+
+    // File transfer durable event store + receiver-side projection updater.
+    //
+    // Exposed as the concrete type because receiver-side code calls
+    // `seed_receiver_context`, which is not part of the `FileTransferEventStorePort`
+    // surface on purpose (entry_id / cached_path are receiver-local concerns).
+    file_transfer_store: Arc<crate::file_transfer_lifecycle::FileTransferEventStore>,
 }
 
 /// Platform layer implementations
@@ -371,6 +384,10 @@ fn create_infra_layer(
     let file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort> =
         Arc::new(DieselFileTransferRepository::new(Arc::clone(&db_executor)));
 
+    let file_transfer_store = Arc::new(
+        uc_infra::file_transfer::SqliteReceiverFileTransferStore::new(Arc::clone(&db_executor)),
+    );
+
     let infra = InfraLayer {
         clipboard_entry_repo,
         clipboard_event_repo,
@@ -389,6 +406,7 @@ fn create_infra_layer(
         clock,
         hash,
         file_transfer_repo,
+        file_transfer_store,
     };
 
     Ok(infra)
@@ -762,6 +780,11 @@ pub fn wire_dependencies_with_identity_store(
     let clipboard_change_origin =
         clipboard_change_origin().expect("clipboard_change_origin not initialized");
 
+    // Extract the concrete file-transfer store before moving the rest of InfraLayer
+    // into AppDeps — it is not exposed through uc-app ports (the use cases see it
+    // as `Arc<dyn FileTransferEventStorePort>`), so it travels via BackgroundRuntimeDeps.
+    let file_transfer_store_arc = Arc::clone(&infra.file_transfer_store);
+
     // Create payload resolver for resolving staged/processing payloads
     let payload_resolver: Arc<dyn ClipboardPayloadResolverPort> =
         Arc::new(ClipboardPayloadResolver::new(
@@ -838,6 +861,12 @@ pub fn wire_dependencies_with_identity_store(
         deps.system.clock.clone(),
     );
 
+    let file_transfer_lifecycle = crate::file_transfer_lifecycle::build_file_transfer_lifecycle(
+        Arc::clone(&file_transfer_store_arc),
+        emitter_cell.clone(),
+        deps.storage.file_transfer_repo.clone(),
+    );
+
     let clipboard_write_coordinator = build_clipboard_write_coordinator(
         deps.clipboard.system_clipboard.clone(),
         deps.clipboard.clipboard_change_origin.clone(),
@@ -858,6 +887,7 @@ pub fn wire_dependencies_with_identity_store(
             worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
             file_transfer_orchestrator,
+            file_transfer_lifecycle,
             clipboard_write_coordinator,
         },
         emitter_cell,

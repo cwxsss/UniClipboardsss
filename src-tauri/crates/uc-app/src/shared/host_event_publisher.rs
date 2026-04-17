@@ -1,0 +1,170 @@
+//! Host-event adapter for file-transfer domain events.
+//!
+//! Translates `FileTransferEvent` (domain truth) into `TransferHostEvent`
+//! (UI broadcast contract) and emits through `HostEventEmitterPort`.
+//!
+//! `entry_id` is looked up through `FileTransferRepositoryPort` because the
+//! receiver-side projection owns that binding and the domain event itself
+//! intentionally does not carry it.
+
+use std::sync::{Arc, RwLock};
+
+use anyhow::Result;
+use async_trait::async_trait;
+use tracing::warn;
+
+use uc_core::file_transfer::{
+    FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
+    FileTransferEventPublisherPort, FileTransferFailureReason,
+};
+use uc_core::ports::file_transfer_repository::FileTransferRepositoryPort;
+use uc_core::ports::transfer_progress::TransferDirection;
+
+use crate::shared::host_event::{HostEvent, HostEventEmitterPort, TransferHostEvent};
+
+pub struct FileTransferHostEventPublisher {
+    emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>,
+    file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
+}
+
+impl FileTransferHostEventPublisher {
+    pub fn new(
+        emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>,
+        file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
+    ) -> Self {
+        Self {
+            emitter_cell,
+            file_transfer_repo,
+        }
+    }
+
+    async fn resolve_entry_id(&self, transfer_id: &str) -> Option<String> {
+        match self
+            .file_transfer_repo
+            .get_entry_id_for_transfer(transfer_id)
+            .await
+        {
+            Ok(entry_id) => entry_id,
+            Err(err) => {
+                warn!(error = %err, transfer_id, "failed to resolve entry_id for host event");
+                None
+            }
+        }
+    }
+
+    fn emit(&self, event: HostEvent) {
+        let emitter = self
+            .emitter_cell
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Err(err) = emitter.emit(event) {
+            warn!(error = %err, "failed to emit file transfer host event");
+        }
+    }
+}
+
+#[async_trait]
+impl FileTransferEventPublisherPort for FileTransferHostEventPublisher {
+    async fn publish(&self, event: FileTransferEvent) -> Result<()> {
+        match event {
+            FileTransferEvent::Announced { transfer_id, .. } => {
+                self.publish_status_change(&transfer_id, "pending", None, "Announced")
+                    .await;
+            }
+            FileTransferEvent::Started { transfer_id, .. } => {
+                self.publish_status_change(&transfer_id, "transferring", None, "Started")
+                    .await;
+            }
+            FileTransferEvent::Progress {
+                transfer_id,
+                peer_id,
+                progress,
+            } => {
+                let entry_id = self.resolve_entry_id(&transfer_id).await;
+                self.emit(HostEvent::Transfer(TransferHostEvent::Progress {
+                    transfer_id,
+                    entry_id,
+                    peer_id,
+                    direction: direction_to_transport(progress.direction),
+                    bytes_transferred: progress.bytes_transferred,
+                    total_bytes: progress.total_bytes,
+                }));
+            }
+            FileTransferEvent::Completed { transfer_id, .. } => {
+                self.publish_status_change(&transfer_id, "completed", None, "Completed")
+                    .await;
+            }
+            FileTransferEvent::Failed {
+                transfer_id,
+                reason,
+                ..
+            } => {
+                let reason_label = Some(failure_reason_label(reason).to_string());
+                self.publish_status_change(&transfer_id, "failed", reason_label, "Failed")
+                    .await;
+            }
+            FileTransferEvent::Cancelled {
+                transfer_id,
+                reason,
+                ..
+            } => {
+                let reason_label = Some(cancellation_reason_label(reason).to_string());
+                self.publish_status_change(&transfer_id, "failed", reason_label, "Cancelled")
+                    .await;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FileTransferHostEventPublisher {
+    async fn publish_status_change(
+        &self,
+        transfer_id: &str,
+        status: &str,
+        reason: Option<String>,
+        event_kind: &'static str,
+    ) {
+        let Some(entry_id) = self.resolve_entry_id(transfer_id).await else {
+            warn!(
+                transfer_id,
+                event_kind, "no entry_id resolved; skipping host status event"
+            );
+            return;
+        };
+        self.emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
+            transfer_id: transfer_id.to_string(),
+            entry_id,
+            status: status.to_string(),
+            reason,
+        }));
+    }
+}
+
+fn direction_to_transport(direction: FileTransferDirection) -> TransferDirection {
+    match direction {
+        FileTransferDirection::Sending => TransferDirection::Sending,
+        FileTransferDirection::Receiving => TransferDirection::Receiving,
+    }
+}
+
+fn failure_reason_label(reason: FileTransferFailureReason) -> &'static str {
+    match reason {
+        FileTransferFailureReason::NetworkUnavailable => "network_unavailable",
+        FileTransferFailureReason::TimedOut => "timed_out",
+        FileTransferFailureReason::AccessDenied => "access_denied",
+        FileTransferFailureReason::StorageUnavailable => "storage_unavailable",
+        FileTransferFailureReason::IntegrityCheckFailed => "integrity_check_failed",
+        FileTransferFailureReason::Unknown => "unknown",
+    }
+}
+
+fn cancellation_reason_label(reason: FileTransferCancellationReason) -> &'static str {
+    match reason {
+        FileTransferCancellationReason::LocalUser => "cancelled:local_user",
+        FileTransferCancellationReason::RemotePeer => "cancelled:remote_peer",
+        FileTransferCancellationReason::Replaced => "cancelled:replaced",
+        FileTransferCancellationReason::Unknown => "cancelled:unknown",
+    }
+}

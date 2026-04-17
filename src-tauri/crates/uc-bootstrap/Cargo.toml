@@ -7,6 +7,7 @@ description = "Composition root — sole crate allowed to depend on uc-core + uc
 [dependencies]
 uc-core = { path = "../uc-core" }
 uc-app = { path = "../uc-app" }
+uc-application = { path = "../uc-application" }
 uc-infra = { path = "../uc-infra" }
 uc-platform = { path = "../uc-platform" }
 uc-observability = { path = "../uc-observability" }
