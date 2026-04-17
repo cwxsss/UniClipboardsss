@@ -106,6 +106,7 @@ fn fail_input(transfer_id: &str, peer_id: &str, reason: FileTransferFailureReaso
         transfer_id: transfer_id.into(),
         peer_id: peer_id.into(),
         reason,
+        detail: None,
     }
 }
 
