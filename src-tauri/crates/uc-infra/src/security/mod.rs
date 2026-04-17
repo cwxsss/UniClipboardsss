@@ -15,6 +15,9 @@ pub use encrypted_blob_store::EncryptedBlobStore;
 pub use encrypting_clipboard_event_writer::EncryptingClipboardEventWriter;
 pub use encryption::EncryptionRepository;
 pub use encryption_state_repo::FileEncryptionStateRepository;
-pub use hashing::{hash_pin, verify_pin, Blake3Hasher};
-pub use identity_fingerprint::{FingerprintError, IdentityFingerprint, ShortCodeGenerator};
+pub use hashing::{hash_pin, verify_pin, Argon2PinHasher, Blake3Hasher};
+pub use identity_fingerprint::{
+    FingerprintError, IdentityFingerprint, Sha256IdentityFingerprintFactory,
+    Sha256ShortCodeGenerator, ShortCodeGenerator,
+};
 pub use key_material::DefaultKeyMaterialService;

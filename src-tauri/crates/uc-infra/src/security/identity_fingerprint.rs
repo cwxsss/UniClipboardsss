@@ -28,6 +28,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use uc_core::ports::security::{IdentityFingerprintFactoryPort, ShortCodeGeneratorPort};
 
 /// 身份指纹错误
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -244,5 +245,43 @@ impl ShortCodeGenerator {
 
         // 返回前6-8字符(可根据需要调整)
         Ok(encoded.chars().take(8).collect())
+    }
+}
+
+/// SHA-256 + Base32 implementation of `IdentityFingerprintFactoryPort`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Sha256IdentityFingerprintFactory;
+
+impl IdentityFingerprintFactoryPort for Sha256IdentityFingerprintFactory {
+    fn from_public_key(&self, public_key: &[u8]) -> anyhow::Result<String> {
+        let fingerprint = IdentityFingerprint::from_public_key(public_key)
+            .map_err(|err| anyhow::anyhow!("identity fingerprint derivation failed: {err}"))?;
+        Ok(fingerprint.to_string())
+    }
+}
+
+/// SHA-256 + Base32 implementation of `ShortCodeGeneratorPort`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Sha256ShortCodeGenerator;
+
+impl ShortCodeGeneratorPort for Sha256ShortCodeGenerator {
+    fn generate(
+        &self,
+        session_id: &str,
+        nonce_initiator: &[u8],
+        nonce_responder: &[u8],
+        initiator_pubkey: &[u8],
+        responder_pubkey: &[u8],
+        protocol_version: &str,
+    ) -> anyhow::Result<String> {
+        ShortCodeGenerator::generate(
+            session_id,
+            nonce_initiator,
+            nonce_responder,
+            initiator_pubkey,
+            responder_pubkey,
+            protocol_version,
+        )
+        .map_err(|err| anyhow::anyhow!("short code generation failed: {err}"))
     }
 }
