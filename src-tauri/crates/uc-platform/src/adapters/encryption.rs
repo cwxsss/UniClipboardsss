@@ -99,7 +99,3 @@ impl Default for InMemoryEncryptionSessionPort {
         Self::new()
     }
 }
-
-/// Backward compatibility alias
-/// 向后兼容的类型别名
-pub type PlaceholderEncryptionSessionPort = InMemoryEncryptionSessionPort;

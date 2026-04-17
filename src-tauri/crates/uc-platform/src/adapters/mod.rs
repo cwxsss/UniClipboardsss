@@ -11,7 +11,6 @@
 //! - `encryption` - Placeholder encryption session management
 //! - `network` - Placeholder P2P networking
 
-pub mod blob;
 pub mod blob_store;
 pub mod encryption;
 pub mod file_transfer;
@@ -20,8 +19,7 @@ pub mod network;
 pub mod pairing_stream;
 pub mod protocol_ids;
 
-pub use blob::PlaceholderBlobWriterPort;
 pub use blob_store::FilesystemBlobStore;
-pub use encryption::{InMemoryEncryptionSessionPort, PlaceholderEncryptionSessionPort};
+pub use encryption::InMemoryEncryptionSessionPort;
 pub use libp2p_network::Libp2pNetworkAdapter;
 pub use network::{DisabledPairingTransport, PairingRuntimeOwner};
