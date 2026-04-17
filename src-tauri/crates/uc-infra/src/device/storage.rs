@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use uc_core::device::DeviceId;
+use uc_core::ids::DeviceId;
 
 const DEVICE_ID_FILE: &str = "device_id.txt";
 

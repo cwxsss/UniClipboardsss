@@ -14,7 +14,7 @@ mod storage;
 
 use anyhow::Result;
 use std::path::PathBuf;
-use uc_core::device::DeviceId;
+use uc_core::ids::DeviceId;
 use uc_core::ports::DeviceIdentityPort;
 
 /// Local filesystem-backed device identity.

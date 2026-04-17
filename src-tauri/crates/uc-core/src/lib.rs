@@ -9,7 +9,6 @@ pub mod app_dirs;
 pub mod clipboard;
 pub mod config;
 pub mod crypto;
-pub mod device;
 pub mod file_transfer;
 pub mod ids;
 pub mod network;
@@ -23,13 +22,11 @@ pub mod space_access;
 // Re-export commonly used types at the crate root
 pub use clipboard::*;
 pub use config::AppConfig;
-pub use device::DeviceId;
 pub use file_transfer::{
     FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
     FileTransferFailureReason, FileTransferProgress,
 };
-pub use ids::BlobId;
-pub use ids::{PeerId, SessionId};
+pub use ids::{BlobId, DeviceId, PeerId, SessionId};
 pub use network::{NetworkEvent, NetworkStatus, ProtocolMessage};
 
 // 不知道如何分类，临时定义在这里
