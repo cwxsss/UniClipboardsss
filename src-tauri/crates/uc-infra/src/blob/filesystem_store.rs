@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+use uc_core::blob::ports::BlobReaderPort;
 use uc_core::BlobId;
 
 use crate::blob::BlobStorePort;
@@ -49,6 +50,13 @@ impl BlobStorePort for FilesystemBlobStore {
         Ok((path, None))
     }
 
+    async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>> {
+        <Self as BlobReaderPort>::get(self, blob_id).await
+    }
+}
+
+#[async_trait::async_trait]
+impl BlobReaderPort for FilesystemBlobStore {
     async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>> {
         let path = self.blob_path(blob_id);
         let mut file = tokio::fs::File::open(&path)

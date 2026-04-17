@@ -19,6 +19,7 @@ use std::sync::Arc;
 use tracing::{debug, info_span, Instrument};
 
 use uc_core::{
+    blob::ports::BlobReaderPort,
     crypto::aad,
     crypto::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion},
     ports::{EncryptionPort, EncryptionSessionPort},
@@ -159,6 +160,13 @@ impl BlobStorePort for EncryptedBlobStore {
         Ok((path, Some(on_disk_size)))
     }
 
+    async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>> {
+        <Self as BlobReaderPort>::get(self, blob_id).await
+    }
+}
+
+#[async_trait]
+impl BlobReaderPort for EncryptedBlobStore {
     async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>> {
         // 1. Read binary data from inner store
         let binary_data = self
