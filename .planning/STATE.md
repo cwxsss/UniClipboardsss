@@ -32,9 +32,10 @@ Last activity: 2026-04-13
 
 ## Pending Todos
 
-2 pending (see `.planning/todos/pending/`):
+3 pending (see `.planning/todos/pending/`):
 - 修复 setup 配对确认提示缺失 (ui)
-- 统一 TransferDirection 与 FileTransferDirection 枚举 (core)
+- 给 FileTransferEvent::Cancelled 接入真实发射方 (file-transfer)
+- 让 timeout sweep 走事件存储而非直接操作 projection (file-transfer)
 
 ## Blockers/Concerns
 
