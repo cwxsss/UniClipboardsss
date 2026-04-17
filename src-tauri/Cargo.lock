@@ -9789,7 +9789,6 @@ name = "uc-core"
 version = "0.5.0-alpha.7"
 dependencies = [
  "anyhow",
- "argon2",
  "async-trait",
  "base32",
  "base64 0.22.1",
@@ -9804,7 +9803,6 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2",
- "subtle",
  "thiserror 2.0.17",
  "tokio",
  "toml 0.8.23",
@@ -9931,6 +9929,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",

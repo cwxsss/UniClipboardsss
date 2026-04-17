@@ -27,7 +27,6 @@
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use uc_core::crypto::pin_hash::{hash_pin, verify_pin};
 use uc_core::crypto::{IdentityFingerprint, ShortCodeGenerator};
 use uc_core::network::{
     protocol::{
@@ -40,6 +39,7 @@ use uc_core::pairing::PairingRole;
 use uc_core::pairing::{PairedDevice, PairingState as PairedDeviceState};
 use uc_core::settings::model::PairingSettings;
 use uc_core::PeerId;
+use uc_infra::security::{hash_pin, verify_pin};
 
 /// 配对状态机的核心状态
 ///
