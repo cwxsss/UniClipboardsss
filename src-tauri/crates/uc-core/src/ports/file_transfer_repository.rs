@@ -178,6 +178,14 @@ pub trait FileTransferRepositoryPort: Send + Sync {
     /// Look up a single transfer by transfer_id.
     /// Returns the entry_id for the transfer, if found.
     async fn get_entry_id_for_transfer(&self, transfer_id: &str) -> anyhow::Result<Option<String>>;
+
+    /// Look up the full projection row for a transfer_id.
+    ///
+    /// Used by receiver-side workers that need the locally-recorded
+    /// `cached_path` (and other context) once the domain timeline reports
+    /// completion. Returns `None` when no receiver projection row exists
+    /// for the given id — e.g. sender-side transfers.
+    async fn get_transfer(&self, transfer_id: &str) -> anyhow::Result<Option<TrackedFileTransfer>>;
 }
 
 /// No-op stub for `FileTransferRepositoryPort` used at construction sites
@@ -228,6 +236,9 @@ impl FileTransferRepositoryPort for NoopFileTransferRepositoryPort {
         Ok(vec![])
     }
     async fn get_entry_id_for_transfer(&self, _: &str) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+    async fn get_transfer(&self, _: &str) -> anyhow::Result<Option<TrackedFileTransfer>> {
         Ok(None)
     }
 }

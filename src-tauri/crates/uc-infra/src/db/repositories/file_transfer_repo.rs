@@ -332,4 +332,15 @@ impl<E: DbExecutor> FileTransferRepositoryPort for DieselFileTransferRepository<
             Ok(entry_id)
         })
     }
+
+    async fn get_transfer(&self, transfer_id: &str) -> anyhow::Result<Option<TrackedFileTransfer>> {
+        let tid = transfer_id.to_string();
+        self.executor.run(move |conn| {
+            let row = file_transfer::table
+                .filter(file_transfer::transfer_id.eq(&tid))
+                .first::<FileTransferRow>(conn)
+                .optional()?;
+            Ok(row.as_ref().map(row_to_domain))
+        })
+    }
 }
