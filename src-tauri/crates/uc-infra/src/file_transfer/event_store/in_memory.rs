@@ -57,8 +57,10 @@ mod tests {
     #[tokio::test]
     async fn append_and_load_only_returns_matching_transfer_history() {
         let store = InMemoryEventStore::new();
-        let first_started = FileTransferEvent::started("transfer-1", "peer-1", "report.pdf", 128);
-        let second_started = FileTransferEvent::started("transfer-2", "peer-2", "archive.zip", 512);
+        let first_started =
+            FileTransferEvent::started("transfer-1", "peer-1", "report.pdf", Some(128));
+        let second_started =
+            FileTransferEvent::started("transfer-2", "peer-2", "archive.zip", Some(512));
         let first_progress = FileTransferEvent::Progress {
             transfer_id: "transfer-1".into(),
             peer_id: "peer-1".into(),

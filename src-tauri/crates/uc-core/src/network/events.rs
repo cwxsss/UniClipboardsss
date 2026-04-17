@@ -136,7 +136,7 @@ pub enum NetworkEvent {
         transfer_id: String,
         peer_id: String,
         filename: String,
-        file_size: u64,
+        file_size: Option<u64>,
     },
     #[deprecated(
         since = "0.6.0",

@@ -14,7 +14,7 @@ pub struct StartTransfer {
     pub transfer_id: String,
     pub peer_id: String,
     pub filename: String,
-    pub file_size: u64,
+    pub file_size: Option<u64>,
 }
 
 /// Start a new transfer and emit a `Started` event.

@@ -277,7 +277,7 @@ impl FileTransferService {
                 transfer_id: incoming.transfer_id().to_string(),
                 peer_id: peer_id.clone(),
                 filename: incoming.filename().to_string(),
-                file_size: incoming.file_size(),
+                file_size: Some(incoming.file_size()),
             })
             .await;
 
@@ -485,7 +485,7 @@ impl FileTransferService {
                 transfer_id: transfer_id.clone(),
                 peer_id: peer_id_str.to_string(),
                 filename: filename.clone(),
-                file_size,
+                file_size: Some(file_size),
             })
             .await;
 

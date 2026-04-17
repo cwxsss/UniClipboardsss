@@ -135,7 +135,7 @@ async fn duplicate_started_event_in_history_is_rejected_as_invalid_history() {
             "transfer-1",
             "peer-1",
             "report.pdf",
-            128,
+            Some(128),
         ))
         .await
         .unwrap();
@@ -144,7 +144,7 @@ async fn duplicate_started_event_in_history_is_rejected_as_invalid_history() {
             "transfer-1",
             "peer-1",
             "report.pdf",
-            128,
+            Some(128),
         ))
         .await
         .unwrap();

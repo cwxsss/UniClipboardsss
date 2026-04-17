@@ -14,7 +14,7 @@ async fn start_transfer_persists_and_publishes_started_event() {
 
     assert_eq!(
         event,
-        FileTransferEvent::started("transfer-1", "peer-1", "report.pdf", 128)
+        FileTransferEvent::started("transfer-1", "peer-1", "report.pdf", Some(128))
     );
     assert_eq!(
         transfer_history(&ctx, "transfer-1").await,
@@ -68,4 +68,30 @@ async fn start_transfer_keeps_other_transfer_history_isolated() {
     assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 1);
     assert_eq!(transfer_history(&ctx, "transfer-2").await.len(), 2);
     assert_eq!(published_events(&ctx).len(), 3);
+}
+
+#[tokio::test]
+async fn start_transfer_allows_unknown_file_size() {
+    let ctx = build_context();
+
+    let event = ctx
+        .start_transfer
+        .execute(uc_application::file_transfer::StartTransfer {
+            transfer_id: "transfer-unknown".into(),
+            peer_id: "peer-1".into(),
+            filename: "report.pdf".into(),
+            file_size: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        event,
+        FileTransferEvent::started("transfer-unknown", "peer-1", "report.pdf", None)
+    );
+    assert_eq!(
+        transfer_history(&ctx, "transfer-unknown").await,
+        vec![event.clone()]
+    );
+    assert_eq!(published_events(&ctx), vec![event]);
 }

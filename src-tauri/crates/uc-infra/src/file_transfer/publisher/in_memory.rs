@@ -44,7 +44,7 @@ mod tests {
     #[tokio::test]
     async fn publish_records_events_in_order() {
         let publisher = InMemoryEventPublisher::new();
-        let started = FileTransferEvent::started("transfer-1", "peer-1", "report.pdf", 128);
+        let started = FileTransferEvent::started("transfer-1", "peer-1", "report.pdf", Some(128));
         let completed = FileTransferEvent::completed("transfer-1", "peer-1");
 
         publisher.publish(started.clone()).await.unwrap();

@@ -65,7 +65,7 @@ fn start_input(transfer_id: &str, peer_id: &str) -> StartTransfer {
         transfer_id: transfer_id.into(),
         peer_id: peer_id.into(),
         filename: "report.pdf".into(),
-        file_size: 128,
+        file_size: Some(128),
     }
 }
 
