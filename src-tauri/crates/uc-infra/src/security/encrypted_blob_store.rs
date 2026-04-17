@@ -19,9 +19,9 @@ use std::sync::Arc;
 use tracing::{debug, info_span, Instrument};
 
 use uc_core::{
+    crypto::aad,
+    crypto::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion},
     ports::{BlobStorePort, EncryptionPort, EncryptionSessionPort},
-    security::aad,
-    security::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion},
     BlobId,
 };
 

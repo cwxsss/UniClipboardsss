@@ -1,7 +1,7 @@
 //! SearchKey — 32-byte HMAC key derived from MasterKey via SearchKeyDerivationPort.
 //!
 //! Opaque newtype: no Serialize/Deserialize, redacted Debug.
-//! Pattern mirrors `security::model::MasterKey`.
+//! Pattern mirrors `crypto::model::MasterKey`.
 
 use std::fmt;
 

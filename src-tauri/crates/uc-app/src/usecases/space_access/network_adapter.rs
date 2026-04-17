@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use uc_core::crypto::space_access::deny_reason_to_code;
 use uc_core::network::{PairingBusy, PairingMessage, SessionId};
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::PairingTransportPort;
-use uc_core::security::space_access::deny_reason_to_code;
 
 use super::context::SpaceAccessContext;
 

@@ -610,13 +610,13 @@ async fn reset(State(state): State<DaemonApiState>) -> Result<Json<SetupResetRes
     })?;
 
     if let Err(e) = deps.security.key_material.delete_keyslot(&scope).await {
-        if !matches!(e, uc_core::security::model::EncryptionError::KeyNotFound) {
+        if !matches!(e, uc_core::crypto::model::EncryptionError::KeyNotFound) {
             tracing::error!(error = %e, "setup reset failed");
             return Err(ApiError::internal(format!("setup reset failed: {e}")));
         }
     }
     if let Err(e) = deps.security.key_material.delete_kek(&scope).await {
-        if !matches!(e, uc_core::security::model::EncryptionError::KeyNotFound) {
+        if !matches!(e, uc_core::crypto::model::EncryptionError::KeyNotFound) {
             tracing::error!(error = %e, "setup reset failed");
             return Err(ApiError::internal(format!("setup reset failed: {e}")));
         }
@@ -632,8 +632,8 @@ async fn reset(State(state): State<DaemonApiState>) -> Result<Json<SetupResetRes
     if let Err(e) = deps.security.encryption_session.clear().await {
         if !matches!(
             e,
-            uc_core::security::model::EncryptionError::KeyNotFound
-                | uc_core::security::model::EncryptionError::NotInitialized
+            uc_core::crypto::model::EncryptionError::KeyNotFound
+                | uc_core::crypto::model::EncryptionError::NotInitialized
         ) {
             tracing::error!(error = %e, "setup reset failed");
             return Err(ApiError::internal(format!("setup reset failed: {e}")));

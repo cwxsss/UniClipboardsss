@@ -9,10 +9,10 @@ use tracing::{debug, trace};
 
 use uc_core::{
     clipboard::{ClipboardEvent, PersistedClipboardRepresentation},
+    crypto::aad,
+    crypto::model::EncryptionAlgo,
     ids::EventId,
     ports::{ClipboardEventWriterPort, EncryptionPort, EncryptionSessionPort},
-    security::aad,
-    security::model::EncryptionAlgo,
 };
 
 /// Decorator that encrypts representation inline_data before storage.

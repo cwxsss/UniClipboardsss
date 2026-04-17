@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uc_core::crypto::space_access::state::SpaceAccessState;
 use uc_core::file_transfer::FileTransferDirection;
-use uc_core::security::space_access::state::SpaceAccessState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

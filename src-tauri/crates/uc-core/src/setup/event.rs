@@ -1,4 +1,4 @@
-use crate::{security::SecretString, setup::SetupError};
+use crate::{crypto::SecretString, setup::SetupError};
 
 #[derive(Debug, PartialEq)]
 pub enum SetupEvent {

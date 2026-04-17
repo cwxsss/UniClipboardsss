@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
-use uc_core::security::model::{EncryptionError, KeySlotFile};
+use uc_core::crypto::model::{EncryptionError, KeySlotFile};
 
 #[async_trait]
 pub trait KeySlotStore: Send + Sync {

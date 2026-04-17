@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use uc_core::crypto::model::MasterKey;
+use uc_core::crypto::space_access::SpaceAccessProofArtifact;
 use uc_core::ids::{SessionId, SpaceId};
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::EncryptionSessionPort;
-use uc_core::security::model::MasterKey;
-use uc_core::security::space_access::SpaceAccessProofArtifact;
 
 type HmacSha256 = Hmac<Sha256>;
 

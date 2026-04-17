@@ -15,12 +15,12 @@ use uc_app::usecases::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
 };
 use uc_app::usecases::SetupOrchestrator;
+use uc_core::crypto::model::{KeySlot, KeySlotFile};
+use uc_core::crypto::space_access::{deny_reason_from_code, SpaceAccessProofArtifact};
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
 };
 use uc_core::pairing::PairingRole;
-use uc_core::security::model::{KeySlot, KeySlotFile};
-use uc_core::security::space_access::{deny_reason_from_code, SpaceAccessProofArtifact};
 use uc_daemon_contract::constants::{pairing_busy_reason, pairing_stage, ws_event, ws_topic};
 use uc_infra::fs::key_slot_store::KeySlotStore;
 
@@ -207,7 +207,7 @@ impl DaemonPairingHost {
         self.discoverability.clear().await;
         self.participant_readiness.clear().await;
         self.broadcast_space_access_state(
-            &uc_core::security::space_access::state::SpaceAccessState::Idle,
+            &uc_core::crypto::space_access::state::SpaceAccessState::Idle,
         );
     }
 
@@ -578,7 +578,7 @@ impl DaemonPairingHost {
 
     fn broadcast_space_access_state(
         &self,
-        state: &uc_core::security::space_access::state::SpaceAccessState,
+        state: &uc_core::crypto::space_access::state::SpaceAccessState,
     ) {
         broadcast_space_access_state_changed(&self.event_tx, state);
     }
@@ -1549,7 +1549,7 @@ async fn reject_inbound_request(
 
 fn broadcast_space_access_state_changed(
     event_tx: &broadcast::Sender<DaemonWsEvent>,
-    state: &uc_core::security::space_access::state::SpaceAccessState,
+    state: &uc_core::crypto::space_access::state::SpaceAccessState,
 ) {
     let payload = SpaceAccessStateChangedPayload {
         state: state.clone(),

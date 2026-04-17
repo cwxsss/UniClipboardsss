@@ -2,9 +2,9 @@
 //! 默认密钥范围实现
 
 use anyhow::Result;
+use uc_core::crypto::model::KeyScope;
 use uc_core::ports::security::key_scope::KeyScopePort;
 use uc_core::ports::security::key_scope::ScopeError;
-use uc_core::security::model::KeyScope;
 
 /// Default key scope implementation
 pub struct DefaultKeyScope {

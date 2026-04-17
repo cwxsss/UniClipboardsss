@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```rust
-//! use uc_core::security::aad;
+//! use uc_core::crypto::aad;
 //! use uc_core::ids::{EventId, RepresentationId, BlobId};
 //!
 //! // For inline clipboard data
@@ -54,7 +54,7 @@ const AAD_NAMESPACE: &str = "uc";
 /// # Examples
 ///
 /// ```rust
-/// use uc_core::security::aad::for_inline;
+/// use uc_core::crypto::aad::for_inline;
 /// use uc_core::ids::{EventId, RepresentationId};
 ///
 /// let event_id = EventId::from("test-event");
@@ -88,7 +88,7 @@ pub fn for_inline(event_id: &EventId, rep_id: &RepresentationId) -> Vec<u8> {
 /// # Examples
 ///
 /// ```rust
-/// use uc_core::security::aad::for_blob;
+/// use uc_core::crypto::aad::for_blob;
 /// use uc_core::ids::BlobId;
 ///
 /// let blob_id = BlobId::from("test-blob");

@@ -1,4 +1,4 @@
-use crate::security::MasterKey;
+use crate::crypto::MasterKey;
 
 /// Error type for transfer payload encryption/decryption operations.
 ///

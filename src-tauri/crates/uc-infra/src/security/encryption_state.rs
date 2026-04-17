@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use tokio::fs;
 
 use uc_core::{
+    crypto::state::{EncryptionState, EncryptionStateError},
     ports::security::encryption_state::{EncryptionStateMarkerPort, EncryptionStatePort},
-    security::state::{EncryptionState, EncryptionStateError},
 };
 
 #[allow(dead_code)]

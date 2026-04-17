@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::security::model::KeyScope;
+use crate::crypto::model::KeyScope;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ScopeError {

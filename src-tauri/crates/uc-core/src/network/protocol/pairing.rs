@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::security::model::KeySlotFile;
+use crate::crypto::model::KeySlotFile;
 
 /// Pairing protocol messages for secure device pairing with PIN verification
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

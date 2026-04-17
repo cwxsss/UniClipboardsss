@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use uc_core::clipboard::ClipboardIntegrationMode;
+use uc_core::crypto::state::EncryptionState;
 use uc_core::ports::SettingsPort;
-use uc_core::security::state::EncryptionState;
 
 use crate::app_paths::AppPaths;
 use crate::deps::AppDeps;

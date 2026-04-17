@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use super::state_machine::FailureReason;
-use uc_core::security::model::KeySlotFile;
+use uc_core::crypto::model::KeySlotFile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairingDomainEvent {

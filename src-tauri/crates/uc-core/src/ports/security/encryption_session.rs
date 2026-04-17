@@ -1,4 +1,4 @@
-use crate::security::model::{EncryptionError, MasterKey};
+use crate::crypto::model::{EncryptionError, MasterKey};
 use async_trait::async_trait;
 
 #[async_trait]

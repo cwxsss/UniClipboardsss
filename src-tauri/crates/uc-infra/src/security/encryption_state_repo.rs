@@ -4,8 +4,8 @@
 use anyhow::Result;
 use std::path::PathBuf;
 use tokio::fs;
+use uc_core::crypto::state::{EncryptionState, EncryptionStateError};
 use uc_core::ports::security::encryption_state::EncryptionStatePort;
-use uc_core::security::state::{EncryptionState, EncryptionStateError};
 
 const ENCRYPTION_STATE_FILE: &str = ".initialized_encryption";
 

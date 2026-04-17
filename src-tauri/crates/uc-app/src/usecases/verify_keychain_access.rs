@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tracing::{info, info_span, Instrument};
 
 use uc_core::{
+    crypto::model::EncryptionError,
     ports::{security::key_scope::KeyScopePort, KeyMaterialPort},
-    security::model::EncryptionError,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -29,10 +29,10 @@ use chacha20poly1305::{
 };
 use tracing::info_span;
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
+use uc_core::crypto::{aad, model::MasterKey};
 use uc_core::ports::{
     TransferCryptoError, TransferPayloadDecryptorPort, TransferPayloadEncryptorPort,
 };
-use uc_core::security::{aad, model::MasterKey};
 use uuid::Uuid;
 
 /// Nominal chunk size: 256 KB.

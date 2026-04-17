@@ -2,18 +2,18 @@ use std::sync::Arc;
 use tracing::{debug, info, info_span, Instrument};
 
 use uc_core::{
+    crypto::{
+        model::{
+            EncryptionAlgo, EncryptionError, KeySlot, MasterKey, Passphrase, WrappedMasterKey,
+        },
+        state::{EncryptionState, EncryptionStateError},
+    },
     ports::{
         security::{
             encryption_state::EncryptionStatePort,
             key_scope::{KeyScopePort, ScopeError},
         },
         EncryptionPort, EncryptionSessionPort, KeyMaterialPort,
-    },
-    security::{
-        model::{
-            EncryptionAlgo, EncryptionError, KeySlot, MasterKey, Passphrase, WrappedMasterKey,
-        },
-        state::{EncryptionState, EncryptionStateError},
     },
 };
 

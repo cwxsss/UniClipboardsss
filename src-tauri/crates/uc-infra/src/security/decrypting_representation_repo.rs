@@ -10,10 +10,10 @@ use tracing::{debug, trace};
 use uc_core::ports::clipboard::ProcessingUpdateOutcome;
 use uc_core::{
     clipboard::{PayloadAvailability, PersistedClipboardRepresentation},
+    crypto::aad,
+    crypto::model::EncryptedBlob,
     ids::{EventId, RepresentationId},
     ports::{ClipboardRepresentationRepositoryPort, EncryptionPort, EncryptionSessionPort},
-    security::aad,
-    security::model::EncryptedBlob,
     BlobId,
 };
 

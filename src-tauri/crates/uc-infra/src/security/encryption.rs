@@ -4,11 +4,11 @@ use rand::RngCore;
 use argon2::Argon2;
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
-use uc_core::ports::EncryptionPort;
-use uc_core::security::model::{
+use uc_core::crypto::model::{
     EncryptedBlob, EncryptionAlgo, EncryptionError, EncryptionFormatVersion, KdfAlgorithm,
     KdfParams, Kek, MasterKey, Passphrase,
 };
+use uc_core::ports::EncryptionPort;
 
 pub struct EncryptionRepository;
 

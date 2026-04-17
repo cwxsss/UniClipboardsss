@@ -1,5 +1,5 @@
+use crate::crypto::EncryptionAlgo;
 use crate::ids::BlobId;
-use crate::security::EncryptionAlgo;
 use crate::ContentHash;
 use std::path::PathBuf;
 

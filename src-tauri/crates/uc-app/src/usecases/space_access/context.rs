@@ -1,8 +1,8 @@
+use uc_core::crypto::model::KeySlot;
+use uc_core::crypto::space_access::state::DenyReason;
+use uc_core::crypto::space_access::SpaceAccessProofArtifact;
+use uc_core::crypto::SecretString;
 use uc_core::ids::SpaceId;
-use uc_core::security::model::KeySlot;
-use uc_core::security::space_access::state::DenyReason;
-use uc_core::security::space_access::SpaceAccessProofArtifact;
-use uc_core::security::SecretString;
 
 #[derive(Clone, Debug)]
 pub struct SpaceAccessOffer {

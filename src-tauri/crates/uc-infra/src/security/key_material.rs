@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use uc_core::{
+    crypto::model::{EncryptionError, Kek, KeyScope, KeySlot, KeySlotFile},
     ports::{KeyMaterialPort, SecureStoragePort},
-    security::model::{EncryptionError, Kek, KeyScope, KeySlot, KeySlotFile},
 };
 
 use crate::fs::key_slot_store::KeySlotStore;

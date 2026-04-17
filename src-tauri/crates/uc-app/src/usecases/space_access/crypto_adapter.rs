@@ -5,16 +5,16 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
+use uc_core::crypto::model::{
+    EncryptionAlgo, EncryptionError, KeySlot, MasterKey, Passphrase, WrappedMasterKey,
+};
+use uc_core::crypto::state::{EncryptionState, EncryptionStateError};
+use uc_core::crypto::SecretString;
 use uc_core::ids::SpaceId;
 use uc_core::ports::security::encryption_state::EncryptionStatePort;
 use uc_core::ports::security::key_scope::{KeyScopePort, ScopeError};
 use uc_core::ports::space::CryptoPort;
 use uc_core::ports::{EncryptionPort, EncryptionSessionPort, KeyMaterialPort};
-use uc_core::security::model::{
-    EncryptionAlgo, EncryptionError, KeySlot, MasterKey, Passphrase, WrappedMasterKey,
-};
-use uc_core::security::state::{EncryptionState, EncryptionStateError};
-use uc_core::security::SecretString;
 
 use super::SpaceAccessCryptoFactory;
 

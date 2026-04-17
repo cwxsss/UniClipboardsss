@@ -11,8 +11,8 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{CoreUseCases, SetupOrchestrator};
 use uc_core::clipboard::ClipboardIntegrationMode;
+use uc_core::crypto::space_access::state::SpaceAccessState;
 use uc_core::pairing::PairedDevice;
-use uc_core::security::space_access::state::SpaceAccessState;
 use uc_core::setup::SetupState;
 
 use crate::api::dto::pairing::PairingSessionSummaryDto;

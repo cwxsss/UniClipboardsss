@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::security::space_access::state::SpaceAccessState;
+use crate::crypto::space_access::state::SpaceAccessState;
 use crate::setup::SetupState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

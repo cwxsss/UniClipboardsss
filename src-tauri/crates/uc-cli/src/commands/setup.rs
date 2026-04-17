@@ -17,8 +17,8 @@ use console::style;
 use serde::Serialize;
 use serde_json::Value;
 use uc_app::usecases::CoreUseCases;
-use uc_core::security::model::Passphrase;
-use uc_core::security::state::EncryptionState;
+use uc_core::crypto::model::Passphrase;
+use uc_core::crypto::state::EncryptionState;
 use uc_daemon::api::dto::setup::SetupStateResponseDto;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
 // Re-export for integration tests (same crate)

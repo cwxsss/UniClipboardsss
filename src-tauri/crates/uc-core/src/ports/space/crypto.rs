@@ -1,7 +1,7 @@
+use crate::crypto::{MasterKey, SecretString};
 use crate::ids::SpaceId;
-use crate::security::{MasterKey, SecretString};
 
-use crate::security::KeySlot;
+use crate::crypto::KeySlot;
 
 #[async_trait::async_trait]
 pub trait CryptoPort: Send + Sync {

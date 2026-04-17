@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::security::state::{EncryptionState, EncryptionStateError};
+use crate::crypto::state::{EncryptionState, EncryptionStateError};
 
 #[async_trait]
 pub trait EncryptionStatePort: Send + Sync {

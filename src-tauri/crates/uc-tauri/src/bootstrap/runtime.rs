@@ -34,8 +34,8 @@ use std::sync::{Arc, RwLock};
 use uc_app::task_registry::TaskRegistry;
 use uc_app::{runtime::CoreRuntime, App, AppDeps};
 use uc_core::config::AppConfig;
+use uc_core::crypto::state::EncryptionState;
 use uc_core::ports::SettingsPort;
-use uc_core::security::state::EncryptionState;
 
 use uc_app::shared::host_event::HostEventEmitterPort;
 

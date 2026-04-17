@@ -7,11 +7,11 @@ use std::sync::Arc;
 use tracing::{info, info_span, Instrument};
 
 use uc_core::{
+    crypto::{model::EncryptionError, state::EncryptionState},
     ports::{
         security::{encryption_state::EncryptionStatePort, key_scope::KeyScopePort},
         EncryptionPort, EncryptionSessionPort, KeyMaterialPort,
     },
-    security::{model::EncryptionError, state::EncryptionState},
 };
 
 #[derive(Debug, thiserror::Error)]

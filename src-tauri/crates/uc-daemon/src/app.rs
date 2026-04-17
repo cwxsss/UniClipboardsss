@@ -62,7 +62,7 @@ pub async fn recover_encryption_session(
     // If encryption is already initialized, return false so the GUI can prompt for manual unlock.
     // If encryption is uninitialized, return false (no unlock needed — setup flow handles it).
     if !auto_unlock_enabled {
-        if encryption_state == uc_core::security::state::EncryptionState::Initialized {
+        if encryption_state == uc_core::crypto::state::EncryptionState::Initialized {
             info!("Auto-unlock disabled via settings — skipping encryption session recovery");
         } else {
             info!("Encryption not initialized, skipping session recovery");

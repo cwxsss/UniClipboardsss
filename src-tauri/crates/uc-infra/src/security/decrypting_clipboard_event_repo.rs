@@ -9,10 +9,10 @@ use tracing::trace;
 
 use uc_core::{
     clipboard::ObservedClipboardRepresentation,
+    crypto::aad,
+    crypto::model::EncryptedBlob,
     ids::{EventId, RepresentationId},
     ports::{ClipboardEventRepositoryPort, EncryptionPort, EncryptionSessionPort},
-    security::aad,
-    security::model::EncryptedBlob,
 };
 
 /// Decorator that decrypts ObservedClipboardRepresentation.bytes on read.

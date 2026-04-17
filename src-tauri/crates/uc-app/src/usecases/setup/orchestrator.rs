@@ -12,21 +12,21 @@ use tokio::sync::Mutex;
 use tracing::{error, info, info_span, warn, Instrument};
 
 use uc_core::{
-    ids::SpaceId,
-    ports::space::CryptoPort,
-    ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
-    ports::{
-        DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, SetupStatusPort,
-        TimerPort,
-    },
-    security::{model::Passphrase, SecretString},
-    security::{
+    crypto::{model::Passphrase, SecretString},
+    crypto::{
         model::{KeySlot, KeySlotFile},
         space_access::{
             event::SpaceAccessEvent,
             state::{DenyReason, SpaceAccessState},
             SpaceAccessProofArtifact,
         },
+    },
+    ids::SpaceId,
+    ports::space::CryptoPort,
+    ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
+    ports::{
+        DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, SetupStatusPort,
+        TimerPort,
     },
     setup::{SetupEvent, SetupState, SetupStateMachine, SetupStatus},
 };
@@ -102,7 +102,7 @@ impl CryptoPort for LoadedKeyslotSpaceAccessCrypto {
         &self,
         _keyslot_blob: &[u8],
         _passphrase: SecretString,
-    ) -> anyhow::Result<uc_core::security::MasterKey> {
+    ) -> anyhow::Result<uc_core::crypto::MasterKey> {
         Err(anyhow::anyhow!(
             "loaded keyslot crypto cannot derive master key in sponsor flow"
         ))
@@ -127,7 +127,7 @@ impl CryptoPort for NoopRuntimeSpaceAccessCrypto {
         &self,
         _keyslot_blob: &[u8],
         _passphrase: SecretString,
-    ) -> anyhow::Result<uc_core::security::MasterKey> {
+    ) -> anyhow::Result<uc_core::crypto::MasterKey> {
         Err(anyhow::anyhow!(
             "noop runtime space access crypto cannot derive master key"
         ))

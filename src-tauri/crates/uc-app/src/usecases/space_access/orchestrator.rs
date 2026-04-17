@@ -8,13 +8,13 @@ use chrono::Utc;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{info_span, Instrument};
 
+use uc_core::crypto::space_access::action::SpaceAccessAction;
+use uc_core::crypto::space_access::deny_reason_to_code;
+use uc_core::crypto::space_access::event::SpaceAccessEvent;
+use uc_core::crypto::space_access::state::{CancelReason, DenyReason, SpaceAccessState};
+use uc_core::crypto::space_access::state_machine::SpaceAccessStateMachine;
 use uc_core::ids::SpaceId;
 use uc_core::network::SessionId;
-use uc_core::security::space_access::action::SpaceAccessAction;
-use uc_core::security::space_access::deny_reason_to_code;
-use uc_core::security::space_access::event::SpaceAccessEvent;
-use uc_core::security::space_access::state::{CancelReason, DenyReason, SpaceAccessState};
-use uc_core::security::space_access::state_machine::SpaceAccessStateMachine;
 use uc_core::SessionId as CoreSessionId;
 
 use super::context::{SpaceAccessContext, SpaceAccessOffer};

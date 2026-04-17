@@ -1,7 +1,7 @@
-use crate::security::space_access::SpaceAccessProofArtifact;
+use crate::crypto::space_access::SpaceAccessProofArtifact;
 use crate::{
+    crypto::MasterKey,
     ids::{SessionId, SpaceId},
-    security::MasterKey,
 };
 
 #[async_trait::async_trait]

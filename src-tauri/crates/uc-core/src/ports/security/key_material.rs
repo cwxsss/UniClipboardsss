@@ -1,4 +1,4 @@
-use crate::security::model::{EncryptionError, Kek, KeyScope, KeySlot};
+use crate::crypto::model::{EncryptionError, Kek, KeyScope, KeySlot};
 use async_trait::async_trait;
 
 #[async_trait]

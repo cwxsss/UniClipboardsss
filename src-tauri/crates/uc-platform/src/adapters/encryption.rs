@@ -4,8 +4,8 @@
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, debug_span};
+use uc_core::crypto::model::{EncryptionError, MasterKey};
 use uc_core::ports::EncryptionSessionPort;
-use uc_core::security::model::{EncryptionError, MasterKey};
 
 #[async_trait]
 impl EncryptionSessionPort for InMemoryEncryptionSessionPort {

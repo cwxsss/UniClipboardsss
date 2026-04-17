@@ -12,13 +12,13 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
 use uc_core::{
-    ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
-    ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, TimerPort},
-    security::space_access::{
+    crypto::space_access::{
         event::SpaceAccessEvent,
         state::{DenyReason, SpaceAccessState},
     },
-    security::{model::Passphrase, SecretString},
+    crypto::{model::Passphrase, SecretString},
+    ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
+    ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, TimerPort},
     setup::{SetupAction, SetupError as SetupDomainError, SetupEvent, SetupState},
 };
 
@@ -689,8 +689,7 @@ impl SetupActionExecutor {
                                 continue;
                             }
                         };
-                        let keyslot: uc_core::security::model::KeySlot =
-                            keyslot_file.clone().into();
+                        let keyslot: uc_core::crypto::model::KeySlot = keyslot_file.clone().into();
                         let keyslot_blob = match serde_json::to_vec(&keyslot) {
                             Ok(blob) => blob,
                             Err(err) => {
