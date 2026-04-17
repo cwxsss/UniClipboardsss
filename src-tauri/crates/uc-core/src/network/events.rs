@@ -1,7 +1,4 @@
-use std::path::PathBuf;
-
 use super::protocol::{ClipboardMessage, PairingMessage, PairingRequest, PairingResponse};
-use crate::ports::transfer_progress::TransferProgress;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -127,55 +124,6 @@ pub enum NetworkEvent {
         direction: ProtocolDirection,
         reason: ProtocolDenyReason,
     },
-    // File transfer lifecycle events
-    #[deprecated(
-        since = "0.6.0",
-        note = "use crate::file_transfer::FileTransferEvent::Started instead"
-    )]
-    FileTransferStarted {
-        transfer_id: String,
-        peer_id: String,
-        filename: String,
-        file_size: Option<u64>,
-    },
-    #[deprecated(
-        since = "0.6.0",
-        note = "use crate::file_transfer::FileTransferEvent::Completed instead"
-    )]
-    FileTransferCompleted {
-        transfer_id: String,
-        peer_id: String,
-        filename: String,
-        file_path: PathBuf,
-        batch_id: Option<String>,
-        batch_total: Option<u32>,
-    },
-    #[deprecated(
-        since = "0.6.0",
-        note = "use crate::file_transfer::FileTransferEvent::Failed instead"
-    )]
-    FileTransferFailed {
-        transfer_id: String,
-        peer_id: String,
-        error: String,
-    },
-    #[deprecated(
-        since = "0.6.0",
-        note = "use crate::file_transfer::FileTransferEvent::Cancelled instead"
-    )]
-    FileTransferCancelled {
-        transfer_id: String,
-        peer_id: String,
-        reason: String,
-    },
-
-    // Transfer progress events
-    #[deprecated(
-        since = "0.6.0",
-        note = "use crate::file_transfer::FileTransferEvent::Progress instead"
-    )]
-    TransferProgress(TransferProgress),
-
     #[allow(dead_code)]
     Error(String),
 }
