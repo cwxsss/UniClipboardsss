@@ -61,9 +61,10 @@ use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
 use uc_infra::search::{HkdfSearchKeyDerivation, SearchPipeline, SqliteSearchIndex};
 use uc_infra::security::{
-    Blake3Hasher, DecryptingClipboardRepresentationRepository, DefaultKeyMaterialService,
-    EncryptedBlobStore, EncryptingClipboardEventWriter, EncryptionRepository,
-    FileEncryptionStateRepository,
+    Argon2PinHasher, Blake3Hasher, DecryptingClipboardRepresentationRepository,
+    DefaultKeyMaterialService, EncryptedBlobStore, EncryptingClipboardEventWriter,
+    EncryptionRepository, FileEncryptionStateRepository, Sha256IdentityFingerprintFactory,
+    Sha256ShortCodeGenerator,
 };
 use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
@@ -806,6 +807,9 @@ pub fn wire_dependencies_with_identity_store(
             key_scope: platform.key_scope,
             secure_storage: platform.secure_storage,
             key_material: infra.key_material,
+            pin_hasher: Arc::new(Argon2PinHasher),
+            short_code: Arc::new(Sha256ShortCodeGenerator),
+            fingerprint: Arc::new(Sha256IdentityFingerprintFactory),
         },
         device: DevicePorts {
             device_identity: platform.device_identity,

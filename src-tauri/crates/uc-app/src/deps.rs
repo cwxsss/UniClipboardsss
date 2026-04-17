@@ -79,6 +79,12 @@ pub struct SecurityPorts {
     pub key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort>,
     pub secure_storage: Arc<dyn SecureStoragePort>,
     pub key_material: Arc<dyn KeyMaterialPort>,
+    /// Argon2 PIN hasher for pairing.
+    pub pin_hasher: Arc<dyn uc_core::ports::security::PinHasherPort>,
+    /// Short pairing-code derivation.
+    pub short_code: Arc<dyn uc_core::ports::security::ShortCodeGeneratorPort>,
+    /// Identity-fingerprint factory used by pairing.
+    pub fingerprint: Arc<dyn uc_core::ports::security::IdentityFingerprintFactoryPort>,
 }
 
 /// Device-domain ports bundle (includes pairing).

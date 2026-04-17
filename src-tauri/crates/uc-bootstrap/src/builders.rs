@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 
 use uc_app::app_paths::AppPaths;
 use uc_app::shared::host_event::HostEventEmitterPort;
-use uc_app::usecases::pairing::PairingAction;
+use uc_app::usecases::pairing::{PairingAction, PairingCryptoPorts};
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{
     DeviceAnnouncer, DeviceNameAnnouncer, LifecycleEventEmitter, LoggingLifecycleEventEmitter,
@@ -148,6 +148,11 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
 
     let pairing_device_id = pairing_device_identity.current_device_id().to_string();
     let staged_store = Arc::new(StagedPairedDeviceStore::new());
+    let pairing_crypto = Arc::new(PairingCryptoPorts {
+        pin_hasher: deps.security.pin_hasher.clone(),
+        short_code: deps.security.short_code.clone(),
+        fingerprint: deps.security.fingerprint.clone(),
+    });
     let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
         pairing_config,
         pairing_device_repo,
@@ -156,6 +161,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         pairing_peer_id,
         pairing_identity_pubkey,
         staged_store.clone(),
+        pairing_crypto,
     );
     let pairing_orchestrator = Arc::new(pairing_orchestrator);
     let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
@@ -244,6 +250,11 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
 
     let pairing_device_id = pairing_device_identity.current_device_id().to_string();
     let staged_store = Arc::new(StagedPairedDeviceStore::new());
+    let pairing_crypto = Arc::new(PairingCryptoPorts {
+        pin_hasher: deps.security.pin_hasher.clone(),
+        short_code: deps.security.short_code.clone(),
+        fingerprint: deps.security.fingerprint.clone(),
+    });
     let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
         pairing_config,
         pairing_device_repo,
@@ -252,6 +263,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         pairing_peer_id,
         pairing_identity_pubkey,
         staged_store.clone(),
+        pairing_crypto,
     );
     let pairing_orchestrator = Arc::new(pairing_orchestrator);
     let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
