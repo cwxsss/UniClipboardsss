@@ -353,23 +353,46 @@ impl FileTransferOrchestrator {
             transfer_id,
             "Removing outbound transfer linkage on completion"
         );
+        // Capture outbound entry_id before removing caches — needed to emit
+        // sender-side completion status (sender has no receiver-projection row).
+        let outbound_entry_id = self.outbound_link_cache.get(transfer_id);
         self.outbound_link_cache.remove(transfer_id);
         self.transfer_entry_cache.remove(transfer_id);
         self.inbound_activity_refresh_cache.remove(transfer_id);
         let now_ms = self.clock.now_ms();
 
-        // Mark durable row completed
+        // Mark durable row completed (receiver-side projection).
         match self
             .tracker
             .mark_completed(transfer_id, content_hash, now_ms)
             .await
         {
             Ok(true) => {
-                // Row was updated — emit status-changed
+                // Row was updated — emit status-changed via receiver lookup below.
             }
             Ok(false) => {
-                // No row found — pending record hasn't been seeded yet.
-                // Cache completion for reconciliation after seeding.
+                // No receiver-side row. Two possibilities:
+                //   1. Sender-side — no projection row is expected; emit using outbound cache.
+                //   2. Receiver-side early completion — pending record not yet seeded.
+                if let Some(entry_id) = outbound_entry_id {
+                    let emitter = self
+                        .emitter_cell
+                        .read()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .clone();
+                    if let Err(err) =
+                        emitter.emit(HostEvent::Transfer(TransferHostEvent::StatusChanged {
+                            transfer_id: transfer_id.to_string(),
+                            entry_id,
+                            status: "completed".to_string(),
+                            reason: None,
+                        }))
+                    {
+                        warn!(error = %err, transfer_id, "Failed to emit sender-side completed status");
+                    }
+                    return;
+                }
+
                 warn!(
                     transfer_id,
                     "Early completion cached: pending record not yet seeded"
@@ -389,7 +412,7 @@ impl FileTransferOrchestrator {
             }
         }
 
-        // Emit status-changed for completed
+        // Emit status-changed for completed (receiver side)
         if let Ok(Some(entry_id)) = self
             .tracker
             .get_entry_summary_by_transfer(transfer_id)
@@ -420,27 +443,35 @@ impl FileTransferOrchestrator {
             transfer_id,
             error_reason, "Removing outbound transfer linkage on failure"
         );
+        // Capture outbound entry_id before removing caches — needed to emit
+        // sender-side failure status (sender has no receiver-projection row).
+        let outbound_entry_id = self.outbound_link_cache.get(transfer_id);
         self.outbound_link_cache.remove(transfer_id);
         self.transfer_entry_cache.remove(transfer_id);
         self.inbound_activity_refresh_cache.remove(transfer_id);
         let now_ms = self.clock.now_ms();
 
-        // Mark durable row failed
+        // Mark durable row failed (receiver-side projection). Failing to mark
+        // still allows sender-side notification below, so don't early-return here.
         if let Err(err) = self
             .tracker
             .mark_failed(transfer_id, error_reason, now_ms)
             .await
         {
             warn!(error = %err, transfer_id, "Failed to mark transfer failed");
-            return;
         }
 
-        // Emit status-changed for failed
-        if let Ok(Some(entry_id)) = self
+        // Resolve entry_id: receiver side first (projection row), then outbound cache (sender side).
+        let entry_id = match self
             .tracker
             .get_entry_summary_by_transfer(transfer_id)
             .await
         {
+            Ok(Some(id)) => Some(id),
+            _ => outbound_entry_id,
+        };
+
+        if let Some(entry_id) = entry_id {
             let emitter = self
                 .emitter_cell
                 .read()
