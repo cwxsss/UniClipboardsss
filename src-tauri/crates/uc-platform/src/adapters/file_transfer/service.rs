@@ -20,8 +20,7 @@ use tokio::sync::{mpsc, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Duration, Instant};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, info_span, instrument, warn, Instrument};
-use uc_core::file_transfer::FileTransferDirection;
-use uc_core::network::NetworkEvent;
+use uc_core::file_transfer::{FileTransferDirection, FileTransferEvent, FileTransferFailureReason};
 use uc_core::ports::transfer_progress::{TransferProgress, TransferProgressPort};
 
 /// Maximum concurrent file transfers globally.
@@ -59,7 +58,7 @@ pub struct FileTransferService {
 
 struct FileTransferServiceInner {
     control: AsyncMutex<stream::Control>,
-    event_tx: mpsc::Sender<NetworkEvent>,
+    event_tx: mpsc::Sender<FileTransferEvent>,
     progress_port: Arc<dyn TransferProgressPort>,
     peer_semaphores: AsyncMutex<HashMap<String, Arc<Semaphore>>>,
     global_semaphore: Arc<Semaphore>,
@@ -156,7 +155,7 @@ impl FileTransferService {
     /// Create a new file transfer service.
     pub fn new(
         control: stream::Control,
-        event_tx: mpsc::Sender<NetworkEvent>,
+        event_tx: mpsc::Sender<FileTransferEvent>,
         progress_port: Arc<dyn TransferProgressPort>,
         config: FileTransferConfig,
     ) -> Self {
@@ -272,12 +271,12 @@ impl FileTransferService {
         let _ = self
             .inner
             .event_tx
-            .send(NetworkEvent::FileTransferStarted {
-                transfer_id: incoming.transfer_id().to_string(),
-                peer_id: peer_id.clone(),
-                filename: incoming.filename().to_string(),
-                file_size: Some(incoming.file_size()),
-            })
+            .send(FileTransferEvent::started(
+                incoming.transfer_id().to_string(),
+                peer_id.clone(),
+                incoming.filename().to_string(),
+                Some(incoming.file_size()),
+            ))
             .await;
 
         // Check disk space (basic check)
@@ -294,11 +293,12 @@ impl FileTransferService {
             let _ = self
                 .inner
                 .event_tx
-                .send(NetworkEvent::FileTransferFailed {
-                    transfer_id: incoming.transfer_id().to_string(),
-                    peer_id: peer_id.clone(),
-                    error: space_err.to_string(),
-                })
+                .send(FileTransferEvent::failed(
+                    incoming.transfer_id().to_string(),
+                    peer_id.clone(),
+                    FileTransferFailureReason::StorageUnavailable,
+                    Some(space_err.to_string()),
+                ))
                 .await;
             return Err(space_err);
         }
@@ -390,26 +390,30 @@ impl FileTransferService {
                 let _ = self
                     .inner
                     .event_tx
-                    .send(NetworkEvent::FileTransferCompleted {
-                        transfer_id: incoming.transfer_id().to_string(),
-                        peer_id: peer_id.clone(),
-                        filename: incoming.filename().to_string(),
-                        file_path: final_path,
-                        batch_id: incoming.batch_id().cloned(),
-                        batch_total: incoming.batch_total(),
-                    })
+                    .send(FileTransferEvent::completed(
+                        incoming.transfer_id().to_string(),
+                        peer_id.clone(),
+                    ))
                     .await;
+                // The `file_path`, `batch_id`, and `batch_total` that the
+                // deprecated NetworkEvent carried are no longer part of the
+                // domain event. They stay with the receiving worker through
+                // its receiver-side projection context (entry_id / cached_path
+                // / batch metadata seeded via `seed_receiver_context`).
+                let _ = final_path;
                 Ok(())
             }
             Err(e) => {
+                let detail = e.to_string();
                 let _ = self
                     .inner
                     .event_tx
-                    .send(NetworkEvent::FileTransferFailed {
-                        transfer_id: incoming.transfer_id().to_string(),
-                        peer_id: peer_id.clone(),
-                        error: e.to_string(),
-                    })
+                    .send(FileTransferEvent::failed(
+                        incoming.transfer_id().to_string(),
+                        peer_id.clone(),
+                        classify_failure_reason(&detail),
+                        Some(detail.clone()),
+                    ))
                     .await;
                 warn!(
                     transfer_id = %incoming.transfer_id(),
@@ -480,12 +484,12 @@ impl FileTransferService {
         let _ = self
             .inner
             .event_tx
-            .send(NetworkEvent::FileTransferStarted {
-                transfer_id: transfer_id.clone(),
-                peer_id: peer_id_str.to_string(),
-                filename: filename.clone(),
-                file_size: Some(file_size),
-            })
+            .send(FileTransferEvent::started(
+                transfer_id.clone(),
+                peer_id_str.to_string(),
+                filename.clone(),
+                Some(file_size),
+            ))
             .await;
 
         // Progress reporting
@@ -585,11 +589,12 @@ impl FileTransferService {
                         let _ = self
                             .inner
                             .event_tx
-                            .send(NetworkEvent::FileTransferFailed {
-                                transfer_id: transfer_id.clone(),
-                                peer_id: peer_id_str.to_string(),
-                                error: format!("rejected: {}", reason),
-                            })
+                            .send(FileTransferEvent::failed(
+                                transfer_id.clone(),
+                                peer_id_str.to_string(),
+                                FileTransferFailureReason::AccessDenied,
+                                Some(format!("rejected: {}", reason)),
+                            ))
                             .await;
                         return Err(anyhow!("file transfer rejected: {}", reason));
                     }
@@ -601,26 +606,33 @@ impl FileTransferService {
                 let _ = self
                     .inner
                     .event_tx
-                    .send(NetworkEvent::FileTransferCompleted {
-                        transfer_id: transfer_id.clone(),
-                        peer_id: peer_id_str.to_string(),
-                        filename,
-                        file_path,
-                        batch_id,
-                        batch_total,
-                    })
+                    .send(FileTransferEvent::completed(
+                        transfer_id.clone(),
+                        peer_id_str.to_string(),
+                    ))
                     .await;
+                // The deprecated `NetworkEvent::FileTransferCompleted` previously
+                // carried `filename`, `file_path`, `batch_id`, `batch_total`.
+                // These are infra/presentation context; the receiver looks
+                // `cached_path` up from its own projection and batch delivery
+                // is not currently driven by the sender.
+                let _ = filename;
+                let _ = file_path;
+                let _ = batch_id;
+                let _ = batch_total;
                 Ok(())
             }
             Err(e) => {
+                let detail = e.to_string();
                 let _ = self
                     .inner
                     .event_tx
-                    .send(NetworkEvent::FileTransferFailed {
-                        transfer_id: transfer_id.clone(),
-                        peer_id: peer_id_str.to_string(),
-                        error: e.to_string(),
-                    })
+                    .send(FileTransferEvent::failed(
+                        transfer_id.clone(),
+                        peer_id_str.to_string(),
+                        classify_failure_reason(&detail),
+                        Some(detail.clone()),
+                    ))
                     .await;
                 warn!(
                     transfer_id = %transfer_id,
@@ -834,6 +846,27 @@ impl FileTransferProtocolCoordinator {
                     .await
             }
         }
+    }
+}
+
+/// Map free-text error messages produced at the transport / protocol layer
+/// onto a typed [`FileTransferFailureReason`]. Mirrors the heuristic the
+/// daemon previously applied on the consuming end, kept at the emission site
+/// now that the domain event carries the typed reason directly.
+fn classify_failure_reason(message: &str) -> FileTransferFailureReason {
+    let lowered = message.to_ascii_lowercase();
+    if lowered.contains("timeout") {
+        FileTransferFailureReason::TimedOut
+    } else if lowered.contains("hash") || lowered.contains("integrity") {
+        FileTransferFailureReason::IntegrityCheckFailed
+    } else if lowered.contains("failed to read file") || lowered.contains("storage") {
+        FileTransferFailureReason::StorageUnavailable
+    } else if lowered.contains("rejected") || lowered.contains("access") {
+        FileTransferFailureReason::AccessDenied
+    } else if lowered.contains("network") || lowered.contains("closed") {
+        FileTransferFailureReason::NetworkUnavailable
+    } else {
+        FileTransferFailureReason::Unknown
     }
 }
 

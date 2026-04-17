@@ -5,12 +5,9 @@ use libp2p_stream as stream;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, warn};
-use uc_core::file_transfer::FileTransferDirection;
 use uc_core::network::protocol::ClipboardPayloadVersion;
 use uc_core::network::{NetworkEvent, ProtocolDirection, ProtocolMessage};
-use uc_core::ports::{
-    ConnectionPolicyResolverPort, InboundClipboardFrame, SyncTargetId, TransferProgress,
-};
+use uc_core::ports::{ConnectionPolicyResolverPort, InboundClipboardFrame, SyncTargetId};
 
 use super::peer_cache::PeerCaches;
 use super::{
@@ -107,8 +104,6 @@ pub(super) fn spawn_business_stream_handler(
                                 return Err("denied by policy".into());
                             }
 
-                            // Clone event_tx for progress reporting inside spawn_blocking
-                            let progress_event_tx = event_tx.clone();
                             let inbound_peer_id_str = peer_id.clone();
                             let encrypted = tokio::task::spawn_blocking(move || {
                                 use std::io::Read;
@@ -182,27 +177,14 @@ pub(super) fn spawn_business_stream_handler(
                                         "inbound chunk read"
                                     );
 
-                                    // Throttle progress: first, last, and at most every 100ms
-                                    if chunks_completed == 1
-                                        || chunks_completed == total_chunks
-                                        || last_progress.elapsed()
-                                            >= std::time::Duration::from_millis(100)
-                                    {
-                                        let _ = try_send_event(
-                                            &progress_event_tx,
-                                            NetworkEvent::TransferProgress(TransferProgress {
-                                                transfer_id: transfer_id.clone(),
-                                                peer_id: inbound_peer_id_str.clone(),
-                                                direction: FileTransferDirection::Receiving,
-                                                chunks_completed,
-                                                total_chunks,
-                                                bytes_transferred: bytes_received,
-                                                total_bytes: None, // unknown until fully read
-                                            }),
-                                            "TransferProgress",
-                                        );
-                                        last_progress = std::time::Instant::now();
-                                    }
+                                    // Clipboard chunk read progress is transport-only: it carries
+                                    // clipboard-internal transfer ids that never match a file-
+                                    // transfer lifecycle, so the application layer has no way to
+                                    // correlate them. The deprecated path published these onto
+                                    // `NetworkEvent::TransferProgress`, where they were silently
+                                    // dropped downstream. Keep the chunk loop bookkeeping for
+                                    // in-stream diagnostics but do not emit events.
+                                    let _ = (chunks_completed, &mut last_progress);
                                 }
 
                                 debug!(

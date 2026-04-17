@@ -11,9 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, info_span, warn, Instrument, Span};
-use uc_core::file_transfer::FileTransferDirection;
 use uc_core::network::{NetworkEvent, ProtocolDirection};
-use uc_core::ports::{ConnectionPolicyResolverPort, TransferProgress};
+use uc_core::ports::ConnectionPolicyResolverPort;
 
 use super::dial_strategy::{
     chosen_dial_addr_for_log, dial_decision_for_snapshot, infer_address_scope,
@@ -493,26 +492,11 @@ pub(super) async fn execute_business_stream(
                             "outbound chunk written"
                         );
 
-                        // Throttle progress events: emit first, last, and at most every 100ms
-                        if chunks_completed == 1
-                            || chunks_completed == total_chunks
-                            || last_progress.elapsed() >= Duration::from_millis(100)
-                        {
-                            let _ = try_send_event(
-                                &event_tx,
-                                NetworkEvent::TransferProgress(TransferProgress {
-                                    transfer_id: transfer_id.clone(),
-                                    peer_id: peer_id_str.to_string(),
-                                    direction: FileTransferDirection::Sending,
-                                    chunks_completed,
-                                    total_chunks,
-                                    bytes_transferred: written,
-                                    total_bytes: Some(total),
-                                }),
-                                "TransferProgress",
-                            );
-                            last_progress = std::time::Instant::now();
-                        }
+                        // Clipboard chunk write progress is transport-only: the transfer id
+                        // parsed out of the V3 header is clipboard-scoped and does not
+                        // correspond to any file-transfer lifecycle. Do not publish it
+                        // onto the domain event bus.
+                        let _ = &mut last_progress;
                     }
                     stream.flush().await?;
                     debug!(

@@ -26,6 +26,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
+use uc_core::file_transfer::{FileTransferEvent, FileTransferEventInboundPort};
 use uc_core::network::{
     ConnectedPeer, DiscoveredPeer, NetworkEvent, PairingMessage, ProtocolDirection, ProtocolKind,
     ProtocolMessage, ResolvedConnectionPolicy,
@@ -104,17 +105,21 @@ const START_STATE_STARTING: u8 = 1;
 const START_STATE_STARTED: u8 = 2;
 const START_STATE_FAILED: u8 = 3;
 
-struct NetworkEventTransferProgressPort {
-    event_tx: mpsc::Sender<NetworkEvent>,
+/// Forwards transport-layer `TransferProgress` observations from the
+/// file-transfer adapter onto the domain-level file-transfer event bus as
+/// `FileTransferEvent::Progress`. Chunk-level detail is intentionally dropped
+/// at this boundary — see `uc-core::file_transfer::FileTransferProgress`.
+struct FileTransferEventProgressForwarder {
+    event_tx: mpsc::Sender<FileTransferEvent>,
 }
 
 #[async_trait]
-impl TransferProgressPort for NetworkEventTransferProgressPort {
+impl TransferProgressPort for FileTransferEventProgressForwarder {
     async fn report_progress(&self, progress: TransferProgress) -> Result<()> {
         self.event_tx
-            .send(NetworkEvent::TransferProgress(progress))
+            .send(FileTransferEvent::from_progress(progress))
             .await
-            .map_err(|err| anyhow!("failed to publish transfer progress event: {err}"))
+            .map_err(|err| anyhow!("failed to publish file transfer progress event: {err}"))
     }
 }
 
@@ -183,6 +188,11 @@ pub struct Libp2pNetworkAdapter {
     event_ingress_rx: Mutex<Option<mpsc::Receiver<NetworkEvent>>>,
     event_bus_tx: broadcast::Sender<NetworkEvent>,
     event_fanout_started: AtomicBool,
+    /// Domain-level file transfer event bus (adapter -> application layer).
+    /// Separate from `event_tx` so file-transfer lifecycle events do not have
+    /// to ride the `NetworkEvent` pipe.
+    file_transfer_event_tx: mpsc::Sender<FileTransferEvent>,
+    file_transfer_event_rx: Mutex<Option<mpsc::Receiver<FileTransferEvent>>>,
     clipboard_frame_tx: mpsc::Sender<InboundClipboardFrame>,
     clipboard_frame_rx: Mutex<Option<mpsc::Receiver<InboundClipboardFrame>>>,
     business_tx: mpsc::Sender<BusinessCommand>,
@@ -227,6 +237,7 @@ impl Libp2pNetworkAdapter {
             .to_vec();
         let (event_tx, event_ingress_rx) = mpsc::channel(64);
         let (event_bus_tx, _) = broadcast::channel(64);
+        let (file_transfer_event_tx, file_transfer_event_rx) = mpsc::channel(64);
         let (clipboard_frame_tx, clipboard_frame_rx) = mpsc::channel(64);
         let (business_tx, business_rx) = mpsc::channel(64);
         let (dial_tx, dial_rx) = mpsc::channel(32);
@@ -238,6 +249,8 @@ impl Libp2pNetworkAdapter {
             event_ingress_rx: Mutex::new(Some(event_ingress_rx)),
             event_bus_tx,
             event_fanout_started: AtomicBool::new(false),
+            file_transfer_event_tx,
+            file_transfer_event_rx: Mutex::new(Some(file_transfer_event_rx)),
             clipboard_frame_tx,
             clipboard_frame_rx: Mutex::new(Some(clipboard_frame_rx)),
             business_tx,
@@ -357,9 +370,9 @@ impl Libp2pNetworkAdapter {
         // Construct FileTransferService and spawn accept loop
         let file_transfer_service = FileTransferService::new(
             stream_control.clone(),
-            self.event_tx.clone(),
-            Arc::new(NetworkEventTransferProgressPort {
-                event_tx: self.event_tx.clone(),
+            self.file_transfer_event_tx.clone(),
+            Arc::new(FileTransferEventProgressForwarder {
+                event_tx: self.file_transfer_event_tx.clone(),
             }),
             FileTransferConfig::new(self.file_cache_dir.clone()),
         );
@@ -421,6 +434,7 @@ impl Libp2pNetworkAdapter {
 
         let caches = self.caches.clone();
         let event_tx = self.event_tx.clone();
+        let file_transfer_event_tx = self.file_transfer_event_tx.clone();
         let policy_resolver = self.policy_resolver.clone();
         let clipboard_frame_tx = self.clipboard_frame_tx.clone();
         let file_cache_dir = self.file_cache_dir.clone();
@@ -493,6 +507,7 @@ impl Libp2pNetworkAdapter {
                             pairing_runtime_owner,
                             &caches,
                             &event_tx,
+                            &file_transfer_event_tx,
                             &clipboard_frame_tx,
                             &policy_resolver,
                             &file_cache_dir,
@@ -643,6 +658,7 @@ fn build_swarm_for_restart(
     pairing_runtime_owner: PairingRuntimeOwner,
     caches: &Arc<RwLock<PeerCaches>>,
     event_tx: &mpsc::Sender<NetworkEvent>,
+    file_transfer_event_tx: &mpsc::Sender<FileTransferEvent>,
     clipboard_frame_tx: &mpsc::Sender<InboundClipboardFrame>,
     policy_resolver: &Arc<dyn ConnectionPolicyResolverPort>,
     file_cache_dir: &PathBuf,
@@ -694,9 +710,9 @@ fn build_swarm_for_restart(
     // Recreate file transfer service.
     let file_transfer_service = FileTransferService::new(
         stream_control.clone(),
-        event_tx.clone(),
-        Arc::new(NetworkEventTransferProgressPort {
-            event_tx: event_tx.clone(),
+        file_transfer_event_tx.clone(),
+        Arc::new(FileTransferEventProgressForwarder {
+            event_tx: file_transfer_event_tx.clone(),
         }),
         FileTransferConfig::new(file_cache_dir.clone()),
     );
@@ -1089,6 +1105,19 @@ impl PairingTransportPort for Libp2pNetworkAdapter {
             }
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl FileTransferEventInboundPort for Libp2pNetworkAdapter {
+    async fn subscribe(&self) -> Result<mpsc::Receiver<FileTransferEvent>> {
+        self.file_transfer_event_rx
+            .lock()
+            .map_err(|_| anyhow!("file transfer event rx mutex poisoned"))?
+            .take()
+            .ok_or_else(|| {
+                anyhow!("file transfer event inbound stream already subscribed (single-consumer)")
+            })
     }
 }
 
