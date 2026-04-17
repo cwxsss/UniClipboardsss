@@ -13,8 +13,8 @@
 //! - [`HostEventEmitterPort`] is synchronous (fire-and-forget semantics).
 //! - Emit failures are best-effort: callers log the error and continue.
 
-use crate::ports::transfer_progress::TransferDirection;
-use crate::setup::SetupState;
+use uc_core::ports::transfer_progress::TransferDirection;
+use uc_core::setup::SetupState;
 
 // ---------------------------------------------------------------------------
 // ClipboardOriginKind

@@ -17,10 +17,10 @@ use std::time::Duration;
 use serde::Serialize;
 use tracing::{debug, info, info_span, trace, warn, Instrument};
 
-use uc_core::ports::host_event_emitter::{HostEvent, HostEventEmitterPort, TransferHostEvent};
 use uc_core::ports::transfer_progress::{TransferDirection, TransferProgress};
 use uc_core::ports::ClockPort;
 
+use crate::shared::host_event::{HostEvent, HostEventEmitterPort, TransferHostEvent};
 use crate::usecases::clipboard::sync_inbound::PendingTransferLinkage;
 use crate::usecases::file_sync::TrackInboundTransfersUseCase;
 

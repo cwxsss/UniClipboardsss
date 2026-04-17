@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use uc_app::deps::{NetworkPorts, SearchPorts};
+use uc_app::shared::host_event::{HostEvent, HostEventEmitterPort, SetupHostEvent};
 use uc_app::usecases::{PairingConfig, ResolveConnectionPolicy};
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
@@ -30,7 +31,6 @@ use uc_core::ports::clipboard::{
     ClipboardChangeOriginPort, ClipboardRepresentationNormalizerPort, RepresentationCachePort,
     SpoolQueuePort, SpoolRequest,
 };
-use uc_core::ports::host_event_emitter::{HostEvent, HostEventEmitterPort, SetupHostEvent};
 use uc_core::ports::SetupEventPort;
 use uc_core::ports::*;
 use uc_core::settings::model::Settings;

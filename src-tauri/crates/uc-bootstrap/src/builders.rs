@@ -22,6 +22,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use uc_app::app_paths::AppPaths;
+use uc_app::shared::host_event::HostEventEmitterPort;
 use uc_app::usecases::pairing::PairingAction;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{
@@ -30,7 +31,6 @@ use uc_app::usecases::{
 };
 use uc_app::AppDeps;
 use uc_core::config::AppConfig;
-use uc_core::ports::host_event_emitter::HostEventEmitterPort;
 use uc_core::ports::PeerDirectoryPort;
 use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
 use uc_platform::adapters::PairingRuntimeOwner;

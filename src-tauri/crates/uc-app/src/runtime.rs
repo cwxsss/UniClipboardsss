@@ -9,12 +9,12 @@
 use std::sync::Arc;
 
 use uc_core::clipboard::ClipboardIntegrationMode;
-use uc_core::ports::host_event_emitter::HostEventEmitterPort;
 use uc_core::ports::SettingsPort;
 use uc_core::security::state::EncryptionState;
 
 use crate::app_paths::AppPaths;
 use crate::deps::AppDeps;
+use crate::shared::host_event::HostEventEmitterPort;
 use crate::task_registry::TaskRegistry;
 use crate::usecases::setup::SetupOrchestrator;
 use crate::usecases::LifecycleStatusPort;

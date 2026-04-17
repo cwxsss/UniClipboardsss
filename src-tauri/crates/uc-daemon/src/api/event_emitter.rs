@@ -1,6 +1,6 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
-use uc_core::ports::host_event_emitter::{
+use uc_app::shared::host_event::{
     ClipboardHostEvent, EmitError, HostEvent, HostEventEmitterPort, SetupHostEvent,
     SpaceAccessHostEvent, TransferHostEvent,
 };

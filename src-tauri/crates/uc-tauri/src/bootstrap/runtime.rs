@@ -37,7 +37,7 @@ use uc_core::config::AppConfig;
 use uc_core::ports::SettingsPort;
 use uc_core::security::state::EncryptionState;
 
-use uc_core::ports::host_event_emitter::HostEventEmitterPort;
+use uc_app::shared::host_event::HostEventEmitterPort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DaemonBootstrapOwnershipSnapshot {

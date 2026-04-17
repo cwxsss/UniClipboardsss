@@ -11,11 +11,11 @@ use std::sync::Arc;
 
 use uc_app::app_paths::AppPaths;
 use uc_app::runtime::CoreRuntime;
+use uc_app::shared::host_event::{EmitError, HostEvent, HostEventEmitterPort};
 use uc_app::task_registry::TaskRegistry;
 use uc_app::usecases::{InMemoryLifecycleStatus, LoggingSessionReadyEmitter, SessionReadyEmitter};
 use uc_app::AppDeps;
 use uc_core::clipboard::ClipboardIntegrationMode;
-use uc_core::ports::host_event_emitter::{EmitError, HostEvent, HostEventEmitterPort};
 
 use crate::assembly::{build_setup_orchestrator, SetupAssemblyPorts};
 // ---------------------------------------------------------------------------
