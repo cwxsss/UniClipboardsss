@@ -122,8 +122,7 @@ pub(crate) fn append_event(conn: &mut SqliteConnection, event: FileTransferEvent
 
 fn transfer_id_of(event: &FileTransferEvent) -> &str {
     match event {
-        FileTransferEvent::Announced { transfer_id, .. }
-        | FileTransferEvent::Started { transfer_id, .. }
+        FileTransferEvent::Started { transfer_id, .. }
         | FileTransferEvent::Progress { transfer_id, .. }
         | FileTransferEvent::Completed { transfer_id, .. }
         | FileTransferEvent::Failed { transfer_id, .. }
@@ -133,7 +132,6 @@ fn transfer_id_of(event: &FileTransferEvent) -> &str {
 
 fn event_type_of(event: &FileTransferEvent) -> &'static str {
     match event {
-        FileTransferEvent::Announced { .. } => "announced",
         FileTransferEvent::Started { .. } => "started",
         FileTransferEvent::Progress { .. } => "progress",
         FileTransferEvent::Completed { .. } => "completed",
@@ -148,9 +146,7 @@ mod tests {
     use crate::db::executor::DieselSqliteExecutor;
     use crate::db::pool::init_db_pool;
     use tempfile::{tempdir, TempDir};
-    use uc_core::{
-        DeviceId, FileTransferCancellationReason, FileTransferDirection, FileTransferProgress,
-    };
+    use uc_core::{FileTransferCancellationReason, FileTransferDirection, FileTransferProgress};
 
     fn make_store() -> (SqliteFileTransferEventStore<DieselSqliteExecutor>, TempDir) {
         let tempdir = tempdir().unwrap();
@@ -165,12 +161,6 @@ mod tests {
     #[tokio::test]
     async fn append_and_load_returns_events_in_sequence_order() {
         let (store, _tempdir) = make_store();
-        let announced = FileTransferEvent::announced(
-            "transfer-1",
-            DeviceId::new("device-1"),
-            "report.pdf",
-            Some(128),
-        );
         let started = FileTransferEvent::started("transfer-1", "peer-1", "report.pdf", Some(128));
         let progress = FileTransferEvent::Progress {
             transfer_id: "transfer-1".into(),
@@ -182,13 +172,12 @@ mod tests {
             },
         };
 
-        store.append(announced.clone()).await.unwrap();
         store.append(started.clone()).await.unwrap();
         store.append(progress.clone()).await.unwrap();
 
         assert_eq!(
             store.load("transfer-1").await.unwrap(),
-            vec![announced, started, progress]
+            vec![started, progress]
         );
     }
 

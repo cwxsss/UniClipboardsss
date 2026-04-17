@@ -1,19 +1,17 @@
 use std::sync::Arc;
 
 use uc_application::file_transfer::{
-    AnnounceTransfer, AnnounceTransferUseCase, CancelTransfer, CancelTransferUseCase,
-    CompleteTransfer, CompleteTransferUseCase, FailTransfer, FailTransferUseCase,
-    ReportTransferProgress, ReportTransferProgressUseCase, StartTransfer, StartTransferUseCase,
+    CancelTransfer, CancelTransferUseCase, CompleteTransfer, CompleteTransferUseCase, FailTransfer,
+    FailTransferUseCase, ReportTransferProgress, ReportTransferProgressUseCase, StartTransfer,
+    StartTransferUseCase,
 };
 use uc_core::file_transfer::FileTransferEventStorePort;
 use uc_core::{
-    DeviceId, FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
+    FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
     FileTransferFailureReason, FileTransferProgress,
 };
 use uc_infra::file_transfer::{InMemoryEventPublisher, InMemoryEventStore};
 
-#[path = "file_transfer/announce_transfer.rs"]
-mod announce_transfer;
 #[path = "file_transfer/error_cases.rs"]
 mod error_cases;
 #[path = "file_transfer/full_flow.rs"]
@@ -24,7 +22,6 @@ mod start_transfer;
 struct TestContext {
     store: Arc<InMemoryEventStore>,
     publisher: Arc<InMemoryEventPublisher>,
-    announce_transfer: AnnounceTransferUseCase<InMemoryEventStore, InMemoryEventPublisher>,
     start_transfer: StartTransferUseCase<InMemoryEventStore, InMemoryEventPublisher>,
     report_progress: ReportTransferProgressUseCase<InMemoryEventStore, InMemoryEventPublisher>,
     complete_transfer: CompleteTransferUseCase<InMemoryEventStore, InMemoryEventPublisher>,
@@ -37,7 +34,6 @@ fn build_context() -> TestContext {
     let publisher = Arc::new(InMemoryEventPublisher::new());
 
     TestContext {
-        announce_transfer: AnnounceTransferUseCase::new(store.clone(), publisher.clone()),
         start_transfer: StartTransferUseCase::new(store.clone(), publisher.clone()),
         report_progress: ReportTransferProgressUseCase::new(store.clone(), publisher.clone()),
         complete_transfer: CompleteTransferUseCase::new(store.clone(), publisher.clone()),
@@ -61,15 +57,6 @@ fn sending_progress(bytes_transferred: u64, total_bytes: u64) -> FileTransferPro
         direction: FileTransferDirection::Sending,
         bytes_transferred,
         total_bytes: Some(total_bytes),
-    }
-}
-
-fn announce_input(transfer_id: &str, origin_device_id: &str) -> AnnounceTransfer {
-    AnnounceTransfer {
-        transfer_id: transfer_id.into(),
-        origin_device_id: DeviceId::new(origin_device_id),
-        filename: "report.pdf".into(),
-        file_size: Some(128),
     }
 }
 

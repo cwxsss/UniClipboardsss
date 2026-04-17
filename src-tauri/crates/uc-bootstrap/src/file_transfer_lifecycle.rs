@@ -15,7 +15,7 @@ use uc_app::shared::host_event::{HostEvent, HostEventEmitterPort, TransferHostEv
 use uc_app::shared::host_event_publisher::FileTransferHostEventPublisher;
 use uc_app::shared::outbound_entry_cache::OutboundEntryIdCache;
 use uc_application::file_transfer::{
-    AnnounceTransferUseCase, CancelTransferUseCase, CompleteTransferUseCase, FailTransferUseCase,
+    CancelTransferUseCase, CompleteTransferUseCase, FailTransferUseCase,
     ReportTransferProgressUseCase, StartTransferUseCase,
 };
 use uc_core::ports::file_transfer_repository::TrackedFileTransferStatus;
@@ -25,8 +25,6 @@ use uc_infra::file_transfer::SqliteReceiverFileTransferStore;
 
 pub type FileTransferEventStore = SqliteReceiverFileTransferStore<Arc<DieselSqliteExecutor>>;
 
-pub type FileTransferAnnounceUseCase =
-    AnnounceTransferUseCase<FileTransferEventStore, FileTransferHostEventPublisher>;
 pub type FileTransferStartUseCase =
     StartTransferUseCase<FileTransferEventStore, FileTransferHostEventPublisher>;
 pub type FileTransferProgressUseCase =
@@ -70,17 +68,23 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(15);
 pub struct FileTransferLifecycle {
     pub store: Arc<FileTransferEventStore>,
     pub publisher: Arc<FileTransferHostEventPublisher>,
-    pub announce: Arc<FileTransferAnnounceUseCase>,
     pub start: Arc<FileTransferStartUseCase>,
     pub report_progress: Arc<FileTransferProgressUseCase>,
     pub complete: Arc<FileTransferCompleteUseCase>,
     pub fail: Arc<FileTransferFailUseCase>,
     pub cancel: Arc<FileTransferCancelUseCase>,
     pub outbound_entry_cache: Arc<OutboundEntryIdCache>,
+    /// Shared host-event emitter cell.
+    ///
+    /// Exposed so receiver-side workers can publish UI-facing `pending` status
+    /// events directly after seeding the receiver projection — this bypasses
+    /// the domain event bus on purpose, since `pending` is a presentation-layer
+    /// preview, not a domain fact (there is no `Announced` event in the
+    /// timeline).
+    pub emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>,
 
     file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
     clock: Arc<dyn ClockPort>,
-    emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>,
 }
 
 impl FileTransferLifecycle {
@@ -95,7 +99,8 @@ impl FileTransferLifecycle {
     ) -> JoinHandle<()> {
         let repo = Arc::clone(&self.file_transfer_repo);
         let clock = Arc::clone(&self.clock);
-        let emitter_cell = Arc::clone(&self.emitter_cell);
+        let emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>> =
+            Arc::clone(&self.emitter_cell);
 
         tokio::spawn(
             async move {
@@ -283,10 +288,6 @@ pub fn build_file_transfer_lifecycle(
         Arc::clone(&outbound_entry_cache),
     ));
 
-    let announce = Arc::new(AnnounceTransferUseCase::new(
-        Arc::clone(&store),
-        Arc::clone(&publisher),
-    ));
     let start = Arc::new(StartTransferUseCase::new(
         Arc::clone(&store),
         Arc::clone(&publisher),
@@ -311,15 +312,14 @@ pub fn build_file_transfer_lifecycle(
     FileTransferLifecycle {
         store,
         publisher,
-        announce,
         start,
         report_progress,
         complete,
         fail,
         cancel,
         outbound_entry_cache,
+        emitter_cell,
         file_transfer_repo,
         clock,
-        emitter_cell,
     }
 }

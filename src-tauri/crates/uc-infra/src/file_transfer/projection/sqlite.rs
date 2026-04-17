@@ -89,22 +89,6 @@ pub(crate) fn apply_event(
     let transfer_id = transfer_id_of(event).to_string();
 
     let affected = match event {
-        FileTransferEvent::Announced {
-            transfer_id,
-            origin_device_id,
-            filename,
-            file_size,
-        } => {
-            diesel::update(file_transfer::table.filter(file_transfer::transfer_id.eq(transfer_id)))
-                .set((
-                    file_transfer::status.eq(TrackedFileTransferStatus::Pending.as_str()),
-                    file_transfer::filename.eq(filename.as_str()),
-                    file_transfer::source_device.eq(origin_device_id.to_string()),
-                    file_transfer::file_size.eq(file_size.map(u64_to_i64)),
-                    file_transfer::updated_at_ms.eq(now_ms),
-                ))
-                .execute(conn)?
-        }
         FileTransferEvent::Started {
             transfer_id,
             filename,
@@ -180,8 +164,7 @@ pub(crate) fn apply_event(
 
 fn transfer_id_of(event: &FileTransferEvent) -> &str {
     match event {
-        FileTransferEvent::Announced { transfer_id, .. }
-        | FileTransferEvent::Started { transfer_id, .. }
+        FileTransferEvent::Started { transfer_id, .. }
         | FileTransferEvent::Progress { transfer_id, .. }
         | FileTransferEvent::Completed { transfer_id, .. }
         | FileTransferEvent::Failed { transfer_id, .. }
@@ -222,7 +205,7 @@ mod tests {
     use tempfile::{tempdir, TempDir};
     use uc_core::file_transfer::FileTransferProgress;
     use uc_core::ports::FileTransferRepositoryPort;
-    use uc_core::{DeviceId, FileTransferDirection};
+    use uc_core::FileTransferDirection;
 
     fn make_updater() -> (
         SqliteReceiverFileTransferProjectionUpdater<DieselSqliteExecutor>,
@@ -271,22 +254,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_event_projects_announced_started_and_completed_states() {
+    async fn apply_event_projects_started_and_completed_states() {
         let (updater, repo, _tempdir) = make_updater();
         updater
             .seed_receiver_context(receiver_context())
             .await
             .unwrap();
 
-        updater
-            .apply_event(&FileTransferEvent::announced(
-                "transfer-1",
-                DeviceId::new("device-1"),
-                "report.pdf",
-                Some(128),
-            ))
-            .await
-            .unwrap();
         updater
             .apply_event(&FileTransferEvent::started(
                 "transfer-1",

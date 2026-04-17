@@ -16,11 +16,11 @@ use tracing::{debug, info, instrument, warn, Instrument};
 
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
+use uc_app::shared::host_event::{HostEvent, TransferHostEvent};
 use uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::sync_planner::{FileCandidate, OutboundSyncPlanner};
 use uc_app::usecases::CoreUseCases;
-use uc_application::file_transfer::AnnounceTransfer;
 use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
@@ -431,12 +431,6 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                     };
                     let lifecycle = Arc::clone(&self.file_transfer_lifecycle);
                     let entry_id_string = entry_id.to_string();
-                    let origin_device_id = self
-                        .runtime
-                        .wiring_deps()
-                        .device
-                        .device_identity
-                        .current_device_id();
                     tokio::spawn(
                         async move {
                             for file_intent in plan.files {
@@ -447,8 +441,6 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                                     .and_then(|n| n.to_str())
                                     .unwrap_or("")
                                     .to_string();
-                                let file_size =
-                                    tokio::fs::metadata(&path).await.ok().map(|m| m.len());
 
                                 // Register sender-side entry_id hint so the publisher
                                 // can resolve it on subsequent events (sender has no
@@ -457,23 +449,27 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                                     .outbound_entry_cache
                                     .insert(transfer_id.clone(), entry_id_string.clone());
 
-                                // Announce the transfer in the durable event store
-                                // before the platform layer emits FileTransferStarted —
-                                // StartTransferUseCase requires a prior Announced event.
-                                if let Err(err) = lifecycle
-                                    .announce
-                                    .execute(AnnounceTransfer {
+                                // Emit a UI-only `pending` status hint. The domain
+                                // timeline starts at `Started` (fired by the platform
+                                // file-send stream). `pending` is a presentation-layer
+                                // preview, not a domain fact.
+                                let emitter = lifecycle
+                                    .emitter_cell
+                                    .read()
+                                    .unwrap_or_else(|p| p.into_inner())
+                                    .clone();
+                                if let Err(err) = emitter.emit(HostEvent::Transfer(
+                                    TransferHostEvent::StatusChanged {
                                         transfer_id: transfer_id.clone(),
-                                        origin_device_id: origin_device_id.clone(),
-                                        filename: file_name.clone(),
-                                        file_size,
-                                    })
-                                    .await
-                                {
+                                        entry_id: entry_id_string.clone(),
+                                        status: "pending".to_string(),
+                                        reason: None,
+                                    },
+                                )) {
                                     warn!(
                                         error = %err,
                                         transfer_id = %transfer_id,
-                                        "Failed to announce outbound transfer"
+                                        "Failed to emit pending status hint"
                                     );
                                 }
 

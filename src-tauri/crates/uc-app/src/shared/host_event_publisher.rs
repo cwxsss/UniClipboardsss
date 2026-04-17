@@ -77,10 +77,6 @@ impl FileTransferHostEventPublisher {
 impl FileTransferEventPublisherPort for FileTransferHostEventPublisher {
     async fn publish(&self, event: FileTransferEvent) -> Result<()> {
         match event {
-            FileTransferEvent::Announced { transfer_id, .. } => {
-                self.publish_status_change(&transfer_id, "pending", None, "Announced")
-                    .await;
-            }
             FileTransferEvent::Started { transfer_id, .. } => {
                 self.publish_status_change(&transfer_id, "transferring", None, "Started")
                     .await;

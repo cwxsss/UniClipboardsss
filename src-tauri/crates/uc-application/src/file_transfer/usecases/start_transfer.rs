@@ -40,12 +40,6 @@ where
     ) -> Result<FileTransferEvent, FileTransferApplicationError> {
         let timeline = load_timeline(self.store.as_ref(), &input.transfer_id).await?;
 
-        if !timeline.announced {
-            return Err(FileTransferApplicationError::TransferNotAnnounced {
-                transfer_id: input.transfer_id,
-            });
-        }
-
         if timeline.started {
             return Err(FileTransferApplicationError::TransferAlreadyStarted {
                 transfer_id: input.transfer_id,

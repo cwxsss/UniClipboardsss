@@ -1,7 +1,6 @@
 use crate::ports::transfer_progress::{
     TransferDirection as TransportTransferDirection, TransferProgress as TransportTransferProgress,
 };
-use crate::DeviceId;
 use serde::{Deserialize, Serialize};
 
 /// Business-facing direction of a file transfer.
@@ -86,33 +85,17 @@ pub enum FileTransferCancellationReason {
 ///
 /// 这些事件只表达业务事实，不表达底层传输实现细节。
 /// 例如：
-/// - 可以表达“传输已声明”“传输已开始”“传输已完成”
+/// - 可以表达“传输已开始”“传输已完成”
 /// - 不应表达某个协议帧、chunk 编号、底层流实现或本地文件路径
+///
+/// `Started` 是领域 timeline 的唯一起点。接收端若需要在字节流到达前就让 UI
+/// 看到一条“即将开始”的预告，属于表示层的呈现需要，由接收端 worker 直接通过
+/// host-event 发 `pending` 状态，不进入领域事件模型。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FileTransferEvent {
-    /// A transfer has been declared and may be referenced before content bytes arrive.
-    ///
-    /// 一笔文件传输已经被声明。
-    ///
-    /// 此时系统已经知道：
-    /// - `transfer_id`
-    /// - 来源设备 `origin_device_id`
-    /// - 文件名 `filename`
-    /// - 以及可能已经知道的 `file_size`
-    ///
-    /// 但这并不表示文件内容已经开始传输。
-    Announced {
-        transfer_id: String,
-        origin_device_id: DeviceId,
-        filename: String,
-        file_size: Option<u64>,
-    },
     /// The transfer content has started flowing.
     ///
-    /// 文件内容传输已经开始。
-    ///
-    /// `Started` 表示这笔传输已经从“可被引用的声明状态”进入“内容开始流动”的状态。
-    /// 它与 `Announced` 不同，后者只表示“系统已知道这笔传输存在”。
+    /// 文件内容传输已经开始。这是领域 timeline 的起点。
     Started {
         transfer_id: String,
         peer_id: String,
@@ -160,23 +143,6 @@ pub enum FileTransferEvent {
 }
 
 impl FileTransferEvent {
-    /// Create an `Announced` event.
-    ///
-    /// 构造“传输已声明”事件。
-    pub fn announced(
-        transfer_id: impl Into<String>,
-        origin_device_id: DeviceId,
-        filename: impl Into<String>,
-        file_size: Option<u64>,
-    ) -> Self {
-        Self::Announced {
-            transfer_id: transfer_id.into(),
-            origin_device_id,
-            filename: filename.into(),
-            file_size,
-        }
-    }
-
     /// Create a `Started` event.
     ///
     /// 构造“传输已开始”事件。

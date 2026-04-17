@@ -20,16 +20,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use uc_app::runtime::CoreRuntime;
+use uc_app::shared::host_event::{HostEvent, TransferHostEvent};
 use uc_app::usecases::clipboard::clipboard_write_coordinator::ClipboardWriteCoordinator;
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
-use uc_application::file_transfer::AnnounceTransfer;
 use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
 use uc_core::network::{ClipboardMessage, ProtocolMessage};
 use uc_core::ports::{
     ClipboardInboundMessageSource, ClipboardTransportError, InboundClipboardFrame,
 };
-use uc_core::DeviceId;
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
 use uc_infra::file_transfer::ReceiverTransferContext;
@@ -236,11 +235,12 @@ impl InboundClipboardSyncWorker {
                                 ref pending_transfers,
                             } = outcome {
                                 // For each pending inbound file transfer: seed the receiver
-                                // projection row first (entry_id / cached_path are local
-                                // receiver context that does not enter the domain event),
-                                // then announce the transfer in the event store so that
-                                // downstream Progress/Completed events have a valid timeline
-                                // and the publisher emits a "pending" host event.
+                                // projection row (entry_id / cached_path are receiver-local
+                                // context that does not enter the domain event model), then
+                                // emit a UI-only `pending` StatusChanged hint. The domain
+                                // timeline starts at `Started` (fired by the libp2p file
+                                // stream handler on the other worker), so `pending` here is
+                                // a presentation-layer preview, not a domain fact.
                                 if !pending_transfers.is_empty() {
                                     if let Some(ref lifecycle) = file_transfer_lifecycle {
                                         let now_ms = clock.now_ms();
@@ -266,22 +266,23 @@ impl InboundClipboardSyncWorker {
                                                 continue;
                                             }
 
-                                            if let Err(err) = lifecycle
-                                                .announce
-                                                .execute(AnnounceTransfer {
+                                            let emitter = lifecycle
+                                                .emitter_cell
+                                                .read()
+                                                .unwrap_or_else(|p| p.into_inner())
+                                                .clone();
+                                            if let Err(err) = emitter.emit(HostEvent::Transfer(
+                                                TransferHostEvent::StatusChanged {
                                                     transfer_id: t.transfer_id.clone(),
-                                                    origin_device_id: DeviceId::new(
-                                                        &message_origin_device_id,
-                                                    ),
-                                                    filename: t.filename.clone(),
-                                                    file_size: None,
-                                                })
-                                                .await
-                                            {
+                                                    entry_id: entry_id.to_string(),
+                                                    status: "pending".to_string(),
+                                                    reason: None,
+                                                },
+                                            )) {
                                                 warn!(
                                                     error = %err,
                                                     transfer_id = %t.transfer_id,
-                                                    "Failed to announce inbound transfer"
+                                                    "Failed to emit pending status hint"
                                                 );
                                             }
                                         }

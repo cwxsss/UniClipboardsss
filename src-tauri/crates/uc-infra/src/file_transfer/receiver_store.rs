@@ -54,7 +54,7 @@ mod tests {
     use crate::db::repositories::DieselFileTransferRepository;
     use tempfile::{tempdir, TempDir};
     use uc_core::ports::FileTransferRepositoryPort;
-    use uc_core::{DeviceId, FileTransferDirection, FileTransferProgress};
+    use uc_core::{FileTransferDirection, FileTransferProgress};
 
     fn make_store() -> (
         SqliteReceiverFileTransferStore<DieselSqliteExecutor>,
@@ -89,12 +89,7 @@ mod tests {
             .await
             .unwrap();
 
-        let announced = FileTransferEvent::announced(
-            "transfer-1",
-            DeviceId::new("device-1"),
-            "report.pdf",
-            Some(128),
-        );
+        let started = FileTransferEvent::started("transfer-1", "peer-1", "report.pdf", Some(128));
         let progress = FileTransferEvent::Progress {
             transfer_id: "transfer-1".into(),
             peer_id: "peer-1".into(),
@@ -105,12 +100,12 @@ mod tests {
             },
         };
 
-        store.append(announced.clone()).await.unwrap();
+        store.append(started.clone()).await.unwrap();
         store.append(progress.clone()).await.unwrap();
 
         assert_eq!(
             store.load("transfer-1").await.unwrap(),
-            vec![announced, progress]
+            vec![started, progress]
         );
 
         let transfers = repo.list_transfers_for_entry("entry-1").await.unwrap();

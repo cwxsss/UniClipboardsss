@@ -18,7 +18,6 @@ enum TerminalState {
 /// 临时整理出来的判断结果。
 #[derive(Debug, Default)]
 pub(crate) struct TransferTimeline {
-    pub(crate) announced: bool,
     pub(crate) started: bool,
     peer_id: Option<String>,
     terminal_state: Option<TerminalState>,
@@ -43,13 +42,6 @@ impl TransferTimeline {
 
         for event in history {
             match event {
-                FileTransferEvent::Announced {
-                    transfer_id: event_transfer_id,
-                    ..
-                } => {
-                    timeline.ensure_transfer_id_matches(transfer_id, event_transfer_id)?;
-                    timeline.announced = true;
-                }
                 FileTransferEvent::Started {
                     transfer_id: event_transfer_id,
                     peer_id,
