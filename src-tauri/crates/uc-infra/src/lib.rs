@@ -6,6 +6,7 @@ pub mod clipboard;
 pub mod config;
 pub mod db;
 pub mod device;
+pub mod file_transfer;
 pub mod fs;
 pub mod network;
 pub mod search;
