@@ -865,6 +865,7 @@ pub fn wire_dependencies_with_identity_store(
         Arc::clone(&file_transfer_store_arc),
         emitter_cell.clone(),
         deps.storage.file_transfer_repo.clone(),
+        deps.system.clock.clone(),
     );
 
     let clipboard_write_coordinator = build_clipboard_write_coordinator(

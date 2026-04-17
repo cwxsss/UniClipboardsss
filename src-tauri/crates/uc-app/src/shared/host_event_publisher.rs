@@ -21,35 +21,44 @@ use uc_core::ports::file_transfer_repository::FileTransferRepositoryPort;
 use uc_core::ports::transfer_progress::TransferDirection;
 
 use crate::shared::host_event::{HostEvent, HostEventEmitterPort, TransferHostEvent};
+use crate::shared::outbound_entry_cache::OutboundEntryIdCache;
 
 pub struct FileTransferHostEventPublisher {
     emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>,
     file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
+    outbound_entry_cache: Arc<OutboundEntryIdCache>,
 }
 
 impl FileTransferHostEventPublisher {
     pub fn new(
         emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>,
         file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
+        outbound_entry_cache: Arc<OutboundEntryIdCache>,
     ) -> Self {
         Self {
             emitter_cell,
             file_transfer_repo,
+            outbound_entry_cache,
         }
     }
 
     async fn resolve_entry_id(&self, transfer_id: &str) -> Option<String> {
+        // Receiver-side projection has authoritative entry_id once seeded.
         match self
             .file_transfer_repo
             .get_entry_id_for_transfer(transfer_id)
             .await
         {
-            Ok(entry_id) => entry_id,
+            Ok(Some(entry_id)) => return Some(entry_id),
+            Ok(None) => {
+                // Fall through to outbound cache (sender side or pre-seed race).
+            }
             Err(err) => {
-                warn!(error = %err, transfer_id, "failed to resolve entry_id for host event");
-                None
+                warn!(error = %err, transfer_id, "failed to resolve entry_id from projection");
             }
         }
+
+        self.outbound_entry_cache.get(transfer_id)
     }
 
     fn emit(&self, event: HostEvent) {
