@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 use uc_core::{
+    blob::ports::BlobReaderPort,
     clipboard::{
         ObservedClipboardRepresentation, PersistedClipboardRepresentation, SystemClipboardSnapshot,
     },
@@ -17,7 +18,6 @@ use uc_core::{
         ClipboardSelectionRepositoryPort,
     },
 };
-use uc_infra::blob::BlobStorePort;
 
 /// Reconstructs a system clipboard state from a historical clipboard entry,
 /// restoring the primary selected representation only.
@@ -26,7 +26,7 @@ pub struct RestoreClipboardSelectionUseCase {
     coordinator: Arc<ClipboardWriteCoordinator>,
     selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
     representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-    blob_store: Arc<dyn BlobStorePort>,
+    blob_store: Arc<dyn BlobReaderPort>,
     mode: ClipboardIntegrationMode,
 }
 
@@ -39,7 +39,7 @@ impl RestoreClipboardSelectionUseCase {
     /// use std::sync::Arc;
     /// use uc_app::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase;
     /// use uc_core::ports::{ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort, ClipboardSelectionRepositoryPort};
-    /// use uc_infra::blob::BlobStorePort;
+    /// use uc_core::blob::ports::BlobReaderPort;
     /// // All parameters must implement their respective ports
     /// ```
     pub fn new(
@@ -47,7 +47,7 @@ impl RestoreClipboardSelectionUseCase {
         coordinator: Arc<ClipboardWriteCoordinator>,
         selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
         representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-        blob_store: Arc<dyn BlobStorePort>,
+        blob_store: Arc<dyn BlobReaderPort>,
         mode: ClipboardIntegrationMode,
     ) -> Self {
         Self {

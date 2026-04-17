@@ -1,14 +1,14 @@
 use anyhow::Result;
 use std::sync::Arc;
+use uc_core::blob::ports::BlobReaderPort;
 use uc_core::ids::RepresentationId;
 use uc_core::ports::ThumbnailRepositoryPort;
-use uc_infra::blob::BlobStorePort;
 
 /// Resolve thumbnail resource by representation id.
 /// 通过表示 id 解析缩略图资源内容。
 pub struct ResolveThumbnailResourceUseCase {
     thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
-    blob_store: Arc<dyn BlobStorePort>,
+    blob_store: Arc<dyn BlobReaderPort>,
 }
 
 /// Thumbnail resource payload and metadata.
@@ -23,7 +23,7 @@ pub struct ThumbnailResourceResult {
 impl ResolveThumbnailResourceUseCase {
     pub fn new(
         thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
-        blob_store: Arc<dyn BlobStorePort>,
+        blob_store: Arc<dyn BlobReaderPort>,
     ) -> Self {
         Self {
             thumbnail_repo,

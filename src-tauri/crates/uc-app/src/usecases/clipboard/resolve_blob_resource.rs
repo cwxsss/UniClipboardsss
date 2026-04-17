@@ -1,14 +1,16 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use uc_core::{clipboard::MimeType, ports::ClipboardRepresentationRepositoryPort, BlobId};
-use uc_infra::blob::BlobStorePort;
+use uc_core::{
+    blob::ports::BlobReaderPort, clipboard::MimeType, ports::ClipboardRepresentationRepositoryPort,
+    BlobId,
+};
 
 /// Resolve blob resource by blob id.
 /// 通过 blob id 解析资源内容。
 pub struct ResolveBlobResourceUseCase {
     representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-    blob_store: Arc<dyn BlobStorePort>,
+    blob_store: Arc<dyn BlobReaderPort>,
 }
 
 /// Blob resource payload and metadata.
@@ -23,7 +25,7 @@ pub struct BlobResourceResult {
 impl ResolveBlobResourceUseCase {
     pub fn new(
         representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-        blob_store: Arc<dyn BlobStorePort>,
+        blob_store: Arc<dyn BlobReaderPort>,
     ) -> Self {
         Self {
             representation_repo,

@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use uc_core::{
+    blob::ports::BlobReaderPort,
     clipboard::MimeType,
     ids::EntryId,
     ports::clipboard::ResolvedClipboardPayload,
@@ -10,7 +11,6 @@ use uc_core::{
         ClipboardRepresentationRepositoryPort, ClipboardSelectionRepositoryPort,
     },
 };
-use uc_infra::blob::BlobStorePort;
 
 /// Get full clipboard entry detail
 /// 获取剪贴板条目完整详情
@@ -18,7 +18,7 @@ pub struct GetEntryDetailUseCase {
     entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
     selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
     representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-    blob_store: Arc<dyn BlobStorePort>,
+    blob_store: Arc<dyn BlobReaderPort>,
     payload_resolver: Arc<dyn ClipboardPayloadResolverPort>,
 }
 
@@ -39,7 +39,7 @@ impl GetEntryDetailUseCase {
         entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
         selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
         representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
-        blob_store: Arc<dyn BlobStorePort>,
+        blob_store: Arc<dyn BlobReaderPort>,
         payload_resolver: Arc<dyn ClipboardPayloadResolverPort>,
     ) -> Self {
         Self {

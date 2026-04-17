@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::ids::RepresentationId;
 use uc_core::ports::clipboard::{
     ClipboardChangeOriginPort, ClipboardPayloadResolverPort, ClipboardRepresentationNormalizerPort,
@@ -22,9 +23,8 @@ use uc_core::ports::file_manager::FileManagerPort;
 use uc_core::ports::file_transport::FileTransportPort;
 use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
+use uc_core::ports::search::search_pipeline::SearchPipelinePort;
 use uc_core::ports::*;
-use uc_infra::blob::{BlobStorePort, BlobWriterPort};
-use uc_infra::search::pipeline::SearchPipeline;
 
 /// Focused network capability bundle for dependency injection.
 /// 用于依赖注入的网络能力聚合。
@@ -97,7 +97,7 @@ pub struct DevicePorts {
 /// Storage-domain ports bundle (blobs, thumbnails, file transfer tracking).
 /// 存储领域端口组（Blob、缩略图、文件传输追踪）。
 pub struct StoragePorts {
-    pub blob_store: Arc<dyn BlobStorePort>,
+    pub blob_store: Arc<dyn BlobReaderPort>,
     pub blob_writer: Arc<dyn BlobWriterPort>,
     pub thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
     pub thumbnail_generator: Arc<dyn ThumbnailGeneratorPort>,
@@ -108,19 +108,15 @@ pub struct StoragePorts {
 ///
 /// Groups the three search infrastructure pieces that must travel together:
 /// the index port (query + CRUD), the key derivation port (HMAC term tags),
-/// and the pipeline (tokenization + text extraction). Keeping them in one
-/// bundle prevents uc-daemon code from constructing these pieces ad hoc.
-///
-/// `SearchPipeline` is a concrete infra helper rather than a port — grouping
-/// it here is a pragmatic exception accepted by the Phase 92 plan designers
-/// (see Phase 92 Research §2 inference note).
+/// and the pipeline port (tokenization + text extraction). Keeping them in
+/// one bundle prevents uc-daemon code from constructing these pieces ad hoc.
 pub struct SearchPorts {
     /// Encrypted search index: query, index_entry, remove_entry, rebuild.
     pub search_index: Arc<dyn SearchIndexPort>,
     /// HMAC search key derivation (profile-scoped, HKDF-SHA256).
     pub search_key_derivation: Arc<dyn SearchKeyDerivationPort>,
     /// Tokenization + text extraction pipeline used for building search documents.
-    pub search_pipeline: Arc<SearchPipeline>,
+    pub search_pipeline: Arc<dyn SearchPipelinePort>,
 }
 
 /// System-domain ports bundle (clock, hash, file manager, cache filesystem).

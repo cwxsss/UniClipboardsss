@@ -24,6 +24,7 @@ use uc_app::deps::{NetworkPorts, SearchPorts};
 use uc_app::shared::host_event::{HostEvent, HostEventEmitterPort, SetupHostEvent};
 use uc_app::usecases::{PairingConfig, ResolveConnectionPolicy};
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
+use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
 use uc_core::ids::RepresentationId;
@@ -34,9 +35,7 @@ use uc_core::ports::clipboard::{
 use uc_core::ports::SetupEventPort;
 use uc_core::ports::*;
 use uc_core::settings::model::Settings;
-use uc_infra::blob::{
-    BlobRepositoryPort, BlobStorePort, BlobWriter, BlobWriterPort, FilesystemBlobStore,
-};
+use uc_infra::blob::{BlobRepositoryPort, BlobStorePort, BlobWriter, FilesystemBlobStore};
 use uc_infra::clipboard::{
     clipboard_change_origin, init_clipboard_change_origin, new_in_memory_change_origin,
     ClipboardPayloadResolver, ClipboardRepresentationNormalizer, DurableSpoolQueue,
@@ -252,8 +251,8 @@ pub struct PlatformLayer {
     // Blob writer
     pub blob_writer: Arc<dyn BlobWriterPort>,
 
-    // Blob store (encrypted)
-    pub blob_store: Arc<dyn BlobStorePort>,
+    // Blob store (encrypted) — exposed to use cases as a read-only port.
+    pub blob_store: Arc<dyn BlobReaderPort>,
 
     // Encryption session
     pub encryption_session: Arc<dyn EncryptionSessionPort>,
@@ -539,17 +538,22 @@ pub fn create_platform_layer(
     info!(peer_id = %libp2p_network.local_peer_id(), "Loaded libp2p identity");
     let network_ports = build_network_ports(libp2p_network.clone(), pairing_runtime_owner);
 
-    let encrypted_blob_store: Arc<dyn BlobStorePort> = Arc::new(EncryptedBlobStore::new(
+    let encrypted_blob_store = Arc::new(EncryptedBlobStore::new(
         blob_store.clone(),
         encryption,
         encryption_session.clone(),
     ));
 
+    // BlobWriter needs the put-side (BlobStorePort); use cases need only the
+    // read-side (BlobReaderPort). Both views point at the same concrete
+    // EncryptedBlobStore instance.
+    let encrypted_blob_store_for_writer: Arc<dyn BlobStorePort> = encrypted_blob_store.clone();
     let blob_writer: Arc<dyn BlobWriterPort> = Arc::new(BlobWriter::new(
-        encrypted_blob_store.clone(),
+        encrypted_blob_store_for_writer,
         blob_repository,
         clock,
     ));
+    let blob_store_reader: Arc<dyn BlobReaderPort> = encrypted_blob_store;
 
     let key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort> =
         Arc::new(uc_platform::key_scope::DefaultKeyScope::new());
@@ -563,7 +567,7 @@ pub fn create_platform_layer(
         device_identity,
         representation_normalizer,
         blob_writer,
-        blob_store: encrypted_blob_store,
+        blob_store: blob_store_reader,
         encryption_session,
         key_scope,
     })
