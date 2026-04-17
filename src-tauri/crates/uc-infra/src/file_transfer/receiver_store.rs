@@ -1,11 +1,12 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use diesel::Connection;
 
 use crate::db::ports::DbExecutor;
 use crate::file_transfer::event_store::sqlite::{append_event, load_events};
 use crate::file_transfer::projection::sqlite::{apply_event, seed_receiver_context};
 use crate::file_transfer::ReceiverTransferContext;
-use uc_core::file_transfer::FileTransferEvent;
+use uc_core::file_transfer::{FileTransferEvent, FileTransferEventStorePort};
 
 /// Receiver-side durable store that keeps event log and projection updates in one SQLite transaction.
 pub struct SqliteReceiverFileTransferStore<E> {
@@ -24,8 +25,17 @@ impl<E: DbExecutor> SqliteReceiverFileTransferStore<E> {
             conn.transaction::<_, anyhow::Error, _>(|conn| seed_receiver_context(conn, &ctx))
         })
     }
+}
 
-    pub async fn append_event_and_project(&self, event: FileTransferEvent) -> Result<()> {
+#[async_trait]
+impl<E: DbExecutor> FileTransferEventStorePort for SqliteReceiverFileTransferStore<E> {
+    async fn load(&self, transfer_id: &str) -> Result<Vec<FileTransferEvent>> {
+        let transfer_id = transfer_id.to_string();
+        self.executor
+            .run(move |conn| load_events(conn, &transfer_id))
+    }
+
+    async fn append(&self, event: FileTransferEvent) -> Result<()> {
         self.executor.run(move |conn| {
             conn.transaction::<_, anyhow::Error, _>(|conn| {
                 append_event(conn, event.clone())?;
@@ -33,12 +43,6 @@ impl<E: DbExecutor> SqliteReceiverFileTransferStore<E> {
                 Ok(())
             })
         })
-    }
-
-    pub async fn load_events(&self, transfer_id: &str) -> Result<Vec<FileTransferEvent>> {
-        let transfer_id = transfer_id.to_string();
-        self.executor
-            .run(move |conn| load_events(conn, &transfer_id))
     }
 }
 
@@ -101,17 +105,11 @@ mod tests {
             },
         };
 
-        store
-            .append_event_and_project(announced.clone())
-            .await
-            .unwrap();
-        store
-            .append_event_and_project(progress.clone())
-            .await
-            .unwrap();
+        store.append(announced.clone()).await.unwrap();
+        store.append(progress.clone()).await.unwrap();
 
         assert_eq!(
-            store.load_events("transfer-1").await.unwrap(),
+            store.load("transfer-1").await.unwrap(),
             vec![announced, progress]
         );
 
@@ -129,15 +127,11 @@ mod tests {
         let (store, _repo, _tempdir) = make_store();
         let event = FileTransferEvent::completed("missing-transfer", "peer-1");
 
-        let err = store.append_event_and_project(event).await.unwrap_err();
+        let err = store.append(event).await.unwrap_err();
 
         assert!(err
             .to_string()
             .contains("seed receiver context before applying events"));
-        assert!(store
-            .load_events("missing-transfer")
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(store.load("missing-transfer").await.unwrap().is_empty());
     }
 }
