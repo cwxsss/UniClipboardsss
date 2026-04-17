@@ -47,7 +47,7 @@ impl<E: DbExecutor> SqliteReceiverFileTransferProjectionUpdater<E> {
     }
 }
 
-fn seed_receiver_context(
+pub(crate) fn seed_receiver_context(
     conn: &mut diesel::sqlite::SqliteConnection,
     ctx: &ReceiverTransferContext,
 ) -> Result<()> {
@@ -80,7 +80,7 @@ fn seed_receiver_context(
     Ok(())
 }
 
-fn apply_event(
+pub(crate) fn apply_event(
     conn: &mut diesel::sqlite::SqliteConnection,
     event: &FileTransferEvent,
 ) -> Result<()> {

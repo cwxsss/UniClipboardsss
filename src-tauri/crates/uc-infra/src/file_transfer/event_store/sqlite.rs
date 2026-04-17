@@ -13,7 +13,7 @@ use uc_core::file_transfer::{FileTransferEvent, FileTransferEventStorePort};
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = file_transfer_events)]
 #[diesel(check_for_backend(diesel::sqlite::Sqlite))]
-struct FileTransferEventRow {
+pub(crate) struct FileTransferEventRow {
     id: i32,
     transfer_id: String,
     sequence: i32,
@@ -24,7 +24,7 @@ struct FileTransferEventRow {
 
 #[derive(Debug, Clone, Insertable)]
 #[diesel(table_name = file_transfer_events)]
-struct NewFileTransferEventRow {
+pub(crate) struct NewFileTransferEventRow {
     transfer_id: String,
     sequence: i32,
     event_type: String,
@@ -57,7 +57,10 @@ impl<E: DbExecutor> FileTransferEventStorePort for SqliteFileTransferEventStore<
     }
 }
 
-fn load_events(conn: &mut SqliteConnection, transfer_id: &str) -> Result<Vec<FileTransferEvent>> {
+pub(crate) fn load_events(
+    conn: &mut SqliteConnection,
+    transfer_id: &str,
+) -> Result<Vec<FileTransferEvent>> {
     let rows = file_transfer_events::table
         .filter(file_transfer_events::transfer_id.eq(transfer_id))
         .order(file_transfer_events::sequence.asc())
@@ -79,44 +82,42 @@ fn load_events(conn: &mut SqliteConnection, transfer_id: &str) -> Result<Vec<Fil
         .collect()
 }
 
-fn append_event(conn: &mut SqliteConnection, event: FileTransferEvent) -> Result<()> {
+pub(crate) fn append_event(conn: &mut SqliteConnection, event: FileTransferEvent) -> Result<()> {
     let transfer_id = transfer_id_of(&event).to_string();
     let event_type = event_type_of(&event).to_string();
     let payload_json = serde_json::to_string(&event)
         .with_context(|| format!("failed to serialize file transfer event `{event_type}`"))?;
     let occurred_at_ms = Utc::now().timestamp_millis();
 
-    conn.transaction::<_, anyhow::Error, _>(|conn| {
-        let current_max: Option<i32> = file_transfer_events::table
-            .filter(file_transfer_events::transfer_id.eq(&transfer_id))
-            .select(diesel::dsl::max(file_transfer_events::sequence))
-            .first(conn)
-            .with_context(|| {
-                format!("failed to read event sequence for file transfer `{transfer_id}`")
-            })?;
+    let current_max: Option<i32> = file_transfer_events::table
+        .filter(file_transfer_events::transfer_id.eq(&transfer_id))
+        .select(diesel::dsl::max(file_transfer_events::sequence))
+        .first(conn)
+        .with_context(|| {
+            format!("failed to read event sequence for file transfer `{transfer_id}`")
+        })?;
 
-        let sequence = current_max.unwrap_or(0) + 1;
+    let sequence = current_max.unwrap_or(0) + 1;
 
-        let row = NewFileTransferEventRow {
-            transfer_id: transfer_id.clone(),
-            sequence,
-            event_type,
-            payload_json,
-            occurred_at_ms,
-        };
+    let row = NewFileTransferEventRow {
+        transfer_id: transfer_id.clone(),
+        sequence,
+        event_type,
+        payload_json,
+        occurred_at_ms,
+    };
 
-        diesel::insert_into(file_transfer_events::table)
-            .values(&row)
-            .execute(conn)
-            .with_context(|| {
-                format!(
-                    "failed to append file transfer event for `{}` at sequence {}",
-                    transfer_id, sequence
-                )
-            })?;
+    diesel::insert_into(file_transfer_events::table)
+        .values(&row)
+        .execute(conn)
+        .with_context(|| {
+            format!(
+                "failed to append file transfer event for `{}` at sequence {}",
+                transfer_id, sequence
+            )
+        })?;
 
-        Ok(())
-    })
+    Ok(())
 }
 
 fn transfer_id_of(event: &FileTransferEvent) -> &str {
