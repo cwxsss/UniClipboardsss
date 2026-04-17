@@ -69,7 +69,7 @@ pub enum FileTransferEvent {
         transfer_id: String,
         peer_id: String,
         filename: String,
-        file_size: u64,
+        file_size: Option<u64>,
     },
     Progress {
         transfer_id: String,
@@ -97,7 +97,7 @@ impl FileTransferEvent {
         transfer_id: impl Into<String>,
         peer_id: impl Into<String>,
         filename: impl Into<String>,
-        file_size: u64,
+        file_size: Option<u64>,
     ) -> Self {
         Self::Started {
             transfer_id: transfer_id.into(),
