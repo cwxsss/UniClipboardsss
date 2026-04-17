@@ -12,33 +12,13 @@
 //! - File names are kept as whole segment plus stem/extension parts.
 //! - `text_preview` is carried through or derived from the best available source.
 
-use uc_core::ids::{EntryId, EventId};
-use uc_core::search::document::ContentType;
 use url::Url;
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Input / Output types
-// ──────────────────────────────────────────────────────────────────────────────
+pub use uc_core::search::SearchPipelineInput;
 
-/// Structured input passed to `SearchTextExtractor` and `SearchPipeline`.
-///
-/// Callers (use-cases) build this from the clipboard entry's representations.
-#[derive(Debug, Clone)]
-pub struct SearchPipelineInput {
-    pub entry_id: EntryId,
-    pub event_id: EventId,
-    pub active_time_ms: i64,
-    pub captured_at_ms: i64,
-    pub content_type: ContentType,
-    pub mime_type: String,
-    pub file_extensions: Vec<String>,
-    pub plain_text: Option<String>,
-    pub html_text: Option<String>,
-    pub uri_list: Vec<String>,
-    pub file_paths: Vec<String>,
-    pub file_names: Vec<String>,
-    pub text_preview: Option<String>,
-}
+// ──────────────────────────────────────────────────────────────────────────────
+// Output type
+// ──────────────────────────────────────────────────────────────────────────────
 
 /// Extracted search text, structured per field.
 ///
