@@ -30,6 +30,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    file_transfer_events (id) {
+        id -> Integer,
+        transfer_id -> Text,
+        sequence -> Integer,
+        event_type -> Text,
+        payload_json -> Text,
+        occurred_at_ms -> BigInt,
+    }
+}
+
+diesel::table! {
     clipboard_entry (entry_id) {
         entry_id -> Text,
         event_id -> Text,
@@ -159,6 +170,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     clipboard_representation_thumbnail,
     clipboard_snapshot_representation,
     file_transfer,
+    file_transfer_events,
     paired_device,
     search_document,
     search_index_meta,
