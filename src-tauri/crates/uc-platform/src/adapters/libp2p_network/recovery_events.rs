@@ -15,8 +15,7 @@ use serde::{Deserialize, Serialize};
 /// Live per-peer runtime state driven by the recovery coordinator.
 ///
 /// Part of the user-facing three-state model defined in the Connection
-/// Stability Recovery PRD. Kept distinct from
-/// `uc_core::device::DeviceStatus`, which is a database-adjacent DTO.
+/// Stability Recovery PRD.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PeerRuntimeState {

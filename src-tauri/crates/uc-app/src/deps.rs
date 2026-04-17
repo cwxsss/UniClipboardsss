@@ -84,7 +84,6 @@ pub struct SecurityPorts {
 /// Device-domain ports bundle (includes pairing).
 /// 设备领域端口组（含配对）。
 pub struct DevicePorts {
-    pub device_repo: Arc<dyn DeviceRepositoryPort>,
     pub device_identity: Arc<dyn DeviceIdentityPort>,
     pub paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
 }

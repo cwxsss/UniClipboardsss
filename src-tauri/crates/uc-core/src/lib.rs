@@ -23,7 +23,7 @@ pub mod space_access;
 // Re-export commonly used types at the crate root
 pub use clipboard::*;
 pub use config::AppConfig;
-pub use device::{Device, DeviceId, DeviceName, DeviceStatus, Platform};
+pub use device::DeviceId;
 pub use file_transfer::{
     FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
     FileTransferFailureReason, FileTransferProgress,

@@ -23,7 +23,6 @@ mod clipboard_event;
 mod clock;
 pub mod connection_policy;
 pub mod device_identity;
-pub mod device_repository;
 mod discovery;
 pub mod errors;
 pub mod file_manager;
@@ -55,8 +54,7 @@ pub use timer::TimerPort;
 pub use clipboard::*;
 pub use clipboard_change_handler::ClipboardChangeHandler;
 pub use device_identity::DeviceIdentityPort;
-pub use device_repository::DeviceRepositoryPort;
-pub use errors::{AppDirsError, DeviceRepositoryError, PairedDeviceRepositoryError};
+pub use errors::{AppDirsError, PairedDeviceRepositoryError};
 pub use file_manager::{FileManagerError, FileManagerPort};
 pub use file_transfer_repository::{
     compute_aggregate_status, EntryTransferSummary, ExpiredInflightTransfer,

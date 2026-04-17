@@ -47,7 +47,7 @@ use uc_infra::db::executor::DieselSqliteExecutor;
 use uc_infra::db::mappers::{
     blob_mapper::BlobRowMapper, clipboard_entry_mapper::ClipboardEntryRowMapper,
     clipboard_event_mapper::ClipboardEventRowMapper,
-    clipboard_selection_mapper::ClipboardSelectionRowMapper, device_mapper::DeviceRowMapper,
+    clipboard_selection_mapper::ClipboardSelectionRowMapper,
     paired_device_mapper::PairedDeviceRowMapper,
     snapshot_representation_mapper::RepresentationRowMapper,
 };
@@ -55,8 +55,7 @@ use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
     DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
     DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselDeviceRepository, DieselFileTransferRepository, DieselPairedDeviceRepository,
-    DieselThumbnailRepository,
+    DieselFileTransferRepository, DieselPairedDeviceRepository, DieselThumbnailRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -194,9 +193,6 @@ struct InfraLayer {
     representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
     selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
 
-    // Device repository
-    device_repo: Arc<dyn DeviceRepositoryPort>,
-
     // Pairing repository
     paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
 
@@ -308,7 +304,6 @@ fn create_infra_layer(
 
     let entry_row_mapper = ClipboardEntryRowMapper;
     let selection_row_mapper = ClipboardSelectionRowMapper;
-    let device_row_mapper = DeviceRowMapper;
     let paired_device_row_mapper = PairedDeviceRowMapper;
     let blob_row_mapper = BlobRowMapper;
     let _representation_row_mapper = RepresentationRowMapper;
@@ -332,9 +327,6 @@ fn create_infra_layer(
 
     let rep_repo = DieselClipboardRepresentationRepository::new(Arc::clone(&db_executor));
     let representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort> = Arc::new(rep_repo);
-
-    let dev_repo = DieselDeviceRepository::new(Arc::clone(&db_executor), device_row_mapper);
-    let device_repo: Arc<dyn DeviceRepositoryPort> = Arc::new(dev_repo);
 
     let paired_repo =
         DieselPairedDeviceRepository::new(Arc::clone(&db_executor), paired_device_row_mapper);
@@ -391,7 +383,6 @@ fn create_infra_layer(
         clipboard_event_repo,
         representation_repo,
         selection_repo,
-        device_repo,
         paired_device_repo,
         blob_repository,
         thumbnail_repo,
@@ -817,7 +808,6 @@ pub fn wire_dependencies_with_identity_store(
             key_material: infra.key_material,
         },
         device: DevicePorts {
-            device_repo: infra.device_repo,
             device_identity: platform.device_identity,
             paired_device_repo: infra.paired_device_repo,
         },
