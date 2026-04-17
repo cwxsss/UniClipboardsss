@@ -83,8 +83,6 @@ pub struct FileTransferProgressPayload {
     pub entry_id: Option<String>,
     pub peer_id: String,
     pub direction: TransferDirection,
-    pub chunks_completed: u32,
-    pub total_chunks: u32,
     pub bytes_transferred: u64,
     pub total_bytes: Option<u64>,
 }

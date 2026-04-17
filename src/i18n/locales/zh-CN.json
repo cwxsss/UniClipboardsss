@@ -540,7 +540,6 @@
       "sending": "发送中",
       "receiving": "接收中",
       "progress": "{{transferred}} / {{total}} ({{percent}}%)",
-      "chunks": "{{completed}} / {{total}} 块",
       "speedValue": "{{speed}}",
       "speedPending": "速度计算中",
       "remainingValue": "剩余 {{time}}",

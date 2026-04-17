@@ -137,8 +137,6 @@ impl HostEventEmitterPort for DaemonApiEventEmitter {
                 entry_id,
                 peer_id,
                 direction,
-                chunks_completed,
-                total_chunks,
                 bytes_transferred,
                 total_bytes,
             }) => {
@@ -152,8 +150,6 @@ impl HostEventEmitterPort for DaemonApiEventEmitter {
                         entry_id,
                         peer_id,
                         direction,
-                        chunks_completed,
-                        total_chunks,
                         bytes_transferred,
                         total_bytes,
                     },

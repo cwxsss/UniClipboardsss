@@ -56,9 +56,7 @@ const FilePreview: React.FC<FilePreviewProps> = ({
   const percent =
     transfer && transfer.totalBytes && transfer.totalBytes > 0
       ? Math.round((transfer.bytesTransferred / transfer.totalBytes) * 100)
-      : transfer?.totalChunks && transfer.totalChunks > 0
-        ? Math.round((transfer.chunksCompleted / transfer.totalChunks) * 100)
-        : 0
+      : 0
 
   const renderStatusBadge = () => (
     <div className="flex flex-wrap gap-2">

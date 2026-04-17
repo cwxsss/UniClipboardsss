@@ -549,7 +549,6 @@
       "sending": "Sending",
       "receiving": "Receiving",
       "progress": "{{transferred}} / {{total}} ({{percent}}%)",
-      "chunks": "{{completed}} / {{total}} chunks",
       "speedValue": "{{speed}}",
       "speedPending": "Calculating speed",
       "remainingValue": "{{time}} remaining",

@@ -6,8 +6,6 @@ export interface TransferProgressInfo {
   entryId: string | null
   peerId: string
   direction: 'Sending' | 'Receiving'
-  chunksCompleted: number
-  totalChunks: number
   bytesTransferred: number
   totalBytes: number | null
   status: 'active' | 'completed' | 'failed'
@@ -43,8 +41,6 @@ interface UpdateTransferProgressPayload {
   entryId?: string | null
   peerId: string
   direction: 'Sending' | 'Receiving'
-  chunksCompleted: number
-  totalChunks: number
   bytesTransferred: number
   totalBytes?: number | null
   eventTs?: number
@@ -55,21 +51,11 @@ const fileTransferSlice = createSlice({
   initialState,
   reducers: {
     updateTransferProgress(state, action: PayloadAction<UpdateTransferProgressPayload>) {
-      const {
-        transferId,
-        entryId,
-        peerId,
-        direction,
-        chunksCompleted,
-        totalChunks,
-        bytesTransferred,
-        totalBytes,
-        eventTs,
-      } = action.payload
+      const { transferId, entryId, peerId, direction, bytesTransferred, totalBytes, eventTs } =
+        action.payload
       const now = eventTs ?? Date.now()
       const existing = state.activeTransfers[transferId]
 
-      const isCompleted = chunksCompleted === totalChunks && totalChunks > 0
       const startedAt = existing?.startedAt ?? now
       const elapsedSeconds = Math.max((now - startedAt) / 1000, 0.001)
       const bytesPerSecond = bytesTransferred > 0 ? bytesTransferred / elapsedSeconds : null
@@ -82,16 +68,21 @@ const fileTransferSlice = createSlice({
           ? Math.max((totalBytesValue - bytesTransferred) / bytesPerSecond, 0)
           : null
 
+      // Preserve terminal status set by status_changed events — progress events must not regress it.
+      const status =
+        existing?.status === 'completed' || existing?.status === 'failed'
+          ? existing.status
+          : 'active'
+
       state.activeTransfers[transferId] = {
+        ...existing,
         transferId,
         entryId: entryId ?? existing?.entryId ?? null,
         peerId,
         direction,
-        chunksCompleted,
-        totalChunks,
         bytesTransferred,
         totalBytes: totalBytesValue,
-        status: isCompleted ? 'completed' : 'active',
+        status,
         startedAt,
         updatedAt: now,
         bytesPerSecond,
@@ -100,6 +91,15 @@ const fileTransferSlice = createSlice({
 
       if (entryId) {
         state.entryTransferMap[entryId] = transferId
+      }
+    },
+
+    markTransferCompleted(state, action: PayloadAction<{ transferId: string }>) {
+      const transfer = state.activeTransfers[action.payload.transferId]
+      if (transfer) {
+        transfer.status = 'completed'
+        transfer.updatedAt = Date.now()
+        transfer.estimatedRemainingSeconds = null
       }
     },
 
@@ -190,6 +190,7 @@ const fileTransferSlice = createSlice({
 
 export const {
   updateTransferProgress,
+  markTransferCompleted,
   linkTransferToEntry,
   markTransferFailed,
   cancelClipboardWrite,

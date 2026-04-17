@@ -3,6 +3,7 @@ import { daemonWs } from '@/lib/daemon-ws'
 import { createLogger } from '@/lib/logger'
 import { useAppDispatch } from '@/store/hooks'
 import {
+  markTransferCompleted,
   markTransferFailed,
   cancelClipboardWrite,
   linkTransferToEntry,
@@ -25,8 +26,6 @@ interface FileTransferProgressEvent {
   entryId?: string | null
   peerId: string
   direction: 'Sending' | 'Receiving'
-  chunksCompleted: number
-  totalChunks: number
   bytesTransferred: number
   totalBytes?: number | null
 }
@@ -94,6 +93,8 @@ export function useTransferProgress(): void {
               error: reason ?? undefined,
             })
           )
+        } else if (status === 'completed') {
+          dispatch(markTransferCompleted({ transferId: payload.transferId }))
         }
       }
 
@@ -106,8 +107,6 @@ export function useTransferProgress(): void {
               entryId: payload.entryId ?? null,
               peerId: payload.peerId,
               direction: payload.direction,
-              chunksCompleted: payload.chunksCompleted,
-              totalChunks: payload.totalChunks,
               bytesTransferred: payload.bytesTransferred,
               totalBytes: payload.totalBytes ?? null,
             },
@@ -120,8 +119,6 @@ export function useTransferProgress(): void {
             entryId: payload.entryId ?? null,
             peerId: payload.peerId,
             direction: payload.direction,
-            chunksCompleted: payload.chunksCompleted,
-            totalChunks: payload.totalChunks,
             bytesTransferred: payload.bytesTransferred,
             totalBytes: payload.totalBytes ?? null,
             eventTs: event.ts,

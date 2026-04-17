@@ -286,8 +286,6 @@ impl FileTransferOrchestrator {
             entry_id: entry_id.clone(),
             peer_id: progress.peer_id.clone(),
             direction: progress.direction.clone(),
-            chunks_completed: progress.chunks_completed,
-            total_chunks: progress.total_chunks,
             bytes_transferred: progress.bytes_transferred,
             total_bytes: progress.total_bytes,
         })) {
