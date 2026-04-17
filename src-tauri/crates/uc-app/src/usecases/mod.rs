@@ -60,10 +60,7 @@ pub use verify_keychain_access::VerifyKeychainAccess;
 
 pub use clipboard::clipboard_write_coordinator::{ClipboardWriteCoordinator, ClipboardWriteIntent};
 
-pub use file_sync::{
-    EarlyCompletionCache, EarlyCompletionInfo, FileTransferOrchestrator, SyncInboundFileUseCase,
-    SyncOutboundFileUseCase, TrackInboundTransfersUseCase,
-};
+pub use file_sync::{SyncInboundFileUseCase, SyncOutboundFileUseCase};
 
 pub use sync_planner::{
     ClipboardSyncIntent, FileCandidate, FileSyncIntent, OutboundSyncPlan, OutboundSyncPlanner,

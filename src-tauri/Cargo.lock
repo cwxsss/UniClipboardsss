@@ -9842,6 +9842,7 @@ dependencies = [
  "tower",
  "tracing",
  "uc-app",
+ "uc-application",
  "uc-bootstrap",
  "uc-core",
  "uc-daemon-contract",

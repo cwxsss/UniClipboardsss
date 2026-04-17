@@ -23,14 +23,16 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::clipboard::clipboard_write_coordinator::ClipboardWriteCoordinator;
 use uc_app::usecases::clipboard::sync_inbound::{InboundApplyOutcome, SyncInboundClipboardUseCase};
 use uc_app::usecases::clipboard::ClipboardIntegrationMode;
-use uc_app::usecases::file_sync::FileTransferOrchestrator;
+use uc_application::file_transfer::AnnounceTransfer;
+use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
 use uc_core::network::{ClipboardMessage, ProtocolMessage};
-use uc_core::ports::file_transfer_repository::PendingInboundTransfer;
 use uc_core::ports::{
     ClipboardInboundMessageSource, ClipboardTransportError, InboundClipboardFrame,
 };
+use uc_core::DeviceId;
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 use uc_infra::clipboard::TransferPayloadDecryptorAdapter;
+use uc_infra::file_transfer::ReceiverTransferContext;
 
 use crate::api::types::DaemonWsEvent;
 use crate::service::{DaemonService, ServiceHealth};
@@ -71,7 +73,7 @@ pub struct InboundClipboardSyncWorker {
     /// DaemonClipboardChangeHandler to share guard state.
     clipboard_write_coordinator: Arc<ClipboardWriteCoordinator>,
     file_cache_dir: Option<PathBuf>,
-    file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
+    file_transfer_lifecycle: Option<Arc<FileTransferLifecycle>>,
 }
 
 impl InboundClipboardSyncWorker {
@@ -86,14 +88,14 @@ impl InboundClipboardSyncWorker {
         event_tx: broadcast::Sender<DaemonWsEvent>,
         clipboard_write_coordinator: Arc<ClipboardWriteCoordinator>,
         file_cache_dir: Option<PathBuf>,
-        file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
+        file_transfer_lifecycle: Option<Arc<FileTransferLifecycle>>,
     ) -> Self {
         Self {
             runtime,
             event_tx,
             clipboard_write_coordinator,
             file_cache_dir,
-            file_transfer_orchestrator,
+            file_transfer_lifecycle,
         }
     }
 
@@ -134,7 +136,8 @@ impl DaemonService for InboundClipboardSyncWorker {
             .clipboard_inbound
             .clone();
         let event_tx = self.event_tx.clone();
-        let orchestrator = self.file_transfer_orchestrator.clone();
+        let lifecycle = self.file_transfer_lifecycle.clone();
+        let clock = self.runtime.wiring_deps().system.clock.clone();
 
         loop {
             let subscribe_result = tokio::select! {
@@ -156,7 +159,8 @@ impl DaemonService for InboundClipboardSyncWorker {
                         Arc::clone(&usecase),
                         cancel.clone(),
                         event_tx.clone(),
-                        orchestrator.clone(),
+                        lifecycle.clone(),
+                        clock.clone(),
                     )
                     .await;
                     info!("inbound clipboard receive loop ended, service will exit");
@@ -192,7 +196,8 @@ impl InboundClipboardSyncWorker {
         usecase: Arc<SyncInboundClipboardUseCase>,
         cancel: CancellationToken,
         event_tx: broadcast::Sender<DaemonWsEvent>,
-        file_transfer_orchestrator: Option<Arc<FileTransferOrchestrator>>,
+        file_transfer_lifecycle: Option<Arc<FileTransferLifecycle>>,
+        clock: Arc<dyn uc_core::ports::ClockPort>,
     ) {
         loop {
             tokio::select! {
@@ -230,46 +235,56 @@ impl InboundClipboardSyncWorker {
                                 entry_id: Some(ref entry_id),
                                 ref pending_transfers,
                             } = outcome {
-                                // Seed pending transfer records for file transfers.
+                                // For each pending inbound file transfer: seed the receiver
+                                // projection row first (entry_id / cached_path are local
+                                // receiver context that does not enter the domain event),
+                                // then announce the transfer in the event store so that
+                                // downstream Progress/Completed events have a valid timeline
+                                // and the publisher emits a "pending" host event.
                                 if !pending_transfers.is_empty() {
-                                    if let Some(ref orch) = file_transfer_orchestrator {
-                                        let now_ms = orch.now_ms();
-                                        let db_transfers: Vec<PendingInboundTransfer> =
-                                            pending_transfers.iter().map(|t| PendingInboundTransfer {
+                                    if let Some(ref lifecycle) = file_transfer_lifecycle {
+                                        let now_ms = clock.now_ms();
+                                        for t in pending_transfers {
+                                            let ctx = ReceiverTransferContext {
                                                 transfer_id: t.transfer_id.clone(),
                                                 entry_id: entry_id.to_string(),
                                                 origin_device_id: message_origin_device_id.clone(),
                                                 filename: t.filename.clone(),
                                                 cached_path: t.cached_path.clone(),
                                                 created_at_ms: now_ms,
-                                            }).collect();
-
-                                        match orch.tracker().record_pending_from_clipboard(db_transfers).await {
-                                            Err(err) => {
-                                                warn!(error = %err, "Failed to persist pending transfer records");
+                                            };
+                                            if let Err(err) = lifecycle
+                                                .store
+                                                .seed_receiver_context(ctx)
+                                                .await
+                                            {
+                                                warn!(
+                                                    error = %err,
+                                                    transfer_id = %t.transfer_id,
+                                                    "Failed to seed receiver transfer context"
+                                                );
+                                                continue;
                                             }
-                                            Ok(()) => {
-                                                // Reconcile early completions that arrived before seeding.
-                                                let seeded_ids: Vec<String> = pending_transfers
-                                                    .iter()
-                                                    .map(|t| t.transfer_id.clone())
-                                                    .collect();
-                                                let early = orch.early_completion_cache().drain_matching(&seeded_ids);
-                                                for (tid, info) in &early {
-                                                    info!(transfer_id = %tid, "Reconciling early completion after seeding");
-                                                    if let Err(err) = orch.tracker().mark_completed(
-                                                        tid,
-                                                        info.content_hash.as_deref(),
-                                                        info.completed_at_ms,
-                                                    ).await {
-                                                        warn!(error = %err, transfer_id = %tid, "Failed to mark early-completed transfer");
-                                                    }
-                                                }
+
+                                            if let Err(err) = lifecycle
+                                                .announce
+                                                .execute(AnnounceTransfer {
+                                                    transfer_id: t.transfer_id.clone(),
+                                                    origin_device_id: DeviceId::new(
+                                                        &message_origin_device_id,
+                                                    ),
+                                                    filename: t.filename.clone(),
+                                                    file_size: None,
+                                                })
+                                                .await
+                                            {
+                                                warn!(
+                                                    error = %err,
+                                                    transfer_id = %t.transfer_id,
+                                                    "Failed to announce inbound transfer"
+                                                );
                                             }
                                         }
-
-                                        // Emit pending status events to frontend.
-                                        orch.emit_pending_status(&entry_id.to_string(), pending_transfers);
                                     }
                                 }
 

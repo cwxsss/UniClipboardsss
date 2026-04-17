@@ -137,10 +137,17 @@ pub enum FileTransferEvent {
     /// The transfer has failed.
     ///
     /// 传输已失败。
+    ///
+    /// `detail` carries the optional free-text context produced at the failure
+    /// site (for example, an underlying I/O error message). It is surfaced to
+    /// the UI layer alongside the typed `reason` so users can see both the
+    /// business category and the specific cause. The domain is intentionally
+    /// agnostic about format and treats `detail` as opaque.
     Failed {
         transfer_id: String,
         peer_id: String,
         reason: FileTransferFailureReason,
+        detail: Option<String>,
     },
     /// The transfer has been cancelled.
     ///
@@ -215,11 +222,13 @@ impl FileTransferEvent {
         transfer_id: impl Into<String>,
         peer_id: impl Into<String>,
         reason: FileTransferFailureReason,
+        detail: Option<String>,
     ) -> Self {
         Self::Failed {
             transfer_id: transfer_id.into(),
             peer_id: peer_id.into(),
             reason,
+            detail,
         }
     }
 

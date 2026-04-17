@@ -17,10 +17,11 @@ use tracing::{debug, info, instrument, warn, Instrument};
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase;
-use uc_app::usecases::file_sync::FileTransferOrchestrator;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::sync_planner::{FileCandidate, OutboundSyncPlanner};
 use uc_app::usecases::CoreUseCases;
+use uc_application::file_transfer::AnnounceTransfer;
+use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_daemon_contract::constants::{ws_event, ws_topic};
@@ -127,7 +128,7 @@ pub struct DaemonClipboardChangeHandler {
     runtime: Arc<CoreRuntime>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
-    file_transfer_orchestrator: Arc<FileTransferOrchestrator>,
+    file_transfer_lifecycle: Arc<FileTransferLifecycle>,
     /// Gate that controls whether clipboard capture is active.
     /// When false, clipboard change events are silently dropped.
     /// Used in `--gui-managed` mode to defer clipboard capture until
@@ -140,14 +141,14 @@ impl DaemonClipboardChangeHandler {
         runtime: Arc<CoreRuntime>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
-        file_transfer_orchestrator: Arc<FileTransferOrchestrator>,
+        file_transfer_lifecycle: Arc<FileTransferLifecycle>,
         capture_gate: Arc<AtomicBool>,
     ) -> Self {
         Self {
             runtime,
             event_tx,
             clipboard_change_origin,
-            file_transfer_orchestrator,
+            file_transfer_lifecycle,
             capture_gate,
         }
     }
@@ -428,40 +429,79 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                             deps.network_ports.file_transfer.clone(),
                         )
                     };
-                    let file_transfer_orchestrator = self.file_transfer_orchestrator.clone();
+                    let lifecycle = Arc::clone(&self.file_transfer_lifecycle);
                     let entry_id_string = entry_id.to_string();
-                    tokio::spawn(async move {
-                        for file_intent in plan.files {
-                            let transfer_id = file_intent.transfer_id.clone();
-                            let path = file_intent.path.clone();
-                            let file_name = path.display().to_string();
-                            file_transfer_orchestrator
-                                .register_outbound_transfer(&transfer_id, &entry_id_string);
-                            info!(
-                                transfer_id = %transfer_id,
-                                entry_id = %entry_id_string,
-                                file = %file_name,
-                                "Registered outbound transfer linkage from clipboard capture"
-                            );
-                            info!(file = %file_intent.path.display(), transfer_id = %file_intent.transfer_id, "Daemon sending file to peers");
-                            match outbound_file_uc
-                                .execute(file_intent.path, Some(transfer_id))
-                                .await
-                            {
-                                Ok(result) => info!(
-                                    transfer_id = %result.transfer_id,
-                                    peer_count = result.peer_count,
-                                    "Daemon outbound file sync completed"
-                                ),
-                                Err(e) => warn!(
-                                    error = %e,
-                                    file = %file_name,
-                                    "Daemon outbound file sync failed"
-                                ),
+                    let origin_device_id = self
+                        .runtime
+                        .wiring_deps()
+                        .device
+                        .device_identity
+                        .current_device_id();
+                    tokio::spawn(
+                        async move {
+                            for file_intent in plan.files {
+                                let transfer_id = file_intent.transfer_id.clone();
+                                let path = file_intent.path.clone();
+                                let file_name = path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let file_size =
+                                    tokio::fs::metadata(&path).await.ok().map(|m| m.len());
+
+                                // Register sender-side entry_id hint so the publisher
+                                // can resolve it on subsequent events (sender has no
+                                // receiver-side projection row).
+                                lifecycle
+                                    .outbound_entry_cache
+                                    .insert(transfer_id.clone(), entry_id_string.clone());
+
+                                // Announce the transfer in the durable event store
+                                // before the platform layer emits FileTransferStarted —
+                                // StartTransferUseCase requires a prior Announced event.
+                                if let Err(err) = lifecycle
+                                    .announce
+                                    .execute(AnnounceTransfer {
+                                        transfer_id: transfer_id.clone(),
+                                        origin_device_id: origin_device_id.clone(),
+                                        filename: file_name.clone(),
+                                        file_size,
+                                    })
+                                    .await
+                                {
+                                    warn!(
+                                        error = %err,
+                                        transfer_id = %transfer_id,
+                                        "Failed to announce outbound transfer"
+                                    );
+                                }
+
+                                info!(
+                                    transfer_id = %transfer_id,
+                                    entry_id = %entry_id_string,
+                                    file = %path.display(),
+                                    "Daemon sending file to peers"
+                                );
+                                match outbound_file_uc
+                                    .execute(file_intent.path, Some(transfer_id))
+                                    .await
+                                {
+                                    Ok(result) => info!(
+                                        transfer_id = %result.transfer_id,
+                                        peer_count = result.peer_count,
+                                        "Daemon outbound file sync completed"
+                                    ),
+                                    Err(e) => warn!(
+                                        error = %e,
+                                        file = %file_name,
+                                        "Daemon outbound file sync failed"
+                                    ),
+                                }
                             }
                         }
-                    }
-                    .in_current_span());
+                        .in_current_span(),
+                    );
                 }
             }
             Ok(None) => {

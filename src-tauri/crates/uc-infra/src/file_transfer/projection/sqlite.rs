@@ -1,7 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel::upsert::excluded;
+use tracing::debug;
 
 use crate::db::models::NewFileTransferRow;
 use crate::db::ports::DbExecutor;
@@ -164,9 +165,13 @@ pub(crate) fn apply_event(
     };
 
     if affected == 0 {
-        bail!(
-            "receiver-side file transfer projection row missing for `{}`; seed receiver context before applying events",
-            transfer_id
+        // No projection row — expected for sender-side transfers, which do not
+        // seed a receiver context. The event is still recorded in the event log
+        // (the transaction wrapping this call handles both); only the
+        // receiver-specific projection update is a no-op.
+        debug!(
+            transfer_id,
+            "no receiver projection row for event; skipping projection update (sender-side or pre-seed)"
         );
     }
 
@@ -341,16 +346,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_event_requires_seeded_receiver_context() {
+    async fn apply_event_is_noop_when_no_receiver_row() {
+        // Sender-side transfers legitimately flow through this projection
+        // updater without ever seeding a receiver context. The update must
+        // silently no-op rather than erroring, otherwise sender-side event
+        // append would fail.
         let (updater, _repo, _tempdir) = make_updater();
 
-        let err = updater
-            .apply_event(&FileTransferEvent::completed("missing-transfer", "peer-1"))
+        updater
+            .apply_event(&FileTransferEvent::completed(
+                "sender-only-transfer",
+                "peer-1",
+            ))
             .await
-            .unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("seed receiver context before applying events"));
+            .unwrap();
     }
 }

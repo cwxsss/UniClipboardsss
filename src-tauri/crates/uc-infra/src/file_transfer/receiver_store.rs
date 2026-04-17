@@ -123,15 +123,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_event_and_project_rolls_back_when_projection_fails() {
+    async fn append_succeeds_without_receiver_context_for_sender_side_events() {
+        // Sender-side transfers intentionally do not seed a receiver context.
+        // The event log still records them; the receiver projection update is
+        // simply a no-op when no row exists. This makes `store.append` safe to
+        // call from both sides without the caller caring which one it is.
         let (store, _repo, _tempdir) = make_store();
-        let event = FileTransferEvent::completed("missing-transfer", "peer-1");
+        let event = FileTransferEvent::completed("sender-only-transfer", "peer-1");
 
-        let err = store.append(event).await.unwrap_err();
+        store.append(event.clone()).await.unwrap();
 
-        assert!(err
-            .to_string()
-            .contains("seed receiver context before applying events"));
-        assert!(store.load("missing-transfer").await.unwrap().is_empty());
+        assert_eq!(
+            store.load("sender-only-transfer").await.unwrap(),
+            vec![event]
+        );
     }
 }

@@ -107,9 +107,10 @@ impl FileTransferEventPublisherPort for FileTransferHostEventPublisher {
             FileTransferEvent::Failed {
                 transfer_id,
                 reason,
+                detail,
                 ..
             } => {
-                let reason_label = Some(failure_reason_label(reason).to_string());
+                let reason_label = Some(format_failure_reason(reason, detail.as_deref()));
                 self.publish_status_change(&transfer_id, "failed", reason_label, "Failed")
                     .await;
             }
@@ -166,6 +167,18 @@ fn failure_reason_label(reason: FileTransferFailureReason) -> &'static str {
         FileTransferFailureReason::StorageUnavailable => "storage_unavailable",
         FileTransferFailureReason::IntegrityCheckFailed => "integrity_check_failed",
         FileTransferFailureReason::Unknown => "unknown",
+    }
+}
+
+/// Compose the final `StatusChanged.reason` string from the typed failure
+/// category and its optional free-text detail.
+///
+/// Output shape: `"{label}"` when no detail, `"{label}: {detail}"` otherwise.
+fn format_failure_reason(reason: FileTransferFailureReason, detail: Option<&str>) -> String {
+    let label = failure_reason_label(reason);
+    match detail.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(detail) => format!("{label}: {detail}"),
+        None => label.to_string(),
     }
 }
 

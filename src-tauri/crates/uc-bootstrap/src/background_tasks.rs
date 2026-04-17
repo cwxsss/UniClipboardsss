@@ -80,7 +80,6 @@ pub async fn spawn_blob_processing_tasks(
         spool_ttl_days,
         worker_retry_max_attempts,
         worker_retry_backoff_ms,
-        file_transfer_orchestrator: _,
         file_transfer_lifecycle: _,
         clipboard_write_coordinator: _,
     } = background;

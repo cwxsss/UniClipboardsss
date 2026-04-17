@@ -125,15 +125,11 @@ pub struct BackgroundRuntimeDeps {
     pub spool_ttl_days: u64,
     pub worker_retry_max_attempts: u32,
     pub worker_retry_backoff_ms: u64,
-    /// File transfer lifecycle orchestrator. Holds a clone of the shared emitter_cell so
-    /// it automatically sees emitter swaps (LoggingEventEmitter → DaemonApiEventEmitter).
-    pub file_transfer_orchestrator: Arc<uc_app::usecases::file_sync::FileTransferOrchestrator>,
-    /// Event-sourced file transfer lifecycle: durable store + host-event publisher + 6 use cases.
-    ///
-    /// Wired here but not yet routed from the daemon workers — the legacy
-    /// `file_transfer_orchestrator` above still drives the runtime path until Phase 3
-    /// swaps the call sites.
-    pub file_transfer_lifecycle: crate::file_transfer_lifecycle::FileTransferLifecycle,
+    /// Event-sourced file transfer lifecycle: durable store + host-event
+    /// publisher + 6 use cases, plus the sweep/reconcile runtime tasks.
+    /// Holds a clone of the shared emitter_cell so it automatically sees
+    /// emitter swaps (LoggingEventEmitter → DaemonApiEventEmitter).
+    pub file_transfer_lifecycle: Arc<crate::file_transfer_lifecycle::FileTransferLifecycle>,
     /// Single write boundary for all programmatic clipboard writes.
     /// Centralises guard-registration + write + cleanup-on-error.
     pub clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
@@ -855,17 +851,13 @@ pub fn wire_dependencies_with_identity_store(
     let emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>> =
         Arc::new(std::sync::RwLock::new(initial_emitter));
 
-    let file_transfer_orchestrator = build_file_transfer_orchestrator(
-        deps.storage.file_transfer_repo.clone(),
-        emitter_cell.clone(),
-        deps.system.clock.clone(),
-    );
-
-    let file_transfer_lifecycle = crate::file_transfer_lifecycle::build_file_transfer_lifecycle(
-        Arc::clone(&file_transfer_store_arc),
-        emitter_cell.clone(),
-        deps.storage.file_transfer_repo.clone(),
-        deps.system.clock.clone(),
+    let file_transfer_lifecycle = Arc::new(
+        crate::file_transfer_lifecycle::build_file_transfer_lifecycle(
+            Arc::clone(&file_transfer_store_arc),
+            emitter_cell.clone(),
+            deps.storage.file_transfer_repo.clone(),
+            deps.system.clock.clone(),
+        ),
     );
 
     let clipboard_write_coordinator = build_clipboard_write_coordinator(
@@ -887,7 +879,6 @@ pub fn wire_dependencies_with_identity_store(
             spool_ttl_days: storage_config.spool_ttl_days,
             worker_retry_max_attempts: storage_config.worker_retry_max_attempts,
             worker_retry_backoff_ms: storage_config.worker_retry_backoff_ms,
-            file_transfer_orchestrator,
             file_transfer_lifecycle,
             clipboard_write_coordinator,
         },
@@ -1048,25 +1039,6 @@ impl SetupAssemblyPorts {
             lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
         }
     }
-}
-
-/// Constructs a `FileTransferOrchestrator` for file transfer lifecycle management.
-///
-/// Uses the shared `emitter_cell` so the orchestrator automatically sees emitter swaps
-/// (e.g., `LoggingHostEventEmitter` → `DaemonApiEventEmitter` after Tauri setup).
-pub fn build_file_transfer_orchestrator(
-    file_transfer_repo: Arc<dyn uc_core::ports::FileTransferRepositoryPort>,
-    emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-    clock: Arc<dyn ClockPort>,
-) -> Arc<uc_app::usecases::file_sync::FileTransferOrchestrator> {
-    let tracker = Arc::new(
-        uc_app::usecases::file_sync::TrackInboundTransfersUseCase::new(file_transfer_repo),
-    );
-    Arc::new(uc_app::usecases::file_sync::FileTransferOrchestrator::new(
-        tracker,
-        emitter_cell,
-        clock,
-    ))
 }
 
 /// Constructs a `ClipboardWriteCoordinator` — the single write boundary for all
