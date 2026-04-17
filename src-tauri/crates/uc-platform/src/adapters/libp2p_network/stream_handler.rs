@@ -5,11 +5,11 @@ use libp2p_stream as stream;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, warn};
+use uc_core::file_transfer::FileTransferDirection;
 use uc_core::network::protocol::ClipboardPayloadVersion;
 use uc_core::network::{NetworkEvent, ProtocolDirection, ProtocolMessage};
 use uc_core::ports::{
-    ConnectionPolicyResolverPort, InboundClipboardFrame, SyncTargetId, TransferDirection,
-    TransferProgress,
+    ConnectionPolicyResolverPort, InboundClipboardFrame, SyncTargetId, TransferProgress,
 };
 
 use super::peer_cache::PeerCaches;
@@ -193,7 +193,7 @@ pub(super) fn spawn_business_stream_handler(
                                             NetworkEvent::TransferProgress(TransferProgress {
                                                 transfer_id: transfer_id.clone(),
                                                 peer_id: inbound_peer_id_str.clone(),
-                                                direction: TransferDirection::Receiving,
+                                                direction: FileTransferDirection::Receiving,
                                                 chunks_completed,
                                                 total_chunks,
                                                 bytes_transferred: bytes_received,

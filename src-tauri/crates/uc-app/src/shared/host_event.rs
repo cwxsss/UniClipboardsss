@@ -13,7 +13,7 @@
 //! - [`HostEventEmitterPort`] is synchronous (fire-and-forget semantics).
 //! - Emit failures are best-effort: callers log the error and continue.
 
-use uc_core::ports::transfer_progress::TransferDirection;
+use uc_core::file_transfer::FileTransferDirection;
 use uc_core::setup::SetupState;
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ pub enum TransferHostEvent {
         transfer_id: String,
         entry_id: Option<String>,
         peer_id: String,
-        direction: TransferDirection,
+        direction: FileTransferDirection,
         bytes_transferred: u64,
         total_bytes: Option<u64>,
     },

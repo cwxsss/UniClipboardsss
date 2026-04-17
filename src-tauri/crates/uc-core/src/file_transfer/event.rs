@@ -1,6 +1,4 @@
-use crate::ports::transfer_progress::{
-    TransferDirection as TransportTransferDirection, TransferProgress as TransportTransferProgress,
-};
+use crate::ports::transfer_progress::TransferProgress as TransportTransferProgress;
 use serde::{Deserialize, Serialize};
 
 /// Business-facing direction of a file transfer.
@@ -10,15 +8,6 @@ use serde::{Deserialize, Serialize};
 pub enum FileTransferDirection {
     Sending,
     Receiving,
-}
-
-impl From<TransportTransferDirection> for FileTransferDirection {
-    fn from(value: TransportTransferDirection) -> Self {
-        match value {
-            TransportTransferDirection::Sending => Self::Sending,
-            TransportTransferDirection::Receiving => Self::Receiving,
-        }
-    }
 }
 
 /// Business-facing progress snapshot for an active transfer.
@@ -44,7 +33,7 @@ pub struct FileTransferProgress {
 impl From<TransportTransferProgress> for FileTransferProgress {
     fn from(value: TransportTransferProgress) -> Self {
         Self {
-            direction: value.direction.into(),
+            direction: value.direction,
             bytes_transferred: value.bytes_transferred,
             total_bytes: value.total_bytes,
         }

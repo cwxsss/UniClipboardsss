@@ -20,10 +20,9 @@ use tokio::sync::{mpsc, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Duration, Instant};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, info_span, instrument, warn, Instrument};
+use uc_core::file_transfer::FileTransferDirection;
 use uc_core::network::NetworkEvent;
-use uc_core::ports::transfer_progress::{
-    TransferDirection, TransferProgress, TransferProgressPort,
-};
+use uc_core::ports::transfer_progress::{TransferProgress, TransferProgressPort};
 
 /// Maximum concurrent file transfers globally.
 pub const MAX_FILE_TRANSFER_CONCURRENCY: usize = 8;
@@ -358,7 +357,7 @@ impl FileTransferService {
             let progress = TransferProgress {
                 transfer_id: transfer_id_clone.clone(),
                 peer_id: peer_id_clone.clone(),
-                direction: TransferDirection::Receiving,
+                direction: FileTransferDirection::Receiving,
                 chunks_completed,
                 total_chunks,
                 bytes_transferred: bytes,
@@ -532,7 +531,7 @@ impl FileTransferService {
             let progress = TransferProgress {
                 transfer_id: transfer_id_for_progress.clone(),
                 peer_id: peer_id_for_progress.clone(),
-                direction: TransferDirection::Sending,
+                direction: FileTransferDirection::Sending,
                 chunks_completed,
                 total_chunks,
                 bytes_transferred: bytes,

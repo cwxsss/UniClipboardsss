@@ -11,8 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, info_span, warn, Instrument, Span};
+use uc_core::file_transfer::FileTransferDirection;
 use uc_core::network::{NetworkEvent, ProtocolDirection};
-use uc_core::ports::{ConnectionPolicyResolverPort, TransferDirection, TransferProgress};
+use uc_core::ports::{ConnectionPolicyResolverPort, TransferProgress};
 
 use super::dial_strategy::{
     chosen_dial_addr_for_log, dial_decision_for_snapshot, infer_address_scope,
@@ -502,7 +503,7 @@ pub(super) async fn execute_business_stream(
                                 NetworkEvent::TransferProgress(TransferProgress {
                                     transfer_id: transfer_id.clone(),
                                     peer_id: peer_id_str.to_string(),
-                                    direction: TransferDirection::Sending,
+                                    direction: FileTransferDirection::Sending,
                                     chunks_completed,
                                     total_chunks,
                                     bytes_transferred: written,

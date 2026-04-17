@@ -7,12 +7,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-/// Direction of a clipboard transfer.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum TransferDirection {
-    Sending,
-    Receiving,
-}
+use crate::file_transfer::FileTransferDirection;
 
 /// Progress of an ongoing clipboard transfer.
 ///
@@ -25,7 +20,7 @@ pub enum TransferDirection {
 pub struct TransferProgress {
     pub transfer_id: String,
     pub peer_id: String,
-    pub direction: TransferDirection,
+    pub direction: FileTransferDirection,
     pub chunks_completed: u32,
     pub total_chunks: u32,
     pub bytes_transferred: u64,

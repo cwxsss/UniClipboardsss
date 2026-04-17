@@ -94,4 +94,4 @@ pub use security::transfer_crypto::{
 pub use settings::{SettingsMigrationPort, SettingsPort};
 pub use setup::SetupStatusPort;
 pub use setup_event_port::SetupEventPort;
-pub use transfer_progress::{TransferDirection, TransferProgress, TransferProgressPort};
+pub use transfer_progress::{TransferProgress, TransferProgressPort};

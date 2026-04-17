@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uc_core::ports::transfer_progress::TransferDirection;
+use uc_core::file_transfer::FileTransferDirection;
 use uc_core::security::space_access::state::SpaceAccessState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +82,7 @@ pub struct FileTransferProgressPayload {
     pub transfer_id: String,
     pub entry_id: Option<String>,
     pub peer_id: String,
-    pub direction: TransferDirection,
+    pub direction: FileTransferDirection,
     pub bytes_transferred: u64,
     pub total_bytes: Option<u64>,
 }

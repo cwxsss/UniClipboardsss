@@ -14,11 +14,10 @@ use async_trait::async_trait;
 use tracing::warn;
 
 use uc_core::file_transfer::{
-    FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
-    FileTransferEventPublisherPort, FileTransferFailureReason,
+    FileTransferCancellationReason, FileTransferEvent, FileTransferEventPublisherPort,
+    FileTransferFailureReason,
 };
 use uc_core::ports::file_transfer_repository::FileTransferRepositoryPort;
-use uc_core::ports::transfer_progress::TransferDirection;
 
 use crate::shared::host_event::{HostEvent, HostEventEmitterPort, TransferHostEvent};
 use crate::shared::outbound_entry_cache::OutboundEntryIdCache;
@@ -91,7 +90,7 @@ impl FileTransferEventPublisherPort for FileTransferHostEventPublisher {
                     transfer_id,
                     entry_id,
                     peer_id,
-                    direction: direction_to_transport(progress.direction),
+                    direction: progress.direction,
                     bytes_transferred: progress.bytes_transferred,
                     total_bytes: progress.total_bytes,
                 }));
@@ -145,13 +144,6 @@ impl FileTransferHostEventPublisher {
             status: status.to_string(),
             reason,
         }));
-    }
-}
-
-fn direction_to_transport(direction: FileTransferDirection) -> TransferDirection {
-    match direction {
-        FileTransferDirection::Sending => TransferDirection::Sending,
-        FileTransferDirection::Receiving => TransferDirection::Receiving,
     }
 }
 
