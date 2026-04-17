@@ -7,7 +7,6 @@ pub use tracing;
 
 pub mod app_paths;
 pub mod deps;
-pub mod models;
 pub mod runtime;
 pub mod shared;
 pub mod task_registry;

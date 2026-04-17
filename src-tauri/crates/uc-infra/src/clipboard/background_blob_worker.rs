@@ -287,7 +287,7 @@ impl BackgroundBlobWorker {
             .context("failed to hash representation bytes")?;
 
         // BlobWriterPort should handle deduplication; data is passed as-is.
-        let blob = self
+        let blob_id = self
             .blob_writer
             .write_if_absent(&content_hash, &blob_bytes)
             .await
@@ -313,7 +313,7 @@ impl BackgroundBlobWorker {
             .update_processing_result(
                 rep_id,
                 &[PayloadAvailability::Processing],
-                Some(&blob.blob_id),
+                Some(&blob_id),
                 PayloadAvailability::BlobReady,
                 None,
             )
@@ -463,17 +463,17 @@ impl BackgroundBlobWorker {
             .hash_bytes(&generated.thumbnail_bytes)
             .context("failed to hash thumbnail bytes")?;
 
-        let thumbnail_blob = self
+        let thumbnail_blob_id = self
             .blob_writer
             .write_if_absent(&thumbnail_hash, &generated.thumbnail_bytes)
             .await
             .context("failed to write thumbnail blob")?;
 
         let created_at_ms = TimestampMs::from_epoch_millis(self.clock.now_ms());
-        let thumbnail_size_bytes = thumbnail_blob.size_bytes;
+        let thumbnail_size_bytes = generated.thumbnail_bytes.len() as i64;
         let metadata = ThumbnailMetadata::new(
             rep_id.clone(),
-            thumbnail_blob.blob_id,
+            thumbnail_blob_id,
             generated.thumbnail_mime_type,
             generated.original_width,
             generated.original_height,

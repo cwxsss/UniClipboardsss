@@ -34,7 +34,7 @@ use uc_core::ports::clipboard::{
 use uc_core::ports::SetupEventPort;
 use uc_core::ports::*;
 use uc_core::settings::model::Settings;
-use uc_infra::blob::BlobWriter;
+use uc_infra::blob::{BlobRepositoryPort, BlobWriter};
 use uc_infra::clipboard::{
     clipboard_change_origin, init_clipboard_change_origin, new_in_memory_change_origin,
     ClipboardPayloadResolver, ClipboardRepresentationNormalizer, DurableSpoolQueue,
@@ -824,7 +824,6 @@ pub fn wire_dependencies_with_identity_store(
         setup_status: infra.setup_status,
         storage: StoragePorts {
             blob_store: platform.blob_store,
-            blob_repository: infra.blob_repository,
             blob_writer: platform.blob_writer,
             thumbnail_repo: infra.thumbnail_repo,
             thumbnail_generator: infra.thumbnail_generator,

@@ -1,11 +1,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use tracing::{debug, debug_span, Instrument};
-use uc_core::blob::BlobStorageLocator;
 use uc_core::ports::ClockPort;
-use uc_core::ports::{BlobRepositoryPort, BlobStorePort, BlobWriterPort};
+use uc_core::ports::{BlobStorePort, BlobWriterPort};
+use uc_core::BlobId;
 use uc_core::ContentHash;
-use uc_core::{Blob, BlobId};
+
+use crate::blob::{Blob, BlobRepositoryPort, BlobStorageLocator};
 
 pub struct BlobWriter<B, BR, C>
 where
@@ -44,15 +45,15 @@ where
         &self,
         content_id: &ContentHash,
         plaintext_bytes: &[u8],
-    ) -> Result<Blob> {
+    ) -> Result<BlobId> {
         let span = debug_span!(
             "infra.blob.write_if_absent",
             size_bytes = plaintext_bytes.len(),
             content_hash = %content_id,
         );
         async {
-            if let Some(blob) = self.blob_repo.find_by_hash(content_id).await? {
-                return Ok(blob);
+            if let Some(existing) = self.blob_repo.find_by_hash(content_id).await? {
+                return Ok(existing.blob_id);
             }
 
             let blob_id = BlobId::new();
@@ -63,8 +64,8 @@ where
 
             let created_at_ms = self.clock.now_ms();
             let blob_storage_locator = BlobStorageLocator::new_local_fs(storage_path);
-            let result = Blob::new(
-                blob_id,
+            let record = Blob::new(
+                blob_id.clone(),
                 blob_storage_locator,
                 plaintext_bytes.len() as i64,
                 content_id.clone(),
@@ -72,18 +73,18 @@ where
                 compressed_size,
             );
 
-            if let Err(err) = self.blob_repo.insert_blob(&result).await {
+            if let Err(err) = self.blob_repo.insert_blob(&record).await {
                 if let Some(existing) = self.blob_repo.find_by_hash(content_id).await? {
                     debug!(
                         error = %err,
                         content_hash = %content_id,
                         "Insert raced with existing blob; returning existing record",
                     );
-                    return Ok(existing);
+                    return Ok(existing.blob_id);
                 }
                 return Err(err);
             }
-            Ok(result)
+            Ok(blob_id)
         }
         .instrument(span)
         .await

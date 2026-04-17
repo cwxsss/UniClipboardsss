@@ -92,7 +92,6 @@ pub struct DevicePorts {
 /// 存储领域端口组（Blob、缩略图、文件传输追踪）。
 pub struct StoragePorts {
     pub blob_store: Arc<dyn BlobStorePort>,
-    pub blob_repository: Arc<dyn BlobRepositoryPort>,
     pub blob_writer: Arc<dyn BlobWriterPort>,
     pub thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
     pub thumbnail_generator: Arc<dyn ThumbnailGeneratorPort>,

@@ -9,18 +9,18 @@
 //!
 //! **Semantic:** "write_if_absent" = atomic write-if-absent with deduplication
 
-use crate::{Blob, ContentHash};
+use crate::{BlobId, ContentHash};
 
 #[async_trait::async_trait]
 pub trait BlobWriterPort: Send + Sync {
     /// Write plaintext bytes to blob store if content_id doesn't already exist.
     ///
     /// # Atomic semantics
-    /// - If `content_id` already exists → return existing `Blob`
-    /// - If `content_id` doesn't exist → write and return new `Blob`
+    /// - If `content_id` already exists → return the existing `BlobId`
+    /// - If `content_id` doesn't exist → write and return the new `BlobId`
     ///
     /// # Idempotence guarantee
-    /// - Multiple concurrent calls with same content_id produce same `Blob`
+    /// - Multiple concurrent calls with same content_id return the same `BlobId`
     /// - Data is written only once per content_id
     ///
     /// # Parameters
@@ -30,13 +30,5 @@ pub trait BlobWriterPort: Send + Sync {
         &self,
         content_id: &ContentHash,
         plaintext_bytes: &[u8],
-    ) -> anyhow::Result<Blob>;
-
-    /// Legacy write method (deprecated, use write_if_absent).
-    ///
-    /// Default implementation calls `write_if_absent`.
-    #[deprecated(note = "Use write_if_absent for atomic semantics")]
-    async fn write(&self, data: &[u8], content_hash: &ContentHash) -> anyhow::Result<Blob> {
-        self.write_if_absent(content_hash, data).await
-    }
+    ) -> anyhow::Result<BlobId>;
 }

@@ -1,7 +1,7 @@
-use crate::crypto::EncryptionAlgo;
-use crate::ids::BlobId;
-use crate::ContentHash;
 use std::path::PathBuf;
+use uc_core::crypto::EncryptionAlgo;
+use uc_core::ids::BlobId;
+use uc_core::ContentHash;
 
 /// 描述：
 /// Blob 在「当前设备」上的存储定位方式

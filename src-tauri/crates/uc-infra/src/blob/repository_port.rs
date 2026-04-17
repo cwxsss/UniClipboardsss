@@ -1,10 +1,17 @@
-// use crate::{command::NewBlobRecord, models::BlobRecord};
+//! Infra-internal blob repository port.
+//!
+//! `BlobRepositoryPort` is not a core domain capability: it only exists so that
+//! the `BlobWriter` adapter can depend on the SQLite-backed blob row store via
+//! an abstraction, keeping the two infra components swappable and testable.
+//!
+//! Consumers outside `uc-infra` should depend on `BlobWriterPort` instead.
+
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
+use uc_core::ContentHash;
 
-use crate::Blob;
-use crate::ContentHash;
+use crate::blob::Blob;
 
 #[async_trait]
 pub trait BlobRepositoryPort: Send + Sync {
