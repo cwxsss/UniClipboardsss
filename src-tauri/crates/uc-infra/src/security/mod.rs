@@ -6,6 +6,7 @@ mod encryption;
 mod encryption_state;
 mod encryption_state_repo;
 mod hashing;
+mod identity_fingerprint;
 mod key_material;
 
 pub use decrypting_clipboard_event_repo::DecryptingClipboardEventRepository;
@@ -15,4 +16,5 @@ pub use encrypting_clipboard_event_writer::EncryptingClipboardEventWriter;
 pub use encryption::EncryptionRepository;
 pub use encryption_state_repo::FileEncryptionStateRepository;
 pub use hashing::{hash_pin, verify_pin, Blake3Hasher};
+pub use identity_fingerprint::{FingerprintError, IdentityFingerprint, ShortCodeGenerator};
 pub use key_material::DefaultKeyMaterialService;

@@ -9,7 +9,6 @@ pub mod app_dirs;
 pub mod blob;
 pub mod clipboard;
 pub mod config;
-pub mod crypto;
 pub mod device;
 pub mod file_transfer;
 pub mod ids;
