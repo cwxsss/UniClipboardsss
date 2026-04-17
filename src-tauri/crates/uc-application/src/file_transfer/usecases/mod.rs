@@ -1,9 +1,11 @@
+mod announce_transfer;
 mod cancel_transfer;
 mod complete_transfer;
 mod fail_transfer;
 mod report_transfer_progress;
 mod start_transfer;
 
+pub use announce_transfer::{AnnounceTransfer, AnnounceTransferUseCase};
 pub use cancel_transfer::{CancelTransfer, CancelTransferUseCase};
 pub use complete_transfer::{CompleteTransfer, CompleteTransferUseCase};
 pub use fail_transfer::{FailTransfer, FailTransferUseCase};

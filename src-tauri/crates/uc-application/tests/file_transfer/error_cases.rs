@@ -1,10 +1,12 @@
 use uc_application::file_transfer::FileTransferApplicationError;
 use uc_core::file_transfer::FileTransferEventStorePort;
-use uc_core::{FileTransferCancellationReason, FileTransferEvent, FileTransferFailureReason};
+use uc_core::{
+    DeviceId, FileTransferCancellationReason, FileTransferEvent, FileTransferFailureReason,
+};
 
 use crate::{
-    build_context, cancel_input, fail_input, progress_input, published_events, start_input,
-    transfer_history,
+    announce_input, build_context, cancel_input, fail_input, progress_input, published_events,
+    start_input, transfer_history,
 };
 
 #[tokio::test]
@@ -31,6 +33,10 @@ async fn progress_before_start_is_rejected_without_side_effects() {
 async fn progress_backwards_is_rejected_without_appending_new_event() {
     let ctx = build_context();
 
+    ctx.announce_transfer
+        .execute(announce_input("transfer-1", "device-1"))
+        .await
+        .unwrap();
     ctx.start_transfer
         .execute(start_input("transfer-1", "peer-1"))
         .await
@@ -54,14 +60,18 @@ async fn progress_backwards_is_rejected_without_appending_new_event() {
             new_bytes: 32,
         }
     );
-    assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 2);
-    assert_eq!(published_events(&ctx).len(), 2);
+    assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 3);
+    assert_eq!(published_events(&ctx).len(), 3);
 }
 
 #[tokio::test]
 async fn peer_mismatch_is_rejected_without_side_effects() {
     let ctx = build_context();
 
+    ctx.announce_transfer
+        .execute(announce_input("transfer-1", "device-1"))
+        .await
+        .unwrap();
     ctx.start_transfer
         .execute(start_input("transfer-1", "peer-1"))
         .await
@@ -85,14 +95,18 @@ async fn peer_mismatch_is_rejected_without_side_effects() {
             actual_peer_id: "peer-2".into(),
         }
     );
-    assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 1);
-    assert_eq!(published_events(&ctx).len(), 1);
+    assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 2);
+    assert_eq!(published_events(&ctx).len(), 2);
 }
 
 #[tokio::test]
 async fn terminal_transfer_rejects_follow_up_events_without_side_effects() {
     let ctx = build_context();
 
+    ctx.announce_transfer
+        .execute(announce_input("transfer-1", "device-1"))
+        .await
+        .unwrap();
     ctx.start_transfer
         .execute(start_input("transfer-1", "peer-1"))
         .await
@@ -122,8 +136,8 @@ async fn terminal_transfer_rejects_follow_up_events_without_side_effects() {
             transfer_id: "transfer-1".into(),
         }
     );
-    assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 2);
-    assert_eq!(published_events(&ctx).len(), 2);
+    assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 3);
+    assert_eq!(published_events(&ctx).len(), 3);
 }
 
 #[tokio::test]
@@ -163,5 +177,35 @@ async fn duplicate_started_event_in_history_is_rejected_as_invalid_history() {
         }
     );
     assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 2);
+    assert!(published_events(&ctx).is_empty());
+}
+
+#[tokio::test]
+async fn announced_event_does_not_count_as_started_transfer() {
+    let ctx = build_context();
+
+    ctx.store
+        .append(FileTransferEvent::announced(
+            "transfer-1",
+            DeviceId::new("device-1"),
+            "report.pdf",
+            None,
+        ))
+        .await
+        .unwrap();
+
+    let error = ctx
+        .report_progress
+        .execute(progress_input("transfer-1", "peer-1", 64))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        FileTransferApplicationError::TransferNotStarted {
+            transfer_id: "transfer-1".into(),
+        }
+    );
+    assert_eq!(transfer_history(&ctx, "transfer-1").await.len(), 1);
     assert!(published_events(&ctx).is_empty());
 }

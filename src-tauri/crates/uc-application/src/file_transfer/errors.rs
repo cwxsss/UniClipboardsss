@@ -17,6 +17,9 @@ pub enum FileTransferApplicationError {
     /// 传输尚未开始，不能继续推进。
     #[error("transfer `{transfer_id}` has not been started")]
     TransferNotStarted { transfer_id: String },
+    /// 传输尚未声明，不能开始内容传输。
+    #[error("transfer `{transfer_id}` has not been announced")]
+    TransferNotAnnounced { transfer_id: String },
     /// 传输已经开始过，不能重复开始。
     #[error("transfer `{transfer_id}` has already been started")]
     TransferAlreadyStarted { transfer_id: String },

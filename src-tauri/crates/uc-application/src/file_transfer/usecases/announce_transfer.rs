@@ -1,31 +1,32 @@
 use std::sync::Arc;
 
 use uc_core::file_transfer::{FileTransferEventPublisherPort, FileTransferEventStorePort};
-use uc_core::FileTransferEvent;
+use uc_core::{DeviceId, FileTransferEvent};
 
 use crate::file_transfer::errors::FileTransferApplicationError;
 use crate::file_transfer::timeline::{load_timeline, persist_and_publish};
 
-/// Input for starting a transfer.
+/// Input for announcing a transfer before content bytes start flowing.
 ///
-/// 启动传输时的应用层输入。
+/// 在文件内容开始传输前，先声明一笔文件传输。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StartTransfer {
+pub struct AnnounceTransfer {
     pub transfer_id: String,
-    pub peer_id: String,
+    pub origin_device_id: DeviceId,
     pub filename: String,
     pub file_size: Option<u64>,
 }
 
-/// Start a new transfer and emit a `Started` event.
+/// Declare a file transfer so downstream consumers can reference it before
+/// the binary content is actually transferred.
 ///
-/// 启动一个新的传输，并产出 `Started` 事件。
-pub struct StartTransferUseCase<S, P> {
+/// 先声明一笔文件传输，使接收方在文件内容到达前就能建立引用关系。
+pub struct AnnounceTransferUseCase<S, P> {
     store: Arc<S>,
     publisher: Arc<P>,
 }
 
-impl<S, P> StartTransferUseCase<S, P>
+impl<S, P> AnnounceTransferUseCase<S, P>
 where
     S: FileTransferEventStorePort,
     P: FileTransferEventPublisherPort,
@@ -36,15 +37,9 @@ where
 
     pub async fn execute(
         &self,
-        input: StartTransfer,
+        input: AnnounceTransfer,
     ) -> Result<FileTransferEvent, FileTransferApplicationError> {
         let timeline = load_timeline(self.store.as_ref(), &input.transfer_id).await?;
-
-        if !timeline.announced {
-            return Err(FileTransferApplicationError::TransferNotAnnounced {
-                transfer_id: input.transfer_id,
-            });
-        }
 
         if timeline.started {
             return Err(FileTransferApplicationError::TransferAlreadyStarted {
@@ -52,9 +47,9 @@ where
             });
         }
 
-        let event = FileTransferEvent::started(
+        let event = FileTransferEvent::announced(
             input.transfer_id,
-            input.peer_id,
+            input.origin_device_id,
             input.filename,
             input.file_size,
         );

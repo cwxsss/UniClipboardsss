@@ -4,7 +4,7 @@ mod usecases;
 
 pub use errors::FileTransferApplicationError;
 pub use usecases::{
-    CancelTransfer, CancelTransferUseCase, CompleteTransfer, CompleteTransferUseCase, FailTransfer,
-    FailTransferUseCase, ReportTransferProgress, ReportTransferProgressUseCase, StartTransfer,
-    StartTransferUseCase,
+    AnnounceTransfer, AnnounceTransferUseCase, CancelTransfer, CancelTransferUseCase,
+    CompleteTransfer, CompleteTransferUseCase, FailTransfer, FailTransferUseCase,
+    ReportTransferProgress, ReportTransferProgressUseCase, StartTransfer, StartTransferUseCase,
 };

@@ -41,7 +41,8 @@ impl FileTransferEventStorePort for InMemoryEventStore {
 
 fn transfer_id_of(event: &FileTransferEvent) -> &str {
     match event {
-        FileTransferEvent::Started { transfer_id, .. }
+        FileTransferEvent::Announced { transfer_id, .. }
+        | FileTransferEvent::Started { transfer_id, .. }
         | FileTransferEvent::Progress { transfer_id, .. }
         | FileTransferEvent::Completed { transfer_id, .. }
         | FileTransferEvent::Failed { transfer_id, .. }
