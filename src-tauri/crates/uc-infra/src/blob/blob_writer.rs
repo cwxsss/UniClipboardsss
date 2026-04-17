@@ -2,11 +2,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tracing::{debug, debug_span, Instrument};
 use uc_core::ports::ClockPort;
-use uc_core::ports::{BlobStorePort, BlobWriterPort};
 use uc_core::BlobId;
 use uc_core::ContentHash;
 
-use crate::blob::{Blob, BlobRepositoryPort, BlobStorageLocator};
+use crate::blob::{Blob, BlobRepositoryPort, BlobStorageLocator, BlobStorePort, BlobWriterPort};
 
 pub struct BlobWriter<B, BR, C>
 where

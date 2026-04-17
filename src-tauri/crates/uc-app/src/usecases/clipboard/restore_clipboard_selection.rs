@@ -13,10 +13,11 @@ use uc_core::{
     },
     ids::{EntryId, EventId, RepresentationId},
     ports::{
-        BlobStorePort, ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort,
+        ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort,
         ClipboardSelectionRepositoryPort,
     },
 };
+use uc_infra::blob::BlobStorePort;
 
 /// Reconstructs a system clipboard state from a historical clipboard entry,
 /// restoring the primary selected representation only.
@@ -37,7 +38,8 @@ impl RestoreClipboardSelectionUseCase {
     /// ```no_run
     /// use std::sync::Arc;
     /// use uc_app::usecases::clipboard::restore_clipboard_selection::RestoreClipboardSelectionUseCase;
-    /// use uc_core::ports::{BlobStorePort, ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort, ClipboardSelectionRepositoryPort};
+    /// use uc_core::ports::{ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort, ClipboardSelectionRepositoryPort};
+    /// use uc_infra::blob::BlobStorePort;
     /// // All parameters must implement their respective ports
     /// ```
     pub fn new(

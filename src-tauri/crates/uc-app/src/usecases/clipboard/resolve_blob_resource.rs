@@ -1,11 +1,8 @@
 use anyhow::Result;
 use std::sync::Arc;
 
-use uc_core::{
-    clipboard::MimeType,
-    ports::{BlobStorePort, ClipboardRepresentationRepositoryPort},
-    BlobId,
-};
+use uc_core::{clipboard::MimeType, ports::ClipboardRepresentationRepositoryPort, BlobId};
+use uc_infra::blob::BlobStorePort;
 
 /// Resolve blob resource by blob id.
 /// 通过 blob id 解析资源内容。

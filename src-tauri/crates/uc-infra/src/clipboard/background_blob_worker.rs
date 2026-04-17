@@ -14,10 +14,9 @@ use uc_core::ids::RepresentationId;
 use uc_core::ports::clipboard::{
     ProcessingUpdateOutcome, ThumbnailGeneratorPort, ThumbnailRepositoryPort,
 };
-use uc_core::ports::{
-    BlobWriterPort, ClipboardRepresentationRepositoryPort, ClockPort, ContentHashPort,
-};
+use uc_core::ports::{ClipboardRepresentationRepositoryPort, ClockPort, ContentHashPort};
 
+use crate::blob::BlobWriterPort;
 use crate::clipboard::{RepresentationCache, SpoolManager};
 
 /// Check if an image MIME type needs conversion to PNG before blob storage.

@@ -23,6 +23,7 @@ use uc_core::ports::file_transport::FileTransportPort;
 use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
 use uc_core::ports::*;
+use uc_infra::blob::{BlobStorePort, BlobWriterPort};
 use uc_infra::search::pipeline::SearchPipeline;
 
 /// Focused network capability bundle for dependency injection.

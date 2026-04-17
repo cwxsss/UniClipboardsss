@@ -21,9 +21,11 @@ use tracing::{debug, info_span, Instrument};
 use uc_core::{
     crypto::aad,
     crypto::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion},
-    ports::{BlobStorePort, EncryptionPort, EncryptionSessionPort},
+    ports::{EncryptionPort, EncryptionSessionPort},
     BlobId,
 };
+
+use crate::blob::BlobStorePort;
 
 /// Magic bytes identifying a UniClipboard blob file ("UCBL")
 const BLOB_MAGIC: [u8; 4] = [0x55, 0x43, 0x42, 0x4C];

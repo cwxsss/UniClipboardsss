@@ -1,34 +1,28 @@
-//! Filesystem-based blob storage
-//! 基于文件系统的 blob 存储
+//! Filesystem-based blob storage.
+//! 基于文件系统的 blob 存储。
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use uc_core::ports::BlobStorePort;
 use uc_core::BlobId;
 
-/// Filesystem-based blob storage
-/// 基于文件系统的 blob 存储
+use crate::blob::BlobStorePort;
+
+/// Filesystem-based blob storage.
 pub struct FilesystemBlobStore {
     base_dir: PathBuf,
 }
 
 impl FilesystemBlobStore {
-    /// Create a new blob store with the given base directory
-    /// 使用给定基础目录创建新的 blob 存储
     pub fn new(base_dir: PathBuf) -> Self {
         Self { base_dir }
     }
 
-    /// Ensure the blob directory exists
-    /// 确保 blob 目录存在
     async fn ensure_dir(&self) -> Result<()> {
         tokio::fs::create_dir_all(&self.base_dir)
             .await
             .context("Failed to create blob directory")
     }
 
-    /// Get the full path for a blob ID
-    /// 获取 blob ID 的完整路径
     fn blob_path(&self, blob_id: &BlobId) -> PathBuf {
         self.base_dir.join(blob_id.as_str())
     }
@@ -51,7 +45,7 @@ impl BlobStorePort for FilesystemBlobStore {
             .context("Failed to flush blob data")?;
         file.sync_all().await.context("Failed to sync blob file")?;
 
-        // Raw filesystem store doesn't track compression
+        // Raw filesystem store doesn't track compression.
         Ok((path, None))
     }
 

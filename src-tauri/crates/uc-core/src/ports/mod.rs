@@ -16,8 +16,6 @@
 //! If all three answers are **yes**, place it in `uc-core/ports`.
 //! Otherwise, place it in the relevant `domain` submodule.
 
-mod blob_store;
-mod blob_writer;
 pub mod cache_fs;
 pub mod clipboard;
 mod clipboard_change_handler;
@@ -46,8 +44,6 @@ pub mod setup_event_port;
 pub mod space;
 mod timer;
 
-pub use blob_store::BlobStorePort;
-pub use blob_writer::BlobWriterPort;
 pub use cache_fs::{CacheFsPort, DirEntry as CacheFsDirEntry};
 pub use clipboard_event::*;
 pub use clock::*;

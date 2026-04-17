@@ -1,9 +1,18 @@
+//! Blob Store Port (infra-internal).
+//!
+//! Abstracts the on-disk (or encrypted-on-disk) blob storage backend.
+//! Exposes the low-level put/get operations used by `BlobWriter` and by
+//! use cases that need to read raw blob bytes.
+//!
+//! This port lives in `uc-infra` rather than `uc-core` because its `put`
+//! contract returns a `PathBuf` and an optional on-disk compressed size —
+//! both are storage-implementation concerns with no domain meaning.
+
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-use crate::BlobId;
+use uc_core::BlobId;
 
 #[async_trait]
 pub trait BlobStorePort: Send + Sync {
@@ -13,7 +22,7 @@ pub trait BlobStorePort: Send + Sync {
     /// Returns `None` if the store does not track compressed size (e.g., raw filesystem).
     async fn put(&self, blob_id: &BlobId, data: &[u8]) -> Result<(PathBuf, Option<i64>)>;
 
-    // Read bytes from blob storage
+    /// Read bytes from blob storage.
     async fn get(&self, blob_id: &BlobId) -> Result<Vec<u8>>;
 }
 

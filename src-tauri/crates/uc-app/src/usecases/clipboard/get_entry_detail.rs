@@ -6,10 +6,11 @@ use uc_core::{
     ids::EntryId,
     ports::clipboard::ResolvedClipboardPayload,
     ports::{
-        BlobStorePort, ClipboardEntryRepositoryPort, ClipboardPayloadResolverPort,
+        ClipboardEntryRepositoryPort, ClipboardPayloadResolverPort,
         ClipboardRepresentationRepositoryPort, ClipboardSelectionRepositoryPort,
     },
 };
+use uc_infra::blob::BlobStorePort;
 
 /// Get full clipboard entry detail
 /// 获取剪贴板条目完整详情

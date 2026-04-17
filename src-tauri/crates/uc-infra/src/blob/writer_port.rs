@@ -1,15 +1,15 @@
-//! Blob Writer Port
+//! Blob Writer Port (infra-internal).
 //!
-//! This port writes plaintext bytes to blob store with deduplication.
+//! Writes plaintext bytes to blob storage with content-hash deduplication.
+//! Callers pass **plaintext**; encryption (if any) is handled by the injected
+//! `BlobStorePort` decorator (e.g. `EncryptedBlobStore`).
 //!
-//! # Encryption boundary
-//! - Callers pass **plaintext** bytes.
-//! - Encryption (if any) is handled by the injected `BlobStorePort`
-//!   decorator (e.g. `EncryptedBlobStore`).
+//! **Semantic:** `write_if_absent` = atomic write-if-absent with deduplication.
 //!
-//! **Semantic:** "write_if_absent" = atomic write-if-absent with deduplication
+//! This port lives in `uc-infra` because writing blobs is a pure storage
+//! mechanism with no domain semantics beyond the identity it returns.
 
-use crate::{BlobId, ContentHash};
+use uc_core::{BlobId, ContentHash};
 
 #[async_trait::async_trait]
 pub trait BlobWriterPort: Send + Sync {

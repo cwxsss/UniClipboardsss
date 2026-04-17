@@ -5,13 +5,10 @@
 //!
 //! # Modules / 模块
 //!
-//! - `blob_store` - Filesystem-based blob storage (implemented)
-//! - `blob` - Placeholder blob materializer (to be replaced)
 //! - `clipboard` - Placeholder clipboard materialization
 //! - `encryption` - Placeholder encryption session management
 //! - `network` - Placeholder P2P networking
 
-pub mod blob_store;
 pub mod encryption;
 pub mod file_transfer;
 pub mod libp2p_network;
@@ -19,7 +16,6 @@ pub mod network;
 pub mod pairing_stream;
 pub mod protocol_ids;
 
-pub use blob_store::FilesystemBlobStore;
 pub use encryption::InMemoryEncryptionSessionPort;
 pub use libp2p_network::Libp2pNetworkAdapter;
 pub use network::{DisabledPairingTransport, PairingRuntimeOwner};

@@ -34,7 +34,9 @@ use uc_core::ports::clipboard::{
 use uc_core::ports::SetupEventPort;
 use uc_core::ports::*;
 use uc_core::settings::model::Settings;
-use uc_infra::blob::{BlobRepositoryPort, BlobWriter};
+use uc_infra::blob::{
+    BlobRepositoryPort, BlobStorePort, BlobWriter, BlobWriterPort, FilesystemBlobStore,
+};
 use uc_infra::clipboard::{
     clipboard_change_origin, init_clipboard_change_origin, new_in_memory_change_origin,
     ClipboardPayloadResolver, ClipboardRepresentationNormalizer, DurableSpoolQueue,
@@ -67,8 +69,8 @@ use uc_infra::security::{
 use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
 use uc_platform::adapters::{
-    DisabledPairingTransport, FilesystemBlobStore, InMemoryEncryptionSessionPort,
-    Libp2pNetworkAdapter, PairingRuntimeOwner,
+    DisabledPairingTransport, InMemoryEncryptionSessionPort, Libp2pNetworkAdapter,
+    PairingRuntimeOwner,
 };
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::LocalClipboard;

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use std::sync::Arc;
 use uc_core::ids::RepresentationId;
-use uc_core::ports::{BlobStorePort, ThumbnailRepositoryPort};
+use uc_core::ports::ThumbnailRepositoryPort;
+use uc_infra::blob::BlobStorePort;
 
 /// Resolve thumbnail resource by representation id.
 /// 通过表示 id 解析缩略图资源内容。

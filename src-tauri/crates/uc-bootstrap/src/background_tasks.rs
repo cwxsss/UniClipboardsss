@@ -17,7 +17,8 @@ use uc_core::ids::RepresentationId;
 use uc_core::ports::clipboard::{
     ClipboardRepresentationRepositoryPort, ThumbnailGeneratorPort, ThumbnailRepositoryPort,
 };
-use uc_core::ports::{BlobWriterPort, ClockPort, ContentHashPort};
+use uc_core::ports::{ClockPort, ContentHashPort};
+use uc_infra::blob::BlobWriterPort;
 use uc_infra::clipboard::{BackgroundBlobWorker, SpoolJanitor, SpoolScanner, SpoolerTask};
 
 use crate::BackgroundRuntimeDeps;
