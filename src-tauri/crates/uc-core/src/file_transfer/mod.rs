@@ -5,4 +5,6 @@ pub use event::{
     FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
     FileTransferFailureReason, FileTransferProgress,
 };
-pub use ports::{FileTransferEventPublisherPort, FileTransferEventStorePort};
+pub use ports::{
+    FileTransferEventInboundPort, FileTransferEventPublisherPort, FileTransferEventStorePort,
+};
