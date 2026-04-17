@@ -1,4 +1,6 @@
 pub mod common;
+#[cfg(target_os = "windows")]
+pub mod image_convert;
 pub mod platform;
 pub mod watcher;
 
