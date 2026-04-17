@@ -1,4 +1,3 @@
-use crate::ports::transfer_progress::TransferProgress as TransportTransferProgress;
 use serde::{Deserialize, Serialize};
 
 /// Business-facing direction of a file transfer.
@@ -28,16 +27,6 @@ pub struct FileTransferProgress {
     ///
     /// 传输总字节数；如果当前还未知，则为 `None`。
     pub total_bytes: Option<u64>,
-}
-
-impl From<TransportTransferProgress> for FileTransferProgress {
-    fn from(value: TransportTransferProgress) -> Self {
-        Self {
-            direction: value.direction,
-            bytes_transferred: value.bytes_transferred,
-            total_bytes: value.total_bytes,
-        }
-    }
 }
 
 /// Stable business reason for a failed file transfer.
@@ -146,17 +135,6 @@ impl FileTransferEvent {
             peer_id: peer_id.into(),
             filename: filename.into(),
             file_size,
-        }
-    }
-
-    /// Convert transport-layer progress into a business-facing `Progress` event.
-    ///
-    /// 将传输层进度转换为业务层 `Progress` 事件。
-    pub fn from_progress(progress: TransportTransferProgress) -> Self {
-        Self::Progress {
-            transfer_id: progress.transfer_id.clone(),
-            peer_id: progress.peer_id.clone(),
-            progress: progress.into(),
         }
     }
 

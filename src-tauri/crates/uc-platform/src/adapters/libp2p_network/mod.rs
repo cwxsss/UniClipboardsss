@@ -37,7 +37,7 @@ use uc_core::ports::{
     ClipboardTransportError, ConnectionPolicyResolverPort, EncryptionSessionPort,
     InboundClipboardFrame, NetworkControlPort, NetworkEventPort, OutboundClipboardFrame,
     PairingTransportPort, PeerDirectoryPort, SyncTargetId, TransferPayloadDecryptorPort,
-    TransferPayloadEncryptorPort, TransferProgress, TransferProgressPort,
+    TransferPayloadEncryptorPort,
 };
 
 use super::file_transfer::service::{FileTransferConfig, FileTransferService};
@@ -104,24 +104,6 @@ const START_STATE_IDLE: u8 = 0;
 const START_STATE_STARTING: u8 = 1;
 const START_STATE_STARTED: u8 = 2;
 const START_STATE_FAILED: u8 = 3;
-
-/// Forwards transport-layer `TransferProgress` observations from the
-/// file-transfer adapter onto the domain-level file-transfer event bus as
-/// `FileTransferEvent::Progress`. Chunk-level detail is intentionally dropped
-/// at this boundary — see `uc-core::file_transfer::FileTransferProgress`.
-struct FileTransferEventProgressForwarder {
-    event_tx: mpsc::Sender<FileTransferEvent>,
-}
-
-#[async_trait]
-impl TransferProgressPort for FileTransferEventProgressForwarder {
-    async fn report_progress(&self, progress: TransferProgress) -> Result<()> {
-        self.event_tx
-            .send(FileTransferEvent::from_progress(progress))
-            .await
-            .map_err(|err| anyhow!("failed to publish file transfer progress event: {err}"))
-    }
-}
 
 #[derive(Debug)]
 enum BusinessCommand {
@@ -371,9 +353,6 @@ impl Libp2pNetworkAdapter {
         let file_transfer_service = FileTransferService::new(
             stream_control.clone(),
             self.file_transfer_event_tx.clone(),
-            Arc::new(FileTransferEventProgressForwarder {
-                event_tx: self.file_transfer_event_tx.clone(),
-            }),
             FileTransferConfig::new(self.file_cache_dir.clone()),
         );
         file_transfer_service.spawn_accept_loop();
@@ -711,9 +690,6 @@ fn build_swarm_for_restart(
     let file_transfer_service = FileTransferService::new(
         stream_control.clone(),
         file_transfer_event_tx.clone(),
-        Arc::new(FileTransferEventProgressForwarder {
-            event_tx: file_transfer_event_tx.clone(),
-        }),
         FileTransferConfig::new(file_cache_dir.clone()),
     );
     file_transfer_service.spawn_accept_loop();

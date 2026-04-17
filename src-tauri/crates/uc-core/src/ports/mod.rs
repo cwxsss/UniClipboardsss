@@ -46,7 +46,6 @@ pub mod setup;
 pub mod setup_event_port;
 pub mod space;
 mod timer;
-pub mod transfer_progress;
 
 pub use blob_repository::BlobRepositoryPort;
 pub use blob_store::BlobStorePort;
@@ -94,4 +93,3 @@ pub use security::transfer_crypto::{
 pub use settings::{SettingsMigrationPort, SettingsPort};
 pub use setup::SetupStatusPort;
 pub use setup_event_port::SetupEventPort;
-pub use transfer_progress::{TransferProgress, TransferProgressPort};

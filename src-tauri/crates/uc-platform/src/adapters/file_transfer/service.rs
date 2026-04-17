@@ -20,8 +20,9 @@ use tokio::sync::{mpsc, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Duration, Instant};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, info_span, instrument, warn, Instrument};
-use uc_core::file_transfer::{FileTransferDirection, FileTransferEvent, FileTransferFailureReason};
-use uc_core::ports::transfer_progress::{TransferProgress, TransferProgressPort};
+use uc_core::file_transfer::{
+    FileTransferDirection, FileTransferEvent, FileTransferFailureReason, FileTransferProgress,
+};
 
 /// Maximum concurrent file transfers globally.
 pub const MAX_FILE_TRANSFER_CONCURRENCY: usize = 8;
@@ -59,7 +60,6 @@ pub struct FileTransferService {
 struct FileTransferServiceInner {
     control: AsyncMutex<stream::Control>,
     event_tx: mpsc::Sender<FileTransferEvent>,
-    progress_port: Arc<dyn TransferProgressPort>,
     peer_semaphores: AsyncMutex<HashMap<String, Arc<Semaphore>>>,
     global_semaphore: Arc<Semaphore>,
     config: FileTransferConfig,
@@ -76,26 +76,34 @@ struct ProgressEmitGate {
     last_emitted_bytes: u64,
 }
 
-async fn report_progress_with_warning(
-    port: Arc<dyn TransferProgressPort>,
-    progress: TransferProgress,
+async fn publish_progress(
+    event_tx: mpsc::Sender<FileTransferEvent>,
+    transfer_id: String,
+    peer_id: String,
+    direction: FileTransferDirection,
+    bytes_transferred: u64,
+    total_bytes: u64,
     stage: &'static str,
 ) {
-    let progress_for_log = progress.clone();
-    if let Err(err) = port.report_progress(progress).await {
+    let event = FileTransferEvent::Progress {
+        transfer_id: transfer_id.clone(),
+        peer_id: peer_id.clone(),
+        progress: FileTransferProgress {
+            direction,
+            bytes_transferred,
+            total_bytes: Some(total_bytes),
+        },
+    };
+    if let Err(err) = event_tx.send(event).await {
         warn!(
             stage,
-            transfer_id = %progress_for_log.transfer_id,
-            peer_id = %progress_for_log.peer_id,
-            direction = ?progress_for_log.direction,
-            chunks_completed = progress_for_log.chunks_completed,
-            total_chunks = progress_for_log.total_chunks,
-            bytes_transferred = progress_for_log.bytes_transferred,
-            total_bytes = ?progress_for_log.total_bytes,
-            port_trait = %std::any::type_name_of_val(port.as_ref()),
-            port_ptr = ?Arc::as_ptr(&port),
+            transfer_id = %transfer_id,
+            peer_id = %peer_id,
+            direction = ?direction,
+            bytes_transferred,
+            total_bytes,
             error = %err,
-            "failed to report file transfer progress"
+            "failed to publish file transfer progress event"
         );
     }
 }
@@ -156,14 +164,12 @@ impl FileTransferService {
     pub fn new(
         control: stream::Control,
         event_tx: mpsc::Sender<FileTransferEvent>,
-        progress_port: Arc<dyn TransferProgressPort>,
         config: FileTransferConfig,
     ) -> Self {
         Self {
             inner: Arc::new(FileTransferServiceInner {
                 control: AsyncMutex::new(control),
                 event_tx,
-                progress_port,
                 peer_semaphores: AsyncMutex::new(HashMap::new()),
                 global_semaphore: Arc::new(Semaphore::new(MAX_FILE_TRANSFER_CONCURRENCY)),
                 config,
@@ -313,7 +319,7 @@ impl FileTransferService {
         write_file_frame(&mut stream, FileMessageType::Accept, &acceptance_bytes).await?;
 
         // Receive the file
-        let progress_port = self.inner.progress_port.clone();
+        let event_tx = self.inner.event_tx.clone();
         let peer_id_clone = peer_id.clone();
         let transfer_id_clone = incoming.transfer_id().to_string();
         let filename_clone = incoming.filename().to_string();
@@ -354,18 +360,20 @@ impl FileTransferService {
             if !should_emit {
                 return;
             }
-            let progress = TransferProgress {
-                transfer_id: transfer_id_clone.clone(),
-                peer_id: peer_id_clone.clone(),
-                direction: FileTransferDirection::Receiving,
-                chunks_completed,
-                total_chunks,
-                bytes_transferred: bytes,
-                total_bytes: Some(file_size),
-            };
-            let port = progress_port.clone();
+            let event_tx = event_tx.clone();
+            let transfer_id = transfer_id_clone.clone();
+            let peer_id = peer_id_clone.clone();
             tokio::spawn(async move {
-                report_progress_with_warning(port, progress, "receiving").await;
+                publish_progress(
+                    event_tx,
+                    transfer_id,
+                    peer_id,
+                    FileTransferDirection::Receiving,
+                    bytes,
+                    file_size,
+                    "receiving",
+                )
+                .await;
             });
         };
 
@@ -493,7 +501,7 @@ impl FileTransferService {
             .await;
 
         // Progress reporting
-        let progress_port = self.inner.progress_port.clone();
+        let event_tx = self.inner.event_tx.clone();
         let peer_id_for_progress = peer_id_str.to_string();
         let transfer_id_for_progress = transfer_id.clone();
         let filename_for_progress = filename.clone();
@@ -532,18 +540,20 @@ impl FileTransferService {
             if !should_emit {
                 return;
             }
-            let progress = TransferProgress {
-                transfer_id: transfer_id_for_progress.clone(),
-                peer_id: peer_id_for_progress.clone(),
-                direction: FileTransferDirection::Sending,
-                chunks_completed,
-                total_chunks,
-                bytes_transferred: bytes,
-                total_bytes: Some(file_size),
-            };
-            let port = progress_port.clone();
+            let event_tx = event_tx.clone();
+            let transfer_id = transfer_id_for_progress.clone();
+            let peer_id = peer_id_for_progress.clone();
             tokio::spawn(async move {
-                report_progress_with_warning(port, progress, "sending").await;
+                publish_progress(
+                    event_tx,
+                    transfer_id,
+                    peer_id,
+                    FileTransferDirection::Sending,
+                    bytes,
+                    file_size,
+                    "sending",
+                )
+                .await;
             });
         };
 
