@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod device;
 pub mod encryption;
+pub mod member;
 pub mod pairing;
 pub mod search;
 pub mod settings;

@@ -1,0 +1,64 @@
+//! DTOs for per-member sync preferences (phase 4b PR-2).
+//!
+//! 与 `dto::device` 下的 `DeviceSyncSettingsDto` 并存：后者映射旧的
+//! `PairedDevice.sync_settings`（单向 `auto_sync` + `sync_frequency`），
+//! 本模块映射 `SpaceMember.sync_preferences`（双向 `send_enabled` /
+//! `receive_enabled` + 双套 `content_types`）。PR-4 移除旧 DTO。
+
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
+use uc_core::membership::MemberSyncPreferences;
+
+use super::device::{ContentTypesDto, ContentTypesPatchDto};
+
+/// Sync preferences recorded for a space member.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberSyncPreferencesDto {
+    pub send_enabled: bool,
+    pub receive_enabled: bool,
+    pub send_content_types: ContentTypesDto,
+    pub receive_content_types: ContentTypesDto,
+}
+
+/// Partial sync preferences for PATCH /member/:device_id/sync-preferences.
+///
+/// 服务器侧 `get → merge → save` 后持久化；未提供的字段保留当前值。
+/// 重置到默认值的调用方应显式传入所有字段的默认值（`MemberSyncPreferences::default()`）。
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MemberSyncPreferencesPatchDto {
+    pub send_enabled: Option<bool>,
+    pub receive_enabled: Option<bool>,
+    pub send_content_types: Option<ContentTypesPatchDto>,
+    pub receive_content_types: Option<ContentTypesPatchDto>,
+}
+
+/// Response wrapper for GET /member/:device_id/sync-preferences.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetMemberSyncPreferencesResponse {
+    pub data: MemberSyncPreferencesDto,
+    pub ts: i64,
+}
+
+/// Response wrapper for PATCH /member/:device_id/sync-preferences.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMemberSyncPreferencesResponse {
+    pub success: bool,
+    pub data: MemberSyncPreferencesDto,
+    pub ts: i64,
+}
+
+impl From<MemberSyncPreferences> for MemberSyncPreferencesDto {
+    fn from(value: MemberSyncPreferences) -> Self {
+        Self {
+            send_enabled: value.send_enabled,
+            receive_enabled: value.receive_enabled,
+            send_content_types: value.send_content_types.into(),
+            receive_content_types: value.receive_content_types.into(),
+        }
+    }
+}

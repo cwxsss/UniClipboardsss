@@ -9,6 +9,7 @@ pub mod dto;
 pub mod encryption;
 pub mod event_emitter;
 pub mod lifecycle;
+pub mod member;
 pub mod openapi;
 pub mod pairing;
 pub mod projection;

@@ -21,6 +21,10 @@ use crate::api::dto::device::{
 };
 use crate::api::dto::encryption::{EncryptionStateResponse, KeychainAccessResponse};
 use crate::api::dto::error::ApiErrorResponse;
+use crate::api::dto::member::{
+    GetMemberSyncPreferencesResponse, MemberSyncPreferencesDto, MemberSyncPreferencesPatchDto,
+    UpdateMemberSyncPreferencesResponse,
+};
 use crate::api::dto::pairing::{
     AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
     PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
@@ -94,6 +98,8 @@ impl Modify for SecurityAddon {
         crate::api::device::get_local_device_info_handler,
         crate::api::device::get_device_sync_settings_handler,
         crate::api::device::update_device_sync_settings_handler,
+        crate::api::member::get_member_sync_preferences_handler,
+        crate::api::member::update_member_sync_preferences_handler,
         crate::api::setup::get_setup_state,
         crate::api::setup::start_new,
         crate::api::setup::start_join,
@@ -189,11 +195,17 @@ impl Modify for SecurityAddon {
             ContentTypesPatchDto,
             GetDeviceSyncSettingsResponse,
             UpdateDeviceSyncSettingsResponse,
+            // Member sync preferences (phase 4b PR-2)
+            MemberSyncPreferencesDto,
+            MemberSyncPreferencesPatchDto,
+            GetMemberSyncPreferencesResponse,
+            UpdateMemberSyncPreferencesResponse,
         )
     ),
     tags(
         (name = "clipboard", description = "Clipboard entry CRUD and statistics"),
         (name = "device", description = "Local device identity and per-device sync settings"),
+        (name = "member", description = "Space member sync preferences (phase 4b)"),
         (name = "settings", description = "Settings management APIs"),
         (name = "encryption", description = "Encryption state and session management"),
         (name = "setup", description = "Device setup and pairing flow"),
