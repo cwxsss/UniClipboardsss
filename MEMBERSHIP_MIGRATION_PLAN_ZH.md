@@ -417,7 +417,7 @@ if persist_result.is_ok() {
 |---|---|---|---|---|
 | **3.1** | ✅ 本阶段 | `uc-app/usecases/pairing/resolve_connection_policy.rs` | 查询源从 `paired_device_repo.get_by_peer_id` 换成 `member_repo.get(DeviceId::new(peer_id.as_str()))`；成员存在 → `PairingState::Trusted`，不存在 → `Pending`；`ConnectionPolicy::allowed_protocols(state)` 签名保持不变 | `ConnectionPolicy` 接 `PairingState` 到 Phase 5 再清理（D8） |
 | **3.2** | ✅ 本阶段 | `uc-app/usecases/pairing/list_sendable_peers.rs` | 改走 `member_repo.list()`；member 存在即视为可发（revoke = 硬删，无需 state 过滤）；`discovered_at` / `last_seen` 保留 `SpaceMember.joined_at` fallback；`SyncOutboundClipboardUseCase` / `SyncOutboundFileUseCase` 新增 `member_repo` 依赖，原 `paired_device_repo` 暂留供 `apply_sync_policy` / `apply_file_sync_policy` 使用（待 3.4 清） | 同上 |
-| **3.3** | ⏳ 本阶段 | daemon 的 unpair 路径 | 改调 `uc-application::membership::RevokeMemberUseCase`；保留 `PairingTransportPort::unpair_device` 调用（关会话 / 触发 peer_lost，无 repo 写）；**删除** `uc-app/usecases/pairing/unpair_device.rs` 及 `CoreUseCases::unpair_device()`；孤儿 `paired_device` 行由 U3 决策（不处理）交给 Phase 5 DROP 清除 | D13（daemon 已依赖 uc-application） |
+| **3.3** | ✅ 本阶段 | daemon 的 unpair 路径 | 改调 `uc-application::membership::RevokeMemberUseCase`；保留 `PairingTransportPort::unpair_device` 调用（关会话 / 触发 peer_lost，无 repo 写）；**删除** `uc-app/usecases/pairing/unpair_device.rs` 及 `CoreUseCases::unpair_device()`；`RevokeMemberUseCase<R>` 补 `?Sized` 以接受 `Arc<dyn MemberRepositoryPort>`；孤儿 `paired_device` 行由 U3 决策（不处理）交给 Phase 5 DROP 清除 | D13（daemon 已依赖 uc-application） |
 | **3.4** | ⏳ 本阶段（**方案 C · 范围收窄**） | 内部 sync policy 过滤器 | `apply_sync_policy` / `apply_file_sync_policy` 改读 `member_repo.get(DeviceId)` → `MemberSyncPreferences`：clipboard 路径用 `send_enabled` + `send_content_types`，file 路径用 `send_enabled` + `send_content_types` 的 `file` 字段；不再使用 `resolve_sync_settings`（per-peer 偏好成为唯一真相源，仅保留全局 `SyncSettings.auto_sync` / `file_sync_enabled` 两道总闸）；`SyncOutboundClipboardUseCase` / `SyncOutboundFileUseCase` 的 `paired_device_repo` 字段随之删除（这两个 usecase 不再读 paired_device）；**不删** `uc-app/usecases/pairing/get_device_sync_settings.rs` / `update_device_sync_settings.rs`，`CoreUseCases::get_device_sync_settings` / `update_device_sync_settings` / `runtime.deps.device.paired_device_repo` 全部保留供 daemon API 读写；DTO 与前端不动。DTO 重塑见 U2 决策 | 同 3.3 |
 | **3.5** | ✅ 本阶段 | daemon 的 list_paired_devices 路径 | daemon `api/query.rs::paired_devices()` 改调 `uc_application::membership::usecases::ListMembersUseCase`；**删除** `uc-app/usecases/pairing/list_paired_devices.rs` 及 `CoreUseCases::list_paired_devices()` accessor；`IntoApiDto<PairedDeviceDto> for SpaceMember` 暂以 `pairing_state: "Trusted"` / `last_seen_at_ms: None` 占位（字段语义随 3.6 改名处理） | 同 3.3 |
 | **3.6** | ⏳ 待办 | daemon DTO 一次性改名 | `PairedDeviceDto → SpaceMemberDto`，`PairedDevicesChangedPayload` 相应改；前端 9 个 TS 文件（`devicesSlice.ts` / `PairedDevicesPanel.tsx` / `PairedPeer` type 等）联动改 | — |
@@ -532,6 +532,10 @@ d4eca020  docs(membership): record phase C commit hash in plan §11
 
 # Phase 3 — 消费者切换（3.1 / 3.2 / 3.5 前置批次）
 17423690  refactor(membership): switch resolve_connection_policy / list_sendable_peers / list_paired_devices to member_repo (phase 3.1 + 3.2 + 3.5)
+
+# Phase 3 — U2/U3 决策记录 + 3.3 提交
+34a0c2bf  docs(membership): record U2/U3 decisions, narrow phase 3.4 scope
+a13c966f  refactor(membership): daemon unpair -> RevokeMemberUseCase (phase 3.3)
 ```
 
 分支：`milestone/0.6.0`。
