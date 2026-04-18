@@ -549,3 +549,204 @@ impl SpaceAccessEventPort for SpaceAccessOrchestrator {
         Ok(event_rx)
     }
 }
+
+#[cfg(test)]
+mod admit_tests {
+    //! Phase A.4 — white-box coverage for `try_admit_sponsor_as_member`.
+    //!
+    //! We exercise the method directly rather than driving the state machine
+    //! to `Granted` through `dispatch`, because `dispatch` requires a
+    //! fully-wired `SpaceAccessExecutor` (Crypto / Transport / Proof / Timer
+    //! / Persistence) that has nothing to do with admit behavior. The actual
+    //! "joiner `Granted` ⇒ admit" wiring in `dispatch` is a single-line
+    //! `else if matches!(next, …Granted)` branch that these tests cover by
+    //! invoking the target method it calls.
+    //!
+    //! Sponsor-side non-admit (responder flow) is covered by the
+    //! `is_responder_flow` branch guard in `dispatch` itself and is a
+    //! straight-line code-reading verification, not a mock-heavy test.
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+    use uc_core::{MembershipError, SpaceMember};
+
+    /// In-memory `MemberRepositoryPort` with optional error injection, so
+    /// tests can verify both the happy path and the "already admitted" /
+    /// repository-error WARN paths.
+    struct FakeMemberRepo {
+        members: StdMutex<Vec<SpaceMember>>,
+        fail_save_with: StdMutex<Option<MembershipError>>,
+    }
+
+    impl FakeMemberRepo {
+        fn new() -> Self {
+            Self {
+                members: StdMutex::new(Vec::new()),
+                fail_save_with: StdMutex::new(None),
+            }
+        }
+
+        fn count(&self) -> usize {
+            self.members.lock().unwrap().len()
+        }
+
+        fn first(&self) -> Option<SpaceMember> {
+            self.members.lock().unwrap().first().cloned()
+        }
+
+        fn preload(&self, member: SpaceMember) {
+            self.members.lock().unwrap().push(member);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MemberRepositoryPort for FakeMemberRepo {
+        async fn get(&self, device_id: &DeviceId) -> Result<Option<SpaceMember>, MembershipError> {
+            Ok(self
+                .members
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|m| &m.device_id == device_id)
+                .cloned())
+        }
+
+        async fn list(&self) -> Result<Vec<SpaceMember>, MembershipError> {
+            Ok(self.members.lock().unwrap().clone())
+        }
+
+        async fn save(&self, member: &SpaceMember) -> Result<(), MembershipError> {
+            if let Some(err) = self.fail_save_with.lock().unwrap().take() {
+                return Err(err);
+            }
+            let mut guard = self.members.lock().unwrap();
+            if let Some(existing) = guard.iter_mut().find(|m| m.device_id == member.device_id) {
+                *existing = member.clone();
+            } else {
+                guard.push(member.clone());
+            }
+            Ok(())
+        }
+
+        async fn remove(&self, _device_id: &DeviceId) -> Result<bool, MembershipError> {
+            Ok(false)
+        }
+    }
+
+    fn make_sample_member(peer_id: &str) -> SpaceMember {
+        SpaceMember {
+            device_id: DeviceId::new(peer_id.to_string()),
+            device_name: "preloaded".to_string(),
+            identity_fingerprint: "old-fingerprint".to_string(),
+            joined_at: Utc::now(),
+            sync_preferences: MemberSyncPreferences::default(),
+        }
+    }
+
+    async fn seed_context(
+        orch: &SpaceAccessOrchestrator,
+        peer_id: Option<&str>,
+        device_name: Option<&str>,
+        fingerprint: Option<&str>,
+    ) {
+        let ctx = orch.context();
+        let mut guard = ctx.lock().await;
+        guard.sponsor_peer_id = peer_id.map(String::from);
+        guard.peer_device_name = device_name.map(String::from);
+        guard.peer_fingerprint = fingerprint.map(String::from);
+    }
+
+    #[tokio::test]
+    async fn no_admit_injected_is_noop() {
+        let orch = SpaceAccessOrchestrator::new();
+        seed_context(&orch, Some("peer-1"), Some("Alice"), Some("fp-1")).await;
+
+        // No admit_member wired — should simply return without panicking.
+        orch.try_admit_sponsor_as_member().await;
+    }
+
+    #[tokio::test]
+    async fn missing_sponsor_peer_id_skips_admit() {
+        let repo = Arc::new(FakeMemberRepo::new());
+        let admit: Arc<AdmitMemberUseCaseDyn> = Arc::new(AdmitMemberUseCase::new(
+            repo.clone() as Arc<dyn MemberRepositoryPort>
+        ));
+        let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
+        seed_context(&orch, None, Some("Alice"), Some("fp-1")).await;
+
+        orch.try_admit_sponsor_as_member().await;
+
+        assert_eq!(repo.count(), 0, "admit should not fire without peer_id");
+    }
+
+    #[tokio::test]
+    async fn missing_peer_device_name_skips_admit() {
+        let repo = Arc::new(FakeMemberRepo::new());
+        let admit: Arc<AdmitMemberUseCaseDyn> = Arc::new(AdmitMemberUseCase::new(
+            repo.clone() as Arc<dyn MemberRepositoryPort>
+        ));
+        let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
+        seed_context(&orch, Some("peer-1"), None, Some("fp-1")).await;
+
+        orch.try_admit_sponsor_as_member().await;
+
+        assert_eq!(repo.count(), 0, "admit should not fire without device_name");
+    }
+
+    #[tokio::test]
+    async fn missing_peer_fingerprint_skips_admit() {
+        let repo = Arc::new(FakeMemberRepo::new());
+        let admit: Arc<AdmitMemberUseCaseDyn> = Arc::new(AdmitMemberUseCase::new(
+            repo.clone() as Arc<dyn MemberRepositoryPort>
+        ));
+        let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
+        seed_context(&orch, Some("peer-1"), Some("Alice"), None).await;
+
+        orch.try_admit_sponsor_as_member().await;
+
+        assert_eq!(repo.count(), 0, "admit should not fire without fingerprint");
+    }
+
+    #[tokio::test]
+    async fn full_context_writes_member_to_repo() {
+        let repo = Arc::new(FakeMemberRepo::new());
+        let admit: Arc<AdmitMemberUseCaseDyn> = Arc::new(AdmitMemberUseCase::new(
+            repo.clone() as Arc<dyn MemberRepositoryPort>
+        ));
+        let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
+        seed_context(&orch, Some("peer-1"), Some("Alice"), Some("fp-1")).await;
+
+        orch.try_admit_sponsor_as_member().await;
+
+        assert_eq!(repo.count(), 1, "admit should persist exactly one member");
+        let stored = repo.first().unwrap();
+        assert_eq!(stored.device_id, DeviceId::new("peer-1".to_string()));
+        assert_eq!(stored.device_name, "Alice");
+        assert_eq!(stored.identity_fingerprint, "fp-1");
+        assert_eq!(stored.sync_preferences, MemberSyncPreferences::default());
+    }
+
+    #[tokio::test]
+    async fn already_admitted_is_warned_and_swallowed() {
+        // Pre-existing row for peer-1 means AdmitMemberUseCase returns
+        // AlreadyAdmitted. The orchestrator must log WARN but not panic,
+        // and must not mutate the existing record.
+        let repo = Arc::new(FakeMemberRepo::new());
+        repo.preload(make_sample_member("peer-1"));
+
+        let admit: Arc<AdmitMemberUseCaseDyn> = Arc::new(AdmitMemberUseCase::new(
+            repo.clone() as Arc<dyn MemberRepositoryPort>
+        ));
+        let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
+        seed_context(&orch, Some("peer-1"), Some("Alice"), Some("fp-1")).await;
+
+        orch.try_admit_sponsor_as_member().await;
+
+        assert_eq!(repo.count(), 1, "admit must not duplicate on conflict");
+        let stored = repo.first().unwrap();
+        assert_eq!(
+            stored.device_name, "preloaded",
+            "existing record must be preserved"
+        );
+        assert_eq!(stored.identity_fingerprint, "old-fingerprint");
+    }
+}
