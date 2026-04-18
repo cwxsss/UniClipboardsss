@@ -122,6 +122,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    space_member (device_id) {
+        device_id -> Text,
+        device_name -> Text,
+        identity_fingerprint -> Text,
+        joined_at -> BigInt,
+        sync_preferences -> Text,
+    }
+}
+
+diesel::table! {
     search_document (profile_id, entry_id) {
         profile_id -> Text,
         entry_id -> Text,
@@ -172,6 +182,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     file_transfer,
     file_transfer_events,
     paired_device,
+    space_member,
     search_document,
     search_index_meta,
     search_posting,
