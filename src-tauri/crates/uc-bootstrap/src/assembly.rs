@@ -49,12 +49,14 @@ use uc_infra::db::mappers::{
     clipboard_selection_mapper::ClipboardSelectionRowMapper,
     paired_device_mapper::PairedDeviceRowMapper,
     snapshot_representation_mapper::RepresentationRowMapper,
+    space_member_mapper::SpaceMemberRowMapper,
 };
 use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
     DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
     DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselFileTransferRepository, DieselPairedDeviceRepository, DieselThumbnailRepository,
+    DieselFileTransferRepository, DieselPairedDeviceRepository, DieselSpaceMemberRepository,
+    DieselThumbnailRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -196,6 +198,9 @@ struct InfraLayer {
     // Pairing repository
     paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
 
+    // Membership repository (shadow of paired_device during Phase 2 migration).
+    member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
+
     // Blob storage
     blob_repository: Arc<dyn BlobRepositoryPort>,
     thumbnail_repo: Arc<dyn ThumbnailRepositoryPort>,
@@ -332,6 +337,10 @@ fn create_infra_layer(
         DieselPairedDeviceRepository::new(Arc::clone(&db_executor), paired_device_row_mapper);
     let paired_device_repo: Arc<dyn PairedDeviceRepositoryPort> = Arc::new(paired_repo);
 
+    let member_repo_impl =
+        DieselSpaceMemberRepository::new(Arc::clone(&db_executor), SpaceMemberRowMapper);
+    let member_repo: Arc<dyn uc_core::MemberRepositoryPort> = Arc::new(member_repo_impl);
+
     let blob_repo = DieselBlobRepository::new(
         Arc::clone(&db_executor),
         blob_row_mapper,
@@ -384,6 +393,7 @@ fn create_infra_layer(
         representation_repo,
         selection_repo,
         paired_device_repo,
+        member_repo,
         blob_repository,
         thumbnail_repo,
         thumbnail_generator,
@@ -818,6 +828,7 @@ pub fn wire_dependencies_with_identity_store(
         device: DevicePorts {
             device_identity: platform.device_identity,
             paired_device_repo: infra.paired_device_repo,
+            member_repo: infra.member_repo,
         },
         network_ports: platform.network_ports,
         network_control: platform.libp2p_network.clone(),

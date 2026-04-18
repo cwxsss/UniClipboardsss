@@ -25,6 +25,7 @@ use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
 use uc_core::ports::search::search_pipeline::SearchPipelinePort;
 use uc_core::ports::*;
+use uc_core::MemberRepositoryPort;
 
 /// Focused network capability bundle for dependency injection.
 /// 用于依赖注入的网络能力聚合。
@@ -92,6 +93,10 @@ pub struct SecurityPorts {
 pub struct DevicePorts {
     pub device_identity: Arc<dyn DeviceIdentityPort>,
     pub paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+    /// Shadow member repository written to alongside paired_device during
+    /// the migration to the membership subsystem. See the Phase 2 plan in
+    /// commit history for details.
+    pub member_repo: Arc<dyn MemberRepositoryPort>,
 }
 
 /// Storage-domain ports bundle (blobs, thumbnails, file transfer tracking).

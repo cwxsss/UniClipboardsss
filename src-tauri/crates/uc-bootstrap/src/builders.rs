@@ -130,6 +130,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     let background = wired.background;
 
     let pairing_device_repo = deps.device.paired_device_repo.clone();
+    let pairing_member_repo = deps.device.member_repo.clone();
     let pairing_device_identity = deps.device.device_identity.clone();
     let pairing_settings = deps.settings.clone();
     let discovery_network = deps.network_ports.peers.clone();
@@ -156,6 +157,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
         pairing_config,
         pairing_device_repo,
+        pairing_member_repo,
         pairing_device_name,
         pairing_device_id,
         pairing_peer_id,
@@ -234,6 +236,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let emitter_cell = wired.emitter_cell;
 
     let pairing_device_repo = deps.device.paired_device_repo.clone();
+    let pairing_member_repo = deps.device.member_repo.clone();
     let pairing_device_identity = deps.device.device_identity.clone();
     let pairing_settings = deps.settings.clone();
     let pairing_peer_id = background.libp2p_network.local_peer_id();
@@ -258,6 +261,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
         pairing_config,
         pairing_device_repo,
+        pairing_member_repo,
         pairing_device_name,
         pairing_device_id,
         pairing_peer_id,

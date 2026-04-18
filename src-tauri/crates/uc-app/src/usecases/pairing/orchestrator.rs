@@ -45,6 +45,7 @@ use uc_core::{
     pairing::PairingRole,
     ports::PairedDeviceRepositoryPort,
     settings::model::Settings,
+    MemberRepositoryPort,
 };
 
 use super::state_machine::{PairingAction, PairingEvent, PairingState};
@@ -107,6 +108,7 @@ impl PairingOrchestrator {
     pub fn new(
         config: PairingConfig,
         device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
+        member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
         local_device_name: String,
         local_device_id: String,
         local_peer_id: String,
@@ -126,8 +128,13 @@ impl PairingOrchestrator {
         };
 
         let session_manager = PairingSessionManager::new(config, local_identity, crypto);
-        let protocol_handler =
-            PairingProtocolHandler::new(action_tx, device_repo, staged_store, event_senders);
+        let protocol_handler = PairingProtocolHandler::new(
+            action_tx,
+            device_repo,
+            member_repo,
+            staged_store,
+            event_senders,
+        );
 
         let orchestrator = Self {
             session_manager,

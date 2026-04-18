@@ -14,6 +14,9 @@ use tracing::{info_span, Instrument};
 
 use uc_core::network::SessionId;
 use uc_core::ports::PairedDeviceRepositoryPort;
+use uc_core::{
+    DeviceId, MemberRepositoryPort, MemberSyncPreferences, MembershipError, SpaceMember,
+};
 
 use super::state_machine::{FailureReason, PairingAction, PairingEvent, TimeoutKind};
 
@@ -30,8 +33,10 @@ use super::staged_paired_device_store::StagedPairedDeviceStore;
 pub(crate) struct PairingProtocolHandler {
     /// Action sender (forwarding actions to the network layer)
     action_tx: mpsc::Sender<PairingAction>,
-    /// Paired device repository
+    /// Paired device repository (authoritative write during Phase 2 migration).
     device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
+    /// Space member repository (shadow write during Phase 2 migration).
+    member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
     /// Staged paired device store
     staged_store: Arc<StagedPairedDeviceStore>,
     /// Event senders for domain events
@@ -43,12 +48,14 @@ impl PairingProtocolHandler {
     pub(crate) fn new(
         action_tx: mpsc::Sender<PairingAction>,
         device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
+        member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
         staged_store: Arc<StagedPairedDeviceStore>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
     ) -> Self {
         Self {
             action_tx,
             device_repo,
+            member_repo,
             staged_store,
             event_senders,
         }
@@ -74,6 +81,7 @@ impl PairingProtocolHandler {
             session_peers.clone(),
             self.event_senders.clone(),
             self.device_repo.clone(),
+            self.member_repo.clone(),
             self.staged_store.clone(),
             session_id.to_string(),
             action,
@@ -87,6 +95,7 @@ impl PairingProtocolHandler {
         session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
         device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
+        member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
         staged_store: Arc<StagedPairedDeviceStore>,
         session_id: String,
         action: PairingAction,
@@ -268,7 +277,16 @@ impl PairingProtocolHandler {
                         let peer_id = device.peer_id.to_string();
                         staged_store.stage(&session_id, device.clone());
 
+                        // Snapshot the fields we need for the shadow membership
+                        // write before `device` is moved into `upsert`.
+                        let member_snapshot = space_member_from_paired_device(&device);
+
                         let persist_result = device_repo.upsert(device).await;
+
+                        if persist_result.is_ok() {
+                            dual_write_member(member_repo.as_ref(), &session_id, member_snapshot)
+                                .await;
+                        }
 
                         let actions = {
                             let mut sessions = sessions.write().await;
@@ -321,6 +339,7 @@ impl PairingProtocolHandler {
                         let session_peers = peers_for_timer;
                         let event_senders = event_senders_for_timer;
                         let device_repo = device_repo.clone();
+                        let member_repo_for_timer = member_repo.clone();
                         let staged_store_for_timer = staged_store.clone();
                         let session_id_for_log = action_session_id.clone();
                         let sleep_duration = deadline
@@ -335,6 +354,7 @@ impl PairingProtocolHandler {
                                 session_peers,
                                 event_senders,
                                 device_repo,
+                                member_repo_for_timer,
                                 staged_store_for_timer,
                                 action_session_id,
                                 kind,
@@ -387,6 +407,7 @@ impl PairingProtocolHandler {
         session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
         device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
+        member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
         staged_store: Arc<StagedPairedDeviceStore>,
         session_id: String,
         kind: TimeoutKind,
@@ -422,6 +443,7 @@ impl PairingProtocolHandler {
                         session_peers.clone(),
                         event_senders.clone(),
                         device_repo.clone(),
+                        member_repo.clone(),
                         staged_store.clone(),
                         session_id.clone(),
                         action,
@@ -452,5 +474,174 @@ impl PairingProtocolHandler {
                 tracing::debug!("Pairing event receiver dropped");
             }
         }
+    }
+}
+
+/// Build a [`SpaceMember`] snapshot from a [`PairedDevice`] for the Phase 2
+/// shadow write to the new membership table.
+///
+/// During the paired_device → membership migration the pairing protocol
+/// produces a `PairedDevice` as its persisted artefact. The membership
+/// table stores a narrower view: no pairing state (removal = revocation),
+/// no `last_seen_at` (moved to the network layer), and `device_id` reuses
+/// the peer id string directly by design.
+fn space_member_from_paired_device(device: &uc_core::pairing::PairedDevice) -> SpaceMember {
+    SpaceMember {
+        device_id: DeviceId::new(device.peer_id.as_str()),
+        device_name: device.device_name.clone(),
+        identity_fingerprint: device.identity_fingerprint.clone(),
+        joined_at: device.paired_at,
+        sync_preferences: MemberSyncPreferences::default(),
+    }
+}
+
+/// Shadow-write a member record alongside the authoritative paired_device
+/// upsert. Failures are logged but do not fail the pairing flow — during
+/// Phase 2 the paired_device table is still the source of truth.
+async fn dual_write_member(
+    member_repo: &(dyn MemberRepositoryPort + Send + Sync),
+    session_id: &str,
+    member: SpaceMember,
+) {
+    if let Err(err) = member_repo.save(&member).await {
+        let kind = match err {
+            MembershipError::AlreadyAdmitted(_) => "already_admitted",
+            MembershipError::NotFound(_) => "not_found",
+            MembershipError::Repository(_) => "repository",
+        };
+        tracing::warn!(
+            session_id = %session_id,
+            device_id = %member.device_id,
+            error = %err,
+            kind,
+            "Phase 2 shadow write to space_member failed; paired_device succeeded"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use chrono::{TimeZone, Utc};
+    use std::sync::Mutex as StdMutex;
+    use uc_core::pairing::{PairedDevice, PairingState};
+    use uc_core::PeerId;
+
+    struct FakeMemberRepo {
+        saved: StdMutex<Vec<SpaceMember>>,
+        fail_with: Option<MembershipError>,
+    }
+
+    impl FakeMemberRepo {
+        fn new() -> Self {
+            Self {
+                saved: StdMutex::new(Vec::new()),
+                fail_with: None,
+            }
+        }
+
+        fn failing(err: MembershipError) -> Self {
+            Self {
+                saved: StdMutex::new(Vec::new()),
+                fail_with: Some(err),
+            }
+        }
+
+        fn saved(&self) -> Vec<SpaceMember> {
+            self.saved.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl MemberRepositoryPort for FakeMemberRepo {
+        async fn get(&self, _device_id: &DeviceId) -> Result<Option<SpaceMember>, MembershipError> {
+            Ok(None)
+        }
+
+        async fn list(&self) -> Result<Vec<SpaceMember>, MembershipError> {
+            Ok(self.saved())
+        }
+
+        async fn save(&self, member: &SpaceMember) -> Result<(), MembershipError> {
+            if let Some(err) = &self.fail_with {
+                return Err(match err {
+                    MembershipError::AlreadyAdmitted(id) => {
+                        MembershipError::AlreadyAdmitted(id.clone())
+                    }
+                    MembershipError::NotFound(id) => MembershipError::NotFound(id.clone()),
+                    MembershipError::Repository(msg) => MembershipError::Repository(msg.clone()),
+                });
+            }
+            self.saved.lock().unwrap().push(member.clone());
+            Ok(())
+        }
+
+        async fn remove(&self, _device_id: &DeviceId) -> Result<bool, MembershipError> {
+            Ok(false)
+        }
+    }
+
+    fn sample_device() -> PairedDevice {
+        PairedDevice {
+            peer_id: PeerId::from("peer-xyz"),
+            pairing_state: PairingState::Trusted,
+            identity_fingerprint: "fp-xyz".to_string(),
+            paired_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            last_seen_at: None,
+            device_name: "Laptop-A".to_string(),
+            sync_settings: None,
+        }
+    }
+
+    #[test]
+    fn space_member_from_paired_device_maps_core_fields() {
+        let device = sample_device();
+        let member = space_member_from_paired_device(&device);
+
+        assert_eq!(member.device_id.as_str(), "peer-xyz");
+        assert_eq!(member.device_name, "Laptop-A");
+        assert_eq!(member.identity_fingerprint, "fp-xyz");
+        assert_eq!(member.joined_at, device.paired_at);
+        assert_eq!(member.sync_preferences, MemberSyncPreferences::default());
+    }
+
+    #[tokio::test]
+    async fn dual_write_persists_member_on_success() {
+        let repo = FakeMemberRepo::new();
+        let member = space_member_from_paired_device(&sample_device());
+
+        dual_write_member(&repo, "session-1", member.clone()).await;
+
+        let saved = repo.saved();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0], member);
+    }
+
+    #[tokio::test]
+    async fn dual_write_swallows_repository_errors() {
+        // Phase 2 contract: a failure in the shadow write must not propagate;
+        // the paired_device upsert is authoritative.
+        let repo = FakeMemberRepo::failing(MembershipError::Repository(
+            "simulated db outage".to_string(),
+        ));
+        let member = space_member_from_paired_device(&sample_device());
+
+        dual_write_member(&repo, "session-1", member).await;
+
+        assert!(repo.saved().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dual_write_swallows_already_admitted_errors() {
+        // A repeated admit during dual-write (e.g. reconnect with existing
+        // paired_device row) must not surface as a pairing failure.
+        let repo =
+            FakeMemberRepo::failing(MembershipError::AlreadyAdmitted(DeviceId::new("peer-xyz")));
+        let member = space_member_from_paired_device(&sample_device());
+
+        dual_write_member(&repo, "session-1", member).await;
+
+        assert!(repo.saved().is_empty());
     }
 }
