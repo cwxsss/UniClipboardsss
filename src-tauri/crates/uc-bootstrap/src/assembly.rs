@@ -22,8 +22,9 @@ use tracing::{info, warn};
 
 use uc_app::deps::{NetworkPorts, SearchPorts};
 use uc_app::shared::host_event::{HostEvent, HostEventEmitterPort, SetupHostEvent};
-use uc_app::usecases::{PairingConfig, ResolveConnectionPolicy};
+use uc_app::usecases::ResolveConnectionPolicy;
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
+use uc_application::pairing::PairingConfig;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
@@ -933,9 +934,10 @@ pub async fn resolve_pairing_config(settings: Arc<dyn SettingsPort>) -> PairingC
 use tokio::sync::Mutex as TokioMutex;
 use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{
-    DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, PairingOrchestrator,
-    SessionReadyEmitter, SetupOrchestrator, SetupPairingFacadePort,
+    DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, SessionReadyEmitter,
+    SetupOrchestrator, SetupPairingFacadePort,
 };
+use uc_application::pairing::PairingOrchestrator;
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{DiscoveryPort, TimerPort};
 
@@ -1009,7 +1011,7 @@ impl SetupAssemblyPorts {
             async fn subscribe(
                 &self,
             ) -> anyhow::Result<
-                tokio::sync::mpsc::Receiver<uc_app::usecases::pairing::PairingDomainEvent>,
+                tokio::sync::mpsc::Receiver<uc_application::pairing::PairingDomainEvent>,
             > {
                 let (_tx, rx) = tokio::sync::mpsc::channel(1);
                 Ok(rx)
@@ -1079,8 +1081,9 @@ pub fn build_setup_orchestrator(
 ) -> Arc<SetupOrchestrator> {
     use uc_app::usecases::{
         AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, InitializeEncryption,
-        MarkSetupComplete, StagedPairedDeviceStore, StartNetworkAfterUnlock,
+        MarkSetupComplete, StartNetworkAfterUnlock,
     };
+    use uc_application::pairing::StagedPairedDeviceStore;
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         deps.security.encryption.clone(),

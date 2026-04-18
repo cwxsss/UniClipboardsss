@@ -49,8 +49,8 @@ pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
 pub use pairing::{
     GetDeviceSyncSettings, GetLocalDeviceInfo, GetP2pPeersSnapshot, ListPairedDevices,
-    ListSendablePeers, LocalDeviceInfo, PairingConfig, PairingOrchestrator,
-    ResolveConnectionPolicy, StagedPairedDeviceStore, UnpairDevice, UpdateDeviceSyncSettings,
+    ListSendablePeers, LocalDeviceInfo, ResolveConnectionPolicy, UnpairDevice,
+    UpdateDeviceSyncSettings,
 };
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
 pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator, SetupPairingFacadePort};

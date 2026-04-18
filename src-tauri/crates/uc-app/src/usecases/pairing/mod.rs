@@ -1,36 +1,19 @@
-pub mod crypto;
 pub mod dto;
-pub mod events;
-pub mod facade;
 pub mod get_device_sync_settings;
 pub mod get_local_device_info;
 pub mod get_p2p_peers_snapshot;
 pub mod list_paired_devices;
 pub mod list_sendable_peers;
-pub mod orchestrator;
-mod protocol_handler;
 pub mod resolve_connection_policy;
-pub(crate) mod session_manager;
-pub mod staged_paired_device_store;
-pub mod state_machine;
 pub mod unpair_device;
 pub mod update_device_sync_settings;
 
-pub use crypto::PairingCryptoPorts;
 pub use dto::{P2PPeerInfo, PairedPeer};
-pub use events::{PairingDomainEvent, PairingEventPort};
-pub use facade::PairingFacade;
 pub use get_device_sync_settings::GetDeviceSyncSettings;
 pub use get_local_device_info::{GetLocalDeviceInfo, LocalDeviceInfo};
 pub use get_p2p_peers_snapshot::{GetP2pPeersSnapshot, P2pPeerSnapshot};
 pub use list_paired_devices::ListPairedDevices;
 pub use list_sendable_peers::ListSendablePeers;
-pub use orchestrator::{PairingConfig, PairingOrchestrator};
 pub use resolve_connection_policy::ResolveConnectionPolicy;
-pub use staged_paired_device_store::StagedPairedDeviceStore;
-pub use state_machine::{
-    CancellationBy, FailureReason, PairingAction, PairingEvent, PairingPolicy, PairingState,
-    PairingStateMachine, TimeoutKind,
-};
 pub use unpair_device::UnpairDevice;
 pub use update_device_sync_settings::UpdateDeviceSyncSettings;

@@ -23,7 +23,6 @@ use uc_core::{
     },
 };
 
-use crate::usecases::pairing::{FailureReason, PairingDomainEvent};
 use crate::usecases::setup::context::SetupContext;
 use crate::usecases::setup::MarkSetupComplete;
 use crate::usecases::space_access::{
@@ -32,6 +31,7 @@ use crate::usecases::space_access::{
 use crate::usecases::AppLifecycleCoordinator;
 use crate::usecases::InitializeEncryption;
 use crate::usecases::SetupPairingFacadePort;
+use uc_application::pairing::{FailureReason, PairingDomainEvent};
 
 use super::orchestrator::SetupError;
 

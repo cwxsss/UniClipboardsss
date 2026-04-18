@@ -24,7 +24,7 @@ use anyhow::Result;
 
 use super::crypto::PairingCryptoPorts;
 use super::{PairingDomainEvent, PairingEventPort, PairingFacade};
-use crate::usecases::pairing::staged_paired_device_store::StagedPairedDeviceStore;
+use crate::pairing::staged_paired_device_store::StagedPairedDeviceStore;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;

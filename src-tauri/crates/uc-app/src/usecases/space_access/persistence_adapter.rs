@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tracing::{info, warn};
 
-use crate::usecases::pairing::staged_paired_device_store::StagedPairedDeviceStore;
+use uc_application::pairing::staged_paired_device_store::StagedPairedDeviceStore;
 use uc_core::ids::{PeerId, SpaceId};
 use uc_core::pairing::PairingState;
 use uc_core::ports::paired_device_repository::PairedDeviceRepositoryPort;
