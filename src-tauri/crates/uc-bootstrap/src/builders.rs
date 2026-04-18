@@ -28,9 +28,7 @@ use uc_app::usecases::{
     DeviceAnnouncer, DeviceNameAnnouncer, LifecycleEventEmitter, LoggingLifecycleEventEmitter,
 };
 use uc_app::AppDeps;
-use uc_application::pairing::{
-    PairingAction, PairingCryptoPorts, PairingOrchestrator, StagedPairedDeviceStore,
-};
+use uc_application::pairing::{PairingAction, PairingCryptoPorts, PairingOrchestrator};
 use uc_application::trusted_peer::TrustPeerOrchestrator;
 use uc_core::config::AppConfig;
 use uc_core::ports::PeerDirectoryPort;
@@ -56,7 +54,7 @@ pub struct GuiBootstrapContext {
     pub storage_paths: AppPaths,
     pub pairing_orchestrator: Arc<PairingOrchestrator>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
-    pub staged_store: Arc<StagedPairedDeviceStore>,
+    pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     pub key_slot_store: Arc<dyn KeySlotStore>,
     pub config: AppConfig,
 }
@@ -76,7 +74,7 @@ pub struct DaemonBootstrapContext {
     pub emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
     pub pairing_orchestrator: Arc<PairingOrchestrator>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
-    pub staged_store: Arc<StagedPairedDeviceStore>,
+    pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     pub key_slot_store: Arc<dyn KeySlotStore>,
     pub storage_paths: AppPaths,
@@ -159,10 +157,9 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     // the start of every pairing flow to support multiple pairings in
     // a single process lifetime.
     let trust_peer_orch: Arc<TrustPeerOrchestrator<dyn TrustedPeerRepositoryPort>> = Arc::new(
-        TrustPeerOrchestrator::new(trusted_peer_repo, local_device_id),
+        TrustPeerOrchestrator::new(Arc::clone(&trusted_peer_repo), local_device_id),
     );
 
-    let staged_store = Arc::new(StagedPairedDeviceStore::new());
     let pairing_crypto = Arc::new(PairingCryptoPorts {
         pin_hasher: deps.security.pin_hasher.clone(),
         short_code: deps.security.short_code.clone(),
@@ -175,7 +172,6 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         pairing_device_id,
         pairing_peer_id,
         pairing_identity_pubkey,
-        staged_store.clone(),
         pairing_crypto,
     );
     let pairing_orchestrator = Arc::new(pairing_orchestrator);
@@ -197,6 +193,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         discovery_network,
         device_announcer,
         lifecycle_emitter,
+        Arc::clone(&trusted_peer_repo),
     );
 
     // [Codex Review R1] Return AppDeps, NOT CoreRuntime.
@@ -209,7 +206,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         storage_paths,
         pairing_orchestrator,
         pairing_action_rx,
-        staged_store,
+        trusted_peer_repo,
         key_slot_store,
         config,
     })
@@ -269,10 +266,9 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     // Process-wide singleton TrustPeerOrchestrator (D19). See the
     // `build_gui_app` comment above for lifecycle notes.
     let trust_peer_orch: Arc<TrustPeerOrchestrator<dyn TrustedPeerRepositoryPort>> = Arc::new(
-        TrustPeerOrchestrator::new(trusted_peer_repo, local_device_id),
+        TrustPeerOrchestrator::new(Arc::clone(&trusted_peer_repo), local_device_id),
     );
 
-    let staged_store = Arc::new(StagedPairedDeviceStore::new());
     let pairing_crypto = Arc::new(PairingCryptoPorts {
         pin_hasher: deps.security.pin_hasher.clone(),
         short_code: deps.security.short_code.clone(),
@@ -285,7 +281,6 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         pairing_device_id,
         pairing_peer_id,
         pairing_identity_pubkey,
-        staged_store.clone(),
         pairing_crypto,
     );
     let pairing_orchestrator = Arc::new(pairing_orchestrator);
@@ -299,7 +294,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         emitter_cell,
         pairing_orchestrator,
         pairing_action_rx,
-        staged_store,
+        trusted_peer_repo,
         space_access_orchestrator,
         key_slot_store,
         storage_paths,

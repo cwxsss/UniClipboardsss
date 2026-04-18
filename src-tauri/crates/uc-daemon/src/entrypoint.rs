@@ -69,6 +69,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         ctx.deps.network_ports.peers.clone(),
         None,
         Arc::new(LoggingLifecycleEventEmitter),
+        ctx.trusted_peer_repo.clone(),
     );
     // Extract file_cache_dir, file_transfer_orchestrator, clipboard_write_coordinator,
     // and emitter_cell before ctx is consumed by runtime construction.

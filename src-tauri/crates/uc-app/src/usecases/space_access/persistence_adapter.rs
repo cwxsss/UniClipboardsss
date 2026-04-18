@@ -1,23 +1,23 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tracing::{info, warn};
+use tracing::info;
 
-use uc_application::pairing::staged_paired_device_store::StagedPairedDeviceStore;
-use uc_core::ids::{PeerId, SpaceId};
+use uc_core::ids::{DeviceId, PeerId, SpaceId};
 use uc_core::pairing::PairingState;
 use uc_core::ports::paired_device_repository::PairedDeviceRepositoryPort;
 use uc_core::ports::security::encryption_state::EncryptionStatePort;
 use uc_core::ports::space::PersistencePort;
+use uc_core::TrustedPeerRepositoryPort;
 
 pub struct SpaceAccessPersistenceAdapter {
     encryption_state: Arc<dyn EncryptionStatePort>,
     paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
-    staged_store: Arc<StagedPairedDeviceStore>,
+    trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
 }
 
 enum TrustPromotionSource {
-    Staged,
+    TrustedPeer,
     Repository,
 }
 
@@ -25,27 +25,25 @@ impl SpaceAccessPersistenceAdapter {
     pub fn new(
         encryption_state: Arc<dyn EncryptionStatePort>,
         paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
-        staged_store: Arc<StagedPairedDeviceStore>,
+        trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     ) -> Self {
         Self {
             encryption_state,
             paired_device_repo,
-            staged_store,
+            trusted_peer_repo,
         }
     }
 
     async fn promote_peer_to_trusted(&self, peer_id: &str) -> anyhow::Result<TrustPromotionSource> {
-        if let Some(mut staged_device) = self.staged_store.get_by_peer_id(peer_id) {
-            staged_device.pairing_state = PairingState::Trusted;
-            self.paired_device_repo.upsert(staged_device).await?;
-            if self.staged_store.take_by_peer_id(peer_id).is_none() {
-                warn!(
-                    peer_id = %peer_id,
-                    operation = "take_by_peer_id",
-                    "take_by_peer_id failed: no staged state found"
-                );
-            }
-            return Ok(TrustPromotionSource::Staged);
+        let device_id = DeviceId::new(peer_id.to_string());
+        if self
+            .trusted_peer_repo
+            .get(&device_id)
+            .await
+            .map_err(|err| anyhow::anyhow!("trusted_peer.get failed: {err}"))?
+            .is_some()
+        {
+            return Ok(TrustPromotionSource::TrustedPeer);
         }
 
         self.paired_device_repo
@@ -67,11 +65,11 @@ impl PersistencePort for SpaceAccessPersistenceAdapter {
         self.encryption_state.persist_initialized().await?;
         let source = self.promote_peer_to_trusted(peer_id).await?;
         match source {
-            TrustPromotionSource::Staged => info!(
+            TrustPromotionSource::TrustedPeer => info!(
                 peer_id = %peer_id,
-                source = "staged",
+                source = "trusted_peer",
                 target_state = "Trusted",
-                "Joiner access persisted with staged paired device"
+                "Joiner access confirmed via trusted_peer repository"
             ),
             TrustPromotionSource::Repository => info!(
                 peer_id = %peer_id,
@@ -92,11 +90,11 @@ impl PersistencePort for SpaceAccessPersistenceAdapter {
         info!(peer_id = %peer_id, "Persisting sponsor access and promoting peer trust");
         let source = self.promote_peer_to_trusted(peer_id).await?;
         match source {
-            TrustPromotionSource::Staged => info!(
+            TrustPromotionSource::TrustedPeer => info!(
                 peer_id = %peer_id,
-                source = "staged",
+                source = "trusted_peer",
                 target_state = "Trusted",
-                "Sponsor access persisted with staged paired device"
+                "Sponsor access confirmed via trusted_peer repository"
             ),
             TrustPromotionSource::Repository => info!(
                 peer_id = %peer_id,

@@ -70,7 +70,7 @@ fn run_app(ctx: GuiBootstrapContext) {
         storage_paths,
         pairing_orchestrator: _pairing_orchestrator,
         pairing_action_rx: _pairing_action_rx,
-        staged_store: _staged_store,
+        trusted_peer_repo: _trusted_peer_repo,
         key_slot_store: _key_slot_store,
         config: _config,
     } = ctx;

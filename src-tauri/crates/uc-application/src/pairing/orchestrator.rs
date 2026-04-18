@@ -23,9 +23,8 @@
 use anyhow::Result;
 
 use super::crypto::PairingCryptoPorts;
-use super::{PairingDomainEvent, PairingEventPort, PairingFacade};
+use super::{PairingDomainEvent, PairingEventPort};
 use crate::pairing::protocol_handler::SharedTrustPeerOrchestrator;
-use crate::pairing::staged_paired_device_store::StagedPairedDeviceStore;
 use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -117,7 +116,6 @@ impl PairingOrchestrator {
         local_device_id: String,
         local_peer_id: String,
         local_identity_pubkey: Vec<u8>,
-        staged_store: Arc<StagedPairedDeviceStore>,
         crypto: Arc<PairingCryptoPorts>,
     ) -> (Self, mpsc::Receiver<PairingAction>) {
         let (action_tx, action_rx) = mpsc::channel(100);
@@ -133,7 +131,7 @@ impl PairingOrchestrator {
 
         let session_manager = PairingSessionManager::new(config, local_identity, crypto);
         let protocol_handler =
-            PairingProtocolHandler::new(action_tx, trust_peer_orch, staged_store, event_senders);
+            PairingProtocolHandler::new(action_tx, trust_peer_orch, event_senders);
 
         let orchestrator = Self {
             session_manager,
@@ -714,30 +712,6 @@ impl PairingOrchestrator {
                 self.session_manager.session_peers(),
             )
             .await
-    }
-}
-
-#[async_trait::async_trait]
-impl PairingFacade for PairingOrchestrator {
-    async fn initiate_pairing(&self, peer_id: String) -> anyhow::Result<SessionId> {
-        Self::initiate_pairing(self, peer_id).await
-    }
-
-    async fn user_accept_pairing(&self, session_id: &str) -> anyhow::Result<()> {
-        Self::user_accept_pairing(self, session_id).await
-    }
-
-    async fn user_reject_pairing(&self, session_id: &str) -> anyhow::Result<()> {
-        Self::user_reject_pairing(self, session_id).await
-    }
-
-    async fn handle_challenge_response(
-        &self,
-        session_id: &str,
-        peer_id: &str,
-        response: PairingChallengeResponse,
-    ) -> anyhow::Result<()> {
-        Self::handle_challenge_response(self, session_id, peer_id, response).await
     }
 }
 

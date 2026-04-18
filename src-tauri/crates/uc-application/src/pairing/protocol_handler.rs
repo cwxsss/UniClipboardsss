@@ -19,7 +19,6 @@ use super::state_machine::{FailureReason, PairingAction, PairingEvent, TimeoutKi
 
 use super::events::PairingDomainEvent;
 use super::session_manager::{PairingPeerInfo, PairingSessionContext};
-use super::staged_paired_device_store::StagedPairedDeviceStore;
 use crate::trusted_peer::{TrustPeerOrchestrator, TrustVerificationChallenge};
 
 /// Shared alias for the trust-peer orchestrator singleton (D19): one
@@ -31,9 +30,9 @@ pub(crate) type SharedTrustPeerOrchestrator =
 
 /// Handles execution of pairing protocol actions.
 ///
-/// Owns port references needed for protocol operations: trust_peer_orch,
-/// staged_store, and action_tx channel. Does NOT own sessions — borrows
-/// them via Arc references passed from the orchestrator.
+/// Owns port references needed for protocol operations: trust_peer_orch
+/// and action_tx channel. Does NOT own sessions — borrows them via Arc
+/// references passed from the orchestrator.
 #[derive(Clone)]
 pub(crate) struct PairingProtocolHandler {
     /// Action sender (forwarding actions to the network layer)
@@ -45,8 +44,6 @@ pub(crate) struct PairingProtocolHandler {
     /// (`PairedDeviceRepositoryPort::upsert` + `MemberRepositoryPort::save`)
     /// that lived here during Phase 2.
     trust_peer_orch: SharedTrustPeerOrchestrator,
-    /// Staged paired device store
-    staged_store: Arc<StagedPairedDeviceStore>,
     /// Event senders for domain events
     event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
 }
@@ -56,13 +53,11 @@ impl PairingProtocolHandler {
     pub(crate) fn new(
         action_tx: mpsc::Sender<PairingAction>,
         trust_peer_orch: SharedTrustPeerOrchestrator,
-        staged_store: Arc<StagedPairedDeviceStore>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
     ) -> Self {
         Self {
             action_tx,
             trust_peer_orch,
-            staged_store,
             event_senders,
         }
     }
@@ -87,7 +82,6 @@ impl PairingProtocolHandler {
             session_peers.clone(),
             self.event_senders.clone(),
             self.trust_peer_orch.clone(),
-            self.staged_store.clone(),
             session_id.to_string(),
             action,
         )
@@ -100,7 +94,6 @@ impl PairingProtocolHandler {
         session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
         trust_peer_orch: SharedTrustPeerOrchestrator,
-        staged_store: Arc<StagedPairedDeviceStore>,
         session_id: String,
         action: PairingAction,
     ) -> impl Future<Output = Result<()>> + Send {
@@ -279,12 +272,6 @@ impl PairingProtocolHandler {
                             "Driving trust-peer flow before verification completion"
                         );
                         let peer_id_str = device.peer_id.to_string();
-                        // The staged-store snapshot is still consumed by
-                        // `uc-app/space_access/persistence_adapter.rs` during
-                        // Phase 2; removal is scheduled for 0.4.3 together
-                        // with the reverse-dep cleanup.
-                        staged_store.stage(&session_id, device.clone());
-
                         let peer_device_id = DeviceId::new(peer_id_str.clone());
                         // Short-code is a UI-presentation artefact emitted
                         // earlier in the flow via
@@ -375,7 +362,6 @@ impl PairingProtocolHandler {
                         let session_peers = peers_for_timer;
                         let event_senders = event_senders_for_timer;
                         let trust_peer_orch_for_timer = trust_peer_orch.clone();
-                        let staged_store_for_timer = staged_store.clone();
                         let session_id_for_log = action_session_id.clone();
                         let sleep_duration = deadline
                             .signed_duration_since(Utc::now())
@@ -389,7 +375,6 @@ impl PairingProtocolHandler {
                                 session_peers,
                                 event_senders,
                                 trust_peer_orch_for_timer,
-                                staged_store_for_timer,
                                 action_session_id,
                                 kind,
                             )
@@ -441,7 +426,6 @@ impl PairingProtocolHandler {
         session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
         trust_peer_orch: SharedTrustPeerOrchestrator,
-        staged_store: Arc<StagedPairedDeviceStore>,
         session_id: String,
         kind: TimeoutKind,
     ) -> impl Future<Output = Result<()>> + Send {
@@ -476,7 +460,6 @@ impl PairingProtocolHandler {
                         session_peers.clone(),
                         event_senders.clone(),
                         trust_peer_orch.clone(),
-                        staged_store.clone(),
                         session_id.clone(),
                         action,
                     )

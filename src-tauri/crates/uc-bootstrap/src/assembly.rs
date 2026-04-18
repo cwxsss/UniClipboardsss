@@ -966,6 +966,7 @@ use uc_app::usecases::{
 use uc_application::pairing::PairingOrchestrator;
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{DiscoveryPort, TimerPort};
+use uc_core::TrustedPeerRepositoryPort;
 
 /// Bundle of network/external adapter ports needed to assemble the SetupOrchestrator.
 ///
@@ -981,6 +982,12 @@ pub struct SetupAssemblyPorts {
     pub discovery_port: Arc<dyn DiscoveryPort>,
     pub device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
     pub lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
+    /// Trusted-peer repository (0.4.3): consumed by
+    /// `SpaceAccessPersistenceAdapter` to verify pairing-side persistence
+    /// before space_access promotes the peer. Same Arc as the one injected
+    /// into `TrustPeerOrchestrator` in bootstrap, shared across the
+    /// process.
+    pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
 }
 
 impl SetupAssemblyPorts {
@@ -991,6 +998,7 @@ impl SetupAssemblyPorts {
         peers: Arc<dyn uc_core::ports::PeerDirectoryPort>,
         device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
         lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
+        trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     ) -> Self {
         struct NetworkDiscoveryPort {
             peers: Arc<dyn uc_core::ports::PeerDirectoryPort>,
@@ -1009,6 +1017,7 @@ impl SetupAssemblyPorts {
             discovery_port: Arc::new(NetworkDiscoveryPort { peers }),
             device_announcer,
             lifecycle_emitter,
+            trusted_peer_repo,
         }
     }
 
@@ -1070,12 +1079,43 @@ impl SetupAssemblyPorts {
             }
         }
 
+        struct NoopTrustedPeerRepository;
+
+        #[async_trait::async_trait]
+        impl TrustedPeerRepositoryPort for NoopTrustedPeerRepository {
+            async fn get(
+                &self,
+                _peer_device_id: &uc_core::DeviceId,
+            ) -> Result<Option<uc_core::TrustedPeer>, uc_core::TrustedPeerError> {
+                Ok(None)
+            }
+
+            async fn list(&self) -> Result<Vec<uc_core::TrustedPeer>, uc_core::TrustedPeerError> {
+                Ok(Vec::new())
+            }
+
+            async fn save(
+                &self,
+                _trusted_peer: &uc_core::TrustedPeer,
+            ) -> Result<(), uc_core::TrustedPeerError> {
+                Ok(())
+            }
+
+            async fn remove(
+                &self,
+                _peer_device_id: &uc_core::DeviceId,
+            ) -> Result<bool, uc_core::TrustedPeerError> {
+                Ok(false)
+            }
+        }
+
         Self {
             setup_pairing_facade: Arc::new(NoopSetupPairingFacade),
             space_access_orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
             discovery_port: Arc::new(EmptyDiscoveryPort),
             device_announcer: None,
             lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
+            trusted_peer_repo: Arc::new(NoopTrustedPeerRepository),
         }
     }
 }
@@ -1109,7 +1149,6 @@ pub fn build_setup_orchestrator(
         AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, InitializeEncryption,
         MarkSetupComplete, StartNetworkAfterUnlock,
     };
-    use uc_application::pairing::StagedPairedDeviceStore;
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         deps.security.encryption.clone(),
@@ -1158,7 +1197,7 @@ pub fn build_setup_orchestrator(
         uc_app::usecases::space_access::SpaceAccessPersistenceAdapter::new(
             deps.security.encryption_state.clone(),
             deps.device.paired_device_repo.clone(),
-            Arc::new(StagedPairedDeviceStore::new()),
+            ports.trusted_peer_repo.clone(),
         ),
     ));
     let setup_event_port = Arc::new(HostEventSetupPort::new(emitter_cell));
