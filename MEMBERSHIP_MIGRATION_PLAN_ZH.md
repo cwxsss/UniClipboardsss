@@ -559,7 +559,7 @@ f2acf1a3  docs(membership): mark phase 3.3 complete, record commit hash in plan 
 f96a6082  feat(membership): add /member/:device_id/sync-preferences endpoints (phase 4b PR-2/5)
 b82d067d  feat(frontend): switch device sync UI to /member sync-preferences (phase 4b PR-3/5)
 c77a4d89  chore(test): remove pre-existing broken frontend test files
-<PR-4 hash 待回填> refactor(membership): decommission legacy paired_device sync-settings path (phase 4b PR-4/5)
+3245a186  refactor(membership): decommission legacy paired_device sync-settings path (phase 4b PR-4/5)
 ```
 
 分支：`milestone/0.6.0`。
