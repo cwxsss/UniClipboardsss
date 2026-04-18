@@ -7,6 +7,7 @@ mod paired_device_repo;
 mod representation_repo;
 mod space_member_repo;
 mod thumbnail_repo;
+mod trusted_peer_repo;
 
 pub use blob_repo::*;
 pub use clipboard_entry_repo::*;
@@ -17,3 +18,4 @@ pub use paired_device_repo::*;
 pub use representation_repo::*;
 pub use space_member_repo::*;
 pub use thumbnail_repo::*;
+pub use trusted_peer_repo::*;

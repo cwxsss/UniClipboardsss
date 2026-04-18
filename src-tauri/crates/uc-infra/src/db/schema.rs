@@ -132,6 +132,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    trusted_peer (peer_device_id) {
+        peer_device_id -> Text,
+        local_device_id -> Text,
+        peer_fingerprint -> Text,
+        trusted_at -> BigInt,
+    }
+}
+
+diesel::table! {
     search_document (profile_id, entry_id) {
         profile_id -> Text,
         entry_id -> Text,
@@ -183,6 +192,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     file_transfer_events,
     paired_device,
     space_member,
+    trusted_peer,
     search_document,
     search_index_meta,
     search_posting,

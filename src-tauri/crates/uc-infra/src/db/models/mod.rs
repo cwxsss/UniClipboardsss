@@ -7,6 +7,7 @@ pub mod file_transfer;
 pub mod paired_device_row;
 pub mod snapshot_representation;
 pub mod space_member_row;
+pub mod trusted_peer_row;
 
 pub use blob::{BlobRow, NewBlobRow};
 pub use clipboard_entry::{ClipboardEntryRow, NewClipboardEntryRow};
@@ -19,3 +20,4 @@ pub use file_transfer::{FileTransferRow, NewFileTransferRow};
 pub use paired_device_row::{NewPairedDeviceRow, PairedDeviceRow};
 pub use snapshot_representation::{NewSnapshotRepresentationRow, SnapshotRepresentationRow};
 pub use space_member_row::{NewSpaceMemberRow, SpaceMemberRow};
+pub use trusted_peer_row::{NewTrustedPeerRow, TrustedPeerRow};

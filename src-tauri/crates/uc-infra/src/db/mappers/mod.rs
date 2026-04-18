@@ -6,3 +6,4 @@ pub mod paired_device_mapper;
 pub mod snapshot_representation_mapper;
 pub mod space_member_mapper;
 pub mod thumbnail_mapper;
+pub mod trusted_peer_mapper;
