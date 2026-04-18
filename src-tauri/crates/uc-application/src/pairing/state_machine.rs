@@ -36,9 +36,22 @@ use uc_core::network::{
     SessionId,
 };
 use uc_core::pairing::PairingRole;
-use uc_core::pairing::{PairedDevice, PairingState as PairedDeviceState};
 use uc_core::settings::model::PairingSettings;
 use uc_core::PeerId;
+
+/// Outcome of a successful pairing handshake passed to the `PersistPairedDevice`
+/// action and stored transiently in the `Finalizing` state.
+///
+/// Replaces the retired `uc_core::pairing::PairedDevice` domain type (phase 4b
+/// PR-5). Intentionally minimal: only the fields the trust-peer orchestrator
+/// actually needs to persist a `TrustedPeer` record. Additional attributes
+/// (device name, paired_at, last_seen) live on `SpaceMember` and are written
+/// separately via `AdmitMemberUseCase` at the space-access boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingHandshakeOutcome {
+    pub peer_id: PeerId,
+    pub identity_fingerprint: String,
+}
 
 use super::crypto::PairingCryptoPorts;
 
@@ -77,7 +90,7 @@ pub enum PairingState {
     /// 持久化中 (双方)
     Finalizing {
         session_id: SessionId,
-        paired_device: PairedDevice,
+        outcome: PairingHandshakeOutcome,
     },
 
     /// 配对成功完成 (终态)
@@ -287,7 +300,7 @@ pub enum PairingAction {
     /// 持久化配对设备
     PersistPairedDevice {
         session_id: SessionId,
-        device: PairedDevice,
+        outcome: PairingHandshakeOutcome,
     },
 
     /// 记录状态转换日志 (用于审计)
@@ -924,8 +937,8 @@ impl PairingStateMachine {
                     return (state, actions);
                 }
 
-                let paired_device = match self.build_paired_device(now) {
-                    Ok(device) => device,
+                let outcome = match self.build_handshake_outcome() {
+                    Ok(outcome) => outcome,
                     Err(reason) => {
                         let (state, mut actions) = self.fail_with_reason(session_id, reason);
                         actions.insert(0, cancel_timer);
@@ -938,7 +951,7 @@ impl PairingStateMachine {
                     cancel_timer,
                     PairingAction::PersistPairedDevice {
                         session_id: session_id.clone(),
-                        device: paired_device.clone(),
+                        outcome: outcome.clone(),
                     },
                     PairingAction::StartTimer {
                         session_id: session_id.clone(),
@@ -950,7 +963,7 @@ impl PairingStateMachine {
                 (
                     PairingState::Finalizing {
                         session_id,
-                        paired_device,
+                        outcome,
                     },
                     actions,
                 )
@@ -1308,14 +1321,14 @@ impl PairingStateMachine {
                     message: PairingMessage::Confirm(confirm),
                 });
 
-                let paired_device = match self.build_paired_device(now) {
-                    Ok(device) => device,
+                let outcome = match self.build_handshake_outcome() {
+                    Ok(outcome) => outcome,
                     Err(reason) => return self.fail_with_reason(session_id, reason),
                 };
                 let deadline = now + Duration::seconds(self.policy.step_timeout_secs);
                 actions.push(PairingAction::PersistPairedDevice {
                     session_id: session_id.clone(),
-                    device: paired_device.clone(),
+                    outcome: outcome.clone(),
                 });
                 actions.push(PairingAction::StartTimer {
                     session_id: session_id.clone(),
@@ -1326,7 +1339,7 @@ impl PairingStateMachine {
                 (
                     PairingState::Finalizing {
                         session_id,
-                        paired_device,
+                        outcome,
                     },
                     actions,
                 )
@@ -1513,7 +1526,7 @@ impl PairingStateMachine {
         (PairingState::Cancelled { session_id, by }, actions)
     }
 
-    fn build_paired_device(&self, now: DateTime<Utc>) -> Result<PairedDevice, FailureReason> {
+    fn build_handshake_outcome(&self) -> Result<PairingHandshakeOutcome, FailureReason> {
         let peer_id = self
             .context
             .peer_id
@@ -1533,20 +1546,9 @@ impl PairingStateMachine {
             Err(err) => return Err(FailureReason::CryptoError(err.to_string())),
         };
 
-        let device_name = self
-            .context
-            .peer_device_name
-            .clone()
-            .unwrap_or_else(|| "Unknown Device".to_string());
-
-        Ok(PairedDevice {
+        Ok(PairingHandshakeOutcome {
             peer_id: PeerId::from(peer_id),
-            pairing_state: PairedDeviceState::Pending,
             identity_fingerprint: fingerprint,
-            paired_at: now,
-            last_seen_at: None,
-            device_name,
-            sync_settings: None,
         })
     }
 }

@@ -120,7 +120,7 @@ pub enum NetworkEvent {
     ProtocolDenied {
         peer_id: String,
         protocol_id: String,
-        pairing_state: crate::pairing::PairingState,
+        trust: crate::network::PeerTrustStatus,
         direction: ProtocolDirection,
         reason: ProtocolDenyReason,
     },

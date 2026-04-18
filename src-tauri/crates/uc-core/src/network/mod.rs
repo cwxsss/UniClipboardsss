@@ -6,7 +6,7 @@ pub mod protocol;
 pub mod session;
 
 pub use connection_policy::{
-    AllowedProtocols, ConnectionPolicy, ProtocolKind, ResolvedConnectionPolicy,
+    AllowedProtocols, ConnectionPolicy, PeerTrustStatus, ProtocolKind, ResolvedConnectionPolicy,
 };
 pub use events::{
     ConnectedPeer, DiscoveredPeer, NetworkEvent, NetworkStatus, ProtocolDenyReason,

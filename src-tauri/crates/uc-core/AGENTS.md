@@ -191,7 +191,7 @@ pub trait DeviceRepositoryPort: Send + Sync {
 
 ### 6.2 可以存在于 core 的内容
 
-* `PairedDevice`
+* `TrustedPeer` / `SpaceMember`
 * `ConnectionPolicy`
 * `DeviceAddress`（逻辑地址）
 * 领域事件（如设备上线）

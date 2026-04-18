@@ -110,18 +110,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    paired_device (peer_id) {
-        peer_id -> Text,
-        pairing_state -> Text,
-        identity_fingerprint -> Text,
-        paired_at -> BigInt,
-        last_seen_at -> Nullable<BigInt>,
-        device_name -> Text,
-        sync_settings -> Nullable<Text>,
-    }
-}
-
-diesel::table! {
     space_member (device_id) {
         device_id -> Text,
         device_name -> Text,
@@ -190,7 +178,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     clipboard_snapshot_representation,
     file_transfer,
     file_transfer_events,
-    paired_device,
     space_member,
     trusted_peer,
     search_document,

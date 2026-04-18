@@ -1,6 +1,5 @@
 use std::sync::Arc;
-use uc_core::network::{ConnectionPolicy, ResolvedConnectionPolicy};
-use uc_core::pairing::PairingState;
+use uc_core::network::{ConnectionPolicy, PeerTrustStatus, ResolvedConnectionPolicy};
 use uc_core::ports::{ConnectionPolicyResolverError, ConnectionPolicyResolverPort};
 use uc_core::{DeviceId, MemberRepositoryPort, PeerId};
 
@@ -24,15 +23,15 @@ impl ResolveConnectionPolicy {
         peer_id: PeerId,
     ) -> Result<ResolvedConnectionPolicy, ResolveConnectionPolicyError> {
         let device_id = DeviceId::new(peer_id.as_str());
-        let state = match self.member_repo.get(&device_id).await {
-            Ok(Some(_)) => PairingState::Trusted,
-            Ok(None) => PairingState::Pending,
+        let trust = match self.member_repo.get(&device_id).await {
+            Ok(Some(_)) => PeerTrustStatus::Trusted,
+            Ok(None) => PeerTrustStatus::Untrusted,
             Err(err) => return Err(ResolveConnectionPolicyError::Repository(err.to_string())),
         };
 
         Ok(ResolvedConnectionPolicy {
-            pairing_state: state.clone(),
-            allowed: ConnectionPolicy::allowed_protocols(state),
+            trust,
+            allowed: ConnectionPolicy::allowed_protocols(trust),
         })
     }
 }

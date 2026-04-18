@@ -30,7 +30,6 @@ pub mod file_transport;
 mod hash;
 pub mod network_control;
 pub mod network_events;
-pub mod paired_device_repository;
 pub mod pairing_transport;
 pub mod peer_directory;
 pub mod search;
@@ -51,7 +50,7 @@ pub use timer::TimerPort;
 pub use clipboard::*;
 pub use clipboard_change_handler::ClipboardChangeHandler;
 pub use device_identity::DeviceIdentityPort;
-pub use errors::{AppDirsError, PairedDeviceRepositoryError};
+pub use errors::AppDirsError;
 pub use file_transfer_repository::{
     compute_aggregate_status, EntryTransferSummary, ExpiredInflightTransfer,
     FileTransferRepositoryPort, NoopFileTransferRepositoryPort, PendingInboundTransfer,
@@ -60,7 +59,6 @@ pub use file_transfer_repository::{
 pub use file_transport::{FileTransportPort, NoopFileTransportPort};
 pub use network_control::NetworkControlPort;
 pub use network_events::NetworkEventPort;
-pub use paired_device_repository::PairedDeviceRepositoryPort;
 pub use pairing_transport::PairingTransportPort;
 pub use peer_directory::PeerDirectoryPort;
 pub use search::search_index::SearchIndexPort;

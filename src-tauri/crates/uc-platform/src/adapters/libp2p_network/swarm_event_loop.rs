@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, RwLock, Semaphore};
 
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 use uc_core::network::NetworkEvent;
-use uc_core::pairing::PairingState;
+use uc_core::network::PeerTrustStatus;
 use uc_core::ports::ConnectionPolicyResolverPort;
 
 use super::address_registry;
@@ -162,7 +162,7 @@ pub(super) async fn run_swarm(
                                 let peer_id_core = uc_core::PeerId::from(peer_id_str.clone());
                                 let is_paired = async {
                                     match policy_resolver.resolve_for_peer(&peer_id_core).await {
-                                        Ok(policy) => policy.pairing_state == PairingState::Trusted,
+                                        Ok(policy) => policy.trust == PeerTrustStatus::Trusted,
                                         Err(err) => {
                                             warn!(
                                                 event = "recovery.resolve_pairing_state_failed",
@@ -748,7 +748,7 @@ async fn handle_mdns_expired(
             let peer_id_core = uc_core::PeerId::from(peer_id_str.clone());
             let is_paired = async {
                 match policy_resolver.resolve_for_peer(&peer_id_core).await {
-                    Ok(policy) => policy.pairing_state == PairingState::Trusted,
+                    Ok(policy) => policy.trust == PeerTrustStatus::Trusted,
                     Err(_) => false,
                 }
             }

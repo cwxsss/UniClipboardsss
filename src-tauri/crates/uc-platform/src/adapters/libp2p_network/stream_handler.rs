@@ -353,7 +353,7 @@ pub(super) async fn emit_protocol_denied(
     event_tx: &mpsc::Sender<NetworkEvent>,
     peer_id: String,
     protocol_id: &str,
-    pairing_state: uc_core::pairing::PairingState,
+    trust: uc_core::network::PeerTrustStatus,
     direction: ProtocolDirection,
     reason: uc_core::network::ProtocolDenyReason,
 ) {
@@ -361,7 +361,7 @@ pub(super) async fn emit_protocol_denied(
         .send(NetworkEvent::ProtocolDenied {
             peer_id,
             protocol_id: protocol_id.to_string(),
-            pairing_state,
+            trust,
             direction,
             reason,
         })
@@ -379,24 +379,23 @@ pub(super) async fn handle_pairing_open_error(
 ) {
     use super::super::pairing_stream::service::PairingStreamError;
     use crate::adapters::protocol_ids::ProtocolId;
-    use uc_core::network::ProtocolDenyReason;
-    use uc_core::pairing::PairingState;
+    use uc_core::network::{PeerTrustStatus, ProtocolDenyReason};
 
     if let Some(pairing_error) = error.downcast_ref::<PairingStreamError>() {
         if matches!(pairing_error, PairingStreamError::UnsupportedProtocol) {
             let peer = uc_core::PeerId::from(peer_id);
-            let pairing_state = match policy_resolver.resolve_for_peer(&peer).await {
-                Ok(resolved) => resolved.pairing_state,
+            let trust = match policy_resolver.resolve_for_peer(&peer).await {
+                Ok(resolved) => resolved.trust,
                 Err(err) => {
                     warn!("policy resolver failed for pairing protocol peer={peer_id}: {err}");
-                    PairingState::Pending
+                    PeerTrustStatus::Untrusted
                 }
             };
             emit_protocol_denied(
                 event_tx,
                 peer_id.to_string(),
                 ProtocolId::Pairing.as_str(),
-                pairing_state,
+                trust,
                 ProtocolDirection::Outbound,
                 ProtocolDenyReason::NotSupported,
             )

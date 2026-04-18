@@ -40,9 +40,11 @@ pub(crate) struct PairingProtocolHandler {
     /// Trust-peer orchestrator singleton (D19). Drives the trust
     /// establishment flow (`initiate → record_session_opened →
     /// confirm_verification`) at the moment the pairing state machine
-    /// reaches `PersistPairedDevice`. Replaces the dual-write combo
-    /// (`PairedDeviceRepositoryPort::upsert` + `MemberRepositoryPort::save`)
-    /// that lived here during Phase 2.
+    /// reaches `PersistPairedDevice`. Replaces the legacy
+    /// `PairedDeviceRepositoryPort::upsert` write (retired in phase 4b PR-5)
+    /// and the `MemberRepositoryPort::save` dual-write that lived here
+    /// during Phase 2; membership is now persisted at the space-access
+    /// boundary via `AdmitMemberUseCase`.
     trust_peer_orch: SharedTrustPeerOrchestrator,
     /// Event senders for domain events
     event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
@@ -270,14 +272,14 @@ impl PairingProtocolHandler {
                     }
                     PairingAction::PersistPairedDevice {
                         session_id: _,
-                        device,
+                        outcome,
                     } => {
                         tracing::info!(
                             session_id = %session_id,
-                            peer_id = %device.peer_id,
+                            peer_id = %outcome.peer_id,
                             "Driving trust-peer flow before verification completion"
                         );
-                        let peer_id_str = device.peer_id.to_string();
+                        let peer_id_str = outcome.peer_id.to_string();
                         let peer_device_id = DeviceId::new(peer_id_str.clone());
                         // Short-code is a UI-presentation artefact emitted
                         // earlier in the flow via
@@ -288,7 +290,7 @@ impl PairingProtocolHandler {
                         // canonical fingerprint for persistence.
                         let challenge = TrustVerificationChallenge {
                             peer_fingerprint: PeerFingerprint::new(
-                                device.identity_fingerprint.clone(),
+                                outcome.identity_fingerprint.clone(),
                             ),
                             short_code: String::new(),
                         };
