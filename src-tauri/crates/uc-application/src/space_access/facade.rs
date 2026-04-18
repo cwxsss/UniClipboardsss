@@ -35,18 +35,20 @@ pub struct SpaceAccessFacade {
 
 impl SpaceAccessFacade {
     /// Builds a facade with no `AdmitMemberUseCase` injected. Reaching
-    /// `Granted` on the joiner side will therefore skip local member
-    /// registration (only the trust relationship is persisted). Real
-    /// runtimes should call [`SpaceAccessFacade::with_admit_member`].
+    /// `Granted` on either side will therefore skip local member
+    /// registration (only the trust relationship is persisted), which
+    /// leaves the policy resolver unable to recognise the just-paired
+    /// peer — all inbound business streams will be denied by policy.
+    /// Real runtimes must call [`SpaceAccessFacade::with_admit_member`].
     pub fn new() -> Self {
         Self {
             orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
         }
     }
 
-    /// Builds a facade with an `AdmitMemberUseCase` injected so that the
-    /// joiner-side `Granted` transition also registers the sponsor peer as
-    /// a local space member. See `SpaceAccessOrchestrator::with_admit_member`.
+    /// Builds a facade with an `AdmitMemberUseCase` injected so that any
+    /// `Granted` transition (sponsor or joiner) also registers the remote
+    /// peer as a local space member. See `SpaceAccessOrchestrator::with_admit_member`.
     pub fn with_admit_member(admit_member: Arc<AdmitMemberUseCaseDyn>) -> Self {
         Self {
             orchestrator: Arc::new(SpaceAccessOrchestrator::new().with_admit_member(admit_member)),

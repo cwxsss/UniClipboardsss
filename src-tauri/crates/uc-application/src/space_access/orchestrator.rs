@@ -52,9 +52,10 @@ pub struct SpaceAccessOrchestrator {
     state: Arc<Mutex<SpaceAccessState>>,
     dispatch_lock: Arc<Mutex<()>>,
     event_senders: Arc<Mutex<Vec<mpsc::Sender<SpaceAccessCompletedEvent>>>>,
-    /// 可选 admit 入口。若注入，则 joiner 角色到达 `Granted` 时把对端登记为
-    /// 本机空间成员（phase A.2）。sponsor 角色此时不触发 admit（成员关系是
-    /// 本地自治的 —— sponsor 侧对"joiner 是否为成员"的视角由后续迭代补齐）。
+    /// 可选 admit 入口。若注入，则任一角色到达 `Granted` 时把对端登记为
+    /// 本机空间成员。成员关系是本地自治的 —— 两侧都必须把对端纳入
+    /// `member_repo`，否则策略解析器（`ResolveConnectionPolicy` 查 member_repo）
+    /// 会把刚配对完的对端判为 `Untrusted`，导致 business 协议被拒。
     admit_member: Option<Arc<AdmitMemberUseCaseDyn>>,
 }
 
@@ -73,9 +74,12 @@ impl SpaceAccessOrchestrator {
         }
     }
 
-    /// Inject the `AdmitMemberUseCase` so that a successful joiner `Granted`
-    /// transition also registers the sponsor peer as a local space member.
-    /// Without this, `Granted` only persists the trust relationship.
+    /// Inject the `AdmitMemberUseCase` so that a successful `Granted`
+    /// transition — on either sponsor or joiner side — also registers the
+    /// remote peer as a local space member. Without this, `Granted` only
+    /// persists the trust relationship and the business protocol will be
+    /// denied by policy at the first inbound stream (the resolver reads
+    /// `member_repo`).
     pub fn with_admit_member(mut self, admit_member: Arc<AdmitMemberUseCaseDyn>) -> Self {
         self.admit_member = Some(admit_member);
         self
@@ -198,9 +202,13 @@ impl SpaceAccessOrchestrator {
                     pairing_session_id.as_ref(),
                 )
                 .await;
-            } else if matches!(next, SpaceAccessState::Granted { .. }) {
-                // joiner 侧：Granted 后把对端 sponsor 登记为本机成员（phase A.2）
-                self.try_admit_sponsor_as_member().await;
+            }
+            if matches!(next, SpaceAccessState::Granted { .. }) {
+                // Both sides register the remote peer as a local member so
+                // the policy resolver (reads `member_repo`) will allow the
+                // business protocol immediately after pairing. Failure only
+                // warns — it must not block `Granted` itself.
+                self.try_admit_peer_as_member().await;
             }
 
             let mut guard = self.state.lock().await;
@@ -211,13 +219,16 @@ impl SpaceAccessOrchestrator {
         .await
     }
 
-    /// joiner 侧 `Granted` 后把对端 sponsor 登记为本机空间成员。
+    /// `Granted` 后把对端（sponsor 或 joiner，取决于本机角色）登记为本机
+    /// 空间成员。两侧都必须调用，否则 `ResolveConnectionPolicy`（查 member_repo）
+    /// 会把刚配对完的对端判为 `Untrusted`，接收端的 business stream handler
+    /// 会直接 "denied by policy" 拒绝，导致剪贴板/文件元数据同步无法进行。
     ///
     /// 语义对齐 `dual_write_member`（Phase 2）：admit 失败只记 WARN，不阻塞
     /// `Granted` 本身 —— 成员关系是本地自治的，pairing / space_access 的成功
     /// 不应被 admit 失败翻盘。必需上下文（peer_id / device_name / fingerprint）
     /// 任一缺失都会 WARN 跳过。
-    async fn try_admit_sponsor_as_member(&self) {
+    async fn try_admit_peer_as_member(&self) {
         let Some(admit) = self.admit_member.clone() else {
             return;
         };
@@ -552,19 +563,15 @@ impl SpaceAccessEventPort for SpaceAccessOrchestrator {
 
 #[cfg(test)]
 mod admit_tests {
-    //! Phase A.4 — white-box coverage for `try_admit_sponsor_as_member`.
+    //! White-box coverage for `try_admit_peer_as_member`.
     //!
     //! We exercise the method directly rather than driving the state machine
     //! to `Granted` through `dispatch`, because `dispatch` requires a
     //! fully-wired `SpaceAccessExecutor` (Crypto / Transport / Proof / Timer
-    //! / Persistence) that has nothing to do with admit behavior. The actual
-    //! "joiner `Granted` ⇒ admit" wiring in `dispatch` is a single-line
-    //! `else if matches!(next, …Granted)` branch that these tests cover by
-    //! invoking the target method it calls.
-    //!
-    //! Sponsor-side non-admit (responder flow) is covered by the
-    //! `is_responder_flow` branch guard in `dispatch` itself and is a
-    //! straight-line code-reading verification, not a mock-heavy test.
+    //! / Persistence) that has nothing to do with admit behavior. Both
+    //! dispatch branches (joiner-side `Granted` and sponsor-side
+    //! responder-flow `Granted`) call this same method, so exercising it
+    //! once covers both roles.
     use super::*;
     use std::sync::Mutex as StdMutex;
     use uc_core::{MembershipError, SpaceMember};
@@ -661,7 +668,7 @@ mod admit_tests {
         seed_context(&orch, Some("peer-1"), Some("Alice"), Some("fp-1")).await;
 
         // No admit_member wired — should simply return without panicking.
-        orch.try_admit_sponsor_as_member().await;
+        orch.try_admit_peer_as_member().await;
     }
 
     #[tokio::test]
@@ -673,7 +680,7 @@ mod admit_tests {
         let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
         seed_context(&orch, None, Some("Alice"), Some("fp-1")).await;
 
-        orch.try_admit_sponsor_as_member().await;
+        orch.try_admit_peer_as_member().await;
 
         assert_eq!(repo.count(), 0, "admit should not fire without peer_id");
     }
@@ -687,7 +694,7 @@ mod admit_tests {
         let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
         seed_context(&orch, Some("peer-1"), None, Some("fp-1")).await;
 
-        orch.try_admit_sponsor_as_member().await;
+        orch.try_admit_peer_as_member().await;
 
         assert_eq!(repo.count(), 0, "admit should not fire without device_name");
     }
@@ -701,7 +708,7 @@ mod admit_tests {
         let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
         seed_context(&orch, Some("peer-1"), Some("Alice"), None).await;
 
-        orch.try_admit_sponsor_as_member().await;
+        orch.try_admit_peer_as_member().await;
 
         assert_eq!(repo.count(), 0, "admit should not fire without fingerprint");
     }
@@ -715,7 +722,7 @@ mod admit_tests {
         let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
         seed_context(&orch, Some("peer-1"), Some("Alice"), Some("fp-1")).await;
 
-        orch.try_admit_sponsor_as_member().await;
+        orch.try_admit_peer_as_member().await;
 
         assert_eq!(repo.count(), 1, "admit should persist exactly one member");
         let stored = repo.first().unwrap();
@@ -739,7 +746,7 @@ mod admit_tests {
         let orch = SpaceAccessOrchestrator::new().with_admit_member(admit);
         seed_context(&orch, Some("peer-1"), Some("Alice"), Some("fp-1")).await;
 
-        orch.try_admit_sponsor_as_member().await;
+        orch.try_admit_peer_as_member().await;
 
         assert_eq!(repo.count(), 1, "admit must not duplicate on conflict");
         let stored = repo.first().unwrap();

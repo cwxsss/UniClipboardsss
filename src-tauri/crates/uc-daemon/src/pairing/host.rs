@@ -727,10 +727,13 @@ async fn run_pairing_action_loop(
                                 warn!(error = %err, session_id = %session_id, "failed to close pairing session");
                             }
                         } else {
-                            // Phase A.2: populate SpaceAccessContext peer identity
-                            // fields so joiner-side `Granted` can produce
-                            // `AdmitMember` input. fingerprint comes from the
-                            // `trusted_peer` table written by 0.4.2.
+                            // Populate SpaceAccessContext peer identity fields so
+                            // either side's `Granted` can produce `AdmitMember`
+                            // input. Both sponsor and joiner now admit the remote
+                            // peer locally — skipping this leaves the policy
+                            // resolver unable to recognise the peer and business
+                            // streams get denied by policy on the first message.
+                            // Fingerprint comes from the `trusted_peer` table.
                             if let Some(peer) = peer_info.as_ref() {
                                 let fingerprint = match trusted_peer_repo
                                     .get(&uc_core::ids::DeviceId::new(peer.peer_id.clone()))
