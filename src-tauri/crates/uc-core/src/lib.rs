@@ -12,6 +12,7 @@ pub mod config;
 pub mod crypto;
 pub mod file_transfer;
 pub mod ids;
+pub mod membership;
 pub mod network;
 pub mod pairing;
 pub mod ports;
@@ -20,6 +21,7 @@ pub mod settings;
 pub mod setup;
 pub mod space_access;
 
+pub use membership::{MemberRepositoryPort, MemberSyncPreferences, MembershipError, SpaceMember};
 // Re-export commonly used types at the crate root
 pub use clipboard::*;
 pub use config::AppConfig;
