@@ -1,7 +1,7 @@
 # Membership 迁移计划（临时工作文档）
 
 > 范围：用 `uc-core::membership` + `uc-application::membership` 彻底替换现有的 `paired_device` 体系。
-> 状态：**Phase 1 / Phase 2 / 阶段 0（0.0–0.5）/ 阶段 A（A.1–A.4）/ 阶段 B（B.0–B.6）/ 阶段 C（C.1–C.5）/ Phase 3 前置三项（3.1 / 3.2 / 3.5）均已提交；下一步 3.3（unpair）/ 3.4（per-peer sync settings）/ 3.6（DTO 改名）。**
+> 状态：**Phase 1 / Phase 2 / 阶段 0（0.0–0.5）/ 阶段 A（A.1–A.4）/ 阶段 B（B.0–B.6）/ 阶段 C（C.1–C.5）/ Phase 3 全部（3.1 / 3.2 / 3.3 / 3.4 · scope C / 3.5 / 3.6 · scope A）均已提交；下一步 Phase 4（删双写）。**
 > 本文档只服务于迁移本身，不作为产品文档，迁移完成后可直接删除。
 
 ---
@@ -420,7 +420,7 @@ if persist_result.is_ok() {
 | **3.3** | ✅ 本阶段 | daemon 的 unpair 路径 | 改调 `uc-application::membership::RevokeMemberUseCase`；保留 `PairingTransportPort::unpair_device` 调用（关会话 / 触发 peer_lost，无 repo 写）；**删除** `uc-app/usecases/pairing/unpair_device.rs` 及 `CoreUseCases::unpair_device()`；`RevokeMemberUseCase<R>` 补 `?Sized` 以接受 `Arc<dyn MemberRepositoryPort>`；孤儿 `paired_device` 行由 U3 决策（不处理）交给 Phase 5 DROP 清除 | D13（daemon 已依赖 uc-application） |
 | **3.4** | ✅ 本阶段（**方案 C · 范围收窄**） | 内部 sync policy 过滤器 | `apply_sync_policy` / `apply_file_sync_policy` 改读 `member_repo.get(DeviceId)` → `MemberSyncPreferences`：clipboard 路径用 `send_enabled` + `send_content_types`，file 路径用 `send_enabled` + `send_content_types` 的 `file` 字段；`member_repo` miss 直接 drop peer（3.2 之后 `member_repo` 是 sendable peer 的权威来源）；infra 错误保留 "keep peer + log warn" 安全回退；`SyncOutboundClipboardUseCase` / `SyncOutboundFileUseCase` 删 `paired_device_repo` 字段（三处构造点同步更新：两处在 `uc-daemon::clipboard_watcher`，一处在 `uc-tauri::AppUseCases::sync_outbound_clipboard`）；保留全局 `SyncSettings.auto_sync` / `file_sync_enabled` 总闸；**保留** `uc-app/usecases/pairing/get_device_sync_settings.rs` / `update_device_sync_settings.rs`、`CoreUseCases::get_device_sync_settings` / `update_device_sync_settings`、`runtime.deps.device.paired_device_repo`、daemon DTO、前端，全部不动（U2 决策延后到 DTO 重塑 PR） | 同 3.3 |
 | **3.5** | ✅ 本阶段 | daemon 的 list_paired_devices 路径 | daemon `api/query.rs::paired_devices()` 改调 `uc_application::membership::usecases::ListMembersUseCase`；**删除** `uc-app/usecases/pairing/list_paired_devices.rs` 及 `CoreUseCases::list_paired_devices()` accessor；`IntoApiDto<PairedDeviceDto> for SpaceMember` 暂以 `pairing_state: "Trusted"` / `last_seen_at_ms: None` 占位（字段语义随 3.6 改名处理） | 同 3.3 |
-| **3.6** | ⏳ 待办 | daemon DTO 一次性改名 | `PairedDeviceDto → SpaceMemberDto`，`PairedDevicesChangedPayload` 相应改；前端 9 个 TS 文件（`devicesSlice.ts` / `PairedDevicesPanel.tsx` / `PairedPeer` type 等）联动改 | — |
+| **3.6** | ✅ 本阶段（**Scope A · 类型名+组件文件+Redux 字段**） | daemon DTO 一次性改名 | Rust: `PairedDeviceDto → SpaceMemberDto`、`PairedDevicesChangedPayload → SpaceMembersChangedPayload`、`PairedDevicesChangedEvent → SpaceMembersChangedEvent`、`RealtimePairedDeviceSummary → RealtimeSpaceMemberSummary`、`RealtimeEvent::PairedDevicesChanged → SpaceMembersChanged` 枚举变体；TS: `PairedPeer → SpaceMember`、`PairedDevicesPanel.tsx → SpaceMembersPanel.tsx`（+ 组件名 + logger tag `paired-devices-panel → space-members-panel`）、Redux `pairedDevices*/fetchPairedDevices/clearPairedDevicesError` → `spaceMembers*/fetchSpaceMembers/clearSpaceMembersError`。**保留**：HTTP URL `/paired-devices`、WS topic `paired-devices`、事件名 `paired-devices.{snapshot,changed}`、Rust 方法 `paired_devices()` / `get_paired_devices()`、TS 函数 `getPairedPeers()` / `getPairedPeersWithStatus()`、`RealtimeTopic::PairedDevices` 枚举变体、i18n key `devices.pairedDevices.title`；wire-level 改名延后到独立 breaking PR（与 DTO 重塑一并） | — |
 
 ### 6.2 一次性改名（D9 对应）
 
@@ -533,11 +533,13 @@ d4eca020  docs(membership): record phase C commit hash in plan §11
 # Phase 3 — 消费者切换（3.1 / 3.2 / 3.5 前置批次）
 17423690  refactor(membership): switch resolve_connection_policy / list_sendable_peers / list_paired_devices to member_repo (phase 3.1 + 3.2 + 3.5)
 
-# Phase 3 — U2/U3 决策记录 + 3.3 + 3.4
+# Phase 3 — U2/U3 决策记录 + 3.3 + 3.4 + 3.6
 34a0c2bf  docs(membership): record U2/U3 decisions, narrow phase 3.4 scope
 a13c966f  refactor(membership): daemon unpair -> RevokeMemberUseCase (phase 3.3)
 f2acf1a3  docs(membership): mark phase 3.3 complete, record commit hash in plan §6.1 + §11
 6c9e2bef  refactor(membership): sync policy filters read MemberSyncPreferences (phase 3.4, scope C)
+461187a9  docs(membership): mark phase 3.4 complete, record commit hash in plan §6.1 + §11
+61cf9a0d  refactor(membership): rename PairedDeviceDto -> SpaceMemberDto end-to-end (phase 3.6, scope A)
 ```
 
 分支：`milestone/0.6.0`。
