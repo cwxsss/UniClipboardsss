@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { contentTypeEntries, getDeviceIcon } from './device-utils'
-import type { PairedPeer } from '@/api/daemon/pairing'
 import type { ContentTypes } from '@/api/daemon/device'
+import type { SpaceMember } from '@/api/daemon/pairing'
 import { SettingRow } from '@/components/setting/SettingRow'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,7 +25,7 @@ interface DeviceSettingsSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   deviceId: string
-  device: PairedPeer | undefined
+  device: SpaceMember | undefined
   globalAutoSyncOff: boolean
   globalFileSyncOff: boolean
   onUnpair: (peerId: string) => void

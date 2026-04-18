@@ -65,7 +65,7 @@ export {
 export type {
   P2PPeerInfo,
   LocalDeviceInfo,
-  PairedPeer,
+  SpaceMember,
   P2PPairingRequest,
   P2PPairingResponse,
   P2PPinVerifyRequest,

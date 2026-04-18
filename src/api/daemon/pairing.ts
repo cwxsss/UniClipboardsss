@@ -39,7 +39,14 @@ interface LocalDeviceInfoResponse {
   ts: number
 }
 
-export interface PairedPeer {
+/**
+ * Space member (formerly SpaceMember) — matches `SpaceMemberDto` on the Rust side.
+ *
+ * NOTE: fields `sharedSecret` / `pairedAt` / `lastSeen` / `lastKnownAddresses` are
+ * legacy declarations kept for source-level compatibility with pre-migration code;
+ * the current daemon DTO only populates `peerId` / `deviceName` / `connected`.
+ */
+export interface SpaceMember {
   peerId: string
   deviceName: string
   sharedSecret: number[]
@@ -160,8 +167,8 @@ export async function getP2PPeers(): Promise<P2PPeerInfo[]> {
  *
  * 获取已配对的设备列表。
  */
-export async function getPairedPeers(): Promise<PairedPeer[]> {
-  return daemonClient.request<PairedPeer[]>('/paired-devices')
+export async function getPairedPeers(): Promise<SpaceMember[]> {
+  return daemonClient.request<SpaceMember[]>('/paired-devices')
 }
 
 /**
@@ -169,8 +176,8 @@ export async function getPairedPeers(): Promise<PairedPeer[]> {
  *
  * 获取已配对的设备列表（带连接状态）。
  */
-export async function getPairedPeersWithStatus(): Promise<PairedPeer[]> {
-  return daemonClient.request<PairedPeer[]>('/paired-devices')
+export async function getPairedPeersWithStatus(): Promise<SpaceMember[]> {
+  return daemonClient.request<SpaceMember[]>('/paired-devices')
 }
 
 /**

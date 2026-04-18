@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
 use crate::realtime::{
-    ClipboardNewContentEvent, PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent,
-    PairingUpdatedEvent, PairingVerificationRequiredEvent, PeerChangedEvent,
-    PeerConnectionChangedEvent, PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary,
-    RealtimeTopic, RealtimeTopicPort, SetupSpaceAccessCompletedEvent, SetupStateChangedEvent,
-    SpaceAccessStateChangedEvent,
+    ClipboardNewContentEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
+    PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
+    PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
+    SetupSpaceAccessCompletedEvent, SetupStateChangedEvent, SpaceAccessStateChangedEvent,
+    SpaceMembersChangedEvent,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -22,10 +22,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
 use uc_daemon_contract::api::auth::DaemonConnectionInfo;
 use uc_daemon_contract::api::types::{
-    DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload,
-    PairingSessionChangedPayload, PairingVerificationPayload, PeerConnectionChangedPayload,
-    PeerNameUpdatedPayload, PeersChangedFullPayload, SetupSpaceAccessCompletedPayload,
-    SetupStateChangedPayload, SpaceAccessStateChangedPayload,
+    DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
+    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload,
+    SetupSpaceAccessCompletedPayload, SetupStateChangedPayload, SpaceAccessStateChangedPayload,
+    SpaceMembersChangedPayload,
 };
 use uc_daemon_contract::constants::{pairing_stage, ws_event, ws_topic};
 
@@ -1075,14 +1075,14 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
             }
         }
         ws_event::PAIRED_DEVICES_CHANGED => {
-            match serde_json::from_value::<PairedDevicesChangedPayload>(event.payload) {
+            match serde_json::from_value::<SpaceMembersChangedPayload>(event.payload) {
                 Ok(payload) => {
                     debug!(
                         event = "bridge.payload_decoded",
                         source_topic = %topic,
                         source_event_type = %event_type,
                         session_id = session_id.as_deref().unwrap_or(""),
-                        payload_type = "PairedDevicesChangedPayload",
+                        payload_type = "SpaceMembersChangedPayload",
                         peer_id = %payload.peer_id,
                         has_device_name = payload.device_name.is_some(),
                         "decoded websocket payload"
@@ -1092,11 +1092,11 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                         &event_type,
                         session_id.as_deref(),
                         None,
-                        "PairedDevicesChanged",
+                        "SpaceMembersChanged",
                     );
-                    Some(RealtimeEvent::PairedDevicesChanged(
-                        PairedDevicesChangedEvent {
-                            devices: vec![crate::realtime::RealtimePairedDeviceSummary {
+                    Some(RealtimeEvent::SpaceMembersChanged(
+                        SpaceMembersChangedEvent {
+                            devices: vec![crate::realtime::RealtimeSpaceMemberSummary {
                                 device_id: payload.peer_id,
                                 device_name: payload.device_name.unwrap_or_default(),
                                 last_seen_ts: None,
@@ -1109,7 +1109,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                         &topic,
                         &event_type,
                         session_id.as_deref(),
-                        "PairedDevicesChangedPayload",
+                        "SpaceMembersChangedPayload",
                         &err,
                     );
                     None
@@ -1345,7 +1345,7 @@ fn event_topic(event: &RealtimeEvent) -> RealtimeTopic {
         RealtimeEvent::PeersChanged(_)
         | RealtimeEvent::PeersNameUpdated(_)
         | RealtimeEvent::PeersConnectionChanged(_) => RealtimeTopic::Peers,
-        RealtimeEvent::PairedDevicesChanged(_) => RealtimeTopic::PairedDevices,
+        RealtimeEvent::SpaceMembersChanged(_) => RealtimeTopic::PairedDevices,
         RealtimeEvent::SetupStateChanged(_) | RealtimeEvent::SetupSpaceAccessCompleted(_) => {
             RealtimeTopic::Setup
         }

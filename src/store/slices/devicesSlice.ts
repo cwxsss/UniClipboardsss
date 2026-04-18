@@ -1,15 +1,15 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
 import {
-  getLocalDeviceInfo,
-  getPairedPeersWithStatus,
-  type LocalDeviceInfo,
-  type PairedPeer,
-} from '@/api/daemon/pairing'
-import {
   getDeviceSyncSettings,
   updateDeviceSyncSettings as updateDeviceSyncSettingsApi,
   type DeviceSyncSettings as SyncSettings,
 } from '@/api/daemon/device'
+import {
+  getLocalDeviceInfo,
+  getPairedPeersWithStatus,
+  type LocalDeviceInfo,
+  type SpaceMember,
+} from '@/api/daemon/pairing'
 
 export interface DiscoveredPeer {
   id: string
@@ -23,12 +23,12 @@ interface DevicesState {
   localDeviceLoading: boolean
   localDeviceError: string | null
 
-  // 已配对的设备
-  pairedDevices: PairedPeer[]
-  pairedDevicesLoading: boolean
-  pairedDevicesError: string | null
+  // 空间成员（曾用名 pairedDevices）
+  spaceMembers: SpaceMember[]
+  spaceMembersLoading: boolean
+  spaceMembersError: string | null
 
-  // 每设备同步设置
+  // 每成员同步设置
   deviceSyncSettings: Record<string, SyncSettings>
   deviceSyncSettingsLoading: Record<string, boolean>
 
@@ -41,9 +41,9 @@ const initialState: DevicesState = {
   localDevice: null,
   localDeviceLoading: false,
   localDeviceError: null,
-  pairedDevices: [],
-  pairedDevicesLoading: false,
-  pairedDevicesError: null,
+  spaceMembers: [],
+  spaceMembersLoading: false,
+  spaceMembersError: null,
   deviceSyncSettings: {},
   deviceSyncSettingsLoading: {},
   discoveredPeers: [],
@@ -62,13 +62,13 @@ export const fetchLocalDeviceInfo = createAsyncThunk(
   }
 )
 
-export const fetchPairedDevices = createAsyncThunk(
-  'devices/fetchPaired',
+export const fetchSpaceMembers = createAsyncThunk(
+  'devices/fetchSpaceMembers',
   async (_, { rejectWithValue }) => {
     try {
       return await getPairedPeersWithStatus()
     } catch {
-      return rejectWithValue('获取已配对设备失败')
+      return rejectWithValue('获取空间成员失败')
     }
   }
 )
@@ -107,14 +107,14 @@ const devicesSlice = createSlice({
     clearLocalDeviceError: state => {
       state.localDeviceError = null
     },
-    clearPairedDevicesError: state => {
-      state.pairedDevicesError = null
+    clearSpaceMembersError: state => {
+      state.spaceMembersError = null
     },
     updatePeerConnectionStatus: (
       state,
       action: { payload: { peerId: string; connected: boolean; deviceName?: string | null } }
     ) => {
-      const peer = state.pairedDevices.find(d => d.peerId === action.payload.peerId)
+      const peer = state.spaceMembers.find(d => d.peerId === action.payload.peerId)
       if (peer) {
         peer.connected = action.payload.connected
         if (action.payload.deviceName) {
@@ -123,7 +123,7 @@ const devicesSlice = createSlice({
       }
     },
     updatePeerDeviceName: (state, action: { payload: { peerId: string; deviceName: string } }) => {
-      const peer = state.pairedDevices.find(d => d.peerId === action.payload.peerId)
+      const peer = state.spaceMembers.find(d => d.peerId === action.payload.peerId)
       if (peer) {
         peer.deviceName = action.payload.deviceName
       }
@@ -172,24 +172,24 @@ const devicesSlice = createSlice({
         state.localDeviceError = action.payload as string
       })
 
-    // Paired devices
+    // Space members (曾用名 paired devices)
     builder
-      .addCase(fetchPairedDevices.pending, state => {
-        // Only show loading state when there are no cached devices.
-        // When devices already exist (e.g., navigating back to the page),
+      .addCase(fetchSpaceMembers.pending, state => {
+        // Only show loading state when there are no cached members.
+        // When members already exist (e.g., navigating back to the page),
         // we fetch in the background without triggering skeleton/loading UI.
-        if (state.pairedDevices.length === 0) {
-          state.pairedDevicesLoading = true
+        if (state.spaceMembers.length === 0) {
+          state.spaceMembersLoading = true
         }
-        state.pairedDevicesError = null
+        state.spaceMembersError = null
       })
-      .addCase(fetchPairedDevices.fulfilled, (state, action) => {
-        state.pairedDevicesLoading = false
-        state.pairedDevices = action.payload
+      .addCase(fetchSpaceMembers.fulfilled, (state, action) => {
+        state.spaceMembersLoading = false
+        state.spaceMembers = action.payload
       })
-      .addCase(fetchPairedDevices.rejected, (state, action) => {
-        state.pairedDevicesLoading = false
-        state.pairedDevicesError = action.payload as string
+      .addCase(fetchSpaceMembers.rejected, (state, action) => {
+        state.spaceMembersLoading = false
+        state.spaceMembersError = action.payload as string
       })
 
     // Device sync settings
@@ -225,7 +225,7 @@ const devicesSlice = createSlice({
 
 export const {
   clearLocalDeviceError,
-  clearPairedDevicesError,
+  clearSpaceMembersError,
   updatePeerConnectionStatus,
   updatePeerDeviceName,
   setDiscoveredPeers,

@@ -5,7 +5,7 @@ use reqwest::{Method, RequestBuilder};
 
 use crate::http::authorized_daemon_request_with_type;
 use crate::DaemonConnectionState;
-use uc_daemon_contract::api::types::{PairedDeviceDto, PeerSnapshotDto, StatusResponse};
+use uc_daemon_contract::api::types::{PeerSnapshotDto, SpaceMemberDto, StatusResponse};
 
 #[derive(Clone)]
 pub struct DaemonQueryClient {
@@ -39,7 +39,7 @@ impl DaemonQueryClient {
         self.get_json(Method::GET, "/peers").await
     }
 
-    pub async fn get_paired_devices(&self) -> Result<Vec<PairedDeviceDto>> {
+    pub async fn get_paired_devices(&self) -> Result<Vec<SpaceMemberDto>> {
         self.get_json(Method::GET, "/paired-devices").await
     }
 

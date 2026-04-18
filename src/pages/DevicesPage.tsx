@@ -1,15 +1,15 @@
 import React, { useEffect } from 'react'
-import { PairedDevicesPanel, ThisDeviceCard } from '@/components'
+import { SpaceMembersPanel, ThisDeviceCard } from '@/components'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useAppDispatch } from '@/store/hooks'
-import { fetchLocalDeviceInfo, fetchPairedDevices } from '@/store/slices/devicesSlice'
+import { fetchLocalDeviceInfo, fetchSpaceMembers } from '@/store/slices/devicesSlice'
 
 const DevicesPage: React.FC = () => {
   const dispatch = useAppDispatch()
 
   useEffect(() => {
     dispatch(fetchLocalDeviceInfo())
-    dispatch(fetchPairedDevices())
+    dispatch(fetchSpaceMembers())
   }, [dispatch])
 
   return (
@@ -18,7 +18,7 @@ const DevicesPage: React.FC = () => {
         <ScrollArea className="h-full">
           <div className="px-4 pt-6 pb-8 space-y-6">
             <ThisDeviceCard />
-            <PairedDevicesPanel />
+            <SpaceMembersPanel />
           </div>
         </ScrollArea>
       </div>

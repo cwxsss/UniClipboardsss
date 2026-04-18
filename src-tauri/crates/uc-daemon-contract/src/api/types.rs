@@ -43,7 +43,7 @@ pub struct PeerSnapshotDto {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairedDeviceDto {
+pub struct SpaceMemberDto {
     pub peer_id: String,
     pub device_name: String,
     pub pairing_state: String,
@@ -156,7 +156,7 @@ pub struct PeerConnectionChangedPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairedDevicesChangedPayload {
+pub struct SpaceMembersChangedPayload {
     pub peer_id: String,
     pub device_name: Option<String>,
     pub connected: bool,

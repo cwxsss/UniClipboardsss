@@ -1,7 +1,7 @@
 //! Devices command -- lists paired devices via daemon HTTP API via `GET /paired-devices`.
 
 use crate::exit_codes;
-use uc_daemon::api::types::PairedDeviceDto;
+use uc_daemon::api::types::SpaceMemberDto;
 use uc_daemon_client::DaemonClientContext;
 
 /// Run the devices command.
@@ -40,7 +40,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
     exit_codes::EXIT_SUCCESS
 }
 
-fn render_devices_output(devices: &[PairedDeviceDto]) -> String {
+fn render_devices_output(devices: &[SpaceMemberDto]) -> String {
     let mut lines = vec![format!("Paired devices: {}", devices.len())];
     lines.extend(
         devices

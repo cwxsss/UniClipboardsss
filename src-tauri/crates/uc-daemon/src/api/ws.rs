@@ -28,10 +28,10 @@ use crate::api::dto::error::ApiError;
 use crate::api::dto::ws::{WsErrorResponse, WsSubscribeRequest};
 use crate::api::server::DaemonApiState;
 use crate::api::types::{
-    DaemonWsEvent, PairedDeviceDto, PairedDevicesChangedPayload, PairingFailurePayload,
-    PairingSessionChangedPayload, PairingSessionSummaryDto, PairingVerificationPayload,
-    PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeerSnapshotDto, PeersChangedFullPayload,
-    SpaceAccessStateResponse, StatusResponse,
+    DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingSessionSummaryDto,
+    PairingVerificationPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
+    PeerSnapshotDto, PeersChangedFullPayload, SpaceAccessStateResponse, SpaceMemberDto,
+    SpaceMembersChangedPayload, StatusResponse,
 };
 use crate::security::claims::SessionTokenClaims;
 
@@ -647,7 +647,7 @@ fn snapshot_event<T: Serialize>(
 fn _event_type_markers(
     _: StatusResponse,
     _: Vec<PeerSnapshotDto>,
-    _: Vec<PairedDeviceDto>,
+    _: Vec<SpaceMemberDto>,
     _: Vec<PairingSessionSummaryDto>,
     _: SpaceAccessStateResponse,
 ) -> (
@@ -658,7 +658,7 @@ fn _event_type_markers(
     PeersChangedFullPayload,
     PeerNameUpdatedPayload,
     PeerConnectionChangedPayload,
-    PairedDevicesChangedPayload,
+    SpaceMembersChangedPayload,
 ) {
     (
         [
@@ -709,7 +709,7 @@ fn _event_type_markers(
             device_name: None,
             connected: false,
         },
-        PairedDevicesChangedPayload {
+        SpaceMembersChangedPayload {
             peer_id: String::new(),
             device_name: None,
             connected: false,

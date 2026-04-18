@@ -13,20 +13,20 @@ import { daemonWs } from '@/lib/daemon-ws'
 import { createLogger } from '@/lib/logger'
 import { useAppDispatch, useAppSelector } from '@/store/hooks'
 import {
-  fetchPairedDevices,
-  clearPairedDevicesError,
+  fetchSpaceMembers,
+  clearSpaceMembersError,
   updatePeerConnectionStatus,
   updatePeerDeviceName,
 } from '@/store/slices/devicesSlice'
 
-const log = createLogger('paired-devices-panel')
+const log = createLogger('space-members-panel')
 
-const PairedDevicesPanel: React.FC = () => {
+const SpaceMembersPanel: React.FC = () => {
   const { t } = useTranslation()
   const { setting } = useSetting()
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
-  const { pairedDevices, pairedDevicesError } = useAppSelector(state => state.devices)
+  const { spaceMembers, spaceMembersError } = useAppSelector(state => state.devices)
   const globalAutoSyncOff = setting?.sync.autoSync === false
   const globalFileSyncOff = setting?.fileSync?.fileSyncEnabled === false
 
@@ -36,7 +36,7 @@ const PairedDevicesPanel: React.FC = () => {
   const [unpairTargetId, setUnpairTargetId] = useState<string | null>(null)
 
   useEffect(() => {
-    dispatch(fetchPairedDevices())
+    dispatch(fetchSpaceMembers())
 
     const handler = (event: { topic: string; eventType: string; payload: unknown }) => {
       if (event.topic !== 'peers') return
@@ -77,7 +77,7 @@ const PairedDevicesPanel: React.FC = () => {
     if (!unpairTargetId) return
     try {
       await unpairP2PDevice(unpairTargetId)
-      dispatch(fetchPairedDevices())
+      dispatch(fetchSpaceMembers())
       setUnpairDialogOpen(false)
       setSheetOpen(false)
       setUnpairTargetId(null)
@@ -87,14 +87,14 @@ const PairedDevicesPanel: React.FC = () => {
   }
 
   const handleRetry = () => {
-    dispatch(clearPairedDevicesError())
-    dispatch(fetchPairedDevices())
+    dispatch(clearSpaceMembersError())
+    dispatch(fetchSpaceMembers())
   }
 
-  const selectedDevice = pairedDevices.find(d => d.peerId === selectedDeviceId)
-  const unpairTargetDevice = pairedDevices.find(d => d.peerId === unpairTargetId)
+  const selectedDevice = spaceMembers.find(d => d.peerId === selectedDeviceId)
+  const unpairTargetDevice = spaceMembers.find(d => d.peerId === unpairTargetId)
 
-  if (pairedDevicesError) {
+  if (spaceMembersError) {
     return (
       <div className="space-y-2">
         <h3 className="text-xs font-medium text-muted-foreground px-1 uppercase tracking-wider">
@@ -103,7 +103,7 @@ const PairedDevicesPanel: React.FC = () => {
         <div className="rounded-xl border border-border/60 bg-card p-4">
           <Alert variant="destructive">
             <AlertDescription className="flex items-center gap-3">
-              <span className="flex-1">{pairedDevicesError}</span>
+              <span className="flex-1">{spaceMembersError}</span>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -119,7 +119,7 @@ const PairedDevicesPanel: React.FC = () => {
     )
   }
 
-  if (pairedDevices.length === 0) {
+  if (spaceMembers.length === 0) {
     return (
       <div className="space-y-2">
         <h3 className="text-xs font-medium text-muted-foreground px-1 uppercase tracking-wider">
@@ -167,7 +167,7 @@ const PairedDevicesPanel: React.FC = () => {
           {t('devices.pairedDevices.title')}
         </h3>
         <div className="grid grid-cols-2 gap-3">
-          {pairedDevices.map((device, index) => {
+          {spaceMembers.map((device, index) => {
             const Icon = getDeviceIcon(device.deviceName)
             const iconColor = getIconColor(index)
 
@@ -249,4 +249,4 @@ const PairedDevicesPanel: React.FC = () => {
   )
 }
 
-export default PairedDevicesPanel
+export default SpaceMembersPanel

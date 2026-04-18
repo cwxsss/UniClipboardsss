@@ -13,7 +13,7 @@ import { clearLocalDeviceError, fetchLocalDeviceInfo } from '@/store/slices/devi
 const ThisDeviceCard: React.FC = () => {
   const { t } = useTranslation()
   const dispatch = useAppDispatch()
-  const { localDevice, localDeviceLoading, localDeviceError, pairedDevices } = useAppSelector(
+  const { localDevice, localDeviceLoading, localDeviceError, spaceMembers } = useAppSelector(
     state => state.devices
   )
   const { setting } = useSetting()
@@ -66,8 +66,8 @@ const ThisDeviceCard: React.FC = () => {
 
   if (!localDevice) return null
 
-  const onlineCount = pairedDevices.filter(d => d.connected).length
-  const pairedCount = pairedDevices.length
+  const onlineCount = spaceMembers.filter(d => d.connected).length
+  const pairedCount = spaceMembers.length
 
   return (
     <div className="rounded-xl border border-border/60 bg-card p-5">

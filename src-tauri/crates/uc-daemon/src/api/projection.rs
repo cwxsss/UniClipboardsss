@@ -1,7 +1,7 @@
 use uc_app::usecases::pairing::get_p2p_peers_snapshot::P2pPeerSnapshot;
 use uc_core::SpaceMember;
 
-use crate::api::types::{PairedDeviceDto, PeerSnapshotDto};
+use crate::api::types::{PeerSnapshotDto, SpaceMemberDto};
 
 pub trait IntoApiDto<T> {
     fn into_api_dto(self) -> T;
@@ -20,9 +20,9 @@ impl IntoApiDto<PeerSnapshotDto> for P2pPeerSnapshot {
     }
 }
 
-impl IntoApiDto<PairedDeviceDto> for SpaceMember {
-    fn into_api_dto(self) -> PairedDeviceDto {
-        PairedDeviceDto {
+impl IntoApiDto<SpaceMemberDto> for SpaceMember {
+    fn into_api_dto(self) -> SpaceMemberDto {
+        SpaceMemberDto {
             peer_id: self.device_id.as_str().to_string(),
             device_name: self.device_name,
             pairing_state: "Trusted".to_string(),

@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import PairedDevicesPanel from '../PairedDevicesPanel'
+import SpaceMembersPanel from '../SpaceMembersPanel'
 import i18n from '@/i18n'
 
 vi.mock('../DeviceSettingsSheet', () => ({
@@ -54,41 +54,41 @@ vi.mock('@/api/p2p', () => ({
 }))
 
 vi.mock('@/store/slices/devicesSlice', () => ({
-  fetchPairedDevices: vi.fn(() => ({ type: 'devices/fetchPairedDevices' })),
-  clearPairedDevicesError: vi.fn(() => ({ type: 'devices/clearPairedDevicesError' })),
+  fetchSpaceMembers: vi.fn(() => ({ type: 'devices/fetchSpaceMembers' })),
+  clearSpaceMembersError: vi.fn(() => ({ type: 'devices/clearSpaceMembersError' })),
   updatePeerConnectionStatus: vi.fn(),
   updatePeerDeviceName: vi.fn(),
 }))
 
 function setupDevices(
-  pairedDevices: Array<{ peerId: string; deviceName: string; connected: boolean }> = []
+  spaceMembers: Array<{ peerId: string; deviceName: string; connected: boolean }> = []
 ) {
   useAppSelectorMock.mockImplementation(() => ({
-    pairedDevices,
-    pairedDevicesLoading: false,
-    pairedDevicesError: null,
+    spaceMembers,
+    spaceMembersLoading: false,
+    spaceMembersError: null,
   }))
 }
 
-describe('PairedDevicesPanel', () => {
+describe('SpaceMembersPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     setupDevices()
   })
 
-  it('renders empty state when no devices are paired', () => {
-    render(<PairedDevicesPanel />)
+  it('renders empty state when no members exist', () => {
+    render(<SpaceMembersPanel />)
     expect(screen.getByText(i18n.t('devices.list.empty.title'))).toBeInTheDocument()
     expect(screen.getByText(i18n.t('devices.list.empty.description'))).toBeInTheDocument()
   })
 
-  it('renders paired devices with online/offline badges', () => {
+  it('renders space members with online/offline badges', () => {
     setupDevices([
       { peerId: 'device-1', deviceName: 'iPhone 13', connected: true },
       { peerId: 'device-2', deviceName: 'MacBook Pro', connected: false },
     ])
 
-    render(<PairedDevicesPanel />)
+    render(<SpaceMembersPanel />)
 
     expect(screen.getByText('iPhone 13')).toBeInTheDocument()
     expect(screen.getByText('MacBook Pro')).toBeInTheDocument()
@@ -99,7 +99,7 @@ describe('PairedDevicesPanel', () => {
   it('clicking device row opens Sheet', () => {
     setupDevices([{ peerId: 'device-1', deviceName: 'iPhone 13', connected: true }])
 
-    render(<PairedDevicesPanel />)
+    render(<SpaceMembersPanel />)
 
     // Sheet should not be visible initially
     expect(screen.queryByTestId('device-settings-sheet')).not.toBeInTheDocument()
@@ -112,7 +112,7 @@ describe('PairedDevicesPanel', () => {
   it('DropdownMenu trigger click does not open Sheet', () => {
     setupDevices([{ peerId: 'device-1', deviceName: 'iPhone 13', connected: true }])
 
-    render(<PairedDevicesPanel />)
+    render(<SpaceMembersPanel />)
 
     // Find the DropdownMenuTrigger button: it's the button that does NOT contain
     // the device name text (the row button contains "iPhone 13")
@@ -131,7 +131,7 @@ describe('PairedDevicesPanel', () => {
   it('Unpair flow opens AlertDialog and confirms unpair', async () => {
     setupDevices([{ peerId: 'device-1', deviceName: 'iPhone 13', connected: true }])
 
-    render(<PairedDevicesPanel />)
+    render(<SpaceMembersPanel />)
 
     // Click device row to open sheet (which triggers state), then close via onOpenChange
     // Instead, directly test the unpair flow via the dropdown menu
@@ -145,12 +145,12 @@ describe('PairedDevicesPanel', () => {
 
   it('error state shows error message and retry button', () => {
     useAppSelectorMock.mockImplementation(() => ({
-      pairedDevices: [],
-      pairedDevicesLoading: false,
-      pairedDevicesError: 'Network error',
+      spaceMembers: [],
+      spaceMembersLoading: false,
+      spaceMembersError: 'Network error',
     }))
 
-    render(<PairedDevicesPanel />)
+    render(<SpaceMembersPanel />)
 
     expect(screen.getByText('Network error')).toBeInTheDocument()
     expect(screen.getByTitle(i18n.t('devices.list.actions.retry'))).toBeInTheDocument()
@@ -158,16 +158,16 @@ describe('PairedDevicesPanel', () => {
 
   it('retry button dispatches correct actions', () => {
     useAppSelectorMock.mockImplementation(() => ({
-      pairedDevices: [],
-      pairedDevicesLoading: false,
-      pairedDevicesError: 'Network error',
+      spaceMembers: [],
+      spaceMembersLoading: false,
+      spaceMembersError: 'Network error',
     }))
 
-    render(<PairedDevicesPanel />)
+    render(<SpaceMembersPanel />)
 
     fireEvent.click(screen.getByTitle(i18n.t('devices.list.actions.retry')))
 
-    expect(dispatchMock).toHaveBeenCalledWith({ type: 'devices/clearPairedDevicesError' })
-    expect(dispatchMock).toHaveBeenCalledWith({ type: 'devices/fetchPairedDevices' })
+    expect(dispatchMock).toHaveBeenCalledWith({ type: 'devices/clearSpaceMembersError' })
+    expect(dispatchMock).toHaveBeenCalledWith({ type: 'devices/fetchSpaceMembers' })
   })
 })

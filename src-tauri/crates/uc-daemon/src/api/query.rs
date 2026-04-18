@@ -21,8 +21,8 @@ use crate::api::dto::pairing::PairingSessionSummaryDto;
 use crate::api::dto::setup::SetupStateResponse;
 use crate::api::projection::IntoApiDto;
 use crate::api::types::{
-    HealthResponse, PairedDeviceDto, PeerSnapshotDto, SetupActionAckResponse,
-    SpaceAccessStateResponse, StatusResponse, WorkerStatusDto,
+    HealthResponse, PeerSnapshotDto, SetupActionAckResponse, SpaceAccessStateResponse,
+    SpaceMemberDto, StatusResponse, WorkerStatusDto,
 };
 use crate::pairing::host::DaemonPairingHost;
 use crate::service::ServiceHealth;
@@ -141,7 +141,7 @@ impl DaemonQueryService {
             .collect())
     }
 
-    pub async fn paired_devices(&self) -> Result<Vec<PairedDeviceDto>> {
+    pub async fn paired_devices(&self) -> Result<Vec<SpaceMemberDto>> {
         let connected_peers = self
             .peers()
             .await?
@@ -234,7 +234,7 @@ impl DaemonQueryService {
     }
 }
 
-fn map_member(member: SpaceMember, connected_peers: &HashMap<String, bool>) -> PairedDeviceDto {
+fn map_member(member: SpaceMember, connected_peers: &HashMap<String, bool>) -> SpaceMemberDto {
     let peer_id = member.device_id.as_str().to_string();
     let mut dto = member.into_api_dto();
     dto.connected = connected_peers.get(&peer_id).copied().unwrap_or(false);

@@ -71,15 +71,15 @@ pub struct PeerConnectionChangedEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RealtimePairedDeviceSummary {
+pub struct RealtimeSpaceMemberSummary {
     pub device_id: String,
     pub device_name: String,
     pub last_seen_ts: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PairedDevicesChangedEvent {
-    pub devices: Vec<RealtimePairedDeviceSummary>,
+pub struct SpaceMembersChangedEvent {
+    pub devices: Vec<RealtimeSpaceMemberSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,7 +118,7 @@ pub enum RealtimeEvent {
     PeersChanged(PeerChangedEvent),
     PeersNameUpdated(PeerNameUpdatedEvent),
     PeersConnectionChanged(PeerConnectionChangedEvent),
-    PairedDevicesChanged(PairedDevicesChangedEvent),
+    SpaceMembersChanged(SpaceMembersChangedEvent),
     SetupStateChanged(SetupStateChangedEvent),
     SetupSpaceAccessCompleted(SetupSpaceAccessCompletedEvent),
     SpaceAccessStateChanged(SpaceAccessStateChangedEvent),
