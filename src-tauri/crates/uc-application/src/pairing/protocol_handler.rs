@@ -15,7 +15,7 @@ use tracing::{info_span, Instrument};
 use uc_core::network::SessionId;
 use uc_core::{DeviceId, PeerFingerprint, TrustedPeerRepositoryPort};
 
-use super::state_machine::{FailureReason, PairingAction, PairingEvent, TimeoutKind};
+use super::state_machine::{PairingAction, PairingEvent, TimeoutKind};
 
 use super::events::PairingDomainEvent;
 use super::session_manager::{PairingPeerInfo, PairingSessionContext};
@@ -214,13 +214,16 @@ impl PairingProtocolHandler {
                         session_id: result_session_id,
                         success,
                         error,
+                        abort_reason,
                     } => {
                         let result_session_id_for_send = result_session_id.clone();
                         let error_for_send = error.clone();
+                        let abort_reason_for_send = abort_reason.clone();
                         tracing::info!(
                             session_id = %result_session_id,
                             success = %success,
                             error = ?error,
+                            abort_reason = ?abort_reason,
                             "Emitting pairing result to frontend"
                         );
                         action_tx
@@ -228,6 +231,7 @@ impl PairingProtocolHandler {
                                 session_id: result_session_id_for_send,
                                 success,
                                 error: error_for_send,
+                                abort_reason: abort_reason_for_send,
                             })
                             .await
                             .context("Failed to queue emit result action")?;
@@ -250,10 +254,12 @@ impl PairingProtocolHandler {
                                 peer_id,
                             }
                         } else {
+                            // Fallback to `ProtocolError` when the state
+                            // machine did not attach an abort-reason —
+                            // shouldn't happen with the updated emission
+                            // sites but keeps the event total.
                             let reason =
-                                error.clone().map(FailureReason::Other).unwrap_or_else(|| {
-                                    FailureReason::Other("Pairing failed".to_string())
-                                });
+                                abort_reason.unwrap_or(uc_core::TrustAbortReason::ProtocolError);
                             PairingDomainEvent::PairingFailed {
                                 session_id: result_session_id.clone(),
                                 peer_id,

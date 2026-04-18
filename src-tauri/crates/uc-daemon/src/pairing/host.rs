@@ -717,6 +717,7 @@ async fn run_pairing_action_loop(
                         session_id,
                         success,
                         error,
+                        abort_reason: _,
                     } => {
                         let peer_info = pairing_orchestrator.get_session_peer(&session_id).await;
                         let role = pairing_orchestrator.get_session_role(&session_id).await;
@@ -1768,18 +1769,14 @@ async fn run_space_access_event_loop(
     }
 }
 
-fn pairing_failure_message(reason: &uc_application::pairing::FailureReason) -> String {
+fn pairing_failure_message(reason: &uc_core::TrustAbortReason) -> String {
+    // 0.4.2.b: The pairing domain event now carries the 3-category
+    // `TrustAbortReason` (D24); detailed error strings from the internal
+    // pairing state machine are no longer propagated here.
     match reason {
-        uc_application::pairing::FailureReason::Other(message)
-        | uc_application::pairing::FailureReason::TransportError(message)
-        | uc_application::pairing::FailureReason::MessageParseError(message)
-        | uc_application::pairing::FailureReason::PersistenceError(message)
-        | uc_application::pairing::FailureReason::CryptoError(message) => message.clone(),
-        uc_application::pairing::FailureReason::Timeout(kind) => {
-            format!("timeout:{kind:?}")
-        }
-        uc_application::pairing::FailureReason::RetryExhausted => "retry_exhausted".to_string(),
-        uc_application::pairing::FailureReason::PeerBusy => "busy".to_string(),
+        uc_core::TrustAbortReason::UserCancelled => "user_cancelled".to_string(),
+        uc_core::TrustAbortReason::Timeout => "timeout".to_string(),
+        uc_core::TrustAbortReason::ProtocolError => "protocol_error".to_string(),
     }
 }
 

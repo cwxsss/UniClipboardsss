@@ -299,10 +299,16 @@ pub enum PairingAction {
     },
 
     /// 发送配对结果事件
+    ///
+    /// `abort_reason` 在 `success = false` 时承载 0.4.2.b 引入的
+    /// `TrustAbortReason` 三档（Timeout / ProtocolError / UserCancelled），
+    /// 供 `PairingProtocolHandler` 翻译为 `PairingDomainEvent::PairingFailed`
+    /// 的 `reason`；`error` 继续携带用于日志/WS 载荷的可读字符串。
     EmitResult {
         session_id: SessionId,
         success: bool,
         error: Option<String>,
+        abort_reason: Option<uc_core::TrustAbortReason>,
     },
 
     /// 无操作 (用于某些事件不需要动作的场景)
@@ -1385,6 +1391,7 @@ impl PairingStateMachine {
                         session_id,
                         success: true,
                         error: None,
+                        abort_reason: None,
                     },
                 ],
             ),
@@ -1405,6 +1412,7 @@ impl PairingStateMachine {
                         session_id,
                         success: false,
                         error: Some(error),
+                        abort_reason: Some(uc_core::TrustAbortReason::ProtocolError),
                     },
                 ],
             ),
@@ -1462,6 +1470,7 @@ impl PairingStateMachine {
         reason: FailureReason,
     ) -> (PairingState, Vec<PairingAction>) {
         let error_msg = pairing_failure_message(&reason);
+        let abort_reason = abort_reason_from_failure(&reason);
         (
             PairingState::Failed {
                 session_id: session_id.clone(),
@@ -1471,6 +1480,7 @@ impl PairingStateMachine {
                 session_id,
                 success: false,
                 error: Some(error_msg),
+                abort_reason: Some(abort_reason),
             }],
         )
     }
@@ -1497,6 +1507,7 @@ impl PairingStateMachine {
             session_id: session_id.clone(),
             success: false,
             error: error.clone(),
+            abort_reason: Some(uc_core::TrustAbortReason::UserCancelled),
         });
 
         (PairingState::Cancelled { session_id, by }, actions)
@@ -1557,6 +1568,23 @@ fn pairing_failure_message(reason: &FailureReason) -> String {
         FailureReason::Timeout(kind) => format!("timeout:{kind:?}"),
         FailureReason::RetryExhausted => "retry_exhausted".to_string(),
         FailureReason::PeerBusy => "busy".to_string(),
+    }
+}
+
+/// Collapse the internal `FailureReason` variants into the three
+/// `TrustAbortReason` categories surfaced at the domain-event boundary
+/// (D24 — 2026-04-17).
+fn abort_reason_from_failure(reason: &FailureReason) -> uc_core::TrustAbortReason {
+    match reason {
+        FailureReason::Timeout(_) | FailureReason::RetryExhausted => {
+            uc_core::TrustAbortReason::Timeout
+        }
+        FailureReason::TransportError(_)
+        | FailureReason::MessageParseError(_)
+        | FailureReason::PersistenceError(_)
+        | FailureReason::CryptoError(_)
+        | FailureReason::PeerBusy
+        | FailureReason::Other(_) => uc_core::TrustAbortReason::ProtocolError,
     }
 }
 

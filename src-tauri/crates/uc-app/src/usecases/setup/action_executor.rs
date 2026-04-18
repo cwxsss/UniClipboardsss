@@ -31,7 +31,8 @@ use crate::usecases::space_access::{
 use crate::usecases::AppLifecycleCoordinator;
 use crate::usecases::InitializeEncryption;
 use crate::usecases::SetupPairingFacadePort;
-use uc_application::pairing::{FailureReason, PairingDomainEvent};
+use uc_application::pairing::PairingDomainEvent;
+use uc_core::TrustAbortReason;
 
 use super::orchestrator::SetupError;
 
@@ -474,27 +475,16 @@ impl SetupActionExecutor {
         }
     }
 
-    pub(super) fn map_pairing_failure_reason(reason: &FailureReason) -> SetupDomainError {
+    pub(super) fn map_pairing_failure_reason(reason: &TrustAbortReason) -> SetupDomainError {
+        // 0.4.2.b: `PairingDomainEvent::PairingFailed::reason` now carries
+        // the 3-category `TrustAbortReason` (D24) instead of the richer
+        // `FailureReason`. The old string-sniffing path (peer unavailable,
+        // busy, etc.) is gone — those collapse into `ProtocolError` and
+        // surface as `PairingFailed`.
         match reason {
-            FailureReason::Other(message) => {
-                let message_lower = message.to_ascii_lowercase();
-                if message_lower.contains("rejected") {
-                    return SetupDomainError::PairingRejected;
-                }
-                if message_lower.contains("timeout") {
-                    return SetupDomainError::NetworkTimeout;
-                }
-                if message_lower.contains("host_not_discoverable")
-                    || message_lower.contains("no_local_pairing_participant_ready")
-                    || message_lower == "busy"
-                    || message_lower.contains("peer unavailable")
-                {
-                    return SetupDomainError::PeerUnavailable;
-                }
-                SetupDomainError::PairingFailed
-            }
-            FailureReason::PeerBusy => SetupDomainError::PeerUnavailable,
-            _ => SetupDomainError::PairingFailed,
+            TrustAbortReason::UserCancelled => SetupDomainError::PairingRejected,
+            TrustAbortReason::Timeout => SetupDomainError::NetworkTimeout,
+            TrustAbortReason::ProtocolError => SetupDomainError::PairingFailed,
         }
     }
 

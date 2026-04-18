@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use super::state_machine::FailureReason;
 use uc_core::crypto::model::KeySlotFile;
+use uc_core::TrustAbortReason;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairingDomainEvent {
@@ -27,10 +27,16 @@ pub enum PairingDomainEvent {
         session_id: String,
         peer_id: String,
     },
+    /// Pairing flow terminated without reaching `Paired`.
+    ///
+    /// `reason` is intentionally collapsed to the three `TrustAbortReason`
+    /// categories (2026-04-17 decision D24): detailed transport / crypto
+    /// / persistence messages are logged at the source and not propagated
+    /// through this domain event.
     PairingFailed {
         session_id: String,
         peer_id: String,
-        reason: FailureReason,
+        reason: TrustAbortReason,
     },
 }
 
