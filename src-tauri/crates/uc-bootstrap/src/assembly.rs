@@ -456,7 +456,7 @@ pub fn create_platform_layer(
     config_dir: &PathBuf,
     encryption: Arc<dyn EncryptionPort>,
     blob_repository: Arc<dyn BlobRepositoryPort>,
-    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+    member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
     clock: Arc<dyn ClockPort>,
     storage_config: Arc<ClipboardStorageConfig>,
     identity_store: Arc<dyn IdentityStorePort>,
@@ -545,7 +545,7 @@ pub fn create_platform_layer(
 
     let encryption_session: Arc<dyn EncryptionSessionPort> =
         Arc::new(InMemoryEncryptionSessionPort::new());
-    let policy_resolver = Arc::new(ResolveConnectionPolicy::new(paired_device_repo.clone()));
+    let policy_resolver = Arc::new(ResolveConnectionPolicy::new(member_repo.clone()));
     let transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort> =
         Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter);
     let transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort> =
@@ -736,7 +736,7 @@ pub fn wire_dependencies_with_identity_store(
         &vault_path,
         infra.encryption.clone(),
         infra.blob_repository.clone(),
-        infra.paired_device_repo.clone(),
+        infra.member_repo.clone(),
         infra.clock.clone(),
         storage_config.clone(),
         identity_store,

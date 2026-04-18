@@ -1,13 +1,11 @@
 use std::sync::Arc;
 use uc_core::network::{ConnectionPolicy, ResolvedConnectionPolicy};
 use uc_core::pairing::PairingState;
-use uc_core::ports::{
-    ConnectionPolicyResolverError, ConnectionPolicyResolverPort, PairedDeviceRepositoryPort,
-};
-use uc_core::PeerId;
+use uc_core::ports::{ConnectionPolicyResolverError, ConnectionPolicyResolverPort};
+use uc_core::{DeviceId, MemberRepositoryPort, PeerId};
 
 pub struct ResolveConnectionPolicy {
-    repo: Arc<dyn PairedDeviceRepositoryPort>,
+    member_repo: Arc<dyn MemberRepositoryPort>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -17,16 +15,17 @@ pub enum ResolveConnectionPolicyError {
 }
 
 impl ResolveConnectionPolicy {
-    pub fn new(repo: Arc<dyn PairedDeviceRepositoryPort>) -> Self {
-        Self { repo }
+    pub fn new(member_repo: Arc<dyn MemberRepositoryPort>) -> Self {
+        Self { member_repo }
     }
 
     pub async fn execute(
         &self,
         peer_id: PeerId,
     ) -> Result<ResolvedConnectionPolicy, ResolveConnectionPolicyError> {
-        let state = match self.repo.get_by_peer_id(&peer_id).await {
-            Ok(Some(device)) => device.pairing_state,
+        let device_id = DeviceId::new(peer_id.as_str());
+        let state = match self.member_repo.get(&device_id).await {
+            Ok(Some(_)) => PairingState::Trusted,
             Ok(None) => PairingState::Pending,
             Err(err) => return Err(ResolveConnectionPolicyError::Repository(err.to_string())),
         };

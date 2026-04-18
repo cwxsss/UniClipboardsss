@@ -177,6 +177,7 @@ impl DaemonClipboardChangeHandler {
             deps.settings.clone(),
             Arc::new(TransferPayloadEncryptorAdapter),
             deps.device.paired_device_repo.clone(),
+            deps.device.member_repo.clone(),
         )
     }
 }
@@ -425,6 +426,7 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                         uc_app::usecases::file_sync::SyncOutboundFileUseCase::new(
                             deps.settings.clone(),
                             deps.device.paired_device_repo.clone(),
+                            deps.device.member_repo.clone(),
                             deps.network_ports.peers.clone(),
                             deps.network_ports.file_transfer.clone(),
                         )

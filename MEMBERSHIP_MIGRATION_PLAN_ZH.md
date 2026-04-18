@@ -1,7 +1,7 @@
 # Membership 迁移计划（临时工作文档）
 
 > 范围：用 `uc-core::membership` + `uc-application::membership` 彻底替换现有的 `paired_device` 体系。
-> 状态：**Phase 1 / Phase 2 / 阶段 0（0.0–0.5）/ 阶段 A（A.1–A.4）/ 阶段 B（B.0–B.6）/ 阶段 C（C.1–C.5）均已提交；下一步进入 Phase 3 消费者切换（3.1 / 3.2 / 3.5 优先）。**
+> 状态：**Phase 1 / Phase 2 / 阶段 0（0.0–0.5）/ 阶段 A（A.1–A.4）/ 阶段 B（B.0–B.6）/ 阶段 C（C.1–C.5）/ Phase 3 前置三项（3.1 / 3.2 / 3.5）均已提交；下一步 3.3（unpair）/ 3.4（per-peer sync settings）/ 3.6（DTO 改名）。**
 > 本文档只服务于迁移本身，不作为产品文档，迁移完成后可直接删除。
 
 ---
@@ -25,11 +25,12 @@
 - **阶段 A 全部提交（A.1 / A.2 / A.2.b / A.4）**：`space_access` 已搬到 `uc-application`，`AdmitMemberUseCase` 在 `SpaceAccessState::Granted` 调用，joiner 与 sponsor 两侧均会写入 `space_member`；orchestrator 由 `SpaceAccessFacade` 收口；Phase 2 期间的 `dual_write_member` 已彻底删除
 - **阶段 B 全部提交（B.0–B.6）**：`RealtimeEvent` 抽取到 `uc-daemon-client`；`uc-core::setup` 收窄到仅 `status`；setup orchestrator / state-machine / action-executor / mark-complete 全部搬到 `uc-application::setup`；`SetupFacade` 作为对外唯一入口，14 个 UseCase / Query 按 §11.4 拆分落地，orchestrator 降级为 `pub(crate)`；为 14 个 UseCase 补齐 port-mock 粒度单测（19 tests）
 - **阶段 C 全部提交（C.1–C.5）**：`uc-app::usecases::space_access` deprecated 再导出模块删除；`uc-bootstrap::assembly` 4 处调用点切换到 `uc_application::space_access::` 直接引用；`uc-app` 侧 `setup/` / `space_access/` 物理目录彻底消失，仅保留 `InitializeEncryption` / `AppLifecycleCoordinator` 两个 UseCase 作为 `SetupInitializeEncryptionPort` / `SetupAppLifecyclePort` 的 adapter trait impl 落脚点；grep 校验全 workspace 无 `uc_app::usecases::setup::` / `uc_app::usecases::space_access::` 引用
+- **Phase 3 前置三项已提交**：3.1 `ResolveConnectionPolicy` 查询源切到 `member_repo`（成员存在 → `Trusted`，不存在 → `Pending`，保留 `ConnectionPolicy::allowed_protocols` 入参）；3.2 `ListSendablePeers` 改走 `member_repo.list()`（所有 member 均视为 Trusted，revoke = 硬删所以不需 state 过滤）；3.5 daemon `paired_devices()` 改调 `ListMembersUseCase`，`uc-app::ListPairedDevices` + `CoreUseCases::list_paired_devices()` 删除；`IntoApiDto<PairedDeviceDto> for SpaceMember` 暂以 `pairing_state: "Trusted"` / `last_seen_at_ms: None` 占位（DTO 改名待 3.6）
 - 实测 dev DB（2026-04-18）：`trusted_peer=1`、`space_member=1`、`paired_device=0`，写入侧符合预期
 
 **已知中间态 bug（不是回归）**：配对成功但前端无可见设备且剪贴板不互通。原因是消费者读取路径仍指向 `paired_device` 表（已无写入）。修复入口在 Phase 3.1 / 3.2 / 3.5（详见 §6.1）。
 
-**下一步**：进入 **Phase 3 消费者切换**，优先级 3.1 → 3.2 → 3.5（把 `list_paired_devices` / `list_sendable_peers` / `resolve_connection_policy` 的查询源切到 `member_repo`），随后 3.3 / 3.4 / 3.6。
+**下一步**：继续 Phase 3 的 **3.3 / 3.4 / 3.6**。3.3 = daemon `unpair` 切到 `RevokeMemberUseCase`；3.4 = per-peer sync 设置读写切到 `Get/UpdateMemberSettingsUseCase` + `ResetMemberPreferencesToDefaultUseCase`（会把 `apply_file_sync_policy` / `apply_sync_policy` 的 `paired_device_repo` 依赖消掉）；3.6 = `PairedDeviceDto → SpaceMemberDto` 一次性改名 + 前端字段联动。
 
 ---
 
@@ -409,14 +410,14 @@ if persist_result.is_ok() {
 
 ### 6.1 切换表
 
-| 子阶段 | 消费者 | 做法 | 依赖 |
-|---|---|---|---|
-| **3.1** | `uc-app/usecases/pairing/resolve_connection_policy.rs` | 查询源从 `paired_device_repo.get_by_peer_id` 换成 `member_repo.get(DeviceId::new(peer_id.as_str()))` | 若 `pairing` 整体搬到 `space_access`，此步与搬家同时完成 |
-| **3.2** | `uc-app/usecases/pairing/list_sendable_peers.rs` | "在 member 列表 ⇒ 可发" | 同上 |
-| **3.3** | daemon 的 unpair 路径 | 改调 `uc-application::membership::RevokeMemberUseCase`；**删除** `uc-app/usecases/pairing/unpair_device.rs` | D13（daemon 已依赖 uc-application） |
-| **3.4** | daemon 的 get/update device_sync_settings 路径 | 改调 `GetMemberUseCase` / `UpdateMemberSettingsUseCase` / `ResetMemberPreferencesToDefaultUseCase`；**删除** uc-app 对应 use case | 同 3.3 |
-| **3.5** | daemon 的 list_paired_devices 路径 | 改调 `ListMembersUseCase`；**删除** `uc-app/usecases/pairing/list_paired_devices.rs` | 同 3.3 |
-| **3.6** | daemon DTO 一次性改名 | `PairedDeviceDto → SpaceMemberDto`，`PairedDevicesChangedPayload` 相应改；前端 9 个 TS 文件（`devicesSlice.ts` / `PairedDevicesPanel.tsx` / `PairedPeer` type 等）联动改 | — |
+| 子阶段 | 状态 | 消费者 | 做法 | 依赖 |
+|---|---|---|---|---|
+| **3.1** | ✅ 本阶段 | `uc-app/usecases/pairing/resolve_connection_policy.rs` | 查询源从 `paired_device_repo.get_by_peer_id` 换成 `member_repo.get(DeviceId::new(peer_id.as_str()))`；成员存在 → `PairingState::Trusted`，不存在 → `Pending`；`ConnectionPolicy::allowed_protocols(state)` 签名保持不变 | `ConnectionPolicy` 接 `PairingState` 到 Phase 5 再清理（D8） |
+| **3.2** | ✅ 本阶段 | `uc-app/usecases/pairing/list_sendable_peers.rs` | 改走 `member_repo.list()`；member 存在即视为可发（revoke = 硬删，无需 state 过滤）；`discovered_at` / `last_seen` 保留 `SpaceMember.joined_at` fallback；`SyncOutboundClipboardUseCase` / `SyncOutboundFileUseCase` 新增 `member_repo` 依赖，原 `paired_device_repo` 暂留供 `apply_sync_policy` / `apply_file_sync_policy` 使用（待 3.4 清） | 同上 |
+| **3.3** | ⏳ 待办 | daemon 的 unpair 路径 | 改调 `uc-application::membership::RevokeMemberUseCase`；**删除** `uc-app/usecases/pairing/unpair_device.rs` | D13（daemon 已依赖 uc-application） |
+| **3.4** | ⏳ 待办 | daemon 的 get/update device_sync_settings 路径 | 改调 `GetMemberUseCase` / `UpdateMemberSettingsUseCase` / `ResetMemberPreferencesToDefaultUseCase`；**删除** uc-app 对应 use case；`apply_sync_policy` / `apply_file_sync_policy` 改读 `MemberSyncPreferences` | 同 3.3 |
+| **3.5** | ✅ 本阶段 | daemon 的 list_paired_devices 路径 | daemon `api/query.rs::paired_devices()` 改调 `uc_application::membership::usecases::ListMembersUseCase`；**删除** `uc-app/usecases/pairing/list_paired_devices.rs` 及 `CoreUseCases::list_paired_devices()` accessor；`IntoApiDto<PairedDeviceDto> for SpaceMember` 暂以 `pairing_state: "Trusted"` / `last_seen_at_ms: None` 占位（字段语义随 3.6 改名处理） | 同 3.3 |
+| **3.6** | ⏳ 待办 | daemon DTO 一次性改名 | `PairedDeviceDto → SpaceMemberDto`，`PairedDevicesChangedPayload` 相应改；前端 9 个 TS 文件（`devicesSlice.ts` / `PairedDevicesPanel.tsx` / `PairedPeer` type 等）联动改 | — |
 
 ### 6.2 一次性改名（D9 对应）
 
@@ -524,6 +525,10 @@ b1285605  refactor(setup): introduce SetupFacade + 14 UseCases/Query, make orche
 
 # 阶段 C — uc-app 旧 setup / space_access 清退
 7318f3bf  refactor(uc-app): drop space_access re-export shim, switch consumers to uc_application (phase C.1-C.5)
+d4eca020  docs(membership): record phase C commit hash in plan §11
+
+# Phase 3 — 消费者切换（3.1 / 3.2 / 3.5 前置批次）
+<pending>   refactor(membership): switch resolve_connection_policy / list_sendable_peers / list_paired_devices to member_repo (phase 3.1 + 3.2 + 3.5)
 ```
 
 分支：`milestone/0.6.0`。

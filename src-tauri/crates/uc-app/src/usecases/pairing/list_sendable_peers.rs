@@ -4,36 +4,38 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use uc_core::network::DiscoveredPeer;
-use uc_core::pairing::PairingState;
-use uc_core::ports::{PairedDeviceRepositoryPort, PeerDirectoryPort};
+use uc_core::ports::PeerDirectoryPort;
+use uc_core::MemberRepositoryPort;
 
 /// List peers eligible for outbound data sync.
 ///
-/// Primary source: trusted paired devices (persistent DB).
-/// Enrichment: discovered peer info (addresses, device_id, last_seen) from
-/// the network discovery layer.
+/// Primary source: admitted space members (persistent DB). Every
+/// `SpaceMember` record represents an active, trusted peer, so no
+/// additional state filter is needed — revocation is hard delete.
+/// Enrichment: discovered peer info (addresses, device_id, last_seen)
+/// from the network discovery layer.
 pub struct ListSendablePeers {
-    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+    member_repo: Arc<dyn MemberRepositoryPort>,
     peer_directory: Arc<dyn PeerDirectoryPort>,
 }
 
 impl ListSendablePeers {
     pub fn new(
-        paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+        member_repo: Arc<dyn MemberRepositoryPort>,
         peer_directory: Arc<dyn PeerDirectoryPort>,
     ) -> Self {
         Self {
-            paired_device_repo,
+            member_repo,
             peer_directory,
         }
     }
 
     pub async fn execute(&self) -> Result<Vec<DiscoveredPeer>> {
-        let paired = self
-            .paired_device_repo
-            .list_all()
+        let members = self
+            .member_repo
+            .list()
             .await
-            .context("failed to load paired devices for sendable peer resolution")?;
+            .context("failed to load members for sendable peer resolution")?;
         let local_peer_id = self.peer_directory.local_peer_id();
         let discovered = self
             .peer_directory
@@ -43,23 +45,21 @@ impl ListSendablePeers {
         let discovered_map: HashMap<&str, &DiscoveredPeer> =
             discovered.iter().map(|p| (p.peer_id.as_str(), p)).collect();
 
-        Ok(paired
+        Ok(members
             .into_iter()
-            .filter(|d| d.pairing_state == PairingState::Trusted)
-            .filter(|d| d.peer_id.as_str() != local_peer_id)
-            .map(|device| {
-                let cached = discovered_map.get(device.peer_id.as_str());
+            .filter(|m| m.device_id.as_str() != local_peer_id)
+            .map(|member| {
+                let peer_id = member.device_id.as_str().to_string();
+                let cached = discovered_map.get(peer_id.as_str());
                 DiscoveredPeer {
-                    peer_id: device.peer_id.as_str().to_string(),
+                    peer_id,
                     device_name: cached
                         .and_then(|c| c.device_name.clone())
-                        .or(Some(device.device_name)),
+                        .or(Some(member.device_name)),
                     device_id: cached.and_then(|c| c.device_id.clone()),
                     addresses: cached.map(|c| c.addresses.clone()).unwrap_or_default(),
-                    discovered_at: cached.map(|c| c.discovered_at).unwrap_or(device.paired_at),
-                    last_seen: cached
-                        .map(|c| c.last_seen)
-                        .unwrap_or(device.last_seen_at.unwrap_or(device.paired_at)),
+                    discovered_at: cached.map(|c| c.discovered_at).unwrap_or(member.joined_at),
+                    last_seen: cached.map(|c| c.last_seen).unwrap_or(member.joined_at),
                     is_paired: true,
                 }
             })

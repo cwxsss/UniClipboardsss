@@ -45,9 +45,8 @@ pub use delete_clipboard_entry::DeleteClipboardEntry;
 pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
 pub use pairing::{
-    GetDeviceSyncSettings, GetLocalDeviceInfo, GetP2pPeersSnapshot, ListPairedDevices,
-    ListSendablePeers, LocalDeviceInfo, ResolveConnectionPolicy, UnpairDevice,
-    UpdateDeviceSyncSettings,
+    GetDeviceSyncSettings, GetLocalDeviceInfo, GetP2pPeersSnapshot, ListSendablePeers,
+    LocalDeviceInfo, ResolveConnectionPolicy, UnpairDevice, UpdateDeviceSyncSettings,
 };
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
@@ -172,11 +171,6 @@ impl<'a> CoreUseCases<'a> {
             self.runtime.storage_paths.clone(),
             self.runtime.deps.system.cache_fs.clone(),
         )
-    }
-
-    /// List paired devices from repository.
-    pub fn list_paired_devices(&self) -> crate::usecases::ListPairedDevices {
-        crate::usecases::ListPairedDevices::new(self.runtime.deps.device.paired_device_repo.clone())
     }
 
     /// Get local device info (peer id + device name).

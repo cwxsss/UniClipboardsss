@@ -9,12 +9,13 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
+use uc_application::membership::usecases::ListMembersUseCase;
 use uc_application::setup::SetupFacade;
 use uc_application::setup::SetupState;
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::clipboard::ClipboardIntegrationMode;
-use uc_core::pairing::PairedDevice;
 use uc_core::space_access::state::SpaceAccessState;
+use uc_core::SpaceMember;
 
 use crate::api::dto::pairing::PairingSessionSummaryDto;
 use crate::api::dto::setup::SetupStateResponse;
@@ -141,18 +142,20 @@ impl DaemonQueryService {
     }
 
     pub async fn paired_devices(&self) -> Result<Vec<PairedDeviceDto>> {
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
         let connected_peers = self
             .peers()
             .await?
             .into_iter()
             .map(|peer| (peer.peer_id, peer.connected))
             .collect::<HashMap<_, _>>();
-        let paired_devices = usecases.list_paired_devices().execute().await?;
+        let members =
+            ListMembersUseCase::new(self.runtime.wiring_deps().device.member_repo.clone())
+                .execute()
+                .await?;
 
-        Ok(paired_devices
+        Ok(members
             .into_iter()
-            .map(|device| map_paired_device(device, &connected_peers))
+            .map(|member| map_member(member, &connected_peers))
             .collect())
     }
 
@@ -231,12 +234,9 @@ impl DaemonQueryService {
     }
 }
 
-fn map_paired_device(
-    device: PairedDevice,
-    connected_peers: &HashMap<String, bool>,
-) -> PairedDeviceDto {
-    let peer_id = device.peer_id.to_string();
-    let mut dto = device.into_api_dto();
+fn map_member(member: SpaceMember, connected_peers: &HashMap<String, bool>) -> PairedDeviceDto {
+    let peer_id = member.device_id.as_str().to_string();
+    let mut dto = member.into_api_dto();
     dto.connected = connected_peers.get(&peer_id).copied().unwrap_or(false);
     dto
 }

@@ -408,6 +408,7 @@ impl<'a> AppUseCases<'a> {
                 .device
                 .paired_device_repo
                 .clone(),
+            self.app_runtime.wiring_deps().device.member_repo.clone(),
         )
     }
 }

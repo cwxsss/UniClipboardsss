@@ -17,6 +17,7 @@ use uc_core::ports::{
     OutboundClipboardFrame, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort,
     SyncTargetId, SystemClipboardPort, TransferPayloadEncryptorPort,
 };
+use uc_core::MemberRepositoryPort;
 
 use crate::usecases::pairing::list_sendable_peers::ListSendablePeers;
 use uc_core::{ClipboardChangeOrigin, PeerId, SystemClipboardSnapshot};
@@ -31,6 +32,7 @@ pub struct SyncOutboundClipboardUseCase {
     settings: Arc<dyn SettingsPort>,
     transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
     paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+    member_repo: Arc<dyn MemberRepositoryPort>,
 }
 
 impl SyncOutboundClipboardUseCase {
@@ -43,6 +45,7 @@ impl SyncOutboundClipboardUseCase {
         settings: Arc<dyn SettingsPort>,
         transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
         paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+        member_repo: Arc<dyn MemberRepositoryPort>,
     ) -> Self {
         Self {
             local_clipboard,
@@ -53,6 +56,7 @@ impl SyncOutboundClipboardUseCase {
             settings,
             transfer_encryptor,
             paired_device_repo,
+            member_repo,
         }
     }
 
@@ -199,7 +203,7 @@ impl SyncOutboundClipboardUseCase {
         }
 
         let all_sendable_peers =
-            ListSendablePeers::new(self.paired_device_repo.clone(), self.peer_directory.clone())
+            ListSendablePeers::new(self.member_repo.clone(), self.peer_directory.clone())
                 .execute()
                 .await
                 .context("failed to load sendable peers for outbound sync")?;

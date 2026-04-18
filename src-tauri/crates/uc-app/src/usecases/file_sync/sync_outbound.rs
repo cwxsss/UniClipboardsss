@@ -8,6 +8,7 @@ use uuid::Uuid;
 use uc_core::ports::{
     FileTransportPort, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort,
 };
+use uc_core::MemberRepositoryPort;
 
 use crate::usecases::pairing::list_sendable_peers::ListSendablePeers;
 
@@ -23,6 +24,7 @@ pub struct SyncOutboundResult {
 pub struct SyncOutboundFileUseCase {
     settings: Arc<dyn SettingsPort>,
     paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+    member_repo: Arc<dyn MemberRepositoryPort>,
     peer_directory: Arc<dyn PeerDirectoryPort>,
     file_transport: Arc<dyn FileTransportPort>,
 }
@@ -31,12 +33,14 @@ impl SyncOutboundFileUseCase {
     pub fn new(
         settings: Arc<dyn SettingsPort>,
         paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
+        member_repo: Arc<dyn MemberRepositoryPort>,
         peer_directory: Arc<dyn PeerDirectoryPort>,
         file_transport: Arc<dyn FileTransportPort>,
     ) -> Self {
         Self {
             settings,
             paired_device_repo,
+            member_repo,
             peer_directory,
             file_transport,
         }
@@ -91,13 +95,11 @@ impl SyncOutboundFileUseCase {
             }
 
             // 5. Get sendable peers
-            let peers = ListSendablePeers::new(
-                self.paired_device_repo.clone(),
-                self.peer_directory.clone(),
-            )
-            .execute()
-            .await
-            .context("Failed to list sendable peers")?;
+            let peers =
+                ListSendablePeers::new(self.member_repo.clone(), self.peer_directory.clone())
+                    .execute()
+                    .await
+                    .context("Failed to list sendable peers")?;
 
             // 6. Apply sync policy
             let eligible =
