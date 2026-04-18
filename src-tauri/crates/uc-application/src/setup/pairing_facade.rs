@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use uc_application::pairing::{PairingDomainEvent, PairingEventPort, PairingFacade};
+use crate::pairing::{PairingDomainEvent, PairingEventPort, PairingFacade};
 
 #[async_trait::async_trait]
 pub trait SetupPairingFacadePort: Send + Sync {

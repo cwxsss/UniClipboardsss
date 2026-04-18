@@ -19,7 +19,7 @@ use axum::Router;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::SetupOrchestrator;
+use uc_application::setup::SetupOrchestrator;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 

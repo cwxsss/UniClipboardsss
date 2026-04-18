@@ -11,7 +11,6 @@ use rand::RngCore;
 use tokio::sync::Mutex;
 use tracing::{error, info, info_span, warn, Instrument};
 
-use uc_application::setup::{SetupEvent, SetupEventPort, SetupState, SetupStateMachine};
 use uc_core::{
     crypto::{
         model::{KeySlot, KeySlotFile, Passphrase},
@@ -29,22 +28,22 @@ use uc_core::{
     },
 };
 
-use crate::usecases::initialize_encryption::InitializeEncryptionError;
-use crate::usecases::setup::action_executor::SetupActionExecutor;
-use crate::usecases::setup::context::SetupContext;
-use crate::usecases::setup::MarkSetupComplete;
-use crate::usecases::space_access::{
+use crate::setup::action_executor::SetupActionExecutor;
+use crate::setup::context::SetupContext;
+use crate::setup::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
+use crate::setup::{
+    MarkSetupComplete, SetupEvent, SetupEventPort, SetupPairingFacadePort, SetupState,
+    SetupStateMachine,
+};
+use crate::space_access::{
     SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer,
 };
-use crate::usecases::AppLifecycleCoordinator;
-use crate::usecases::InitializeEncryption;
-use crate::usecases::SetupPairingFacadePort;
 
 /// Errors produced by the setup orchestrator.
 #[derive(Debug, thiserror::Error)]
 pub enum SetupError {
     #[error("initialize encryption failed: {0}")]
-    InitializeEncryption(#[from] InitializeEncryptionError),
+    InitializeEncryption(#[source] anyhow::Error),
     #[error("mark setup complete failed: {0}")]
     MarkSetupComplete(#[from] anyhow::Error),
     /// Failed to load setup status from persistent storage.
@@ -134,10 +133,10 @@ impl CryptoPort for NoopRuntimeSpaceAccessCrypto {
 
 impl SetupOrchestrator {
     pub fn new(
-        initialize_encryption: Arc<InitializeEncryption>,
+        initialize_encryption: Arc<dyn SetupInitializeEncryptionPort>,
         mark_setup_complete: Arc<MarkSetupComplete>,
         setup_status: Arc<dyn SetupStatusPort>,
-        app_lifecycle: Arc<AppLifecycleCoordinator>,
+        app_lifecycle: Arc<dyn SetupAppLifecyclePort>,
         setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
         setup_event_port: Arc<dyn SetupEventPort>,
         space_access_facade: Arc<SpaceAccessFacade>,

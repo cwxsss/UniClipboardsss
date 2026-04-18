@@ -16,8 +16,8 @@ use crate::app_paths::AppPaths;
 use crate::deps::AppDeps;
 use crate::shared::host_event::HostEventEmitterPort;
 use crate::task_registry::TaskRegistry;
-use crate::usecases::setup::SetupOrchestrator;
 use crate::usecases::LifecycleStatusPort;
+use uc_application::setup::SetupOrchestrator;
 
 /// Tauri-free runtime holding all non-Tauri application state.
 ///

@@ -959,9 +959,9 @@ pub async fn resolve_pairing_config(settings: Arc<dyn SettingsPort>) -> PairingC
 use tokio::sync::Mutex as TokioMutex;
 use uc_app::usecases::{
     DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, SessionReadyEmitter,
-    SetupOrchestrator, SetupPairingFacadePort,
 };
 use uc_application::pairing::PairingFacade;
+use uc_application::setup::{SetupOrchestrator, SetupPairingFacadePort};
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{DiscoveryPort, TimerPort};
@@ -1146,8 +1146,9 @@ pub fn build_setup_orchestrator(
 ) -> Arc<SetupOrchestrator> {
     use uc_app::usecases::{
         AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, InitializeEncryption,
-        MarkSetupComplete, StartNetworkAfterUnlock,
+        StartNetworkAfterUnlock,
     };
+    use uc_application::setup::MarkSetupComplete;
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         deps.security.encryption.clone(),

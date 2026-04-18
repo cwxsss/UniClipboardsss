@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use uc_application::setup::SetupState;
+
+use crate::setup::SetupState;
 
 /// Shared setup context containing state and dispatch lock.
 ///

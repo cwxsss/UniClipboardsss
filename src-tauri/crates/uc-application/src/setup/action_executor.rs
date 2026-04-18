@@ -11,10 +11,6 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
-use uc_application::setup::{
-    SetupAction, SetupError as SetupDomainError, SetupEvent, SetupEventPort, SetupState,
-    SetupStateMachine,
-};
 use uc_core::{
     crypto::{model::Passphrase, SecretString},
     ids::SessionId,
@@ -24,18 +20,19 @@ use uc_core::{
         event::SpaceAccessEvent,
         state::{DenyReason, SpaceAccessState},
     },
+    TrustAbortReason,
 };
 
-use crate::usecases::setup::context::SetupContext;
-use crate::usecases::setup::MarkSetupComplete;
-use crate::usecases::space_access::{
+use crate::pairing::PairingDomainEvent;
+use crate::setup::context::SetupContext;
+use crate::setup::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
+use crate::setup::{
+    MarkSetupComplete, SetupAction, SetupError as SetupDomainError, SetupEvent, SetupEventPort,
+    SetupPairingFacadePort, SetupState, SetupStateMachine,
+};
+use crate::space_access::{
     SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer,
 };
-use crate::usecases::AppLifecycleCoordinator;
-use crate::usecases::InitializeEncryption;
-use crate::usecases::SetupPairingFacadePort;
-use uc_application::pairing::PairingDomainEvent;
-use uc_core::TrustAbortReason;
 
 use super::orchestrator::SetupError;
 
@@ -49,9 +46,9 @@ const JOINER_OFFER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// method parameters to avoid circular references back to the orchestrator.
 pub struct SetupActionExecutor {
     // Use-case ports
-    pub(super) initialize_encryption: Arc<InitializeEncryption>,
+    pub(super) initialize_encryption: Arc<dyn SetupInitializeEncryptionPort>,
     pub(super) mark_setup_complete: Arc<MarkSetupComplete>,
-    pub(super) app_lifecycle: Arc<AppLifecycleCoordinator>,
+    pub(super) app_lifecycle: Arc<dyn SetupAppLifecyclePort>,
     pub(super) setup_event_port: Arc<dyn SetupEventPort>,
 
     // Infrastructure ports
@@ -86,7 +83,10 @@ impl SetupActionExecutor {
             match action {
                 SetupAction::CreateEncryptedSpace => {
                     let pp = Self::take_passphrase(passphrase).await?;
-                    self.initialize_encryption.execute(pp).await?;
+                    self.initialize_encryption
+                        .execute(pp)
+                        .await
+                        .map_err(SetupError::InitializeEncryption)?;
                     follow_up_events.push(SetupEvent::CreateSpaceSucceeded);
                     debug!("setup action CreateEncryptedSpace completed");
                 }

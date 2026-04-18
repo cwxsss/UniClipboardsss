@@ -9,12 +9,12 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::space_access::{
-    SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessFacade,
-};
-use uc_app::usecases::SetupOrchestrator;
 use uc_application::pairing::PairingAction;
 use uc_application::pairing::{PairingDomainEvent, PairingEventPort, PairingFacade};
+use uc_application::setup::SetupOrchestrator;
+use uc_application::space_access::{
+    SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessFacade,
+};
 use uc_core::crypto::model::{KeySlot, KeySlotFile};
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
