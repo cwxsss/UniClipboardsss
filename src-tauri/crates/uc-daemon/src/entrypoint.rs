@@ -255,6 +255,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         state.clone(),
         ctx.space_access_orchestrator.clone(),
         ctx.key_slot_store.clone(),
+        ctx.trusted_peer_repo.clone(),
         event_tx.clone(),
     ));
 

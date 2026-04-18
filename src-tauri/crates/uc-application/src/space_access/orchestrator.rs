@@ -6,18 +6,28 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::sync::{mpsc, Mutex};
-use tracing::{info_span, Instrument};
+use tracing::{info_span, warn, Instrument};
 
-use uc_core::ids::{SessionId, SpaceId};
+use uc_core::ids::{DeviceId, SessionId, SpaceId};
 use uc_core::space_access::action::SpaceAccessAction;
 use uc_core::space_access::deny_reason_to_code;
 use uc_core::space_access::event::SpaceAccessEvent;
 use uc_core::space_access::state::{CancelReason, DenyReason, SpaceAccessState};
 use uc_core::space_access::state_machine::SpaceAccessStateMachine;
+use uc_core::{MemberRepositoryPort, MemberSyncPreferences};
+
+use crate::membership::usecases::{AdmitMember, AdmitMemberUseCase};
 
 use super::context::{SpaceAccessContext, SpaceAccessOffer};
 use super::events::{SpaceAccessCompletedEvent, SpaceAccessEventPort};
 use super::executor::SpaceAccessExecutor;
+
+/// Admit member use case bound by a dyn repository so `SpaceAccessOrchestrator`
+/// stays non-generic across its many consumers (bootstrap / daemon / setup /
+/// tauri). Matches D28 shape for `TrustPeerOrchestrator`. The `Send + Sync`
+/// bound is implied by the `MemberRepositoryPort` supertrait, so the dyn form
+/// mirrors the `Arc<dyn MemberRepositoryPort>` already used in `DevicePorts`.
+pub type AdmitMemberUseCaseDyn = AdmitMemberUseCase<dyn MemberRepositoryPort>;
 
 /// Errors produced by space access orchestrator.
 #[derive(Debug, thiserror::Error)]
@@ -42,6 +52,10 @@ pub struct SpaceAccessOrchestrator {
     state: Arc<Mutex<SpaceAccessState>>,
     dispatch_lock: Arc<Mutex<()>>,
     event_senders: Arc<Mutex<Vec<mpsc::Sender<SpaceAccessCompletedEvent>>>>,
+    /// 可选 admit 入口。若注入，则 joiner 角色到达 `Granted` 时把对端登记为
+    /// 本机空间成员（phase A.2）。sponsor 角色此时不触发 admit（成员关系是
+    /// 本地自治的 —— sponsor 侧对"joiner 是否为成员"的视角由后续迭代补齐）。
+    admit_member: Option<Arc<AdmitMemberUseCaseDyn>>,
 }
 
 impl SpaceAccessOrchestrator {
@@ -55,7 +69,16 @@ impl SpaceAccessOrchestrator {
             state: Arc::new(Mutex::new(SpaceAccessState::Idle)),
             dispatch_lock: Arc::new(Mutex::new(())),
             event_senders: Arc::new(Mutex::new(Vec::new())),
+            admit_member: None,
         }
+    }
+
+    /// Inject the `AdmitMemberUseCase` so that a successful joiner `Granted`
+    /// transition also registers the sponsor peer as a local space member.
+    /// Without this, `Granted` only persists the trust relationship.
+    pub fn with_admit_member(mut self, admit_member: Arc<AdmitMemberUseCaseDyn>) -> Self {
+        self.admit_member = Some(admit_member);
+        self
     }
 
     pub async fn start_sponsor_authorization(
@@ -175,6 +198,9 @@ impl SpaceAccessOrchestrator {
                     pairing_session_id.as_ref(),
                 )
                 .await;
+            } else if matches!(next, SpaceAccessState::Granted { .. }) {
+                // joiner 侧：Granted 后把对端 sponsor 登记为本机成员（phase A.2）
+                self.try_admit_sponsor_as_member().await;
             }
 
             let mut guard = self.state.lock().await;
@@ -183,6 +209,71 @@ impl SpaceAccessOrchestrator {
         }
         .instrument(span)
         .await
+    }
+
+    /// joiner 侧 `Granted` 后把对端 sponsor 登记为本机空间成员。
+    ///
+    /// 语义对齐 `dual_write_member`（Phase 2）：admit 失败只记 WARN，不阻塞
+    /// `Granted` 本身 —— 成员关系是本地自治的，pairing / space_access 的成功
+    /// 不应被 admit 失败翻盘。必需上下文（peer_id / device_name / fingerprint）
+    /// 任一缺失都会 WARN 跳过。
+    async fn try_admit_sponsor_as_member(&self) {
+        let Some(admit) = self.admit_member.clone() else {
+            return;
+        };
+
+        let (peer_id, device_name, fingerprint) = {
+            let context = self.context.lock().await;
+            (
+                context.sponsor_peer_id.clone(),
+                context.peer_device_name.clone(),
+                context.peer_fingerprint.clone(),
+            )
+        };
+
+        let Some(peer_id) = peer_id else {
+            warn!("space_access Granted without sponsor_peer_id; skipping admit_member");
+            return;
+        };
+        let Some(device_name) = device_name else {
+            warn!(
+                peer_id = %peer_id,
+                "space_access Granted without peer_device_name; skipping admit_member"
+            );
+            return;
+        };
+        let Some(fingerprint) = fingerprint else {
+            warn!(
+                peer_id = %peer_id,
+                "space_access Granted without peer_fingerprint; skipping admit_member"
+            );
+            return;
+        };
+
+        let input = AdmitMember {
+            device_id: DeviceId::new(peer_id.clone()),
+            device_name,
+            identity_fingerprint: fingerprint,
+            joined_at: Utc::now(),
+            sync_preferences: MemberSyncPreferences::default(),
+        };
+
+        match admit.execute(input).await {
+            Ok(member) => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    device_id = %member.device_id,
+                    "admit_member succeeded at space_access Granted"
+                );
+            }
+            Err(err) => {
+                warn!(
+                    peer_id = %peer_id,
+                    error = %err,
+                    "admit_member failed at space_access Granted; continuing (local-only effect)"
+                );
+            }
+        }
     }
 
     async fn emit_responder_completion(

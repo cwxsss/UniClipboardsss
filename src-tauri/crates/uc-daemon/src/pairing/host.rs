@@ -112,6 +112,7 @@ pub struct DaemonPairingHost {
     state: Arc<RwLock<RuntimeState>>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
+    trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
     discoverability: Arc<LeaseRegistry>,
     participant_readiness: Arc<LeaseRegistry>,
     active_session_id: Arc<RwLock<Option<String>>>,
@@ -126,6 +127,7 @@ impl DaemonPairingHost {
         state: Arc<RwLock<RuntimeState>>,
         space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
         key_slot_store: Arc<dyn KeySlotStore>,
+        trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
     ) -> Self {
         Self {
@@ -135,6 +137,7 @@ impl DaemonPairingHost {
             state,
             space_access_orchestrator,
             key_slot_store,
+            trusted_peer_repo,
             discoverability: Arc::new(LeaseRegistry::default()),
             participant_readiness: Arc::new(LeaseRegistry::default()),
             active_session_id: Arc::new(RwLock::new(None)),
@@ -359,6 +362,7 @@ impl DaemonPairingHost {
                 self.pairing_facade.clone(),
                 self.space_access_orchestrator.clone(),
                 self.key_slot_store.clone(),
+                self.trusted_peer_repo.clone(),
                 self.state.clone(),
                 self.active_session_id.clone(),
                 self.event_tx.clone(),
@@ -599,6 +603,7 @@ async fn run_pairing_action_loop(
     pairing_facade: Arc<PairingFacade>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
+    trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
@@ -721,7 +726,42 @@ async fn run_pairing_action_loop(
                             {
                                 warn!(error = %err, session_id = %session_id, "failed to close pairing session");
                             }
-                        } else if role == Some(PairingRole::Responder) {
+                        } else {
+                            // Phase A.2: populate SpaceAccessContext peer identity
+                            // fields so joiner-side `Granted` can produce
+                            // `AdmitMember` input. fingerprint comes from the
+                            // `trusted_peer` table written by 0.4.2.
+                            if let Some(peer) = peer_info.as_ref() {
+                                let fingerprint = match trusted_peer_repo
+                                    .get(&uc_core::ids::DeviceId::new(peer.peer_id.clone()))
+                                    .await
+                                {
+                                    Ok(Some(rec)) => Some(rec.peer_fingerprint.to_string()),
+                                    Ok(None) => {
+                                        warn!(
+                                            peer_id = %peer.peer_id,
+                                            "trusted_peer record missing right after pairing success"
+                                        );
+                                        None
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            peer_id = %peer.peer_id,
+                                            error = %err,
+                                            "trusted_peer lookup failed after pairing success"
+                                        );
+                                        None
+                                    }
+                                };
+
+                                let context = space_access_orchestrator.context();
+                                let mut guard = context.lock().await;
+                                guard.peer_device_name = peer.device_name.clone();
+                                guard.peer_fingerprint = fingerprint;
+                            }
+                        }
+
+                        if success && role == Some(PairingRole::Responder) {
                             if let Some(peer) = peer_info.as_ref() {
                                 let context = space_access_orchestrator.context();
                                 context.lock().await.sponsor_peer_id = Some(peer.peer_id.clone());

@@ -28,6 +28,7 @@ use uc_app::usecases::{
     DeviceAnnouncer, DeviceNameAnnouncer, LifecycleEventEmitter, LoggingLifecycleEventEmitter,
 };
 use uc_app::AppDeps;
+use uc_application::membership::usecases::AdmitMemberUseCase;
 use uc_application::pairing::{PairingAction, PairingCryptoPorts, PairingFacade};
 use uc_application::trusted_peer::TrustPeerOrchestrator;
 use uc_core::config::AppConfig;
@@ -175,7 +176,12 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         pairing_crypto,
     );
     let pairing_facade = Arc::new(pairing_facade);
-    let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
+    // Phase A.2: inject AdmitMemberUseCase so joiner-side `Granted` also
+    // registers the sponsor peer as a local space member. Failure to admit
+    // only logs WARN and does not block `Granted` itself.
+    let admit_member = Arc::new(AdmitMemberUseCase::new(deps.device.member_repo.clone()));
+    let space_access_orchestrator =
+        Arc::new(SpaceAccessOrchestrator::new().with_admit_member(admit_member));
 
     let storage_paths = get_storage_paths(&config)?;
     let key_slot_store: Arc<dyn KeySlotStore> =
@@ -284,7 +290,12 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         pairing_crypto,
     );
     let pairing_facade = Arc::new(pairing_facade);
-    let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
+    // Phase A.2: inject AdmitMemberUseCase so joiner-side `Granted` also
+    // registers the sponsor peer as a local space member. Failure to admit
+    // only logs WARN and does not block `Granted` itself.
+    let admit_member = Arc::new(AdmitMemberUseCase::new(deps.device.member_repo.clone()));
+    let space_access_orchestrator =
+        Arc::new(SpaceAccessOrchestrator::new().with_admit_member(admit_member));
     let key_slot_store: Arc<dyn KeySlotStore> =
         Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
 

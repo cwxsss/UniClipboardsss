@@ -21,13 +21,13 @@ pub struct AdmitMember {
 /// 将新设备接纳为本机空间成员。
 ///
 /// 幂等策略：同一 `device_id` 重复 admit 会返回 `AlreadyAdmitted` 错误。
-pub struct AdmitMemberUseCase<R> {
+pub struct AdmitMemberUseCase<R: ?Sized> {
     repository: Arc<R>,
 }
 
 impl<R> AdmitMemberUseCase<R>
 where
-    R: MemberRepositoryPort,
+    R: MemberRepositoryPort + ?Sized,
 {
     pub fn new(repository: Arc<R>) -> Self {
         Self { repository }
