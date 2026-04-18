@@ -16,3 +16,38 @@ impl CancelSetupUseCase {
         self.orchestrator.cancel_setup().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setup::testing::{build_default_harness, seed_state};
+
+    #[tokio::test]
+    async fn cancel_from_create_space_input_returns_to_welcome() {
+        let harness = build_default_harness();
+        seed_state(
+            &harness,
+            SetupState::CreateSpaceInputPassphrase { error: None },
+        )
+        .await;
+        let uc = CancelSetupUseCase::new(Arc::clone(&harness.orchestrator));
+
+        assert_eq!(uc.execute().await.unwrap(), SetupState::Welcome);
+    }
+
+    #[tokio::test]
+    async fn cancel_from_join_input_passphrase_returns_to_select_device() {
+        let harness = build_default_harness();
+        seed_state(
+            &harness,
+            SetupState::JoinSpaceInputPassphrase { error: None },
+        )
+        .await;
+        let uc = CancelSetupUseCase::new(Arc::clone(&harness.orchestrator));
+
+        assert_eq!(
+            uc.execute().await.unwrap(),
+            SetupState::JoinSpaceSelectDevice { error: None }
+        );
+    }
+}

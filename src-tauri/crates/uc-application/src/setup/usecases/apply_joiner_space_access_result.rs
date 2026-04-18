@@ -33,3 +33,33 @@ impl ApplyJoinerSpaceAccessResultUseCase {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setup::testing::build_default_harness;
+
+    /// Verifies the UseCase delegates to the orchestrator and propagates the
+    /// resulting `SpaceAccessState` without panicking even when the
+    /// state-machine cannot apply the event (Idle + `AccessDenied` is a
+    /// no-op transition in the current flow).
+    #[tokio::test]
+    async fn deny_path_propagates_current_space_access_state() {
+        let harness = build_default_harness();
+        let uc = ApplyJoinerSpaceAccessResultUseCase::new(Arc::clone(&harness.orchestrator));
+
+        let state = uc
+            .execute(
+                "session-1".to_string(),
+                SpaceId::from("space"),
+                Some("sponsor".to_string()),
+                false,
+                Some(DenyReason::InternalError),
+            )
+            .await
+            .unwrap();
+        // Accepts any state the orchestrator returns; what we assert is the
+        // call did not bubble a `SetupError`.
+        let _ = state;
+    }
+}

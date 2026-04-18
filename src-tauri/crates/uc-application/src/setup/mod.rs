@@ -27,6 +27,9 @@ pub(crate) mod usecases;
 
 pub(crate) mod action_executor;
 
+#[cfg(test)]
+pub(crate) mod testing;
+
 pub use actions::SetupAction;
 pub use errors::SetupError;
 pub use event_port::SetupEventPort;

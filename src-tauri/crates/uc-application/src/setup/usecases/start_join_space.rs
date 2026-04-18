@@ -16,3 +16,25 @@ impl StartJoinSpaceUseCase {
         self.orchestrator.join_space().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setup::testing::build_default_harness;
+
+    #[tokio::test]
+    async fn welcome_transitions_to_join_space_select_device() {
+        let harness = build_default_harness();
+        let uc = StartJoinSpaceUseCase::new(Arc::clone(&harness.orchestrator));
+
+        let state = uc.execute().await.unwrap();
+
+        assert_eq!(state, SetupState::JoinSpaceSelectDevice { error: None });
+        let emissions = harness.events.snapshot().await;
+        assert_eq!(emissions.len(), 1);
+        assert_eq!(
+            emissions[0].0,
+            SetupState::JoinSpaceSelectDevice { error: None }
+        );
+    }
+}

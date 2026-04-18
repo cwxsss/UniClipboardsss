@@ -1,7 +1,7 @@
 # Membership 迁移计划（临时工作文档）
 
 > 范围：用 `uc-core::membership` + `uc-application::membership` 彻底替换现有的 `paired_device` 体系。
-> 状态：**Phase 1 / Phase 2 / 阶段 0（0.0–0.5）/ 阶段 A（A.1–A.4）均已提交；下一步进入 Phase 3 消费者切换（3.1 / 3.2 / 3.5 优先）。**
+> 状态：**Phase 1 / Phase 2 / 阶段 0（0.0–0.5）/ 阶段 A（A.1–A.4）/ 阶段 B（B.0–B.6）均已提交；下一步进入阶段 C（`uc-app::usecases::setup` / `space_access` 清退），随后 Phase 3 消费者切换（3.1 / 3.2 / 3.5 优先）。**
 > 本文档只服务于迁移本身，不作为产品文档，迁移完成后可直接删除。
 
 ---
@@ -23,11 +23,12 @@
 - Phase 1 / Phase 2 已提交（`space_member` repo + Phase 2 期间的双写）
 - **阶段 0.0 → 0.5 全部提交**：写入路径从 `PairedDevice` 切到 `TrustedPeer`；`FailureReason` 收口至 `TrustAbortReason`；反向依赖清除；daemon 入口统一走 `PairingFacade`；`SpaceAccessPersistenceAdapter` 停写 `paired_device`。0.5 范围经 D31 收窄为"停写"，`PairedDevice` 族 Rust 类型删除推迟到 Phase 5
 - **阶段 A 全部提交（A.1 / A.2 / A.2.b / A.4）**：`space_access` 已搬到 `uc-application`，`AdmitMemberUseCase` 在 `SpaceAccessState::Granted` 调用，joiner 与 sponsor 两侧均会写入 `space_member`；orchestrator 由 `SpaceAccessFacade` 收口；Phase 2 期间的 `dual_write_member` 已彻底删除
+- **阶段 B 全部提交（B.0–B.6）**：`RealtimeEvent` 抽取到 `uc-daemon-client`；`uc-core::setup` 收窄到仅 `status`；setup orchestrator / state-machine / action-executor / mark-complete 全部搬到 `uc-application::setup`；`SetupFacade` 作为对外唯一入口，14 个 UseCase / Query 按 §11.4 拆分落地，orchestrator 降级为 `pub(crate)`；为 14 个 UseCase 补齐 port-mock 粒度单测（19 tests）；原 `uc-app::usecases::setup` 仅剩 `InitializeEncryption` / `AppLifecycleCoordinator` 两个适配器，作为过渡期消费方保留，待阶段 C 清退
 - 实测 dev DB（2026-04-18）：`trusted_peer=1`、`space_member=1`、`paired_device=0`，写入侧符合预期
 
 **已知中间态 bug（不是回归）**：配对成功但前端无可见设备且剪贴板不互通。原因是消费者读取路径仍指向 `paired_device` 表（已无写入）。修复入口在 Phase 3.1 / 3.2 / 3.5（详见 §6.1）。
 
-**下一步**：进入 **Phase 3 消费者切换**，优先级 3.1 → 3.2 → 3.5（把 `list_paired_devices` / `list_sendable_peers` / `resolve_connection_policy` 的查询源切到 `member_repo`），随后 3.3 / 3.4 / 3.6。阶段 B（setup 搬家）和阶段 C（uc-app 旧模块清退）按 §5.4 顺序排在其后。
+**下一步**：进入 **阶段 C（`uc-app` 旧 setup / space_access 清退）**，随后 **Phase 3 消费者切换**，优先级 3.1 → 3.2 → 3.5（把 `list_paired_devices` / `list_sendable_peers` / `resolve_connection_policy` 的查询源切到 `member_repo`），随后 3.3 / 3.4 / 3.6。
 
 ---
 
@@ -333,14 +334,15 @@ if persist_result.is_ok() {
 
 **产物**：setup 完全脱离 `uc-app`；状态机回归 application 层；`SetupOrchestrator` 变内部实现（决策细则 #2），daemon 只看见 `SetupFacade`。
 
-| # | 动作 | 说明 |
-|---|---|---|
-| B.1 | `uc-core/src/setup/` 删除 `state.rs` / `event.rs` / `action.rs` / `state_machine.rs` / `error.rs`（仅保留 `status.rs`）；顶层 `lib.rs` re-export 清理 | 纠偏 `uc-core/AGENTS.md` §9.1 |
-| B.2 | 新建 `uc-application/src/setup/{mod.rs, state.rs, events.rs, actions.rs, state_machine.rs, errors.rs, context.rs, orchestrator.rs, action_executor.rs, pairing_facade.rs, facade.rs, commands.rs, queries.rs, usecases/}` | 状态机直接从 core 平移；orchestrator 薄化为"dispatch 循环 + context + cancel/reset" |
-| B.3 | 把 `SetupOrchestrator` 的 13 个公开方法**拆为独立 UseCase** — 命名见 §5.4.1 清单 | 所有 UseCase 共享同一个 `Arc<SetupOrchestrator>`（避免状态分散）；`SetupOrchestrator` **不 re-export**，只 `pub(crate)` |
-| B.4 | `SetupFacade` 作为 daemon 的唯一入口，内部路由到具体 UseCase | AGENTS §11 薄 Facade |
-| B.5 | `uc-bootstrap` 切换：daemon 改依赖 `uc_application::setup::SetupFacade`；`uc-app/usecases/setup/` 标 `#[deprecated]` 不删 | 保留 `uc-app` 旧 setup 到阶段 C |
-| B.6 | 测试按 UseCase 粒度重写到 `uc-application/tests/setup/`（`mockall` + port mock） | AGENTS §17.4 |
+| # | 状态 | 动作 | 说明 |
+|---|---|---|---|
+| B.0 | ✅ | `RealtimeEvent` 体系从 `uc-core` 下沉到 `uc-daemon-client`（事件表示层概念，违反 §9.1） | 作为 B.1 前置清理；原计划未列入，B 阶段启动时识别补上 |
+| B.1 | ✅ `34dba1c9` | `uc-core/src/setup/` 删除 `state.rs` / `event.rs` / `action.rs` / `state_machine.rs` / `error.rs`（仅保留 `status.rs`）；顶层 `lib.rs` re-export 清理；骨架平移到 `uc-application/src/setup/` | 纠偏 `uc-core/AGENTS.md` §9.1 |
+| B.2 | ✅ `a717ea4f` | 搬 `orchestrator` / `action_executor` / `context` / `mark_complete` 到 `uc-application/src/setup/`；引入 `SetupInitializeEncryptionPort` / `SetupAppLifecyclePort` 避免 uc-app→uc-application 循环依赖；`uc-app` 侧对原两个 UseCase 挂 adapter trait impl | 轻量 port 抽象替代方案，避免扩大搬家范围 |
+| B.3 | ✅ `b1285605` | 把 `SetupOrchestrator` 的 14 个公开方法**拆为独立 UseCase / Query** — 见下方清单 | 所有 UseCase 共享同一 `Arc<SetupOrchestrator>`（避免状态分散）；UseCase 全部 `pub(crate)` |
+| B.4 | ✅ `b1285605` | `SetupFacade` 作为 daemon / tauri 的唯一入口，内部路由到 14 个 UseCase / Query | AGENTS §11.4 薄 Facade |
+| B.5 | ✅ `b1285605` | `SetupOrchestrator` 降级为 `pub(crate)`；`uc-bootstrap` / `uc-daemon` / `uc-tauri` 全部切到 `uc-application::setup::SetupFacade`；`uc-app/src/usecases/setup/` shim 清退，仅保留 `InitializeEncryption` / `AppLifecycleCoordinator` 两个 adapter trait impl | 保留 `uc-app` 过渡态到阶段 C |
+| B.6 | ✅ | 为 14 个 UseCase 补齐 port-mock 粒度单测（19 tests，全绿）；`uc-application/src/setup/testing.rs` 提供可复用 fake ports + `build_default_harness()` 脚手架 | AGENTS §17.4；tests 放在各 UseCase 文件内 `#[cfg(test)]` 模块，覆盖委托语义 + 关键状态转移 |
 
 **B.3 的 UseCase 拆分清单**：
 
@@ -361,12 +363,20 @@ if persist_result.is_ok() {
 | `resolve_host_space_access_proof(...)` | `ResolveHostSpaceAccessProofUseCase` |
 | `apply_joiner_space_access_result(...)` | `ApplyJoinerSpaceAccessResultUseCase` |
 
-**阶段 B 出口条件**：
-1. `uc-application/src/setup/` 编译通过 + 新增 UseCase 级测试全绿
-2. `uc-core/src/setup/` 只剩 `status.rs`
-3. daemon 不再 import `uc_app::usecases::setup::*`
-4. `uc-app::usecases::setup` 标 `#[deprecated]` 但仍可编译（阶段 C 再删）
-5. admit 仍只挂在 space_access `Granted`（`CompleteJoinSpaceUseCase` 不调 admit）
+**阶段 B 出口条件 — 已全部满足**：
+1. ✅ `uc-application/src/setup/` 编译通过；19 个 UseCase 级 port-mock 测试全绿（`cargo test -p uc-application --lib setup::usecases`）
+2. ✅ `uc-core/src/setup/` 只剩 `status.rs`
+3. ✅ daemon / tauri / bootstrap 不再 import `uc_app::usecases::setup::*`，统一走 `uc_application::setup::SetupFacade`
+4. ✅ `uc-app::usecases::setup` shim 目录已清退；残余 `InitializeEncryption` / `AppLifecycleCoordinator` 作为 `SetupInitializeEncryptionPort` / `SetupAppLifecyclePort` adapter 保留到阶段 C
+5. ✅ admit 仍只挂在 space_access `Granted`（`CompleteJoinSpaceUseCase` 不调 admit）
+
+**阶段 B 执行期间固化的决策**（2026-04-18）：
+
+| # | 决策 | 生效阶段 | 备注 |
+|---|---|---|---|
+| D32 | **引入 `SetupInitializeEncryptionPort` / `SetupAppLifecyclePort` 以避免 uc-application → uc-app 反向依赖** | B.2 | orchestrator 搬到 uc-application 后原本调 `uc-app::InitializeEncryption` / `AppLifecycleCoordinator`；反向引用会破坏 D13。解决：在 uc-application 侧定义 port trait，uc-app 的两个 UseCase 挂 adapter impl；uc-app 对 uc-application 的**退出方向**依赖符合 D27 |
+| D33 | **UseCase 粒度测试采用 crate-内 port-mock 路径，不走跨 crate `uc-application/tests/`** | B.6 | 原计划 §5.4.B.6 写"`uc-application/tests/setup/`"；实际 UseCase 均 `pub(crate)`（§11.4），外部无法直接访问。改为各 UseCase 文件内 `#[cfg(test)] mod tests` + 共享的 `src/setup/testing.rs` fake ports 脚手架，测试对象是"UseCase → orchestrator dispatch"完整路径，覆盖 delegate 语义 + 关键状态转移 + error 路径 |
+| D34 | **对需要深度 space_access / pairing 交互的 UseCase（sponsor authorization / resolve proof / apply joiner result / verify passphrase）只测 error / smoke 路径，不硬构造 happy path** | B.6 | noop fake 下 `CryptoPort::export_keyslot_blob` / crypto-backed proof verification 无法满足,硬造 happy path 需为 crypto/persistence 写 1000+ 行 fake。实用权衡：delegate + error 路径能验证 UseCase 不 panic 且正确传播 orchestrator error；完整 happy path 覆盖由后续 Facade 集成测试或 daemon e2e 测试承担 |
 
 #### 阶段 C — `uc-app` 旧 setup / 旧 space_access 清退
 
@@ -498,6 +508,11 @@ dd3978f5  refactor(pairing): introduce PairingFacade as external entry point (ph
 af79e3d5  feat(space_access): admit sponsor as local member on joiner Granted (phase A.2)
 cb171f37  refactor(space_access): hide orchestrator behind SpaceAccessFacade (phase A.2.b)
 f3a369a8  test(space_access): cover try_admit_sponsor_as_member branches (phase A.4)
+
+# 阶段 B — setup 搬家 + 14 UseCase 拆分 + UseCase 粒度单测
+34dba1c9  refactor(setup): move setup state machine uc-core→uc-application (phase 0.5/B.1)
+a717ea4f  refactor(setup): move orchestrator/executor/context/mark_complete to uc-application (phase B.2)
+b1285605  refactor(setup): introduce SetupFacade + 14 UseCases/Query, make orchestrator pub(crate) (phase B.3 + B.4 + B.5)
 ```
 
 分支：`milestone/0.6.0`。

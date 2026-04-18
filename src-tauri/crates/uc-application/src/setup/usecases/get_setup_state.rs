@@ -16,3 +16,28 @@ impl GetSetupStateQuery {
         self.orchestrator.get_state().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::setup::testing::{build_harness, FakeSetupStatus, HarnessOptions};
+
+    #[tokio::test]
+    async fn seeds_completed_when_status_has_completed() {
+        let harness = build_harness(HarnessOptions {
+            status: FakeSetupStatus::completed(),
+            ..HarnessOptions::default()
+        });
+        let uc = GetSetupStateQuery::new(Arc::clone(&harness.orchestrator));
+
+        assert_eq!(uc.execute().await, SetupState::Completed);
+    }
+
+    #[tokio::test]
+    async fn seeds_welcome_when_status_not_completed() {
+        let harness = build_harness(HarnessOptions::default());
+        let uc = GetSetupStateQuery::new(Arc::clone(&harness.orchestrator));
+
+        assert_eq!(uc.execute().await, SetupState::Welcome);
+    }
+}
