@@ -20,8 +20,13 @@ pub mod search;
 pub mod settings;
 pub mod setup;
 pub mod space_access;
+pub mod trusted_peer;
 
 pub use membership::{MemberRepositoryPort, MemberSyncPreferences, MembershipError, SpaceMember};
+pub use trusted_peer::{
+    PeerFingerprint, TrustAbortReason, TrustedPeer, TrustedPeerError, TrustedPeerEvent,
+    TrustedPeerRepositoryPort,
+};
 // Re-export commonly used types at the crate root
 pub use clipboard::*;
 pub use config::AppConfig;
