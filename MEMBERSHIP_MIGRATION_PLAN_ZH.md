@@ -528,7 +528,7 @@ b1285605  refactor(setup): introduce SetupFacade + 14 UseCases/Query, make orche
 d4eca020  docs(membership): record phase C commit hash in plan §11
 
 # Phase 3 — 消费者切换（3.1 / 3.2 / 3.5 前置批次）
-<pending>   refactor(membership): switch resolve_connection_policy / list_sendable_peers / list_paired_devices to member_repo (phase 3.1 + 3.2 + 3.5)
+17423690  refactor(membership): switch resolve_connection_policy / list_sendable_peers / list_paired_devices to member_repo (phase 3.1 + 3.2 + 3.5)
 ```
 
 分支：`milestone/0.6.0`。
