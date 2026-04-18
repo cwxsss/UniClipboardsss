@@ -23,13 +23,13 @@ use tokio::sync::mpsc;
 
 use uc_app::app_paths::AppPaths;
 use uc_app::shared::host_event::HostEventEmitterPort;
-use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{
     DeviceAnnouncer, DeviceNameAnnouncer, LifecycleEventEmitter, LoggingLifecycleEventEmitter,
 };
 use uc_app::AppDeps;
 use uc_application::membership::usecases::AdmitMemberUseCase;
 use uc_application::pairing::{PairingAction, PairingCryptoPorts, PairingFacade};
+use uc_application::space_access::SpaceAccessFacade;
 use uc_application::trusted_peer::TrustPeerOrchestrator;
 use uc_core::config::AppConfig;
 use uc_core::ports::PeerDirectoryPort;
@@ -76,7 +76,7 @@ pub struct DaemonBootstrapContext {
     pub pairing_facade: Arc<PairingFacade>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
     pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
-    pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    pub space_access_facade: Arc<SpaceAccessFacade>,
     pub key_slot_store: Arc<dyn KeySlotStore>,
     pub storage_paths: AppPaths,
     pub config: AppConfig,
@@ -180,8 +180,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     // registers the sponsor peer as a local space member. Failure to admit
     // only logs WARN and does not block `Granted` itself.
     let admit_member = Arc::new(AdmitMemberUseCase::new(deps.device.member_repo.clone()));
-    let space_access_orchestrator =
-        Arc::new(SpaceAccessOrchestrator::new().with_admit_member(admit_member));
+    let space_access_facade = Arc::new(SpaceAccessFacade::with_admit_member(admit_member));
 
     let storage_paths = get_storage_paths(&config)?;
     let key_slot_store: Arc<dyn KeySlotStore> =
@@ -195,7 +194,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
 
     let setup_ports = SetupAssemblyPorts::from_network(
         pairing_facade.clone(),
-        space_access_orchestrator.clone(),
+        space_access_facade.clone(),
         discovery_network,
         device_announcer,
         lifecycle_emitter,
@@ -294,8 +293,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     // registers the sponsor peer as a local space member. Failure to admit
     // only logs WARN and does not block `Granted` itself.
     let admit_member = Arc::new(AdmitMemberUseCase::new(deps.device.member_repo.clone()));
-    let space_access_orchestrator =
-        Arc::new(SpaceAccessOrchestrator::new().with_admit_member(admit_member));
+    let space_access_facade = Arc::new(SpaceAccessFacade::with_admit_member(admit_member));
     let key_slot_store: Arc<dyn KeySlotStore> =
         Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
 
@@ -306,7 +304,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         pairing_facade,
         pairing_action_rx,
         trusted_peer_repo,
-        space_access_orchestrator,
+        space_access_facade,
         key_slot_store,
         storage_paths,
         config,

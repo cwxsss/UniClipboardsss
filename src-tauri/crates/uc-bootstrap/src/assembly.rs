@@ -958,12 +958,12 @@ pub async fn resolve_pairing_config(settings: Arc<dyn SettingsPort>) -> PairingC
 // ---------------------------------------------------------------------------
 
 use tokio::sync::Mutex as TokioMutex;
-use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{
     DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, SessionReadyEmitter,
     SetupOrchestrator, SetupPairingFacadePort,
 };
 use uc_application::pairing::PairingFacade;
+use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{DiscoveryPort, TimerPort};
 use uc_core::TrustedPeerRepositoryPort;
@@ -978,7 +978,7 @@ use uc_core::TrustedPeerRepositoryPort;
 /// the SAME instance to both the orchestrator and AppRuntime/CoreRuntime.
 pub struct SetupAssemblyPorts {
     pub setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
-    pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    pub space_access_facade: Arc<SpaceAccessFacade>,
     pub discovery_port: Arc<dyn DiscoveryPort>,
     pub device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
     pub lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
@@ -994,7 +994,7 @@ impl SetupAssemblyPorts {
     /// Create a bundle using the peer-directory port as the discovery adapter.
     pub fn from_network(
         pairing_facade: Arc<PairingFacade>,
-        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+        space_access_facade: Arc<SpaceAccessFacade>,
         peers: Arc<dyn uc_core::ports::PeerDirectoryPort>,
         device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
         lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
@@ -1013,7 +1013,7 @@ impl SetupAssemblyPorts {
         }
         Self {
             setup_pairing_facade: pairing_facade,
-            space_access_orchestrator,
+            space_access_facade,
             discovery_port: Arc::new(NetworkDiscoveryPort { peers }),
             device_announcer,
             lifecycle_emitter,
@@ -1111,7 +1111,7 @@ impl SetupAssemblyPorts {
 
         Self {
             setup_pairing_facade: Arc::new(NoopSetupPairingFacade),
-            space_access_orchestrator: Arc::new(SpaceAccessOrchestrator::new()),
+            space_access_facade: Arc::new(SpaceAccessFacade::new()),
             discovery_port: Arc::new(EmptyDiscoveryPort),
             device_announcer: None,
             lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
@@ -1183,7 +1183,7 @@ pub fn build_setup_orchestrator(
     let transport_port: Arc<TokioMutex<dyn SpaceAccessTransportPort>> = Arc::new(TokioMutex::new(
         uc_app::usecases::space_access::SpaceAccessNetworkAdapter::new(
             deps.network_ports.pairing.clone(),
-            ports.space_access_orchestrator.context(),
+            ports.space_access_facade.context_handle(),
         ),
     ));
     let proof_port: Arc<dyn uc_core::ports::space::ProofPort> = Arc::new(
@@ -1208,7 +1208,7 @@ pub fn build_setup_orchestrator(
         app_lifecycle,
         ports.setup_pairing_facade,
         setup_event_port,
-        ports.space_access_orchestrator,
+        ports.space_access_facade,
         ports.discovery_port,
         deps.network_control.clone(),
         crypto_factory,

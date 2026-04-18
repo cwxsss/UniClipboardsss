@@ -26,7 +26,7 @@ use uc_core::{
 use crate::usecases::setup::context::SetupContext;
 use crate::usecases::setup::MarkSetupComplete;
 use crate::usecases::space_access::{
-    SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessJoinerOffer, SpaceAccessOrchestrator,
+    SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer,
 };
 use crate::usecases::AppLifecycleCoordinator;
 use crate::usecases::InitializeEncryption;
@@ -63,7 +63,7 @@ pub struct SetupActionExecutor {
 
     // Collaborator orchestrators
     pub(super) setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
-    pub(super) space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    pub(super) space_access_facade: Arc<SpaceAccessFacade>,
 }
 
 impl SetupActionExecutor {
@@ -241,13 +241,13 @@ impl SetupActionExecutor {
             *guard = Some(offer.clone());
         }
 
-        {
-            let sa_context = self.space_access_orchestrator.context();
-            let mut guard = sa_context.lock().await;
-            guard.joiner_offer = Some(offer.clone());
-            guard.joiner_passphrase = Some(SecretString::new(passphrase_val.expose().to_string()));
-            guard.sponsor_peer_id = selected_peer_id.lock().await.clone();
-        }
+        self.space_access_facade
+            .initiate_joiner_flow(
+                offer.clone(),
+                SecretString::new(passphrase_val.expose().to_string()),
+                selected_peer_id.lock().await.clone(),
+            )
+            .await;
 
         let crypto = self.crypto_factory.build(passphrase_val);
         let mut transport = self.transport_port.lock().await;
@@ -264,7 +264,7 @@ impl SetupActionExecutor {
         let space_id = offer.space_id.clone();
         let typed_session_id = SessionId::from(session_id.clone());
 
-        self.space_access_orchestrator
+        self.space_access_facade
             .dispatch(
                 &mut executor,
                 SpaceAccessEvent::JoinRequested {
@@ -283,7 +283,7 @@ impl SetupActionExecutor {
                 SetupError::PairingFailed
             })?;
 
-        self.space_access_orchestrator
+        self.space_access_facade
             .dispatch(
                 &mut executor,
                 SpaceAccessEvent::OfferAccepted {
@@ -303,7 +303,7 @@ impl SetupActionExecutor {
                 SetupError::PairingFailed
             })?;
 
-        self.space_access_orchestrator
+        self.space_access_facade
             .dispatch(
                 &mut executor,
                 SpaceAccessEvent::PassphraseSubmitted,
@@ -337,11 +337,7 @@ impl SetupActionExecutor {
                 return Some(local_offer);
             }
 
-            let context_offer = {
-                let sa_context = self.space_access_orchestrator.context();
-                let guard = sa_context.lock().await;
-                guard.joiner_offer.clone()
-            };
+            let context_offer = self.space_access_facade.peek_joiner_offer().await;
 
             if context_offer.is_some() {
                 return context_offer;
@@ -375,7 +371,7 @@ impl SetupActionExecutor {
         let mark_setup_complete = Arc::clone(&self.mark_setup_complete);
         let app_lifecycle = Arc::clone(&self.app_lifecycle);
         let pairing_session_id = Arc::clone(pairing_session_id);
-        let space_access_orchestrator = Arc::clone(&self.space_access_orchestrator);
+        let space_access_facade = Arc::clone(&self.space_access_facade);
 
         tokio::spawn(async move {
             loop {
@@ -383,7 +379,7 @@ impl SetupActionExecutor {
                     break;
                 }
 
-                let space_access_state = space_access_orchestrator.get_state().await;
+                let space_access_state = space_access_facade.get_state().await;
                 let Some(setup_event) =
                     Self::map_setup_event_from_space_access_state(&space_access_state, &session_id)
                 else {

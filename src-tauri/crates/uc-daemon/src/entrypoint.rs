@@ -65,7 +65,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let daemon_settings = ctx.deps.settings.clone();
     let setup_ports = SetupAssemblyPorts::from_network(
         ctx.pairing_facade.clone(),
-        ctx.space_access_orchestrator.clone(),
+        ctx.space_access_facade.clone(),
         ctx.deps.network_ports.peers.clone(),
         None,
         Arc::new(LoggingLifecycleEventEmitter),
@@ -253,7 +253,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         ctx.pairing_facade.clone(),
         ctx.pairing_action_rx,
         state.clone(),
-        ctx.space_access_orchestrator.clone(),
+        ctx.space_access_facade.clone(),
         ctx.key_slot_store.clone(),
         ctx.trusted_peer_repo.clone(),
         event_tx.clone(),
@@ -300,7 +300,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         state,
         event_tx,
         Some(pairing_host),
-        Some(ctx.space_access_orchestrator),
+        Some(ctx.space_access_facade),
         encryption_unlocked,
         deferred_services,
         deferred_notify_opt,

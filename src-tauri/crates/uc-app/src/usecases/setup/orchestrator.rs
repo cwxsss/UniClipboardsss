@@ -36,7 +36,7 @@ use crate::usecases::setup::action_executor::SetupActionExecutor;
 use crate::usecases::setup::context::SetupContext;
 use crate::usecases::setup::MarkSetupComplete;
 use crate::usecases::space_access::{
-    SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessJoinerOffer, SpaceAccessOrchestrator,
+    SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer,
 };
 use crate::usecases::AppLifecycleCoordinator;
 use crate::usecases::InitializeEncryption;
@@ -142,7 +142,7 @@ impl SetupOrchestrator {
         app_lifecycle: Arc<AppLifecycleCoordinator>,
         setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
         setup_event_port: Arc<dyn SetupEventPort>,
-        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+        space_access_facade: Arc<SpaceAccessFacade>,
         discovery_port: Arc<dyn DiscoveryPort>,
         network_control: Arc<dyn NetworkControlPort>,
         crypto_factory: Arc<dyn SpaceAccessCryptoFactory>,
@@ -166,7 +166,7 @@ impl SetupOrchestrator {
             timer_port,
             persistence_port,
             setup_pairing_facade,
-            space_access_orchestrator,
+            space_access_facade,
         });
 
         Self {
@@ -298,11 +298,10 @@ impl SetupOrchestrator {
             return Err(SetupError::PairingFailed);
         }
 
-        {
-            let context = self.action_executor.space_access_orchestrator.context();
-            let mut guard = context.lock().await;
-            guard.sponsor_peer_id = Some(sponsor_peer_id);
-        }
+        self.action_executor
+            .space_access_facade
+            .set_sponsor_peer_id(Some(sponsor_peer_id))
+            .await;
 
         let space_id = SpaceId::from(keyslot_file.scope.profile_id.as_str());
         let typed_session_id = SessionId::from(pairing_session_id);
@@ -323,28 +322,27 @@ impl SetupOrchestrator {
         proof: SpaceAccessProofArtifact,
         sponsor_peer_id: Option<String>,
     ) -> Result<SpaceAccessState, SetupError> {
-        let current_pairing_session_id = match self
-            .action_executor
-            .space_access_orchestrator
-            .get_state()
-            .await
-        {
-            SpaceAccessState::WaitingJoinerProof {
-                pairing_session_id, ..
-            } => pairing_session_id,
-            _ => return Err(SetupError::PairingFailed),
-        };
-
-        let expected = {
-            let context = self.action_executor.space_access_orchestrator.context();
-            let mut guard = context.lock().await;
-            if let Some(peer_id) = sponsor_peer_id {
-                guard.sponsor_peer_id = Some(peer_id);
-            }
-            let Some(offer) = guard.prepared_offer.clone() else {
-                return Err(SetupError::PairingFailed);
+        let current_pairing_session_id =
+            match self.action_executor.space_access_facade.get_state().await {
+                SpaceAccessState::WaitingJoinerProof {
+                    pairing_session_id, ..
+                } => pairing_session_id,
+                _ => return Err(SetupError::PairingFailed),
             };
-            offer
+
+        if let Some(peer_id) = sponsor_peer_id {
+            self.action_executor
+                .space_access_facade
+                .set_sponsor_peer_id(Some(peer_id))
+                .await;
+        }
+        let Some(expected) = self
+            .action_executor
+            .space_access_facade
+            .peek_prepared_offer()
+            .await
+        else {
+            return Err(SetupError::PairingFailed);
         };
 
         let event = if proof.pairing_session_id != current_pairing_session_id {
@@ -398,8 +396,10 @@ impl SetupOrchestrator {
         deny_reason: Option<DenyReason>,
     ) -> Result<SpaceAccessState, SetupError> {
         if let Some(peer_id) = sponsor_peer_id {
-            let context = self.action_executor.space_access_orchestrator.context();
-            context.lock().await.sponsor_peer_id = Some(peer_id);
+            self.action_executor
+                .space_access_facade
+                .set_sponsor_peer_id(Some(peer_id))
+                .await;
         }
 
         let typed_session_id = SessionId::from(pairing_session_id);
@@ -511,7 +511,7 @@ impl SetupOrchestrator {
         };
 
         self.action_executor
-            .space_access_orchestrator
+            .space_access_facade
             .dispatch(&mut executor, event, Some(pairing_session_id))
             .await
             .map_err(|_| SetupError::PairingFailed)
@@ -549,7 +549,7 @@ impl SetupOrchestrator {
         self.selected_peer_id.lock().await.take();
         self.joiner_offer.lock().await.take();
         self.passphrase.lock().await.take();
-        self.action_executor.space_access_orchestrator.reset().await;
+        self.action_executor.space_access_facade.reset().await;
     }
 
     /// Derives the base [`SetupState`] from persisted [`SetupStatus`].

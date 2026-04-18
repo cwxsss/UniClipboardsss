@@ -194,7 +194,7 @@ async fn space_access_state_handler(State(state): State<DaemonApiState>) -> impl
     Json(
         state
             .query_service
-            .space_access_state(state.space_access_orchestrator().as_deref())
+            .space_access_state(state.space_access_facade().as_deref())
             .await,
     )
     .into_response()

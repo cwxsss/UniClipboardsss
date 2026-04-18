@@ -14,8 +14,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::space_access::SpaceAccessOrchestrator;
 use uc_app::usecases::{CoreUseCases, SessionReadyEmitter};
+use uc_application::space_access::SpaceAccessFacade;
 
 use crate::api::auth::load_or_create_auth_token;
 use crate::api::event_emitter::DaemonApiEventEmitter;
@@ -136,7 +136,7 @@ pub struct DaemonApp {
     state: Arc<RwLock<RuntimeState>>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
     api_pairing_host: Option<Arc<DaemonPairingHost>>,
-    space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
+    space_access_facade: Option<Arc<SpaceAccessFacade>>,
     cancel: CancellationToken,
     // Deferred services: clipboard-watcher, inbound-clipboard-sync, and peer-discovery
     // are deferred until the GUI signals ready (--gui-managed) or setup completes (uninitialized).
@@ -167,7 +167,7 @@ impl DaemonApp {
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         api_pairing_host: Option<Arc<DaemonPairingHost>>,
-        space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
+        space_access_facade: Option<Arc<SpaceAccessFacade>>,
     ) -> Self {
         Self {
             services,
@@ -175,7 +175,7 @@ impl DaemonApp {
             state,
             event_tx,
             api_pairing_host,
-            space_access_orchestrator,
+            space_access_facade,
             cancel: CancellationToken::new(),
             deferred_services: Vec::new(),
             deferred_ready_notify: None,
@@ -200,7 +200,7 @@ impl DaemonApp {
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         api_pairing_host: Option<Arc<DaemonPairingHost>>,
-        space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
+        space_access_facade: Option<Arc<SpaceAccessFacade>>,
         _encryption_unlocked: bool,
         deferred_services: Vec<Arc<dyn DaemonService>>,
         deferred_ready_notify: Option<Arc<tokio::sync::Notify>>,
@@ -220,7 +220,7 @@ impl DaemonApp {
             state,
             event_tx,
             api_pairing_host,
-            space_access_orchestrator,
+            space_access_facade,
             cancel: CancellationToken::new(),
             deferred_services,
             deferred_ready_notify,
@@ -269,7 +269,7 @@ impl DaemonApp {
         // emit to the same broadcast channel that WebSocket subscribers receive from.
         api_state.event_tx = self.event_tx.clone();
         let api_state = api_state.with_setup(self.runtime.setup_orchestrator().clone());
-        let api_state = match &self.space_access_orchestrator {
+        let api_state = match &self.space_access_facade {
             Some(sao) => api_state.with_space_access(sao.clone()),
             None => api_state,
         };

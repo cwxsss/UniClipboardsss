@@ -553,7 +553,7 @@ async fn build_snapshot_event(
         ws_topic::SPACE_ACCESS => {
             let space_access_state = state
                 .query_service
-                .space_access_state(state.space_access_orchestrator().as_deref())
+                .space_access_state(state.space_access_facade().as_deref())
                 .await;
             snapshot_event(
                 ws_topic::SPACE_ACCESS,

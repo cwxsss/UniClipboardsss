@@ -23,7 +23,7 @@ use uc_app::usecases::SetupOrchestrator;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use uc_app::usecases::space_access::SpaceAccessOrchestrator;
+use uc_application::space_access::SpaceAccessFacade;
 use uc_daemon_contract::constants::pairing_error_code;
 
 use crate::api::auth::{build_connection_info, DaemonAuthToken, DaemonConnectionInfo};
@@ -46,7 +46,7 @@ pub struct DaemonApiState {
     pub runtime: Option<Arc<CoreRuntime>>,
     pub pairing_host: Option<Arc<DaemonPairingHost>>,
     pub setup_orchestrator: Option<Arc<SetupOrchestrator>>,
-    pub space_access_orchestrator: Option<Arc<SpaceAccessOrchestrator>>,
+    pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
     /// Gate controlling clipboard capture in the daemon.
     /// When set to true, clipboard monitoring becomes active.
@@ -75,7 +75,7 @@ impl DaemonApiState {
             runtime,
             pairing_host: None,
             setup_orchestrator: None,
-            space_access_orchestrator: None,
+            space_access_facade: None,
             event_tx,
             clipboard_capture_gate: None,
             deferred_ready_notify: None,
@@ -107,16 +107,13 @@ impl DaemonApiState {
         self.setup_orchestrator.clone()
     }
 
-    pub fn with_space_access(
-        mut self,
-        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
-    ) -> Self {
-        self.space_access_orchestrator = Some(space_access_orchestrator);
+    pub fn with_space_access(mut self, space_access_facade: Arc<SpaceAccessFacade>) -> Self {
+        self.space_access_facade = Some(space_access_facade);
         self
     }
 
-    pub fn space_access_orchestrator(&self) -> Option<Arc<SpaceAccessOrchestrator>> {
-        self.space_access_orchestrator.clone()
+    pub fn space_access_facade(&self) -> Option<Arc<SpaceAccessFacade>> {
+        self.space_access_facade.clone()
     }
 
     pub fn with_clipboard_gate(mut self, gate: Arc<AtomicBool>) -> Self {

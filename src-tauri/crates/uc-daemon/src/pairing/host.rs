@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::space_access::{
-    SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessOrchestrator,
+    SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessFacade,
 };
 use uc_app::usecases::SetupOrchestrator;
 use uc_application::pairing::PairingAction;
@@ -110,7 +110,7 @@ pub struct DaemonPairingHost {
     pairing_facade: Arc<PairingFacade>,
     pairing_action_rx: Mutex<Option<mpsc::Receiver<PairingAction>>>,
     state: Arc<RwLock<RuntimeState>>,
-    space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    space_access_facade: Arc<SpaceAccessFacade>,
     key_slot_store: Arc<dyn KeySlotStore>,
     trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
     discoverability: Arc<LeaseRegistry>,
@@ -125,7 +125,7 @@ impl DaemonPairingHost {
         pairing_facade: Arc<PairingFacade>,
         pairing_action_rx: mpsc::Receiver<PairingAction>,
         state: Arc<RwLock<RuntimeState>>,
-        space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+        space_access_facade: Arc<SpaceAccessFacade>,
         key_slot_store: Arc<dyn KeySlotStore>,
         trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
@@ -135,7 +135,7 @@ impl DaemonPairingHost {
             pairing_facade,
             pairing_action_rx: Mutex::new(Some(pairing_action_rx)),
             state,
-            space_access_orchestrator,
+            space_access_facade,
             key_slot_store,
             trusted_peer_repo,
             discoverability: Arc::new(LeaseRegistry::default()),
@@ -349,7 +349,7 @@ impl DaemonPairingHost {
             .await
             .context("failed to subscribe to pairing domain events")?;
         let space_access_events =
-            SpaceAccessEventPort::subscribe(self.space_access_orchestrator.as_ref())
+            SpaceAccessEventPort::subscribe(self.space_access_facade.as_ref())
                 .await
                 .context("failed to subscribe to space access events")?;
 
@@ -360,7 +360,7 @@ impl DaemonPairingHost {
                 self.runtime.clone(),
                 self.runtime.setup_orchestrator().clone(),
                 self.pairing_facade.clone(),
-                self.space_access_orchestrator.clone(),
+                self.space_access_facade.clone(),
                 self.key_slot_store.clone(),
                 self.trusted_peer_repo.clone(),
                 self.state.clone(),
@@ -388,7 +388,7 @@ impl DaemonPairingHost {
             run_pairing_protocol_loop(
                 self.runtime.clone(),
                 self.runtime.setup_orchestrator().clone(),
-                self.space_access_orchestrator.clone(),
+                self.space_access_facade.clone(),
                 self.pairing_facade.clone(),
                 self.state.clone(),
                 self.active_session_id.clone(),
@@ -601,7 +601,7 @@ async fn run_pairing_action_loop(
     runtime: Arc<CoreRuntime>,
     setup_orchestrator: Arc<SetupOrchestrator>,
     pairing_facade: Arc<PairingFacade>,
-    space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    space_access_facade: Arc<SpaceAccessFacade>,
     key_slot_store: Arc<dyn KeySlotStore>,
     trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
     state: Arc<RwLock<RuntimeState>>,
@@ -754,17 +754,17 @@ async fn run_pairing_action_loop(
                                     }
                                 };
 
-                                let context = space_access_orchestrator.context();
-                                let mut guard = context.lock().await;
-                                guard.peer_device_name = peer.device_name.clone();
-                                guard.peer_fingerprint = fingerprint;
+                                space_access_facade
+                                    .set_peer_identity(peer.device_name.clone(), fingerprint)
+                                    .await;
                             }
                         }
 
                         if success && role == Some(PairingRole::Responder) {
                             if let Some(peer) = peer_info.as_ref() {
-                                let context = space_access_orchestrator.context();
-                                context.lock().await.sponsor_peer_id = Some(peer.peer_id.clone());
+                                space_access_facade
+                                    .set_sponsor_peer_id(Some(peer.peer_id.clone()))
+                                    .await;
                                 match key_slot_store.load().await {
                                     Ok(keyslot_file) => {
                                         if matches!(
@@ -782,7 +782,7 @@ async fn run_pairing_action_loop(
                                                 Ok(_) => {
                                                     broadcast_space_access_state_changed(
                                                         &event_tx,
-                                                        &space_access_orchestrator.get_state().await,
+                                                        &space_access_facade.get_state().await,
                                                     );
                                                 }
                                                 Err(err) => {
@@ -1165,7 +1165,7 @@ async fn run_pairing_domain_event_loop(
 async fn run_pairing_protocol_loop(
     runtime: Arc<CoreRuntime>,
     setup_orchestrator: Arc<SetupOrchestrator>,
-    space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
+    space_access_facade: Arc<SpaceAccessFacade>,
     pairing_facade: Arc<PairingFacade>,
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
@@ -1199,7 +1199,7 @@ async fn run_pairing_protocol_loop(
                                 NetworkEvent::PairingMessageReceived { peer_id, message } => {
                                     handle_pairing_message(
                                         setup_orchestrator.as_ref(),
-                                        space_access_orchestrator.as_ref(),
+                                        space_access_facade.as_ref(),
                                         pairing_facade.as_ref(),
                                         &state,
                                         &active_session_id,
@@ -1280,7 +1280,7 @@ async fn run_pairing_session_sweep_loop(
 )]
 async fn handle_pairing_message(
     setup_orchestrator: &SetupOrchestrator,
-    space_access_orchestrator: &SpaceAccessOrchestrator,
+    space_access_facade: &SpaceAccessFacade,
     pairing_facade: &PairingFacade,
     state: &Arc<RwLock<RuntimeState>>,
     active_session_id: &Arc<RwLock<Option<String>>>,
@@ -1485,7 +1485,7 @@ async fn handle_pairing_message(
                             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
                         broadcast_space_access_state_changed(
                             event_tx,
-                            &space_access_orchestrator.get_state().await,
+                            &space_access_facade.get_state().await,
                         );
                         return Ok(());
                     }
@@ -1506,7 +1506,7 @@ async fn handle_pairing_message(
                             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
                         broadcast_space_access_state_changed(
                             event_tx,
-                            &space_access_orchestrator.get_state().await,
+                            &space_access_facade.get_state().await,
                         );
                         return Ok(());
                     }
