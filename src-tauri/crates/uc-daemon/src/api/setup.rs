@@ -5,7 +5,7 @@
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use uc_core::setup::SetupState;
+use uc_application::setup::SetupState;
 use utoipa;
 
 use crate::api::dto::error::ApiError;

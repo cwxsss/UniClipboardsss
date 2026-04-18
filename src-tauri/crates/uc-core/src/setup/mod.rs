@@ -1,17 +1,11 @@
 //! Setup domain module.
 //!
-//! This module defines the setup state machine types.
+//! Only `SetupStatus` (the persistable completion flag, data contract for
+//! `SetupStatusPort`) lives here. The rest of the setup flow — state
+//! machine, events, actions, errors, event port — moved to
+//! `uc-application::setup`, since `uc-core/AGENTS.md` §9.1 puts setup
+//! flow orchestration outside core.
 
-pub mod action;
-pub mod error;
-pub mod event;
-pub mod state;
-pub mod state_machine;
 pub mod status;
 
-pub use action::SetupAction;
-pub use error::SetupError;
-pub use event::SetupEvent;
-pub use state::SetupState;
-pub use state_machine::SetupStateMachine;
 pub use status::SetupStatus;

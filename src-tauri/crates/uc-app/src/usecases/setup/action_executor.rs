@@ -11,12 +11,15 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
+use uc_application::setup::{
+    SetupAction, SetupError as SetupDomainError, SetupEvent, SetupEventPort, SetupState,
+    SetupStateMachine,
+};
 use uc_core::{
     crypto::{model::Passphrase, SecretString},
     ids::SessionId,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
-    ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, TimerPort},
-    setup::{SetupAction, SetupError as SetupDomainError, SetupEvent, SetupState},
+    ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, TimerPort},
     space_access::{
         event::SpaceAccessEvent,
         state::{DenyReason, SpaceAccessState},
@@ -389,8 +392,7 @@ impl SetupActionExecutor {
 
                 let _dispatch_guard = context.acquire_dispatch_lock().await;
                 let current = context.get_state().await;
-                let (next, actions) =
-                    uc_core::setup::SetupStateMachine::transition(current, setup_event);
+                let (next, actions) = SetupStateMachine::transition(current, setup_event);
 
                 for action in actions {
                     if matches!(action, SetupAction::MarkSetupComplete) {

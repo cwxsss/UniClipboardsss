@@ -769,7 +769,7 @@ async fn run_pairing_action_loop(
                                     Ok(keyslot_file) => {
                                         if matches!(
                                             setup_orchestrator.get_state().await,
-                                            uc_core::setup::SetupState::Completed
+                                            uc_application::setup::SetupState::Completed
                                         ) {
                                             match setup_orchestrator
                                                 .start_completed_host_sponsor_authorization(

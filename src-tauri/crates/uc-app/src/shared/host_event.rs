@@ -13,8 +13,8 @@
 //! - [`HostEventEmitterPort`] is synchronous (fire-and-forget semantics).
 //! - Emit failures are best-effort: callers log the error and continue.
 
+use uc_application::setup::SetupState;
 use uc_core::file_transfer::FileTransferDirection;
-use uc_core::setup::SetupState;
 
 // ---------------------------------------------------------------------------
 // ClipboardOriginKind

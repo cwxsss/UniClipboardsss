@@ -38,7 +38,6 @@ pub mod search;
 pub mod security;
 pub mod settings;
 pub mod setup;
-pub mod setup_event_port;
 pub mod space;
 mod timer;
 
@@ -77,4 +76,3 @@ pub use security::transfer_crypto::{
 };
 pub use settings::{SettingsMigrationPort, SettingsPort};
 pub use setup::SetupStatusPort;
-pub use setup_event_port::SetupEventPort;

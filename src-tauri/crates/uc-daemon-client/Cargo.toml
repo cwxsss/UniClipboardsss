@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Workspace crates
+uc-application = { path = "../uc-application" }
 uc-core = { path = "../uc-core" }
 uc-daemon-contract = { path = "../uc-daemon-contract" }
 uc-daemon-local = { path = "../uc-daemon-local" }

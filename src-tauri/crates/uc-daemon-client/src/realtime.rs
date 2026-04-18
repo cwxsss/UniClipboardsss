@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use uc_core::setup::SetupState;
+use uc_application::setup::SetupState;
 use uc_core::space_access::state::SpaceAccessState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

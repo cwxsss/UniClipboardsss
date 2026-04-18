@@ -3,5 +3,6 @@
 pub mod file_transfer;
 pub mod membership;
 pub mod pairing;
+pub mod setup;
 pub mod space_access;
 pub mod trusted_peer;

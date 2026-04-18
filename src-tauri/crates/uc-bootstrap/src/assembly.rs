@@ -25,6 +25,7 @@ use uc_app::shared::host_event::{HostEvent, HostEventEmitterPort, SetupHostEvent
 use uc_app::usecases::ResolveConnectionPolicy;
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
 use uc_application::pairing::PairingConfig;
+use uc_application::setup::SetupEventPort;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
@@ -33,7 +34,6 @@ use uc_core::ports::clipboard::{
     ClipboardChangeOriginPort, ClipboardRepresentationNormalizerPort, RepresentationCachePort,
     SpoolQueuePort, SpoolRequest,
 };
-use uc_core::ports::SetupEventPort;
 use uc_core::ports::*;
 use uc_core::settings::model::Settings;
 use uc_infra::blob::{BlobRepositoryPort, BlobStorePort, BlobWriter, FilesystemBlobStore};
@@ -176,7 +176,7 @@ impl HostEventSetupPort {
 impl SetupEventPort for HostEventSetupPort {
     async fn emit_setup_state_changed(
         &self,
-        state: uc_core::setup::SetupState,
+        state: uc_application::setup::SetupState,
         session_id: Option<String>,
     ) {
         let emitter = self

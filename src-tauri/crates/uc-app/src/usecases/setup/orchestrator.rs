@@ -11,6 +11,7 @@ use rand::RngCore;
 use tokio::sync::Mutex;
 use tracing::{error, info, info_span, warn, Instrument};
 
+use uc_application::setup::{SetupEvent, SetupEventPort, SetupState, SetupStateMachine};
 use uc_core::{
     crypto::{
         model::{KeySlot, KeySlotFile, Passphrase},
@@ -19,11 +20,8 @@ use uc_core::{
     ids::{SessionId, SpaceId},
     ports::space::CryptoPort,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
-    ports::{
-        DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupEventPort, SetupStatusPort,
-        TimerPort,
-    },
-    setup::{SetupEvent, SetupState, SetupStateMachine, SetupStatus},
+    ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort},
+    setup::SetupStatus,
     space_access::{
         event::SpaceAccessEvent,
         state::{DenyReason, SpaceAccessState},

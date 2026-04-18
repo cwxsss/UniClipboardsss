@@ -9,10 +9,10 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::{CoreUseCases, SetupOrchestrator};
+use uc_application::setup::SetupState;
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::clipboard::ClipboardIntegrationMode;
 use uc_core::pairing::PairedDevice;
-use uc_core::setup::SetupState;
 use uc_core::space_access::state::SpaceAccessState;
 
 use crate::api::dto::pairing::PairingSessionSummaryDto;

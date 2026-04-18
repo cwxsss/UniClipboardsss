@@ -1,4 +1,6 @@
-use crate::{crypto::SecretString, setup::SetupError};
+use uc_core::crypto::SecretString;
+
+use crate::setup::SetupError;
 
 #[derive(Debug, PartialEq)]
 pub enum SetupEvent {
