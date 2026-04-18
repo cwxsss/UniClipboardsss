@@ -98,9 +98,6 @@ pub struct PairingOrchestrator {
     protocol_handler: PairingProtocolHandler,
 }
 
-/// Re-export PairingPeerInfo as a public type for API compatibility.
-pub use super::session_manager::PairingPeerInfo;
-
 impl PairingOrchestrator {
     /// Create a new pairing orchestrator.
     ///
@@ -679,11 +676,6 @@ impl PairingOrchestrator {
     /// Get role for a session.
     pub async fn get_session_role(&self, session_id: &str) -> Option<PairingRole> {
         self.session_manager.get_session_role(session_id).await
-    }
-
-    /// Return whether a session currently exists in the orchestrator.
-    pub async fn has_session(&self, session_id: &str) -> bool {
-        self.session_manager.has_session(session_id).await
     }
 
     /// Return whether a session exists **and** is still in a non-terminal state.

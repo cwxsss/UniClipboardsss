@@ -963,7 +963,7 @@ use uc_app::usecases::{
     DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, SessionReadyEmitter,
     SetupOrchestrator, SetupPairingFacadePort,
 };
-use uc_application::pairing::PairingOrchestrator;
+use uc_application::pairing::PairingFacade;
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{DiscoveryPort, TimerPort};
 use uc_core::TrustedPeerRepositoryPort;
@@ -993,7 +993,7 @@ pub struct SetupAssemblyPorts {
 impl SetupAssemblyPorts {
     /// Create a bundle using the peer-directory port as the discovery adapter.
     pub fn from_network(
-        pairing_orchestrator: Arc<PairingOrchestrator>,
+        pairing_facade: Arc<PairingFacade>,
         space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
         peers: Arc<dyn uc_core::ports::PeerDirectoryPort>,
         device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
@@ -1012,7 +1012,7 @@ impl SetupAssemblyPorts {
             }
         }
         Self {
-            setup_pairing_facade: pairing_orchestrator,
+            setup_pairing_facade: pairing_facade,
             space_access_orchestrator,
             discovery_port: Arc::new(NetworkDiscoveryPort { peers }),
             device_announcer,

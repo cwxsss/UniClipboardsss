@@ -150,11 +150,6 @@ impl PairingSessionManager {
             .and_then(|ctx| ctx.state_machine.role())
     }
 
-    /// Return whether a session exists in the manager.
-    pub(crate) async fn has_session(&self, session_id: &str) -> bool {
-        self.sessions.read().await.contains_key(session_id)
-    }
-
     /// Return whether a session exists **and** is still in a non-terminal state
     /// (i.e. not `Failed`, `Cancelled`, or `Paired`).
     pub(crate) async fn has_active_session(&self, session_id: &str) -> bool {

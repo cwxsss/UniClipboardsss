@@ -14,7 +14,7 @@ use uc_app::usecases::space_access::{
 };
 use uc_app::usecases::SetupOrchestrator;
 use uc_application::pairing::PairingAction;
-use uc_application::pairing::{PairingDomainEvent, PairingEventPort, PairingOrchestrator};
+use uc_application::pairing::{PairingDomainEvent, PairingEventPort, PairingFacade};
 use uc_core::crypto::model::{KeySlot, KeySlotFile};
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
@@ -107,7 +107,7 @@ impl std::error::Error for DaemonPairingHostError {}
 
 pub struct DaemonPairingHost {
     runtime: Arc<CoreRuntime>,
-    pairing_orchestrator: Arc<PairingOrchestrator>,
+    pairing_facade: Arc<PairingFacade>,
     pairing_action_rx: Mutex<Option<mpsc::Receiver<PairingAction>>>,
     state: Arc<RwLock<RuntimeState>>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
@@ -121,7 +121,7 @@ pub struct DaemonPairingHost {
 impl DaemonPairingHost {
     pub fn new(
         runtime: Arc<CoreRuntime>,
-        pairing_orchestrator: Arc<PairingOrchestrator>,
+        pairing_facade: Arc<PairingFacade>,
         pairing_action_rx: mpsc::Receiver<PairingAction>,
         state: Arc<RwLock<RuntimeState>>,
         space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
@@ -130,7 +130,7 @@ impl DaemonPairingHost {
     ) -> Self {
         Self {
             runtime,
-            pairing_orchestrator,
+            pairing_facade,
             pairing_action_rx: Mutex::new(Some(pairing_action_rx)),
             state,
             space_access_orchestrator,
@@ -190,11 +190,7 @@ impl DaemonPairingHost {
 
     pub async fn reset_setup_state(&self) {
         if let Some(session_id) = self.active_session_id().await {
-            if let Err(error) = self
-                .pairing_orchestrator
-                .user_reject_pairing(&session_id)
-                .await
-            {
+            if let Err(error) = self.pairing_facade.reject_pairing(&session_id).await {
                 warn!(
                     error = %error,
                     session_id = %session_id,
@@ -222,7 +218,7 @@ impl DaemonPairingHost {
         self.reserve_session_slot(None).await?;
 
         match self
-            .pairing_orchestrator
+            .pairing_facade
             .initiate_pairing(peer_id.clone())
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))
@@ -258,8 +254,8 @@ impl DaemonPairingHost {
     pub async fn accept_pairing(&self, session_id: &str) -> Result<(), DaemonPairingHostError> {
         self.require_session(session_id).await?;
         self.reserve_session_slot(Some(session_id)).await?;
-        self.pairing_orchestrator
-            .user_accept_pairing(session_id)
+        self.pairing_facade
+            .accept_pairing(session_id)
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
         Ok(())
@@ -268,8 +264,8 @@ impl DaemonPairingHost {
     pub async fn reject_pairing(&self, session_id: &str) -> Result<(), DaemonPairingHostError> {
         self.require_session(session_id).await?;
         self.reserve_session_slot(Some(session_id)).await?;
-        self.pairing_orchestrator
-            .user_reject_pairing(session_id)
+        self.pairing_facade
+            .reject_pairing(session_id)
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
         Ok(())
@@ -278,8 +274,8 @@ impl DaemonPairingHost {
     pub async fn cancel_pairing(&self, session_id: &str) -> Result<(), DaemonPairingHostError> {
         self.require_session(session_id).await?;
         self.reserve_session_slot(Some(session_id)).await?;
-        self.pairing_orchestrator
-            .user_cancel_pairing(session_id)
+        self.pairing_facade
+            .cancel_pairing(session_id)
             .await
             .map_err(|err| DaemonPairingHostError::Internal(err.to_string()))?;
         Ok(())
@@ -308,7 +304,7 @@ impl DaemonPairingHost {
 
         let device_name = request.device_name.clone();
         match self
-            .pairing_orchestrator
+            .pairing_facade
             .handle_incoming_request(peer_id.clone(), request)
             .await
         {
@@ -346,7 +342,7 @@ impl DaemonPairingHost {
             .await
             .take()
             .context("daemon pairing host already running")?;
-        let domain_events = PairingEventPort::subscribe(self.pairing_orchestrator.as_ref())
+        let domain_events = PairingEventPort::subscribe(self.pairing_facade.as_ref())
             .await
             .context("failed to subscribe to pairing domain events")?;
         let space_access_events =
@@ -360,7 +356,7 @@ impl DaemonPairingHost {
             run_pairing_action_loop(
                 self.runtime.clone(),
                 self.runtime.setup_orchestrator().clone(),
-                self.pairing_orchestrator.clone(),
+                self.pairing_facade.clone(),
                 self.space_access_orchestrator.clone(),
                 self.key_slot_store.clone(),
                 self.state.clone(),
@@ -374,7 +370,7 @@ impl DaemonPairingHost {
 
         tasks.spawn(
             run_pairing_domain_event_loop(
-                self.pairing_orchestrator.clone(),
+                self.pairing_facade.clone(),
                 self.state.clone(),
                 self.active_session_id.clone(),
                 domain_events,
@@ -389,7 +385,7 @@ impl DaemonPairingHost {
                 self.runtime.clone(),
                 self.runtime.setup_orchestrator().clone(),
                 self.space_access_orchestrator.clone(),
-                self.pairing_orchestrator.clone(),
+                self.pairing_facade.clone(),
                 self.state.clone(),
                 self.active_session_id.clone(),
                 self.discoverability.clone(),
@@ -401,7 +397,7 @@ impl DaemonPairingHost {
         );
 
         tasks.spawn(run_pairing_session_sweep_loop(
-            self.pairing_orchestrator.clone(),
+            self.pairing_facade.clone(),
             self.discoverability.clone(),
             self.participant_readiness.clone(),
             cancel.child_token(),
@@ -551,11 +547,7 @@ impl DaemonPairingHost {
     async fn require_session(&self, session_id: &str) -> Result<(), DaemonPairingHostError> {
         // First check: does the orchestrator still have an active (non-terminal)
         // session?  If yes, the session is valid.
-        if self
-            .pairing_orchestrator
-            .has_active_session(session_id)
-            .await
-        {
+        if self.pairing_facade.has_active_session(session_id).await {
             return Ok(());
         }
 
@@ -579,7 +571,7 @@ impl DaemonPairingHost {
     }
 
     async fn session_peer_id(&self, session_id: &str) -> Option<String> {
-        if let Some(peer) = self.pairing_orchestrator.get_session_peer(session_id).await {
+        if let Some(peer) = self.pairing_facade.get_session_peer(session_id).await {
             return Some(peer.peer_id);
         }
         self.state
@@ -590,7 +582,7 @@ impl DaemonPairingHost {
     }
 
     async fn session_device_name(&self, session_id: &str) -> Option<String> {
-        if let Some(peer) = self.pairing_orchestrator.get_session_peer(session_id).await {
+        if let Some(peer) = self.pairing_facade.get_session_peer(session_id).await {
             return peer.device_name;
         }
         self.state
@@ -604,7 +596,7 @@ impl DaemonPairingHost {
 async fn run_pairing_action_loop(
     runtime: Arc<CoreRuntime>,
     setup_orchestrator: Arc<SetupOrchestrator>,
-    pairing_orchestrator: Arc<PairingOrchestrator>,
+    pairing_facade: Arc<PairingFacade>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
     key_slot_store: Arc<dyn KeySlotStore>,
     state: Arc<RwLock<RuntimeState>>,
@@ -646,7 +638,7 @@ async fn run_pairing_action_loop(
                                     error_kind = "transport_failure",
                                 );
                                 signal_pairing_transport_failure(
-                                    pairing_orchestrator.as_ref(),
+                                    pairing_facade.as_ref(),
                                     &state,
                                     &active_session_id,
                                     &event_tx,
@@ -667,7 +659,7 @@ async fn run_pairing_action_loop(
                                     error_kind = "transport_failure",
                                 );
                                 signal_pairing_transport_failure(
-                                    pairing_orchestrator.as_ref(),
+                                    pairing_facade.as_ref(),
                                     &state,
                                     &active_session_id,
                                     &event_tx,
@@ -719,8 +711,8 @@ async fn run_pairing_action_loop(
                         error,
                         abort_reason: _,
                     } => {
-                        let peer_info = pairing_orchestrator.get_session_peer(&session_id).await;
-                        let role = pairing_orchestrator.get_session_role(&session_id).await;
+                        let peer_info = pairing_facade.get_session_peer(&session_id).await;
+                        let role = pairing_facade.get_session_role(&session_id).await;
 
                         if !success {
                             if let Err(err) = pairing_transport
@@ -802,7 +794,7 @@ async fn run_pairing_action_loop(
 }
 
 async fn run_pairing_domain_event_loop(
-    pairing_orchestrator: Arc<PairingOrchestrator>,
+    pairing_facade: Arc<PairingFacade>,
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
     mut domain_events: mpsc::Receiver<PairingDomainEvent>,
@@ -831,7 +823,7 @@ async fn run_pairing_domain_event_loop(
                             peer_id = %peer_id,
                         );
                         async {
-                            let device_name = pairing_orchestrator
+                            let device_name = pairing_facade
                                 .get_session_peer(&session_id)
                                 .await
                                 .and_then(|peer| peer.device_name);
@@ -940,7 +932,7 @@ async fn run_pairing_domain_event_loop(
                             peer_id = %peer_id,
                         );
                         async {
-                            let device_name = pairing_orchestrator
+                            let device_name = pairing_facade
                                 .get_session_peer(&session_id)
                                 .await
                                 .and_then(|peer| peer.device_name);
@@ -1007,7 +999,7 @@ async fn run_pairing_domain_event_loop(
                             peer_id = %peer_id,
                         );
                         async {
-                            let device_name = pairing_orchestrator
+                            let device_name = pairing_facade
                                 .get_session_peer(&session_id)
                                 .await
                                 .and_then(|peer| peer.device_name);
@@ -1067,7 +1059,7 @@ async fn run_pairing_domain_event_loop(
                             peer_id = %peer_id,
                         );
                         async {
-                            let device_name = pairing_orchestrator
+                            let device_name = pairing_facade
                                 .get_session_peer(&session_id)
                                 .await
                                 .and_then(|peer| peer.device_name);
@@ -1134,7 +1126,7 @@ async fn run_pairing_protocol_loop(
     runtime: Arc<CoreRuntime>,
     setup_orchestrator: Arc<SetupOrchestrator>,
     space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
-    pairing_orchestrator: Arc<PairingOrchestrator>,
+    pairing_facade: Arc<PairingFacade>,
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
     discoverability: Arc<LeaseRegistry>,
@@ -1168,7 +1160,7 @@ async fn run_pairing_protocol_loop(
                                     handle_pairing_message(
                                         setup_orchestrator.as_ref(),
                                         space_access_orchestrator.as_ref(),
-                                        pairing_orchestrator.as_ref(),
+                                        pairing_facade.as_ref(),
                                         &state,
                                         &active_session_id,
                                         &pairing_transport,
@@ -1182,7 +1174,7 @@ async fn run_pairing_protocol_loop(
                                 }
                                 NetworkEvent::PairingFailed { session_id, peer_id, error } => {
                                     signal_pairing_transport_failure(
-                                        pairing_orchestrator.as_ref(),
+                                        pairing_facade.as_ref(),
                                         &state,
                                         &active_session_id,
                                         &event_tx,
@@ -1219,7 +1211,7 @@ async fn run_pairing_protocol_loop(
 }
 
 async fn run_pairing_session_sweep_loop(
-    pairing_orchestrator: Arc<PairingOrchestrator>,
+    pairing_facade: Arc<PairingFacade>,
     discoverability: Arc<LeaseRegistry>,
     participant_readiness: Arc<LeaseRegistry>,
     cancel: CancellationToken,
@@ -1230,7 +1222,7 @@ async fn run_pairing_session_sweep_loop(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                pairing_orchestrator.cleanup_expired_sessions().await;
+                pairing_facade.cleanup_expired_sessions().await;
                 let _ = discoverability.is_active().await;
                 let _ = participant_readiness.is_active().await;
             }
@@ -1249,7 +1241,7 @@ async fn run_pairing_session_sweep_loop(
 async fn handle_pairing_message(
     setup_orchestrator: &SetupOrchestrator,
     space_access_orchestrator: &SpaceAccessOrchestrator,
-    pairing_orchestrator: &PairingOrchestrator,
+    pairing_facade: &PairingFacade,
     state: &Arc<RwLock<RuntimeState>>,
     active_session_id: &Arc<RwLock<Option<String>>>,
     pairing_transport: &Arc<dyn uc_core::ports::PairingTransportPort>,
@@ -1341,7 +1333,7 @@ async fn handle_pairing_message(
                 "forwarding inbound pairing request to orchestrator"
             );
 
-            if let Err(err) = pairing_orchestrator
+            if let Err(err) = pairing_facade
                 .handle_incoming_request(peer_id.clone(), request)
                 .await
             {
@@ -1356,45 +1348,41 @@ async fn handle_pairing_message(
         }
         PairingMessage::Challenge(challenge) => {
             let session_id = challenge.session_id.clone();
-            pairing_orchestrator
+            pairing_facade
                 .handle_challenge(&session_id, &peer_id, challenge)
                 .await?;
         }
         PairingMessage::KeyslotOffer(offer) => {
             let session_id = offer.session_id.clone();
-            pairing_orchestrator
+            pairing_facade
                 .handle_keyslot_offer(&session_id, &peer_id, offer)
                 .await?;
         }
         PairingMessage::ChallengeResponse(response) => {
             let session_id = response.session_id.clone();
-            pairing_orchestrator
+            pairing_facade
                 .handle_challenge_response(&session_id, &peer_id, response)
                 .await?;
         }
         PairingMessage::Response(response) => {
             let session_id = response.session_id.clone();
-            pairing_orchestrator
+            pairing_facade
                 .handle_response(&session_id, &peer_id, response)
                 .await?;
         }
         PairingMessage::Confirm(confirm) => {
             let session_id = confirm.session_id.clone();
-            pairing_orchestrator
+            pairing_facade
                 .handle_confirm(&session_id, &peer_id, confirm)
                 .await?;
         }
         PairingMessage::Reject(reject) => {
             let session_id = reject.session_id.clone();
-            pairing_orchestrator
-                .handle_reject(&session_id, &peer_id)
-                .await?;
+            pairing_facade.handle_reject(&session_id, &peer_id).await?;
         }
         PairingMessage::Cancel(cancel) => {
             let session_id = cancel.session_id.clone();
-            pairing_orchestrator
-                .handle_cancel(&session_id, &peer_id)
-                .await?;
+            pairing_facade.handle_cancel(&session_id, &peer_id).await?;
         }
         PairingMessage::Busy(busy) => {
             if let Some(reason) = busy.reason.as_deref() {
@@ -1412,7 +1400,7 @@ async fn handle_pairing_message(
                                 return Ok(());
                             }
                         };
-                        pairing_orchestrator
+                        pairing_facade
                             .handle_keyslot_offer(
                                 &busy.session_id,
                                 &peer_id,
@@ -1495,7 +1483,7 @@ async fn handle_pairing_message(
                 }
             }
             let session_id = busy.session_id.clone();
-            pairing_orchestrator
+            pairing_facade
                 .handle_busy(&session_id, &peer_id, busy.reason.clone())
                 .await?;
         }
@@ -1665,7 +1653,7 @@ fn emit_pairing_failure(
 }
 
 async fn signal_pairing_transport_failure(
-    pairing_orchestrator: &PairingOrchestrator,
+    pairing_facade: &PairingFacade,
     state: &Arc<RwLock<RuntimeState>>,
     active_session_id: &Arc<RwLock<Option<String>>>,
     event_tx: &broadcast::Sender<DaemonWsEvent>,
@@ -1704,7 +1692,7 @@ async fn signal_pairing_transport_failure(
     );
     emit_pairing_failure(event_tx, session_id, Some(peer_id.to_string()), &reason);
     clear_active_session_slot(active_session_id, session_id).await;
-    pairing_orchestrator
+    pairing_facade
         .handle_transport_error(session_id, peer_id, reason)
         .await?;
     Ok(())

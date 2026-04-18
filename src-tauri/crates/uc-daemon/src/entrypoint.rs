@@ -64,7 +64,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let daemon_peer_directory = ctx.deps.network_ports.peers.clone();
     let daemon_settings = ctx.deps.settings.clone();
     let setup_ports = SetupAssemblyPorts::from_network(
-        ctx.pairing_orchestrator.clone(),
+        ctx.pairing_facade.clone(),
         ctx.space_access_orchestrator.clone(),
         ctx.deps.network_ports.peers.clone(),
         None,
@@ -250,7 +250,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
 
     let pairing_host = Arc::new(DaemonPairingHost::new(
         runtime.clone(),
-        ctx.pairing_orchestrator.clone(),
+        ctx.pairing_facade.clone(),
         ctx.pairing_action_rx,
         state.clone(),
         ctx.space_access_orchestrator.clone(),

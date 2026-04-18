@@ -68,7 +68,7 @@ fn run_app(ctx: GuiBootstrapContext) {
         background,
         setup_ports,
         storage_paths,
-        pairing_orchestrator: _pairing_orchestrator,
+        pairing_facade: _pairing_facade,
         pairing_action_rx: _pairing_action_rx,
         trusted_peer_repo: _trusted_peer_repo,
         key_slot_store: _key_slot_store,

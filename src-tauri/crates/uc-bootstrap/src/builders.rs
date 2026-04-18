@@ -28,7 +28,7 @@ use uc_app::usecases::{
     DeviceAnnouncer, DeviceNameAnnouncer, LifecycleEventEmitter, LoggingLifecycleEventEmitter,
 };
 use uc_app::AppDeps;
-use uc_application::pairing::{PairingAction, PairingCryptoPorts, PairingOrchestrator};
+use uc_application::pairing::{PairingAction, PairingCryptoPorts, PairingFacade};
 use uc_application::trusted_peer::TrustPeerOrchestrator;
 use uc_core::config::AppConfig;
 use uc_core::ports::PeerDirectoryPort;
@@ -52,7 +52,7 @@ pub struct GuiBootstrapContext {
     pub background: BackgroundRuntimeDeps,
     pub setup_ports: SetupAssemblyPorts,
     pub storage_paths: AppPaths,
-    pub pairing_orchestrator: Arc<PairingOrchestrator>,
+    pub pairing_facade: Arc<PairingFacade>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
     pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     pub key_slot_store: Arc<dyn KeySlotStore>,
@@ -72,7 +72,7 @@ pub struct DaemonBootstrapContext {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
     pub emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-    pub pairing_orchestrator: Arc<PairingOrchestrator>,
+    pub pairing_facade: Arc<PairingFacade>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
     pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     pub space_access_orchestrator: Arc<SpaceAccessOrchestrator>,
@@ -165,7 +165,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         short_code: deps.security.short_code.clone(),
         fingerprint: deps.security.fingerprint.clone(),
     });
-    let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
+    let (pairing_facade, pairing_action_rx) = PairingFacade::new(
         pairing_config,
         trust_peer_orch,
         pairing_device_name,
@@ -174,7 +174,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         pairing_identity_pubkey,
         pairing_crypto,
     );
-    let pairing_orchestrator = Arc::new(pairing_orchestrator);
+    let pairing_facade = Arc::new(pairing_facade);
     let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
 
     let storage_paths = get_storage_paths(&config)?;
@@ -188,7 +188,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     let lifecycle_emitter: Arc<dyn LifecycleEventEmitter> = Arc::new(LoggingLifecycleEventEmitter);
 
     let setup_ports = SetupAssemblyPorts::from_network(
-        pairing_orchestrator.clone(),
+        pairing_facade.clone(),
         space_access_orchestrator.clone(),
         discovery_network,
         device_announcer,
@@ -204,7 +204,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         background,
         setup_ports,
         storage_paths,
-        pairing_orchestrator,
+        pairing_facade,
         pairing_action_rx,
         trusted_peer_repo,
         key_slot_store,
@@ -274,7 +274,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         short_code: deps.security.short_code.clone(),
         fingerprint: deps.security.fingerprint.clone(),
     });
-    let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
+    let (pairing_facade, pairing_action_rx) = PairingFacade::new(
         pairing_config,
         trust_peer_orch,
         pairing_device_name,
@@ -283,7 +283,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         pairing_identity_pubkey,
         pairing_crypto,
     );
-    let pairing_orchestrator = Arc::new(pairing_orchestrator);
+    let pairing_facade = Arc::new(pairing_facade);
     let space_access_orchestrator = Arc::new(SpaceAccessOrchestrator::new());
     let key_slot_store: Arc<dyn KeySlotStore> =
         Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
@@ -292,7 +292,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         deps,
         background,
         emitter_cell,
-        pairing_orchestrator,
+        pairing_facade,
         pairing_action_rx,
         trusted_peer_repo,
         space_access_orchestrator,
