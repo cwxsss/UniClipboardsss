@@ -84,6 +84,7 @@ UI / CLI / Daemon API
 * `uc-app` **不可以依赖**具体 infra 实现类型
 * `uc-app` **不可以自己重新定义领域真相**
 * `uc-app` **不可以承担表示层职责**
+* 对外只暴露 **Facade / UseCase** 作为应用层入口，Orchestrator / StateMachine / SessionManager 等实现细节一律 `pub(crate)` —— 详见 §11.4
 
 ---
 
@@ -599,6 +600,50 @@ Facade 内部可以调用：
 * 十几个 domain object 拼装结果
 * 底层 repository raw data
 * infra event 原始消息
+
+---
+
+## 11.4 对外边界：External → Facade/UseCase → Orchestrator → Ports
+
+每个业务模块对外暴露的入口，**必须**只有 Facade 或 UseCase 两种形态。`Orchestrator` / `StateMachine` / `SessionManager` / 内部协调对象等实现细节，**一律 `pub(crate)`**，不得作为公共类型被外部 crate（daemon / tauri / CLI / 其他应用模块）直接拿到。
+
+```text
+External (daemon / tauri / CLI / 其他 uc-application 模块)
+        ↓
+Facade / UseCase        ← 唯一对外入口（Application Service 层）
+        ↓
+Orchestrator            ← 内部流程编排，pub(crate)
+        ↓
+Ports                   ← uc-core 定义，跨 crate 可见
+```
+
+### 强制规则
+
+* 模块对外 `mod.rs` 的 `pub use` **只允许**导出：
+  * Facade 类型（如 `PairingFacade`、`SetupFacade`、`ClipboardFacade`）
+  * UseCase 类型（如 `CaptureClipboardUseCase`、`SearchClipboardUseCase`）
+  * Command / Query / Result / Error / 显式状态枚举（应用语义）
+  * 明确必要的事件类型 / event port trait（订阅用）
+* **禁止导出** `*Orchestrator` / `*SessionManager` / `*StateMachine` / `*Handler` 等内部协调类型的公共符号
+* Facade 的构造方法内部持有 `Arc<Orchestrator>`、组合 UseCase；外部只能通过 Facade 方法间接驱动 Orchestrator
+* 同一业务模块内部允许 UseCase 以 `pub(crate)` 可见性与 Orchestrator 互相持有引用；这类内部依赖不穿越 crate 边界
+* 如果某个方法语义上只能"直接驱动 Orchestrator"（比如状态查询），也必须在 Facade 上显式加一个 thin method 转发；**不得通过 `pub(crate)` 泄露 Orchestrator 引用给外部**
+
+### 反模式
+
+* 让外部 crate 同时拿到 `Arc<Facade>` 和 `Arc<Orchestrator>` —— 这样 Facade 的封装就是装饰
+* 在 `mod.rs` 写 `pub use orchestrator::*Orchestrator`
+* 在 bootstrap context 中把 `pairing_orchestrator: Arc<PairingOrchestrator>` 暴露出来（应为 `pairing_facade: Arc<PairingFacade>`）
+* 为了测试方便，把 Orchestrator 变成 `pub`（正确做法：在 crate 内对 Orchestrator 写单元测试；对外写 Facade 集成测试）
+
+### 理由
+
+外部消费者看见 Orchestrator = 封装破产：
+1. 流程状态的演进路径分裂成"走 Facade"和"直接调 Orchestrator"两条，真相来源失控（违反 §10.2）
+2. Orchestrator 的内部签名变成事实公共 API，每次重构都要跨 crate 同步改签名
+3. UseCase / Facade thin wrapper 的隔离意义消失，变成冗余的一层
+
+这条规则写死以后，**重构 Orchestrator 内部签名不再是 breaking change**，只要 Facade 方法签名稳定，外部一律无感。
 
 ---
 
