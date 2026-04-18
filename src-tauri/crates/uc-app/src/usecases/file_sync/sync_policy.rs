@@ -2,19 +2,24 @@ use std::sync::Arc;
 
 use tracing::{debug, info, warn};
 use uc_core::network::DiscoveredPeer;
-use uc_core::pairing::resolve_sync_settings;
-use uc_core::ports::{PairedDeviceRepositoryPort, SettingsPort};
+use uc_core::ports::SettingsPort;
 use uc_core::settings::content_type_filter::{is_content_type_allowed, ContentTypeCategory};
-use uc_core::PeerId;
+use uc_core::{DeviceId, MemberRepositoryPort};
 
 /// Filter peers by sync policy for file content.
 ///
-/// Checks global auto_sync, per-device auto_sync, and file content type toggle.
-/// Peers not found in the paired device table are kept (safety fallback).
-/// Errors from settings/repo loads are logged and the peer is kept.
+/// Checks the two global master toggles (`auto_sync`, `file_sync_enabled`),
+/// then for each peer reads `MemberSyncPreferences` via `member_repo`:
+/// the peer is kept only when `send_enabled` is on **and** the file
+/// category is allowed by `send_content_types`.
+///
+/// Peers missing from `member_repo` are dropped — `member_repo` is the
+/// authoritative source of sendable members after phase 3.1/3.2. Infra
+/// errors are logged and the peer is kept (safety fallback for transient
+/// failures).
 pub async fn apply_file_sync_policy(
     settings: &Arc<dyn SettingsPort>,
-    paired_device_repo: &Arc<dyn PairedDeviceRepositoryPort>,
+    member_repo: &Arc<dyn MemberRepositoryPort>,
     peers: &[DiscoveredPeer],
 ) -> Vec<DiscoveredPeer> {
     // Load global settings
@@ -43,36 +48,37 @@ pub async fn apply_file_sync_policy(
 
     let mut result = Vec::with_capacity(peers.len());
     for peer in peers {
-        let peer_id = PeerId::from(peer.peer_id.as_str());
-        match paired_device_repo.get_by_peer_id(&peer_id).await {
-            Ok(Some(device)) => {
-                if let Some(ref gs) = global_settings {
-                    let effective = resolve_sync_settings(&device, &gs.sync);
-                    if !effective.auto_sync {
-                        debug!(
-                            peer_id = %peer.peer_id,
-                            "Skipping file sync: auto_sync disabled"
-                        );
-                        continue;
-                    }
-                    // Check file content type toggle
-                    if !is_content_type_allowed(ContentTypeCategory::File, &effective.content_types)
-                    {
-                        debug!(
-                            peer_id = %peer.peer_id,
-                            "Skipping file sync: file content type disabled"
-                        );
-                        continue;
-                    }
+        let device_id = DeviceId::new(peer.peer_id.as_str());
+        match member_repo.get(&device_id).await {
+            Ok(Some(member)) => {
+                let prefs = &member.sync_preferences;
+                if !prefs.send_enabled {
+                    debug!(
+                        peer_id = %peer.peer_id,
+                        "Skipping file sync: member send_enabled disabled"
+                    );
+                    continue;
+                }
+                if !is_content_type_allowed(ContentTypeCategory::File, &prefs.send_content_types) {
+                    debug!(
+                        peer_id = %peer.peer_id,
+                        "Skipping file sync: file content type disabled for member"
+                    );
+                    continue;
                 }
                 result.push(peer.clone());
             }
-            Ok(None) => result.push(peer.clone()),
+            Ok(None) => {
+                debug!(
+                    peer_id = %peer.peer_id,
+                    "Skipping file sync: peer is not a space member"
+                );
+            }
             Err(err) => {
                 warn!(
                     peer_id = %peer.peer_id,
                     error = %err,
-                    "Failed to load device; proceeding with sync"
+                    "Failed to load space member for file sync policy; proceeding with sync"
                 );
                 result.push(peer.clone());
             }

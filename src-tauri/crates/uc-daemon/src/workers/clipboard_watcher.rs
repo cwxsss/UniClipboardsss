@@ -176,7 +176,6 @@ impl DaemonClipboardChangeHandler {
             deps.device.device_identity.clone(),
             deps.settings.clone(),
             Arc::new(TransferPayloadEncryptorAdapter),
-            deps.device.paired_device_repo.clone(),
             deps.device.member_repo.clone(),
         )
     }
@@ -425,7 +424,6 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                         let deps = self.runtime.wiring_deps();
                         uc_app::usecases::file_sync::SyncOutboundFileUseCase::new(
                             deps.settings.clone(),
-                            deps.device.paired_device_repo.clone(),
                             deps.device.member_repo.clone(),
                             deps.network_ports.peers.clone(),
                             deps.network_ports.file_transfer.clone(),

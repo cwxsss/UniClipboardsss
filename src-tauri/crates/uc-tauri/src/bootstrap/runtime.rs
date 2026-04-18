@@ -403,11 +403,6 @@ impl<'a> AppUseCases<'a> {
                 .clone(),
             self.app_runtime.wiring_deps().settings.clone(),
             Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter),
-            self.app_runtime
-                .wiring_deps()
-                .device
-                .paired_device_repo
-                .clone(),
             self.app_runtime.wiring_deps().device.member_repo.clone(),
         )
     }

@@ -5,9 +5,7 @@ use anyhow::{bail, Context, Result};
 use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
-use uc_core::ports::{
-    FileTransportPort, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort,
-};
+use uc_core::ports::{FileTransportPort, PeerDirectoryPort, SettingsPort};
 use uc_core::MemberRepositoryPort;
 
 use crate::usecases::pairing::list_sendable_peers::ListSendablePeers;
@@ -23,7 +21,6 @@ pub struct SyncOutboundResult {
 
 pub struct SyncOutboundFileUseCase {
     settings: Arc<dyn SettingsPort>,
-    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
     member_repo: Arc<dyn MemberRepositoryPort>,
     peer_directory: Arc<dyn PeerDirectoryPort>,
     file_transport: Arc<dyn FileTransportPort>,
@@ -32,14 +29,12 @@ pub struct SyncOutboundFileUseCase {
 impl SyncOutboundFileUseCase {
     pub fn new(
         settings: Arc<dyn SettingsPort>,
-        paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
         member_repo: Arc<dyn MemberRepositoryPort>,
         peer_directory: Arc<dyn PeerDirectoryPort>,
         file_transport: Arc<dyn FileTransportPort>,
     ) -> Self {
         Self {
             settings,
-            paired_device_repo,
             member_repo,
             peer_directory,
             file_transport,
@@ -102,8 +97,7 @@ impl SyncOutboundFileUseCase {
                     .context("Failed to list sendable peers")?;
 
             // 6. Apply sync policy
-            let eligible =
-                apply_file_sync_policy(&self.settings, &self.paired_device_repo, &peers).await;
+            let eligible = apply_file_sync_policy(&self.settings, &self.member_repo, &peers).await;
 
             if eligible.is_empty() {
                 if peers.is_empty() {

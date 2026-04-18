@@ -11,16 +11,15 @@ use uc_core::network::protocol::{
     BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion,
 };
 use uc_core::network::{ClipboardMessage, ProtocolMessage};
-use uc_core::pairing::resolve_sync_settings;
 use uc_core::ports::{
     ClipboardOutboundTransportPort, DeviceIdentityPort, EncryptionSessionPort,
-    OutboundClipboardFrame, PairedDeviceRepositoryPort, PeerDirectoryPort, SettingsPort,
-    SyncTargetId, SystemClipboardPort, TransferPayloadEncryptorPort,
+    OutboundClipboardFrame, PeerDirectoryPort, SettingsPort, SyncTargetId, SystemClipboardPort,
+    TransferPayloadEncryptorPort,
 };
-use uc_core::MemberRepositoryPort;
+use uc_core::{DeviceId, MemberRepositoryPort};
 
 use crate::usecases::pairing::list_sendable_peers::ListSendablePeers;
-use uc_core::{ClipboardChangeOrigin, PeerId, SystemClipboardSnapshot};
+use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_observability::otlp::propagator::inject_current_context;
 
 pub struct SyncOutboundClipboardUseCase {
@@ -31,7 +30,6 @@ pub struct SyncOutboundClipboardUseCase {
     device_identity: Arc<dyn DeviceIdentityPort>,
     settings: Arc<dyn SettingsPort>,
     transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
-    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
     member_repo: Arc<dyn MemberRepositoryPort>,
 }
 
@@ -44,7 +42,6 @@ impl SyncOutboundClipboardUseCase {
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
         transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
-        paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
         member_repo: Arc<dyn MemberRepositoryPort>,
     ) -> Self {
         Self {
@@ -55,16 +52,23 @@ impl SyncOutboundClipboardUseCase {
             device_identity,
             settings,
             transfer_encryptor,
-            paired_device_repo,
             member_repo,
         }
     }
 
-    /// Filter sendable peers by per-device sync policy (auto_sync + content type).
+    /// Filter sendable peers by per-member sync preferences and content type.
     ///
-    /// Peers not found in the paired device table are kept (safety fallback).
-    /// Errors from settings/repo loads are logged and the peer is kept.
-    /// The snapshot is classified once and the content type check is applied per-peer.
+    /// Applies in order:
+    /// 1. Global master toggles (`SyncSettings.auto_sync`,
+    ///    `FileSyncSettings.file_sync_enabled` for file content).
+    /// 2. Per-member send preferences (`MemberSyncPreferences.send_enabled`
+    ///    + `send_content_types`) read from `member_repo`.
+    ///
+    /// Peers missing from `member_repo` are dropped — after phase 3.2
+    /// `member_repo` is the authoritative source of sendable peers, so a
+    /// miss here indicates the peer was revoked between list-time and
+    /// policy-time. Infra errors on load are logged and the peer is kept
+    /// (safety fallback for transient failures).
     pub async fn apply_sync_policy(
         &self,
         peers: &[uc_core::network::DiscoveredPeer],
@@ -110,40 +114,40 @@ impl SyncOutboundClipboardUseCase {
 
         let mut result = Vec::with_capacity(peers.len());
         for peer in peers {
-            let peer_id = PeerId::from(peer.peer_id.as_str());
-            match self.paired_device_repo.get_by_peer_id(&peer_id).await {
-                Ok(Some(device)) => {
-                    if let Some(ref gs) = global_settings {
-                        let effective = resolve_sync_settings(&device, &gs.sync);
-                        if !effective.auto_sync {
-                            debug!(
-                                peer_id = %peer.peer_id,
-                                "Skipping sync for peer: auto_sync disabled"
-                            );
-                            continue;
-                        }
-                        if !is_content_type_allowed(content_category, &effective.content_types) {
-                            debug!(
-                                peer_id = %peer.peer_id,
-                                content_type = ?content_category,
-                                "Skipping sync for peer: content type disabled"
-                            );
-                            continue;
-                        }
+            let device_id = DeviceId::new(peer.peer_id.as_str());
+            match self.member_repo.get(&device_id).await {
+                Ok(Some(member)) => {
+                    let prefs = &member.sync_preferences;
+                    if !prefs.send_enabled {
+                        debug!(
+                            peer_id = %peer.peer_id,
+                            "Skipping sync for peer: member send_enabled disabled"
+                        );
+                        continue;
+                    }
+                    if !is_content_type_allowed(content_category, &prefs.send_content_types) {
+                        debug!(
+                            peer_id = %peer.peer_id,
+                            content_type = ?content_category,
+                            "Skipping sync for peer: content type disabled for member"
+                        );
+                        continue;
                     }
                     result.push(peer.clone());
                 }
                 Ok(None) => {
-                    // Peer not in paired_device table yet -- proceed with sync
-                    result.push(peer.clone());
+                    debug!(
+                        peer_id = %peer.peer_id,
+                        "Skipping sync for peer: not a space member"
+                    );
                 }
                 Err(err) => {
                     warn!(
-                        error_kind = "paired_device_load_failed",
+                        error_kind = "member_load_failed",
                         retryable = true,
                         peer_id = %peer.peer_id,
                         error = %err,
-                        "Failed to load paired device for sync policy check; proceeding with sync"
+                        "Failed to load space member for sync policy check; proceeding with sync"
                     );
                     result.push(peer.clone());
                 }
