@@ -630,9 +630,9 @@
         "title": "同步设置",
         "restoreDefaults": "恢复默认",
         "rules": {
-          "autoSync": {
-            "title": "自动同步",
-            "description": "在设备解锁状态下自动同步剪贴板内容"
+          "sendEnabled": {
+            "title": "发送到此设备",
+            "description": "开启后，本机的剪贴板内容会同步给此设备。接收方向当前始终开启，独立的接收开关将在后续版本中开放。"
           },
           "syncText": {
             "title": "同步文本",

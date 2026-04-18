@@ -1,9 +1,10 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
 import {
-  getDeviceSyncSettings,
-  updateDeviceSyncSettings as updateDeviceSyncSettingsApi,
-  type DeviceSyncSettings as SyncSettings,
-} from '@/api/daemon/device'
+  getMemberSyncPreferences,
+  updateMemberSyncPreferences as updateMemberSyncPreferencesApi,
+  type MemberSyncPreferences,
+  type MemberSyncPreferencesPatch,
+} from '@/api/daemon/member'
 import {
   getLocalDeviceInfo,
   getPairedPeersWithStatus,
@@ -28,9 +29,9 @@ interface DevicesState {
   spaceMembersLoading: boolean
   spaceMembersError: string | null
 
-  // 每成员同步设置
-  deviceSyncSettings: Record<string, SyncSettings>
-  deviceSyncSettingsLoading: Record<string, boolean>
+  // 每成员同步偏好（phase 4b PR-3：从 DeviceSyncSettings 切换到 MemberSyncPreferences）
+  memberSyncPreferences: Record<string, MemberSyncPreferences>
+  memberSyncPreferencesLoading: Record<string, boolean>
 
   // Discovered peers (from peer discovery scan)
   discoveredPeers: DiscoveredPeer[]
@@ -44,8 +45,8 @@ const initialState: DevicesState = {
   spaceMembers: [],
   spaceMembersLoading: false,
   spaceMembersError: null,
-  deviceSyncSettings: {},
-  deviceSyncSettingsLoading: {},
+  memberSyncPreferences: {},
+  memberSyncPreferencesLoading: {},
   discoveredPeers: [],
   discoveredPeersLoading: false,
 }
@@ -73,29 +74,29 @@ export const fetchSpaceMembers = createAsyncThunk(
   }
 )
 
-export const fetchDeviceSyncSettings = createAsyncThunk(
-  'devices/fetchSyncSettings',
-  async (peerId: string, { rejectWithValue }) => {
+export const fetchMemberSyncPreferences = createAsyncThunk(
+  'devices/fetchMemberSyncPreferences',
+  async (deviceId: string, { rejectWithValue }) => {
     try {
-      const settings = await getDeviceSyncSettings(peerId)
-      return { peerId, settings }
+      const preferences = await getMemberSyncPreferences(deviceId)
+      return { deviceId, preferences }
     } catch {
-      return rejectWithValue('Failed to fetch device sync settings')
+      return rejectWithValue('Failed to fetch member sync preferences')
     }
   }
 )
 
-export const updateDeviceSyncSettings = createAsyncThunk(
-  'devices/updateSyncSettings',
+export const updateMemberSyncPreferences = createAsyncThunk(
+  'devices/updateMemberSyncPreferences',
   async (
-    { peerId, settings }: { peerId: string; settings: SyncSettings | null },
+    { deviceId, patch }: { deviceId: string; patch: MemberSyncPreferencesPatch },
     { rejectWithValue }
   ) => {
     try {
-      const resolved = await updateDeviceSyncSettingsApi(peerId, settings)
-      return { peerId, settings: resolved }
+      const preferences = await updateMemberSyncPreferencesApi(deviceId, patch)
+      return { deviceId, preferences }
     } catch {
-      return rejectWithValue('Failed to update device sync settings')
+      return rejectWithValue('Failed to update member sync preferences')
     }
   }
 )
@@ -192,33 +193,31 @@ const devicesSlice = createSlice({
         state.spaceMembersError = action.payload as string
       })
 
-    // Device sync settings
+    // Member sync preferences
     builder
-      .addCase(fetchDeviceSyncSettings.pending, (state, action) => {
-        state.deviceSyncSettingsLoading[action.meta.arg] = true
+      .addCase(fetchMemberSyncPreferences.pending, (state, action) => {
+        state.memberSyncPreferencesLoading[action.meta.arg] = true
       })
-      .addCase(fetchDeviceSyncSettings.fulfilled, (state, action) => {
-        const { peerId, settings } = action.payload
-        state.deviceSyncSettings[peerId] = settings
-        state.deviceSyncSettingsLoading[peerId] = false
+      .addCase(fetchMemberSyncPreferences.fulfilled, (state, action) => {
+        const { deviceId, preferences } = action.payload
+        state.memberSyncPreferences[deviceId] = preferences
+        state.memberSyncPreferencesLoading[deviceId] = false
       })
-      .addCase(fetchDeviceSyncSettings.rejected, (state, action) => {
-        state.deviceSyncSettingsLoading[action.meta.arg] = false
+      .addCase(fetchMemberSyncPreferences.rejected, (state, action) => {
+        state.memberSyncPreferencesLoading[action.meta.arg] = false
       })
 
     builder
-      .addCase(updateDeviceSyncSettings.pending, (state, action) => {
-        state.deviceSyncSettingsLoading[action.meta.arg.peerId] = true
+      .addCase(updateMemberSyncPreferences.pending, (state, action) => {
+        state.memberSyncPreferencesLoading[action.meta.arg.deviceId] = true
       })
-      .addCase(updateDeviceSyncSettings.fulfilled, (state, action) => {
-        const { peerId, settings } = action.payload
-        if (settings) {
-          state.deviceSyncSettings[peerId] = settings
-        }
-        state.deviceSyncSettingsLoading[peerId] = false
+      .addCase(updateMemberSyncPreferences.fulfilled, (state, action) => {
+        const { deviceId, preferences } = action.payload
+        state.memberSyncPreferences[deviceId] = preferences
+        state.memberSyncPreferencesLoading[deviceId] = false
       })
-      .addCase(updateDeviceSyncSettings.rejected, (state, action) => {
-        state.deviceSyncSettingsLoading[action.meta.arg.peerId] = false
+      .addCase(updateMemberSyncPreferences.rejected, (state, action) => {
+        state.memberSyncPreferencesLoading[action.meta.arg.deviceId] = false
       })
   },
 })

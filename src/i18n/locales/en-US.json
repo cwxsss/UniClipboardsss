@@ -639,9 +639,9 @@
         "title": "Sync Settings",
         "restoreDefaults": "Restore defaults",
         "rules": {
-          "autoSync": {
-            "title": "Auto Sync",
-            "description": "Automatically sync clipboard content when the device is unlocked"
+          "sendEnabled": {
+            "title": "Send to this device",
+            "description": "When on, clipboard content from this computer is sent to the selected device. Receiving is always on for now; a dedicated receive toggle will arrive in a later release."
           },
           "syncText": {
             "title": "Sync Text",
