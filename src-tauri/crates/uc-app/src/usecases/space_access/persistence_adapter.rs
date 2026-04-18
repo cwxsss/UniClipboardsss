@@ -1,55 +1,49 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tracing::info;
+use tracing::{info, warn};
 
-use uc_core::ids::{DeviceId, PeerId, SpaceId};
-use uc_core::pairing::PairingState;
-use uc_core::ports::paired_device_repository::PairedDeviceRepositoryPort;
+use uc_core::ids::{DeviceId, SpaceId};
 use uc_core::ports::security::encryption_state::EncryptionStatePort;
 use uc_core::ports::space::PersistencePort;
 use uc_core::TrustedPeerRepositoryPort;
 
 pub struct SpaceAccessPersistenceAdapter {
     encryption_state: Arc<dyn EncryptionStatePort>,
-    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
     trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
-}
-
-enum TrustPromotionSource {
-    TrustedPeer,
-    Repository,
 }
 
 impl SpaceAccessPersistenceAdapter {
     pub fn new(
         encryption_state: Arc<dyn EncryptionStatePort>,
-        paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
         trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     ) -> Self {
         Self {
             encryption_state,
-            paired_device_repo,
             trusted_peer_repo,
         }
     }
 
-    async fn promote_peer_to_trusted(&self, peer_id: &str) -> anyhow::Result<TrustPromotionSource> {
+    /// 确认对端已存在于 `trusted_peer` 表。
+    ///
+    /// 阶段 0.5 起 `paired_device` 表进入只读，本方法不再回填旧表；
+    /// 若 `trusted_peer` 表未命中则说明尚未完成 pairing 协议，
+    /// 记 WARN 继续放行（与 pairing 双写时代的语义一致，不阻塞 space_access）。
+    async fn ensure_peer_trusted(&self, peer_id: &str) -> anyhow::Result<()> {
         let device_id = DeviceId::new(peer_id.to_string());
-        if self
+        let hit = self
             .trusted_peer_repo
             .get(&device_id)
             .await
             .map_err(|err| anyhow::anyhow!("trusted_peer.get failed: {err}"))?
-            .is_some()
-        {
-            return Ok(TrustPromotionSource::TrustedPeer);
+            .is_some();
+        if !hit {
+            warn!(
+                peer_id = %peer_id,
+                "trusted_peer record missing during space_access persistence; continuing anyway"
+            );
         }
-
-        self.paired_device_repo
-            .set_state(&PeerId::from(peer_id), PairingState::Trusted)
-            .await?;
-        Ok(TrustPromotionSource::Repository)
+        Ok(())
     }
 }
 
@@ -61,23 +55,14 @@ impl PersistencePort for SpaceAccessPersistenceAdapter {
         _space_id: &SpaceId,
         peer_id: &str,
     ) -> anyhow::Result<()> {
-        info!(peer_id = %peer_id, "Persisting joiner access and promoting peer trust");
+        info!(peer_id = %peer_id, "Persisting joiner access and confirming peer trust");
         self.encryption_state.persist_initialized().await?;
-        let source = self.promote_peer_to_trusted(peer_id).await?;
-        match source {
-            TrustPromotionSource::TrustedPeer => info!(
-                peer_id = %peer_id,
-                source = "trusted_peer",
-                target_state = "Trusted",
-                "Joiner access confirmed via trusted_peer repository"
-            ),
-            TrustPromotionSource::Repository => info!(
-                peer_id = %peer_id,
-                source = "repository",
-                target_state = "Trusted",
-                "Joiner access persisted with repository state update"
-            ),
-        }
+        self.ensure_peer_trusted(peer_id).await?;
+        info!(
+            peer_id = %peer_id,
+            source = "trusted_peer",
+            "Joiner access confirmed via trusted_peer repository"
+        );
         Ok(())
     }
 
@@ -87,22 +72,13 @@ impl PersistencePort for SpaceAccessPersistenceAdapter {
         _space_id: &SpaceId,
         peer_id: &str,
     ) -> anyhow::Result<()> {
-        info!(peer_id = %peer_id, "Persisting sponsor access and promoting peer trust");
-        let source = self.promote_peer_to_trusted(peer_id).await?;
-        match source {
-            TrustPromotionSource::TrustedPeer => info!(
-                peer_id = %peer_id,
-                source = "trusted_peer",
-                target_state = "Trusted",
-                "Sponsor access confirmed via trusted_peer repository"
-            ),
-            TrustPromotionSource::Repository => info!(
-                peer_id = %peer_id,
-                source = "repository",
-                target_state = "Trusted",
-                "Sponsor access persisted with repository state update"
-            ),
-        }
+        info!(peer_id = %peer_id, "Persisting sponsor access and confirming peer trust");
+        self.ensure_peer_trusted(peer_id).await?;
+        info!(
+            peer_id = %peer_id,
+            source = "trusted_peer",
+            "Sponsor access confirmed via trusted_peer repository"
+        );
         Ok(())
     }
 }

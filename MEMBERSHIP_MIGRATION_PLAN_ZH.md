@@ -25,7 +25,7 @@
 - Phase 2 的双写（`paired_device` 权威 + `space_member` 影子）继续运行 — 无回归风险
 - `uc-application::trusted_peer` 已就位但尚未 wire（bootstrap 未构造 orchestrator，pairing 协议未切过去）
 
-**下一步**：阶段 0.4（方案 B2），按 §5.4 "阶段 0.4 commit 拆分" 的 0.4.1 → 0.4.4 顺序推进。**0.4.1 / 0.4.2 / 0.4.2.b / 0.4.3 / 0.4.4 均已完成**（写入路径从 PairedDevice 切到 TrustedPeer；`FailureReason` 收口至 `TrustAbortReason`；反向依赖清除；daemon 入口统一走 `PairingFacade`）。当前进入 **0.5**（删除 `PairedDevice` 族 Rust 类型），再切入阶段 A（space_access 搬家 + `SpaceAccessContext` 扩字段 + admit 挂接）。
+**下一步**：阶段 0.4（方案 B2），按 §5.4 "阶段 0.4 commit 拆分" 的 0.4.1 → 0.4.4 顺序推进。**0.4.1 / 0.4.2 / 0.4.2.b / 0.4.3 / 0.4.4 / 0.5 均已完成**（写入路径从 PairedDevice 切到 TrustedPeer；`FailureReason` 收口至 `TrustAbortReason`；反向依赖清除；daemon 入口统一走 `PairingFacade`；`SpaceAccessPersistenceAdapter` 停写 `paired_device`）。0.5 范围经 D31 收窄为"停写"，`PairedDevice` 族 Rust 类型删除推迟到 Phase 5。下一步进入 **阶段 A**（space_access 搬家 + `SpaceAccessContext` 扩字段 + admit 挂接）。
 
 ---
 
@@ -196,15 +196,15 @@ if persist_result.is_ok() {
 | 0.2 | ✅ `d7aa22a1` | `uc-infra`: 新建 `trusted_peer` 表 + `DieselTrustedPeerRepository`（无数据迁移，用户升级后重新配对） | DOMAIN.md §8；**不与 `paired_device` 做兼容搬迁**（2026-04-17 决策，详见执行记录 D17） |
 | 0.3 | ✅ `ef5ba23b` | 新建 `uc-application::trusted_peer`：orchestrator + 状态机 + `TrustPeerUseCase` / `ConfirmPeerVerificationUseCase` / `CancelTrustingUseCase` / `DistrustPeerUseCase` / `ListTrustedPeersQuery` / `GetTrustedPeerQuery` | DOMAIN.md §5；状态机终态仅 `Trusted` / `Aborted` |
 | 0.4 | ⏳ 进行中 | **pairing 协议层整体从 `uc-app/pairing/` 平移到 `uc-application/pairing/`**（B2 方案，2026-04-17 决策 D26），同时切换写入目标到 `TrustedPeer`；`staged_paired_device_store` / `uc-app/pairing/facade.rs` 删除；daemon 直切 `uc-application::pairing`；旧错误类型 `FailureReason` / `PairingBusy` 翻译到 `TrustStateEvent` 三档 | 涉及 6 个协议文件搬家 + bootstrap / daemon import 改名 + 写入路径切换；非协议类 use case（`list_paired_devices` / `unpair_device` / 等 8 个）留在 uc-app，到 Phase 3 再切换。0.4.1 已提交 `b8de5aa2`；0.4.2 已落地（写入路径切 TrustPeerOrchestrator） |
-| 0.5 | ⏳ | 删除 `uc-core::pairing::PairedDevice` / `PairingState` / `PairedDeviceRepositoryPort`；`paired_device` 表进入只读 | Rust 类型删除；`DROP TABLE paired_device` 统一留给 MIGRATION_PLAN Phase 5 |
+| 0.5 | ✅ | 清理 `SpaceAccessPersistenceAdapter` 里 `paired_device_repo.set_state(...)` 残留写入点，让 `paired_device` 表彻底进入只读 | 范围收窄（2026-04-17 决策 D31）：Rust 类型删除**推迟到 Phase 5**（与 `DROP TABLE paired_device` 一起做）。详见 §5.4 阶段 0.5 执行记录 |
 
 **阶段 0 出口条件**（2026-04-17 修订 — 配合 B2 方案）：
 1. `uc-core::trusted_peer` + `uc-application::trusted_peer` + `uc-application::pairing` 编译通过，测试全绿
 2. `StagedPairedDeviceStore` 从代码库彻底消失
 3. `SpaceAccessPersistenceAdapter` 不再引用 `crate::usecases::pairing::*`，反向依赖绊脚石清除
 4. ~~`SpaceAccessContext` 已承载 `device_name` / `peer_fingerprint`~~ **推到阶段 A**（space_access 搬家时一并扩字段 + 挂写入最自然；0.4 pairing 搬家后已具备跨模块直接调用条件）
-5. ~~`PairingState` 枚举彻底删除~~ **推到 0.5**（和 `PairedDevice` 一起删；0.4 搬家期间 `PairingState` 仍是 PairedDevice 字段，但写入路径已不再生产该值）
-6. `paired_device` 表只读，新写入路径已切到 `trusted_peer`（`space_member` 写入由阶段 A 的 admit 挂接补齐）
+5. ~~`PairingState` 枚举彻底删除~~ ~~**推到 0.5**（和 `PairedDevice` 一起删；0.4 搬家期间 `PairingState` 仍是 PairedDevice 字段，但写入路径已不再生产该值）~~ **推到 Phase 5**（0.5 范围收窄为"停写"，详见 D31；Rust 类型删除与 `DROP TABLE` 合并处理）
+6. `paired_device` 表只读（0.5 落地后彻底无写入路径，Rust 类型仍存活供 Phase 3 消费方使用）；新写入路径已切到 `trusted_peer`，`space_member` 写入由阶段 A 的 admit 挂接补齐
 7. `uc-app/pairing/` 协议层（6 个文件）消失；daemon 不再 import `uc_app::usecases::pairing::{PairingOrchestrator, PairingAction, PairingDomainEvent, FailureReason}`
 8. CI 全绿；无回归
 
@@ -214,7 +214,7 @@ if persist_result.is_ok() {
 - commit 3：0.2 infra 表 + migration — 已提交 `d7aa22a1`
 - commit 4：0.3 application 层 orchestrator + UseCases — 已提交 `ef5ba23b`
 - commit 5：0.4 消费者切换 + staged store 删除（进行中）
-- commit 6：0.5 `PairedDevice` 及相关 Rust 类型清除
+- commit 6：0.5 `SpaceAccessPersistenceAdapter` 停写 `paired_device` 表（`PairedDevice` 族 Rust 类型删除推迟到 Phase 5，与 `DROP TABLE` 合并）
 
 #### 阶段 0 执行记录与决策（2026-04-17）
 
@@ -262,6 +262,7 @@ if persist_result.is_ok() {
 | D28 | **`TrustPeerOrchestrator` 增加 `reset()` 方法以支持单例多次流程复用**（2026-04-17） | 0.4.2 | `state_machine.rs` 的 `transition()` 纯函数契约要求 `Trusted` / `Aborted` 终态拒绝所有后续事件（有 `terminal_{trusted,aborted}_rejects_further_events` 两条测试写死），但 D19 规定 orchestrator 以全局单例装配，第二次 pairing flow 就会被终态 `IllegalTransition` 拒绝。三条候选路径：(1) 加 `reset()` 方法从任意状态回 `Idle`；(2) 放宽 `transition()` 允许 `Trusted | Aborted` + `Initiate` 回到 `EstablishingSession`（改纯函数契约，要改 9 条单元测试）；(3) 0.4.2 绕过 orchestrator 直接调 `TrustPeerUseCase::execute()`。选 (1) — 契约最清晰：终态 = 一次流程结束，`reset()` 表达"开启新流程"，纯函数转移表不变。protocol_handler 在 PersistPairedDevice 分支先 `reset` 再 `initiate→record_session_opened→confirm_verification`。`TrustPeerOrchestrator<R>` / `TrustPeerUseCase<R>` / `ConfirmPeerVerificationUseCase<R>` / `CancelTrustingUseCase<R>` 同步放宽为 `R: ?Sized`，允许 `R = dyn TrustedPeerRepositoryPort` 作为 bootstrap 注入类型 |
 | D29 | **0.4.2 不再把 `FailureReason` / `PairingBusy` 错误类型从代码树彻底删除，只切换写入路径**（2026-04-17） | 0.4.2 → 0.4.2.b | D24 原文要求 0.4.2 删 `FailureReason`，但实测 `state_machine.rs` 内部 100+ 处引用（`PairingState::Failed { reason: FailureReason }` + 大量 `FailureReason::*` 构造路径），且 `PairingState` 留到 0.5 再删（§5.4 出口条件 5 推迟）——真正删除必须等 `state_machine.rs` 整体重写。0.4.2 现实可完成的是：写入路径切到 `TrustPeerOrchestrator`，公共面 `PairingDomainEvent::PairingFailed::reason: FailureReason` 暂保留，daemon / action_executor 对 `FailureReason` 的 match 不破坏；FailureReason 类型完全移除拆到新子步 **0.4.2.b**（改 `PairingDomainEvent::PairingFailed::reason` → `String` 或新枚举，daemon / setup 同步收敛）。保障 0.4.2 commit 体量可控（~500 行），且风险最集中的写入路径切换不被 FailureReason 大规模重命名混淆 |
 | D30 | **0.4.4 用 `PairingFacade` 替代原计划的"UseCase thin wrapper"作为 daemon 入口**（2026-04-17） | 0.4.4 及以后 | 原计划要求 daemon 改调 `ConfirmPeerVerificationUseCase` / `CancelTrustingUseCase`；实测这两个 UseCase 位于 trust_peer 层级、由 pairing protocol handler 在 `PersistPairedDevice` 内部驱动（0.4.2 落地），**daemon 并不直接触达 trust_peer 层**。daemon 用户动作实际是 pairing-level 的 short-code 确认/拒绝/取消。若只在 daemon 层"包一层 UseCase"但仍暴露 `Arc<PairingOrchestrator>`，封装无意义。最终采用 **External → Facade → Orchestrator → Ports** 边界：`PairingFacade` 对外公开，`PairingOrchestrator` 变 `pub(crate)`；Facade 内部组合三个 `pub(crate)` 级 thin-wrapper UseCase（`AcceptPairingUseCase` / `RejectPairingUseCase` / `CancelPairingUseCase`）处理 user-intent 入口，网络事件分派/会话查询/`PairingEventPort` 订阅由 Facade 直接委托给内部 orchestrator。`bootstrap` / `daemon` / `setup pairing_facade` 全部改用 `PairingFacade`。符合 AGENTS.md §11 "应用 Facade" 定位 |
+| D31 | **0.5 范围收窄为"停写 `paired_device` 表"，Rust 类型删除推迟到 Phase 5**（2026-04-17） | 0.5 | 原计划 0.5 要求同时删除 `PairedDevice` / `PairingState` / `PairedDeviceRepositoryPort` 三个类型，但清点下游依赖后发现无法兑现：§5.4 方案 B2 明确保留 uc-app 9 个非协议 use case 到 Phase 3（`list_paired_devices` / `unpair_device` / `update_device_sync_settings` / `get_device_sync_settings` / `resolve_connection_policy` / `list_sendable_peers` / `get_p2p_peers_snapshot` / `dto.rs` / `get_local_device_info`）；此外 `uc-application/pairing/state_machine.rs` 的 `PairingAction::PersistPairedDevice` + `build_paired_device()`、`uc-app/clipboard/sync_outbound.rs` + `file_sync/sync_*.rs`、`uc-platform/libp2p_network/{mod,swarm_event_loop,stream_handler}.rs`、`uc-core/network/{events,connection_policy}.rs` + `ports/realtime.rs`、daemon DTO 链路都还在用这三个类型。硬删会把 Phase 3 + Phase 3.6 + Phase 5 全部前置进来。收窄后的 0.5 只做唯一残留的写入点清理：`SpaceAccessPersistenceAdapter::promote_peer_to_trusted` 里 `paired_device_repo.set_state(&peer_id, PairingState::Trusted)` 后备分支删除，`paired_device_repo` 字段与构造参数移除；`paired_device` 表从此彻底无新写入（D17 的"重新配对"妥协下此后备路径本就无业务价值）。Rust 类型删除合并到 Phase 5 `DROP TABLE paired_device` migration commit |
 
 ##### 阶段 0.4 已决事项（2026-04-17 拍板）
 

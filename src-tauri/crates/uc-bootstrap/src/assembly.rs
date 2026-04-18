@@ -1196,7 +1196,6 @@ pub fn build_setup_orchestrator(
     let persistence_port = Arc::new(TokioMutex::new(
         uc_app::usecases::space_access::SpaceAccessPersistenceAdapter::new(
             deps.security.encryption_state.clone(),
-            deps.device.paired_device_repo.clone(),
             ports.trusted_peer_repo.clone(),
         ),
     ));
