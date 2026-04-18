@@ -961,7 +961,7 @@ use uc_app::usecases::{
     DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, SessionReadyEmitter,
 };
 use uc_application::pairing::PairingFacade;
-use uc_application::setup::{SetupOrchestrator, SetupPairingFacadePort};
+use uc_application::setup::{SetupFacade, SetupPairingFacadePort};
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::space::SpaceAccessTransportPort;
 use uc_core::ports::{DiscoveryPort, TimerPort};
@@ -973,7 +973,7 @@ use uc_core::TrustedPeerRepositoryPort;
 /// adapter ports that the caller (main.rs/wiring.rs) provides and that are NOT
 /// shared with AppRuntime or CoreRuntime. All shared/dual-use values
 /// (emitter_cell, lifecycle_status, session_ready_emitter) are separate
-/// parameters to build_setup_orchestrator(), ensuring with_setup() can pass
+/// parameters to build_setup_facade(), ensuring with_setup() can pass
 /// the SAME instance to both the orchestrator and AppRuntime/CoreRuntime.
 pub struct SetupAssemblyPorts {
     pub setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
@@ -1026,7 +1026,7 @@ impl SetupAssemblyPorts {
     /// NOTE: Shared state (emitter_cell, lifecycle_status, clipboard_integration_mode)
     /// and with_setup()-constructed adapters (session_ready_emitter) are NOT created
     /// here — they are created by AppRuntime::new() / with_setup() and passed
-    /// separately to build_setup_orchestrator().
+    /// separately to build_setup_facade().
     pub fn placeholder(_deps: &uc_app::AppDeps) -> Self {
         struct EmptyDiscoveryPort;
         #[async_trait::async_trait]
@@ -1134,21 +1134,22 @@ pub fn build_clipboard_write_coordinator(
     ))
 }
 
-/// Build the SetupOrchestrator with all required adapters.
+/// Build the `SetupFacade` with all required adapters.
 ///
-/// This is the single composition point for SetupOrchestrator (RNTM-05).
-pub fn build_setup_orchestrator(
+/// This is the single composition point for setup (RNTM-05 / phase B.4).
+/// Returns the phase-B `SetupFacade`; the internal `SetupOrchestrator` is
+/// hidden per `uc-application/AGENTS.md` §11.4.
+pub fn build_setup_facade(
     deps: &uc_app::AppDeps,
     ports: SetupAssemblyPorts,
     lifecycle_status: Arc<dyn LifecycleStatusPort>,
     emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
     session_ready_emitter: Arc<dyn SessionReadyEmitter>,
-) -> Arc<SetupOrchestrator> {
+) -> Arc<SetupFacade> {
     use uc_app::usecases::{
         AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, InitializeEncryption,
         StartNetworkAfterUnlock,
     };
-    use uc_application::setup::MarkSetupComplete;
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
         deps.security.encryption.clone(),
@@ -1157,7 +1158,6 @@ pub fn build_setup_orchestrator(
         deps.security.encryption_state.clone(),
         deps.security.encryption_session.clone(),
     ));
-    let mark_setup_complete = Arc::new(MarkSetupComplete::from_ports(deps.setup_status.clone()));
 
     let start_network = Arc::new(StartNetworkAfterUnlock::from_port(
         deps.network_control.clone(),
@@ -1201,9 +1201,8 @@ pub fn build_setup_orchestrator(
     ));
     let setup_event_port = Arc::new(HostEventSetupPort::new(emitter_cell));
 
-    Arc::new(SetupOrchestrator::new(
+    Arc::new(SetupFacade::new(
         initialize_encryption,
-        mark_setup_complete,
         deps.setup_status.clone(),
         app_lifecycle,
         ports.setup_pairing_facade,

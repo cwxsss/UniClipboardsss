@@ -25,9 +25,10 @@ use uc_core::{
 
 use crate::pairing::PairingDomainEvent;
 use crate::setup::context::SetupContext;
+use crate::setup::mark_complete::MarkSetupComplete;
 use crate::setup::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
 use crate::setup::{
-    MarkSetupComplete, SetupAction, SetupError as SetupDomainError, SetupEvent, SetupEventPort,
+    SetupAction, SetupError as SetupDomainError, SetupEvent, SetupEventPort,
     SetupPairingFacadePort, SetupState, SetupStateMachine,
 };
 use crate::space_access::{

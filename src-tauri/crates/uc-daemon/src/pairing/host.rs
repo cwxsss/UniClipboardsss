@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
 use uc_application::pairing::PairingAction;
 use uc_application::pairing::{PairingDomainEvent, PairingEventPort, PairingFacade};
-use uc_application::setup::SetupOrchestrator;
+use uc_application::setup::SetupFacade;
 use uc_application::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessFacade,
 };
@@ -358,7 +358,7 @@ impl DaemonPairingHost {
         tasks.spawn(
             run_pairing_action_loop(
                 self.runtime.clone(),
-                self.runtime.setup_orchestrator().clone(),
+                self.runtime.setup_facade().clone(),
                 self.pairing_facade.clone(),
                 self.space_access_facade.clone(),
                 self.key_slot_store.clone(),
@@ -387,7 +387,7 @@ impl DaemonPairingHost {
         tasks.spawn(
             run_pairing_protocol_loop(
                 self.runtime.clone(),
-                self.runtime.setup_orchestrator().clone(),
+                self.runtime.setup_facade().clone(),
                 self.space_access_facade.clone(),
                 self.pairing_facade.clone(),
                 self.state.clone(),
@@ -599,7 +599,7 @@ impl DaemonPairingHost {
 
 async fn run_pairing_action_loop(
     runtime: Arc<CoreRuntime>,
-    setup_orchestrator: Arc<SetupOrchestrator>,
+    setup_facade: Arc<SetupFacade>,
     pairing_facade: Arc<PairingFacade>,
     space_access_facade: Arc<SpaceAccessFacade>,
     key_slot_store: Arc<dyn KeySlotStore>,
@@ -768,10 +768,10 @@ async fn run_pairing_action_loop(
                                 match key_slot_store.load().await {
                                     Ok(keyslot_file) => {
                                         if matches!(
-                                            setup_orchestrator.get_state().await,
+                                            setup_facade.get_state().await,
                                             uc_application::setup::SetupState::Completed
                                         ) {
-                                            match setup_orchestrator
+                                            match setup_facade
                                                 .start_completed_host_sponsor_authorization(
                                                     session_id.clone(),
                                                     peer.peer_id.clone(),
@@ -1164,7 +1164,7 @@ async fn run_pairing_domain_event_loop(
 
 async fn run_pairing_protocol_loop(
     runtime: Arc<CoreRuntime>,
-    setup_orchestrator: Arc<SetupOrchestrator>,
+    setup_facade: Arc<SetupFacade>,
     space_access_facade: Arc<SpaceAccessFacade>,
     pairing_facade: Arc<PairingFacade>,
     state: Arc<RwLock<RuntimeState>>,
@@ -1198,7 +1198,7 @@ async fn run_pairing_protocol_loop(
                             match event {
                                 NetworkEvent::PairingMessageReceived { peer_id, message } => {
                                     handle_pairing_message(
-                                        setup_orchestrator.as_ref(),
+                                        setup_facade.as_ref(),
                                         space_access_facade.as_ref(),
                                         pairing_facade.as_ref(),
                                         &state,
@@ -1279,7 +1279,7 @@ async fn run_pairing_session_sweep_loop(
     )
 )]
 async fn handle_pairing_message(
-    setup_orchestrator: &SetupOrchestrator,
+    setup_facade: &SetupFacade,
     space_access_facade: &SpaceAccessFacade,
     pairing_facade: &PairingFacade,
     state: &Arc<RwLock<RuntimeState>>,
@@ -1467,7 +1467,7 @@ async fn handle_pairing_message(
                                 return Ok(());
                             }
                         };
-                        setup_orchestrator
+                        setup_facade
                             .resolve_host_space_access_proof(
                                 SpaceAccessProofArtifact {
                                     pairing_session_id: uc_core::SessionId::from(
@@ -1494,7 +1494,7 @@ async fn handle_pairing_message(
                             .deny_reason
                             .as_deref()
                             .and_then(deny_reason_from_code);
-                        setup_orchestrator
+                        setup_facade
                             .apply_joiner_space_access_result(
                                 busy.session_id.clone(),
                                 uc_core::ids::SpaceId::from(payload.space_id.as_str()),

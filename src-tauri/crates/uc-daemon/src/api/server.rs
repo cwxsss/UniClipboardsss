@@ -19,7 +19,7 @@ use axum::Router;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
-use uc_application::setup::SetupOrchestrator;
+use uc_application::setup::SetupFacade;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -45,7 +45,7 @@ pub struct DaemonApiState {
     pub auth_token: DaemonAuthToken,
     pub runtime: Option<Arc<CoreRuntime>>,
     pub pairing_host: Option<Arc<DaemonPairingHost>>,
-    pub setup_orchestrator: Option<Arc<SetupOrchestrator>>,
+    pub setup_facade: Option<Arc<SetupFacade>>,
     pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
     /// Gate controlling clipboard capture in the daemon.
@@ -74,7 +74,7 @@ impl DaemonApiState {
             auth_token,
             runtime,
             pairing_host: None,
-            setup_orchestrator: None,
+            setup_facade: None,
             space_access_facade: None,
             event_tx,
             clipboard_capture_gate: None,
@@ -98,13 +98,13 @@ impl DaemonApiState {
         self.pairing_host.clone()
     }
 
-    pub fn with_setup(mut self, setup_orchestrator: Arc<SetupOrchestrator>) -> Self {
-        self.setup_orchestrator = Some(setup_orchestrator);
+    pub fn with_setup(mut self, setup_facade: Arc<SetupFacade>) -> Self {
+        self.setup_facade = Some(setup_facade);
         self
     }
 
-    pub fn setup_orchestrator(&self) -> Option<Arc<SetupOrchestrator>> {
-        self.setup_orchestrator.clone()
+    pub fn setup_facade(&self) -> Option<Arc<SetupFacade>> {
+        self.setup_facade.clone()
     }
 
     pub fn with_space_access(mut self, space_access_facade: Arc<SpaceAccessFacade>) -> Self {

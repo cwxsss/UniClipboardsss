@@ -24,7 +24,6 @@ pub mod initialize_encryption;
 pub mod internal;
 pub mod pairing;
 pub mod search;
-pub mod setup;
 /// Re-exports [`uc_application::space_access`] so in-crate code (`setup`) can
 /// continue `use crate::usecases::space_access::*`. Direct callers outside
 /// `uc-app` should import `uc_application::space_access` instead — this module
@@ -63,8 +62,6 @@ pub use pairing::{
     UpdateDeviceSyncSettings,
 };
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
-#[allow(deprecated)]
-pub use setup::{MarkSetupComplete, SetupError, SetupOrchestrator, SetupPairingFacadePort};
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
 pub use update_settings::UpdateSettings;
 pub use verify_keychain_access::VerifyKeychainAccess;
@@ -245,8 +242,8 @@ impl<'a> CoreUseCases<'a> {
     }
 
     /// Mark setup as complete (persists `.setup_status` flag).
-    pub fn mark_setup_complete(&self) -> crate::usecases::MarkSetupComplete {
-        crate::usecases::MarkSetupComplete::from_ports(self.runtime.deps.setup_status.clone())
+    pub fn mark_setup_complete(&self) -> uc_application::setup::MarkSetupComplete {
+        uc_application::setup::MarkSetupComplete::from_ports(self.runtime.deps.setup_status.clone())
     }
 
     /// Get the InitializeEncryption use case.

@@ -45,7 +45,7 @@ pub fn router() -> Router<DaemonApiState> {
 async fn get_setup_state(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<GetSetupStateResponse>, ApiError> {
-    let orchestrator = state.setup_orchestrator().ok_or_else(|| {
+    let orchestrator = state.setup_facade().ok_or_else(|| {
         tracing::error!("setup orchestrator unavailable");
         ApiError::internal("setup orchestrator unavailable")
     })?;
@@ -81,7 +81,7 @@ async fn start_new(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     if !matches!(orchestrator.get_state().await, SetupState::Welcome) {
@@ -126,7 +126,7 @@ async fn start_join(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     if !matches!(orchestrator.get_state().await, SetupState::Welcome) {
@@ -173,7 +173,7 @@ async fn select_peer(
     Json(payload): Json<SetupSelectPeerRequest>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     if !matches!(
@@ -224,7 +224,7 @@ async fn confirm_peer(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     let inner = state
@@ -305,7 +305,7 @@ async fn submit_passphrase(
     Json(payload): Json<SetupSubmitPassphraseRequest>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     if !matches!(
@@ -359,7 +359,7 @@ async fn verify_passphrase(
     Json(payload): Json<SetupSubmitPassphraseRequest>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     if !matches!(
@@ -413,7 +413,7 @@ async fn complete_space_access(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     // If setup is already completed (sponsor role), return current state
@@ -457,7 +457,7 @@ async fn cancel(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     let inner = state
@@ -528,7 +528,7 @@ async fn clear_transient(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<SetupActionResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
 
     if let Some(pairing_host) = state.pairing_host() {
@@ -568,7 +568,7 @@ async fn clear_transient(
 )]
 async fn reset(State(state): State<DaemonApiState>) -> Result<Json<SetupResetResponse>, ApiError> {
     let orchestrator = state
-        .setup_orchestrator()
+        .setup_facade()
         .ok_or_else(|| ApiError::internal("setup orchestrator unavailable"))?;
     let runtime = state
         .runtime

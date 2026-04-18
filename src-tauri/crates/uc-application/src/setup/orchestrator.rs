@@ -30,10 +30,10 @@ use uc_core::{
 
 use crate::setup::action_executor::SetupActionExecutor;
 use crate::setup::context::SetupContext;
+use crate::setup::mark_complete::MarkSetupComplete;
 use crate::setup::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
 use crate::setup::{
-    MarkSetupComplete, SetupEvent, SetupEventPort, SetupPairingFacadePort, SetupState,
-    SetupStateMachine,
+    SetupEvent, SetupEventPort, SetupPairingFacadePort, SetupState, SetupStateMachine,
 };
 use crate::space_access::{
     SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer,

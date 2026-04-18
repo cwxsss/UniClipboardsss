@@ -17,7 +17,7 @@ use uc_app::usecases::{InMemoryLifecycleStatus, LoggingSessionReadyEmitter, Sess
 use uc_app::AppDeps;
 use uc_core::clipboard::ClipboardIntegrationMode;
 
-use crate::assembly::{build_setup_orchestrator, SetupAssemblyPorts};
+use crate::assembly::{build_setup_facade, SetupAssemblyPorts};
 // ---------------------------------------------------------------------------
 // LoggingHostEventEmitter
 // ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ fn build_non_gui_runtime_internal_with_emitter(
     let task_registry = Arc::new(TaskRegistry::new());
     let clipboard_integration_mode = resolve_clipboard_integration_mode();
 
-    let setup_orchestrator = build_setup_orchestrator(
+    let setup_facade = build_setup_facade(
         &deps,
         setup_ports,
         lifecycle_status.clone(),
@@ -146,7 +146,7 @@ fn build_non_gui_runtime_internal_with_emitter(
         deps,
         emitter_cell,
         lifecycle_status,
-        setup_orchestrator,
+        setup_facade,
         clipboard_integration_mode,
         task_registry,
         storage_paths,

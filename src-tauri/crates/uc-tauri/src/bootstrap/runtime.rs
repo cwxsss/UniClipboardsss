@@ -180,8 +180,8 @@ impl AppRuntime {
         let session_ready_emitter: Arc<dyn uc_app::usecases::SessionReadyEmitter> =
             Arc::new(uc_app::usecases::app_lifecycle::adapters::LoggingSessionReadyEmitter);
 
-        // Pass shared state + adapters to build_setup_orchestrator as SEPARATE params.
-        let setup_orchestrator = uc_bootstrap::assembly::build_setup_orchestrator(
+        // Pass shared state + adapters to build_setup_facade as SEPARATE params.
+        let setup_facade = uc_bootstrap::assembly::build_setup_facade(
             &deps,
             setup_ports,
             lifecycle_status.clone(), // same instance goes to CoreRuntime below
@@ -194,7 +194,7 @@ impl AppRuntime {
             deps,
             emitter_cell,
             lifecycle_status,
-            setup_orchestrator,
+            setup_facade,
             clipboard_integration_mode,
             task_registry,
             storage_paths,

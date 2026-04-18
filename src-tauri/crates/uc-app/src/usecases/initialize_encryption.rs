@@ -181,3 +181,12 @@ impl InitializeEncryption {
         .await
     }
 }
+
+#[async_trait::async_trait]
+impl uc_application::setup::SetupInitializeEncryptionPort for InitializeEncryption {
+    async fn execute(&self, passphrase: Passphrase) -> anyhow::Result<()> {
+        InitializeEncryption::execute(self, passphrase)
+            .await
+            .map_err(anyhow::Error::new)
+    }
+}

@@ -9,7 +9,7 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
-use uc_application::setup::SetupOrchestrator;
+use uc_application::setup::SetupFacade;
 use uc_application::setup::SetupState;
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::clipboard::ClipboardIntegrationMode;
@@ -178,7 +178,7 @@ impl DaemonQueryService {
 
     pub async fn setup_state(
         &self,
-        setup_orchestrator: &SetupOrchestrator,
+        setup_orchestrator: &SetupFacade,
         pairing_host: Option<&DaemonPairingHost>,
     ) -> Result<SetupStateResponse> {
         let usecases = CoreUseCases::new(self.runtime.as_ref());
@@ -219,7 +219,7 @@ impl DaemonQueryService {
 
     pub async fn setup_action_ack(
         &self,
-        setup_orchestrator: &SetupOrchestrator,
+        setup_orchestrator: &SetupFacade,
         pairing_host: Option<&DaemonPairingHost>,
     ) -> Result<SetupActionAckResponse> {
         let state = self.setup_state(setup_orchestrator, pairing_host).await?;
