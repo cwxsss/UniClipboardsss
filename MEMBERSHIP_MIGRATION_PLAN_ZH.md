@@ -1,0 +1,472 @@
+# Membership 迁移计划（临时工作文档）
+
+> 范围：用 `uc-core::membership` + `uc-application::membership` 彻底替换现有的 `paired_device` 体系。
+> 状态：**Phase 1 / Phase 2 已落地；阶段 0.1 / 0.2 / 0.3 已提交，下一步进入阶段 0.4 消费者切换。**
+> 本文档只服务于迁移本身，不作为产品文档，迁移完成后可直接删除。
+
+---
+
+## 0. 当前状态（2026-04-17 更新）
+
+迁移走到 Phase 2 完成后，发现**整件事无法和 `space_access` / `pairing` 解耦**，因此插入"里程碑 §5"处理 `space_access` + `setup` 搬家。
+
+进一步讨论后发现：搬 space_access 会遭遇 `SpaceAccessPersistenceAdapter → StagedPairedDeviceStore` 的反向依赖绊脚石，其根源是 `PairedDevice` 上帝对象（把"配对动作"、"信任关系"、"同步偏好"、"显示名"捏在一起）。根治需先重构 pairing domain。
+
+**2026-04-17 决策**：
+
+1. 将 `pairing` 域重命名并重构为 **`trusted_peer`**（只管"两台设备可通信信任关系"），拆解 `PairedDevice`
+2. 在里程碑 §5 前插入 **阶段 0 — trusted_peer domain 重构**，作为 §5.4 的第一阶段
+3. `TRUSTED_PEER_DOMAIN_ZH.md` 已作为 §5.4 阶段 0 的权威定义固化
+4. Phase 3/4/5 仍保留，等阶段 0→A→B→C 完成后再启动
+
+**当前状态**（2026-04-17 更新）：
+- Phase 1/2 已提交（`space_member` repo + 双写 `space_member` 影子）
+- **阶段 0.0 / 0.1 / 0.2 / 0.3 已提交**（详见 §5.4 阶段 0 执行记录与决策）
+- Phase 2 的双写（`paired_device` 权威 + `space_member` 影子）继续运行 — 无回归风险
+- `uc-application::trusted_peer` 已就位但尚未 wire（bootstrap 未构造 orchestrator，pairing 协议未切过去）
+
+**下一步**：阶段 0.4 消费者切换（`uc-app::pairing::protocol_handler` → orchestrator、删除 `staged_paired_device_store`、向 `SpaceAccessContext` 注入 `device_name` / `peer_fingerprint`），然后 0.5 删除 `PairedDevice` 族 Rust 类型，完成后切入阶段 A（space_access 搬家）。
+
+---
+
+## 1. 背景与核心决策（拍板一次、沿用到底）
+
+| # | 决策 | 备注 |
+|---|---|---|
+| D1 | **单空间模型**，`SpaceMember` 不带 `SpaceId` | 当前 UniClipboard 是单空间 |
+| D2 | **本地自治**，成员关系不跨设备同步，revoke 是本地动作 | 对端若继续发数据，由接收路径兜底 |
+| D3 | **`MemberSyncPreferences` 语义**：本机对某远端成员的"发送/接收"独立偏好 | 与旧 `SyncSettings` 不同层次 |
+| D4 | **revoke = 从 repo 硬删**（无 `Revoked` 中间态） | 因此 `MemberState` 枚举不存在 |
+| D5 | **`DeviceId == peer_id` 字符串直接复用**，不引入独立映射表 | 妥协换零迁移成本；副作用：libp2p key 轮换 = 新身份，已接受 |
+| D6 | `last_seen_at` **不进 membership**，搬到网络层 | 不属于成员关系属性 |
+| D7 | 老数据 **一次性 migration**，`paired_device` 里 `Trusted` 的行自动搬到 `space_member` | Phase 1 已经包进 up.sql |
+| D8 | `PairingState` 枚举 **整体删除**（Phase 5 或合并到 pairing 搬家时） | 代码里 `Pending` 从未写进 DB，`Revoked` 从未被读过 |
+| D9 | Daemon DTO **一次性改名**（`PairedDeviceDto` → `SpaceMemberDto`），前端同步改 | Phase 3.6 |
+| D10 | admit 的默认 `sync_preferences` = `MemberSyncPreferences::default()`（双向全开） | 不读全局 `SyncSettings`，避免层次混淆 |
+| D11 | admit 幂等冲突在双写期降级为 WARN | 不让 membership 侧失败影响配对流程 |
+| D12 | `sync_settings → MemberSyncPreferences` 映射：`None → default`；`auto_sync` 镜像到 `send/receive`；`content_types` 镜像到发/收两侧；`sync_frequency` 丢弃 | 已固化在 `2026-04-18-000001_create_space_member/up.sql` |
+| D13 | **`uc-application` 是新 use case 所在地**，`uc-app` 在退役。daemon 已依赖 uc-application；uc-app 不依赖 uc-application | 与最近几个 commit 方向一致（file_transfer 已搬家、search 改 port 等） |
+| D14 | `admit_member` use case **保留**，等 `space_access` 搬家后作为其完成时的调用点 | 目前无调用方是暂时态 |
+| D15 | **`uc-app/pairing` 整体拆除**（方案 b）：协议状态机并入 `space_access`；设备列表归 `membership`；协议技术层下沉到 `uc-core`/`uc-infra` | 在 space_access 搬家那一步同时发生 |
+| D16 | 迁移**暂停**在 Phase 2 完成态，先做 `space_access` 到 `uc-application` 的搬家 | 见第 0 节 |
+
+---
+
+## 2. Phase 0 — 领域建模（已完成 · 提交 `1af58f34`）
+
+### 2.1 `uc-core/src/membership/`
+
+- `member.rs` — `SpaceMember { device_id, device_name, identity_fingerprint, joined_at: DateTime<Utc>, sync_preferences }`
+- `preferences.rs` — `MemberSyncPreferences { send_enabled, receive_enabled, send_content_types, receive_content_types }`；`Default` 双向全开
+- `error.rs` — `MembershipError { AlreadyAdmitted(DeviceId), NotFound(DeviceId), Repository(String) }`
+- `ports.rs` — `MemberRepositoryPort { get, list, save(upsert), remove }`
+- `mod.rs` — 导出四者，顶层 `lib.rs` re-export
+
+### 2.2 `uc-application/src/membership/`
+
+- `errors.rs` — `MembershipApplicationError`，实现 `From<MembershipError>`
+- `usecases/admit_member.rs` — 幂等检查（get→if Some→AlreadyAdmitted），然后 save
+- `usecases/get_member.rs` — 查不到返回 NotFound
+- `usecases/list_members.rs` — 无参，直接透传 repo.list
+- `usecases/update_member_settings.rs` — 全量覆盖 sync_preferences
+- `usecases/reset_member_preferences_to_default.rs` — 重置为默认值
+- `usecases/revoke_member.rs` — 调 repo.remove，未存在返回 NotFound
+- `usecases/mod.rs` — 统一导出
+
+### 2.3 刻意放弃的设计
+
+- ❌ `ensure_active_member` use case — 调用方不清楚，暂不引入
+- ❌ `MemberState` 枚举 — 硬删模型下没有用武之地
+- ❌ `IdentityFingerprint` 值对象 — 暂保留 `String`，未来再说
+- ❌ `DomainEvent` / `MemberEventPort` — 本地自治不需要广播
+
+---
+
+## 3. Phase 1 — Infra 落地 + 数据迁移（已完成 · 提交 `5f5c6f4c`）
+
+### 3.1 Migration
+
+`uc-infra/migrations/2026-04-18-000001_create_space_member/`
+
+- `up.sql` — `CREATE TABLE space_member(...)`，然后 `INSERT ... SELECT` 从 `paired_device WHERE pairing_state = 'Trusted'`，期间把 JSON `sync_settings` 映射成 `MemberSyncPreferences` JSON。每个布尔字段走 `CASE json_extract(...) WHEN 0 THEN json('false') ELSE json('true') END` 规避 SQLite bool-as-int 怪癖
+- `down.sql` — `DROP TABLE space_member`
+
+### 3.2 新增文件
+
+- `src/db/models/space_member_row.rs` — `SpaceMemberRow` / `NewSpaceMemberRow`
+- `src/db/mappers/space_member_mapper.rs` — `SpaceMemberRowMapper`（`to_row` 序列化 preferences 为 JSON，`to_domain` 反序列化）
+- `src/db/repositories/space_member_repo.rs` — `DieselSpaceMemberRepository`，实现 `MemberRepositoryPort::{get, list, save(UPSERT on conflict), remove(bool)}`
+- `src/db/schema.rs` — 新增 `space_member` table 条目
+
+### 3.3 测试
+
+`space_member_repo.rs` 内置 6 个集成测试（用 `init_db_pool` + `tempfile`）：
+
+- `save_then_get_roundtrip`
+- `get_missing_returns_none`
+- `save_is_upsert`
+- `list_returns_all_saved`
+- `remove_returns_true_when_present_false_when_absent`
+- `migration_copies_trusted_paired_devices_with_default_preferences` — 验证 Pending 被跳过 + `auto_sync=false`/混合 content_types 的映射
+
+---
+
+## 4. Phase 2 — 双写：pairing 完成后同时写 `space_member`（已完成 · 提交 `befbbdfe`）
+
+### 4.1 装配
+
+- `uc-app/src/deps.rs` — `DevicePorts::member_repo: Arc<dyn MemberRepositoryPort>`
+- `uc-bootstrap/src/assembly.rs` — `InfraLayer::member_repo`、构造 `DieselSpaceMemberRepository`、填入 `DevicePorts`
+- `uc-bootstrap/src/builders.rs` 两处 — 从 `deps.device.member_repo.clone()` 取出，传给 `PairingOrchestrator::new`
+
+### 4.2 Pairing 改造
+
+- `PairingOrchestrator::new` 签名加 `member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>`（第 3 参数）
+- `PairingProtocolHandler::new` 同样加一个字段
+- `execute_action_inner` 和 `handle_timeout` 签名都新增该参数
+
+### 4.3 双写逻辑（`PairingAction::PersistPairedDevice` 分支）
+
+```rust
+let member_snapshot = space_member_from_paired_device(&device); // snapshot before move
+let persist_result = device_repo.upsert(device).await;          // authoritative
+if persist_result.is_ok() {
+    dual_write_member(member_repo.as_ref(), &session_id, member_snapshot).await;
+}
+```
+
+两个 helper 在文件底部：
+
+- `space_member_from_paired_device(&PairedDevice) -> SpaceMember`：字段映射，`device_id = DeviceId::new(peer_id.as_str())`，`joined_at = paired_at`，`sync_preferences = default()`
+- `dual_write_member(...)`：只做 `member_repo.save`，任何错误都 WARN，不 propagate
+
+### 4.4 测试
+
+`protocol_handler.rs` 的 `#[cfg(test)] mod tests` 新增 4 个 case：
+
+- `space_member_from_paired_device_maps_core_fields`
+- `dual_write_persists_member_on_success`
+- `dual_write_swallows_repository_errors`
+- `dual_write_swallows_already_admitted_errors`
+
+都用 `FakeMemberRepo`（sync `StdMutex<Vec>` + 可选错误注入），不依赖真实 DB。
+
+---
+
+## 5. 插入里程碑 — `space_access` + `setup` 搬到 `uc-application`（进行中，优先级最高）
+
+> 2026-04-17 细化：把本里程碑固化为 **阶段 A / 阶段 B / 阶段 C**，顺序不可颠倒。每阶段完成是下阶段的前置。
+
+### 5.1 大致形状（背景）
+
+- `uc-core/src/space_access/` 已有领域模型（`domain.rs` / `state.rs` / `state_machine.rs` / `action.rs` / `event.rs` / `error.rs` / `reason_codec.rs`）
+- `uc-core/src/setup/` 里除 `status.rs` 之外的所有状态机 / 事件 / 动作 / 错误**应拉回 `uc-application`**（当前位置违反 `uc-core/AGENTS.md` §9.1，顺带纠偏）
+- `uc-application/src/space_access/` 和 `uc-application/src/setup/` **未建立**，本里程碑同时建立
+- 选项 (b) 下，`uc-app/usecases/pairing/` 的协议状态机和 orchestrator **合并或整合进 space_access**；纯技术协调层（如 `StagedPairedDeviceStore`）下沉到 `uc-core` / `uc-infra`
+
+### 5.2 与 membership 的对接
+
+- `space_access` 的 **`SpaceAccessState::Granted`** 是 `AdmitMemberUseCase::execute(AdmitMember { ... })` 的**唯一正式入场点**（D14）
+- `setup` **不重复**挂 admit（`SetupEvent::JoinSpaceSucceeded` 只推 UI 状态）
+- `device_name` / `identity_fingerprint` 由 **pairing 在 `KeyslotReceived` / `PairingSucceeded` 事件**写入 `SpaceAccessContext`，由 space_access 取出构造 `AdmitMember` 输入
+- 调用来源从"uc-app 的 pairing protocol_handler"切到"uc-application 的 space_access orchestrator"
+- `uc-app/src/usecases/pairing/` 里的 `list_paired_devices` / `unpair_device` / `get_device_sync_settings` / `update_device_sync_settings` 等 use case 在 pairing 搬家后应不再有消费方
+
+### 5.3 对 membership 迁移的影响
+
+- 搬家完成后再启动修正版 Phase 3；且 Phase 3 的一部分工作（删除 uc-app 重叠 use case）会被 space_access 搬家顺手完成
+- Phase 4 的"删双写"简化为"space_access 成功后只写 `space_member`，不再写 `paired_device`"
+
+---
+
+### 5.4 阶段 0 / A / B / C 固化（2026-04-17 决策）
+
+**执行顺序不可颠倒**：0 → A → B → C。每阶段的"出口条件"是下阶段启动的前置。
+
+> 2026-04-17 增补：原计划直接启动阶段 A，但发现 `SpaceAccessPersistenceAdapter` 反向依赖 `StagedPairedDeviceStore`，其病根是 `PairedDevice` 上帝对象。根治需先重构 pairing domain，因此插入 **阶段 0 — `trusted_peer` domain 建立 + `PairedDevice` 拆解清退**。详细 domain 定义见 `TRUSTED_PEER_DOMAIN_ZH.md`。
+
+#### 阶段 0 — `trusted_peer` domain 重构（`PairedDevice` 上帝对象拆解）
+
+**产物**：`uc-core::trusted_peer` + `uc-application::trusted_peer` 就位；`PairedDevice` 上帝对象拆解为 `TrustedPeer`（信任关系）+ `SpaceMember`（成员登记）+ 未来的 `DeviceDisplayInfo`（显示属性），`StagedPairedDeviceStore` 消失。
+
+| # | 状态 | 动作 | 说明 |
+|---|---|---|---|
+| 0.0 | ✅ | 写 `TRUSTED_PEER_DOMAIN_ZH.md` 固化 domain 定义 | 作为 0.1~0.5 的唯一权威来源，防止实施漂移 |
+| 0.1 | ✅ `47861357` | 新建 `uc-core::trusted_peer`：`TrustedPeer` / `PeerFingerprint` / `TrustedPeerEvent` / `TrustedPeerRepositoryPort` / `TrustedPeerError` | 严格按 DOMAIN.md §4 形状；`ShortCode` **不进** core |
+| 0.2 | ✅ `d7aa22a1` | `uc-infra`: 新建 `trusted_peer` 表 + `DieselTrustedPeerRepository`（无数据迁移，用户升级后重新配对） | DOMAIN.md §8；**不与 `paired_device` 做兼容搬迁**（2026-04-17 决策，详见执行记录 D17） |
+| 0.3 | ✅ `ef5ba23b` | 新建 `uc-application::trusted_peer`：orchestrator + 状态机 + `TrustPeerUseCase` / `ConfirmPeerVerificationUseCase` / `CancelTrustingUseCase` / `DistrustPeerUseCase` / `ListTrustedPeersQuery` / `GetTrustedPeerQuery` | DOMAIN.md §5；状态机终态仅 `Trusted` / `Aborted` |
+| 0.4 | ⏳ 下一步 | 消费者切换：`uc-app::pairing::protocol_handler` 改为驱动 `TrustPeerOrchestrator`；space_access / setup 从事件订阅消费 `TrustedPeer`；`staged_paired_device_store` 删除；旧协议错误（`PairingMessage` / `PairingBusy` 等）一并删掉，无向后兼容（D19） | 涉及 6 个文件 + bootstrap 2 处；同时把 pairing 事件携带的 `device_name` / `fingerprint` 写入 `SpaceAccessContext`（为阶段 A 的 admit 注入铺路） |
+| 0.5 | ⏳ | 删除 `uc-core::pairing::PairedDevice` / `PairingState` / `PairedDeviceRepositoryPort`；`paired_device` 表进入只读 | Rust 类型删除；`DROP TABLE paired_device` 统一留给 MIGRATION_PLAN Phase 5 |
+
+**阶段 0 出口条件**：
+1. `uc-core::trusted_peer` + `uc-application::trusted_peer` 编译通过，测试全绿
+2. `StagedPairedDeviceStore` 从代码库彻底消失
+3. `SpaceAccessPersistenceAdapter` 不再引用 `crate::usecases::pairing::*`，反向依赖绊脚石清除
+4. `SpaceAccessContext` 已承载 `device_name` / `peer_fingerprint`（阶段 A admit 注入的前置）
+5. `PairingState` 枚举彻底删除（D8 兑现）
+6. `paired_device` 表只读，新写入路径已切到 `trusted_peer` + `space_member`
+7. CI 全绿；迁移期双写（trusted_peer 权威 + legacy paired_device 只读）无回归
+
+**阶段 0 拆 commit**：
+- commit 1：0.0 DOMAIN.md
+- commit 2：0.1 core domain 定义 — 已提交 `47861357`
+- commit 3：0.2 infra 表 + migration — 已提交 `d7aa22a1`
+- commit 4：0.3 application 层 orchestrator + UseCases — 已提交 `ef5ba23b`
+- commit 5：0.4 消费者切换 + staged store 删除（进行中）
+- commit 6：0.5 `PairedDevice` 及相关 Rust 类型清除
+
+#### 阶段 0 执行记录与决策（2026-04-17）
+
+##### 已完成工作
+
+**0.1 `uc-core::trusted_peer`**（commit `47861357`）
+- 新建 `src-tauri/crates/uc-core/src/trusted_peer/` 下 6 个文件：`mod.rs` / `peer.rs` / `fingerprint.rs` / `events.rs` / `ports.rs` / `error.rs`
+- 产出类型：`TrustedPeer` aggregate（§4.1）、`PeerFingerprint` 值对象（§4.2）、`TrustedPeerEvent` + `TrustAbortReason` 三档（§4.3）、`TrustedPeerRepositoryPort`（§4.4）、`TrustedPeerError` 三变体（§4.5）
+- 在 `uc-core/src/lib.rs` 顶层 re-export 全部 6 个类型
+- 6 个单元测试覆盖 `PeerFingerprint` 等值/Display、3 条错误翻译、`TrustAbortReason` 变体互异
+- 审查清单 §11 七条全答"否"；不引入 `tokio` / `diesel` / `libp2p`
+
+**0.2 `uc-infra` 落地**（commit `d7aa22a1`）
+- migration `2026-04-19-000001_create_trusted_peer/{up,down}.sql`：`CREATE TABLE trusted_peer(peer_device_id PK, local_device_id, peer_fingerprint, trusted_at)` + `idx_trusted_peer_local`
+- 新增 `TrustedPeerRow` / `NewTrustedPeerRow` / `TrustedPeerRowMapper` / `DieselTrustedPeerRepository<E, M>`
+- `trusted_peer` 表加入 `schema.rs` 的 `allow_tables_to_appear_in_same_query!`
+- `save` 采用 `ON CONFLICT(peer_device_id) DO UPDATE` 上 upsert
+- 5 个 repo 集成测试：save/get 回环、missing→None、UPSERT、list-all、remove 布尔返回
+
+**0.3 `uc-application::trusted_peer`**（commit `ef5ba23b`）
+- 新建 `src-tauri/crates/uc-application/src/trusted_peer/` 下 14 个文件：`mod.rs` / `errors.rs` / `challenge.rs` / `state.rs` / `state_machine.rs` / `orchestrator.rs` / `testing.rs` + `usecases/` 下 8 个文件
+- 产出：`TrustState` 五态 + `TrustStateEvent` 六事件；纯函数 `transition()`；`TrustPeerOrchestrator<R>` 持 `Mutex<TrustState>`
+- 六个 UseCase / Query：`TrustPeerUseCase`、`DistrustPeerUseCase`、`ListTrustedPeersQuery`、`GetTrustedPeerQuery` 直接操作 repo；`ConfirmPeerVerificationUseCase`、`CancelTrustingUseCase` 是 orchestrator 的 thin wrapper
+- crate-internal `InMemoryTrustedPeerRepository`（`#[cfg(test)]`）供所有单元测试共享
+- 26 个单元测试：`errors` × 1、`state_machine` × 9、`orchestrator` × 7、`trust_peer` × 2、`distrust_peer` × 2、`list_trusted_peers` × 2、`get_trusted_peer` × 2
+- bootstrap 尚未构造 orchestrator；pairing 协议尚未驱动；0.3 不发 `TrustedPeerEvent`（无订阅者，留到 0.4）
+
+##### 执行中新增的决策
+
+承接 §1 的 D1-D16，阶段 0 执行期间新固化了下列决策，供后续阶段引用：
+
+| # | 决策 | 生效阶段 | 备注 |
+|---|---|---|---|
+| D17 | **阶段 0.2 不做 `paired_device → trusted_peer` 数据搬迁**（2026-04-17） | 0.2 | 用户升级后重新配对。DOMAIN.md §8.2 的一次性 migration 不执行，迁移 SQL 只 `CREATE TABLE` |
+| D18 | **`trusted_at` 在 infra 落为 `BigInt` seconds**（偏离 DOMAIN.md §8.1 的 `TEXT ISO-8601`） | 0.2 | 对齐项目全局约定（`space_member.joined_at` / `paired_device.paired_at` / `*_at_ms`）；core 契约仍是 `DateTime<Utc>`，纯 infra 决策 |
+| D19 | **`TrustPeerOrchestrator` 在 bootstrap 中以全局单例方式装配**（2026-04-17） | 0.4 | 单空间模型下同一时刻只允许一个 trust flow；不做 per-peer 实例化；`Mutex<TrustState>` 天然串行化所有推进路径 |
+| D20 | **阶段 0.4 直接删除旧协议错误类型（`PairingMessage` / `PairingBusy` 等）**（2026-04-17） | 0.4 | 无向后兼容；翻译到 `TrustStateEvent::{TimedOut, ProtocolError, UserCancelled}` 三档后，原有错误类型消失，不保留 sentinel |
+| D21 | **`TrustPeerUseCase` 对重复 peer 返回 `AlreadyTrusted`，不静默覆盖 fingerprint**（DOMAIN.md §4.5 对称执行） | 0.3 | fingerprint 轮换属于合法场景，但走 "先 `DistrustPeerUseCase` 再 `TrustPeerUseCase`" 的显式路径；repo 层 `save` 仍是 upsert（支持状态机内部重入），业务侧由 UseCase 拒绝 |
+| D22 | **`ConfirmPeerVerificationUseCase` / `CancelTrustingUseCase` 是 orchestrator 的 thin wrapper，不是独立 repo 操作** | 0.3 | 让 UI 调用方对 orchestrator 无感，但状态真相仍单点收口在 orchestrator（AGENTS.md §10.2 对齐） |
+
+##### 阶段 0.4 待决事项
+
+动手 0.4 前仍需要回答的问题：
+
+1. **orchestrator 被谁调用 / 谁消费它的事件？**
+   - 现状：`TrustPeerOrchestrator` 有入口方法 `initiate` / `record_session_opened` / `confirm_verification` / `cancel` / `record_timeout` / `record_protocol_error`，但没人调
+   - 预期 0.4 动：`uc-app::pairing::protocol_handler` 改为在协议阶段切换时调 orchestrator 的相应入口；UI 层（setup facade / daemon command）改为调 `ConfirmPeerVerificationUseCase` / `CancelTrustingUseCase`
+   - **待定**：protocol_handler 当前是怎样驱动 `PairedDevice` 写入的？具体挂点在哪一行？先读 `uc-app/src/usecases/pairing/` 再规划
+
+2. **`TrustedPeerEvent` 是否要在 0.4 发出？谁订阅？**
+   - DOMAIN.md §4.3 定义了 4 个事件（`PeerVerificationRequired` / `PeerTrusted` / `PeerDistrusted` / `PeerTrustAborted`）
+   - 0.3 没实现 publisher，因为没订阅者
+   - 阶段 A 的 `space_access` orchestrator 可能订阅 `PeerTrusted` 触发 `AdmitMemberUseCase`（MIGRATION_PLAN §5.4 阶段 A.2）；但 0.4 是否就需要发出事件取决于 `SpaceAccessContext` 的具体改造方案
+   - **待定**：0.4 先只加 `tokio::sync::broadcast` 通道（无订阅），还是同步接入 space_access？
+
+3. **`SpaceAccessContext` 新增 `device_name` / `peer_fingerprint` 的最小改造面**
+   - 阶段 0 出口条件第 4 条要求；预期在 `uc-app/src/usecases/space_access/context.rs`
+   - 写入时机是什么？pairing 协议握手阶段、进入 `AwaitingUserVerification` 时？
+   - **待定**：先读现有 context 结构再规划
+
+4. **`PairingMessage` / `PairingBusy` 在哪些文件？删除影响面？**
+   - D20 决策"直接删"，但需要先枚举所有引用
+   - 预期在 `uc-core::network` 或 `uc-app/src/usecases/pairing/` 附近
+
+5. **`staged_paired_device_store` 的调用方清单**
+   - 删除前需要枚举所有调用方，确认都能切到 `TrustedPeerRepositoryPort::get(...).is_some()`
+   - 可能的调用方：`SpaceAccessPersistenceAdapter`、pairing protocol handler、setup orchestrator
+   - **待定**：先 grep 调用面再定切换顺序
+
+6. **`local_device_id` 从哪取？**
+   - orchestrator 构造时需要；bootstrap 得先拿到本机 id
+   - 预期从 `DeviceIdentityProvider` 或 config 层
+   - **待定**：确认现有 identity provider 的公开 API
+
+7. **0.4 是否要在 uc-app 侧保留一层薄 facade？**
+   - 现在 uc-app 还在退役（D13），新代码都去 uc-application
+   - 但 daemon / tauri command 当前可能从 uc-app 的 pairing facade 消费
+   - **待定**：迁移路径是"直接切到 uc-application"还是"uc-app facade 内部委托到 uc-application"？
+
+上述 7 个疑问落到具体实施前逐一明确，避免 0.4 返工。
+
+#### 阶段 A — `space_access` 搬家 + admit 挂点
+
+**产物**：`uc-application::space_access` 成为唯一应用层入口；`AdmitMemberUseCase` 在 `SpaceAccessState::Granted`（**仅 joiner 侧**）被调用。
+
+| # | 动作 | 说明 |
+|---|---|---|
+| A.1 | 新建 `uc-application/src/space_access/{mod.rs, errors.rs, context.rs, events.rs, orchestrator.rs, executor.rs, crypto_adapter.rs, network_adapter.rs, persistence_adapter.rs, proof_adapter.rs, usecases/}` | 文件骨架从 `uc-app/usecases/space_access/` 平移，公开 API 面保持不变；`persistence_adapter` 改为通过 `TrustedPeerRepositoryPort` 落盘（阶段 0.4 已清 staged store） |
+| A.2 | `SpaceAccessOrchestrator` 注入泛型 `Option<Arc<AdmitMemberUseCase<R>>>`；在 `Granted` 转移点调用 `admit_member.execute(...)` | 仅 joiner 角色触发；失败只 WARN，不影响 `Granted` 返回（与 `dual_write_member` 同源语义） |
+| A.3 | `uc-bootstrap` 装配切换：构造 `AdmitMemberUseCase::new(member_repo.clone())` 注入 orchestrator；`uc-app` 旧 space_access `#[deprecated]` 不删 | `trusted_peer` + `space_member` 双写在阶段 0.4 已就位，admit 只是多出一条路径 |
+| A.4 | `uc-application/tests/space_access_admit_member.rs`：joiner `Granted` → repo 能 `get`；`Denied` 不写入；sponsor 侧不触发 admit | 同时保留 `uc-app` 原测试跑绿 |
+| ~~A.5~~ | ~~pairing 侧改造：事件写 `device_name` / `fingerprint` 到 `SpaceAccessContext`~~ | **已在阶段 0.4 完成**，阶段 A 不再需要 |
+
+**阶段 A 出口条件**：
+1. `uc-application/src/space_access/` 编译通过 + 新增测试全绿
+2. `uc-app/usecases/space_access/` 标 `#[deprecated]` 但仍可编译
+3. daemon 仍从 `uc-app` 路径消费 space_access（阶段 B 再切换）
+4. CI 全绿；双写行为无回归
+
+**阶段 A 拆 commit**：
+- commit 1：A.1 骨架搬家（纯搬运，零行为变更，反向依赖已由阶段 0 清除）
+- commit 2：A.2 + A.3 admit 注入 + 装配切换
+- commit 3：A.4 测试
+
+#### 阶段 B — `setup` 语义化搬家（状态机拉回 + 拆 UseCase）
+
+**产物**：setup 完全脱离 `uc-app`；状态机回归 application 层；`SetupOrchestrator` 变内部实现（决策细则 #2），daemon 只看见 `SetupFacade`。
+
+| # | 动作 | 说明 |
+|---|---|---|
+| B.1 | `uc-core/src/setup/` 删除 `state.rs` / `event.rs` / `action.rs` / `state_machine.rs` / `error.rs`（仅保留 `status.rs`）；顶层 `lib.rs` re-export 清理 | 纠偏 `uc-core/AGENTS.md` §9.1 |
+| B.2 | 新建 `uc-application/src/setup/{mod.rs, state.rs, events.rs, actions.rs, state_machine.rs, errors.rs, context.rs, orchestrator.rs, action_executor.rs, pairing_facade.rs, facade.rs, commands.rs, queries.rs, usecases/}` | 状态机直接从 core 平移；orchestrator 薄化为"dispatch 循环 + context + cancel/reset" |
+| B.3 | 把 `SetupOrchestrator` 的 13 个公开方法**拆为独立 UseCase** — 命名见 §5.4.1 清单 | 所有 UseCase 共享同一个 `Arc<SetupOrchestrator>`（避免状态分散）；`SetupOrchestrator` **不 re-export**，只 `pub(crate)` |
+| B.4 | `SetupFacade` 作为 daemon 的唯一入口，内部路由到具体 UseCase | AGENTS §11 薄 Facade |
+| B.5 | `uc-bootstrap` 切换：daemon 改依赖 `uc_application::setup::SetupFacade`；`uc-app/usecases/setup/` 标 `#[deprecated]` 不删 | 保留 `uc-app` 旧 setup 到阶段 C |
+| B.6 | 测试按 UseCase 粒度重写到 `uc-application/tests/setup/`（`mockall` + port mock） | AGENTS §17.4 |
+
+**B.3 的 UseCase 拆分清单**：
+
+| 原 `SetupOrchestrator` 方法 | 目标 UseCase / Query |
+|---|---|
+| `new_space()` | `StartNewSpaceUseCase` |
+| `join_space()` | `StartJoinSpaceUseCase` |
+| `select_device(peer_id)` | `SelectJoinPeerUseCase` |
+| `confirm_peer_trust()` | `ConfirmPeerTrustUseCase` |
+| `submit_passphrase(p1, p2)` | `SubmitNewSpacePassphraseUseCase` |
+| `verify_passphrase(p)` | `VerifyJoinPassphraseUseCase` |
+| `complete_join_space()` | `CompleteJoinSpaceUseCase` |
+| `cancel_setup()` | `CancelSetupUseCase` |
+| `reset()` | `ResetSetupUseCase` |
+| `clear_transient_state()` | `ClearSetupTransientStateUseCase` |
+| `get_state()` | `GetSetupStateQuery` |
+| `start_completed_host_sponsor_authorization(...)` | `StartSponsorAuthorizationForJoinerUseCase` |
+| `resolve_host_space_access_proof(...)` | `ResolveHostSpaceAccessProofUseCase` |
+| `apply_joiner_space_access_result(...)` | `ApplyJoinerSpaceAccessResultUseCase` |
+
+**阶段 B 出口条件**：
+1. `uc-application/src/setup/` 编译通过 + 新增 UseCase 级测试全绿
+2. `uc-core/src/setup/` 只剩 `status.rs`
+3. daemon 不再 import `uc_app::usecases::setup::*`
+4. `uc-app::usecases::setup` 标 `#[deprecated]` 但仍可编译（阶段 C 再删）
+5. admit 仍只挂在 space_access `Granted`（`CompleteJoinSpaceUseCase` 不调 admit）
+
+#### 阶段 C — `uc-app` 旧 setup / 旧 space_access 清退
+
+**触发条件**：阶段 B 完成且 daemon 切换稳定运行一个迭代周期无回滚。
+
+| # | 动作 |
+|---|---|
+| C.1 | 删除 `uc-app/src/usecases/setup/` |
+| C.2 | 删除 `uc-app/src/usecases/space_access/` |
+| C.3 | `uc-app/src/lib.rs` 和 `usecases/mod.rs` 移除相应导出 |
+| C.4 | `grep` 验证 `uc-app` 不再被任何 crate import `setup::` / `space_access::` |
+| C.5 | 更新本文档 §0 和 §5.4 状态标注 → 进入 Phase 3（消费者切换） |
+
+**阶段 C 出口条件**：`uc-app` 里 setup / space_access 模块完全消失；`cargo tree` 验证只有 `uc-application` 作为应用层承载。
+
+---
+
+## 6. Phase 3 — 消费者切换（修正版；等 `space_access` 搬完后启动）
+
+**原则**：
+- UI 触发的读/写 → daemon 直接调 `uc-application::membership` use case，**不经 uc-app**
+- 系统内部高频查询 → 直接用 `MemberRepositoryPort` port
+- **修正版**：不在 uc-app 里做"改数据源"这种过渡操作；凡 UI 相关的 use case，直接从 uc-app 删除，daemon 调用点切到 uc-application
+
+### 6.1 切换表
+
+| 子阶段 | 消费者 | 做法 | 依赖 |
+|---|---|---|---|
+| **3.1** | `uc-app/usecases/pairing/resolve_connection_policy.rs` | 查询源从 `paired_device_repo.get_by_peer_id` 换成 `member_repo.get(DeviceId::new(peer_id.as_str()))` | 若 `pairing` 整体搬到 `space_access`，此步与搬家同时完成 |
+| **3.2** | `uc-app/usecases/pairing/list_sendable_peers.rs` | "在 member 列表 ⇒ 可发" | 同上 |
+| **3.3** | daemon 的 unpair 路径 | 改调 `uc-application::membership::RevokeMemberUseCase`；**删除** `uc-app/usecases/pairing/unpair_device.rs` | D13（daemon 已依赖 uc-application） |
+| **3.4** | daemon 的 get/update device_sync_settings 路径 | 改调 `GetMemberUseCase` / `UpdateMemberSettingsUseCase` / `ResetMemberPreferencesToDefaultUseCase`；**删除** uc-app 对应 use case | 同 3.3 |
+| **3.5** | daemon 的 list_paired_devices 路径 | 改调 `ListMembersUseCase`；**删除** `uc-app/usecases/pairing/list_paired_devices.rs` | 同 3.3 |
+| **3.6** | daemon DTO 一次性改名 | `PairedDeviceDto → SpaceMemberDto`，`PairedDevicesChangedPayload` 相应改；前端 9 个 TS 文件（`devicesSlice.ts` / `PairedDevicesPanel.tsx` / `PairedPeer` type 等）联动改 | — |
+
+### 6.2 一次性改名（D9 对应）
+
+Phase 3.6 不再单独作为兼容过渡步骤——**DTO 改名 + 前端字段名切换一次完成**。期间前端有一次"破坏性 PR"，不留双写 DTO。
+
+### 6.3 每一步必须回答
+
+- 切换后这个消费者的**失败语义**和原来一致吗？
+- **测试路径**：能否触发对应行为？
+- **事务边界**：是否有半成功需要考虑？
+- **DTO/字段**：前端还有没有别的地方依赖旧字段？
+
+---
+
+## 7. Phase 4 — 删双写（等 Phase 3 完成）
+
+**触发条件**：Phase 3.1~3.6 跑稳一个迭代周期无回滚 + `space_access` 搬家已完成。
+
+动作：
+
+1. `space_access` 的 admit 调用链成为**唯一写入 `space_member` 的入口**
+2. 删除 `uc-app/pairing/protocol_handler.rs` 里的 `dual_write_member` 调用（或整个 `protocol_handler.rs` 随 pairing 搬家一并消失）
+3. `paired_device` 表只读，不再接收新写入
+4. `DevicePorts::paired_device_repo` 视使用情况决定：
+   - 若 `resolve_connection_policy` / `list_sendable_peers` 已切到 `member_repo`，可删除字段
+   - 若还有残余读取，保留一段
+
+---
+
+## 8. Phase 5 — 彻底清理（等 Phase 4 完成）
+
+**触发条件**：Phase 4 完成 + 一个稳定版本。
+
+动作：
+
+1. `uc-core/src/pairing/paired_device.rs` — 删除 `PairedDevice` / `PairingState`（D8）
+2. `uc-core/src/ports/paired_device_repository.rs` — 删除 `PairedDeviceRepositoryPort`
+3. `uc-core/src/ports/errors.rs` — 删除 `PairedDeviceRepositoryError`
+4. `uc-infra/src/db/models/paired_device_row.rs` — 删除
+5. `uc-infra/src/db/mappers/paired_device_mapper.rs` — 删除
+6. `uc-infra/src/db/repositories/paired_device_repo.rs` — 删除
+7. `uc-infra/src/db/schema.rs` — 删除 `paired_device` table! 条目
+8. **新 migration** `drop_paired_device`（不删历史 migration 文件）：
+   ```sql
+   DROP TABLE paired_device;
+   ```
+9. grep 验证 `PairedDevice` / `PairingState` / `paired_device` 归零
+
+---
+
+## 9. 跨 Phase 不动的约束
+
+- `uc-core` 对 `tokio` / `diesel` / `libp2p` 的依赖：永远 0
+- `uc-app` **不新增**对 `uc-application` 的 crate 依赖（保持边界）
+- `MemberRepositoryPort` 接口不再加方法（`get_by_peer_id` 之类），因为 D5 约定让 `get(DeviceId::new(peer_id.as_str()))` 足够用
+- 前端协议改名只在 **Phase 3.6** 做一次
+
+---
+
+## 10. 未解决 / 待决策
+
+| 项 | 描述 | 触发时机 |
+|---|---|---|
+| U1 | `space_access` 搬家后 `uc-app/pairing` 的边界拆分：哪些进 space_access，哪些沉到 uc-core/uc-infra | space_access discuss-phase |
+| U2 | 3.4 全量 vs patch 的 daemon 兼容策略 | 进入 3.4 前 |
+| U3 | 3.3 双写 revoke 的原子性（member + paired_device 能不能放同一事务） — 若 3.3 和 pairing 搬家同时发生则可能不存在此问题 | 进入 3.3 前 |
+| U4 | Phase 5 的 `DROP TABLE paired_device` migration 是否要保留一个 `.bak` 拷贝给 rollback | 进入 Phase 5 前 |
+| U5 | `resolve_connection_policy` / `list_sendable_peers` 在 pairing 搬家后是否仍存在；若存在，归属到哪个模块 | space_access 搬家设计阶段 |
+
+---
+
+## 11. 已提交记录
+
+```
+befbbdfe  feat(membership): dual-write space_member during pairing (Phase 2)
+5f5c6f4c  feat(membership): add Diesel SpaceMember repository and data migration
+1af58f34  feat(membership): add SpaceMember domain model and use cases
+```
+
+分支：`milestone/0.6.0`。
