@@ -559,12 +559,14 @@ f2acf1a3  docs(membership): mark phase 3.3 complete, record commit hash in plan 
 461187a9  docs(membership): mark phase 3.4 complete, record commit hash in plan §6.1 + §11
 61cf9a0d  refactor(membership): rename PairedDeviceDto -> SpaceMemberDto end-to-end (phase 3.6, scope A)
 
-# Phase 4b — 渐进断裂 PR-1 ~ PR-4
+# Phase 4b — 渐进断裂 PR-1 ~ PR-5（迁移完成）
 8e353bea  feat(membership): add GetMemberSyncPreferences / UpdateMemberSyncPreferences (phase 4b PR-1/5)
 f96a6082  feat(membership): add /member/:device_id/sync-preferences endpoints (phase 4b PR-2/5)
 b82d067d  feat(frontend): switch device sync UI to /member sync-preferences (phase 4b PR-3/5)
 c77a4d89  chore(test): remove pre-existing broken frontend test files
 3245a186  refactor(membership): decommission legacy paired_device sync-settings path (phase 4b PR-4/5)
+310da981  docs(membership): backfill phase 4b PR-4 commit hash in plan §11
+d2de97b8  refactor(membership): drop paired_device table, retire PairedDevice/PairingState types (phase 4b PR-5/5)
 ```
 
 分支：`milestone/0.6.0`。
