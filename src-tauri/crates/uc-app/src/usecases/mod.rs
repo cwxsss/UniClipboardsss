@@ -24,18 +24,6 @@ pub mod initialize_encryption;
 pub mod internal;
 pub mod pairing;
 pub mod search;
-/// Re-exports [`uc_application::space_access`] so in-crate code (`setup`) can
-/// continue `use crate::usecases::space_access::*`. Direct callers outside
-/// `uc-app` should import `uc_application::space_access` instead — this module
-/// will be removed after Phase C cleans up the legacy `uc-app::usecases::setup`.
-#[deprecated(
-    since = "0.6.0",
-    note = "space_access moved to uc-application; import from uc_application::space_access"
-)]
-pub mod space_access {
-    #[allow(deprecated)]
-    pub use uc_application::space_access::*;
-}
 pub mod start_network;
 pub mod start_network_after_unlock;
 pub mod storage;

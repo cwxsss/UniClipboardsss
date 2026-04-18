@@ -1172,7 +1172,7 @@ pub fn build_setup_facade(
         },
     ));
     let crypto_factory = Arc::new(
-        uc_app::usecases::space_access::DefaultSpaceAccessCryptoFactory::new(
+        uc_application::space_access::DefaultSpaceAccessCryptoFactory::new(
             deps.security.encryption.clone(),
             deps.security.key_material.clone(),
             deps.security.key_scope.clone(),
@@ -1181,20 +1181,20 @@ pub fn build_setup_facade(
         ),
     );
     let transport_port: Arc<TokioMutex<dyn SpaceAccessTransportPort>> = Arc::new(TokioMutex::new(
-        uc_app::usecases::space_access::SpaceAccessNetworkAdapter::new(
+        uc_application::space_access::SpaceAccessNetworkAdapter::new(
             deps.network_ports.pairing.clone(),
             ports.space_access_facade.context_handle(),
         ),
     ));
     let proof_port: Arc<dyn uc_core::ports::space::ProofPort> = Arc::new(
-        uc_app::usecases::space_access::HmacProofAdapter::new_with_encryption_session(
+        uc_application::space_access::HmacProofAdapter::new_with_encryption_session(
             deps.security.encryption_session.clone(),
         ),
     );
     let timer_port: Arc<TokioMutex<dyn TimerPort>> =
         Arc::new(TokioMutex::new(uc_infra::time::Timer::new()));
     let persistence_port = Arc::new(TokioMutex::new(
-        uc_app::usecases::space_access::SpaceAccessPersistenceAdapter::new(
+        uc_application::space_access::SpaceAccessPersistenceAdapter::new(
             deps.security.encryption_state.clone(),
             ports.trusted_peer_repo.clone(),
         ),
