@@ -36,27 +36,3 @@ pub use file_transfer::{
 };
 pub use ids::{BlobId, DeviceId, PeerId, SessionId};
 pub use network::{NetworkEvent, NetworkStatus, ProtocolMessage};
-
-// 不知道如何分类，临时定义在这里
-
-pub struct EncryptionMeta {
-    pub algo: String,   // "xchacha20poly1305"
-    pub key_id: String, // keyslot id / key version
-    pub nonce_b64: String,
-    pub aad_b64: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum MaterializedPayload {
-    /// 直接可交付
-    Inline {
-        mime: Option<String>,
-        bytes: Vec<u8>,
-    },
-
-    /// 已经落 blob，可交付 blob 引用
-    Blob {
-        mime: Option<String>,
-        blob_id: BlobId,
-    },
-}
