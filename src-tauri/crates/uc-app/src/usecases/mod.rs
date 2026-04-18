@@ -22,6 +22,7 @@ pub mod file_sync;
 pub mod get_settings;
 pub mod initialize_encryption;
 pub mod internal;
+pub mod membership;
 pub mod pairing;
 pub mod search;
 pub mod start_network;
@@ -44,6 +45,7 @@ pub use clipboard::list_entry_projections::{
 pub use delete_clipboard_entry::DeleteClipboardEntry;
 pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
+pub use membership::{GetMemberSyncPreferences, UpdateMemberSyncPreferences};
 pub use pairing::{
     GetDeviceSyncSettings, GetLocalDeviceInfo, GetP2pPeersSnapshot, ListSendablePeers,
     LocalDeviceInfo, ResolveConnectionPolicy, UpdateDeviceSyncSettings,
@@ -201,6 +203,23 @@ impl<'a> CoreUseCases<'a> {
     pub fn update_device_sync_settings(&self) -> crate::usecases::UpdateDeviceSyncSettings {
         crate::usecases::UpdateDeviceSyncSettings::from_ports(
             self.runtime.deps.device.paired_device_repo.clone(),
+        )
+    }
+
+    /// Get sync preferences for a space member (phase 4b path).
+    ///
+    /// 并存于 `get_device_sync_settings` 之外，读 `member_repo`；DTO / 前端切换
+    /// 后旧入口将在 PR-4 中移除。
+    pub fn get_member_sync_preferences(&self) -> crate::usecases::GetMemberSyncPreferences {
+        crate::usecases::GetMemberSyncPreferences::from_ports(
+            self.runtime.deps.device.member_repo.clone(),
+        )
+    }
+
+    /// Overwrite sync preferences for a space member (phase 4b path).
+    pub fn update_member_sync_preferences(&self) -> crate::usecases::UpdateMemberSyncPreferences {
+        crate::usecases::UpdateMemberSyncPreferences::from_ports(
+            self.runtime.deps.device.member_repo.clone(),
         )
     }
 

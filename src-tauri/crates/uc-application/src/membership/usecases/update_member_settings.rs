@@ -16,13 +16,13 @@ pub struct UpdateMemberSettings {
 }
 
 /// 更新本机对某成员的同步偏好（全量覆盖）。
-pub struct UpdateMemberSettingsUseCase<R> {
+pub struct UpdateMemberSettingsUseCase<R: ?Sized> {
     repository: Arc<R>,
 }
 
 impl<R> UpdateMemberSettingsUseCase<R>
 where
-    R: MemberRepositoryPort,
+    R: MemberRepositoryPort + ?Sized,
 {
     pub fn new(repository: Arc<R>) -> Self {
         Self { repository }

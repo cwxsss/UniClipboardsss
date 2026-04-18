@@ -14,13 +14,13 @@ pub struct GetMember {
 ///
 /// 面向 UI 的"设备详情"视图使用。若调用方希望"存在性可选"，
 /// 后续可引入一个独立的 `FindMember` 用例，直接返回 `Option`。
-pub struct GetMemberUseCase<R> {
+pub struct GetMemberUseCase<R: ?Sized> {
     repository: Arc<R>,
 }
 
 impl<R> GetMemberUseCase<R>
 where
-    R: MemberRepositoryPort,
+    R: MemberRepositoryPort + ?Sized,
 {
     pub fn new(repository: Arc<R>) -> Self {
         Self { repository }
