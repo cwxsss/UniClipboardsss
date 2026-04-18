@@ -19,7 +19,7 @@ use super::usecases::trust_peer::{TrustPeer, TrustPeerUseCase};
 /// exposes `record_session_opened` / `record_timeout` / `record_protocol_error`
 /// for the protocol handler to drive, plus `initiate` / `confirm` / `cancel`
 /// for user-initiated actions.
-pub struct TrustPeerOrchestrator<R> {
+pub struct TrustPeerOrchestrator<R: ?Sized> {
     state: Mutex<TrustState>,
     trust_peer: TrustPeerUseCase<R>,
     local_device_id: DeviceId,
@@ -27,7 +27,7 @@ pub struct TrustPeerOrchestrator<R> {
 
 impl<R> TrustPeerOrchestrator<R>
 where
-    R: TrustedPeerRepositoryPort,
+    R: TrustedPeerRepositoryPort + ?Sized,
 {
     pub fn new(repository: Arc<R>, local_device_id: DeviceId) -> Self {
         Self {
@@ -39,6 +39,22 @@ where
 
     pub async fn current_state(&self) -> TrustState {
         self.state.lock().await.clone()
+    }
+
+    /// Reset the orchestrator back to `Idle` regardless of current state.
+    ///
+    /// Intended to be called at the start of a fresh trust-establishment
+    /// flow when the orchestrator is wired as a process-wide singleton
+    /// (D19). Terminal states (`Trusted`, `Aborted`) reject all further
+    /// events by design, so without an explicit reset the second flow
+    /// would always fail with `IllegalTransition`.
+    ///
+    /// Intentionally infallible: the caller's contract is "I own the
+    /// orchestrator for the next flow"; mid-flow state is discarded.
+    pub async fn reset(&self) -> TrustState {
+        let mut guard = self.state.lock().await;
+        *guard = TrustState::Idle;
+        TrustState::Idle
     }
 
     /// External entry point: start trusting a specific peer.
@@ -272,5 +288,63 @@ mod tests {
             err,
             TrustedPeerApplicationError::IllegalTransition(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn reset_returns_to_idle_from_trusted_and_allows_new_flow() {
+        let (repo, orch) = build("local-1");
+
+        // First flow: reach Trusted terminal.
+        orch.initiate(DeviceId::new("peer-a")).await.unwrap();
+        orch.record_session_opened(DeviceId::new("peer-a"), challenge("fp-a", "123"))
+            .await
+            .unwrap();
+        orch.confirm_verification().await.unwrap();
+        assert!(matches!(
+            orch.current_state().await,
+            TrustState::Trusted { .. }
+        ));
+
+        // Reset, then start a brand new flow with a different peer.
+        let after_reset = orch.reset().await;
+        assert_eq!(after_reset, TrustState::Idle);
+
+        // Remove peer-a from repo so peer-b is just a regular new trust.
+        // (Not required — orchestrator reset is orthogonal to persistence —
+        // but keeps the second flow's assertion unambiguous.)
+        repo.remove(&DeviceId::new("peer-a")).await.unwrap();
+
+        orch.initiate(DeviceId::new("peer-b")).await.unwrap();
+        orch.record_session_opened(DeviceId::new("peer-b"), challenge("fp-b", "456"))
+            .await
+            .unwrap();
+        let final_state = orch.confirm_verification().await.unwrap();
+        match final_state {
+            TrustState::Trusted { trusted_peer } => {
+                assert_eq!(trusted_peer.peer_device_id.as_str(), "peer-b");
+            }
+            other => panic!("expected Trusted after reset+new flow, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reset_from_aborted_returns_to_idle() {
+        let (_repo, orch) = build("local-1");
+        orch.initiate(DeviceId::new("peer-a")).await.unwrap();
+        orch.cancel().await.unwrap();
+        assert!(matches!(
+            orch.current_state().await,
+            TrustState::Aborted { .. }
+        ));
+
+        let after_reset = orch.reset().await;
+        assert_eq!(after_reset, TrustState::Idle);
+    }
+
+    #[tokio::test]
+    async fn reset_from_idle_is_noop() {
+        let (_repo, orch) = build("local-1");
+        let after_reset = orch.reset().await;
+        assert_eq!(after_reset, TrustState::Idle);
     }
 }

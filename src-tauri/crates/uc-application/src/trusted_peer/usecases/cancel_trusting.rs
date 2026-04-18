@@ -11,13 +11,13 @@ use crate::trusted_peer::state::TrustState;
 /// Thin wrapper around `TrustPeerOrchestrator::cancel`. The flow must
 /// still be in a non-terminal state (`Idle` is rejected — there is
 /// nothing to cancel); callers receive `IllegalTransition` otherwise.
-pub struct CancelTrustingUseCase<R> {
+pub struct CancelTrustingUseCase<R: ?Sized> {
     orchestrator: Arc<TrustPeerOrchestrator<R>>,
 }
 
 impl<R> CancelTrustingUseCase<R>
 where
-    R: TrustedPeerRepositoryPort,
+    R: TrustedPeerRepositoryPort + ?Sized,
 {
     pub fn new(orchestrator: Arc<TrustPeerOrchestrator<R>>) -> Self {
         Self { orchestrator }

@@ -31,8 +31,10 @@ use uc_app::AppDeps;
 use uc_application::pairing::{
     PairingAction, PairingCryptoPorts, PairingOrchestrator, StagedPairedDeviceStore,
 };
+use uc_application::trusted_peer::TrustPeerOrchestrator;
 use uc_core::config::AppConfig;
 use uc_core::ports::PeerDirectoryPort;
+use uc_core::TrustedPeerRepositoryPort;
 use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
 use uc_platform::adapters::PairingRuntimeOwner;
 
@@ -129,9 +131,8 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
 
     let deps = wired.deps;
     let background = wired.background;
+    let trusted_peer_repo = wired.trusted_peer_repo;
 
-    let pairing_device_repo = deps.device.paired_device_repo.clone();
-    let pairing_member_repo = deps.device.member_repo.clone();
     let pairing_device_identity = deps.device.device_identity.clone();
     let pairing_settings = deps.settings.clone();
     let discovery_network = deps.network_ports.peers.clone();
@@ -148,7 +149,19 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         (device_name, config)
     });
 
-    let pairing_device_id = pairing_device_identity.current_device_id().to_string();
+    let local_device_id = pairing_device_identity.current_device_id();
+    let pairing_device_id = local_device_id.to_string();
+
+    // Process-wide singleton TrustPeerOrchestrator (D19) — drives the
+    // trust-establishment state machine from `PersistPairedDevice` at
+    // the end of each pairing flow. Backed by the Diesel-backed
+    // `TrustedPeerRepositoryPort` wired above; `reset()` is invoked at
+    // the start of every pairing flow to support multiple pairings in
+    // a single process lifetime.
+    let trust_peer_orch: Arc<TrustPeerOrchestrator<dyn TrustedPeerRepositoryPort>> = Arc::new(
+        TrustPeerOrchestrator::new(trusted_peer_repo, local_device_id),
+    );
+
     let staged_store = Arc::new(StagedPairedDeviceStore::new());
     let pairing_crypto = Arc::new(PairingCryptoPorts {
         pin_hasher: deps.security.pin_hasher.clone(),
@@ -157,8 +170,7 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     });
     let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
         pairing_config,
-        pairing_device_repo,
-        pairing_member_repo,
+        trust_peer_orch,
         pairing_device_name,
         pairing_device_id,
         pairing_peer_id,
@@ -235,9 +247,8 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let deps = wired.deps;
     let background = wired.background;
     let emitter_cell = wired.emitter_cell;
+    let trusted_peer_repo = wired.trusted_peer_repo;
 
-    let pairing_device_repo = deps.device.paired_device_repo.clone();
-    let pairing_member_repo = deps.device.member_repo.clone();
     let pairing_device_identity = deps.device.device_identity.clone();
     let pairing_settings = deps.settings.clone();
     let pairing_peer_id = background.libp2p_network.local_peer_id();
@@ -252,7 +263,15 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         (device_name, config)
     });
 
-    let pairing_device_id = pairing_device_identity.current_device_id().to_string();
+    let local_device_id = pairing_device_identity.current_device_id();
+    let pairing_device_id = local_device_id.to_string();
+
+    // Process-wide singleton TrustPeerOrchestrator (D19). See the
+    // `build_gui_app` comment above for lifecycle notes.
+    let trust_peer_orch: Arc<TrustPeerOrchestrator<dyn TrustedPeerRepositoryPort>> = Arc::new(
+        TrustPeerOrchestrator::new(trusted_peer_repo, local_device_id),
+    );
+
     let staged_store = Arc::new(StagedPairedDeviceStore::new());
     let pairing_crypto = Arc::new(PairingCryptoPorts {
         pin_hasher: deps.security.pin_hasher.clone(),
@@ -261,8 +280,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     });
     let (pairing_orchestrator, pairing_action_rx) = PairingOrchestrator::new(
         pairing_config,
-        pairing_device_repo,
-        pairing_member_repo,
+        trust_peer_orch,
         pairing_device_name,
         pairing_device_id,
         pairing_peer_id,

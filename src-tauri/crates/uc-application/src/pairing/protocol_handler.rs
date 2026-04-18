@@ -13,30 +13,38 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{info_span, Instrument};
 
 use uc_core::network::SessionId;
-use uc_core::ports::PairedDeviceRepositoryPort;
-use uc_core::{
-    DeviceId, MemberRepositoryPort, MemberSyncPreferences, MembershipError, SpaceMember,
-};
+use uc_core::{DeviceId, PeerFingerprint, TrustedPeerRepositoryPort};
 
 use super::state_machine::{FailureReason, PairingAction, PairingEvent, TimeoutKind};
 
 use super::events::PairingDomainEvent;
 use super::session_manager::{PairingPeerInfo, PairingSessionContext};
 use super::staged_paired_device_store::StagedPairedDeviceStore;
+use crate::trusted_peer::{TrustPeerOrchestrator, TrustVerificationChallenge};
+
+/// Shared alias for the trust-peer orchestrator singleton (D19): one
+/// instance per process, dyn-backed so bootstrap can inject the concrete
+/// `DieselTrustedPeerRepository` without threading the generic up through
+/// `PairingOrchestrator::new`.
+pub(crate) type SharedTrustPeerOrchestrator =
+    Arc<TrustPeerOrchestrator<dyn TrustedPeerRepositoryPort>>;
 
 /// Handles execution of pairing protocol actions.
 ///
-/// Owns port references needed for protocol operations: device_repo,
+/// Owns port references needed for protocol operations: trust_peer_orch,
 /// staged_store, and action_tx channel. Does NOT own sessions — borrows
 /// them via Arc references passed from the orchestrator.
 #[derive(Clone)]
 pub(crate) struct PairingProtocolHandler {
     /// Action sender (forwarding actions to the network layer)
     action_tx: mpsc::Sender<PairingAction>,
-    /// Paired device repository (authoritative write during Phase 2 migration).
-    device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
-    /// Space member repository (shadow write during Phase 2 migration).
-    member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
+    /// Trust-peer orchestrator singleton (D19). Drives the trust
+    /// establishment flow (`initiate → record_session_opened →
+    /// confirm_verification`) at the moment the pairing state machine
+    /// reaches `PersistPairedDevice`. Replaces the dual-write combo
+    /// (`PairedDeviceRepositoryPort::upsert` + `MemberRepositoryPort::save`)
+    /// that lived here during Phase 2.
+    trust_peer_orch: SharedTrustPeerOrchestrator,
     /// Staged paired device store
     staged_store: Arc<StagedPairedDeviceStore>,
     /// Event senders for domain events
@@ -47,15 +55,13 @@ impl PairingProtocolHandler {
     /// Create a new protocol handler.
     pub(crate) fn new(
         action_tx: mpsc::Sender<PairingAction>,
-        device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
-        member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
+        trust_peer_orch: SharedTrustPeerOrchestrator,
         staged_store: Arc<StagedPairedDeviceStore>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
     ) -> Self {
         Self {
             action_tx,
-            device_repo,
-            member_repo,
+            trust_peer_orch,
             staged_store,
             event_senders,
         }
@@ -80,8 +86,7 @@ impl PairingProtocolHandler {
             sessions.clone(),
             session_peers.clone(),
             self.event_senders.clone(),
-            self.device_repo.clone(),
-            self.member_repo.clone(),
+            self.trust_peer_orch.clone(),
             self.staged_store.clone(),
             session_id.to_string(),
             action,
@@ -94,8 +99,7 @@ impl PairingProtocolHandler {
         sessions: Arc<RwLock<HashMap<SessionId, PairingSessionContext>>>,
         session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
-        device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
-        member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
+        trust_peer_orch: SharedTrustPeerOrchestrator,
         staged_store: Arc<StagedPairedDeviceStore>,
         session_id: String,
         action: PairingAction,
@@ -272,21 +276,53 @@ impl PairingProtocolHandler {
                         tracing::info!(
                             session_id = %session_id,
                             peer_id = %device.peer_id,
-                            "Persisting paired device before verification completion"
+                            "Driving trust-peer flow before verification completion"
                         );
-                        let peer_id = device.peer_id.to_string();
+                        let peer_id_str = device.peer_id.to_string();
+                        // The staged-store snapshot is still consumed by
+                        // `uc-app/space_access/persistence_adapter.rs` during
+                        // Phase 2; removal is scheduled for 0.4.3 together
+                        // with the reverse-dep cleanup.
                         staged_store.stage(&session_id, device.clone());
 
-                        // Snapshot the fields we need for the shadow membership
-                        // write before `device` is moved into `upsert`.
-                        let member_snapshot = space_member_from_paired_device(&device);
+                        let peer_device_id = DeviceId::new(peer_id_str.clone());
+                        // Short-code is a UI-presentation artefact emitted
+                        // earlier in the flow via
+                        // `PairingDomainEvent::PairingVerificationRequired`;
+                        // the orchestrator state here is not observed
+                        // externally in 0.4.2 (D23 defers event publishing
+                        // to phase A), so the challenge only needs the
+                        // canonical fingerprint for persistence.
+                        let challenge = TrustVerificationChallenge {
+                            peer_fingerprint: PeerFingerprint::new(
+                                device.identity_fingerprint.clone(),
+                            ),
+                            short_code: String::new(),
+                        };
 
-                        let persist_result = device_repo.upsert(device).await;
-
-                        if persist_result.is_ok() {
-                            dual_write_member(member_repo.as_ref(), &session_id, member_snapshot)
-                                .await;
+                        // D19 singleton: reset guarantees a fresh flow
+                        // regardless of the previous flow's terminal state.
+                        trust_peer_orch.reset().await;
+                        let persist_result: Result<()> = async {
+                            trust_peer_orch
+                                .initiate(peer_device_id.clone())
+                                .await
+                                .map_err(|err| anyhow::anyhow!("trust initiate failed: {err}"))?;
+                            trust_peer_orch
+                                .record_session_opened(peer_device_id.clone(), challenge)
+                                .await
+                                .map_err(|err| {
+                                    anyhow::anyhow!("trust record_session_opened failed: {err}")
+                                })?;
+                            trust_peer_orch
+                                .confirm_verification()
+                                .await
+                                .map_err(|err| {
+                                    anyhow::anyhow!("trust confirm_verification failed: {err}")
+                                })?;
+                            Ok(())
                         }
+                        .await;
 
                         let actions = {
                             let mut sessions = sessions.write().await;
@@ -294,7 +330,7 @@ impl PairingProtocolHandler {
                                 let event = match persist_result {
                                     Ok(()) => PairingEvent::PersistOk {
                                         session_id: session_id.clone(),
-                                        device_id: peer_id,
+                                        device_id: peer_id_str,
                                     },
                                     Err(err) => PairingEvent::PersistErr {
                                         session_id: session_id.clone(),
@@ -338,8 +374,7 @@ impl PairingProtocolHandler {
                         let sessions = sessions_for_timer;
                         let session_peers = peers_for_timer;
                         let event_senders = event_senders_for_timer;
-                        let device_repo = device_repo.clone();
-                        let member_repo_for_timer = member_repo.clone();
+                        let trust_peer_orch_for_timer = trust_peer_orch.clone();
                         let staged_store_for_timer = staged_store.clone();
                         let session_id_for_log = action_session_id.clone();
                         let sleep_duration = deadline
@@ -353,8 +388,7 @@ impl PairingProtocolHandler {
                                 sessions,
                                 session_peers,
                                 event_senders,
-                                device_repo,
-                                member_repo_for_timer,
+                                trust_peer_orch_for_timer,
                                 staged_store_for_timer,
                                 action_session_id,
                                 kind,
@@ -406,8 +440,7 @@ impl PairingProtocolHandler {
         sessions: Arc<RwLock<HashMap<SessionId, PairingSessionContext>>>,
         session_peers: Arc<RwLock<HashMap<SessionId, PairingPeerInfo>>>,
         event_senders: Arc<Mutex<Vec<mpsc::Sender<PairingDomainEvent>>>>,
-        device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
-        member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
+        trust_peer_orch: SharedTrustPeerOrchestrator,
         staged_store: Arc<StagedPairedDeviceStore>,
         session_id: String,
         kind: TimeoutKind,
@@ -442,8 +475,7 @@ impl PairingProtocolHandler {
                         sessions.clone(),
                         session_peers.clone(),
                         event_senders.clone(),
-                        device_repo.clone(),
-                        member_repo.clone(),
+                        trust_peer_orch.clone(),
                         staged_store.clone(),
                         session_id.clone(),
                         action,
@@ -477,171 +509,140 @@ impl PairingProtocolHandler {
     }
 }
 
-/// Build a [`SpaceMember`] snapshot from a [`PairedDevice`] for the Phase 2
-/// shadow write to the new membership table.
-///
-/// During the paired_device → membership migration the pairing protocol
-/// produces a `PairedDevice` as its persisted artefact. The membership
-/// table stores a narrower view: no pairing state (removal = revocation),
-/// no `last_seen_at` (moved to the network layer), and `device_id` reuses
-/// the peer id string directly by design.
-fn space_member_from_paired_device(device: &uc_core::pairing::PairedDevice) -> SpaceMember {
-    SpaceMember {
-        device_id: DeviceId::new(device.peer_id.as_str()),
-        device_name: device.device_name.clone(),
-        identity_fingerprint: device.identity_fingerprint.clone(),
-        joined_at: device.paired_at,
-        sync_preferences: MemberSyncPreferences::default(),
-    }
-}
-
-/// Shadow-write a member record alongside the authoritative paired_device
-/// upsert. Failures are logged but do not fail the pairing flow — during
-/// Phase 2 the paired_device table is still the source of truth.
-async fn dual_write_member(
-    member_repo: &(dyn MemberRepositoryPort + Send + Sync),
-    session_id: &str,
-    member: SpaceMember,
-) {
-    if let Err(err) = member_repo.save(&member).await {
-        let kind = match err {
-            MembershipError::AlreadyAdmitted(_) => "already_admitted",
-            MembershipError::NotFound(_) => "not_found",
-            MembershipError::Repository(_) => "repository",
-        };
-        tracing::warn!(
-            session_id = %session_id,
-            device_id = %member.device_id,
-            error = %err,
-            kind,
-            "Phase 2 shadow write to space_member failed; paired_device succeeded"
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use async_trait::async_trait;
-    use chrono::{TimeZone, Utc};
-    use std::sync::Mutex as StdMutex;
-    use uc_core::pairing::{PairedDevice, PairingState};
-    use uc_core::PeerId;
+    //! 0.4.2 migration note: the four Phase-2 `dual_write_*` unit tests
+    //! that lived here have been replaced by trusted-peer assertions that
+    //! mirror the new write-path contract:
+    //!
+    //! - `trust_flow_persists_trusted_peer_on_success`
+    //! - `trust_flow_rejects_second_pairing_for_same_peer`
+    //! - `trust_flow_reset_allows_pairing_another_peer`
+    //! - `trust_flow_peer_device_id_matches_peer_id_string` (D5)
+    //!
+    //! The tests exercise the `TrustPeerOrchestrator` driver sequence that
+    //! the `PersistPairedDevice` branch now runs, using the same
+    //! `InMemoryTrustedPeerRepository` test double that the orchestrator's
+    //! own unit tests use.
 
-    struct FakeMemberRepo {
-        saved: StdMutex<Vec<SpaceMember>>,
-        fail_with: Option<MembershipError>,
+    use crate::trusted_peer::testing::InMemoryTrustedPeerRepository;
+    use crate::trusted_peer::{
+        TrustPeerOrchestrator, TrustState, TrustVerificationChallenge, TrustedPeerApplicationError,
+    };
+    use std::sync::Arc;
+    use uc_core::{DeviceId, PeerFingerprint, TrustedPeerRepositoryPort};
+
+    fn build_orch(
+        local: &str,
+    ) -> (
+        Arc<InMemoryTrustedPeerRepository>,
+        TrustPeerOrchestrator<InMemoryTrustedPeerRepository>,
+    ) {
+        let repo = Arc::new(InMemoryTrustedPeerRepository::new());
+        let orch = TrustPeerOrchestrator::new(repo.clone(), DeviceId::new(local));
+        (repo, orch)
     }
 
-    impl FakeMemberRepo {
-        fn new() -> Self {
-            Self {
-                saved: StdMutex::new(Vec::new()),
-                fail_with: None,
-            }
-        }
-
-        fn failing(err: MembershipError) -> Self {
-            Self {
-                saved: StdMutex::new(Vec::new()),
-                fail_with: Some(err),
-            }
-        }
-
-        fn saved(&self) -> Vec<SpaceMember> {
-            self.saved.lock().unwrap().clone()
-        }
-    }
-
-    #[async_trait]
-    impl MemberRepositoryPort for FakeMemberRepo {
-        async fn get(&self, _device_id: &DeviceId) -> Result<Option<SpaceMember>, MembershipError> {
-            Ok(None)
-        }
-
-        async fn list(&self) -> Result<Vec<SpaceMember>, MembershipError> {
-            Ok(self.saved())
-        }
-
-        async fn save(&self, member: &SpaceMember) -> Result<(), MembershipError> {
-            if let Some(err) = &self.fail_with {
-                return Err(match err {
-                    MembershipError::AlreadyAdmitted(id) => {
-                        MembershipError::AlreadyAdmitted(id.clone())
-                    }
-                    MembershipError::NotFound(id) => MembershipError::NotFound(id.clone()),
-                    MembershipError::Repository(msg) => MembershipError::Repository(msg.clone()),
-                });
-            }
-            self.saved.lock().unwrap().push(member.clone());
-            Ok(())
-        }
-
-        async fn remove(&self, _device_id: &DeviceId) -> Result<bool, MembershipError> {
-            Ok(false)
+    fn challenge(fp: &str) -> TrustVerificationChallenge {
+        TrustVerificationChallenge {
+            peer_fingerprint: PeerFingerprint::new(fp),
+            short_code: String::new(),
         }
     }
 
-    fn sample_device() -> PairedDevice {
-        PairedDevice {
-            peer_id: PeerId::from("peer-xyz"),
-            pairing_state: PairingState::Trusted,
-            identity_fingerprint: "fp-xyz".to_string(),
-            paired_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
-            last_seen_at: None,
-            device_name: "Laptop-A".to_string(),
-            sync_settings: None,
-        }
-    }
-
-    #[test]
-    fn space_member_from_paired_device_maps_core_fields() {
-        let device = sample_device();
-        let member = space_member_from_paired_device(&device);
-
-        assert_eq!(member.device_id.as_str(), "peer-xyz");
-        assert_eq!(member.device_name, "Laptop-A");
-        assert_eq!(member.identity_fingerprint, "fp-xyz");
-        assert_eq!(member.joined_at, device.paired_at);
-        assert_eq!(member.sync_preferences, MemberSyncPreferences::default());
+    async fn drive_persist_flow(
+        orch: &TrustPeerOrchestrator<InMemoryTrustedPeerRepository>,
+        peer_device_id: DeviceId,
+        fingerprint: &str,
+    ) -> Result<TrustState, TrustedPeerApplicationError> {
+        orch.reset().await;
+        orch.initiate(peer_device_id.clone()).await?;
+        orch.record_session_opened(peer_device_id, challenge(fingerprint))
+            .await?;
+        orch.confirm_verification().await
     }
 
     #[tokio::test]
-    async fn dual_write_persists_member_on_success() {
-        let repo = FakeMemberRepo::new();
-        let member = space_member_from_paired_device(&sample_device());
+    async fn trust_flow_persists_trusted_peer_on_success() {
+        // Replaces `dual_write_persists_member_on_success`: the PersistPairedDevice
+        // branch now drives the trust orchestrator's full Idle→Trusted sequence.
+        let (repo, orch) = build_orch("local-1");
 
-        dual_write_member(&repo, "session-1", member.clone()).await;
+        let final_state = drive_persist_flow(&orch, DeviceId::new("peer-xyz"), "fp-xyz")
+            .await
+            .unwrap();
 
-        let saved = repo.saved();
-        assert_eq!(saved.len(), 1);
-        assert_eq!(saved[0], member);
+        match final_state {
+            TrustState::Trusted { trusted_peer } => {
+                assert_eq!(trusted_peer.local_device_id.as_str(), "local-1");
+                assert_eq!(trusted_peer.peer_device_id.as_str(), "peer-xyz");
+                assert_eq!(trusted_peer.peer_fingerprint.as_str(), "fp-xyz");
+            }
+            other => panic!("expected Trusted, got {other:?}"),
+        }
+
+        let saved = repo.get(&DeviceId::new("peer-xyz")).await.unwrap();
+        assert!(saved.is_some());
+        assert_eq!(saved.unwrap().peer_fingerprint.as_str(), "fp-xyz");
     }
 
     #[tokio::test]
-    async fn dual_write_swallows_repository_errors() {
-        // Phase 2 contract: a failure in the shadow write must not propagate;
-        // the paired_device upsert is authoritative.
-        let repo = FakeMemberRepo::failing(MembershipError::Repository(
-            "simulated db outage".to_string(),
-        ));
-        let member = space_member_from_paired_device(&sample_device());
+    async fn trust_flow_rejects_second_pairing_for_same_peer() {
+        // Replaces `dual_write_swallows_already_admitted_errors`: under the
+        // new model re-pairing the same peer without an explicit distrust
+        // returns `AlreadyTrusted` (D21) rather than silently overwriting.
+        let (_repo, orch) = build_orch("local-1");
 
-        dual_write_member(&repo, "session-1", member).await;
+        drive_persist_flow(&orch, DeviceId::new("peer-xyz"), "fp-xyz")
+            .await
+            .unwrap();
 
-        assert!(repo.saved().is_empty());
+        let err = drive_persist_flow(&orch, DeviceId::new("peer-xyz"), "fp-xyz-rotated")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            TrustedPeerApplicationError::AlreadyTrusted(DeviceId::new("peer-xyz"))
+        );
     }
 
     #[tokio::test]
-    async fn dual_write_swallows_already_admitted_errors() {
-        // A repeated admit during dual-write (e.g. reconnect with existing
-        // paired_device row) must not surface as a pairing failure.
-        let repo =
-            FakeMemberRepo::failing(MembershipError::AlreadyAdmitted(DeviceId::new("peer-xyz")));
-        let member = space_member_from_paired_device(&sample_device());
+    async fn trust_flow_reset_allows_pairing_another_peer() {
+        // Replaces `dual_write_swallows_repository_errors`: proves the
+        // singleton-orchestrator reset contract — after one flow reaches
+        // the `Trusted` terminal state, the next flow with a different
+        // peer still works.
+        let (repo, orch) = build_orch("local-1");
 
-        dual_write_member(&repo, "session-1", member).await;
+        drive_persist_flow(&orch, DeviceId::new("peer-a"), "fp-a")
+            .await
+            .unwrap();
+        drive_persist_flow(&orch, DeviceId::new("peer-b"), "fp-b")
+            .await
+            .unwrap();
 
-        assert!(repo.saved().is_empty());
+        assert!(repo.get(&DeviceId::new("peer-a")).await.unwrap().is_some());
+        assert!(repo.get(&DeviceId::new("peer-b")).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn trust_flow_peer_device_id_matches_peer_id_string() {
+        // Replaces `space_member_from_paired_device_maps_core_fields`:
+        // validates D5 (`DeviceId == peer_id` string reuse) at the
+        // trust-peer boundary — the identifier that reaches the repository
+        // is exactly the peer-id string that the pairing protocol supplied.
+        let (repo, orch) = build_orch("local-1");
+        let peer_id_str = "long-peer-id-with-specific-bytes-xyz";
+
+        drive_persist_flow(&orch, DeviceId::new(peer_id_str), "fp")
+            .await
+            .unwrap();
+
+        let saved = repo
+            .get(&DeviceId::new(peer_id_str))
+            .await
+            .unwrap()
+            .expect("expected trusted peer to be persisted under the peer-id device id");
+        assert_eq!(saved.peer_device_id.as_str(), peer_id_str);
     }
 }

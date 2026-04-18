@@ -50,14 +50,14 @@ use uc_infra::db::mappers::{
     clipboard_selection_mapper::ClipboardSelectionRowMapper,
     paired_device_mapper::PairedDeviceRowMapper,
     snapshot_representation_mapper::RepresentationRowMapper,
-    space_member_mapper::SpaceMemberRowMapper,
+    space_member_mapper::SpaceMemberRowMapper, trusted_peer_mapper::TrustedPeerRowMapper,
 };
 use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
     DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
     DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
     DieselFileTransferRepository, DieselPairedDeviceRepository, DieselSpaceMemberRepository,
-    DieselThumbnailRepository,
+    DieselThumbnailRepository, DieselTrustedPeerRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -148,6 +148,12 @@ pub struct WiredDependencies {
     /// all consumers — CoreRuntime, SetupOrchestrator, and FileTransferOrchestrator —
     /// see the same emitter after any swap.
     pub emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
+    /// Trusted-peer repository surfaced at the bootstrap boundary so the
+    /// GUI / daemon builders can build the singleton `TrustPeerOrchestrator`
+    /// without threading it through `AppDeps` (which is retiring together
+    /// with uc-app). Scheduled to move into `uc-application` wiring
+    /// infrastructure once uc-app is gone.
+    pub trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
 }
 
 /// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
@@ -201,6 +207,12 @@ struct InfraLayer {
 
     // Membership repository (shadow of paired_device during Phase 2 migration).
     member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
+
+    // Trusted-peer repository — authoritative write path from phase 0.4.2.
+    // Drives `TrustPeerOrchestrator` at the pairing handler's PersistPairedDevice
+    // boundary, replacing the previous `paired_device` upsert + `space_member`
+    // shadow-write.
+    trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
 
     // Blob storage
     blob_repository: Arc<dyn BlobRepositoryPort>,
@@ -342,6 +354,11 @@ fn create_infra_layer(
         DieselSpaceMemberRepository::new(Arc::clone(&db_executor), SpaceMemberRowMapper);
     let member_repo: Arc<dyn uc_core::MemberRepositoryPort> = Arc::new(member_repo_impl);
 
+    let trusted_peer_repo_impl =
+        DieselTrustedPeerRepository::new(Arc::clone(&db_executor), TrustedPeerRowMapper);
+    let trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort> =
+        Arc::new(trusted_peer_repo_impl);
+
     let blob_repo = DieselBlobRepository::new(
         Arc::clone(&db_executor),
         blob_row_mapper,
@@ -395,6 +412,7 @@ fn create_infra_layer(
         selection_repo,
         paired_device_repo,
         member_repo,
+        trusted_peer_repo,
         blob_repository,
         thumbnail_repo,
         thumbnail_generator,
@@ -791,6 +809,13 @@ pub fn wire_dependencies_with_identity_store(
     // as `Arc<dyn FileTransferEventStorePort>`), so it travels via BackgroundRuntimeDeps.
     let file_transfer_store_arc = Arc::clone(&infra.file_transfer_store);
 
+    // Clone the trusted-peer repository handle before moving `infra` into
+    // `AppDeps` below — the builders (build_gui_app / build_daemon_app) need
+    // it to construct the `TrustPeerOrchestrator` singleton (D19). We do not
+    // thread it through `AppDeps` because uc-app is retiring (D13) and
+    // the repository is consumed solely by uc-application wiring.
+    let trusted_peer_repo_for_wiring = Arc::clone(&infra.trusted_peer_repo);
+
     // Create payload resolver for resolving staged/processing payloads
     let payload_resolver: Arc<dyn ClipboardPayloadResolverPort> =
         Arc::new(ClipboardPayloadResolver::new(
@@ -879,6 +904,7 @@ pub fn wire_dependencies_with_identity_store(
 
     Ok(WiredDependencies {
         deps,
+        trusted_peer_repo: trusted_peer_repo_for_wiring,
         background: BackgroundRuntimeDeps {
             libp2p_network: platform.libp2p_network.clone(),
             representation_cache,

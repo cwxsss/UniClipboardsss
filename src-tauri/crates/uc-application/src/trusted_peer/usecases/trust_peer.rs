@@ -22,13 +22,13 @@ pub struct TrustPeer {
 /// 幂等策略：同一 `peer_device_id` 已存在会返回 `AlreadyTrusted`，和
 /// `AdmitMemberUseCase` 的冲突策略对称。fingerprint 轮换属于合法业务场景，
 /// 但应当走 "先 Distrust 再 Trust" 的显式流程，而不是静默覆盖。
-pub struct TrustPeerUseCase<R> {
+pub struct TrustPeerUseCase<R: ?Sized> {
     repository: Arc<R>,
 }
 
 impl<R> TrustPeerUseCase<R>
 where
-    R: TrustedPeerRepositoryPort,
+    R: TrustedPeerRepositoryPort + ?Sized,
 {
     pub fn new(repository: Arc<R>) -> Self {
         Self { repository }

@@ -24,6 +24,7 @@ use anyhow::Result;
 
 use super::crypto::PairingCryptoPorts;
 use super::{PairingDomainEvent, PairingEventPort, PairingFacade};
+use crate::pairing::protocol_handler::SharedTrustPeerOrchestrator;
 use crate::pairing::staged_paired_device_store::StagedPairedDeviceStore;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -43,9 +44,7 @@ use uc_core::{
         SessionId,
     },
     pairing::PairingRole,
-    ports::PairedDeviceRepositoryPort,
     settings::model::Settings,
-    MemberRepositoryPort,
 };
 
 use super::state_machine::{PairingAction, PairingEvent, PairingState};
@@ -105,10 +104,15 @@ pub use super::session_manager::PairingPeerInfo;
 
 impl PairingOrchestrator {
     /// Create a new pairing orchestrator.
+    ///
+    /// `trust_peer_orch` is the process-wide singleton (D19) that the
+    /// protocol handler drives at the `PersistPairedDevice` action to
+    /// persist `TrustedPeer` records. Replaces the Phase-2
+    /// `device_repo` + `member_repo` pair that previously performed the
+    /// dual-write.
     pub fn new(
         config: PairingConfig,
-        device_repo: Arc<dyn PairedDeviceRepositoryPort + Send + Sync + 'static>,
-        member_repo: Arc<dyn MemberRepositoryPort + Send + Sync + 'static>,
+        trust_peer_orch: SharedTrustPeerOrchestrator,
         local_device_name: String,
         local_device_id: String,
         local_peer_id: String,
@@ -128,13 +132,8 @@ impl PairingOrchestrator {
         };
 
         let session_manager = PairingSessionManager::new(config, local_identity, crypto);
-        let protocol_handler = PairingProtocolHandler::new(
-            action_tx,
-            device_repo,
-            member_repo,
-            staged_store,
-            event_senders,
-        );
+        let protocol_handler =
+            PairingProtocolHandler::new(action_tx, trust_peer_orch, staged_store, event_senders);
 
         let orchestrator = Self {
             session_manager,

@@ -6,7 +6,7 @@ pub mod state_machine;
 pub mod usecases;
 
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 
 pub use challenge::TrustVerificationChallenge;
 pub use errors::TrustedPeerApplicationError;

@@ -12,13 +12,13 @@ use crate::trusted_peer::state::TrustState;
 /// callers (setup facade, daemon command handler) need not know the
 /// orchestrator exists. The orchestrator is the single source of truth for
 /// the state machine and the persistence call.
-pub struct ConfirmPeerVerificationUseCase<R> {
+pub struct ConfirmPeerVerificationUseCase<R: ?Sized> {
     orchestrator: Arc<TrustPeerOrchestrator<R>>,
 }
 
 impl<R> ConfirmPeerVerificationUseCase<R>
 where
-    R: TrustedPeerRepositoryPort,
+    R: TrustedPeerRepositoryPort + ?Sized,
 {
     pub fn new(orchestrator: Arc<TrustPeerOrchestrator<R>>) -> Self {
         Self { orchestrator }
