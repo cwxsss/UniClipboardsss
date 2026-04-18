@@ -46,7 +46,7 @@ pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
 pub use pairing::{
     GetDeviceSyncSettings, GetLocalDeviceInfo, GetP2pPeersSnapshot, ListSendablePeers,
-    LocalDeviceInfo, ResolveConnectionPolicy, UnpairDevice, UpdateDeviceSyncSettings,
+    LocalDeviceInfo, ResolveConnectionPolicy, UpdateDeviceSyncSettings,
 };
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
@@ -200,14 +200,6 @@ impl<'a> CoreUseCases<'a> {
     /// Update or clear per-device sync settings.
     pub fn update_device_sync_settings(&self) -> crate::usecases::UpdateDeviceSyncSettings {
         crate::usecases::UpdateDeviceSyncSettings::from_ports(
-            self.runtime.deps.device.paired_device_repo.clone(),
-        )
-    }
-
-    /// Unpair device and remove from repository.
-    pub fn unpair_device(&self) -> crate::usecases::UnpairDevice {
-        crate::usecases::UnpairDevice::new(
-            self.runtime.deps.network_ports.pairing.clone(),
             self.runtime.deps.device.paired_device_repo.clone(),
         )
     }

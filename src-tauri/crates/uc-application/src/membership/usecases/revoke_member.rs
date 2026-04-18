@@ -14,13 +14,13 @@ pub struct RevokeMember {
 ///
 /// 本地自治模型下不会广播通知对端。对端若仍尝试同步，
 /// 需要由接收路径自行检查发送方是否仍在本机成员列表中。
-pub struct RevokeMemberUseCase<R> {
+pub struct RevokeMemberUseCase<R: ?Sized> {
     repository: Arc<R>,
 }
 
 impl<R> RevokeMemberUseCase<R>
 where
-    R: MemberRepositoryPort,
+    R: MemberRepositoryPort + ?Sized,
 {
     pub fn new(repository: Arc<R>) -> Self {
         Self { repository }

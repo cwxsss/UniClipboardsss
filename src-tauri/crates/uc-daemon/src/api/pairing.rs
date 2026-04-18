@@ -8,7 +8,8 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use utoipa;
 
-use uc_app::usecases::CoreUseCases;
+use uc_application::membership::usecases::{RevokeMember, RevokeMemberUseCase};
+use uc_core::DeviceId;
 use uc_daemon_contract::constants::pairing_stage;
 
 use crate::api::dto::error::ApiError;
@@ -437,14 +438,25 @@ async fn handle_unpair_device(
     Json(payload): Json<UnpairDeviceRequest>,
 ) -> Result<StatusCode, ApiError> {
     let runtime = state.runtime_or_error()?;
-    let usecases = CoreUseCases::new(runtime.as_ref());
+    let deps = runtime.wiring_deps();
+    let peer_id = payload.peer_id;
 
-    usecases
-        .unpair_device()
-        .execute(payload.peer_id)
+    deps.network_ports
+        .pairing
+        .unpair_device(peer_id.clone())
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "daemon unpair failed");
+            tracing::error!(error = %e, peer_id = %peer_id, "daemon unpair: pairing transport failed");
+            ApiError::internal(e.to_string())
+        })?;
+
+    RevokeMemberUseCase::new(deps.device.member_repo.clone())
+        .execute(RevokeMember {
+            device_id: DeviceId::new(peer_id.as_str()),
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, peer_id = %peer_id, "daemon unpair: revoke member failed");
             ApiError::internal(e.to_string())
         })?;
 
