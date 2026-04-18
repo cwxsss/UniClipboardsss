@@ -1,7 +1,7 @@
-//! HTTP handlers for per-member sync preferences (phase 4b PR-2).
+//! HTTP handlers for per-member sync preferences (phase 4b).
 //!
-//! 新路径，与 `api::device::{get,update}_device_sync_settings_handler` 并存；
-//! 读写 `SpaceMember.sync_preferences`（`MemberRepositoryPort`），PR-4 移除旧端点。
+//! 读写 `SpaceMember.sync_preferences`（`MemberRepositoryPort`）；旧
+//! `api::device::{get,update}_device_sync_settings_handler` 已在 PR-4 移除。
 
 use axum::extract::{Path, State};
 use axum::routing::{get, patch};
@@ -133,7 +133,7 @@ fn merge_member_sync_preferences_patch(
 
 fn apply_content_types_patch(
     target: &mut uc_core::settings::model::ContentTypes,
-    patch: crate::api::dto::device::ContentTypesPatchDto,
+    patch: crate::api::dto::settings::ContentTypesPatchDto,
 ) {
     if let Some(v) = patch.text {
         target.text = v;
@@ -210,7 +210,7 @@ mod tests {
         let patch = MemberSyncPreferencesPatchDto {
             send_enabled: None,
             receive_enabled: None,
-            send_content_types: Some(crate::api::dto::device::ContentTypesPatchDto {
+            send_content_types: Some(crate::api::dto::settings::ContentTypesPatchDto {
                 text: Some(true),
                 image: None,
                 link: None,

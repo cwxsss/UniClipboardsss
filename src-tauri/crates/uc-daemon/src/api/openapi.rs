@@ -13,12 +13,7 @@ use crate::api::dto::clipboard::{
     GetEntryDetailResponse, GetEntryResourceResponse, ListEntriesResponse, ToggleFavoriteRequest,
     ToggleFavoriteResponse, ToggleFavoriteResultDto,
 };
-use crate::api::dto::device::{
-    ContentTypesDto as DeviceContentTypesDto, ContentTypesPatchDto, DeviceSyncSettingsDto,
-    DeviceSyncSettingsPatchDto, GetDeviceSyncSettingsResponse, GetLocalDeviceInfoResponse,
-    LocalDeviceInfoDto, SyncFrequencyDto as DeviceSyncFrequencyDto,
-    UpdateDeviceSyncSettingsResponse,
-};
+use crate::api::dto::device::{GetLocalDeviceInfoResponse, LocalDeviceInfoDto};
 use crate::api::dto::encryption::{EncryptionStateResponse, KeychainAccessResponse};
 use crate::api::dto::error::ApiErrorResponse;
 use crate::api::dto::member::{
@@ -96,8 +91,6 @@ impl Modify for SecurityAddon {
         crate::api::encryption::lock_handler,
         crate::api::encryption::verify_keychain_access_handler,
         crate::api::device::get_local_device_info_handler,
-        crate::api::device::get_device_sync_settings_handler,
-        crate::api::device::update_device_sync_settings_handler,
         crate::api::member::get_member_sync_preferences_handler,
         crate::api::member::update_member_sync_preferences_handler,
         crate::api::setup::get_setup_state,
@@ -187,14 +180,6 @@ impl Modify for SecurityAddon {
             SearchStatusData,
             SearchRebuildAcceptedResponse,
             SearchRebuildAcceptedData,
-            // Device sync settings
-            DeviceContentTypesDto,
-            DeviceSyncFrequencyDto,
-            DeviceSyncSettingsDto,
-            DeviceSyncSettingsPatchDto,
-            ContentTypesPatchDto,
-            GetDeviceSyncSettingsResponse,
-            UpdateDeviceSyncSettingsResponse,
             // Member sync preferences (phase 4b PR-2)
             MemberSyncPreferencesDto,
             MemberSyncPreferencesPatchDto,
@@ -204,7 +189,7 @@ impl Modify for SecurityAddon {
     ),
     tags(
         (name = "clipboard", description = "Clipboard entry CRUD and statistics"),
-        (name = "device", description = "Local device identity and per-device sync settings"),
+        (name = "device", description = "Local device identity"),
         (name = "member", description = "Space member sync preferences (phase 4b)"),
         (name = "settings", description = "Settings management APIs"),
         (name = "encryption", description = "Encryption state and session management"),

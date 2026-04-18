@@ -91,10 +91,8 @@ pub struct SecurityPorts {
 /// 设备领域端口组（含配对）。
 pub struct DevicePorts {
     pub device_identity: Arc<dyn DeviceIdentityPort>,
-    pub paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
-    /// Shadow member repository written to alongside paired_device during
-    /// the migration to the membership subsystem. See the Phase 2 plan in
-    /// commit history for details.
+    /// Authoritative repository of admitted space members (phase 4b PR-4：
+    /// `paired_device_repo` 已下线，成员身份与同步偏好的唯一持久层)。
     pub member_repo: Arc<dyn MemberRepositoryPort>,
 }
 

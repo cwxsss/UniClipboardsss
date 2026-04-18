@@ -47,8 +47,8 @@ pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
 pub use membership::{GetMemberSyncPreferences, UpdateMemberSyncPreferences};
 pub use pairing::{
-    GetDeviceSyncSettings, GetLocalDeviceInfo, GetP2pPeersSnapshot, ListSendablePeers,
-    LocalDeviceInfo, ResolveConnectionPolicy, UpdateDeviceSyncSettings,
+    GetLocalDeviceInfo, GetP2pPeersSnapshot, ListSendablePeers, LocalDeviceInfo,
+    ResolveConnectionPolicy,
 };
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
@@ -183,33 +183,15 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
-    /// Get unified P2P peer snapshot combining discovered, connected, and paired peers.
+    /// Get unified P2P peer snapshot combining discovered, connected, and admitted members.
     pub fn get_p2p_peers_snapshot(&self) -> crate::usecases::GetP2pPeersSnapshot {
         crate::usecases::GetP2pPeersSnapshot::new(
             self.runtime.deps.network_ports.peers.clone(),
-            self.runtime.deps.device.paired_device_repo.clone(),
+            self.runtime.deps.device.member_repo.clone(),
         )
     }
 
-    /// Get resolved sync settings for a specific device.
-    pub fn get_device_sync_settings(&self) -> crate::usecases::GetDeviceSyncSettings {
-        crate::usecases::GetDeviceSyncSettings::from_ports(
-            self.runtime.deps.device.paired_device_repo.clone(),
-            self.runtime.deps.settings.clone(),
-        )
-    }
-
-    /// Update or clear per-device sync settings.
-    pub fn update_device_sync_settings(&self) -> crate::usecases::UpdateDeviceSyncSettings {
-        crate::usecases::UpdateDeviceSyncSettings::from_ports(
-            self.runtime.deps.device.paired_device_repo.clone(),
-        )
-    }
-
-    /// Get sync preferences for a space member (phase 4b path).
-    ///
-    /// 并存于 `get_device_sync_settings` 之外，读 `member_repo`；DTO / 前端切换
-    /// 后旧入口将在 PR-4 中移除。
+    /// Get sync preferences for a space member (phase 4b PR-1 权威路径).
     pub fn get_member_sync_preferences(&self) -> crate::usecases::GetMemberSyncPreferences {
         crate::usecases::GetMemberSyncPreferences::from_ports(
             self.runtime.deps.device.member_repo.clone(),

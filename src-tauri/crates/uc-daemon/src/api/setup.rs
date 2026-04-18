@@ -586,22 +586,22 @@ async fn reset(State(state): State<DaemonApiState>) -> Result<Json<SetupResetRes
 
     let deps = runtime.wiring_deps();
 
-    for device in deps
-        .device
-        .paired_device_repo
-        .list_all()
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "setup reset failed");
-            ApiError::internal(format!("setup reset failed: {e}"))
-        })?
-    {
-        if let Err(e) = deps.device.paired_device_repo.delete(&device.peer_id).await {
-            if !matches!(e, uc_core::ports::PairedDeviceRepositoryError::NotFound) {
+    // Clear every admitted space member. Phase 4b PR-4 retires
+    // `paired_device_repo`; membership is now the sole persistent peer list,
+    // and `remove` is idempotent (returns `false` when the row is already gone)
+    // so we do not special-case missing rows.
+    for member in deps.device.member_repo.list().await.map_err(|e| {
+        tracing::error!(error = %e, "setup reset failed");
+        ApiError::internal(format!("setup reset failed: {e}"))
+    })? {
+        deps.device
+            .member_repo
+            .remove(&member.device_id)
+            .await
+            .map_err(|e| {
                 tracing::error!(error = %e, "setup reset failed");
-                return Err(ApiError::internal(format!("setup reset failed: {e}")));
-            }
-        }
+                ApiError::internal(format!("setup reset failed: {e}"))
+            })?;
     }
 
     let scope = deps.security.key_scope.current_scope().await.map_err(|e| {

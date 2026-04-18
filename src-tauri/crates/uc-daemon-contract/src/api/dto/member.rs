@@ -1,16 +1,15 @@
 //! DTOs for per-member sync preferences (phase 4b PR-2).
 //!
-//! 与 `dto::device` 下的 `DeviceSyncSettingsDto` 并存：后者映射旧的
-//! `PairedDevice.sync_settings`（单向 `auto_sync` + `sync_frequency`），
-//! 本模块映射 `SpaceMember.sync_preferences`（双向 `send_enabled` /
-//! `receive_enabled` + 双套 `content_types`）。PR-4 移除旧 DTO。
+//! 语义：映射 `SpaceMember.sync_preferences`（双向 `send_enabled` /
+//! `receive_enabled` + 双套 `content_types`）。复用 `dto::settings` 下的
+//! `ContentTypesDto` / `ContentTypesPatchDto`，两套字段形状一致。
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use uc_core::membership::MemberSyncPreferences;
 
-use super::device::{ContentTypesDto, ContentTypesPatchDto};
+use super::settings::{ContentTypesDto, ContentTypesPatchDto};
 
 /// Sync preferences recorded for a space member.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

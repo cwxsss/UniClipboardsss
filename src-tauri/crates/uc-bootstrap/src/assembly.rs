@@ -48,7 +48,6 @@ use uc_infra::db::mappers::{
     blob_mapper::BlobRowMapper, clipboard_entry_mapper::ClipboardEntryRowMapper,
     clipboard_event_mapper::ClipboardEventRowMapper,
     clipboard_selection_mapper::ClipboardSelectionRowMapper,
-    paired_device_mapper::PairedDeviceRowMapper,
     snapshot_representation_mapper::RepresentationRowMapper,
     space_member_mapper::SpaceMemberRowMapper, trusted_peer_mapper::TrustedPeerRowMapper,
 };
@@ -56,8 +55,8 @@ use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
     DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
     DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselFileTransferRepository, DieselPairedDeviceRepository, DieselSpaceMemberRepository,
-    DieselThumbnailRepository, DieselTrustedPeerRepository,
+    DieselFileTransferRepository, DieselSpaceMemberRepository, DieselThumbnailRepository,
+    DieselTrustedPeerRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -202,10 +201,7 @@ struct InfraLayer {
     representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
     selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
 
-    // Pairing repository
-    paired_device_repo: Arc<dyn PairedDeviceRepositoryPort>,
-
-    // Membership repository (shadow of paired_device during Phase 2 migration).
+    // Membership repository (phase 4b PR-4 起成为唯一持久成员层).
     member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
 
     // Trusted-peer repository — authoritative write path from phase 0.4.2.
@@ -322,7 +318,6 @@ fn create_infra_layer(
 
     let entry_row_mapper = ClipboardEntryRowMapper;
     let selection_row_mapper = ClipboardSelectionRowMapper;
-    let paired_device_row_mapper = PairedDeviceRowMapper;
     let blob_row_mapper = BlobRowMapper;
     let _representation_row_mapper = RepresentationRowMapper;
 
@@ -345,10 +340,6 @@ fn create_infra_layer(
 
     let rep_repo = DieselClipboardRepresentationRepository::new(Arc::clone(&db_executor));
     let representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort> = Arc::new(rep_repo);
-
-    let paired_repo =
-        DieselPairedDeviceRepository::new(Arc::clone(&db_executor), paired_device_row_mapper);
-    let paired_device_repo: Arc<dyn PairedDeviceRepositoryPort> = Arc::new(paired_repo);
 
     let member_repo_impl =
         DieselSpaceMemberRepository::new(Arc::clone(&db_executor), SpaceMemberRowMapper);
@@ -410,7 +401,6 @@ fn create_infra_layer(
         clipboard_event_repo,
         representation_repo,
         selection_repo,
-        paired_device_repo,
         member_repo,
         trusted_peer_repo,
         blob_repository,
@@ -853,7 +843,6 @@ pub fn wire_dependencies_with_identity_store(
         },
         device: DevicePorts {
             device_identity: platform.device_identity,
-            paired_device_repo: infra.paired_device_repo,
             member_repo: infra.member_repo,
         },
         network_ports: platform.network_ports,
