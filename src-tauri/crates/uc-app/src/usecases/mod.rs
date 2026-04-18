@@ -189,14 +189,6 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
-    /// Open data directory use case.
-    pub fn open_data_directory(&self) -> crate::usecases::storage::OpenDataDirectory {
-        crate::usecases::storage::OpenDataDirectory::new(
-            self.runtime.storage_paths.clone(),
-            self.runtime.deps.system.file_manager.clone(),
-        )
-    }
-
     /// List paired devices from repository.
     pub fn list_paired_devices(&self) -> crate::usecases::ListPairedDevices {
         crate::usecases::ListPairedDevices::new(self.runtime.deps.device.paired_device_repo.clone())

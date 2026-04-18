@@ -19,7 +19,6 @@ use uc_core::ports::clipboard::{
     RepresentationCachePort, SpoolQueuePort, SystemClipboardPort, ThumbnailGeneratorPort,
     ThumbnailRepositoryPort,
 };
-use uc_core::ports::file_manager::FileManagerPort;
 use uc_core::ports::file_transport::FileTransportPort;
 use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
@@ -124,12 +123,11 @@ pub struct SearchPorts {
     pub search_pipeline: Arc<dyn SearchPipelinePort>,
 }
 
-/// System-domain ports bundle (clock, hash, file manager, cache filesystem).
-/// 系统领域端口组（时钟、哈希、文件管理器、缓存文件系统）。
+/// System-domain ports bundle (clock, hash, cache filesystem).
+/// 系统领域端口组（时钟、哈希、缓存文件系统）。
 pub struct SystemPorts {
     pub clock: Arc<dyn ClockPort>,
     pub hash: Arc<dyn ContentHashPort>,
-    pub file_manager: Arc<dyn FileManagerPort>,
     pub cache_fs: Arc<dyn uc_core::ports::cache_fs::CacheFsPort>,
 }
 

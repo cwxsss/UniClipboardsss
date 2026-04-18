@@ -25,7 +25,6 @@ pub mod connection_policy;
 pub mod device_identity;
 mod discovery;
 pub mod errors;
-pub mod file_manager;
 pub mod file_transfer_repository;
 pub mod file_transport;
 mod hash;
@@ -53,7 +52,6 @@ pub use clipboard::*;
 pub use clipboard_change_handler::ClipboardChangeHandler;
 pub use device_identity::DeviceIdentityPort;
 pub use errors::{AppDirsError, PairedDeviceRepositoryError};
-pub use file_manager::{FileManagerError, FileManagerPort};
 pub use file_transfer_repository::{
     compute_aggregate_status, EntryTransferSummary, ExpiredInflightTransfer,
     FileTransferRepositoryPort, NoopFileTransferRepositoryPort, PendingInboundTransfer,

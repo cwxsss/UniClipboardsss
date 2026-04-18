@@ -3,11 +3,9 @@
 
 pub mod clear_cache;
 pub mod get_storage_stats;
-pub mod open_data_directory;
 
 pub use clear_cache::ClearCache;
 pub use get_storage_stats::{GetStorageStats, StorageStatsResult};
-pub use open_data_directory::OpenDataDirectory;
 
 use anyhow::{Context, Result};
 use std::path::Path;

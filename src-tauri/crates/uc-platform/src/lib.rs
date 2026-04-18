@@ -13,7 +13,6 @@ pub mod app_dirs;
 pub mod bootstrap;
 pub mod capability;
 pub mod clipboard;
-pub mod file_manager;
 pub mod file_secure_storage;
 pub mod identity_store;
 pub mod key_scope;
