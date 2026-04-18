@@ -523,7 +523,7 @@ b1285605  refactor(setup): introduce SetupFacade + 14 UseCases/Query, make orche
 766fed95  test(setup): add port-mock UseCase tests + mark phase B complete (phase B.6)
 
 # 阶段 C — uc-app 旧 setup / space_access 清退
-<pending>   refactor(uc-app): drop space_access re-export shim, switch consumers to uc_application (phase C.1–C.5)
+7318f3bf  refactor(uc-app): drop space_access re-export shim, switch consumers to uc_application (phase C.1-C.5)
 ```
 
 分支：`milestone/0.6.0`。
