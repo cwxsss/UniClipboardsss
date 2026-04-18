@@ -24,7 +24,6 @@ pub mod initialize_encryption;
 pub mod internal;
 pub mod pairing;
 pub mod search;
-pub mod settings;
 pub mod setup;
 /// Re-exports [`uc_application::space_access`] so in-crate code (`setup`) can
 /// continue `use crate::usecases::space_access::*`. Direct callers outside
