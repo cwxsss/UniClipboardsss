@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::setup::SetupState;
-use crate::space_access::state::SpaceAccessState;
+use uc_core::setup::SetupState;
+use uc_core::space_access::state::SpaceAccessState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RealtimeTopic {

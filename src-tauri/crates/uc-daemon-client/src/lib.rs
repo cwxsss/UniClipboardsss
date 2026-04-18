@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 pub mod connection;
 pub mod http;
+pub mod realtime;
 pub mod setup;
 pub mod ws_bridge;
 

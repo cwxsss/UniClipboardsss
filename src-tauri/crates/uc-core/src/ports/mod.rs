@@ -34,7 +34,6 @@ pub mod network_events;
 pub mod paired_device_repository;
 pub mod pairing_transport;
 pub mod peer_directory;
-pub mod realtime;
 pub mod search;
 pub mod security;
 pub mod settings;
@@ -67,12 +66,6 @@ pub use network_events::NetworkEventPort;
 pub use paired_device_repository::PairedDeviceRepositoryPort;
 pub use pairing_transport::PairingTransportPort;
 pub use peer_directory::PeerDirectoryPort;
-pub use realtime::{
-    PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
-    PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
-    PeerNameUpdatedEvent, RealtimeEvent, RealtimePairedDeviceSummary, RealtimePeerSummary,
-    RealtimeTopic, RealtimeTopicPort,
-};
 pub use search::search_index::SearchIndexPort;
 pub use search::search_key::SearchKeyDerivationPort;
 pub use security::encryption::EncryptionPort;

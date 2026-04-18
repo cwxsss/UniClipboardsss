@@ -3,6 +3,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 
+use crate::realtime::{
+    ClipboardNewContentEvent, PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent,
+    PairingUpdatedEvent, PairingVerificationRequiredEvent, PeerChangedEvent,
+    PeerConnectionChangedEvent, PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary,
+    RealtimeTopic, RealtimeTopicPort, SetupSpaceAccessCompletedEvent, SetupStateChangedEvent,
+    SpaceAccessStateChangedEvent,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -13,13 +20,6 @@ use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, info_span, instrument, warn, Instrument};
-use uc_core::ports::realtime::{
-    ClipboardNewContentEvent, PairedDevicesChangedEvent, PairingCompleteEvent, PairingFailedEvent,
-    PairingUpdatedEvent, PairingVerificationRequiredEvent, PeerChangedEvent,
-    PeerConnectionChangedEvent, PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary,
-    RealtimeTopic, RealtimeTopicPort, SetupSpaceAccessCompletedEvent, SetupStateChangedEvent,
-    SpaceAccessStateChangedEvent,
-};
 use uc_daemon_contract::api::auth::DaemonConnectionInfo;
 use uc_daemon_contract::api::types::{
     DaemonWsEvent, PairedDevicesChangedPayload, PairingFailurePayload,
@@ -1096,7 +1096,7 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                     );
                     Some(RealtimeEvent::PairedDevicesChanged(
                         PairedDevicesChangedEvent {
-                            devices: vec![uc_core::ports::realtime::RealtimePairedDeviceSummary {
+                            devices: vec![crate::realtime::RealtimePairedDeviceSummary {
                                 device_id: payload.peer_id,
                                 device_name: payload.device_name.unwrap_or_default(),
                                 last_seen_ts: None,
