@@ -1,3 +1,4 @@
+mod blob_cipher_adapter;
 mod decrypting_clipboard_event_repo;
 mod decrypting_representation_repo;
 mod encrypted_blob_store;
@@ -9,7 +10,9 @@ mod hashing;
 mod identity_fingerprint;
 mod key_material;
 mod space_access_adapter;
+pub(crate) mod v1_aead;
 
+pub use blob_cipher_adapter::BlobCipherAdapter;
 pub use decrypting_clipboard_event_repo::DecryptingClipboardEventRepository;
 pub use decrypting_representation_repo::DecryptingClipboardRepresentationRepository;
 pub use encrypted_blob_store::EncryptedBlobStore;
