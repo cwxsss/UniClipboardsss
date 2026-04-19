@@ -25,7 +25,7 @@ use uc_core::ports::security::encryption_state::EncryptionStatePort;
 use uc_core::ports::security::key_material::KeyMaterialPort;
 use uc_core::ports::security::key_scope::KeyScopePort;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
-use uc_core::space_access::JoinOffer;
+use uc_core::space_access::{JoinOffer, ProofDerivedKey};
 
 /// Slice 1 的 SpaceAccessPort 实现。
 pub struct DefaultSpaceAccessAdapter {
@@ -233,7 +233,7 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
         &self,
         offer: &JoinOffer,
         passphrase: &DomainPassphrase,
-    ) -> Result<MasterKey, SpaceAccessError> {
+    ) -> Result<ProofDerivedKey, SpaceAccessError> {
         let span = info_span!("infra.space_access.derive_master_key_for_proof", space_id = %offer.space_id);
         async {
             info!("deriving master key from pairing offer");
@@ -321,7 +321,11 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
             }
 
             info!("master key derivation completed");
-            Ok(master_key)
+            // 把 MasterKey 字节包装成不透明凭据返回——领域层只看到
+            // "本次 proof 链路的 32 字节秘密"，不再暴露 MasterKey 类型。
+            // adapter 内部仍然把 master_key 写进了 EncryptionSession，所以
+            // 这里消耗它取字节是安全的。
+            Ok(ProofDerivedKey::from_bytes(master_key.0))
         }
         .instrument(span)
         .await

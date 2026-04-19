@@ -494,7 +494,7 @@ impl SpaceAccessOrchestrator {
                         keyslot_blob: offer.keyslot_blob.clone(),
                         challenge_nonce: offer.challenge_nonce,
                     };
-                    let master_key = executor
+                    let derived_key = executor
                         .space_access
                         .derive_master_key_for_proof(&join_offer, &domain_passphrase)
                         .await
@@ -502,7 +502,7 @@ impl SpaceAccessOrchestrator {
 
                     let proof = executor
                         .proof
-                        .build_proof(session_id, &space_id, offer.challenge_nonce, &master_key)
+                        .build_proof(session_id, &space_id, offer.challenge_nonce, &derived_key)
                         .await?;
 
                     let mut context = self.context.lock().await;

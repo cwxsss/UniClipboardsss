@@ -5,11 +5,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use uc_core::crypto::model::MasterKey;
 use uc_core::ids::{SessionId, SpaceId};
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::EncryptionSessionPort;
-use uc_core::space_access::SpaceAccessProofArtifact;
+use uc_core::space_access::{ProofDerivedKey, SpaceAccessProofArtifact};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -90,25 +89,27 @@ impl ProofPort for HmacProofAdapter {
         pairing_session_id: &SessionId,
         space_id: &SpaceId,
         challenge_nonce: [u8; 32],
-        master_key: &MasterKey,
+        derived_key: &ProofDerivedKey,
     ) -> anyhow::Result<SpaceAccessProofArtifact> {
-        let mk_bytes = master_key.as_bytes();
-        let mk_fingerprint = format!(
+        let key_bytes = derived_key.as_bytes();
+        let key_fingerprint = format!(
             "{:02x}{:02x}{:02x}{:02x}",
-            mk_bytes[0], mk_bytes[1], mk_bytes[2], mk_bytes[3]
+            key_bytes[0], key_bytes[1], key_bytes[2], key_bytes[3]
         );
         tracing::debug!(
             session_id = %pairing_session_id,
             space_id = %space_id,
-            mk_fingerprint,
+            key_fingerprint,
             "building HMAC proof"
         );
 
         let proof_bytes =
-            Self::compute_hmac(pairing_session_id, space_id, challenge_nonce, mk_bytes)?;
+            Self::compute_hmac(pairing_session_id, space_id, challenge_nonce, key_bytes)?;
 
         let cache_key = Self::cache_key(pairing_session_id, space_id, challenge_nonce);
-        self.key_cache.lock().await.insert(cache_key, master_key.0);
+        let mut cached = [0u8; 32];
+        cached.copy_from_slice(key_bytes);
+        self.key_cache.lock().await.insert(cache_key, cached);
 
         Ok(SpaceAccessProofArtifact {
             pairing_session_id: pairing_session_id.clone(),

@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, Mutex};
 
 use uc_core::crypto::domain::{ActiveSpace, Passphrase as DomainPassphrase};
-use uc_core::crypto::model::{MasterKey, Passphrase};
+use uc_core::crypto::model::Passphrase;
 use uc_core::ids::{SessionId, SpaceId};
 use uc_core::network::{DiscoveredPeer, PairingMessage};
 use uc_core::ports::space::{
@@ -29,7 +29,7 @@ use uc_core::ports::{
     DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort,
 };
 use uc_core::setup::SetupStatus;
-use uc_core::space_access::{JoinOffer, SpaceAccessProofArtifact};
+use uc_core::space_access::{JoinOffer, ProofDerivedKey, SpaceAccessProofArtifact};
 
 use super::event_port::SetupEventPort;
 use super::orchestrator::SetupOrchestrator;
@@ -289,7 +289,7 @@ impl ProofPort for FakeProof {
         pairing_session_id: &SessionId,
         space_id: &SpaceId,
         _challenge_nonce: [u8; 32],
-        _master_key: &MasterKey,
+        _derived_key: &ProofDerivedKey,
     ) -> Result<SpaceAccessProofArtifact> {
         Ok(SpaceAccessProofArtifact {
             pairing_session_id: pairing_session_id.clone(),
@@ -348,7 +348,7 @@ impl SpaceAccessPort for NoopSpaceAccess {
         &self,
         _offer: &JoinOffer,
         _passphrase: &DomainPassphrase,
-    ) -> Result<MasterKey, SpaceAccessError> {
+    ) -> Result<ProofDerivedKey, SpaceAccessError> {
         Err(SpaceAccessError::Internal(
             "noop derive_master_key_for_proof".into(),
         ))

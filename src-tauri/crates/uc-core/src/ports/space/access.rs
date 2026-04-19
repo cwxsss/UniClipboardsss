@@ -13,9 +13,8 @@
 use async_trait::async_trait;
 
 use crate::crypto::domain::{ActiveSpace, Passphrase};
-use crate::crypto::model::MasterKey;
 use crate::ids::SpaceId;
-use crate::space_access::JoinOffer;
+use crate::space_access::{JoinOffer, ProofDerivedKey};
 
 /// 业务语义级的空间访问失败。
 ///
@@ -98,16 +97,14 @@ pub trait SpaceAccessPort: Send + Sync {
         passphrase: &Passphrase,
     ) -> Result<JoinOffer, SpaceAccessError>;
 
-    /// Joiner 侧：用口令解开 offer 的 keyslot 字节,派生出构造 proof 所需的 MasterKey。
+    /// Joiner 侧：用口令解开 offer 的 keyslot 字节,派生出构造 proof 所需的不透明凭据。
     ///
-    /// ⚠️ **已知技术债务**：返回类型暂时是 `MasterKey`——pairing proof 协议
-    /// 的下一步（`ProofPort::build_proof`）当前也接受 `MasterKey`。两者是同
-    /// 一条链路上的邻居,将在后续阶段重构 `ProofPort` 时统一换成不透明凭据。
-    /// **不要为此方法增加新调用方**——新代码应等待 `ProofPort` 修订完成后
-    /// 使用新签名。
+    /// 返回的 `ProofDerivedKey` 是只在本次 pairing proof 链路里有意义的
+    /// 32 字节秘密——后续直接喂给 `ProofPort::build_proof` 计算 HMAC,
+    /// 领域代码无需也无法把它当作 `MasterKey` 转用到其它路径。
     async fn derive_master_key_for_proof(
         &self,
         offer: &JoinOffer,
         passphrase: &Passphrase,
-    ) -> Result<MasterKey, SpaceAccessError>;
+    ) -> Result<ProofDerivedKey, SpaceAccessError>;
 }
