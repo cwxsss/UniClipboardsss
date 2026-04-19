@@ -20,12 +20,13 @@ use uc_core::network::protocol::{
 };
 use uc_observability::otlp::propagator::extract_remote_context;
 
+use uc_core::ids::SpaceId;
 use uc_core::network::ClipboardMessage;
 use uc_core::ports::clipboard::{RepresentationCachePort, SpoolQueuePort};
+use uc_core::ports::space::SpaceAccessPort;
 use uc_core::ports::{
     ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardRepresentationNormalizerPort,
-    DeviceIdentityPort, EncryptionPort, EncryptionSessionPort, SelectRepresentationPolicyPort,
-    SettingsPort, TransferCipherPort,
+    DeviceIdentityPort, SelectRepresentationPolicyPort, SettingsPort, TransferCipherPort,
 };
 use uc_core::{
     ClipboardChangeOrigin, MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
@@ -84,12 +85,9 @@ pub struct SyncInboundClipboardUseCase {
     /// Coordinator for Full-mode OS clipboard writes (write path).
     /// None for Passive-mode instances that never write to the OS clipboard.
     clipboard_write_coordinator: Option<Arc<ClipboardWriteCoordinator>>,
-    /// 仅用于 `is_ready()` 早返回优化。实际解密的密钥获取已下沉到
-    /// `transfer_cipher` adapter 内部。Slice 3 会把 session 整组迁移到
-    /// `SpaceAccessPort`。
-    encryption_session: Arc<dyn EncryptionSessionPort>,
-    #[allow(dead_code)]
-    encryption: Arc<dyn EncryptionPort>,
+    /// 仅用于 `is_unlocked()` 早返回优化。实际解密的密钥获取由
+    /// `transfer_cipher` adapter 端到端管理。
+    space_access: Arc<dyn SpaceAccessPort>,
     device_identity: Arc<dyn DeviceIdentityPort>,
     transfer_cipher: Arc<dyn TransferCipherPort>,
     capture_clipboard:
@@ -103,8 +101,7 @@ pub struct SyncInboundClipboardUseCase {
 impl SyncInboundClipboardUseCase {
     pub fn new(
         mode: ClipboardIntegrationMode,
-        encryption_session: Arc<dyn EncryptionSessionPort>,
-        encryption: Arc<dyn EncryptionPort>,
+        space_access: Arc<dyn SpaceAccessPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
         transfer_cipher: Arc<dyn TransferCipherPort>,
         settings: Arc<dyn SettingsPort>,
@@ -118,8 +115,7 @@ impl SyncInboundClipboardUseCase {
         Ok(Self {
             mode,
             clipboard_write_coordinator: None,
-            encryption_session,
-            encryption,
+            space_access,
             device_identity,
             transfer_cipher,
             capture_clipboard: None,
@@ -131,8 +127,7 @@ impl SyncInboundClipboardUseCase {
 
     pub fn with_capture_dependencies(
         mode: ClipboardIntegrationMode,
-        encryption_session: Arc<dyn EncryptionSessionPort>,
-        encryption: Arc<dyn EncryptionPort>,
+        space_access: Arc<dyn SpaceAccessPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
         transfer_cipher: Arc<dyn TransferCipherPort>,
         entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
@@ -147,8 +142,7 @@ impl SyncInboundClipboardUseCase {
         Self {
             mode,
             clipboard_write_coordinator: None,
-            encryption_session,
-            encryption,
+            space_access,
             device_identity: device_identity.clone(),
             transfer_cipher,
             capture_clipboard: Some(
@@ -253,8 +247,10 @@ impl SyncInboundClipboardUseCase {
                 return Ok(InboundApplyOutcome::Skipped);
             }
 
-            if !self.encryption_session.is_ready().await {
-                info!("Skipping inbound apply because encryption session is not ready");
+            // 占位 SpaceId,与其它 usecase 一致;adapter 当前不按 SpaceId 路由。
+            let space_id = SpaceId::from("space");
+            if !self.space_access.is_unlocked(&space_id).await {
+                info!("Skipping inbound apply because space is not unlocked");
                 return Ok(InboundApplyOutcome::Skipped);
             }
 

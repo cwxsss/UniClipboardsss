@@ -391,11 +391,7 @@ impl<'a> AppUseCases<'a> {
                 .clipboard_outbound
                 .clone(),
             self.app_runtime.wiring_deps().network_ports.peers.clone(),
-            self.app_runtime
-                .wiring_deps()
-                .security
-                .encryption_session
-                .clone(),
+            self.app_runtime.wiring_deps().security.space_access.clone(),
             self.app_runtime
                 .wiring_deps()
                 .device

@@ -1,6 +1,9 @@
 //! Encrypting clipboard event writer decorator.
 //!
 //! Wraps ClipboardEventWriterPort and encrypts inline_data before storage.
+//!
+//! Slice 3 起通过 BlobCipherPort 加密——见 decrypting_clipboard_event_repo
+//! 的 wire format 兼容性说明。
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -10,29 +13,23 @@ use tracing::{debug, trace};
 use uc_core::{
     clipboard::{ClipboardEvent, PersistedClipboardRepresentation},
     crypto::aad,
-    crypto::model::EncryptionAlgo,
-    ids::EventId,
-    ports::{ClipboardEventWriterPort, EncryptionPort, EncryptionSessionPort},
+    crypto::domain::{Aad, ActiveSpace, Plaintext},
+    ids::{EventId, SpaceId},
+    ports::{security::BlobCipherPort, ClipboardEventWriterPort},
 };
 
 /// Decorator that encrypts representation inline_data before storage.
 pub struct EncryptingClipboardEventWriter {
     inner: Arc<dyn ClipboardEventWriterPort>,
-    encryption: Arc<dyn EncryptionPort>,
-    session: Arc<dyn EncryptionSessionPort>,
+    blob_cipher: Arc<dyn BlobCipherPort>,
 }
 
 impl EncryptingClipboardEventWriter {
     pub fn new(
         inner: Arc<dyn ClipboardEventWriterPort>,
-        encryption: Arc<dyn EncryptionPort>,
-        session: Arc<dyn EncryptionSessionPort>,
+        blob_cipher: Arc<dyn BlobCipherPort>,
     ) -> Self {
-        Self {
-            inner,
-            encryption,
-            session,
-        }
+        Self { inner, blob_cipher }
     }
 }
 
@@ -43,46 +40,34 @@ impl ClipboardEventWriterPort for EncryptingClipboardEventWriter {
         event: &ClipboardEvent,
         representations: &Vec<PersistedClipboardRepresentation>,
     ) -> Result<()> {
-        // Get master key from session
-        let master_key = self
-            .session
-            .get_master_key()
-            .await
-            .context("encryption session not ready - cannot encrypt clipboard data")?;
+        // 单空间模型下用占位 ActiveSpace,adapter 当前不按 SpaceId 路由。
+        let active = ActiveSpace::new(SpaceId::from("space"));
 
-        // Encrypt inline_data for each representation
         let mut encrypted_reps = Vec::with_capacity(representations.len());
         let mut encrypted_count = 0usize;
         let mut total_plaintext_bytes = 0usize;
         let mut total_ciphertext_bytes = 0usize;
 
         for rep in representations {
-            let encrypted_inline_data = if let Some(ref plaintext) = rep.inline_data {
-                // Encrypt the inline data
+            let encrypted_inline_data = if let Some(ref plain_bytes) = rep.inline_data {
                 let aad = aad::for_inline(&event.event_id, &rep.id);
-                let encrypted_blob = self
-                    .encryption
-                    .encrypt_blob(
-                        &master_key,
-                        plaintext,
-                        &aad,
-                        EncryptionAlgo::XChaCha20Poly1305,
-                    )
+                let plaintext = Plaintext::new(plain_bytes.clone());
+                let plaintext_len = plaintext.len();
+                let ciphertext = self
+                    .blob_cipher
+                    .encrypt(&active, &plaintext, &Aad::from(aad.as_slice()))
                     .await
                     .context("failed to encrypt inline_data")?;
-
-                // Serialize to bytes
-                let encrypted_bytes = serde_json::to_vec(&encrypted_blob)
-                    .context("failed to serialize encrypted inline_data")?;
+                let encrypted_bytes = ciphertext.into_bytes();
 
                 trace!(
                     representation_id = %rep.id.as_ref(),
-                    plaintext_bytes = plaintext.len(),
+                    plaintext_bytes = plaintext_len,
                     ciphertext_bytes = encrypted_bytes.len(),
-                    "Encrypted inline_data for representation"
+                    "Encrypted inline_data via BlobCipherPort"
                 );
                 encrypted_count += 1;
-                total_plaintext_bytes += plaintext.len();
+                total_plaintext_bytes += plaintext_len;
                 total_ciphertext_bytes += encrypted_bytes.len();
 
                 Some(encrypted_bytes)
@@ -90,10 +75,6 @@ impl ClipboardEventWriterPort for EncryptingClipboardEventWriter {
                 None
             };
 
-            // Create new representation with encrypted inline_data, preserving
-            // the original payload_state. Using ::new() here would re-infer state
-            // from (inline_data, blob_id), converting Staged to Inline and preventing
-            // the blob worker from materializing full content.
             encrypted_reps.push(PersistedClipboardRepresentation::new_with_state(
                 rep.id.clone(),
                 rep.format_id.clone(),
@@ -113,16 +94,14 @@ impl ClipboardEventWriterPort for EncryptingClipboardEventWriter {
                 encrypted = encrypted_count,
                 total_plaintext_bytes,
                 total_ciphertext_bytes,
-                "Encrypted inline_data for event"
+                "Encrypted inline_data for event via BlobCipherPort"
             );
         }
 
-        // Delegate to inner with encrypted representations
         self.inner.insert_event(event, &encrypted_reps).await
     }
 
     async fn delete_event_and_representations(&self, event_id: &EventId) -> Result<()> {
-        // Deletion doesn't need encryption - just delegate
         self.inner.delete_event_and_representations(event_id).await
     }
 }

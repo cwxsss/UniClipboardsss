@@ -376,6 +376,18 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
         Ok(okm)
     }
 
+    async fn current_session_proof_key(&self) -> Result<Option<ProofDerivedKey>, SpaceAccessError> {
+        if !self.encryption_session.is_ready().await {
+            return Ok(None);
+        }
+        let master_key = self
+            .encryption_session
+            .get_master_key()
+            .await
+            .map_err(map_encryption_error)?;
+        Ok(Some(ProofDerivedKey::from_bytes(master_key.0)))
+    }
+
     async fn prepare_join_offer(
         &self,
         space_id: &SpaceId,

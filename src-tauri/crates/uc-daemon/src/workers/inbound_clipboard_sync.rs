@@ -102,8 +102,7 @@ impl InboundClipboardSyncWorker {
         let deps = self.runtime.wiring_deps();
         SyncInboundClipboardUseCase::with_capture_dependencies(
             ClipboardIntegrationMode::Full,
-            deps.security.encryption_session.clone(),
-            deps.security.encryption.clone(),
+            deps.security.space_access.clone(),
             deps.device.device_identity.clone(),
             Arc::new(TransferCipherAdapter::new(
                 deps.security.encryption_session.clone(),

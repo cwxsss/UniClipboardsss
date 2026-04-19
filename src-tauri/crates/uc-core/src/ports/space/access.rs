@@ -121,6 +121,21 @@ pub trait SpaceAccessPort: Send + Sync {
     /// 会话未解锁时返回 [`SpaceAccessError::NotUnlocked`]。
     async fn derive_subkey(&self, salt: &[u8], info: &[u8]) -> Result<[u8; 32], SpaceAccessError>;
 
+    /// 取出当前已解锁会话的 proof 链路凭据(包装的 master_key 字节)。
+    ///
+    /// 仅供 sponsor 侧 `ProofPort::verify_proof` 在 cache miss
+    /// （进程重启 / cache 失效）时重新计算 HMAC——它需要拿到
+    /// build_proof 时使用的同一份字节。
+    ///
+    /// 行为:
+    /// - 会话已解锁: `Ok(Some(ProofDerivedKey))`
+    /// - 会话未解锁: `Ok(None)` (调用方应当作 verify 失败处理)
+    /// - 内部 IO 失败: `Err(Internal)`
+    ///
+    /// 注: 这是"读取已解锁会话的 master_key 字节"的窄接口,与 joiner 侧的
+    /// `derive_master_key_for_proof` (从 JoinOffer + Passphrase 派生) 形成对称。
+    async fn current_session_proof_key(&self) -> Result<Option<ProofDerivedKey>, SpaceAccessError>;
+
     /// Sponsor 侧：准备 pairing offer。
     ///
     /// 读取/生成该空间的 keyslot 序列化字节 + 产生 32 字节挑战 nonce,打包给 joiner。

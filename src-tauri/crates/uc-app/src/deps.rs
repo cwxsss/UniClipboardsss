@@ -86,6 +86,10 @@ pub struct SecurityPorts {
     /// encryption_state / key_scope) 仅作为本 adapter 的内部依赖,
     /// 计划在 Slice 3 末尾整组移除。
     pub space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort>,
+    /// 业务 blob 加解密 port——4 个剪切板 decorator 在 Slice 3 起统一通过此
+    /// port 加解密 inline_data。adapter 内部持有 EncryptionSessionPort 自管
+    /// 会话与 V1 AEAD,调用方完全不再触碰 master_key。
+    pub blob_cipher: Arc<dyn uc_core::ports::security::BlobCipherPort>,
     /// Argon2 PIN hasher for pairing.
     pub pin_hasher: Arc<dyn uc_core::ports::security::PinHasherPort>,
     /// Short pairing-code derivation.

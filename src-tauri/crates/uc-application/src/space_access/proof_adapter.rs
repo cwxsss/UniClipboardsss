@@ -6,8 +6,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use uc_core::ids::{SessionId, SpaceId};
-use uc_core::ports::space::ProofPort;
-use uc_core::ports::EncryptionSessionPort;
+use uc_core::ports::space::{ProofPort, SpaceAccessPort};
 use uc_core::space_access::{ProofDerivedKey, SpaceAccessProofArtifact};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -21,21 +20,23 @@ struct ProofCacheKey {
 
 pub struct HmacProofAdapter {
     key_cache: Mutex<HashMap<ProofCacheKey, [u8; 32]>>,
-    encryption_session: Option<Arc<dyn EncryptionSessionPort>>,
+    space_access: Option<Arc<dyn SpaceAccessPort>>,
 }
 
 impl HmacProofAdapter {
     pub fn new() -> Self {
         Self {
             key_cache: Mutex::new(HashMap::new()),
-            encryption_session: None,
+            space_access: None,
         }
     }
 
-    pub fn new_with_encryption_session(encryption_session: Arc<dyn EncryptionSessionPort>) -> Self {
+    /// 给 sponsor 侧 verify_proof 的 cache miss fallback 路径注入会话访问器。
+    /// 不传时 cache miss 直接判失败,适合无持久会话的测试场景。
+    pub fn new_with_space_access(space_access: Arc<dyn SpaceAccessPort>) -> Self {
         Self {
             key_cache: Mutex::new(HashMap::new()),
-            encryption_session: Some(encryption_session),
+            space_access: Some(space_access),
         }
     }
 
@@ -145,22 +146,29 @@ impl ProofPort for HmacProofAdapter {
 
         let (master_key, key_source) = if let Some(master_key) = master_key {
             (Some(master_key), "cache")
-        } else if let Some(encryption_session) = &self.encryption_session {
-            match encryption_session.get_master_key().await {
-                Ok(master_key) => {
+        } else if let Some(space_access) = &self.space_access {
+            match space_access.current_session_proof_key().await {
+                Ok(Some(derived)) => {
                     let mut master_key_bytes = [0u8; 32];
-                    master_key_bytes.copy_from_slice(master_key.as_bytes());
+                    master_key_bytes.copy_from_slice(derived.as_bytes());
                     self.key_cache
                         .lock()
                         .await
                         .insert(cache_key, master_key_bytes);
-                    (Some(master_key_bytes), "encryption_session")
+                    (Some(master_key_bytes), "space_access")
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        session_id = %proof.pairing_session_id,
+                        "proof verification failed: space session is locked"
+                    );
+                    (None, "none")
                 }
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
                         session_id = %proof.pairing_session_id,
-                        "proof verification failed: encryption session has no master key"
+                        "proof verification failed: space access lookup errored"
                     );
                     (None, "none")
                 }
@@ -168,7 +176,7 @@ impl ProofPort for HmacProofAdapter {
         } else {
             tracing::warn!(
                 session_id = %proof.pairing_session_id,
-                "proof verification failed: no encryption session configured"
+                "proof verification failed: no space access configured"
             );
             (None, "none")
         };

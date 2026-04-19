@@ -553,9 +553,11 @@ pub fn create_platform_layer(
 
     let encrypted_blob_store = Arc::new(EncryptedBlobStore::new(
         blob_store.clone(),
-        encryption,
         encryption_session.clone(),
     ));
+    // `encryption` 局部变量原本只传给 EncryptedBlobStore 一处,迁移后无消费者;
+    // 保留绑定但显式 drop,避免 unused 警告。三件套整组删除时(C8)随之消失。
+    let _ = encryption;
 
     // BlobWriter needs the put-side (BlobStorePort); use cases need only the
     // read-side (BlobReaderPort). Both views point at the same concrete
@@ -728,14 +730,23 @@ pub fn wire_dependencies_with_identity_store(
         pairing_runtime_owner,
     )?;
 
+    // SpaceAccessPort——单一会话/密钥访问入口,后续 search/decorator/SecurityPorts
+    // 都从此 Arc clone。adapter 内部仍依赖旧三件套,C8 整组删除时改为 adapter 自管。
+    let space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
+        Arc::new(uc_infra::security::DefaultSpaceAccessAdapter::new(
+            infra.encryption.clone(),
+            infra.key_material.clone(),
+            platform.key_scope.clone(),
+            infra.encryption_state.clone(),
+            platform.encryption_session.clone(),
+        ));
+
     // Wire the search bundle (Phase 92).
     // All three pieces are grouped under AppDeps.search to prevent uc-daemon
     // from constructing search infrastructure ad hoc.
-    let search_key_derivation: Arc<dyn SearchKeyDerivationPort> =
-        Arc::new(HkdfSearchKeyDerivation::new(
-            platform.encryption_session.clone(),
-            platform.key_scope.clone(),
-        ));
+    let search_key_derivation: Arc<dyn SearchKeyDerivationPort> = Arc::new(
+        HkdfSearchKeyDerivation::new(space_access.clone(), platform.key_scope.clone()),
+    );
     let search_index: Arc<dyn SearchIndexPort> = Arc::new(SqliteSearchIndex::new(
         db_pool_for_search,
         platform.key_scope.clone(),
@@ -743,19 +754,24 @@ pub fn wire_dependencies_with_identity_store(
     ));
     let search_pipeline = Arc::new(SearchPipeline::new());
 
+    // BlobCipherPort——4 个 decorator 共享的业务 AEAD adapter,这里先构造一份
+    // 同时塞进 decorators 和 SecurityPorts (后面 AppDeps 装配那段),保证整个进程
+    // 共享同一个会话视图。
+    let blob_cipher: Arc<dyn uc_core::ports::security::BlobCipherPort> = Arc::new(
+        uc_infra::security::BlobCipherAdapter::new(platform.encryption_session.clone()),
+    );
+
     // Wrap ports with encryption decorators
     let encrypting_event_writer: Arc<dyn ClipboardEventWriterPort> =
         Arc::new(EncryptingClipboardEventWriter::new(
             infra.clipboard_event_repo.clone(),
-            infra.encryption.clone(),
-            platform.encryption_session.clone(),
+            blob_cipher.clone(),
         ));
 
     let decrypting_rep_repo: Arc<dyn ClipboardRepresentationRepositoryPort> =
         Arc::new(DecryptingClipboardRepresentationRepository::new(
             infra.representation_repo.clone(),
-            infra.encryption.clone(),
-            platform.encryption_session.clone(),
+            blob_cipher.clone(),
         ));
 
     // Create background processing components
@@ -825,17 +841,7 @@ pub fn wire_dependencies_with_identity_store(
             payload_resolver,
         },
         security: {
-            // 装配 SpaceAccessPort,作为后续 usecase 的统一会话/密钥访问入口。
-            // adapter 内部仍依赖其余 5 个旧 port——三件套整组删除时这里改为
-            // adapter 自管私有依赖。
-            let space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
-                Arc::new(uc_infra::security::DefaultSpaceAccessAdapter::new(
-                    infra.encryption.clone(),
-                    infra.key_material.clone(),
-                    platform.key_scope.clone(),
-                    infra.encryption_state.clone(),
-                    platform.encryption_session.clone(),
-                ));
+            // SpaceAccessPort 在装配点之前已创建（见 search_key_derivation 装配处）。
             SecurityPorts {
                 encryption: infra.encryption,
                 encryption_session: platform.encryption_session,
@@ -843,7 +849,8 @@ pub fn wire_dependencies_with_identity_store(
                 key_scope: platform.key_scope,
                 secure_storage: platform.secure_storage,
                 key_material: infra.key_material,
-                space_access,
+                space_access: space_access.clone(),
+                blob_cipher: blob_cipher.clone(),
                 pin_hasher: Arc::new(Argon2PinHasher),
                 short_code: Arc::new(Sha256ShortCodeGenerator),
                 fingerprint: Arc::new(Sha256IdentityFingerprintFactory),
@@ -1173,8 +1180,8 @@ pub fn build_setup_facade(
         ),
     ));
     let proof_port: Arc<dyn uc_core::ports::space::ProofPort> = Arc::new(
-        uc_application::space_access::HmacProofAdapter::new_with_encryption_session(
-            deps.security.encryption_session.clone(),
+        uc_application::space_access::HmacProofAdapter::new_with_space_access(
+            deps.security.space_access.clone(),
         ),
     );
     let timer_port: Arc<TokioMutex<dyn TimerPort>> =

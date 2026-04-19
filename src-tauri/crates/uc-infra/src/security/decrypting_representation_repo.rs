@@ -1,6 +1,9 @@
 //! Decrypting clipboard representation repository decorator.
 //!
 //! Wraps ClipboardRepresentationRepositoryPort and decrypts inline_data on read.
+//!
+//! Slice 3 起通过 BlobCipherPort 加解密——见 decrypting_clipboard_event_repo
+//! 的 wire format 兼容性说明。
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -11,31 +14,29 @@ use uc_core::ports::clipboard::ProcessingUpdateOutcome;
 use uc_core::{
     clipboard::{PayloadAvailability, PersistedClipboardRepresentation},
     crypto::aad,
-    crypto::model::EncryptedBlob,
-    ids::{EventId, RepresentationId},
-    ports::{ClipboardRepresentationRepositoryPort, EncryptionPort, EncryptionSessionPort},
+    crypto::domain::{Aad, ActiveSpace, Ciphertext},
+    ids::{EventId, RepresentationId, SpaceId},
+    ports::{security::BlobCipherPort, ClipboardRepresentationRepositoryPort},
     BlobId,
 };
 
 /// Decorator that decrypts representation inline_data on read.
 pub struct DecryptingClipboardRepresentationRepository {
     inner: Arc<dyn ClipboardRepresentationRepositoryPort>,
-    encryption: Arc<dyn EncryptionPort>,
-    session: Arc<dyn EncryptionSessionPort>,
+    blob_cipher: Arc<dyn BlobCipherPort>,
 }
 
 impl DecryptingClipboardRepresentationRepository {
     pub fn new(
         inner: Arc<dyn ClipboardRepresentationRepositoryPort>,
-        encryption: Arc<dyn EncryptionPort>,
-        session: Arc<dyn EncryptionSessionPort>,
+        blob_cipher: Arc<dyn BlobCipherPort>,
     ) -> Self {
-        Self {
-            inner,
-            encryption,
-            session,
-        }
+        Self { inner, blob_cipher }
     }
+}
+
+fn placeholder_active_space() -> ActiveSpace {
+    ActiveSpace::new(SpaceId::from("space"))
 }
 
 #[async_trait]
@@ -45,7 +46,6 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
         event_id: &EventId,
         representation_id: &RepresentationId,
     ) -> Result<Option<PersistedClipboardRepresentation>> {
-        // Get from inner
         let rep_opt = self
             .inner
             .get_representation(event_id, representation_id)
@@ -55,42 +55,27 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
             return Ok(None);
         };
 
-        // Decrypt inline_data if present
         let decrypted_inline_data = if let Some(ref encrypted_bytes) = rep.inline_data {
-            // Deserialize encrypted blob
-            let encrypted_blob: EncryptedBlob = serde_json::from_slice(encrypted_bytes)
-                .context("failed to deserialize encrypted inline_data - data may be corrupted")?;
-
-            // Get master key
-            let master_key = self
-                .session
-                .get_master_key()
-                .await
-                .context("encryption session not ready - cannot decrypt")?;
-
-            // Decrypt
             let aad = aad::for_inline(event_id, representation_id);
+            let active = placeholder_active_space();
+            let ciphertext = Ciphertext::new(encrypted_bytes.clone());
             let plaintext = self
-                .encryption
-                .decrypt_blob(&master_key, &encrypted_blob, &aad)
+                .blob_cipher
+                .decrypt(&active, &ciphertext, &Aad::from(aad.as_slice()))
                 .await
                 .context("failed to decrypt inline_data")?;
 
             trace!(
                 representation_id = %representation_id.as_ref(),
                 bytes = plaintext.len(),
-                "Decrypted inline_data for representation"
+                "Decrypted inline_data for representation via BlobCipherPort"
             );
 
-            Some(plaintext)
+            Some(plaintext.into_bytes())
         } else {
             None
         };
 
-        // Return representation with decrypted data, preserving the original payload_state.
-        // Using ::new() here would re-infer the state from (inline_data, blob_id), which
-        // incorrectly converts Staged (with preview inline_data) to Inline, causing
-        // has_detail=false in list projections and preventing full content loading.
         Ok(Some(PersistedClipboardRepresentation::new_with_state(
             rep.id,
             rep.format_id,
@@ -151,7 +136,6 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
         representation_id: &RepresentationId,
         blob_id: &BlobId,
     ) -> Result<()> {
-        // No encryption needed for blob_id update - just delegate
         self.inner.update_blob_id(representation_id, blob_id).await
     }
 
@@ -160,7 +144,6 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
         representation_id: &RepresentationId,
         blob_id: &BlobId,
     ) -> Result<bool> {
-        // No encryption needed for blob_id update - just delegate
         self.inner
             .update_blob_id_if_none(representation_id, blob_id)
             .await
@@ -174,9 +157,6 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
         new_state: PayloadAvailability,
         last_error: Option<&str>,
     ) -> Result<ProcessingUpdateOutcome> {
-        // Delegate to inner repo - this method is for state updates, not data reading
-        // The returned representation may contain encrypted inline_data, which is expected
-        // for update operations. Use get_representation to get decrypted data.
         self.inner
             .update_processing_result(rep_id, expected_states, blob_id, new_state, last_error)
             .await
@@ -191,43 +171,33 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
         let mut decrypted_count = 0usize;
         let mut decrypted_bytes = 0usize;
         let mut result = Vec::with_capacity(reps.len());
+        let active = placeholder_active_space();
         for rep in reps {
             if let Some(ref encrypted_bytes) = rep.inline_data {
-                match serde_json::from_slice::<EncryptedBlob>(encrypted_bytes) {
-                    Ok(encrypted_blob) => {
-                        let master_key = self
-                            .session
-                            .get_master_key()
-                            .await
-                            .context("encryption session not ready - cannot decrypt")?;
-                        let aad = aad::for_inline(event_id, &rep.id);
-                        match self
-                            .encryption
-                            .decrypt_blob(&master_key, &encrypted_blob, &aad)
-                            .await
-                        {
-                            Ok(plaintext) => {
-                                decrypted_count += 1;
-                                decrypted_bytes += plaintext.len();
-                                result.push(PersistedClipboardRepresentation::new_with_state(
-                                    rep.id,
-                                    rep.format_id,
-                                    rep.mime_type,
-                                    rep.size_bytes,
-                                    Some(plaintext),
-                                    rep.blob_id,
-                                    rep.payload_state,
-                                    rep.last_error,
-                                )?);
-                            }
-                            Err(_) => {
-                                // If decryption fails, return with encrypted data
-                                result.push(rep);
-                            }
-                        }
+                let aad = aad::for_inline(event_id, &rep.id);
+                let ciphertext = Ciphertext::new(encrypted_bytes.clone());
+                match self
+                    .blob_cipher
+                    .decrypt(&active, &ciphertext, &Aad::from(aad.as_slice()))
+                    .await
+                {
+                    Ok(plaintext) => {
+                        decrypted_count += 1;
+                        decrypted_bytes += plaintext.len();
+                        result.push(PersistedClipboardRepresentation::new_with_state(
+                            rep.id,
+                            rep.format_id,
+                            rep.mime_type,
+                            rep.size_bytes,
+                            Some(plaintext.into_bytes()),
+                            rep.blob_id,
+                            rep.payload_state,
+                            rep.last_error,
+                        )?);
                     }
                     Err(_) => {
-                        // Not encrypted, return as-is
+                        // 与历史行为对齐:解密失败时返回原始（密文）数据,
+                        // 让上层决定如何处理（一般会跳过该 representation）。
                         result.push(rep);
                     }
                 }
@@ -241,7 +211,7 @@ impl ClipboardRepresentationRepositoryPort for DecryptingClipboardRepresentation
                 representations = input_count,
                 decrypted = decrypted_count,
                 decrypted_bytes,
-                "Decrypted representations for event"
+                "Decrypted representations for event via BlobCipherPort"
             );
         }
         Ok(result)

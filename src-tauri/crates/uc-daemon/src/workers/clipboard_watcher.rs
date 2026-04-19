@@ -172,7 +172,7 @@ impl DaemonClipboardChangeHandler {
             deps.clipboard.system_clipboard.clone(),
             deps.network_ports.clipboard_outbound.clone(),
             deps.network_ports.peers.clone(),
-            deps.security.encryption_session.clone(),
+            deps.security.space_access.clone(),
             deps.device.device_identity.clone(),
             deps.settings.clone(),
             Arc::new(TransferCipherAdapter::new(

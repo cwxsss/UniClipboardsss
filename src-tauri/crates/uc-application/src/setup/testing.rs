@@ -372,6 +372,10 @@ impl SpaceAccessPort for NoopSpaceAccess {
     ) -> Result<[u8; 32], SpaceAccessError> {
         Err(SpaceAccessError::Internal("noop derive_subkey".into()))
     }
+
+    async fn current_session_proof_key(&self) -> Result<Option<ProofDerivedKey>, SpaceAccessError> {
+        Ok(None)
+    }
 }
 
 // ────────────────────────── Harness ──────────────────────────

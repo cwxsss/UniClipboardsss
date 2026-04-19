@@ -7,14 +7,15 @@ use tracing::{debug, info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
+use uc_core::ids::SpaceId;
 use uc_core::network::protocol::{
     BinaryRepresentation, ClipboardBinaryPayload, ClipboardPayloadVersion,
 };
 use uc_core::network::{ClipboardMessage, ProtocolMessage};
+use uc_core::ports::space::SpaceAccessPort;
 use uc_core::ports::{
-    ClipboardOutboundTransportPort, DeviceIdentityPort, EncryptionSessionPort,
-    OutboundClipboardFrame, PeerDirectoryPort, SettingsPort, SyncTargetId, SystemClipboardPort,
-    TransferCipherPort,
+    ClipboardOutboundTransportPort, DeviceIdentityPort, OutboundClipboardFrame, PeerDirectoryPort,
+    SettingsPort, SyncTargetId, SystemClipboardPort, TransferCipherPort,
 };
 use uc_core::{DeviceId, MemberRepositoryPort};
 
@@ -26,11 +27,10 @@ pub struct SyncOutboundClipboardUseCase {
     local_clipboard: Arc<dyn SystemClipboardPort>,
     clipboard_network: Arc<dyn ClipboardOutboundTransportPort>,
     peer_directory: Arc<dyn PeerDirectoryPort>,
-    /// 仅用于 `is_ready()` 早返回优化：未解锁时直接跳过 outbound 流程，
-    /// 避免白跑 peers 查询和 policy 过滤。实际加密的密钥获取已下沉到
-    /// `transfer_cipher` adapter 内部。Slice 3 会把 session 整组迁移到
-    /// `SpaceAccessPort`，届时此字段改用 `SpaceAccessPort::is_unlocked`。
-    encryption_session: Arc<dyn EncryptionSessionPort>,
+    /// 仅用于 `is_unlocked()` 早返回优化:未解锁时直接跳过 outbound 流程,
+    /// 避免白跑 peers 查询和 policy 过滤。实际加密的密钥获取由
+    /// `transfer_cipher` adapter 端到端管理。
+    space_access: Arc<dyn SpaceAccessPort>,
     device_identity: Arc<dyn DeviceIdentityPort>,
     settings: Arc<dyn SettingsPort>,
     transfer_cipher: Arc<dyn TransferCipherPort>,
@@ -42,7 +42,7 @@ impl SyncOutboundClipboardUseCase {
         local_clipboard: Arc<dyn SystemClipboardPort>,
         clipboard_network: Arc<dyn ClipboardOutboundTransportPort>,
         peer_directory: Arc<dyn PeerDirectoryPort>,
-        encryption_session: Arc<dyn EncryptionSessionPort>,
+        space_access: Arc<dyn SpaceAccessPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
         transfer_cipher: Arc<dyn TransferCipherPort>,
@@ -52,7 +52,7 @@ impl SyncOutboundClipboardUseCase {
             local_clipboard,
             clipboard_network,
             peer_directory,
-            encryption_session,
+            space_access,
             device_identity,
             settings,
             transfer_cipher,
@@ -199,8 +199,10 @@ impl SyncOutboundClipboardUseCase {
             return Ok(());
         }
 
-        if !self.encryption_session.is_ready().await {
-            info!(origin = ?origin, "Skipping outbound sync because encryption session is not ready");
+        // 占位 SpaceId,与其它 usecase 一致;adapter 当前不按 SpaceId 路由。
+        let space_id = SpaceId::from("space");
+        if !self.space_access.is_unlocked(&space_id).await {
+            info!(origin = ?origin, "Skipping outbound sync because space is not unlocked");
             return Ok(());
         }
 
