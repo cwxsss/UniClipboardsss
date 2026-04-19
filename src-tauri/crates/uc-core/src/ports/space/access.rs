@@ -29,7 +29,7 @@ pub enum SpaceAccessError {
     #[error("space already initialized")]
     AlreadyInitialized,
 
-    /// 口令不匹配（对应 unlock / change_passphrase 的 old 校验失败）。
+    /// 口令不匹配——unlock 时校验失败。
     #[error("wrong passphrase")]
     WrongPassphrase,
 
@@ -76,19 +76,6 @@ pub trait SpaceAccessPort: Send + Sync {
         space_id: &SpaceId,
         passphrase: &Passphrase,
     ) -> Result<ActiveSpace, SpaceAccessError>;
-
-    /// 更换口令。
-    ///
-    /// 语义：
-    /// - 只重新包装已有密钥物料，**不生成新 MasterKey**——所有既有密文仍可解密。
-    /// - `old` 校验失败返回 [`SpaceAccessError::WrongPassphrase`]。
-    /// - 不要求调用前处于已解锁态（adapter 可基于 `old` 临时解包以校验）。
-    async fn change_passphrase(
-        &self,
-        space_id: &SpaceId,
-        old: &Passphrase,
-        new: &Passphrase,
-    ) -> Result<(), SpaceAccessError>;
 
     /// 查询当前是否已解锁。
     async fn is_unlocked(&self, space_id: &SpaceId) -> bool;
