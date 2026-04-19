@@ -212,21 +212,32 @@ pub trait DeviceRepositoryPort: Send + Sync {
 
 ### 7.1 可以存在于 core 的内容
 
-* `MasterKey`
-* `KeySlot`
-* `WrappedKey`
-* `Passphrase`
-* `UnlockContext`
-* `EncryptionPolicy`
+* `Passphrase`（用户输入的口令；uc-application / cli 的领域输入类型）
+* `ProfileId`（当前 profile 的值对象，`uc-core/src/ids/profile_id.rs`）
+* `EncryptionError`（跨 crate 错误类型）
+* 领域类型 `Plaintext` / `Ciphertext` / `Aad` / `ActiveSpace`（port 签名使用的领域中性类型，`crypto::domain`）
+* `ProofDerivedKey`（pairing proof 不透明凭据）
+* 业务策略（`EncryptionPolicy` 之类的规则对象，如有）
 
-### 7.2 不允许存在于 core 的内容
+### 7.2 不允许存在于 core 的内容（含**已下沉**的历史类型）
 
-| 不允许         | 示例                  |
-| ----------- | ------------------- |
-| 加密算法调用      | `argon2::hash`      |
-| 随机数实现       | `rand::rngs::OsRng` |
-| Keychain 访问 | OS API              |
-| Nonce 生成    | 技术实现                |
+Phase B milestone (Slice 1-7) 起统一落实——以下所有类型**都不属于 uc-core**，已物理下沉到 `uc-infra/src/security/`:
+
+| 类别                    | 类型/符号                                                                  | 落点                                                      |
+| --------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------- |
+| 运行时密钥物料               | `Kek` / `MasterKey`                                                    | `uc-infra/src/security/secrets.rs`                      |
+| 持久化/wire 数据结构          | `KeySlot` / `KeySlotFile` / `WrappedMasterKey` / `EncryptedBlob`       | `uc-infra/src/security/crypto_model.rs`                 |
+| KDF 参数                 | `KdfParams` / `KdfParamsV1`                                            | 同上                                                      |
+| 作用域 wrapper            | `KeyScope` / `KeySlotConvertError`                                     | 同上                                                      |
+| 版本/算法 enum（已删除）        | `KdfAlgorithm` / `EncryptionAlgo` / `KeySlotVersion` / `EncryptionFormatVersion` | 单变体 enum 清零，字段类型改 `String`，字面值 adapter 硬编码 (`"V1"` 等) |
+| 加密算法调用                | `argon2::hash`、`XChaCha20-Poly1305` 初始化等                              | 同上                                                      |
+| 随机数实现                 | `rand::rngs::OsRng`                                                   | 同上                                                      |
+| Keychain 访问           | OS API                                                                | 同上                                                      |
+| Nonce 生成              | 技术实现                                                                  | 同上                                                      |
+
+### 7.3 历史条款回顾（已废止）
+
+早期文档曾列 "`MasterKey` / `KeySlot` / `WrappedKey` 允许进 core"——这是 Phase B 重构前的历史立场。milestone/1.0.0 Phase B 已全部下沉到 uc-infra，任何反向再次往 uc-core 加这些类型的 PR **应被拒绝**。如需新增持久化/密钥物料数据结构，默认放 `uc-infra/src/security/crypto_model.rs`，uc-core 只看端口契约与领域中性类型。
 
 ---
 
