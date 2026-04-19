@@ -14,7 +14,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use hkdf::Hkdf;
 use rand::RngCore;
+use sha2::Sha256;
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use uc_core::crypto::domain::{ActiveSpace, Passphrase as DomainPassphrase};
@@ -273,6 +275,105 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
             .clear()
             .await
             .map_err(map_encryption_error)
+    }
+
+    async fn try_resume_session(
+        &self,
+        space_id: &SpaceId,
+    ) -> Result<Option<ActiveSpace>, SpaceAccessError> {
+        let span = info_span!("infra.space_access.try_resume_session", space_id = %space_id);
+        async {
+            info!("attempting silent session resume from keyring");
+
+            let state = self
+                .encryption_state
+                .load_state()
+                .await
+                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+            if state == EncryptionState::Uninitialized {
+                info!("encryption uninitialized, no session to resume");
+                return Ok(None);
+            }
+
+            let scope = self
+                .key_scope
+                .current_scope()
+                .await
+                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+
+            let keyslot = self
+                .key_material
+                .load_keyslot(&scope)
+                .await
+                .map_err(map_encryption_error)?;
+            let wrapped_master_key = keyslot
+                .wrapped_master_key
+                .as_ref()
+                .ok_or(SpaceAccessError::CorruptedKeyMaterial)?;
+
+            // 静默路径：直接读 keyring 缓存的 KEK,不重新派生。
+            let kek = self
+                .key_material
+                .load_kek(&scope)
+                .await
+                .map_err(map_encryption_error)?;
+
+            let master_key = self
+                .encryption
+                .unwrap_master_key(&kek, &wrapped_master_key.blob)
+                .await
+                .map_err(map_encryption_error)?;
+
+            self.encryption_session
+                .set_master_key(master_key)
+                .await
+                .map_err(map_encryption_error)?;
+
+            info!("session resumed from keyring");
+            Ok(Some(ActiveSpace::new(space_id.clone())))
+        }
+        .instrument(span)
+        .await
+    }
+
+    async fn verify_keychain_access(&self) -> Result<bool, SpaceAccessError> {
+        let span = info_span!("infra.space_access.verify_keychain_access");
+        async {
+            let scope = self
+                .key_scope
+                .current_scope()
+                .await
+                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+
+            // 探测：把"权限被拒绝"和"keyring 暂时不可用"都视为 "Always Allow 未授予"
+            // （Ok(false)）；只有"KEK 不存在"才升格成 NotInitialized 报错给上层。
+            match self.key_material.load_kek(&scope).await {
+                Ok(_) => Ok(true),
+                Err(EncryptionError::PermissionDenied) => Ok(false),
+                Err(EncryptionError::KeyringError(_)) => Ok(false),
+                Err(EncryptionError::KeyNotFound) => Err(SpaceAccessError::NotInitialized),
+                Err(other) => Err(SpaceAccessError::Internal(other.to_string())),
+            }
+        }
+        .instrument(span)
+        .await
+    }
+
+    async fn derive_subkey(&self, salt: &[u8], info: &[u8]) -> Result<[u8; 32], SpaceAccessError> {
+        if !self.encryption_session.is_ready().await {
+            return Err(SpaceAccessError::NotUnlocked);
+        }
+        let master_key = self
+            .encryption_session
+            .get_master_key()
+            .await
+            .map_err(map_encryption_error)?;
+
+        let hkdf = Hkdf::<Sha256>::new(Some(salt), master_key.as_bytes());
+        let mut okm = [0u8; 32];
+        hkdf.expand(info, &mut okm)
+            .map_err(|e| SpaceAccessError::Internal(format!("HKDF expand: {e}")))?;
+        Ok(okm)
     }
 
     async fn prepare_join_offer(

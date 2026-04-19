@@ -84,6 +84,43 @@ pub trait SpaceAccessPort: Send + Sync {
     /// 清除内存会话——持久化密钥物料不受影响,后续仍可 `unlock`。
     async fn lock(&self, space_id: &SpaceId) -> Result<(), SpaceAccessError>;
 
+    /// 静默尝试从持久化层（keyring 缓存）恢复会话——startup 路径专用。
+    ///
+    /// 行为：
+    /// - 空间从未初始化：返回 `Ok(None)`（不视为错误,调用方据此判断是否需要引导用户首次 setup）；
+    /// - 已初始化且 keyring 命中：解锁成功,返回 `Ok(Some(ActiveSpace))`；
+    /// - keyring 缓存丢失 / 权限不足 / 密钥物料损坏：返回相应 [`SpaceAccessError`]。
+    ///
+    /// 与 `unlock` 的区别：本方法**不接受口令**,完全依赖 keyring 缓存——
+    /// 适合 startup 静默恢复;若 keyring 失效（如用户清除 / 跨设备导入）,
+    /// 调用方应回退到带口令的 `unlock` 路径。
+    async fn try_resume_session(
+        &self,
+        space_id: &SpaceId,
+    ) -> Result<Option<ActiveSpace>, SpaceAccessError>;
+
+    /// 探测 keyring 当前是否能在静默下读出本空间的 KEK。
+    ///
+    /// 用途：macOS Keychain "Always Allow" 引导流程——首次访问会弹权限
+    /// 提示框,用户授予 "Always Allow" 后再次调用应静默成功。
+    ///
+    /// 行为：
+    /// - `Ok(true)`：keyring 静默命中,无需用户授权；
+    /// - `Ok(false)`：权限被拒绝 / keyring 暂时不可用——调用方应当作"未授予 Always Allow"对待；
+    /// - `Err(NotInitialized)`：本空间从未初始化,keyring 里没有 KEK;
+    /// - `Err(Internal)`：其他不可恢复错误。
+    async fn verify_keychain_access(&self) -> Result<bool, SpaceAccessError>;
+
+    /// 从当前会话派生 32 字节子密钥（HKDF-SHA256,IKM = MasterKey）。
+    ///
+    /// 调用方决定 `salt`（一般是某种业务作用域,如 profile_id）和 `info`
+    /// （区分用途的字符串,如 `"uniclipboard-search-index/v1"`）。adapter
+    /// 内部用 IKM = master_key 派生,不暴露 master_key 字节。
+    ///
+    /// 用途：搜索索引 SearchKey 派生、未来其它需要派生密钥的场景。
+    /// 会话未解锁时返回 [`SpaceAccessError::NotUnlocked`]。
+    async fn derive_subkey(&self, salt: &[u8], info: &[u8]) -> Result<[u8; 32], SpaceAccessError>;
+
     /// Sponsor 侧：准备 pairing offer。
     ///
     /// 读取/生成该空间的 keyslot 序列化字节 + 产生 32 字节挑战 nonce,打包给 joiner。

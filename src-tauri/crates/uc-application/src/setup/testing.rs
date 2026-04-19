@@ -353,6 +353,25 @@ impl SpaceAccessPort for NoopSpaceAccess {
             "noop derive_master_key_for_proof".into(),
         ))
     }
+
+    async fn try_resume_session(
+        &self,
+        _space_id: &SpaceId,
+    ) -> Result<Option<ActiveSpace>, SpaceAccessError> {
+        Ok(None)
+    }
+
+    async fn verify_keychain_access(&self) -> Result<bool, SpaceAccessError> {
+        Ok(false)
+    }
+
+    async fn derive_subkey(
+        &self,
+        _salt: &[u8],
+        _info: &[u8],
+    ) -> Result<[u8; 32], SpaceAccessError> {
+        Err(SpaceAccessError::Internal("noop derive_subkey".into()))
+    }
 }
 
 // ────────────────────────── Harness ──────────────────────────
