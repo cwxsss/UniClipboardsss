@@ -11,41 +11,9 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Opaque invitation credential shown to the joiner (short code / ticket).
-///
-/// Format and validation rules live in the adapter (Slice 1 decision Q-ε).
-/// `uc-core` only treats it as an identifier passed between sponsor and
-/// joiner.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct InvitationCode(String);
-
-impl InvitationCode {
-    /// Wrap an adapter-provided string without performing format validation.
-    ///
-    /// Core trusts the adapter to have validated the code on the wire; this
-    /// constructor exists so use cases can carry the value through domain
-    /// types without reaching for a `String`.
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
-impl std::fmt::Display for InvitationCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
+pub use crate::pairing::invitation::InvitationCode;
 
 /// Successfully issued invitation.
 #[derive(Debug, Clone)]
