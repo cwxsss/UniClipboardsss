@@ -1,3 +1,4 @@
+pub mod blob_cipher;
 pub mod encryption;
 pub mod encryption_session;
 pub mod encryption_state;
@@ -9,6 +10,7 @@ pub mod secure_storage;
 pub mod short_code;
 pub mod transfer_crypto;
 
+pub use blob_cipher::{BlobCipherError, BlobCipherPort};
 pub use identity_fingerprint::IdentityFingerprintFactoryPort;
 pub use pin_hasher::PinHasherPort;
 pub use short_code::ShortCodeGeneratorPort;
