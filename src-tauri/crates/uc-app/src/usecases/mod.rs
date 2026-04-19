@@ -233,8 +233,7 @@ impl<'a> CoreUseCases<'a> {
         &self,
     ) -> crate::usecases::verify_keychain_access::VerifyKeychainAccess {
         crate::usecases::verify_keychain_access::VerifyKeychainAccess::from_ports(
-            self.runtime.deps.security.key_scope.clone(),
-            self.runtime.deps.security.key_material.clone(),
+            self.runtime.deps.security.space_access.clone(),
         )
     }
 

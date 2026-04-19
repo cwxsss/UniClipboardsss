@@ -1,57 +1,37 @@
 //! Verify whether macOS Keychain "Always Allow" permission has been granted.
 //!
-//! This use case performs a lightweight check by calling `load_kek()` and
-//! reporting whether the call succeeded silently (no user prompt), which
-//! indicates that "Always Allow" was granted for this application.
+//! 薄 wrapper, 把"探测 keyring 是否能在静默下读出 KEK"这条 macOS 引导
+//! 流程转交给 `SpaceAccessPort::verify_keychain_access`。
+//!
+//! 历史上本 usecase 自己持有 KeyMaterialPort + KeyScopePort 做权限探测,
+//! Slice 3 把"探测 + 错误分类"全部搬到 `DefaultSpaceAccessAdapter` 内部,
+//! 这里只留命令翻译。
 
 use std::sync::Arc;
 use tracing::{info, info_span, Instrument};
 
-use uc_core::{
-    crypto::model::EncryptionError,
-    ports::{security::key_scope::KeyScopePort, KeyMaterialPort},
-};
+use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
 
 #[derive(Debug, thiserror::Error)]
 pub enum VerifyKeychainError {
-    #[error("key scope resolution failed: {0}")]
-    ScopeFailed(String),
-
     #[error("KEK not found: encryption may not be properly initialized")]
     KekNotFound,
 
-    #[error("unexpected keyring error: {0}")]
-    Unexpected(String),
+    #[error("space access failed: {0}")]
+    SpaceAccess(#[from] SpaceAccessError),
 }
 
-/// Use case for verifying macOS Keychain "Always Allow" permission.
-///
-/// ## Behavior
-///
-/// - Calls `load_kek()` to check if Keychain access succeeds silently
-/// - `Ok(true)` — Keychain access succeeded (Always Allow granted)
-/// - `Ok(false)` — Permission denied or keyring error (Always Allow not yet granted)
-/// - `Err(KekNotFound)` — KEK not stored (encryption not properly initialized)
-/// - `Err(ScopeFailed)` — Key scope resolution failed
-/// - `Err(Unexpected)` — Unexpected error
 pub struct VerifyKeychainAccess {
-    key_scope: Arc<dyn KeyScopePort>,
-    key_material: Arc<dyn KeyMaterialPort>,
+    space_access: Arc<dyn SpaceAccessPort>,
 }
 
 impl VerifyKeychainAccess {
-    pub fn new(key_scope: Arc<dyn KeyScopePort>, key_material: Arc<dyn KeyMaterialPort>) -> Self {
-        Self {
-            key_scope,
-            key_material,
-        }
+    pub fn new(space_access: Arc<dyn SpaceAccessPort>) -> Self {
+        Self { space_access }
     }
 
-    pub fn from_ports(
-        key_scope: Arc<dyn KeyScopePort>,
-        key_material: Arc<dyn KeyMaterialPort>,
-    ) -> Self {
-        Self::new(key_scope, key_material)
+    pub fn from_ports(space_access: Arc<dyn SpaceAccessPort>) -> Self {
+        Self::new(space_access)
     }
 
     /// Execute the keychain access verification.
@@ -59,41 +39,22 @@ impl VerifyKeychainAccess {
     /// # Returns
     ///
     /// - `Ok(true)` — Keychain access succeeded silently (Always Allow granted)
-    /// - `Ok(false)` — Permission denied or keyring error
-    /// - `Err(_)` — KEK not found or unexpected error
+    /// - `Ok(false)` — Permission denied or transient keyring error
+    /// - `Err(KekNotFound)` — Encryption uninitialized (KEK 不在 keyring 里)
+    /// - `Err(SpaceAccess)` — 其它不可恢复错误
     pub async fn execute(&self) -> Result<bool, VerifyKeychainError> {
         let span = info_span!("usecase.verify_keychain_access.execute");
 
         async {
-            info!("Verifying Keychain access for Always Allow permission");
+            info!("delegating keychain access probe to SpaceAccessPort");
 
-            // 1. Get current key scope
-            let scope = self
-                .key_scope
-                .current_scope()
+            self.space_access
+                .verify_keychain_access()
                 .await
-                .map_err(|e| VerifyKeychainError::ScopeFailed(e.to_string()))?;
-
-            // 2. Attempt to load KEK from keyring
-            match self.key_material.load_kek(&scope).await {
-                Ok(_) => {
-                    info!("Keychain access succeeded silently — Always Allow granted");
-                    Ok(true)
-                }
-                Err(EncryptionError::PermissionDenied) => {
-                    info!("Keychain access denied — Always Allow not granted");
-                    Ok(false)
-                }
-                Err(EncryptionError::KeyNotFound) => {
-                    info!("KEK not found in keyring — encryption may not be initialized");
-                    Err(VerifyKeychainError::KekNotFound)
-                }
-                Err(EncryptionError::KeyringError(_)) => {
-                    info!("Keyring error — treating as Always Allow not granted");
-                    Ok(false)
-                }
-                Err(other) => Err(VerifyKeychainError::Unexpected(other.to_string())),
-            }
+                .map_err(|e| match e {
+                    SpaceAccessError::NotInitialized => VerifyKeychainError::KekNotFound,
+                    other => VerifyKeychainError::SpaceAccess(other),
+                })
         }
         .instrument(span)
         .await
