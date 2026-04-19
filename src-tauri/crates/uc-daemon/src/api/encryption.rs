@@ -7,7 +7,6 @@ use serde_json::json;
 use tokio::sync::broadcast::error::SendError;
 use tracing::{info, warn};
 use uc_app::usecases::CoreUseCases;
-use uc_core::crypto::state::EncryptionState;
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 use utoipa;
 
@@ -47,18 +46,18 @@ async fn get_encryption_state_handler(
     let runtime = state.runtime_or_error()?;
     let deps = runtime.wiring_deps();
 
-    let enc_state = deps
-        .security
-        .encryption_state
-        .load_state()
+    // Phase C: setup 完成真相源 = `SetupStatus.has_completed`。
+    let initialized = deps
+        .setup_status
+        .get_status()
         .await
-        .map_err(|e| ApiError::internal(format!("failed to load encryption state: {e}")))?;
+        .map(|s| s.has_completed)
+        .map_err(|e| ApiError::internal(format!("failed to load setup status: {e}")))?;
     let space_id = uc_core::ids::SpaceId::from("space");
-    let session_ready = deps.security.space_access.is_unlocked(&space_id).await;
-
-    let (initialized, session_ready) = match enc_state {
-        EncryptionState::Initialized => (true, session_ready),
-        _ => (false, false),
+    let session_ready = if initialized {
+        deps.security.space_access.is_unlocked(&space_id).await
+    } else {
+        false
     };
 
     let ts = chrono::Utc::now().timestamp_millis();

@@ -1,6 +1,5 @@
 pub mod blob_cipher;
 pub mod current_profile;
-pub mod encryption_state;
 pub mod identity_fingerprint;
 pub mod pin_hasher;
 pub mod secure_storage;

@@ -4,24 +4,16 @@ use async_trait::async_trait;
 use tracing::{info, warn};
 
 use uc_core::ids::{DeviceId, SpaceId};
-use uc_core::ports::security::encryption_state::EncryptionStatePort;
 use uc_core::ports::space::PersistencePort;
 use uc_core::TrustedPeerRepositoryPort;
 
 pub struct SpaceAccessPersistenceAdapter {
-    encryption_state: Arc<dyn EncryptionStatePort>,
     trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
 }
 
 impl SpaceAccessPersistenceAdapter {
-    pub fn new(
-        encryption_state: Arc<dyn EncryptionStatePort>,
-        trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
-    ) -> Self {
-        Self {
-            encryption_state,
-            trusted_peer_repo,
-        }
+    pub fn new(trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>) -> Self {
+        Self { trusted_peer_repo }
     }
 
     /// 确认对端已存在于 `trusted_peer` 表。
@@ -55,8 +47,10 @@ impl PersistencePort for SpaceAccessPersistenceAdapter {
         _space_id: &SpaceId,
         peer_id: &str,
     ) -> anyhow::Result<()> {
-        info!(peer_id = %peer_id, "Persisting joiner access and confirming peer trust");
-        self.encryption_state.persist_initialized().await?;
+        info!(peer_id = %peer_id, "Confirming joiner peer trust");
+        // Phase C 起不再写 `.initialized_encryption` marker;"本机已初始化"
+        // 由磁盘 keyslot 文件存在性回答, setup 完成由 `SetupStatusPort.has_completed`
+        // 在 setup flow 统一收口标记。
         self.ensure_peer_trusted(peer_id).await?;
         info!(
             peer_id = %peer_id,

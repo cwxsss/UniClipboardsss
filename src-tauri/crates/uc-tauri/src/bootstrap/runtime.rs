@@ -34,7 +34,6 @@ use std::sync::{Arc, RwLock};
 use uc_app::task_registry::TaskRegistry;
 use uc_app::{runtime::CoreRuntime, App, AppDeps};
 use uc_core::config::AppConfig;
-use uc_core::crypto::state::EncryptionState;
 use uc_core::ports::SettingsPort;
 
 use uc_app::shared::host_event::HostEventEmitterPort;
@@ -289,9 +288,10 @@ impl AppRuntime {
         self.core.is_encryption_ready().await
     }
 
-    /// Returns the persisted encryption state used by readiness checks.
-    pub async fn encryption_state(&self) -> Result<EncryptionState, String> {
-        self.core.encryption_state().await
+    /// Phase C: unified truth source = `SetupStatus.has_completed`.
+    /// Replaces prior `encryption_state()` helper backed by `EncryptionStatePort`.
+    pub async fn has_completed_setup(&self) -> Result<bool, String> {
+        self.core.has_completed_setup().await
     }
 
     /// Returns a clone of the settings port for resolve_pairing_device_name.

@@ -9,7 +9,6 @@
 use std::sync::Arc;
 
 use uc_core::clipboard::ClipboardIntegrationMode;
-use uc_core::crypto::state::EncryptionState;
 use uc_core::ports::SettingsPort;
 
 use crate::app_paths::AppPaths;
@@ -136,12 +135,14 @@ impl CoreRuntime {
         self.deps.security.space_access.is_unlocked(&space_id).await
     }
 
-    pub async fn encryption_state(&self) -> Result<EncryptionState, String> {
+    /// Phase C 起统一真相源: setup 完成标记 `SetupStatus.has_completed`。
+    /// 取代原 `EncryptionStatePort.load_state()`——两个 marker 本是同一件事。
+    pub async fn has_completed_setup(&self) -> Result<bool, String> {
         self.deps
-            .security
-            .encryption_state
-            .load_state()
+            .setup_status
+            .get_status()
             .await
+            .map(|s| s.has_completed)
             .map_err(|e| e.to_string())
     }
 

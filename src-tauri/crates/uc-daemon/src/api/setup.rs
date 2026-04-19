@@ -605,18 +605,13 @@ async fn reset(State(state): State<DaemonApiState>) -> Result<Json<SetupResetRes
     }
 
     // 单空间模型: 用占位 SpaceId 调 SpaceAccessPort.factory_reset。
+    // Phase C 起不再单独清 `.initialized_encryption` marker 文件——
+    // setup 完成真相由 `SetupStatus.has_completed` 承载,而 `orchestrator.reset()`
+    // 上面已经把 `SetupStatus` 重置为 default (`has_completed=false`)。
     let space_id = uc_core::ids::SpaceId::from("space");
     deps.security
         .space_access
         .factory_reset(&space_id)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "setup reset failed");
-            ApiError::internal(format!("setup reset failed: {e}"))
-        })?;
-    deps.security
-        .encryption_state
-        .clear_initialized()
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "setup reset failed");

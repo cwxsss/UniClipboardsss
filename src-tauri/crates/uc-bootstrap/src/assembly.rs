@@ -63,8 +63,8 @@ use uc_infra::fs::key_slot_store::JsonKeySlotStore;
 use uc_infra::search::{HkdfSearchKeyDerivation, SearchPipeline, SqliteSearchIndex};
 use uc_infra::security::{
     Argon2PinHasher, Blake3Hasher, DecryptingClipboardRepresentationRepository, EncryptedBlobStore,
-    EncryptingClipboardEventWriter, FileEncryptionStateRepository, InMemorySession,
-    KeyMaterialStore, Sha256IdentityFingerprintFactory, Sha256ShortCodeGenerator,
+    EncryptingClipboardEventWriter, InMemorySession, KeyMaterialStore,
+    Sha256IdentityFingerprintFactory, Sha256ShortCodeGenerator,
 };
 use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
@@ -213,7 +213,6 @@ struct InfraLayer {
 
     // Security services
     key_material: Arc<KeyMaterialStore>,
-    encryption_state: Arc<dyn uc_core::ports::security::encryption_state::EncryptionStatePort>,
 
     // Settings
     settings_repo: Arc<dyn SettingsPort>,
@@ -371,9 +370,6 @@ fn create_infra_layer(
         keyslot_store,
     ));
 
-    let encryption_state: Arc<dyn uc_core::ports::security::encryption_state::EncryptionStatePort> =
-        Arc::new(FileEncryptionStateRepository::new(vault_path.clone()));
-
     let settings_repo: Arc<dyn SettingsPort> = Arc::new(FileSettingsRepository::new(settings_path));
 
     let setup_status: Arc<dyn SetupStatusPort> =
@@ -403,7 +399,6 @@ fn create_infra_layer(
         thumbnail_repo,
         thumbnail_generator,
         key_material,
-        encryption_state,
         settings_repo,
         setup_status,
         clock,
@@ -719,12 +714,13 @@ pub fn wire_dependencies_with_identity_store(
     )?;
 
     // SpaceAccessPort——单一会话/密钥访问入口。adapter 自管 KeyMaterialStore +
-    // InMemorySession + EncryptionStatePort + CurrentProfilePort,V1 AEAD 走 v1_aead helper。
+    // InMemorySession + CurrentProfilePort,V1 AEAD 走 v1_aead helper。
+    // Phase C 起不再依赖 EncryptionStatePort (已物理删除);adapter 用
+    // `key_material.keyslot_exists()` 判断是否已初始化。
     let space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
         Arc::new(uc_infra::security::DefaultSpaceAccessAdapter::new(
             infra.key_material.clone(),
             platform.current_profile.clone(),
-            infra.encryption_state.clone(),
             platform.session.clone(),
         ));
 
@@ -830,7 +826,6 @@ pub fn wire_dependencies_with_identity_store(
             payload_resolver,
         },
         security: SecurityPorts {
-            encryption_state: infra.encryption_state,
             current_profile: platform.current_profile,
             secure_storage: platform.secure_storage,
             space_access: space_access.clone(),
@@ -1172,7 +1167,6 @@ pub fn build_setup_facade(
         Arc::new(TokioMutex::new(uc_infra::time::Timer::new()));
     let persistence_port = Arc::new(TokioMutex::new(
         uc_application::space_access::SpaceAccessPersistenceAdapter::new(
-            deps.security.encryption_state.clone(),
             ports.trusted_peer_repo.clone(),
         ),
     ));

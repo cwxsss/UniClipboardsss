@@ -18,7 +18,6 @@ use serde::Serialize;
 use serde_json::Value;
 use uc_app::usecases::CoreUseCases;
 use uc_core::crypto::model::Passphrase;
-use uc_core::crypto::state::EncryptionState;
 use uc_daemon::api::dto::setup::SetupStateResponseDto;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
 // Re-export for integration tests (same crate)
@@ -79,15 +78,16 @@ pub async fn run_interactive(json: bool, verbose: bool) -> i32 {
 
 // ── New Space flow (create encrypted space only, no pairing) ────────
 
-/// Returns `Ok(())` if encryption state allows new-space initialization,
-/// or `Err(exit_code)` if the operation should be rejected.
+/// Returns `Ok(())` if this device has not yet completed setup (new-space allowed),
+/// or `Err(exit_code)` if setup already ran.
 ///
-/// Uses a whitelist approach: only `Uninitialized` is allowed.
-/// All other states (Initializing, Initialized, Error, etc.) are rejected.
-pub fn new_space_encryption_guard(state: EncryptionState) -> Result<(), i32> {
-    match state {
-        EncryptionState::Uninitialized => Ok(()),
-        _ => Err(exit_codes::EXIT_ERROR),
+/// Phase C: 真相源改为 `SetupStatus.has_completed`——取代原
+/// `EncryptionStatePort.load_state()` 的 marker 文件判断。
+pub fn new_space_setup_guard(setup_completed: bool) -> Result<(), i32> {
+    if setup_completed {
+        Err(exit_codes::EXIT_ERROR)
+    } else {
+        Ok(())
     }
 }
 
@@ -101,16 +101,16 @@ async fn run_new_space() -> i32 {
         }
     };
 
-    // 2. Check encryption state — reject if already initialized
-    let state = match runtime.encryption_state().await {
-        Ok(s) => s,
+    // 2. Check setup status — reject if already completed
+    let setup_completed = match runtime.has_completed_setup().await {
+        Ok(v) => v,
         Err(e) => {
-            ui::error(&format!("Failed to check encryption state: {e}"));
+            ui::error(&format!("Failed to check setup status: {e}"));
             return exit_codes::EXIT_ERROR;
         }
     };
 
-    if let Err(code) = new_space_encryption_guard(state) {
+    if let Err(code) = new_space_setup_guard(setup_completed) {
         ui::error("Space already initialized.");
         ui::info(
             "Hint",

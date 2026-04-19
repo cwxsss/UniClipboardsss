@@ -77,6 +77,17 @@ impl KeyMaterialStore {
         Ok(file.into())
     }
 
+    /// 本机磁盘上是否存在 keyslot 文件(任意 scope)。取代 Phase C 前的
+    /// `EncryptionStatePort.load_state() == Initialized` 判断:从"是否写过
+    /// marker 文件"改成"是否真的有 keyslot",更精确。
+    pub async fn keyslot_exists(&self) -> Result<bool, EncryptionError> {
+        match self.keyslot_store.load().await {
+            Ok(_) => Ok(true),
+            Err(EncryptionError::KeyNotFound) => Ok(false),
+            Err(other) => Err(other),
+        }
+    }
+
     pub async fn store_keyslot(&self, keyslot: &KeySlot) -> Result<(), EncryptionError> {
         let file = KeySlotFile::try_from(keyslot).map_err(|_| EncryptionError::CorruptedKeySlot)?;
         self.keyslot_store.store(&file).await

@@ -9,14 +9,15 @@ use crate::output;
 #[derive(Serialize)]
 struct SpaceStatusOutput {
     encryption_ready: bool,
-    encryption_state: String,
+    setup_completed: bool,
 }
 
 impl fmt::Display for SpaceStatusOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ready_str = if self.encryption_ready { "yes" } else { "no" };
+        let setup_str = if self.setup_completed { "yes" } else { "no" };
         writeln!(f, "Encryption ready: {}", ready_str)?;
-        write!(f, "Encryption state: {}", self.encryption_state)?;
+        write!(f, "Setup completed: {}", setup_str)?;
         Ok(())
     }
 }
@@ -41,17 +42,17 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
     };
 
     let encryption_ready = runtime.is_encryption_ready().await;
-    let encryption_state = match runtime.encryption_state().await {
-        Ok(state) => format!("{:?}", state),
+    let setup_completed = match runtime.has_completed_setup().await {
+        Ok(v) => v,
         Err(e) => {
-            eprintln!("Error: failed to query encryption state: {}", e);
+            eprintln!("Error: failed to query setup status: {}", e);
             return exit_codes::EXIT_ERROR;
         }
     };
 
     let result = SpaceStatusOutput {
         encryption_ready,
-        encryption_state,
+        setup_completed,
     };
 
     if let Err(e) = output::print_result(&result, json) {

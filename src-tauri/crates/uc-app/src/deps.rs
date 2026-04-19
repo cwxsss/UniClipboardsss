@@ -73,7 +73,6 @@ pub struct ClipboardPorts {
 /// Security-domain ports bundle.
 /// 安全领域端口组。
 pub struct SecurityPorts {
-    pub encryption_state: Arc<dyn uc_core::ports::security::encryption_state::EncryptionStatePort>,
     pub current_profile: Arc<dyn uc_core::ports::security::current_profile::CurrentProfilePort>,
     pub secure_storage: Arc<dyn SecureStoragePort>,
     /// 单一空间访问 port——initialize / unlock / try_resume_session /

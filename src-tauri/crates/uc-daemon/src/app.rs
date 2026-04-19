@@ -49,23 +49,24 @@ pub async fn recover_encryption_session(
     runtime: &CoreRuntime,
     auto_unlock_enabled: bool,
 ) -> anyhow::Result<bool> {
-    // Check encryption state first — needed to determine behavior when auto_unlock is disabled.
-    let encryption_state = runtime
+    // Phase C: setup 完成真相源改为 `SetupStatus.has_completed`(取代原
+    // `EncryptionStatePort.load_state()` marker 文件)。
+    let setup_completed = runtime
         .wiring_deps()
-        .security
-        .encryption_state
-        .load_state()
+        .setup_status
+        .get_status()
         .await
-        .map_err(|e| anyhow::anyhow!("failed to load encryption state: {}", e))?;
+        .map(|s| s.has_completed)
+        .map_err(|e| anyhow::anyhow!("failed to load setup status: {}", e))?;
 
     // When auto-unlock is disabled, skip the unlock attempt entirely.
-    // If encryption is already initialized, return false so the GUI can prompt for manual unlock.
-    // If encryption is uninitialized, return false (no unlock needed — setup flow handles it).
+    // If setup has already been completed, return false so the GUI can prompt for manual unlock.
+    // Otherwise, return false (no unlock needed — setup flow handles it).
     if !auto_unlock_enabled {
-        if encryption_state == uc_core::crypto::state::EncryptionState::Initialized {
+        if setup_completed {
             info!("Auto-unlock disabled via settings — skipping encryption session recovery");
         } else {
-            info!("Encryption not initialized, skipping session recovery");
+            info!("Setup not completed, skipping session recovery");
         }
         return Ok(false);
     }

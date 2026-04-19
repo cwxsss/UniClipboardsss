@@ -22,10 +22,8 @@ use uc_core::crypto::model::{EncryptionError, Passphrase as LegacyPassphrase};
 
 use super::crypto_model::{KeyScope, KeySlot, WrappedMasterKey};
 use super::secrets::MasterKey;
-use uc_core::crypto::state::EncryptionState;
 use uc_core::ids::{ProfileId, SpaceId};
 use uc_core::ports::security::current_profile::CurrentProfilePort;
-use uc_core::ports::security::encryption_state::EncryptionStatePort;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
 use uc_core::space_access::{JoinOffer, ProofDerivedKey};
 
@@ -38,7 +36,6 @@ use super::v1_aead;
 pub struct DefaultSpaceAccessAdapter {
     key_material: Arc<KeyMaterialStore>,
     current_profile: Arc<dyn CurrentProfilePort>,
-    encryption_state: Arc<dyn EncryptionStatePort>,
     session: Arc<InMemorySession>,
 }
 
@@ -46,13 +43,11 @@ impl DefaultSpaceAccessAdapter {
     pub fn new(
         key_material: Arc<KeyMaterialStore>,
         current_profile: Arc<dyn CurrentProfilePort>,
-        encryption_state: Arc<dyn EncryptionStatePort>,
         session: Arc<InMemorySession>,
     ) -> Self {
         Self {
             key_material,
             current_profile,
-            encryption_state,
             session,
         }
     }
@@ -131,19 +126,10 @@ impl DefaultSpaceAccessAdapter {
         }
 
         // session 写入是 in-memory 操作,不会失败——直接写。
+        // Phase C 起不再写 `.initialized_encryption` marker 文件;"已初始化"
+        // 真相由磁盘 keyslot 存在性 (`key_material.keyslot_exists()`) 回答,
+        // setup 完成事实由 `SetupStatusPort.has_completed` 承载。
         self.session.set_master_key(master_key);
-
-        if let Err(e) = self.encryption_state.persist_initialized().await {
-            error!(error = %e, "persist_initialized failed");
-            self.session.clear();
-            if let Err(err) = self.key_material.delete_keyslot(scope).await {
-                warn!(error = %err, "rollback delete_keyslot failed");
-            }
-            if let Err(err) = self.key_material.delete_kek(scope).await {
-                warn!(error = %err, "rollback delete_kek failed");
-            }
-            return Err(SpaceAccessError::Internal(e.to_string()));
-        }
 
         Ok(keyslot)
     }
@@ -160,12 +146,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
         async {
             info!("initializing new space");
 
-            let state = self
-                .encryption_state
-                .load_state()
+            if self
+                .key_material
+                .keyslot_exists()
                 .await
-                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
-            if state == EncryptionState::Initialized {
+                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?
+            {
                 return Err(SpaceAccessError::AlreadyInitialized);
             }
 
@@ -195,12 +181,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
         async {
             info!("unlocking space with passphrase");
 
-            let state = self
-                .encryption_state
-                .load_state()
+            if !self
+                .key_material
+                .keyslot_exists()
                 .await
-                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
-            if state == EncryptionState::Uninitialized {
+                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?
+            {
                 return Err(SpaceAccessError::NotInitialized);
             }
 
@@ -289,13 +275,13 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
         async {
             info!("attempting silent session resume from keyring");
 
-            let state = self
-                .encryption_state
-                .load_state()
+            if !self
+                .key_material
+                .keyslot_exists()
                 .await
-                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
-            if state == EncryptionState::Uninitialized {
-                info!("encryption uninitialized, no session to resume");
+                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?
+            {
+                info!("no keyslot on disk, no session to resume");
                 return Ok(None);
             }
 
@@ -395,12 +381,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
         async {
             info!("preparing sponsor join offer");
 
-            let state = self
-                .encryption_state
-                .load_state()
+            let already_initialized = self
+                .key_material
+                .keyslot_exists()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
-            debug!(state = ?state, "loaded encryption state");
+            debug!(already_initialized, "checked keyslot existence");
 
             let profile = self
                 .current_profile
@@ -412,7 +398,7 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
 
             // Branch A — 运行时已初始化的 sponsor 路径: 从 key_material 读已有 keyslot,
             // 不重新生成 MasterKey。passphrase 参数此时不参与派生。
-            if state == EncryptionState::Initialized {
+            if already_initialized {
                 let _ = passphrase;
                 let keyslot = self
                     .key_material
@@ -508,20 +494,10 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
 
             // 把字节注入会话(让 sponsor 后续 verify 走 fallback 路径),
             // 同时包装一份成不透明凭据返回 joiner 侧调用方。
+            // Phase C 起不再写 `.initialized_encryption` marker 文件;
+            // "本机已初始化" 的真相由磁盘 keyslot 文件存在性回答。
             self.session.set_master_key(master_key.clone());
             let derived = ProofDerivedKey::from_bytes(master_key.0);
-
-            if let Err(e) = self.encryption_state.persist_initialized().await {
-                error!(error = %e, "persist_initialized failed");
-                self.session.clear();
-                if let Err(err) = self.key_material.delete_keyslot(&scope).await {
-                    warn!(error = %err, "rollback delete_keyslot failed");
-                }
-                if let Err(err) = self.key_material.delete_kek(&scope).await {
-                    warn!(error = %err, "rollback delete_kek failed");
-                }
-                return Err(SpaceAccessError::Internal(e.to_string()));
-            }
 
             info!("master key derivation completed");
             Ok(derived)
