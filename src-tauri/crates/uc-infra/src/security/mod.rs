@@ -8,7 +8,6 @@ mod encryption_state_repo;
 mod hashing;
 mod identity_fingerprint;
 mod key_material;
-pub mod space_encryption;
 
 pub use decrypting_clipboard_event_repo::DecryptingClipboardEventRepository;
 pub use decrypting_representation_repo::DecryptingClipboardRepresentationRepository;
@@ -22,4 +21,3 @@ pub use identity_fingerprint::{
     Sha256ShortCodeGenerator, ShortCodeGenerator,
 };
 pub use key_material::DefaultKeyMaterialService;
-pub use space_encryption::InMemorySpaceCryptoAdapter;

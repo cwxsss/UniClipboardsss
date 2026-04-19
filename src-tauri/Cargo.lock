@@ -9941,7 +9941,6 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "uuid",
- "zeroize",
  "zstd",
 ]
 
