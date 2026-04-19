@@ -36,6 +36,7 @@ use uc_core::network::{
     SessionId,
 };
 use uc_core::pairing::PairingRole;
+use uc_core::security::IdentityFingerprint;
 use uc_core::settings::model::PairingSettings;
 use uc_core::PeerId;
 
@@ -50,7 +51,7 @@ use uc_core::PeerId;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairingHandshakeOutcome {
     pub peer_id: PeerId,
-    pub identity_fingerprint: String,
+    pub identity_fingerprint: IdentityFingerprint,
 }
 
 use super::crypto::PairingCryptoPorts;
@@ -654,7 +655,7 @@ impl PairingStateMachine {
                     .fingerprint
                     .from_public_key(&local_identity_pubkey)
                 {
-                    Ok(fingerprint) => fingerprint,
+                    Ok(fingerprint) => fingerprint.to_string(),
                     Err(err) => {
                         return self.fail_with_reason(
                             session_id,
@@ -667,7 +668,7 @@ impl PairingStateMachine {
                     .fingerprint
                     .from_public_key(&challenge.identity_pubkey)
                 {
-                    Ok(fingerprint) => fingerprint,
+                    Ok(fingerprint) => fingerprint.to_string(),
                     Err(err) => {
                         return self.fail_with_reason(
                             session_id,
@@ -1066,7 +1067,7 @@ impl PairingStateMachine {
                     .fingerprint
                     .from_public_key(&local_identity_pubkey)
                 {
-                    Ok(fingerprint) => fingerprint,
+                    Ok(fingerprint) => fingerprint.to_string(),
                     Err(err) => {
                         return self.fail_with_reason(
                             session_id,
@@ -1079,7 +1080,7 @@ impl PairingStateMachine {
                     .fingerprint
                     .from_public_key(&peer_identity_pubkey)
                 {
-                    Ok(fingerprint) => fingerprint,
+                    Ok(fingerprint) => fingerprint.to_string(),
                     Err(err) => {
                         return self.fail_with_reason(
                             session_id,

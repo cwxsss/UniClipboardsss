@@ -1,12 +1,10 @@
 mod error;
 mod events;
-mod fingerprint;
 mod peer;
 mod ports;
 
 pub use error::TrustedPeerError;
 pub use events::{TrustAbortReason, TrustedPeerEvent};
-pub use fingerprint::PeerFingerprint;
 pub use peer::TrustedPeer;
 pub use ports::TrustedPeerRepositoryPort;
 
@@ -14,23 +12,6 @@ pub use ports::TrustedPeerRepositoryPort;
 mod tests {
     use super::*;
     use crate::ids::DeviceId;
-
-    #[test]
-    fn peer_fingerprint_preserves_value_and_equality() {
-        let a = PeerFingerprint::new("abc123");
-        let b = PeerFingerprint::new(String::from("abc123"));
-        let c = PeerFingerprint::new("different");
-
-        assert_eq!(a.as_str(), "abc123");
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-    }
-
-    #[test]
-    fn peer_fingerprint_display_returns_raw_value() {
-        let fp = PeerFingerprint::new("deadbeef");
-        assert_eq!(format!("{fp}"), "deadbeef");
-    }
 
     #[test]
     fn error_already_trusted_formats_device_id() {

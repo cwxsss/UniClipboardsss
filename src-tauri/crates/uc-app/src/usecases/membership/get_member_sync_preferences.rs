@@ -83,11 +83,15 @@ mod tests {
         }
     }
 
+    fn sample_fingerprint() -> uc_core::security::IdentityFingerprint {
+        uc_core::security::IdentityFingerprint::from_raw_string("FPAAAAAAAAAAAAAA").unwrap()
+    }
+
     fn sample_member(peer_id: &str) -> SpaceMember {
         SpaceMember {
             device_id: DeviceId::new(peer_id),
             device_name: "alpha".to_string(),
-            identity_fingerprint: "fp".to_string(),
+            identity_fingerprint: sample_fingerprint(),
             joined_at: Utc::now(),
             sync_preferences: MemberSyncPreferences {
                 send_enabled: false,

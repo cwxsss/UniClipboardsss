@@ -645,11 +645,20 @@ mod admit_tests {
         }
     }
 
+    fn sample_fingerprint(seed: &str) -> uc_core::security::IdentityFingerprint {
+        let mut raw: String = seed.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        raw.make_ascii_uppercase();
+        while raw.len() < 16 {
+            raw.push('A');
+        }
+        uc_core::security::IdentityFingerprint::from_raw_string(&raw[..16]).unwrap()
+    }
+
     fn make_sample_member(peer_id: &str) -> SpaceMember {
         SpaceMember {
             device_id: DeviceId::new(peer_id.to_string()),
             device_name: "preloaded".to_string(),
-            identity_fingerprint: "old-fingerprint".to_string(),
+            identity_fingerprint: sample_fingerprint("OLD"),
             joined_at: Utc::now(),
             sync_preferences: MemberSyncPreferences::default(),
         }
@@ -665,7 +674,7 @@ mod admit_tests {
         let mut guard = ctx.lock().await;
         guard.sponsor_peer_id = peer_id.map(String::from);
         guard.peer_device_name = device_name.map(String::from);
-        guard.peer_fingerprint = fingerprint.map(String::from);
+        guard.peer_fingerprint = fingerprint.map(sample_fingerprint);
     }
 
     #[tokio::test]
@@ -734,7 +743,7 @@ mod admit_tests {
         let stored = repo.first().unwrap();
         assert_eq!(stored.device_id, DeviceId::new("peer-1".to_string()));
         assert_eq!(stored.device_name, "Alice");
-        assert_eq!(stored.identity_fingerprint, "fp-1");
+        assert_eq!(stored.identity_fingerprint, sample_fingerprint("fp-1"));
         assert_eq!(stored.sync_preferences, MemberSyncPreferences::default());
     }
 
@@ -760,6 +769,6 @@ mod admit_tests {
             stored.device_name, "preloaded",
             "existing record must be preserved"
         );
-        assert_eq!(stored.identity_fingerprint, "old-fingerprint");
+        assert_eq!(stored.identity_fingerprint, sample_fingerprint("OLD"));
     }
 }

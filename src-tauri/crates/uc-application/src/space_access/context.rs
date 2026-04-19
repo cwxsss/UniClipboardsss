@@ -1,5 +1,6 @@
 use uc_core::crypto::SecretString;
 use uc_core::ids::SpaceId;
+use uc_core::security::IdentityFingerprint;
 use uc_core::space_access::state::DenyReason;
 use uc_core::space_access::{JoinOffer, SpaceAccessProofArtifact};
 
@@ -22,7 +23,7 @@ pub struct SpaceAccessContext {
     pub peer_device_name: Option<String>,
     /// 对端身份指纹，由上层在 pairing 完成后从 `trusted_peer` 仓库读出写入，
     /// 供 `Granted` 转移点构造 `AdmitMember` 输入。
-    pub peer_fingerprint: Option<String>,
+    pub peer_fingerprint: Option<IdentityFingerprint>,
     pub result_success: Option<bool>,
     pub result_deny_reason: Option<DenyReason>,
 }

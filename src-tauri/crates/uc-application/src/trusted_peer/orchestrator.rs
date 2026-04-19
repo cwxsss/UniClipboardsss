@@ -144,7 +144,8 @@ where
 mod tests {
     use super::*;
     use crate::trusted_peer::testing::InMemoryTrustedPeerRepository;
-    use uc_core::{PeerFingerprint, TrustAbortReason};
+    use uc_core::security::IdentityFingerprint;
+    use uc_core::TrustAbortReason;
 
     fn build(
         local: &str,
@@ -157,9 +158,19 @@ mod tests {
         (repo, orch)
     }
 
-    fn challenge(fp: &str, code: &str) -> TrustVerificationChallenge {
+    /// Pad a short seed into a valid 16-char alphanumeric fingerprint.
+    fn fp_of(seed: &str) -> IdentityFingerprint {
+        let mut raw: String = seed.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        raw.make_ascii_uppercase();
+        while raw.len() < 16 {
+            raw.push('A');
+        }
+        IdentityFingerprint::from_raw_string(&raw[..16]).unwrap()
+    }
+
+    fn challenge(fp_seed: &str, code: &str) -> TrustVerificationChallenge {
         TrustVerificationChallenge {
-            peer_fingerprint: PeerFingerprint::new(fp),
+            peer_fingerprint: fp_of(fp_seed),
             short_code: code.into(),
         }
     }
@@ -169,7 +180,7 @@ mod tests {
         let (repo, orch) = build("local-1");
 
         orch.initiate(DeviceId::new("peer-a")).await.unwrap();
-        orch.record_session_opened(DeviceId::new("peer-a"), challenge("fp-a", "123"))
+        orch.record_session_opened(DeviceId::new("peer-a"), challenge("FPA", "123"))
             .await
             .unwrap();
 
@@ -178,21 +189,21 @@ mod tests {
             TrustState::Trusted { trusted_peer } => {
                 assert_eq!(trusted_peer.peer_device_id.as_str(), "peer-a");
                 assert_eq!(trusted_peer.local_device_id.as_str(), "local-1");
-                assert_eq!(trusted_peer.peer_fingerprint.as_str(), "fp-a");
+                assert_eq!(trusted_peer.peer_fingerprint, fp_of("FPA"));
             }
             other => panic!("expected Trusted, got {other:?}"),
         }
 
         let saved = repo.get(&DeviceId::new("peer-a")).await.unwrap();
         assert!(saved.is_some());
-        assert_eq!(saved.unwrap().peer_fingerprint.as_str(), "fp-a");
+        assert_eq!(saved.unwrap().peer_fingerprint, fp_of("FPA"));
     }
 
     #[tokio::test]
     async fn cancel_from_awaiting_goes_to_aborted_user_cancelled_and_does_not_persist() {
         let (repo, orch) = build("local-1");
         orch.initiate(DeviceId::new("peer-a")).await.unwrap();
-        orch.record_session_opened(DeviceId::new("peer-a"), challenge("fp-a", "123"))
+        orch.record_session_opened(DeviceId::new("peer-a"), challenge("FPA", "123"))
             .await
             .unwrap();
 
@@ -225,7 +236,7 @@ mod tests {
     async fn protocol_error_from_awaiting_goes_to_aborted_protocol_error() {
         let (_repo, orch) = build("local-1");
         orch.initiate(DeviceId::new("peer-a")).await.unwrap();
-        orch.record_session_opened(DeviceId::new("peer-a"), challenge("fp-a", "123"))
+        orch.record_session_opened(DeviceId::new("peer-a"), challenge("FPA", "123"))
             .await
             .unwrap();
 
@@ -264,7 +275,7 @@ mod tests {
         orch.initiate(DeviceId::new("peer-a")).await.unwrap();
 
         let err = orch
-            .record_session_opened(DeviceId::new("different"), challenge("fp", "code"))
+            .record_session_opened(DeviceId::new("different"), challenge("FP", "code"))
             .await
             .unwrap_err();
         assert!(matches!(
@@ -277,7 +288,7 @@ mod tests {
     async fn terminal_state_rejects_further_events() {
         let (_repo, orch) = build("local-1");
         orch.initiate(DeviceId::new("peer-a")).await.unwrap();
-        orch.record_session_opened(DeviceId::new("peer-a"), challenge("fp-a", "123"))
+        orch.record_session_opened(DeviceId::new("peer-a"), challenge("FPA", "123"))
             .await
             .unwrap();
         orch.confirm_verification().await.unwrap();
@@ -296,7 +307,7 @@ mod tests {
 
         // First flow: reach Trusted terminal.
         orch.initiate(DeviceId::new("peer-a")).await.unwrap();
-        orch.record_session_opened(DeviceId::new("peer-a"), challenge("fp-a", "123"))
+        orch.record_session_opened(DeviceId::new("peer-a"), challenge("FPA", "123"))
             .await
             .unwrap();
         orch.confirm_verification().await.unwrap();
@@ -315,7 +326,7 @@ mod tests {
         repo.remove(&DeviceId::new("peer-a")).await.unwrap();
 
         orch.initiate(DeviceId::new("peer-b")).await.unwrap();
-        orch.record_session_opened(DeviceId::new("peer-b"), challenge("fp-b", "456"))
+        orch.record_session_opened(DeviceId::new("peer-b"), challenge("FPB", "456"))
             .await
             .unwrap();
         let final_state = orch.confirm_verification().await.unwrap();

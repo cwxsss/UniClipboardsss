@@ -40,7 +40,16 @@ mod tests {
     use super::*;
     use crate::trusted_peer::testing::InMemoryTrustedPeerRepository;
     use chrono::Utc;
-    use uc_core::PeerFingerprint;
+    use uc_core::security::IdentityFingerprint;
+
+    fn fp_for(seed: &str) -> IdentityFingerprint {
+        let mut raw: String = seed.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        raw.make_ascii_uppercase();
+        while raw.len() < 16 {
+            raw.push('A');
+        }
+        IdentityFingerprint::from_raw_string(&raw[..16]).unwrap()
+    }
 
     #[tokio::test]
     async fn missing_peer_returns_none() {
@@ -63,7 +72,7 @@ mod tests {
         let peer = TrustedPeer {
             local_device_id: DeviceId::new("local-1"),
             peer_device_id: DeviceId::new("peer-a"),
-            peer_fingerprint: PeerFingerprint::new("fp-a"),
+            peer_fingerprint: fp_for("FPA"),
             trusted_at: Utc::now(),
         };
         repo.save(&peer).await.unwrap();

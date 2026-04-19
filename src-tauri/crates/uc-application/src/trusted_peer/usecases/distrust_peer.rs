@@ -40,13 +40,23 @@ mod tests {
     use super::*;
     use crate::trusted_peer::testing::InMemoryTrustedPeerRepository;
     use chrono::Utc;
-    use uc_core::{PeerFingerprint, TrustedPeer};
+    use uc_core::security::IdentityFingerprint;
+    use uc_core::TrustedPeer;
+
+    fn fp_for(seed: &str) -> IdentityFingerprint {
+        let mut raw: String = seed.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        raw.make_ascii_uppercase();
+        while raw.len() < 16 {
+            raw.push('A');
+        }
+        IdentityFingerprint::from_raw_string(&raw[..16]).unwrap()
+    }
 
     fn fixture_trusted_peer(peer_id: &str) -> TrustedPeer {
         TrustedPeer {
             local_device_id: DeviceId::new("local-1"),
             peer_device_id: DeviceId::new(peer_id),
-            peer_fingerprint: PeerFingerprint::new(format!("fp-{peer_id}")),
+            peer_fingerprint: fp_for(&format!("FP{peer_id}")),
             trusted_at: Utc::now(),
         }
     }

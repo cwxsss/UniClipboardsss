@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
 use chrono::{TimeZone, Utc};
 
-use uc_core::{DeviceId, PeerFingerprint, TrustedPeer};
+use uc_core::security::IdentityFingerprint;
+use uc_core::{DeviceId, TrustedPeer};
 
 use crate::db::models::{NewTrustedPeerRow, TrustedPeerRow};
 use crate::db::ports::{InsertMapper, RowMapper};
@@ -13,7 +14,7 @@ impl InsertMapper<TrustedPeer, NewTrustedPeerRow> for TrustedPeerRowMapper {
         Ok(NewTrustedPeerRow {
             peer_device_id: domain.peer_device_id.as_str().to_string(),
             local_device_id: domain.local_device_id.as_str().to_string(),
-            peer_fingerprint: domain.peer_fingerprint.as_str().to_string(),
+            peer_fingerprint: domain.peer_fingerprint.as_raw(),
             trusted_at: domain.trusted_at.timestamp(),
         })
     }
@@ -26,10 +27,13 @@ impl RowMapper<TrustedPeerRow, TrustedPeer> for TrustedPeerRowMapper {
             .single()
             .ok_or_else(|| anyhow!("invalid trusted_at timestamp: {}", row.trusted_at))?;
 
+        let peer_fingerprint = IdentityFingerprint::from_display_string(&row.peer_fingerprint)
+            .map_err(|e| anyhow!("invalid peer_fingerprint in row: {}", e))?;
+
         Ok(TrustedPeer {
             local_device_id: DeviceId::new(row.local_device_id.clone()),
             peer_device_id: DeviceId::new(row.peer_device_id.clone()),
-            peer_fingerprint: PeerFingerprint::new(row.peer_fingerprint.clone()),
+            peer_fingerprint,
             trusted_at,
         })
     }

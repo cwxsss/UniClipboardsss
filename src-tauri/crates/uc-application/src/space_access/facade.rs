@@ -15,6 +15,7 @@ use uc_core::space_access::event::SpaceAccessEvent;
 use uc_core::space_access::state::SpaceAccessState;
 
 use uc_core::crypto::SecretString;
+use uc_core::security::IdentityFingerprint;
 use uc_core::space_access::JoinOffer;
 
 use super::context::{SpaceAccessContext, SpaceAccessJoinerOffer};
@@ -122,7 +123,7 @@ impl SpaceAccessFacade {
     pub async fn set_peer_identity(
         &self,
         device_name: Option<String>,
-        fingerprint: Option<String>,
+        fingerprint: Option<IdentityFingerprint>,
     ) {
         let ctx = self.orchestrator.context();
         let mut guard = ctx.lock().await;

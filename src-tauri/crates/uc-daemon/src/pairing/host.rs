@@ -739,7 +739,7 @@ async fn run_pairing_action_loop(
                                     .get(&uc_core::ids::DeviceId::new(peer.peer_id.clone()))
                                     .await
                                 {
-                                    Ok(Some(rec)) => Some(rec.peer_fingerprint.to_string()),
+                                    Ok(Some(rec)) => Some(rec.peer_fingerprint),
                                     Ok(None) => {
                                         warn!(
                                             peer_id = %peer.peer_id,

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use uc_core::security::IdentityFingerprint;
 use uc_core::{DeviceId, MemberRepositoryPort, MemberSyncPreferences, SpaceMember};
 
 use crate::membership::errors::MembershipApplicationError;
@@ -13,7 +14,7 @@ use crate::membership::errors::MembershipApplicationError;
 pub struct AdmitMember {
     pub device_id: DeviceId,
     pub device_name: String,
-    pub identity_fingerprint: String,
+    pub identity_fingerprint: IdentityFingerprint,
     pub joined_at: DateTime<Utc>,
     pub sync_preferences: MemberSyncPreferences,
 }

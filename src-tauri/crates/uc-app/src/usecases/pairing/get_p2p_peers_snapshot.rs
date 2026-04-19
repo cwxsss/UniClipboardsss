@@ -131,7 +131,7 @@ impl GetP2pPeersSnapshot {
                     "NotPaired".to_string()
                 },
                 identity_fingerprint: member
-                    .map(|m| m.identity_fingerprint.clone())
+                    .map(|m| m.identity_fingerprint.to_string())
                     .unwrap_or_default(),
             });
         }
@@ -153,7 +153,7 @@ impl GetP2pPeersSnapshot {
                     is_paired: true,
                     is_connected: false,
                     pairing_state: "Trusted".to_string(),
-                    identity_fingerprint: member.identity_fingerprint.clone(),
+                    identity_fingerprint: member.identity_fingerprint.to_string(),
                 });
             }
         }

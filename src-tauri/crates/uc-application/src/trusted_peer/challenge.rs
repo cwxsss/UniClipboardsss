@@ -1,4 +1,4 @@
-use uc_core::PeerFingerprint;
+use uc_core::security::IdentityFingerprint;
 
 /// Presentation-facing artefact produced when the trust flow is awaiting
 /// user verification. Lives in the application layer — not in the core
@@ -10,6 +10,6 @@ use uc_core::PeerFingerprint;
 /// touching the domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustVerificationChallenge {
-    pub peer_fingerprint: PeerFingerprint,
+    pub peer_fingerprint: IdentityFingerprint,
     pub short_code: String,
 }

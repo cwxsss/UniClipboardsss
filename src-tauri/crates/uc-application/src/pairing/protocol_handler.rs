@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{info_span, Instrument};
 
 use uc_core::network::SessionId;
-use uc_core::{DeviceId, PeerFingerprint, TrustedPeerRepositoryPort};
+use uc_core::{DeviceId, TrustedPeerRepositoryPort};
 
 use super::state_machine::{PairingAction, PairingEvent, TimeoutKind};
 
@@ -289,9 +289,7 @@ impl PairingProtocolHandler {
                         // to phase A), so the challenge only needs the
                         // canonical fingerprint for persistence.
                         let challenge = TrustVerificationChallenge {
-                            peer_fingerprint: PeerFingerprint::new(
-                                outcome.identity_fingerprint.clone(),
-                            ),
+                            peer_fingerprint: outcome.identity_fingerprint.clone(),
                             short_code: String::new(),
                         };
 
@@ -521,7 +519,8 @@ mod tests {
         TrustPeerOrchestrator, TrustState, TrustVerificationChallenge, TrustedPeerApplicationError,
     };
     use std::sync::Arc;
-    use uc_core::{DeviceId, PeerFingerprint, TrustedPeerRepositoryPort};
+    use uc_core::security::IdentityFingerprint;
+    use uc_core::{DeviceId, TrustedPeerRepositoryPort};
 
     fn build_orch(
         local: &str,
@@ -534,9 +533,19 @@ mod tests {
         (repo, orch)
     }
 
-    fn challenge(fp: &str) -> TrustVerificationChallenge {
+    /// Pad a short seed into a valid 16-char alphanumeric fingerprint.
+    fn fp(seed: &str) -> IdentityFingerprint {
+        let mut raw: String = seed.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        raw.make_ascii_uppercase();
+        while raw.len() < 16 {
+            raw.push('A');
+        }
+        IdentityFingerprint::from_raw_string(&raw[..16]).unwrap()
+    }
+
+    fn challenge(peer_fingerprint: IdentityFingerprint) -> TrustVerificationChallenge {
         TrustVerificationChallenge {
-            peer_fingerprint: PeerFingerprint::new(fp),
+            peer_fingerprint,
             short_code: String::new(),
         }
     }
@@ -544,7 +553,7 @@ mod tests {
     async fn drive_persist_flow(
         orch: &TrustPeerOrchestrator<InMemoryTrustedPeerRepository>,
         peer_device_id: DeviceId,
-        fingerprint: &str,
+        fingerprint: IdentityFingerprint,
     ) -> Result<TrustState, TrustedPeerApplicationError> {
         orch.reset().await;
         orch.initiate(peer_device_id.clone()).await?;
@@ -559,7 +568,8 @@ mod tests {
         // branch now drives the trust orchestrator's full Idle→Trusted sequence.
         let (repo, orch) = build_orch("local-1");
 
-        let final_state = drive_persist_flow(&orch, DeviceId::new("peer-xyz"), "fp-xyz")
+        let expected_fp = fp("FPXYZ");
+        let final_state = drive_persist_flow(&orch, DeviceId::new("peer-xyz"), expected_fp.clone())
             .await
             .unwrap();
 
@@ -567,14 +577,14 @@ mod tests {
             TrustState::Trusted { trusted_peer } => {
                 assert_eq!(trusted_peer.local_device_id.as_str(), "local-1");
                 assert_eq!(trusted_peer.peer_device_id.as_str(), "peer-xyz");
-                assert_eq!(trusted_peer.peer_fingerprint.as_str(), "fp-xyz");
+                assert_eq!(trusted_peer.peer_fingerprint, expected_fp);
             }
             other => panic!("expected Trusted, got {other:?}"),
         }
 
         let saved = repo.get(&DeviceId::new("peer-xyz")).await.unwrap();
         assert!(saved.is_some());
-        assert_eq!(saved.unwrap().peer_fingerprint.as_str(), "fp-xyz");
+        assert_eq!(saved.unwrap().peer_fingerprint, expected_fp);
     }
 
     #[tokio::test]
@@ -584,11 +594,11 @@ mod tests {
         // returns `AlreadyTrusted` (D21) rather than silently overwriting.
         let (_repo, orch) = build_orch("local-1");
 
-        drive_persist_flow(&orch, DeviceId::new("peer-xyz"), "fp-xyz")
+        drive_persist_flow(&orch, DeviceId::new("peer-xyz"), fp("FPXYZ"))
             .await
             .unwrap();
 
-        let err = drive_persist_flow(&orch, DeviceId::new("peer-xyz"), "fp-xyz-rotated")
+        let err = drive_persist_flow(&orch, DeviceId::new("peer-xyz"), fp("FPXYZROTATED"))
             .await
             .unwrap_err();
         assert_eq!(
@@ -605,10 +615,10 @@ mod tests {
         // peer still works.
         let (repo, orch) = build_orch("local-1");
 
-        drive_persist_flow(&orch, DeviceId::new("peer-a"), "fp-a")
+        drive_persist_flow(&orch, DeviceId::new("peer-a"), fp("FPA"))
             .await
             .unwrap();
-        drive_persist_flow(&orch, DeviceId::new("peer-b"), "fp-b")
+        drive_persist_flow(&orch, DeviceId::new("peer-b"), fp("FPB"))
             .await
             .unwrap();
 
@@ -625,7 +635,7 @@ mod tests {
         let (repo, orch) = build_orch("local-1");
         let peer_id_str = "long-peer-id-with-specific-bytes-xyz";
 
-        drive_persist_flow(&orch, DeviceId::new(peer_id_str), "fp")
+        drive_persist_flow(&orch, DeviceId::new(peer_id_str), fp("FP"))
             .await
             .unwrap();
 

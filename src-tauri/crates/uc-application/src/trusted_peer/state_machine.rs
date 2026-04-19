@@ -83,15 +83,25 @@ mod tests {
     use super::*;
     use crate::trusted_peer::challenge::TrustVerificationChallenge;
     use chrono::Utc;
-    use uc_core::{DeviceId, PeerFingerprint, TrustAbortReason, TrustedPeer};
+    use uc_core::security::IdentityFingerprint;
+    use uc_core::{DeviceId, TrustAbortReason, TrustedPeer};
 
     fn peer(id: &str) -> DeviceId {
         DeviceId::new(id)
     }
 
-    fn challenge(fp: &str, code: &str) -> TrustVerificationChallenge {
+    fn fp_for(seed: &str) -> IdentityFingerprint {
+        let mut raw: String = seed.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        raw.make_ascii_uppercase();
+        while raw.len() < 16 {
+            raw.push('A');
+        }
+        IdentityFingerprint::from_raw_string(&raw[..16]).unwrap()
+    }
+
+    fn challenge(fp_seed: &str, code: &str) -> TrustVerificationChallenge {
         TrustVerificationChallenge {
-            peer_fingerprint: PeerFingerprint::new(fp),
+            peer_fingerprint: fp_for(fp_seed),
             short_code: code.into(),
         }
     }
@@ -100,7 +110,7 @@ mod tests {
         TrustedPeer {
             local_device_id: peer("local"),
             peer_device_id: peer(peer_id),
-            peer_fingerprint: PeerFingerprint::new(format!("fp-{peer_id}")),
+            peer_fingerprint: fp_for(&format!("FP{peer_id}")),
             trusted_at: Utc::now(),
         }
     }

@@ -17,15 +17,16 @@ pub mod network;
 pub mod pairing;
 pub mod ports;
 pub mod search;
+pub mod security;
 pub mod settings;
 pub mod setup;
 pub mod space_access;
 pub mod trusted_peer;
 
 pub use membership::{MemberRepositoryPort, MemberSyncPreferences, MembershipError, SpaceMember};
+pub use security::{FingerprintError, IdentityFingerprint};
 pub use trusted_peer::{
-    PeerFingerprint, TrustAbortReason, TrustedPeer, TrustedPeerError, TrustedPeerEvent,
-    TrustedPeerRepositoryPort,
+    TrustAbortReason, TrustedPeer, TrustedPeerError, TrustedPeerEvent, TrustedPeerRepositoryPort,
 };
 // Re-export commonly used types at the crate root
 pub use clipboard::*;

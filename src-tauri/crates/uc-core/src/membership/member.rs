@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::ids::DeviceId;
+use crate::security::IdentityFingerprint;
 
 use super::preferences::MemberSyncPreferences;
 
@@ -14,7 +15,7 @@ use super::preferences::MemberSyncPreferences;
 pub struct SpaceMember {
     pub device_id: DeviceId,
     pub device_name: String,
-    pub identity_fingerprint: String,
+    pub identity_fingerprint: IdentityFingerprint,
     pub joined_at: DateTime<Utc>,
     pub sync_preferences: MemberSyncPreferences,
 }

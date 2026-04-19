@@ -1,204 +1,69 @@
-//! Identity fingerprint generation and verification
+//! Concrete SHA-256 + Base32 derivation behind `IdentityFingerprintFactoryPort`
+//! and `ShortCodeGeneratorPort`.
 //!
-//! 这个模块提供了设备身份指纹的生成、验证和展示功能。
+//! The value object (`IdentityFingerprint`) and its format errors live in
+//! `uc_core::security` — this module only implements the algorithm.
 //!
-//! # Security Model / 安全模型
+//! # Algorithms
 //!
-//! - **基于身份公钥**: 指纹基于设备的长期身份公钥,而非运行时 nonce 或网络地址
-//! - **稳定且唯一**: 同一设备的指纹始终相同,不同设备的指纹几乎必然不同
-//! - **可人工比对**: 指纹编码为易于人类阅读和比对的格式(Base32,分组显示)
-//!
-//! # Design / 设计
-//!
-//! ```text
-//! Identity Keypair (Ed25519)
-//!   ├── Private Key: 受保护存储(系统钥匙串/密钥管理器)
-//!   └── Public Key: 用于生成指纹和签名验证
-//!
-//! Fingerprint Generation:
-//!   public_key -> SHA-256(domain_sep || pub_key) -> Base32 -> 分组显示
-//!                                          |
-//!                                          v
-//!                        "ABCD-EFGH-IJKL-MNOP" (16字符)
-//!
-//! Short Code (用户确认码):
-//!   SHA-256(transcript) -> 前5字节 -> Base32 -> 6-8字符
-//! ```
+//! - Identity fingerprint: `Base32( SHA-256("uc-identity-fp-v1" || pub_key)[0..10] )`
+//!   → 16 chars grouped as `ABCD-EFGH-IJKL-MNOP`
+//! - Short code: `Base32( SHA-256("uc-pairing-transcript-v1" || session || nonces || pubkeys || version)[0..5] )`
+//!   → 8 chars (first group of Base32 output)
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uc_core::ports::security::{IdentityFingerprintFactoryPort, ShortCodeGeneratorPort};
+use uc_core::security::IdentityFingerprint;
 
-/// 身份指纹错误
+/// Derivation-time failure for the Ed25519 → fingerprint pipeline.
+///
+/// Format-level errors (invalid fingerprint string, verify mismatches) live
+/// on `uc_core::security::FingerprintError` and are emitted when parsing an
+/// already-materialized fingerprint — never here.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum FingerprintError {
-    /// 无效的公钥长度
+pub enum FingerprintDerivationError {
     #[error("Invalid public key length: expected {expected}, got {actual}")]
     InvalidKeyLength { expected: usize, actual: usize },
-
-    /// 无效的指纹格式
-    #[error("Invalid fingerprint format: {0}")]
-    InvalidFormat(String),
-
-    /// 指纹不匹配
-    #[error("Fingerprint mismatch")]
-    Mismatch,
-
-    /// 编码错误
-    #[error("Encoding error: {0}")]
-    EncodingError(String),
 }
 
-/// 身份指纹 (16字符 Base32,分组显示)
+/// Derive the canonical identity fingerprint from an Ed25519 public key.
 ///
-/// Format: `ABCD-EFGH-IJKL-MNOP`
+/// Uses a fixed domain separator so the same key cannot collide with
+/// fingerprints minted for other purposes.
+fn derive_identity_fingerprint(
+    public_key: &[u8],
+) -> Result<IdentityFingerprint, FingerprintDerivationError> {
+    if public_key.len() != 32 {
+        return Err(FingerprintDerivationError::InvalidKeyLength {
+            expected: 32,
+            actual: public_key.len(),
+        });
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"uc-identity-fp-v1");
+    hasher.update(public_key);
+    let hash = hasher.finalize();
+
+    let truncated = &hash[0..10];
+    let encoded = base32::encode(base32::Alphabet::Rfc4648 { padding: false }, truncated);
+
+    Ok(IdentityFingerprint::from_raw_string(encoded)
+        .expect("16-char alphanumeric Base32 output is always a valid fingerprint"))
+}
+
+/// Generator for transcript-bound short codes shown to the user during pairing.
 ///
-/// 每个分组4个字符,共4组,便于人类比对。
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct IdentityFingerprint(String);
-
-impl IdentityFingerprint {
-    /// 指纹的分组大小(字符数)
-    const GROUP_SIZE: usize = 4;
-
-    /// 从原始字节数组创建指纹
-    ///
-    /// # Arguments
-    ///
-    /// * `bytes` - SHA-256 哈希输出(取前10字节用于指纹)
-    ///
-    /// # Process / 处理流程
-    ///
-    /// 1. 取输入的前10字节(80bit)
-    /// 2. Base32 编码为16字符
-    /// 3. 分组显示: `ABCD-EFGH-IJKL-MNOP`
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, FingerprintError> {
-        if bytes.len() < 10 {
-            return Err(FingerprintError::InvalidKeyLength {
-                expected: 10,
-                actual: bytes.len(),
-            });
-        }
-
-        // 取前10字节并 Base32 编码
-        let truncated = &bytes[0..10];
-        let encoded = base32::encode(base32::Alphabet::Rfc4648 { padding: false }, truncated);
-
-        // 分组显示
-        let fingerprint = Self::format_with_groups(&encoded);
-
-        Ok(Self(fingerprint))
-    }
-
-    /// 从公钥生成身份指纹
-    ///
-    /// # Algorithm / 算法
-    ///
-    /// ```text
-    /// fingerprint_raw = SHA-256("uc-identity-fp-v1" || public_key_bytes)
-    /// fingerprint_display = Base32(fingerprint_raw[0..10]) -> 分组
-    /// ```
-    ///
-    /// # Arguments
-    ///
-    /// * `public_key` - 设备的身份公钥(Ed25519, 32字节)
-    pub fn from_public_key(public_key: &[u8]) -> Result<Self, FingerprintError> {
-        if public_key.len() != 32 {
-            return Err(FingerprintError::InvalidKeyLength {
-                expected: 32,
-                actual: public_key.len(),
-            });
-        }
-
-        // Domain separator 防止不同用途的公钥混淆
-        let mut hasher = Sha256::new();
-        hasher.update(b"uc-identity-fp-v1");
-        hasher.update(public_key);
-        let hash = hasher.finalize();
-
-        Self::from_bytes(&hash)
-    }
-
-    /// 从字符串解析指纹
-    pub fn from_str(s: &str) -> Result<Self, FingerprintError> {
-        let cleaned = s.replace('-', "");
-
-        if cleaned.len() != 16 {
-            return Err(FingerprintError::InvalidFormat(format!(
-                "Expected 16 characters, got {}",
-                cleaned.len()
-            )));
-        }
-
-        // 验证 Base32 字符集
-        if !cleaned.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return Err(FingerprintError::InvalidFormat(
-                "Non-alphanumeric characters found".to_string(),
-            ));
-        }
-
-        Ok(IdentityFingerprint(Self::format_with_groups(&cleaned)))
-    }
-
-    /// 格式化为分组显示
-    fn format_with_groups(encoded: &str) -> String {
-        let groups: Vec<&str> = encoded
-            .as_bytes()
-            .chunks(Self::GROUP_SIZE)
-            .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
-            .collect();
-
-        groups.join("-")
-    }
-
-    /// 获取原始字符串(去除分组符号)
-    pub fn as_raw(&self) -> String {
-        self.0.replace('-', "")
-    }
-
-    /// 获取显示字符串(带分组符号)
-    pub fn as_display(&self) -> &str {
-        &self.0
-    }
-
-    /// 验证两个指纹是否匹配
-    pub fn verify(&self, other: &IdentityFingerprint) -> Result<(), FingerprintError> {
-        if self.as_raw() == other.as_raw() {
-            Ok(())
-        } else {
-            Err(FingerprintError::Mismatch)
-        }
-    }
-}
-
-impl std::fmt::Display for IdentityFingerprint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::str::FromStr for IdentityFingerprint {
-    type Err = FingerprintError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_str(s)
-    }
-}
-
-/// 短码生成器 (用于用户确认)
-///
-/// 短码基于配对会话的 transcript 哈希,而非固定指纹,
-/// 防止攻击者提前伪造UI。
+/// Keyed off the live pairing transcript, not a fixed fingerprint, so an
+/// attacker cannot stage a confirmation UI before the handshake completes.
 #[derive(Debug, Clone)]
 pub struct ShortCodeGenerator {
     _private: (),
 }
 
 impl ShortCodeGenerator {
-    /// 生成配对短码
-    ///
-    /// # Algorithm / 算法
+    /// Generate a short pairing confirmation code.
     ///
     /// ```text
     /// transcript = "uc-pairing-transcript-v1" ||
@@ -208,18 +73,8 @@ impl ShortCodeGenerator {
     ///              initiator_pubkey ||
     ///              responder_pubkey ||
     ///              protocol_version
-    ///
-    /// short_code = Base32(SHA-256(transcript)[0..5])
+    /// short_code = Base32(SHA-256(transcript)[0..5])[..8]
     /// ```
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - 配对会话ID
-    /// * `nonce_initiator` - 发起方 nonce
-    /// * `nonce_responder` - 响应方 nonce
-    /// * `initiator_pubkey` - 发起方身份公钥
-    /// * `responder_pubkey` - 响应方身份公钥
-    /// * `protocol_version` - 协议版本
     pub fn generate(
         session_id: &str,
         nonce_initiator: &[u8],
@@ -227,7 +82,7 @@ impl ShortCodeGenerator {
         initiator_pubkey: &[u8],
         responder_pubkey: &[u8],
         protocol_version: &str,
-    ) -> Result<String, FingerprintError> {
+    ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(b"uc-pairing-transcript-v1");
         hasher.update(session_id.as_bytes());
@@ -236,15 +91,11 @@ impl ShortCodeGenerator {
         hasher.update(initiator_pubkey);
         hasher.update(responder_pubkey);
         hasher.update(protocol_version.as_bytes());
-
         let hash = hasher.finalize();
 
-        // 取前5字节(40bit) -> Base32 -> 8字符
         let truncated = &hash[0..5];
         let encoded = base32::encode(base32::Alphabet::Rfc4648 { padding: false }, truncated);
-
-        // 返回前6-8字符(可根据需要调整)
-        Ok(encoded.chars().take(8).collect())
+        encoded.chars().take(8).collect()
     }
 }
 
@@ -253,10 +104,9 @@ impl ShortCodeGenerator {
 pub struct Sha256IdentityFingerprintFactory;
 
 impl IdentityFingerprintFactoryPort for Sha256IdentityFingerprintFactory {
-    fn from_public_key(&self, public_key: &[u8]) -> anyhow::Result<String> {
-        let fingerprint = IdentityFingerprint::from_public_key(public_key)
-            .map_err(|err| anyhow::anyhow!("identity fingerprint derivation failed: {err}"))?;
-        Ok(fingerprint.to_string())
+    fn from_public_key(&self, public_key: &[u8]) -> anyhow::Result<IdentityFingerprint> {
+        derive_identity_fingerprint(public_key)
+            .map_err(|err| anyhow::anyhow!("identity fingerprint derivation failed: {err}"))
     }
 }
 
@@ -274,14 +124,52 @@ impl ShortCodeGeneratorPort for Sha256ShortCodeGenerator {
         responder_pubkey: &[u8],
         protocol_version: &str,
     ) -> anyhow::Result<String> {
-        ShortCodeGenerator::generate(
+        Ok(ShortCodeGenerator::generate(
             session_id,
             nonce_initiator,
             nonce_responder,
             initiator_pubkey,
             responder_pubkey,
             protocol_version,
-        )
-        .map_err(|err| anyhow::anyhow!("short code generation failed: {err}"))
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_fingerprint_is_stable_for_same_pubkey() {
+        let pk = [7u8; 32];
+        let fp_a = derive_identity_fingerprint(&pk).unwrap();
+        let fp_b = derive_identity_fingerprint(&pk).unwrap();
+        assert_eq!(fp_a, fp_b);
+    }
+
+    #[test]
+    fn derive_fingerprint_rejects_wrong_length() {
+        let err = derive_identity_fingerprint(&[0u8; 16]).unwrap_err();
+        assert!(matches!(
+            err,
+            FingerprintDerivationError::InvalidKeyLength { .. }
+        ));
+    }
+
+    #[test]
+    fn derive_fingerprint_differs_across_keys() {
+        let a = derive_identity_fingerprint(&[1u8; 32]).unwrap();
+        let b = derive_identity_fingerprint(&[2u8; 32]).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn factory_port_returns_same_value_as_free_fn() {
+        let pk = [3u8; 32];
+        let via_port = Sha256IdentityFingerprintFactory
+            .from_public_key(&pk)
+            .unwrap();
+        let via_fn = derive_identity_fingerprint(&pk).unwrap();
+        assert_eq!(via_port, via_fn);
     }
 }

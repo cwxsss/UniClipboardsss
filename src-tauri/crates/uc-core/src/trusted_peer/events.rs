@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::DeviceId;
+use crate::security::IdentityFingerprint;
 
-use super::fingerprint::PeerFingerprint;
 use super::peer::TrustedPeer;
 
 /// Reason a trust-establishment flow was abandoned before reaching `Trusted`.
@@ -24,8 +24,16 @@ pub enum TrustAbortReason {
 /// application layer from the fingerprint (see DOMAIN §5.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrustedPeerEvent {
-    PeerVerificationRequired { peer_fingerprint: PeerFingerprint },
-    PeerTrusted { trusted_peer: TrustedPeer },
-    PeerDistrusted { peer_device_id: DeviceId },
-    PeerTrustAborted { reason: TrustAbortReason },
+    PeerVerificationRequired {
+        peer_fingerprint: IdentityFingerprint,
+    },
+    PeerTrusted {
+        trusted_peer: TrustedPeer,
+    },
+    PeerDistrusted {
+        peer_device_id: DeviceId,
+    },
+    PeerTrustAborted {
+        reason: TrustAbortReason,
+    },
 }

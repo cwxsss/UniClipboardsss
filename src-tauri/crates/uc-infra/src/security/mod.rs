@@ -26,8 +26,8 @@ pub use encrypted_blob_store::EncryptedBlobStore;
 pub use encrypting_clipboard_event_writer::EncryptingClipboardEventWriter;
 pub use hashing::{hash_pin, verify_pin, Argon2PinHasher, Blake3Hasher};
 pub use identity_fingerprint::{
-    FingerprintError, IdentityFingerprint, Sha256IdentityFingerprintFactory,
-    Sha256ShortCodeGenerator, ShortCodeGenerator,
+    FingerprintDerivationError, Sha256IdentityFingerprintFactory, Sha256ShortCodeGenerator,
+    ShortCodeGenerator,
 };
 pub use key_material::KeyMaterialStore;
 pub(crate) use secrets::{Kek, MasterKey};

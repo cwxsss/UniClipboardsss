@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::{TimeZone, Utc};
 
+use uc_core::security::IdentityFingerprint;
 use uc_core::{DeviceId, MemberSyncPreferences, SpaceMember};
 
 use crate::db::models::{NewSpaceMemberRow, SpaceMemberRow};
@@ -16,7 +17,7 @@ impl InsertMapper<SpaceMember, NewSpaceMemberRow> for SpaceMemberRowMapper {
         Ok(NewSpaceMemberRow {
             device_id: domain.device_id.as_str().to_string(),
             device_name: domain.device_name.clone(),
-            identity_fingerprint: domain.identity_fingerprint.clone(),
+            identity_fingerprint: domain.identity_fingerprint.as_raw(),
             joined_at: domain.joined_at.timestamp(),
             sync_preferences: sync_preferences_json,
         })
@@ -34,10 +35,14 @@ impl RowMapper<SpaceMemberRow, SpaceMember> for SpaceMemberRowMapper {
             serde_json::from_str(&row.sync_preferences)
                 .map_err(|e| anyhow!("deserialize sync_preferences: {}", e))?;
 
+        let identity_fingerprint =
+            IdentityFingerprint::from_display_string(&row.identity_fingerprint)
+                .map_err(|e| anyhow!("invalid identity_fingerprint in row: {}", e))?;
+
         Ok(SpaceMember {
             device_id: DeviceId::new(row.device_id.clone()),
             device_name: row.device_name.clone(),
-            identity_fingerprint: row.identity_fingerprint.clone(),
+            identity_fingerprint,
             joined_at,
             sync_preferences,
         })

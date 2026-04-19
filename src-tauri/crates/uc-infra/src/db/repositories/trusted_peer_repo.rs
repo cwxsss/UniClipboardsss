@@ -122,7 +122,8 @@ mod tests {
     use crate::db::pool::init_db_pool;
     use chrono::Utc;
     use tempfile::{tempdir, TempDir};
-    use uc_core::{DeviceId, PeerFingerprint, TrustedPeer};
+    use uc_core::security::IdentityFingerprint;
+    use uc_core::{DeviceId, TrustedPeer};
 
     fn make_repo() -> (
         DieselTrustedPeerRepository<DieselSqliteExecutor, TrustedPeerRowMapper>,
@@ -136,11 +137,21 @@ mod tests {
         (repo, tempdir)
     }
 
+    /// Pad a short seed into a valid 16-char alphanumeric fingerprint.
+    fn fixture_fingerprint(seed: &str) -> IdentityFingerprint {
+        let mut raw: String = seed.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        raw.make_ascii_uppercase();
+        while raw.len() < 16 {
+            raw.push('A');
+        }
+        IdentityFingerprint::from_raw_string(&raw[..16]).unwrap()
+    }
+
     fn fixture_peer(peer: &str, local: &str) -> TrustedPeer {
         TrustedPeer {
             local_device_id: DeviceId::new(local),
             peer_device_id: DeviceId::new(peer),
-            peer_fingerprint: PeerFingerprint::new(format!("fp-{peer}")),
+            peer_fingerprint: fixture_fingerprint(&format!("FP{peer}")),
             trusted_at: Utc::now(),
         }
     }
@@ -170,11 +181,12 @@ mod tests {
         let mut peer = fixture_peer("peer-b", "local-1");
         repo.save(&peer).await.unwrap();
 
-        peer.peer_fingerprint = PeerFingerprint::new("rotated-fp");
+        let rotated = fixture_fingerprint("ROTATEDFP");
+        peer.peer_fingerprint = rotated.clone();
         repo.save(&peer).await.unwrap();
 
         let loaded = repo.get(&peer.peer_device_id).await.unwrap().unwrap();
-        assert_eq!(loaded.peer_fingerprint.as_str(), "rotated-fp");
+        assert_eq!(loaded.peer_fingerprint, rotated);
     }
 
     #[tokio::test]

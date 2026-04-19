@@ -123,6 +123,7 @@ mod tests {
     use crate::db::pool::init_db_pool;
     use chrono::Utc;
     use tempfile::{tempdir, TempDir};
+    use uc_core::security::IdentityFingerprint;
     use uc_core::{DeviceId, MemberSyncPreferences, SpaceMember};
 
     fn make_repo() -> (
@@ -137,11 +138,21 @@ mod tests {
         (repo, tempdir)
     }
 
+    /// Pad a short seed into a valid 16-char alphanumeric fingerprint.
+    fn fixture_fingerprint(seed: &str) -> IdentityFingerprint {
+        let mut raw: String = seed.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        raw.make_ascii_uppercase();
+        while raw.len() < 16 {
+            raw.push('A');
+        }
+        IdentityFingerprint::from_raw_string(&raw[..16]).unwrap()
+    }
+
     fn fixture_member(id: &str) -> SpaceMember {
         SpaceMember {
             device_id: DeviceId::new(id),
             device_name: format!("device-{id}"),
-            identity_fingerprint: format!("fp-{id}"),
+            identity_fingerprint: fixture_fingerprint(&format!("FP{id}")),
             joined_at: Utc::now(),
             sync_preferences: MemberSyncPreferences::default(),
         }

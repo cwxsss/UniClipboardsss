@@ -2,8 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::ids::DeviceId;
-
-use super::fingerprint::PeerFingerprint;
+use crate::security::IdentityFingerprint;
 
 /// Aggregate root for a persisted "this peer is trusted to communicate with us" fact.
 ///
@@ -15,6 +14,6 @@ use super::fingerprint::PeerFingerprint;
 pub struct TrustedPeer {
     pub local_device_id: DeviceId,
     pub peer_device_id: DeviceId,
-    pub peer_fingerprint: PeerFingerprint,
+    pub peer_fingerprint: IdentityFingerprint,
     pub trusted_at: DateTime<Utc>,
 }
