@@ -24,10 +24,7 @@ pub fn new_in_memory_change_origin(
 ) -> std::sync::Arc<dyn uc_core::ports::clipboard::ClipboardChangeOriginPort> {
     std::sync::Arc::new(change_origin::InMemoryClipboardChangeOrigin::new())
 }
-pub use chunked_transfer::{
-    ChunkedDecoder, ChunkedEncoder, TransferCipherAdapter, TransferPayloadDecryptorAdapter,
-    TransferPayloadEncryptorAdapter,
-};
+pub use chunked_transfer::{ChunkedDecoder, ChunkedEncoder, TransferCipherAdapter};
 pub use durable_spool_queue::DurableSpoolQueue;
 pub use normalizer::ClipboardRepresentationNormalizer;
 pub use payload_resolver::ClipboardPayloadResolver;

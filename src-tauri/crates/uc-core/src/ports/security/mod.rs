@@ -9,7 +9,6 @@ pub mod pin_hasher;
 pub mod secure_storage;
 pub mod short_code;
 pub mod transfer_cipher;
-pub mod transfer_crypto;
 
 pub use blob_cipher::{BlobCipherError, BlobCipherPort};
 pub use identity_fingerprint::IdentityFingerprintFactoryPort;

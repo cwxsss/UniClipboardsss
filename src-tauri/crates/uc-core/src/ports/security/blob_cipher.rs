@@ -5,9 +5,9 @@
 //! MasterKey / 算法标签 / 版本号等基础设施概念。
 //!
 //! 合并了原先 `EncryptionPort::{encrypt_blob, decrypt_blob}` 的职责。
-//! 传输分片场景（原 `TransferPayloadEncryptorPort` / `DecryptorPort`）
-//! 是否并入本 port 交由 Phase B 按 adapter 实际差异决定，Phase A
-//! 暂不触碰那对 port。
+//! 传输分片场景（chunked + 内置压缩 + per-chunk wire-format AAD）已经
+//! 由独立的 `TransferCipherPort` 承担——AAD 模型与 wire format 无法与
+//! 本 port 共享，因此保持两套 port 并行。
 
 use async_trait::async_trait;
 

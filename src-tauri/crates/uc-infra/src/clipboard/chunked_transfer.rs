@@ -33,10 +33,7 @@ use chacha20poly1305::{
 use tracing::info_span;
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
 use uc_core::crypto::{aad, model::MasterKey};
-use uc_core::ports::{
-    EncryptionSessionPort, TransferCipherError, TransferCipherPort, TransferCryptoError,
-    TransferPayloadDecryptorPort, TransferPayloadEncryptorPort,
-};
+use uc_core::ports::{EncryptionSessionPort, TransferCipherError, TransferCipherPort};
 use uuid::Uuid;
 
 /// Nominal chunk size: 256 KB.
@@ -72,7 +69,7 @@ const PARALLEL_COMPRESSION_THRESHOLD: usize = 1024 * 1024; // 1 MiB
 /// Errors that can occur during chunked transfer encoding or decoding.
 ///
 /// These are wire-format implementation details, internal to uc-infra.
-/// Adapters map these to `TransferCryptoError` at the port boundary.
+/// Adapters map these to `TransferCipherError` at the port boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum ChunkedTransferError {
     /// First 4 bytes do not match V3_MAGIC.
@@ -111,49 +108,6 @@ pub enum ChunkedTransferError {
     /// Underlying IO error while reading or writing.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-}
-
-impl From<ChunkedTransferError> for TransferCryptoError {
-    fn from(e: ChunkedTransferError) -> Self {
-        match e {
-            ChunkedTransferError::EncryptFailed(msg) => TransferCryptoError::EncryptionFailed(msg),
-            ChunkedTransferError::DecryptFailed { chunk_index } => {
-                TransferCryptoError::DecryptionFailed(format!(
-                    "AEAD decryption failed for chunk {chunk_index}"
-                ))
-            }
-            ChunkedTransferError::InvalidCiphertextLen {
-                chunk_index,
-                ciphertext_len,
-            } => TransferCryptoError::InvalidFormat(format!(
-                "chunk {chunk_index}: ciphertext_len {ciphertext_len} outside valid range"
-            )),
-            ChunkedTransferError::InvalidHeader { reason } => {
-                TransferCryptoError::InvalidFormat(reason)
-            }
-            ChunkedTransferError::InvalidMagic => {
-                TransferCryptoError::InvalidFormat("invalid magic bytes".into())
-            }
-            ChunkedTransferError::TruncatedHeader => {
-                TransferCryptoError::InvalidFormat("stream ended before header was complete".into())
-            }
-            ChunkedTransferError::TruncatedChunk => TransferCryptoError::InvalidFormat(
-                "stream ended before chunk ciphertext was complete".into(),
-            ),
-            ChunkedTransferError::CompressionFailed { reason } => {
-                TransferCryptoError::EncryptionFailed(format!("compression failed: {reason}"))
-            }
-            ChunkedTransferError::DecompressionFailed { reason } => {
-                TransferCryptoError::DecryptionFailed(format!("decompression failed: {reason}"))
-            }
-            ChunkedTransferError::InvalidCompressionAlgo { algo } => {
-                TransferCryptoError::InvalidFormat(format!("invalid compression algorithm: {algo}"))
-            }
-            ChunkedTransferError::Io(e) => {
-                TransferCryptoError::EncryptionFailed(format!("IO error: {e}"))
-            }
-        }
-    }
 }
 
 /// Streaming encoder for V3 chunked clipboard transfers with compression support.
@@ -427,96 +381,13 @@ fn compress_zstd(data: &[u8], level: i32) -> std::io::Result<Vec<u8>> {
     encoder.finish()
 }
 
-/// Adapter implementing `TransferPayloadEncryptorPort` via `ChunkedEncoder`.
-///
-/// Generates `transfer_id` internally (UUID v4) -- callers do not need to manage it.
-/// Compresses payloads exceeding `COMPRESSION_THRESHOLD` with zstd before encryption.
-pub struct TransferPayloadEncryptorAdapter;
-
-impl TransferPayloadEncryptorPort for TransferPayloadEncryptorAdapter {
-    fn encrypt(
-        &self,
-        master_key: &MasterKey,
-        plaintext: &[u8],
-    ) -> Result<Vec<u8>, TransferCryptoError> {
-        let transfer_id: [u8; 16] = *Uuid::new_v4().as_bytes();
-
-        let uncompressed_len = u32::try_from(plaintext.len()).map_err(|_| {
-            TransferCryptoError::EncryptionFailed(format!(
-                "plaintext length {} exceeds u32::MAX",
-                plaintext.len()
-            ))
-        })?;
-
-        let (data_to_encrypt, compression_algo) = if plaintext.len() > COMPRESSION_THRESHOLD {
-            let _guard = info_span!("transfer.compress", input_len = plaintext.len()).entered();
-            let compressed = compress_zstd(plaintext, ZSTD_LEVEL).map_err(|e| {
-                TransferCryptoError::EncryptionFailed(format!("compression failed: {e}"))
-            })?;
-
-            if compressed.len() < plaintext.len() {
-                (compressed, 1u8)
-            } else {
-                (plaintext.to_vec(), 0u8)
-            }
-        } else {
-            (plaintext.to_vec(), 0u8)
-        };
-
-        let mut buf = Vec::new();
-        {
-            let _guard =
-                info_span!("transfer.chunked_encrypt", data_len = data_to_encrypt.len(),).entered();
-            ChunkedEncoder::encode_to(
-                &mut buf,
-                master_key,
-                &transfer_id,
-                &data_to_encrypt,
-                compression_algo,
-                uncompressed_len,
-            )?;
-        }
-        Ok(buf)
-    }
-}
-
-/// Adapter implementing `TransferPayloadDecryptorPort` via `ChunkedDecoder`.
-///
-/// Only accepts V3 (`UC3\0`) wire format.
-pub struct TransferPayloadDecryptorAdapter;
-
-impl TransferPayloadDecryptorPort for TransferPayloadDecryptorAdapter {
-    fn decrypt(
-        &self,
-        encrypted: &[u8],
-        master_key: &MasterKey,
-    ) -> Result<Vec<u8>, TransferCryptoError> {
-        if encrypted.len() < 4 {
-            return Err(TransferCryptoError::InvalidFormat(
-                "data too short to contain magic bytes".into(),
-            ));
-        }
-
-        let magic = &encrypted[0..4];
-        if magic == V3_MAGIC {
-            ChunkedDecoder::decode_from(Cursor::new(encrypted), master_key)
-                .map_err(TransferCryptoError::from)
-        } else {
-            Err(TransferCryptoError::InvalidFormat(
-                "unrecognized wire format magic bytes".into(),
-            ))
-        }
-    }
-}
-
 /// `TransferCipherPort` 的基础设施适配器。
 ///
 /// 端到端会话管理：内部持有 `EncryptionSessionPort`，自己完成
 /// "会话就绪检查 + 取出 MasterKey"，调用方只需提交字节。
 ///
-/// wire format / 压缩 / AEAD 细节全部复用 `ChunkedEncoder` / `ChunkedDecoder`，
-/// 与旧 `TransferPayloadEncryptorAdapter` / `TransferPayloadDecryptorAdapter`
-/// 的字节级行为完全一致（保证用户既有密文可解、设备间协议兼容）。
+/// wire format / 压缩 / AEAD 细节复用 `ChunkedEncoder` / `ChunkedDecoder`——
+/// 字节级行为与历史一致，保证用户既有密文可解、设备间协议兼容。
 pub struct TransferCipherAdapter {
     session: Arc<dyn EncryptionSessionPort>,
 }
