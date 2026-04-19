@@ -824,16 +824,30 @@ pub fn wire_dependencies_with_identity_store(
             worker_tx,
             payload_resolver,
         },
-        security: SecurityPorts {
-            encryption: infra.encryption,
-            encryption_session: platform.encryption_session,
-            encryption_state: infra.encryption_state,
-            key_scope: platform.key_scope,
-            secure_storage: platform.secure_storage,
-            key_material: infra.key_material,
-            pin_hasher: Arc::new(Argon2PinHasher),
-            short_code: Arc::new(Sha256ShortCodeGenerator),
-            fingerprint: Arc::new(Sha256IdentityFingerprintFactory),
+        security: {
+            // 装配 SpaceAccessPort,作为后续 usecase 的统一会话/密钥访问入口。
+            // adapter 内部仍依赖其余 5 个旧 port——三件套整组删除时这里改为
+            // adapter 自管私有依赖。
+            let space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
+                Arc::new(uc_infra::security::DefaultSpaceAccessAdapter::new(
+                    infra.encryption.clone(),
+                    infra.key_material.clone(),
+                    platform.key_scope.clone(),
+                    infra.encryption_state.clone(),
+                    platform.encryption_session.clone(),
+                ));
+            SecurityPorts {
+                encryption: infra.encryption,
+                encryption_session: platform.encryption_session,
+                encryption_state: infra.encryption_state,
+                key_scope: platform.key_scope,
+                secure_storage: platform.secure_storage,
+                key_material: infra.key_material,
+                space_access,
+                pin_hasher: Arc::new(Argon2PinHasher),
+                short_code: Arc::new(Sha256ShortCodeGenerator),
+                fingerprint: Arc::new(Sha256IdentityFingerprintFactory),
+            }
         },
         device: DevicePorts {
             device_identity: platform.device_identity,
@@ -1135,11 +1149,7 @@ pub fn build_setup_facade(
     };
 
     let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
-        deps.security.encryption.clone(),
-        deps.security.key_material.clone(),
-        deps.security.key_scope.clone(),
-        deps.security.encryption_state.clone(),
-        deps.security.encryption_session.clone(),
+        deps.security.space_access.clone(),
     ));
 
     let start_network = Arc::new(StartNetworkAfterUnlock::from_port(
@@ -1155,13 +1165,7 @@ pub fn build_setup_facade(
         },
     ));
     let space_access_port: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
-        Arc::new(uc_infra::security::DefaultSpaceAccessAdapter::new(
-            deps.security.encryption.clone(),
-            deps.security.key_material.clone(),
-            deps.security.key_scope.clone(),
-            deps.security.encryption_state.clone(),
-            deps.security.encryption_session.clone(),
-        ));
+        deps.security.space_access.clone();
     let transport_port: Arc<TokioMutex<dyn SpaceAccessTransportPort>> = Arc::new(TokioMutex::new(
         uc_application::space_access::SpaceAccessNetworkAdapter::new(
             deps.network_ports.pairing.clone(),

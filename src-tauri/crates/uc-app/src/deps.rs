@@ -79,6 +79,13 @@ pub struct SecurityPorts {
     pub key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort>,
     pub secure_storage: Arc<dyn SecureStoragePort>,
     pub key_material: Arc<dyn KeyMaterialPort>,
+    /// 单一空间访问 port——initialize / unlock / try_resume_session /
+    /// verify_keychain_access / derive_subkey 等业务动作的统一入口。
+    /// Slice 3 起所有 usecase 都通过此 port 访问会话生命周期与密钥派生,
+    /// 上面 5 个 port (encryption / key_material / encryption_session /
+    /// encryption_state / key_scope) 仅作为本 adapter 的内部依赖,
+    /// 计划在 Slice 3 末尾整组移除。
+    pub space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort>,
     /// Argon2 PIN hasher for pairing.
     pub pin_hasher: Arc<dyn uc_core::ports::security::PinHasherPort>,
     /// Short pairing-code derivation.

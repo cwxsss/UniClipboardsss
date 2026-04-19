@@ -224,11 +224,7 @@ impl<'a> CoreUseCases<'a> {
     /// Get the InitializeEncryption use case.
     pub fn initialize_encryption(&self) -> crate::usecases::InitializeEncryption {
         crate::usecases::InitializeEncryption::from_ports(
-            self.runtime.deps.security.encryption.clone(),
-            self.runtime.deps.security.key_material.clone(),
-            self.runtime.deps.security.key_scope.clone(),
-            self.runtime.deps.security.encryption_state.clone(),
-            self.runtime.deps.security.encryption_session.clone(),
+            self.runtime.deps.security.space_access.clone(),
         )
     }
 
