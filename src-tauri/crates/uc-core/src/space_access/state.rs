@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub use crate::crypto::KeySlot;
 use crate::ids::{SessionId, SpaceId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

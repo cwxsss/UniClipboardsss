@@ -5,11 +5,12 @@
 
 use std::sync::Arc;
 use uc_core::{
-    crypto::model::{EncryptionError, KeyScope, KeySlot, KeySlotFile},
+    crypto::model::{EncryptionError, KeyScope},
     ports::{SecureStorageError, SecureStoragePort},
 };
 
 use crate::fs::key_slot_store::KeySlotStore;
+use crate::security::crypto_model::{KeySlot, KeySlotFile};
 use crate::security::scope_identifier::scope_identifier;
 use crate::security::secrets::Kek;
 

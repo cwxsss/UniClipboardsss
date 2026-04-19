@@ -1,4 +1,5 @@
 mod blob_cipher_adapter;
+pub mod crypto_model;
 mod decrypting_clipboard_event_repo;
 mod decrypting_representation_repo;
 mod default_key_scope;
@@ -16,6 +17,10 @@ mod space_access_adapter;
 pub(crate) mod v1_aead;
 
 pub use blob_cipher_adapter::BlobCipherAdapter;
+pub use crypto_model::{
+    EncryptedBlob, KdfParams, KdfParamsV1, KeySlot, KeySlotConvertError, KeySlotFile,
+    WrappedMasterKey,
+};
 pub use decrypting_clipboard_event_repo::DecryptingClipboardEventRepository;
 pub use decrypting_representation_repo::DecryptingClipboardRepresentationRepository;
 pub use default_key_scope::DefaultKeyScope;

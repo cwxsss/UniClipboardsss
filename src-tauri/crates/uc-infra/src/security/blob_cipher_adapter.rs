@@ -20,9 +20,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use uc_core::crypto::domain::{Aad, ActiveSpace, Ciphertext, Plaintext};
-use uc_core::crypto::model::EncryptedBlob;
 use uc_core::ports::security::blob_cipher::{BlobCipherError, BlobCipherPort};
 
+use super::crypto_model::EncryptedBlob;
 use super::session::InMemorySession;
 use super::v1_aead;
 

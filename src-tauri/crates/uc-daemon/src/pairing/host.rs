@@ -15,7 +15,6 @@ use uc_application::setup::SetupFacade;
 use uc_application::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessFacade,
 };
-use uc_core::crypto::model::KeySlot;
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
 };
@@ -23,6 +22,7 @@ use uc_core::pairing::PairingRole;
 use uc_core::space_access::{deny_reason_from_code, SpaceAccessProofArtifact};
 use uc_daemon_contract::constants::{pairing_busy_reason, pairing_stage, ws_event, ws_topic};
 use uc_infra::fs::key_slot_store::KeySlotStore;
+use uc_infra::security::crypto_model::KeySlot;
 
 use crate::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
