@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use uc_core::crypto::domain::{Aad, ActiveSpace, Ciphertext, Plaintext};
-use uc_core::crypto::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion};
+use uc_core::crypto::model::EncryptedBlob;
 use uc_core::ports::security::blob_cipher::{BlobCipherError, BlobCipherPort};
 
 use super::session::InMemorySession;
@@ -76,9 +76,7 @@ impl BlobCipherPort for BlobCipherAdapter {
             .map_err(|_| BlobCipherError::InvalidCiphertext)?;
 
         // V1 加密协议固定 XChaCha20-Poly1305 + version V1——其它分支当作密文损坏。
-        if !matches!(blob.aead, EncryptionAlgo::XChaCha20Poly1305)
-            || !matches!(blob.version, EncryptionFormatVersion::V1)
-        {
+        if blob.aead != "XChaCha20Poly1305" || blob.version != "V1" {
             return Err(BlobCipherError::InvalidCiphertext);
         }
 

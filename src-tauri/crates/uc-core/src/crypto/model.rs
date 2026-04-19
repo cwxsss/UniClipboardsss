@@ -13,71 +13,32 @@ use rand::{rngs::OsRng, TryRngCore};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Versions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KeySlotVersion {
-    V1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EncryptionFormatVersion {
-    V1,
-}
-
-/// Algorithms
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KdfAlgorithm {
-    Argon2id,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EncryptionAlgo {
-    /// Only supported XChaCha20-Poly1305 for now
-    XChaCha20Poly1305,
-}
-
-impl fmt::Display for EncryptionAlgo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            EncryptionAlgo::XChaCha20Poly1305 => "xchacha20-poly1305",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-impl From<String> for EncryptionAlgo {
-    fn from(s: String) -> Self {
-        match s.as_str() {
-            "xchacha20-poly1305" => EncryptionAlgo::XChaCha20Poly1305,
-            _ => panic!("unsupported encryption algorithm: {}", s),
-        }
-    }
-}
-
-impl From<&str> for EncryptionAlgo {
-    fn from(s: &str) -> Self {
-        s.to_string().into()
-    }
-}
+// 版本/算法字段采用字符串字面值,与历史 serde enum 输出(`"V1"` / `"Argon2id"` /
+// `"XChaCha20Poly1305"`)字节级一致——磁盘 JSON 与 pairing wire format 均沿用这些
+// 常量值。字面值字符串由 uc-infra adapter 在构造点硬编码,uc-core 不再维护 enum。
+// 详见 Slice 4 B.4.1-3 删除 `KeySlotVersion` / `EncryptionFormatVersion` /
+// `KdfAlgorithm` / `EncryptionAlgo` 四个单变体 enum 的讨论。
 
 /// KDF params
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KdfParams {
-    pub alg: KdfAlgorithm,
+    /// KDF 算法名——当前仅支持 `"Argon2id"`,其它值触发 `UnsupportedKdfAlgorithm`。
+    pub alg: String,
     pub params: KdfParamsV1,
 }
 
 impl KdfParams {
     pub fn for_initialization() -> Self {
         Self {
-            alg: KdfAlgorithm::Argon2id,
+            alg: "Argon2id".to_string(),
             params: KdfParamsV1::default(),
         }
     }
 
     pub fn salt_len(&self) -> usize {
-        match self.alg {
-            KdfAlgorithm::Argon2id => 16,
+        match self.alg.as_str() {
+            "Argon2id" => 16,
+            _ => 16,
         }
     }
 }
@@ -117,7 +78,8 @@ impl Default for KdfParamsV1 {
 /// 3) store MasterKey in session
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeySlot {
-    pub version: KeySlotVersion,
+    /// KeySlot 版本——当前仅支持 `"V1"`,其它值触发 `UnsupportedKeySlotVersion`。
+    pub version: String,
 
     pub scope: KeyScope,
 
@@ -138,7 +100,7 @@ impl KeySlot {
             .map_err(|_| EncryptionError::CryptoFailure)?;
 
         Ok(Self {
-            version: KeySlotVersion::V1,
+            version: "V1".to_string(),
             scope,
             kdf,
             salt,
@@ -178,8 +140,10 @@ pub struct WrappedMasterKey {
 ///   - AES-256-GCM: 12 bytes
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EncryptedBlob {
-    pub version: EncryptionFormatVersion,
-    pub aead: EncryptionAlgo,
+    /// 格式版本——当前仅支持 `"V1"`,其它值触发 `UnsupportedBlobVersion`。
+    pub version: String,
+    /// AEAD 算法名——当前仅支持 `"XChaCha20Poly1305"`,其它值视为密文损坏。
+    pub aead: String,
     pub nonce: Vec<u8>,
     pub ciphertext: Vec<u8>,
 
@@ -292,7 +256,8 @@ pub enum KeySlotConvertError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeySlotFile {
-    pub version: KeySlotVersion,
+    /// KeySlot 版本——当前仅支持 `"V1"`,其它值触发 `UnsupportedKeySlotVersion`。
+    pub version: String,
     pub scope: KeyScope,
     pub kdf: KdfParams,
     pub salt: Vec<u8>,
@@ -314,7 +279,7 @@ impl TryFrom<&KeySlot> for KeySlotFile {
             .ok_or(KeySlotConvertError::MissingWrappedMasterKey)?;
 
         Ok(KeySlotFile {
-            version: ks.version,
+            version: ks.version.clone(),
             scope: ks.scope.clone(),
             kdf: ks.kdf.clone(),
             salt: ks.salt.clone(),
@@ -402,14 +367,12 @@ pub enum EncryptionError {
 
 impl EncryptedBlob {
     pub fn validate_basic(&self) -> Result<(), EncryptionError> {
-        match (self.aead.clone(), self.nonce.len()) {
-            (EncryptionAlgo::XChaCha20Poly1305, 24) => {}
-            (alg, n) => {
-                return Err(EncryptionError::InvalidParameter(format!(
-                    "invalid nonce length for {:?}: {}",
-                    alg, n
-                )));
-            }
+        if self.aead != "XChaCha20Poly1305" || self.nonce.len() != 24 {
+            return Err(EncryptionError::InvalidParameter(format!(
+                "invalid nonce length for {:?}: {}",
+                self.aead,
+                self.nonce.len()
+            )));
         }
 
         if self.ciphertext.is_empty() {
@@ -418,8 +381,8 @@ impl EncryptedBlob {
             ));
         }
 
-        match self.version {
-            EncryptionFormatVersion::V1 => {}
+        if self.version != "V1" {
+            return Err(EncryptionError::UnsupportedBlobVersion);
         }
 
         Ok(())

@@ -35,22 +35,19 @@ mod tests {
     use super::*;
     use crate::setup::testing::{build_default_harness, seed_state};
     use crate::setup::SetupState;
-    use uc_core::crypto::model::{
-        EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion, KdfParams, KeyScope, KeySlotFile,
-        KeySlotVersion,
-    };
+    use uc_core::crypto::model::{EncryptedBlob, KdfParams, KeyScope, KeySlotFile};
 
     fn sample_keyslot_file() -> KeySlotFile {
         KeySlotFile {
-            version: KeySlotVersion::V1,
+            version: "V1".to_string(),
             scope: KeyScope {
                 profile_id: "profile".into(),
             },
             kdf: KdfParams::for_initialization(),
             salt: vec![0u8; 16],
             wrapped_master_key: EncryptedBlob {
-                version: EncryptionFormatVersion::V1,
-                aead: EncryptionAlgo::XChaCha20Poly1305,
+                version: "V1".to_string(),
+                aead: "XChaCha20Poly1305".to_string(),
                 nonce: vec![0u8; 24],
                 ciphertext: vec![0u8; 8],
                 aad_fingerprint: None,

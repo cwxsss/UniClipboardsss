@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use uc_core::crypto::EncryptionAlgo;
 use uc_core::ids::BlobId;
 use uc_core::ContentHash;
 
@@ -19,9 +18,12 @@ pub enum BlobStorageLocator {
     /// 本地文件系统 + 加密包裹
     ///
     /// 注意：
-    /// - encryption 只描述“存储形态”
+    /// - encryption 只描述"存储形态"
     /// - 不等价于传输加密
-    EncryptedFs { path: PathBuf, algo: EncryptionAlgo },
+    /// - `algo` 是 SQLite `blob.encryption_algo` 列的字符串令牌(V1 固定
+    ///   `"xchacha20-poly1305"`,历史 `EncryptionAlgo` enum 的 kebab-case
+    ///   Display 输出)——磁盘兼容不变量,不得改。
+    EncryptedFs { path: PathBuf, algo: String },
 }
 
 impl BlobStorageLocator {
@@ -29,7 +31,7 @@ impl BlobStorageLocator {
         BlobStorageLocator::LocalFs { path }
     }
 
-    pub fn new_encrypted_fs(path: PathBuf, algo: EncryptionAlgo) -> Self {
+    pub fn new_encrypted_fs(path: PathBuf, algo: String) -> Self {
         BlobStorageLocator::EncryptedFs { path, algo }
     }
 }

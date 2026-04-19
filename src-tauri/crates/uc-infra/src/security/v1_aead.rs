@@ -20,10 +20,13 @@ use argon2::Argon2;
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use rand::RngCore;
-use uc_core::crypto::model::{
-    EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion, KdfAlgorithm, KdfParams, Kek,
-    MasterKey, Passphrase,
-};
+use uc_core::crypto::model::{EncryptedBlob, KdfParams, Kek, MasterKey, Passphrase};
+
+// 字面值常量——与历史 serde enum 输出字节级一致,为磁盘/wire format ironclad
+// 不变量(Slice 4 B.4.1-3 删除四个单变体 enum 后从 adapter 端硬编码)。
+const KDF_ALG_ARGON2ID: &str = "Argon2id";
+const AEAD_XCHACHA20_POLY1305: &str = "XChaCha20Poly1305";
+const ENCRYPTION_FORMAT_V1: &str = "V1";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AeadError {
@@ -41,26 +44,25 @@ pub(crate) fn derive_kek_argon2id(
     salt: &[u8],
     kdf: &KdfParams,
 ) -> Result<Kek, String> {
-    match kdf.alg {
-        KdfAlgorithm::Argon2id => {
-            let argon2 = Argon2::new(
-                argon2::Algorithm::Argon2id,
-                argon2::Version::V0x13,
-                argon2::Params::new(
-                    kdf.params.mem_kib,
-                    kdf.params.iters,
-                    kdf.params.parallelism,
-                    Some(32),
-                )
-                .map_err(|e| format!("argon2 params: {e}"))?,
-            );
-            let mut okm = [0u8; 32];
-            argon2
-                .hash_password_into(passphrase.as_bytes(), salt, &mut okm)
-                .map_err(|e| format!("argon2 hash: {e}"))?;
-            Kek::from_bytes(&okm).map_err(|e| format!("Kek::from_bytes: {e}"))
-        }
+    if kdf.alg != KDF_ALG_ARGON2ID {
+        return Err(format!("unsupported KDF algorithm: {}", kdf.alg));
     }
+    let argon2 = Argon2::new(
+        argon2::Algorithm::Argon2id,
+        argon2::Version::V0x13,
+        argon2::Params::new(
+            kdf.params.mem_kib,
+            kdf.params.iters,
+            kdf.params.parallelism,
+            Some(32),
+        )
+        .map_err(|e| format!("argon2 params: {e}"))?,
+    );
+    let mut okm = [0u8; 32];
+    argon2
+        .hash_password_into(passphrase.as_bytes(), salt, &mut okm)
+        .map_err(|e| format!("argon2 hash: {e}"))?;
+    Kek::from_bytes(&okm).map_err(|e| format!("Kek::from_bytes: {e}"))
 }
 
 /// XChaCha20-Poly1305 包装 MasterKey。
@@ -80,8 +82,8 @@ pub(crate) fn wrap_master_key_xchacha(
         .map_err(|_| AeadError::EncryptFailed)?;
 
     Ok(EncryptedBlob {
-        version: EncryptionFormatVersion::V1,
-        aead: EncryptionAlgo::XChaCha20Poly1305,
+        version: ENCRYPTION_FORMAT_V1.to_string(),
+        aead: AEAD_XCHACHA20_POLY1305.to_string(),
         nonce,
         ciphertext,
         aad_fingerprint: None,
@@ -130,8 +132,8 @@ pub(crate) fn encrypt_blob_xchacha(
     let aad_fp = Some(blake3::hash(aad).as_bytes()[..16].to_vec());
 
     Ok(EncryptedBlob {
-        version: EncryptionFormatVersion::V1,
-        aead: EncryptionAlgo::XChaCha20Poly1305,
+        version: ENCRYPTION_FORMAT_V1.to_string(),
+        aead: AEAD_XCHACHA20_POLY1305.to_string(),
         nonce,
         ciphertext,
         aad_fingerprint: aad_fp,
