@@ -164,14 +164,6 @@ diesel::table! {
     }
 }
 
-diesel::table! {
-    space_metadata (space_id) {
-        space_id -> Text,
-        payload -> Binary,
-        updated_at_ms -> BigInt,
-    }
-}
-
 diesel::joinable!(clipboard_entry -> clipboard_event (event_id));
 diesel::joinable!(clipboard_selection -> clipboard_entry (entry_id));
 diesel::joinable!(clipboard_snapshot_representation -> blob (blob_id));
@@ -187,7 +179,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     file_transfer,
     file_transfer_events,
     space_member,
-    space_metadata,
     trusted_peer,
     search_document,
     search_index_meta,

@@ -6,7 +6,6 @@ pub mod clipboard_selection;
 pub mod file_transfer;
 pub mod snapshot_representation;
 pub mod space_member_row;
-pub mod space_metadata_row;
 pub mod trusted_peer_row;
 
 pub use blob::{BlobRow, NewBlobRow};
@@ -19,5 +18,4 @@ pub use clipboard_selection::{ClipboardSelectionRow, NewClipboardSelectionRow};
 pub use file_transfer::{FileTransferRow, NewFileTransferRow};
 pub use snapshot_representation::{NewSnapshotRepresentationRow, SnapshotRepresentationRow};
 pub use space_member_row::{NewSpaceMemberRow, SpaceMemberRow};
-pub use space_metadata_row::{NewSpaceMetadataRow, SpaceMetadataRow};
 pub use trusted_peer_row::{NewTrustedPeerRow, TrustedPeerRow};
