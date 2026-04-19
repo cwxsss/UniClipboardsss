@@ -219,9 +219,9 @@ pub trait DeviceRepositoryPort: Send + Sync {
 * `ProofDerivedKey`（pairing proof 不透明凭据）
 * 业务策略（`EncryptionPolicy` 之类的规则对象，如有）
 
-### 7.2 不允许存在于 core 的内容（含**已下沉**的历史类型）
+### 7.2 不允许存在于 core 的内容（含**已下沉/删除**的历史类型）
 
-Phase B milestone (Slice 1-7) 起统一落实——以下所有类型**都不属于 uc-core**，已物理下沉到 `uc-infra/src/security/`:
+Phase B milestone (Slice 1-7) + Phase C (Slice 8) 起统一落实——以下所有类型**都不属于 uc-core**:
 
 | 类别                    | 类型/符号                                                                  | 落点                                                      |
 | --------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------- |
@@ -230,14 +230,16 @@ Phase B milestone (Slice 1-7) 起统一落实——以下所有类型**都不属
 | KDF 参数                 | `KdfParams` / `KdfParamsV1`                                            | 同上                                                      |
 | 作用域 wrapper            | `KeyScope` / `KeySlotConvertError`                                     | 同上                                                      |
 | 版本/算法 enum（已删除）        | `KdfAlgorithm` / `EncryptionAlgo` / `KeySlotVersion` / `EncryptionFormatVersion` | 单变体 enum 清零，字段类型改 `String`，字面值 adapter 硬编码 (`"V1"` 等) |
-| 加密算法调用                | `argon2::hash`、`XChaCha20-Poly1305` 初始化等                              | 同上                                                      |
+| 应用流程状态 enum（已删除）       | `EncryptionState` / `EncryptionStateError` / `EncryptionStatePort`     | Phase C 彻底删除:"setup 是否完成"统一由 `SetupStatusPort.has_completed` 表达,adapter 分支判断改用 `KeyMaterialStore::keyslot_exists()`(直接查磁盘真实存在性,比原 marker 文件更精确) |
+| 加密算法调用                | `argon2::hash`、`XChaCha20-Poly1305` 初始化等                              | `uc-infra/src/security/`                                |
 | 随机数实现                 | `rand::rngs::OsRng`                                                   | 同上                                                      |
 | Keychain 访问           | OS API                                                                | 同上                                                      |
 | Nonce 生成              | 技术实现                                                                  | 同上                                                      |
 
 ### 7.3 历史条款回顾（已废止）
 
-早期文档曾列 "`MasterKey` / `KeySlot` / `WrappedKey` 允许进 core"——这是 Phase B 重构前的历史立场。milestone/1.0.0 Phase B 已全部下沉到 uc-infra，任何反向再次往 uc-core 加这些类型的 PR **应被拒绝**。如需新增持久化/密钥物料数据结构，默认放 `uc-infra/src/security/crypto_model.rs`，uc-core 只看端口契约与领域中性类型。
+- 早期文档曾列 "`MasterKey` / `KeySlot` / `WrappedKey` 允许进 core"——Phase B 重构前立场。milestone/1.0.0 Phase B 已全部下沉到 `uc-infra/src/security/`,任何反向再次往 uc-core 加这些类型的 PR **应被拒绝**。如需新增持久化/密钥物料数据结构,默认放 `uc-infra/src/security/crypto_model.rs` 或 `secrets.rs`,uc-core 只看端口契约与领域中性类型。
+- 早期设计曾把"设备是否初始化过加密"用独立的 `EncryptionStatePort` / `EncryptionState` enum 单独记录——Phase C (Slice 8) 确认这与 `SetupStatusPort.has_completed` 是同一业务事实的冗余副本,已彻底删除。任何反向再引入"独立 encryption state 持久化"的 PR **应被拒绝**:真相源唯一为 `SetupStatusPort`,adapter 需要查"keyslot 是否真实存在"时直接调 `KeyMaterialStore::keyslot_exists()`。
 
 ---
 
@@ -268,7 +270,8 @@ Phase B milestone (Slice 1-7) 起统一落实——以下所有类型**都不属
 * `Space`
 * `TrustRelationship`
 * `Device`
-* `KeyMaterial`
+
+> 注: 早期条款曾列 `KeyMaterial` 允许进 core,Phase B milestone 已全部下沉到 `uc-infra/src/security/` (见 §7.2 对照表)。
 
 ---
 
