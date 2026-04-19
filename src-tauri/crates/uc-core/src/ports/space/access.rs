@@ -87,9 +87,16 @@ pub trait SpaceAccessPort: Send + Sync {
 
     /// Sponsor 侧：准备 pairing offer。
     ///
-    /// 读取该空间的 keyslot 序列化字节 + 产生 32 字节挑战 nonce,打包给 joiner。
-    /// 空间未初始化返回 [`SpaceAccessError::NotInitialized`]。
-    async fn prepare_join_offer(&self, space_id: &SpaceId) -> Result<JoinOffer, SpaceAccessError>;
+    /// 读取/生成该空间的 keyslot 序列化字节 + 产生 32 字节挑战 nonce,打包给 joiner。
+    ///
+    /// 注：签名保留 `passphrase` 参数以忠实反映当前 sponsor 侧"准备 offer =
+    /// 顺带首次初始化（若未初始化）"的行为。若未来拆分"已初始化 sponsor 只读
+    /// offer"vs"首次初始化 + 建 offer"两种语义,应在独立的清理阶段进行。
+    async fn prepare_join_offer(
+        &self,
+        space_id: &SpaceId,
+        passphrase: &Passphrase,
+    ) -> Result<JoinOffer, SpaceAccessError>;
 
     /// Joiner 侧：用口令解开 offer 的 keyslot 字节,派生出构造 proof 所需的 MasterKey。
     ///
