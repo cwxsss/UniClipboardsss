@@ -5,6 +5,7 @@ mod clipboard_selection_repo;
 mod file_transfer_repo;
 mod representation_repo;
 mod space_member_repo;
+mod space_metadata_repo;
 mod thumbnail_repo;
 mod trusted_peer_repo;
 
@@ -15,5 +16,6 @@ pub use clipboard_selection_repo::*;
 pub use file_transfer_repo::*;
 pub use representation_repo::*;
 pub use space_member_repo::*;
+pub use space_metadata_repo::*;
 pub use thumbnail_repo::*;
 pub use trusted_peer_repo::*;

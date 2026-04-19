@@ -13,15 +13,23 @@
 use async_trait::async_trait;
 
 use crate::crypto::domain::{ActiveSpace, Passphrase};
+use crate::ports::space_metadata_repository::SpaceMetadataError;
 
 /// 空间加密动作可能产生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum SpaceCryptoError {
-    /// 基础设施层的意外失败（KDF / AEAD / 持久化）。
+    /// 基础设施层的意外失败（KDF / AEAD / 其他本地计算）。
     ///
     /// 上层通常将此错误翻译为"创建空间失败，请重试"。
     #[error("space crypto internal failure: {0}")]
     Internal(#[from] anyhow::Error),
+
+    /// 元数据持久化失败。
+    ///
+    /// 失败后上层应可认为"这次创建动作没有生效"——adapter 保证失败时不会
+    /// 在持久层留下半成品。
+    #[error("space metadata persistence failed: {0}")]
+    Metadata(#[from] SpaceMetadataError),
 }
 
 /// 空间加密端口——封装空间级别的加密业务动作。

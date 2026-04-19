@@ -1,9 +1,13 @@
-//! `SpaceCryptoPort` 的基础设施实现 —— 内存版本。
+//! `SpaceCryptoPort` 的基础设施实现。
 //!
-//! 本 adapter 把"创建空间"的完整业务动作封装成一个方法：
-//! KDF 派生 → 子密钥派生 → 随机 DMK → AEAD 包装 → 元数据登记 → 会话登记。
-//! 任意步骤失败都会保持 adapter 内部状态不变（目前只有内存 `HashMap`，
-//! 失败路径天然无副作用；Phase 3.1.b 加入持久化后需补完 saga 回滚逻辑）。
+//! 把"创建空间"的完整业务动作封装成一个方法：
+//! KDF 派生 → 子密钥派生 → 随机 DMK → AEAD 包装 → 持久化元数据 → 会话登记。
+//!
+//! 持久化通过 `SpaceMetadataRepositoryPort` 完成，具体存储由 adapter 外部
+//! 注入（生产：SQLite；测试：内存）。
+//!
+//! Saga 回滚：元数据持久化失败时直接向上抛（HashMap 会话尚未登记，无副作用）；
+//! 元数据成功但会话登记不会失败（内存操作）——未来引入更多步骤时在本方法内补回滚。
 //!
 //! AAD 约定（DMK 包装）：`space_id_utf8 || b"v2"` —— 防止跨空间/跨版本混用密文。
 
@@ -22,53 +26,49 @@ use uuid::Uuid;
 use uc_core::crypto::domain::{ActiveSpace, Passphrase};
 use uc_core::ids::SpaceId;
 use uc_core::ports::space_encryption::{SpaceCryptoError, SpaceCryptoPort};
+use uc_core::ports::space_metadata_repository::SpaceMetadataRepositoryPort;
 
 use super::kdf::{derive_srk, derive_subkeys};
+use super::payload;
 use super::types::{
     Dmk, KdfParams, SpaceMetadataV2, SpaceSeed, WrappedDmk, AEAD_NONCE_LEN, KEY_LEN,
 };
 
-/// v2 内存版空间加密 adapter。
+/// v2 空间加密 adapter。
 ///
-/// 职责范围：Phase 3.1.a——仅实现 `create_space`。3.1.b 加入 SQLite 持久化，
-/// 3.2 之后扩展 `unlock / encrypt / decrypt / change_passphrase` 等方法。
-pub struct InMemorySpaceCryptoAdapter {
+/// 持久化能力由注入的 `SpaceMetadataRepositoryPort` 提供——生产装配时传入
+/// `DieselSpaceMetadataRepository`，测试可传入 `InMemorySpaceMetadataRepository`。
+///
+/// 会话（解锁后的 DMK 内存缓存）保留为 adapter 的内部 `HashMap`——Phase 3.2
+/// 引入 Unlock 时会评估是否提取为独立 port。
+pub struct SpaceCryptoAdapter {
+    metadata_repo: Arc<dyn SpaceMetadataRepositoryPort>,
     sessions: Arc<Mutex<HashMap<SpaceId, Dmk>>>,
-    metadata: Arc<Mutex<HashMap<SpaceId, SpaceMetadataV2>>>,
     kdf_params: KdfParams,
 }
 
-impl InMemorySpaceCryptoAdapter {
-    /// 生产场景入口 —— 使用 D2 决策的默认 Argon2id 参数（128 MiB / iters=3 / par=4）。
-    pub fn new() -> Self {
-        Self::with_kdf_params(KdfParams::default())
+impl SpaceCryptoAdapter {
+    /// 用默认 Argon2id 参数（D2：128 MiB / iters=3 / par=4）构造。
+    pub fn new(metadata_repo: Arc<dyn SpaceMetadataRepositoryPort>) -> Self {
+        Self::with_kdf_params(metadata_repo, KdfParams::default())
     }
 
     /// 显式注入 KDF 参数（测试或未来参数演化时使用）。
-    pub fn with_kdf_params(kdf_params: KdfParams) -> Self {
+    pub fn with_kdf_params(
+        metadata_repo: Arc<dyn SpaceMetadataRepositoryPort>,
+        kdf_params: KdfParams,
+    ) -> Self {
         Self {
+            metadata_repo,
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            metadata: Arc::new(Mutex::new(HashMap::new())),
             kdf_params,
         }
     }
 
-    /// 测试辅助：窥视某个空间当前是否有会话条目。
+    /// 测试辅助：窥视某个空间当前是否有会话条目（内存会话表）。
     #[cfg(test)]
     pub(crate) async fn has_session(&self, id: &SpaceId) -> bool {
         self.sessions.lock().await.contains_key(id)
-    }
-
-    /// 测试辅助：读取某个空间的元数据快照。
-    #[cfg(test)]
-    pub(crate) async fn peek_metadata(&self, id: &SpaceId) -> Option<SpaceMetadataV2> {
-        self.metadata.lock().await.get(id).cloned()
-    }
-}
-
-impl Default for InMemorySpaceCryptoAdapter {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -81,7 +81,7 @@ fn dmk_wrap_aad(space_id: &str) -> Vec<u8> {
 }
 
 #[async_trait]
-impl SpaceCryptoPort for InMemorySpaceCryptoAdapter {
+impl SpaceCryptoPort for SpaceCryptoAdapter {
     async fn create_space(&self, passphrase: &Passphrase) -> Result<ActiveSpace, SpaceCryptoError> {
         // 1. 生成 SpaceId (UUIDv4)
         let space_id_str = Uuid::new_v4().to_string();
@@ -141,12 +141,12 @@ impl SpaceCryptoPort for InMemorySpaceCryptoAdapter {
             created_at: chrono::Utc::now(),
         };
 
-        // 8. 登记（内存）—— 这两步先 metadata 后 session，保证即使 session 未登记成功，
-        //   也能通过 metadata 重建（未来 persist 版本会用同样顺序 + saga 回滚）。
-        self.metadata
-            .lock()
-            .await
-            .insert(space_id.clone(), metadata);
+        // 8. 序列化并持久化 —— 失败则整个动作失败，不登记会话
+        let payload_bytes = payload::encode(&metadata)
+            .map_err(|e| SpaceCryptoError::Internal(anyhow::anyhow!(e)))?;
+        self.metadata_repo.save(&space_id, &payload_bytes).await?;
+
+        // 9. 登记会话（内存）
         self.sessions.lock().await.insert(space_id.clone(), dmk);
 
         Ok(ActiveSpace::new(space_id))
@@ -160,72 +160,54 @@ impl SpaceCryptoPort for InMemorySpaceCryptoAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::security::space_encryption::repository::InMemorySpaceMetadataRepository;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
-    fn test_adapter() -> InMemorySpaceCryptoAdapter {
-        InMemorySpaceCryptoAdapter::with_kdf_params(KdfParams::insecure_test_defaults())
+    fn test_adapter() -> (SpaceCryptoAdapter, Arc<InMemorySpaceMetadataRepository>) {
+        let repo = Arc::new(InMemorySpaceMetadataRepository::new());
+        let adapter =
+            SpaceCryptoAdapter::with_kdf_params(repo.clone(), KdfParams::insecure_test_defaults());
+        (adapter, repo)
     }
 
     #[tokio::test]
-    async fn create_space_returns_active_space_with_registered_session() {
-        let crypto = test_adapter();
+    async fn create_space_registers_session_and_persists_metadata() {
+        let (crypto, repo) = test_adapter();
         let pp = Passphrase::from("correct horse battery staple");
 
         let active = crypto.create_space(&pp).await.unwrap();
 
-        // ActiveSpace 的 space_id 非空
         assert!(!active.space_id().as_str().is_empty());
-        // 会话与元数据都已登记
         assert!(crypto.has_session(active.space_id()).await);
-        assert!(crypto.peek_metadata(active.space_id()).await.is_some());
+
+        // 元数据 payload 已落盘并可反序列化为等价结构
+        let saved = repo.load(active.space_id()).await.unwrap().unwrap();
+        let decoded = payload::decode(&saved).unwrap();
+        assert_eq!(&decoded.space_id, active.space_id());
+        assert_eq!(decoded.wrapped_dmk.nonce.len(), AEAD_NONCE_LEN);
+        assert_eq!(decoded.wrapped_dmk.ciphertext.len(), KEY_LEN + 16);
     }
 
     #[tokio::test]
     async fn two_create_calls_yield_distinct_space_ids() {
-        let crypto = test_adapter();
+        let (crypto, _) = test_adapter();
         let pp = Passphrase::from("same passphrase");
-
         let a = crypto.create_space(&pp).await.unwrap();
         let b = crypto.create_space(&pp).await.unwrap();
-
-        assert_ne!(a.space_id(), b.space_id(), "每次 create 应产生新 space_id");
-
-        // 即使 passphrase 相同，wrapped_dmk 也应不同（随机 DMK + 随机 nonce）
-        let meta_a = crypto.peek_metadata(a.space_id()).await.unwrap();
-        let meta_b = crypto.peek_metadata(b.space_id()).await.unwrap();
-        assert_ne!(meta_a.wrapped_dmk.ciphertext, meta_b.wrapped_dmk.ciphertext);
-        assert_ne!(meta_a.wrapped_dmk.nonce, meta_b.wrapped_dmk.nonce);
-        assert_ne!(meta_a.space_seed.as_bytes(), meta_b.space_seed.as_bytes());
+        assert_ne!(a.space_id(), b.space_id());
     }
 
     #[tokio::test]
-    async fn created_metadata_carries_expected_fields() {
-        let crypto = test_adapter();
-        let pp = Passphrase::from("pp");
-
-        let active = crypto.create_space(&pp).await.unwrap();
-        let meta = crypto.peek_metadata(active.space_id()).await.unwrap();
-
-        // space_id 与 ActiveSpace 一致
-        assert_eq!(&meta.space_id, active.space_id());
-        // nonce 长度匹配 XChaCha20-Poly1305
-        assert_eq!(meta.wrapped_dmk.nonce.len(), AEAD_NONCE_LEN);
-        // 密文为 DMK + Poly1305 tag
-        assert_eq!(meta.wrapped_dmk.ciphertext.len(), KEY_LEN + 16);
-        // KDF 参数来自 adapter 构造
-        assert_eq!(meta.kdf_params, KdfParams::insecure_test_defaults());
-    }
-
-    #[tokio::test]
-    async fn wrapped_dmk_can_be_unwrapped_with_derived_subkeys() {
-        // 本测试证明 adapter 的封装过程与 kdf.rs 保持一致：
-        // 用相同 passphrase + metadata 里的 seed/kdf_params 重新派生子密钥，
-        // 能成功解包 wrapped_dmk。这是 Phase 3.2 "unlock" 的基础保证。
-        let crypto = test_adapter();
+    async fn persisted_payload_round_trip_matches_live_dmk() {
+        // 证明 adapter 持久化的 payload 与 create_space 内部的 DMK 一致：
+        // 用相同 passphrase + 落盘元数据重新派生子密钥，能解包出 DMK。
+        let (crypto, repo) = test_adapter();
         let pp_str = "unit-test-pp";
         let pp = Passphrase::from(pp_str);
 
         let active = crypto.create_space(&pp).await.unwrap();
-        let meta = crypto.peek_metadata(active.space_id()).await.unwrap();
+        let saved = repo.load(active.space_id()).await.unwrap().unwrap();
+        let meta = payload::decode(&saved).unwrap();
 
         let srk = derive_srk(
             pp_str.as_bytes(),
@@ -247,18 +229,17 @@ mod tests {
                 },
             )
             .expect("解包应成功");
-        assert_eq!(plaintext.len(), KEY_LEN, "解出的 DMK 应为 32 字节");
+        assert_eq!(plaintext.len(), KEY_LEN);
     }
 
     #[tokio::test]
-    async fn wrong_passphrase_fails_to_unwrap() {
-        // 验证 AEAD + SRK 派生的真实性：用错误口令派生出的 wrap_key 解包必失败
-        let crypto = test_adapter();
+    async fn wrong_passphrase_fails_to_unwrap_persisted_dmk() {
+        let (crypto, repo) = test_adapter();
         let active = crypto
             .create_space(&Passphrase::from("right"))
             .await
             .unwrap();
-        let meta = crypto.peek_metadata(active.space_id()).await.unwrap();
+        let meta = payload::decode(&repo.load(active.space_id()).await.unwrap().unwrap()).unwrap();
 
         let srk = derive_srk(
             b"wrong",
@@ -278,6 +259,65 @@ mod tests {
                 aad: &aad,
             },
         );
-        assert!(result.is_err(), "错误口令不应解出 DMK");
+        assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // Saga 回滚：元数据持久化失败时不得登记会话
+    // ------------------------------------------------------------------
+
+    /// 构造一个第 N 次 save 失败的 repo，用于验证 saga 失败路径。
+    struct FailingRepo {
+        calls: Arc<AtomicU32>,
+        fail_on_call: u32,
+    }
+
+    #[async_trait]
+    impl SpaceMetadataRepositoryPort for FailingRepo {
+        async fn save(
+            &self,
+            _id: &SpaceId,
+            _payload: &[u8],
+        ) -> Result<(), uc_core::ports::space_metadata_repository::SpaceMetadataError> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == self.fail_on_call {
+                Err(
+                    uc_core::ports::space_metadata_repository::SpaceMetadataError::Backend(
+                        anyhow::anyhow!("simulated disk full"),
+                    ),
+                )
+            } else {
+                Ok(())
+            }
+        }
+        async fn load(
+            &self,
+            _id: &SpaceId,
+        ) -> Result<Option<Vec<u8>>, uc_core::ports::space_metadata_repository::SpaceMetadataError>
+        {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn save_failure_does_not_register_session() {
+        let repo = Arc::new(FailingRepo {
+            calls: Arc::new(AtomicU32::new(0)),
+            fail_on_call: 1,
+        });
+        let crypto = SpaceCryptoAdapter::with_kdf_params(repo, KdfParams::insecure_test_defaults());
+
+        let err = crypto
+            .create_space(&Passphrase::from("pp"))
+            .await
+            .expect_err("元数据保存失败时 create_space 必须失败");
+
+        match err {
+            SpaceCryptoError::Metadata(_) => {}
+            other => panic!("期望 Metadata 错误，实际 {:?}", other),
+        }
+
+        // 会话 map 不应留下任何条目
+        assert_eq!(crypto.sessions.lock().await.len(), 0);
     }
 }

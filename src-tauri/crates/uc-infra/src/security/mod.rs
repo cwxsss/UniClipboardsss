@@ -22,4 +22,4 @@ pub use identity_fingerprint::{
     Sha256ShortCodeGenerator, ShortCodeGenerator,
 };
 pub use key_material::DefaultKeyMaterialService;
-pub use space_encryption::InMemorySpaceCryptoAdapter;
+pub use space_encryption::{InMemorySpaceMetadataRepository, SpaceCryptoAdapter};

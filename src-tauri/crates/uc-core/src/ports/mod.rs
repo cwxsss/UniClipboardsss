@@ -38,6 +38,7 @@ pub mod settings;
 pub mod setup;
 pub mod space;
 pub mod space_encryption;
+pub mod space_metadata_repository;
 mod timer;
 
 pub use cache_fs::{CacheFsPort, DirEntry as CacheFsDirEntry};
