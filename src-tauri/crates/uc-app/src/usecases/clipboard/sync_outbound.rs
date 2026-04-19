@@ -14,7 +14,7 @@ use uc_core::network::{ClipboardMessage, ProtocolMessage};
 use uc_core::ports::{
     ClipboardOutboundTransportPort, DeviceIdentityPort, EncryptionSessionPort,
     OutboundClipboardFrame, PeerDirectoryPort, SettingsPort, SyncTargetId, SystemClipboardPort,
-    TransferPayloadEncryptorPort,
+    TransferCipherPort,
 };
 use uc_core::{DeviceId, MemberRepositoryPort};
 
@@ -26,10 +26,14 @@ pub struct SyncOutboundClipboardUseCase {
     local_clipboard: Arc<dyn SystemClipboardPort>,
     clipboard_network: Arc<dyn ClipboardOutboundTransportPort>,
     peer_directory: Arc<dyn PeerDirectoryPort>,
+    /// 仅用于 `is_ready()` 早返回优化：未解锁时直接跳过 outbound 流程，
+    /// 避免白跑 peers 查询和 policy 过滤。实际加密的密钥获取已下沉到
+    /// `transfer_cipher` adapter 内部。Slice 3 会把 session 整组迁移到
+    /// `SpaceAccessPort`，届时此字段改用 `SpaceAccessPort::is_unlocked`。
     encryption_session: Arc<dyn EncryptionSessionPort>,
     device_identity: Arc<dyn DeviceIdentityPort>,
     settings: Arc<dyn SettingsPort>,
-    transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+    transfer_cipher: Arc<dyn TransferCipherPort>,
     member_repo: Arc<dyn MemberRepositoryPort>,
 }
 
@@ -41,7 +45,7 @@ impl SyncOutboundClipboardUseCase {
         encryption_session: Arc<dyn EncryptionSessionPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
-        transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
+        transfer_cipher: Arc<dyn TransferCipherPort>,
         member_repo: Arc<dyn MemberRepositoryPort>,
     ) -> Self {
         Self {
@@ -51,7 +55,7 @@ impl SyncOutboundClipboardUseCase {
             encryption_session,
             device_identity,
             settings,
-            transfer_encryptor,
+            transfer_cipher,
             member_repo,
         }
     }
@@ -318,31 +322,24 @@ impl SyncOutboundClipboardUseCase {
             file_transfers,
         };
 
-        // Clone values needed for parallel encryption block (to avoid &self borrow in tokio::join!)
-        let transfer_encryptor = self.transfer_encryptor.clone();
-        let encryption_session = self.encryption_session.clone();
+        // Clone the cipher handle for the move into the prepare task.
+        let transfer_cipher = self.transfer_cipher.clone();
 
         // Prepare the framed payload once, then fan it out with cheap frame clones.
         let prepare_future = async move {
-            let master_key = async {
-                encryption_session
-                    .get_master_key()
+            let encrypted_content = async {
+                transfer_cipher
+                    .encrypt(&plaintext_bytes)
                     .await
-                    .map_err(anyhow::Error::from)
-                    .context("failed to access encryption session master key for outbound sync")
-            }
-            .instrument(info_span!("clipboard.get_master_key"))
-            .await?;
-
-            let encrypted_content = {
-                let _guard = info_span!("clipboard.encrypt", plaintext_len = plaintext_bytes.len())
-                    .entered();
-                transfer_encryptor
-                    .encrypt(&master_key, &plaintext_bytes)
                     .map_err(|e| {
                         anyhow::anyhow!("failed to encrypt outbound clipboard payload: {e}")
-                    })?
-            };
+                    })
+            }
+            .instrument(info_span!(
+                "clipboard.encrypt",
+                plaintext_len = plaintext_bytes.len()
+            ))
+            .await?;
 
             let framed = {
                 let _guard = info_span!("clipboard.frame", encrypted_len = encrypted_content.len())

@@ -36,8 +36,7 @@ use uc_core::ports::{
     ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
     ClipboardTransportError, ConnectionPolicyResolverPort, EncryptionSessionPort,
     InboundClipboardFrame, NetworkControlPort, NetworkEventPort, OutboundClipboardFrame,
-    PairingTransportPort, PeerDirectoryPort, SyncTargetId, TransferPayloadDecryptorPort,
-    TransferPayloadEncryptorPort,
+    PairingTransportPort, PeerDirectoryPort, SyncTargetId,
 };
 
 use super::file_transfer::service::{FileTransferConfig, FileTransferService};
@@ -185,8 +184,6 @@ pub struct Libp2pNetworkAdapter {
     start_state: Arc<AtomicU8>,
     policy_resolver: Arc<dyn ConnectionPolicyResolverPort>,
     _encryption_session: Arc<dyn EncryptionSessionPort>,
-    _transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
-    _transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
     /// Wrapped in `Arc` so the swarm restart loop can update this handle when
     /// rebuilding the session without needing a reference back to `self`.
     stream_control: Arc<Mutex<Option<stream::Control>>>,
@@ -203,8 +200,6 @@ impl Libp2pNetworkAdapter {
         identity_store: Arc<dyn IdentityStorePort>,
         policy_resolver: Arc<dyn ConnectionPolicyResolverPort>,
         encryption_session: Arc<dyn EncryptionSessionPort>,
-        transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
-        transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort>,
         file_cache_dir: PathBuf,
         pairing_runtime_owner: PairingRuntimeOwner,
     ) -> Result<Self> {
@@ -243,8 +238,6 @@ impl Libp2pNetworkAdapter {
             start_state: Arc::new(AtomicU8::new(START_STATE_IDLE)),
             policy_resolver,
             _encryption_session: encryption_session,
-            _transfer_decryptor: transfer_decryptor,
-            _transfer_encryptor: transfer_encryptor,
             stream_control: Arc::new(Mutex::new(None)),
             pairing_runtime_owner,
             pairing_service: Arc::new(Mutex::new(None)),

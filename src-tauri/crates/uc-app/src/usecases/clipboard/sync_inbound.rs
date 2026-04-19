@@ -25,7 +25,7 @@ use uc_core::ports::clipboard::{RepresentationCachePort, SpoolQueuePort};
 use uc_core::ports::{
     ClipboardEntryRepositoryPort, ClipboardEventWriterPort, ClipboardRepresentationNormalizerPort,
     DeviceIdentityPort, EncryptionPort, EncryptionSessionPort, SelectRepresentationPolicyPort,
-    SettingsPort, TransferPayloadDecryptorPort,
+    SettingsPort, TransferCipherPort,
 };
 use uc_core::{
     ClipboardChangeOrigin, MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
@@ -84,11 +84,14 @@ pub struct SyncInboundClipboardUseCase {
     /// Coordinator for Full-mode OS clipboard writes (write path).
     /// None for Passive-mode instances that never write to the OS clipboard.
     clipboard_write_coordinator: Option<Arc<ClipboardWriteCoordinator>>,
+    /// 仅用于 `is_ready()` 早返回优化。实际解密的密钥获取已下沉到
+    /// `transfer_cipher` adapter 内部。Slice 3 会把 session 整组迁移到
+    /// `SpaceAccessPort`。
     encryption_session: Arc<dyn EncryptionSessionPort>,
     #[allow(dead_code)]
     encryption: Arc<dyn EncryptionPort>,
     device_identity: Arc<dyn DeviceIdentityPort>,
-    transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
+    transfer_cipher: Arc<dyn TransferCipherPort>,
     capture_clipboard:
         Option<crate::usecases::internal::capture_clipboard::CaptureClipboardUseCase>,
     recent_ids: Mutex<VecDeque<(String, Instant)>>,
@@ -103,7 +106,7 @@ impl SyncInboundClipboardUseCase {
         encryption_session: Arc<dyn EncryptionSessionPort>,
         encryption: Arc<dyn EncryptionPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
-        transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
+        transfer_cipher: Arc<dyn TransferCipherPort>,
         settings: Arc<dyn SettingsPort>,
     ) -> Result<Self> {
         if mode == ClipboardIntegrationMode::Passive {
@@ -118,7 +121,7 @@ impl SyncInboundClipboardUseCase {
             encryption_session,
             encryption,
             device_identity,
-            transfer_decryptor,
+            transfer_cipher,
             capture_clipboard: None,
             recent_ids: Mutex::new(VecDeque::new()),
             file_cache_dir: None,
@@ -131,7 +134,7 @@ impl SyncInboundClipboardUseCase {
         encryption_session: Arc<dyn EncryptionSessionPort>,
         encryption: Arc<dyn EncryptionPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
-        transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort>,
+        transfer_cipher: Arc<dyn TransferCipherPort>,
         entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
         event_writer: Arc<dyn ClipboardEventWriterPort>,
         representation_policy: Arc<dyn SelectRepresentationPolicyPort>,
@@ -147,7 +150,7 @@ impl SyncInboundClipboardUseCase {
             encryption_session,
             encryption,
             device_identity: device_identity.clone(),
-            transfer_decryptor,
+            transfer_cipher,
             capture_clipboard: Some(
                 crate::usecases::internal::capture_clipboard::CaptureClipboardUseCase::new(
                     entry_repo,
@@ -312,16 +315,12 @@ impl SyncInboundClipboardUseCase {
             let plaintext_bytes = match pre_decoded_plaintext {
                 Some(bytes) => bytes,
                 None => {
-                    // Fallback: transport didn't pre-decode — decrypt in-process
-                    let master_key = self
-                        .encryption_session
-                        .get_master_key()
-                        .await
-                        .map_err(anyhow::Error::from)
-                        .context("failed to get master key for V3 inbound")?;
+                    // Fallback: transport didn't pre-decode — decrypt in-process.
+                    // adapter 内部自己 is_ready + 取 master_key + chunked 解密。
                     match self
-                        .transfer_decryptor
-                        .decrypt(&message.encrypted_content, &master_key)
+                        .transfer_cipher
+                        .decrypt(&message.encrypted_content)
+                        .await
                     {
                         Ok(bytes) => bytes,
                         Err(e) => {

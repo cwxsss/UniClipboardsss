@@ -536,17 +536,11 @@ pub fn create_platform_layer(
     let encryption_session: Arc<dyn EncryptionSessionPort> =
         Arc::new(InMemoryEncryptionSessionPort::new());
     let policy_resolver = Arc::new(ResolveConnectionPolicy::new(member_repo.clone()));
-    let transfer_decryptor: Arc<dyn TransferPayloadDecryptorPort> =
-        Arc::new(uc_infra::clipboard::TransferPayloadDecryptorAdapter);
-    let transfer_encryptor: Arc<dyn TransferPayloadEncryptorPort> =
-        Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter);
     let libp2p_network = Arc::new(
         Libp2pNetworkAdapter::new(
             identity_store,
             policy_resolver,
             encryption_session.clone(),
-            transfer_decryptor,
-            transfer_encryptor,
             file_cache_dir,
             pairing_runtime_owner,
         )

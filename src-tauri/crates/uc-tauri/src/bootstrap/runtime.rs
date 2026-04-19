@@ -328,7 +328,7 @@ impl AppRuntime {
 /// 3 non-core accessors that cannot live in uc-app:
 /// - apply_autostart (needs AppHandle)
 /// - app_lifecycle_coordinator (needs LoggingSessionReadyEmitter)
-/// - sync_outbound_clipboard (needs uc_infra TransferPayloadEncryptorAdapter)
+/// - sync_outbound_clipboard (needs uc_infra TransferCipherAdapter)
 pub struct AppUseCases<'a> {
     app_runtime: &'a AppRuntime,
     core: uc_app::usecases::CoreUseCases<'a>,
@@ -402,7 +402,13 @@ impl<'a> AppUseCases<'a> {
                 .device_identity
                 .clone(),
             self.app_runtime.wiring_deps().settings.clone(),
-            Arc::new(uc_infra::clipboard::TransferPayloadEncryptorAdapter),
+            Arc::new(uc_infra::clipboard::TransferCipherAdapter::new(
+                self.app_runtime
+                    .wiring_deps()
+                    .security
+                    .encryption_session
+                    .clone(),
+            )),
             self.app_runtime.wiring_deps().device.member_repo.clone(),
         )
     }
