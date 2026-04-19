@@ -1130,13 +1130,12 @@ pub fn build_setup_facade(
     session_ready_emitter: Arc<dyn SessionReadyEmitter>,
 ) -> Arc<SetupFacade> {
     use uc_app::usecases::{
-        AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, InitializeEncryption,
-        StartNetworkAfterUnlock,
+        AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, StartNetworkAfterUnlock,
     };
 
-    let initialize_encryption = Arc::new(InitializeEncryption::from_ports(
-        deps.security.space_access.clone(),
-    ));
+    // Phase C: `InitializeEncryption` usecase 保留给 uc-cli run_new_space 入口;
+    // setup flow action_executor 现在直接调 `SpaceAccessPort.initialize`,不再绕
+    // `SetupInitializeEncryptionPort` 适配层(已删除)。
 
     let start_network = Arc::new(StartNetworkAfterUnlock::from_port(
         deps.network_control.clone(),
@@ -1173,7 +1172,6 @@ pub fn build_setup_facade(
     let setup_event_port = Arc::new(HostEventSetupPort::new(emitter_cell));
 
     Arc::new(SetupFacade::new(
-        initialize_encryption,
         deps.setup_status.clone(),
         app_lifecycle,
         ports.setup_pairing_facade,

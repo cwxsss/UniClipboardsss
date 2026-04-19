@@ -23,6 +23,10 @@ pub enum InitializeEncryptionError {
 /// EncryptionSessionPort / EncryptionStatePort / KeyScopePort）做完整 11 步
 /// 流程。Slice 3 把这些步骤搬到 `DefaultSpaceAccessAdapter` 内部,这里只
 /// 留命令翻译 + 错误映射。
+///
+/// Phase C 起此 usecase 只被 `uc-cli run_new_space` 直接调用; setup 流程
+/// (`SetupAction::CreateEncryptedSpace`) 内部直接调 `SpaceAccessPort.initialize`,
+/// 不再绕经此处(原 `SetupInitializeEncryptionPort` 适配层已删除)。
 pub struct InitializeEncryption {
     space_access: Arc<dyn SpaceAccessPort>,
 }
@@ -42,13 +46,12 @@ impl InitializeEncryption {
         async {
             info!("delegating space initialization to SpaceAccessPort");
 
-            // 单空间模型下用占位 SpaceId,与 setup orchestrator
-            // (apply_joiner_space_access_result.rs) 保持一致。adapter 当前
+            // 单空间模型下用占位 SpaceId,与 setup action_executor
+            // (CreateEncryptedSpace 分支) 保持一致。adapter 当前
             // 不按 SpaceId 路由,多空间引入时再改造。
             let space_id = SpaceId::from("space");
-            // model::Passphrase -> domain::Passphrase 桥接。
-            // SetupInitializeEncryptionPort trait 仍接收 model::Passphrase
-            // (D4 deprecated 标记),长期目标是统一为 domain::Passphrase。
+            // model::Passphrase -> domain::Passphrase 桥接
+            // (domain::Passphrase 基于 SecretString, drop 时 zeroize)。
             let domain_passphrase = uc_core::crypto::domain::Passphrase::new(passphrase.0);
 
             self.space_access
@@ -66,15 +69,5 @@ impl InitializeEncryption {
         }
         .instrument(span)
         .await
-    }
-}
-
-#[allow(deprecated)] // 自身 impl 一个 deprecated trait——属于实现侧,警告仅给调用方看。
-#[async_trait::async_trait]
-impl uc_application::setup::SetupInitializeEncryptionPort for InitializeEncryption {
-    async fn execute(&self, passphrase: Passphrase) -> anyhow::Result<()> {
-        InitializeEncryption::execute(self, passphrase)
-            .await
-            .map_err(anyhow::Error::new)
     }
 }

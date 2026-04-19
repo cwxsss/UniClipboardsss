@@ -44,7 +44,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(final_state, SetupState::Completed);
-        assert_eq!(*harness.initialize_encryption.calls.lock().await, 1);
         assert_eq!(*harness.app_lifecycle.calls.lock().await, 1);
         assert!(harness.status.snapshot().await.has_completed);
     }

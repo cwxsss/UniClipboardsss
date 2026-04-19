@@ -38,6 +38,6 @@ pub use facade::SetupFacade;
 pub use mark_complete::MarkSetupComplete;
 pub use orchestrator::SetupError as SetupOrchestratorError;
 pub use pairing_facade::SetupPairingFacadePort;
-pub use ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
+pub use ports::SetupAppLifecyclePort;
 pub use state::SetupState;
 pub use state_machine::SetupStateMachine;

@@ -26,11 +26,13 @@ use uc_core::{
 use crate::pairing::PairingDomainEvent;
 use crate::setup::context::SetupContext;
 use crate::setup::mark_complete::MarkSetupComplete;
-use crate::setup::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
+use crate::setup::ports::SetupAppLifecyclePort;
 use crate::setup::{
     SetupAction, SetupError as SetupDomainError, SetupEvent, SetupEventPort,
     SetupPairingFacadePort, SetupState, SetupStateMachine,
 };
+use uc_core::crypto::domain::Passphrase as DomainPassphrase;
+use uc_core::ids::SpaceId;
 use uc_core::ports::space::SpaceAccessPort;
 
 use crate::space_access::{SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer};
@@ -47,7 +49,6 @@ const JOINER_OFFER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// method parameters to avoid circular references back to the orchestrator.
 pub struct SetupActionExecutor {
     // Use-case ports
-    pub(super) initialize_encryption: Arc<dyn SetupInitializeEncryptionPort>,
     pub(super) mark_setup_complete: Arc<MarkSetupComplete>,
     pub(super) app_lifecycle: Arc<dyn SetupAppLifecyclePort>,
     pub(super) setup_event_port: Arc<dyn SetupEventPort>,
@@ -84,10 +85,18 @@ impl SetupActionExecutor {
             match action {
                 SetupAction::CreateEncryptedSpace => {
                     let pp = Self::take_passphrase(passphrase).await?;
-                    self.initialize_encryption
-                        .execute(pp)
+                    // Phase C: setup action 直接调 `SpaceAccessPort.initialize`,
+                    // 不再经由 `SetupInitializeEncryptionPort` 适配层。
+                    // model::Passphrase → domain::Passphrase 桥接(domain::Passphrase
+                    // 基于 SecretString,drop 时 zeroize)。
+                    let domain_passphrase = DomainPassphrase::new(pp.0);
+                    // 单空间模型: 占位 SpaceId,与 uc-cli run_new_space 及
+                    // uc-app::usecases::InitializeEncryption 保持一致。
+                    let space_id = SpaceId::from("space");
+                    self.space_access_port
+                        .initialize(&space_id, &domain_passphrase)
                         .await
-                        .map_err(SetupError::InitializeEncryption)?;
+                        .map_err(|e| SetupError::InitializeEncryption(anyhow::Error::new(e)))?;
                     follow_up_events.push(SetupEvent::CreateSpaceSucceeded);
                     debug!("setup action CreateEncryptedSpace completed");
                 }

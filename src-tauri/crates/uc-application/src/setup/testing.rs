@@ -19,7 +19,6 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, Mutex};
 
 use uc_core::crypto::domain::{ActiveSpace, Passphrase as DomainPassphrase};
-use uc_core::crypto::model::Passphrase;
 use uc_core::ids::{SessionId, SpaceId};
 use uc_core::network::{DiscoveredPeer, PairingMessage};
 use uc_core::ports::space::{
@@ -34,38 +33,12 @@ use uc_core::space_access::{JoinOffer, ProofDerivedKey, SpaceAccessProofArtifact
 use super::event_port::SetupEventPort;
 use super::orchestrator::SetupOrchestrator;
 use super::pairing_facade::SetupPairingFacadePort;
-use super::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
+use super::ports::SetupAppLifecyclePort;
 use super::state::SetupState;
 use crate::pairing::PairingDomainEvent;
 use crate::space_access::SpaceAccessFacade;
 
 // ────────────────────────── Fake ports ──────────────────────────
-
-pub(crate) struct FakeInitializeEncryption {
-    pub calls: Mutex<u32>,
-    pub fail: bool,
-}
-
-impl FakeInitializeEncryption {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            calls: Mutex::new(0),
-            fail: false,
-        })
-    }
-}
-
-#[async_trait]
-impl SetupInitializeEncryptionPort for FakeInitializeEncryption {
-    async fn execute(&self, _passphrase: Passphrase) -> Result<()> {
-        *self.calls.lock().await += 1;
-        if self.fail {
-            Err(anyhow::anyhow!("fake initialize encryption failure"))
-        } else {
-            Ok(())
-        }
-    }
-}
 
 pub(crate) struct FakeSetupStatus {
     inner: Mutex<SetupStatus>,
@@ -314,10 +287,13 @@ pub(crate) struct NoopSpaceAccess;
 impl SpaceAccessPort for NoopSpaceAccess {
     async fn initialize(
         &self,
-        _space_id: &SpaceId,
+        space_id: &SpaceId,
         _passphrase: &DomainPassphrase,
     ) -> Result<ActiveSpace, SpaceAccessError> {
-        Err(SpaceAccessError::Internal("noop initialize".into()))
+        // Phase C: setup action `CreateEncryptedSpace` 直接调本方法(取代
+        // 原 FakeInitializeEncryption 的成功桩)。Noop 语义下返回 Ok,
+        // 让 submit_new_space_passphrase 测试能走到 Completed。
+        Ok(ActiveSpace::new(space_id.clone()))
     }
 
     async fn unlock(
@@ -388,7 +364,6 @@ pub(crate) struct TestHarness {
     pub orchestrator: Arc<SetupOrchestrator>,
     pub events: Arc<FakeSetupEvents>,
     pub status: Arc<FakeSetupStatus>,
-    pub initialize_encryption: Arc<FakeInitializeEncryption>,
     pub app_lifecycle: Arc<FakeAppLifecycle>,
 }
 
@@ -410,13 +385,11 @@ impl Default for HarnessOptions {
 
 pub(crate) fn build_harness(opts: HarnessOptions) -> TestHarness {
     let events = FakeSetupEvents::new();
-    let initialize_encryption = FakeInitializeEncryption::new();
     let app_lifecycle = FakeAppLifecycle::new();
     let status = opts.status.clone();
     let space_access_facade = Arc::new(SpaceAccessFacade::new());
 
     let orchestrator = Arc::new(SetupOrchestrator::new(
-        initialize_encryption.clone(),
         Arc::new(super::mark_complete::MarkSetupComplete::from_ports(
             status.clone(),
         )),
@@ -441,7 +414,6 @@ pub(crate) fn build_harness(opts: HarnessOptions) -> TestHarness {
         orchestrator,
         events,
         status,
-        initialize_encryption,
         app_lifecycle,
     }
 }

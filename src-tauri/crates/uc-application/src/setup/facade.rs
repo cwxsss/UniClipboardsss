@@ -36,7 +36,7 @@ use super::event_port::SetupEventPort;
 use super::mark_complete::MarkSetupComplete;
 use super::orchestrator::{SetupError, SetupOrchestrator};
 use super::pairing_facade::SetupPairingFacadePort;
-use super::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
+use super::ports::SetupAppLifecyclePort;
 use super::state::SetupState;
 use super::usecases::{
     ApplyJoinerSpaceAccessResultUseCase, CancelSetupUseCase, ClearSetupTransientStateUseCase,
@@ -85,7 +85,6 @@ impl SetupFacade {
     /// orchestrator still needs.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        initialize_encryption: Arc<dyn SetupInitializeEncryptionPort>,
         setup_status: Arc<dyn SetupStatusPort>,
         app_lifecycle: Arc<dyn SetupAppLifecyclePort>,
         setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
@@ -103,7 +102,6 @@ impl SetupFacade {
         let mark_setup_complete = Arc::new(MarkSetupComplete::from_ports(setup_status.clone()));
 
         let orchestrator = Arc::new(SetupOrchestrator::new(
-            initialize_encryption,
             mark_setup_complete,
             setup_status,
             app_lifecycle,

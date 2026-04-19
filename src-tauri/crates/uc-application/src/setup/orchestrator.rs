@@ -26,7 +26,7 @@ use uc_core::{
 use crate::setup::action_executor::SetupActionExecutor;
 use crate::setup::context::SetupContext;
 use crate::setup::mark_complete::MarkSetupComplete;
-use crate::setup::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
+use crate::setup::ports::SetupAppLifecyclePort;
 use crate::setup::{
     SetupEvent, SetupEventPort, SetupPairingFacadePort, SetupState, SetupStateMachine,
 };
@@ -74,7 +74,6 @@ pub struct SetupOrchestrator {
 
 impl SetupOrchestrator {
     pub fn new(
-        initialize_encryption: Arc<dyn SetupInitializeEncryptionPort>,
         mark_setup_complete: Arc<MarkSetupComplete>,
         setup_status: Arc<dyn SetupStatusPort>,
         app_lifecycle: Arc<dyn SetupAppLifecyclePort>,
@@ -91,7 +90,6 @@ impl SetupOrchestrator {
         persistence_port: Arc<Mutex<dyn PersistencePort>>,
     ) -> Self {
         let action_executor = Arc::new(SetupActionExecutor {
-            initialize_encryption,
             mark_setup_complete,
             app_lifecycle,
             setup_event_port,
