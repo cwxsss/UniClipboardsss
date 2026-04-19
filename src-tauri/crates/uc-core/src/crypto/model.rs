@@ -160,12 +160,6 @@ pub struct KeyScope {
     pub profile_id: String,
 }
 
-impl KeyScope {
-    pub fn to_identifier(&self) -> String {
-        format!("profile:{}", self.profile_id)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WrappedMasterKey {
     pub blob: EncryptedBlob,

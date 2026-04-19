@@ -10,6 +10,7 @@ use uc_core::{
 };
 
 use crate::fs::key_slot_store::KeySlotStore;
+use crate::security::scope_identifier::scope_identifier;
 
 pub struct KeyMaterialStore {
     secure_storage: Arc<dyn SecureStoragePort>,
@@ -29,7 +30,7 @@ impl KeyMaterialStore {
 }
 
 fn kek_key(scope: &KeyScope) -> String {
-    format!("kek:v1:{}", scope.to_identifier())
+    format!("kek:v1:{}", scope_identifier(scope))
 }
 
 fn map_storage_error(err: SecureStorageError) -> EncryptionError {

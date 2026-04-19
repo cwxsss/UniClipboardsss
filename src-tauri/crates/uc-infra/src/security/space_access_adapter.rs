@@ -29,6 +29,7 @@ use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
 use uc_core::space_access::{JoinOffer, ProofDerivedKey};
 
 use super::key_material::KeyMaterialStore;
+use super::scope_identifier::scope_identifier;
 use super::session::InMemorySession;
 use super::v1_aead;
 
@@ -162,7 +163,7 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .current_scope()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
-            debug!(scope = %scope.to_identifier(), "got key scope");
+            debug!(scope = %scope_identifier(&scope), "got key scope");
 
             self.do_first_time_init(&scope, passphrase).await?;
 
@@ -390,7 +391,7 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .current_scope()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
-            debug!(scope = %scope.to_identifier(), "got key scope");
+            debug!(scope = %scope_identifier(&scope), "got key scope");
 
             // Branch A — 运行时已初始化的 sponsor 路径: 从 key_material 读已有 keyslot,
             // 不重新生成 MasterKey。passphrase 参数此时不参与派生。
@@ -444,7 +445,7 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
             let keyslot: KeySlot = serde_json::from_slice(&offer.keyslot_blob)
                 .map_err(|_| SpaceAccessError::CorruptedKeyMaterial)?;
             let scope = keyslot.scope.clone();
-            debug!(scope = %scope.to_identifier(), "parsed keyslot from offer blob");
+            debug!(scope = %scope_identifier(&scope), "parsed keyslot from offer blob");
 
             let wrapped_master_key = keyslot
                 .wrapped_master_key

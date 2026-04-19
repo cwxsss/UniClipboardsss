@@ -1,12 +1,12 @@
-//! Default key scope implementation
-//! 默认密钥范围实现
+//! 默认 `KeyScopePort` 实现——单用户模式下固定返回 `profile_id = "default"`。
+//!
+//! 历史位置:`uc-platform/src/key_scope.rs`。Slice 4 (U4-D) 起搬到 uc-infra:
+//! `profile_id` 不是平台差异,而是业务/应用层概念,不应由 uc-platform 承担。
 
 use anyhow::Result;
 use uc_core::crypto::model::KeyScope;
-use uc_core::ports::security::key_scope::KeyScopePort;
-use uc_core::ports::security::key_scope::ScopeError;
+use uc_core::ports::security::key_scope::{KeyScopePort, ScopeError};
 
-/// Default key scope implementation
 pub struct DefaultKeyScope {
     scope: KeyScope,
 }

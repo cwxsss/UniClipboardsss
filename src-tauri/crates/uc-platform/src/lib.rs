@@ -15,7 +15,6 @@ pub mod capability;
 pub mod clipboard;
 pub mod file_secure_storage;
 pub mod identity_store;
-pub mod key_scope;
 pub mod net_utils;
 pub mod ports;
 pub mod secure_storage;

@@ -560,7 +560,7 @@ pub fn create_platform_layer(
     let blob_store_reader: Arc<dyn BlobReaderPort> = encrypted_blob_store;
 
     let key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort> =
-        Arc::new(uc_platform::key_scope::DefaultKeyScope::new());
+        Arc::new(uc_infra::security::DefaultKeyScope::new());
 
     Ok(PlatformLayer {
         clipboard,
