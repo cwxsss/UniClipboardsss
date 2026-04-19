@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::model::KeySlotFile;
-
 /// Pairing protocol messages for secure device pairing with PIN verification
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PairingMessage {
@@ -60,11 +58,22 @@ pub struct PairingChallenge {
 }
 
 /// Keyslot offer sent by responder for join flow
+///
+/// Slice 6 (U6 候选 F) 起 `keyslot_file` 以不透明 `serde_json::Value` 形式承载——
+/// wire JSON 的嵌套对象形状与历史 `KeySlotFile` 序列化输出字节级一致,但 uc-core
+/// 不再依赖领域类型。adapter 在解码边界用 `serde_json::from_value::<KeySlotFile>`
+/// 还原成领域类型,或直接 `to_vec` 得字节传给下游。
+///
+/// `space_id` 是本次 offer 针对的 space 标识(从 sender 的 `SpaceAccessBusyOfferPayload`
+/// 直接透传);旧对端不带此字段时 application 层 fall back 从 payload 内
+/// `scope.profile_id` 挖取——wire schema 向后兼容。
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairingKeyslotOffer {
     pub session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keyslot_file: Option<KeySlotFile>,
+    pub keyslot_file: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub challenge: Option<Vec<u8>>,
 }
@@ -233,6 +242,7 @@ impl std::fmt::Debug for PairingKeyslotOffer {
         f.debug_struct("PairingKeyslotOffer")
             .field("session_id", &self.session_id)
             .field("keyslot_file_present", &keyslot_present)
+            .field("space_id", &self.space_id)
             .field("challenge_len", &challenge_len)
             .finish()
     }

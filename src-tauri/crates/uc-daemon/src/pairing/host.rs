@@ -15,7 +15,7 @@ use uc_application::setup::SetupFacade;
 use uc_application::space_access::{
     SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessFacade,
 };
-use uc_core::crypto::model::{KeySlot, KeySlotFile};
+use uc_core::crypto::model::KeySlot;
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
 };
@@ -774,11 +774,14 @@ async fn run_pairing_action_loop(
                                             setup_facade.get_state().await,
                                             uc_application::setup::SetupState::Completed
                                         ) {
+                                            let space_id = uc_core::ids::SpaceId::from(
+                                                keyslot_file.scope.profile_id.as_str(),
+                                            );
                                             match setup_facade
                                                 .start_completed_host_sponsor_authorization(
                                                     session_id.clone(),
                                                     peer.peer_id.clone(),
-                                                    keyslot_file,
+                                                    space_id,
                                                 )
                                                 .await
                                             {
@@ -918,7 +921,8 @@ async fn run_pairing_domain_event_loop(
                     PairingDomainEvent::KeyslotReceived {
                         session_id,
                         peer_id,
-                        keyslot_file: _,
+                        keyslot_payload: _,
+                        space_id: _,
                         challenge: _,
                     } => {
                         let session_span = tracing::info_span!(
@@ -1431,14 +1435,17 @@ async fn handle_pairing_message(
             if let Some(reason) = busy.reason.as_deref() {
                 match parse_space_access_busy_payload(reason) {
                     Ok(SpaceAccessBusyPayload::Offer(payload)) => {
-                        let keyslot_file = match KeySlotFile::try_from(&payload.keyslot) {
-                            Ok(keyslot_file) => keyslot_file,
+                        // Slice 6 (U6) 起 PairingKeyslotOffer.keyslot_file 是不透明
+                        // serde_json::Value——直接把 payload.keyslot 的 `KeySlot`
+                        // 序列化成 Value 透传,application 层不再解析内部字段。
+                        let keyslot_value = match serde_json::to_value(&payload.keyslot) {
+                            Ok(value) => value,
                             Err(err) => {
                                 warn!(
                                     error = %err,
                                     session_id = %busy.session_id,
                                     peer_id = %peer_id,
-                                    "space access offer missing wrapped keyslot payload"
+                                    "failed to serialize keyslot payload for busy offer"
                                 );
                                 return Ok(());
                             }
@@ -1449,7 +1456,8 @@ async fn handle_pairing_message(
                                 &peer_id,
                                 PairingKeyslotOffer {
                                     session_id: busy.session_id.clone(),
-                                    keyslot_file: Some(keyslot_file),
+                                    keyslot_file: Some(keyslot_value),
+                                    space_id: Some(payload.space_id.clone()),
                                     challenge: Some(payload.nonce),
                                 },
                             )

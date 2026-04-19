@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use uc_core::crypto::model::KeySlotFile;
+use uc_core::ids::SpaceId;
 use uc_core::space_access::state::SpaceAccessState;
 
 use crate::setup::orchestrator::{SetupError, SetupOrchestrator};
@@ -18,13 +18,13 @@ impl StartSponsorAuthorizationForJoinerUseCase {
         &self,
         pairing_session_id: String,
         sponsor_peer_id: String,
-        keyslot_file: KeySlotFile,
+        space_id: SpaceId,
     ) -> Result<SpaceAccessState, SetupError> {
         self.orchestrator
             .start_completed_host_sponsor_authorization(
                 pairing_session_id,
                 sponsor_peer_id,
-                keyslot_file,
+                space_id,
             )
             .await
     }
@@ -35,27 +35,6 @@ mod tests {
     use super::*;
     use crate::setup::testing::{build_default_harness, seed_state};
     use crate::setup::SetupState;
-    use uc_core::crypto::model::{EncryptedBlob, KdfParams, KeyScope, KeySlotFile};
-
-    fn sample_keyslot_file() -> KeySlotFile {
-        KeySlotFile {
-            version: "V1".to_string(),
-            scope: KeyScope {
-                profile_id: "profile".into(),
-            },
-            kdf: KdfParams::for_initialization(),
-            salt: vec![0u8; 16],
-            wrapped_master_key: EncryptedBlob {
-                version: "V1".to_string(),
-                aead: "XChaCha20Poly1305".to_string(),
-                nonce: vec![0u8; 24],
-                ciphertext: vec![0u8; 8],
-                aad_fingerprint: None,
-            },
-            created_at: None,
-            updated_at: None,
-        }
-    }
 
     #[tokio::test]
     async fn rejects_when_setup_not_completed() {
@@ -64,7 +43,7 @@ mod tests {
         let uc = StartSponsorAuthorizationForJoinerUseCase::new(Arc::clone(&harness.orchestrator));
 
         let err = uc
-            .execute("session".into(), "sponsor".into(), sample_keyslot_file())
+            .execute("session".into(), "sponsor".into(), SpaceId::from("profile"))
             .await
             .unwrap_err();
         assert!(matches!(err, SetupError::PairingFailed));

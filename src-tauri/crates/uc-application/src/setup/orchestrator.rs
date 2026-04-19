@@ -11,11 +11,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info, info_span, warn, Instrument};
 
 use uc_core::{
-    crypto::{
-        domain::Passphrase as DomainPassphrase,
-        model::{KeySlotFile, Passphrase},
-        SecretString,
-    },
+    crypto::{domain::Passphrase as DomainPassphrase, model::Passphrase, SecretString},
     ids::{SessionId, SpaceId},
     ports::space::{PersistencePort, ProofPort, SpaceAccessPort, SpaceAccessTransportPort},
     ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort},
@@ -233,7 +229,7 @@ impl SetupOrchestrator {
         &self,
         pairing_session_id: String,
         sponsor_peer_id: String,
-        keyslot_file: KeySlotFile,
+        space_id: SpaceId,
     ) -> Result<SpaceAccessState, SetupError> {
         let current_state = self.get_state().await;
         if !matches!(current_state, SetupState::Completed) {
@@ -245,7 +241,6 @@ impl SetupOrchestrator {
             .set_sponsor_peer_id(Some(sponsor_peer_id))
             .await;
 
-        let space_id = SpaceId::from(keyslot_file.scope.profile_id.as_str());
         let typed_session_id = SessionId::from(pairing_session_id);
         // Runtime sponsor path: space 已初始化,adapter 走"只读 keyslot"分支,
         // 传 empty passphrase 作为占位（Branch A 里不参与派生）。

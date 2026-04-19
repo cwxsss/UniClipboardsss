@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 use uc_core::{
-    crypto::model::KeySlotFile,
     ids::SpaceId,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
     ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort},
@@ -208,10 +207,10 @@ impl SetupFacade {
         &self,
         pairing_session_id: String,
         sponsor_peer_id: String,
-        keyslot_file: KeySlotFile,
+        space_id: SpaceId,
     ) -> Result<SpaceAccessState, SetupError> {
         self.start_sponsor_auth_for_joiner
-            .execute(pairing_session_id, sponsor_peer_id, keyslot_file)
+            .execute(pairing_session_id, sponsor_peer_id, space_id)
             .await
     }
 

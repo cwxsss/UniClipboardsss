@@ -666,7 +666,8 @@ impl SetupActionExecutor {
                     }
                     PairingDomainEvent::KeyslotReceived {
                         session_id: event_session_id,
-                        keyslot_file,
+                        keyslot_payload,
+                        space_id,
                         challenge,
                         ..
                     } if event_session_id == session_id => {
@@ -682,22 +683,22 @@ impl SetupActionExecutor {
                                 continue;
                             }
                         };
-                        let keyslot: uc_core::crypto::model::KeySlot = keyslot_file.clone().into();
-                        let keyslot_blob = match serde_json::to_vec(&keyslot) {
+                        // Slice 6 (U6) 起 keyslot_payload 是不透明 serde_json::Value;
+                        // 直接 to_vec 得 JSON bytes 喂给 SpaceAccessJoinerOffer.keyslot_blob,
+                        // adapter 端再 from_slice 还原成 KeySlot——省掉一次 round-trip。
+                        let keyslot_blob = match serde_json::to_vec(&keyslot_payload) {
                             Ok(blob) => blob,
                             Err(err) => {
                                 warn!(
                                     error = %err,
                                     session_id = %session_id,
-                                    "failed to serialize keyslot for space access"
+                                    "failed to serialize keyslot payload for space access"
                                 );
                                 continue;
                             }
                         };
                         let offer = SpaceAccessJoinerOffer {
-                            space_id: uc_core::ids::SpaceId::from(
-                                keyslot_file.scope.profile_id.as_str(),
-                            ),
+                            space_id: uc_core::ids::SpaceId::from(space_id.as_str()),
                             keyslot_blob,
                             challenge_nonce,
                         };

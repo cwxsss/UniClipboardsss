@@ -325,8 +325,8 @@ impl PairingOrchestrator {
                 has_challenge,
                 "Handling pairing keyslot offer"
             );
-            let keyslot_file = match offer.keyslot_file {
-                Some(keyslot_file) => keyslot_file,
+            let keyslot_payload = match offer.keyslot_file {
+                Some(value) => value,
                 None => {
                     tracing::warn!(
                         session_id = %session_id,
@@ -347,11 +347,32 @@ impl PairingOrchestrator {
                     return Ok(());
                 }
             };
+            // space_id 由 wire 层独立携带;旧对端缺失时 fall back 从 payload
+            // 内 `scope.profile_id` 挖取(保留向后兼容,uc-core 不解释 payload 形状)。
+            let space_id = match offer.space_id {
+                Some(id) => id,
+                None => match keyslot_payload
+                    .get("scope")
+                    .and_then(|scope| scope.get("profile_id"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    Some(profile_id) => profile_id.to_string(),
+                    None => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            peer_id = %peer_id,
+                            "Keyslot offer missing space_id and payload has no scope.profile_id"
+                        );
+                        return Ok(());
+                    }
+                },
+            };
             self.protocol_handler
                 .emit_event(PairingDomainEvent::KeyslotReceived {
                     session_id: session_id.to_string(),
                     peer_id: peer_id.to_string(),
-                    keyslot_file,
+                    keyslot_payload,
+                    space_id,
                     challenge,
                 })
                 .await;
