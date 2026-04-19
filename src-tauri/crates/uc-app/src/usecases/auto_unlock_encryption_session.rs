@@ -1,159 +1,65 @@
-//! Auto-unlock encryption session on startup.
+//! Auto-unlock encryption session on startup——薄 wrapper,把"静默从持久化层
+//! 恢复会话"这条 startup 路径转交给 `SpaceAccessPort::try_resume_session`。
 //!
-//! This use case loads the MasterKey from persisted keyslot + KEK
-//! and sets it in the EncryptionSessionPort for transparent encryption.
+//! 历史上本 usecase 自己持有 5 个 port (encryption_state / key_scope /
+//! key_material / encryption / encryption_session) 做完整 7 步流程,
+//! Slice 3 把它们搬到 `DefaultSpaceAccessAdapter::try_resume_session`,
+//! 这里只留命令翻译 + 错误映射。
 
 use std::sync::Arc;
 use tracing::{info, info_span, Instrument};
 
 use uc_core::{
-    crypto::{model::EncryptionError, state::EncryptionState},
-    ports::{
-        security::{encryption_state::EncryptionStatePort, key_scope::KeyScopePort},
-        EncryptionPort, EncryptionSessionPort, KeyMaterialPort,
-    },
+    ids::SpaceId,
+    ports::space::{SpaceAccessError, SpaceAccessPort},
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum AutoUnlockError {
-    #[error("encryption state check failed: {0}")]
-    StateCheckFailed(String),
-
-    #[error("key scope resolution failed: {0}")]
-    ScopeFailed(String),
-
-    #[error("failed to load keyslot: {0}")]
-    KeySlotLoadFailed(#[source] EncryptionError),
-
-    #[error("failed to load KEK from keyring: {0}")]
-    KekLoadFailed(#[source] EncryptionError),
-
-    #[error("keyslot has no wrapped master key")]
-    MissingWrappedMasterKey,
-
-    #[error("failed to unwrap master key: {0}")]
-    UnwrapFailed(#[source] EncryptionError),
-
-    #[error("failed to set master key in session: {0}")]
-    SessionSetFailed(#[source] EncryptionError),
+    #[error("space access failed: {0}")]
+    SpaceAccess(#[from] SpaceAccessError),
 }
 
-/// Use case for automatically unlocking encryption session on startup.
-///
-/// ## Behavior
-///
-/// - If encryption is **Uninitialized**: Returns `Ok(false)` (not unlocked, but not an error)
-/// - If encryption is **Initialized**: Attempts to load and set MasterKey, returns `Ok(true)` on success
-/// - Any failure during unlock returns an error
 pub struct AutoUnlockEncryptionSession {
-    encryption_state: Arc<dyn EncryptionStatePort>,
-    key_scope: Arc<dyn KeyScopePort>,
-    key_material: Arc<dyn KeyMaterialPort>,
-    encryption: Arc<dyn EncryptionPort>,
-    encryption_session: Arc<dyn EncryptionSessionPort>,
+    space_access: Arc<dyn SpaceAccessPort>,
 }
 
 impl AutoUnlockEncryptionSession {
-    pub fn new(
-        encryption_state: Arc<dyn EncryptionStatePort>,
-        key_scope: Arc<dyn KeyScopePort>,
-        key_material: Arc<dyn KeyMaterialPort>,
-        encryption: Arc<dyn EncryptionPort>,
-        encryption_session: Arc<dyn EncryptionSessionPort>,
-    ) -> Self {
-        Self {
-            encryption_state,
-            key_scope,
-            key_material,
-            encryption,
-            encryption_session,
-        }
+    pub fn new(space_access: Arc<dyn SpaceAccessPort>) -> Self {
+        Self { space_access }
     }
 
-    pub fn from_ports(
-        encryption_state: Arc<dyn EncryptionStatePort>,
-        key_scope: Arc<dyn KeyScopePort>,
-        key_material: Arc<dyn KeyMaterialPort>,
-        encryption: Arc<dyn EncryptionPort>,
-        encryption_session: Arc<dyn EncryptionSessionPort>,
-    ) -> Self {
-        Self::new(
-            encryption_state,
-            key_scope,
-            key_material,
-            encryption,
-            encryption_session,
-        )
+    pub fn from_ports(space_access: Arc<dyn SpaceAccessPort>) -> Self {
+        Self::new(space_access)
     }
 
     /// Execute the keyring unlock flow.
     ///
     /// # Returns
     ///
-    /// - `Ok(true)` - Session unlocked successfully
+    /// - `Ok(true)` - Session resumed successfully (keyring 命中)
     /// - `Ok(false)` - Encryption not initialized (no unlock needed)
-    /// - `Err(_)` - Unlock failed
+    /// - `Err(_)` - Resume failed (keyring 缓存丢失 / 权限不足 / 密钥物料损坏 等)
     pub async fn execute(&self) -> Result<bool, AutoUnlockError> {
         let span = info_span!("usecase.auto_unlock_encryption_session.execute");
 
         async {
-            info!("Checking encryption state for keyring unlock");
+            info!("delegating silent session resume to SpaceAccessPort");
 
-            // 1. Check encryption state
-            let state = self
-                .encryption_state
-                .load_state()
-                .await
-                .map_err(|e| AutoUnlockError::StateCheckFailed(e.to_string()))?;
+            // 与 InitializeEncryption 保持占位 SpaceId 一致。adapter 当前不按
+            // SpaceId 路由,多空间引入时再改造。
+            let space_id = SpaceId::from("space");
 
-            if state == EncryptionState::Uninitialized {
-                info!("Encryption not initialized, skipping keyring unlock");
-                return Ok(false);
+            match self.space_access.try_resume_session(&space_id).await? {
+                Some(_active_space) => {
+                    info!("session resumed via SpaceAccessPort");
+                    Ok(true)
+                }
+                None => {
+                    info!("encryption uninitialized, no session to resume");
+                    Ok(false)
+                }
             }
-
-            info!("Encryption initialized, attempting keyring unlock");
-
-            // 2. Get key scope
-            let scope = self
-                .key_scope
-                .current_scope()
-                .await
-                .map_err(|e| AutoUnlockError::ScopeFailed(e.to_string()))?;
-
-            // 3. Load keyslot
-            let keyslot = self
-                .key_material
-                .load_keyslot(&scope)
-                .await
-                .map_err(AutoUnlockError::KeySlotLoadFailed)?;
-
-            // 4. Get wrapped master key
-            let wrapped_master_key = keyslot
-                .wrapped_master_key
-                .ok_or(AutoUnlockError::MissingWrappedMasterKey)?;
-
-            // 5. Load KEK from keyring
-            let kek = self
-                .key_material
-                .load_kek(&scope)
-                .await
-                .map_err(AutoUnlockError::KekLoadFailed)?;
-
-            // 6. Unwrap master key
-            let master_key = self
-                .encryption
-                .unwrap_master_key(&kek, &wrapped_master_key.blob)
-                .await
-                .map_err(AutoUnlockError::UnwrapFailed)?;
-
-            // 7. Set master key in session
-            self.encryption_session
-                .set_master_key(master_key)
-                .await
-                .map_err(AutoUnlockError::SessionSetFailed)?;
-
-            info!("Keyring unlock completed successfully");
-            Ok(true)
         }
         .instrument(span)
         .await
