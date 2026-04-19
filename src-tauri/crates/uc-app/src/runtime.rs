@@ -131,7 +131,9 @@ impl CoreRuntime {
     }
 
     pub async fn is_encryption_ready(&self) -> bool {
-        self.deps.security.encryption_session.is_ready().await
+        // 单空间模型: 用占位 SpaceId 探测会话就绪。多空间路由后续扩展。
+        let space_id = uc_core::ids::SpaceId::from("space");
+        self.deps.security.space_access.is_unlocked(&space_id).await
     }
 
     pub async fn encryption_state(&self) -> Result<EncryptionState, String> {

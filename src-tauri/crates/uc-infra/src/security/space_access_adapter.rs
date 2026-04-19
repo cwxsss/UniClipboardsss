@@ -1,15 +1,13 @@
-//! SpaceAccessPort 的基础设施适配器。
+//! `SpaceAccessPort` 的基础设施适配器。
 //!
-//! Slice 3 阶段全部六个方法接通：内部委托既有四件套
-//! （EncryptionPort / KeyMaterialPort / EncryptionSessionPort / EncryptionStatePort）
-//! + KeyScopePort,忠实保留现有 V1 加密行为
-//! （Argon2id KDF + XChaCha20-Poly1305 wrap/unwrap）。
+//! Slice 3 - C8 起完全独立运行: 不再依赖任何已删除的 port trait
+//! (EncryptionPort / EncryptionSessionPort / KeyMaterialPort),
+//! 改用 uc-infra 内部具体类型 `KeyMaterialStore` + `InMemorySession`,
+//! AEAD 算法走 `super::v1_aead` helper。
 //!
-//! initialize / unlock / lock / is_unlocked 的具体调用方将在 Slice 3
-//! 后续 commit 中分别从 InitializeEncryption / AutoUnlockEncryptionSession
-//! 等 usecase 切过来。三件套 port（EncryptionPort / KeyMaterialPort /
-//! EncryptionSessionPort）届时只剩下本 adapter 一个内部消费者,
-//! 最终 commit 物理删除。
+//! 公共 port 边界保持稳定: `SpaceAccessPort` trait + 全部方法签名不变。
+//! 字节级行为与历史 `EncryptionRepository` 一致——V1 加密协议
+//! (Argon2id KDF + XChaCha20-Poly1305 wrap/unwrap) ironclad 保留。
 
 use std::sync::Arc;
 
@@ -21,42 +19,39 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use uc_core::crypto::domain::{ActiveSpace, Passphrase as DomainPassphrase};
 use uc_core::crypto::model::{
-    EncryptionAlgo, EncryptionError, KeyScope, KeySlot, MasterKey, Passphrase as LegacyPassphrase,
-    WrappedMasterKey,
+    EncryptionError, KeyScope, KeySlot, MasterKey, Passphrase as LegacyPassphrase, WrappedMasterKey,
 };
 use uc_core::crypto::state::EncryptionState;
 use uc_core::ids::SpaceId;
-use uc_core::ports::security::encryption::EncryptionPort;
-use uc_core::ports::security::encryption_session::EncryptionSessionPort;
 use uc_core::ports::security::encryption_state::EncryptionStatePort;
-use uc_core::ports::security::key_material::KeyMaterialPort;
 use uc_core::ports::security::key_scope::KeyScopePort;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
 use uc_core::space_access::{JoinOffer, ProofDerivedKey};
 
-/// Slice 1 的 SpaceAccessPort 实现。
+use super::key_material::KeyMaterialStore;
+use super::session::InMemorySession;
+use super::v1_aead;
+
+/// `SpaceAccessPort` 默认实现。
 pub struct DefaultSpaceAccessAdapter {
-    encryption: Arc<dyn EncryptionPort>,
-    key_material: Arc<dyn KeyMaterialPort>,
+    key_material: Arc<KeyMaterialStore>,
     key_scope: Arc<dyn KeyScopePort>,
     encryption_state: Arc<dyn EncryptionStatePort>,
-    encryption_session: Arc<dyn EncryptionSessionPort>,
+    session: Arc<InMemorySession>,
 }
 
 impl DefaultSpaceAccessAdapter {
     pub fn new(
-        encryption: Arc<dyn EncryptionPort>,
-        key_material: Arc<dyn KeyMaterialPort>,
+        key_material: Arc<KeyMaterialStore>,
         key_scope: Arc<dyn KeyScopePort>,
         encryption_state: Arc<dyn EncryptionStatePort>,
-        encryption_session: Arc<dyn EncryptionSessionPort>,
+        session: Arc<InMemorySession>,
     ) -> Self {
         Self {
-            encryption,
             key_material,
             key_scope,
             encryption_state,
-            encryption_session,
+            session,
         }
     }
 }
@@ -72,13 +67,17 @@ fn map_encryption_error(err: EncryptionError) -> SpaceAccessError {
     }
 }
 
+fn map_aead_error_for_unwrap(err: v1_aead::AeadError) -> SpaceAccessError {
+    match err {
+        v1_aead::AeadError::DecryptFailed => SpaceAccessError::WrongPassphrase,
+        other => SpaceAccessError::Internal(other.to_string()),
+    }
+}
+
 impl DefaultSpaceAccessAdapter {
     /// 私有 helper：执行首次初始化的核心步骤
-    /// （生成 KeySlot 草稿 → 派生 KEK → 生成 MasterKey → 包装 → 落盘 → 写入会话 → 标记 Initialized）。
-    ///
-    /// 返回构造完成的 keyslot（caller 可序列化为 JoinOffer 用）以及 master_key
-    /// 的拷贝（caller 可包装成 ActiveSpace 时无需关心，但 prepare_join_offer
-    /// 不需要它，因此通过返回值保留 owned）。任何中间步骤失败时按依赖反向回滚。
+    /// （生成 KeySlot 草稿 → 派生 KEK → 生成 MasterKey → 包装 → 落盘 →
+    /// 写入会话 → 标记 Initialized）。任何中间步骤失败时按依赖反向回滚。
     async fn do_first_time_init(
         &self,
         scope: &KeyScope,
@@ -89,22 +88,16 @@ impl DefaultSpaceAccessAdapter {
         debug!("keyslot draft created");
 
         let legacy = LegacyPassphrase(passphrase.expose().to_string());
-        let kek = self
-            .encryption
-            .derive_kek(&legacy, &keyslot_draft.salt, &keyslot_draft.kdf)
-            .await
-            .map_err(map_encryption_error)?;
+        let kek = v1_aead::derive_kek_argon2id(&legacy, &keyslot_draft.salt, &keyslot_draft.kdf)
+            .map_err(SpaceAccessError::Internal)?;
         debug!("KEK derived");
 
         let master_key =
             MasterKey::generate().map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
         debug!("master key generated");
 
-        let blob = self
-            .encryption
-            .wrap_master_key(&kek, &master_key, EncryptionAlgo::XChaCha20Poly1305)
-            .await
-            .map_err(map_encryption_error)?;
+        let blob = v1_aead::wrap_master_key_xchacha(&kek, &master_key)
+            .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
         debug!("master key wrapped");
 
         let keyslot = keyslot_draft.finalize(WrappedMasterKey { blob });
@@ -125,22 +118,12 @@ impl DefaultSpaceAccessAdapter {
             return Err(map_encryption_error(e));
         }
 
-        if let Err(e) = self.encryption_session.set_master_key(master_key).await {
-            error!(error = %e, "set_master_key failed");
-            if let Err(err) = self.key_material.delete_keyslot(scope).await {
-                warn!(error = %err, "rollback delete_keyslot failed");
-            }
-            if let Err(err) = self.key_material.delete_kek(scope).await {
-                warn!(error = %err, "rollback delete_kek failed");
-            }
-            return Err(map_encryption_error(e));
-        }
+        // session 写入是 in-memory 操作,不会失败——直接写。
+        self.session.set_master_key(master_key);
 
         if let Err(e) = self.encryption_state.persist_initialized().await {
             error!(error = %e, "persist_initialized failed");
-            if let Err(err) = self.encryption_session.clear().await {
-                warn!(error = %err, "rollback clear master key failed");
-            }
+            self.session.clear();
             if let Err(err) = self.key_material.delete_keyslot(scope).await {
                 warn!(error = %err, "rollback delete_keyslot failed");
             }
@@ -213,12 +196,7 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .current_scope()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
-            debug!(scope = %scope.to_identifier(), "got key scope");
 
-            // 用持久化的 keyslot + 用户口令派生 KEK,unwrap MasterKey。
-            // 不读 keyring：unlock 是显式口令路径,行为独立于 keyring 是否
-            // 还有缓存。adapter 顺手把 KEK 重新写入 keyring,让后续静默
-            // 恢复（startup auto-unlock）能命中。
             let keyslot = self
                 .key_material
                 .load_keyslot(&scope)
@@ -231,30 +209,21 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .ok_or(SpaceAccessError::CorruptedKeyMaterial)?;
 
             let legacy = LegacyPassphrase(passphrase.expose().to_string());
-            let kek = self
-                .encryption
-                .derive_kek(&legacy, &keyslot.salt, &keyslot.kdf)
-                .await
-                .map_err(map_encryption_error)?;
+            let kek = v1_aead::derive_kek_argon2id(&legacy, &keyslot.salt, &keyslot.kdf)
+                .map_err(SpaceAccessError::Internal)?;
             debug!("KEK derived from passphrase");
 
-            let master_key = self
-                .encryption
-                .unwrap_master_key(&kek, &wrapped_master_key.blob)
-                .await
-                .map_err(map_encryption_error)?;
+            let master_key = v1_aead::unwrap_master_key_xchacha(&kek, &wrapped_master_key.blob)
+                .map_err(map_aead_error_for_unwrap)?;
             debug!("master key unwrapped");
 
             // 把派生出的 KEK 重新写入 keyring,保持 keyring 与最新口令对齐
-            // （让下次静默 startup 路径仍可命中）。失败仅 warn,不影响本次解锁。
+            // (让下次静默 startup 路径仍可命中)。失败仅 warn,不影响本次解锁。
             if let Err(e) = self.key_material.store_kek(&scope, &kek).await {
                 warn!(error = %e, "store_kek refresh failed (non-fatal)");
             }
 
-            self.encryption_session
-                .set_master_key(master_key)
-                .await
-                .map_err(map_encryption_error)?;
+            self.session.set_master_key(master_key);
 
             info!("space unlocked successfully");
             Ok(ActiveSpace::new(space_id.clone()))
@@ -264,17 +233,37 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
     }
 
     async fn is_unlocked(&self, _space_id: &SpaceId) -> bool {
-        // 当前 EncryptionSession 是单空间模型,不分 SpaceId。
-        // 多空间路由由后续阶段（按 SpaceId 索引会话）引入时再展开。
-        self.encryption_session.is_ready().await
+        self.session.is_ready()
     }
 
     async fn lock(&self, _space_id: &SpaceId) -> Result<(), SpaceAccessError> {
-        // 持久化的 keyslot/KEK 不动——后续仍可 unlock。仅清空内存会话。
-        self.encryption_session
-            .clear()
-            .await
-            .map_err(map_encryption_error)
+        self.session.clear();
+        Ok(())
+    }
+
+    async fn factory_reset(&self, space_id: &SpaceId) -> Result<(), SpaceAccessError> {
+        let span = info_span!("infra.space_access.factory_reset", space_id = %space_id);
+        async {
+            let scope = self
+                .key_scope
+                .current_scope()
+                .await
+                .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+
+            // 幂等: 不存在的物料视为已经删除,不报错。
+            match self.key_material.delete_keyslot(&scope).await {
+                Ok(()) | Err(EncryptionError::KeyNotFound) => {}
+                Err(e) => return Err(map_encryption_error(e)),
+            }
+            match self.key_material.delete_kek(&scope).await {
+                Ok(()) | Err(EncryptionError::KeyNotFound) => {}
+                Err(e) => return Err(map_encryption_error(e)),
+            }
+            self.session.clear();
+            Ok(())
+        }
+        .instrument(span)
+        .await
     }
 
     async fn try_resume_session(
@@ -311,23 +300,17 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .as_ref()
                 .ok_or(SpaceAccessError::CorruptedKeyMaterial)?;
 
-            // 静默路径：直接读 keyring 缓存的 KEK,不重新派生。
+            // 静默路径: 直接读 keyring 缓存的 KEK,不重新派生。
             let kek = self
                 .key_material
                 .load_kek(&scope)
                 .await
                 .map_err(map_encryption_error)?;
 
-            let master_key = self
-                .encryption
-                .unwrap_master_key(&kek, &wrapped_master_key.blob)
-                .await
-                .map_err(map_encryption_error)?;
+            let master_key = v1_aead::unwrap_master_key_xchacha(&kek, &wrapped_master_key.blob)
+                .map_err(map_aead_error_for_unwrap)?;
 
-            self.encryption_session
-                .set_master_key(master_key)
-                .await
-                .map_err(map_encryption_error)?;
+            self.session.set_master_key(master_key);
 
             info!("session resumed from keyring");
             Ok(Some(ActiveSpace::new(space_id.clone())))
@@ -345,8 +328,8 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
 
-            // 探测：把"权限被拒绝"和"keyring 暂时不可用"都视为 "Always Allow 未授予"
-            // （Ok(false)）；只有"KEK 不存在"才升格成 NotInitialized 报错给上层。
+            // 探测: 把"权限被拒绝"和"keyring 暂时不可用"都视为 "Always Allow 未授予"
+            // (Ok(false));只有"KEK 不存在"才升格成 NotInitialized 报错给上层。
             match self.key_material.load_kek(&scope).await {
                 Ok(_) => Ok(true),
                 Err(EncryptionError::PermissionDenied) => Ok(false),
@@ -360,13 +343,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
     }
 
     async fn derive_subkey(&self, salt: &[u8], info: &[u8]) -> Result<[u8; 32], SpaceAccessError> {
-        if !self.encryption_session.is_ready().await {
+        if !self.session.is_ready() {
             return Err(SpaceAccessError::NotUnlocked);
         }
         let master_key = self
-            .encryption_session
+            .session
             .get_master_key()
-            .await
             .map_err(map_encryption_error)?;
 
         let hkdf = Hkdf::<Sha256>::new(Some(salt), master_key.as_bytes());
@@ -377,13 +359,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
     }
 
     async fn current_session_proof_key(&self) -> Result<Option<ProofDerivedKey>, SpaceAccessError> {
-        if !self.encryption_session.is_ready().await {
+        if !self.session.is_ready() {
             return Ok(None);
         }
         let master_key = self
-            .encryption_session
+            .session
             .get_master_key()
-            .await
             .map_err(map_encryption_error)?;
         Ok(Some(ProofDerivedKey::from_bytes(master_key.0)))
     }
@@ -411,10 +392,8 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
             debug!(scope = %scope.to_identifier(), "got key scope");
 
-            // Branch A — 运行时已初始化的 sponsor 路径：从 key_material 读已有
-            // keyslot,不重新生成 MasterKey,忠实对应原 LoadedKeyslotSpaceAccessCrypto
-            // 的 export_keyslot_blob 语义。passphrase 参数此时不参与派生,
-            // 只是调用契约对齐——保留未来演进空间（比如换口令路径复用此方法）。
+            // Branch A — 运行时已初始化的 sponsor 路径: 从 key_material 读已有 keyslot,
+            // 不重新生成 MasterKey。passphrase 参数此时不参与派生。
             if state == EncryptionState::Initialized {
                 let _ = passphrase;
                 let keyslot = self
@@ -434,7 +413,7 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 });
             }
 
-            // Branch B — 首次 setup sponsor 路径：未初始化,走完整 KEK 派生 +
+            // Branch B — 首次 setup sponsor 路径: 未初始化,走完整 KEK 派生 +
             // MasterKey 生成 + 包装 + 落盘 + 标记 Initialized。
             let keyslot = self.do_first_time_init(&scope, passphrase).await?;
             let keyslot_blob = serde_json::to_vec(&keyslot)
@@ -473,11 +452,8 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .ok_or(SpaceAccessError::CorruptedKeyMaterial)?;
 
             let legacy = LegacyPassphrase(passphrase.expose().to_string());
-            let kek = self
-                .encryption
-                .derive_kek(&legacy, &keyslot.salt, &keyslot.kdf)
-                .await
-                .map_err(map_encryption_error)?;
+            let kek = v1_aead::derive_kek_argon2id(&legacy, &keyslot.salt, &keyslot.kdf)
+                .map_err(SpaceAccessError::Internal)?;
             debug!("KEK derived from passphrase and offer keyslot");
 
             if let Err(e) = self.key_material.store_kek(&scope, &kek).await {
@@ -496,45 +472,30 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 return Err(map_encryption_error(e));
             }
 
-            let master_key = match self
-                .encryption
-                .unwrap_master_key(&kek, &wrapped_master_key.blob)
-                .await
-            {
-                Ok(master_key) => master_key,
-                Err(e) => {
-                    error!(error = %e, "unwrap_master_key failed");
-                    if let Err(err) = self.key_material.delete_keyslot(&scope).await {
-                        warn!(error = %err, "rollback delete_keyslot failed");
+            let master_key =
+                match v1_aead::unwrap_master_key_xchacha(&kek, &wrapped_master_key.blob) {
+                    Ok(mk) => mk,
+                    Err(e) => {
+                        error!(error = ?e, "unwrap_master_key failed");
+                        if let Err(err) = self.key_material.delete_keyslot(&scope).await {
+                            warn!(error = %err, "rollback delete_keyslot failed");
+                        }
+                        if let Err(err) = self.key_material.delete_kek(&scope).await {
+                            warn!(error = %err, "rollback delete_kek failed");
+                        }
+                        return Err(map_aead_error_for_unwrap(e));
                     }
-                    if let Err(err) = self.key_material.delete_kek(&scope).await {
-                        warn!(error = %err, "rollback delete_kek failed");
-                    }
-                    return Err(map_encryption_error(e));
-                }
-            };
+                };
             debug!("master key unwrapped");
 
-            if let Err(e) = self
-                .encryption_session
-                .set_master_key(master_key.clone())
-                .await
-            {
-                error!(error = %e, "set_master_key failed");
-                if let Err(err) = self.key_material.delete_keyslot(&scope).await {
-                    warn!(error = %err, "rollback delete_keyslot failed");
-                }
-                if let Err(err) = self.key_material.delete_kek(&scope).await {
-                    warn!(error = %err, "rollback delete_kek failed");
-                }
-                return Err(map_encryption_error(e));
-            }
+            // 把字节注入会话(让 sponsor 后续 verify 走 fallback 路径),
+            // 同时包装一份成不透明凭据返回 joiner 侧调用方。
+            self.session.set_master_key(master_key.clone());
+            let derived = ProofDerivedKey::from_bytes(master_key.0);
 
             if let Err(e) = self.encryption_state.persist_initialized().await {
                 error!(error = %e, "persist_initialized failed");
-                if let Err(err) = self.encryption_session.clear().await {
-                    warn!(error = %err, "rollback clear master key failed");
-                }
+                self.session.clear();
                 if let Err(err) = self.key_material.delete_keyslot(&scope).await {
                     warn!(error = %err, "rollback delete_keyslot failed");
                 }
@@ -545,11 +506,7 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
             }
 
             info!("master key derivation completed");
-            // 把 MasterKey 字节包装成不透明凭据返回——领域层只看到
-            // "本次 proof 链路的 32 字节秘密"，不再暴露 MasterKey 类型。
-            // adapter 内部仍然把 master_key 写进了 EncryptionSession，所以
-            // 这里消耗它取字节是安全的。
-            Ok(ProofDerivedKey::from_bytes(master_key.0))
+            Ok(derived)
         }
         .instrument(span)
         .await

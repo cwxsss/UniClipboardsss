@@ -84,6 +84,14 @@ pub trait SpaceAccessPort: Send + Sync {
     /// 清除内存会话——持久化密钥物料不受影响,后续仍可 `unlock`。
     async fn lock(&self, space_id: &SpaceId) -> Result<(), SpaceAccessError>;
 
+    /// 工厂重置: 删除指定空间的全部持久化密钥物料 (磁盘 keyslot + keyring KEK)
+    /// 并清空内存会话。`encryption_state` 持久化标记由调用方单独处理
+    /// (avoid 让本 port 跨越 EncryptionStatePort 边界)。
+    ///
+    /// 用途: setup 流程"重置"操作 / 测试清理。删除"keyslot 不存在"或
+    /// "KEK 不存在"等情况视作幂等成功,不报错。
+    async fn factory_reset(&self, space_id: &SpaceId) -> Result<(), SpaceAccessError>;
+
     /// 静默尝试从持久化层（keyring 缓存）恢复会话——startup 路径专用。
     ///
     /// 行为：

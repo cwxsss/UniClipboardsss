@@ -398,13 +398,11 @@ impl<'a> AppUseCases<'a> {
                 .device_identity
                 .clone(),
             self.app_runtime.wiring_deps().settings.clone(),
-            Arc::new(uc_infra::clipboard::TransferCipherAdapter::new(
-                self.app_runtime
-                    .wiring_deps()
-                    .security
-                    .encryption_session
-                    .clone(),
-            )),
+            self.app_runtime
+                .wiring_deps()
+                .security
+                .transfer_cipher
+                .clone(),
             self.app_runtime.wiring_deps().device.member_repo.clone(),
         )
     }

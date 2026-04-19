@@ -27,8 +27,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info_span, Instrument};
 
-use uc_core::{blob::ports::BlobReaderPort, crypto::aad, ports::EncryptionSessionPort, BlobId};
+use uc_core::{blob::ports::BlobReaderPort, crypto::aad, BlobId};
 
+use super::session::InMemorySession;
 use super::v1_aead;
 use crate::blob::BlobStorePort;
 
@@ -84,11 +85,11 @@ fn parse_blob(data: &[u8]) -> Result<(&[u8; 24], &[u8])> {
 /// - Read: parse binary -> decrypt -> decompress
 pub struct EncryptedBlobStore {
     inner: Arc<dyn BlobStorePort>,
-    session: Arc<dyn EncryptionSessionPort>,
+    session: Arc<InMemorySession>,
 }
 
 impl EncryptedBlobStore {
-    pub fn new(inner: Arc<dyn BlobStorePort>, session: Arc<dyn EncryptionSessionPort>) -> Self {
+    pub fn new(inner: Arc<dyn BlobStorePort>, session: Arc<InMemorySession>) -> Self {
         Self { inner, session }
     }
 }
@@ -101,7 +102,6 @@ impl BlobStorePort for EncryptedBlobStore {
         let master_key = self
             .session
             .get_master_key()
-            .await
             .context("encryption session not ready - cannot encrypt blob")?;
 
         let compressed =
@@ -161,7 +161,6 @@ impl BlobReaderPort for EncryptedBlobStore {
         let master_key = self
             .session
             .get_master_key()
-            .await
             .context("encryption session not ready - cannot decrypt blob")?;
 
         let aad_bytes = aad::for_blob_v2(blob_id);

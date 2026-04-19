@@ -22,7 +22,6 @@
 //! ```
 
 use std::io::{Cursor, Read, Write};
-
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -33,8 +32,10 @@ use chacha20poly1305::{
 use tracing::info_span;
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
 use uc_core::crypto::{aad, model::MasterKey};
-use uc_core::ports::{EncryptionSessionPort, TransferCipherError, TransferCipherPort};
+use uc_core::ports::{TransferCipherError, TransferCipherPort};
 use uuid::Uuid;
+
+use crate::security::InMemorySession;
 
 /// Nominal chunk size: 256 KB.
 /// Peak memory per encode or decode call: ~2 x CHUNK_SIZE.
@@ -383,28 +384,27 @@ fn compress_zstd(data: &[u8], level: i32) -> std::io::Result<Vec<u8>> {
 
 /// `TransferCipherPort` 的基础设施适配器。
 ///
-/// 端到端会话管理：内部持有 `EncryptionSessionPort`，自己完成
-/// "会话就绪检查 + 取出 MasterKey"，调用方只需提交字节。
+/// 端到端会话管理: 内部持有 uc-infra 的 `InMemorySession` 具体类型,
+/// 自己完成"会话就绪检查 + 取出 MasterKey",调用方只需提交字节。
 ///
 /// wire format / 压缩 / AEAD 细节复用 `ChunkedEncoder` / `ChunkedDecoder`——
-/// 字节级行为与历史一致，保证用户既有密文可解、设备间协议兼容。
+/// 字节级行为与历史一致,保证用户既有密文可解、设备间协议兼容。
 pub struct TransferCipherAdapter {
-    session: Arc<dyn EncryptionSessionPort>,
+    session: Arc<InMemorySession>,
 }
 
 impl TransferCipherAdapter {
-    pub fn new(session: Arc<dyn EncryptionSessionPort>) -> Self {
+    pub fn new(session: Arc<InMemorySession>) -> Self {
         Self { session }
     }
 
-    /// 内部：从会话取 MasterKey，未就绪时返回 `NotUnlocked`。
-    async fn current_master_key(&self) -> Result<MasterKey, TransferCipherError> {
-        if !self.session.is_ready().await {
+    /// 内部: 从会话取 MasterKey,未就绪时返回 `NotUnlocked`。
+    fn current_master_key(&self) -> Result<MasterKey, TransferCipherError> {
+        if !self.session.is_ready() {
             return Err(TransferCipherError::NotUnlocked);
         }
         self.session
             .get_master_key()
-            .await
             .map_err(|e| TransferCipherError::Internal(e.to_string()))
     }
 }
@@ -412,7 +412,7 @@ impl TransferCipherAdapter {
 #[async_trait]
 impl TransferCipherPort for TransferCipherAdapter {
     async fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
-        let master_key = self.current_master_key().await?;
+        let master_key = self.current_master_key()?;
 
         let transfer_id: [u8; 16] = *Uuid::new_v4().as_bytes();
         let uncompressed_len = u32::try_from(plaintext.len()).map_err(|_| {
@@ -454,7 +454,7 @@ impl TransferCipherPort for TransferCipherAdapter {
     }
 
     async fn decrypt(&self, encrypted: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
-        let master_key = self.current_master_key().await?;
+        let master_key = self.current_master_key()?;
 
         if encrypted.len() < 4 {
             return Err(TransferCipherError::InvalidFormat);

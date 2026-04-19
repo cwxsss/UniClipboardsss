@@ -1,9 +1,6 @@
 pub mod blob_cipher;
-pub mod encryption;
-pub mod encryption_session;
 pub mod encryption_state;
 pub mod identity_fingerprint;
-pub mod key_material;
 pub mod key_scope;
 pub mod pin_hasher;
 pub mod secure_storage;

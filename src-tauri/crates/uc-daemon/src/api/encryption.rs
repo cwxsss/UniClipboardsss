@@ -53,7 +53,8 @@ async fn get_encryption_state_handler(
         .load_state()
         .await
         .map_err(|e| ApiError::internal(format!("failed to load encryption state: {e}")))?;
-    let session_ready = deps.security.encryption_session.is_ready().await;
+    let space_id = uc_core::ids::SpaceId::from("space");
+    let session_ready = deps.security.space_access.is_unlocked(&space_id).await;
 
     let (initialized, session_ready) = match enc_state {
         EncryptionState::Initialized => (true, session_ready),
@@ -134,11 +135,12 @@ async fn lock_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let runtime = state.runtime_or_error()?;
 
+    let space_id = uc_core::ids::SpaceId::from("space");
     runtime
         .wiring_deps()
         .security
-        .encryption_session
-        .clear()
+        .space_access
+        .lock(&space_id)
         .await
         .map_err(|e| ApiError::internal(format!("failed to lock encryption: {e}")))?;
 

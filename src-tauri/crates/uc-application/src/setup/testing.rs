@@ -336,6 +336,10 @@ impl SpaceAccessPort for NoopSpaceAccess {
         Err(SpaceAccessError::Internal("noop lock".into()))
     }
 
+    async fn factory_reset(&self, _space_id: &SpaceId) -> Result<(), SpaceAccessError> {
+        Ok(())
+    }
+
     async fn prepare_join_offer(
         &self,
         _space_id: &SpaceId,

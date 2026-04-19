@@ -1,20 +1,22 @@
-use async_trait::async_trait;
+//! KeyMaterialStore——keyring (KEK) + 磁盘 (KeySlot) 的统一存取入口。
+//!
+//! Slice 3 - C8 起作为 uc-infra 内部具体类型存在(原 `KeyMaterialPort` trait
+//! 已删除)；唯一消费者是 `DefaultSpaceAccessAdapter`,后者通过 Arc 共享。
+
 use std::sync::Arc;
 use uc_core::{
     crypto::model::{EncryptionError, Kek, KeyScope, KeySlot, KeySlotFile},
-    ports::{KeyMaterialPort, SecureStoragePort},
+    ports::{SecureStorageError, SecureStoragePort},
 };
 
 use crate::fs::key_slot_store::KeySlotStore;
 
-pub struct DefaultKeyMaterialService {
+pub struct KeyMaterialStore {
     secure_storage: Arc<dyn SecureStoragePort>,
     keyslot_store: Arc<dyn KeySlotStore>,
 }
 
-impl DefaultKeyMaterialService {
-    /// Create a new key material service
-    /// 创建新的密钥材料服务
+impl KeyMaterialStore {
     pub fn new(
         secure_storage: Arc<dyn SecureStoragePort>,
         keyslot_store: Arc<dyn KeySlotStore>,
@@ -30,20 +32,18 @@ fn kek_key(scope: &KeyScope) -> String {
     format!("kek:v1:{}", scope.to_identifier())
 }
 
-fn map_storage_error(err: uc_core::ports::SecureStorageError) -> EncryptionError {
-    use uc_core::ports::SecureStorageError as StorageError;
+fn map_storage_error(err: SecureStorageError) -> EncryptionError {
     match err {
-        StorageError::PermissionDenied(_) => EncryptionError::PermissionDenied,
-        StorageError::Corrupt(_) => EncryptionError::KeyMaterialCorrupt,
-        StorageError::Unavailable(msg) | StorageError::Other(msg) => {
+        SecureStorageError::PermissionDenied(_) => EncryptionError::PermissionDenied,
+        SecureStorageError::Corrupt(_) => EncryptionError::KeyMaterialCorrupt,
+        SecureStorageError::Unavailable(msg) | SecureStorageError::Other(msg) => {
             EncryptionError::KeyringError(msg)
         }
     }
 }
 
-#[async_trait]
-impl KeyMaterialPort for DefaultKeyMaterialService {
-    async fn load_kek(&self, scope: &KeyScope) -> Result<Kek, EncryptionError> {
+impl KeyMaterialStore {
+    pub async fn load_kek(&self, scope: &KeyScope) -> Result<Kek, EncryptionError> {
         let key = kek_key(scope);
         let secret = self
             .secure_storage
@@ -54,19 +54,19 @@ impl KeyMaterialPort for DefaultKeyMaterialService {
             .map_err(|e| EncryptionError::KeyringError(format!("invalid KEK material: {e}")))
     }
 
-    async fn store_kek(&self, scope: &KeyScope, kek: &Kek) -> Result<(), EncryptionError> {
+    pub async fn store_kek(&self, scope: &KeyScope, kek: &Kek) -> Result<(), EncryptionError> {
         let key = kek_key(scope);
         self.secure_storage
             .set(&key, &kek.0)
             .map_err(map_storage_error)
     }
 
-    async fn delete_kek(&self, scope: &KeyScope) -> Result<(), EncryptionError> {
+    pub async fn delete_kek(&self, scope: &KeyScope) -> Result<(), EncryptionError> {
         let key = kek_key(scope);
         self.secure_storage.delete(&key).map_err(map_storage_error)
     }
 
-    async fn load_keyslot(&self, scope: &KeyScope) -> Result<KeySlot, EncryptionError> {
+    pub async fn load_keyslot(&self, scope: &KeyScope) -> Result<KeySlot, EncryptionError> {
         let file = self.keyslot_store.load().await?;
         if &file.scope != scope {
             return Err(EncryptionError::KeyMaterialCorrupt);
@@ -74,12 +74,12 @@ impl KeyMaterialPort for DefaultKeyMaterialService {
         Ok(file.into())
     }
 
-    async fn store_keyslot(&self, keyslot: &KeySlot) -> Result<(), EncryptionError> {
+    pub async fn store_keyslot(&self, keyslot: &KeySlot) -> Result<(), EncryptionError> {
         let file = KeySlotFile::try_from(keyslot).map_err(|_| EncryptionError::CorruptedKeySlot)?;
         self.keyslot_store.store(&file).await
     }
 
-    async fn delete_keyslot(&self, scope: &KeyScope) -> Result<(), EncryptionError> {
+    pub async fn delete_keyslot(&self, scope: &KeyScope) -> Result<(), EncryptionError> {
         let file = self.keyslot_store.load().await?;
         if &file.scope != scope {
             return Err(EncryptionError::KeyMaterialCorrupt);

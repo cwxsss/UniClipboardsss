@@ -3,12 +3,12 @@ mod decrypting_clipboard_event_repo;
 mod decrypting_representation_repo;
 mod encrypted_blob_store;
 mod encrypting_clipboard_event_writer;
-mod encryption;
 mod encryption_state;
 mod encryption_state_repo;
 mod hashing;
 mod identity_fingerprint;
 mod key_material;
+mod session;
 mod space_access_adapter;
 pub(crate) mod v1_aead;
 
@@ -17,12 +17,12 @@ pub use decrypting_clipboard_event_repo::DecryptingClipboardEventRepository;
 pub use decrypting_representation_repo::DecryptingClipboardRepresentationRepository;
 pub use encrypted_blob_store::EncryptedBlobStore;
 pub use encrypting_clipboard_event_writer::EncryptingClipboardEventWriter;
-pub use encryption::EncryptionRepository;
 pub use encryption_state_repo::FileEncryptionStateRepository;
 pub use hashing::{hash_pin, verify_pin, Argon2PinHasher, Blake3Hasher};
 pub use identity_fingerprint::{
     FingerprintError, IdentityFingerprint, Sha256IdentityFingerprintFactory,
     Sha256ShortCodeGenerator, ShortCodeGenerator,
 };
-pub use key_material::DefaultKeyMaterialService;
+pub use key_material::KeyMaterialStore;
+pub use session::InMemorySession;
 pub use space_access_adapter::DefaultSpaceAccessAdapter;

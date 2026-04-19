@@ -62,17 +62,13 @@ use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
 use uc_infra::search::{HkdfSearchKeyDerivation, SearchPipeline, SqliteSearchIndex};
 use uc_infra::security::{
-    Argon2PinHasher, Blake3Hasher, DecryptingClipboardRepresentationRepository,
-    DefaultKeyMaterialService, EncryptedBlobStore, EncryptingClipboardEventWriter,
-    EncryptionRepository, FileEncryptionStateRepository, Sha256IdentityFingerprintFactory,
-    Sha256ShortCodeGenerator,
+    Argon2PinHasher, Blake3Hasher, DecryptingClipboardRepresentationRepository, EncryptedBlobStore,
+    EncryptingClipboardEventWriter, FileEncryptionStateRepository, InMemorySession,
+    KeyMaterialStore, Sha256IdentityFingerprintFactory, Sha256ShortCodeGenerator,
 };
 use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
-use uc_platform::adapters::{
-    DisabledPairingTransport, InMemoryEncryptionSessionPort, Libp2pNetworkAdapter,
-    PairingRuntimeOwner,
-};
+use uc_platform::adapters::{DisabledPairingTransport, Libp2pNetworkAdapter, PairingRuntimeOwner};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::LocalClipboard;
 use uc_platform::identity_store::FileIdentityStore;
@@ -216,8 +212,7 @@ struct InfraLayer {
     thumbnail_generator: Arc<dyn ThumbnailGeneratorPort>,
 
     // Security services
-    key_material: Arc<dyn KeyMaterialPort>,
-    encryption: Arc<dyn EncryptionPort>,
+    key_material: Arc<KeyMaterialStore>,
     encryption_state: Arc<dyn uc_core::ports::security::encryption_state::EncryptionStatePort>,
 
     // Settings
@@ -268,8 +263,10 @@ pub struct PlatformLayer {
     // Blob store (encrypted) — exposed to use cases as a read-only port.
     pub blob_store: Arc<dyn BlobReaderPort>,
 
-    // Encryption session
-    pub encryption_session: Arc<dyn EncryptionSessionPort>,
+    // 进程内会话——uc-infra 内部 adapter (SpaceAccessAdapter / BlobCipherAdapter /
+    // TransferCipherAdapter / EncryptedBlobStore) 共享同一份 Arc。具体类型,
+    // 不再走 EncryptionSessionPort trait dyn 间接层。
+    pub session: Arc<InMemorySession>,
 
     // Key scope
     pub key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort>,
@@ -369,11 +366,10 @@ fn create_infra_layer(
     let keyslot_store: Arc<dyn uc_infra::fs::key_slot_store::KeySlotStore> =
         Arc::new(keyslot_store);
 
-    let key_material_service =
-        DefaultKeyMaterialService::new(secure_storage_for_key_material, keyslot_store);
-    let key_material: Arc<dyn KeyMaterialPort> = Arc::new(key_material_service);
-
-    let encryption: Arc<dyn EncryptionPort> = Arc::new(EncryptionRepository);
+    let key_material = Arc::new(KeyMaterialStore::new(
+        secure_storage_for_key_material,
+        keyslot_store,
+    ));
 
     let encryption_state: Arc<dyn uc_core::ports::security::encryption_state::EncryptionStatePort> =
         Arc::new(FileEncryptionStateRepository::new(vault_path.clone()));
@@ -407,7 +403,6 @@ fn create_infra_layer(
         thumbnail_repo,
         thumbnail_generator,
         key_material,
-        encryption,
         encryption_state,
         settings_repo,
         setup_status,
@@ -444,7 +439,6 @@ fn build_network_ports(
 pub fn create_platform_layer(
     secure_storage: Arc<dyn SecureStoragePort>,
     config_dir: &PathBuf,
-    encryption: Arc<dyn EncryptionPort>,
     blob_repository: Arc<dyn BlobRepositoryPort>,
     member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
     clock: Arc<dyn ClockPort>,
@@ -533,14 +527,14 @@ pub fn create_platform_layer(
     let representation_normalizer: Arc<dyn ClipboardRepresentationNormalizerPort> =
         Arc::new(ClipboardRepresentationNormalizer::new(storage_config));
 
-    let encryption_session: Arc<dyn EncryptionSessionPort> =
-        Arc::new(InMemoryEncryptionSessionPort::new());
+    // 进程内会话: uc-infra adapter 共享的具体类型,替换历史
+    // InMemoryEncryptionSessionPort + EncryptionSessionPort trait dyn 间接层。
+    let session = Arc::new(InMemorySession::new());
     let policy_resolver = Arc::new(ResolveConnectionPolicy::new(member_repo.clone()));
     let libp2p_network = Arc::new(
         Libp2pNetworkAdapter::new(
             identity_store,
             policy_resolver,
-            encryption_session.clone(),
             file_cache_dir,
             pairing_runtime_owner,
         )
@@ -551,13 +545,8 @@ pub fn create_platform_layer(
     info!(peer_id = %libp2p_network.local_peer_id(), "Loaded libp2p identity");
     let network_ports = build_network_ports(libp2p_network.clone(), pairing_runtime_owner);
 
-    let encrypted_blob_store = Arc::new(EncryptedBlobStore::new(
-        blob_store.clone(),
-        encryption_session.clone(),
-    ));
-    // `encryption` 局部变量原本只传给 EncryptedBlobStore 一处,迁移后无消费者;
-    // 保留绑定但显式 drop,避免 unused 警告。三件套整组删除时(C8)随之消失。
-    let _ = encryption;
+    let encrypted_blob_store =
+        Arc::new(EncryptedBlobStore::new(blob_store.clone(), session.clone()));
 
     // BlobWriter needs the put-side (BlobStorePort); use cases need only the
     // read-side (BlobReaderPort). Both views point at the same concrete
@@ -583,7 +572,7 @@ pub fn create_platform_layer(
         representation_normalizer,
         blob_writer,
         blob_store: blob_store_reader,
-        encryption_session,
+        session,
         key_scope,
     })
 }
@@ -720,7 +709,6 @@ pub fn wire_dependencies_with_identity_store(
     let platform = create_platform_layer(
         secure_storage,
         &vault_path,
-        infra.encryption.clone(),
         infra.blob_repository.clone(),
         infra.member_repo.clone(),
         infra.clock.clone(),
@@ -730,20 +718,17 @@ pub fn wire_dependencies_with_identity_store(
         pairing_runtime_owner,
     )?;
 
-    // SpaceAccessPort——单一会话/密钥访问入口,后续 search/decorator/SecurityPorts
-    // 都从此 Arc clone。adapter 内部仍依赖旧三件套,C8 整组删除时改为 adapter 自管。
+    // SpaceAccessPort——单一会话/密钥访问入口。adapter 自管 KeyMaterialStore +
+    // InMemorySession + EncryptionStatePort + KeyScopePort,V1 AEAD 走 v1_aead helper。
     let space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
         Arc::new(uc_infra::security::DefaultSpaceAccessAdapter::new(
-            infra.encryption.clone(),
             infra.key_material.clone(),
             platform.key_scope.clone(),
             infra.encryption_state.clone(),
-            platform.encryption_session.clone(),
+            platform.session.clone(),
         ));
 
     // Wire the search bundle (Phase 92).
-    // All three pieces are grouped under AppDeps.search to prevent uc-daemon
-    // from constructing search infrastructure ad hoc.
     let search_key_derivation: Arc<dyn SearchKeyDerivationPort> = Arc::new(
         HkdfSearchKeyDerivation::new(space_access.clone(), platform.key_scope.clone()),
     );
@@ -754,11 +739,15 @@ pub fn wire_dependencies_with_identity_store(
     ));
     let search_pipeline = Arc::new(SearchPipeline::new());
 
-    // BlobCipherPort——4 个 decorator 共享的业务 AEAD adapter,这里先构造一份
-    // 同时塞进 decorators 和 SecurityPorts (后面 AppDeps 装配那段),保证整个进程
-    // 共享同一个会话视图。
+    // BlobCipherPort——4 个 decorator 共享的业务 AEAD adapter。
     let blob_cipher: Arc<dyn uc_core::ports::security::BlobCipherPort> = Arc::new(
-        uc_infra::security::BlobCipherAdapter::new(platform.encryption_session.clone()),
+        uc_infra::security::BlobCipherAdapter::new(platform.session.clone()),
+    );
+
+    // TransferCipherPort——sync_outbound / sync_inbound 通过此 port 加解密
+    // 网络字节,与 BlobCipherPort 共享同一个 InMemorySession。
+    let transfer_cipher: Arc<dyn uc_core::ports::security::TransferCipherPort> = Arc::new(
+        uc_infra::clipboard::TransferCipherAdapter::new(platform.session.clone()),
     );
 
     // Wrap ports with encryption decorators
@@ -840,21 +829,16 @@ pub fn wire_dependencies_with_identity_store(
             worker_tx,
             payload_resolver,
         },
-        security: {
-            // SpaceAccessPort 在装配点之前已创建（见 search_key_derivation 装配处）。
-            SecurityPorts {
-                encryption: infra.encryption,
-                encryption_session: platform.encryption_session,
-                encryption_state: infra.encryption_state,
-                key_scope: platform.key_scope,
-                secure_storage: platform.secure_storage,
-                key_material: infra.key_material,
-                space_access: space_access.clone(),
-                blob_cipher: blob_cipher.clone(),
-                pin_hasher: Arc::new(Argon2PinHasher),
-                short_code: Arc::new(Sha256ShortCodeGenerator),
-                fingerprint: Arc::new(Sha256IdentityFingerprintFactory),
-            }
+        security: SecurityPorts {
+            encryption_state: infra.encryption_state,
+            key_scope: platform.key_scope,
+            secure_storage: platform.secure_storage,
+            space_access: space_access.clone(),
+            blob_cipher: blob_cipher.clone(),
+            transfer_cipher: transfer_cipher.clone(),
+            pin_hasher: Arc::new(Argon2PinHasher),
+            short_code: Arc::new(Sha256ShortCodeGenerator),
+            fingerprint: Arc::new(Sha256IdentityFingerprintFactory),
         },
         device: DevicePorts {
             device_identity: platform.device_identity,

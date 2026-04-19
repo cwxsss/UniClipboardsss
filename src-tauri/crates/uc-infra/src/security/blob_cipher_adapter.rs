@@ -22,16 +22,16 @@ use std::sync::Arc;
 use uc_core::crypto::domain::{Aad, ActiveSpace, Ciphertext, Plaintext};
 use uc_core::crypto::model::{EncryptedBlob, EncryptionAlgo, EncryptionFormatVersion};
 use uc_core::ports::security::blob_cipher::{BlobCipherError, BlobCipherPort};
-use uc_core::ports::EncryptionSessionPort;
 
+use super::session::InMemorySession;
 use super::v1_aead;
 
 pub struct BlobCipherAdapter {
-    session: Arc<dyn EncryptionSessionPort>,
+    session: Arc<InMemorySession>,
 }
 
 impl BlobCipherAdapter {
-    pub fn new(session: Arc<dyn EncryptionSessionPort>) -> Self {
+    pub fn new(session: Arc<InMemorySession>) -> Self {
         Self { session }
     }
 }
@@ -44,15 +44,14 @@ impl BlobCipherPort for BlobCipherAdapter {
         plaintext: &Plaintext,
         aad: &Aad,
     ) -> Result<Ciphertext, BlobCipherError> {
-        // 当前单 master_key 模型：ActiveSpace 仅作"已解锁"语义担保，
+        // 当前单 master_key 模型: ActiveSpace 仅作"已解锁"语义担保,
         // 不参与会话查找。多空间路由后续扩展。
-        if !self.session.is_ready().await {
+        if !self.session.is_ready() {
             return Err(BlobCipherError::NotUnlocked);
         }
         let master_key = self
             .session
             .get_master_key()
-            .await
             .map_err(|e| BlobCipherError::Internal(e.to_string()))?;
 
         let blob = v1_aead::encrypt_blob_xchacha(&master_key, plaintext.as_bytes(), aad.as_bytes())
@@ -69,7 +68,7 @@ impl BlobCipherPort for BlobCipherAdapter {
         ciphertext: &Ciphertext,
         aad: &Aad,
     ) -> Result<Plaintext, BlobCipherError> {
-        if !self.session.is_ready().await {
+        if !self.session.is_ready() {
             return Err(BlobCipherError::NotUnlocked);
         }
 
@@ -86,7 +85,6 @@ impl BlobCipherPort for BlobCipherAdapter {
         let master_key = self
             .session
             .get_master_key()
-            .await
             .map_err(|e| BlobCipherError::Internal(e.to_string()))?;
 
         let plain = v1_aead::decrypt_blob_xchacha(

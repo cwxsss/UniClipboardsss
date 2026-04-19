@@ -27,7 +27,6 @@ use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 
 use crate::search::projection::SearchProjectionBuilder;
-use uc_infra::clipboard::TransferCipherAdapter;
 use uc_observability::FlowId;
 use uc_platform::clipboard::watcher::{ClipboardWatcher, PlatformEvent, PlatformEventSender};
 
@@ -175,9 +174,7 @@ impl DaemonClipboardChangeHandler {
             deps.security.space_access.clone(),
             deps.device.device_identity.clone(),
             deps.settings.clone(),
-            Arc::new(TransferCipherAdapter::new(
-                deps.security.encryption_session.clone(),
-            )),
+            deps.security.transfer_cipher.clone(),
             deps.device.member_repo.clone(),
         )
     }

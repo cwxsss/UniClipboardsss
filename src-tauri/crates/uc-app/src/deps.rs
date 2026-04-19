@@ -73,23 +73,19 @@ pub struct ClipboardPorts {
 /// Security-domain ports bundle.
 /// 安全领域端口组。
 pub struct SecurityPorts {
-    pub encryption: Arc<dyn EncryptionPort>,
-    pub encryption_session: Arc<dyn EncryptionSessionPort>,
     pub encryption_state: Arc<dyn uc_core::ports::security::encryption_state::EncryptionStatePort>,
     pub key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort>,
     pub secure_storage: Arc<dyn SecureStoragePort>,
-    pub key_material: Arc<dyn KeyMaterialPort>,
     /// 单一空间访问 port——initialize / unlock / try_resume_session /
-    /// verify_keychain_access / derive_subkey 等业务动作的统一入口。
-    /// Slice 3 起所有 usecase 都通过此 port 访问会话生命周期与密钥派生,
-    /// 上面 5 个 port (encryption / key_material / encryption_session /
-    /// encryption_state / key_scope) 仅作为本 adapter 的内部依赖,
-    /// 计划在 Slice 3 末尾整组移除。
+    /// verify_keychain_access / derive_subkey / current_session_proof_key 等
+    /// 业务动作的统一入口。所有会话/密钥访问都从这里走。
     pub space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort>,
-    /// 业务 blob 加解密 port——4 个剪切板 decorator 在 Slice 3 起统一通过此
-    /// port 加解密 inline_data。adapter 内部持有 EncryptionSessionPort 自管
-    /// 会话与 V1 AEAD,调用方完全不再触碰 master_key。
+    /// 业务 blob 加解密 port——4 个剪切板 decorator 通过此 port 加解密
+    /// inline_data。adapter 内部端到端自管会话与 V1 AEAD。
     pub blob_cipher: Arc<dyn uc_core::ports::security::BlobCipherPort>,
+    /// 剪切板传输 chunked AEAD port——sync_outbound / sync_inbound usecase 通过
+    /// 此 port 加解密网络字节。adapter 内部端到端自管会话。
+    pub transfer_cipher: Arc<dyn uc_core::ports::security::TransferCipherPort>,
     /// Argon2 PIN hasher for pairing.
     pub pin_hasher: Arc<dyn uc_core::ports::security::PinHasherPort>,
     /// Short pairing-code derivation.

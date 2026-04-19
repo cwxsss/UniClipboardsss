@@ -34,9 +34,9 @@ use uc_core::network::{
 };
 use uc_core::ports::{
     ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
-    ClipboardTransportError, ConnectionPolicyResolverPort, EncryptionSessionPort,
-    InboundClipboardFrame, NetworkControlPort, NetworkEventPort, OutboundClipboardFrame,
-    PairingTransportPort, PeerDirectoryPort, SyncTargetId,
+    ClipboardTransportError, ConnectionPolicyResolverPort, InboundClipboardFrame,
+    NetworkControlPort, NetworkEventPort, OutboundClipboardFrame, PairingTransportPort,
+    PeerDirectoryPort, SyncTargetId,
 };
 
 use super::file_transfer::service::{FileTransferConfig, FileTransferService};
@@ -183,7 +183,6 @@ pub struct Libp2pNetworkAdapter {
     keypair: Mutex<identity::Keypair>,
     start_state: Arc<AtomicU8>,
     policy_resolver: Arc<dyn ConnectionPolicyResolverPort>,
-    _encryption_session: Arc<dyn EncryptionSessionPort>,
     /// Wrapped in `Arc` so the swarm restart loop can update this handle when
     /// rebuilding the session without needing a reference back to `self`.
     stream_control: Arc<Mutex<Option<stream::Control>>>,
@@ -199,7 +198,6 @@ impl Libp2pNetworkAdapter {
     pub fn new(
         identity_store: Arc<dyn IdentityStorePort>,
         policy_resolver: Arc<dyn ConnectionPolicyResolverPort>,
-        encryption_session: Arc<dyn EncryptionSessionPort>,
         file_cache_dir: PathBuf,
         pairing_runtime_owner: PairingRuntimeOwner,
     ) -> Result<Self> {
@@ -237,7 +235,6 @@ impl Libp2pNetworkAdapter {
             keypair: Mutex::new(keypair),
             start_state: Arc::new(AtomicU8::new(START_STATE_IDLE)),
             policy_resolver,
-            _encryption_session: encryption_session,
             stream_control: Arc::new(Mutex::new(None)),
             pairing_runtime_owner,
             pairing_service: Arc::new(Mutex::new(None)),

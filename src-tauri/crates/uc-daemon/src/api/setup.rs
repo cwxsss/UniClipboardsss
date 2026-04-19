@@ -604,23 +604,16 @@ async fn reset(State(state): State<DaemonApiState>) -> Result<Json<SetupResetRes
             })?;
     }
 
-    let scope = deps.security.key_scope.current_scope().await.map_err(|e| {
-        tracing::error!(error = %e, "setup reset failed");
-        ApiError::internal(format!("setup reset failed: {e}"))
-    })?;
-
-    if let Err(e) = deps.security.key_material.delete_keyslot(&scope).await {
-        if !matches!(e, uc_core::crypto::model::EncryptionError::KeyNotFound) {
+    // 单空间模型: 用占位 SpaceId 调 SpaceAccessPort.factory_reset。
+    let space_id = uc_core::ids::SpaceId::from("space");
+    deps.security
+        .space_access
+        .factory_reset(&space_id)
+        .await
+        .map_err(|e| {
             tracing::error!(error = %e, "setup reset failed");
-            return Err(ApiError::internal(format!("setup reset failed: {e}")));
-        }
-    }
-    if let Err(e) = deps.security.key_material.delete_kek(&scope).await {
-        if !matches!(e, uc_core::crypto::model::EncryptionError::KeyNotFound) {
-            tracing::error!(error = %e, "setup reset failed");
-            return Err(ApiError::internal(format!("setup reset failed: {e}")));
-        }
-    }
+            ApiError::internal(format!("setup reset failed: {e}"))
+        })?;
     deps.security
         .encryption_state
         .clear_initialized()
@@ -629,16 +622,6 @@ async fn reset(State(state): State<DaemonApiState>) -> Result<Json<SetupResetRes
             tracing::error!(error = %e, "setup reset failed");
             ApiError::internal(format!("setup reset failed: {e}"))
         })?;
-    if let Err(e) = deps.security.encryption_session.clear().await {
-        if !matches!(
-            e,
-            uc_core::crypto::model::EncryptionError::KeyNotFound
-                | uc_core::crypto::model::EncryptionError::NotInitialized
-        ) {
-            tracing::error!(error = %e, "setup reset failed");
-            return Err(ApiError::internal(format!("setup reset failed: {e}")));
-        }
-    }
 
     Ok(Json(SetupResetResponse {
         profile: std::env::var("UC_PROFILE")
