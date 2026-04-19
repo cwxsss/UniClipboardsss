@@ -18,7 +18,7 @@ pub(crate) mod v1_aead;
 
 pub use blob_cipher_adapter::BlobCipherAdapter;
 pub use crypto_model::{
-    EncryptedBlob, KdfParams, KdfParamsV1, KeySlot, KeySlotConvertError, KeySlotFile,
+    EncryptedBlob, KdfParams, KdfParamsV1, KeyScope, KeySlot, KeySlotConvertError, KeySlotFile,
     WrappedMasterKey,
 };
 pub use decrypting_clipboard_event_repo::DecryptingClipboardEventRepository;

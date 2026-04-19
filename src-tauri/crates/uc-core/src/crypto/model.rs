@@ -1,26 +1,19 @@
 //! Security / Encryption domain models.
 //!
-//! Slice 6 (U6) 起保留以下符号:
-//! - `Passphrase`: 用户提供的解锁口令;跨 crate 作为领域输入类型
-//! - `KeyScope`: 仍保留(Slice 6 范围内);被 `KeyScopePort` trait 返回值引用,
-//!   彻底下沉需同步重构 `KeyScopePort`(Slice 7 / U4 候选 B)
+//! 本模块最终保留的跨 crate 领域符号:
+//! - `Passphrase`: 用户提供的解锁口令;uc-application / cli 等领域输入类型
 //! - `EncryptionError`: 跨 crate 错误类型(uc-infra `KeySlotStore` port 等返回)
 //!
-//! 其余数据结构(`KdfParams` / `KdfParamsV1` / `KeySlot` / `WrappedMasterKey` /
-//! `EncryptedBlob` / `KeySlotFile` / `KeySlotConvertError`)已物理下沉到
-//! `uc-infra/src/security/crypto_model.rs` —— 它们属于磁盘 JSON /
-//! pairing wire format 的承载结构,是 uc-infra 的持久化职责。
-//! 运行时密钥物料(`Kek` / `MasterKey`)在 Slice 4 (B.4.5) 已搬到
-//! `uc-infra/src/security/secrets.rs`。
+//! 其余符号已物理下沉到 `uc-infra/src/security/`:
+//! - `Kek` / `MasterKey`  → `secrets.rs`(Slice 4 B.4.5)
+//! - `KdfParams` / `KdfParamsV1` / `KeySlot` / `WrappedMasterKey` /
+//!   `EncryptedBlob` / `KeySlotFile` / `KeySlotConvertError` / `KeyScope`
+//!   → `crypto_model.rs`(Slice 6-7)
+//!
+//! `KeyScopePort` → `CurrentProfilePort`(Slice 7 U7 候选 B),返回
+//! `uc_core::ids::ProfileId` 值对象。
 
-use serde::{Deserialize, Serialize};
 use std::fmt;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyScope {
-    /// Profile ID (user profile)
-    pub profile_id: String,
-}
 
 /// Passphrase provided by user. Only used to derive KEK inside use cases.
 /// Avoid storing this beyond the unlock/initialize flow.

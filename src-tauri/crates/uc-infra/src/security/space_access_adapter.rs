@@ -18,9 +18,9 @@ use sha2::Sha256;
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use uc_core::crypto::domain::{ActiveSpace, Passphrase as DomainPassphrase};
-use uc_core::crypto::model::{EncryptionError, KeyScope, Passphrase as LegacyPassphrase};
+use uc_core::crypto::model::{EncryptionError, Passphrase as LegacyPassphrase};
 
-use super::crypto_model::{KeySlot, WrappedMasterKey};
+use super::crypto_model::{KeyScope, KeySlot, WrappedMasterKey};
 use super::secrets::MasterKey;
 use uc_core::crypto::state::EncryptionState;
 use uc_core::ids::{ProfileId, SpaceId};

@@ -19,7 +19,7 @@ use diesel::RunQueryDsl;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, instrument, warn};
 
-use uc_core::ids::EntryId;
+use uc_core::ids::{EntryId, ProfileId};
 use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
 use uc_core::ports::security::current_profile::CurrentProfilePort;
@@ -128,13 +128,17 @@ impl SqliteSearchIndex {
 
     // ─── Private async helpers ────────────────────────────────────────────────
 
-    /// Resolve the current profile ID from the `CurrentProfilePort`.
-    async fn current_profile_id(&self) -> Result<String, SearchError> {
-        let profile =
-            self.current_profile.current_profile().await.map_err(|e| {
-                SearchError::Internal(format!("failed to get current profile: {e}"))
-            })?;
-        Ok(profile.into_inner())
+    /// Resolve the current `ProfileId` from the `CurrentProfilePort`.
+    ///
+    /// 返回值对象而非 String:call site 利用 `ProfileId: Deref<Target=String>`
+    /// 直接在 `&str` / `bytes()` / SQL bind 场景透明解引用;仅在需要拥有
+    /// 所有权的 `String`(move 进 spawn_blocking、HashMap key)时显式
+    /// `into_inner()` 或 `clone`。
+    async fn current_profile_id(&self) -> Result<ProfileId, SearchError> {
+        self.current_profile
+            .current_profile()
+            .await
+            .map_err(|e| SearchError::Internal(format!("failed to get current profile: {e}")))
     }
 
     /// Return a clone of the active rebuild state only when `profile_id` matches.
@@ -700,7 +704,7 @@ impl SearchIndexPort for SqliteSearchIndex {
         document: SearchDocument,
         postings: Vec<SearchPosting>,
     ) -> Result<(), SearchError> {
-        let profile_id = self.current_profile_id().await?;
+        let profile_id = self.current_profile_id().await?.into_inner();
         let pool = self.pool.clone();
 
         // Check for active rebuild before entering spawn_blocking. A clone is cheap;
@@ -739,7 +743,7 @@ impl SearchIndexPort for SqliteSearchIndex {
 
     #[instrument(name = "search_index.remove_entry", level = "debug", skip(self), fields(entry_id = %entry_id))]
     async fn remove_entry(&self, entry_id: &EntryId) -> Result<(), SearchError> {
-        let profile_id = self.current_profile_id().await?;
+        let profile_id = self.current_profile_id().await?.into_inner();
         let pool = self.pool.clone();
         let entry_id = entry_id.clone();
 
@@ -775,7 +779,7 @@ impl SearchIndexPort for SqliteSearchIndex {
         fields(operator = ?query.operator, limit = query.limit, offset = query.offset)
     )]
     async fn search(&self, query: SearchQuery) -> Result<SearchResultsPage, SearchError> {
-        let profile_id = self.current_profile_id().await?;
+        let profile_id = self.current_profile_id().await?.into_inner();
         let pool = self.pool.clone();
 
         // Normalize query terms before entering spawn_blocking.
@@ -984,7 +988,7 @@ impl SearchIndexPort for SqliteSearchIndex {
         entries: Vec<(SearchDocument, Vec<SearchPosting>)>,
         progress_tx: Sender<RebuildProgress>,
     ) -> Result<(), SearchError> {
-        let profile_id = self.current_profile_id().await?;
+        let profile_id = self.current_profile_id().await?.into_inner();
         let pool = self.pool.clone();
         let rebuild_state_arc = self.rebuild_state.clone();
         let total = entries.len() as u32;
@@ -1219,7 +1223,7 @@ impl SearchIndexPort for SqliteSearchIndex {
 
     #[instrument(name = "search_index.get_index_meta", level = "debug", skip(self))]
     async fn get_index_meta(&self) -> Result<SearchIndexMeta, SearchError> {
-        let profile_id = self.current_profile_id().await?;
+        let profile_id = self.current_profile_id().await?.into_inner();
         let pool = self.pool.clone();
 
         tokio::task::spawn_blocking(move || {
