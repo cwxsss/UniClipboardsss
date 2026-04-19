@@ -23,9 +23,9 @@ use uc_core::crypto::model::{EncryptionError, KeyScope, Passphrase as LegacyPass
 use super::crypto_model::{KeySlot, WrappedMasterKey};
 use super::secrets::MasterKey;
 use uc_core::crypto::state::EncryptionState;
-use uc_core::ids::SpaceId;
+use uc_core::ids::{ProfileId, SpaceId};
+use uc_core::ports::security::current_profile::CurrentProfilePort;
 use uc_core::ports::security::encryption_state::EncryptionStatePort;
-use uc_core::ports::security::key_scope::KeyScopePort;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
 use uc_core::space_access::{JoinOffer, ProofDerivedKey};
 
@@ -37,7 +37,7 @@ use super::v1_aead;
 /// `SpaceAccessPort` 默认实现。
 pub struct DefaultSpaceAccessAdapter {
     key_material: Arc<KeyMaterialStore>,
-    key_scope: Arc<dyn KeyScopePort>,
+    current_profile: Arc<dyn CurrentProfilePort>,
     encryption_state: Arc<dyn EncryptionStatePort>,
     session: Arc<InMemorySession>,
 }
@@ -45,16 +45,26 @@ pub struct DefaultSpaceAccessAdapter {
 impl DefaultSpaceAccessAdapter {
     pub fn new(
         key_material: Arc<KeyMaterialStore>,
-        key_scope: Arc<dyn KeyScopePort>,
+        current_profile: Arc<dyn CurrentProfilePort>,
         encryption_state: Arc<dyn EncryptionStatePort>,
         session: Arc<InMemorySession>,
     ) -> Self {
         Self {
             key_material,
-            key_scope,
+            current_profile,
             encryption_state,
             session,
         }
+    }
+}
+
+/// Helper: 把端口返回的 `ProfileId` 包装成 key_material 使用的 `KeyScope`。
+///
+/// Slice 7 (U7) 过渡期间 `KeyScope` 仍是 uc-core 类型(磁盘 `KeySlotFile.scope`
+/// 字段依赖);Slice 7 Commit 2 搬到 uc-infra 后这个 helper 可简化或消失。
+fn key_scope_from_profile(profile: &ProfileId) -> KeyScope {
+    KeyScope {
+        profile_id: profile.as_ref().to_string(),
     }
 }
 
@@ -159,11 +169,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 return Err(SpaceAccessError::AlreadyInitialized);
             }
 
-            let scope = self
-                .key_scope
-                .current_scope()
+            let profile = self
+                .current_profile
+                .current_profile()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+            let scope = key_scope_from_profile(&profile);
             debug!(scope = %scope_identifier(&scope), "got key scope");
 
             self.do_first_time_init(&scope, passphrase).await?;
@@ -193,11 +204,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 return Err(SpaceAccessError::NotInitialized);
             }
 
-            let scope = self
-                .key_scope
-                .current_scope()
+            let profile = self
+                .current_profile
+                .current_profile()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+            let scope = key_scope_from_profile(&profile);
 
             let keyslot = self
                 .key_material
@@ -246,11 +258,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
     async fn factory_reset(&self, space_id: &SpaceId) -> Result<(), SpaceAccessError> {
         let span = info_span!("infra.space_access.factory_reset", space_id = %space_id);
         async {
-            let scope = self
-                .key_scope
-                .current_scope()
+            let profile = self
+                .current_profile
+                .current_profile()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+            let scope = key_scope_from_profile(&profile);
 
             // 幂等: 不存在的物料视为已经删除,不报错。
             match self.key_material.delete_keyslot(&scope).await {
@@ -286,11 +299,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 return Ok(None);
             }
 
-            let scope = self
-                .key_scope
-                .current_scope()
+            let profile = self
+                .current_profile
+                .current_profile()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+            let scope = key_scope_from_profile(&profile);
 
             let keyslot = self
                 .key_material
@@ -324,11 +338,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
     async fn verify_keychain_access(&self) -> Result<bool, SpaceAccessError> {
         let span = info_span!("infra.space_access.verify_keychain_access");
         async {
-            let scope = self
-                .key_scope
-                .current_scope()
+            let profile = self
+                .current_profile
+                .current_profile()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+            let scope = key_scope_from_profile(&profile);
 
             // 探测: 把"权限被拒绝"和"keyring 暂时不可用"都视为 "Always Allow 未授予"
             // (Ok(false));只有"KEK 不存在"才升格成 NotInitialized 报错给上层。
@@ -387,11 +402,12 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
             debug!(state = ?state, "loaded encryption state");
 
-            let scope = self
-                .key_scope
-                .current_scope()
+            let profile = self
+                .current_profile
+                .current_profile()
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
+            let scope = key_scope_from_profile(&profile);
             debug!(scope = %scope_identifier(&scope), "got key scope");
 
             // Branch A — 运行时已初始化的 sponsor 路径: 从 key_material 读已有 keyslot,

@@ -22,7 +22,7 @@ use tracing::{debug, instrument, warn};
 use uc_core::ids::EntryId;
 use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
-use uc_core::ports::security::key_scope::KeyScopePort;
+use uc_core::ports::security::current_profile::CurrentProfilePort;
 use uc_core::search::document::{SearchDocument, SearchIndexMeta, SearchPosting};
 use uc_core::search::error::SearchError;
 use uc_core::search::query::{QueryOperator, SearchQuery, TimeRangeFilter};
@@ -91,7 +91,7 @@ impl ActiveRebuild {
 /// crossing the async/blocking boundary.
 pub struct SqliteSearchIndex {
     pool: DbPool,
-    key_scope: Arc<dyn KeyScopePort>,
+    current_profile: Arc<dyn CurrentProfilePort>,
     search_key_derivation: Arc<dyn SearchKeyDerivationPort>,
     /// Active rebuild state, shared between the rebuild coordinator and the
     /// live write/delete helpers that must mirror into temp tables.
@@ -111,12 +111,12 @@ impl SqliteSearchIndex {
     /// Create a new `SqliteSearchIndex`.
     pub fn new(
         pool: DbPool,
-        key_scope: Arc<dyn KeyScopePort>,
+        current_profile: Arc<dyn CurrentProfilePort>,
         search_key_derivation: Arc<dyn SearchKeyDerivationPort>,
     ) -> Self {
         Self {
             pool,
-            key_scope,
+            current_profile,
             search_key_derivation,
             rebuild_state: Arc::new(std::sync::RwLock::new(None)),
             #[cfg(test)]
@@ -128,14 +128,13 @@ impl SqliteSearchIndex {
 
     // ─── Private async helpers ────────────────────────────────────────────────
 
-    /// Resolve the current profile ID from the key scope.
+    /// Resolve the current profile ID from the `CurrentProfilePort`.
     async fn current_profile_id(&self) -> Result<String, SearchError> {
-        let scope = self
-            .key_scope
-            .current_scope()
-            .await
-            .map_err(|e| SearchError::Internal(format!("failed to get key scope: {e}")))?;
-        Ok(scope.profile_id)
+        let profile =
+            self.current_profile.current_profile().await.map_err(|e| {
+                SearchError::Internal(format!("failed to get current profile: {e}"))
+            })?;
+        Ok(profile.into_inner())
     }
 
     /// Return a clone of the active rebuild state only when `profile_id` matches.

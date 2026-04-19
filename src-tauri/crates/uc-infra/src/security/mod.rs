@@ -2,7 +2,7 @@ mod blob_cipher_adapter;
 pub mod crypto_model;
 mod decrypting_clipboard_event_repo;
 mod decrypting_representation_repo;
-mod default_key_scope;
+mod default_current_profile;
 mod encrypted_blob_store;
 mod encrypting_clipboard_event_writer;
 mod encryption_state;
@@ -23,7 +23,7 @@ pub use crypto_model::{
 };
 pub use decrypting_clipboard_event_repo::DecryptingClipboardEventRepository;
 pub use decrypting_representation_repo::DecryptingClipboardRepresentationRepository;
-pub use default_key_scope::DefaultKeyScope;
+pub use default_current_profile::DefaultCurrentProfile;
 pub use encrypted_blob_store::EncryptedBlobStore;
 pub use encrypting_clipboard_event_writer::EncryptingClipboardEventWriter;
 pub use encryption_state_repo::FileEncryptionStateRepository;

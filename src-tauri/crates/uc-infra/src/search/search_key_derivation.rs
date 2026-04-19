@@ -15,7 +15,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
-use uc_core::ports::security::key_scope::KeyScopePort;
+use uc_core::ports::security::current_profile::CurrentProfilePort;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
 use uc_core::search::error::SearchError;
 use uc_core::search::key::SearchKey;
@@ -32,14 +32,17 @@ type HmacSha256 = Hmac<Sha256>;
 /// 不同 profile 派生不同 key。
 pub struct HkdfSearchKeyDerivation {
     space_access: Arc<dyn SpaceAccessPort>,
-    key_scope: Arc<dyn KeyScopePort>,
+    current_profile: Arc<dyn CurrentProfilePort>,
 }
 
 impl HkdfSearchKeyDerivation {
-    pub fn new(space_access: Arc<dyn SpaceAccessPort>, key_scope: Arc<dyn KeyScopePort>) -> Self {
+    pub fn new(
+        space_access: Arc<dyn SpaceAccessPort>,
+        current_profile: Arc<dyn CurrentProfilePort>,
+    ) -> Self {
         Self {
             space_access,
-            key_scope,
+            current_profile,
         }
     }
 }
@@ -47,15 +50,14 @@ impl HkdfSearchKeyDerivation {
 #[async_trait]
 impl SearchKeyDerivationPort for HkdfSearchKeyDerivation {
     async fn derive_search_key(&self) -> Result<SearchKey, SearchError> {
-        let scope = self
-            .key_scope
-            .current_scope()
-            .await
-            .map_err(|e| SearchError::Internal(format!("failed to get key scope: {e}")))?;
+        let profile =
+            self.current_profile.current_profile().await.map_err(|e| {
+                SearchError::Internal(format!("failed to get current profile: {e}"))
+            })?;
 
         let okm = self
             .space_access
-            .derive_subkey(scope.profile_id.as_bytes(), SEARCH_KEY_INFO)
+            .derive_subkey(profile.as_ref().as_bytes(), SEARCH_KEY_INFO)
             .await
             .map_err(|e| match e {
                 SpaceAccessError::NotUnlocked => SearchError::SessionLocked,

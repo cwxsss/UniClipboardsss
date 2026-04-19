@@ -268,8 +268,8 @@ pub struct PlatformLayer {
     // 不再走 EncryptionSessionPort trait dyn 间接层。
     pub session: Arc<InMemorySession>,
 
-    // Key scope
-    pub key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort>,
+    // Current profile
+    pub current_profile: Arc<dyn uc_core::ports::security::current_profile::CurrentProfilePort>,
 }
 
 /// Create SQLite database connection pool
@@ -559,8 +559,8 @@ pub fn create_platform_layer(
     ));
     let blob_store_reader: Arc<dyn BlobReaderPort> = encrypted_blob_store;
 
-    let key_scope: Arc<dyn uc_core::ports::security::key_scope::KeyScopePort> =
-        Arc::new(uc_infra::security::DefaultKeyScope::new());
+    let current_profile: Arc<dyn uc_core::ports::security::current_profile::CurrentProfilePort> =
+        Arc::new(uc_infra::security::DefaultCurrentProfile::new());
 
     Ok(PlatformLayer {
         clipboard,
@@ -573,7 +573,7 @@ pub fn create_platform_layer(
         blob_writer,
         blob_store: blob_store_reader,
         session,
-        key_scope,
+        current_profile,
     })
 }
 
@@ -719,22 +719,22 @@ pub fn wire_dependencies_with_identity_store(
     )?;
 
     // SpaceAccessPort——单一会话/密钥访问入口。adapter 自管 KeyMaterialStore +
-    // InMemorySession + EncryptionStatePort + KeyScopePort,V1 AEAD 走 v1_aead helper。
+    // InMemorySession + EncryptionStatePort + CurrentProfilePort,V1 AEAD 走 v1_aead helper。
     let space_access: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
         Arc::new(uc_infra::security::DefaultSpaceAccessAdapter::new(
             infra.key_material.clone(),
-            platform.key_scope.clone(),
+            platform.current_profile.clone(),
             infra.encryption_state.clone(),
             platform.session.clone(),
         ));
 
     // Wire the search bundle (Phase 92).
     let search_key_derivation: Arc<dyn SearchKeyDerivationPort> = Arc::new(
-        HkdfSearchKeyDerivation::new(space_access.clone(), platform.key_scope.clone()),
+        HkdfSearchKeyDerivation::new(space_access.clone(), platform.current_profile.clone()),
     );
     let search_index: Arc<dyn SearchIndexPort> = Arc::new(SqliteSearchIndex::new(
         db_pool_for_search,
-        platform.key_scope.clone(),
+        platform.current_profile.clone(),
         search_key_derivation.clone(),
     ));
     let search_pipeline = Arc::new(SearchPipeline::new());
@@ -831,7 +831,7 @@ pub fn wire_dependencies_with_identity_store(
         },
         security: SecurityPorts {
             encryption_state: infra.encryption_state,
-            key_scope: platform.key_scope,
+            current_profile: platform.current_profile,
             secure_storage: platform.secure_storage,
             space_access: space_access.clone(),
             blob_cipher: blob_cipher.clone(),
