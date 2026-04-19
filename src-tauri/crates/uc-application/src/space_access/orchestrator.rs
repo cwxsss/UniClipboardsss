@@ -18,7 +18,7 @@ use uc_core::{MemberRepositoryPort, MemberSyncPreferences};
 
 use crate::membership::usecases::{AdmitMember, AdmitMemberUseCase};
 
-use super::context::{SpaceAccessContext, SpaceAccessOffer};
+use super::context::SpaceAccessContext;
 use super::events::{SpaceAccessCompletedEvent, SpaceAccessEventPort};
 use super::executor::SpaceAccessExecutor;
 
@@ -430,13 +430,11 @@ impl SpaceAccessOrchestrator {
                     space_id,
                     expires_at: _,
                 } => {
-                    let keyslot = executor.crypto.export_keyslot_blob(&space_id).await?;
-                    let nonce = executor.crypto.generate_nonce32().await;
-                    let offer = SpaceAccessOffer {
-                        space_id: space_id.clone(),
-                        keyslot,
-                        nonce,
-                    };
+                    let offer = executor
+                        .space_access
+                        .prepare_join_offer(&space_id, executor.passphrase)
+                        .await
+                        .map_err(|e| SpaceAccessError::Crypto(anyhow::anyhow!(e)))?;
                     let mut context = self.context.lock().await;
                     context.prepared_offer = Some(offer);
                     let _ = pairing_session_id;
@@ -489,10 +487,18 @@ impl SpaceAccessOrchestrator {
                         (offer, passphrase)
                     };
 
+                    let domain_passphrase =
+                        uc_core::crypto::domain::Passphrase::new(passphrase.expose().to_string());
+                    let join_offer = uc_core::space_access::JoinOffer {
+                        space_id: offer.space_id.clone(),
+                        keyslot_blob: offer.keyslot_blob.clone(),
+                        challenge_nonce: offer.challenge_nonce,
+                    };
                     let master_key = executor
-                        .crypto
-                        .derive_master_key_from_keyslot(&offer.keyslot_blob, passphrase)
-                        .await?;
+                        .space_access
+                        .derive_master_key_for_proof(&join_offer, &domain_passphrase)
+                        .await
+                        .map_err(|e| SpaceAccessError::Crypto(anyhow::anyhow!(e)))?;
 
                     let proof = executor
                         .proof

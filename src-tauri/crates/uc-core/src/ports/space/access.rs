@@ -7,8 +7,8 @@
 //! 不穿过这一层。
 //!
 //! 合并了原先的 `EncryptionPort`（KDF + wrap/unwrap 部分）、
-//! `EncryptionSessionPort`、`KeyMaterialPort`、
-//! `space::CryptoPort::{export_keyslot_blob, derive_master_key_from_keyslot}`。
+//! `EncryptionSessionPort`、`KeyMaterialPort`、以及已删除的 `space::CryptoPort`
+//! 的三个方法（`generate_nonce32 / export_keyslot_blob / derive_master_key_from_keyslot`）。
 
 use async_trait::async_trait;
 

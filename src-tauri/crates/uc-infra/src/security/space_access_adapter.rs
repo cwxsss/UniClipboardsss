@@ -113,9 +113,6 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .await
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
             debug!(state = ?state, "loaded encryption state");
-            if state == EncryptionState::Initialized {
-                return Err(SpaceAccessError::AlreadyInitialized);
-            }
 
             let scope = self
                 .key_scope
@@ -124,6 +121,32 @@ impl SpaceAccessPort for DefaultSpaceAccessAdapter {
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
             debug!(scope = %scope.to_identifier(), "got key scope");
 
+            // Branch A — 运行时已初始化的 sponsor 路径：从 key_material 读已有
+            // keyslot,不重新生成 MasterKey,忠实对应原 LoadedKeyslotSpaceAccessCrypto
+            // 的 export_keyslot_blob 语义。passphrase 参数此时不参与派生,
+            // 只是调用契约对齐——保留未来演进空间（比如换口令路径复用此方法）。
+            if state == EncryptionState::Initialized {
+                let _ = passphrase;
+                let keyslot = self
+                    .key_material
+                    .load_keyslot(&scope)
+                    .await
+                    .map_err(map_encryption_error)?;
+                let keyslot_blob = serde_json::to_vec(&keyslot)
+                    .map_err(|e| SpaceAccessError::Internal(format!("serialize keyslot: {e}")))?;
+                let mut challenge_nonce = [0u8; 32];
+                rand::rng().fill_bytes(&mut challenge_nonce);
+                info!("sponsor join offer prepared (runtime, already initialized)");
+                return Ok(JoinOffer {
+                    space_id: space_id.clone(),
+                    keyslot_blob,
+                    challenge_nonce,
+                });
+            }
+
+            // Branch B — 首次 setup sponsor 路径：未初始化,走完整 KEK 派生 +
+            // MasterKey 生成 + 包装 + 落盘。对应原 SpaceAccessCryptoAdapter 的
+            // export_keyslot_blob 语义。
             let keyslot_draft = KeySlot::draft_v1(scope.clone())
                 .map_err(|e| SpaceAccessError::Internal(e.to_string()))?;
             debug!("keyslot draft created");

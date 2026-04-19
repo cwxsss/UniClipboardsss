@@ -15,8 +15,9 @@ use uc_core::space_access::event::SpaceAccessEvent;
 use uc_core::space_access::state::SpaceAccessState;
 
 use uc_core::crypto::SecretString;
+use uc_core::space_access::JoinOffer;
 
-use super::context::{SpaceAccessContext, SpaceAccessJoinerOffer, SpaceAccessOffer};
+use super::context::{SpaceAccessContext, SpaceAccessJoinerOffer};
 use super::events::{SpaceAccessCompletedEvent, SpaceAccessEventPort};
 use super::executor::SpaceAccessExecutor;
 use super::orchestrator::{AdmitMemberUseCaseDyn, SpaceAccessError, SpaceAccessOrchestrator};
@@ -102,9 +103,9 @@ impl SpaceAccessFacade {
             .clone()
     }
 
-    /// Reads the sponsor-prepared offer (keyslot + nonce) that the sponsor
-    /// side caches before sending it to a joiner.
-    pub async fn peek_prepared_offer(&self) -> Option<SpaceAccessOffer> {
+    /// Reads the sponsor-prepared offer (keyslot + challenge nonce) that the
+    /// sponsor side caches before sending it to a joiner.
+    pub async fn peek_prepared_offer(&self) -> Option<JoinOffer> {
         self.orchestrator
             .context()
             .lock()

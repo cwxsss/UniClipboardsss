@@ -1,5 +1,4 @@
 mod context;
-mod crypto_adapter;
 mod events;
 mod executor;
 mod facade;
@@ -9,16 +8,11 @@ mod orchestrator;
 mod persistence_adapter;
 mod proof_adapter;
 
-pub use context::{SpaceAccessContext, SpaceAccessJoinerOffer, SpaceAccessOffer};
-pub use crypto_adapter::{
-    DefaultSpaceAccessCryptoFactory, SpaceAccessCryptoAdapter, SpaceAccessCryptoError,
-};
+pub use context::{SpaceAccessContext, SpaceAccessJoinerOffer};
 pub use events::{SpaceAccessCompletedEvent, SpaceAccessEventPort};
 pub use executor::SpaceAccessExecutor;
 pub use facade::SpaceAccessFacade;
-pub use initialize_new_space::{
-    SpaceAccessCryptoFactory, StartSponsorAuthorization, StartSponsorAuthorizationError,
-};
+pub use initialize_new_space::{StartSponsorAuthorization, StartSponsorAuthorizationError};
 pub use network_adapter::SpaceAccessNetworkAdapter;
 pub use orchestrator::SpaceAccessError;
 // `SpaceAccessOrchestrator` stays module-private on purpose (§11.4): every

@@ -1,15 +1,7 @@
-use uc_core::crypto::model::KeySlot;
 use uc_core::crypto::SecretString;
 use uc_core::ids::SpaceId;
 use uc_core::space_access::state::DenyReason;
-use uc_core::space_access::SpaceAccessProofArtifact;
-
-#[derive(Clone, Debug)]
-pub struct SpaceAccessOffer {
-    pub space_id: SpaceId,
-    pub keyslot: KeySlot,
-    pub nonce: [u8; 32],
-}
+use uc_core::space_access::{JoinOffer, SpaceAccessProofArtifact};
 
 #[derive(Clone, Debug)]
 pub struct SpaceAccessJoinerOffer {
@@ -20,7 +12,7 @@ pub struct SpaceAccessJoinerOffer {
 
 #[derive(Default)]
 pub struct SpaceAccessContext {
-    pub prepared_offer: Option<SpaceAccessOffer>,
+    pub prepared_offer: Option<JoinOffer>,
     pub joiner_offer: Option<SpaceAccessJoinerOffer>,
     pub joiner_passphrase: Option<SecretString>,
     pub proof_artifact: Option<SpaceAccessProofArtifact>,

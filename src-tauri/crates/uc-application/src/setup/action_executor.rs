@@ -31,9 +31,9 @@ use crate::setup::{
     SetupAction, SetupError as SetupDomainError, SetupEvent, SetupEventPort,
     SetupPairingFacadePort, SetupState, SetupStateMachine,
 };
-use crate::space_access::{
-    SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer,
-};
+use uc_core::ports::space::SpaceAccessPort;
+
+use crate::space_access::{SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer};
 
 use super::orchestrator::SetupError;
 
@@ -55,7 +55,7 @@ pub struct SetupActionExecutor {
     // Infrastructure ports
     pub(super) discovery_port: Arc<dyn DiscoveryPort>,
     pub(super) network_control: Arc<dyn NetworkControlPort>,
-    pub(super) crypto_factory: Arc<dyn SpaceAccessCryptoFactory>,
+    pub(super) space_access_port: Arc<dyn SpaceAccessPort>,
     pub(super) pairing_transport: Arc<dyn PairingTransportPort>,
     pub(super) transport_port: Arc<Mutex<dyn SpaceAccessTransportPort>>,
     pub(super) proof_port: Arc<dyn ProofPort>,
@@ -253,12 +253,14 @@ impl SetupActionExecutor {
             )
             .await;
 
-        let crypto = self.crypto_factory.build(passphrase_val);
+        let domain_passphrase =
+            uc_core::crypto::domain::Passphrase::new(passphrase_val.expose().to_string());
         let mut transport = self.transport_port.lock().await;
         let mut timer = self.timer_port.lock().await;
         let mut store = self.persistence_port.lock().await;
         let mut executor = SpaceAccessExecutor {
-            crypto: crypto.as_ref(),
+            space_access: self.space_access_port.as_ref(),
+            passphrase: &domain_passphrase,
             transport: &mut *transport,
             proof: self.proof_port.as_ref(),
             timer: &mut *timer,

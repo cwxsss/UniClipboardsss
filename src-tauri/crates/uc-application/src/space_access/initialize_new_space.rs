@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use uc_core::crypto::domain::Passphrase as DomainPassphrase;
 use uc_core::crypto::SecretString;
 use uc_core::ids::{SessionId, SpaceId};
-use uc_core::ports::space::{CryptoPort, PersistencePort, ProofPort, SpaceAccessTransportPort};
+use uc_core::ports::space::{
+    PersistencePort, ProofPort, SpaceAccessPort, SpaceAccessTransportPort,
+};
 use uc_core::ports::TimerPort;
 use uc_core::space_access::state::SpaceAccessState;
 
@@ -17,13 +20,9 @@ pub enum StartSponsorAuthorizationError {
     SpaceAccess(#[from] SpaceAccessError),
 }
 
-pub trait SpaceAccessCryptoFactory: Send + Sync {
-    fn build(&self, passphrase: SecretString) -> Box<dyn CryptoPort>;
-}
-
 pub struct StartSponsorAuthorization {
     orchestrator: Arc<SpaceAccessOrchestrator>,
-    crypto_factory: Arc<dyn SpaceAccessCryptoFactory>,
+    space_access_port: Arc<dyn SpaceAccessPort>,
     transport: Arc<Mutex<dyn SpaceAccessTransportPort>>,
     proof: Arc<dyn ProofPort>,
     timer: Arc<Mutex<dyn TimerPort>>,
@@ -34,7 +33,7 @@ pub struct StartSponsorAuthorization {
 impl StartSponsorAuthorization {
     pub fn new(
         orchestrator: Arc<SpaceAccessOrchestrator>,
-        crypto_factory: Arc<dyn SpaceAccessCryptoFactory>,
+        space_access_port: Arc<dyn SpaceAccessPort>,
         transport: Arc<Mutex<dyn SpaceAccessTransportPort>>,
         proof: Arc<dyn ProofPort>,
         timer: Arc<Mutex<dyn TimerPort>>,
@@ -42,7 +41,7 @@ impl StartSponsorAuthorization {
     ) -> Self {
         Self {
             orchestrator,
-            crypto_factory,
+            space_access_port,
             transport,
             proof,
             timer,
@@ -57,12 +56,13 @@ impl StartSponsorAuthorization {
     ) -> Result<SpaceAccessState, StartSponsorAuthorizationError> {
         let space_id = SpaceId::new();
         let pairing_session_id = SessionId::from(format!("setup-{}", uuid::Uuid::new_v4()));
-        let crypto = self.crypto_factory.build(passphrase);
+        let domain_passphrase = DomainPassphrase::new(passphrase.expose().to_string());
         let mut timer = self.timer.lock().await;
         let mut store = self.store.lock().await;
         let mut transport = self.transport.lock().await;
         let mut executor = SpaceAccessExecutor {
-            crypto: crypto.as_ref(),
+            space_access: self.space_access_port.as_ref(),
+            passphrase: &domain_passphrase,
             transport: &mut *transport,
             proof: self.proof.as_ref(),
             timer: &mut *timer,

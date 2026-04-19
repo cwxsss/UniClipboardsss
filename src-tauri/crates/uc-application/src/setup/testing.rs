@@ -18,16 +18,18 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, Mutex};
 
-use uc_core::crypto::model::Passphrase;
-use uc_core::crypto::{MasterKey, SecretString};
+use uc_core::crypto::domain::{ActiveSpace, Passphrase as DomainPassphrase};
+use uc_core::crypto::model::{MasterKey, Passphrase};
 use uc_core::ids::{SessionId, SpaceId};
 use uc_core::network::{DiscoveredPeer, PairingMessage};
-use uc_core::ports::space::{CryptoPort, PersistencePort, ProofPort, SpaceAccessTransportPort};
+use uc_core::ports::space::{
+    PersistencePort, ProofPort, SpaceAccessError, SpaceAccessPort, SpaceAccessTransportPort,
+};
 use uc_core::ports::{
     DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort,
 };
 use uc_core::setup::SetupStatus;
-use uc_core::space_access::SpaceAccessProofArtifact;
+use uc_core::space_access::{JoinOffer, SpaceAccessProofArtifact};
 
 use super::event_port::SetupEventPort;
 use super::orchestrator::SetupOrchestrator;
@@ -35,7 +37,7 @@ use super::pairing_facade::SetupPairingFacadePort;
 use super::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
 use super::state::SetupState;
 use crate::pairing::PairingDomainEvent;
-use crate::space_access::{SpaceAccessCryptoFactory, SpaceAccessFacade};
+use crate::space_access::SpaceAccessFacade;
 
 // ────────────────────────── Fake ports ──────────────────────────
 
@@ -306,35 +308,50 @@ impl ProofPort for FakeProof {
     }
 }
 
-pub(crate) struct NoopCryptoFactory;
-
-impl SpaceAccessCryptoFactory for NoopCryptoFactory {
-    fn build(&self, _passphrase: SecretString) -> Box<dyn CryptoPort> {
-        Box::new(NoopCrypto)
-    }
-}
-
-struct NoopCrypto;
+pub(crate) struct NoopSpaceAccess;
 
 #[async_trait]
-impl CryptoPort for NoopCrypto {
-    async fn generate_nonce32(&self) -> [u8; 32] {
-        [0u8; 32]
-    }
-
-    async fn export_keyslot_blob(
+impl SpaceAccessPort for NoopSpaceAccess {
+    async fn initialize(
         &self,
         _space_id: &SpaceId,
-    ) -> Result<uc_core::crypto::model::KeySlot> {
-        Err(anyhow::anyhow!("noop crypto cannot export keyslot"))
+        _passphrase: &DomainPassphrase,
+    ) -> Result<ActiveSpace, SpaceAccessError> {
+        Err(SpaceAccessError::Internal("noop initialize".into()))
     }
 
-    async fn derive_master_key_from_keyslot(
+    async fn unlock(
         &self,
-        _keyslot_blob: &[u8],
-        _passphrase: SecretString,
-    ) -> Result<MasterKey> {
-        Err(anyhow::anyhow!("noop crypto cannot derive master key"))
+        _space_id: &SpaceId,
+        _passphrase: &DomainPassphrase,
+    ) -> Result<ActiveSpace, SpaceAccessError> {
+        Err(SpaceAccessError::Internal("noop unlock".into()))
+    }
+
+    async fn is_unlocked(&self, _space_id: &SpaceId) -> bool {
+        false
+    }
+
+    async fn lock(&self, _space_id: &SpaceId) -> Result<(), SpaceAccessError> {
+        Err(SpaceAccessError::Internal("noop lock".into()))
+    }
+
+    async fn prepare_join_offer(
+        &self,
+        _space_id: &SpaceId,
+        _passphrase: &DomainPassphrase,
+    ) -> Result<JoinOffer, SpaceAccessError> {
+        Err(SpaceAccessError::Internal("noop prepare_join_offer".into()))
+    }
+
+    async fn derive_master_key_for_proof(
+        &self,
+        _offer: &JoinOffer,
+        _passphrase: &DomainPassphrase,
+    ) -> Result<MasterKey, SpaceAccessError> {
+        Err(SpaceAccessError::Internal(
+            "noop derive_master_key_for_proof".into(),
+        ))
     }
 }
 
@@ -383,7 +400,7 @@ pub(crate) fn build_harness(opts: HarnessOptions) -> TestHarness {
         space_access_facade,
         Arc::new(FakeDiscovery),
         Arc::new(FakeNetworkControl),
-        Arc::new(NoopCryptoFactory),
+        Arc::new(NoopSpaceAccess),
         Arc::new(FakePairingTransport),
         Arc::new(Mutex::new(FakeSpaceAccessTransport)),
         Arc::new(FakeProof {

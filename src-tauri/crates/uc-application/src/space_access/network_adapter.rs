@@ -38,11 +38,16 @@ impl SpaceAccessTransportPort for SpaceAccessNetworkAdapter {
                 .ok_or_else(|| anyhow::anyhow!("missing prepared_offer in space access context"))?
         };
 
+        // 保持 wire 格式与旧实现字面等价: `nonce` 字段承载 challenge_nonce 字节,
+        // `keyslot` 字段是嵌套的 KeySlot JSON 对象（不是字节数组或 base64）。
+        // adapter 侧的 keyslot_blob 已是序列化后的 JSON 字节,这里反序列化为 Value
+        // 再 inline,确保字节级兼容现网 joiner。
+        let keyslot_value: serde_json::Value = serde_json::from_slice(&offer.keyslot_blob)?;
         let payload = serde_json::json!({
             "kind": "space_access_offer",
             "space_id": offer.space_id.as_str(),
-            "nonce": offer.nonce,
-            "keyslot": offer.keyslot,
+            "nonce": offer.challenge_nonce,
+            "keyslot": keyslot_value,
         });
         let payload = serde_json::to_string(&payload)?;
 

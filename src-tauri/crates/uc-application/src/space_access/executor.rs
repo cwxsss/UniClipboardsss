@@ -1,8 +1,12 @@
-use uc_core::ports::space::{CryptoPort, PersistencePort, ProofPort, SpaceAccessTransportPort};
+use uc_core::crypto::domain::Passphrase;
+use uc_core::ports::space::{
+    PersistencePort, ProofPort, SpaceAccessPort, SpaceAccessTransportPort,
+};
 use uc_core::ports::TimerPort;
 
 pub struct SpaceAccessExecutor<'a> {
-    pub crypto: &'a dyn CryptoPort,
+    pub space_access: &'a dyn SpaceAccessPort,
+    pub passphrase: &'a Passphrase,
     pub transport: &'a mut dyn SpaceAccessTransportPort,
     pub proof: &'a dyn ProofPort,
     pub timer: &'a mut dyn TimerPort,

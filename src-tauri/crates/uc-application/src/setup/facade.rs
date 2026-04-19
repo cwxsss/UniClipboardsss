@@ -46,7 +46,9 @@ use super::usecases::{
     StartNewSpaceUseCase, StartSponsorAuthorizationForJoinerUseCase,
     SubmitNewSpacePassphraseUseCase, VerifyJoinPassphraseUseCase,
 };
-use crate::space_access::{SpaceAccessCryptoFactory, SpaceAccessFacade};
+use uc_core::ports::space::SpaceAccessPort;
+
+use crate::space_access::SpaceAccessFacade;
 
 /// Stable application-layer entry point for the setup module.
 ///
@@ -92,7 +94,7 @@ impl SetupFacade {
         space_access_facade: Arc<SpaceAccessFacade>,
         discovery_port: Arc<dyn DiscoveryPort>,
         network_control: Arc<dyn NetworkControlPort>,
-        crypto_factory: Arc<dyn SpaceAccessCryptoFactory>,
+        space_access_port: Arc<dyn SpaceAccessPort>,
         pairing_transport: Arc<dyn PairingTransportPort>,
         transport_port: Arc<Mutex<dyn SpaceAccessTransportPort>>,
         proof_port: Arc<dyn ProofPort>,
@@ -111,7 +113,7 @@ impl SetupFacade {
             space_access_facade,
             discovery_port,
             network_control,
-            crypto_factory,
+            space_access_port,
             pairing_transport,
             transport_port,
             proof_port,

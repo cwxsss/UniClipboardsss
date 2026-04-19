@@ -1160,15 +1160,14 @@ pub fn build_setup_facade(
             lifecycle_emitter: ports.lifecycle_emitter,
         },
     ));
-    let crypto_factory = Arc::new(
-        uc_application::space_access::DefaultSpaceAccessCryptoFactory::new(
+    let space_access_port: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
+        Arc::new(uc_infra::security::DefaultSpaceAccessAdapter::new(
             deps.security.encryption.clone(),
             deps.security.key_material.clone(),
             deps.security.key_scope.clone(),
             deps.security.encryption_state.clone(),
             deps.security.encryption_session.clone(),
-        ),
-    );
+        ));
     let transport_port: Arc<TokioMutex<dyn SpaceAccessTransportPort>> = Arc::new(TokioMutex::new(
         uc_application::space_access::SpaceAccessNetworkAdapter::new(
             deps.network_ports.pairing.clone(),
@@ -1199,7 +1198,7 @@ pub fn build_setup_facade(
         ports.space_access_facade,
         ports.discovery_port,
         deps.network_control.clone(),
-        crypto_factory,
+        space_access_port,
         deps.network_ports.pairing.clone(),
         transport_port,
         proof_port,

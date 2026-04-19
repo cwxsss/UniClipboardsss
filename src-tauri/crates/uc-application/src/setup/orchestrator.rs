@@ -7,18 +7,17 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use rand::RngCore;
 use tokio::sync::Mutex;
 use tracing::{error, info, info_span, warn, Instrument};
 
 use uc_core::{
     crypto::{
-        model::{KeySlot, KeySlotFile, Passphrase},
+        domain::Passphrase as DomainPassphrase,
+        model::{KeySlotFile, Passphrase},
         SecretString,
     },
     ids::{SessionId, SpaceId},
-    ports::space::CryptoPort,
-    ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
+    ports::space::{PersistencePort, ProofPort, SpaceAccessPort, SpaceAccessTransportPort},
     ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort},
     setup::SetupStatus,
     space_access::{
@@ -35,9 +34,7 @@ use crate::setup::ports::{SetupAppLifecyclePort, SetupInitializeEncryptionPort};
 use crate::setup::{
     SetupEvent, SetupEventPort, SetupPairingFacadePort, SetupState, SetupStateMachine,
 };
-use crate::space_access::{
-    SpaceAccessCryptoFactory, SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer,
-};
+use crate::space_access::{SpaceAccessExecutor, SpaceAccessFacade, SpaceAccessJoinerOffer};
 
 /// Errors produced by the setup orchestrator.
 #[derive(Debug, thiserror::Error)]
@@ -79,58 +76,6 @@ pub struct SetupOrchestrator {
     pub(super) action_executor: Arc<SetupActionExecutor>,
 }
 
-struct LoadedKeyslotSpaceAccessCrypto {
-    keyslot_file: KeySlotFile,
-}
-
-#[async_trait::async_trait]
-impl CryptoPort for LoadedKeyslotSpaceAccessCrypto {
-    async fn generate_nonce32(&self) -> [u8; 32] {
-        let mut nonce = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        nonce
-    }
-
-    async fn export_keyslot_blob(&self, _space_id: &SpaceId) -> anyhow::Result<KeySlot> {
-        Ok(self.keyslot_file.clone().into())
-    }
-
-    async fn derive_master_key_from_keyslot(
-        &self,
-        _keyslot_blob: &[u8],
-        _passphrase: SecretString,
-    ) -> anyhow::Result<uc_core::crypto::MasterKey> {
-        Err(anyhow::anyhow!(
-            "loaded keyslot crypto cannot derive master key in sponsor flow"
-        ))
-    }
-}
-
-struct NoopRuntimeSpaceAccessCrypto;
-
-#[async_trait::async_trait]
-impl CryptoPort for NoopRuntimeSpaceAccessCrypto {
-    async fn generate_nonce32(&self) -> [u8; 32] {
-        [0u8; 32]
-    }
-
-    async fn export_keyslot_blob(&self, _space_id: &SpaceId) -> anyhow::Result<KeySlot> {
-        Err(anyhow::anyhow!(
-            "noop runtime space access crypto cannot export keyslot"
-        ))
-    }
-
-    async fn derive_master_key_from_keyslot(
-        &self,
-        _keyslot_blob: &[u8],
-        _passphrase: SecretString,
-    ) -> anyhow::Result<uc_core::crypto::MasterKey> {
-        Err(anyhow::anyhow!(
-            "noop runtime space access crypto cannot derive master key"
-        ))
-    }
-}
-
 impl SetupOrchestrator {
     pub fn new(
         initialize_encryption: Arc<dyn SetupInitializeEncryptionPort>,
@@ -142,7 +87,7 @@ impl SetupOrchestrator {
         space_access_facade: Arc<SpaceAccessFacade>,
         discovery_port: Arc<dyn DiscoveryPort>,
         network_control: Arc<dyn NetworkControlPort>,
-        crypto_factory: Arc<dyn SpaceAccessCryptoFactory>,
+        space_access_port: Arc<dyn SpaceAccessPort>,
         pairing_transport: Arc<dyn PairingTransportPort>,
         transport_port: Arc<Mutex<dyn SpaceAccessTransportPort>>,
         proof_port: Arc<dyn ProofPort>,
@@ -156,7 +101,7 @@ impl SetupOrchestrator {
             setup_event_port,
             discovery_port,
             network_control,
-            crypto_factory,
+            space_access_port,
             pairing_transport,
             transport_port,
             proof_port,
@@ -302,8 +247,11 @@ impl SetupOrchestrator {
 
         let space_id = SpaceId::from(keyslot_file.scope.profile_id.as_str());
         let typed_session_id = SessionId::from(pairing_session_id);
-        self.dispatch_space_access_event_with_crypto(
-            LoadedKeyslotSpaceAccessCrypto { keyslot_file },
+        // Runtime sponsor path: space 已初始化,adapter 走"只读 keyslot"分支,
+        // 传 empty passphrase 作为占位（Branch A 里不参与派生）。
+        let placeholder = DomainPassphrase::new(String::new());
+        self.dispatch_space_access_event(
+            &placeholder,
             SpaceAccessEvent::SponsorAuthorizationRequested {
                 pairing_session_id: typed_session_id.clone(),
                 space_id,
@@ -358,7 +306,7 @@ impl SetupOrchestrator {
             let verified = self
                 .action_executor
                 .proof_port
-                .verify_proof(&proof, expected.nonce)
+                .verify_proof(&proof, expected.challenge_nonce)
                 .await
                 .map_err(|_| SetupError::PairingFailed)?;
 
@@ -376,12 +324,9 @@ impl SetupOrchestrator {
             }
         };
 
-        self.dispatch_space_access_event_with_crypto(
-            NoopRuntimeSpaceAccessCrypto,
-            event,
-            proof.pairing_session_id.clone(),
-        )
-        .await
+        let placeholder = DomainPassphrase::new(String::new());
+        self.dispatch_space_access_event(&placeholder, event, proof.pairing_session_id.clone())
+            .await
     }
 
     pub async fn apply_joiner_space_access_result(
@@ -413,12 +358,9 @@ impl SetupOrchestrator {
             }
         };
 
-        self.dispatch_space_access_event_with_crypto(
-            NoopRuntimeSpaceAccessCrypto,
-            event,
-            typed_session_id,
-        )
-        .await
+        let placeholder = DomainPassphrase::new(String::new());
+        self.dispatch_space_access_event(&placeholder, event, typed_session_id)
+            .await
     }
 
     async fn dispatch(&self, event: SetupEvent) -> Result<SetupState, SetupError> {
@@ -487,20 +429,18 @@ impl SetupOrchestrator {
         }
     }
 
-    async fn dispatch_space_access_event_with_crypto<C>(
+    async fn dispatch_space_access_event(
         &self,
-        crypto: C,
+        passphrase: &DomainPassphrase,
         event: SpaceAccessEvent,
         pairing_session_id: SessionId,
-    ) -> Result<SpaceAccessState, SetupError>
-    where
-        C: CryptoPort,
-    {
+    ) -> Result<SpaceAccessState, SetupError> {
         let mut transport = self.action_executor.transport_port.lock().await;
         let mut timer = self.action_executor.timer_port.lock().await;
         let mut store = self.action_executor.persistence_port.lock().await;
         let mut executor = SpaceAccessExecutor {
-            crypto: &crypto,
+            space_access: self.action_executor.space_access_port.as_ref(),
+            passphrase,
             transport: &mut *transport,
             proof: self.action_executor.proof_port.as_ref(),
             timer: &mut *timer,
