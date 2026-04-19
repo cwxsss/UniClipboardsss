@@ -23,6 +23,9 @@
 
 use std::io::{Cursor, Read, Write};
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use chacha20poly1305::{
     aead::{Aead, Payload},
     KeyInit, XChaCha20Poly1305, XNonce,
@@ -31,7 +34,8 @@ use tracing::info_span;
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
 use uc_core::crypto::{aad, model::MasterKey};
 use uc_core::ports::{
-    TransferCryptoError, TransferPayloadDecryptorPort, TransferPayloadEncryptorPort,
+    EncryptionSessionPort, TransferCipherError, TransferCipherPort, TransferCryptoError,
+    TransferPayloadDecryptorPort, TransferPayloadEncryptorPort,
 };
 use uuid::Uuid;
 
@@ -502,6 +506,122 @@ impl TransferPayloadDecryptorPort for TransferPayloadDecryptorAdapter {
                 "unrecognized wire format magic bytes".into(),
             ))
         }
+    }
+}
+
+/// `TransferCipherPort` 的基础设施适配器。
+///
+/// 端到端会话管理：内部持有 `EncryptionSessionPort`，自己完成
+/// "会话就绪检查 + 取出 MasterKey"，调用方只需提交字节。
+///
+/// wire format / 压缩 / AEAD 细节全部复用 `ChunkedEncoder` / `ChunkedDecoder`，
+/// 与旧 `TransferPayloadEncryptorAdapter` / `TransferPayloadDecryptorAdapter`
+/// 的字节级行为完全一致（保证用户既有密文可解、设备间协议兼容）。
+pub struct TransferCipherAdapter {
+    session: Arc<dyn EncryptionSessionPort>,
+}
+
+impl TransferCipherAdapter {
+    pub fn new(session: Arc<dyn EncryptionSessionPort>) -> Self {
+        Self { session }
+    }
+
+    /// 内部：从会话取 MasterKey，未就绪时返回 `NotUnlocked`。
+    async fn current_master_key(&self) -> Result<MasterKey, TransferCipherError> {
+        if !self.session.is_ready().await {
+            return Err(TransferCipherError::NotUnlocked);
+        }
+        self.session
+            .get_master_key()
+            .await
+            .map_err(|e| TransferCipherError::Internal(e.to_string()))
+    }
+}
+
+#[async_trait]
+impl TransferCipherPort for TransferCipherAdapter {
+    async fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
+        let master_key = self.current_master_key().await?;
+
+        let transfer_id: [u8; 16] = *Uuid::new_v4().as_bytes();
+        let uncompressed_len = u32::try_from(plaintext.len()).map_err(|_| {
+            TransferCipherError::Internal(format!(
+                "plaintext length {} exceeds u32::MAX",
+                plaintext.len()
+            ))
+        })?;
+
+        let (data_to_encrypt, compression_algo) = if plaintext.len() > COMPRESSION_THRESHOLD {
+            let _guard = info_span!("transfer.compress", input_len = plaintext.len()).entered();
+            let compressed = compress_zstd(plaintext, ZSTD_LEVEL)
+                .map_err(|e| TransferCipherError::Internal(format!("compression failed: {e}")))?;
+
+            if compressed.len() < plaintext.len() {
+                (compressed, 1u8)
+            } else {
+                (plaintext.to_vec(), 0u8)
+            }
+        } else {
+            (plaintext.to_vec(), 0u8)
+        };
+
+        let mut buf = Vec::new();
+        {
+            let _guard =
+                info_span!("transfer.chunked_encrypt", data_len = data_to_encrypt.len()).entered();
+            ChunkedEncoder::encode_to(
+                &mut buf,
+                &master_key,
+                &transfer_id,
+                &data_to_encrypt,
+                compression_algo,
+                uncompressed_len,
+            )
+            .map_err(map_chunked_error_for_encrypt)?;
+        }
+        Ok(buf)
+    }
+
+    async fn decrypt(&self, encrypted: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
+        let master_key = self.current_master_key().await?;
+
+        if encrypted.len() < 4 {
+            return Err(TransferCipherError::InvalidFormat);
+        }
+        if encrypted[0..4] != V3_MAGIC {
+            return Err(TransferCipherError::InvalidFormat);
+        }
+        ChunkedDecoder::decode_from(Cursor::new(encrypted), &master_key)
+            .map_err(map_chunked_error_for_decrypt)
+    }
+}
+
+fn map_chunked_error_for_encrypt(e: ChunkedTransferError) -> TransferCipherError {
+    match e {
+        ChunkedTransferError::EncryptFailed(_) => TransferCipherError::EncryptionFailed,
+        ChunkedTransferError::CompressionFailed { reason } => {
+            TransferCipherError::Internal(format!("compression failed: {reason}"))
+        }
+        ChunkedTransferError::Io(err) => TransferCipherError::Internal(format!("IO error: {err}")),
+        other => TransferCipherError::Internal(other.to_string()),
+    }
+}
+
+fn map_chunked_error_for_decrypt(e: ChunkedTransferError) -> TransferCipherError {
+    match e {
+        ChunkedTransferError::DecryptFailed { .. } => TransferCipherError::DecryptionFailed,
+        ChunkedTransferError::DecompressionFailed { .. }
+        | ChunkedTransferError::InvalidCompressionAlgo { .. }
+        | ChunkedTransferError::InvalidMagic
+        | ChunkedTransferError::TruncatedHeader
+        | ChunkedTransferError::TruncatedChunk
+        | ChunkedTransferError::InvalidCiphertextLen { .. }
+        | ChunkedTransferError::InvalidHeader { .. } => TransferCipherError::InvalidFormat,
+        ChunkedTransferError::EncryptFailed(_) => TransferCipherError::DecryptionFailed,
+        ChunkedTransferError::CompressionFailed { reason } => {
+            TransferCipherError::Internal(format!("compression failed: {reason}"))
+        }
+        ChunkedTransferError::Io(err) => TransferCipherError::Internal(format!("IO error: {err}")),
     }
 }
 

@@ -25,7 +25,7 @@ pub fn new_in_memory_change_origin(
     std::sync::Arc::new(change_origin::InMemoryClipboardChangeOrigin::new())
 }
 pub use chunked_transfer::{
-    ChunkedDecoder, ChunkedEncoder, TransferPayloadDecryptorAdapter,
+    ChunkedDecoder, ChunkedEncoder, TransferCipherAdapter, TransferPayloadDecryptorAdapter,
     TransferPayloadEncryptorAdapter,
 };
 pub use durable_spool_queue::DurableSpoolQueue;
