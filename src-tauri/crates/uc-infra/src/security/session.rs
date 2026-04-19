@@ -9,7 +9,9 @@
 use std::sync::{Arc, Mutex};
 
 use tracing::{debug, debug_span};
-use uc_core::crypto::model::{EncryptionError, MasterKey};
+use uc_core::crypto::model::EncryptionError;
+
+use super::secrets::MasterKey;
 
 #[derive(Debug)]
 struct State {

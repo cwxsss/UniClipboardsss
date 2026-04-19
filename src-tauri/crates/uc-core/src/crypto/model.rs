@@ -153,50 +153,9 @@ pub struct EncryptedBlob {
     pub aad_fingerprint: Option<Vec<u8>>,
 }
 
-/// Secrets (newtypes)
-/// =========================
-
-/// The data-encryption key (DEK) used to encrypt clipboard blobs.
-///
-/// - 32 bytes is suitable for XChaCha20-Poly1305 / AES-256-GCM keys.
-/// - Do NOT implement Serialize/Deserialize.
-/// - Consider adding `zeroize` to wipe on drop in adapters.
-/// TODO: Remove Clone trait.
-#[derive(Clone, PartialEq, Eq)]
-pub struct MasterKey(pub [u8; 32]);
-
-impl fmt::Debug for MasterKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "MasterKey([REDACTED])")
-    }
-}
-
-impl MasterKey {
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    pub fn generate() -> Result<Self, EncryptionError> {
-        let mut buf = [0u8; Self::LEN];
-        OsRng
-            .try_fill_bytes(&mut buf)
-            .map_err(|_| EncryptionError::CryptoFailure)?;
-        Self::from_bytes(&buf)
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, EncryptionError> {
-        if bytes.len() != Self::LEN {
-            return Err(EncryptionError::InvalidParameter(format!(
-                "invalid MasterKey length: expected {}, got {}",
-                Self::LEN,
-                bytes.len()
-            )));
-        }
-        let mut mk_bytes = [0u8; Self::LEN];
-        mk_bytes.copy_from_slice(bytes);
-        Ok(MasterKey(mk_bytes))
-    }
-}
+// Slice 4 (B.4.5) 起 `MasterKey` 与 `Kek` 物理下沉到 uc-infra
+// (`crates/uc-infra/src/security/secrets.rs`)——它们是运行时密钥物料,只在
+// adapter 层出现,从不跨过 port 边界,uc-core 不再暴露。
 
 /// Passphrase provided by user. Only used to derive KEK inside use cases.
 /// Avoid storing this beyond the unlock/initialize flow.
@@ -212,39 +171,6 @@ impl fmt::Debug for Passphrase {
 impl Passphrase {
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
-    }
-}
-
-/// The key-encryption key (KEK) derived from passphrase via KDF.
-/// KEK is used ONLY to wrap/unwrap the MasterKey.
-///
-/// Keep KEK ephemeral (avoid long-lived storage).
-/// TODO: consider adding `zeroize` to wipe on drop in adapters, disable derive(Debug).
-#[derive(Clone, PartialEq, Eq)]
-pub struct Kek(pub [u8; 32]);
-
-impl fmt::Debug for Kek {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Kek([REDACTED])")
-    }
-}
-
-impl Kek {
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, EncryptionError> {
-        if bytes.len() != Self::LEN {
-            return Err(EncryptionError::InvalidParameter(format!(
-                "invalid KEK length: expected {}, got {}",
-                Self::LEN,
-                bytes.len()
-            )));
-        }
-        let mut kek_bytes = [0u8; Self::LEN];
-        kek_bytes.copy_from_slice(bytes);
-        Ok(Kek(kek_bytes))
     }
 }
 
@@ -387,13 +313,4 @@ impl EncryptedBlob {
 
         Ok(())
     }
-}
-
-/// Helpers for KEK/MasterKey conversions (optional, keep domain clean).
-impl MasterKey {
-    pub const LEN: usize = 32;
-}
-
-impl Kek {
-    pub const LEN: usize = 32;
 }

@@ -19,8 +19,10 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use uc_core::crypto::domain::{ActiveSpace, Passphrase as DomainPassphrase};
 use uc_core::crypto::model::{
-    EncryptionError, KeyScope, KeySlot, MasterKey, Passphrase as LegacyPassphrase, WrappedMasterKey,
+    EncryptionError, KeyScope, KeySlot, Passphrase as LegacyPassphrase, WrappedMasterKey,
 };
+
+use super::secrets::MasterKey;
 use uc_core::crypto::state::EncryptionState;
 use uc_core::ids::SpaceId;
 use uc_core::ports::security::encryption_state::EncryptionStatePort;

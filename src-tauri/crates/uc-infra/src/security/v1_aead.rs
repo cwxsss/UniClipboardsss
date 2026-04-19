@@ -20,7 +20,9 @@ use argon2::Argon2;
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use rand::RngCore;
-use uc_core::crypto::model::{EncryptedBlob, KdfParams, Kek, MasterKey, Passphrase};
+use uc_core::crypto::model::{EncryptedBlob, KdfParams, Passphrase};
+
+use super::secrets::{Kek, MasterKey};
 
 // 字面值常量——与历史 serde enum 输出字节级一致,为磁盘/wire format ironclad
 // 不变量(Slice 4 B.4.1-3 删除四个单变体 enum 后从 adapter 端硬编码)。

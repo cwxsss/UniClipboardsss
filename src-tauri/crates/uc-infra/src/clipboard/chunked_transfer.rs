@@ -31,11 +31,11 @@ use chacha20poly1305::{
 };
 use tracing::info_span;
 use uc_core::config::RECEIVE_PLAINTEXT_CAP;
-use uc_core::crypto::{aad, model::MasterKey};
+use uc_core::crypto::aad;
 use uc_core::ports::{TransferCipherError, TransferCipherPort};
 use uuid::Uuid;
 
-use crate::security::InMemorySession;
+use crate::security::{InMemorySession, MasterKey};
 
 /// Nominal chunk size: 256 KB.
 /// Peak memory per encode or decode call: ~2 x CHUNK_SIZE.

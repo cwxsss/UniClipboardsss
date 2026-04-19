@@ -10,6 +10,7 @@ mod hashing;
 mod identity_fingerprint;
 mod key_material;
 mod scope_identifier;
+mod secrets;
 mod session;
 mod space_access_adapter;
 pub(crate) mod v1_aead;
@@ -27,5 +28,6 @@ pub use identity_fingerprint::{
     Sha256ShortCodeGenerator, ShortCodeGenerator,
 };
 pub use key_material::KeyMaterialStore;
+pub(crate) use secrets::{Kek, MasterKey};
 pub use session::InMemorySession;
 pub use space_access_adapter::DefaultSpaceAccessAdapter;
