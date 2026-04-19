@@ -28,8 +28,10 @@ pub mod errors;
 pub mod file_transfer_repository;
 pub mod file_transport;
 mod hash;
+pub mod local_identity;
 pub mod network_control;
 pub mod network_events;
+pub mod pairing_invitation;
 pub mod pairing_transport;
 pub mod peer_directory;
 pub mod search;
@@ -57,8 +59,12 @@ pub use file_transfer_repository::{
     TrackedFileTransfer, TrackedFileTransferStatus,
 };
 pub use file_transport::{FileTransportPort, NoopFileTransportPort};
+pub use local_identity::{LocalIdentityError, LocalIdentityPort};
 pub use network_control::NetworkControlPort;
 pub use network_events::NetworkEventPort;
+pub use pairing_invitation::{
+    InvitationCode, InvitationError, IssuedInvitation, PairingInvitationPort,
+};
 pub use pairing_transport::PairingTransportPort;
 pub use peer_directory::PeerDirectoryPort;
 pub use search::search_index::SearchIndexPort;
