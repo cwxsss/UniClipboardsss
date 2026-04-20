@@ -2,19 +2,25 @@
 //!
 //! First-run flow on a fresh device:
 //!
+//! 0. Guard: `SetupStatus.has_completed == false`. A second A1 on an
+//!    already-set-up device returns `AlreadySetup` — the user should hit
+//!    A2 (unlock) instead, or factory-reset first.
 //! 1. Validate the passphrase confirmation.
 //! 2. Resolve & persist `device_name` (`Settings.general.device_name`).
 //! 3. `SpaceAccessPort::initialize` — create the encrypted space.
-//! 4. `LocalIdentityPort::create` — generate the Ed25519 identity keypair.
+//! 4. `LocalIdentityPort::ensure` — read or lazily generate the Ed25519
+//!    identity fingerprint. In Slice 1 the iroh endpoint binds its
+//!    identity at bootstrap, so by the time A1 runs the identity already
+//!    exists; `ensure()` returns that existing fingerprint idempotently.
 //! 5. `DeviceIdentityPort::current_device_id` — local UUID.
 //! 6. Persist the owner `SpaceMember` record.
 //! 7. Mark `SetupStatus.has_completed = true`.
 //!
 //! The use case is atomic in intent (all-or-nothing) but relies on
-//! port-level idempotency (space-access `AlreadyInitialized`, local
-//! identity `AlreadyExists`) rather than a distributed transaction —
-//! retry after mid-way failure is expected to either resume from the
-//! failed step or surface the conflict to the caller.
+//! port-level idempotency (space-access `AlreadyInitialized`, identity
+//! `ensure` is idempotent by design) rather than a distributed
+//! transaction — retry after mid-way failure is expected to either resume
+//! from the failed step or surface the conflict to the caller.
 
 use std::sync::Arc;
 
@@ -70,6 +76,19 @@ impl InitializeSpaceUseCase {
         &self,
         cmd: InitializeSpaceCommand,
     ) -> Result<InitializeSpaceResult, InitializeSpaceError> {
+        // 0. Fresh-install guard. Slice 1 moved identity creation to
+        //    bootstrap time (iroh endpoint bind), so identity-existence is
+        //    no longer a reliable "was A1 already run?" signal; the setup
+        //    status flag is.
+        let status = self
+            .setup_status
+            .get_status()
+            .await
+            .map_err(|e| InitializeSpaceError::StorageFailed(e.to_string()))?;
+        if status.has_completed {
+            return Err(InitializeSpaceError::AlreadySetup);
+        }
+
         // 1. Passphrase confirmation.
         if cmd.passphrase != cmd.passphrase_confirm {
             return Err(InitializeSpaceError::PassphraseMismatch);
@@ -88,12 +107,22 @@ impl InitializeSpaceUseCase {
             .map_err(map_initialize_space_access_err)?;
         debug!(%space_id, "space initialised");
 
-        // 4. Generate the local network identity.
-        let fingerprint = self.local_identity.create().await.map_err(|e| match e {
-            LocalIdentityError::AlreadyExists => InitializeSpaceError::IdentityAlreadyExists,
+        // 4. Resolve the local network identity. In Slice 1 the iroh
+        //    endpoint binds its Ed25519 secret at bootstrap time, so
+        //    `ensure()` returns the pre-existing fingerprint here.
+        //    `AlreadyExists` from an older adapter implementation would be
+        //    unexpected (the port's ensure contract is idempotent); map
+        //    it through `StorageFailed` so the caller sees a typed error
+        //    rather than a panic.
+        let fingerprint = self.local_identity.ensure().await.map_err(|e| match e {
             LocalIdentityError::Storage(m) => InitializeSpaceError::StorageFailed(m),
+            LocalIdentityError::AlreadyExists => InitializeSpaceError::StorageFailed(
+                "local identity adapter raised AlreadyExists from ensure(); \
+                 violates LocalIdentityPort idempotency contract"
+                    .into(),
+            ),
         })?;
-        debug!(fingerprint = %fingerprint, "local identity created");
+        debug!(fingerprint = %fingerprint, "local identity resolved");
 
         // 5-6. Build and persist the owner SpaceMember record.
         let device_id = self.device_identity.current_device_id();
@@ -462,6 +491,9 @@ mod tests {
             *h.space_access.initialized.lock().unwrap(),
             "space_access.initialize should have been called"
         );
+        // A1 now calls ensure() rather than create(); the fake funnels
+        // ensure-on-empty through create(), so create_calls still
+        // increments exactly once on the fresh-install path.
         assert_eq!(*h.local_identity.create_calls.lock().unwrap(), 1);
 
         let members = h.member_repo.list().await.unwrap();
@@ -524,12 +556,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identity_already_exists_surfaces_specific_variant() {
+    async fn already_completed_setup_rejects_before_touching_space_access() {
+        let h = build_harness();
+        // Pre-mark setup as done — simulates a second A1 call on a device
+        // that has already onboarded.
+        *h.setup_status.status.lock().unwrap() = SetupStatus {
+            has_completed: true,
+        };
+
+        let err = h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap_err();
+
+        assert!(matches!(err, InitializeSpaceError::AlreadySetup));
+        // Must bail BEFORE any port call so the persisted space stays
+        // untouched.
+        assert!(!*h.space_access.initialized.lock().unwrap());
+        assert_eq!(*h.local_identity.create_calls.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn identity_ensure_adapter_bug_raises_storage_failed() {
+        // The LocalIdentityPort contract says ensure() is idempotent — it
+        // must not raise AlreadyExists. If an adapter violates that, A1
+        // surfaces it as a typed StorageFailed so callers can log/alert
+        // rather than panic.
         let h = build_harness();
         *h.local_identity.create_err.lock().unwrap() = Some(LocalIdentityError::AlreadyExists);
         let err = h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap_err();
-        assert!(matches!(err, InitializeSpaceError::IdentityAlreadyExists));
-        // setup status must NOT be marked complete on identity-create failure.
+        match err {
+            InitializeSpaceError::StorageFailed(msg) => {
+                assert!(msg.contains("idempotency"), "msg was {msg}");
+            }
+            other => panic!("expected StorageFailed, got {other:?}"),
+        }
         let status = h.setup_status.get_status().await.unwrap();
         assert!(!status.has_completed);
     }

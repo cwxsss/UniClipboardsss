@@ -25,11 +25,16 @@ pub enum InitializeSpaceError {
     #[error("space is already initialised")]
     AlreadyInitialized,
 
-    /// A local identity already exists (previous A1/B2 run left state).
-    /// Current policy is loud failure so data inconsistencies are caught;
-    /// the joiner path uses `ensure()` where retry is expected.
-    #[error("local identity already exists")]
-    IdentityAlreadyExists,
+    /// Setup was already completed for this device. Distinct from
+    /// [`AlreadyInitialized`](Self::AlreadyInitialized) at the port layer:
+    /// this variant is raised up-front by the use case when
+    /// `SetupStatus.has_completed == true`, so it fires even if the
+    /// keyslot is somehow missing. Identity lifetime is a bootstrap-time
+    /// concern (the iroh endpoint binds its Ed25519 secret before any A1
+    /// can run), so the "fresh install" guard keys off setup status
+    /// rather than identity existence.
+    #[error("setup has already been completed on this device")]
+    AlreadySetup,
 
     /// Failed to read or persist settings / membership / setup-status —
     /// message carries adapter-level context for logs.
