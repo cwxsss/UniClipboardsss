@@ -26,8 +26,11 @@ use crate::facade::space_setup::deps::SpaceSetupDeps;
 use crate::facade::space_setup::errors::{
     InitializeSpaceError, IssuePairingInvitationError, UnlockSpaceError,
 };
+use crate::membership::usecases::AdmitMemberUseCase;
 use crate::pairing_inbound::orchestrator::PairingInboundOrchestrator;
+use crate::pairing_inbound::sponsor_handshake::SponsorHandshakeCoordinator;
 use crate::pairing_invitation::InMemoryPairingInvitationHolder;
+use crate::trusted_peer::usecases::TrustPeerUseCase;
 use crate::usecases::pairing::issue_invitation::IssuePairingInvitationUseCase;
 use crate::usecases::setup::initialize_space::InitializeSpaceUseCase;
 use crate::usecases::setup::unlock_space::UnlockSpaceUseCase;
@@ -88,22 +91,31 @@ impl SpaceSetupFacade {
             Arc::clone(&clock),
             Arc::clone(&invitation_holder),
         ));
-        // Spawn the sponsor-side inbound event loop. The orchestrator
-        // reuses `SpaceAccessStateMachine` for all handshake transitions
-        // and dispatches actions onto the Slice 1 iroh-native wire.
-        let inbound_orchestrator = Arc::new(PairingInboundOrchestrator::new(
-            pairing_events,
+        // Build the sponsor-side pairing stack: the handshake
+        // coordinator owns wire I/O for the KeyslotOffer→Confirm flow;
+        // the orchestrator composes it with admit/trust use cases so
+        // persistence is done by the already-existing use cases rather
+        // than being duplicated here.
+        let local_device_id = device_identity.current_device_id();
+        let handshake = Arc::new(SponsorHandshakeCoordinator::new(
             pairing_session,
-            pairing_invitation,
-            invitation_holder,
-            clock,
             space_access,
             proof_port,
-            member_repo,
-            trusted_peer_repo,
             local_identity,
-            device_identity,
+            Arc::clone(&device_identity),
             settings,
+        ));
+        let admit_member_uc = Arc::new(AdmitMemberUseCase::new(Arc::clone(&member_repo)));
+        let trust_peer_uc = Arc::new(TrustPeerUseCase::new(trusted_peer_repo));
+        let inbound_orchestrator = Arc::new(PairingInboundOrchestrator::new(
+            pairing_events,
+            pairing_invitation,
+            invitation_holder,
+            Arc::clone(&clock),
+            handshake,
+            admit_member_uc,
+            trust_peer_uc,
+            local_device_id,
         ));
         let pairing_inbound_handle = inbound_orchestrator.spawn();
         Self {

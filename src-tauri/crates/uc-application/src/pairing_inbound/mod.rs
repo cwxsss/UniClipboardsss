@@ -21,3 +21,4 @@
 //! (`SpaceSetupFacade` spawns it during construction).
 
 pub(crate) mod orchestrator;
+pub(crate) mod sponsor_handshake;
