@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use uc_core::membership::MemberRepositoryPort;
+use uc_core::ports::pairing_invitation::PairingInvitationPort;
 use uc_core::ports::space::SpaceAccessPort;
 use uc_core::ports::{
     ClockPort, DeviceIdentityPort, LocalIdentityPort, NetworkControlPort, SettingsPort,
@@ -31,4 +32,11 @@ pub struct SpaceSetupDeps {
     /// Network runtime lifecycle. Auto-started on A1/A2 success (F1) and
     /// stopped by [`super::SpaceSetupFacade::on_shutdown`] (F2).
     pub network_control: Arc<dyn NetworkControlPort>,
+    /// Sponsor-side rendezvous client for issuing invitation codes (B1).
+    ///
+    /// The accompanying in-memory holder for parked invitations is
+    /// constructed **inside** [`super::SpaceSetupFacade::new`] and kept
+    /// `pub(crate)` so application-internal implementation details
+    /// (`uc-application/AGENTS.md` §11.4) stay off the bootstrap surface.
+    pub pairing_invitation: Arc<dyn PairingInvitationPort>,
 }

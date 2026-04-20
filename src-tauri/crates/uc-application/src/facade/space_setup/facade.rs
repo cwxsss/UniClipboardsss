@@ -16,22 +16,29 @@ use tracing::{instrument, warn};
 use uc_core::ports::NetworkControlPort;
 
 use crate::facade::space_setup::commands::{
-    InitializeSpaceCommand, InitializeSpaceResult, UnlockSpaceCommand, UnlockSpaceResult,
+    InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
+    UnlockSpaceCommand, UnlockSpaceResult,
 };
 use crate::facade::space_setup::deps::SpaceSetupDeps;
-use crate::facade::space_setup::errors::{InitializeSpaceError, UnlockSpaceError};
+use crate::facade::space_setup::errors::{
+    InitializeSpaceError, IssuePairingInvitationError, UnlockSpaceError,
+};
+use crate::pairing_invitation::InMemoryPairingInvitationHolder;
+use crate::usecases::pairing::issue_invitation::IssuePairingInvitationUseCase;
 use crate::usecases::setup::initialize_space::InitializeSpaceUseCase;
 use crate::usecases::setup::unlock_space::UnlockSpaceUseCase;
 
-/// Space-lifecycle facade (A1 initialise, A2 unlock, F2 shutdown).
+/// Space-lifecycle facade (A1 initialise, A2 unlock, B1 issue invitation,
+/// F2 shutdown).
 pub struct SpaceSetupFacade {
     initialize_space: Arc<InitializeSpaceUseCase>,
     unlock_space: Arc<UnlockSpaceUseCase>,
+    issue_pairing_invitation: Arc<IssuePairingInvitationUseCase>,
     network_control: Arc<dyn NetworkControlPort>,
 }
 
 impl SpaceSetupFacade {
-    /// Wire both use cases from a single [`SpaceSetupDeps`] bundle.
+    /// Wire all use cases from a single [`SpaceSetupDeps`] bundle.
     pub fn new(deps: SpaceSetupDeps) -> Self {
         let SpaceSetupDeps {
             space_access,
@@ -42,21 +49,33 @@ impl SpaceSetupFacade {
             settings,
             clock,
             network_control,
+            pairing_invitation,
         } = deps;
+
+        // Invitation holder is purely an internal flow-state component
+        // (§11.4) — construct it here so bootstrap never sees the type.
+        let invitation_holder = Arc::new(InMemoryPairingInvitationHolder::new());
 
         let initialize_space = Arc::new(InitializeSpaceUseCase::new(
             Arc::clone(&space_access),
             local_identity,
-            device_identity,
+            Arc::clone(&device_identity),
             member_repo,
             Arc::clone(&setup_status),
             settings,
-            clock,
+            Arc::clone(&clock),
         ));
         let unlock_space = Arc::new(UnlockSpaceUseCase::new(space_access, setup_status));
+        let issue_pairing_invitation = Arc::new(IssuePairingInvitationUseCase::new(
+            pairing_invitation,
+            device_identity,
+            clock,
+            invitation_holder,
+        ));
         Self {
             initialize_space,
             unlock_space,
+            issue_pairing_invitation,
             network_control,
         }
     }
@@ -83,6 +102,19 @@ impl SpaceSetupFacade {
         let out = self.unlock_space.execute(cmd).await?;
         self.auto_start_network().await;
         Ok(out)
+    }
+
+    /// B1 · Ask the rendezvous service for a fresh invitation code and
+    /// park the resulting aggregate in the application-layer holder.
+    ///
+    /// Does **not** auto-start the network: the adapter surfaces
+    /// [`IssuePairingInvitationError::NetworkNotStarted`] if the runtime
+    /// isn't up, letting the UI prompt the user to complete A1/A2 first.
+    #[instrument(skip_all)]
+    pub async fn issue_pairing_invitation(
+        &self,
+    ) -> Result<IssuePairingInvitationResult, IssuePairingInvitationError> {
+        self.issue_pairing_invitation.execute().await
     }
 
     /// F2 · Shut the network runtime down cleanly on app exit.
@@ -127,9 +159,15 @@ mod tests {
 
     use async_trait::async_trait;
 
+    use chrono::{DateTime, Utc};
+
     use uc_core::crypto::domain::{ActiveSpace, Passphrase};
     use uc_core::ids::{DeviceId, SpaceId};
     use uc_core::membership::{MembershipError, SpaceMember};
+    use uc_core::pairing::invitation::InvitationCode;
+    use uc_core::ports::pairing_invitation::{
+        InvitationError, IssuedInvitation, PairingInvitationPort,
+    };
     use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
     use uc_core::ports::{
         ClockPort, DeviceIdentityPort, LocalIdentityError, LocalIdentityPort, NetworkControlPort,
@@ -334,6 +372,28 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeInvitationPort {
+        calls: StdMutex<u32>,
+        next_err: StdMutex<Option<InvitationError>>,
+    }
+
+    #[async_trait]
+    impl PairingInvitationPort for FakeInvitationPort {
+        async fn issue_invitation(&self) -> Result<IssuedInvitation, InvitationError> {
+            *self.calls.lock().unwrap() += 1;
+            if let Some(err) = self.next_err.lock().unwrap().take() {
+                return Err(err);
+            }
+            Ok(IssuedInvitation {
+                code: InvitationCode::new("SMOKE-0001"),
+                expires_at: DateTime::parse_from_rfc3339("2026-04-20T10:05:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            })
+        }
+    }
+
     fn default_fingerprint() -> IdentityFingerprint {
         IdentityFingerprint::from_raw_string("ABCDEFGHIJKLMNOP").unwrap()
     }
@@ -342,8 +402,13 @@ mod tests {
         space_access: Arc<dyn SpaceAccessPort>,
         setup_status: Arc<dyn SetupStatusPort>,
         settings: Arc<dyn SettingsPort>,
-    ) -> (SpaceSetupFacade, Arc<FakeNetworkControl>) {
+    ) -> (
+        SpaceSetupFacade,
+        Arc<FakeNetworkControl>,
+        Arc<FakeInvitationPort>,
+    ) {
         let network_control = Arc::new(FakeNetworkControl::default());
+        let pairing_invitation = Arc::new(FakeInvitationPort::default());
         let facade = SpaceSetupFacade::new(SpaceSetupDeps {
             space_access,
             local_identity: Arc::new(FakeLocalIdentity {
@@ -357,8 +422,9 @@ mod tests {
             settings,
             clock: Arc::new(FixedClock(0)),
             network_control: network_control.clone(),
+            pairing_invitation: pairing_invitation.clone(),
         });
-        (facade, network_control)
+        (facade, network_control, pairing_invitation)
     }
 
     fn settings_with_device_name(name: &str) -> Arc<InMemorySettings> {
@@ -374,7 +440,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_forwards_happy_path() {
-        let (facade, _net) = make_facade(
+        let (facade, _net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -390,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_forwards_passphrase_mismatch() {
-        let (facade, _net) = make_facade(
+        let (facade, _net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -410,7 +476,7 @@ mod tests {
         *setup_status.status.lock().unwrap() = SetupStatus {
             has_completed: true,
         };
-        let (facade, _net) = make_facade(
+        let (facade, _net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -423,7 +489,7 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_space_forwards_setup_not_completed() {
-        let (facade, _net) = make_facade(
+        let (facade, _net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -443,7 +509,7 @@ mod tests {
         };
         let space_access = FakeSpaceAccess::default();
         *space_access.unlock_err.lock().unwrap() = Some(SpaceAccessError::WrongPassphrase);
-        let (facade, _net) = make_facade(
+        let (facade, _net, _inv) = make_facade(
             Arc::new(space_access),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -459,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_success_starts_network() {
-        let (facade, net) = make_facade(
+        let (facade, net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -476,7 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_failure_does_not_start_network() {
-        let (facade, net) = make_facade(
+        let (facade, net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -500,7 +566,7 @@ mod tests {
         *setup_status.status.lock().unwrap() = SetupStatus {
             has_completed: true,
         };
-        let (facade, net) = make_facade(
+        let (facade, net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -514,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_space_failure_does_not_start_network() {
-        let (facade, net) = make_facade(
+        let (facade, net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -532,7 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_network_failure_does_not_fail_initialize_space() {
-        let (facade, net) = make_facade(
+        let (facade, net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -553,7 +619,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_shutdown_stops_network() {
-        let (facade, net) = make_facade(
+        let (facade, net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -561,5 +627,49 @@ mod tests {
         facade.on_shutdown().await;
         assert_eq!(net.stop_calls(), 1);
         assert_eq!(net.start_calls(), 0);
+    }
+
+    // ── B1 · issue pairing invitation wiring ─────────────────────────────
+
+    #[tokio::test]
+    async fn issue_pairing_invitation_forwards_happy_path() {
+        let (facade, _net, inv) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        let out = facade.issue_pairing_invitation().await.expect("B1 ok");
+        assert_eq!(out.code.as_str(), "SMOKE-0001");
+        assert_eq!(*inv.calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn issue_pairing_invitation_forwards_network_not_started() {
+        let (facade, _net, inv) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        *inv.next_err.lock().unwrap() = Some(InvitationError::NetworkNotStarted);
+        let err = facade.issue_pairing_invitation().await.unwrap_err();
+        assert!(matches!(
+            err,
+            IssuePairingInvitationError::NetworkNotStarted
+        ));
+    }
+
+    #[tokio::test]
+    async fn issue_pairing_invitation_does_not_auto_start_network() {
+        let (facade, net, _inv) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        facade.issue_pairing_invitation().await.expect("B1 ok");
+        assert_eq!(
+            net.start_calls(),
+            0,
+            "B1 is not a space-lifecycle action and must not touch network runtime",
+        );
     }
 }

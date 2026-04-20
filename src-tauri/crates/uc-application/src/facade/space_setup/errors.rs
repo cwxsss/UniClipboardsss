@@ -42,6 +42,31 @@ pub enum InitializeSpaceError {
     Internal(String),
 }
 
+/// Failure modes of B1 `IssuePairingInvitationUseCase`.
+///
+/// Mirrors
+/// [`uc_core::ports::pairing_invitation::InvitationError`] at the
+/// application boundary, keeping the upstream-port variant names so UI
+/// can branch on intent ("start network" vs. "retry later") without
+/// having to import the infra-port enum.
+#[derive(Debug, Error)]
+pub enum IssuePairingInvitationError {
+    /// Underlying network runtime has not been started. UI should surface
+    /// "start network first" (A1/A2 completing auto-starts it, so this
+    /// typically means startup failed earlier and the user needs to retry).
+    #[error("network is not started")]
+    NetworkNotStarted,
+
+    /// Rendezvous service unreachable / transient failure. UI may offer a
+    /// manual retry.
+    #[error("pairing invitation service unavailable")]
+    ServiceUnavailable,
+
+    /// Uncategorised adapter-side failure; message for logs only.
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
 /// Failure modes of A2 `UnlockSpaceUseCase`.
 #[derive(Debug, Error)]
 pub enum UnlockSpaceError {

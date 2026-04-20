@@ -15,8 +15,9 @@ mod errors;
 mod facade;
 
 pub use commands::{
-    InitializeSpaceCommand, InitializeSpaceResult, UnlockSpaceCommand, UnlockSpaceResult,
+    InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
+    UnlockSpaceCommand, UnlockSpaceResult,
 };
 pub use deps::SpaceSetupDeps;
-pub use errors::{InitializeSpaceError, UnlockSpaceError};
+pub use errors::{InitializeSpaceError, IssuePairingInvitationError, UnlockSpaceError};
 pub use facade::SpaceSetupFacade;

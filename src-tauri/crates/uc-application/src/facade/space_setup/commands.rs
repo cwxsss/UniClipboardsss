@@ -3,8 +3,11 @@
 //! Each pair models one external-facing application action; keep them free
 //! of cross-cutting domain types and do not add query shape here.
 
+use chrono::{DateTime, Utc};
+
 use uc_core::crypto::domain::Passphrase;
 use uc_core::ids::{DeviceId, SpaceId};
+use uc_core::pairing::InvitationCode;
 use uc_core::security::IdentityFingerprint;
 
 // ---------------------------------------------------------------------------
@@ -49,4 +52,18 @@ pub struct UnlockSpaceCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockSpaceResult {
     pub space_id: SpaceId,
+}
+
+// ---------------------------------------------------------------------------
+// B1 · IssuePairingInvitation
+// ---------------------------------------------------------------------------
+
+/// Output of a successful B1 invitation issuance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuePairingInvitationResult {
+    /// Short human-typable code the sponsor shows to the joiner.
+    pub code: InvitationCode,
+    /// Server-authoritative expiry; UI should display a countdown from
+    /// this value rather than computing its own.
+    pub expires_at: DateTime<Utc>,
 }

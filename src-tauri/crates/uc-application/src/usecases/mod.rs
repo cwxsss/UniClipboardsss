@@ -8,4 +8,5 @@
 //! here stays `pub(crate)`: external crates reach them exclusively through
 //! `AppFacade`.
 
+pub(crate) mod pairing;
 pub(crate) mod setup;
