@@ -11944,6 +11944,7 @@ dependencies = [
  "libsqlite3-sys",
  "log",
  "mockall 0.13.1",
+ "postcard",
  "rand 0.9.2",
  "reqwest",
  "serde",

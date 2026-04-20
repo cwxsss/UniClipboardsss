@@ -72,6 +72,8 @@ zstd = { version = "0.13", features = ["zstdmt"] }
 iroh = "0.95.1"
 iroh-blobs = "0.95"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Slice 1 pairing session wire codec — binary, compact, serde-compatible.
+postcard = { version = "1", features = ["use-std"] }
 
 [dependencies.uuid]
 version = "1.10.0"
