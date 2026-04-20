@@ -1,3 +1,5 @@
+#![allow(deprecated)] // frozen libp2p wiring (PairingTransportPort / NetworkEventPort) — dropped in Slice 5
+
 //! # Application Dependencies / 应用依赖
 //!
 //! This module defines the dependency grouping for App construction.

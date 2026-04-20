@@ -1,3 +1,5 @@
+#![allow(deprecated)] // frozen libp2p NetworkEventPort consumer; replaced in Slice 5
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

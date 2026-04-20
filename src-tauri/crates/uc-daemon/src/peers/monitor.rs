@@ -1,3 +1,5 @@
+#![allow(deprecated)] // legacy NetworkEventPort subscription; replaced in Slice 5
+
 //! # PeerMonitor
 //!
 //! Dedicated [`DaemonService`] that subscribes to network events and emits

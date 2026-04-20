@@ -1,3 +1,5 @@
+#![allow(deprecated)] // bridges legacy PairingTransportPort; replaced in Slice 5
+
 //! Setup orchestrator.
 //!
 //! This module coordinates the setup state machine transitions and delegates

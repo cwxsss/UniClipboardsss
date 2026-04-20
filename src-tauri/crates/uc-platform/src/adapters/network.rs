@@ -1,6 +1,8 @@
 //! Placeholder network port implementation
 //! 占位符网络端口实现
 
+#![allow(deprecated)] // frozen libp2p path; legacy PairingTransportPort removed in Slice 5
+
 use anyhow::Result;
 use async_trait::async_trait;
 use uc_core::network::PairingMessage;

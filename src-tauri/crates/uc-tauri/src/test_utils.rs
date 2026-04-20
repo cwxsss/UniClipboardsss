@@ -1,3 +1,5 @@
+#![allow(deprecated)] // uses legacy PairingTransportPort for test fakes; replaced in Slice 5
+
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;

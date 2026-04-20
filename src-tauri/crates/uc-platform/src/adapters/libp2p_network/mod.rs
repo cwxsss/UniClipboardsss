@@ -1,3 +1,4 @@
+#![allow(deprecated)] // frozen libp2p path; legacy PairingTransportPort/NetworkEventPort will be removed in Slice 5
 mod address_registry;
 mod behaviour;
 mod business_command;

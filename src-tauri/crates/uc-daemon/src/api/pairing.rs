@@ -1,3 +1,5 @@
+#![allow(deprecated)] // legacy PairingTransportPort; replaced in Slice 5
+
 //! HTTP route handlers for pairing endpoints.
 //!
 //! Provides pairing lifecycle management: initiate, accept, reject, cancel, verify,

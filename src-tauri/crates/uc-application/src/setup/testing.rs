@@ -1,3 +1,5 @@
+#![allow(deprecated)] // bridges legacy PairingTransportPort; replaced in Slice 5
+
 //! Test-only scaffolding for setup UseCases (phase B.6).
 //!
 //! Assembles a `SetupOrchestrator` with a minimal set of fake ports so that

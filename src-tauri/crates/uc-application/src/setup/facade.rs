@@ -1,3 +1,5 @@
+#![allow(deprecated)] // bridges legacy PairingTransportPort; replaced in Slice 5
+
 //! `SetupFacade` — stable application-layer entry point for setup (phase B.4).
 //!
 //! # Architecture

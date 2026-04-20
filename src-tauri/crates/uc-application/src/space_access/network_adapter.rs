@@ -1,3 +1,5 @@
+#![allow(deprecated)] // bridges legacy PairingTransportPort; replaced in Slice 5
+
 use std::sync::Arc;
 
 use tokio::sync::Mutex;

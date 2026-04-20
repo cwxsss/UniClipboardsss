@@ -1,3 +1,5 @@
+#![allow(deprecated)] // frozen libp2p PairingTransportPort consumer; replaced in Slice 5
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

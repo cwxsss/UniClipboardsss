@@ -1,3 +1,5 @@
+#![allow(deprecated)] // wires the frozen libp2p PairingTransportPort; replaced in Slice 5
+
 //! # Pure Dependency Assembly
 //!
 //! This module contains all pure dependency construction functions that have

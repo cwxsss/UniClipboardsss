@@ -1,3 +1,5 @@
+#![allow(deprecated)] // bridges legacy PairingTransportPort; replaced in Slice 5
+
 //! Setup action executor.
 //!
 //! Handles side-effect execution for setup actions, delegating to infrastructure

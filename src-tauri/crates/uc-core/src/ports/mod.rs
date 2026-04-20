@@ -31,6 +31,7 @@ mod hash;
 pub mod local_identity;
 pub mod network_control;
 pub mod network_events;
+pub mod pairing;
 pub mod pairing_invitation;
 pub mod pairing_transport;
 pub mod peer_directory;
@@ -61,10 +62,16 @@ pub use file_transfer_repository::{
 pub use file_transport::{FileTransportPort, NoopFileTransportPort};
 pub use local_identity::{LocalIdentityError, LocalIdentityPort};
 pub use network_control::NetworkControlPort;
+#[allow(deprecated)]
 pub use network_events::NetworkEventPort;
+pub use pairing::{
+    DialError, PairingEventPort, PairingSessionEvent, PairingSessionId, PairingSessionPort,
+    SessionError,
+};
 pub use pairing_invitation::{
     InvitationCode, InvitationError, IssuedInvitation, PairingInvitationPort,
 };
+#[allow(deprecated)]
 pub use pairing_transport::PairingTransportPort;
 pub use peer_directory::PeerDirectoryPort;
 pub use search::search_index::SearchIndexPort;
