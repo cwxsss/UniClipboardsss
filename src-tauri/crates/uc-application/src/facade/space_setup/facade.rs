@@ -1,12 +1,19 @@
-//! `SpaceSetupFacade` — space-lifecycle entry point (A1 + A2).
+//! `SpaceSetupFacade` — space-lifecycle entry point (A1 + A2 + shutdown).
 //!
-//! Owns the two use cases as `Arc` so later phases can share the same
-//! instance with F1 `on_startup` wiring when A1/A2 success triggers an
-//! automatic `StartNetwork` (tracked as TODO, lands in P6).
+//! Owns the two use cases plus the network lifecycle port so A1/A2 success
+//! auto-triggers `start_network` (F1) and [`on_shutdown`](Self::on_shutdown)
+//! mirrors it with `stop_network` (F2).
+//!
+//! Network errors during auto-start are intentionally non-fatal: the
+//! underlying space mutation has already committed and isn't safe to roll
+//! back, and the network runtime is retryable from UI. Failures are
+//! surfaced through `tracing::warn!` so ops still sees them.
 
 use std::sync::Arc;
 
-use tracing::instrument;
+use tracing::{instrument, warn};
+
+use uc_core::ports::NetworkControlPort;
 
 use crate::facade::space_setup::commands::{
     InitializeSpaceCommand, InitializeSpaceResult, UnlockSpaceCommand, UnlockSpaceResult,
@@ -16,10 +23,11 @@ use crate::facade::space_setup::errors::{InitializeSpaceError, UnlockSpaceError}
 use crate::usecases::setup::initialize_space::InitializeSpaceUseCase;
 use crate::usecases::setup::unlock_space::UnlockSpaceUseCase;
 
-/// Space-lifecycle facade (A1 initialise, A2 unlock).
+/// Space-lifecycle facade (A1 initialise, A2 unlock, F2 shutdown).
 pub struct SpaceSetupFacade {
     initialize_space: Arc<InitializeSpaceUseCase>,
     unlock_space: Arc<UnlockSpaceUseCase>,
+    network_control: Arc<dyn NetworkControlPort>,
 }
 
 impl SpaceSetupFacade {
@@ -33,6 +41,7 @@ impl SpaceSetupFacade {
             setup_status,
             settings,
             clock,
+            network_control,
         } = deps;
 
         let initialize_space = Arc::new(InitializeSpaceUseCase::new(
@@ -48,31 +57,60 @@ impl SpaceSetupFacade {
         Self {
             initialize_space,
             unlock_space,
+            network_control,
         }
     }
 
-    /// A1 · Create the encrypted space on a fresh device.
-    ///
-    /// Follow-up `StartNetwork` wiring lands with F1 in P6.
+    /// A1 · Create the encrypted space on a fresh device. On success the
+    /// network runtime is auto-started (F1).
     #[instrument(skip_all)]
     pub async fn initialize_space(
         &self,
         cmd: InitializeSpaceCommand,
     ) -> Result<InitializeSpaceResult, InitializeSpaceError> {
-        // TODO(P6 · F1): on success, call `StartNetworkUseCase::execute()`.
-        self.initialize_space.execute(cmd).await
+        let out = self.initialize_space.execute(cmd).await?;
+        self.auto_start_network().await;
+        Ok(out)
     }
 
-    /// A2 · Unlock the encrypted space after a restart.
-    ///
-    /// Follow-up `StartNetwork` wiring lands with F1 in P6.
+    /// A2 · Unlock the encrypted space after a restart. On success the
+    /// network runtime is auto-started (F1).
     #[instrument(skip_all)]
     pub async fn unlock_space(
         &self,
         cmd: UnlockSpaceCommand,
     ) -> Result<UnlockSpaceResult, UnlockSpaceError> {
-        // TODO(P6 · F1): on success, call `StartNetworkUseCase::execute()`.
-        self.unlock_space.execute(cmd).await
+        let out = self.unlock_space.execute(cmd).await?;
+        self.auto_start_network().await;
+        Ok(out)
+    }
+
+    /// F2 · Shut the network runtime down cleanly on app exit.
+    ///
+    /// Best-effort: failures are logged but not returned, since the caller
+    /// is on the teardown path and has no recourse.
+    #[instrument(skip_all)]
+    pub async fn on_shutdown(&self) {
+        if let Err(err) = self.network_control.stop_network().await {
+            warn!(
+                error = %err,
+                "stop_network failed during shutdown; proceeding with teardown"
+            );
+        }
+    }
+
+    /// Best-effort network startup after a successful space-lifecycle
+    /// action. Does not propagate errors: A1/A2 already committed the
+    /// space mutation and rolling that back is worse than leaving the
+    /// network offline until the user retries.
+    async fn auto_start_network(&self) {
+        if let Err(err) = self.network_control.start_network().await {
+            warn!(
+                error = %err,
+                "start_network failed after space-lifecycle action; space state is \
+                 committed, user must retry network via manual reconnect"
+            );
+        }
     }
 }
 
@@ -94,8 +132,8 @@ mod tests {
     use uc_core::membership::{MembershipError, SpaceMember};
     use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
     use uc_core::ports::{
-        ClockPort, DeviceIdentityPort, LocalIdentityError, LocalIdentityPort, SettingsPort,
-        SetupStatusPort,
+        ClockPort, DeviceIdentityPort, LocalIdentityError, LocalIdentityPort, NetworkControlPort,
+        SettingsPort, SetupStatusPort,
     };
     use uc_core::security::IdentityFingerprint;
     use uc_core::settings::model::Settings;
@@ -265,6 +303,37 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeNetworkControl {
+        start_calls: StdMutex<u32>,
+        stop_calls: StdMutex<u32>,
+        start_err: StdMutex<Option<String>>,
+    }
+
+    impl FakeNetworkControl {
+        fn start_calls(&self) -> u32 {
+            *self.start_calls.lock().unwrap()
+        }
+        fn stop_calls(&self) -> u32 {
+            *self.stop_calls.lock().unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl NetworkControlPort for FakeNetworkControl {
+        async fn start_network(&self) -> anyhow::Result<()> {
+            *self.start_calls.lock().unwrap() += 1;
+            if let Some(msg) = self.start_err.lock().unwrap().take() {
+                return Err(anyhow::anyhow!(msg));
+            }
+            Ok(())
+        }
+        async fn stop_network(&self) -> anyhow::Result<()> {
+            *self.stop_calls.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
     fn default_fingerprint() -> IdentityFingerprint {
         IdentityFingerprint::from_raw_string("ABCDEFGHIJKLMNOP").unwrap()
     }
@@ -273,8 +342,9 @@ mod tests {
         space_access: Arc<dyn SpaceAccessPort>,
         setup_status: Arc<dyn SetupStatusPort>,
         settings: Arc<dyn SettingsPort>,
-    ) -> SpaceSetupFacade {
-        SpaceSetupFacade::new(SpaceSetupDeps {
+    ) -> (SpaceSetupFacade, Arc<FakeNetworkControl>) {
+        let network_control = Arc::new(FakeNetworkControl::default());
+        let facade = SpaceSetupFacade::new(SpaceSetupDeps {
             space_access,
             local_identity: Arc::new(FakeLocalIdentity {
                 fp: default_fingerprint(),
@@ -286,7 +356,9 @@ mod tests {
             setup_status,
             settings,
             clock: Arc::new(FixedClock(0)),
-        })
+            network_control: network_control.clone(),
+        });
+        (facade, network_control)
     }
 
     fn settings_with_device_name(name: &str) -> Arc<InMemorySettings> {
@@ -302,7 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_forwards_happy_path() {
-        let facade = make_facade(
+        let (facade, _net) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -318,7 +390,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_forwards_passphrase_mismatch() {
-        let facade = make_facade(
+        let (facade, _net) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -338,7 +410,7 @@ mod tests {
         *setup_status.status.lock().unwrap() = SetupStatus {
             has_completed: true,
         };
-        let facade = make_facade(
+        let (facade, _net) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -351,7 +423,7 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_space_forwards_setup_not_completed() {
-        let facade = make_facade(
+        let (facade, _net) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -371,7 +443,7 @@ mod tests {
         };
         let space_access = FakeSpaceAccess::default();
         *space_access.unlock_err.lock().unwrap() = Some(SpaceAccessError::WrongPassphrase);
-        let facade = make_facade(
+        let (facade, _net) = make_facade(
             Arc::new(space_access),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -381,5 +453,113 @@ mod tests {
         };
         let err = facade.unlock_space(cmd).await.unwrap_err();
         assert!(matches!(err, UnlockSpaceError::WrongPassphrase));
+    }
+
+    // ── P6 · F1/F2 network wiring ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn initialize_space_success_starts_network() {
+        let (facade, net) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            settings_with_device_name("mac"),
+        );
+        let cmd = InitializeSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+            passphrase_confirm: Passphrase::new("hunter22hunter22"),
+            device_name: None,
+        };
+        facade.initialize_space(cmd).await.expect("A1 ok");
+        assert_eq!(net.start_calls(), 1);
+        assert_eq!(net.stop_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn initialize_space_failure_does_not_start_network() {
+        let (facade, net) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            settings_with_device_name("mac"),
+        );
+        let cmd = InitializeSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+            passphrase_confirm: Passphrase::new("different22else2"),
+            device_name: None,
+        };
+        let _ = facade.initialize_space(cmd).await.unwrap_err();
+        assert_eq!(
+            net.start_calls(),
+            0,
+            "A1 failure must not touch network runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn unlock_space_success_starts_network() {
+        let setup_status = InMemorySetupStatus::default();
+        *setup_status.status.lock().unwrap() = SetupStatus {
+            has_completed: true,
+        };
+        let (facade, net) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(setup_status),
+            Arc::new(InMemorySettings::default()),
+        );
+        let cmd = UnlockSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+        };
+        facade.unlock_space(cmd).await.expect("A2 ok");
+        assert_eq!(net.start_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn unlock_space_failure_does_not_start_network() {
+        let (facade, net) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        let cmd = UnlockSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+        };
+        let _ = facade.unlock_space(cmd).await.unwrap_err();
+        assert_eq!(
+            net.start_calls(),
+            0,
+            "A2 failure (SetupNotCompleted) must not touch network runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_network_failure_does_not_fail_initialize_space() {
+        let (facade, net) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            settings_with_device_name("mac"),
+        );
+        *net.start_err.lock().unwrap() = Some("bind failed".to_string());
+        let cmd = InitializeSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+            passphrase_confirm: Passphrase::new("hunter22hunter22"),
+            device_name: None,
+        };
+        let out = facade
+            .initialize_space(cmd)
+            .await
+            .expect("A1 result must not reflect network failure");
+        assert_eq!(out.fingerprint, default_fingerprint());
+        assert_eq!(net.start_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn on_shutdown_stops_network() {
+        let (facade, net) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        facade.on_shutdown().await;
+        assert_eq!(net.stop_calls(), 1);
+        assert_eq!(net.start_calls(), 0);
     }
 }

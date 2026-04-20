@@ -10,7 +10,8 @@ use std::sync::Arc;
 use uc_core::membership::MemberRepositoryPort;
 use uc_core::ports::space::SpaceAccessPort;
 use uc_core::ports::{
-    ClockPort, DeviceIdentityPort, LocalIdentityPort, SettingsPort, SetupStatusPort,
+    ClockPort, DeviceIdentityPort, LocalIdentityPort, NetworkControlPort, SettingsPort,
+    SetupStatusPort,
 };
 
 /// Dependencies for [`super::SpaceSetupFacade`].
@@ -27,4 +28,7 @@ pub struct SpaceSetupDeps {
     pub setup_status: Arc<dyn SetupStatusPort>,
     pub settings: Arc<dyn SettingsPort>,
     pub clock: Arc<dyn ClockPort>,
+    /// Network runtime lifecycle. Auto-started on A1/A2 success (F1) and
+    /// stopped by [`super::SpaceSetupFacade::on_shutdown`] (F2).
+    pub network_control: Arc<dyn NetworkControlPort>,
 }
