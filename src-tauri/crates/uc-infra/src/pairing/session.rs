@@ -1,6 +1,6 @@
-//! Iroh-backed implementation of [`PairingSessionPort`].
+//! Iroh-backed implementation of [`PairingSessionPort`] + [`PairingEventPort`].
 //!
-//! Joiner side (P7c.2) is the focus of this module:
+//! Joiner side (P7c.2):
 //!
 //! 1. `dial_by_invitation(code)` calls the rendezvous service's resolve
 //!    endpoint (`GET {base}/v1/pairings/{code}`), deserializes the opaque
@@ -11,30 +11,52 @@
 //!    [`super::wire`]).
 //! 3. `close` releases the stored session.
 //!
-//! Sponsor-side ALPN handler + [`PairingEventPort`] implementation lives in
-//! P7c.3 (same struct, additional trait impl).
+//! Sponsor side (P7c.3):
+//!
+//! * [`IrohPairingSessionAdapter::install_handler`] registers a
+//!   [`PairingProtocolHandler`] on a given [`iroh::protocol::RouterBuilder`].
+//!   The handler accepts the first bi-stream, reads one framed
+//!   [`PairingSessionMessage`], stashes the live [`Connection`] + streams
+//!   under a freshly minted [`PairingSessionId`], and emits
+//!   [`PairingSessionEvent::Incoming`] to the subscriber installed via
+//!   [`PairingEventPort::subscribe`].
+//! * Subscription is single-consumer: a second `subscribe()` call replaces
+//!   the previous sender (the old receiver then observes channel close).
 //!
 //! [`PairingSessionPort`]: uc_core::ports::pairing::PairingSessionPort
+//! [`PairingEventPort`]: uc_core::ports::pairing::PairingEventPort
 //! [`EndpointAddr`]: iroh::EndpointAddr
 //! [`PairingSessionMessage`]: uc_core::pairing::PairingSessionMessage
+//! [`Connection`]: iroh::endpoint::Connection
+//! [`PairingSessionEvent::Incoming`]: uc_core::ports::pairing::PairingSessionEvent::Incoming
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iroh::endpoint::{RecvStream, SendStream};
+use iroh::endpoint::{Connection, RecvStream, SendStream};
+use iroh::protocol::{AcceptError, ProtocolHandler, RouterBuilder};
 use iroh::{Endpoint, EndpointAddr};
 use reqwest::StatusCode;
 use serde::Deserialize;
-use tokio::sync::Mutex;
-use tracing::{debug, instrument};
+use tokio::sync::{mpsc, Mutex};
+use tracing::{debug, instrument, warn};
 
 use uc_core::pairing::{InvitationCode, PairingSessionMessage};
-use uc_core::ports::pairing::{DialError, PairingSessionId, PairingSessionPort, SessionError};
+use uc_core::ports::pairing::{
+    DialError, PairingEventPort, PairingSessionEvent, PairingSessionId, PairingSessionPort,
+    SessionError,
+};
 
 use super::wire::{self, WireDecodeError};
 use crate::rendezvous::RENDEZVOUS_BASE_URL;
+
+/// Bound for the [`PairingEventPort`] channel. 32 is comfortably above the
+/// expected inbound rate (a human approves pairing at most every few
+/// seconds) while still bounded so a stuck subscriber exerts back-pressure
+/// instead of unbounded memory growth.
+const EVENT_CHANNEL_CAPACITY: usize = 32;
 
 /// ALPN identifier for the Slice 1 pairing protocol (F-014).
 pub const PAIRING_ALPN: &[u8] = b"/uniclipboard/pairing/1";
@@ -51,13 +73,20 @@ pub struct IrohPairingSessionAdapter {
     base_url: String,
     sessions: Mutex<HashMap<PairingSessionId, Arc<SessionSlot>>>,
     next_session_seq: AtomicU64,
+    /// Sender side of the currently installed [`PairingEventPort`]
+    /// subscription. Filled by [`subscribe`](PairingEventPort::subscribe)
+    /// and drained by the sponsor-side handler. `None` means no subscriber
+    /// is listening yet; incoming sessions are dropped in that window with
+    /// a warn-level log (§10 of `uc-infra/AGENTS.md` — failures must be
+    /// observable).
+    incoming_tx: Mutex<Option<mpsc::Sender<PairingSessionEvent>>>,
 }
 
 struct SessionSlot {
     send: Mutex<SendStream>,
     recv: Mutex<RecvStream>,
     // Hold the connection so it stays alive for the session's lifetime.
-    _connection: iroh::endpoint::Connection,
+    _connection: Connection,
 }
 
 impl IrohPairingSessionAdapter {
@@ -67,6 +96,7 @@ impl IrohPairingSessionAdapter {
             base_url: RENDEZVOUS_BASE_URL.to_string(),
             sessions: Mutex::new(HashMap::new()),
             next_session_seq: AtomicU64::new(0),
+            incoming_tx: Mutex::new(None),
         }
     }
 
@@ -78,6 +108,7 @@ impl IrohPairingSessionAdapter {
             base_url: base_url.into(),
             sessions: Mutex::new(HashMap::new()),
             next_session_seq: AtomicU64::new(0),
+            incoming_tx: Mutex::new(None),
         }
     }
 
@@ -125,7 +156,7 @@ impl IrohPairingSessionAdapter {
     /// accept (P7c.3).
     pub(crate) async fn register_session(
         &self,
-        connection: iroh::endpoint::Connection,
+        connection: Connection,
         send: SendStream,
         recv: RecvStream,
     ) -> PairingSessionId {
@@ -146,6 +177,145 @@ impl IrohPairingSessionAdapter {
             .get(id)
             .cloned()
             .ok_or_else(|| SessionError::NotFound(id.clone()))
+    }
+
+    /// Register [`PairingProtocolHandler`] for [`PAIRING_ALPN`] on the given
+    /// iroh [`RouterBuilder`]. Consumes and returns the builder so callers
+    /// can chain additional protocols before `.spawn()`.
+    ///
+    /// The adapter's own [`Endpoint`] must match the one the builder was
+    /// constructed with — otherwise the handler will never see inbound
+    /// connections. We don't assert equality here because iroh's
+    /// [`Endpoint`] identity is internal; instead the wiring layer
+    /// (uc-application / uc-bootstrap) is responsible for passing the same
+    /// endpoint to both.
+    pub fn install_handler(self: &Arc<Self>, builder: RouterBuilder) -> RouterBuilder {
+        builder.accept(
+            PAIRING_ALPN,
+            PairingProtocolHandler {
+                adapter: Arc::clone(self),
+            },
+        )
+    }
+
+    /// Sponsor-side inbound path. Runs on a fresh tokio task spawned by the
+    /// iroh router for each accepted connection.
+    async fn handle_incoming(&self, connection: Connection) {
+        let remote = connection.remote_id();
+        let (send, mut recv) = match connection.accept_bi().await {
+            Ok(pair) => pair,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    remote = %remote,
+                    "pairing accept_bi failed; dropping connection",
+                );
+                return;
+            }
+        };
+
+        let mut len_buf = [0u8; FRAME_LEN_BYTES];
+        if let Err(err) = recv.read_exact(&mut len_buf).await {
+            warn!(
+                error = %err,
+                remote = %remote,
+                "pairing first-frame length read failed; dropping connection",
+            );
+            return;
+        }
+        let len = u32::from_be_bytes(len_buf) as usize;
+
+        let mut payload = vec![0u8; len];
+        if let Err(err) = recv.read_exact(&mut payload).await {
+            warn!(
+                error = %err,
+                remote = %remote,
+                frame_len = len,
+                "pairing first-frame payload read failed; dropping connection",
+            );
+            return;
+        }
+
+        let message = match wire::decode(&payload) {
+            Ok(m) => m,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    remote = %remote,
+                    "pairing first-frame decode failed; dropping connection",
+                );
+                return;
+            }
+        };
+
+        let session = self.register_session(connection, send, recv).await;
+        debug!(session = %session, remote = %remote, "pairing session accepted");
+
+        let tx_snapshot = self.incoming_tx.lock().await.clone();
+        let Some(tx) = tx_snapshot else {
+            warn!(
+                session = %session,
+                "pairing event dropped: no subscriber installed",
+            );
+            // Keep the session registered: if a subscriber attaches later
+            // it won't see *this* event, but the operator-visible warn above
+            // is the signal. Cleanup is the caller's job via `close()`.
+            return;
+        };
+        if let Err(err) = tx
+            .send(PairingSessionEvent::Incoming {
+                session: session.clone(),
+                message,
+            })
+            .await
+        {
+            warn!(
+                session = %session,
+                error = %err,
+                "pairing event receiver dropped before delivery",
+            );
+        }
+    }
+}
+
+// ============================================================================
+// ProtocolHandler
+// ============================================================================
+
+/// Thin wrapper that adapts [`IrohPairingSessionAdapter`] to the iroh
+/// [`ProtocolHandler`] trait. Kept as a dedicated struct (rather than
+/// `impl ProtocolHandler for IrohPairingSessionAdapter`) because the
+/// handler needs `Debug` and `'static`, which cleanly match a thin wrapper
+/// holding an `Arc<IrohPairingSessionAdapter>`.
+#[derive(Clone)]
+pub(crate) struct PairingProtocolHandler {
+    adapter: Arc<IrohPairingSessionAdapter>,
+}
+
+impl std::fmt::Debug for PairingProtocolHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairingProtocolHandler")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProtocolHandler for PairingProtocolHandler {
+    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+        self.adapter.handle_incoming(connection).await;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl PairingEventPort for IrohPairingSessionAdapter {
+    async fn subscribe(&self) -> anyhow::Result<mpsc::Receiver<PairingSessionEvent>> {
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        let mut guard = self.incoming_tx.lock().await;
+        if guard.is_some() {
+            debug!("pairing subscriber replaced; previous receiver will observe close");
+        }
+        *guard = Some(tx);
+        Ok(rx)
     }
 }
 
@@ -281,13 +451,17 @@ struct ResolveResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroh::protocol::Router;
     use iroh::RelayMode;
+    use std::time::Duration;
     use tokio::task::JoinHandle;
     use uc_core::ids::DeviceId;
     use uc_core::pairing::JoinerRequest;
     use uc_core::security::IdentityFingerprint;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
     async fn bound_endpoint() -> Arc<Endpoint> {
         Arc::new(
@@ -524,4 +698,118 @@ mod tests {
     // before closing. iroh bi-streams require the dialer to write first for
     // `accept_bi()` on the responder to resolve, so a sponsor that finishes
     // without ever reading cannot be modelled faithfully here.
+
+    // ========================================================================
+    // Sponsor-side (P7c.3)
+    // ========================================================================
+
+    /// Frame the given message exactly the way
+    /// [`PairingSessionPort::send`] does — used by the raw joiner in
+    /// sponsor-side tests (we exercise the dialer half by hand to keep the
+    /// assertion focused on the handler, not on `dial_by_invitation`).
+    async fn write_framed(send: &mut SendStream, message: &PairingSessionMessage) {
+        let payload = wire::encode(message).expect("wire encode");
+        let len: u32 = payload.len().try_into().expect("payload fits u32");
+        send.write_all(&len.to_be_bytes()).await.expect("write len");
+        send.write_all(&payload).await.expect("write payload");
+    }
+
+    async fn with_timeout<F, T>(label: &'static str, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        tokio::time::timeout(TEST_TIMEOUT, fut)
+            .await
+            .unwrap_or_else(|_| panic!("{label} timed out after {:?}", TEST_TIMEOUT))
+    }
+
+    #[tokio::test]
+    async fn sponsor_handler_emits_incoming_event_with_decoded_first_frame() {
+        // Sponsor side: adapter + router on the same endpoint.
+        let sponsor_endpoint = bound_endpoint().await;
+        wait_for_direct_addrs(&sponsor_endpoint).await;
+        let sponsor_addr = sponsor_endpoint.addr();
+
+        let sponsor_adapter = Arc::new(IrohPairingSessionAdapter::new(sponsor_endpoint.clone()));
+        let mut rx = sponsor_adapter.subscribe().await.expect("subscribe");
+
+        let router = sponsor_adapter
+            .install_handler(Router::builder((*sponsor_endpoint).clone()))
+            .spawn();
+
+        // Joiner side: raw connect + open_bi + one framed message.
+        let joiner_endpoint = bound_endpoint().await;
+        wait_for_direct_addrs(&joiner_endpoint).await;
+
+        let connection = with_timeout(
+            "joiner connect",
+            joiner_endpoint.connect(sponsor_addr, PAIRING_ALPN),
+        )
+        .await
+        .expect("connect");
+
+        let (mut send, _recv) = with_timeout("open_bi", connection.open_bi())
+            .await
+            .expect("open_bi");
+
+        let request = sample_request();
+        write_framed(&mut send, &request).await;
+
+        // Sponsor observes the Incoming event with the decoded payload.
+        let event = with_timeout("recv event", rx.recv())
+            .await
+            .expect("event channel closed");
+
+        match event {
+            PairingSessionEvent::Incoming { session, message } => {
+                assert!(!session.as_str().is_empty(), "session id should be minted",);
+                match (request, message) {
+                    (
+                        PairingSessionMessage::Request(expected),
+                        PairingSessionMessage::Request(got),
+                    ) => {
+                        assert_eq!(
+                            expected.invitation_code.as_str(),
+                            got.invitation_code.as_str()
+                        );
+                        assert_eq!(expected.device_id.as_str(), got.device_id.as_str());
+                        assert_eq!(expected.identity_fingerprint, got.identity_fingerprint);
+                        assert_eq!(expected.nonce, got.nonce);
+                    }
+                    (a, b) => panic!("variant mismatch: {a:?} vs {b:?}"),
+                }
+            }
+            other => panic!("expected Incoming, got {other:?}"),
+        }
+
+        // Clean shutdown: router.shutdown() triggers ProtocolHandler::shutdown
+        // on all registered handlers and closes the endpoint.
+        with_timeout("router shutdown", router.shutdown())
+            .await
+            .expect("router shutdown");
+    }
+
+    #[tokio::test]
+    async fn subscribe_replaces_previous_sender() {
+        let endpoint = bound_endpoint().await;
+        let adapter = Arc::new(IrohPairingSessionAdapter::new(endpoint));
+
+        let mut first_rx = adapter.subscribe().await.expect("first subscribe");
+        let mut second_rx = adapter.subscribe().await.expect("second subscribe");
+
+        // The previous receiver must observe close (the old sender was
+        // dropped when the new subscribe() overwrote the slot).
+        match with_timeout("first rx close", first_rx.recv()).await {
+            None => {}
+            Some(ev) => panic!("expected channel close, got {ev:?}"),
+        }
+
+        // The new receiver is wired up but quiet (no connections yet).
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), second_rx.recv())
+                .await
+                .is_err(),
+            "second receiver should be idle",
+        );
+    }
 }
