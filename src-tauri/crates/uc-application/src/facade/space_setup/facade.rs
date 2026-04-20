@@ -23,7 +23,11 @@ use crate::facade::space_setup::commands::{
     InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
     UnlockSpaceCommand, UnlockSpaceResult,
 };
+use crate::facade::space_setup::commands::{
+    RedeemPairingInvitationCommand, RedeemPairingInvitationResult,
+};
 use crate::facade::space_setup::deps::SpaceSetupDeps;
+use crate::facade::space_setup::errors::RedeemPairingInvitationError;
 use crate::facade::space_setup::errors::{
     InitializeSpaceError, IssuePairingInvitationError, UnlockSpaceError,
 };
@@ -33,15 +37,17 @@ use crate::pairing_inbound::sponsor_handshake::SponsorHandshakeCoordinator;
 use crate::pairing_invitation::InMemoryPairingInvitationHolder;
 use crate::trusted_peer::usecases::TrustPeerUseCase;
 use crate::usecases::pairing::issue_invitation::IssuePairingInvitationUseCase;
+use crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase;
 use crate::usecases::setup::initialize_space::InitializeSpaceUseCase;
 use crate::usecases::setup::unlock_space::UnlockSpaceUseCase;
 
 /// Space-lifecycle facade (A1 initialise, A2 unlock, B1 issue invitation,
-/// P7e inbound subscriber, F2 shutdown).
+/// B2 redeem invitation, P7e inbound subscriber, F2 shutdown).
 pub struct SpaceSetupFacade {
     initialize_space: Arc<InitializeSpaceUseCase>,
     unlock_space: Arc<UnlockSpaceUseCase>,
     issue_pairing_invitation: Arc<IssuePairingInvitationUseCase>,
+    redeem_pairing_invitation: Arc<RedeemPairingInvitationUseCase>,
     network_control: Arc<dyn NetworkControlPort>,
     /// `JoinHandle` for the sponsor-side inbound pairing orchestrator
     /// spawned during construction. Aborted in [`Self::on_shutdown`] so
@@ -84,7 +90,7 @@ impl SpaceSetupFacade {
         ));
         let unlock_space = Arc::new(UnlockSpaceUseCase::new(
             Arc::clone(&space_access),
-            setup_status,
+            Arc::clone(&setup_status),
         ));
         let issue_pairing_invitation = Arc::new(IssuePairingInvitationUseCase::new(
             Arc::clone(&pairing_invitation),
@@ -98,37 +104,57 @@ impl SpaceSetupFacade {
         // persistence is done by the already-existing use cases rather
         // than being duplicated here.
         let local_device_id = device_identity.current_device_id();
-        // Handshake TTL：joiner 从 KeyslotOffer 到 ChallengeResponse
-        // 间会有一步用户交互（输入 passphrase），60s 给到的裕量足以
-        // 覆盖人工输入 + 网络抖动，又不会让掉线的 session 无限期占坑。
-        // 对齐 legacy setup orchestrator 的 60s 默认值。
+        // Handshake TTL：sponsor 侧从 begin 到 confirm/reject 的 watchdog
+        // （P7g），joiner 侧每次 recv 的 timeout（P7h）。60s 对齐 legacy
+        // setup orchestrator 的默认值；足够覆盖一次人工口令输入 + 网络
+        // 抖动，又不会让掉线的会话无限期占坑。
         let handshake_ttl = Duration::from_secs(60);
+        // admit/trust 两侧都要用 —— sponsor orchestrator 把 joiner 登记
+        // 进本机；joiner use case 把 sponsor 登记进本机。构造一次 Arc
+        // 共享即可，不给一边复制一边。
+        let admit_member_uc = Arc::new(AdmitMemberUseCase::new(Arc::clone(&member_repo)));
+        let trust_peer_uc = Arc::new(TrustPeerUseCase::new(Arc::clone(&trusted_peer_repo)));
+
         let handshake = SponsorHandshakeCoordinator::new(
-            pairing_session,
-            space_access,
-            proof_port,
-            local_identity,
+            Arc::clone(&pairing_session),
+            Arc::clone(&space_access),
+            Arc::clone(&proof_port),
+            Arc::clone(&local_identity),
             Arc::clone(&device_identity),
-            settings,
+            Arc::clone(&settings),
             handshake_ttl,
         );
-        let admit_member_uc = Arc::new(AdmitMemberUseCase::new(Arc::clone(&member_repo)));
-        let trust_peer_uc = Arc::new(TrustPeerUseCase::new(trusted_peer_repo));
         let inbound_orchestrator = Arc::new(PairingInboundOrchestrator::new(
             pairing_events,
             pairing_invitation,
             invitation_holder,
             Arc::clone(&clock),
             handshake,
-            admit_member_uc,
-            trust_peer_uc,
+            Arc::clone(&admit_member_uc),
+            Arc::clone(&trust_peer_uc),
             local_device_id,
         ));
         let pairing_inbound_handle = inbound_orchestrator.spawn();
+
+        let redeem_pairing_invitation = Arc::new(RedeemPairingInvitationUseCase::new(
+            pairing_session,
+            space_access,
+            proof_port,
+            local_identity,
+            device_identity,
+            settings,
+            setup_status,
+            admit_member_uc,
+            trust_peer_uc,
+            clock,
+            handshake_ttl,
+        ));
+
         Self {
             initialize_space,
             unlock_space,
             issue_pairing_invitation,
+            redeem_pairing_invitation,
             network_control,
             pairing_inbound_handle,
         }
@@ -169,6 +195,25 @@ impl SpaceSetupFacade {
         &self,
     ) -> Result<IssuePairingInvitationResult, IssuePairingInvitationError> {
         self.issue_pairing_invitation.execute().await
+    }
+
+    /// B2 · Redeem a sponsor-issued invitation (joiner side).
+    ///
+    /// Auto-starts the network before dialing because, unlike A1/A2, the
+    /// joiner's entry point may be the first user action on this device
+    /// (no prior `initialize_space` / `unlock_space` to have triggered
+    /// F1). Auto-start failures are logged but not propagated — the
+    /// subsequent dial will fail with [`RedeemPairingInvitationError::
+    /// SponsorUnreachable`] / `ServiceUnavailable` if the network is
+    /// genuinely unusable, which is the more actionable surface for the
+    /// UI.
+    #[instrument(skip_all)]
+    pub async fn redeem_pairing_invitation(
+        &self,
+        cmd: RedeemPairingInvitationCommand,
+    ) -> Result<RedeemPairingInvitationResult, RedeemPairingInvitationError> {
+        self.auto_start_network().await;
+        self.redeem_pairing_invitation.execute(cmd).await
     }
 
     /// F2 · Shut the network runtime down cleanly on app exit.

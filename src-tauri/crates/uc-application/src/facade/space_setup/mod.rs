@@ -16,8 +16,12 @@ mod facade;
 
 pub use commands::{
     InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
-    UnlockSpaceCommand, UnlockSpaceResult,
+    RedeemPairingInvitationCommand, RedeemPairingInvitationResult, UnlockSpaceCommand,
+    UnlockSpaceResult,
 };
 pub use deps::SpaceSetupDeps;
-pub use errors::{InitializeSpaceError, IssuePairingInvitationError, UnlockSpaceError};
+pub use errors::{
+    InitializeSpaceError, IssuePairingInvitationError, RedeemPairingInvitationError,
+    UnlockSpaceError,
+};
 pub use facade::SpaceSetupFacade;

@@ -9,3 +9,4 @@
 //! [`PairingInvitation`]: uc_core::pairing::invitation::PairingInvitation
 
 pub(crate) mod issue_invitation;
+pub(crate) mod redeem_invitation;

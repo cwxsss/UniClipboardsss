@@ -67,3 +67,44 @@ pub struct IssuePairingInvitationResult {
     /// this value rather than computing its own.
     pub expires_at: DateTime<Utc>,
 }
+
+// ---------------------------------------------------------------------------
+// B2 · RedeemPairingInvitation  (joiner side)
+// ---------------------------------------------------------------------------
+
+/// Input to [`crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase`].
+///
+/// Joiner-side UX gathers both fields up front: the user types the
+/// invitation code the sponsor shared and the space passphrase the sponsor
+/// chose during A1. Slice 1 does not support a two-step flow where the
+/// passphrase is entered after receiving the keyslot offer.
+#[derive(Debug)]
+pub struct RedeemPairingInvitationCommand {
+    /// Invitation code the user typed (or scanned from the sponsor's UI).
+    pub code: InvitationCode,
+    /// Same passphrase the sponsor used in A1 `InitializeSpace`.
+    pub passphrase: Passphrase,
+}
+
+/// Output of a successful B2 redemption.
+///
+/// Returned fields let the UI show a "you are connected to X" confirmation
+/// without having to re-read the freshly-persisted `SpaceMember` /
+/// `TrustedPeer` rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedeemPairingInvitationResult {
+    /// Sponsor device now persisted locally as both `SpaceMember` and
+    /// `TrustedPeer`.
+    pub sponsor_device_id: DeviceId,
+    /// Sponsor's stable identity fingerprint (F-036 concept 2).
+    pub sponsor_identity_fingerprint: IdentityFingerprint,
+    /// Sponsor's space id, adopted as the joiner's local space id.
+    pub space_id: SpaceId,
+    /// This device's own id, as persisted on the sponsor side through the
+    /// in-flight `JoinerRequest` — surfaced here so the UI does not need
+    /// to query `DeviceIdentityPort` separately for the confirmation
+    /// screen.
+    pub self_device_id: DeviceId,
+    /// This device's stable identity fingerprint.
+    pub self_identity_fingerprint: IdentityFingerprint,
+}
