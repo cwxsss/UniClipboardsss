@@ -72,7 +72,7 @@ use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
 use uc_platform::adapters::{DisabledPairingTransport, Libp2pNetworkAdapter, PairingRuntimeOwner};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
-use uc_platform::clipboard::LocalClipboard;
+use uc_platform::clipboard::{LocalClipboard, NoopSystemClipboard};
 use uc_platform::identity_store::FileIdentityStore;
 use uc_platform::ports::{AppDirsPort, IdentityStorePort};
 
@@ -444,11 +444,31 @@ pub fn create_platform_layer(
     file_cache_dir: PathBuf,
     pairing_runtime_owner: PairingRuntimeOwner,
 ) -> WiringResult<PlatformLayer> {
-    let clipboard_impl = LocalClipboard::new()
-        .map_err(|e| WiringError::ClipboardInit(format!("Failed to create clipboard: {}", e)))?;
-    let clipboard_impl = Arc::new(clipboard_impl);
-    let clipboard: Arc<dyn PlatformClipboardPort> = clipboard_impl.clone();
-    let system_clipboard: Arc<dyn SystemClipboardPort> = clipboard_impl;
+    // Slice 1 CLI commands (init/invite/join) do not touch the system
+    // clipboard, but a non-bundled CLI launched from a shell lacks the
+    // WindowServer / AppKit context that `clipboard-rs` assumes, so
+    // `LocalClipboard::new()` panics inside `+[NSPasteboard generalPasteboard]`.
+    // When `UC_DISABLE_SYSTEM_CLIPBOARD=1` is set we skip the real
+    // adapter entirely and wire in `NoopSystemClipboard`. The CLI sets
+    // this variable before bootstrap; GUI / daemon paths leave it unset
+    // and get the real adapter.
+    let (clipboard, system_clipboard): (
+        Arc<dyn PlatformClipboardPort>,
+        Arc<dyn SystemClipboardPort>,
+    ) = if std::env::var_os("UC_DISABLE_SYSTEM_CLIPBOARD").is_some() {
+        tracing::info!(
+            "UC_DISABLE_SYSTEM_CLIPBOARD set; substituting NoopSystemClipboard \
+             (any clipboard capture / write is a no-op)"
+        );
+        let noop: Arc<NoopSystemClipboard> = Arc::new(NoopSystemClipboard);
+        (noop.clone(), noop)
+    } else {
+        let clipboard_impl = LocalClipboard::new().map_err(|e| {
+            WiringError::ClipboardInit(format!("Failed to create clipboard: {}", e))
+        })?;
+        let clipboard_impl = Arc::new(clipboard_impl);
+        (clipboard_impl.clone(), clipboard_impl)
+    };
 
     let device_identity = LocalDeviceIdentity::load_or_create(config_dir.clone()).map_err(|e| {
         WiringError::SettingsInit(format!("Failed to create device identity: {}", e))

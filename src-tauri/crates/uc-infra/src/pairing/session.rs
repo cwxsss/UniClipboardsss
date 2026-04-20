@@ -3,9 +3,10 @@
 //! Joiner side (P7c.2):
 //!
 //! 1. `dial_by_invitation(code)` calls the rendezvous service's resolve
-//!    endpoint (`GET {base}/v1/pairings/{code}`), deserializes the opaque
-//!    sponsor ticket into an iroh [`EndpointAddr`], dials the sponsor with
-//!    ALPN [`PAIRING_ALPN`], and opens a bi-directional stream.
+//!    endpoint (`POST {base}/v1/pairings/resolve` with JSON body
+//!    `{ "code": "<code>" }`), deserializes the opaque sponsor ticket into
+//!    an iroh [`EndpointAddr`], dials the sponsor with ALPN
+//!    [`PAIRING_ALPN`], and opens a bi-directional stream.
 //! 2. `send` / `recv_next` ride the stream with a 4-byte big-endian length
 //!    prefix followed by a postcard-encoded [`PairingSessionMessage`] (see
 //!    [`super::wire`]).
@@ -120,15 +121,20 @@ impl IrohPairingSessionAdapter {
     }
 
     async fn resolve_invitation(&self, code: &InvitationCode) -> Result<EndpointAddr, DialError> {
-        let url = format!("{}/v1/pairings/{}", self.base_url, code.as_str());
-        let response = reqwest::Client::new()
-            .get(&url)
-            .send()
-            .await
-            .map_err(|err| {
-                debug!(error = %err, "rendezvous resolve transport failure");
-                DialError::ServiceUnavailable
-            })?;
+        // Server exposes `POST /v1/pairings/resolve` with JSON body
+        // `{ "code": ... }`. The GET-by-path variant doesn't exist on
+        // the rendezvous service; the explicit User-Agent dodges CF's
+        // bot-management layer that resets anonymous reqwest traffic.
+        let url = format!("{}/v1/pairings/resolve", self.base_url);
+        let body = serde_json::json!({ "code": code.as_str() });
+        let client = reqwest::Client::builder()
+            .user_agent(concat!("uniclipboard-cli/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|err| DialError::Internal(format!("http client build: {err}")))?;
+        let response = client.post(&url).json(&body).send().await.map_err(|err| {
+            debug!(error = %err, "rendezvous resolve transport failure");
+            DialError::ServiceUnavailable
+        })?;
 
         let status = response.status();
         match status {
@@ -621,8 +627,11 @@ mod tests {
             "sponsorEndpointId": "ignored-for-tests",
             "expiresAtMs": 0,
         });
-        Mock::given(method("GET"))
-            .and(path(format!("/v1/pairings/{code}")))
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/resolve"))
+            .and(wiremock::matchers::body_partial_json(
+                serde_json::json!({ "code": code }),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
             .mount(server)
             .await;
@@ -691,8 +700,8 @@ mod tests {
     #[tokio::test]
     async fn dial_maps_404_to_invitation_not_found() {
         let rendezvous = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/pairings/UNKNOWN"))
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/resolve"))
             .respond_with(ResponseTemplate::new(404))
             .mount(&rendezvous)
             .await;
@@ -712,8 +721,8 @@ mod tests {
     #[tokio::test]
     async fn dial_maps_410_to_invitation_expired() {
         let rendezvous = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/pairings/STALE"))
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/resolve"))
             .respond_with(ResponseTemplate::new(410))
             .mount(&rendezvous)
             .await;
@@ -733,8 +742,8 @@ mod tests {
     #[tokio::test]
     async fn dial_maps_5xx_to_service_unavailable() {
         let rendezvous = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/pairings/BUSY"))
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/resolve"))
             .respond_with(ResponseTemplate::new(503))
             .mount(&rendezvous)
             .await;
@@ -759,8 +768,8 @@ mod tests {
             "sponsorEndpointId": "x",
             "expiresAtMs": 0,
         });
-        Mock::given(method("GET"))
-            .and(path("/v1/pairings/BADTICKET"))
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/resolve"))
             .respond_with(ResponseTemplate::new(200).set_body_json(bad_body))
             .mount(&rendezvous)
             .await;

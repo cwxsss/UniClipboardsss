@@ -37,6 +37,13 @@ pub const RENDEZVOUS_BASE_URL: &str = "https://rendezvous.uniclipboard.app";
 /// responsive when the service degrades.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Explicit user agent. `reqwest::Client::builder()` leaves the header
+/// blank by default, which Cloudflare's bot-management layer at the
+/// rendezvous edge 550-resets on some rules. Sending a stable identifier
+/// makes the transport behave like `curl`/browser clients and is also
+/// useful on the server side for telemetry.
+const USER_AGENT: &str = concat!("uniclipboard-cli/", env!("CARGO_PKG_VERSION"));
+
 /// Rendezvous-backed adapter for [`PairingInvitationPort`].
 pub struct RendezvousPairingInvitationAdapter {
     endpoint: Arc<Endpoint>,
@@ -129,11 +136,12 @@ impl PairingInvitationPort for RendezvousPairingInvitationAdapter {
 
         let url = format!("{}/v1/pairings", self.base_url.trim_end_matches('/'));
         let client = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
             .timeout(HTTP_TIMEOUT)
             .build()
             .map_err(|err| InvitationError::Internal(format!("http client build: {err}")))?;
         let resp = client.post(&url).json(&body).send().await.map_err(|err| {
-            warn!(error = %err, "rendezvous request transport failed");
+            warn!(error = %err, chain = %err_chain(&err), "rendezvous request transport failed");
             InvitationError::ServiceUnavailable
         })?;
 
@@ -176,19 +184,24 @@ impl PairingInvitationPort for RendezvousPairingInvitationAdapter {
         &self,
         code: &InvitationCode,
     ) -> Result<(), ConsumeInvitationError> {
-        // POST {base}/v1/pairings/{code}/consume — server marks the entry
-        // terminal and subsequent GETs return 404/410. Body is empty; the
-        // server trusts the transport-level sponsor identity (F-030).
+        // POST {base}/v1/pairings/consume with JSON body `{ "code": ... }` —
+        // the server marks the entry terminal and subsequent resolves return
+        // 404/409. The server trusts the transport-level sponsor identity
+        // (F-030). Note: the path does NOT interpolate the code — that
+        // variant of the API doesn't exist on the rendezvous service.
         let url = format!(
-            "{}/v1/pairings/{}/consume",
+            "{}/v1/pairings/consume",
             self.base_url.trim_end_matches('/'),
-            code.as_str()
         );
+        let body = CodeRequest {
+            code: code.as_str().to_string(),
+        };
         let client = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
             .timeout(HTTP_TIMEOUT)
             .build()
             .map_err(|err| ConsumeInvitationError::Internal(format!("http client build: {err}")))?;
-        let resp = client.post(&url).send().await.map_err(|err| {
+        let resp = client.post(&url).json(&body).send().await.map_err(|err| {
             warn!(error = %err, "rendezvous consume transport failed");
             ConsumeInvitationError::ServiceUnavailable
         })?;
@@ -200,12 +213,18 @@ impl PairingInvitationPort for RendezvousPairingInvitationAdapter {
         }
         match status.as_u16() {
             404 => {
-                debug!("rendezvous returned 404 on consume (already reaped)");
+                // Server groups `pairing_not_found` + `pairing_expired` under
+                // 404; caller maps both as benign (already-terminal), so we
+                // don't need to distinguish on the HTTP status alone.
+                debug!("rendezvous returned 404 on consume (not found or expired)");
                 Err(ConsumeInvitationError::NotFound)
             }
-            410 => {
-                debug!("rendezvous returned 410 on consume (expired)");
-                Err(ConsumeInvitationError::Expired)
+            409 => {
+                // `pairing_already_consumed` — some other sponsor client
+                // (or us on retry) already claimed it. Treat as benign,
+                // identical to NotFound from the caller's perspective.
+                debug!("rendezvous returned 409 on consume (already consumed)");
+                Err(ConsumeInvitationError::NotFound)
             }
             s if (500..600).contains(&s) => {
                 warn!(status = %status, "rendezvous service 5xx on consume");
@@ -245,6 +264,14 @@ struct CreatePairingResponse {
     expires_at_ms: i64,
 }
 
+/// Request body for `POST /v1/pairings/consume` and — used elsewhere —
+/// `POST /v1/pairings/resolve`. The field name is unambiguously `code`
+/// (no rename needed) on the server side.
+#[derive(Debug, Serialize)]
+struct CodeRequest {
+    code: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct RendezvousErrorEnvelope {
     error: Option<RendezvousErrorDetail>,
@@ -260,6 +287,21 @@ struct RendezvousErrorDetail {
 #[cfg(test)]
 fn utc_from_ms(ms: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(ms).single().unwrap()
+}
+
+/// Walk an error's `Error::source()` chain and render it into a single
+/// `A -> B -> C` string. `reqwest::Error`'s `Display` intentionally hides
+/// the inner cause (the whole point is "transport failed"), which makes
+/// "error sending request for url" impossible to diagnose without the
+/// underlying hyper / rustls / io error — this helper surfaces them.
+fn err_chain(err: &dyn std::error::Error) -> String {
+    let mut parts = vec![err.to_string()];
+    let mut source = err.source();
+    while let Some(s) = source {
+        parts.push(s.to_string());
+        source = s.source();
+    }
+    parts.join(" -> ")
 }
 
 #[cfg(test)]
@@ -481,10 +523,12 @@ mod tests {
 
     #[tokio::test]
     async fn consume_invitation_happy_path_is_204_ok() {
+        use wiremock::matchers::body_partial_json;
         let ep = loopback_endpoint().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/pairings/ABCD-EFGH/consume"))
+            .and(path("/v1/pairings/consume"))
+            .and(body_partial_json(json!({ "code": "ABCD-EFGH" })))
             .respond_with(ResponseTemplate::new(204))
             .expect(1)
             .mount(&server)
@@ -506,7 +550,7 @@ mod tests {
         let ep = loopback_endpoint().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/pairings/GONE-CODE/consume"))
+            .and(path("/v1/pairings/consume"))
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
@@ -524,12 +568,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn consume_invitation_maps_410_to_expired() {
+    async fn consume_invitation_maps_409_to_not_found() {
+        // Server returns 409 `pairing_already_consumed` when a second
+        // sponsor client wins the race. Caller treats as benign, so we
+        // collapse to NotFound like the existing expired branch.
         let ep = loopback_endpoint().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/pairings/OLD-CODE/consume"))
-            .respond_with(ResponseTemplate::new(410))
+            .and(path("/v1/pairings/consume"))
+            .respond_with(ResponseTemplate::new(409))
             .mount(&server)
             .await;
 
@@ -542,7 +589,7 @@ mod tests {
             .consume_invitation(&InvitationCode::new("OLD-CODE"))
             .await
             .unwrap_err();
-        assert!(matches!(err, ConsumeInvitationError::Expired));
+        assert!(matches!(err, ConsumeInvitationError::NotFound));
     }
 
     #[tokio::test]
@@ -550,7 +597,7 @@ mod tests {
         let ep = loopback_endpoint().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/pairings/BUSY-CODE/consume"))
+            .and(path("/v1/pairings/consume"))
             .respond_with(ResponseTemplate::new(503))
             .mount(&server)
             .await;
@@ -587,7 +634,7 @@ mod tests {
         let ep = loopback_endpoint().await;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(path("/v1/pairings/WEIRD/consume"))
+            .and(path("/v1/pairings/consume"))
             .respond_with(ResponseTemplate::new(400).set_body_json(json!({
                 "error": { "code": "malformed_code" }
             })))

@@ -14,7 +14,7 @@ serde = { version = "1", features = ["derive"] }
 chrono = "0.4"
 anyhow = "1.0"
 uuid = { version = "1", features = ["v7"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-webpki-roots", "blocking"] }
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 # Phase 87 OTLP pipeline — promoted from dev-deps to full deps (Plan 02)
 # NOTE: `reqwest-blocking-client` (not `reqwest-client`) is required because

@@ -23,11 +23,20 @@ serde_json = "1"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 dialoguer = "0.11"
 console = "0.15"
 indicatif = "0.17"
 libc = "0.2"
+hostname = "0.4"
+uc-application = { path = "../uc-application" }
+# Installs the default `rustls` crypto provider process-wide at `main()`
+# start — iroh-quinn and reqwest both consume rustls 0.23+, which now
+# requires an explicit `CryptoProvider` before the first TLS handshake.
+# Without this the first party to set up a `ClientConfig` (today iroh)
+# leaves later consumers (reqwest → rendezvous) with a provider that
+# surfaces certs as `CertificateError::BadEncoding`.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 [dev-dependencies]
 axum = { version = "0.7", features = ["ws", "tokio", "http1", "http2"] }

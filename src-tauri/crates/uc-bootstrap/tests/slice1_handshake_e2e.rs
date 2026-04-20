@@ -387,8 +387,8 @@ async fn sponsor_joiner_end_to_end_pairing_persists_both_sides() {
         })
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/v1/pairings/{CODE}")))
+    Mock::given(method("POST"))
+        .and(path("/v1/pairings/resolve"))
         .respond_with(GetPairing {
             vault: Arc::clone(&vault),
             expires_at_ms: EXPIRES_AT_MS,
@@ -396,7 +396,7 @@ async fn sponsor_joiner_end_to_end_pairing_persists_both_sides() {
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path(format!("/v1/pairings/{CODE}/consume")))
+        .and(path("/v1/pairings/consume"))
         .respond_with(ResponseTemplate::new(204))
         .mount(&server)
         .await;
