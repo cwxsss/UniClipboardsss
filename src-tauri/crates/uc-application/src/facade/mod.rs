@@ -5,9 +5,11 @@
 //! `crate::usecases::<domain>` and stay `pub(crate)`; the facade is
 //! expected to compose them in P4 without re-exporting them.
 
+pub mod app_facade;
 pub mod commands;
 pub mod errors;
 
+pub use app_facade::AppFacade;
 pub use commands::{
     InitializeSpaceCommand, InitializeSpaceResult, UnlockSpaceCommand, UnlockSpaceResult,
 };
