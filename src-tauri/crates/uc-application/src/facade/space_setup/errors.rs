@@ -176,3 +176,29 @@ pub enum UnlockSpaceError {
     #[error("internal error: {0}")]
     Internal(String),
 }
+
+/// Failure modes of [`crate::facade::space_setup::SpaceSetupFacade::try_resume_session`].
+///
+/// Kept narrow on purpose: "nothing to resume" (setup never completed
+/// or keyslot absent) is a **normal** signal returned as `Ok(false)`,
+/// not an error. Only genuine problems — corrupt key material, a
+/// missing keyring entry that blocks silent resume despite the keyslot
+/// being on disk, or an unexpected adapter fault — surface as errors.
+#[derive(Debug, Error)]
+pub enum TryResumeSessionError {
+    /// The keyslot exists on disk but the keyring entry needed to
+    /// unwrap it is missing or rejected (typically: user wiped the
+    /// system keychain item, or permission was denied). Caller should
+    /// fall back to a passphrase-based `unlock` once that CLI surface
+    /// exists; until then the operator must re-init the profile.
+    #[error("cached master key is not available from the keyring")]
+    KeyringMiss,
+
+    /// Stored keyslot was corrupted or in an unsupported format.
+    #[error("space key material corrupted")]
+    CorruptedKeyMaterial,
+
+    /// Uncategorised infra / adapter failure.
+    #[error("internal error: {0}")]
+    Internal(String),
+}

@@ -28,6 +28,7 @@
 use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, instrument, warn};
@@ -41,6 +42,7 @@ use uc_core::ports::{ClockPort, ConsumeInvitationError, PairingInvitationPort};
 use uc_core::MemberRepositoryPort;
 use uc_core::TrustedPeerRepositoryPort;
 
+use crate::facade::space_setup::PairingOutcome;
 use crate::membership::usecases::{AdmitMember, AdmitMemberUseCase};
 use crate::pairing_invitation::holder::{InMemoryPairingInvitationHolder, TakeMatchingError};
 use crate::trusted_peer::usecases::{TrustPeer, TrustPeerUseCase};
@@ -62,6 +64,11 @@ pub(crate) struct PairingInboundOrchestrator {
     admit_member: Arc<AdmitMemberUc>,
     trust_peer: Arc<TrustPeerUc>,
     local_device_id: uc_core::DeviceId,
+    /// Broadcast channel: fires exactly one [`PairingOutcome`] per matched
+    /// invitation. `send` is `let _`-ignored because no subscribers is a
+    /// legitimate state (e.g., GUI tauri runtime without a live listener);
+    /// the CLI `invite` command subscribes before enabling B1.
+    outcome_tx: broadcast::Sender<PairingOutcome>,
 }
 
 impl PairingInboundOrchestrator {
@@ -74,6 +81,7 @@ impl PairingInboundOrchestrator {
         admit_member: Arc<AdmitMemberUc>,
         trust_peer: Arc<TrustPeerUc>,
         local_device_id: uc_core::DeviceId,
+        outcome_tx: broadcast::Sender<PairingOutcome>,
     ) -> Self {
         Self {
             pairing_events,
@@ -84,7 +92,14 @@ impl PairingInboundOrchestrator {
             admit_member,
             trust_peer,
             local_device_id,
+            outcome_tx,
         }
+    }
+
+    fn emit_failure(&self, reason: impl Into<String>) {
+        let _ = self.outcome_tx.send(PairingOutcome::Failure {
+            reason: reason.into(),
+        });
     }
 
     /// Subscribe to the event port and spawn the drain loop. Returned
@@ -222,6 +237,8 @@ impl PairingInboundOrchestrator {
                 self.handshake
                     .reject(session, PairingRejectReason::InvitationMismatch)
                     .await;
+                // Expired = our invitation; outer caller is done.
+                self.emit_failure("invitation expired before joiner request arrived");
                 None
             }
             Err(TakeMatchingError::Internal(msg)) => {
@@ -232,8 +249,9 @@ impl PairingInboundOrchestrator {
                     "holder invariant broken on inbound pairing request; rejecting"
                 );
                 self.handshake
-                    .reject(session, PairingRejectReason::Internal(msg))
+                    .reject(session, PairingRejectReason::Internal(msg.clone()))
                     .await;
+                self.emit_failure(format!("invitation holder invariant violated: {msg}"));
                 None
             }
         }
@@ -268,6 +286,7 @@ impl PairingInboundOrchestrator {
                 self.handshake
                     .reject(&session, PairingRejectReason::PassphraseMismatch)
                     .await;
+                self.emit_failure("joiner proof rejected (passphrase mismatch)");
             }
         }
     }
@@ -286,6 +305,7 @@ impl PairingInboundOrchestrator {
                         PairingRejectReason::Internal("sponsor clock out of range".into()),
                     )
                     .await;
+                self.emit_failure("sponsor clock out of range");
                 return;
             }
         };
@@ -309,6 +329,7 @@ impl PairingInboundOrchestrator {
                     PairingRejectReason::Internal(format!("admit_member: {err}")),
                 )
                 .await;
+            self.emit_failure(format!("admit_member failed: {err}"));
             return;
         }
 
@@ -330,6 +351,7 @@ impl PairingInboundOrchestrator {
                     PairingRejectReason::Internal(format!("trust_peer: {err}")),
                 )
                 .await;
+            self.emit_failure(format!("trust_peer failed: {err}"));
             return;
         }
 
@@ -346,12 +368,18 @@ impl PairingInboundOrchestrator {
             // on the settings/send failure). We deliberately do not send
             // a Reject here because the joiner's local store may have
             // already advanced; let the natural timeout take care of it.
+            self.emit_failure(format!("Confirm send failed after commit: {err}"));
         } else {
             info!(
                 session = %session,
                 joiner_device_id = %facts.device_id.as_str(),
                 "pairing handshake completed"
             );
+            let _ = self.outcome_tx.send(PairingOutcome::Success {
+                peer_device_id: facts.device_id.clone(),
+                peer_device_name: facts.device_name.clone(),
+                peer_fingerprint: facts.identity_fingerprint.clone(),
+            });
         }
     }
 
@@ -623,6 +651,25 @@ mod tests {
         }
     }
 
+    /// Minimal SetupStatusPort stub — orchestrator tests don't care
+    /// which `space_id` lands in the KeyslotOffer, so a None value
+    /// triggers the sponsor coordinator's fresh-UUID fallback. That's
+    /// fine because assertions here compare wire intent and use case
+    /// ordering, not specific space ids.
+    struct OrchestratorStubSetupStatus;
+    #[async_trait]
+    impl uc_core::ports::SetupStatusPort for OrchestratorStubSetupStatus {
+        async fn get_status(&self) -> anyhow::Result<uc_core::setup::SetupStatus> {
+            Ok(uc_core::setup::SetupStatus {
+                has_completed: true,
+                space_id: None,
+            })
+        }
+        async fn set_status(&self, _s: &uc_core::setup::SetupStatus) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
     /// Repo that records every save and can be pre-armed to fail.
     #[derive(Default)]
     struct RecordingMemberRepo {
@@ -734,7 +781,13 @@ mod tests {
             }
         }
 
-        fn build(self, events: Arc<ScriptedEventPort>) -> Arc<PairingInboundOrchestrator> {
+        fn build(
+            self,
+            events: Arc<ScriptedEventPort>,
+        ) -> (
+            Arc<PairingInboundOrchestrator>,
+            broadcast::Receiver<PairingOutcome>,
+        ) {
             // 大 TTL：orchestrator 这一层的测试不关心 TTL fire，
             // 专门的 TTL 行为测试在 `sponsor_handshake::tests` 里。
             let handshake = SponsorHandshakeCoordinator::new(
@@ -746,9 +799,11 @@ mod tests {
                 Arc::new(FixedLocal(sponsor_fp())),
                 Arc::new(FixedDevice(DeviceId::new("sponsor-device"))),
                 Arc::new(NamedSettings("sponsor-mac".into())),
+                Arc::new(OrchestratorStubSetupStatus),
                 std::time::Duration::from_secs(3600),
             );
-            Arc::new(PairingInboundOrchestrator::new(
+            let (outcome_tx, outcome_rx) = broadcast::channel(16);
+            let orch = Arc::new(PairingInboundOrchestrator::new(
                 events,
                 self.invitation_port.clone(),
                 self.holder.clone(),
@@ -761,7 +816,9 @@ mod tests {
                     self.trusted_peer_repo.clone() as Arc<dyn TrustedPeerRepositoryPort>
                 )),
                 DeviceId::new("sponsor-device"),
-            ))
+                outcome_tx,
+            ));
+            (orch, outcome_rx)
         }
     }
 
@@ -779,7 +836,7 @@ mod tests {
         let sp = b.session_port.clone();
         let inv = b.invitation_port.clone();
         let holder = b.holder.clone();
-        let orch = b.build(drained_events());
+        let (orch, mut outcomes) = b.build(drained_events());
 
         orch.handle_event(PairingSessionEvent::Incoming {
             session: PairingSessionId::new("s"),
@@ -798,6 +855,9 @@ mod tests {
         assert_eq!(sp.closed().len(), 1);
         assert!(inv.consumed.lock().unwrap().is_empty());
         assert_eq!(holder.len().await, 1);
+        // Stranger code → not ours; no outcome should fire (the invite
+        // command stays listening for the real joiner).
+        assert!(outcomes.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -807,7 +867,7 @@ mod tests {
         b.clock_ms = (fixed_now() + Duration::minutes(10)).timestamp_millis();
         let sp = b.session_port.clone();
         let holder = b.holder.clone();
-        let orch = b.build(drained_events());
+        let (orch, mut outcomes) = b.build(drained_events());
 
         orch.handle_event(PairingSessionEvent::Incoming {
             session: PairingSessionId::new("s"),
@@ -822,13 +882,21 @@ mod tests {
             })
         ));
         assert_eq!(holder.len().await, 0);
+        // Our expired invitation = lifecycle-end; outcome surfaces as
+        // Failure so the `invite` command can exit with a useful reason.
+        match outcomes.try_recv() {
+            Ok(PairingOutcome::Failure { reason }) => {
+                assert!(reason.contains("expired"), "reason = {reason}");
+            }
+            other => panic!("expected Failure(expired), got {other:?}"),
+        }
     }
 
     #[tokio::test]
     async fn non_request_first_frame_rejects_internal() {
         let b = Bundle::happy();
         let sp = b.session_port.clone();
-        let orch = b.build(drained_events());
+        let (orch, mut outcomes) = b.build(drained_events());
         orch.handle_event(PairingSessionEvent::Incoming {
             session: PairingSessionId::new("s"),
             message: PairingSessionMessage::ChallengeResponse(JoinerChallengeResponse {
@@ -843,6 +911,8 @@ mod tests {
             },
             o => panic!("expected Reject, got {o:?}"),
         }
+        // Pre-match garbage → can't attribute to any invitation, no outcome.
+        assert!(outcomes.try_recv().is_err());
     }
 
     // ── verified happy path ──────────────────────────────────────────────
@@ -854,7 +924,7 @@ mod tests {
         let sp = b.session_port.clone();
         let member_repo = b.member_repo.clone();
         let trusted_peer_repo = b.trusted_peer_repo.clone();
-        let orch = b.build(drained_events());
+        let (orch, mut outcomes) = b.build(drained_events());
 
         let session = PairingSessionId::new("s-ok");
         orch.handle_event(PairingSessionEvent::Incoming {
@@ -889,6 +959,20 @@ mod tests {
         assert!(matches!(sent[0].1, PairingSessionMessage::KeyslotOffer(_)));
         assert!(matches!(sent[1].1, PairingSessionMessage::Confirm(_)));
         assert_eq!(sp.closed().len(), 1);
+        // Completion outcome fires with joiner facts so the CLI/GUI
+        // listener can display "paired with X".
+        match outcomes.try_recv() {
+            Ok(PairingOutcome::Success {
+                peer_device_id,
+                peer_device_name,
+                peer_fingerprint,
+            }) => {
+                assert_eq!(peer_device_id.as_str(), "joiner-device");
+                assert_eq!(peer_device_name, "joiner's laptop");
+                assert_eq!(peer_fingerprint, joiner_fp());
+            }
+            other => panic!("expected Success, got {other:?}"),
+        }
     }
 
     // ── unverified → PassphraseMismatch, no persistence ──────────────────
@@ -901,7 +985,7 @@ mod tests {
         let sp = b.session_port.clone();
         let member_repo = b.member_repo.clone();
         let trusted_peer_repo = b.trusted_peer_repo.clone();
-        let orch = b.build(drained_events());
+        let (orch, mut outcomes) = b.build(drained_events());
 
         let session = PairingSessionId::new("s-bad");
         orch.handle_event(PairingSessionEvent::Incoming {
@@ -927,6 +1011,12 @@ mod tests {
         ));
         assert!(member_repo.saved.lock().unwrap().is_empty());
         assert!(trusted_peer_repo.saved.lock().unwrap().is_empty());
+        match outcomes.try_recv() {
+            Ok(PairingOutcome::Failure { reason }) => {
+                assert!(reason.contains("passphrase"), "reason = {reason}");
+            }
+            other => panic!("expected Failure(passphrase), got {other:?}"),
+        }
     }
 
     // ── admit failure aborts before trust + Confirm ──────────────────────
@@ -940,7 +1030,7 @@ mod tests {
         let sp = b.session_port.clone();
         let member_repo = b.member_repo.clone();
         let trusted_peer_repo = b.trusted_peer_repo.clone();
-        let orch = b.build(drained_events());
+        let (orch, mut outcomes) = b.build(drained_events());
 
         let session = PairingSessionId::new("s-af");
         orch.handle_event(PairingSessionEvent::Incoming {
@@ -974,6 +1064,12 @@ mod tests {
             trusted_peer_repo.saved.lock().unwrap().is_empty(),
             "trust must not run when admit failed"
         );
+        match outcomes.try_recv() {
+            Ok(PairingOutcome::Failure { reason }) => {
+                assert!(reason.contains("admit_member"), "reason = {reason}");
+            }
+            other => panic!("expected Failure(admit_member), got {other:?}"),
+        }
     }
 
     // ── trust failure aborts after admit already committed ──────────────
@@ -987,7 +1083,7 @@ mod tests {
         let sp = b.session_port.clone();
         let member_repo = b.member_repo.clone();
         let trusted_peer_repo = b.trusted_peer_repo.clone();
-        let orch = b.build(drained_events());
+        let (orch, mut outcomes) = b.build(drained_events());
 
         let session = PairingSessionId::new("s-tf");
         orch.handle_event(PairingSessionEvent::Incoming {
@@ -1021,6 +1117,12 @@ mod tests {
             },
             o => panic!("expected Reject, got {o:?}"),
         }
+        match outcomes.try_recv() {
+            Ok(PairingOutcome::Failure { reason }) => {
+                assert!(reason.contains("trust_peer"), "reason = {reason}");
+            }
+            other => panic!("expected Failure(trust_peer), got {other:?}"),
+        }
     }
 
     // ── Closed event delegates to handshake coordinator ────────────────
@@ -1029,7 +1131,7 @@ mod tests {
     async fn closed_event_clears_parked_handshake_state() {
         let b = Bundle::happy();
         b.holder.insert(pending("DR")).await;
-        let orch = b.build(drained_events());
+        let (orch, _outcomes) = b.build(drained_events());
 
         let session = PairingSessionId::new("s-dr");
         orch.handle_event(PairingSessionEvent::Incoming {
@@ -1054,7 +1156,7 @@ mod tests {
         let b = Bundle::happy();
         b.holder.insert(pending("ST")).await;
         let sp = b.session_port.clone();
-        let orch = b.build(drained_events());
+        let (orch, _outcomes) = b.build(drained_events());
         let session = PairingSessionId::new("s-st");
 
         orch.handle_event(PairingSessionEvent::Incoming {
@@ -1089,7 +1191,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel(16);
         let events = Arc::new(ScriptedEventPort(StdMutex::new(Some(rx))));
-        let orch = b.build(events);
+        let (orch, mut _outcomes) = b.build(events);
 
         let handle = Arc::clone(&orch).spawn();
         tx.send(PairingSessionEvent::Incoming {
@@ -1115,7 +1217,7 @@ mod tests {
         let b = Bundle::happy();
         let events = drained_events();
         let _ = events.subscribe().await.unwrap();
-        let orch = b.build(events);
+        let (orch, mut _outcomes) = b.build(events);
         let handle = orch.spawn();
         tokio::time::timeout(std::time::Duration::from_secs(2), handle)
             .await

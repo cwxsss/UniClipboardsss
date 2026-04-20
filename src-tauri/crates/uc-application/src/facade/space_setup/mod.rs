@@ -12,6 +12,7 @@
 mod commands;
 mod deps;
 mod errors;
+mod events;
 mod facade;
 
 pub use commands::{
@@ -22,6 +23,7 @@ pub use commands::{
 pub use deps::SpaceSetupDeps;
 pub use errors::{
     InitializeSpaceError, IssuePairingInvitationError, RedeemPairingInvitationError,
-    UnlockSpaceError,
+    TryResumeSessionError, UnlockSpaceError,
 };
+pub use events::PairingOutcome;
 pub use facade::SpaceSetupFacade;

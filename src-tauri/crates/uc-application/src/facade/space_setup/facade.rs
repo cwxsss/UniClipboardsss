@@ -14,10 +14,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{instrument, warn};
 
-use uc_core::ports::NetworkControlPort;
+use uc_core::ids::SpaceId;
+use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
+use uc_core::ports::{NetworkControlPort, SetupStatusPort};
 
 use crate::facade::space_setup::commands::{
     InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
@@ -29,8 +32,9 @@ use crate::facade::space_setup::commands::{
 use crate::facade::space_setup::deps::SpaceSetupDeps;
 use crate::facade::space_setup::errors::RedeemPairingInvitationError;
 use crate::facade::space_setup::errors::{
-    InitializeSpaceError, IssuePairingInvitationError, UnlockSpaceError,
+    InitializeSpaceError, IssuePairingInvitationError, TryResumeSessionError, UnlockSpaceError,
 };
+use crate::facade::space_setup::events::PairingOutcome;
 use crate::membership::usecases::AdmitMemberUseCase;
 use crate::pairing_inbound::orchestrator::PairingInboundOrchestrator;
 use crate::pairing_inbound::sponsor_handshake::SponsorHandshakeCoordinator;
@@ -54,6 +58,16 @@ pub struct SpaceSetupFacade {
     /// spawned during construction. Aborted in [`Self::on_shutdown`] so
     /// the event loop doesn't outlive the facade.
     pairing_inbound_handle: JoinHandle<()>,
+    /// Broadcast source of sponsor-side pairing completion events.
+    /// Held on the facade so [`Self::subscribe_pairing_completion`] can
+    /// hand out fresh receivers as long as the facade is alive.
+    pairing_outcome_tx: broadcast::Sender<PairingOutcome>,
+    /// Held for [`Self::try_resume_session`] — the silent resume path
+    /// needs both the setup flag (to decide whether there's anything
+    /// to resume at all) and direct access to `SpaceAccessPort::try_resume_session`.
+    /// Everything else still goes through use cases.
+    space_access: Arc<dyn SpaceAccessPort>,
+    setup_status: Arc<dyn SetupStatusPort>,
 }
 
 impl SpaceSetupFacade {
@@ -75,6 +89,13 @@ impl SpaceSetupFacade {
             proof_port,
             trusted_peer_repo,
         } = deps;
+
+        // Stash handles for `try_resume_session` before the originals
+        // get moved into the respective use cases below. Needed so the
+        // facade itself owns a silent-resume path without routing
+        // through a use case that would only wrap two port calls.
+        let space_access_for_facade = Arc::clone(&space_access);
+        let setup_status_for_facade = Arc::clone(&setup_status);
 
         // Invitation holder is purely an internal flow-state component
         // (§11.4) — construct it here so bootstrap never sees the type.
@@ -123,8 +144,15 @@ impl SpaceSetupFacade {
             Arc::clone(&local_identity),
             Arc::clone(&device_identity),
             Arc::clone(&settings),
+            Arc::clone(&setup_status),
             handshake_ttl,
         );
+        // Capacity 16 is more than enough: the outcome fires at most
+        // once per handshake and typical subscribers (CLI `invite`, GUI)
+        // drain as they arrive. Lag from a slow subscriber would drop the
+        // oldest events, which is acceptable — a slow consumer caring
+        // only about the latest attempt is fine.
+        let (pairing_outcome_tx, _initial_rx) = broadcast::channel(16);
         let inbound_orchestrator = Arc::new(PairingInboundOrchestrator::new(
             pairing_events,
             pairing_invitation,
@@ -134,6 +162,7 @@ impl SpaceSetupFacade {
             Arc::clone(&admit_member_uc),
             Arc::clone(&trust_peer_uc),
             local_device_id,
+            pairing_outcome_tx.clone(),
         ));
         let pairing_inbound_handle = inbound_orchestrator.spawn();
 
@@ -163,7 +192,68 @@ impl SpaceSetupFacade {
             redeem_pairing_invitation,
             network_control,
             pairing_inbound_handle,
+            pairing_outcome_tx,
+            space_access: space_access_for_facade,
+            setup_status: setup_status_for_facade,
         }
+    }
+
+    /// Try to restore the in-memory space session silently, using the
+    /// KEK cached in secure storage by a previous `init` / `unlock`.
+    ///
+    /// Returns `Ok(true)` when the session is now unlocked and ready
+    /// for pairing operations; `Ok(false)` when there is nothing to
+    /// resume (setup has not completed on this profile). Genuine
+    /// problems — corrupt key material, missing keyring entry despite
+    /// a keyslot on disk, or adapter faults — surface via
+    /// [`TryResumeSessionError`].
+    ///
+    /// Intended for short-lived CLI processes: every `invite` call
+    /// drives this before B1 so the sponsor's `verify_proof` path has
+    /// the master key in memory when the joiner's ChallengeResponse
+    /// lands. GUI / daemon callers can use it at startup to skip the
+    /// passphrase prompt when the keyring still has the KEK.
+    #[instrument(skip_all)]
+    pub async fn try_resume_session(&self) -> Result<bool, TryResumeSessionError> {
+        let status = self
+            .setup_status
+            .get_status()
+            .await
+            .map_err(|err| TryResumeSessionError::Internal(err.to_string()))?;
+        if !status.has_completed {
+            return Ok(false);
+        }
+
+        // The adapter keys off the current profile, so the `SpaceId`
+        // passed here is an opaque handle rather than a lookup key.
+        // Minting a fresh UUID matches how A2 `unlock` does it.
+        let space_id = SpaceId::new();
+        match self.space_access.try_resume_session(&space_id).await {
+            Ok(Some(_)) => Ok(true),
+            // Keyslot missing despite has_completed == true — treat
+            // as "nothing to resume" rather than an error: can happen
+            // right after factory_reset when setup_status lagged.
+            Ok(None) => Ok(false),
+            Err(SpaceAccessError::CorruptedKeyMaterial) => {
+                Err(TryResumeSessionError::CorruptedKeyMaterial)
+            }
+            // NotInitialized and WrongPassphrase from load_kek map to
+            // "keyring didn't give us what we needed to silently unlock".
+            Err(SpaceAccessError::NotInitialized) | Err(SpaceAccessError::WrongPassphrase) => {
+                Err(TryResumeSessionError::KeyringMiss)
+            }
+            Err(other) => Err(TryResumeSessionError::Internal(other.to_string())),
+        }
+    }
+
+    /// Subscribe to sponsor-side pairing completion events.
+    ///
+    /// Each call returns a fresh receiver sharing the facade's broadcast
+    /// source. Receivers must be obtained **before** the awaited handshake
+    /// starts; lag policy follows `tokio::sync::broadcast` (oldest events
+    /// are dropped if a subscriber falls behind `capacity`).
+    pub fn subscribe_pairing_completion(&self) -> broadcast::Receiver<PairingOutcome> {
+        self.pairing_outcome_tx.subscribe()
     }
 
     /// A1 · Create the encrypted space on a fresh device. On success the
@@ -703,6 +793,7 @@ mod tests {
         let setup_status = InMemorySetupStatus::default();
         *setup_status.status.lock().unwrap() = SetupStatus {
             has_completed: true,
+            space_id: None,
         };
         let (facade, _net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
@@ -734,6 +825,7 @@ mod tests {
         let setup_status = InMemorySetupStatus::default();
         *setup_status.status.lock().unwrap() = SetupStatus {
             has_completed: true,
+            space_id: None,
         };
         let space_access = FakeSpaceAccess::default();
         *space_access.unlock_err.lock().unwrap() = Some(SpaceAccessError::WrongPassphrase);
@@ -793,6 +885,7 @@ mod tests {
         let setup_status = InMemorySetupStatus::default();
         *setup_status.status.lock().unwrap() = SetupStatus {
             has_completed: true,
+            space_id: None,
         };
         let (facade, net, _inv) = make_facade(
             Arc::new(FakeSpaceAccess::default()),

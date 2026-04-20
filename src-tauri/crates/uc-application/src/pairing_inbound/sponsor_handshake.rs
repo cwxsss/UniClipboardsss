@@ -52,7 +52,7 @@ use uc_core::pairing::session_message::{
 };
 use uc_core::ports::pairing::{PairingSessionId, PairingSessionPort};
 use uc_core::ports::space::{ProofPort, SpaceAccessPort};
-use uc_core::ports::{DeviceIdentityPort, LocalIdentityPort, SettingsPort};
+use uc_core::ports::{DeviceIdentityPort, LocalIdentityPort, SettingsPort, SetupStatusPort};
 use uc_core::security::IdentityFingerprint;
 use uc_core::space_access::domain::SpaceAccessProofArtifact;
 
@@ -97,6 +97,11 @@ pub(crate) struct SponsorHandshakeCoordinator {
     local_identity: Arc<dyn LocalIdentityPort>,
     device_identity: Arc<dyn DeviceIdentityPort>,
     settings: Arc<dyn SettingsPort>,
+    /// Source of the stable `SpaceId` persisted at A1 time. The earlier
+    /// design minted a fresh UUID per handshake, which caused the joiner
+    /// to adopt an id unrelated to the sponsor's original space — this
+    /// port fixes that by giving `begin` access to the canonical value.
+    setup_status: Arc<dyn SetupStatusPort>,
     sessions: Mutex<HashMap<PairingSessionId, SessionCtx>>,
     /// handshake TTL（begin 到 confirm/reject 的最大等待时间）。
     handshake_ttl: Duration,
@@ -113,6 +118,7 @@ impl SponsorHandshakeCoordinator {
         local_identity: Arc<dyn LocalIdentityPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
+        setup_status: Arc<dyn SetupStatusPort>,
         handshake_ttl: Duration,
     ) -> Arc<Self> {
         Arc::new_cyclic(|weak| Self {
@@ -122,6 +128,7 @@ impl SponsorHandshakeCoordinator {
             local_identity,
             device_identity,
             settings,
+            setup_status,
             sessions: Mutex::new(HashMap::new()),
             handshake_ttl,
             self_weak: weak.clone(),
@@ -139,11 +146,31 @@ impl SponsorHandshakeCoordinator {
         session: &PairingSessionId,
         request: JoinerRequest,
     ) -> Result<(), ()> {
-        // Fresh SpaceId: the adapter's Branch A does not consult it
-        // (keyslot is keyed by profile), but both wire peers and the
-        // persisted `SpaceMember` echo the same value, so we emit one
-        // stable id per handshake.
-        let probe_space_id = SpaceId::new();
+        // Load the canonical `SpaceId` persisted at A1 time so the
+        // joiner adopts the sponsor's actual space — not a fresh UUID
+        // minted here. Legacy installs that pre-date the
+        // `SetupStatus.space_id` field fall back to a fresh id + a
+        // warning; everything else (adapter Branch A, `SpaceMember`
+        // rows, wire frames) is content-addressed by keyslot anyway,
+        // so the fallback is recoverable.
+        let probe_space_id = match self.setup_status.get_status().await {
+            Ok(status) => status.space_id.unwrap_or_else(|| {
+                warn!(
+                    session = %session,
+                    "SetupStatus.space_id missing; falling back to fresh UUID — \
+                     joiner will adopt this id, which won't match a legacy sponsor's original"
+                );
+                SpaceId::new()
+            }),
+            Err(err) => {
+                warn!(
+                    session = %session,
+                    error = %err,
+                    "setup_status.get_status failed; falling back to fresh SpaceId"
+                );
+                SpaceId::new()
+            }
+        };
         // Placeholder passphrase — ignored by Branch A of the adapter
         // (already-initialised sponsor). Reusing a const empty Passphrase
         // keeps the signature intact until the port grows an
@@ -668,8 +695,27 @@ mod tests {
             Arc::new(FixedLocal(sponsor_fp())),
             Arc::new(FixedDevice(DeviceId::new("sponsor-device"))),
             settings,
+            // Tests don't care which space_id lands in the KeyslotOffer
+            // — a stub that returns a fixed completed-but-no-id status
+            // exercises the fallback branch, which is fine because
+            // assertions compare against what the coordinator emits.
+            Arc::new(StubSetupStatus),
             ttl,
         )
+    }
+
+    struct StubSetupStatus;
+    #[async_trait]
+    impl SetupStatusPort for StubSetupStatus {
+        async fn get_status(&self) -> anyhow::Result<uc_core::setup::SetupStatus> {
+            Ok(uc_core::setup::SetupStatus {
+                has_completed: true,
+                space_id: None,
+            })
+        }
+        async fn set_status(&self, _status: &uc_core::setup::SetupStatus) -> anyhow::Result<()> {
+            Ok(())
+        }
     }
 
     fn happy_defaults() -> (

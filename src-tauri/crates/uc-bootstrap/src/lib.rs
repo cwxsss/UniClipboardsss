@@ -25,7 +25,7 @@ pub use assembly::{
 pub use background_tasks::{spawn_blob_processing_tasks, BlobProcessingPorts};
 pub use builders::{
     build_cli_context, build_cli_context_with_profile, build_daemon_app, build_gui_app,
-    CliBootstrapContext, DaemonBootstrapContext, GuiBootstrapContext,
+    build_slice1_cli_context, CliBootstrapContext, DaemonBootstrapContext, GuiBootstrapContext,
 };
 pub use config::load_config;
 pub use init::ensure_default_device_name;

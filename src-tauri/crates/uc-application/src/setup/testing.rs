@@ -60,6 +60,7 @@ impl FakeSetupStatus {
     pub fn completed() -> Arc<Self> {
         Self::new(SetupStatus {
             has_completed: true,
+            space_id: None,
         })
     }
 

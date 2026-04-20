@@ -140,10 +140,16 @@ impl InitializeSpaceUseCase {
             .map_err(|e| InitializeSpaceError::StorageFailed(e.to_string()))?;
         debug!(%device_id, "owner SpaceMember persisted");
 
-        // 7. Mark setup as completed.
+        // 7. Mark setup as completed — and persist the minted
+        //    `space_id` so A2 unlock / sponsor handshake / peer views
+        //    all observe the same canonical id across process
+        //    boundaries. Without this, every later process would mint
+        //    its own UUID and the joiner would end up persisting a
+        //    different id than the sponsor.
         self.setup_status
             .set_status(&SetupStatus {
                 has_completed: true,
+                space_id: Some(space_id.clone()),
             })
             .await
             .map_err(|e| InitializeSpaceError::StorageFailed(e.to_string()))?;
@@ -562,6 +568,7 @@ mod tests {
         // that has already onboarded.
         *h.setup_status.status.lock().unwrap() = SetupStatus {
             has_completed: true,
+            space_id: None,
         };
 
         let err = h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap_err();

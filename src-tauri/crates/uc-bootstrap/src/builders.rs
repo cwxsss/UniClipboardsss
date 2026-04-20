@@ -241,6 +241,18 @@ pub fn build_cli_context_with_profile(
     })
 }
 
+/// Slice 1 CLI composition-root entry. Returns the full
+/// [`crate::assembly::WiredDependencies`] so the caller can hand it to
+/// [`crate::space_setup::build_space_setup_assembly`]; unlike
+/// [`build_cli_context_with_profile`], this does not flatten to `AppDeps`
+/// and therefore preserves access to `trusted_peer_repo` and other Slice
+/// 1-only ports the `SpaceSetupFacade` needs.
+pub fn build_slice1_cli_context(
+    log_profile: Option<uc_observability::LogProfile>,
+) -> anyhow::Result<(AppConfig, crate::assembly::WiredDependencies)> {
+    build_core(cli_pairing_runtime_owner(), log_profile)
+}
+
 /// Build daemon bootstrap context. Returns AppDeps + background deps.
 /// Caller constructs CoreRuntime and starts background workers.
 pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {

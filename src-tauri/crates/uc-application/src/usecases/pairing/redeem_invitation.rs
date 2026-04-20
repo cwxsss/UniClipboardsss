@@ -131,9 +131,13 @@ impl RedeemPairingInvitationUseCase {
             .map_err(map_trust_err)?;
 
         // Mark setup complete (ordering rationale: see module doc).
+        // Adopt the sponsor's `space_id` — without this, future commands
+        // on this joiner would mint a fresh id and the two sides would
+        // diverge on the canonical identifier.
         self.setup_status
             .set_status(&SetupStatus {
                 has_completed: true,
+                space_id: Some(outcome.space_id.clone()),
             })
             .await
             .map_err(|e| {
