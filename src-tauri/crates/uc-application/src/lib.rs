@@ -4,6 +4,7 @@ pub mod facade;
 pub mod file_transfer;
 pub mod membership;
 pub mod pairing;
+pub(crate) mod pairing_inbound;
 pub(crate) mod pairing_invitation;
 pub mod setup;
 pub mod space_access;

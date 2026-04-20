@@ -69,7 +69,8 @@ pub use pairing::{
     SessionError,
 };
 pub use pairing_invitation::{
-    InvitationCode, InvitationError, IssuedInvitation, PairingInvitationPort,
+    ConsumeInvitationError, InvitationCode, InvitationError, IssuedInvitation,
+    PairingInvitationPort,
 };
 #[allow(deprecated)]
 pub use pairing_transport::PairingTransportPort;

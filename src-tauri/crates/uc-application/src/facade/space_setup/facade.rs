@@ -2,7 +2,9 @@
 //!
 //! Owns the two use cases plus the network lifecycle port so A1/A2 success
 //! auto-triggers `start_network` (F1) and [`on_shutdown`](Self::on_shutdown)
-//! mirrors it with `stop_network` (F2).
+//! mirrors it with `stop_network` (F2). Also owns the sponsor-side inbound
+//! orchestrator so the rest of the crate never sees the spawn surface
+//! (§11.4).
 //!
 //! Network errors during auto-start are intentionally non-fatal: the
 //! underlying space mutation has already committed and isn't safe to roll
@@ -11,6 +13,7 @@
 
 use std::sync::Arc;
 
+use tokio::task::JoinHandle;
 use tracing::{instrument, warn};
 
 use uc_core::ports::NetworkControlPort;
@@ -23,22 +26,28 @@ use crate::facade::space_setup::deps::SpaceSetupDeps;
 use crate::facade::space_setup::errors::{
     InitializeSpaceError, IssuePairingInvitationError, UnlockSpaceError,
 };
+use crate::pairing_inbound::orchestrator::PairingInboundOrchestrator;
 use crate::pairing_invitation::InMemoryPairingInvitationHolder;
 use crate::usecases::pairing::issue_invitation::IssuePairingInvitationUseCase;
 use crate::usecases::setup::initialize_space::InitializeSpaceUseCase;
 use crate::usecases::setup::unlock_space::UnlockSpaceUseCase;
 
 /// Space-lifecycle facade (A1 initialise, A2 unlock, B1 issue invitation,
-/// F2 shutdown).
+/// P7e inbound subscriber, F2 shutdown).
 pub struct SpaceSetupFacade {
     initialize_space: Arc<InitializeSpaceUseCase>,
     unlock_space: Arc<UnlockSpaceUseCase>,
     issue_pairing_invitation: Arc<IssuePairingInvitationUseCase>,
     network_control: Arc<dyn NetworkControlPort>,
+    /// `JoinHandle` for the sponsor-side inbound pairing orchestrator
+    /// spawned during construction. Aborted in [`Self::on_shutdown`] so
+    /// the event loop doesn't outlive the facade.
+    pairing_inbound_handle: JoinHandle<()>,
 }
 
 impl SpaceSetupFacade {
-    /// Wire all use cases from a single [`SpaceSetupDeps`] bundle.
+    /// Wire all use cases from a single [`SpaceSetupDeps`] bundle and
+    /// spawn the sponsor-side inbound pairing orchestrator.
     pub fn new(deps: SpaceSetupDeps) -> Self {
         let SpaceSetupDeps {
             space_access,
@@ -50,6 +59,8 @@ impl SpaceSetupFacade {
             clock,
             network_control,
             pairing_invitation,
+            pairing_session,
+            pairing_events,
         } = deps;
 
         // Invitation holder is purely an internal flow-state component
@@ -67,16 +78,29 @@ impl SpaceSetupFacade {
         ));
         let unlock_space = Arc::new(UnlockSpaceUseCase::new(space_access, setup_status));
         let issue_pairing_invitation = Arc::new(IssuePairingInvitationUseCase::new(
-            pairing_invitation,
+            Arc::clone(&pairing_invitation),
             device_identity,
-            clock,
-            invitation_holder,
+            Arc::clone(&clock),
+            Arc::clone(&invitation_holder),
         ));
+        // Spawn the sponsor-side inbound event loop: subscribes to
+        // PairingEventPort and dispatches Incoming/MessageReceived/Closed
+        // via the orchestrator. The handle is owned by the facade so
+        // on_shutdown can abort it cleanly.
+        let inbound_orchestrator = Arc::new(PairingInboundOrchestrator::new(
+            pairing_events,
+            pairing_session,
+            pairing_invitation,
+            invitation_holder,
+            clock,
+        ));
+        let pairing_inbound_handle = inbound_orchestrator.spawn();
         Self {
             initialize_space,
             unlock_space,
             issue_pairing_invitation,
             network_control,
+            pairing_inbound_handle,
         }
     }
 
@@ -120,9 +144,12 @@ impl SpaceSetupFacade {
     /// F2 · Shut the network runtime down cleanly on app exit.
     ///
     /// Best-effort: failures are logged but not returned, since the caller
-    /// is on the teardown path and has no recourse.
+    /// is on the teardown path and has no recourse. Also aborts the
+    /// inbound pairing orchestrator so its `subscribe` receiver drops and
+    /// the underlying adapter releases the event channel.
     #[instrument(skip_all)]
     pub async fn on_shutdown(&self) {
+        self.pairing_inbound_handle.abort();
         if let Err(err) = self.network_control.stop_network().await {
             warn!(
                 error = %err,
@@ -161,12 +188,18 @@ mod tests {
 
     use chrono::{DateTime, Utc};
 
+    use tokio::sync::mpsc;
     use uc_core::crypto::domain::{ActiveSpace, Passphrase};
     use uc_core::ids::{DeviceId, SpaceId};
     use uc_core::membership::{MembershipError, SpaceMember};
     use uc_core::pairing::invitation::InvitationCode;
+    use uc_core::pairing::PairingSessionMessage;
+    use uc_core::ports::pairing::{
+        DialError, PairingEventPort, PairingSessionEvent, PairingSessionId, PairingSessionPort,
+        SessionError,
+    };
     use uc_core::ports::pairing_invitation::{
-        InvitationError, IssuedInvitation, PairingInvitationPort,
+        ConsumeInvitationError, InvitationError, IssuedInvitation, PairingInvitationPort,
     };
     use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
     use uc_core::ports::{
@@ -392,6 +425,72 @@ mod tests {
                     .with_timezone(&Utc),
             })
         }
+
+        async fn consume_invitation(
+            &self,
+            _code: &InvitationCode,
+        ) -> Result<(), ConsumeInvitationError> {
+            // Smoke tests don't exercise P7e inbound path.
+            Ok(())
+        }
+    }
+
+    /// Minimal fakes for the Slice 1 pairing session/event ports. The
+    /// smoke tests here only verify A1/A2/B1 forwarding and shutdown side
+    /// effects; inbound event handling is covered exhaustively in
+    /// `pairing_inbound::orchestrator::tests`.
+    #[derive(Default)]
+    struct NoopSessionPort;
+
+    #[async_trait]
+    impl PairingSessionPort for NoopSessionPort {
+        async fn dial_by_invitation(
+            &self,
+            _code: &uc_core::pairing::invitation::InvitationCode,
+        ) -> Result<PairingSessionId, DialError> {
+            unreachable!("smoke tests never dial")
+        }
+        async fn send(
+            &self,
+            _session: &PairingSessionId,
+            _message: PairingSessionMessage,
+        ) -> Result<(), SessionError> {
+            Ok(())
+        }
+        async fn recv_next(
+            &self,
+            _session: &PairingSessionId,
+        ) -> Result<Option<PairingSessionMessage>, SessionError> {
+            unreachable!("smoke tests never recv")
+        }
+        async fn close(&self, _session: &PairingSessionId, _reason: Option<String>) {}
+    }
+
+    /// Hands out a single empty receiver; the orchestrator will idle until
+    /// the facade is dropped (and `on_shutdown` aborts the task).
+    struct IdleEventPort {
+        rx: StdMutex<Option<mpsc::Receiver<PairingSessionEvent>>>,
+    }
+    impl IdleEventPort {
+        fn new() -> Self {
+            let (_tx, rx) = mpsc::channel(1);
+            // Drop the sender on purpose — the channel closes when the
+            // receiver's `recv` is awaited. That's fine: the orchestrator's
+            // run_loop exits cleanly on channel close.
+            Self {
+                rx: StdMutex::new(Some(rx)),
+            }
+        }
+    }
+    #[async_trait]
+    impl PairingEventPort for IdleEventPort {
+        async fn subscribe(&self) -> anyhow::Result<mpsc::Receiver<PairingSessionEvent>> {
+            self.rx
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("IdleEventPort already subscribed"))
+        }
     }
 
     fn default_fingerprint() -> IdentityFingerprint {
@@ -423,6 +522,8 @@ mod tests {
             clock: Arc::new(FixedClock(0)),
             network_control: network_control.clone(),
             pairing_invitation: pairing_invitation.clone(),
+            pairing_session: Arc::new(NoopSessionPort),
+            pairing_events: Arc::new(IdleEventPort::new()),
         });
         (facade, network_control, pairing_invitation)
     }

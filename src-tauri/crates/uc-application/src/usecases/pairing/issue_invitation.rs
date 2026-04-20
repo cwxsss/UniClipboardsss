@@ -158,6 +158,14 @@ mod tests {
                 FakeOutcome::Err(e) => Err(e),
             }
         }
+
+        async fn consume_invitation(
+            &self,
+            _code: &InvitationCode,
+        ) -> Result<(), uc_core::ports::ConsumeInvitationError> {
+            // B1 use case never drives consume directly.
+            Ok(())
+        }
     }
 
     struct FixedDeviceIdentity(DeviceId);

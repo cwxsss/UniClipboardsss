@@ -25,7 +25,8 @@ use tracing::{debug, instrument, warn};
 
 use uc_core::pairing::invitation::InvitationCode;
 use uc_core::ports::{
-    DeviceIdentityPort, InvitationError, IssuedInvitation, PairingInvitationPort, SettingsPort,
+    ConsumeInvitationError, DeviceIdentityPort, InvitationError, IssuedInvitation,
+    PairingInvitationPort, SettingsPort,
 };
 
 /// Production rendezvous service base URL.
@@ -167,6 +168,59 @@ impl PairingInvitationPort for RendezvousPairingInvitationAdapter {
 
         debug!(%expires_at, "rendezvous invitation issued");
         Ok(IssuedInvitation { code, expires_at })
+    }
+
+    #[instrument(skip(self), fields(code = %code.as_str()))]
+    async fn consume_invitation(
+        &self,
+        code: &InvitationCode,
+    ) -> Result<(), ConsumeInvitationError> {
+        // POST {base}/v1/pairings/{code}/consume — server marks the entry
+        // terminal and subsequent GETs return 404/410. Body is empty; the
+        // server trusts the transport-level sponsor identity (F-030).
+        let url = format!(
+            "{}/v1/pairings/{}/consume",
+            self.base_url.trim_end_matches('/'),
+            code.as_str()
+        );
+        let client = reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()
+            .map_err(|err| ConsumeInvitationError::Internal(format!("http client build: {err}")))?;
+        let resp = client.post(&url).send().await.map_err(|err| {
+            warn!(error = %err, "rendezvous consume transport failed");
+            ConsumeInvitationError::ServiceUnavailable
+        })?;
+
+        let status = resp.status();
+        if status.is_success() {
+            debug!("rendezvous invitation consumed");
+            return Ok(());
+        }
+        match status.as_u16() {
+            404 => {
+                debug!("rendezvous returned 404 on consume (already reaped)");
+                Err(ConsumeInvitationError::NotFound)
+            }
+            410 => {
+                debug!("rendezvous returned 410 on consume (expired)");
+                Err(ConsumeInvitationError::Expired)
+            }
+            s if (500..600).contains(&s) => {
+                warn!(status = %status, "rendezvous service 5xx on consume");
+                Err(ConsumeInvitationError::ServiceUnavailable)
+            }
+            _ => {
+                let err_env = resp.json::<RendezvousErrorEnvelope>().await.ok();
+                let slug = err_env
+                    .and_then(|e| e.error.map(|d| d.code))
+                    .unwrap_or_else(|| "unknown".to_string());
+                warn!(status = %status, slug = %slug, "rendezvous returned unexpected status on consume");
+                Err(ConsumeInvitationError::Internal(format!(
+                    "rendezvous rejected consume ({status}, slug={slug})"
+                )))
+            }
+        }
     }
 }
 
@@ -420,6 +474,140 @@ mod tests {
             other => panic!("expected Internal, got {other:?}"),
         };
         assert!(msg.contains("device_name"), "msg was {msg}");
+    }
+
+    // ── consume_invitation (P7e) ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn consume_invitation_happy_path_is_204_ok() {
+        let ep = loopback_endpoint().await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/ABCD-EFGH/consume"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let adapter = make_adapter(
+            ep,
+            InMemorySettings::with_device_name(Some("mac")),
+            server.uri(),
+        );
+        adapter
+            .consume_invitation(&InvitationCode::new("ABCD-EFGH"))
+            .await
+            .expect("consume happy path");
+    }
+
+    #[tokio::test]
+    async fn consume_invitation_maps_404_to_not_found() {
+        let ep = loopback_endpoint().await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/GONE-CODE/consume"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let adapter = make_adapter(
+            ep,
+            InMemorySettings::with_device_name(Some("mac")),
+            server.uri(),
+        );
+        let err = adapter
+            .consume_invitation(&InvitationCode::new("GONE-CODE"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConsumeInvitationError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn consume_invitation_maps_410_to_expired() {
+        let ep = loopback_endpoint().await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/OLD-CODE/consume"))
+            .respond_with(ResponseTemplate::new(410))
+            .mount(&server)
+            .await;
+
+        let adapter = make_adapter(
+            ep,
+            InMemorySettings::with_device_name(Some("mac")),
+            server.uri(),
+        );
+        let err = adapter
+            .consume_invitation(&InvitationCode::new("OLD-CODE"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConsumeInvitationError::Expired));
+    }
+
+    #[tokio::test]
+    async fn consume_invitation_maps_5xx_to_service_unavailable() {
+        let ep = loopback_endpoint().await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/BUSY-CODE/consume"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+
+        let adapter = make_adapter(
+            ep,
+            InMemorySettings::with_device_name(Some("mac")),
+            server.uri(),
+        );
+        let err = adapter
+            .consume_invitation(&InvitationCode::new("BUSY-CODE"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConsumeInvitationError::ServiceUnavailable));
+    }
+
+    #[tokio::test]
+    async fn consume_invitation_maps_transport_failure_to_service_unavailable() {
+        let ep = loopback_endpoint().await;
+        let adapter = make_adapter(
+            ep,
+            InMemorySettings::with_device_name(Some("mac")),
+            "http://127.0.0.1:1".to_string(),
+        );
+        let err = adapter
+            .consume_invitation(&InvitationCode::new("ANY"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ConsumeInvitationError::ServiceUnavailable));
+    }
+
+    #[tokio::test]
+    async fn consume_invitation_maps_other_4xx_to_internal_with_slug() {
+        let ep = loopback_endpoint().await;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/pairings/WEIRD/consume"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": { "code": "malformed_code" }
+            })))
+            .mount(&server)
+            .await;
+
+        let adapter = make_adapter(
+            ep,
+            InMemorySettings::with_device_name(Some("mac")),
+            server.uri(),
+        );
+        let err = adapter
+            .consume_invitation(&InvitationCode::new("WEIRD"))
+            .await
+            .unwrap_err();
+        let msg = match err {
+            ConsumeInvitationError::Internal(m) => m,
+            other => panic!("expected Internal, got {other:?}"),
+        };
+        assert!(msg.contains("malformed_code"), "msg was {msg}");
+        assert!(msg.contains("400"));
     }
 
     #[tokio::test]

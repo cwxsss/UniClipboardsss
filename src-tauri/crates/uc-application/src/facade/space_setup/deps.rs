@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use uc_core::membership::MemberRepositoryPort;
+use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
 use uc_core::ports::pairing_invitation::PairingInvitationPort;
 use uc_core::ports::space::SpaceAccessPort;
 use uc_core::ports::{
@@ -32,11 +33,22 @@ pub struct SpaceSetupDeps {
     /// Network runtime lifecycle. Auto-started on A1/A2 success (F1) and
     /// stopped by [`super::SpaceSetupFacade::on_shutdown`] (F2).
     pub network_control: Arc<dyn NetworkControlPort>,
-    /// Sponsor-side rendezvous client for issuing invitation codes (B1).
+    /// Sponsor-side rendezvous client for issuing invitation codes (B1)
+    /// and notifying the rendezvous of successful consumes (P7e inbound
+    /// path).
     ///
     /// The accompanying in-memory holder for parked invitations is
     /// constructed **inside** [`super::SpaceSetupFacade::new`] and kept
     /// `pub(crate)` so application-internal implementation details
     /// (`uc-application/AGENTS.md` §11.4) stay off the bootstrap surface.
     pub pairing_invitation: Arc<dyn PairingInvitationPort>,
+    /// Session-level transport used by the sponsor-side inbound orchestrator
+    /// to send `PairingReject` and close sessions that fail code matching.
+    /// Joiner-side uses the same port to dial; Slice 1 wires a single
+    /// adapter (`IrohPairingSessionAdapter`) for both roles.
+    pub pairing_session: Arc<dyn PairingSessionPort>,
+    /// Sponsor-side subscription to inbound pairing events. Drives the
+    /// [`crate::pairing_inbound`] orchestrator; the facade spawns the event
+    /// loop during construction and stops it on shutdown.
+    pub pairing_events: Arc<dyn PairingEventPort>,
 }
