@@ -1,12 +1,12 @@
 //! `AppFacade` — single, cross-domain entry point introduced in Slice 1.
 //!
 //! Per `uc-application/AGENTS.md` §11.4 external consumers only see the
-//! facade + its command / result / error types. The use cases and other
-//! coordination objects stay `pub(crate)`.
+//! facade + its command / result / error types. Use cases live under
+//! `crate::usecases::<domain>` and stay `pub(crate)`; the facade is
+//! expected to compose them in P4 without re-exporting them.
 
 pub mod commands;
 pub mod errors;
-pub(crate) mod usecases;
 
 pub use commands::{
     InitializeSpaceCommand, InitializeSpaceResult, UnlockSpaceCommand, UnlockSpaceResult,

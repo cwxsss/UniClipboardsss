@@ -11,7 +11,7 @@ use uc_core::security::IdentityFingerprint;
 // A1 · InitializeSpace
 // ---------------------------------------------------------------------------
 
-/// Input to [`crate::facade::usecases::InitializeSpaceUseCase`].
+/// Input to [`crate::usecases::setup::initialize_space::InitializeSpaceUseCase`].
 #[derive(Debug)]
 pub struct InitializeSpaceCommand {
     /// User-entered passphrase protecting the new space.
@@ -39,7 +39,7 @@ pub struct InitializeSpaceResult {
 // A2 · UnlockSpace
 // ---------------------------------------------------------------------------
 
-/// Input to [`crate::facade::usecases::UnlockSpaceUseCase`].
+/// Input to [`crate::usecases::setup::unlock_space::UnlockSpaceUseCase`].
 #[derive(Debug)]
 pub struct UnlockSpaceCommand {
     pub passphrase: Passphrase,
