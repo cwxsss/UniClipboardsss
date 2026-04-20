@@ -9,6 +9,7 @@ pub mod device;
 pub mod file_transfer;
 pub mod fs;
 pub mod network;
+pub mod rendezvous;
 pub mod search;
 pub mod security;
 pub mod settings;
