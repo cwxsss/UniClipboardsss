@@ -2,11 +2,12 @@
 //!
 //! Joiner side (P7c.2):
 //!
-//! 1. `dial_by_invitation(code)` calls the rendezvous service's resolve
-//!    endpoint (`POST {base}/v1/pairings/resolve` with JSON body
-//!    `{ "code": "<code>" }`), deserializes the opaque sponsor ticket into
-//!    an iroh [`EndpointAddr`], dials the sponsor with ALPN
-//!    [`PAIRING_ALPN`], and opens a bi-directional stream.
+//! 1. `dial_by_invitation(code)` asks the shared [`RendezvousClient`] to
+//!    resolve the code into a sponsor ticket
+//!    ([`crate::rendezvous::client`]'s `/v1/pairings/resolve`),
+//!    deserializes the opaque payload into an iroh [`EndpointAddr`],
+//!    dials the sponsor with ALPN [`PAIRING_ALPN`], and opens a
+//!    bi-directional stream.
 //! 2. `send` / `recv_next` ride the stream with a 4-byte big-endian length
 //!    prefix followed by a postcard-encoded [`PairingSessionMessage`] (see
 //!    [`super::wire`]).
@@ -39,8 +40,6 @@ use async_trait::async_trait;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::protocol::{AcceptError, ProtocolHandler, RouterBuilder};
 use iroh::{Endpoint, EndpointAddr};
-use reqwest::StatusCode;
-use serde::Deserialize;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, instrument, warn};
 
@@ -51,7 +50,7 @@ use uc_core::ports::pairing::{
 };
 
 use super::wire::{self, WireDecodeError};
-use crate::rendezvous::RENDEZVOUS_BASE_URL;
+use crate::rendezvous::{RendezvousClient, RendezvousHttpError};
 
 /// Bound for the [`PairingEventPort`] channel. 32 is comfortably above the
 /// expected inbound rate (a human approves pairing at most every few
@@ -71,7 +70,10 @@ const FRAME_LEN_BYTES: usize = 4;
 /// Iroh-backed pairing session adapter.
 pub struct IrohPairingSessionAdapter {
     endpoint: Arc<Endpoint>,
-    base_url: String,
+    /// Shared rendezvous HTTP gateway. Used only for `dial_by_invitation`
+    /// (joiner-side resolve call); the sponsor-side accept path doesn't
+    /// touch rendezvous.
+    rendezvous: Arc<RendezvousClient>,
     sessions: Mutex<HashMap<PairingSessionId, Arc<SessionSlot>>>,
     next_session_seq: AtomicU64,
     /// Sender side of the currently installed [`PairingEventPort`]
@@ -91,24 +93,14 @@ struct SessionSlot {
 }
 
 impl IrohPairingSessionAdapter {
-    pub fn new(endpoint: Arc<Endpoint>) -> Self {
+    /// Build an adapter wired to the given iroh endpoint and shared
+    /// rendezvous gateway. Hand the same [`RendezvousClient`] `Arc` to
+    /// every rendezvous-aware adapter in the process so they share
+    /// connection pool, timeout, and user-agent.
+    pub fn new(endpoint: Arc<Endpoint>, rendezvous: Arc<RendezvousClient>) -> Self {
         Self {
             endpoint,
-            base_url: RENDEZVOUS_BASE_URL.to_string(),
-            sessions: Mutex::new(HashMap::new()),
-            next_session_seq: AtomicU64::new(0),
-            incoming_tx: Mutex::new(None),
-        }
-    }
-
-    /// Override the rendezvous base URL. Production callers use
-    /// [`Self::new`] which defaults to [`crate::rendezvous::RENDEZVOUS_BASE_URL`].
-    /// Integration tests and bring-up flows that need to point at a mock or
-    /// staging rendezvous service go through this constructor.
-    pub fn with_base_url(endpoint: Arc<Endpoint>, base_url: impl Into<String>) -> Self {
-        Self {
-            endpoint,
-            base_url: base_url.into(),
+            rendezvous,
             sessions: Mutex::new(HashMap::new()),
             next_session_seq: AtomicU64::new(0),
             incoming_tx: Mutex::new(None),
@@ -121,41 +113,12 @@ impl IrohPairingSessionAdapter {
     }
 
     async fn resolve_invitation(&self, code: &InvitationCode) -> Result<EndpointAddr, DialError> {
-        // Server exposes `POST /v1/pairings/resolve` with JSON body
-        // `{ "code": ... }`. The GET-by-path variant doesn't exist on
-        // the rendezvous service; the explicit User-Agent dodges CF's
-        // bot-management layer that resets anonymous reqwest traffic.
-        let url = format!("{}/v1/pairings/resolve", self.base_url);
-        let body = serde_json::json!({ "code": code.as_str() });
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("uniclipboard-cli/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|err| DialError::Internal(format!("http client build: {err}")))?;
-        let response = client.post(&url).json(&body).send().await.map_err(|err| {
-            debug!(error = %err, "rendezvous resolve transport failure");
-            DialError::ServiceUnavailable
-        })?;
-
-        let status = response.status();
-        match status {
-            StatusCode::OK => {}
-            StatusCode::NOT_FOUND => return Err(DialError::InvitationNotFound),
-            StatusCode::GONE => return Err(DialError::InvitationExpired),
-            s if s.is_server_error() => return Err(DialError::ServiceUnavailable),
-            s => {
-                let body = response.text().await.unwrap_or_default();
-                return Err(DialError::Internal(format!(
-                    "rendezvous resolve: status {s} body={body}"
-                )));
-            }
-        }
-
-        let body: ResolveResponse = response
-            .json()
+        let resp = self
+            .rendezvous
+            .resolve_pairing(code.as_str())
             .await
-            .map_err(|err| DialError::Internal(format!("rendezvous resolve parse: {err}")))?;
-
-        serde_json::from_str::<EndpointAddr>(&body.sponsor_ticket)
+            .map_err(map_resolve_err)?;
+        serde_json::from_str::<EndpointAddr>(&resp.sponsor_ticket)
             .map_err(|err| DialError::Internal(format!("sponsor ticket decode: {err}")))
     }
 
@@ -532,18 +495,29 @@ fn map_read_err(err: iroh::endpoint::ReadExactError) -> SessionError {
     }
 }
 
-// ============================================================================
-// Wire types (rendezvous resolve response)
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-struct ResolveResponse {
-    #[serde(rename = "sponsorTicket")]
-    sponsor_ticket: String,
-    #[serde(rename = "sponsorEndpointId", default)]
-    _sponsor_endpoint_id: Option<String>,
-    #[serde(rename = "expiresAtMs", default)]
-    _expires_at_ms: Option<i64>,
+/// Project rendezvous HTTP errors into the subset of `DialError` the
+/// joiner-side resolve call can plausibly hit. The sponsor side never
+/// produces [`DialError`], so `Unexpected`/`Parse` are reported as
+/// `Internal` rather than reinterpreted.
+fn map_resolve_err(err: RendezvousHttpError) -> DialError {
+    match err {
+        RendezvousHttpError::NotFound => DialError::InvitationNotFound,
+        RendezvousHttpError::Gone => DialError::InvitationExpired,
+        RendezvousHttpError::Transport(_) | RendezvousHttpError::ServiceUnavailable(_) => {
+            DialError::ServiceUnavailable
+        }
+        // 409 is not a documented outcome on /resolve; treat as internal
+        // so the server anomaly shows up in logs.
+        RendezvousHttpError::Conflict => {
+            DialError::Internal("rendezvous resolve: unexpected 409".to_string())
+        }
+        RendezvousHttpError::Unexpected { status, slug } => {
+            DialError::Internal(format!("rendezvous resolve: status {status} slug={slug}"))
+        }
+        RendezvousHttpError::Parse(msg) => {
+            DialError::Internal(format!("rendezvous resolve parse: {msg}"))
+        }
+    }
 }
 
 // ============================================================================
@@ -573,6 +547,29 @@ mod tests {
                 .bind()
                 .await
                 .expect("bind endpoint"),
+        )
+    }
+
+    /// Build an adapter plus a rendezvous client pointed at `base_url`.
+    /// For tests that drive `dial_by_invitation` against a mock server.
+    fn adapter_with_rendezvous(
+        endpoint: Arc<Endpoint>,
+        base_url: impl Into<String>,
+    ) -> IrohPairingSessionAdapter {
+        IrohPairingSessionAdapter::new(
+            endpoint,
+            Arc::new(RendezvousClient::with_base_url(base_url)),
+        )
+    }
+
+    /// Adapter with a dummy rendezvous client that is never exercised —
+    /// for sponsor-side tests and ghost-session tests that never call
+    /// `dial_by_invitation`. We still construct a real client (instead
+    /// of an Option) so the production constructor signature stays tight.
+    fn adapter_no_rendezvous(endpoint: Arc<Endpoint>) -> IrohPairingSessionAdapter {
+        IrohPairingSessionAdapter::new(
+            endpoint,
+            Arc::new(RendezvousClient::with_base_url("http://unused.invalid")),
         )
     }
 
@@ -664,7 +661,7 @@ mod tests {
 
         let joiner_endpoint = bound_endpoint().await;
         wait_for_direct_addrs(&joiner_endpoint).await;
-        let adapter = IrohPairingSessionAdapter::with_base_url(joiner_endpoint, &rendezvous.uri());
+        let adapter = adapter_with_rendezvous(joiner_endpoint, rendezvous.uri());
 
         let session = adapter
             .dial_by_invitation(&InvitationCode::new("CODE-9999"))
@@ -707,7 +704,7 @@ mod tests {
             .await;
 
         let endpoint = bound_endpoint().await;
-        let adapter = IrohPairingSessionAdapter::with_base_url(endpoint, &rendezvous.uri());
+        let adapter = adapter_with_rendezvous(endpoint, rendezvous.uri());
 
         match adapter
             .dial_by_invitation(&InvitationCode::new("UNKNOWN"))
@@ -728,7 +725,7 @@ mod tests {
             .await;
 
         let endpoint = bound_endpoint().await;
-        let adapter = IrohPairingSessionAdapter::with_base_url(endpoint, &rendezvous.uri());
+        let adapter = adapter_with_rendezvous(endpoint, rendezvous.uri());
 
         match adapter
             .dial_by_invitation(&InvitationCode::new("STALE"))
@@ -749,7 +746,7 @@ mod tests {
             .await;
 
         let endpoint = bound_endpoint().await;
-        let adapter = IrohPairingSessionAdapter::with_base_url(endpoint, &rendezvous.uri());
+        let adapter = adapter_with_rendezvous(endpoint, rendezvous.uri());
 
         match adapter
             .dial_by_invitation(&InvitationCode::new("BUSY"))
@@ -775,7 +772,7 @@ mod tests {
             .await;
 
         let endpoint = bound_endpoint().await;
-        let adapter = IrohPairingSessionAdapter::with_base_url(endpoint, &rendezvous.uri());
+        let adapter = adapter_with_rendezvous(endpoint, rendezvous.uri());
 
         match adapter
             .dial_by_invitation(&InvitationCode::new("BADTICKET"))
@@ -789,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn send_on_unknown_session_returns_not_found() {
         let endpoint = bound_endpoint().await;
-        let adapter = IrohPairingSessionAdapter::new(endpoint);
+        let adapter = adapter_no_rendezvous(endpoint);
         let ghost = PairingSessionId::new("no-such-session");
 
         match adapter.send(&ghost, sample_request()).await {
@@ -835,7 +832,7 @@ mod tests {
         wait_for_direct_addrs(&sponsor_endpoint).await;
         let sponsor_addr = sponsor_endpoint.addr();
 
-        let sponsor_adapter = Arc::new(IrohPairingSessionAdapter::new(sponsor_endpoint.clone()));
+        let sponsor_adapter = Arc::new(adapter_no_rendezvous(sponsor_endpoint.clone()));
         let mut rx = sponsor_adapter.subscribe().await.expect("subscribe");
 
         let router = sponsor_adapter
@@ -897,7 +894,7 @@ mod tests {
     #[tokio::test]
     async fn subscribe_replaces_previous_sender() {
         let endpoint = bound_endpoint().await;
-        let adapter = Arc::new(IrohPairingSessionAdapter::new(endpoint));
+        let adapter = Arc::new(adapter_no_rendezvous(endpoint));
 
         let mut first_rx = adapter.subscribe().await.expect("first subscribe");
         let mut second_rx = adapter.subscribe().await.expect("second subscribe");

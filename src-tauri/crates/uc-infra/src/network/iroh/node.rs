@@ -24,7 +24,7 @@ use uc_core::ports::pairing_invitation::PairingInvitationPort;
 use uc_core::ports::{DeviceIdentityPort, LocalIdentityError, SettingsPort};
 
 use crate::pairing::{IrohPairingSessionAdapter, PAIRING_ALPN};
-use crate::rendezvous::RendezvousPairingInvitationAdapter;
+use crate::rendezvous::{RendezvousClient, RendezvousPairingInvitationAdapter};
 
 use super::identity_store::IrohIdentityStore;
 
@@ -145,17 +145,26 @@ impl IrohNodeBuilder {
     ///   connections are accepted.
     /// * Returns the pairing session / event / invitation ports. The first
     ///   two are the same `Arc` cast to two trait objects.
+    ///
+    /// A single [`RendezvousClient`] is built here and shared between the
+    /// session adapter (joiner `dial_by_invitation` → `/resolve`) and the
+    /// invitation adapter (sponsor `/pairings` + `/consume`) so the
+    /// whole process uses one reqwest connection pool, one timeout, and
+    /// one user-agent.
     pub fn install_pairing(
         &mut self,
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
     ) -> PairingHandlers {
-        let adapter = Arc::new(match &self.config.rendezvous_base_url {
-            Some(url) => {
-                IrohPairingSessionAdapter::with_base_url(Arc::clone(&self.endpoint), url.clone())
-            }
-            None => IrohPairingSessionAdapter::new(Arc::clone(&self.endpoint)),
+        let rendezvous = Arc::new(match &self.config.rendezvous_base_url {
+            Some(url) => RendezvousClient::with_base_url(url.clone()),
+            None => RendezvousClient::new(),
         });
+
+        let adapter = Arc::new(IrohPairingSessionAdapter::new(
+            Arc::clone(&self.endpoint),
+            Arc::clone(&rendezvous),
+        ));
 
         // `RouterBuilder::accept` consumes `self`; take + reassign so the
         // builder can be called again for a Slice 2 handler in the same
@@ -168,19 +177,12 @@ impl IrohNodeBuilder {
         self.router_builder = Some(builder);
 
         let invitation: Arc<dyn PairingInvitationPort> =
-            Arc::new(match self.config.rendezvous_base_url.clone() {
-                Some(url) => RendezvousPairingInvitationAdapter::with_base_url(
-                    Arc::clone(&self.endpoint),
-                    device_identity,
-                    settings,
-                    url,
-                ),
-                None => RendezvousPairingInvitationAdapter::new(
-                    Arc::clone(&self.endpoint),
-                    device_identity,
-                    settings,
-                ),
-            });
+            Arc::new(RendezvousPairingInvitationAdapter::new(
+                Arc::clone(&self.endpoint),
+                device_identity,
+                settings,
+                rendezvous,
+            ));
 
         PairingHandlers {
             session: adapter.clone(),
