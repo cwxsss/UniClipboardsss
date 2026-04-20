@@ -10,11 +10,12 @@ use std::sync::Arc;
 use uc_core::membership::MemberRepositoryPort;
 use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
 use uc_core::ports::pairing_invitation::PairingInvitationPort;
-use uc_core::ports::space::SpaceAccessPort;
+use uc_core::ports::space::{ProofPort, SpaceAccessPort};
 use uc_core::ports::{
     ClockPort, DeviceIdentityPort, LocalIdentityPort, NetworkControlPort, SettingsPort,
     SetupStatusPort,
 };
+use uc_core::trusted_peer::TrustedPeerRepositoryPort;
 
 /// Dependencies for [`super::SpaceSetupFacade`].
 ///
@@ -51,4 +52,11 @@ pub struct SpaceSetupDeps {
     /// [`crate::pairing_inbound`] orchestrator; the facade spawns the event
     /// loop during construction and stops it on shutdown.
     pub pairing_events: Arc<dyn PairingEventPort>,
+    /// HMAC proof verifier for the joiner's `ChallengeResponse` (P7f).
+    /// Shared between the inbound handshake path and any future
+    /// joiner-side flow that needs proof build/verify symmetry.
+    pub proof_port: Arc<dyn ProofPort>,
+    /// Persists a joiner as a `TrustedPeer` alongside the `SpaceMember`
+    /// row when the P7f handshake succeeds (`PersistSponsorAccess`).
+    pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
 }

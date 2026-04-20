@@ -30,6 +30,7 @@ use uc_core::pairing::{
     InvitationCode, JoinerChallengeResponse, JoinerRequest, PairingReject, PairingRejectReason,
     PairingSessionMessage, SponsorConfirm, SponsorKeyslotOffer,
 };
+use uc_core::ports::pairing::PairingSessionId;
 use uc_core::security::IdentityFingerprint;
 
 const WIRE_VERSION: u8 = 1;
@@ -67,6 +68,7 @@ struct WireSponsorKeyslotOffer {
     space_id: String,
     keyslot_blob: Vec<u8>,
     challenge: Vec<u8>,
+    pairing_session_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -166,6 +168,7 @@ fn to_wire(msg: &PairingSessionMessage) -> WireBody {
             space_id: o.space_id.inner().clone(),
             keyslot_blob: o.keyslot_blob.clone(),
             challenge: o.challenge.clone(),
+            pairing_session_id: o.pairing_session_id.as_str().to_string(),
         }),
         PairingSessionMessage::ChallengeResponse(c) => {
             WireBody::ChallengeResponse(WireJoinerChallengeResponse {
@@ -202,6 +205,7 @@ fn from_wire(body: WireBody) -> Result<PairingSessionMessage, WireDecodeError> {
             space_id: SpaceId::from_string(o.space_id),
             keyslot_blob: o.keyslot_blob,
             challenge: o.challenge,
+            pairing_session_id: PairingSessionId::new(o.pairing_session_id),
         })),
         WireBody::ChallengeResponse(c) => Ok(PairingSessionMessage::ChallengeResponse(
             JoinerChallengeResponse {
@@ -276,6 +280,7 @@ mod tests {
             space_id: SpaceId::from_str("space-42"),
             keyslot_blob: vec![0xde, 0xad, 0xbe, 0xef],
             challenge: vec![0x01; 32],
+            pairing_session_id: PairingSessionId::new("sess-abc-42"),
         });
 
         let decoded = round_trip(original);
@@ -284,6 +289,7 @@ mod tests {
                 assert_eq!(o.space_id.inner(), "space-42");
                 assert_eq!(o.keyslot_blob, vec![0xde, 0xad, 0xbe, 0xef]);
                 assert_eq!(o.challenge, vec![0x01; 32]);
+                assert_eq!(o.pairing_session_id.as_str(), "sess-abc-42");
             }
             other => panic!("expected KeyslotOffer, got {other:?}"),
         }

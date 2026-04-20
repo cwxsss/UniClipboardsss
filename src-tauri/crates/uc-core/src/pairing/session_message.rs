@@ -22,6 +22,7 @@
 
 use super::invitation::InvitationCode;
 use crate::ids::{DeviceId, SpaceId};
+use crate::ports::pairing::PairingSessionId;
 use crate::security::IdentityFingerprint;
 
 /// All pairing session-level messages for the Slice 1 iroh-native flow.
@@ -60,9 +61,16 @@ pub struct SponsorKeyslotOffer {
     /// Opaque keyslot payload. Infra serializes the historical
     /// `KeySlotFile` JSON here; core treats the blob as bytes.
     pub keyslot_blob: Vec<u8>,
-    /// Challenge bytes the joiner must decrypt with the derived master
-    /// key to prove passphrase knowledge.
+    /// 32-byte challenge nonce the joiner combines with the derived
+    /// master key and `pairing_session_id` to compute an HMAC proof
+    /// ([`ProofPort::build_proof`](crate::ports::space::ProofPort)).
+    /// Sponsor keeps a copy in per-session state and feeds the same
+    /// value to `verify_proof` on receipt.
     pub challenge: Vec<u8>,
+    /// Sponsor-minted session identifier replayed verbatim into the
+    /// joiner's proof payload so the sponsor-side `verify_proof` can
+    /// bind the HMAC to the live pairing session (replay defence).
+    pub pairing_session_id: PairingSessionId,
 }
 
 /// Joiner → sponsor. Challenge decrypt proof (B2 step 8).

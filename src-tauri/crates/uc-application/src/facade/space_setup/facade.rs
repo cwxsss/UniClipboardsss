@@ -61,6 +61,8 @@ impl SpaceSetupFacade {
             pairing_invitation,
             pairing_session,
             pairing_events,
+            proof_port,
+            trusted_peer_repo,
         } = deps;
 
         // Invitation holder is purely an internal flow-state component
@@ -69,30 +71,39 @@ impl SpaceSetupFacade {
 
         let initialize_space = Arc::new(InitializeSpaceUseCase::new(
             Arc::clone(&space_access),
-            local_identity,
+            Arc::clone(&local_identity),
             Arc::clone(&device_identity),
-            member_repo,
+            Arc::clone(&member_repo),
             Arc::clone(&setup_status),
-            settings,
+            Arc::clone(&settings),
             Arc::clone(&clock),
         ));
-        let unlock_space = Arc::new(UnlockSpaceUseCase::new(space_access, setup_status));
+        let unlock_space = Arc::new(UnlockSpaceUseCase::new(
+            Arc::clone(&space_access),
+            setup_status,
+        ));
         let issue_pairing_invitation = Arc::new(IssuePairingInvitationUseCase::new(
             Arc::clone(&pairing_invitation),
-            device_identity,
+            Arc::clone(&device_identity),
             Arc::clone(&clock),
             Arc::clone(&invitation_holder),
         ));
-        // Spawn the sponsor-side inbound event loop: subscribes to
-        // PairingEventPort and dispatches Incoming/MessageReceived/Closed
-        // via the orchestrator. The handle is owned by the facade so
-        // on_shutdown can abort it cleanly.
+        // Spawn the sponsor-side inbound event loop. The orchestrator
+        // reuses `SpaceAccessStateMachine` for all handshake transitions
+        // and dispatches actions onto the Slice 1 iroh-native wire.
         let inbound_orchestrator = Arc::new(PairingInboundOrchestrator::new(
             pairing_events,
             pairing_session,
             pairing_invitation,
             invitation_holder,
             clock,
+            space_access,
+            proof_port,
+            member_repo,
+            trusted_peer_repo,
+            local_identity,
+            device_identity,
+            settings,
         ));
         let pairing_inbound_handle = inbound_orchestrator.spawn();
         Self {
@@ -201,7 +212,7 @@ mod tests {
     use uc_core::ports::pairing_invitation::{
         ConsumeInvitationError, InvitationError, IssuedInvitation, PairingInvitationPort,
     };
-    use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
+    use uc_core::ports::space::{ProofPort, SpaceAccessError, SpaceAccessPort};
     use uc_core::ports::{
         ClockPort, DeviceIdentityPort, LocalIdentityError, LocalIdentityPort, NetworkControlPort,
         SettingsPort, SetupStatusPort,
@@ -209,7 +220,9 @@ mod tests {
     use uc_core::security::IdentityFingerprint;
     use uc_core::settings::model::Settings;
     use uc_core::setup::SetupStatus;
-    use uc_core::space_access::{JoinOffer, ProofDerivedKey};
+    use uc_core::space_access::{JoinOffer, ProofDerivedKey, SpaceAccessProofArtifact};
+    use uc_core::trusted_peer::{TrustedPeer, TrustedPeerError, TrustedPeerRepositoryPort};
+    use uc_core::SessionId;
 
     // ── fakes (minimal) ──────────────────────────────────────────────────
 
@@ -493,6 +506,48 @@ mod tests {
         }
     }
 
+    /// Smoke-test stub: proof verification is not exercised here —
+    /// the inbound handshake flow is covered in
+    /// `pairing_inbound::orchestrator::tests`.
+    struct NoopProofPort;
+    #[async_trait]
+    impl ProofPort for NoopProofPort {
+        async fn build_proof(
+            &self,
+            _pairing_session_id: &SessionId,
+            _space_id: &SpaceId,
+            _challenge_nonce: [u8; 32],
+            _derived_key: &ProofDerivedKey,
+        ) -> anyhow::Result<SpaceAccessProofArtifact> {
+            unreachable!("smoke tests never drive verification")
+        }
+        async fn verify_proof(
+            &self,
+            _proof: &SpaceAccessProofArtifact,
+            _expected_nonce: [u8; 32],
+        ) -> anyhow::Result<bool> {
+            unreachable!("smoke tests never drive verification")
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopTrustedPeerRepo;
+    #[async_trait]
+    impl TrustedPeerRepositoryPort for NoopTrustedPeerRepo {
+        async fn get(&self, _: &DeviceId) -> Result<Option<TrustedPeer>, TrustedPeerError> {
+            Ok(None)
+        }
+        async fn list(&self) -> Result<Vec<TrustedPeer>, TrustedPeerError> {
+            Ok(vec![])
+        }
+        async fn save(&self, _: &TrustedPeer) -> Result<(), TrustedPeerError> {
+            Ok(())
+        }
+        async fn remove(&self, _: &DeviceId) -> Result<bool, TrustedPeerError> {
+            Ok(false)
+        }
+    }
+
     fn default_fingerprint() -> IdentityFingerprint {
         IdentityFingerprint::from_raw_string("ABCDEFGHIJKLMNOP").unwrap()
     }
@@ -524,6 +579,8 @@ mod tests {
             pairing_invitation: pairing_invitation.clone(),
             pairing_session: Arc::new(NoopSessionPort),
             pairing_events: Arc::new(IdleEventPort::new()),
+            proof_port: Arc::new(NoopProofPort),
+            trusted_peer_repo: Arc::new(NoopTrustedPeerRepo),
         });
         (facade, network_control, pairing_invitation)
     }
