@@ -6,6 +6,7 @@ pub mod membership;
 pub mod pairing;
 pub(crate) mod pairing_inbound;
 pub(crate) mod pairing_invitation;
+pub(crate) mod pairing_outbound;
 pub mod setup;
 pub mod space_access;
 pub mod trusted_peer;

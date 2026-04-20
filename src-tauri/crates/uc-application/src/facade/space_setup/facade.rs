@@ -35,6 +35,7 @@ use crate::membership::usecases::AdmitMemberUseCase;
 use crate::pairing_inbound::orchestrator::PairingInboundOrchestrator;
 use crate::pairing_inbound::sponsor_handshake::SponsorHandshakeCoordinator;
 use crate::pairing_invitation::InMemoryPairingInvitationHolder;
+use crate::pairing_outbound::joiner_handshake::JoinerHandshakeCoordinator;
 use crate::trusted_peer::usecases::TrustPeerUseCase;
 use crate::usecases::pairing::issue_invitation::IssuePairingInvitationUseCase;
 use crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase;
@@ -115,7 +116,7 @@ impl SpaceSetupFacade {
         let admit_member_uc = Arc::new(AdmitMemberUseCase::new(Arc::clone(&member_repo)));
         let trust_peer_uc = Arc::new(TrustPeerUseCase::new(Arc::clone(&trusted_peer_repo)));
 
-        let handshake = SponsorHandshakeCoordinator::new(
+        let sponsor_handshake = SponsorHandshakeCoordinator::new(
             Arc::clone(&pairing_session),
             Arc::clone(&space_access),
             Arc::clone(&proof_port),
@@ -129,25 +130,30 @@ impl SpaceSetupFacade {
             pairing_invitation,
             invitation_holder,
             Arc::clone(&clock),
-            handshake,
+            sponsor_handshake,
             Arc::clone(&admit_member_uc),
             Arc::clone(&trust_peer_uc),
             local_device_id,
         ));
         let pairing_inbound_handle = inbound_orchestrator.spawn();
 
-        let redeem_pairing_invitation = Arc::new(RedeemPairingInvitationUseCase::new(
+        // joiner-side symmetric: coordinator holds wire + crypto, use
+        // case composes it with admit/trust/setup-status.
+        let joiner_handshake = JoinerHandshakeCoordinator::new(
             pairing_session,
             space_access,
             proof_port,
             local_identity,
             device_identity,
             settings,
-            setup_status,
+            handshake_ttl,
+        );
+        let redeem_pairing_invitation = Arc::new(RedeemPairingInvitationUseCase::new(
+            joiner_handshake,
             admit_member_uc,
             trust_peer_uc,
+            setup_status,
             clock,
-            handshake_ttl,
         ));
 
         Self {
