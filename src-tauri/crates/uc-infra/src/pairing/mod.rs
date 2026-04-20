@@ -8,6 +8,8 @@
 //!
 //! [`PairingSessionMessage`]: uc_core::pairing::PairingSessionMessage
 
+pub mod session;
 pub mod wire;
 
+pub use session::{IrohPairingSessionAdapter, PAIRING_ALPN};
 pub use wire::{decode, encode, WireDecodeError, WireEncodeError};
