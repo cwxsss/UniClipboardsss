@@ -12,6 +12,7 @@
 //! surfaced through `tracing::warn!` so ops still sees them.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::task::JoinHandle;
 use tracing::{instrument, warn};
@@ -97,14 +98,20 @@ impl SpaceSetupFacade {
         // persistence is done by the already-existing use cases rather
         // than being duplicated here.
         let local_device_id = device_identity.current_device_id();
-        let handshake = Arc::new(SponsorHandshakeCoordinator::new(
+        // Handshake TTL：joiner 从 KeyslotOffer 到 ChallengeResponse
+        // 间会有一步用户交互（输入 passphrase），60s 给到的裕量足以
+        // 覆盖人工输入 + 网络抖动，又不会让掉线的 session 无限期占坑。
+        // 对齐 legacy setup orchestrator 的 60s 默认值。
+        let handshake_ttl = Duration::from_secs(60);
+        let handshake = SponsorHandshakeCoordinator::new(
             pairing_session,
             space_access,
             proof_port,
             local_identity,
             Arc::clone(&device_identity),
             settings,
-        ));
+            handshake_ttl,
+        );
         let admit_member_uc = Arc::new(AdmitMemberUseCase::new(Arc::clone(&member_repo)));
         let trust_peer_uc = Arc::new(TrustPeerUseCase::new(trusted_peer_repo));
         let inbound_orchestrator = Arc::new(PairingInboundOrchestrator::new(

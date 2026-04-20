@@ -107,6 +107,11 @@ pub enum PairingRejectReason {
     /// Sponsor: user declined (reserved; Slice 1 doesn't surface an
     /// approval prompt but the enum leaves room for it).
     UserRejected,
+    /// Sponsor: handshake未在 TTL 内完成（`begin` 后既没看到 `confirm`
+    /// 也没看到 `reject` / `close`）。与 `Internal(String)` 分开是
+    /// 因为 timeout 是一个稳定、可观测的产品语义（UI 可以直接展示
+    /// "配对超时"），不是字符串化的兜底错误。
+    Timeout,
     /// Protocol-level violation; message is for logs only.
     Internal(String),
 }

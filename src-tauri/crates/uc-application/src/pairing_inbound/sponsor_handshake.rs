@@ -20,13 +20,28 @@
 //! they can't reach). The joiner side (P7h) has more states and genuine
 //! user-input branches; it will reuse the FSM.
 //!
+//! ## TTL 与内部 tokio::spawn
+//!
+//! `begin` 成功后会 spawn 一个 TTL 看门狗 task，超时则由 coordinator
+//! 自己发 `Reject(Timeout)` + close + drop ctx（P7g）。`confirm` /
+//! `reject` / `handle_session_closed` 任一先触发都会 abort 这个 task。
+//! 这里没走 `TimerPort`：后者没有 fire-back 回调，对 handshake 这种
+//! 需要"超时即主动 Reject"的语义用不上；在 coordinator 内直接 spawn
+//! 符合 `uc-application/AGENTS.md` §15.3（运行时细节收敛在 orchestrator
+//! 内部）。
+//!
+//! 为了让 spawn 的闭包能回调 coordinator 自己，用 `Arc::new_cyclic`
+//! 持一个 `Weak<Self>`；`new` 因此返回 `Arc<Self>` 而不是 `Self`。
+//!
 //! The coordinator is `pub(crate)` — external callers reach pairing
 //! exclusively through the orchestrator's `handle_event` entry.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use tokio::sync::Mutex;
+use tokio::task::AbortHandle;
+use tokio::time::{sleep, Duration};
 use tracing::{debug, warn};
 
 use uc_core::crypto::domain::Passphrase;
@@ -59,7 +74,7 @@ pub(crate) enum Verdict {
 
 /// Per-session data parked between `KeyslotOffer` (sent) and
 /// `ChallengeResponse` (received). Dropped on any terminal outcome
-/// (Confirm, Reject, peer-initiated Close).
+/// (Confirm, Reject, peer-initiated Close, TTL timeout).
 struct SessionCtx {
     space_id: SpaceId,
     /// 32-byte nonce we handed the joiner; feeds `verify_proof`.
@@ -68,6 +83,11 @@ struct SessionCtx {
     /// from `PairingSessionId`, so replay across sessions fails.
     core_session_id: SessionId,
     joiner: JoinerFacts,
+    /// TTL 看门狗 task 的 abort handle；在 ctx 被正常终止
+    /// (confirm / reject / session closed) 时 abort，让 task 不再 fire。
+    /// `None` 仅出现在 timer spawn 前的极短窗口或 race（ctx 已被抢先
+    /// 清掉），此时 `begin` 兜底立即 abort 自己 spawn 的 handle。
+    timer_abort: Option<AbortHandle>,
 }
 
 pub(crate) struct SponsorHandshakeCoordinator {
@@ -78,6 +98,10 @@ pub(crate) struct SponsorHandshakeCoordinator {
     device_identity: Arc<dyn DeviceIdentityPort>,
     settings: Arc<dyn SettingsPort>,
     sessions: Mutex<HashMap<PairingSessionId, SessionCtx>>,
+    /// handshake TTL（begin 到 confirm/reject 的最大等待时间）。
+    handshake_ttl: Duration,
+    /// 自引用 Weak，给 TTL 看门狗 task 回调用；避免 Arc 循环。
+    self_weak: Weak<Self>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -89,8 +113,9 @@ impl SponsorHandshakeCoordinator {
         local_identity: Arc<dyn LocalIdentityPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,
-    ) -> Self {
-        Self {
+        handshake_ttl: Duration,
+    ) -> Arc<Self> {
+        Arc::new_cyclic(|weak| Self {
             pairing_session,
             space_access,
             proof_port,
@@ -98,7 +123,9 @@ impl SponsorHandshakeCoordinator {
             device_identity,
             settings,
             sessions: Mutex::new(HashMap::new()),
-        }
+            handshake_ttl,
+            self_weak: weak.clone(),
+        })
     }
 
     /// Step 1: prepare + send `KeyslotOffer`, park per-session state.
@@ -153,6 +180,7 @@ impl SponsorHandshakeCoordinator {
                 device_name: request.device_name,
                 identity_fingerprint: request.identity_fingerprint,
             },
+            timer_abort: None,
         };
         // Park state *before* sending so a racing ChallengeResponse
         // always finds a home (iroh send is faster than a wire round
@@ -178,8 +206,61 @@ impl SponsorHandshakeCoordinator {
             return Err(());
         }
 
-        debug!(session = %session, "KeyslotOffer sent; awaiting ChallengeResponse");
+        self.arm_timeout(session).await;
+
+        debug!(
+            session = %session,
+            ttl_ms = %self.handshake_ttl.as_millis(),
+            "KeyslotOffer sent; awaiting ChallengeResponse"
+        );
         Ok(())
+    }
+
+    /// Spawn the TTL watchdog and stash its `AbortHandle` in the parked
+    /// ctx. If the ctx was already gone (e.g. a racing `reject` cleared
+    /// it between the `send` return and this call), the handle is
+    /// aborted immediately so the task never fires. Called only from
+    /// `begin` after a successful `KeyslotOffer` send.
+    async fn arm_timeout(&self, session: &PairingSessionId) {
+        let ttl = self.handshake_ttl;
+        let weak = self.self_weak.clone();
+        let session_for_task = session.clone();
+        let join = tokio::spawn(async move {
+            sleep(ttl).await;
+            if let Some(this) = weak.upgrade() {
+                this.fire_timeout(&session_for_task).await;
+            }
+        });
+        let handle = join.abort_handle();
+        let mut map = self.sessions.lock().await;
+        match map.get_mut(session) {
+            Some(ctx) => ctx.timer_abort = Some(handle),
+            None => {
+                // ctx vanished in the window between send-success and
+                // arming (only possible via a concurrent terminal op
+                // racing us). The task is now orphaned — kill it so it
+                // can't fire a ghost Reject after the slot is reused.
+                handle.abort();
+            }
+        }
+    }
+
+    /// Called by the spawned watchdog when the TTL expires. Idempotent:
+    /// if confirm/reject/close already cleared the ctx, this is a no-op
+    /// (the `AbortHandle` cancel usually wins; this is the loss-case
+    /// guard).
+    async fn fire_timeout(&self, session: &PairingSessionId) {
+        let removed = self.sessions.lock().await.remove(session).is_some();
+        if !removed {
+            return;
+        }
+        warn!(
+            session = %session,
+            ttl_ms = %self.handshake_ttl.as_millis(),
+            "handshake TTL expired; rejecting joiner with Timeout"
+        );
+        self.send_reject_and_close(session, PairingRejectReason::Timeout)
+            .await;
     }
 
     /// Step 2: run `verify_proof` against the parked nonce and return
@@ -244,6 +325,7 @@ impl SponsorHandshakeCoordinator {
             .await
             .remove(session)
             .ok_or_else(|| "confirm called without parked ctx".to_string())?;
+        abort_timer(&ctx);
 
         let sender_device_name = self
             .settings
@@ -281,7 +363,9 @@ impl SponsorHandshakeCoordinator {
     /// means calling this after the orchestrator already cleared state
     /// via some other path is a no-op.
     pub(crate) async fn reject(&self, session: &PairingSessionId, reason: PairingRejectReason) {
-        self.sessions.lock().await.remove(session);
+        if let Some(ctx) = self.sessions.lock().await.remove(session) {
+            abort_timer(&ctx);
+        }
         self.send_reject_and_close(session, reason).await;
     }
 
@@ -292,8 +376,8 @@ impl SponsorHandshakeCoordinator {
         session: &PairingSessionId,
         reason: Option<&str>,
     ) {
-        let dropped = self.sessions.lock().await.remove(session).is_some();
-        if dropped {
+        if let Some(ctx) = self.sessions.lock().await.remove(session) {
+            abort_timer(&ctx);
             debug!(
                 session = %session,
                 reason = ?reason,
@@ -321,6 +405,15 @@ impl SponsorHandshakeCoordinator {
         self.pairing_session
             .close(session, Some(format!("reject: {reason:?}")))
             .await;
+    }
+}
+
+/// Abort the TTL watchdog attached to a just-removed ctx. Free fn (not a
+/// method) because by the time this runs the ctx has already been
+/// extracted from the HashMap and no longer belongs to the coordinator.
+fn abort_timer(ctx: &SessionCtx) {
+    if let Some(h) = &ctx.timer_abort {
+        h.abort();
     }
 }
 
@@ -547,12 +640,27 @@ mod tests {
         }
     }
 
+    /// 测试用 TTL：给大多数断言一个足够大的值，让 watchdog 在 test
+    /// body 正常结束前绝不会 fire。需要验证 fire 的 test 自己用
+    /// `tokio::time::pause` + `advance` 精确控制。
+    const TEST_TTL: Duration = Duration::from_secs(3600);
+
     fn happy_coordinator(
         session_port: Arc<RecordingSessionPort>,
         space_access: Arc<StubSpaceAccess>,
         proof: Arc<ScriptedProof>,
         settings: Arc<StubSettings>,
-    ) -> SponsorHandshakeCoordinator {
+    ) -> Arc<SponsorHandshakeCoordinator> {
+        happy_coordinator_with_ttl(session_port, space_access, proof, settings, TEST_TTL)
+    }
+
+    fn happy_coordinator_with_ttl(
+        session_port: Arc<RecordingSessionPort>,
+        space_access: Arc<StubSpaceAccess>,
+        proof: Arc<ScriptedProof>,
+        settings: Arc<StubSettings>,
+        ttl: Duration,
+    ) -> Arc<SponsorHandshakeCoordinator> {
         SponsorHandshakeCoordinator::new(
             session_port,
             space_access,
@@ -560,6 +668,7 @@ mod tests {
             Arc::new(FixedLocal(sponsor_fp())),
             Arc::new(FixedDevice(DeviceId::new("sponsor-device"))),
             settings,
+            ttl,
         )
     }
 
@@ -843,5 +952,117 @@ mod tests {
             .handle_session_closed(&PairingSessionId::new("unknown"), None)
             .await;
         assert_eq!(coord.parked_sessions().await, 0);
+    }
+
+    // ── TTL watchdog (P7g) ─────────────────────────────────────────────
+    //
+    // 用 `start_paused = true` 让 tokio 时钟在 test 里只因
+    // `tokio::time::advance` 才推进；这样 watchdog fire 的时机是确定的。
+    // `sleep(ttl).await` + `advance(ttl)` 即能精确重放超时事件。
+
+    #[tokio::test(start_paused = true)]
+    async fn ttl_fires_reject_timeout_and_drops_ctx_when_no_response() {
+        let (sp, sa, pr, st) = happy_defaults();
+        let ttl = Duration::from_secs(30);
+        let coord = happy_coordinator_with_ttl(sp.clone(), sa, pr, st, ttl);
+        let session = PairingSessionId::new("timeout-1");
+        coord.begin(&session, joiner_request()).await.unwrap();
+        assert_eq!(coord.parked_sessions().await, 1);
+
+        // `sleep` 在 paused clock 下让 runtime 自动推进到下个
+        // 已登记 deadline（即 watchdog 的 sleep）。因此既推进时间又
+        // 让 watchdog 的 `send_reject_and_close` 跑到头。
+        tokio::time::sleep(ttl + Duration::from_secs(1)).await;
+
+        let sent = sp.sent();
+        assert_eq!(sent.len(), 2, "KeyslotOffer + Reject(Timeout)");
+        match &sent[1].1 {
+            PairingSessionMessage::Reject(r) => {
+                assert_eq!(r.reason, PairingRejectReason::Timeout)
+            }
+            other => panic!("expected Reject, got {other:?}"),
+        }
+        assert_eq!(sp.closed().len(), 1);
+        assert_eq!(
+            coord.parked_sessions().await,
+            0,
+            "timeout fire must drop ctx"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn confirm_aborts_ttl_watchdog() {
+        let (sp, sa, pr, st) = happy_defaults();
+        let ttl = Duration::from_secs(30);
+        let coord = happy_coordinator_with_ttl(sp.clone(), sa, pr, st, ttl);
+        let session = PairingSessionId::new("confirm-abort");
+        coord.begin(&session, joiner_request()).await.unwrap();
+        let _ = coord
+            .verify_challenge(
+                &session,
+                JoinerChallengeResponse {
+                    encrypted_challenge: vec![],
+                },
+            )
+            .await;
+        coord.confirm(&session).await.unwrap();
+
+        // 时间跨过 TTL，任何没被 abort 的 watchdog 都会在这一步 fire。
+        tokio::time::sleep(ttl * 2).await;
+
+        // 只应看到 KeyslotOffer + Confirm —— 绝不能多出 Reject。
+        let sent = sp.sent();
+        assert_eq!(sent.len(), 2, "KeyslotOffer + Confirm only");
+        assert!(matches!(sent[0].1, PairingSessionMessage::KeyslotOffer(_)));
+        assert!(matches!(sent[1].1, PairingSessionMessage::Confirm(_)));
+        assert_eq!(sp.closed().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reject_aborts_ttl_watchdog() {
+        let (sp, sa, pr, st) = happy_defaults();
+        let ttl = Duration::from_secs(30);
+        let coord = happy_coordinator_with_ttl(sp.clone(), sa, pr, st, ttl);
+        let session = PairingSessionId::new("reject-abort");
+        coord.begin(&session, joiner_request()).await.unwrap();
+        coord
+            .reject(&session, PairingRejectReason::PassphraseMismatch)
+            .await;
+
+        tokio::time::sleep(ttl * 2).await;
+
+        let sent = sp.sent();
+        assert_eq!(sent.len(), 2, "KeyslotOffer + Reject(PassphraseMismatch)");
+        match &sent[1].1 {
+            PairingSessionMessage::Reject(r) => {
+                assert_eq!(r.reason, PairingRejectReason::PassphraseMismatch)
+            }
+            other => panic!("expected Reject, got {other:?}"),
+        }
+        // 只该有一次 close —— watchdog 若真跑过会再发一次。
+        assert_eq!(sp.closed().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn handle_session_closed_aborts_ttl_watchdog() {
+        let (sp, sa, pr, st) = happy_defaults();
+        let ttl = Duration::from_secs(30);
+        let coord = happy_coordinator_with_ttl(sp.clone(), sa, pr, st, ttl);
+        let session = PairingSessionId::new("closed-abort");
+        coord.begin(&session, joiner_request()).await.unwrap();
+        coord
+            .handle_session_closed(&session, Some("peer disconnected"))
+            .await;
+
+        tokio::time::sleep(ttl * 2).await;
+
+        // 仅 KeyslotOffer；handle_session_closed 本身不打 wire，
+        // watchdog 若 leak 就会多出 Reject(Timeout)。
+        let sent = sp.sent();
+        assert_eq!(sent.len(), 1);
+        assert!(matches!(sent[0].1, PairingSessionMessage::KeyslotOffer(_)));
+        // handle_session_closed 不主动 close（transport 侧已 close），
+        // 所以 closed 记录应为 0。
+        assert!(sp.closed().is_empty());
     }
 }

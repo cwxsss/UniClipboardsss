@@ -735,7 +735,9 @@ mod tests {
         }
 
         fn build(self, events: Arc<ScriptedEventPort>) -> Arc<PairingInboundOrchestrator> {
-            let handshake = Arc::new(SponsorHandshakeCoordinator::new(
+            // 大 TTL：orchestrator 这一层的测试不关心 TTL fire，
+            // 专门的 TTL 行为测试在 `sponsor_handshake::tests` 里。
+            let handshake = SponsorHandshakeCoordinator::new(
                 self.session_port.clone() as Arc<dyn PairingSessionPort>,
                 Arc::new(StubSpaceAccess {
                     challenge_nonce: [0x42; 32],
@@ -744,7 +746,8 @@ mod tests {
                 Arc::new(FixedLocal(sponsor_fp())),
                 Arc::new(FixedDevice(DeviceId::new("sponsor-device"))),
                 Arc::new(NamedSettings("sponsor-mac".into())),
-            ));
+                std::time::Duration::from_secs(3600),
+            );
             Arc::new(PairingInboundOrchestrator::new(
                 events,
                 self.invitation_port.clone(),

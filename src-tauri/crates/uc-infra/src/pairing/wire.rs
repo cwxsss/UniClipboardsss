@@ -94,6 +94,7 @@ enum WireRejectReason {
     InvitationMismatch,
     PassphraseMismatch,
     UserRejected,
+    Timeout,
     Internal(String),
 }
 
@@ -186,6 +187,7 @@ fn to_wire(msg: &PairingSessionMessage) -> WireBody {
                 PairingRejectReason::InvitationMismatch => WireRejectReason::InvitationMismatch,
                 PairingRejectReason::PassphraseMismatch => WireRejectReason::PassphraseMismatch,
                 PairingRejectReason::UserRejected => WireRejectReason::UserRejected,
+                PairingRejectReason::Timeout => WireRejectReason::Timeout,
                 PairingRejectReason::Internal(s) => WireRejectReason::Internal(s.clone()),
             },
         }),
@@ -223,6 +225,7 @@ fn from_wire(body: WireBody) -> Result<PairingSessionMessage, WireDecodeError> {
                 WireRejectReason::InvitationMismatch => PairingRejectReason::InvitationMismatch,
                 WireRejectReason::PassphraseMismatch => PairingRejectReason::PassphraseMismatch,
                 WireRejectReason::UserRejected => PairingRejectReason::UserRejected,
+                WireRejectReason::Timeout => PairingRejectReason::Timeout,
                 WireRejectReason::Internal(s) => PairingRejectReason::Internal(s),
             },
         })),
@@ -335,6 +338,7 @@ mod tests {
             PairingRejectReason::InvitationMismatch,
             PairingRejectReason::PassphraseMismatch,
             PairingRejectReason::UserRejected,
+            PairingRejectReason::Timeout,
             PairingRejectReason::Internal("bad things".to_string()),
         ] {
             let original = PairingSessionMessage::Reject(PairingReject {
