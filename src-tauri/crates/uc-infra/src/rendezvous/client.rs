@@ -60,10 +60,11 @@ impl RendezvousPairingInvitationAdapter {
         }
     }
 
-    /// Test-only constructor that redirects to a custom rendezvous URL
-    /// (e.g. a `wiremock::MockServer::uri()`).
-    #[cfg(test)]
-    fn with_base_url(
+    /// Construct an adapter pointed at a custom rendezvous URL (mock
+    /// server, staging instance, on-prem deployment). Production callers
+    /// use [`Self::new`] which defaults to
+    /// [`crate::rendezvous::RENDEZVOUS_BASE_URL`].
+    pub fn with_base_url(
         endpoint: Arc<Endpoint>,
         device_identity: Arc<dyn DeviceIdentityPort>,
         settings: Arc<dyn SettingsPort>,

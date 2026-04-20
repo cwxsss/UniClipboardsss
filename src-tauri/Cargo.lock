@@ -11747,6 +11747,7 @@ dependencies = [
  "uc-observability",
  "uc-platform",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

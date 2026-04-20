@@ -12,6 +12,7 @@ pub mod config;
 pub mod file_transfer_lifecycle;
 pub mod init;
 pub mod non_gui_runtime;
+pub mod space_setup;
 pub mod tracing;
 
 // Re-export primary public items
@@ -31,5 +32,8 @@ pub use init::ensure_default_device_name;
 pub use non_gui_runtime::{
     build_cli_runtime, build_non_gui_runtime, build_non_gui_runtime_with_emitter,
     build_non_gui_runtime_with_setup, resolve_clipboard_integration_mode, LoggingHostEventEmitter,
+};
+pub use space_setup::{
+    build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly, SpaceSetupAssemblyError,
 };
 pub use tracing::init_tracing_subscriber;

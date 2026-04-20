@@ -89,6 +89,20 @@ impl IrohIdentityStore {
     fn generate_new() -> SecretKey {
         SecretKey::generate(&mut rand::rng())
     }
+
+    /// Return the persisted iroh `SecretKey`, generating + persisting a fresh
+    /// one if the slot is empty. Used by [`super::node::IrohNodeBuilder`] so
+    /// the endpoint's network identity matches the fingerprint exposed via
+    /// [`LocalIdentityPort`]. Crate-private so the `iroh::SecretKey` type
+    /// stays confined to this module.
+    pub(crate) fn ensure_secret_key(&self) -> Result<SecretKey, LocalIdentityError> {
+        if let Some(existing) = self.load_secret()? {
+            return Ok(existing);
+        }
+        let sk = Self::generate_new();
+        self.persist_secret(&sk)?;
+        Ok(sk)
+    }
 }
 
 #[async_trait]

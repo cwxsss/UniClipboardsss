@@ -100,9 +100,11 @@ impl IrohPairingSessionAdapter {
         }
     }
 
-    /// Test-only override for the rendezvous base URL.
-    #[cfg(test)]
-    pub(crate) fn with_base_url(endpoint: Arc<Endpoint>, base_url: impl Into<String>) -> Self {
+    /// Override the rendezvous base URL. Production callers use
+    /// [`Self::new`] which defaults to [`crate::rendezvous::RENDEZVOUS_BASE_URL`].
+    /// Integration tests and bring-up flows that need to point at a mock or
+    /// staging rendezvous service go through this constructor.
+    pub fn with_base_url(endpoint: Arc<Endpoint>, base_url: impl Into<String>) -> Self {
         Self {
             endpoint,
             base_url: base_url.into(),
@@ -274,8 +276,120 @@ impl IrohPairingSessionAdapter {
                 error = %err,
                 "pairing event receiver dropped before delivery",
             );
+            return;
         }
+
+        // Sponsor-side recv pump: after the first frame fires `Incoming`,
+        // every subsequent frame from the joiner (e.g. ChallengeResponse)
+        // must surface as `MessageReceived` so the inbound orchestrator
+        // drives state forward. The joiner side (dial_by_invitation) does
+        // not spawn a pump because `JoinerHandshakeCoordinator` polls
+        // `recv_next` explicitly; mixing the two would deadlock on
+        // `SessionSlot.recv`.
+        self.spawn_recv_pump(session, tx).await;
     }
+
+    /// Spawn a tokio task that drains subsequent frames from the session's
+    /// recv stream and emits `MessageReceived` / `Closed` events. Exits on
+    /// peer FIN or an unrecoverable read error. The task holds an `Arc` to
+    /// the session slot, so `close()` removing the map entry is not enough
+    /// to stop it — the pump naturally exits when the peer closes their
+    /// send side, which happens on every clean handshake termination
+    /// (sponsor `close()` → joiner sees FIN → joiner closes → sponsor
+    /// recv sees FIN).
+    async fn spawn_recv_pump(
+        &self,
+        session: PairingSessionId,
+        tx: mpsc::Sender<PairingSessionEvent>,
+    ) {
+        let slot = match self.sessions.lock().await.get(&session).cloned() {
+            Some(slot) => slot,
+            None => {
+                // Session disappeared between register and pump spawn —
+                // nothing to drain.
+                return;
+            }
+        };
+        tokio::spawn(async move {
+            loop {
+                let frame = {
+                    let mut recv = slot.recv.lock().await;
+                    read_next_frame(&mut recv).await
+                };
+                match frame {
+                    Ok(Some(message)) => {
+                        if tx
+                            .send(PairingSessionEvent::MessageReceived {
+                                session: session.clone(),
+                                message,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            // Subscriber gone — no point continuing to
+                            // drain; nothing consumes the events.
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        // Peer half-closed cleanly — emit Closed with no
+                        // reason and exit.
+                        let _ = tx
+                            .send(PairingSessionEvent::Closed {
+                                session: session.clone(),
+                                reason: None,
+                            })
+                            .await;
+                        return;
+                    }
+                    Err(err) => {
+                        // Non-EOF read error — surface the reason text so
+                        // the orchestrator can log it. Includes the
+                        // `SessionError::Closed` case for FIN via Reset.
+                        let reason = match err {
+                            SessionError::Closed => None,
+                            other => Some(other.to_string()),
+                        };
+                        let _ = tx
+                            .send(PairingSessionEvent::Closed {
+                                session: session.clone(),
+                                reason,
+                            })
+                            .await;
+                        return;
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// Read one length-prefixed frame off `recv`. Returns `Ok(None)` on clean
+/// peer half-close (matches `recv_next`'s `None` contract). Extracted so
+/// both [`IrohPairingSessionAdapter::spawn_recv_pump`] and
+/// [`<IrohPairingSessionAdapter as PairingSessionPort>::recv_next`] share
+/// the same wire framing.
+async fn read_next_frame(
+    recv: &mut RecvStream,
+) -> Result<Option<PairingSessionMessage>, SessionError> {
+    let mut len_buf = [0u8; FRAME_LEN_BYTES];
+    match recv.read_exact(&mut len_buf).await {
+        Ok(()) => {}
+        Err(iroh::endpoint::ReadExactError::FinishedEarly(0)) => return Ok(None),
+        Err(err) => return Err(map_read_err(err)),
+    }
+    let len = u32::from_be_bytes(len_buf) as usize;
+
+    let mut payload = vec![0u8; len];
+    recv.read_exact(&mut payload).await.map_err(map_read_err)?;
+
+    wire::decode(&payload).map(Some).map_err(|err| match err {
+        WireDecodeError::Postcard(_)
+        | WireDecodeError::UnsupportedVersion { .. }
+        | WireDecodeError::InvalidFingerprint(_) => {
+            SessionError::Internal(format!("wire decode: {err}"))
+        }
+    })
 }
 
 // ============================================================================
@@ -374,25 +488,7 @@ impl PairingSessionPort for IrohPairingSessionAdapter {
     ) -> Result<Option<PairingSessionMessage>, SessionError> {
         let slot = self.session(session).await?;
         let mut recv = slot.recv.lock().await;
-
-        let mut len_buf = [0u8; FRAME_LEN_BYTES];
-        match recv.read_exact(&mut len_buf).await {
-            Ok(()) => {}
-            Err(iroh::endpoint::ReadExactError::FinishedEarly(0)) => return Ok(None),
-            Err(err) => return Err(map_read_err(err)),
-        }
-        let len = u32::from_be_bytes(len_buf) as usize;
-
-        let mut payload = vec![0u8; len];
-        recv.read_exact(&mut payload).await.map_err(map_read_err)?;
-
-        wire::decode(&payload).map(Some).map_err(|err| match err {
-            WireDecodeError::Postcard(_)
-            | WireDecodeError::UnsupportedVersion { .. }
-            | WireDecodeError::InvalidFingerprint(_) => {
-                SessionError::Internal(format!("wire decode: {err}"))
-            }
-        })
+        read_next_frame(&mut recv).await
     }
 
     #[instrument(skip_all, fields(session = %session))]

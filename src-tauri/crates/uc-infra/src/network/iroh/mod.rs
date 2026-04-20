@@ -5,5 +5,7 @@
 //! [`IrohIdentityStore`]; later slices add the rest.
 
 pub mod identity_store;
+pub mod node;
 
 pub use identity_store::{IrohIdentityStore, IDENTITY_STORE_KEY};
+pub use node::{IrohNode, IrohNodeBuilder, IrohNodeConfig, IrohNodeError, PairingHandlers};
