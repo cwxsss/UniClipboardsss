@@ -14,8 +14,7 @@ use uc_core::ids::SpaceId;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
 use uc_core::ports::SetupStatusPort;
 
-use crate::facade::commands::{UnlockSpaceCommand, UnlockSpaceResult};
-use crate::facade::errors::UnlockSpaceError;
+use crate::facade::space_setup::{UnlockSpaceCommand, UnlockSpaceError, UnlockSpaceResult};
 
 pub(crate) struct UnlockSpaceUseCase {
     space_access: Arc<dyn SpaceAccessPort>,

@@ -30,8 +30,9 @@ use uc_core::ports::{
 };
 use uc_core::setup::SetupStatus;
 
-use crate::facade::commands::{InitializeSpaceCommand, InitializeSpaceResult};
-use crate::facade::errors::InitializeSpaceError;
+use crate::facade::space_setup::{
+    InitializeSpaceCommand, InitializeSpaceError, InitializeSpaceResult,
+};
 
 pub(crate) struct InitializeSpaceUseCase {
     space_access: Arc<dyn SpaceAccessPort>,
