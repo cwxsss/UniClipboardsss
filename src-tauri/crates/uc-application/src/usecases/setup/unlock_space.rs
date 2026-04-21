@@ -47,10 +47,7 @@ impl UnlockSpaceUseCase {
             return Err(UnlockSpaceError::SetupNotCompleted);
         }
 
-        // The adapter keys keyslot lookup off the current profile, not
-        // this id (see `uc-infra/src/security/space_access_adapter.rs`).
-        // A fresh UUID here is fine and matches how A1 derives its id.
-        let space_id = SpaceId::new();
+        let space_id = status.space_id.clone().unwrap_or_else(SpaceId::new);
         self.space_access
             .unlock(&space_id, &cmd.passphrase)
             .await
@@ -177,15 +174,21 @@ mod tests {
     fn build(
         setup_completed: bool,
         unlock_err: Option<SpaceAccessError>,
-    ) -> (UnlockSpaceUseCase, Arc<FakeSpaceAccess>) {
+    ) -> (UnlockSpaceUseCase, Arc<FakeSpaceAccess>, Option<SpaceId>) {
         let space_access = Arc::new(FakeSpaceAccess::default());
         *space_access.unlock_err.lock().unwrap() = unlock_err;
         let setup_status = Arc::new(InMemorySetupStatus::default());
-        if setup_completed {
-            setup_status.status.lock().unwrap().has_completed = true;
-        }
+        let seeded_space_id = if setup_completed {
+            let id = SpaceId::new();
+            let mut guard = setup_status.status.lock().unwrap();
+            guard.has_completed = true;
+            guard.space_id = Some(id.clone());
+            Some(id)
+        } else {
+            None
+        };
         let uc = UnlockSpaceUseCase::new(space_access.clone(), setup_status);
-        (uc, space_access)
+        (uc, space_access, seeded_space_id)
     }
 
     fn cmd(pass: &str) -> UnlockSpaceCommand {
@@ -195,17 +198,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn happy_path_returns_result_and_calls_unlock() {
-        let (uc, sa) = build(true, None);
+    async fn happy_path_returns_space_id_from_setup_status() {
+        let (uc, sa, seeded) = build(true, None);
         let r = uc.execute(cmd("pass")).await.unwrap();
-        // Result carries a freshly minted SpaceId — not empty.
-        assert!(!r.space_id.inner().is_empty());
+        assert_eq!(r.space_id, seeded.expect("seeded"));
         assert_eq!(*sa.unlock_calls.lock().unwrap(), 1);
+    }
+
+    /// Legacy profiles pre-dating F-058 may have `space_id == None` in
+    /// `SetupStatus`. Spec: fall back to minting a fresh id so A2 is not
+    /// blocked. T-17 self-heal is explicitly out of scope (backlog).
+    #[tokio::test]
+    async fn missing_setup_space_id_falls_back_to_fresh_mint() {
+        let space_access = Arc::new(FakeSpaceAccess::default());
+        let setup_status = Arc::new(InMemorySetupStatus::default());
+        setup_status.status.lock().unwrap().has_completed = true;
+        let uc = UnlockSpaceUseCase::new(space_access.clone(), setup_status);
+        let r = uc.execute(cmd("pass")).await.unwrap();
+        assert!(!r.space_id.inner().is_empty());
+        assert_eq!(*space_access.unlock_calls.lock().unwrap(), 1);
     }
 
     #[tokio::test]
     async fn setup_not_completed_short_circuits_before_unlock() {
-        let (uc, sa) = build(false, None);
+        let (uc, sa, _) = build(false, None);
         let err = uc.execute(cmd("pass")).await.unwrap_err();
         assert!(matches!(err, UnlockSpaceError::SetupNotCompleted));
         assert_eq!(*sa.unlock_calls.lock().unwrap(), 0);
@@ -213,28 +229,28 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_passphrase_maps_to_specific_variant() {
-        let (uc, _sa) = build(true, Some(SpaceAccessError::WrongPassphrase));
+        let (uc, _sa, _) = build(true, Some(SpaceAccessError::WrongPassphrase));
         let err = uc.execute(cmd("wrong")).await.unwrap_err();
         assert!(matches!(err, UnlockSpaceError::WrongPassphrase));
     }
 
     #[tokio::test]
     async fn not_initialized_maps_to_space_not_initialized() {
-        let (uc, _sa) = build(true, Some(SpaceAccessError::NotInitialized));
+        let (uc, _sa, _) = build(true, Some(SpaceAccessError::NotInitialized));
         let err = uc.execute(cmd("pass")).await.unwrap_err();
         assert!(matches!(err, UnlockSpaceError::SpaceNotInitialized));
     }
 
     #[tokio::test]
     async fn corrupted_key_material_maps_to_specific_variant() {
-        let (uc, _sa) = build(true, Some(SpaceAccessError::CorruptedKeyMaterial));
+        let (uc, _sa, _) = build(true, Some(SpaceAccessError::CorruptedKeyMaterial));
         let err = uc.execute(cmd("pass")).await.unwrap_err();
         assert!(matches!(err, UnlockSpaceError::CorruptedKeyMaterial));
     }
 
     #[tokio::test]
     async fn internal_error_passthrough() {
-        let (uc, _sa) = build(true, Some(SpaceAccessError::Internal("boom".into())));
+        let (uc, _sa, _) = build(true, Some(SpaceAccessError::Internal("boom".into())));
         let err = uc.execute(cmd("pass")).await.unwrap_err();
         match err {
             UnlockSpaceError::Internal(m) => assert_eq!(m, "boom"),

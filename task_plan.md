@@ -828,10 +828,24 @@ pub struct StopNetworkCommand; // 无字段
 - `build_slice1_cli_context` → Slice 2 的 CLI 命令(`status` / `rename` / `revoke`)同样基于它
 - `MemberRepositoryPort` + `TrustedPeerRepositoryPort` 已填充真实数据 → Slice 2 的 `MemberRosterFacade::list_with_presence()` 读它们即可
 
-**Slice 2 预研需确认**:
-- 剪贴板同步是否也复用 `broadcast::Sender` 给 facade 订阅者,还是走 `mpsc::Receiver`(更利于背压)
-- F1 "启动时预连全员" 的触发时机:`A2 unlock` 之后立即 / `try_resume_session` 之后立即 / 首次 dispatch 时懒连
-- 剪贴板 wire 格式:Slice 1 的 `PairingSessionMessage`(postcard binary)是范式,Slice 2 的 `ClipboardFrame` 按同款
+**Slice 2 预研决策(2026-04-20 定稿)**:
+
+- **D1 · facade 订阅通道**:`ClipboardSyncFacade::subscribe_inbound` / `subscribe_outbound_result` 走 `broadcast::Sender<InboundClipboardNotice>`(沿用 Slice 1 `PairingOutcome` pattern)
+  - Notice 是小 struct(kind / size / sender / entry_id / at),**不**承载 raw payload。UI / CLI 订阅 Notice,再按需从 DB 拉全文
+  - raw payload bytes 走内部单路管线:iroh stream → 解码 → 写系统剪贴板 + 写 DB → 发 Notice。不经 broadcast,没有 10MB fanout 问题
+  - lagging drop 可接受(掉 Notice 不致命,UI 下次打开面板从 DB 全量拉)
+
+- **D2 · F1 预连触发时机**:`A2 unlock` 成功 + `try_resume_session` 成功两条路径,都在 `StartNetworkUseCase` 完成后紧跟一步 `ensure_reachable_all(roster)`
+  - Slice 2 验收条款"F1 启动后自动 ensure_reachable 全员,UI 即时反馈"已否决懒连
+  - `on_startup` 在 locked 状态没密钥,连了白连 → 必须等解密上下文可用
+  - 单次 dispatch 若目标尚未连上,由 dispatch 内部 `ensure_reachable(target)` 兜底(单 target,不扫全员)
+  - N > 10 资源放大属 T-05 阈值懒连(P3),Slice 2 假设典型 N ≤ 10
+
+- **D3 · `ClipboardFrame` wire 格式**:分层——`FrameHeader` 走 postcard,payload 走 raw iroh stream,**不**做 app 层分片
+  - Header 结构:`{ version: u8, kind: PayloadKind, size: u32, sender: DeviceId, entry_id: EntryId, at: Timestamp }` ~50 bytes,postcard 序列化
+  - Payload:reader 读完 header 拿到 `size`,`read_exact(size)` 流式读 N bytes(10MB 不整块 allocate 再 serialize)
+  - 协议演进用 header 里的 `version: u8` + `#[non_exhaustive]` enum 兜着(Slice 1 `PairingSessionMessage` 已验证跑得通)
+  - 工具链复用 `uc-infra/src/pairing/wire.rs` 的 postcard helper,新增 `uc-infra/src/clipboard/wire.rs` 对称放
 
 ---
 
