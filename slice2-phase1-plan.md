@@ -401,7 +401,7 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 | T6 | `EnsureReachableAllUseCase` | ✅ | `e66776f8` | ~1.4h | 按 §12.4 决策用 `peer_addr_repo.list()` 作迭代源;`JoinSet` 并发 + `DeviceIdentityPort` 防御性 self-filter;6 单测全绿(含并发性 wall-time 断言——mockall expectation 内部 Mutex 会序列化 `.returning` 调用,改用手写 `SleepyPresence` fake) |
 | T7 | `MemberRosterFacade` | ✅ | `548b3bdf` | ~0.5h | `facade/roster/` 全套(facade+commands+errors+mod);thin wrapper 不拨号;`is_local` 通过 `LocalIdentityPort::get_current_fingerprint()` 对比 `SpaceMember.identity_fingerprint`;drop `MemberId`(无此类型)+ `last_seen_at`(presence port 当前无时间追踪);8 单测全绿 |
 | T8 | F1 hook `auto_start_network` | ✅ | `f461a6eb` | ~0.7h | `SpaceSetupDeps` 加 `presence: Arc<dyn PresencePort>`;facade 内部构造 `EnsureReachableAllUseCase`;`auto_start_network` 成功后紧接 `ensure_reachable_all.execute()`,失败走 `warn!` 不传播;4 新单测覆盖验收点;bootstrap 的 presence port 接线(`IrohNodeBuilder::install_presence` 调用)**随 T8 合入**,因为 `SpaceSetupDeps` 新字段不装 `presence` 编译不过——T9 scope 缩减为只做 MemberRosterFacade 的 bootstrap 接线 |
-| T9 | bootstrap 装配 | 🔲 | — | 估 1h | — |
+| T9 | bootstrap 装配 | ✅ | `<pending>` | ~0.2h | scope 缩减(T8 已吸收 presence 接线)后只剩 `MemberRosterFacade` 装配:`SpaceSetupAssembly` 加 `pub roster: Arc<MemberRosterFacade>` 字段,`build_space_setup_assembly` 构造时复用 `member_repo` / `local_identity` / `presence` 三个 Arc(后两个需先 `Arc::clone` 给 SpaceSetupFacade,之后再 move 给 roster);工作空间全量编译 + slice1 e2e 仍绿 |
 | T10 | `uniclipboard-cli members` | 🔲 | — | 估 2h | — |
 | T11 | `slice2_phase1_presence_e2e` 集成测试 | 🔲 | — | 估 3h | — |
 | T12 | `single-machine-e2e.sh` 扩展 | 🔲 | — | 估 1h | — |
@@ -409,9 +409,9 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 
 ### 12.2 累计
 
-- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 / T7 / T8 = 10 项 / ~8.7h
-- **剩余**:T9-T13 = 5 项 / 估 ~7.3h(T9 scope 已缩减,见 T8 说明)
-- **进度**:~73%(按估算工时口径)
+- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 / T7 / T8 / T9 = 11 项 / ~8.9h
+- **剩余**:T10-T13 = 4 项 / 估 ~6.3h
+- **进度**:~80%(按估算工时口径)
 
 ### 12.3 关键发现 / 偏离
 

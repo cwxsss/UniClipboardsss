@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use tracing::{info, instrument};
 
-use uc_application::facade::{SpaceSetupDeps, SpaceSetupFacade};
+use uc_application::facade::{
+    MemberRosterDeps, MemberRosterFacade, SpaceSetupDeps, SpaceSetupFacade,
+};
 use uc_application::space_access::HmacProofAdapter;
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::{LocalIdentityPort, PresencePort};
@@ -36,10 +38,15 @@ use crate::assembly::WiredDependencies;
 
 /// Output of [`build_space_setup_assembly`]. External callers keep the
 /// whole assembly alive for the process lifetime; they only dispatch
-/// user-facing commands through [`Self::facade`] and run [`Self::shutdown`]
-/// once on exit.
+/// user-facing commands through [`Self::facade`] / [`Self::roster`] and
+/// run [`Self::shutdown`] once on exit.
 pub struct SpaceSetupAssembly {
     pub facade: Arc<SpaceSetupFacade>,
+    /// Slice 2 Phase 1 · T9:roster 查询门面(`list_with_presence` +
+    /// `subscribe_presence_events`)。CLI `members` 命令从这里拿状态,
+    /// tauri `get_roster` 将来也走同一条。共享同一个 `peer_addr_repo` /
+    /// `presence` 实例,所以 F1 hook 填好的缓存这里能直接读到。
+    pub roster: Arc<MemberRosterFacade>,
     /// The shared iroh node. Held privately so callers can't bind a second
     /// node or install additional handlers after `spawn` — that would
     /// fragment peer identity (§"共用网络栈" decision, Slice 1 planning).
@@ -126,7 +133,7 @@ pub async fn build_space_setup_assembly(
 
     let facade = Arc::new(SpaceSetupFacade::new(SpaceSetupDeps {
         space_access: Arc::clone(&deps.security.space_access),
-        local_identity,
+        local_identity: Arc::clone(&local_identity),
         device_identity: Arc::clone(&deps.device.device_identity),
         member_repo: Arc::clone(&deps.device.member_repo),
         setup_status: Arc::clone(&deps.setup_status),
@@ -139,9 +146,23 @@ pub async fn build_space_setup_assembly(
         proof_port,
         trusted_peer_repo: Arc::clone(&wired.trusted_peer_repo),
         peer_addr_repo: Arc::clone(&wired.peer_addr_repo),
+        presence: Arc::clone(&presence),
+    }));
+
+    // Slice 2 Phase 1 · T9:roster 门面和 space_setup facade 共享同一组
+    // 实例(`member_repo` / `local_identity` / `presence`),这样 F1 hook
+    // 通过 `presence.ensure_reachable_all` 填好的缓存,`list_with_presence`
+    // 能直接读到。Facade 本身是纯 thin wrapper,构造非常便宜。
+    let roster = Arc::new(MemberRosterFacade::new(MemberRosterDeps {
+        member_repo: Arc::clone(&deps.device.member_repo),
+        local_identity,
         presence,
     }));
 
-    info!("Slice 1 SpaceSetupFacade assembled");
-    Ok(SpaceSetupAssembly { facade, iroh_node })
+    info!("Slice 1 SpaceSetupFacade + MemberRosterFacade assembled");
+    Ok(SpaceSetupAssembly {
+        facade,
+        roster,
+        iroh_node,
+    })
 }
