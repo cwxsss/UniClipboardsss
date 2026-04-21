@@ -13,7 +13,7 @@ use uc_core::ports::pairing_invitation::PairingInvitationPort;
 use uc_core::ports::space::{ProofPort, SpaceAccessPort};
 use uc_core::ports::{
     ClockPort, DeviceIdentityPort, LocalIdentityPort, NetworkControlPort,
-    PeerAddressRepositoryPort, SettingsPort, SetupStatusPort,
+    PeerAddressRepositoryPort, PresencePort, SettingsPort, SetupStatusPort,
 };
 use uc_core::trusted_peer::TrustedPeerRepositoryPort;
 
@@ -65,4 +65,11 @@ pub struct SpaceSetupDeps {
     /// [`crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase`]
     /// 在 `persist` 收尾处调用。写失败不 fail 配对，presence 下轮兜底。
     pub peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
+    /// Slice 2 Phase 1 · T8：F1 hook 预连所有 paired peer(A1/A2/B2 成功后
+    /// 自动触发),让 UI 查 roster 时 presence 状态立刻准。Facade 内部
+    /// 会用它 + `peer_addr_repo` + `device_identity` 构造
+    /// [`crate::usecases::presence::ensure_reachable_all::EnsureReachableAllUseCase`]
+    /// (usecase 是 `pub(crate)`,bootstrap 不拿它直接 construct,
+    /// 对齐 `uc-application/AGENTS.md` §11.4)。
+    pub presence: Arc<dyn PresencePort>,
 }

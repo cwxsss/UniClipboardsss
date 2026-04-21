@@ -25,7 +25,7 @@ use tracing::{info, instrument};
 use uc_application::facade::{SpaceSetupDeps, SpaceSetupFacade};
 use uc_application::space_access::HmacProofAdapter;
 use uc_core::ports::space::ProofPort;
-use uc_core::ports::LocalIdentityPort;
+use uc_core::ports::{LocalIdentityPort, PresencePort};
 use uc_infra::network::iroh::{IrohIdentityStore, IrohNode, IrohNodeBuilder, IrohNodeError};
 // Re-exported so external callers can parametrise the assembly without
 // having to `use uc_infra` themselves.
@@ -104,6 +104,14 @@ pub async fn build_space_setup_assembly(
         Arc::clone(&deps.device.device_identity),
         Arc::clone(&deps.settings),
     );
+    // Slice 2 Phase 1 · T8:在同一 iroh 节点上装 presence handler。must
+    // be before `builder.spawn()`(install_* 要求 router 未 spawn)。
+    // `Arc<dyn PresencePort>` 喂给 SpaceSetupDeps,facade 内部再构造
+    // `EnsureReachableAllUseCase` 给 F1 hook 用。
+    let presence: Arc<dyn PresencePort> = builder.install_presence(
+        Arc::clone(&wired.peer_addr_repo),
+        Arc::clone(&deps.system.clock),
+    );
     let iroh_node = builder.spawn();
 
     // HMAC proof adapter verifies the joiner's ChallengeResponse against
@@ -131,6 +139,7 @@ pub async fn build_space_setup_assembly(
         proof_port,
         trusted_peer_repo: Arc::clone(&wired.trusted_peer_repo),
         peer_addr_repo: Arc::clone(&wired.peer_addr_repo),
+        presence,
     }));
 
     info!("Slice 1 SpaceSetupFacade assembled");

@@ -367,6 +367,15 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         Arc::clone(&device_identity),
         Arc::clone(&settings) as Arc<dyn SettingsPort>,
     );
+    // Slice 2 Phase 1 · T8:presence handler 在同一 iroh 节点上 install,
+    // 这个 e2e 不断言 presence 行为,但 F1 hook 现在 unconditionally 跑
+    // `ensure_reachable_all.execute()`——需要一个真 presence port 才能
+    // 通过 facade 构造。仍用 loopback iroh adapter,与 Slice 1 测试目标
+    // 一致。
+    let presence: Arc<dyn uc_core::ports::PresencePort> = builder.install_presence(
+        Arc::clone(&peer_addr_repo) as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
+        Arc::new(SystemClock) as Arc<dyn uc_core::ports::ClockPort>,
+    );
     let iroh_node = builder.spawn();
 
     let proof_port: Arc<dyn ProofPort> = Arc::new(HmacProofAdapter::new_with_space_access(
@@ -390,6 +399,7 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         trusted_peer_repo: Arc::clone(&trusted_peer_repo) as Arc<dyn TrustedPeerRepositoryPort>,
         peer_addr_repo: Arc::clone(&peer_addr_repo)
             as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
+        presence,
     }));
 
     Side {

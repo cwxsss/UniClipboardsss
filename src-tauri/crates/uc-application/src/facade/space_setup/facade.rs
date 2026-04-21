@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
-use tracing::{instrument, warn};
+use tracing::{info, instrument, warn};
 
 use uc_core::ids::SpaceId;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
@@ -43,6 +43,7 @@ use crate::pairing_outbound::joiner_handshake::JoinerHandshakeCoordinator;
 use crate::trusted_peer::usecases::TrustPeerUseCase;
 use crate::usecases::pairing::issue_invitation::IssuePairingInvitationUseCase;
 use crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase;
+use crate::usecases::presence::ensure_reachable_all::EnsureReachableAllUseCase;
 use crate::usecases::setup::initialize_space::InitializeSpaceUseCase;
 use crate::usecases::setup::unlock_space::UnlockSpaceUseCase;
 
@@ -68,6 +69,11 @@ pub struct SpaceSetupFacade {
     /// Everything else still goes through use cases.
     space_access: Arc<dyn SpaceAccessPort>,
     setup_status: Arc<dyn SetupStatusPort>,
+    /// Slice 2 Phase 1 · T8：F1 hook。A1/A2/B2 成功后
+    /// [`Self::auto_start_network`] 会在 `start_network` 成功之后
+    /// 触发一次全员预连,把 presence 缓存填满,让 UI 查 roster 时
+    /// online/offline 立刻准。
+    ensure_reachable_all: Arc<EnsureReachableAllUseCase>,
 }
 
 impl SpaceSetupFacade {
@@ -89,6 +95,7 @@ impl SpaceSetupFacade {
             proof_port,
             trusted_peer_repo,
             peer_addr_repo,
+            presence,
         } = deps;
 
         // Stash handles for `try_resume_session` before the originals
@@ -120,6 +127,14 @@ impl SpaceSetupFacade {
             Arc::clone(&device_identity),
             Arc::clone(&clock),
             Arc::clone(&invitation_holder),
+        ));
+        // T8 · F1 hook: construct ensure_reachable_all early so peer_addr_repo /
+        // device_identity can still be Arc::clone'd here — both are moved into
+        // downstream use cases below.
+        let ensure_reachable_all = Arc::new(EnsureReachableAllUseCase::new(
+            Arc::clone(&peer_addr_repo),
+            presence,
+            Arc::clone(&device_identity),
         ));
         // Build the sponsor-side pairing stack: the handshake
         // coordinator owns wire I/O for the KeyslotOffer→Confirm flow;
@@ -198,6 +213,7 @@ impl SpaceSetupFacade {
             pairing_outcome_tx,
             space_access: space_access_for_facade,
             setup_status: setup_status_for_facade,
+            ensure_reachable_all,
         }
     }
 
@@ -336,6 +352,13 @@ impl SpaceSetupFacade {
     /// action. Does not propagate errors: A1/A2 already committed the
     /// space mutation and rolling that back is worse than leaving the
     /// network offline until the user retries.
+    ///
+    /// **Slice 2 Phase 1 · T8 · F1 hook**:`start_network` 成功后紧接着
+    /// 跑一次 `ensure_reachable_all` —— 对所有已知 paired peer 并发探测,
+    /// 把 presence 缓存填满,让 UI 下一次 `list_with_presence` 就能拿到
+    /// 正确的 online/offline 而不是全是 `Unknown`。预连失败不传给调用
+    /// 方:A1/A2/B2 的空间变更已经落盘,单个 peer 拨不通属正常情形,
+    /// adapter 的 `Connection::closed` watchdog 会按正常流程 lazy 补齐。
     async fn auto_start_network(&self) {
         if let Err(err) = self.network_control.start_network().await {
             warn!(
@@ -343,6 +366,27 @@ impl SpaceSetupFacade {
                 "start_network failed after space-lifecycle action; space state is \
                  committed, user must retry network via manual reconnect"
             );
+            // start_network 失败时不跑 ensure_reachable_all —— 没有网络
+            // 运行时,拨号一定返 adapter internal,制造一堆无用 warn。
+            return;
+        }
+        match self.ensure_reachable_all.execute().await {
+            Ok(report) => {
+                info!(
+                    total = report.total,
+                    online = report.online,
+                    offline = report.offline,
+                    errors = report.errors.len(),
+                    "F1 ensure_reachable_all completed"
+                );
+            }
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "ensure_reachable_all failed after start_network; presence will \
+                     recover lazily on next adapter probe"
+                );
+            }
         }
     }
 }
@@ -711,31 +755,72 @@ mod tests {
         }
     }
 
-    // Slice 2 Phase 1 · T5：这些 facade smoke tests 不跑到 pairing 收尾
-    // 点（A1/A2/resume 路径），所以 peer_addr_repo 的所有方法都不应被调。
-    // 用 mockall 定义测试替身，默认 `.times(0)` 隐式契约——一旦 smoke
-    // test 意外触发 upsert/get/list/remove，drop 时就会 panic。T5 行为契约
-    // 在 orchestrator / redeem_invitation tests 里专门覆盖。
-    mockall::mock! {
-        pub PeerAddrRepo {}
+    // Slice 2 Phase 1 · T5/T8 note:
+    //
+    // * T5:pairing 收尾点(orchestrator / redeem_invitation)会对 peer_addr_repo
+    //   做 upsert——行为契约在各自的测试里覆盖,不在本文件。
+    // * T8:F1 hook `auto_start_network` 成功跑 `start_network` 之后会
+    //   unconditionally 调 `peer_addr_repo.list()` 喂给 `EnsureReachableAllUseCase`。
+    //
+    // 因此本 helper 换成一个 FakePeerAddrRepo:`list()` 默认返回空 vec
+    // (→ ensure_reachable_all 跑完一轮,不触发 presence.ensure_reachable),
+    // 并记录 list() 调用次数让 F1 acceptance tests 断言"跑过一次"。
+    // 其他 repo 方法保持 "unreachable!()" —— 本 smoke 测试集不该走它们。
+    #[derive(Default)]
+    struct FakePeerAddrRepo {
+        list_calls: StdMutex<u32>,
+    }
+    impl FakePeerAddrRepo {
+        fn list_calls(&self) -> u32 {
+            *self.list_calls.lock().unwrap()
+        }
+    }
+    #[async_trait]
+    impl uc_core::ports::PeerAddressRepositoryPort for FakePeerAddrRepo {
+        async fn get(
+            &self,
+            _device: &DeviceId,
+        ) -> Result<Option<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError>
+        {
+            unreachable!("smoke tests don't read individual peer addresses")
+        }
+        async fn upsert(
+            &self,
+            _record: &uc_core::ports::PeerAddressRecord,
+        ) -> Result<(), uc_core::ports::PeerAddressError> {
+            unreachable!("pairing finalise covered in orchestrator tests, not here")
+        }
+        async fn list(
+            &self,
+        ) -> Result<Vec<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError>
+        {
+            *self.list_calls.lock().unwrap() += 1;
+            Ok(vec![])
+        }
+        async fn remove(&self, _device: &DeviceId) -> Result<(), uc_core::ports::PeerAddressError> {
+            unreachable!("removal covered in other suites")
+        }
+    }
 
-        #[async_trait]
-        impl uc_core::ports::PeerAddressRepositoryPort for PeerAddrRepo {
-            async fn get(
-                &self,
-                device: &DeviceId,
-            ) -> Result<Option<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError>;
-            async fn upsert(
-                &self,
-                record: &uc_core::ports::PeerAddressRecord,
-            ) -> Result<(), uc_core::ports::PeerAddressError>;
-            async fn list(
-                &self,
-            ) -> Result<Vec<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError>;
-            async fn remove(
-                &self,
-                device: &DeviceId,
-            ) -> Result<(), uc_core::ports::PeerAddressError>;
+    // T8:`ensure_reachable_all` 构造必须拿一个 `Arc<dyn PresencePort>`。
+    // 本 smoke 集的 peer_addr_repo 始终返回空 vec,所以 `ensure_reachable`
+    // 永远不会被触发;`current_state` / `subscribe` 也不走。3 个方法全
+    // `unreachable!()` —— 若某测试路径意外调用到 presence,会立刻 panic
+    // 而不是静默通过。
+    struct FakePresence;
+    #[async_trait]
+    impl uc_core::ports::PresencePort for FakePresence {
+        async fn ensure_reachable(
+            &self,
+            _device: &DeviceId,
+        ) -> Result<uc_core::ports::ReachabilityState, uc_core::ports::PresenceError> {
+            unreachable!("empty peer_addr_repo must keep ensure_reachable untouched")
+        }
+        async fn current_state(&self, _device: &DeviceId) -> uc_core::ports::ReachabilityState {
+            unreachable!("current_state is the roster facade's path, not this one")
+        }
+        fn subscribe(&self) -> tokio::sync::broadcast::Receiver<uc_core::ports::PresenceEvent> {
+            unreachable!("subscribe is the roster facade's path, not this one")
         }
     }
 
@@ -751,9 +836,11 @@ mod tests {
         SpaceSetupFacade,
         Arc<FakeNetworkControl>,
         Arc<FakeInvitationPort>,
+        Arc<FakePeerAddrRepo>,
     ) {
         let network_control = Arc::new(FakeNetworkControl::default());
         let pairing_invitation = Arc::new(FakeInvitationPort::default());
+        let peer_addr_repo = Arc::new(FakePeerAddrRepo::default());
         let facade = SpaceSetupFacade::new(SpaceSetupDeps {
             space_access,
             local_identity: Arc::new(FakeLocalIdentity {
@@ -772,9 +859,11 @@ mod tests {
             pairing_events: Arc::new(IdleEventPort::new()),
             proof_port: Arc::new(NoopProofPort),
             trusted_peer_repo: Arc::new(NoopTrustedPeerRepo),
-            peer_addr_repo: Arc::new(MockPeerAddrRepo::new()),
+            peer_addr_repo: Arc::clone(&peer_addr_repo)
+                as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
+            presence: Arc::new(FakePresence),
         });
-        (facade, network_control, pairing_invitation)
+        (facade, network_control, pairing_invitation, peer_addr_repo)
     }
 
     fn settings_with_device_name(name: &str) -> Arc<InMemorySettings> {
@@ -790,7 +879,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_forwards_happy_path() {
-        let (facade, _net, _inv) = make_facade(
+        let (facade, _net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -806,7 +895,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_forwards_passphrase_mismatch() {
-        let (facade, _net, _inv) = make_facade(
+        let (facade, _net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -827,7 +916,7 @@ mod tests {
             has_completed: true,
             space_id: None,
         };
-        let (facade, _net, _inv) = make_facade(
+        let (facade, _net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -840,7 +929,7 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_space_forwards_setup_not_completed() {
-        let (facade, _net, _inv) = make_facade(
+        let (facade, _net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -861,7 +950,7 @@ mod tests {
         };
         let space_access = FakeSpaceAccess::default();
         *space_access.unlock_err.lock().unwrap() = Some(SpaceAccessError::WrongPassphrase);
-        let (facade, _net, _inv) = make_facade(
+        let (facade, _net, _inv, _peer) = make_facade(
             Arc::new(space_access),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -877,7 +966,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_success_starts_network() {
-        let (facade, net, _inv) = make_facade(
+        let (facade, net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -894,7 +983,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_failure_does_not_start_network() {
-        let (facade, net, _inv) = make_facade(
+        let (facade, net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -919,7 +1008,7 @@ mod tests {
             has_completed: true,
             space_id: None,
         };
-        let (facade, net, _inv) = make_facade(
+        let (facade, net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -933,7 +1022,7 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_space_failure_does_not_start_network() {
-        let (facade, net, _inv) = make_facade(
+        let (facade, net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -951,7 +1040,7 @@ mod tests {
 
     #[tokio::test]
     async fn start_network_failure_does_not_fail_initialize_space() {
-        let (facade, net, _inv) = make_facade(
+        let (facade, net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -972,7 +1061,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_shutdown_stops_network() {
-        let (facade, net, _inv) = make_facade(
+        let (facade, net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -982,11 +1071,105 @@ mod tests {
         assert_eq!(net.start_calls(), 0);
     }
 
+    // ── T8 · F1 hook: auto_start_network triggers ensure_reachable_all ──
+    //
+    // 契约(plan §7.1 验收点):
+    // * A1 / A2 / B2 成功 → auto_start_network → ensure_reachable_all 跑一次
+    //   (以 peer_addr_repo.list() 被调计数代理——空 repo 路径下也跑过 list)
+    // * start_network 失败 → ensure_reachable_all 不跑(不调 list)
+    // * ensure_reachable_all 失败 → A1/A2 结果不受影响(已在 start_network_
+    //   failure_does_not_fail_initialize_space 覆盖了失败不传播;本集下
+    //   用空 repo,ensure_reachable_all 不会失败,只验证"跑过")
+
+    #[tokio::test]
+    async fn f1_hook_initialize_space_success_triggers_ensure_reachable_all() {
+        let (facade, _net, _inv, peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            settings_with_device_name("mac"),
+        );
+        let cmd = InitializeSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+            passphrase_confirm: Passphrase::new("hunter22hunter22"),
+            device_name: None,
+        };
+        facade.initialize_space(cmd).await.expect("A1 ok");
+        assert_eq!(
+            peer.list_calls(),
+            1,
+            "A1 success must trigger ensure_reachable_all (list invoked once)",
+        );
+    }
+
+    #[tokio::test]
+    async fn f1_hook_unlock_space_success_triggers_ensure_reachable_all() {
+        let setup_status = InMemorySetupStatus::default();
+        *setup_status.status.lock().unwrap() = SetupStatus {
+            has_completed: true,
+            space_id: None,
+        };
+        let (facade, _net, _inv, peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(setup_status),
+            Arc::new(InMemorySettings::default()),
+        );
+        let cmd = UnlockSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+        };
+        facade.unlock_space(cmd).await.expect("A2 ok");
+        assert_eq!(
+            peer.list_calls(),
+            1,
+            "A2 success must trigger ensure_reachable_all",
+        );
+    }
+
+    #[tokio::test]
+    async fn f1_hook_skipped_when_start_network_fails() {
+        let (facade, net, _inv, peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            settings_with_device_name("mac"),
+        );
+        *net.start_err.lock().unwrap() = Some("bind failed".to_string());
+        let cmd = InitializeSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+            passphrase_confirm: Passphrase::new("hunter22hunter22"),
+            device_name: None,
+        };
+        facade.initialize_space(cmd).await.expect("A1 ok");
+        assert_eq!(net.start_calls(), 1);
+        assert_eq!(
+            peer.list_calls(),
+            0,
+            "start_network failure must skip ensure_reachable_all",
+        );
+    }
+
+    #[tokio::test]
+    async fn f1_hook_skipped_when_lifecycle_action_fails() {
+        // A1 失败(passphrase mismatch)→ 不跑 start_network → 也不跑
+        // ensure_reachable_all。验证 guard 顺序正确。
+        let (facade, net, _inv, peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            settings_with_device_name("mac"),
+        );
+        let cmd = InitializeSpaceCommand {
+            passphrase: Passphrase::new("hunter22hunter22"),
+            passphrase_confirm: Passphrase::new("different22else2"),
+            device_name: None,
+        };
+        let _ = facade.initialize_space(cmd).await.unwrap_err();
+        assert_eq!(net.start_calls(), 0);
+        assert_eq!(peer.list_calls(), 0);
+    }
+
     // ── B1 · issue pairing invitation wiring ─────────────────────────────
 
     #[tokio::test]
     async fn issue_pairing_invitation_forwards_happy_path() {
-        let (facade, _net, inv) = make_facade(
+        let (facade, _net, inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -998,7 +1181,7 @@ mod tests {
 
     #[tokio::test]
     async fn issue_pairing_invitation_forwards_network_not_started() {
-        let (facade, _net, inv) = make_facade(
+        let (facade, _net, inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -1013,7 +1196,7 @@ mod tests {
 
     #[tokio::test]
     async fn issue_pairing_invitation_does_not_auto_start_network() {
-        let (facade, net, _inv) = make_facade(
+        let (facade, net, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
