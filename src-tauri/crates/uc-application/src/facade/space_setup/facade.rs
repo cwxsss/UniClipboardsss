@@ -43,7 +43,9 @@ use crate::pairing_outbound::joiner_handshake::JoinerHandshakeCoordinator;
 use crate::trusted_peer::usecases::TrustPeerUseCase;
 use crate::usecases::pairing::issue_invitation::IssuePairingInvitationUseCase;
 use crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase;
-use crate::usecases::presence::ensure_reachable_all::EnsureReachableAllUseCase;
+use crate::usecases::presence::ensure_reachable_all::{
+    EnsureReachableAllError, EnsureReachableAllReport, EnsureReachableAllUseCase,
+};
 use crate::usecases::setup::initialize_space::InitializeSpaceUseCase;
 use crate::usecases::setup::unlock_space::UnlockSpaceUseCase;
 
@@ -329,6 +331,25 @@ impl SpaceSetupFacade {
     ) -> Result<RedeemPairingInvitationResult, RedeemPairingInvitationError> {
         self.auto_start_network().await;
         self.redeem_pairing_invitation.execute(cmd).await
+    }
+
+    /// Slice 2 Phase 1 · T10 · CLI `members` 入口:主动触发一轮
+    /// `ensure_reachable_all`,把 `IrohPresenceAdapter` 的缓存刷新到最新,
+    /// 然后 CLI 再调 `MemberRosterFacade::list_with_presence` 读缓存 →
+    /// 查询结果天然满足"B 重启后 ≤ 10s 内显示 online"的验收条款。
+    ///
+    /// 与 F1 hook 里 `auto_start_network` 自动触发的那一轮的区别:本方法
+    /// 不调 `start_network`(iroh router 已在 assembly 构造时 `spawn`,
+    /// CLI 走直接模式无需 libp2p 兼容路径);只暴露 `ensure_reachable_all`
+    /// 使用例结果,让 CLI 决定如何展示(fatal 错误 / 个别 peer 失败计数)。
+    ///
+    /// UseCase 本身保持 `pub(crate)`(§11.4),只通过本 facade thin wrapper
+    /// 对外,后续 Tauri / GUI 也复用同一入口。
+    #[instrument(skip_all)]
+    pub async fn refresh_presence(
+        &self,
+    ) -> Result<EnsureReachableAllReport, EnsureReachableAllError> {
+        self.ensure_reachable_all.execute().await
     }
 
     /// F2 · Shut the network runtime down cleanly on app exit.

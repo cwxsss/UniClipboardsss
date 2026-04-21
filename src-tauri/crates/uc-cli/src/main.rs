@@ -117,6 +117,12 @@ enum Commands {
     },
     /// List paired devices via the daemon API
     Devices,
+    /// List members of this space with presence (online / offline / unknown).
+    ///
+    /// Self-contained direct mode (Slice 2 Phase 1): runs a one-off probe of
+    /// all paired peers so states are fresh on every call. No daemon
+    /// required. Prints `{name} ({state}) [local]` per device.
+    Members,
     /// Show space and encryption status (direct mode, no daemon required)
     SpaceStatus,
     /// Search clipboard history (query or inspect search availability)
@@ -231,6 +237,7 @@ fn main() -> anyhow::Result<()> {
                 }
             },
             Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
+            Commands::Members => commands::members::run(cli.json, cli.verbose).await,
             Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,
             Commands::Search { subcommand } => {
                 commands::search::run(subcommand, cli.json, cli.verbose).await

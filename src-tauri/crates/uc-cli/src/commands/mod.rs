@@ -2,6 +2,7 @@ pub mod devices;
 pub mod init;
 pub mod invite;
 pub mod join;
+pub mod members;
 pub mod search;
 pub mod setup;
 pub mod slice1_common;
