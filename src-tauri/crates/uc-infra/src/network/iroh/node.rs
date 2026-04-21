@@ -8,10 +8,12 @@
 //! contained) and the Slice 1 decision log on shared endpoint ownership.
 //!
 //! The builder pattern is deliberate: each `install_*` method is where a
-//! new transport slices in. Slice 1 ships [`install_pairing`]; Slice 2 / 3
-//! will add `install_clipboard` / `install_blobs` on the same builder.
+//! new transport slices in. Slice 1 ships [`install_pairing`]; Slice 2
+//! Phase 1 adds [`install_presence`]; Slice 2 Phase 2 / 3 will add
+//! `install_clipboard` / `install_blobs` on the same builder.
 //!
 //! [`install_pairing`]: IrohNodeBuilder::install_pairing
+//! [`install_presence`]: IrohNodeBuilder::install_presence
 
 use std::sync::Arc;
 
@@ -21,12 +23,16 @@ use tracing::{debug, instrument};
 
 use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
 use uc_core::ports::pairing_invitation::PairingInvitationPort;
-use uc_core::ports::{DeviceIdentityPort, LocalIdentityError, SettingsPort};
+use uc_core::ports::{
+    ClockPort, DeviceIdentityPort, LocalIdentityError, PeerAddressRepositoryPort, PresencePort,
+    SettingsPort,
+};
 
 use crate::pairing::{IrohPairingSessionAdapter, PAIRING_ALPN};
 use crate::rendezvous::{RendezvousClient, RendezvousPairingInvitationAdapter};
 
 use super::identity_store::IrohIdentityStore;
+use super::presence_adapter::{IrohPresenceAdapter, IrohPresenceHandler, PRESENCE_ALPN};
 
 /// The three pairing ports produced by [`IrohNodeBuilder::install_pairing`].
 ///
@@ -191,6 +197,39 @@ impl IrohNodeBuilder {
         }
     }
 
+    /// Install the presence transport (Slice 2 Phase 1):
+    ///
+    /// * Registers [`IrohPresenceHandler`] as the [`PRESENCE_ALPN`]
+    ///   [`iroh::protocol::ProtocolHandler`] so incoming "is this peer
+    ///   reachable" probes are accepted and held open until the peer closes.
+    /// * Builds [`IrohPresenceAdapter`] wired to the shared endpoint,
+    ///   [`PeerAddressRepositoryPort`] for stored NodeAddr bytes, and
+    ///   [`ClockPort`] for event timestamps. Returns it as
+    ///   `Arc<dyn PresencePort>` so callers depend on the port, not the
+    ///   concrete adapter (`uc-infra/AGENTS.md` §4.3).
+    ///
+    /// Must be called before [`spawn`](Self::spawn). Safe to call alongside
+    /// [`install_pairing`] — the two ALPNs are disjoint so both handlers
+    /// coexist on the same router.
+    pub fn install_presence(
+        &mut self,
+        peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
+        clock: Arc<dyn ClockPort>,
+    ) -> Arc<dyn PresencePort> {
+        let builder = self
+            .router_builder
+            .take()
+            .expect("router_builder missing — install_* called after spawn");
+        let builder = builder.accept(PRESENCE_ALPN, IrohPresenceHandler::new());
+        self.router_builder = Some(builder);
+
+        Arc::new(IrohPresenceAdapter::new(
+            Arc::clone(&self.endpoint),
+            peer_addr_repo,
+            clock,
+        ))
+    }
+
     /// Finalize the builder: spawn the [`Router`]. After this point no more
     /// `install_*` calls are allowed.
     pub fn spawn(self) -> IrohNode {
@@ -316,5 +355,68 @@ mod tests {
             .expect("second bind");
         assert_eq!(second.endpoint.id(), first_id);
         second.spawn().shutdown().await;
+    }
+
+    #[derive(Default)]
+    struct EmptyPeerAddressRepo;
+    #[async_trait]
+    impl PeerAddressRepositoryPort for EmptyPeerAddressRepo {
+        async fn get(
+            &self,
+            _device: &DeviceId,
+        ) -> Result<Option<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError>
+        {
+            Ok(None)
+        }
+        async fn upsert(
+            &self,
+            _record: &uc_core::ports::PeerAddressRecord,
+        ) -> Result<(), uc_core::ports::PeerAddressError> {
+            Ok(())
+        }
+        async fn list(
+            &self,
+        ) -> Result<Vec<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError>
+        {
+            Ok(Vec::new())
+        }
+        async fn remove(&self, _device: &DeviceId) -> Result<(), uc_core::ports::PeerAddressError> {
+            Ok(())
+        }
+    }
+
+    struct FixedClock(i64);
+    impl ClockPort for FixedClock {
+        fn now_ms(&self) -> i64 {
+            self.0
+        }
+    }
+
+    #[tokio::test]
+    async fn install_pairing_and_install_presence_coexist_on_same_router() {
+        // Two ALPNs on one router — proves Slice 2 Phase 1's presence
+        // transport slices in without disturbing Slice 1's pairing wiring.
+        let store = identity_store();
+        let mut builder = IrohNodeBuilder::bind(&store, IrohNodeConfig::default())
+            .await
+            .expect("bind");
+
+        let _pairing = builder.install_pairing(
+            Arc::new(FixedDeviceIdentity(DeviceId::new("device-coexist"))),
+            Arc::new(InMemorySettings(StdMutex::new(Settings::default()))),
+        );
+
+        let presence: Arc<dyn PresencePort> = builder.install_presence(
+            Arc::new(EmptyPeerAddressRepo),
+            Arc::new(FixedClock(1_700_000_000_000)),
+        );
+
+        // current_state before any dial is Unknown — proves the adapter
+        // survived the type-erasure round trip through install_presence.
+        let unknown_state = presence.current_state(&DeviceId::new("never-dialed")).await;
+        assert_eq!(unknown_state, uc_core::ports::ReachabilityState::Unknown,);
+
+        let node = builder.spawn();
+        node.shutdown().await;
     }
 }
