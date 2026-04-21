@@ -399,7 +399,7 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 | T4 | `IrohNodeBuilder::install_presence` 扩展点 | ✅ | `32a02c62` | 0.3h | 镜像 `install_pairing`,两 ALPN 同 router 共存单测绿 |
 | T5 | pairing 收尾点写 `NodeAddr` 到 repo | ✅ | `a562e529` | ~1.8h | 比估多 0.8h:wire 协议升级不可避,bump `WIRE_VERSION` → 2;3 个 T5 专项单测全绿 |
 | T6 | `EnsureReachableAllUseCase` | ✅ | `e66776f8` | ~1.4h | 按 §12.4 决策用 `peer_addr_repo.list()` 作迭代源;`JoinSet` 并发 + `DeviceIdentityPort` 防御性 self-filter;6 单测全绿(含并发性 wall-time 断言——mockall expectation 内部 Mutex 会序列化 `.returning` 调用,改用手写 `SleepyPresence` fake) |
-| T7 | `MemberRosterFacade` | 🔲 | — | 估 2h | — |
+| T7 | `MemberRosterFacade` | ✅ | `<pending>` | ~0.5h | `facade/roster/` 全套(facade+commands+errors+mod);thin wrapper 不拨号;`is_local` 通过 `LocalIdentityPort::get_current_fingerprint()` 对比 `SpaceMember.identity_fingerprint`;drop `MemberId`(无此类型)+ `last_seen_at`(presence port 当前无时间追踪);8 单测全绿 |
 | T8 | F1 hook `auto_start_network` | 🔲 | — | 估 1h | — |
 | T9 | bootstrap 装配 | 🔲 | — | 估 1h | — |
 | T10 | `uniclipboard-cli members` | 🔲 | — | 估 2h | — |
@@ -409,9 +409,9 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 
 ### 12.2 累计
 
-- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 = 8 项 / ~7.5h
-- **剩余**:T7-T13 = 7 项 / 估 ~10.3h
-- **进度**:~60%(按估算工时口径)
+- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 / T7 = 9 项 / ~8.0h
+- **剩余**:T8-T13 = 6 项 / 估 ~8.3h
+- **进度**:~66%(按估算工时口径)
 
 ### 12.3 关键发现 / 偏离
 
@@ -428,7 +428,7 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 ### 12.4 后续提醒
 
 - ~~T6 `EnsureReachableAllUseCase` 可以读 `peer_addr_repo.list()` 直接枚举所有 paired 设备(跳过本机),对每个调 `presence.ensure_reachable`;不需要再从 `member_repo` 拉取。~~ ✅ T6 已按此决策实施(2026-04-21)。`execute()` 签名无 `space_id` 参数——当前单 space 场景 peer_addr_repo 就是全量 roster 的上限;多 space 将来再加。`EnsureReachableAllError::Repository` 表达 repo 故障,单点 probe 失败归 `report.errors` 不 fail 整体。
-- T7 `MemberRosterFacade::list_with_presence` 的 `is_local` 判断:对每个 member 比 `LocalIdentityPort::get_current_fingerprint()`。
+- ~~T7 `MemberRosterFacade::list_with_presence` 的 `is_local` 判断:对每个 member 比 `LocalIdentityPort::get_current_fingerprint()`。~~ ✅ T7 已按此决策实施(2026-04-21)。`local_identity.get_current_fingerprint()` 取一次,对每个 member 的 `identity_fingerprint` 做 `==`(经 `IdentityFingerprint::PartialEq` 语义上等价于 `verify`)。pre-A1/B2 态(返回 `None`)下所有 entry 均标 `is_local=false`——此窗口期一般也无成员记录,属防御路径。plan §4.1 的 `member_id` 字段和 `last_seen_at` 字段已 drop(前者无对应类型,后者 presence port 当前不追踪时间戳;T7 验收点仅要求 state 三值正确)。
 - T8 的 "hook 在 `auto_start_network` 内触发 ensure_reachable_all" 需要从 `SetupStatus` 读 `space_id`(T-15 已确保一致,2026-04-20 `255fd2fe`)。
 - T10 CLI `members` 命令执行前**应先跑一轮** `ensure_reachable_all`(plan §8 T3 修订决策),保证 B 重启后"下次 CLI 查询 ≤ 10s 内显示 online"的验收条款。
 - T11 e2e 覆盖"iroh keypair 重绑恢复"路径(T3b 用 repo swap 绕过的部分),以及 T5 新增的 wire 对称 blob 写入(两侧 repo 中都能 get 到对方 blob,且 postcard 解码得到合法 `EndpointAddr`)。

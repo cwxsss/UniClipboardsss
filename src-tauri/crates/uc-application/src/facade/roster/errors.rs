@@ -1,0 +1,23 @@
+//! Application-layer errors for `MemberRosterFacade`.
+
+use thiserror::Error;
+
+/// Failure modes of [`crate::facade::roster::MemberRosterFacade::list_with_presence`].
+///
+/// `PresencePort::current_state` 故意**不**在这里出现——它的签名是
+/// `async fn current_state(...) -> ReachabilityState`(无 Result),
+/// 表示"读缓存不可能失败"。若未来 adapter 想在缓存失效时回退到
+/// `Unknown`,也应继续在 port 内部消化,保持本 error 小而稳定。
+#[derive(Debug, Error)]
+pub enum RosterError {
+    /// `MemberRepositoryPort::list` 故障。消息面向日志;UI 上层一般
+    /// 展示一句"无法加载成员列表"+ 原样 error 字符串调试。
+    #[error("failed to list members: {0}")]
+    MemberRepository(String),
+
+    /// `LocalIdentityPort::get_current_fingerprint` 故障——adapter 在读
+    /// 身份存储(keychain / 文件)时出错。区别于"还没创建身份"
+    /// (那返回 `Ok(None)`,不是 error),此 variant 表示存储本身故障。
+    #[error("failed to read local identity: {0}")]
+    LocalIdentity(String),
+}
