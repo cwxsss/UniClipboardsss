@@ -398,7 +398,7 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 | T3b | `IrohPresenceAdapter`(watchdog + `PRESENCE_ALPN` handler) | ✅ | `5c69b2a6` | ~0.6h(subagent) | 5 单测绿;`peers` / `last_state` 双 map(String 键——`DeviceId` 缺 `Hash`);`TrackedPeer::Drop` 自动 abort watchdog |
 | T4 | `IrohNodeBuilder::install_presence` 扩展点 | ✅ | `32a02c62` | 0.3h | 镜像 `install_pairing`,两 ALPN 同 router 共存单测绿 |
 | T5 | pairing 收尾点写 `NodeAddr` 到 repo | ✅ | `a562e529` | ~1.8h | 比估多 0.8h:wire 协议升级不可避,bump `WIRE_VERSION` → 2;3 个 T5 专项单测全绿 |
-| T6 | `EnsureReachableAllUseCase` | ✅ | `[pending]` | ~1.4h | 按 §12.4 决策用 `peer_addr_repo.list()` 作迭代源;`JoinSet` 并发 + `DeviceIdentityPort` 防御性 self-filter;6 单测全绿(含并发性 wall-time 断言——mockall expectation 内部 Mutex 会序列化 `.returning` 调用,改用手写 `SleepyPresence` fake) |
+| T6 | `EnsureReachableAllUseCase` | ✅ | `e66776f8` | ~1.4h | 按 §12.4 决策用 `peer_addr_repo.list()` 作迭代源;`JoinSet` 并发 + `DeviceIdentityPort` 防御性 self-filter;6 单测全绿(含并发性 wall-time 断言——mockall expectation 内部 Mutex 会序列化 `.returning` 调用,改用手写 `SleepyPresence` fake) |
 | T7 | `MemberRosterFacade` | 🔲 | — | 估 2h | — |
 | T8 | F1 hook `auto_start_network` | 🔲 | — | 估 1h | — |
 | T9 | bootstrap 装配 | 🔲 | — | 估 1h | — |
