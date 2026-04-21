@@ -52,6 +52,10 @@ pub enum ClipboardTransportError {
 }
 
 #[async_trait]
+#[deprecated(
+    since = "Slice2-Phase2",
+    note = "帧模型 transport 为 libp2p 时代 port;iroh 栈改用业务语义的 ClipboardDispatchPort(见 ports/clipboard/sync_dispatch.rs)。Slice 5 与其它 legacy 一并删除。"
+)]
 pub trait ClipboardOutboundTransportPort: Send + Sync {
     /// 向一个同步目标发送一份剪贴板传输帧。
     ///
@@ -76,6 +80,10 @@ pub trait ClipboardInboundMessageSource: Send {
 }
 
 #[async_trait]
+#[deprecated(
+    since = "Slice2-Phase2",
+    note = "帧模型 transport 为 libp2p 时代 port;iroh 栈改用业务语义的 ClipboardReceiverPort(见 ports/clipboard/sync_receiver.rs)。Slice 5 与其它 legacy 一并删除。"
+)]
 pub trait ClipboardInboundTransportPort: Send + Sync {
     /// 订阅入站剪贴板传输帧。
     ///

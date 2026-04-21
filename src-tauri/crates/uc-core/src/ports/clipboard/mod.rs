@@ -11,6 +11,8 @@ mod representation_repository;
 mod select_representation_policy;
 mod selection_resolver;
 mod spool_queue;
+mod sync_dispatch;
+mod sync_receiver;
 mod thumbnail_generator;
 mod thumbnail_repository;
 mod transport;
@@ -30,8 +32,13 @@ pub use representation_repository::{
 pub use select_representation_policy::SelectRepresentationPolicyPort;
 pub use selection_resolver::SelectionResolverPort;
 pub use spool_queue::{SpoolQueuePort, SpoolRequest};
+pub use sync_dispatch::{
+    ClipboardDispatchError, ClipboardDispatchPort, ClipboardHeader, DispatchAck, SyncPayload,
+};
+pub use sync_receiver::{ClipboardReceiverPort, InboundClipboard};
 pub use thumbnail_generator::{GeneratedThumbnail, ThumbnailGeneratorPort};
 pub use thumbnail_repository::ThumbnailRepositoryPort;
+#[allow(deprecated)]
 pub use transport::{
     ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
     ClipboardTransportError, InboundClipboardFrame, OutboundClipboardFrame, SyncTargetId,
