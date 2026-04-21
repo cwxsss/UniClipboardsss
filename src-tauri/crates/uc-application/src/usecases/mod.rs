@@ -9,4 +9,5 @@
 //! `AppFacade`.
 
 pub(crate) mod pairing;
+pub(crate) mod presence;
 pub(crate) mod setup;

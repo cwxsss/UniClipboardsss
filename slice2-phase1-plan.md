@@ -397,8 +397,8 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 | T3 计划修订 | 改 adapter 架构为 Connection::closed watchdog | ✅ | `a5394349` | 0.2h | `slice2-phase1-plan.md` §8 增补 |
 | T3b | `IrohPresenceAdapter`(watchdog + `PRESENCE_ALPN` handler) | ✅ | `5c69b2a6` | ~0.6h(subagent) | 5 单测绿;`peers` / `last_state` 双 map(String 键——`DeviceId` 缺 `Hash`);`TrackedPeer::Drop` 自动 abort watchdog |
 | T4 | `IrohNodeBuilder::install_presence` 扩展点 | ✅ | `32a02c62` | 0.3h | 镜像 `install_pairing`,两 ALPN 同 router 共存单测绿 |
-| T5 | pairing 收尾点写 `NodeAddr` 到 repo | ✅ | `[pending]` | ~1.8h | 比估多 0.8h:wire 协议升级不可避,bump `WIRE_VERSION` → 2;3 个 T5 专项单测全绿 |
-| T6 | `EnsureReachableAllUseCase` | 🔲 | — | 估 1.5h | — |
+| T5 | pairing 收尾点写 `NodeAddr` 到 repo | ✅ | `a562e529` | ~1.8h | 比估多 0.8h:wire 协议升级不可避,bump `WIRE_VERSION` → 2;3 个 T5 专项单测全绿 |
+| T6 | `EnsureReachableAllUseCase` | ✅ | `[pending]` | ~1.4h | 按 §12.4 决策用 `peer_addr_repo.list()` 作迭代源;`JoinSet` 并发 + `DeviceIdentityPort` 防御性 self-filter;6 单测全绿(含并发性 wall-time 断言——mockall expectation 内部 Mutex 会序列化 `.returning` 调用,改用手写 `SleepyPresence` fake) |
 | T7 | `MemberRosterFacade` | 🔲 | — | 估 2h | — |
 | T8 | F1 hook `auto_start_network` | 🔲 | — | 估 1h | — |
 | T9 | bootstrap 装配 | 🔲 | — | 估 1h | — |
@@ -409,9 +409,9 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 
 ### 12.2 累计
 
-- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 = 7 项 / ~6.1h
-- **剩余**:T6-T13 = 8 项 / 估 ~11.8h
-- **进度**:~53%(按估算工时口径)
+- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 = 8 项 / ~7.5h
+- **剩余**:T7-T13 = 7 项 / 估 ~10.3h
+- **进度**:~60%(按估算工时口径)
 
 ### 12.3 关键发现 / 偏离
 
@@ -423,9 +423,11 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 
 4. **T5 wire 协议升级**(2026-04-21):原计划只写 repo 即可,实际发现 sponsor 拿不到 joiner 的 `EndpointAddr`(iroh `Endpoint::remote_info` 是 `pub(crate)`,`Connection::remote_address` 只给单个 SocketAddr 不含 relay)。改为 wire 对称扩展:`JoinerRequest` / `SponsorConfirm` 各加 `transport_address_blob: Vec<u8>`(opaque bytes,core 纯净);新增 port 方法 `PairingSessionPort::local_transport_address_blob`(iroh adapter 返 `postcard(endpoint.addr())`);`WIRE_VERSION` 从 1 升到 2——Slice 1 → Slice 2 升级期跨版本对端由 `UnsupportedVersion` 显式拒连,因为 pre-release 不需兼容层。
 
+5. **T6 mockall 并发坑**(2026-04-21):并发性单测用 mockall 的 `.returning(|_| { thread::sleep; ... })` 会 **被序列化**——mockall 把 expectation 的 `FnMut` closure 存在内部 `Mutex<...>` 里以保证 trait object 安全,三个 JoinSet task 在 Mutex 上排队,即使 multi-thread runtime 也走 serial(实测 616ms ≈ 3 × 200ms)。同一问题会影响**任何**需要断言并发的 mockall 测试。统一替换为手写 `impl PresencePort` fake(30 行,`tokio::time::sleep` 直接 yield)。正常"调用次数 + 参数匹配"断言仍用 mockall。
+
 ### 12.4 后续提醒
 
-- T6 `EnsureReachableAllUseCase` 可以读 `peer_addr_repo.list()` 直接枚举所有 paired 设备(跳过本机),对每个调 `presence.ensure_reachable`;不需要再从 `member_repo` 拉取。
+- ~~T6 `EnsureReachableAllUseCase` 可以读 `peer_addr_repo.list()` 直接枚举所有 paired 设备(跳过本机),对每个调 `presence.ensure_reachable`;不需要再从 `member_repo` 拉取。~~ ✅ T6 已按此决策实施(2026-04-21)。`execute()` 签名无 `space_id` 参数——当前单 space 场景 peer_addr_repo 就是全量 roster 的上限;多 space 将来再加。`EnsureReachableAllError::Repository` 表达 repo 故障,单点 probe 失败归 `report.errors` 不 fail 整体。
 - T7 `MemberRosterFacade::list_with_presence` 的 `is_local` 判断:对每个 member 比 `LocalIdentityPort::get_current_fingerprint()`。
 - T8 的 "hook 在 `auto_start_network` 内触发 ensure_reachable_all" 需要从 `SetupStatus` 读 `space_id`(T-15 已确保一致,2026-04-20 `255fd2fe`)。
 - T10 CLI `members` 命令执行前**应先跑一轮** `ensure_reachable_all`(plan §8 T3 修订决策),保证 B 重启后"下次 CLI 查询 ≤ 10s 内显示 online"的验收条款。
