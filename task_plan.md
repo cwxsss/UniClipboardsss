@@ -886,6 +886,24 @@ pub struct StopNetworkCommand; // 无字段
 - [ ] A3 revoke 后被撤销设备尝试连入被拒(connection deny)
 - [ ] A5 rename 后下次同步,对端 SpaceMember 名字更新
 
+#### Slice 2 Phase 1 · roster + presence 基础设施 🔲
+
+**范围**:只做"谁在线"这件事变活——roster 查询 + presence 事件 + F1 预连 hook。**不做**剪贴板同步,**不接** rename / revoke UI 按钮,**不写**新 wire 协议。
+
+**交付**:
+- `PresencePort::ensure_reachable(member_id)` + `ensure_reachable_all(roster)` 扩展
+- `PeerAddressRepositoryPort` 完整实现(Slice 1 骨架激活,接真实 iroh `NodeAddr`)
+- `MemberRosterFacade` 🆕 + `list_with_presence()` + `subscribe_presence_events()`
+- F1 预连 hook:A2 unlock + try_resume_session 成功路径都追加 `ensure_reachable_all`
+- `uc-infra` adapter:iroh `Endpoint::remote_info` 查 online,`Watcher` 订阅状态变化
+- `uniclipboard-cli status` 命令:查询并打印所有 SpaceMember 的在线状态
+
+**最终校验标准**(Phase 1 完成判据):
+- [ ] 两台设备 A / B 都完成 unlock 后,任一台跑 `uniclipboard-cli status` 能列出**所有** SpaceMember 并显示每个成员的在线状态(online / offline)
+- [ ] 关掉 B 后,A 再跑 `uniclipboard-cli status` 在 ≤ 10s 内反映 B = offline
+- [ ] B 重新启动并 unlock 后,A 再跑 `uniclipboard-cli status` 在 ≤ 10s 内反映 B = online
+- [ ] 单元测试覆盖 `MemberRosterFacade`(fake `PresencePort`)+ `ensure_reachable_all` 并发安全
+
 ---
 
 ### Slice 3 · 文件 / Blob 🔲
