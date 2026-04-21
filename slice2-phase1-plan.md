@@ -402,16 +402,16 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 | T7 | `MemberRosterFacade` | ✅ | `548b3bdf` | ~0.5h | `facade/roster/` 全套(facade+commands+errors+mod);thin wrapper 不拨号;`is_local` 通过 `LocalIdentityPort::get_current_fingerprint()` 对比 `SpaceMember.identity_fingerprint`;drop `MemberId`(无此类型)+ `last_seen_at`(presence port 当前无时间追踪);8 单测全绿 |
 | T8 | F1 hook `auto_start_network` | ✅ | `f461a6eb` | ~0.7h | `SpaceSetupDeps` 加 `presence: Arc<dyn PresencePort>`;facade 内部构造 `EnsureReachableAllUseCase`;`auto_start_network` 成功后紧接 `ensure_reachable_all.execute()`,失败走 `warn!` 不传播;4 新单测覆盖验收点;bootstrap 的 presence port 接线(`IrohNodeBuilder::install_presence` 调用)**随 T8 合入**,因为 `SpaceSetupDeps` 新字段不装 `presence` 编译不过——T9 scope 缩减为只做 MemberRosterFacade 的 bootstrap 接线 |
 | T9 | bootstrap 装配 | ✅ | `181f2cc8` | ~0.2h | scope 缩减(T8 已吸收 presence 接线)后只剩 `MemberRosterFacade` 装配:`SpaceSetupAssembly` 加 `pub roster: Arc<MemberRosterFacade>` 字段,`build_space_setup_assembly` 构造时复用 `member_repo` / `local_identity` / `presence` 三个 Arc(后两个需先 `Arc::clone` 给 SpaceSetupFacade,之后再 move 给 roster);工作空间全量编译 + slice1 e2e 仍绿 |
-| T10 | `uniclipboard-cli members` | 🔲 | — | 估 2h | — |
+| T10 | `uniclipboard-cli members` | ✅ | `bda7686b` | ~0.4h | 自包含直连模式:build_assembly → try_resume_session → **facade.refresh_presence**(plan §12.4 T10 提醒,F1 hook 之外的显式 probe 入口)→ `roster.list_with_presence` → human(`name (state) [local]` per line)/ JSON 双渲染。为不泄露 `EnsureReachableAllUseCase`(§11.4),在 `SpaceSetupFacade` 加 thin `refresh_presence()` wrapper,并从 space_setup mod 透出 `EnsureReachableAllReport/Error`。无新单测(integration-level);workspace 全量编译 + uc-application 176 + uc-cli 10 + slice1_handshake_e2e 单测绿 |
 | T11 | `slice2_phase1_presence_e2e` 集成测试 | 🔲 | — | 估 3h | — |
 | T12 | `single-machine-e2e.sh` 扩展 | 🔲 | — | 估 1h | — |
 | T13 | task_plan.md Phase 1 ✅ 收尾 | 🔲 | — | 估 0.3h | — |
 
 ### 12.2 累计
 
-- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 / T7 / T8 / T9 = 11 项 / ~8.9h
-- **剩余**:T10-T13 = 4 项 / 估 ~6.3h
-- **进度**:~80%(按估算工时口径)
+- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 / T7 / T8 / T9 / T10 = 12 项 / ~9.3h
+- **剩余**:T11-T13 = 3 项 / 估 ~4.3h
+- **进度**:~87%(按估算工时口径)
 
 ### 12.3 关键发现 / 偏离
 
@@ -430,5 +430,5 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 - ~~T6 `EnsureReachableAllUseCase` 可以读 `peer_addr_repo.list()` 直接枚举所有 paired 设备(跳过本机),对每个调 `presence.ensure_reachable`;不需要再从 `member_repo` 拉取。~~ ✅ T6 已按此决策实施(2026-04-21)。`execute()` 签名无 `space_id` 参数——当前单 space 场景 peer_addr_repo 就是全量 roster 的上限;多 space 将来再加。`EnsureReachableAllError::Repository` 表达 repo 故障,单点 probe 失败归 `report.errors` 不 fail 整体。
 - ~~T7 `MemberRosterFacade::list_with_presence` 的 `is_local` 判断:对每个 member 比 `LocalIdentityPort::get_current_fingerprint()`。~~ ✅ T7 已按此决策实施(2026-04-21)。`local_identity.get_current_fingerprint()` 取一次,对每个 member 的 `identity_fingerprint` 做 `==`(经 `IdentityFingerprint::PartialEq` 语义上等价于 `verify`)。pre-A1/B2 态(返回 `None`)下所有 entry 均标 `is_local=false`——此窗口期一般也无成员记录,属防御路径。plan §4.1 的 `member_id` 字段和 `last_seen_at` 字段已 drop(前者无对应类型,后者 presence port 当前不追踪时间戳;T7 验收点仅要求 state 三值正确)。
 - ~~T8 的 "hook 在 `auto_start_network` 内触发 ensure_reachable_all" 需要从 `SetupStatus` 读 `space_id`(T-15 已确保一致,2026-04-20 `255fd2fe`)。~~ ✅ T8 已实施(2026-04-21)。实际实现比原计划更简:因 T6 `execute()` 已无 `space_id` 参数(§12.4),F1 hook 不用读 SetupStatus;facade 新增 `ensure_reachable_all: Arc<EnsureReachableAllUseCase>` 字段,`auto_start_network` 成功拉起 network 后 unconditionally `execute()` 一次。成功路径 `info!` 输出 total/online/offline/errors,失败路径 `warn!` 不传播——A1/A2/B2 的空间变更已落盘,失败回滚代价远大于"网络 lazy 重连"的代价。**bootstrap 的 presence port 接线一并合入 T8**(`SpaceSetupDeps.presence` 新字段不装配编译不过)——T9 scope 现在只剩 MemberRosterFacade 的 bootstrap 接线。
-- T10 CLI `members` 命令执行前**应先跑一轮** `ensure_reachable_all`(plan §8 T3 修订决策),保证 B 重启后"下次 CLI 查询 ≤ 10s 内显示 online"的验收条款。
+- ~~T10 CLI `members` 命令执行前**应先跑一轮** `ensure_reachable_all`(plan §8 T3 修订决策),保证 B 重启后"下次 CLI 查询 ≤ 10s 内显示 online"的验收条款。~~ ✅ T10 已实施(2026-04-21 `bda7686b`):`facade.refresh_presence()` 在 `try_resume_session` 之后 `list_with_presence` 之前调一次,把刷新后 report 的 total/online/offline/errors 摘要喂给 spinner,单个 peer 失败不 fatal(进 `report.errors`)。usecase 保持 pub(crate),只通过 facade thin wrapper 对外——后续 Tauri `get_roster` 命令可复用同一入口。
 - T11 e2e 覆盖"iroh keypair 重绑恢复"路径(T3b 用 repo swap 绕过的部分),以及 T5 新增的 wire 对称 blob 写入(两侧 repo 中都能 get 到对方 blob,且 postcard 解码得到合法 `EndpointAddr`)。
