@@ -818,8 +818,8 @@ pub struct StopNetworkCommand; // 无字段
 
 **Slice 2 启动前应消化的 Slice 1 遗留**:
 - T-15:A2 unlock 返回的 space_id 对齐 SetupStatus(不先做会污染 Slice 2 的 roster 查询)—— **建议在 Slice 2 phase 0 顺手修**
-- T-16:`uniclipboard-cli unlock` / `lock` 命令(Slice 2 的 CLI 命令会在 keyring miss 时需要 unlock 路径)—— **建议 Slice 2 phase 1 添加**
-- T-17:legacy profile 迁移——**暂缓**,等第一个真实用户反馈
+- T-16:`uniclipboard-cli lock` / `unlock` 命令—— **❌ 2026-04-20 决策不做**(CLI 进程短命,keyslot + keychain 本就长期持有,`lock` 无业务价值)
+- T-17:legacy profile 迁移—— **❌ 2026-04-20 决策不做**(项目尚无真实用户,不需要向后兼容)
 - `SpaceSetupFacade` 保留的 `A1/A2/B1/B2/F2` 对外表面稳定,Slice 2 只新增 `ClipboardSyncFacade`,不动 `SpaceSetupFacade`
 
 **Slice 2 可复用的 Slice 1 基础设施**:
@@ -1080,25 +1080,14 @@ pub struct StopNetworkCommand; // 无字段
 - **触发条件**:Slice 2 接入 Tauri / daemon 的 `status` 查询时必然撞上
 - **工作量**:小(一处改动 + A2 测试 assertion 对齐)
 
-### T-16 · `uniclipboard-cli lock` / `unlock` 命令
+### T-16 · `uniclipboard-cli lock` / `unlock` 命令 — ❌ 不做(2026-04-20)
 - **来源**:Slice 1 P9b 留下的 CLI 空缺(F-057)
-- **业务背景**:目前 `invite` / `join` 在 keyring miss 时报错让用户"re-init",不体面。应提供 `uniclipboard-cli unlock [--passphrase]` 让用户显式输口令恢复 session;以及 `uniclipboard-cli lock` 让用户主动清内存 + keyring cache(防盗机)
-- **现状**:`facade.unlock_space(UnlockSpaceCommand{passphrase})` 已存在,CLI 只需包一层。lock 需要决策是否新增 `SpaceAccessPort::clear_cached_session` 来清 keyring(当前 `lock()` 契约只清内存)
-- **预案**:
-  - `unlock` 命令直接复用 `UnlockSpaceCommand`
-  - `lock` 命令:先走 `facade.on_shutdown` 清内存,然后决定是否也清 keyring——建议加 `--forget` 选项,默认只清内存(与 port 契约一致)
-- **触发条件**:用户反馈 keyring miss 后无解 / 安全审计要求显式 lock
-- **工作量**:中(两个 CLI 命令 + 可能的一个新 port 方法 + 测试)
+- **决策**:不做。设计上 `SpaceAccessPort` 的 keyslot(磁盘)+ KEK(OS keychain)本就是**长期共享存储**;CLI 进程短命,跑完命令即退出,`lock` 清内存无业务价值,`unlock` 也只是让 keyring 静默恢复路径多一个等价入口。若 keyring miss 真正发生,当前"引导用户重新 init"的错误已满足最小闭环,不值得为边角场景养两个 CLI 命令
+- **若未来反悔**:参考本条历史讨论——`--forget` 需新增 `SpaceAccessPort::clear_keyring_cache`(只清 keyring,保留磁盘 keyslot),填在 `lock()` 与 `factory_reset()` 之间的粒度空档
 
-### T-17 · Legacy profile 的 `SetupStatus.space_id == None` 迁移
+### T-17 · Legacy profile 的 `SetupStatus.space_id == None` 迁移 — ❌ 不做(2026-04-20)
 - **来源**:Slice 1 P9a F-058 fallback 路径
-- **业务背景**:本次升级前已 init 的老 profile 里 `SetupStatus.space_id` 是 None,`SponsorHandshakeCoordinator` 会 fallback 到 fresh UUID,导致和 legacy 握手得到的 joiner space_id 对不上
-- **现状**:sponsor 端记到 `warn!` 日志,未做修复动作。新 fresh profile 的 e2e 正确
-- **预案**:
-  - 方案 a:A2 unlock 成功时如果发现 `status.space_id == None`,mint 一个 + 写回(自愈);注意这会让老 joiner 拿到的 id 仍对不上 sponsor 的"真 id",但从此以后一致
-  - 方案 b:加 `uniclipboard-cli reset` 或 `factory-reset` 命令,要求用户显式重来(最干净)
-- **触发条件**:第一个真实用户从旧版本升级上来反馈问题
-- **工作量**:小(方案 b 更推荐)
+- **决策**:不做。项目尚无真实用户,不需要向后兼容;开发者自测老 profile 撞到时手动 `factory_reset` 即可。T-15 按原意保留 `unwrap_or_else(SpaceId::new)` fallback,不做"自愈写回"
 
 ---
 
