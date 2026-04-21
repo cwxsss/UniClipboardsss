@@ -47,7 +47,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use tracing::{info, instrument};
 
-use uc_core::ports::{ClockPort, SetupStatusPort};
+use uc_core::ports::{ClockPort, PeerAddressRecord, PeerAddressRepositoryPort, SetupStatusPort};
 use uc_core::setup::SetupStatus;
 use uc_core::{MemberRepositoryPort, MemberSyncPreferences, TrustedPeerRepositoryPort};
 
@@ -70,6 +70,9 @@ pub(crate) struct RedeemPairingInvitationUseCase {
     admit_member: Arc<AdmitMemberUc>,
     trust_peer: Arc<TrustPeerUc>,
     setup_status: Arc<dyn SetupStatusPort>,
+    /// Slice 2 Phase 1 · T5：配对完成后 best-effort 把 sponsor 的传输地址
+    /// blob 写入仓库。写失败不 fail join（presence 下轮会再拉）。
+    peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
     clock: Arc<dyn ClockPort>,
 }
 
@@ -79,6 +82,7 @@ impl RedeemPairingInvitationUseCase {
         admit_member: Arc<AdmitMemberUc>,
         trust_peer: Arc<TrustPeerUc>,
         setup_status: Arc<dyn SetupStatusPort>,
+        peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
         clock: Arc<dyn ClockPort>,
     ) -> Self {
         Self {
@@ -86,6 +90,7 @@ impl RedeemPairingInvitationUseCase {
             admit_member,
             trust_peer,
             setup_status,
+            peer_addr_repo,
             clock,
         }
     }
@@ -144,6 +149,14 @@ impl RedeemPairingInvitationUseCase {
                 RedeemPairingInvitationError::Internal(format!("setup_status.set_status: {e}"))
             })?;
 
+        // Slice 2 Phase 1 · T5：best-effort upsert sponsor transport addr。
+        // 位置放在 `setup_status` 之后是刻意的：setup_status=true 才是
+        // 配对 Success 的单点真相来源；peer address 写入是体验优化，
+        // 失败不能回退配对状态。空 blob（旧 sponsor / adapter 未附带）
+        // 跳过；写失败仅 warn，presence `ensure_reachable_all` 下一轮
+        // 兜底。
+        self.persist_sponsor_address(&outcome, now).await;
+
         info!(
             sponsor_device_id = %outcome.sponsor_device_id.as_str(),
             space_id = %outcome.space_id,
@@ -163,6 +176,38 @@ impl RedeemPairingInvitationUseCase {
         DateTime::<Utc>::from_timestamp_millis(self.clock.now_ms()).ok_or_else(|| {
             RedeemPairingInvitationError::Internal("clock returned invalid timestamp".into())
         })
+    }
+
+    async fn persist_sponsor_address(
+        &self,
+        outcome: &JoinerHandshakeOutcome,
+        observed_at: DateTime<Utc>,
+    ) {
+        if outcome.sponsor_transport_address_blob.is_empty() {
+            tracing::debug!(
+                sponsor_device_id = %outcome.sponsor_device_id.as_str(),
+                "sponsor did not supply transport_address_blob; skipping peer_addr_repo upsert"
+            );
+            return;
+        }
+        let record = PeerAddressRecord {
+            device_id: outcome.sponsor_device_id.clone(),
+            addr_blob: outcome.sponsor_transport_address_blob.clone(),
+            observed_at,
+        };
+        if let Err(err) = self.peer_addr_repo.upsert(&record).await {
+            tracing::warn!(
+                sponsor_device_id = %outcome.sponsor_device_id.as_str(),
+                error = %err,
+                "peer_addr_repo.upsert failed after pairing; presence will recover lazily"
+            );
+        } else {
+            tracing::debug!(
+                sponsor_device_id = %outcome.sponsor_device_id.as_str(),
+                blob_len = outcome.sponsor_transport_address_blob.len(),
+                "peer_addr_repo.upsert landed for paired sponsor"
+            );
+        }
     }
 }
 
@@ -246,6 +291,7 @@ mod tests {
                     sender_device_id: DeviceId::new("sponsor-device"),
                     sender_device_name: "sponsor's laptop".into(),
                     sender_identity_fingerprint: sponsor_fp(),
+                    transport_address_blob: Vec::new(),
                 }));
             me
         }
@@ -534,6 +580,36 @@ mod tests {
         }
     }
 
+    // Slice 2 Phase 1 · T5：用 mockall 定义 `PeerAddressRepositoryPort`
+    // 的测试替身。好处：`.expect_upsert().times(N).withf(...).returning(...)`
+    // 把"是否调用、调用几次、参数匹配、返回值"打包成一条契约，drop
+    // mock 时自动校验；比手写 Recording fake 的 `saved: Vec<_>` +
+    // `fail_next: Option<Err>` 更直观。跨 module 不复用宏生成的类型：
+    // orchestrator tests 里有另一份独立声明，因为 mockall 生成的符号只在
+    // 各自模块内可见。
+    mockall::mock! {
+        pub PeerAddrRepo {}
+
+        #[async_trait]
+        impl PeerAddressRepositoryPort for PeerAddrRepo {
+            async fn get(
+                &self,
+                device: &DeviceId,
+            ) -> Result<Option<PeerAddressRecord>, uc_core::ports::PeerAddressError>;
+            async fn upsert(
+                &self,
+                record: &PeerAddressRecord,
+            ) -> Result<(), uc_core::ports::PeerAddressError>;
+            async fn list(
+                &self,
+            ) -> Result<Vec<PeerAddressRecord>, uc_core::ports::PeerAddressError>;
+            async fn remove(
+                &self,
+                device: &DeviceId,
+            ) -> Result<(), uc_core::ports::PeerAddressError>;
+        }
+    }
+
     struct Harness {
         session: Arc<HappySession>,
         member_repo: Arc<RecordingMemberRepo>,
@@ -548,6 +624,7 @@ mod tests {
             member_repo: Arc<RecordingMemberRepo>,
             trust_repo: Arc<RecordingTrustRepo>,
             setup_status: Arc<RecordingSetupStatus>,
+            peer_addr_repo: Arc<MockPeerAddrRepo>,
         ) -> (RedeemPairingInvitationUseCase, Self) {
             let handshake = JoinerHandshakeCoordinator::new(
                 session,
@@ -569,6 +646,7 @@ mod tests {
                 admit_uc,
                 trust_uc,
                 setup_status.clone(),
+                peer_addr_repo.clone() as Arc<dyn PeerAddressRepositoryPort>,
                 Arc::new(FixedClock(fixed_now_ms())),
             );
             (
@@ -590,6 +668,13 @@ mod tests {
                 Arc::new(RecordingMemberRepo::default()),
                 Arc::new(RecordingTrustRepo::default()),
                 Arc::new(RecordingSetupStatus::ok()),
+                // 默认场景（sponsor blob == empty 走 skip 分支）：
+                // mock 不期望任何 upsert 调用，发生了会 drop 时 panic。
+                {
+                    let mut mock = MockPeerAddrRepo::new();
+                    mock.expect_upsert().times(0);
+                    Arc::new(mock)
+                },
             )
         }
     }
@@ -616,18 +701,113 @@ mod tests {
             "setup_status flipped exactly once to has_completed=true"
         );
         assert_eq!(*h.session.closed.lock().unwrap(), 1);
+        // T5：HappySession::primed() 给的 Confirm.transport_address_blob
+        // 是空 Vec，所以 upsert 应跳过。Harness::happy 的 mock 用
+        // `.expect_upsert().times(0)`——若分支失误（对空 blob 也 upsert），
+        // drop mock 时 mockall 会 panic。
+    }
+
+    /// Session variant that primes a `SponsorConfirm` with a specific
+    /// transport blob; used by T5 tests that need to exercise the
+    /// non-empty-blob branch.
+    fn session_with_sponsor_blob(blob: Vec<u8>) -> Arc<HappySession> {
+        let me = Arc::new(HappySession::default());
+        me.recv
+            .lock()
+            .unwrap()
+            .push_back(PairingSessionMessage::KeyslotOffer(SponsorKeyslotOffer {
+                space_id: SpaceId::from_str("space-xyz"),
+                keyslot_blob: vec![0xAA; 16],
+                challenge: vec![0x42; 32],
+                pairing_session_id: PairingSessionId::new("session-1"),
+            }));
+        me.recv
+            .lock()
+            .unwrap()
+            .push_back(PairingSessionMessage::Confirm(SponsorConfirm {
+                space_id: SpaceId::from_str("space-xyz"),
+                sender_device_id: DeviceId::new("sponsor-device"),
+                sender_device_name: "sponsor's laptop".into(),
+                sender_identity_fingerprint: sponsor_fp(),
+                transport_address_blob: blob,
+            }));
+        me
+    }
+
+    #[tokio::test]
+    async fn t5_sponsor_blob_non_empty_upserts_peer_addr_repo() {
+        // 契约：收到非空 sponsor blob 后，恰好一次 upsert，参数匹配。
+        let expected_blob: Vec<u8> = vec![0xab, 0xcd, 0xef];
+        let expected_blob_matcher = expected_blob.clone();
+        let peer_mock = {
+            let mut m = MockPeerAddrRepo::new();
+            m.expect_upsert()
+                .times(1)
+                .withf(move |record| {
+                    record.device_id.as_str() == "sponsor-device"
+                        && record.addr_blob == expected_blob_matcher
+                })
+                .returning(|_| Ok(()));
+            Arc::new(m)
+        };
+        let session = session_with_sponsor_blob(expected_blob);
+        let (uc, _h) = Harness::build(
+            session.clone(),
+            session,
+            Arc::new(RecordingMemberRepo::default()),
+            Arc::new(RecordingTrustRepo::default()),
+            Arc::new(RecordingSetupStatus::ok()),
+            peer_mock,
+        );
+        uc.execute(cmd("CODE-ADDR")).await.expect("ok");
+        // drop-time mockall 校验：少调 / 多调 / 参数不匹配 都会 panic。
+    }
+
+    #[tokio::test]
+    async fn t5_sponsor_blob_upsert_failure_does_not_fail_join() {
+        // 预设 upsert 返 Err；T5 best-effort 语义下，execute 仍必须 Ok。
+        let peer_mock = {
+            let mut m = MockPeerAddrRepo::new();
+            m.expect_upsert().times(1).returning(|_| {
+                Err(uc_core::ports::PeerAddressError::Internal(
+                    "sqlite down".into(),
+                ))
+            });
+            Arc::new(m)
+        };
+        let session = session_with_sponsor_blob(vec![0x01]);
+        let (uc, h) = Harness::build(
+            session.clone(),
+            session,
+            Arc::new(RecordingMemberRepo::default()),
+            Arc::new(RecordingTrustRepo::default()),
+            Arc::new(RecordingSetupStatus::ok()),
+            peer_mock,
+        );
+        uc.execute(cmd("CODE-FAIL"))
+            .await
+            .expect("T5 upsert failure does not fail the join");
+        assert_eq!(*h.setup_status.set_calls.lock().unwrap(), vec![true]);
     }
 
     #[tokio::test]
     async fn coordinator_error_passes_through_without_touching_persistence() {
         let session = Arc::new(HappySession::default()); // not primed — won't be used
         let unreachable: Arc<dyn PairingSessionPort> = Arc::new(UnreachableSession);
+        // 错误路径 mock：coordinator 提前失败，upsert 绝不应被调到；
+        // 若被调，drop mock 时 `.expect_upsert().times(0)` 会 panic。
+        let peer_mock = {
+            let mut m = MockPeerAddrRepo::new();
+            m.expect_upsert().times(0);
+            Arc::new(m)
+        };
         let (uc, h) = Harness::build(
             unreachable,
             session, // handle kept around so the Harness's `session.closed` stays consistent with the "no close" assertion
             Arc::new(RecordingMemberRepo::default()),
             Arc::new(RecordingTrustRepo::default()),
             Arc::new(RecordingSetupStatus::ok()),
+            peer_mock,
         );
         let err = uc.execute(cmd("X")).await.unwrap_err();
         assert!(matches!(
@@ -646,12 +826,18 @@ mod tests {
         *member_repo.fail_next.lock().unwrap() =
             Some(MembershipError::Repository("db down".into()));
         let session = Arc::new(HappySession::primed());
+        let peer_mock = {
+            let mut m = MockPeerAddrRepo::new();
+            m.expect_upsert().times(0);
+            Arc::new(m)
+        };
         let (uc, h) = Harness::build(
             session.clone(),
             session,
             member_repo,
             Arc::new(RecordingTrustRepo::default()),
             Arc::new(RecordingSetupStatus::ok()),
+            peer_mock,
         );
         let err = uc.execute(cmd("X")).await.unwrap_err();
         match err {
@@ -671,12 +857,18 @@ mod tests {
         *trust_repo.fail_next.lock().unwrap() =
             Some(TrustedPeerError::Repository("trust boom".into()));
         let session = Arc::new(HappySession::primed());
+        let peer_mock = {
+            let mut m = MockPeerAddrRepo::new();
+            m.expect_upsert().times(0);
+            Arc::new(m)
+        };
         let (uc, h) = Harness::build(
             session.clone(),
             session,
             Arc::new(RecordingMemberRepo::default()),
             trust_repo,
             Arc::new(RecordingSetupStatus::ok()),
+            peer_mock,
         );
         let err = uc.execute(cmd("X")).await.unwrap_err();
         match err {
@@ -696,12 +888,21 @@ mod tests {
     #[tokio::test]
     async fn setup_status_failure_lands_admit_and_trust_but_surfaces_internal() {
         let session = Arc::new(HappySession::primed());
+        let peer_mock = {
+            let mut m = MockPeerAddrRepo::new();
+            // Peer addr upsert is gated on setup_status success (it's
+            // lifecycle-sequenced after mark-complete), so setup_status
+            // failure short-circuits it — mock enforces via times(0).
+            m.expect_upsert().times(0);
+            Arc::new(m)
+        };
         let (uc, h) = Harness::build(
             session.clone(),
             session,
             Arc::new(RecordingMemberRepo::default()),
             Arc::new(RecordingTrustRepo::default()),
             Arc::new(RecordingSetupStatus::failing()),
+            peer_mock,
         );
         let err = uc.execute(cmd("X")).await.unwrap_err();
         match err {

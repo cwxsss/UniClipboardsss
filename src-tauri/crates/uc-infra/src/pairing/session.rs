@@ -471,6 +471,25 @@ impl PairingSessionPort for IrohPairingSessionAdapter {
             debug!(?reason, "pairing session closed");
         }
     }
+
+    /// Slice 2 Phase 1 · T5：返回本端 [`EndpointAddr`] 的 postcard 不透明
+    /// 字节。handshake coordinator 在发出 `JoinerRequest` / `SponsorConfirm`
+    /// 前调用此方法填充 `transport_address_blob`，对端接到后直接写入
+    /// `PeerAddressRepositoryPort`。
+    ///
+    /// 返回 `None` 表示编码失败（理论上不会发生——postcard 对
+    /// `EndpointAddr` 的序列化是 total），此时对端会以空 blob 兜底跳过
+    /// upsert。
+    async fn local_transport_address_blob(&self) -> Option<Vec<u8>> {
+        let addr = self.endpoint.addr();
+        match postcard::to_stdvec(&addr) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                warn!(error = %err, "postcard encode EndpointAddr failed; skipping address publish");
+                None
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -645,6 +664,7 @@ mod tests {
             device_name: "Joiner".into(),
             identity_fingerprint: sample_fingerprint(),
             nonce: vec![7; 8],
+            transport_address_blob: vec![],
         })
     }
 

@@ -38,7 +38,10 @@ use uc_core::pairing::session_message::{
     JoinerRequest, PairingRejectReason, PairingSessionMessage,
 };
 use uc_core::ports::pairing::{PairingEventPort, PairingSessionEvent, PairingSessionId};
-use uc_core::ports::{ClockPort, ConsumeInvitationError, PairingInvitationPort};
+use uc_core::ports::{
+    ClockPort, ConsumeInvitationError, PairingInvitationPort, PeerAddressRecord,
+    PeerAddressRepositoryPort,
+};
 use uc_core::MemberRepositoryPort;
 use uc_core::TrustedPeerRepositoryPort;
 
@@ -63,6 +66,10 @@ pub(crate) struct PairingInboundOrchestrator {
     handshake: Arc<SponsorHandshakeCoordinator>,
     admit_member: Arc<AdmitMemberUc>,
     trust_peer: Arc<TrustPeerUc>,
+    /// Slice 2 Phase 1 · T5：配对成功后 best-effort 把 joiner 的传输地址
+    /// 写入仓库，供后续 `ensure_reachable_all` 直接拨号，避免每次都要走
+    /// rendezvous。写失败不 fail 配对（presence 下轮兜底）。
+    peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
     local_device_id: uc_core::DeviceId,
     /// Broadcast channel: fires exactly one [`PairingOutcome`] per matched
     /// invitation. `send` is `let _`-ignored because no subscribers is a
@@ -72,6 +79,7 @@ pub(crate) struct PairingInboundOrchestrator {
 }
 
 impl PairingInboundOrchestrator {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         pairing_events: Arc<dyn PairingEventPort>,
         pairing_invitation: Arc<dyn PairingInvitationPort>,
@@ -80,6 +88,7 @@ impl PairingInboundOrchestrator {
         handshake: Arc<SponsorHandshakeCoordinator>,
         admit_member: Arc<AdmitMemberUc>,
         trust_peer: Arc<TrustPeerUc>,
+        peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
         local_device_id: uc_core::DeviceId,
         outcome_tx: broadcast::Sender<PairingOutcome>,
     ) -> Self {
@@ -91,6 +100,7 @@ impl PairingInboundOrchestrator {
             handshake,
             admit_member,
             trust_peer,
+            peer_addr_repo,
             local_device_id,
             outcome_tx,
         }
@@ -375,11 +385,45 @@ impl PairingInboundOrchestrator {
                 joiner_device_id = %facts.device_id.as_str(),
                 "pairing handshake completed"
             );
+            // Slice 2 Phase 1 · T5：best-effort 把 joiner 的传输地址 blob
+            // 写入 `peer_addr_repo`。空 blob（旧 joiner / adapter 未附带）
+            // 跳过 upsert；写失败只 warn 不 fail 配对——presence 下一轮
+            // `ensure_reachable_all` 会再拉兜底。
+            self.persist_peer_address(&facts, now).await;
             let _ = self.outcome_tx.send(PairingOutcome::Success {
                 peer_device_id: facts.device_id.clone(),
                 peer_device_name: facts.device_name.clone(),
                 peer_fingerprint: facts.identity_fingerprint.clone(),
             });
+        }
+    }
+
+    /// Best-effort 写 joiner 传输地址；blob 为空或写失败都只 warn。
+    async fn persist_peer_address(&self, facts: &JoinerFacts, observed_at: chrono::DateTime<Utc>) {
+        if facts.transport_address_blob.is_empty() {
+            debug!(
+                device_id = %facts.device_id.as_str(),
+                "joiner did not supply transport_address_blob; skipping peer_addr_repo upsert"
+            );
+            return;
+        }
+        let record = PeerAddressRecord {
+            device_id: facts.device_id.clone(),
+            addr_blob: facts.transport_address_blob.clone(),
+            observed_at,
+        };
+        if let Err(err) = self.peer_addr_repo.upsert(&record).await {
+            warn!(
+                device_id = %facts.device_id.as_str(),
+                error = %err,
+                "peer_addr_repo.upsert failed after pairing; presence will recover lazily"
+            );
+        } else {
+            debug!(
+                device_id = %facts.device_id.as_str(),
+                blob_len = facts.transport_address_blob.len(),
+                "peer_addr_repo.upsert landed for new joiner"
+            );
         }
     }
 
@@ -721,6 +765,33 @@ mod tests {
         }
     }
 
+    // Slice 2 Phase 1 · T5：用 mockall 生成 `PeerAddressRepositoryPort`
+    // 的测试替身。T5 的三条测试断言都是"某次 upsert 是否发生、参数对不对、
+    // 失败时外层是否被穿透"——正好是 mockall `.expect_upsert().times(N)
+    // .withf(...).returning(...)` 擅长的行为契约。
+    mockall::mock! {
+        pub PeerAddrRepo {}
+
+        #[async_trait]
+        impl PeerAddressRepositoryPort for PeerAddrRepo {
+            async fn get(
+                &self,
+                device: &DeviceId,
+            ) -> Result<Option<PeerAddressRecord>, uc_core::ports::PeerAddressError>;
+            async fn upsert(
+                &self,
+                record: &PeerAddressRecord,
+            ) -> Result<(), uc_core::ports::PeerAddressError>;
+            async fn list(
+                &self,
+            ) -> Result<Vec<PeerAddressRecord>, uc_core::ports::PeerAddressError>;
+            async fn remove(
+                &self,
+                device: &DeviceId,
+            ) -> Result<(), uc_core::ports::PeerAddressError>;
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     fn fixed_now() -> DateTime<Utc> {
@@ -755,7 +826,22 @@ mod tests {
             device_name: "joiner's laptop".into(),
             identity_fingerprint: joiner_fp(),
             nonce: vec![1, 2, 3, 4],
+            transport_address_blob: vec![],
         }
+    }
+
+    /// Build a `MockPeerAddrRepo` that accepts any `upsert` / `get` /
+    /// `list` / `remove` call and returns a neutral success. Used by
+    /// tests that don't care about T5 peer-address behaviour (the
+    /// majority of this module's tests); the T5-specific cases build
+    /// their own mocks inline with targeted `.expect_*` setups.
+    fn permissive_peer_addr_repo() -> Arc<MockPeerAddrRepo> {
+        let mut mock = MockPeerAddrRepo::new();
+        mock.expect_upsert().returning(|_| Ok(()));
+        mock.expect_get().returning(|_| Ok(None));
+        mock.expect_list().returning(|| Ok(vec![]));
+        mock.expect_remove().returning(|_| Ok(()));
+        Arc::new(mock)
     }
 
     struct Bundle {
@@ -764,6 +850,7 @@ mod tests {
         holder: Arc<InMemoryPairingInvitationHolder>,
         member_repo: Arc<RecordingMemberRepo>,
         trusted_peer_repo: Arc<RecordingTrustedPeerRepo>,
+        peer_addr_repo: Arc<MockPeerAddrRepo>,
         proof_verdicts: Vec<bool>,
         clock_ms: i64,
     }
@@ -776,6 +863,7 @@ mod tests {
                 holder: Arc::new(InMemoryPairingInvitationHolder::new()),
                 member_repo: Arc::new(RecordingMemberRepo::default()),
                 trusted_peer_repo: Arc::new(RecordingTrustedPeerRepo::default()),
+                peer_addr_repo: permissive_peer_addr_repo(),
                 proof_verdicts: vec![true],
                 clock_ms: fixed_now_ms(),
             }
@@ -815,6 +903,7 @@ mod tests {
                 Arc::new(TrustPeerUseCase::new(
                     self.trusted_peer_repo.clone() as Arc<dyn TrustedPeerRepositoryPort>
                 )),
+                self.peer_addr_repo.clone() as Arc<dyn PeerAddressRepositoryPort>,
                 DeviceId::new("sponsor-device"),
                 outcome_tx,
             ));
@@ -973,6 +1062,132 @@ mod tests {
             }
             other => panic!("expected Success, got {other:?}"),
         }
+    }
+
+    // ── T5: peer_addr_repo upsert behaviour ──────────────────────────────
+
+    /// Helper: build a joiner_request with an explicit transport blob so
+    /// the T5 tests can vary the field without duplicating the whole
+    /// struct literal.
+    fn joiner_request_with_blob(code: &str, blob: Vec<u8>) -> JoinerRequest {
+        JoinerRequest {
+            invitation_code: InvitationCode::new(code),
+            device_id: DeviceId::new("joiner-device"),
+            device_name: "joiner's laptop".into(),
+            identity_fingerprint: joiner_fp(),
+            nonce: vec![1, 2, 3, 4],
+            transport_address_blob: blob,
+        }
+    }
+
+    #[tokio::test]
+    async fn verified_path_with_address_blob_upserts_peer_addr_repo() {
+        // mockall 行为契约：期望 upsert 恰好被调一次、参数匹配
+        // (device_id == "joiner-device" && addr_blob == <期望字节>)。
+        // mockall 在 `drop` MockPeerAddrRepo 时会校验 `.times(1)`，所以
+        // 哪怕测试逻辑漏了 assertion，少调或多调也会 panic。
+        let expected_blob: Vec<u8> = vec![0xde, 0xad, 0xbe, 0xef];
+        let expected_blob_matcher = expected_blob.clone();
+        let mut mock = MockPeerAddrRepo::new();
+        mock.expect_upsert()
+            .times(1)
+            .withf(move |record| {
+                record.device_id.as_str() == "joiner-device"
+                    && record.addr_blob == expected_blob_matcher
+            })
+            .returning(|_| Ok(()));
+
+        let mut b = Bundle::happy();
+        b.peer_addr_repo = Arc::new(mock);
+        b.holder.insert(pending("OK")).await;
+        let (orch, _outcomes) = b.build(drained_events());
+
+        let session = PairingSessionId::new("s-ok-addr");
+        orch.handle_event(PairingSessionEvent::Incoming {
+            session: session.clone(),
+            message: PairingSessionMessage::Request(joiner_request_with_blob("OK", expected_blob)),
+        })
+        .await;
+        orch.handle_event(PairingSessionEvent::MessageReceived {
+            session,
+            message: PairingSessionMessage::ChallengeResponse(JoinerChallengeResponse {
+                encrypted_challenge: vec![0x11],
+            }),
+        })
+        .await;
+        // 当 orch 持有的最后一个 Arc drop 时，mockall 的析构会校验期望。
+    }
+
+    #[tokio::test]
+    async fn verified_path_without_address_blob_skips_peer_addr_repo() {
+        // 空 blob 场景：mockall `.expect_upsert().times(0)` 在 drop
+        // 检查时 fail 以防意外调用。
+        let mut mock = MockPeerAddrRepo::new();
+        mock.expect_upsert().times(0);
+
+        let mut b = Bundle::happy();
+        b.peer_addr_repo = Arc::new(mock);
+        b.holder.insert(pending("OK")).await;
+        let (orch, mut outcomes) = b.build(drained_events());
+
+        let session = PairingSessionId::new("s-ok-noaddr");
+        orch.handle_event(PairingSessionEvent::Incoming {
+            session: session.clone(),
+            message: PairingSessionMessage::Request(joiner_request_with_blob("OK", Vec::new())),
+        })
+        .await;
+        orch.handle_event(PairingSessionEvent::MessageReceived {
+            session,
+            message: PairingSessionMessage::ChallengeResponse(JoinerChallengeResponse {
+                encrypted_challenge: vec![0x11],
+            }),
+        })
+        .await;
+
+        // Pairing itself still succeeds end-to-end.
+        assert!(matches!(
+            outcomes.try_recv(),
+            Ok(PairingOutcome::Success { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn peer_addr_repo_failure_does_not_fail_pairing() {
+        // 预设 upsert 返 Err；T5 best-effort 语义下，配对仍必须成功
+        // 广播 `PairingOutcome::Success`。
+        let mut mock = MockPeerAddrRepo::new();
+        mock.expect_upsert().times(1).returning(|_| {
+            Err(uc_core::ports::PeerAddressError::Internal(
+                "sqlite down".into(),
+            ))
+        });
+
+        let mut b = Bundle::happy();
+        b.peer_addr_repo = Arc::new(mock);
+        b.holder.insert(pending("OK")).await;
+        let (orch, mut outcomes) = b.build(drained_events());
+
+        let session = PairingSessionId::new("s-fail-upsert");
+        orch.handle_event(PairingSessionEvent::Incoming {
+            session: session.clone(),
+            message: PairingSessionMessage::Request(joiner_request_with_blob(
+                "OK",
+                vec![0x01, 0x02],
+            )),
+        })
+        .await;
+        orch.handle_event(PairingSessionEvent::MessageReceived {
+            session,
+            message: PairingSessionMessage::ChallengeResponse(JoinerChallengeResponse {
+                encrypted_challenge: vec![0x11],
+            }),
+        })
+        .await;
+
+        assert!(matches!(
+            outcomes.try_recv(),
+            Ok(PairingOutcome::Success { .. })
+        ));
     }
 
     // ── unverified → PassphraseMismatch, no persistence ──────────────────

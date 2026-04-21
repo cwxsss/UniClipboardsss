@@ -69,6 +69,11 @@ pub(crate) struct JoinerHandshakeOutcome {
     pub space_id: SpaceId,
     pub self_device_id: DeviceId,
     pub self_identity_fingerprint: IdentityFingerprint,
+    /// Slice 2 Phase 1 · T5：sponsor 从 `SponsorConfirm.transport_address_blob`
+    /// 带来的不透明传输地址字节，由 outer use case best-effort upsert 到
+    /// `PeerAddressRepositoryPort`。空 `Vec` 表示 sponsor 未附带地址，
+    /// joiner 侧应跳过 upsert。
+    pub sponsor_transport_address_blob: Vec<u8>,
 }
 
 pub(crate) struct JoinerHandshakeCoordinator {
@@ -165,6 +170,14 @@ impl JoinerHandshakeCoordinator {
             .ok_or(RedeemPairingInvitationError::DeviceNameRequired)?;
 
         // ── 2. Send JoinerRequest ────────────────────────────────────────
+        // Slice 2 Phase 1 · T5：adapter 暴露本机传输地址 blob；`None`
+        // 兜底为空 Vec —— sponsor 收到空 blob 就跳过 peer address upsert，
+        // 不阻塞配对本身。
+        let transport_address_blob = self
+            .pairing_session
+            .local_transport_address_blob()
+            .await
+            .unwrap_or_default();
         let request = JoinerRequest {
             invitation_code: code.clone(),
             device_id: local_device_id.clone(),
@@ -174,6 +187,7 @@ impl JoinerHandshakeCoordinator {
             // 即可；加 rand crate 不值当。未来 slice 若把 transcript
             // binding 纳入 HMAC，再在这里填。
             nonce: Vec::new(),
+            transport_address_blob,
         };
         self.pairing_session
             .send(session, PairingSessionMessage::Request(request))
@@ -262,6 +276,7 @@ impl JoinerHandshakeCoordinator {
             space_id: confirm.space_id,
             self_device_id: local_device_id,
             self_identity_fingerprint: local_fp,
+            sponsor_transport_address_blob: confirm.transport_address_blob,
         })
     }
 
@@ -641,6 +656,7 @@ mod tests {
             sender_device_id: DeviceId::new("sponsor-device"),
             sender_device_name: "sponsor's laptop".into(),
             sender_identity_fingerprint: sponsor_fp(),
+            transport_address_blob: Vec::new(),
         }
     }
 
@@ -1031,6 +1047,7 @@ mod tests {
                     device_name: "x".into(),
                     identity_fingerprint: joiner_fp(),
                     nonce: vec![],
+                    transport_address_blob: vec![],
                 },
             )));
         let err = b

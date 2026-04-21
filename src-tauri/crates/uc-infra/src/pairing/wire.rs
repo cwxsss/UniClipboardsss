@@ -33,7 +33,13 @@ use uc_core::pairing::{
 use uc_core::ports::pairing::PairingSessionId;
 use uc_core::security::IdentityFingerprint;
 
-const WIRE_VERSION: u8 = 1;
+/// Wire 版本号。
+///
+/// Slice 2 Phase 1 · T5 在 `JoinerRequest` 与 `SponsorConfirm` 上新增了
+/// `transport_address_blob` 字段，postcard 非 schema-兼容，故版本由 1 升
+/// 至 2；旧 peer 发来的 v=1 帧会走 [`WireDecodeError::UnsupportedVersion`]
+/// 分支显式拒连，让排障信号明确。
+const WIRE_VERSION: u8 = 2;
 
 // ============================================================================
 // Wire types (infra-local)
@@ -61,6 +67,19 @@ struct WireJoinerRequest {
     device_name: String,
     identity_fingerprint: String,
     nonce: Vec<u8>,
+    /// Slice 2 Phase 1 · T5：joiner 传输地址不透明字节（iroh postcard
+    /// 编码的 `EndpointAddr`）。
+    ///
+    /// postcard 按结构体字段顺序追加，新增字段不是 schema-兼容的——
+    /// Slice 1→Slice 2 升级期的跨版本对端不兼容通过 [`WIRE_VERSION`]
+    /// 升到 `2` 来显式拒连，由 [`WireDecodeError::UnsupportedVersion`]
+    /// 提示用户升级；生产前未发布，不需要兼容层。
+    ///
+    /// 空 `Vec` 是一个合法业务值：表示本端 adapter 暂时没有可发布的
+    /// direct addr（例如 endpoint 还未 online），sponsor 端收到后跳过
+    /// `peer_addr_repo.upsert`，presence 下次 `ensure_reachable_all`
+    /// 从 rendezvous 再拉兜底。
+    transport_address_blob: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -82,6 +101,9 @@ struct WireSponsorConfirm {
     sender_device_id: String,
     sender_device_name: String,
     sender_identity_fingerprint: String,
+    /// Slice 2 Phase 1 · T5：sponsor 传输地址不透明字节。详见
+    /// [`WireJoinerRequest::transport_address_blob`] 的说明。
+    transport_address_blob: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -164,6 +186,7 @@ fn to_wire(msg: &PairingSessionMessage) -> WireBody {
             device_name: r.device_name.clone(),
             identity_fingerprint: r.identity_fingerprint.as_display().to_string(),
             nonce: r.nonce.clone(),
+            transport_address_blob: r.transport_address_blob.clone(),
         }),
         PairingSessionMessage::KeyslotOffer(o) => WireBody::KeyslotOffer(WireSponsorKeyslotOffer {
             space_id: o.space_id.inner().clone(),
@@ -181,6 +204,7 @@ fn to_wire(msg: &PairingSessionMessage) -> WireBody {
             sender_device_id: c.sender_device_id.as_str().to_string(),
             sender_device_name: c.sender_device_name.clone(),
             sender_identity_fingerprint: c.sender_identity_fingerprint.as_display().to_string(),
+            transport_address_blob: c.transport_address_blob.clone(),
         }),
         PairingSessionMessage::Reject(r) => WireBody::Reject(WirePairingReject {
             reason: match &r.reason {
@@ -202,6 +226,7 @@ fn from_wire(body: WireBody) -> Result<PairingSessionMessage, WireDecodeError> {
             device_name: r.device_name,
             identity_fingerprint: parse_fingerprint(&r.identity_fingerprint)?,
             nonce: r.nonce,
+            transport_address_blob: r.transport_address_blob,
         })),
         WireBody::KeyslotOffer(o) => Ok(PairingSessionMessage::KeyslotOffer(SponsorKeyslotOffer {
             space_id: SpaceId::from_string(o.space_id),
@@ -219,6 +244,7 @@ fn from_wire(body: WireBody) -> Result<PairingSessionMessage, WireDecodeError> {
             sender_device_id: DeviceId::new(c.sender_device_id),
             sender_device_name: c.sender_device_name,
             sender_identity_fingerprint: parse_fingerprint(&c.sender_identity_fingerprint)?,
+            transport_address_blob: c.transport_address_blob,
         })),
         WireBody::Reject(r) => Ok(PairingSessionMessage::Reject(PairingReject {
             reason: match r.reason {
@@ -262,6 +288,7 @@ mod tests {
             device_name: "Alice's laptop".to_string(),
             identity_fingerprint: sample_fingerprint(),
             nonce: vec![1, 2, 3, 4, 5],
+            transport_address_blob: vec![0x9a, 0x01, 0x02],
         });
 
         let decoded = round_trip(original);
@@ -272,6 +299,7 @@ mod tests {
                 assert_eq!(r.device_name, "Alice's laptop");
                 assert_eq!(r.identity_fingerprint, sample_fingerprint());
                 assert_eq!(r.nonce, vec![1, 2, 3, 4, 5]);
+                assert_eq!(r.transport_address_blob, vec![0x9a, 0x01, 0x02]);
             }
             other => panic!("expected Request, got {other:?}"),
         }
@@ -319,6 +347,7 @@ mod tests {
             sender_device_id: DeviceId::new("dev-sponsor"),
             sender_device_name: "Bob's desktop".to_string(),
             sender_identity_fingerprint: sample_fingerprint(),
+            transport_address_blob: vec![0xaa, 0xbb, 0xcc],
         });
         let decoded = round_trip(original);
         match decoded {
@@ -327,6 +356,7 @@ mod tests {
                 assert_eq!(c.sender_device_id.as_str(), "dev-sponsor");
                 assert_eq!(c.sender_device_name, "Bob's desktop");
                 assert_eq!(c.sender_identity_fingerprint, sample_fingerprint());
+                assert_eq!(c.transport_address_blob, vec![0xaa, 0xbb, 0xcc]);
             }
             other => panic!("expected Confirm, got {other:?}"),
         }
@@ -354,15 +384,17 @@ mod tests {
 
     #[test]
     fn decode_rejects_future_version() {
-        // v=2 envelope with any body — build by hand via postcard on our
-        // own struct (fake future version).
+        // Build a forged envelope at v = WIRE_VERSION + 1 to verify
+        // rejection semantics survive future bumps without touching this
+        // test's hardcoded numbers.
         #[derive(Serialize)]
         struct FutureEnvelope {
             v: u8,
             body: WireBody,
         }
+        let fake_version = WIRE_VERSION + 1;
         let fake = FutureEnvelope {
-            v: 2,
+            v: fake_version,
             body: WireBody::ChallengeResponse(WireJoinerChallengeResponse {
                 encrypted_challenge: vec![],
             }),
@@ -371,7 +403,7 @@ mod tests {
 
         match decode(&bytes) {
             Err(WireDecodeError::UnsupportedVersion { got, expected }) => {
-                assert_eq!(got, 2);
+                assert_eq!(got, fake_version);
                 assert_eq!(expected, WIRE_VERSION);
             }
             other => panic!("expected UnsupportedVersion, got {other:?}"),
@@ -398,6 +430,7 @@ mod tests {
                 device_name: "n".to_string(),
                 identity_fingerprint: "TOO_SHORT".to_string(),
                 nonce: vec![],
+                transport_address_blob: vec![],
             }),
         };
         let bytes = postcard::to_allocvec(&fake).unwrap();

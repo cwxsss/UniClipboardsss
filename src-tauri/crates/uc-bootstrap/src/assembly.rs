@@ -50,6 +50,7 @@ use uc_infra::db::mappers::{
     blob_mapper::BlobRowMapper, clipboard_entry_mapper::ClipboardEntryRowMapper,
     clipboard_event_mapper::ClipboardEventRowMapper,
     clipboard_selection_mapper::ClipboardSelectionRowMapper,
+    peer_address_mapper::PeerAddressRowMapper,
     snapshot_representation_mapper::RepresentationRowMapper,
     space_member_mapper::SpaceMemberRowMapper, trusted_peer_mapper::TrustedPeerRowMapper,
 };
@@ -57,8 +58,8 @@ use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
     DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
     DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselFileTransferRepository, DieselSpaceMemberRepository, DieselThumbnailRepository,
-    DieselTrustedPeerRepository,
+    DieselFileTransferRepository, DieselPeerAddressRepository, DieselSpaceMemberRepository,
+    DieselThumbnailRepository, DieselTrustedPeerRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -151,6 +152,11 @@ pub struct WiredDependencies {
     /// with uc-app). Scheduled to move into `uc-application` wiring
     /// infrastructure once uc-app is gone.
     pub trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
+    /// Slice 2 Phase 1 · T5：peer address 仓库，由
+    /// [`crate::space_setup::build_space_setup_assembly`] 注入 `SpaceSetupFacade`，
+    /// 用于配对完成后 best-effort 写对端传输地址 blob。跟
+    /// `trusted_peer_repo` 同样绕开 `AppDeps`：消费者在 uc-application 里。
+    pub peer_addr_repo: Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
 }
 
 /// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
@@ -207,6 +213,10 @@ struct InfraLayer {
     // boundary, replacing the previous `paired_device` upsert + `space_member`
     // shadow-write.
     trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
+
+    // Slice 2 Phase 1 · T5：peer address 仓库。pairing 收尾点 best-effort
+    // 写入对端传输地址，供 F1 `ensure_reachable_all` 直接拨号。
+    peer_addr_repo: Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
 
     // Blob storage
     blob_repository: Arc<dyn BlobRepositoryPort>,
@@ -348,6 +358,11 @@ fn create_infra_layer(
     let trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort> =
         Arc::new(trusted_peer_repo_impl);
 
+    let peer_addr_repo_impl =
+        DieselPeerAddressRepository::new(Arc::clone(&db_executor), PeerAddressRowMapper);
+    let peer_addr_repo: Arc<dyn uc_core::ports::PeerAddressRepositoryPort> =
+        Arc::new(peer_addr_repo_impl);
+
     let blob_repo = DieselBlobRepository::new(
         Arc::clone(&db_executor),
         blob_row_mapper,
@@ -397,6 +412,7 @@ fn create_infra_layer(
         selection_repo,
         member_repo,
         trusted_peer_repo,
+        peer_addr_repo,
         blob_repository,
         thumbnail_repo,
         thumbnail_generator,
@@ -822,6 +838,9 @@ pub fn wire_dependencies_with_identity_store(
     // thread it through `AppDeps` because uc-app is retiring (D13) and
     // the repository is consumed solely by uc-application wiring.
     let trusted_peer_repo_for_wiring = Arc::clone(&infra.trusted_peer_repo);
+    // Same pattern for `peer_addr_repo` — Slice 2 Phase 1 wiring consumer
+    // is `SpaceSetupFacade`, which lives in uc-application, not uc-app.
+    let peer_addr_repo_for_wiring = Arc::clone(&infra.peer_addr_repo);
 
     // Create payload resolver for resolving staged/processing payloads
     let payload_resolver: Arc<dyn ClipboardPayloadResolverPort> =
@@ -909,6 +928,7 @@ pub fn wire_dependencies_with_identity_store(
     Ok(WiredDependencies {
         deps,
         trusted_peer_repo: trusted_peer_repo_for_wiring,
+        peer_addr_repo: peer_addr_repo_for_wiring,
         background: BackgroundRuntimeDeps {
             libp2p_network: platform.libp2p_network.clone(),
             representation_cache,

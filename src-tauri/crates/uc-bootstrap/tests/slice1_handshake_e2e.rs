@@ -105,6 +105,50 @@ impl MemberRepositoryPort for InMemoryMemberRepo {
 }
 
 #[derive(Default)]
+struct InMemoryPeerAddrRepo {
+    rows: StdMutex<Vec<uc_core::ports::PeerAddressRecord>>,
+}
+#[async_trait]
+impl uc_core::ports::PeerAddressRepositoryPort for InMemoryPeerAddrRepo {
+    async fn get(
+        &self,
+        device_id: &DeviceId,
+    ) -> Result<Option<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError> {
+        Ok(self
+            .rows
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| &r.device_id == device_id)
+            .cloned())
+    }
+    async fn upsert(
+        &self,
+        record: &uc_core::ports::PeerAddressRecord,
+    ) -> Result<(), uc_core::ports::PeerAddressError> {
+        let mut rows = self.rows.lock().unwrap();
+        if let Some(existing) = rows.iter_mut().find(|r| r.device_id == record.device_id) {
+            *existing = record.clone();
+        } else {
+            rows.push(record.clone());
+        }
+        Ok(())
+    }
+    async fn list(
+        &self,
+    ) -> Result<Vec<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError> {
+        Ok(self.rows.lock().unwrap().clone())
+    }
+    async fn remove(&self, device_id: &DeviceId) -> Result<(), uc_core::ports::PeerAddressError> {
+        self.rows
+            .lock()
+            .unwrap()
+            .retain(|r| &r.device_id != device_id);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
 struct InMemoryTrustedPeerRepo {
     rows: StdMutex<Vec<TrustedPeer>>,
 }
@@ -255,6 +299,7 @@ struct Side {
     iroh_node: IrohNode,
     member_repo: Arc<InMemoryMemberRepo>,
     trusted_peer_repo: Arc<InMemoryTrustedPeerRepo>,
+    peer_addr_repo: Arc<InMemoryPeerAddrRepo>,
     setup_status: Arc<InMemorySetupStatus>,
     device_id: DeviceId,
     _keystore_dir: TempDir, // kept alive for the JsonKeySlotStore path
@@ -273,6 +318,7 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
     let setup_status = Arc::new(InMemorySetupStatus::default());
     let member_repo = Arc::new(InMemoryMemberRepo::default());
     let trusted_peer_repo = Arc::new(InMemoryTrustedPeerRepo::default());
+    let peer_addr_repo = Arc::new(InMemoryPeerAddrRepo::default());
 
     // Identity + iroh endpoint: one secret key, loaded by IrohIdentityStore
     // and reused to bind the endpoint so the on-wire identity matches the
@@ -342,6 +388,8 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         pairing_events,
         proof_port,
         trusted_peer_repo: Arc::clone(&trusted_peer_repo) as Arc<dyn TrustedPeerRepositoryPort>,
+        peer_addr_repo: Arc::clone(&peer_addr_repo)
+            as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
     }));
 
     Side {
@@ -349,6 +397,7 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         iroh_node,
         member_repo,
         trusted_peer_repo,
+        peer_addr_repo,
         setup_status,
         device_id,
         _keystore_dir: keystore_dir,

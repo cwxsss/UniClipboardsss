@@ -63,6 +63,10 @@ pub(crate) struct JoinerFacts {
     pub device_id: DeviceId,
     pub device_name: String,
     pub identity_fingerprint: IdentityFingerprint,
+    /// Slice 2 Phase 1 · T5：joiner 从 `JoinerRequest.transport_address_blob`
+    /// 捎来的不透明传输地址字节。orchestrator best-effort 写入
+    /// `PeerAddressRepositoryPort`；空 `Vec` 表示未携带，跳过 upsert。
+    pub transport_address_blob: Vec<u8>,
 }
 
 /// Outcome of the joiner's `ChallengeResponse`.
@@ -206,6 +210,7 @@ impl SponsorHandshakeCoordinator {
                 device_id: request.device_id,
                 device_name: request.device_name,
                 identity_fingerprint: request.identity_fingerprint,
+                transport_address_blob: request.transport_address_blob,
             },
             timer_abort: None,
         };
@@ -369,11 +374,20 @@ impl SponsorHandshakeCoordinator {
             .await
             .map_err(|e| format!("local_identity.ensure: {e}"))?;
 
+        // Slice 2 Phase 1 · T5：把本机传输地址 blob 捎给 joiner，对端
+        // `RedeemPairingInvitationUseCase::persist` best-effort upsert。
+        // adapter 不可用时兜底空 Vec，不阻塞 Confirm 发送。
+        let transport_address_blob = self
+            .pairing_session
+            .local_transport_address_blob()
+            .await
+            .unwrap_or_default();
         let confirm = PairingSessionMessage::Confirm(SponsorConfirm {
             space_id: ctx.space_id,
             sender_device_id: self.device_identity.current_device_id(),
             sender_device_name,
             sender_identity_fingerprint,
+            transport_address_blob,
         });
         self.pairing_session
             .send(session, confirm)
@@ -664,6 +678,7 @@ mod tests {
             device_name: "joiner's laptop".into(),
             identity_fingerprint: joiner_fp(),
             nonce: vec![1, 2, 3, 4],
+            transport_address_blob: vec![],
         }
     }
 

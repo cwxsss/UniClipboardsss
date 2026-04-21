@@ -12,8 +12,8 @@ use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
 use uc_core::ports::pairing_invitation::PairingInvitationPort;
 use uc_core::ports::space::{ProofPort, SpaceAccessPort};
 use uc_core::ports::{
-    ClockPort, DeviceIdentityPort, LocalIdentityPort, NetworkControlPort, SettingsPort,
-    SetupStatusPort,
+    ClockPort, DeviceIdentityPort, LocalIdentityPort, NetworkControlPort,
+    PeerAddressRepositoryPort, SettingsPort, SetupStatusPort,
 };
 use uc_core::trusted_peer::TrustedPeerRepositoryPort;
 
@@ -59,4 +59,10 @@ pub struct SpaceSetupDeps {
     /// Persists a joiner as a `TrustedPeer` alongside the `SpaceMember`
     /// row when the P7f handshake succeeds (`PersistSponsorAccess`).
     pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
+    /// Slice 2 Phase 1 · T5：配对成功后把对端传输地址 blob 写入仓库。
+    /// sponsor 端由 [`crate::pairing_inbound::PairingInboundOrchestrator`]
+    /// 在 `finalise_verified` 里 best-effort 调用，joiner 端由
+    /// [`crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase`]
+    /// 在 `persist` 收尾处调用。写失败不 fail 配对，presence 下轮兜底。
+    pub peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
 }

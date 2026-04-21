@@ -121,6 +121,21 @@ pub trait PairingSessionPort: Send + Sync {
     /// is a no-op. Takes `&self` (not `self`) so the caller keeps the id
     /// around for logging.
     async fn close(&self, session: &PairingSessionId, reason: Option<String>);
+
+    /// 返回本地传输地址的不透明编码（Slice 2 Phase 1 · T5）。
+    ///
+    /// 供 handshake coordinator 在发送 `JoinerRequest` / `SponsorConfirm`
+    /// 前填充 `transport_address_blob` 字段使用。adapter 自己决定编码格式
+    /// （iroh adapter 用 postcard 编码 `EndpointAddr`），core/application
+    /// 只把字节透传给对端。
+    ///
+    /// 返回 `None` 表示 adapter 暂时无法提供（例如 endpoint 尚未发布 direct
+    /// addrs，或测试用假 adapter 不实现此能力）；调用方应发送空 `Vec`，对端
+    /// 接到空 blob 后会跳过 `peer_addr_repo.upsert`，由 `ensure_reachable_all`
+    /// 下次重试兜底。
+    async fn local_transport_address_blob(&self) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -130,6 +130,7 @@ pub async fn build_space_setup_assembly(
         pairing_events: handlers.events,
         proof_port,
         trusted_peer_repo: Arc::clone(&wired.trusted_peer_repo),
+        peer_addr_repo: Arc::clone(&wired.peer_addr_repo),
     }));
 
     info!("Slice 1 SpaceSetupFacade assembled");

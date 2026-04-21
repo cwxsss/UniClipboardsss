@@ -397,7 +397,7 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 | T3 计划修订 | 改 adapter 架构为 Connection::closed watchdog | ✅ | `a5394349` | 0.2h | `slice2-phase1-plan.md` §8 增补 |
 | T3b | `IrohPresenceAdapter`(watchdog + `PRESENCE_ALPN` handler) | ✅ | `5c69b2a6` | ~0.6h(subagent) | 5 单测绿;`peers` / `last_state` 双 map(String 键——`DeviceId` 缺 `Hash`);`TrackedPeer::Drop` 自动 abort watchdog |
 | T4 | `IrohNodeBuilder::install_presence` 扩展点 | ✅ | `32a02c62` | 0.3h | 镜像 `install_pairing`,两 ALPN 同 router 共存单测绿 |
-| T5 | pairing 收尾点写 `NodeAddr` 到 repo | 🔲 | — | 估 1h | 下一步 |
+| T5 | pairing 收尾点写 `NodeAddr` 到 repo | ✅ | `[pending]` | ~1.8h | 比估多 0.8h:wire 协议升级不可避,bump `WIRE_VERSION` → 2;3 个 T5 专项单测全绿 |
 | T6 | `EnsureReachableAllUseCase` | 🔲 | — | 估 1.5h | — |
 | T7 | `MemberRosterFacade` | 🔲 | — | 估 2h | — |
 | T8 | F1 hook `auto_start_network` | 🔲 | — | 估 1h | — |
@@ -409,9 +409,9 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 
 ### 12.2 累计
 
-- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 = 6 项 / ~4.3h
-- **剩余**:T5-T13 = 9 项 / 估 ~12.8h
-- **进度**:~42%(按估算工时口径)
+- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 = 7 项 / ~6.1h
+- **剩余**:T6-T13 = 8 项 / 估 ~11.8h
+- **进度**:~53%(按估算工时口径)
 
 ### 12.3 关键发现 / 偏离
 
@@ -421,9 +421,12 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 
 3. **`TrackedPeer::Drop` 自动 abort watchdog**(T3b 设计补丁):防止 `peers` 移除 entry 后 watchdog task 成为孤儿。
 
+4. **T5 wire 协议升级**(2026-04-21):原计划只写 repo 即可,实际发现 sponsor 拿不到 joiner 的 `EndpointAddr`(iroh `Endpoint::remote_info` 是 `pub(crate)`,`Connection::remote_address` 只给单个 SocketAddr 不含 relay)。改为 wire 对称扩展:`JoinerRequest` / `SponsorConfirm` 各加 `transport_address_blob: Vec<u8>`(opaque bytes,core 纯净);新增 port 方法 `PairingSessionPort::local_transport_address_blob`(iroh adapter 返 `postcard(endpoint.addr())`);`WIRE_VERSION` 从 1 升到 2——Slice 1 → Slice 2 升级期跨版本对端由 `UnsupportedVersion` 显式拒连,因为 pre-release 不需兼容层。
+
 ### 12.4 后续提醒
 
-- T5 需改 `SpaceSetupDeps`(加 `peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>` 字段)+ `pairing_inbound/orchestrator.rs` + `pairing_outbound/joiner_handshake.rs` 两侧 best-effort upsert。失败 warn 不 fail 配对(plan §6 T5 已记)。
+- T6 `EnsureReachableAllUseCase` 可以读 `peer_addr_repo.list()` 直接枚举所有 paired 设备(跳过本机),对每个调 `presence.ensure_reachable`;不需要再从 `member_repo` 拉取。
+- T7 `MemberRosterFacade::list_with_presence` 的 `is_local` 判断:对每个 member 比 `LocalIdentityPort::get_current_fingerprint()`。
 - T8 的 "hook 在 `auto_start_network` 内触发 ensure_reachable_all" 需要从 `SetupStatus` 读 `space_id`(T-15 已确保一致,2026-04-20 `255fd2fe`)。
 - T10 CLI `members` 命令执行前**应先跑一轮** `ensure_reachable_all`(plan §8 T3 修订决策),保证 B 重启后"下次 CLI 查询 ≤ 10s 内显示 online"的验收条款。
-- T11 e2e 覆盖"iroh keypair 重绑恢复"路径(T3b 用 repo swap 绕过的部分)。
+- T11 e2e 覆盖"iroh keypair 重绑恢复"路径(T3b 用 repo swap 绕过的部分),以及 T5 新增的 wire 对称 blob 写入(两侧 repo 中都能 get 到对方 blob,且 postcard 解码得到合法 `EndpointAddr`)。

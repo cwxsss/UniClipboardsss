@@ -50,6 +50,16 @@ pub struct JoinerRequest {
     pub identity_fingerprint: IdentityFingerprint,
     /// Handshake transcript nonce.
     pub nonce: Vec<u8>,
+    /// 不透明传输地址 blob（Slice 2 Phase 1 · T5）。
+    ///
+    /// 由 joiner 端 adapter 用自身的 transport 编码（iroh adapter 用
+    /// postcard 编码 `EndpointAddr`）。core 不解析内容，只把字节作为
+    /// 透传字段交给 sponsor 端写入 [`PeerAddressRepositoryPort`]。
+    /// 空 `Vec` 表示 joiner 端 adapter 无法提供地址（旧客户端或尚未
+    /// publish direct addrs），sponsor 端降级为跳过 upsert。
+    ///
+    /// [`PeerAddressRepositoryPort`]: crate::ports::PeerAddressRepositoryPort
+    pub transport_address_blob: Vec<u8>,
 }
 
 /// Sponsor → joiner. Hands the joiner an offer they can unseal with the
@@ -87,6 +97,16 @@ pub struct SponsorConfirm {
     pub sender_device_id: DeviceId,
     pub sender_device_name: String,
     pub sender_identity_fingerprint: IdentityFingerprint,
+    /// 不透明传输地址 blob（Slice 2 Phase 1 · T5）。
+    ///
+    /// sponsor 端 adapter 填入自身的 transport 编码（iroh adapter 为
+    /// postcard 编码的 `EndpointAddr`）。joiner 端只把字节直传
+    /// [`PeerAddressRepositoryPort`]。空 `Vec` 表示 sponsor adapter
+    /// 尚未发布 direct addrs，joiner 端降级为跳过 upsert，留待下轮
+    /// `ensure_reachable_all` 从 rendezvous 再拉取。
+    ///
+    /// [`PeerAddressRepositoryPort`]: crate::ports::PeerAddressRepositoryPort
+    pub transport_address_blob: Vec<u8>,
 }
 
 /// Either side → other. Terminal message with a structured reason so the

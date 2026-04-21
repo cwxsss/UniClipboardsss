@@ -88,6 +88,7 @@ impl SpaceSetupFacade {
             pairing_events,
             proof_port,
             trusted_peer_repo,
+            peer_addr_repo,
         } = deps;
 
         // Stash handles for `try_resume_session` before the originals
@@ -161,6 +162,7 @@ impl SpaceSetupFacade {
             sponsor_handshake,
             Arc::clone(&admit_member_uc),
             Arc::clone(&trust_peer_uc),
+            Arc::clone(&peer_addr_repo),
             local_device_id,
             pairing_outcome_tx.clone(),
         ));
@@ -182,6 +184,7 @@ impl SpaceSetupFacade {
             admit_member_uc,
             trust_peer_uc,
             setup_status,
+            peer_addr_repo,
             clock,
         ));
 
@@ -708,6 +711,34 @@ mod tests {
         }
     }
 
+    // Slice 2 Phase 1 · T5：这些 facade smoke tests 不跑到 pairing 收尾
+    // 点（A1/A2/resume 路径），所以 peer_addr_repo 的所有方法都不应被调。
+    // 用 mockall 定义测试替身，默认 `.times(0)` 隐式契约——一旦 smoke
+    // test 意外触发 upsert/get/list/remove，drop 时就会 panic。T5 行为契约
+    // 在 orchestrator / redeem_invitation tests 里专门覆盖。
+    mockall::mock! {
+        pub PeerAddrRepo {}
+
+        #[async_trait]
+        impl uc_core::ports::PeerAddressRepositoryPort for PeerAddrRepo {
+            async fn get(
+                &self,
+                device: &DeviceId,
+            ) -> Result<Option<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError>;
+            async fn upsert(
+                &self,
+                record: &uc_core::ports::PeerAddressRecord,
+            ) -> Result<(), uc_core::ports::PeerAddressError>;
+            async fn list(
+                &self,
+            ) -> Result<Vec<uc_core::ports::PeerAddressRecord>, uc_core::ports::PeerAddressError>;
+            async fn remove(
+                &self,
+                device: &DeviceId,
+            ) -> Result<(), uc_core::ports::PeerAddressError>;
+        }
+    }
+
     fn default_fingerprint() -> IdentityFingerprint {
         IdentityFingerprint::from_raw_string("ABCDEFGHIJKLMNOP").unwrap()
     }
@@ -741,6 +772,7 @@ mod tests {
             pairing_events: Arc::new(IdleEventPort::new()),
             proof_port: Arc::new(NoopProofPort),
             trusted_peer_repo: Arc::new(NoopTrustedPeerRepo),
+            peer_addr_repo: Arc::new(MockPeerAddrRepo::new()),
         });
         (facade, network_control, pairing_invitation)
     }
