@@ -110,6 +110,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    peer_address (device_id) {
+        device_id -> Text,
+        addr_blob -> Binary,
+        observed_at -> BigInt,
+    }
+}
+
+diesel::table! {
     space_member (device_id) {
         device_id -> Text,
         device_name -> Text,
@@ -178,6 +186,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     clipboard_snapshot_representation,
     file_transfer,
     file_transfer_events,
+    peer_address,
     space_member,
     trusted_peer,
     search_document,
