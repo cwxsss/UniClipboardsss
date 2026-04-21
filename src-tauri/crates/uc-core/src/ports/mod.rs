@@ -34,7 +34,9 @@ pub mod network_events;
 pub mod pairing;
 pub mod pairing_invitation;
 pub mod pairing_transport;
+pub mod peer_address;
 pub mod peer_directory;
+pub mod presence;
 pub mod search;
 pub mod security;
 pub mod settings;
@@ -74,7 +76,9 @@ pub use pairing_invitation::{
 };
 #[allow(deprecated)]
 pub use pairing_transport::PairingTransportPort;
+pub use peer_address::{PeerAddressError, PeerAddressRecord, PeerAddressRepositoryPort};
 pub use peer_directory::PeerDirectoryPort;
+pub use presence::{PresenceError, PresenceEvent, PresencePort, ReachabilityState};
 pub use search::search_index::SearchIndexPort;
 pub use search::search_key::SearchKeyDerivationPort;
 pub use security::secure_storage::{SecureStorageError, SecureStoragePort};
