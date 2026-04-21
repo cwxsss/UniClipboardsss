@@ -316,9 +316,28 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 
 ## 8. 风险 & 待确认
 
+### T3 设计修订(2026-04-20 · T3a probe 后)
+
+原设计假设 `Endpoint::conn_type` Watcher 在 peer 断开时会 transition,adapter 订阅 stream 就能知道 offline。
+
+**probe 实测结论**(commit `36fc7e3b`,`uc-infra/tests/iroh_presence_probe.rs` 4 个场景):
+
+1. ✅ `conn_type(unknown_peer)` → `Option::None` —— `Unknown` 映射成立
+2. ✅ `conn_type(after connect)` → `Direct(SocketAddr)` —— `Online` 映射成立
+3. ⚠️ `conn_type` 是**缓存**,peer 关闭 3s 后仍返 `Direct(...)` —— **不能**用做 offline 检测
+4. ✅ `Connection::closed().await` 111ms 内触发 —— 才是可靠的 offline 信号
+
+**修订后的 adapter 架构**:
+- `IrohPresenceAdapter` 持有 `Mutex<HashMap<DeviceId, TrackedPeer>>`,`TrackedPeer` 包 `iroh::Connection` + `JoinHandle` watchdog
+- `ensure_reachable(device)`:查 map,若 conn alive 返 `Online` 缓存;否则 `endpoint.connect(addr, PRESENCE_ALPN)` → 成功则插 map + spawn watchdog(等 `conn.closed().await` → 改 map + broadcast `Offline`);失败则 broadcast `Offline` 立返
+- `current_state` 只读缓存(`list_with_presence` 调用路径不拨号)
+- B 重启 → A 再次 online 的恢复路径:lazy retry 在下次 `ensure_reachable` 时生效。CLI `members` 命令在查询前先跑一轮 `ensure_reachable_all`,天然满足"≤ 10s 反映 online"的验收条款
+- 新增 `PRESENCE_ALPN`(`uniclipboard/presence/0`)和 accept 侧 `IrohPresenceHandler`(实现 iroh `ProtocolHandler`,accept → hold until closed)
+
+### 其他风险
+
 | 风险 | 缓解 |
 |---|---|
-| iroh 0.95 `remote_info` 语义跟预期不符(比如"尚未探测"也算 online) | T3 先写 adapter 探针测试验证 iroh 真实行为,再决定 `ReachabilityState` 映射规则 |
 | `PeerAddressRepositoryPort` 的持久化层选择(新建 sqlite 表 vs 文件 vs 内存) | 建议**新建 sqlite 表**,理由:生命周期跟 `SpaceMember` 绑定,已有 sqlite 基础设施;内存不过进程,文件不好做并发原子写 |
 | `pairing` 收尾点写 NodeAddr 会不会破坏 Slice 1 的原子性 | T5 写成"best-effort warn",失败不 fail 配对;presence 下次主动探测兜底 |
 | `ensure_reachable_all` 并发拨号可能触发 iroh 限流 | N ≤ 10 假设下不会;若 T3 测试撞上限再降为 `JoinSet` + 并发度 5 |
