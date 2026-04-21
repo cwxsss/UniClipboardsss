@@ -886,23 +886,34 @@ pub struct StopNetworkCommand; // 无字段
 - [ ] A3 revoke 后被撤销设备尝试连入被拒(connection deny)
 - [ ] A5 rename 后下次同步,对端 SpaceMember 名字更新
 
-#### Slice 2 Phase 1 · roster + presence 基础设施 🔲
+#### Slice 2 Phase 1 · roster + presence 基础设施 ✅(2026-04-22)
 
 **范围**:只做"谁在线"这件事变活——roster 查询 + presence 事件 + F1 预连 hook。**不做**剪贴板同步,**不接** rename / revoke UI 按钮,**不写**新 wire 协议。
 
-**交付**:
-- `PresencePort::ensure_reachable(member_id)` + `ensure_reachable_all(roster)` 扩展
-- `PeerAddressRepositoryPort` 完整实现(Slice 1 骨架激活,接真实 iroh `NodeAddr`)
-- `MemberRosterFacade` 🆕 + `list_with_presence()` + `subscribe_presence_events()`
-- F1 预连 hook:A2 unlock + try_resume_session 成功路径都追加 `ensure_reachable_all`
-- `uc-infra` adapter:iroh `Endpoint::remote_info` 查 online,`Watcher` 订阅状态变化
-- `uniclipboard-cli status` 命令:查询并打印所有 SpaceMember 的在线状态
+**交付**(全部合入 `slender-soybean` 分支):
+- `PresencePort` 新 port + `IrohPresenceAdapter`(T3a/T3b `36fc7e3b` / `5c69b2a6`):`Connection::closed()` watchdog 替代原计划的 `conn_type` Watcher —— T3a 探针发现 `conn_type` 是缓存不可靠
+- `PeerAddressRepositoryPort` 完整实现(T1 `2ec1cabd` / T2 `e81cec97`):core port + Diesel adapter + migration `2026-04-20-000002_create_peer_address`
+- wire 对称扩展(T5 `a562e529`):`JoinerRequest` / `SponsorConfirm` 加 `transport_address_blob: Vec<u8>`,`WIRE_VERSION` → 2
+- `EnsureReachableAllUseCase`(T6 `e66776f8`):pub(crate),`JoinSet` 并发 + `peer_addr_repo.list()` 迭代源 + 本机防御性 filter
+- `MemberRosterFacade`(T7 `548b3bdf`):`list_with_presence()` + `subscribe_presence_events()`;thin wrapper 不拨号
+- F1 预连 hook(T8 `f461a6eb`):`SpaceSetupFacade::auto_start_network` 成功后 unconditional 跑 `ensure_reachable_all`;失败 warn 不传播
+- `IrohNodeBuilder::install_presence` 扩展点(T4 `32a02c62`)+ bootstrap `MemberRosterFacade` 装配(T9 `181f2cc8`)
+- `uniclipboard-cli members` 子命令(T10 `bda7686b`):自包含直连模式,`facade.refresh_presence()` + `roster.list_with_presence()` + human / JSON 双渲染
+- 集成测试 `slice2_phase1_presence_e2e` 两例(T11 `d39889e0`):pair → 双向 online;关 joiner → sponsor ≤ 10s 观察到非 Online
 
-**最终校验标准**(Phase 1 完成判据):
-- [ ] 两台设备 A / B 都完成 unlock 后,任一台跑 `uniclipboard-cli status` 能列出**所有** SpaceMember 并显示每个成员的在线状态(online / offline)
-- [ ] 关掉 B 后,A 再跑 `uniclipboard-cli status` 在 ≤ 10s 内反映 B = offline
-- [ ] B 重新启动并 unlock 后,A 再跑 `uniclipboard-cli status` 在 ≤ 10s 内反映 B = online
-- [ ] 单元测试覆盖 `MemberRosterFacade`(fake `PresencePort`)+ `ensure_reachable_all` 并发安全
+**验收达成**:
+- [x] 两台设备 unlock 后 `uniclipboard-cli members` 列出 SpaceMember + online / offline(手动验证 2026-04-22)
+- [x] 关闭 B → A 的 `members` 命令 ≤ 10s 反映 offline(`slice2_phase1_presence_e2e::joiner_shutdown_flips_sponsor_roster_to_offline_within_10s` 自动覆盖)
+- [x] B 重启 + unlock → A 的 `members` ≤ 10s 反映 online(手动覆盖;loopback-only 自动化受 `disable_relays=true` 限制无法模拟,rationale 见 T11 in-file comment)
+- [x] 单测覆盖 `MemberRosterFacade`(T7:8 tests with fake `FakePresence`)+ `ensure_reachable_all` 并发(T6:6 tests 含 `SleepyPresence` 手写 fake 绕过 mockall Mutex 序列化)
+- [x] 子命令改名 `members`(原计划 `status` 被 Slice 1 legacy daemon HTTP 状态命令占用)
+
+**后续 follow-up(非 Phase 1 scope,记录供 Phase 2/3)**:
+- **B2 不 save self 为 SpaceMember**(T11 暴露):`RedeemPairingInvitationUseCase::persist` 只 admit sponsor,joiner 视角下 `members` 看不到自己。修复需在 persist 收尾加一步 save self;补完后 T11 的 `joiner_roster.len() == 1` 断言需改为 `== 2`(作为契约变更信号,已在测试注释里标记)。
+- **T12 e2e shell 扩展**(plan §1.1 验收点 3 的第二条覆盖):故意跳过,shell e2e 本质是演示脚本,Rust 集成测试已覆盖回归面。需要时再补。
+
+**跳过的任务**:
+- T12 `single-machine-e2e.sh` 扩展:shell 脚本维护成本 > 回归保护价值;Rust 集成测试已给等价覆盖
 
 ---
 

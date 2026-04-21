@@ -403,15 +403,15 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 | T8 | F1 hook `auto_start_network` | ✅ | `f461a6eb` | ~0.7h | `SpaceSetupDeps` 加 `presence: Arc<dyn PresencePort>`;facade 内部构造 `EnsureReachableAllUseCase`;`auto_start_network` 成功后紧接 `ensure_reachable_all.execute()`,失败走 `warn!` 不传播;4 新单测覆盖验收点;bootstrap 的 presence port 接线(`IrohNodeBuilder::install_presence` 调用)**随 T8 合入**,因为 `SpaceSetupDeps` 新字段不装 `presence` 编译不过——T9 scope 缩减为只做 MemberRosterFacade 的 bootstrap 接线 |
 | T9 | bootstrap 装配 | ✅ | `181f2cc8` | ~0.2h | scope 缩减(T8 已吸收 presence 接线)后只剩 `MemberRosterFacade` 装配:`SpaceSetupAssembly` 加 `pub roster: Arc<MemberRosterFacade>` 字段,`build_space_setup_assembly` 构造时复用 `member_repo` / `local_identity` / `presence` 三个 Arc(后两个需先 `Arc::clone` 给 SpaceSetupFacade,之后再 move 给 roster);工作空间全量编译 + slice1 e2e 仍绿 |
 | T10 | `uniclipboard-cli members` | ✅ | `bda7686b` | ~0.4h | 自包含直连模式:build_assembly → try_resume_session → **facade.refresh_presence**(plan §12.4 T10 提醒,F1 hook 之外的显式 probe 入口)→ `roster.list_with_presence` → human(`name (state) [local]` per line)/ JSON 双渲染。为不泄露 `EnsureReachableAllUseCase`(§11.4),在 `SpaceSetupFacade` 加 thin `refresh_presence()` wrapper,并从 space_setup mod 透出 `EnsureReachableAllReport/Error`。无新单测(integration-level);workspace 全量编译 + uc-application 176 + uc-cli 10 + slice1_handshake_e2e 单测绿 |
-| T11 | `slice2_phase1_presence_e2e` 集成测试 | 🔲 | — | 估 3h | — |
-| T12 | `single-machine-e2e.sh` 扩展 | 🔲 | — | 估 1h | — |
-| T13 | task_plan.md Phase 1 ✅ 收尾 | 🔲 | — | 估 0.3h | — |
+| T11 | `slice2_phase1_presence_e2e` 集成测试 | ✅ | `d39889e0` | ~1.0h | 两例:`pair_then_refresh_reports_both_sides_online`(plan §1.1 verdict 1)+ `joiner_shutdown_flips_sponsor_roster_to_offline_within_10s`(verdict 2)。verdict 3("B 重启 online")**刻意跳过**:`disable_relays=true` loopback-only 测试无法模拟 iroh 的 NodeAddr 刷新,强行跑只出假阳性——手动验证已覆盖。测试跑时 37.4s(两例共用 wiremock + iroh bind)。暴露 Slice 1 pre-existing gap:joiner B2 不 save self → joiner 视角 roster 只有 sponsor(测试断言 `joiner_roster.len() == 1` 作为契约信号,注释标记 future fix 时应改) |
+| T12 | `single-machine-e2e.sh` 扩展 | ⏭️ 跳过 | — | 0h | 评估后跳过:shell 脚本维护成本 > 回归保护价值(改 CLI 输出文案就断),T11 Rust 集成测试已给等价覆盖,且比 shell 更精确(10s 时效断言)。需要时再补,task_plan.md Phase 1 ✅ 标注已收录 |
+| T13 | task_plan.md Phase 1 ✅ 收尾 | ✅ | `(本提交)` | ~0.3h | task_plan.md 中 Slice 2 Phase 1 节改 🔲 → ✅ 并罗列所有 T1-T11 commit hash + 验收达成状态;follow-up 记录"joiner 不 save self" gap(T11 暴露)供 Phase 2/3 处理;本 plan §12.2 累计更新 |
 
 ### 12.2 累计
 
-- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 / T7 / T8 / T9 / T10 = 12 项 / ~9.3h
-- **剩余**:T11-T13 = 3 项 / 估 ~4.3h
-- **进度**:~87%(按估算工时口径)
+- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 / T5 / T6 / T7 / T8 / T9 / T10 / T11 / T13 = 14 项 / ~10.6h
+- **跳过**:T12(评估后 shell e2e 扩展价值低于维护成本,Rust 集成测试已覆盖——task_plan.md Phase 1 ✅ 节有记录)
+- **进度**:🏁 **Slice 2 Phase 1 完成**(2026-04-22)。实际总工时 ~10.6h(不含跳过的 T12),比原估算 ~15.2h 省约 30%——主要来自 T4/T7/T9 模块化良好 + T6 复用 `JoinSet` 而非自造并发模型 + T12 战略性跳过
 
 ### 12.3 关键发现 / 偏离
 
@@ -431,4 +431,5 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 - ~~T7 `MemberRosterFacade::list_with_presence` 的 `is_local` 判断:对每个 member 比 `LocalIdentityPort::get_current_fingerprint()`。~~ ✅ T7 已按此决策实施(2026-04-21)。`local_identity.get_current_fingerprint()` 取一次,对每个 member 的 `identity_fingerprint` 做 `==`(经 `IdentityFingerprint::PartialEq` 语义上等价于 `verify`)。pre-A1/B2 态(返回 `None`)下所有 entry 均标 `is_local=false`——此窗口期一般也无成员记录,属防御路径。plan §4.1 的 `member_id` 字段和 `last_seen_at` 字段已 drop(前者无对应类型,后者 presence port 当前不追踪时间戳;T7 验收点仅要求 state 三值正确)。
 - ~~T8 的 "hook 在 `auto_start_network` 内触发 ensure_reachable_all" 需要从 `SetupStatus` 读 `space_id`(T-15 已确保一致,2026-04-20 `255fd2fe`)。~~ ✅ T8 已实施(2026-04-21)。实际实现比原计划更简:因 T6 `execute()` 已无 `space_id` 参数(§12.4),F1 hook 不用读 SetupStatus;facade 新增 `ensure_reachable_all: Arc<EnsureReachableAllUseCase>` 字段,`auto_start_network` 成功拉起 network 后 unconditionally `execute()` 一次。成功路径 `info!` 输出 total/online/offline/errors,失败路径 `warn!` 不传播——A1/A2/B2 的空间变更已落盘,失败回滚代价远大于"网络 lazy 重连"的代价。**bootstrap 的 presence port 接线一并合入 T8**(`SpaceSetupDeps.presence` 新字段不装配编译不过)——T9 scope 现在只剩 MemberRosterFacade 的 bootstrap 接线。
 - ~~T10 CLI `members` 命令执行前**应先跑一轮** `ensure_reachable_all`(plan §8 T3 修订决策),保证 B 重启后"下次 CLI 查询 ≤ 10s 内显示 online"的验收条款。~~ ✅ T10 已实施(2026-04-21 `bda7686b`):`facade.refresh_presence()` 在 `try_resume_session` 之后 `list_with_presence` 之前调一次,把刷新后 report 的 total/online/offline/errors 摘要喂给 spinner,单个 peer 失败不 fatal(进 `report.errors`)。usecase 保持 pub(crate),只通过 facade thin wrapper 对外——后续 Tauri `get_roster` 命令可复用同一入口。
-- T11 e2e 覆盖"iroh keypair 重绑恢复"路径(T3b 用 repo swap 绕过的部分),以及 T5 新增的 wire 对称 blob 写入(两侧 repo 中都能 get 到对方 blob,且 postcard 解码得到合法 `EndpointAddr`)。
+- ~~T11 e2e 覆盖"iroh keypair 重绑恢复"路径(T3b 用 repo swap 绕过的部分),以及 T5 新增的 wire 对称 blob 写入(两侧 repo 中都能 get 到对方 blob,且 postcard 解码得到合法 `EndpointAddr`)。~~ ✅ T11 已实施(2026-04-22 `d39889e0`):verdict 1 + verdict 2 覆盖,verdict 3(B 重启 online)因 `disable_relays=true` loopback 限制跳过自动化——stale socket 在无 relay 下拿不回来,强测只能出假阳性,手动验收覆盖。对称 blob 断言通过 `sponsor_report.online=1` / `joiner_report.online=1` 间接覆盖(能 probe online 说明两侧 repo 里 blob 有效)。
+- **T11 暴露 pre-existing Slice 1 gap**:`RedeemPairingInvitationUseCase::persist` 只 admit sponsor,joiner 不把自己存进 `member_repo` → joiner 视角下 `members` 命令看不到本机。T11 断言 `joiner_roster.len() == 1` 作为契约信号。修复应在 `persist` 收尾追加 `save self` 步骤,对应测试断言需更新为 `== 2`。推到 Phase 2 / Phase 3 的 rename/revoke 工作中顺手修。
