@@ -382,3 +382,48 @@ uniclipboard-cli members --profile=a  # 断言 b "offline"
 ---
 
 > **开工信号**:用户点头 → 从 T1 开始。
+
+---
+
+## 12. 进度跟踪(live · 2026-04-20 最新)
+
+### 12.1 任务状态
+
+| # | 任务 | 状态 | commit | 实际工时 | 备注 |
+|---|---|---|---|---|---|
+| T1 | uc-core 加 `PresencePort` + `PeerAddressRepositoryPort` | ✅ | `011472cf` | 0.4h | 估 0.5h,顺 |
+| T2 | `DieselPeerAddressRepository` + migration | ✅ | `e81cec97` | 2h | 估 2h,6 单测绿;schema 新增 `peer_address` 表(TEXT PK + BLOB + INTEGER) |
+| T3a | iroh 探针(conn_type 语义调研) | ✅ | `36fc7e3b` | 0.8h | **发现**:`conn_type` 是缓存,peer 关后仍返 `Direct(...)`;`Connection::closed()` 111ms 内可靠触发 |
+| T3 计划修订 | 改 adapter 架构为 Connection::closed watchdog | ✅ | `a5394349` | 0.2h | `slice2-phase1-plan.md` §8 增补 |
+| T3b | `IrohPresenceAdapter`(watchdog + `PRESENCE_ALPN` handler) | ✅ | `5c69b2a6` | ~0.6h(subagent) | 5 单测绿;`peers` / `last_state` 双 map(String 键——`DeviceId` 缺 `Hash`);`TrackedPeer::Drop` 自动 abort watchdog |
+| T4 | `IrohNodeBuilder::install_presence` 扩展点 | ✅ | `32a02c62` | 0.3h | 镜像 `install_pairing`,两 ALPN 同 router 共存单测绿 |
+| T5 | pairing 收尾点写 `NodeAddr` 到 repo | 🔲 | — | 估 1h | 下一步 |
+| T6 | `EnsureReachableAllUseCase` | 🔲 | — | 估 1.5h | — |
+| T7 | `MemberRosterFacade` | 🔲 | — | 估 2h | — |
+| T8 | F1 hook `auto_start_network` | 🔲 | — | 估 1h | — |
+| T9 | bootstrap 装配 | 🔲 | — | 估 1h | — |
+| T10 | `uniclipboard-cli members` | 🔲 | — | 估 2h | — |
+| T11 | `slice2_phase1_presence_e2e` 集成测试 | 🔲 | — | 估 3h | — |
+| T12 | `single-machine-e2e.sh` 扩展 | 🔲 | — | 估 1h | — |
+| T13 | task_plan.md Phase 1 ✅ 收尾 | 🔲 | — | 估 0.3h | — |
+
+### 12.2 累计
+
+- **已完成**:T1 / T2 / T3a / T3(修订) / T3b / T4 = 6 项 / ~4.3h
+- **剩余**:T5-T13 = 9 项 / 估 ~12.8h
+- **进度**:~42%(按估算工时口径)
+
+### 12.3 关键发现 / 偏离
+
+1. **iroh `conn_type` 不可靠**(T3a 探针发现):原计划用 `Endpoint::conn_type` Watcher 订阅状态流做 offline 检测,实测是缓存语义,peer 关后仍返 `Direct(...)`。改走"持有 Connection + 等 `closed()`"模式,加 watchdog task。`slice2-phase1-plan.md` §8 修订已合入。
+
+2. **`DeviceId` 缺 `Hash` derive**(T3b 编码时遇):全 `uc-core::ids` 家族里唯一没派生 `Hash` 的 ID。绕过:adapter 内部用 `String` 作 HashMap key,边界处重建 `DeviceId`,port 契约不受影响。后续若要修需动 uc-core 公共 API(非本 Phase 范围)。
+
+3. **`TrackedPeer::Drop` 自动 abort watchdog**(T3b 设计补丁):防止 `peers` 移除 entry 后 watchdog task 成为孤儿。
+
+### 12.4 后续提醒
+
+- T5 需改 `SpaceSetupDeps`(加 `peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>` 字段)+ `pairing_inbound/orchestrator.rs` + `pairing_outbound/joiner_handshake.rs` 两侧 best-effort upsert。失败 warn 不 fail 配对(plan §6 T5 已记)。
+- T8 的 "hook 在 `auto_start_network` 内触发 ensure_reachable_all" 需要从 `SetupStatus` 读 `space_id`(T-15 已确保一致,2026-04-20 `255fd2fe`)。
+- T10 CLI `members` 命令执行前**应先跑一轮** `ensure_reachable_all`(plan §8 T3 修订决策),保证 B 重启后"下次 CLI 查询 ≤ 10s 内显示 online"的验收条款。
+- T11 e2e 覆盖"iroh keypair 重绑恢复"路径(T3b 用 repo swap 绕过的部分)。
