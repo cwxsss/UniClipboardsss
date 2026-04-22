@@ -31,22 +31,21 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
+use uc_application::decode_v3_bytes_to_snapshot;
 use uc_application::facade::space_setup::{
     InitializeSpaceCommand, RedeemPairingInvitationCommand, SpaceSetupDeps, SpaceSetupFacade,
 };
 use uc_application::facade::{
-    ClipboardSyncDeps, ClipboardSyncFacade, DispatchEntryInput, IngestHandle, MemberRosterDeps,
-    MemberRosterFacade,
+    ClipboardSyncDeps, ClipboardSyncFacade, IngestHandle, MemberRosterDeps, MemberRosterFacade,
 };
 use uc_application::space_access::HmacProofAdapter;
 use uc_bootstrap::IrohNodeConfig;
 use uc_core::crypto::domain::Passphrase;
-use uc_core::ids::DeviceId;
+use uc_core::ids::{DeviceId, FormatId, RepresentationId};
 use uc_core::membership::{MemberRepositoryPort, MembershipError, SpaceMember};
 use uc_core::ports::pairing::PairingSessionPort;
 use uc_core::ports::security::TransferCipherPort;
@@ -59,6 +58,9 @@ use uc_core::ports::{
 use uc_core::settings::model::Settings;
 use uc_core::setup::SetupStatus;
 use uc_core::trusted_peer::{TrustedPeer, TrustedPeerError, TrustedPeerRepositoryPort};
+use uc_core::{
+    ClipboardChangeOrigin, MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
+};
 
 use uc_infra::clipboard::TransferCipherAdapter;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -554,18 +556,23 @@ async fn sponsor_dispatch_lands_on_joiner_within_2s() {
     // public sender by the time the inbound notice arrives.
     let mut joiner_notices = joiner.clipboard_sync.subscribe_inbound_notices();
 
-    let plaintext = Bytes::from_static(b"hello clipboard sync");
-    // Use a deterministic, distinguishable hash — Phase 2 ingest passes
-    // it through verbatim. Production pipeline uses SHA-256/blake3 but
-    // the receiver doesn't dedup yet (that's Phase 3 work).
-    let content_hash = "ph2-fixture-aaaabbbbccccdddd".to_string();
+    // Phase 3 upgrade(T11):use `dispatch_snapshot` — matches the
+    // daemon wire format. Inbound notice's plaintext is a V3 envelope,
+    // so we decode it and check the round-tripped representation.
+    let text = "hello clipboard sync";
+    let snapshot = SystemClipboardSnapshot {
+        ts_ms: 1_700_000_000_000,
+        representations: vec![ObservedClipboardRepresentation::new(
+            RepresentationId::new(),
+            FormatId::from("text"),
+            Some(MimeType("text/plain".to_string())),
+            text.as_bytes().to_vec(),
+        )],
+    };
+    let expected_hash = snapshot.snapshot_hash().to_string();
     let outcome = sponsor
         .clipboard_sync
-        .dispatch_entry(DispatchEntryInput {
-            plaintext: plaintext.clone(),
-            content_hash: content_hash.clone(),
-            payload_version: 3,
-        })
+        .dispatch_snapshot(snapshot, ClipboardChangeOrigin::LocalCapture)
         .await
         .expect("sponsor dispatch ok");
     assert_eq!(
@@ -592,12 +599,18 @@ async fn sponsor_dispatch_lands_on_joiner_within_2s() {
         "notice must report sponsor as origin"
     );
     assert_eq!(
-        notice.content_hash, content_hash,
-        "content_hash must round-trip unchanged"
+        notice.content_hash, expected_hash,
+        "content_hash (canonical snapshot_hash) must round-trip unchanged"
     );
+
+    // Decode the V3 envelope and check the text representation round-tripped.
+    let decoded = decode_v3_bytes_to_snapshot(&notice.plaintext)
+        .expect("notice plaintext must decode as V3 envelope");
+    assert_eq!(decoded.representations.len(), 1);
+    assert_eq!(decoded.representations[0].bytes, text.as_bytes());
     assert_eq!(
-        notice.plaintext, plaintext,
-        "plaintext bytes must round-trip unchanged after AEAD decrypt"
+        decoded.representations[0].mime.as_ref().map(|m| m.as_str()),
+        Some("text/plain")
     );
 
     sponsor.shutdown().await;
@@ -637,16 +650,27 @@ async fn repeat_dispatch_lands_twice_phase2_no_dedup() {
 
     let mut joiner_notices = joiner.clipboard_sync.subscribe_inbound_notices();
 
-    let plaintext = Bytes::from_static(b"duplicate fixture text");
-    let content_hash = "ph2-dup-1111222233334444".to_string();
+    // Phase 3 upgrade(T11):same fixture built twice — `snapshot_hash`
+    // is deterministic so both sends produce identical `content_hash`.
+    // At the wire/facade level, Phase 2 behaviour holds: receiver adapter
+    // doesn't dedup, so both sends get Accepted. Phase 3 dedup(in
+    // `ApplyInboundClipboardUseCase`) is a daemon concern, NOT exercised
+    // by this raw facade-level e2e — that belongs in the T12 daemon e2e.
+    let fixture_text = "duplicate fixture text";
+    let build_snapshot = || SystemClipboardSnapshot {
+        ts_ms: 1_700_000_000_000,
+        representations: vec![ObservedClipboardRepresentation::new(
+            RepresentationId::new(),
+            FormatId::from("text"),
+            Some(MimeType("text/plain".to_string())),
+            fixture_text.as_bytes().to_vec(),
+        )],
+    };
+    let canonical_hash = build_snapshot().snapshot_hash().to_string();
     for attempt in 0..2 {
         let outcome = sponsor
             .clipboard_sync
-            .dispatch_entry(DispatchEntryInput {
-                plaintext: plaintext.clone(),
-                content_hash: content_hash.clone(),
-                payload_version: 3,
-            })
+            .dispatch_snapshot(build_snapshot(), ClipboardChangeOrigin::LocalCapture)
             .await
             .unwrap_or_else(|e| panic!("attempt {attempt} dispatch must succeed: {e:?}"));
         assert_eq!(
@@ -656,6 +680,10 @@ async fn repeat_dispatch_lands_twice_phase2_no_dedup() {
         assert_eq!(
             outcome.total_duplicate, 0,
             "no Phase 2 producer returns DuplicateIgnored on the wire"
+        );
+        assert_eq!(
+            outcome.content_hash, canonical_hash,
+            "snapshot_hash should be deterministic across identical snapshots"
         );
     }
 
@@ -668,11 +696,14 @@ async fn repeat_dispatch_lands_twice_phase2_no_dedup() {
         received.push(notice);
     }
     assert!(
-        received
-            .iter()
-            .all(|n| n.plaintext == plaintext && n.content_hash == content_hash),
-        "both notices must carry identical plaintext + content_hash; got {received:?}"
+        received.iter().all(|n| n.content_hash == canonical_hash),
+        "both notices must carry identical canonical content_hash; got {received:?}"
     );
+    for notice in &received {
+        let decoded = decode_v3_bytes_to_snapshot(&notice.plaintext)
+            .expect("notice plaintext must decode as V3 envelope");
+        assert_eq!(decoded.representations[0].bytes, fixture_text.as_bytes());
+    }
 
     sponsor.shutdown().await;
     joiner.shutdown().await;

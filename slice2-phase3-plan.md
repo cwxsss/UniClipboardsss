@@ -644,8 +644,8 @@ Slice 2 没全完(A3/A5 缺 UI),但 **C/E/F 三组核心 usecase 全到位**,Sli
 | T6 | entrypoint 注入 | ✅ | `8e007150` | 0.3h | bundled with T7/T8(signatures cross-cut);`ApplyInboundClipboardUseCase` 从 runtime deps 组装,shared `clipboard_write_coordinator` Arc 维持 origin guard cache 单例;shutdown hook 移 assembly 进 block_on 闭包,daemon.run() 返回后 `assembly.shutdown().await` 再 drop runtime,iroh router 干净 CONNECTION_CLOSE |
 | T7 | DaemonClipboardChangeHandler 改装 | ✅ | `8e007150` | 0.3h | bundled;`build_sync_outbound_clipboard_use_case` 删除,`plan.clipboard` dispatch arm 改调 `clipboard_sync.dispatch_snapshot`;`OutboundSyncPlanner` 保留(master toggle 来源);per-member filter 推 follow-up |
 | T8 | InboundClipboardSyncWorker 重写 | ✅ | `8e007150` | 0.4h | bundled;~230→~190 LOC,drop `parse_clipboard_frame` + `ClipboardInboundTransportPort` 订阅 + `SyncInboundClipboardUseCase` 装配 + file_cache_dir + file_transfer_lifecycle(Phase 3 text-only);subscribe `clipboard_sync.subscribe_inbound_notices()` → `apply_inbound_uc.execute` → `Applied` emit WS / 其他变体 log;5 bootstrap e2e 全绿 |
-| T9 | CLI send envelope 升级 | ⏸️ pending | — | — | — |
-| T10 | CLI watch decode 升级 | ⏸️ pending | — | — | — |
+| T9 | CLI send envelope 升级 | ✅ | `8e075213` | 0.2h | bundled w/ T10;text → single-rep `SystemClipboardSnapshot` → `dispatch_snapshot(_, LocalCapture)`;删 sha2 + bytes dep + 本地 `sha256_hex`/`hex_lower` helpers |
+| T10 | CLI watch decode 升级 | ✅ | `8e075213` | 0.3h | bundled;`decode_v3_bytes_to_snapshot` public re-export(visibility surgery:`usecases` + `usecases::clipboard_sync` 改 pub mod,但内部项仍 pub(crate) 未泄);watch 渲染:first `text/*` rep 优先,无则 per-rep mime/size summary;JSON schema `plaintext_utf8` → `text` + 新 `rep_summary` 字段(Phase 2 shell e2e 需同步改,T13 处理) |
 | T11 | phase 2 e2e 更新 | ⏸️ pending | — | — | — |
 | T12 | phase 3 daemon e2e | ⏸️ pending | — | — | — |
 | T13 | shell e2e schema 更新 | ⏸️ pending | — | — | — |
