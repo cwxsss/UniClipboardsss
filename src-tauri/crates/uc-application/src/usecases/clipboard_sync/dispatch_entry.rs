@@ -26,9 +26,13 @@
 //! ## Concurrency
 //!
 //! `tokio::task::JoinSet` per target. Phase 1's mockall-Mutex lesson
-//! applies (see plan §10) — the tests here use a hand-written fake
-//! dispatch port to avoid serialising concurrent probe calls through
-//! `mockall::Mutex<FnMut>`.
+//! (slice2-phase1-plan.md §12.3 decision 5) only applies when **wall-time
+//! concurrency** is asserted — the tests below use mockall throughout
+//! because none of them measure wall-clock duration; `.returning(...)`
+//! closures return immediately, so the expectation Mutex never blocks
+//! anything observable. Hand-written fakes are reserved for cases that
+//! genuinely need them (broadcast `subscribe + emit`; see
+//! `ingest_inbound.rs::tests` and Phase 1 `roster/facade.rs::FakePresence`).
 
 use std::sync::Arc;
 
