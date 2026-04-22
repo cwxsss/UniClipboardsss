@@ -514,7 +514,7 @@ let ingest_handle = self.clipboard_sync.spawn_ingest_loop();
 | T7 | DispatchClipboardEntryUseCase | ✅ | `896e371b` | 0.8h | 5 单测全绿;输入 `DispatchClipboardEntryInput { plaintext, content_hash, payload_version }`——不内置"读系统剪贴板 + 构造 payload"步,caller 负责;iteration source 复用 Phase 1 的 `peer_addr_repo.list()` 决策;`JoinSet` 并发 + 本机 filter + Online-only filter;hand-written `RecipeDispatch` 规避 mockall-Mutex(Phase 1 T6 教训);`bytes = "1.7"` 加入 uc-application Cargo.toml |
 | T8 | IngestInboundClipboardUseCase | ✅ | `57ab9e65` | 0.4h | 4 单测;Phase 2 刻意不做本地持久化 + 不做本地 dedup(adapter 的 Ack 边界已分 Accepted/DuplicateIgnored);decrypt 失败 warn + skip,loop 继续;`IngestSpawnHandle` Drop 自动 abort |
 | T9 | ClipboardSyncFacade | ✅ | `5b49d0ca` | 0.5h | 3 单测;完整 public ↔ internal type 映射(7 对类型 + `From<DispatchSyncError>`);subscribe 桥接走 relay task 保证 pub types 独立演进;`IngestHandle` Drop 级联 abort;`facade/mod.rs` 导出 9 个符号 |
-| T10 | bootstrap 装配 | ⏸️ pending | — | — | **下一步**:`SpaceSetupAssembly` 加 `clipboard_sync`,`build_space_setup_assembly` 调 `install_clipboard` + 构造 facade,`auto_start_network` 成功后 spawn ingest loop |
+| T10 | bootstrap 装配 | ✅ | `d4849971` | 0.4h | `SpaceSetupAssembly` 新增 `pub clipboard_sync: Arc<ClipboardSyncFacade>` + 私有 `ingest_handle: IngestHandle`(parallel to `roster`);`build_space_setup_assembly` 在 `install_presence` 之后调 `install_clipboard`,`spawn` 后构造 facade + 起 ingest loop;`shutdown` 显式 abort ingest 走在 router shutdown 前;`uc_infra::network::iroh` 顶层导出 `ClipboardHandlers`。**偏离原计划**:ingest 不进 `SpaceSetupFacade::auto_start_network`——receiver 与 `start_network` 无序依赖(handler 装在 router 上,spawn 即工作),内嵌反而要把 ClipboardSyncFacade 注进 SpaceSetupFacade、违 §11.4 精神;assembly 层装配最干净;bootstrap 测试 3 测全绿(slice1_handshake_e2e + slice2_phase1_presence_e2e) |
 | T11 | uc-cli send/watch | ⏸️ pending | — | — | — |
 | T12 | slice2_phase2 e2e 集成测试 | ⏸️ pending | — | — | — |
 | T13 | 手动双 profile 验收 | ⏸️ pending | — | — | — |
@@ -522,9 +522,9 @@ let ingest_handle = self.clipboard_sync.spawn_ingest_loop();
 
 ### 15.2 累计
 
-- **已完成**:T1-T9(9/14)~4.2h;比原估 ~15h 约省 72%,主要因 adapter 模块化好 + Phase 1 pattern 直接复用
-- **测试**:29 单测 + 3 integration probe verdict 全绿(`cargo test` per-module 分开跑,未做全量回归)
-- **进度**:等用户指示推进 T10,其余 5 任务整体 ~5-8h
+- **已完成**:T1-T10(10/14)~4.6h;比原估 ~16h 约省 71%,主要因 adapter 模块化好 + Phase 1 pattern 直接复用
+- **测试**:29 单测 + 3 integration probe verdict + 3 bootstrap e2e 全绿
+- **进度**:T11 uc-cli send/watch 进行中;余下 4 任务整体 ~5h
 
 ### 15.3 关键决策 / 偏离
 
@@ -537,8 +537,8 @@ let ingest_handle = self.clipboard_sync.spawn_ingest_loop();
 
 ### 15.4 后续提醒
 
-- T10 bootstrap 要看 `SpaceSetupFacade::auto_start_network` 当前把 `ensure_reachable_all` 接在哪一行,clipboard ingest spawn 也接在那附近。需要给 SpaceSetupFacade 加 `Arc<ClipboardSyncFacade>` 字段 + `Mutex<Option<IngestHandle>>` 存 spawn handle
 - T11 CLI 里 plaintext pipeline 最简做法:读系统剪贴板 `SystemClipboardPort::read_snapshot()` → 取第一个 text representation → postcard encode 一个 mini `ClipboardBinaryPayload` → SHA-256 content_hash。`watch` 循环读 `last_snapshot_hash` + `poll_system_clipboard` 每 500ms 比对变化
+- T11 入口可走 `assembly.clipboard_sync.dispatch_entry(...)` / `subscribe_inbound_notices()`,assembly 已自动 spawn ingest loop,CLI 不再需要手动 `spawn_ingest_loop()`
 - T12 e2e 复用 Phase 1 `slice2_phase1_presence_e2e` 的两-assembly + pair 夹具,再加 `dispatch_entry()` 调用 + `subscribe_inbound_notices()` 断言 plaintext 字节等价。避免 T11 shell 脚本,Rust 集成测试已覆盖验收
 
 
