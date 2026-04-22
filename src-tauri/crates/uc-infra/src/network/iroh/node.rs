@@ -9,11 +9,13 @@
 //!
 //! The builder pattern is deliberate: each `install_*` method is where a
 //! new transport slices in. Slice 1 ships [`install_pairing`]; Slice 2
-//! Phase 1 adds [`install_presence`]; Slice 2 Phase 2 / 3 will add
-//! `install_clipboard` / `install_blobs` on the same builder.
+//! Phase 1 adds [`install_presence`]; Slice 2 Phase 2 adds
+//! [`install_clipboard`]; Slice 3 will add `install_blobs` on the same
+//! builder.
 //!
 //! [`install_pairing`]: IrohNodeBuilder::install_pairing
 //! [`install_presence`]: IrohNodeBuilder::install_presence
+//! [`install_clipboard`]: IrohNodeBuilder::install_clipboard
 
 use std::sync::Arc;
 
@@ -21,16 +23,20 @@ use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode};
 use tracing::{debug, instrument};
 
+use uc_core::membership::MemberRepositoryPort;
 use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
 use uc_core::ports::pairing_invitation::PairingInvitationPort;
+use uc_core::ports::security::IdentityFingerprintFactoryPort;
 use uc_core::ports::{
-    ClockPort, DeviceIdentityPort, LocalIdentityError, PeerAddressRepositoryPort, PresencePort,
-    SettingsPort,
+    ClipboardDispatchPort, ClipboardReceiverPort, ClockPort, DeviceIdentityPort,
+    LocalIdentityError, PeerAddressRepositoryPort, PresencePort, SettingsPort,
 };
 
 use crate::pairing::{IrohPairingSessionAdapter, PAIRING_ALPN};
 use crate::rendezvous::{RendezvousClient, RendezvousPairingInvitationAdapter};
 
+use super::clipboard_dispatch_adapter::{IrohClipboardDispatchAdapter, CLIPBOARD_ALPN};
+use super::clipboard_receiver_adapter::IrohClipboardReceiverAdapter;
 use super::identity_store::IrohIdentityStore;
 use super::presence_adapter::{IrohPresenceAdapter, IrohPresenceHandler, PRESENCE_ALPN};
 
@@ -45,6 +51,17 @@ pub struct PairingHandlers {
     pub session: Arc<dyn PairingSessionPort>,
     pub events: Arc<dyn PairingEventPort>,
     pub invitation: Arc<dyn PairingInvitationPort>,
+}
+
+/// The two clipboard ports produced by [`IrohNodeBuilder::install_clipboard`].
+///
+/// `dispatch` opens a fresh bi-stream per message; `receiver` exposes the
+/// broadcast of inbound payloads. Both share the endpoint — the receiver
+/// handler is also registered under [`CLIPBOARD_ALPN`] on the same
+/// `RouterBuilder`.
+pub struct ClipboardHandlers {
+    pub dispatch: Arc<dyn ClipboardDispatchPort>,
+    pub receiver: Arc<dyn ClipboardReceiverPort>,
 }
 
 /// Live iroh node with a spawned [`Router`].
@@ -124,6 +141,10 @@ impl IrohNodeBuilder {
         };
         let endpoint = Endpoint::builder()
             .secret_key(secret)
+            // Only PAIRING is declared at bind time; additional ALPNs are
+            // added to the endpoint via `RouterBuilder::spawn`, which
+            // rebuilds the ALPN set from every `accept()` handler. See
+            // `install_presence` / `install_clipboard`.
             .alpns(vec![PAIRING_ALPN.to_vec()])
             .relay_mode(relay_mode)
             .bind()
@@ -228,6 +249,50 @@ impl IrohNodeBuilder {
             peer_addr_repo,
             clock,
         ))
+    }
+
+    /// Install the clipboard sync transport (Slice 2 Phase 2):
+    ///
+    /// * Registers [`IrohClipboardReceiverHandler`] as the
+    ///   [`CLIPBOARD_ALPN`] `ProtocolHandler`. Unknown peers are rejected
+    ///   at the ack boundary, not at bind time — see the receiver adapter
+    ///   for identity resolution via `remote_id()` + fingerprint.
+    /// * Returns both clipboard ports as trait objects. The dispatch
+    ///   adapter shares the same `Endpoint` and `PeerAddressRepositoryPort`
+    ///   as presence — reusing the stored `addr_blob` per peer so a
+    ///   dispatch flows through the same NAT/relay mapping the presence
+    ///   watchdog already established.
+    ///
+    /// Must be called before [`spawn`](Self::spawn). Coexists with
+    /// [`install_pairing`] / [`install_presence`] — all three ALPNs share
+    /// a single router.
+    ///
+    /// [`IrohClipboardReceiverHandler`]: super::clipboard_receiver_adapter::IrohClipboardReceiverHandler
+    pub fn install_clipboard(
+        &mut self,
+        peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
+        member_repo: Arc<dyn MemberRepositoryPort>,
+        fingerprint_factory: Arc<dyn IdentityFingerprintFactoryPort>,
+    ) -> ClipboardHandlers {
+        let receiver = IrohClipboardReceiverAdapter::new(member_repo, fingerprint_factory);
+        let handler = receiver.handler();
+
+        let builder = self
+            .router_builder
+            .take()
+            .expect("router_builder missing — install_* called after spawn");
+        let builder = builder.accept(CLIPBOARD_ALPN, handler);
+        self.router_builder = Some(builder);
+
+        let dispatch = Arc::new(IrohClipboardDispatchAdapter::new(
+            Arc::clone(&self.endpoint),
+            peer_addr_repo,
+        ));
+
+        ClipboardHandlers {
+            dispatch,
+            receiver: Arc::new(receiver),
+        }
     }
 
     /// Finalize the builder: spawn the [`Router`]. After this point no more
@@ -415,6 +480,97 @@ mod tests {
         // survived the type-erasure round trip through install_presence.
         let unknown_state = presence.current_state(&DeviceId::new("never-dialed")).await;
         assert_eq!(unknown_state, uc_core::ports::ReachabilityState::Unknown,);
+
+        let node = builder.spawn();
+        node.shutdown().await;
+    }
+
+    #[derive(Default)]
+    struct EmptyMemberRepo;
+    #[async_trait]
+    impl uc_core::membership::MemberRepositoryPort for EmptyMemberRepo {
+        async fn get(
+            &self,
+            _device_id: &DeviceId,
+        ) -> Result<Option<uc_core::membership::SpaceMember>, uc_core::membership::MembershipError>
+        {
+            Ok(None)
+        }
+        async fn list(
+            &self,
+        ) -> Result<Vec<uc_core::membership::SpaceMember>, uc_core::membership::MembershipError>
+        {
+            Ok(Vec::new())
+        }
+        async fn save(
+            &self,
+            _member: &uc_core::membership::SpaceMember,
+        ) -> Result<(), uc_core::membership::MembershipError> {
+            Ok(())
+        }
+        async fn remove(
+            &self,
+            _device_id: &DeviceId,
+        ) -> Result<bool, uc_core::membership::MembershipError> {
+            Ok(false)
+        }
+    }
+
+    #[tokio::test]
+    async fn install_pairing_presence_and_clipboard_coexist_on_same_router() {
+        // Three ALPNs on one router — Slice 2 Phase 2 (clipboard) slices
+        // in alongside pairing + presence. Verifies both clipboard ports
+        // survive the trait-object round trip and the router spawns /
+        // shuts down cleanly when all three transports are installed.
+        let store = identity_store();
+        let mut builder = IrohNodeBuilder::bind(&store, IrohNodeConfig::default())
+            .await
+            .expect("bind");
+
+        let _pairing = builder.install_pairing(
+            Arc::new(FixedDeviceIdentity(DeviceId::new("device-triple"))),
+            Arc::new(InMemorySettings(StdMutex::new(Settings::default()))),
+        );
+
+        let peer_addr_repo: Arc<dyn PeerAddressRepositoryPort> = Arc::new(EmptyPeerAddressRepo);
+        let _presence = builder.install_presence(
+            Arc::clone(&peer_addr_repo),
+            Arc::new(FixedClock(1_700_000_000_000)),
+        );
+
+        let ClipboardHandlers { dispatch, receiver } = builder.install_clipboard(
+            peer_addr_repo,
+            Arc::new(EmptyMemberRepo),
+            Arc::new(crate::security::Sha256IdentityFingerprintFactory),
+        );
+
+        // Dispatch against an unknown device — the repo is empty so we
+        // hit the `Offline` short-circuit without touching the wire. This
+        // verifies the trait object round-tripped and is usable.
+        let offline_err = dispatch
+            .dispatch(
+                &DeviceId::new("never-paired"),
+                &uc_core::ports::ClipboardHeader {
+                    version: uc_core::ports::ClipboardHeader::CURRENT_VERSION,
+                    content_hash: "0".repeat(64),
+                    captured_at_ms: 0,
+                    origin_device_id: "self".to_string(),
+                    origin_device_name: "Self".to_string(),
+                    payload_version: 3,
+                },
+                uc_core::ports::SyncPayload {
+                    ciphertext: bytes::Bytes::from_static(b"x"),
+                },
+            )
+            .await
+            .expect_err("no peer_addr → Offline");
+        assert!(
+            matches!(offline_err, uc_core::ports::ClipboardDispatchError::Offline),
+            "expected Offline, got {offline_err:?}"
+        );
+
+        // Receiver's subscribe handle is ready for the ingest use case.
+        let _inbound_rx = receiver.subscribe();
 
         let node = builder.spawn();
         node.shutdown().await;
