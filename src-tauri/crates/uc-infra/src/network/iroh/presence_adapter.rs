@@ -242,6 +242,15 @@ impl PresencePort for IrohPresenceAdapter {
                 PresenceError::Internal(format!("postcard decode EndpointAddr: {err}"))
             })?;
 
+        // Step 3a: strip stored direct IP addresses. Stored blobs freeze
+        // the peer's pairing-time UDP port, which gets reassigned on
+        // every subsequent daemon restart — keeping them just burns
+        // dial budget on dead ports (real-device observation: 30-s
+        // timeouts). iroh's built-in pkarr discovery will fill in the
+        // peer's current direct addrs when it connects. Keeps the stored
+        // relay URL as a fallback hint.
+        let endpoint_addr = super::connect_addr::strip_stale_direct_addrs(endpoint_addr);
+
         // Step 4: dial.
         match self.endpoint.connect(endpoint_addr, PRESENCE_ALPN).await {
             Ok(connection) => {

@@ -7,6 +7,7 @@
 pub mod clipboard_dispatch_adapter;
 pub mod clipboard_receiver_adapter;
 pub mod clipboard_wire;
+pub mod connect_addr;
 pub mod identity_store;
 pub mod node;
 pub mod presence_adapter;
