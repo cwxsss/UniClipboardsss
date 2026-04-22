@@ -646,7 +646,7 @@ Slice 2 没全完(A3/A5 缺 UI),但 **C/E/F 三组核心 usecase 全到位**,Sli
 | T8 | InboundClipboardSyncWorker 重写 | ✅ | `8e007150` | 0.4h | bundled;~230→~190 LOC,drop `parse_clipboard_frame` + `ClipboardInboundTransportPort` 订阅 + `SyncInboundClipboardUseCase` 装配 + file_cache_dir + file_transfer_lifecycle(Phase 3 text-only);subscribe `clipboard_sync.subscribe_inbound_notices()` → `apply_inbound_uc.execute` → `Applied` emit WS / 其他变体 log;5 bootstrap e2e 全绿 |
 | T9 | CLI send envelope 升级 | ✅ | `8e075213` | 0.2h | bundled w/ T10;text → single-rep `SystemClipboardSnapshot` → `dispatch_snapshot(_, LocalCapture)`;删 sha2 + bytes dep + 本地 `sha256_hex`/`hex_lower` helpers |
 | T10 | CLI watch decode 升级 | ✅ | `8e075213` | 0.3h | bundled;`decode_v3_bytes_to_snapshot` public re-export(visibility surgery:`usecases` + `usecases::clipboard_sync` 改 pub mod,但内部项仍 pub(crate) 未泄);watch 渲染:first `text/*` rep 优先,无则 per-rep mime/size summary;JSON schema `plaintext_utf8` → `text` + 新 `rep_summary` 字段(Phase 2 shell e2e 需同步改,T13 处理) |
-| T11 | phase 2 e2e 更新 | ⏸️ pending | — | — | — |
+| T11 | phase 2 e2e 更新 | ✅ | `f8f2079c` | 0.2h | 两 verdict 切 `dispatch_snapshot` + 解码校验(first rep bytes 字节级,mime 相等);content_hash 改断 `snapshot.snapshot_hash().to_string()`(canonical blake3v1:…);第二 verdict 保持"wire 层不 dedup" 契约,daemon 层 dedup 推 T12 daemon e2e;2/2 green |
 | T12 | phase 3 daemon e2e | ⏸️ pending | — | — | — |
 | T13 | shell e2e schema 更新 | ⏸️ pending | — | — | — |
 | T14 | 真机验收 | ⏸️ pending | — | — | — |

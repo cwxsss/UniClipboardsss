@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 #
-# Single-machine end-to-end clipboard sync smoke test (Slice 2 Phase 2).
+# Single-machine end-to-end clipboard sync smoke test (Slice 2, Phase
+# 2 wire-level + Phase 3 CLI envelope).
 #
 # Builds on `test_pair_e2e.sh`'s flow (alice/bob profiles, --dev mode,
-# real rendezvous), then exercises the iroh clipboard ALPN:
+# real rendezvous), then exercises the iroh clipboard ALPN via
+# `ClipboardSyncFacade::dispatch_snapshot` (Phase 3 · T9):
 #   * alice: init (A1) + invite (B1)
 #   * bob:   join (B2)
-#   * bob:   watch in background (subscribe to inbound notices)
-#   * alice: send "hello phase2"
-#   * verify bob's watch output saw the message within DELIVER_SECS
-#   * exercise repeat dispatch — Phase 2 has no receiver-side dedup,
-#     so the same content sent twice MUST land twice on bob's side
-#     (this assertion will need to flip in Phase 3 once persistence
-#     dedup arrives; see slice2-phase2-plan.md §15.5).
+#   * bob:   watch in background (subscribes + decodes V3 envelope)
+#   * alice: send "hello phase3"
+#   * verify bob's watch JSON contains `"text":"<expected>"` within
+#     DELIVER_SECS (Phase 3 schema — Phase 2 `plaintext_utf8` retired
+#     per T10)
+#   * exercise repeat dispatch — facade-level (without daemon
+#     persistence dedup) still lands twice; daemon-side dedup is
+#     exercised in the Rust T12 daemon e2e, not here.
 #
 # Requirements:
 #   - macOS (profile data dirs live under ~/Library/Application Support)
@@ -196,14 +199,14 @@ rm -f "$ALICE_SEND_OUT"
 
 echo "==> Waiting up to ${DELIVER_SECS}s for bob watch to receive it"
 for ((i = 0; i < DELIVER_SECS * 2; i++)); do
-    if grep -q "\"plaintext_utf8\":\"$EXPECTED_1\"" "$BOB_WATCH_OUT" 2>/dev/null; then
+    if grep -q "\"text\":\"$EXPECTED_1\"" "$BOB_WATCH_OUT" 2>/dev/null; then
         echo "    received within $((i / 2)).$((i % 2 * 5))s"
         break
     fi
     sleep 0.5
 done
 
-if ! grep -q "\"plaintext_utf8\":\"$EXPECTED_1\"" "$BOB_WATCH_OUT" 2>/dev/null; then
+if ! grep -q "\"text\":\"$EXPECTED_1\"" "$BOB_WATCH_OUT" 2>/dev/null; then
     echo "FAIL: bob did not receive verdict 1 within ${DELIVER_SECS}s" >&2
     echo "--- bob stdout dump ---" >&2
     cat "$BOB_WATCH_OUT" >&2
@@ -226,12 +229,12 @@ if [[ $ALICE_PIPE_EXIT -ne 0 ]]; then
 fi
 
 for ((i = 0; i < DELIVER_SECS * 2; i++)); do
-    if grep -q "\"plaintext_utf8\":\"$EXPECTED_2\"" "$BOB_WATCH_OUT" 2>/dev/null; then
+    if grep -q "\"text\":\"$EXPECTED_2\"" "$BOB_WATCH_OUT" 2>/dev/null; then
         break
     fi
     sleep 0.5
 done
-if ! grep -q "\"plaintext_utf8\":\"$EXPECTED_2\"" "$BOB_WATCH_OUT" 2>/dev/null; then
+if ! grep -q "\"text\":\"$EXPECTED_2\"" "$BOB_WATCH_OUT" 2>/dev/null; then
     echo "FAIL: bob did not receive verdict 2 (stdin) within ${DELIVER_SECS}s" >&2
     echo "--- bob watch dump ---" >&2
     cat "$BOB_WATCH_OUT" >&2
@@ -246,13 +249,13 @@ echo "==> alice: send \"$EXPECTED_3\" twice (Phase 2 no dedup → expect 2 recei
 "$CLI" $COMMON_FLAGS --profile alice --json send "$EXPECTED_3" > /dev/null 2>&1
 
 for ((i = 0; i < DELIVER_SECS * 2; i++)); do
-    COUNT="$(grep -c "\"plaintext_utf8\":\"$EXPECTED_3\"" "$BOB_WATCH_OUT" 2>/dev/null || echo 0)"
+    COUNT="$(grep -c "\"text\":\"$EXPECTED_3\"" "$BOB_WATCH_OUT" 2>/dev/null || echo 0)"
     if [[ "$COUNT" -ge 2 ]]; then
         break
     fi
     sleep 0.5
 done
-COUNT="$(grep -c "\"plaintext_utf8\":\"$EXPECTED_3\"" "$BOB_WATCH_OUT" 2>/dev/null || echo 0)"
+COUNT="$(grep -c "\"text\":\"$EXPECTED_3\"" "$BOB_WATCH_OUT" 2>/dev/null || echo 0)"
 if [[ "$COUNT" -lt 2 ]]; then
     echo "FAIL: expected 2 receipts of duplicate content, got $COUNT" >&2
     echo "  (Phase 2 receiver does not dedup; both dispatches must land.)" >&2
