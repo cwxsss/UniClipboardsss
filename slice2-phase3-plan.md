@@ -637,7 +637,7 @@ Slice 2 没全完(A3/A5 缺 UI),但 **C/E/F 三组核心 usecase 全到位**,Sli
 | T0a | 迁移 CaptureClipboardUseCase → uc-application | ✅ | `cb4ac588` | 0.4h | 新 `uc-application/src/clipboard_capture/`(mod.rs + usecase.rs);`uc-app` 老路径 16 行 shim;workspace + 188 uc-application 测试 + 7 uc-app 测试全绿 |
 | T0b | 迁移 ClipboardWriteCoordinator → uc-application | ✅ | `ad5ac7ac` | 0.3h | 新 `uc-application/src/clipboard_write/`;同形 shim;workspace 绿 |
 | T1 | find_by_content_hash | ✅ | `9ce27893` | 0.3h | port 加 default method 返 `Ok(None)`;Diesel 走两步查询(event → entry)避开 JoinDsl 导入冲突;2 直插 fixture 单测全绿;签名定为 `find_entry_id_by_snapshot_hash(&str) -> Option<EntryId>`(返回 id 不返全 entry,dedup 场景只需知道"存不存在") |
-| T2 | payload_codec | ⏸️ pending | — | — | — |
+| T2 | payload_codec | ✅ | `68f89b31` | 0.4h | `encode_snapshot_to_v3_bytes` 返 `(Bytes, content_hash)`,`decode_v3_bytes_to_snapshot` 反向;content_hash 走 `snapshot.snapshot_hash().to_string()` 与本地 `clipboard_event.snapshot_hash` 列对齐;decoder 给 representations 全分配新 `RepresentationId`(receiver-local);4 单测全绿(roundtrip 单 / 多 rep + None mime + 二进制 / hash 确定性 / truncate 错误) |
 | T3 | dispatch_snapshot | ⏸️ pending | — | — | — |
 | T4 | ApplyInboundClipboardUseCase | ⏸️ pending | — | — | — |
 | T5 | build_daemon_app 装配 | ⏸️ pending | — | — | — |

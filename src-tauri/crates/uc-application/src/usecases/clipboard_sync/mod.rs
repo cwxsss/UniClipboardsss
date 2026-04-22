@@ -21,4 +21,7 @@ pub(crate) use dispatch_entry::{
 pub(crate) use ingest_inbound::{
     InboundAction, InboundClipboardNotice, IngestInboundClipboardUseCase, IngestSpawnHandle,
 };
+// `decode_v3_bytes_to_snapshot` is used by `ApplyInboundClipboardUseCase`
+// (T4) — allow unused until that use case lands.
+#[allow(unused_imports)]
 pub(crate) use payload_codec::{decode_v3_bytes_to_snapshot, encode_snapshot_to_v3_bytes};

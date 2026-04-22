@@ -23,11 +23,12 @@ use uc_core::ports::{
     ClipboardDispatchPort, ClipboardReceiverPort, ClockPort, DeviceIdentityPort, DispatchAck,
     LocalIdentityPort, PeerAddressRepositoryPort, PresencePort, SettingsPort,
 };
+use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 
 use crate::usecases::clipboard_sync::{
-    DispatchClipboardEntryInput, DispatchClipboardEntryUseCase, DispatchOutcome, DispatchPerTarget,
-    DispatchSyncError, InboundAction as UcInboundAction, InboundClipboardNotice as UcInboundNotice,
-    IngestInboundClipboardUseCase, IngestSpawnHandle,
+    encode_snapshot_to_v3_bytes, DispatchClipboardEntryInput, DispatchClipboardEntryUseCase,
+    DispatchOutcome, DispatchPerTarget, DispatchSyncError, InboundAction as UcInboundAction,
+    InboundClipboardNotice as UcInboundNotice, IngestInboundClipboardUseCase, IngestSpawnHandle,
 };
 
 /// Construction bundle, mirrors `MemberRosterDeps` pattern so bootstrap
@@ -158,6 +159,11 @@ impl ClipboardSyncFacade {
     }
 
     /// Fan out one plaintext payload to every online paired peer.
+    ///
+    /// Phase 2 / CLI / test entry point — caller has already encoded the
+    /// payload and computed `content_hash`. Daemon (Phase 3) prefers
+    /// [`Self::dispatch_snapshot`] which encodes the V3 envelope + the
+    /// canonical snapshot_hash internally.
     #[instrument(skip_all, fields(content_hash = %input.content_hash))]
     pub async fn dispatch_entry(
         &self,
@@ -172,6 +178,34 @@ impl ClipboardSyncFacade {
             })
             .await?;
         Ok(lift_outcome(internal))
+    }
+
+    /// Phase 3 daemon entry point — encode `snapshot` into the V3
+    /// envelope + compute the canonical `snapshot_hash` (matches the
+    /// `clipboard_event.snapshot_hash` column on receiver-side dedup),
+    /// then dispatch.
+    ///
+    /// The `origin` parameter is passive metadata for tracing /
+    /// telemetry; gating callers (e.g. daemon `clipboard_watcher`) are
+    /// expected to short-circuit on `RemotePush` _before_ calling this
+    /// method, so the facade does not enforce a guard here. Centralising
+    /// the encode keeps daemon + future Tauri / CLI snapshot-aware
+    /// senders from re-implementing the V3 codec independently.
+    #[instrument(skip_all, fields(rep_count = snapshot.representations.len(), origin = ?origin))]
+    pub async fn dispatch_snapshot(
+        &self,
+        snapshot: SystemClipboardSnapshot,
+        origin: ClipboardChangeOrigin,
+    ) -> Result<DispatchEntryOutcome, ClipboardSyncError> {
+        let _ = origin; // span metadata only (see doc above)
+        let (plaintext, content_hash) = encode_snapshot_to_v3_bytes(&snapshot)
+            .map_err(|e| ClipboardSyncError::CipherFailure(format!("payload encode: {e}")))?;
+        self.dispatch_entry(DispatchEntryInput {
+            plaintext,
+            content_hash,
+            payload_version: 3,
+        })
+        .await
     }
 
     /// Subscribe to the inbound-notice broadcast. CLI `watch` / future
@@ -568,7 +602,85 @@ mod tests {
         assert_eq!(notice.action, InboundAction::NewEntry);
     }
 
-    /// Verdict 3 — `spawn_ingest_loop` returns a handle whose `Drop`
+    /// Verdict 3 — `dispatch_snapshot` encodes the snapshot into the V3
+    /// envelope + derives the canonical content_hash from
+    /// `snapshot_hash()`, then calls the same underlying dispatch path
+    /// as `dispatch_entry`. mockall asserts encrypt is invoked with the
+    /// encoded envelope bytes (not raw plaintext), and that the target
+    /// dispatch fires with `payload_version=3`.
+    #[tokio::test]
+    async fn dispatch_snapshot_encodes_envelope_and_fans_out() {
+        use uc_core::ids::{FormatId, RepresentationId};
+        use uc_core::{MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot};
+
+        let mut repo = MockPeerAddrRepo::new();
+        repo.expect_list()
+            .times(1)
+            .returning(|| Ok(vec![record("peer-a")]));
+
+        let mut presence = MockPresence::new();
+        presence
+            .expect_current_state()
+            .with(eq(DeviceId::new("peer-a")))
+            .times(1)
+            .returning(|_| ReachabilityState::Online);
+
+        let mut cipher = MockCipher::new();
+        // Encrypt gets the V3 envelope bytes, not the raw text. We just
+        // assert it's called once and round-trip the bytes unchanged
+        // (the test cipher is a passthrough for assertion purposes).
+        cipher
+            .expect_encrypt()
+            .times(1)
+            .withf(|plaintext| {
+                // The V3 envelope starts with 8B ts_ms (LE) + 2B rep_count (LE).
+                // For our fixture: ts_ms=7 → [0x07, 0, 0, 0, 0, 0, 0, 0],
+                // rep_count=1 → [0x01, 0x00]. Anchor on rep_count to keep the
+                // assertion resilient to ts_ms choice.
+                plaintext.len() > 10 && plaintext[8..10] == [0x01, 0x00]
+            })
+            .returning(|p| Ok(p.to_vec()));
+
+        let mut dispatch = MockDispatch::new();
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-a")), always(), always())
+            .times(1)
+            .withf(|_target, header, _payload| header.payload_version == 3)
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
+
+        let (facade, _receiver) = build_facade(
+            repo,
+            presence,
+            cipher,
+            dispatch,
+            make_device_identity("self"),
+            make_local_identity(),
+            make_settings(),
+        );
+
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 7,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("text"),
+                Some(MimeType("text/plain".to_string())),
+                b"hello phase3".to_vec(),
+            )],
+        };
+        let outcome = facade
+            .dispatch_snapshot(snapshot, uc_core::ClipboardChangeOrigin::LocalCapture)
+            .await
+            .expect("dispatch_snapshot ok");
+        assert_eq!(outcome.total_accepted, 1);
+        assert!(
+            outcome.content_hash.starts_with("blake3v1:"),
+            "outcome carries the canonical snapshot_hash, got {}",
+            outcome.content_hash
+        );
+    }
+
+    /// Verdict 4 — `spawn_ingest_loop` returns a handle whose `Drop`
     /// aborts the background task. Decrypt has zero expectations: if the
     /// loop kept consuming after the handle drop, mockall would observe
     /// an unexpected decrypt and panic.
