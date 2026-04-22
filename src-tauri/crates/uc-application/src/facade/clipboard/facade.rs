@@ -139,7 +139,6 @@ impl ClipboardSyncFacade {
     pub fn new(deps: ClipboardSyncDeps) -> Self {
         let dispatch_uc = Arc::new(DispatchClipboardEntryUseCase::new(
             Arc::clone(&deps.peer_addr_repo),
-            Arc::clone(&deps.presence),
             Arc::clone(&deps.transfer_cipher),
             Arc::clone(&deps.clipboard_dispatch),
             Arc::clone(&deps.device_identity),

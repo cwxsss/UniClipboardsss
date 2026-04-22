@@ -1,9 +1,9 @@
 //! Slice 2 Phase 2 · T7 — `DispatchClipboardEntryUseCase`.
 //!
 //! Encrypts one clipboard plaintext payload via [`TransferCipherPort`] and
-//! fans it out to every **online** member (excluding self) on the
-//! clipboard ALPN. Failure per target is isolated in the per-target report
-//! so a single unreachable peer never blocks the rest of the roster.
+//! fans it out to every paired member (excluding self) on the clipboard
+//! ALPN. Failure per target is isolated in the per-target report so a
+//! single unreachable peer never blocks the rest of the roster.
 //!
 //! ## Inputs, not side-effects
 //!
@@ -19,9 +19,16 @@
 //! Follows the `EnsureReachableAllUseCase` pattern (T6 / Phase 1):
 //! `peer_addr_repo.list()` is the authoritative roster of "members we
 //! have an address blob for" and avoids iterating ghost entries in
-//! `member_repo` that never completed pairing. Online filter is
-//! `PresencePort::current_state == Online` — `ensure_reachable_all` is
-//! already queued at F1 `auto_start_network` so the cache is warm.
+//! `member_repo` that never completed pairing. We intentionally do **not**
+//! pre-filter by `PresencePort::current_state == Online`: presence's
+//! `last_state` is populated by our own outbound `ensure_reachable`
+//! probes, so when a peer dials us first (accept path only), our cache
+//! still reports `Unknown`/`Offline` and a pre-filter would drop a peer
+//! that's in fact reachable. Instead we let the dispatch port try every
+//! paired member and record `Err(Offline)` in `per_target` for whichever
+//! ones the wire can't reach. The iroh dispatch adapter returns quickly
+//! on unreachable peers, so this costs little even when many peers are
+//! down.
 //!
 //! ## Concurrency
 //!
@@ -44,8 +51,7 @@ use uc_core::ids::DeviceId;
 use uc_core::ports::security::TransferCipherPort;
 use uc_core::ports::{
     ClipboardDispatchError, ClipboardDispatchPort, ClipboardHeader, ClockPort, DeviceIdentityPort,
-    DispatchAck, LocalIdentityPort, PeerAddressRepositoryPort, PresencePort, ReachabilityState,
-    SettingsPort, SyncPayload,
+    DispatchAck, LocalIdentityPort, PeerAddressRepositoryPort, SettingsPort, SyncPayload,
 };
 
 /// Input to one dispatch pass. The caller owns the plaintext →
@@ -106,7 +112,6 @@ pub(crate) enum DispatchSyncError {
 
 pub(crate) struct DispatchClipboardEntryUseCase {
     peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
-    presence: Arc<dyn PresencePort>,
     transfer_cipher: Arc<dyn TransferCipherPort>,
     clipboard_dispatch: Arc<dyn ClipboardDispatchPort>,
     device_identity: Arc<dyn DeviceIdentityPort>,
@@ -118,7 +123,6 @@ pub(crate) struct DispatchClipboardEntryUseCase {
 impl DispatchClipboardEntryUseCase {
     pub(crate) fn new(
         peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
-        presence: Arc<dyn PresencePort>,
         transfer_cipher: Arc<dyn TransferCipherPort>,
         clipboard_dispatch: Arc<dyn ClipboardDispatchPort>,
         device_identity: Arc<dyn DeviceIdentityPort>,
@@ -128,7 +132,6 @@ impl DispatchClipboardEntryUseCase {
     ) -> Self {
         Self {
             peer_addr_repo,
-            presence,
             transfer_cipher,
             clipboard_dispatch,
             device_identity,
@@ -158,22 +161,26 @@ impl DispatchClipboardEntryUseCase {
         };
 
         // 2. Enumerate targets. `peer_addr_repo.list()` is the iteration
-        //    source (see module doc); filter self + Online-only.
+        //    source (see module doc); self is the only filter. Presence
+        //    state is intentionally NOT consulted — see module doc for
+        //    rationale. The dispatch port reports `Offline` per-target
+        //    for unreachable peers, which we fold into the outcome below.
         let records =
             self.peer_addr_repo.list().await.map_err(|err| {
                 DispatchSyncError::Repository(format!("peer_addr_repo.list: {err}"))
             })?;
 
         let local_device = self.device_identity.current_device_id();
-        let mut candidates: Vec<DeviceId> = Vec::with_capacity(records.len());
-        for record in records {
-            if record.device_id == local_device {
-                continue;
-            }
-            if self.presence.current_state(&record.device_id).await == ReachabilityState::Online {
-                candidates.push(record.device_id);
-            }
-        }
+        let candidates: Vec<DeviceId> = records
+            .into_iter()
+            .filter_map(|record| {
+                if record.device_id == local_device {
+                    None
+                } else {
+                    Some(record.device_id)
+                }
+            })
+            .collect();
 
         // 3. Build the header once and clone per target.
         let origin_device_name = self.load_origin_device_name().await;
@@ -187,7 +194,7 @@ impl DispatchClipboardEntryUseCase {
         };
 
         if candidates.is_empty() {
-            info!("dispatch: no online peers; skipping fan-out");
+            info!("dispatch: no paired peers; skipping fan-out");
             return Ok(DispatchOutcome {
                 content_hash: input.content_hash,
                 per_target: Vec::new(),
@@ -313,11 +320,12 @@ impl DispatchClipboardEntryUseCase {
 //       `Mutex<FnMut>` would serialise concurrent `.returning()` closures
 //       (Phase 1 T6's `SleepyPresence`).
 //
-// For this file: the dispatch use case calls 3 async ports + 4 read-only
-// ports; no broadcast emit, no wall-time concurrency assertion. All 7
-// ports are mocked with `mockall::mock!`. `PresencePort` is fully mocked
-// even though `current_state` is per-device — `.expect_current_state()`
-// with `.with(...)` predicates handles per-device routing cleanly.
+// For this file: the dispatch use case calls 2 async ports + 4 read-only
+// ports; no broadcast emit, no wall-time concurrency assertion. All six
+// ports are mocked with `mockall::mock!`. `PresencePort` was dropped
+// from this use case's deps once we stopped pre-filtering by online
+// state (see module doc); peers are enumerated from `peer_addr_repo`
+// only, and per-target offline verdicts come from the dispatch port.
 
 #[cfg(test)]
 mod tests {
@@ -326,13 +334,11 @@ mod tests {
     use async_trait::async_trait;
     use chrono::Utc;
     use mockall::predicate::*;
-    use tokio::sync::broadcast;
 
     use uc_core::ports::security::{TransferCipherError, TransferCipherPort};
     use uc_core::ports::{
         ClockPort, DeviceIdentityPort, LocalIdentityError, LocalIdentityPort, PeerAddressError,
-        PeerAddressRecord, PeerAddressRepositoryPort, PresenceError, PresenceEvent, PresencePort,
-        ReachabilityState, SettingsPort,
+        PeerAddressRecord, PeerAddressRepositoryPort, SettingsPort,
     };
     use uc_core::security::IdentityFingerprint;
     use uc_core::settings::model::Settings;
@@ -351,27 +357,6 @@ mod tests {
             async fn upsert(&self, record: &PeerAddressRecord) -> Result<(), PeerAddressError>;
             async fn list(&self) -> Result<Vec<PeerAddressRecord>, PeerAddressError>;
             async fn remove(&self, device: &DeviceId) -> Result<(), PeerAddressError>;
-        }
-    }
-
-    // ── mockall: PresencePort ───────────────────────────────────────────
-    //
-    // Per-device state routing is handled with `.with(eq(DeviceId::new(...)))`
-    // predicates per expectation — clearer than a hand-written `HashMap`
-    // because each test reads as "for peer X, return Online" instead of
-    // "set up a map ahead of time."
-
-    mockall::mock! {
-        pub Presence {}
-
-        #[async_trait]
-        impl PresencePort for Presence {
-            async fn ensure_reachable(
-                &self,
-                device: &DeviceId,
-            ) -> Result<ReachabilityState, PresenceError>;
-            async fn current_state(&self, device: &DeviceId) -> ReachabilityState;
-            fn subscribe(&self) -> broadcast::Receiver<PresenceEvent>;
         }
     }
 
@@ -489,7 +474,6 @@ mod tests {
     /// deterministic.
     fn build_uc(
         peer_addr_repo: MockPeerAddrRepo,
-        presence: MockPresence,
         cipher: MockCipher,
         dispatch: MockDispatch,
         device_identity: MockDeviceId_,
@@ -498,7 +482,6 @@ mod tests {
     ) -> DispatchClipboardEntryUseCase {
         DispatchClipboardEntryUseCase::new(
             Arc::new(peer_addr_repo),
-            Arc::new(presence),
             Arc::new(cipher),
             Arc::new(dispatch),
             Arc::new(device_identity),
@@ -543,27 +526,15 @@ mod tests {
 
     // ── verdicts ────────────────────────────────────────────────────────
 
-    /// 1. Happy path — two online peers, both accept. mockall asserts
+    /// 1. Happy path — two paired peers, both accept. mockall asserts
     /// dispatch is called exactly twice (once per peer) and the encrypt
     /// path runs exactly once.
     #[tokio::test]
-    async fn fan_outs_to_all_online_peers_and_counts_accepted() {
+    async fn fan_outs_to_all_peers_and_counts_accepted() {
         let mut repo = MockPeerAddrRepo::new();
         repo.expect_list()
             .times(1)
             .returning(|| Ok(vec![record("peer-a"), record("peer-b")]));
-
-        let mut presence = MockPresence::new();
-        presence
-            .expect_current_state()
-            .with(eq(DeviceId::new("peer-a")))
-            .times(1)
-            .returning(|_| ReachabilityState::Online);
-        presence
-            .expect_current_state()
-            .with(eq(DeviceId::new("peer-b")))
-            .times(1)
-            .returning(|_| ReachabilityState::Online);
 
         let mut cipher = MockCipher::new();
         cipher
@@ -585,7 +556,6 @@ mod tests {
 
         let uc = build_uc(
             repo,
-            presence,
             cipher,
             dispatch,
             make_device_identity("self-device"),
@@ -600,27 +570,19 @@ mod tests {
         assert_eq!(outcome.per_target.len(), 2);
     }
 
-    /// 2. Offline filter — one peer is Offline, dispatch port is **never**
-    /// called for it (mockall enforces via `.times(0)` implicit on the
-    /// missing expectation; an extra call would panic on drop).
+    /// 2. Unreachable peer — dispatch port returns `Err(Offline)` for a
+    /// peer the wire can't reach. The outcome reports it as offline
+    /// instead of silently dropping it pre-flight; the other peer still
+    /// gets the frame. This is the key contract change that fixes the
+    /// "no online peers; skipping fan-out" silent regression where our
+    /// local presence cache was empty because the peer dialed us first
+    /// (accept-side only updates the peer's cache, not ours).
     #[tokio::test]
-    async fn skips_offline_peers_without_invoking_dispatch_port() {
+    async fn unreachable_peer_is_reported_offline_after_dispatch_attempt() {
         let mut repo = MockPeerAddrRepo::new();
         repo.expect_list()
             .times(1)
             .returning(|| Ok(vec![record("peer-on"), record("peer-off")]));
-
-        let mut presence = MockPresence::new();
-        presence
-            .expect_current_state()
-            .with(eq(DeviceId::new("peer-on")))
-            .times(1)
-            .returning(|_| ReachabilityState::Online);
-        presence
-            .expect_current_state()
-            .with(eq(DeviceId::new("peer-off")))
-            .times(1)
-            .returning(|_| ReachabilityState::Offline);
 
         let mut cipher = MockCipher::new();
         cipher
@@ -629,17 +591,22 @@ mod tests {
             .returning(|p| Ok(p.to_vec()));
 
         let mut dispatch = MockDispatch::new();
-        // Only one expectation registered; if the use case calls dispatch
-        // for `peer-off`, mockall will panic ("no matching expectation").
         dispatch
             .expect_dispatch()
             .with(eq(DeviceId::new("peer-on")), always(), always())
             .times(1)
             .returning(|_, _, _| Ok(DispatchAck::Accepted));
+        // Crucial: dispatch IS called for `peer-off` (no pre-filter). The
+        // port returns `Offline`, and the outcome surfaces that — callers
+        // can then decide whether to retry or surface to the user.
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-off")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Err(ClipboardDispatchError::Offline));
 
         let uc = build_uc(
             repo,
-            presence,
             cipher,
             dispatch,
             make_device_identity("self-device"),
@@ -649,8 +616,8 @@ mod tests {
 
         let outcome = uc.execute(input()).await.expect("dispatch ok");
         assert_eq!(outcome.total_accepted, 1);
-        assert_eq!(outcome.per_target.len(), 1);
-        assert_eq!(outcome.per_target[0].device_id.as_str(), "peer-on");
+        assert_eq!(outcome.total_offline, 1);
+        assert_eq!(outcome.per_target.len(), 2);
     }
 
     /// 3. Self-filter — `peer_addr_repo` inadvertently contains the local
@@ -662,16 +629,6 @@ mod tests {
         repo.expect_list()
             .times(1)
             .returning(|| Ok(vec![record("self-device"), record("peer-a")]));
-
-        let mut presence = MockPresence::new();
-        // The use case filters self before consulting presence, so
-        // `self-device` must not be probed either. Single expectation
-        // covers `peer-a` only.
-        presence
-            .expect_current_state()
-            .with(eq(DeviceId::new("peer-a")))
-            .times(1)
-            .returning(|_| ReachabilityState::Online);
 
         let mut cipher = MockCipher::new();
         cipher
@@ -688,7 +645,6 @@ mod tests {
 
         let uc = build_uc(
             repo,
-            presence,
             cipher,
             dispatch,
             make_device_identity("self-device"),
@@ -706,10 +662,9 @@ mod tests {
     /// dispatch ever called" by registering zero dispatch expectations.
     #[tokio::test]
     async fn locked_space_short_circuits_before_dispatch() {
-        // peer_addr_repo and presence aren't reached — register zero
-        // expectations so an accidental call would panic.
+        // peer_addr_repo isn't reached — register zero expectations so an
+        // accidental call would panic.
         let repo = MockPeerAddrRepo::new();
-        let presence = MockPresence::new();
 
         let mut cipher = MockCipher::new();
         cipher
@@ -721,7 +676,6 @@ mod tests {
 
         let uc = build_uc(
             repo,
-            presence,
             cipher,
             dispatch,
             make_device_identity("self-device"),
@@ -751,15 +705,6 @@ mod tests {
             ])
         });
 
-        let mut presence = MockPresence::new();
-        for d in ["peer-ok", "peer-off", "peer-rej"] {
-            presence
-                .expect_current_state()
-                .with(eq(DeviceId::new(d)))
-                .times(1)
-                .returning(|_| ReachabilityState::Online);
-        }
-
         let mut cipher = MockCipher::new();
         cipher
             .expect_encrypt()
@@ -785,7 +730,6 @@ mod tests {
 
         let uc = build_uc(
             repo,
-            presence,
             cipher,
             dispatch,
             make_device_identity("self-device"),
