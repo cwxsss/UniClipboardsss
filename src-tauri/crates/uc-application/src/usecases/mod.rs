@@ -8,6 +8,7 @@
 //! here stays `pub(crate)`: external crates reach them exclusively through
 //! `AppFacade`.
 
+pub(crate) mod clipboard_sync;
 pub(crate) mod pairing;
 pub(crate) mod presence;
 pub(crate) mod setup;
