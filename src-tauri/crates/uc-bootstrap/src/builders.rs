@@ -27,6 +27,7 @@ use uc_app::usecases::{
     DeviceAnnouncer, DeviceNameAnnouncer, LifecycleEventEmitter, LoggingLifecycleEventEmitter,
 };
 use uc_app::AppDeps;
+use uc_application::facade::ClipboardSyncFacade;
 use uc_application::membership::usecases::AdmitMemberUseCase;
 use uc_application::pairing::{PairingAction, PairingCryptoPorts, PairingFacade};
 use uc_application::space_access::SpaceAccessFacade;
@@ -41,6 +42,7 @@ use crate::assembly::{
     get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
     BackgroundRuntimeDeps, SetupAssemblyPorts,
 };
+use crate::space_setup::{build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly};
 
 /// Context for GUI entry point. Contains everything needed to construct
 /// AppRuntime EXCEPT tauri::AppHandle. uc-tauri calls AppRuntime::with_setup()
@@ -80,6 +82,24 @@ pub struct DaemonBootstrapContext {
     pub key_slot_store: Arc<dyn KeySlotStore>,
     pub storage_paths: AppPaths,
     pub config: AppConfig,
+    /// Slice 2 Phase 3 · T5 — iroh-stack clipboard sync facade.
+    /// Daemon's `DaemonClipboardChangeHandler` (T7) calls
+    /// `clipboard_sync_facade.dispatch_snapshot(...)` instead of the
+    /// deprecated libp2p `SyncOutboundClipboardUseCase`;
+    /// `InboundClipboardSyncWorker` (T8) subscribes via
+    /// `subscribe_inbound_notices()`.
+    ///
+    /// Same Arc as the one held by `space_setup_assembly.clipboard_sync` —
+    /// kept here as a top-level field so daemon entrypoint code reads
+    /// off `ctx.clipboard_sync_facade` directly without unwrapping the
+    /// assembly.
+    pub clipboard_sync_facade: Arc<ClipboardSyncFacade>,
+    /// Slice 2 Phase 3 · T5 — full Slice 1+ assembly. Owns the iroh
+    /// node, pairing/presence/clipboard handlers, and the auto-spawned
+    /// ingest loop. Daemon shutdown calls `space_setup_assembly.shutdown()`
+    /// to cleanly tear down router + abort ingest before the Tokio
+    /// runtime exits.
+    pub space_setup_assembly: SpaceSetupAssembly,
 }
 
 /// Shared core wiring used by all three builders.
@@ -255,27 +275,48 @@ pub fn build_slice1_cli_context(
 
 /// Build daemon bootstrap context. Returns AppDeps + background deps.
 /// Caller constructs CoreRuntime and starts background workers.
+///
+/// Slice 2 Phase 3 · T5 — also binds the iroh node + builds the full
+/// `SpaceSetupAssembly` (Slice 1 pairing + Slice 2 presence + clipboard
+/// handlers) and exposes `clipboard_sync_facade` so daemon workers can
+/// dispatch / subscribe via the iroh stack instead of the deprecated
+/// libp2p `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort`.
+/// The libp2p `PairingFacade` is retained for the daemon's HTTP/WS
+/// pairing API (Tauri / GUI consumer); both stacks coexist until Slice 5.
 pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let (config, wired) = build_core(daemon_pairing_runtime_owner(), None)?;
     let storage_paths = get_storage_paths(&config)?;
+
+    // Pre-extract clones for the libp2p pairing path. We must keep
+    // `wired` intact past this point because `build_space_setup_assembly`
+    // takes it by reference.
+    let pairing_device_identity = wired.deps.device.device_identity.clone();
+    let pairing_settings = wired.deps.settings.clone();
+    let pairing_peer_id = wired.background.libp2p_network.local_peer_id();
+    let pairing_identity_pubkey = wired.background.libp2p_network.local_identity_pubkey();
+
+    // Resolve pairing device name + pairing config + build the iroh-stack
+    // assembly inside one short-lived current-thread runtime. The
+    // assembly's iroh `Endpoint::bind` is async — it MUST run in a
+    // tokio context, hence the `block_on`.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let (pairing_device_name, pairing_config, space_setup_assembly) = rt.block_on(async {
+        let device_name = resolve_pairing_device_name(pairing_settings.clone()).await;
+        let config = resolve_pairing_config(pairing_settings.clone()).await;
+        let assembly = build_space_setup_assembly(&wired, IrohNodeConfig::default())
+            .await
+            .map_err(|e| anyhow::anyhow!("Slice 1+ assembly build failed: {e}"))?;
+        Ok::<_, anyhow::Error>((device_name, config, assembly))
+    })?;
+
+    // Now safe to consume `wired` — assembly is built and owns its own
+    // Arcs to the underlying ports.
     let deps = wired.deps;
     let background = wired.background;
     let emitter_cell = wired.emitter_cell;
     let trusted_peer_repo = wired.trusted_peer_repo;
-
-    let pairing_device_identity = deps.device.device_identity.clone();
-    let pairing_settings = deps.settings.clone();
-    let pairing_peer_id = background.libp2p_network.local_peer_id();
-    let pairing_identity_pubkey = background.libp2p_network.local_identity_pubkey();
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let (pairing_device_name, pairing_config) = rt.block_on(async {
-        let device_name = resolve_pairing_device_name(pairing_settings.clone()).await;
-        let config = resolve_pairing_config(pairing_settings).await;
-        (device_name, config)
-    });
 
     let local_device_id = pairing_device_identity.current_device_id();
     let pairing_device_id = local_device_id.to_string();
@@ -309,6 +350,11 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let key_slot_store: Arc<dyn KeySlotStore> =
         Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
 
+    // Same Arc the assembly holds — handed up to ctx so daemon entrypoint
+    // (T6) can wire it into the two clipboard workers without unpacking
+    // the assembly.
+    let clipboard_sync_facade = Arc::clone(&space_setup_assembly.clipboard_sync);
+
     Ok(DaemonBootstrapContext {
         deps,
         background,
@@ -320,5 +366,7 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         key_slot_store,
         storage_paths,
         config,
+        clipboard_sync_facade,
+        space_setup_assembly,
     })
 }

@@ -639,7 +639,7 @@ Slice 2 没全完(A3/A5 缺 UI),但 **C/E/F 三组核心 usecase 全到位**,Sli
 | T1 | find_by_content_hash | ✅ | `9ce27893` | 0.3h | port 加 default method 返 `Ok(None)`;Diesel 走两步查询(event → entry)避开 JoinDsl 导入冲突;2 直插 fixture 单测全绿;签名定为 `find_entry_id_by_snapshot_hash(&str) -> Option<EntryId>`(返回 id 不返全 entry,dedup 场景只需知道"存不存在") |
 | T2 | payload_codec | ✅ | `68f89b31` | 0.4h | `encode_snapshot_to_v3_bytes` 返 `(Bytes, content_hash)`,`decode_v3_bytes_to_snapshot` 反向;content_hash 走 `snapshot.snapshot_hash().to_string()` 与本地 `clipboard_event.snapshot_hash` 列对齐;decoder 给 representations 全分配新 `RepresentationId`(receiver-local);4 单测全绿(roundtrip 单 / 多 rep + None mime + 二进制 / hash 确定性 / truncate 错误) |
 | T3 | dispatch_snapshot | ✅ | `de2c8da6` | 0.2h | facade 新 pub 方法,内部 encode_snapshot_to_v3_bytes → dispatch_entry(payload_version=3);origin 仅 trace span metadata(gating 留给 caller);1 新 verdict(4/4 green),`withf` 断言 encrypt 收到 V3 rep_count header + dispatch fires with payload_version=3 + outcome content_hash 以 `blake3v1:` 起头 |
-| T4 | ApplyInboundClipboardUseCase | ⏸️ pending | — | — | — |
+| T4 | ApplyInboundClipboardUseCase | ✅ | `84129746` | 0.7h | 6 mockall 单测(planned 5,加 dedup_query_failure_short_circuits 第六条);**偏离 plan §3 文件位置**:文件留 `usecases/clipboard_sync/apply_inbound.rs`(plan 原意),但通过 lib.rs root re-export 跨 crate 公开,`usecases` 模块本身仍 pub(crate);两个 internal `InboundCapture` / `InboundWrite` traits 把 CaptureClipboardUseCase + ClipboardWriteCoordinator 的 7+2 port 依赖外包,production 走 blanket impl,test 走 mockall — 比直接构造完整 CaptureClipboardUseCase 干净 |
 | T5 | build_daemon_app 装配 | ⏸️ pending | — | — | — |
 | T6 | entrypoint 注入 | ⏸️ pending | — | — | — |
 | T7 | DaemonClipboardChangeHandler 改装 | ⏸️ pending | — | — | — |
