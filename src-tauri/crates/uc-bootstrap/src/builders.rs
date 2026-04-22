@@ -283,7 +283,7 @@ pub fn build_slice1_cli_context(
 /// libp2p `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort`.
 /// The libp2p `PairingFacade` is retained for the daemon's HTTP/WS
 /// pairing API (Tauri / GUI consumer); both stacks coexist until Slice 5.
-pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
+pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let (config, wired) = build_core(daemon_pairing_runtime_owner(), None)?;
     let storage_paths = get_storage_paths(&config)?;
 
@@ -296,20 +296,20 @@ pub fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let pairing_identity_pubkey = wired.background.libp2p_network.local_identity_pubkey();
 
     // Resolve pairing device name + pairing config + build the iroh-stack
-    // assembly inside one short-lived current-thread runtime. The
-    // assembly's iroh `Endpoint::bind` is async — it MUST run in a
-    // tokio context, hence the `block_on`.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let (pairing_device_name, pairing_config, space_setup_assembly) = rt.block_on(async {
-        let device_name = resolve_pairing_device_name(pairing_settings.clone()).await;
-        let config = resolve_pairing_config(pairing_settings.clone()).await;
-        let assembly = build_space_setup_assembly(&wired, IrohNodeConfig::default())
-            .await
-            .map_err(|e| anyhow::anyhow!("Slice 1+ assembly build failed: {e}"))?;
-        Ok::<_, anyhow::Error>((device_name, config, assembly))
-    })?;
+    // assembly on the caller's runtime. Must NOT spin up a throwaway
+    // current-thread rt here: `Endpoint::bind` spawns magicsock / relay /
+    // STUN actors via `tokio::spawn`, which attach to whatever runtime is
+    // running the bind. If that runtime drops (as a short-lived local rt
+    // would), those actors are aborted and the Endpoint becomes a zombie
+    // — `connect()` then returns "Unable to connect to remote" instantly
+    // and `accept` sees no incoming traffic. Keeping the bind on the
+    // caller's long-lived daemon runtime keeps iroh's tasks alive for the
+    // process lifetime.
+    let pairing_device_name = resolve_pairing_device_name(pairing_settings.clone()).await;
+    let pairing_config = resolve_pairing_config(pairing_settings.clone()).await;
+    let space_setup_assembly = build_space_setup_assembly(&wired, IrohNodeConfig::default())
+        .await
+        .map_err(|e| anyhow::anyhow!("Slice 1+ assembly build failed: {e}"))?;
 
     // Now safe to consume `wired` — assembly is built and owns its own
     // Arcs to the underlying ports.

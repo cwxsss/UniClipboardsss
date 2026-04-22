@@ -59,9 +59,22 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         None
     };
 
-    // build_daemon_app() calls build_core() which inits tracing + wires deps.
-    // Safe to call outside tokio (no internal block_on in daemon path).
-    let ctx = build_daemon_app()?;
+    // Build the daemon's tokio runtime FIRST. Everything async in the
+    // daemon's lifetime — iroh Endpoint::bind (inside build_daemon_app),
+    // recover_encryption_session, try_resume_session + refresh_presence,
+    // and finally daemon.run() — MUST share this single long-lived
+    // runtime. `Endpoint::bind` spawns magicsock / relay / STUN actors
+    // via `tokio::spawn`; if they run on a short-lived rt that drops
+    // after construction, the Endpoint becomes a zombie and `connect()`
+    // returns "Unable to connect to remote" instantly while `accept`
+    // sees no inbound traffic.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+
+    // build_daemon_app() calls build_core() which inits tracing + wires
+    // deps, then awaits `build_space_setup_assembly` which binds iroh.
+    let ctx = rt.block_on(build_daemon_app())?;
     let daemon_network_control = ctx.deps.network_control.clone();
     let daemon_network_events = ctx.deps.network_ports.events.clone();
     let daemon_file_transfer_events = ctx.deps.network_ports.file_transfer_events.clone();
@@ -199,10 +212,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         daemon_peer_directory,
         daemon_settings,
     ));
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
 
     // Phase 67: Recover encryption session BEFORE building services.
     let encryption_unlocked = rt.block_on(async {
@@ -358,6 +367,33 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // a clean close.
     let space_setup_assembly = ctx.space_setup_assembly;
     rt.block_on(async move {
+        // Slice 2 Phase 3 fix — resume the Slice 1+ Space session and prime
+        // peer reachability, matching what `uniclipboard-cli watch / members /
+        // send` do at entry. Without this, `recover_encryption_session` (the
+        // legacy libp2p-era unlock path above) never drives the F1 hook
+        // `ensure_reachable_all`, so the daemon's iroh router is up but:
+        //   1. paired peers see `offline` — no reverse Connection is ever
+        //      established for `IrohPresenceAdapter` to observe.
+        //   2. `dispatch_snapshot` / inbound `ApplyInboundClipboardUseCase`
+        //      operate without an active space session, so clipboard sync
+        //      silently fails in both directions.
+        // `Ok(false)` means the profile has no space yet (pre-`init/join`),
+        // which is legitimate — we just skip the probe. Errors are logged,
+        // never fatal: daemon stays up so the operator can recover.
+        match space_setup_assembly.facade.try_resume_session().await {
+            Ok(true) => {
+                if let Err(e) = space_setup_assembly.facade.refresh_presence().await {
+                    tracing::warn!(error = %e, "daemon startup: presence probe failed");
+                }
+            }
+            Ok(false) => {
+                tracing::info!("daemon startup: no space on this profile — skipping resume/probe");
+            }
+            Err(e) => {
+                tracing::warn!(error = ?e, "daemon startup: try_resume_session failed");
+            }
+        }
+
         let res = daemon.run().await;
         space_setup_assembly.shutdown().await;
         res
