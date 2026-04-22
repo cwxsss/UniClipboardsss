@@ -8,8 +8,13 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
+use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::LoggingLifecycleEventEmitter;
 use uc_app::usecases::SessionReadyEmitter;
+use uc_application::{
+    ApplyInboundClipboardUseCase, InboundCapture as ApplyInboundCapture,
+    InboundWrite as ApplyInboundWrite,
+};
 use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_non_gui_runtime_with_emitter;
 use uc_bootstrap::builders::build_daemon_app;
@@ -124,12 +129,49 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // In GUI-managed mode, capture is disabled until the GUI signals readiness.
     let clipboard_capture_gate = Arc::new(std::sync::atomic::AtomicBool::new(!gui_managed));
 
+    // Slice 2 Phase 3 · T6 — pull clipboard_sync_facade out of the
+    // assembly before we move it into `space_setup_assembly` for
+    // shutdown. Feeds both the outbound watcher (T7) and the inbound
+    // worker (T8).
+    let clipboard_sync_facade = ctx.clipboard_sync_facade.clone();
+
+    // Slice 2 Phase 3 · T6 — build `ApplyInboundClipboardUseCase` from
+    // runtime wiring deps. `CaptureClipboardUseCase` (migrated to
+    // uc-application in T0a) gets wrapped as `Arc<dyn InboundCapture>`
+    // via its blanket impl; `ClipboardWriteCoordinator` (T0b) likewise
+    // wraps as `Arc<dyn InboundWrite>`. The coordinator shared here is
+    // the exact same Arc the watcher reads `clipboard_change_origin`
+    // from, so RemotePush guards register and consume on one cache.
+    let apply_inbound_capture_uc = Arc::new(CaptureClipboardUseCase::new(
+        runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+        runtime.wiring_deps().clipboard.clipboard_event_repo.clone(),
+        runtime
+            .wiring_deps()
+            .clipboard
+            .representation_policy
+            .clone(),
+        runtime
+            .wiring_deps()
+            .clipboard
+            .representation_normalizer
+            .clone(),
+        runtime.wiring_deps().device.device_identity.clone(),
+        runtime.wiring_deps().clipboard.representation_cache.clone(),
+        runtime.wiring_deps().clipboard.spool_queue.clone(),
+    ));
+    let apply_inbound_uc = Arc::new(ApplyInboundClipboardUseCase::new(
+        runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+        apply_inbound_capture_uc as Arc<dyn ApplyInboundCapture>,
+        Arc::clone(&clipboard_write_coordinator) as Arc<dyn ApplyInboundWrite>,
+    ));
+
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
         runtime.clone(),
         event_tx.clone(),
         clipboard_change_origin.clone(),
         file_transfer_lifecycle.clone(),
         clipboard_capture_gate.clone(),
+        clipboard_sync_facade.clone(),
     ));
     let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
         local_clipboard.clone(),
@@ -137,11 +179,9 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     ));
 
     let inbound_clipboard_sync = Arc::new(InboundClipboardSyncWorker::new(
-        runtime.clone(),
+        clipboard_sync_facade.clone(),
+        apply_inbound_uc,
         event_tx.clone(),
-        clipboard_write_coordinator.clone(),
-        Some(file_cache_dir.clone()),
-        Some(file_transfer_lifecycle.clone()),
     ));
 
     let file_sync_orchestrator_worker = Arc::new(FileSyncOrchestratorWorker::new(
@@ -309,5 +349,17 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         Some(search_coordinator),
     );
 
-    rt.block_on(daemon.run())
+    // Slice 2 Phase 3 · T6 — move the iroh-stack assembly into the
+    // runtime closure so its shutdown runs AFTER daemon.run() returns
+    // (graceful or signal-driven) but BEFORE the runtime itself drops.
+    // `SpaceSetupAssembly::shutdown` aborts the ingest loop + tears
+    // down the iroh router, emitting `CONNECTION_CLOSE` to any live
+    // peer. Without this, peers see TCP RST / QUIC timeout instead of
+    // a clean close.
+    let space_setup_assembly = ctx.space_setup_assembly;
+    rt.block_on(async move {
+        let res = daemon.run().await;
+        space_setup_assembly.shutdown().await;
+        res
+    })
 }

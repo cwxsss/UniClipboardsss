@@ -17,10 +17,10 @@ use tracing::{debug, info, instrument, warn, Instrument};
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
 use uc_app::shared::host_event::{HostEvent, TransferHostEvent};
-use uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::sync_planner::{FileCandidate, OutboundSyncPlanner};
 use uc_app::usecases::CoreUseCases;
+use uc_application::facade::ClipboardSyncFacade;
 use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
@@ -133,6 +133,10 @@ pub struct DaemonClipboardChangeHandler {
     /// Used in `--gui-managed` mode to defer clipboard capture until
     /// the GUI user explicitly unlocks the app.
     capture_gate: Arc<AtomicBool>,
+    /// Slice 2 Phase 3 · T7 — iroh-stack clipboard sync. Replaces the
+    /// deprecated libp2p `SyncOutboundClipboardUseCase` path. Wired from
+    /// `DaemonBootstrapContext.clipboard_sync_facade` in `entrypoint.rs`.
+    clipboard_sync: Arc<ClipboardSyncFacade>,
 }
 
 impl DaemonClipboardChangeHandler {
@@ -142,6 +146,7 @@ impl DaemonClipboardChangeHandler {
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
         file_transfer_lifecycle: Arc<FileTransferLifecycle>,
         capture_gate: Arc<AtomicBool>,
+        clipboard_sync: Arc<ClipboardSyncFacade>,
     ) -> Self {
         Self {
             runtime,
@@ -149,6 +154,7 @@ impl DaemonClipboardChangeHandler {
             clipboard_change_origin,
             file_transfer_lifecycle,
             capture_gate,
+            clipboard_sync,
         }
     }
 
@@ -162,20 +168,6 @@ impl DaemonClipboardChangeHandler {
             deps.device.device_identity.clone(),
             deps.clipboard.representation_cache.clone(),
             deps.clipboard.spool_queue.clone(),
-        )
-    }
-
-    fn build_sync_outbound_clipboard_use_case(&self) -> SyncOutboundClipboardUseCase {
-        let deps = self.runtime.wiring_deps();
-        SyncOutboundClipboardUseCase::new(
-            deps.clipboard.system_clipboard.clone(),
-            deps.network_ports.clipboard_outbound.clone(),
-            deps.network_ports.peers.clone(),
-            deps.security.space_access.clone(),
-            deps.device.device_identity.clone(),
-            deps.settings.clone(),
-            deps.security.transfer_cipher.clone(),
-            deps.device.member_repo.clone(),
         )
     }
 }
@@ -395,26 +387,42 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                     )
                     .await;
 
-                // Dispatch clipboard sync via spawn_blocking (execute() uses executor::block_on internally).
+                // Slice 2 Phase 3 · T7 — route outbound clipboard dispatch through the
+                // iroh-stack `ClipboardSyncFacade::dispatch_snapshot`. The legacy
+                // libp2p `SyncOutboundClipboardUseCase` path is retired; per-member
+                // sync preferences + content_type filters are not yet migrated
+                // (D3 decision: Phase 3 follow-up). The `OutboundSyncPlanner` still
+                // gates on global `auto_sync` + LocalCapture origin, so that layer
+                // continues to work.
+                //
+                // File transfers referenced in `clipboard_intent.file_transfers`
+                // are ignored here — Phase 3 is text-only; file sync runs through
+                // `plan.files` below on the legacy `SyncOutboundFileUseCase` path
+                // (Slice 3 will land the iroh blob ticket alternative).
                 if let Some(clipboard_intent) = plan.clipboard {
-                    let outbound_sync_uc = self.build_sync_outbound_clipboard_use_case();
-                    let flow_id_clone = flow_id.clone();
-                    tokio::task::spawn_blocking(move || {
-                        {
-                            match outbound_sync_uc.execute(
-                                clipboard_intent.snapshot,
-                                origin,
-                                Some(flow_id_clone),
-                                clipboard_intent.file_transfers,
-                            ) {
-                                Ok(()) => info!("Daemon outbound clipboard sync completed"),
-                                Err(e) => {
-                                    warn!(error = %e, "Daemon outbound clipboard sync failed")
-                                }
+                    let clipboard_sync = Arc::clone(&self.clipboard_sync);
+                    let snapshot_for_dispatch = clipboard_intent.snapshot;
+                    tokio::spawn(
+                        async move {
+                            match clipboard_sync
+                                .dispatch_snapshot(snapshot_for_dispatch, origin)
+                                .await
+                            {
+                                Ok(outcome) => info!(
+                                    accepted = outcome.total_accepted,
+                                    duplicate = outcome.total_duplicate,
+                                    offline = outcome.total_offline,
+                                    errored = outcome.total_errored,
+                                    "Daemon outbound clipboard sync (iroh) completed"
+                                ),
+                                Err(e) => warn!(
+                                    error = %e,
+                                    "Daemon outbound clipboard sync (iroh) failed"
+                                ),
                             }
                         }
-                        .in_current_span()
-                    });
+                        .in_current_span(),
+                    );
                 }
 
                 // Dispatch file sync for each file intent.
