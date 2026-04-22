@@ -30,4 +30,26 @@ pub trait ClipboardEntryRepositoryPort: Send + Sync {
     /// # Errors
     /// Returns error if database operation fails
     async fn delete_entry(&self, entry_id: &EntryId) -> Result<()>;
+
+    /// Look up an existing entry by its event's `snapshot_hash` (stored as
+    /// the wire `content_hash` string, formatted as `"blake3v1:<hex>"`).
+    ///
+    /// Returns `Some(EntryId)` when a prior capture (local or remote push)
+    /// persisted a `ClipboardEvent` carrying this exact hash; returns
+    /// `None` when no match exists. Used by
+    /// `ApplyInboundClipboardUseCase` (Slice 2 Phase 3 · T4) as the dedup
+    /// short-circuit before falling through to persist + OS-clipboard
+    /// write.
+    ///
+    /// Implementation note: this is a read-only join across
+    /// `clipboard_entry` + `clipboard_event`. Adapters that do not support
+    /// the join (e.g. in-memory test fakes) may return `Ok(None)`
+    /// unconditionally, which degrades Phase 3 dedup to "wire-level only"
+    /// but is safe.
+    async fn find_entry_id_by_snapshot_hash(
+        &self,
+        _snapshot_hash: &str,
+    ) -> Result<Option<EntryId>> {
+        Ok(None)
+    }
 }

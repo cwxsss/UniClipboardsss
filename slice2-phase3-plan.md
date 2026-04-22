@@ -634,8 +634,8 @@ Slice 2 没全完(A3/A5 缺 UI),但 **C/E/F 三组核心 usecase 全到位**,Sli
 
 | # | 任务 | 状态 | commit | 实际工时 | 备注 |
 |---|---|---|---|---|---|
-| T0a | 迁移 CaptureClipboardUseCase → uc-application | ⏸️ pending | — | — | — |
-| T0b | 迁移 ClipboardWriteCoordinator → uc-application | ⏸️ pending | — | — | — |
+| T0a | 迁移 CaptureClipboardUseCase → uc-application | ✅ | `cb4ac588` | 0.4h | 新 `uc-application/src/clipboard_capture/`(mod.rs + usecase.rs);`uc-app` 老路径 16 行 shim;workspace + 188 uc-application 测试 + 7 uc-app 测试全绿 |
+| T0b | 迁移 ClipboardWriteCoordinator → uc-application | ✅ | `ad5ac7ac` | 0.3h | 新 `uc-application/src/clipboard_write/`;同形 shim;workspace 绿 |
 | T1 | find_by_content_hash | ⏸️ pending | — | — | — |
 | T2 | payload_codec | ⏸️ pending | — | — | — |
 | T3 | dispatch_snapshot | ⏸️ pending | — | — | — |
