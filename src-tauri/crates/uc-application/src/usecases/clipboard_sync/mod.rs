@@ -3,18 +3,20 @@
 //! * [`DispatchClipboardEntryUseCase`] — encrypt + fan-out a freshly
 //!   captured clipboard entry to every reachable member.
 //! * [`IngestInboundClipboardUseCase`] — subscribe to the receiver port,
-//!   decrypt + dedupe + persist each inbound payload.
+//!   decrypt + re-broadcast each inbound payload as an application-level
+//!   notice.
 //!
 //! Both are `pub(crate)` per `uc-application/AGENTS.md` §11.4. External
 //! consumers (daemon / Tauri / CLI) reach them through
 //! `ClipboardSyncFacade`.
 
 pub(crate) mod dispatch_entry;
+pub(crate) mod ingest_inbound;
 
 pub(crate) use dispatch_entry::{
     DispatchClipboardEntryInput, DispatchClipboardEntryUseCase, DispatchOutcome, DispatchPerTarget,
     DispatchSyncError,
 };
-
-// `ingest_inbound` arrives with T8 — the mod declaration + re-export will
-// be restored in that commit.
+pub(crate) use ingest_inbound::{
+    InboundAction, InboundClipboardNotice, IngestInboundClipboardUseCase, IngestSpawnHandle,
+};
