@@ -95,6 +95,18 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         ui::info("status", "Listening — press Ctrl-C to stop");
         ui::bar();
     }
+    // Machine-readable handshake marker: scripts (e.g. the single-machine
+    // clipboard e2e) can wait for this on stderr before driving the
+    // sender side. Without it, a sender racing the watch's subscribe
+    // setup time emits notices to a not-yet-connected public broadcast
+    // and the assertion times out. Explicit flush because stderr is
+    // line-buffered when piped, but we want zero delay regardless.
+    {
+        use std::io::Write;
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(err, "WATCH_READY");
+        let _ = err.flush();
+    }
 
     let exit_code = loop {
         tokio::select! {
