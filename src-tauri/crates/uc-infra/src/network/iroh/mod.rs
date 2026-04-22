@@ -4,6 +4,7 @@
 //! endpoint lifecycle, session opener, blob transfer. Slice 1 only ships
 //! [`IrohIdentityStore`]; later slices add the rest.
 
+pub mod clipboard_wire;
 pub mod identity_store;
 pub mod node;
 pub mod presence_adapter;
