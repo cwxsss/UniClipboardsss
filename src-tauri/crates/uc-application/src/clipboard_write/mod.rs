@@ -15,5 +15,7 @@
 //! workers, tauri runtime).
 
 mod coordinator;
+mod primary_rep_selector;
 
 pub use coordinator::{ClipboardWriteCoordinator, ClipboardWriteIntent};
+pub use primary_rep_selector::{narrow_to_primary, PrimaryRepError};
