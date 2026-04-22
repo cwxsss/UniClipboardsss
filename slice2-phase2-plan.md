@@ -496,3 +496,49 @@ let ingest_handle = self.clipboard_sync.spawn_ingest_loop();
 ---
 
 > **开工信号**:用户点头 → 从 T1 开始。
+
+---
+
+## 15. 进度跟踪(live · 2026-04-22 在做)
+
+### 15.1 任务状态
+
+| # | 任务 | 状态 | commit | 实际工时 | 备注 |
+|---|---|---|---|---|---|
+| T1 | uc-core 新 port + legacy deprecated | ✅ | `0edb7479` | 0.3h | `ClipboardDispatchPort` / `ClipboardReceiverPort` / `ClipboardHeader` / `SyncPayload` / `DispatchAck` 落 core;legacy `transport.rs` 两 trait 加 `#[deprecated(since="Slice2-Phase2")]`——warning 在 `uc-app::sync_outbound` / `uc-daemon::inbound_clipboard_sync` 冒出是意图的"指路牌",Slice 5 删除 |
+| T2 | iroh identity probe | ✅ | `5a9ea34f` | 0.4h | 3 verdict 全绿;**关键发现**:`iroh::EndpointId = iroh_base::PublicKey`(32-byte Ed25519),`Connection::remote_id().as_bytes()` 与 `SecretKey::public().as_bytes()` 字节等价,**无需扩 port**。§10 风险表第 1 行风险消除 |
+| T3 | clipboard_wire postcard codec | ✅ | `b2206e33` | 0.4h | 7 单测全绿(6 计划内 + ack codec);frame: `[magic=0xC1 \| header_len_be(4) \| header \| payload_len_be(4) \| payload]`;`CLIPBOARD_MAGIC` 是 mis-routed ALPN 早拒哨兵;`bytes = "1.7"` 加入 uc-infra Cargo.toml |
+| T4 | IrohClipboardDispatchAdapter | ✅ | `ae5b8202` | 0.5h | 4 单测(含 oversized 本地短路不拨号);`CLIPBOARD_ALPN = "uniclipboard/clipboard/0"`;错误折叠 `Offline`(missing addr / decode / dial fail)、`Io`、`PeerRejected` |
+| T5 | IrohClipboardReceiverAdapter + ProtocolHandler | ✅ | `63330895` | 0.7h | 4 单测(含 3 并发 connection);**bug 修**:handler 返回时 Connection drop 导致 ack byte 来不及 flush,参考 presence handler 加 `connection.closed().await` 保活;identity 解析按 T2 probe 实现,`member_repo.list()` 扫描(N ≤ 10) |
+| T6 | install_clipboard 扩展点 | ✅ | `c500ae62` | 0.2h | 4 单测(含三 ALPN 共存);`ClipboardHandlers { dispatch, receiver }` 结构对齐 `PairingHandlers`;`RouterBuilder::spawn` 自动重注 ALPN 集,`bind()` 只声明 PAIRING |
+| T7 | DispatchClipboardEntryUseCase | ✅ | `896e371b` | 0.8h | 5 单测全绿;输入 `DispatchClipboardEntryInput { plaintext, content_hash, payload_version }`——不内置"读系统剪贴板 + 构造 payload"步,caller 负责;iteration source 复用 Phase 1 的 `peer_addr_repo.list()` 决策;`JoinSet` 并发 + 本机 filter + Online-only filter;hand-written `RecipeDispatch` 规避 mockall-Mutex(Phase 1 T6 教训);`bytes = "1.7"` 加入 uc-application Cargo.toml |
+| T8 | IngestInboundClipboardUseCase | ✅ | `57ab9e65` | 0.4h | 4 单测;Phase 2 刻意不做本地持久化 + 不做本地 dedup(adapter 的 Ack 边界已分 Accepted/DuplicateIgnored);decrypt 失败 warn + skip,loop 继续;`IngestSpawnHandle` Drop 自动 abort |
+| T9 | ClipboardSyncFacade | ✅ | `5b49d0ca` | 0.5h | 3 单测;完整 public ↔ internal type 映射(7 对类型 + `From<DispatchSyncError>`);subscribe 桥接走 relay task 保证 pub types 独立演进;`IngestHandle` Drop 级联 abort;`facade/mod.rs` 导出 9 个符号 |
+| T10 | bootstrap 装配 | ⏸️ pending | — | — | **下一步**:`SpaceSetupAssembly` 加 `clipboard_sync`,`build_space_setup_assembly` 调 `install_clipboard` + 构造 facade,`auto_start_network` 成功后 spawn ingest loop |
+| T11 | uc-cli send/watch | ⏸️ pending | — | — | — |
+| T12 | slice2_phase2 e2e 集成测试 | ⏸️ pending | — | — | — |
+| T13 | 手动双 profile 验收 | ⏸️ pending | — | — | — |
+| T14 | task_plan.md ✅ 收尾 | ⏸️ pending | — | — | — |
+
+### 15.2 累计
+
+- **已完成**:T1-T9(9/14)~4.2h;比原估 ~15h 约省 72%,主要因 adapter 模块化好 + Phase 1 pattern 直接复用
+- **测试**:29 单测 + 3 integration probe verdict 全绿(`cargo test` per-module 分开跑,未做全量回归)
+- **进度**:等用户指示推进 T10,其余 5 任务整体 ~5-8h
+
+### 15.3 关键决策 / 偏离
+
+1. **wire version 独立编号**:`ClipboardHeader::CURRENT_VERSION = 1`,不借用 pairing `WIRE_VERSION = 2`。pairing codec 的版本改动不牵动 clipboard,隔离收益远大于"共用版本号"的一致性
+2. **identity 解析免 port 扩展**(T2 探针确认):`IdentityFingerprintFactoryPort::from_public_key(&[u8])` 已足够,T5 adapter 在线 list + scan fingerprint——N ≤ 10 假设下性能足够,Phase 3 若要 scale 再加索引
+3. **T5 connection.closed().await 保活**:handler `accept` 返回即 drop connection → ack byte race。参考 `IrohPresenceHandler` 模式,每个 ack-emit 分支都加 `connection.closed().await`。**Phase 2 发现的唯一隐蔽 bug**
+4. **T7 不内置读系统剪贴板**:保持 use case 纯粹——CLI / daemon 负责"系统剪贴板 → ClipboardBinaryPayload → bytes"的 pipeline,use case 只接 bytes + content_hash。测试可预置 deterministic plaintext,不需要 mock OS clipboard
+5. **T8 不做本地持久化**(plan §5.3):adapter 的 AckCode 已区分 Accepted / DuplicateIgnored,Phase 2 的 ingest 只 decrypt + broadcast;daemon / tauri 集成到 clipboard_event_repo 推 Phase 3。CLI `watch` 直接打印 stderr
+6. **T6 RouterBuilder alpn 自动刷新**:iroh `RouterBuilder::spawn` 内部会 `endpoint.set_alpns(all_accept_alpns)`,所以 `bind` 只挂 PAIRING 就够。Phase 1 presence + Phase 2 clipboard 的 ALPN 都在 spawn 时自动挂上
+
+### 15.4 后续提醒
+
+- T10 bootstrap 要看 `SpaceSetupFacade::auto_start_network` 当前把 `ensure_reachable_all` 接在哪一行,clipboard ingest spawn 也接在那附近。需要给 SpaceSetupFacade 加 `Arc<ClipboardSyncFacade>` 字段 + `Mutex<Option<IngestHandle>>` 存 spawn handle
+- T11 CLI 里 plaintext pipeline 最简做法:读系统剪贴板 `SystemClipboardPort::read_snapshot()` → 取第一个 text representation → postcard encode 一个 mini `ClipboardBinaryPayload` → SHA-256 content_hash。`watch` 循环读 `last_snapshot_hash` + `poll_system_clipboard` 每 500ms 比对变化
+- T12 e2e 复用 Phase 1 `slice2_phase1_presence_e2e` 的两-assembly + pair 夹具,再加 `dispatch_entry()` 调用 + `subscribe_inbound_notices()` 断言 plaintext 字节等价。避免 T11 shell 脚本,Rust 集成测试已覆盖验收
+
+
