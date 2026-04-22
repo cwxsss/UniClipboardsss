@@ -1,28 +1,32 @@
-//! `uniclipboard-cli send` — one-shot clipboard dispatch (Slice 2 Phase 2 · T11).
+//! `uniclipboard-cli send` — one-shot clipboard dispatch.
 //!
 //! Self-contained direct-mode command (no daemon), mirroring the `init` /
 //! `invite` / `join` / `members` pattern. Builds a `SpaceSetupAssembly`,
 //! resumes the cached session, refreshes presence so dispatch can route to
-//! online peers, then encodes the user-supplied text as a Phase 2 payload
-//! and fans it out via `ClipboardSyncFacade::dispatch_entry`.
+//! online peers, then wraps the user-supplied text as a single-text-rep
+//! `SystemClipboardSnapshot` and fans it out via
+//! `ClipboardSyncFacade::dispatch_snapshot`.
 //!
-//! Phase 2 deliberately takes the plaintext from the CLI (positional arg
-//! or stdin) instead of reading the system clipboard — the bootstrap sets
-//! `UC_DISABLE_SYSTEM_CLIPBOARD=1` so non-bundled CLI runs don't panic in
-//! `+[NSPasteboard generalPasteboard]`. Daemon-driven system-clipboard
-//! capture lands in Phase 3.
+//! Phase 3 upgrade(T9):text → V3 envelope。Phase 2 raw-bytes path retired
+//! so daemon-on-the-other-side(Phase 3 T7/T8)can decode us uniformly.
+//! CLI callers with daemon receivers will now interoperate natively.
+//!
+//! Still doesn't read the system clipboard — bootstrap sets
+//! `UC_DISABLE_SYSTEM_CLIPBOARD=1` so non-bundled CLI runs don't panic
+//! in `+[NSPasteboard generalPasteboard]`. The daemon owns the OS
+//! clipboard in production.
 
 use std::io::Read;
 
-use bytes::Bytes;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use uc_application::facade::space_setup::TryResumeSessionError;
-use uc_application::facade::{
-    ClipboardSyncError, DispatchEntryInput, DispatchEntryOutcome, DispatchEntryPerTarget,
-};
+use uc_application::facade::{ClipboardSyncError, DispatchEntryOutcome, DispatchEntryPerTarget};
+use uc_core::ids::{FormatId, RepresentationId};
 use uc_core::ports::DispatchAck;
+use uc_core::{
+    ClipboardChangeOrigin, MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
+};
 
 use crate::commands::slice1_common::{build_assembly, refuse_if_daemon_running};
 use crate::exit_codes;
@@ -116,20 +120,26 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
         ),
     }
 
-    let plaintext_bytes = Bytes::from(plaintext.into_bytes());
-    let content_hash = sha256_hex(&plaintext_bytes);
+    // Phase 3 · T9:wrap the CLI text into a single-representation
+    // `SystemClipboardSnapshot` with `text/plain` mime — same shape the
+    // daemon would emit if the user copied this text through a real
+    // `SystemClipboardPort`. `dispatch_snapshot` handles V3 envelope
+    // encoding + canonical `snapshot_hash` (which matches the receiver's
+    // local `clipboard_event.snapshot_hash` for dedup).
+    let snapshot = SystemClipboardSnapshot {
+        ts_ms: chrono::Utc::now().timestamp_millis(),
+        representations: vec![ObservedClipboardRepresentation::new(
+            RepresentationId::new(),
+            FormatId::from("text"),
+            Some(MimeType("text/plain".to_string())),
+            plaintext.into_bytes(),
+        )],
+    };
 
     let dispatch_spinner = ui::spinner("Dispatching to online peers...");
     let outcome = assembly
         .clipboard_sync
-        .dispatch_entry(DispatchEntryInput {
-            plaintext: plaintext_bytes,
-            content_hash: content_hash.clone(),
-            // Phase 2 sends raw text bytes; payload_version reserved for a
-            // future inner-codec version bump (V3 ClipboardBinaryPayload
-            // when daemon takes over capture).
-            payload_version: 3,
-        })
+        .dispatch_snapshot(snapshot, ClipboardChangeOrigin::LocalCapture)
         .await;
 
     let outcome = match outcome {
@@ -191,23 +201,6 @@ fn read_plaintext(arg: Option<String>) -> Result<String, String> {
         }
     }
     Ok(buf)
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    hex_lower(&digest)
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0F) as usize] as char);
-    }
-    out
 }
 
 fn render_dispatch_error(err: &ClipboardSyncError) -> String {

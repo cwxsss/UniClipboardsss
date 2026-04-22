@@ -8,7 +8,11 @@
 //! here stays `pub(crate)`: external crates reach them exclusively through
 //! `AppFacade`.
 
-pub(crate) mod clipboard_sync;
+/// `pub` (not `pub(crate)`) only because Slice 2 Phase 3 · T10 needs a
+/// publicly-reachable path to `payload_codec::decode_v3_bytes_to_snapshot`
+/// for the CLI `watch` command. Items inside keep their `pub(crate)` caps
+/// so the surface stays narrow.
+pub mod clipboard_sync;
 pub(crate) mod pairing;
 pub(crate) mod presence;
 pub(crate) mod setup;

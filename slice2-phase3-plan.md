@@ -641,9 +641,9 @@ Slice 2 没全完(A3/A5 缺 UI),但 **C/E/F 三组核心 usecase 全到位**,Sli
 | T3 | dispatch_snapshot | ✅ | `de2c8da6` | 0.2h | facade 新 pub 方法,内部 encode_snapshot_to_v3_bytes → dispatch_entry(payload_version=3);origin 仅 trace span metadata(gating 留给 caller);1 新 verdict(4/4 green),`withf` 断言 encrypt 收到 V3 rep_count header + dispatch fires with payload_version=3 + outcome content_hash 以 `blake3v1:` 起头 |
 | T4 | ApplyInboundClipboardUseCase | ✅ | `84129746` | 0.7h | 6 mockall 单测(planned 5,加 dedup_query_failure_short_circuits 第六条);**偏离 plan §3 文件位置**:文件留 `usecases/clipboard_sync/apply_inbound.rs`(plan 原意),但通过 lib.rs root re-export 跨 crate 公开,`usecases` 模块本身仍 pub(crate);两个 internal `InboundCapture` / `InboundWrite` traits 把 CaptureClipboardUseCase + ClipboardWriteCoordinator 的 7+2 port 依赖外包,production 走 blanket impl,test 走 mockall — 比直接构造完整 CaptureClipboardUseCase 干净 |
 | T5 | build_daemon_app 装配 | ✅ | `19595e06` | 0.4h | DaemonBootstrapContext 加 `clipboard_sync_facade: Arc<ClipboardSyncFacade>` + `space_setup_assembly: SpaceSetupAssembly` 两 pub 字段;`build_daemon_app` 内既有 `block_on` 块新增第 3 个 future 跑 `build_space_setup_assembly`;libp2p PairingFacade 不动(D1 替换仅限 clipboard 路径,pairing 留到 Slice 5);workspace + 5 e2e 全绿 |
-| T6 | entrypoint 注入 | ⏸️ pending | — | — | — |
-| T7 | DaemonClipboardChangeHandler 改装 | ⏸️ pending | — | — | — |
-| T8 | InboundClipboardSyncWorker 重写 | ⏸️ pending | — | — | — |
+| T6 | entrypoint 注入 | ✅ | `8e007150` | 0.3h | bundled with T7/T8(signatures cross-cut);`ApplyInboundClipboardUseCase` 从 runtime deps 组装,shared `clipboard_write_coordinator` Arc 维持 origin guard cache 单例;shutdown hook 移 assembly 进 block_on 闭包,daemon.run() 返回后 `assembly.shutdown().await` 再 drop runtime,iroh router 干净 CONNECTION_CLOSE |
+| T7 | DaemonClipboardChangeHandler 改装 | ✅ | `8e007150` | 0.3h | bundled;`build_sync_outbound_clipboard_use_case` 删除,`plan.clipboard` dispatch arm 改调 `clipboard_sync.dispatch_snapshot`;`OutboundSyncPlanner` 保留(master toggle 来源);per-member filter 推 follow-up |
+| T8 | InboundClipboardSyncWorker 重写 | ✅ | `8e007150` | 0.4h | bundled;~230→~190 LOC,drop `parse_clipboard_frame` + `ClipboardInboundTransportPort` 订阅 + `SyncInboundClipboardUseCase` 装配 + file_cache_dir + file_transfer_lifecycle(Phase 3 text-only);subscribe `clipboard_sync.subscribe_inbound_notices()` → `apply_inbound_uc.execute` → `Applied` emit WS / 其他变体 log;5 bootstrap e2e 全绿 |
 | T9 | CLI send envelope 升级 | ⏸️ pending | — | — | — |
 | T10 | CLI watch decode 升级 | ⏸️ pending | — | — | — |
 | T11 | phase 2 e2e 更新 | ⏸️ pending | — | — | — |

@@ -127,12 +127,11 @@ enum Commands {
     SpaceStatus,
     /// Dispatch one clipboard payload to every online paired peer.
     ///
-    /// Self-contained direct mode (Slice 2 Phase 2). Reads the payload
-    /// from the positional argument, or — when omitted — from stdin
-    /// until EOF. Encodes the bytes as a Phase 2 text payload and fans
-    /// it out via the iroh clipboard ALPN. Phase 2 deliberately does
-    /// **not** read the system clipboard; daemon-driven capture lands
-    /// in Phase 3.
+    /// Self-contained direct mode. Reads text from the positional
+    /// argument, or — when omitted — from stdin until EOF. Wraps the
+    /// text into a single-representation `SystemClipboardSnapshot`,
+    /// encodes it as a V3 envelope, and fans it out via the iroh
+    /// clipboard ALPN — same wire format the daemon uses.
     Send {
         /// Plaintext to send. Omit to read from stdin until EOF.
         text: Option<String>,
@@ -140,9 +139,10 @@ enum Commands {
     /// Watch inbound clipboard payloads from paired peers and print each
     /// delivery as it lands. Press Ctrl-C to stop.
     ///
-    /// Self-contained direct mode (Slice 2 Phase 2). Phase 2 prints to
-    /// the terminal only — does not write the system clipboard, so it
-    /// cannot collide with a future daemon watcher.
+    /// Self-contained direct mode. Decodes the V3 envelope and shows the
+    /// first text representation (or a per-rep summary for image-only
+    /// envelopes). Does NOT write the system clipboard — that's the
+    /// daemon's job; the CLI watch is purely a diagnostic observer.
     Watch,
     /// Search clipboard history (query or inspect search availability)
     Search {

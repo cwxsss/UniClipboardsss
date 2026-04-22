@@ -15,8 +15,10 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
+use uc_application::decode_v3_bytes_to_snapshot;
 use uc_application::facade::space_setup::TryResumeSessionError;
 use uc_application::facade::{InboundAction, InboundNotice};
+use uc_core::SystemClipboardSnapshot;
 
 use crate::commands::slice1_common::{build_assembly, refuse_if_daemon_running};
 use crate::exit_codes;
@@ -143,8 +145,15 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
 }
 
 fn render_notice(notice: &InboundNotice, json: bool) {
+    // Phase 3 · T10:`notice.plaintext` is a V3 envelope, not raw text.
+    // Decode and show the first text representation (falls back to a
+    // per-rep summary if no text rep is present — e.g. image-only).
+    let snapshot = decode_v3_bytes_to_snapshot(&notice.plaintext).ok();
+    let text_preview = snapshot.as_ref().and_then(first_text_preview);
+    let rep_summary = snapshot.as_ref().map(rep_summary_line);
+
     if json {
-        let dto = NoticeDto::from(notice);
+        let dto = NoticeDto::from_notice(notice, text_preview.clone(), rep_summary.clone());
         match serde_json::to_string(&dto) {
             Ok(line) => println!("{line}"),
             Err(err) => ui::error(&format!("Failed to serialize notice: {err}")),
@@ -152,14 +161,58 @@ fn render_notice(notice: &InboundNotice, json: bool) {
         return;
     }
 
-    let preview = String::from_utf8_lossy(&notice.plaintext);
+    let body = match text_preview {
+        Some(t) => truncate_preview(&t),
+        None => rep_summary.unwrap_or_else(|| "(undecodable envelope)".to_string()),
+    };
     let line = format!(
         "[{}] {} ({})",
         notice.from_device.as_str(),
-        truncate_preview(&preview),
+        body,
         format_action(notice.action),
     );
     ui::info("·", &line);
+}
+
+/// Return the first `text/*`-mime representation's UTF-8 string (if any).
+fn first_text_preview(snapshot: &SystemClipboardSnapshot) -> Option<String> {
+    for rep in &snapshot.representations {
+        let is_text = rep
+            .mime
+            .as_ref()
+            .map(|m| {
+                let s = m.as_str();
+                s.eq_ignore_ascii_case("text/plain")
+                    || s.eq_ignore_ascii_case("public.utf8-plain-text")
+                    || s.to_ascii_lowercase().starts_with("text/")
+            })
+            .unwrap_or(false);
+        if !is_text {
+            continue;
+        }
+        if let Ok(s) = std::str::from_utf8(&rep.bytes) {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
+/// One-line summary when the envelope has only non-text reps (e.g.
+/// image/png). Useful for operator eyeballing; not meant for parsing.
+fn rep_summary_line(snapshot: &SystemClipboardSnapshot) -> String {
+    let parts: Vec<String> = snapshot
+        .representations
+        .iter()
+        .map(|rep| {
+            let mime = rep.mime.as_ref().map(|m| m.as_str()).unwrap_or("?");
+            format!("{}/{}B", mime, rep.bytes.len())
+        })
+        .collect();
+    format!(
+        "[envelope:{} rep(s) {}]",
+        snapshot.representations.len(),
+        parts.join(", ")
+    )
 }
 
 fn truncate_preview(text: &str) -> String {
@@ -184,17 +237,30 @@ fn format_action(action: InboundAction) -> &'static str {
 struct NoticeDto<'a> {
     from_device: &'a str,
     content_hash: &'a str,
-    plaintext_utf8: String,
+    /// First `text/*` representation's UTF-8 content, if any. Absent for
+    /// image-only / binary-only envelopes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    /// Per-representation summary `[envelope:N reps mime/Nbytes, ...]`
+    /// for human / script eyeballing when the envelope has non-text
+    /// reps. Present only when decode succeeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rep_summary: Option<String>,
     action: &'static str,
     at_ms: i64,
 }
 
-impl<'a> From<&'a InboundNotice> for NoticeDto<'a> {
-    fn from(n: &'a InboundNotice) -> Self {
+impl<'a> NoticeDto<'a> {
+    fn from_notice(
+        n: &'a InboundNotice,
+        text: Option<String>,
+        rep_summary: Option<String>,
+    ) -> Self {
         Self {
             from_device: n.from_device.as_str(),
             content_hash: &n.content_hash,
-            plaintext_utf8: String::from_utf8_lossy(&n.plaintext).into_owned(),
+            text,
+            rep_summary,
             action: format_action(n.action),
             at_ms: n.at_ms,
         }

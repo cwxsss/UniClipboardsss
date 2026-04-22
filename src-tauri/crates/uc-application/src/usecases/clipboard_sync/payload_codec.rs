@@ -77,7 +77,7 @@ pub(crate) fn encode_snapshot_to_v3_bytes(
 ///
 /// Caller should pass `notice.plaintext.as_ref()` from the inbound
 /// notice; the decoder does not claim ownership of the buffer.
-pub(crate) fn decode_v3_bytes_to_snapshot(bytes: &[u8]) -> Result<SystemClipboardSnapshot> {
+pub fn decode_v3_bytes_to_snapshot(bytes: &[u8]) -> Result<SystemClipboardSnapshot> {
     let mut cursor = bytes;
     let payload = ClipboardBinaryPayload::decode_from(&mut cursor)
         .map_err(|e| anyhow!("decode V3 envelope: {e}"))?;
