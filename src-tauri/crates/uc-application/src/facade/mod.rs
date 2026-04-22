@@ -6,10 +6,15 @@
 //! sub-facades expose them through domain-scoped methods.
 
 pub mod app_facade;
+pub mod clipboard;
 pub mod roster;
 pub mod space_setup;
 
 pub use app_facade::AppFacade;
+pub use clipboard::{
+    ClipboardSyncDeps, ClipboardSyncError, ClipboardSyncFacade, DispatchEntryInput,
+    DispatchEntryOutcome, DispatchEntryPerTarget, InboundAction, InboundNotice, IngestHandle,
+};
 pub use roster::{MemberRosterDeps, MemberRosterFacade, PresenceEvent, RosterEntry, RosterError};
 pub use space_setup::{
     InitializeSpaceCommand, InitializeSpaceError, InitializeSpaceResult, SpaceSetupDeps,
