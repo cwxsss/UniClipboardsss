@@ -4,7 +4,6 @@ use std::fmt;
 use std::process::Stdio;
 
 use serde::Serialize;
-use uc_app::app_paths::AppPaths;
 
 use crate::exit_codes;
 use crate::local_daemon;
@@ -31,7 +30,7 @@ impl fmt::Display for StartOutput {
 
 /// Run the start command.
 pub async fn run(foreground: bool, json: bool, verbose: bool) -> i32 {
-    if let Some(code) = check_setup_complete(json, verbose) {
+    if let Some(code) = check_setup_complete(json, verbose).await {
         return code;
     }
 
@@ -42,22 +41,18 @@ pub async fn run(foreground: bool, json: bool, verbose: bool) -> i32 {
     }
 }
 
-/// Check if setup (encryption initialization) is complete before starting the daemon.
+/// Block `start` if Space setup hasn't completed for the active
+/// profile. Delegates the actual check to
+/// [`uc_bootstrap::is_setup_complete`] so the file paths + JSON schema
+/// stay encoded in `uc-infra::FileSetupStatusRepository`, not duplicated
+/// here.
 ///
-/// Uses a lightweight file-existence check on `.initialized_encryption` marker
-/// instead of building the full CLI runtime, which would trigger keychain
-/// access popups on macOS.
-///
-/// Returns `Some(exit_code)` if start should be blocked, `None` if ok to proceed.
-fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
-    let app_dirs = match uc_bootstrap::assembly::get_default_app_dirs().ok() {
-        Some(d) => d,
-        None => return None, // Can't resolve — let daemon handle it
-    };
-
-    let marker_file = AppPaths::from_app_dirs(&app_dirs).encryption_marker_path();
-    if marker_file.exists() {
-        return None; // Setup complete — proceed
+/// Returns `Some(exit_code)` to block, `None` to proceed.
+async fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
+    // Resolution failure (e.g. missing app dirs) → let daemon surface
+    // the underlying error rather than masking it here.
+    if uc_bootstrap::is_setup_complete().await.unwrap_or(true) {
+        return None;
     }
 
     if json {
@@ -70,7 +65,8 @@ fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
         );
     } else {
         eprintln!(
-            "Error: setup not complete. Run `uniclipboard setup` first to create or join a Space."
+            "Error: setup not complete. Run `uniclipboard-cli init` (new Space) or \
+             `uniclipboard-cli join` (existing Space) first, then retry `start`."
         );
     }
     Some(exit_codes::EXIT_ERROR)

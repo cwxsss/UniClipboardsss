@@ -28,7 +28,7 @@ pub use builders::{
     build_slice1_cli_context, CliBootstrapContext, DaemonBootstrapContext, GuiBootstrapContext,
 };
 pub use config::load_config;
-pub use init::ensure_default_device_name;
+pub use init::{ensure_default_device_name, is_setup_complete};
 pub use non_gui_runtime::{
     build_cli_runtime, build_non_gui_runtime, build_non_gui_runtime_with_emitter,
     build_non_gui_runtime_with_setup, resolve_clipboard_integration_mode, LoggingHostEventEmitter,
