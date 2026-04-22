@@ -515,16 +515,16 @@ let ingest_handle = self.clipboard_sync.spawn_ingest_loop();
 | T8 | IngestInboundClipboardUseCase | ✅ | `57ab9e65` | 0.4h | 4 单测;Phase 2 刻意不做本地持久化 + 不做本地 dedup(adapter 的 Ack 边界已分 Accepted/DuplicateIgnored);decrypt 失败 warn + skip,loop 继续;`IngestSpawnHandle` Drop 自动 abort |
 | T9 | ClipboardSyncFacade | ✅ | `5b49d0ca` | 0.5h | 3 单测;完整 public ↔ internal type 映射(7 对类型 + `From<DispatchSyncError>`);subscribe 桥接走 relay task 保证 pub types 独立演进;`IngestHandle` Drop 级联 abort;`facade/mod.rs` 导出 9 个符号 |
 | T10 | bootstrap 装配 | ✅ | `d4849971` | 0.4h | `SpaceSetupAssembly` 新增 `pub clipboard_sync: Arc<ClipboardSyncFacade>` + 私有 `ingest_handle: IngestHandle`(parallel to `roster`);`build_space_setup_assembly` 在 `install_presence` 之后调 `install_clipboard`,`spawn` 后构造 facade + 起 ingest loop;`shutdown` 显式 abort ingest 走在 router shutdown 前;`uc_infra::network::iroh` 顶层导出 `ClipboardHandlers`。**偏离原计划**:ingest 不进 `SpaceSetupFacade::auto_start_network`——receiver 与 `start_network` 无序依赖(handler 装在 router 上,spawn 即工作),内嵌反而要把 ClipboardSyncFacade 注进 SpaceSetupFacade、违 §11.4 精神;assembly 层装配最干净;bootstrap 测试 3 测全绿(slice1_handshake_e2e + slice2_phase1_presence_e2e) |
-| T11 | uc-cli send/watch | ⏸️ pending | — | — | — |
-| T12 | slice2_phase2 e2e 集成测试 | ⏸️ pending | — | — | — |
-| T13 | 手动双 profile 验收 | ⏸️ pending | — | — | — |
-| T14 | task_plan.md ✅ 收尾 | ⏸️ pending | — | — | — |
+| T11 | uc-cli send/watch | ✅ | `5d7622ed` | 0.5h | `send [TEXT]`(positional 或 stdin)— resume → refresh_presence → `dispatch_entry`,人类 + JSON 双输出,non-zero exit when nothing landed;`watch` — `subscribe_inbound_notices` + Ctrl-C 退出,JSON 模式 line-delimited;**偏离原计划**:不读系统剪贴板,bootstrap `UC_DISABLE_SYSTEM_CLIPBOARD=1` 让 clipboard-rs 在 non-bundled CLI 上不会 panic,plaintext 改走 CLI arg / stdin,daemon 改装到 iroh 时再开 OS clipboard 路径;新依赖 `bytes` / `sha2`(content_hash hex) |
+| T12 | slice2_phase2 e2e 集成测试 | ✅ | `734d52fe` | 0.7h | 2 verdict 全绿(`sponsor_dispatch_lands_on_joiner_within_2s` + `repeat_dispatch_lands_twice_phase2_no_dedup`,合计 ~7s);**偏离原计划**:改断 `subscribe_inbound_notices` 收到 plaintext 而非 `ClipboardEventWriter.insert_event`(Phase 2 ingest 不持久化);"重复 → DuplicateIgnored" 改为"两次都 Accepted"——Phase 2 receiver adapter 不 dedup,wire 留有 `DuplicateIgnored` 编码但无生产者,Phase 3 持久化时再 flip 该断言;harness 与 phase1 e2e 复制(`tests/common` 抽取留 Phase 2 后);新依赖 `bytes` to uc-bootstrap dev-deps |
+| T13 | 手动双 profile 验收 | ⏭️ 战略跳过 | — | — | 沿用 Phase 1 T12 战略跳过决策(plan §12.2):Rust 集成测试已等价覆盖配对 + dispatch + receive 全路径(real iroh loopback transport,3 ALPN 同 router,V3 chunked AEAD round-trip,`subscribe_inbound_notices` 接收时序 ≤ 5s)。CLI plaintext pipeline 不读系统剪贴板(`UC_DISABLE_SYSTEM_CLIPBOARD=1`),没有 OS-side variance 需要手动验证。手动 recipe 留在 `slice2-phase2-plan.md §9.3` 供需要时使用 |
+| T14 | task_plan.md ✅ 收尾 | ✅ | `<本提交>` | 0.3h | task_plan.md Phase 2 节标 ✅ + 列全 11 条 commit;`slice2-phase2-plan.md §15` tracker 全部封版;follow-up 列表新增"daemon clipboard watcher 改装到 iroh"(Phase 3)+ "ingest receiver-side dedup 到 ClipboardEventWriter"(Phase 3);progress.md 追加 Slice 2 Phase 2 封版 session |
 
 ### 15.2 累计
 
-- **已完成**:T1-T10(10/14)~4.6h;比原估 ~16h 约省 71%,主要因 adapter 模块化好 + Phase 1 pattern 直接复用
-- **测试**:29 单测 + 3 integration probe verdict + 3 bootstrap e2e 全绿
-- **进度**:T11 uc-cli send/watch 进行中;余下 4 任务整体 ~5h
+- **已完成**:13/14 tasks(T13 战略跳过)~6.1h;比原估 ~17.5h 约省 65%,主要因 adapter 模块化好 + Phase 1 pattern 直接复用 + e2e harness 沿用
+- **测试**:29 单测 + 3 integration probe verdict + 5 bootstrap e2e(slice1 1 + slice2-phase1 2 + slice2-phase2 2)+ 2 CLI smoke(`--help`、resume guard)全绿
+- **状态**:Phase 2 封版,移交 Phase 3
 
 ### 15.3 关键决策 / 偏离
 
@@ -539,6 +539,13 @@ let ingest_handle = self.clipboard_sync.spawn_ingest_loop();
 
 - T11 CLI 里 plaintext pipeline 最简做法:读系统剪贴板 `SystemClipboardPort::read_snapshot()` → 取第一个 text representation → postcard encode 一个 mini `ClipboardBinaryPayload` → SHA-256 content_hash。`watch` 循环读 `last_snapshot_hash` + `poll_system_clipboard` 每 500ms 比对变化
 - T11 入口可走 `assembly.clipboard_sync.dispatch_entry(...)` / `subscribe_inbound_notices()`,assembly 已自动 spawn ingest loop,CLI 不再需要手动 `spawn_ingest_loop()`
+
+### 15.5 移交 Phase 3 follow-up
+
+- **daemon clipboard watcher 改装到 iroh**:Phase 2 验收时刻意保留 `uc-app::sync_outbound` / `uc-daemon::workers::inbound_clipboard_sync` 走 libp2p 栈(Phase 2 双栈并行);Phase 3 把 daemon watcher / inbound writer 改 wire 到 `ClipboardSyncFacade`,完成后 Slice 5 才能删 deprecated `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort`
+- **receiver-side dedup**:Phase 2 ingest 不持久化、不 dedup,wire 留有 `DuplicateIgnored` 编码但无生产者(e2e `repeat_dispatch_lands_twice_phase2_no_dedup` 已 pin 当前事实)。Phase 3 落 `ClipboardEventWriter.insert_event` + content_hash 去重时 emit `DuplicateIgnored`,同时 flip e2e 那个 verdict
+- **B2 不 save self 为 SpaceMember**(继承自 Phase 1):`RedeemPairingInvitationUseCase::persist` 修复后 e2e B→A 双向断言可加;phase2 e2e 已注释提示
+- **e2e harness 抽 `tests/common`**:phase1 / phase2 两文件已是第三份重复(slice1_handshake_e2e + slice2_phase1_presence_e2e + slice2_phase2_clipboard_e2e),Phase 3 出第四份前可统一抽取(Phase 1/2 的 in-file 注释都已立 flag)
 - T12 e2e 复用 Phase 1 `slice2_phase1_presence_e2e` 的两-assembly + pair 夹具,再加 `dispatch_entry()` 调用 + `subscribe_inbound_notices()` 断言 plaintext 字节等价。避免 T11 shell 脚本,Rust 集成测试已覆盖验收
 
 

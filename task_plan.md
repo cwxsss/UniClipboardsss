@@ -917,6 +917,46 @@ pub struct StopNetworkCommand; // 无字段
 
 ---
 
+#### Slice 2 Phase 2 · 剪贴板同步(text-only,CLI-only)✅(2026-04-22)
+
+**范围**:把"A 复制 → B 收到"这件事在 iroh 栈跑通;CLI 提供 `send` / `watch` 两条命令完成端到端验收。**不含**系统剪贴板写入(daemon 侧)、A3 revoke / A5 rename UI、blob / 文件传输。
+
+**交付**(全部合入 `slender-soybean` 分支):
+- **uc-core port**(T1 `0edb7479`):`ClipboardDispatchPort` / `ClipboardReceiverPort` / `ClipboardHeader` / `SyncPayload` / `DispatchAck` / `ClipboardDispatchError` / `InboundClipboard`;legacy `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort` 加 `#[deprecated(since="Slice2-Phase2")]`(Phase 2 双栈并行,Slice 5 删除)
+- **iroh identity probe**(T2 `5a9ea34f`):3 verdict 探针确认 `iroh::EndpointId == iroh_base::PublicKey`(32-byte Ed25519),`Connection::remote_id().as_bytes()` 与 `SecretKey::public().as_bytes()` 字节等价 → 复用现有 `IdentityFingerprintFactoryPort::from_public_key(&[u8])`,**无需扩 port**
+- **wire codec**(T3 `b2206e33`):`clipboard_wire.rs` 7 单测;frame format `[magic=0xC1 \| header_len_be(4) \| header(postcard) \| payload_len_be(4) \| ciphertext]` + 1-byte ack 反向流;`MAX_HEADER_SIZE=4KiB` / `MAX_PAYLOAD_SIZE=2MiB` / `AckCode { Accepted=0x01, DuplicateIgnored=0x02, Rejected=0xFF }`
+- **dispatch adapter**(T4 `ae5b8202`):`IrohClipboardDispatchAdapter` impls `ClipboardDispatchPort`;`CLIPBOARD_ALPN = b"uniclipboard/clipboard/0"`;按 `peer_addr_repo.get → postcard-decode EndpointAddr → endpoint.connect(CLIPBOARD_ALPN) → open_bi → write_frame → read 1-byte ack` 链路走;`Offline` / `Io` / `PeerRejected` 错误折叠
+- **receiver adapter**(T5 `63330895`):`IrohClipboardReceiverAdapter` 持广播 Sender + `IrohClipboardReceiverHandler` ProtocolHandler 装在 router 上;identity 反查靠 `Connection::remote_id().as_bytes()` → `IdentityFingerprintFactoryPort` → `member_repo.list().scan` → `DeviceId`;**关键 bug 修**:handler 返回时 `Connection` 被 drop 导致 ack byte 来不及 flush,加 `connection.closed().await` 保活
+- **install_clipboard 扩展点**(T6 `c500ae62`):`IrohNodeBuilder::install_clipboard(peer_addr_repo, member_repo, fingerprint_factory) -> ClipboardHandlers`;3 ALPN(pairing + presence + clipboard)同 router 共存测试覆盖
+- **DispatchClipboardEntryUseCase**(T7 `896e371b` + `e134247c` mockall 重写):`pub(crate)`;输入 `(plaintext: Bytes, content_hash: String, payload_version: u8)`;流程 `cipher.encrypt → peer_addr_repo.list → filter self + Online → JoinSet 并发 fan-out`;5 单测全 mockall(`.with(eq(DeviceId))` per-target 路由)
+- **IngestInboundClipboardUseCase**(T8 `57ab9e65` + `e134247c` mockall 重写):`pub(crate)`;subscribe receiver broadcast → decrypt → 重 broadcast `InboundClipboardNotice { from_device, content_hash, plaintext, action, at_ms }`;`IngestSpawnHandle` Drop 自动 abort;Phase 2 不持久化 + 不 dedup;4 单测(mockall + `FakeReceiver` 手写)
+- **ClipboardSyncFacade**(T9 `5b49d0ca` + `e134247c` mockall 重写):公开入口,3 方法(`dispatch_entry` / `subscribe_inbound_notices` / `spawn_ingest_loop`);完整 public ↔ internal 类型映射(7 对 + `From<DispatchSyncError>`),保证 §11.4 内部类型不外泄;3 单测
+- **bootstrap 装配**(T10 `d4849971`):`SpaceSetupAssembly` 加 `pub clipboard_sync: Arc<ClipboardSyncFacade>` + 私有 `ingest_handle: IngestHandle`(parallel to `roster`);`build_space_setup_assembly` 在 `install_presence` 之后调 `install_clipboard`、构造 facade、起 ingest loop;`shutdown` 显式 abort ingest 走在 router 关之前;`uc_infra::network::iroh` 顶层导出 `ClipboardHandlers`
+- **uc-cli 命令**(T11 `5d7622ed`):
+  - `uniclipboard-cli send [TEXT]` — positional 或 stdin → resume → refresh_presence → `dispatch_entry`,human + JSON 双输出,non-zero exit when nothing landed
+  - `uniclipboard-cli watch` — `subscribe_inbound_notices` 循环 + Ctrl-C 退出,JSON 模式 line-delimited
+  - **决策**:不读系统剪贴板(`UC_DISABLE_SYSTEM_CLIPBOARD=1` 让 clipboard-rs 在 non-bundled CLI 上不会 panic),plaintext 改 CLI arg / stdin;daemon 改装到 iroh 时再开 OS clipboard 路径
+- **集成测试**(T12 `734d52fe`):`slice2_phase2_clipboard_e2e` 两 verdict —— `sponsor_dispatch_lands_on_joiner_within_2s`(plaintext + content_hash 字节级 round-trip 通过 V3 chunked AEAD)+ `repeat_dispatch_lands_twice_phase2_no_dedup`(pin Phase 2 不 dedup 的当前事实,Phase 3 持久化时 flip)
+- **文档**(T14 `<本提交>`):本节标 ✅;`slice2-phase2-plan.md §15` tracker 全部封版
+
+**验收达成**:
+- [x] A 复制文字 → B 在 ≤ 2s 内收到相同内容 + 匹配 content_hash(自动 e2e `sponsor_dispatch_lands_on_joiner_within_2s`,5s ceiling 含 CI 抖动)
+- [x] CLI `uniclipboard-cli send <TEXT>` / `watch` 走通(单元 + e2e + smoke `--help` / resume guard)
+- [x] 重复内容第二次 dispatch 仍 Accepted(Phase 2 receiver 不 dedup,wire 有编码无生产者;`repeat_dispatch_lands_twice_phase2_no_dedup` pin)
+- [x] 离线对端不 panic(`DispatchPerTarget.outcome = Err("Offline")`,Phase 2 dispatch 错误折叠覆盖)
+- [x] 单测覆盖 3 usecase + 1 facade + 4 adapter(总 ~29 单测 + 5 e2e + 3 probe)
+
+**跳过的任务**:
+- **T13 手动双 profile 验收 ⏭️ 战略跳过**:沿用 Phase 1 T12 战略跳过决策。Rust 集成测试已等价覆盖 pair → dispatch → receive 全路径(real iroh loopback transport,3 ALPN 同 router,V3 chunked AEAD round-trip,接收时序 ≤ 5s),CLI plaintext pipeline 不读系统剪贴板没有 OS-side variance 需要手动验证。手动 recipe 留在 `slice2-phase2-plan.md §9.3` 供需要时使用
+
+**后续 follow-up(非 Phase 2 scope,记录供 Phase 3+)**:
+- **daemon clipboard watcher 改装到 iroh**(Phase 3):`uc-app::sync_outbound` / `uc-daemon::workers::inbound_clipboard_sync` 改 wire 到 `ClipboardSyncFacade`,完成后 Slice 5 才能删 deprecated transport ports
+- **receiver-side dedup + 持久化**(Phase 3):ingest 接 `ClipboardEventWriter.insert_event` + content_hash 去重 → emit wire `DuplicateIgnored`,同时 flip `repeat_dispatch_lands_twice_phase2_no_dedup` 验收
+- **B2 不 save self 为 SpaceMember**(继承自 Phase 1):修复后 phase2 e2e 可加 B→A 双向断言
+- **e2e harness 抽 `tests/common`**:slice1 + slice2-phase1 + slice2-phase2 三份重复,Phase 3 出第四份前可统一抽取
+
+---
+
 ### Slice 3 · 文件 / Blob 🔲
 
 **目标**:含文件的剪贴板端到端;明文 hash 去重生效(重复复制同一文件不产生重复密文)。
