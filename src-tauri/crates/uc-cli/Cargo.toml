@@ -30,6 +30,13 @@ indicatif = "0.17"
 libc = "0.2"
 hostname = "0.4"
 uc-application = { path = "../uc-application" }
+# Slice 2 Phase 2 · T11 — `send` / `watch` need to package raw bytes as
+# `bytes::Bytes` for `ClipboardSyncFacade::dispatch_entry` and compute a
+# deduplication hash for the wire `ClipboardHeader.content_hash`. SHA-256
+# is the same algorithm the Phase 2 plan and Slice 5 fingerprint factory
+# converged on.
+bytes = "1.7"
+sha2 = "0.10"
 # Installs the default `rustls` crypto provider process-wide at `main()`
 # start — iroh-quinn and reqwest both consume rustls 0.23+, which now
 # requires an explicit `CryptoProvider` before the first TLS handshake.

@@ -125,6 +125,25 @@ enum Commands {
     Members,
     /// Show space and encryption status (direct mode, no daemon required)
     SpaceStatus,
+    /// Dispatch one clipboard payload to every online paired peer.
+    ///
+    /// Self-contained direct mode (Slice 2 Phase 2). Reads the payload
+    /// from the positional argument, or — when omitted — from stdin
+    /// until EOF. Encodes the bytes as a Phase 2 text payload and fans
+    /// it out via the iroh clipboard ALPN. Phase 2 deliberately does
+    /// **not** read the system clipboard; daemon-driven capture lands
+    /// in Phase 3.
+    Send {
+        /// Plaintext to send. Omit to read from stdin until EOF.
+        text: Option<String>,
+    },
+    /// Watch inbound clipboard payloads from paired peers and print each
+    /// delivery as it lands. Press Ctrl-C to stop.
+    ///
+    /// Self-contained direct mode (Slice 2 Phase 2). Phase 2 prints to
+    /// the terminal only — does not write the system clipboard, so it
+    /// cannot collide with a future daemon watcher.
+    Watch,
     /// Search clipboard history (query or inspect search availability)
     Search {
         #[command(subcommand)]
@@ -239,6 +258,10 @@ fn main() -> anyhow::Result<()> {
             Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
             Commands::Members => commands::members::run(cli.json, cli.verbose).await,
             Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,
+            Commands::Send { text } => {
+                commands::send::run(commands::send::SendArgs { text }, cli.json, cli.verbose).await
+            }
+            Commands::Watch => commands::watch::run(cli.json, cli.verbose).await,
             Commands::Search { subcommand } => {
                 commands::search::run(subcommand, cli.json, cli.verbose).await
             }
