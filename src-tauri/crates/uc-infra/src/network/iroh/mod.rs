@@ -5,12 +5,14 @@
 //! [`IrohIdentityStore`]; later slices add the rest.
 
 pub mod clipboard_dispatch_adapter;
+pub mod clipboard_receiver_adapter;
 pub mod clipboard_wire;
 pub mod identity_store;
 pub mod node;
 pub mod presence_adapter;
 
 pub use clipboard_dispatch_adapter::{IrohClipboardDispatchAdapter, CLIPBOARD_ALPN};
+pub use clipboard_receiver_adapter::{IrohClipboardReceiverAdapter, IrohClipboardReceiverHandler};
 pub use identity_store::{IrohIdentityStore, IDENTITY_STORE_KEY};
 pub use node::{IrohNode, IrohNodeBuilder, IrohNodeConfig, IrohNodeError, PairingHandlers};
 pub use presence_adapter::{IrohPresenceAdapter, IrohPresenceHandler, PRESENCE_ALPN};
