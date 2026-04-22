@@ -254,16 +254,27 @@ fn lift_notice(internal: UcInboundNotice) -> InboundNotice {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+//
+// **Mocking convention** (consistent with `usecases::clipboard_sync::*::tests`):
+//
+// * Use `mockall::mock!` for ports asserted via call counts + return
+//   values: `PeerAddressRepositoryPort`, `TransferCipherPort`,
+//   `ClipboardDispatchPort`, `PresencePort`, `DeviceIdentityPort`,
+//   `LocalIdentityPort`, `SettingsPort`.
+// * Hand-write `FakeReceiver` because `ClipboardReceiverPort::subscribe`
+//   returns a non-Clone broadcast `Receiver` and the test needs an
+//   `emit(...)` helper to drive the loop. Same trade-off as Phase 1
+//   `FakePresence` in `roster/facade.rs`.
+// * Trivial sync `FixedClock` stays hand-written (4 lines).
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use std::collections::HashMap;
     use std::time::Duration;
 
     use async_trait::async_trait;
-    use tokio::sync::Mutex;
+    use mockall::predicate::*;
     use uc_core::ports::security::TransferCipherError;
     use uc_core::ports::{
         ClipboardDispatchError, ClipboardHeader, DispatchAck, InboundClipboard, LocalIdentityError,
@@ -273,86 +284,90 @@ mod tests {
     use uc_core::security::IdentityFingerprint;
     use uc_core::settings::model::Settings;
 
-    // ---- doubles --------------------------------------------------------
+    // ── mockall ──────────────────────────────────────────────────────────
 
-    #[derive(Default)]
-    struct MemRepo {
-        inner: Mutex<HashMap<String, PeerAddressRecord>>,
-    }
-    #[async_trait]
-    impl PeerAddressRepositoryPort for MemRepo {
-        async fn get(
-            &self,
-            device: &DeviceId,
-        ) -> Result<Option<PeerAddressRecord>, PeerAddressError> {
-            Ok(self.inner.lock().await.get(device.as_str()).cloned())
-        }
-        async fn upsert(&self, record: &PeerAddressRecord) -> Result<(), PeerAddressError> {
-            self.inner
-                .lock()
-                .await
-                .insert(record.device_id.as_str().to_string(), record.clone());
-            Ok(())
-        }
-        async fn list(&self) -> Result<Vec<PeerAddressRecord>, PeerAddressError> {
-            Ok(self.inner.lock().await.values().cloned().collect())
-        }
-        async fn remove(&self, device: &DeviceId) -> Result<(), PeerAddressError> {
-            self.inner.lock().await.remove(device.as_str());
-            Ok(())
+    mockall::mock! {
+        pub PeerAddrRepo {}
+        #[async_trait]
+        impl PeerAddressRepositoryPort for PeerAddrRepo {
+            async fn get(
+                &self,
+                device: &DeviceId,
+            ) -> Result<Option<PeerAddressRecord>, PeerAddressError>;
+            async fn upsert(&self, record: &PeerAddressRecord) -> Result<(), PeerAddressError>;
+            async fn list(&self) -> Result<Vec<PeerAddressRecord>, PeerAddressError>;
+            async fn remove(&self, device: &DeviceId) -> Result<(), PeerAddressError>;
         }
     }
 
-    struct StaticPresence(HashMap<String, ReachabilityState>);
-    #[async_trait]
-    impl PresencePort for StaticPresence {
-        async fn ensure_reachable(
-            &self,
-            _device: &DeviceId,
-        ) -> Result<ReachabilityState, PresenceError> {
-            Ok(ReachabilityState::Online)
-        }
-        async fn current_state(&self, device: &DeviceId) -> ReachabilityState {
-            self.0
-                .get(device.as_str())
-                .copied()
-                .unwrap_or(ReachabilityState::Unknown)
-        }
-        fn subscribe(&self) -> broadcast::Receiver<PresenceEvent> {
-            let (tx, rx) = broadcast::channel(1);
-            std::mem::forget(tx);
-            rx
+    mockall::mock! {
+        pub Presence {}
+        #[async_trait]
+        impl PresencePort for Presence {
+            async fn ensure_reachable(
+                &self,
+                device: &DeviceId,
+            ) -> Result<ReachabilityState, PresenceError>;
+            async fn current_state(&self, device: &DeviceId) -> ReachabilityState;
+            fn subscribe(&self) -> broadcast::Receiver<PresenceEvent>;
         }
     }
 
-    struct EchoCipher;
-    #[async_trait]
-    impl TransferCipherPort for EchoCipher {
-        async fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
-            Ok(plaintext.to_vec())
-        }
-        async fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
-            Ok(ciphertext.to_vec())
+    mockall::mock! {
+        pub Cipher {}
+        #[async_trait]
+        impl TransferCipherPort for Cipher {
+            async fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, TransferCipherError>;
+            async fn decrypt(&self, encrypted: &[u8]) -> Result<Vec<u8>, TransferCipherError>;
         }
     }
 
-    #[derive(Default)]
-    struct OkDispatch {
-        called: Mutex<usize>,
-    }
-    #[async_trait]
-    impl ClipboardDispatchPort for OkDispatch {
-        async fn dispatch(
-            &self,
-            _target: &DeviceId,
-            _header: &ClipboardHeader,
-            _payload: SyncPayload,
-        ) -> Result<DispatchAck, ClipboardDispatchError> {
-            *self.called.lock().await += 1;
-            Ok(DispatchAck::Accepted)
+    mockall::mock! {
+        pub Dispatch {}
+        #[async_trait]
+        impl ClipboardDispatchPort for Dispatch {
+            async fn dispatch(
+                &self,
+                target: &DeviceId,
+                header: &ClipboardHeader,
+                payload: SyncPayload,
+            ) -> Result<DispatchAck, ClipboardDispatchError>;
         }
     }
 
+    mockall::mock! {
+        pub DeviceId_ {}
+        impl DeviceIdentityPort for DeviceId_ {
+            fn current_device_id(&self) -> DeviceId;
+        }
+    }
+
+    mockall::mock! {
+        pub LocalIdentity {}
+        #[async_trait]
+        impl LocalIdentityPort for LocalIdentity {
+            async fn create(&self) -> Result<IdentityFingerprint, LocalIdentityError>;
+            async fn ensure(&self) -> Result<IdentityFingerprint, LocalIdentityError>;
+            async fn get_current_fingerprint(
+                &self,
+            ) -> Result<Option<IdentityFingerprint>, LocalIdentityError>;
+        }
+    }
+
+    mockall::mock! {
+        pub Settings_ {}
+        #[async_trait]
+        impl SettingsPort for Settings_ {
+            async fn load(&self) -> anyhow::Result<Settings>;
+            async fn save(&self, s: &Settings) -> anyhow::Result<()>;
+        }
+    }
+
+    // ── hand-written: ClipboardReceiverPort + ClockPort ─────────────────
+
+    /// `subscribe()` returns a non-Clone `broadcast::Receiver` and the
+    /// tests need an `emit(...)` helper — same trade-off as Phase 1's
+    /// `FakePresence`.
     struct FakeReceiver {
         tx: broadcast::Sender<InboundClipboard>,
     }
@@ -372,39 +387,6 @@ mod tests {
         }
     }
 
-    struct FixedDevice(DeviceId);
-    impl DeviceIdentityPort for FixedDevice {
-        fn current_device_id(&self) -> DeviceId {
-            self.0.clone()
-        }
-    }
-    struct StubLocalIdentity;
-    #[async_trait]
-    impl LocalIdentityPort for StubLocalIdentity {
-        async fn create(&self) -> Result<IdentityFingerprint, LocalIdentityError> {
-            Ok(IdentityFingerprint::from_raw_string("AAAABBBBCCCCDDDD").unwrap())
-        }
-        async fn ensure(&self) -> Result<IdentityFingerprint, LocalIdentityError> {
-            self.create().await
-        }
-        async fn get_current_fingerprint(
-            &self,
-        ) -> Result<Option<IdentityFingerprint>, LocalIdentityError> {
-            Ok(Some(
-                IdentityFingerprint::from_raw_string("AAAABBBBCCCCDDDD").unwrap(),
-            ))
-        }
-    }
-    struct StubSettings;
-    #[async_trait]
-    impl SettingsPort for StubSettings {
-        async fn load(&self) -> anyhow::Result<Settings> {
-            Ok(Settings::default())
-        }
-        async fn save(&self, _: &Settings) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
     struct FixedClock(i64);
     impl ClockPort for FixedClock {
         fn now_ms(&self) -> i64 {
@@ -412,49 +394,112 @@ mod tests {
         }
     }
 
-    fn make_deps(
-        peer_addr_repo: Arc<dyn PeerAddressRepositoryPort>,
-        presence: Arc<dyn PresencePort>,
-        dispatch: Arc<dyn ClipboardDispatchPort>,
-        receiver: Arc<dyn ClipboardReceiverPort>,
-    ) -> ClipboardSyncDeps {
-        ClipboardSyncDeps {
-            peer_addr_repo,
-            presence,
-            transfer_cipher: Arc::new(EchoCipher),
-            clipboard_dispatch: dispatch,
-            clipboard_receiver: receiver,
-            device_identity: Arc::new(FixedDevice(DeviceId::new("self"))),
-            local_identity: Arc::new(StubLocalIdentity),
-            settings: Arc::new(StubSettings),
-            clock: Arc::new(FixedClock(1_700_000_000_000)),
+    // ── helpers ─────────────────────────────────────────────────────────
+
+    fn fp() -> IdentityFingerprint {
+        IdentityFingerprint::from_raw_string("AAAABBBBCCCCDDDD").unwrap()
+    }
+
+    fn record(device: &str) -> PeerAddressRecord {
+        PeerAddressRecord {
+            device_id: DeviceId::new(device),
+            addr_blob: vec![0xAA; 8],
+            observed_at: chrono::Utc::now(),
         }
     }
 
-    // ---- verdicts -------------------------------------------------------
+    /// Build a `DeviceIdentity` mock that returns the same `device_id`
+    /// every call.
+    fn make_device_identity(local: &str) -> MockDeviceId_ {
+        let local = DeviceId::new(local);
+        let mut m = MockDeviceId_::new();
+        m.expect_current_device_id()
+            .returning(move || local.clone());
+        m
+    }
+
+    fn make_local_identity() -> MockLocalIdentity {
+        let mut m = MockLocalIdentity::new();
+        m.expect_get_current_fingerprint()
+            .returning(|| Ok(Some(fp())));
+        m
+    }
+
+    fn make_settings() -> MockSettings_ {
+        let mut m = MockSettings_::new();
+        m.expect_load().returning(|| Ok(Settings::default()));
+        m
+    }
+
+    /// Wire the facade with the given mock ports + a `FakeReceiver`. The
+    /// FakeReceiver is returned alongside so the caller can `publish(...)`
+    /// during the test.
+    fn build_facade(
+        peer_addr_repo: MockPeerAddrRepo,
+        presence: MockPresence,
+        cipher: MockCipher,
+        dispatch: MockDispatch,
+        device_identity: MockDeviceId_,
+        local_identity: MockLocalIdentity,
+        settings: MockSettings_,
+    ) -> (ClipboardSyncFacade, Arc<FakeReceiver>) {
+        let receiver = Arc::new(FakeReceiver::new());
+        let facade = ClipboardSyncFacade::new(ClipboardSyncDeps {
+            peer_addr_repo: Arc::new(peer_addr_repo),
+            presence: Arc::new(presence),
+            transfer_cipher: Arc::new(cipher),
+            clipboard_dispatch: Arc::new(dispatch),
+            clipboard_receiver: receiver.clone() as Arc<dyn ClipboardReceiverPort>,
+            device_identity: Arc::new(device_identity),
+            local_identity: Arc::new(local_identity),
+            settings: Arc::new(settings),
+            clock: Arc::new(FixedClock(1_700_000_000_000)),
+        });
+        (facade, receiver)
+    }
+
+    // ── verdicts ────────────────────────────────────────────────────────
 
     /// Verdict 1 — `dispatch_entry` delegates to the inner use case and
-    /// returns a public outcome. Counts match the dispatch adapter's Ok
-    /// ack.
+    /// returns the public-shape outcome. mockall asserts: peer_addr_repo
+    /// listed once, presence checked once for peer-a, encrypt called
+    /// once, dispatch called once for peer-a.
     #[tokio::test]
     async fn dispatch_entry_returns_public_outcome_for_online_peer() {
-        let repo = Arc::new(MemRepo::default());
-        repo.upsert(&PeerAddressRecord {
-            device_id: DeviceId::new("peer-a"),
-            addr_blob: vec![0xAA; 8],
-            observed_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
-        let presence = Arc::new(StaticPresence(
-            [("peer-a".to_string(), ReachabilityState::Online)]
-                .into_iter()
-                .collect(),
-        ));
-        let dispatch = Arc::new(OkDispatch::default());
-        let receiver = Arc::new(FakeReceiver::new());
-        let facade =
-            ClipboardSyncFacade::new(make_deps(repo, presence, dispatch.clone(), receiver));
+        let mut repo = MockPeerAddrRepo::new();
+        repo.expect_list()
+            .times(1)
+            .returning(|| Ok(vec![record("peer-a")]));
+
+        let mut presence = MockPresence::new();
+        presence
+            .expect_current_state()
+            .with(eq(DeviceId::new("peer-a")))
+            .times(1)
+            .returning(|_| ReachabilityState::Online);
+
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_encrypt()
+            .times(1)
+            .returning(|p| Ok(p.to_vec()));
+
+        let mut dispatch = MockDispatch::new();
+        dispatch
+            .expect_dispatch()
+            .with(eq(DeviceId::new("peer-a")), always(), always())
+            .times(1)
+            .returning(|_, _, _| Ok(DispatchAck::Accepted));
+
+        let (facade, _receiver) = build_facade(
+            repo,
+            presence,
+            cipher,
+            dispatch,
+            make_device_identity("self"),
+            make_local_identity(),
+            make_settings(),
+        );
 
         let outcome = facade
             .dispatch_entry(DispatchEntryInput {
@@ -466,25 +511,36 @@ mod tests {
             .expect("dispatch ok");
         assert_eq!(outcome.total_accepted, 1);
         assert_eq!(outcome.per_target.len(), 1);
-        assert_eq!(*dispatch.called.lock().await, 1);
+        assert_eq!(outcome.per_target[0].device_id.as_str(), "peer-a");
     }
 
     /// Verdict 2 — `subscribe_inbound_notices` bridges the internal
-    /// broadcast to a public one. Publishing an inbound on the underlying
-    /// receiver yields a `InboundNotice` with the decrypted plaintext and
-    /// public `InboundAction::NewEntry`.
+    /// broadcast to a public-typed one. Decrypt is mocked once; the
+    /// public `InboundNotice` round-trips with `InboundAction::NewEntry`.
     #[tokio::test]
     async fn subscribe_inbound_notices_bridges_internal_to_public_type() {
-        let repo = Arc::new(MemRepo::default());
-        let presence = Arc::new(StaticPresence(HashMap::new()));
-        let dispatch = Arc::new(OkDispatch::default());
-        let receiver = Arc::new(FakeReceiver::new());
-        let facade = ClipboardSyncFacade::new(make_deps(
+        // Dispatch path is unused in this test; register no expectations.
+        // peer_addr_repo / presence likewise unused.
+        let repo = MockPeerAddrRepo::new();
+        let presence = MockPresence::new();
+        let dispatch = MockDispatch::new();
+
+        let mut cipher = MockCipher::new();
+        // Decrypt called once when the published frame reaches the loop.
+        cipher
+            .expect_decrypt()
+            .times(1)
+            .returning(|ct| Ok(ct.to_vec()));
+
+        let (facade, receiver) = build_facade(
             repo,
             presence,
+            cipher,
             dispatch,
-            receiver.clone() as Arc<dyn ClipboardReceiverPort>,
-        ));
+            make_device_identity("self"),
+            make_local_identity(),
+            make_settings(),
+        );
         let mut notices = facade.subscribe_inbound_notices();
         let _ingest = facade.spawn_ingest_loop();
 
@@ -512,31 +568,37 @@ mod tests {
         assert_eq!(notice.action, InboundAction::NewEntry);
     }
 
-    /// Verdict 3 — `spawn_ingest_loop` returns a handle that aborts the
-    /// background task on drop, so bootstrap shutdown is clean without an
-    /// explicit `.abort()` call.
+    /// Verdict 3 — `spawn_ingest_loop` returns a handle whose `Drop`
+    /// aborts the background task. Decrypt has zero expectations: if the
+    /// loop kept consuming after the handle drop, mockall would observe
+    /// an unexpected decrypt and panic.
     #[tokio::test]
     async fn spawn_ingest_handle_drops_clean() {
-        let repo = Arc::new(MemRepo::default());
-        let presence = Arc::new(StaticPresence(HashMap::new()));
-        let dispatch = Arc::new(OkDispatch::default());
-        let receiver = Arc::new(FakeReceiver::new());
-        let facade = ClipboardSyncFacade::new(make_deps(
+        let repo = MockPeerAddrRepo::new();
+        let presence = MockPresence::new();
+        let dispatch = MockDispatch::new();
+        // Zero decrypt expectations — no inbound is published, so decrypt
+        // must never be called even by a leaked task.
+        let cipher = MockCipher::new();
+
+        let (facade, receiver) = build_facade(
             repo,
             presence,
+            cipher,
             dispatch,
-            receiver.clone() as Arc<dyn ClipboardReceiverPort>,
-        ));
+            make_device_identity("self"),
+            make_local_identity(),
+            make_settings(),
+        );
         {
             let _handle = facade.spawn_ingest_loop();
-            // Let the loop subscribe…
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        // Handle dropped. Sleep briefly so any panic would surface.
+        // Handle dropped. Briefly sleep so the abort settles. If a leaked
+        // task touched the receiver after this point, no decrypt is set
+        // up to handle it — mockall's `Drop` would panic. Safe to publish
+        // here as the (already-aborted) loop would no longer consume it.
         tokio::time::sleep(Duration::from_millis(20)).await;
-        // If the task were still alive it would still be holding a subscribe
-        // handle on the receiver; but we can't easily observe that from
-        // outside. The real assertion is "no panic, no leaked task" — we
-        // rely on `Drop` calling `abort` on the `JoinHandle`.
+        let _ = receiver; // keep the receiver alive so tx isn't dropped early
     }
 }

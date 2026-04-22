@@ -163,6 +163,18 @@ impl IngestInboundClipboardUseCase {
 // ============================================================================
 // Tests
 // ============================================================================
+//
+// **Mocking convention** (see also `dispatch_entry.rs::tests`):
+//
+// * `TransferCipherPort` is mocked via `mockall::mock!` — all four tests
+//   need different `decrypt` recipes (echo / fail / decryption error),
+//   and mockall lets each test register exactly the calls it expects.
+// * `ClipboardReceiverPort` stays a hand-written `FakeReceiver` because
+//   the tests need to drive `subscribe()` + emit on demand. The Phase 1
+//   roster facade hand-wrote `FakePresence` for the same reason
+//   (broadcast emit ergonomics — see `roster/facade.rs::tests`).
+// * `ClockPort` stays the trivial `FixedClock` (4 lines) — same call as
+//   Phase 1 ensure_reachable_all.
 
 #[cfg(test)]
 mod tests {
@@ -175,9 +187,15 @@ mod tests {
     use uc_core::ports::security::{TransferCipherError, TransferCipherPort};
     use uc_core::ports::{ClipboardHeader, ClockPort, InboundClipboard};
 
-    /// Test double publishing `InboundClipboard` on demand via its own
-    /// broadcast sender. `subscribe` hands out receivers wired to the
-    /// same sender.
+    // ── hand-written fake: ClipboardReceiverPort ────────────────────────
+    //
+    // mockall would require a `subscribe()` returning a one-shot
+    // `broadcast::Receiver` — possible but awkward (the receiver isn't
+    // Clone, so a reusable mock would need `Mutex<Option<Receiver>>`).
+    // The hand-written fake is shorter and exposes a `publish(...)`
+    // helper the tests use to drive the loop. Same trade-off as Phase
+    // 1's `FakePresence`.
+
     struct FakeReceiver {
         tx: broadcast::Sender<InboundClipboard>,
     }
@@ -199,34 +217,19 @@ mod tests {
         }
     }
 
-    struct EchoCipher;
-    #[async_trait]
-    impl TransferCipherPort for EchoCipher {
-        async fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
-            Ok(plaintext.to_vec())
-        }
-        async fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
-            // Strip the T7 OkCipher sentinel prefix if present, otherwise
-            // echo the bytes verbatim — keeps the test independent from
-            // adapter encoding specifics.
-            if ciphertext.starts_with(b"CIPH") {
-                Ok(ciphertext[4..].to_vec())
-            } else {
-                Ok(ciphertext.to_vec())
-            }
+    // ── mockall: TransferCipherPort ─────────────────────────────────────
+
+    mockall::mock! {
+        pub Cipher {}
+
+        #[async_trait]
+        impl TransferCipherPort for Cipher {
+            async fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, TransferCipherError>;
+            async fn decrypt(&self, encrypted: &[u8]) -> Result<Vec<u8>, TransferCipherError>;
         }
     }
 
-    struct FailingCipher;
-    #[async_trait]
-    impl TransferCipherPort for FailingCipher {
-        async fn encrypt(&self, _: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
-            Err(TransferCipherError::EncryptionFailed)
-        }
-        async fn decrypt(&self, _: &[u8]) -> Result<Vec<u8>, TransferCipherError> {
-            Err(TransferCipherError::DecryptionFailed)
-        }
-    }
+    // ── trivial: ClockPort ──────────────────────────────────────────────
 
     struct FixedClock(i64);
     impl ClockPort for FixedClock {
@@ -252,12 +255,26 @@ mod tests {
 
     /// 1. Happy path — one inbound, decrypt succeeds, notice arrives on
     /// the broadcast with `NewEntry` action and the decrypted plaintext.
+    /// mockall asserts decrypt is called exactly once with the expected
+    /// ciphertext bytes.
     #[tokio::test]
     async fn forwards_decrypted_inbound_as_notice() {
         let receiver = Arc::new(FakeReceiver::new());
+        let mut cipher = MockCipher::new();
+        // Decrypt is called once with the inbound's ciphertext; return a
+        // recognisable plaintext so the assertion checks both the call
+        // and the round-trip.
+        cipher.expect_decrypt().times(1).returning(|ct| {
+            Ok(if ct.starts_with(b"CIPH") {
+                ct[4..].to_vec()
+            } else {
+                ct.to_vec()
+            })
+        });
+
         let uc = Arc::new(IngestInboundClipboardUseCase::new(
             receiver.clone(),
-            Arc::new(EchoCipher),
+            Arc::new(cipher),
             Arc::new(FixedClock(42)),
         ));
         let mut notice_rx = uc.subscribe_notices();
@@ -284,16 +301,19 @@ mod tests {
     }
 
     /// 2. Decrypt failure — no notice is emitted; the ingest loop keeps
-    /// running (next frame still processes). Simulated by publishing two
-    /// frames: the first with broken ciphertext, the second fine.
+    /// running. mockall asserts the decrypt failure is the only invocation.
     #[tokio::test]
     async fn skips_frame_when_decrypt_fails_but_keeps_loop_running() {
         let receiver = Arc::new(FakeReceiver::new());
-        // Decrypt always fails; we'd normally alternate ciphers, but
-        // proving "no notice emitted for failed decrypt" is enough.
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_decrypt()
+            .times(1)
+            .returning(|_| Err(TransferCipherError::DecryptionFailed));
+
         let uc = Arc::new(IngestInboundClipboardUseCase::new(
             receiver.clone(),
-            Arc::new(FailingCipher),
+            Arc::new(cipher),
             Arc::new(FixedClock(0)),
         ));
         let mut notice_rx = uc.subscribe_notices();
@@ -311,14 +331,21 @@ mod tests {
         assert!(fast_poll.is_err(), "decrypt failure must not emit a notice");
     }
 
-    /// 3. Concurrent inbounds — publish three frames in quick succession
-    /// and verify each produces a distinct notice.
+    /// 3. Three inbounds — publish three frames in quick succession; the
+    /// loop processes each one. mockall asserts decrypt is called
+    /// exactly three times.
     #[tokio::test]
     async fn forwards_multiple_inbounds_in_order() {
         let receiver = Arc::new(FakeReceiver::new());
+        let mut cipher = MockCipher::new();
+        cipher
+            .expect_decrypt()
+            .times(3)
+            .returning(|ct| Ok(ct.to_vec()));
+
         let uc = Arc::new(IngestInboundClipboardUseCase::new(
             receiver.clone(),
-            Arc::new(EchoCipher),
+            Arc::new(cipher),
             Arc::new(FixedClock(100)),
         ));
         let mut notice_rx = uc.subscribe_notices();
@@ -347,14 +374,26 @@ mod tests {
     }
 
     /// 4. Handle abort cleanly stops the loop. The drop impl aborts the
-    /// task; new publishes after the abort do not reach a (missing)
-    /// subscriber.
+    /// task; the post-abort publish does not reach decrypt (mockall would
+    /// panic at drop if a second decrypt slipped through).
     #[tokio::test]
     async fn abort_stops_loop_without_emitting_further_notices() {
         let receiver = Arc::new(FakeReceiver::new());
+        let mut cipher = MockCipher::new();
+        // Exactly one decrypt call expected — for the pre-abort publish.
+        // The post-abort publish must NOT reach the cipher; mockall's
+        // `.times(1)` enforces this on Drop.
+        cipher.expect_decrypt().times(1).returning(|ct| {
+            Ok(if ct.starts_with(b"CIPH") {
+                ct[4..].to_vec()
+            } else {
+                ct.to_vec()
+            })
+        });
+
         let uc = Arc::new(IngestInboundClipboardUseCase::new(
             receiver.clone(),
-            Arc::new(EchoCipher),
+            Arc::new(cipher),
             Arc::new(FixedClock(0)),
         ));
         let mut notice_rx = uc.subscribe_notices();
@@ -377,7 +416,7 @@ mod tests {
         // Allow abort to settle.
         tokio::time::sleep(Duration::from_millis(20)).await;
 
-        // Publish another — the loop is gone, no notice.
+        // Publish another — the loop is gone, decrypt must not be called.
         receiver.publish(inbound_fixture(
             "peer-b",
             "b".repeat(64).as_str(),
