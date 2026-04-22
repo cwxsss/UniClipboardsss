@@ -23,12 +23,17 @@ use std::sync::Arc;
 use tracing::{info, instrument};
 
 use uc_application::facade::{
-    MemberRosterDeps, MemberRosterFacade, SpaceSetupDeps, SpaceSetupFacade,
+    ClipboardSyncDeps, ClipboardSyncFacade, IngestHandle, MemberRosterDeps, MemberRosterFacade,
+    SpaceSetupDeps, SpaceSetupFacade,
 };
 use uc_application::space_access::HmacProofAdapter;
 use uc_core::ports::space::ProofPort;
-use uc_core::ports::{LocalIdentityPort, PresencePort};
-use uc_infra::network::iroh::{IrohIdentityStore, IrohNode, IrohNodeBuilder, IrohNodeError};
+use uc_core::ports::{
+    ClipboardDispatchPort, ClipboardReceiverPort, LocalIdentityPort, PresencePort,
+};
+use uc_infra::network::iroh::{
+    ClipboardHandlers, IrohIdentityStore, IrohNode, IrohNodeBuilder, IrohNodeError,
+};
 // Re-exported so external callers can parametrise the assembly without
 // having to `use uc_infra` themselves.
 pub use uc_infra::network::iroh::IrohNodeConfig;
@@ -47,10 +52,21 @@ pub struct SpaceSetupAssembly {
     /// tauri `get_roster` 将来也走同一条。共享同一个 `peer_addr_repo` /
     /// `presence` 实例,所以 F1 hook 填好的缓存这里能直接读到。
     pub roster: Arc<MemberRosterFacade>,
+    /// Slice 2 Phase 2 · T10:剪切板同步门面(`dispatch_entry` +
+    /// `subscribe_inbound_notices`)。CLI `send` / `watch` 通过这里走。
+    /// 与 `roster` 同样共享 `peer_addr_repo` / `presence`,所以 F1 hook
+    /// 喂好的 presence 缓存,`dispatch_entry` 能直接读到。
+    pub clipboard_sync: Arc<ClipboardSyncFacade>,
     /// The shared iroh node. Held privately so callers can't bind a second
     /// node or install additional handlers after `spawn` — that would
     /// fragment peer identity (§"共用网络栈" decision, Slice 1 planning).
     iroh_node: IrohNode,
+    /// Slice 2 Phase 2 · T10:ingest loop 的 join handle。装配时立即起一
+    /// 次,与 receiver handler 同生命周期(handler 装在 `iroh_node` 的
+    /// router 上,router shutdown 时 broadcast Sender 释放,loop 自然退
+    /// 出 `RecvError::Closed`)。`shutdown` 显式 abort 一次走在 router
+    /// 关闭之前,加快进程退出。
+    ingest_handle: IngestHandle,
 }
 
 impl SpaceSetupAssembly {
@@ -64,6 +80,12 @@ impl SpaceSetupAssembly {
     ///    `CONNECTION_CLOSE` to any live peer.
     #[instrument(skip_all)]
     pub async fn shutdown(self) {
+        // Abort ingest loop ahead of router shutdown so the broadcast
+        // receiver task exits before its sender (the receiver adapter
+        // owned by the router) drops. Drop on `IngestHandle` would do the
+        // same when `self` falls out of scope; the explicit call only
+        // shaves a tick off teardown latency and makes ordering obvious.
+        self.ingest_handle.abort();
         self.facade.on_shutdown().await;
         self.iroh_node.shutdown().await;
     }
@@ -119,6 +141,20 @@ pub async fn build_space_setup_assembly(
         Arc::clone(&wired.peer_addr_repo),
         Arc::clone(&deps.system.clock),
     );
+    // Slice 2 Phase 2 · T10:同一节点装第三个 ALPN(剪切板同步)。dispatch
+    // 复用 endpoint + peer_addr_repo,与 presence 共享 NAT/relay 映射;
+    // receiver handler 通过 `member_repo` 把 `Connection::remote_id()` 反查
+    // 成 DeviceId 再喂给应用层 broadcast。同样必须在 `spawn` 前装。
+    let ClipboardHandlers {
+        dispatch: clipboard_dispatch,
+        receiver: clipboard_receiver,
+    } = builder.install_clipboard(
+        Arc::clone(&wired.peer_addr_repo),
+        Arc::clone(&deps.device.member_repo),
+        Arc::clone(&deps.security.fingerprint),
+    );
+    let clipboard_dispatch: Arc<dyn ClipboardDispatchPort> = clipboard_dispatch;
+    let clipboard_receiver: Arc<dyn ClipboardReceiverPort> = clipboard_receiver;
     let iroh_node = builder.spawn();
 
     // HMAC proof adapter verifies the joiner's ChallengeResponse against
@@ -155,14 +191,35 @@ pub async fn build_space_setup_assembly(
     // 能直接读到。Facade 本身是纯 thin wrapper,构造非常便宜。
     let roster = Arc::new(MemberRosterFacade::new(MemberRosterDeps {
         member_repo: Arc::clone(&deps.device.member_repo),
-        local_identity,
-        presence,
+        local_identity: Arc::clone(&local_identity),
+        presence: Arc::clone(&presence),
     }));
 
-    info!("Slice 1 SpaceSetupFacade + MemberRosterFacade assembled");
+    // Slice 2 Phase 2 · T10:剪切板同步门面。`dispatch_entry` 共享同一份
+    // `peer_addr_repo` / `presence` 让 F1 hook 喂的 presence 缓存直接生
+    // 效;`transfer_cipher` 与已有 file_transfer 路径同享 V3 chunked
+    // AEAD adapter。ingest 后台 loop 立刻起一次,与 receiver handler 同
+    // 生命周期(随 `iroh_node.shutdown()` 自然退出 `RecvError::Closed`,
+    // `SpaceSetupAssembly::shutdown` 显式 `abort()` 加速过程)。
+    let clipboard_sync = Arc::new(ClipboardSyncFacade::new(ClipboardSyncDeps {
+        peer_addr_repo: Arc::clone(&wired.peer_addr_repo),
+        presence: Arc::clone(&presence),
+        transfer_cipher: Arc::clone(&deps.security.transfer_cipher),
+        clipboard_dispatch,
+        clipboard_receiver,
+        device_identity: Arc::clone(&deps.device.device_identity),
+        local_identity,
+        settings: Arc::clone(&deps.settings),
+        clock: Arc::clone(&deps.system.clock),
+    }));
+    let ingest_handle = clipboard_sync.spawn_ingest_loop();
+
+    info!("Slice 2 SpaceSetupFacade + MemberRosterFacade + ClipboardSyncFacade assembled");
     Ok(SpaceSetupAssembly {
         facade,
         roster,
+        clipboard_sync,
         iroh_node,
+        ingest_handle,
     })
 }
