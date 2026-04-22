@@ -27,8 +27,8 @@ use uc_core::{
 
 use crate::setup::action_executor::SetupActionExecutor;
 use crate::setup::context::SetupContext;
-use crate::setup::mark_complete::MarkSetupComplete;
 use crate::setup::ports::SetupAppLifecyclePort;
+use crate::setup::usecases::MarkSetupCompleteUsecase;
 use crate::setup::{
     SetupEvent, SetupEventPort, SetupPairingFacadePort, SetupState, SetupStateMachine,
 };
@@ -76,7 +76,7 @@ pub struct SetupOrchestrator {
 
 impl SetupOrchestrator {
     pub fn new(
-        mark_setup_complete: Arc<MarkSetupComplete>,
+        mark_setup_complete: Arc<MarkSetupCompleteUsecase>,
         setup_status: Arc<dyn SetupStatusPort>,
         app_lifecycle: Arc<dyn SetupAppLifecyclePort>,
         setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,

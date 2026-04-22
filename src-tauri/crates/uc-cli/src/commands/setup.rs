@@ -146,7 +146,7 @@ async fn run_new_space() -> i32 {
     }
 
     // 5. Persist setup completion so daemon/GUI recognise setup is done
-    if let Err(e) = uc.mark_setup_complete().execute().await {
+    if let Err(e) = uc.setup_status().mark_complete().await {
         ui::error(&format!("Failed to persist setup status: {e}"));
         return exit_codes::EXIT_ERROR;
     }

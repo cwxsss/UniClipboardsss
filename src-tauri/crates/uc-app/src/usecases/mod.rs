@@ -216,9 +216,12 @@ impl<'a> CoreUseCases<'a> {
         )
     }
 
-    /// Mark setup as complete (persists `.setup_status` flag).
-    pub fn mark_setup_complete(&self) -> uc_application::setup::MarkSetupComplete {
-        uc_application::setup::MarkSetupComplete::from_ports(self.runtime.deps.setup_status.clone())
+    /// Build a `SetupStatusFacade` (read + write the `.setup_status` flag).
+    ///
+    /// Goes through the application-layer facade (§11.4) rather than
+    /// exposing the underlying `pub(crate)` use case.
+    pub fn setup_status(&self) -> uc_application::facade::SetupStatusFacade {
+        uc_application::facade::SetupStatusFacade::new(self.runtime.deps.setup_status.clone())
     }
 
     /// Get the InitializeEncryption use case.

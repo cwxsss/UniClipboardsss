@@ -8,6 +8,7 @@
 pub mod app_facade;
 pub mod clipboard;
 pub mod roster;
+pub mod setup_status;
 pub mod space_setup;
 
 pub use app_facade::AppFacade;
@@ -16,6 +17,7 @@ pub use clipboard::{
     DispatchEntryOutcome, DispatchEntryPerTarget, InboundAction, InboundNotice, IngestHandle,
 };
 pub use roster::{MemberRosterDeps, MemberRosterFacade, PresenceEvent, RosterEntry, RosterError};
+pub use setup_status::SetupStatusFacade;
 pub use space_setup::{
     InitializeSpaceCommand, InitializeSpaceError, InitializeSpaceResult, SpaceSetupDeps,
     SpaceSetupFacade, UnlockSpaceCommand, UnlockSpaceError, UnlockSpaceResult,

@@ -27,8 +27,8 @@ use uc_core::{
 
 use crate::pairing::PairingDomainEvent;
 use crate::setup::context::SetupContext;
-use crate::setup::mark_complete::MarkSetupComplete;
 use crate::setup::ports::SetupAppLifecyclePort;
+use crate::setup::usecases::MarkSetupCompleteUsecase;
 use crate::setup::{
     SetupAction, SetupError as SetupDomainError, SetupEvent, SetupEventPort,
     SetupPairingFacadePort, SetupState, SetupStateMachine,
@@ -51,7 +51,7 @@ const JOINER_OFFER_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// method parameters to avoid circular references back to the orchestrator.
 pub struct SetupActionExecutor {
     // Use-case ports
-    pub(super) mark_setup_complete: Arc<MarkSetupComplete>,
+    pub(super) mark_setup_complete: Arc<MarkSetupCompleteUsecase>,
     pub(super) app_lifecycle: Arc<dyn SetupAppLifecyclePort>,
     pub(super) setup_event_port: Arc<dyn SetupEventPort>,
 

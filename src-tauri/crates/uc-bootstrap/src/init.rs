@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 use uc_app::app_paths::AppPaths;
-use uc_application::setup::IsSetupComplete;
+use uc_application::facade::SetupStatusFacade;
 use uc_core::config::AppConfig;
 use uc_core::ports::{SettingsPort, SetupStatusPort};
 use uc_infra::FileSetupStatusRepository;
@@ -14,11 +14,10 @@ use crate::assembly::{get_default_app_dirs, get_storage_paths};
 /// Returns `true` when the active profile has a completed Space setup.
 ///
 /// Composition-root helper (§3 layer rule: only bootstrap may mix infra
-/// adapters + application use cases). Wires
+/// adapters + application facades). Wires
 /// [`FileSetupStatusRepository`] into the application-layer
-/// [`IsSetupComplete`] use case so the domain question ("has setup
-/// completed?") is answered by a use case, not by bootstrap peeking at
-/// file formats.
+/// [`SetupStatusFacade`], so external callers (CLI, GUI, future
+/// healthcheck) ask one question through one facade.
 ///
 /// Profile-aware: goes through `get_storage_paths` which applies
 /// `apply_profile_suffix` against `UC_PROFILE` env var (set by
@@ -26,7 +25,7 @@ use crate::assembly::{get_default_app_dirs, get_storage_paths};
 /// dir that `init` / `join` wrote into is the one we read back.
 ///
 /// Legacy fallback: the libp2p-era Tauri `uniclipboard setup` command
-/// wrote a `.initialized_encryption` marker file. The domain use case
+/// wrote a `.initialized_encryption` marker file. The domain facade
 /// doesn't know about that (Slice 5 will delete the path entirely), so
 /// the back-compat check stays here in the composition root as a
 /// pragmatic fallback — remove it once nobody has pre-Slice 1 state
@@ -38,13 +37,13 @@ pub async fn is_setup_complete() -> anyhow::Result<bool> {
     let setup_status: Arc<dyn SetupStatusPort> = Arc::new(
         FileSetupStatusRepository::with_defaults(paths.vault_dir.clone()),
     );
-    let use_case = IsSetupComplete::from_ports(setup_status);
-    if use_case.execute().await.unwrap_or(false) {
+    let facade = SetupStatusFacade::new(setup_status);
+    if facade.is_complete().await.unwrap_or(false) {
         return Ok(true);
     }
 
-    // Legacy back-compat only (§6.4 rationale). The `IsSetupComplete`
-    // use case is the authoritative Slice 1+ answer.
+    // Legacy back-compat only. `SetupStatusFacade::is_complete` is the
+    // authoritative Slice 1+ answer.
     let legacy_marker = AppPaths::from_app_dirs(&get_default_app_dirs()?).encryption_marker_path();
     Ok(legacy_marker.exists())
 }

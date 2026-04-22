@@ -84,7 +84,7 @@ UI / CLI / Daemon API
 * `uc-app` **不可以依赖**具体 infra 实现类型
 * `uc-app` **不可以自己重新定义领域真相**
 * `uc-app` **不可以承担表示层职责**
-* 对外只暴露 **Facade / UseCase** 作为应用层入口，Orchestrator / StateMachine / SessionManager 等实现细节一律 `pub(crate)` —— 详见 §11.4
+* 对外只暴露 `src/facade/` 目录下的 **Facade**（以及经 Facade 转发的 UseCase / Command / Query / Result / Error / 状态枚举）作为应用层入口；业务子模块（`pairing/`、`setup/`、`clipboard_capture/`、`usecases/*` 等）与 Orchestrator / StateMachine / SessionManager 等实现细节一律 `pub(crate)`，外部 crate 不得直接访问 —— 详见 §11.4
 
 ---
 
@@ -603,47 +603,90 @@ Facade 内部可以调用：
 
 ---
 
-## 11.4 对外边界：External → Facade/UseCase → Orchestrator → Ports
+## 11.4 对外边界：`src/facade/` 是 uc-application 的唯一对外出口
 
-每个业务模块对外暴露的入口，**必须**只有 Facade 或 UseCase 两种形态。`Orchestrator` / `StateMachine` / `SessionManager` / 内部协调对象等实现细节，**一律 `pub(crate)`**，不得作为公共类型被外部 crate（daemon / tauri / CLI / 其他应用模块）直接拿到。
+### 11.4.1 强制铁律（必读）
+
+**外部 crate（daemon / tauri / CLI / bootstrap / 任何非 `uc-application` 的消费者）访问 `uc-application` 的能力，唯一合法路径是 `src/facade/` 下暴露的 Facade 与 UseCase。**
+
+换言之：
+
+* 外部消费者只能 `use uc_application::facade::...`（或等价的顶层 `pub use` 再导出，但再导出的来源必须是 `src/facade/`）
+* 外部消费者 **不得** `use uc_application::pairing::...` / `uc_application::setup::...` / `uc_application::clipboard_capture::...` 等业务子模块的任何类型、函数、构造器
+* 业务子模块（如 `pairing/`、`setup/`、`clipboard_capture/`、`usecases/*`）对外 crate 的默认可见性应为 `pub(crate)`，只对 crate 内部的 facade 层开放
+
+一句话记忆：
+
+> **“外部看 `uc-application`，眼里只有 `facade/`。其他模块不存在。”**
 
 ```text
-External (daemon / tauri / CLI / 其他 uc-application 模块)
+External (daemon / tauri / CLI / bootstrap)
+        ↓     只能从这里进入
+    src/facade/                     ← 唯一对外入口目录
+      ├── app_facade.rs             (AppFacade: 顶层聚合)
+      ├── <domain>/mod.rs           (DomainFacade: 域级入口)
+      └── <domain>/...              (该域下 pub(crate) 的 usecase/orchestrator/state)
         ↓
-Facade / UseCase        ← 唯一对外入口（Application Service 层）
+    业务子模块 (pairing/ setup/ clipboard_capture/ usecases/...)
+        ↓     pub(crate)，对外 crate 不可见
+    Orchestrator / StateMachine / SessionManager / Handler
         ↓
-Orchestrator            ← 内部流程编排，pub(crate)
-        ↓
-Ports                   ← uc-core 定义，跨 crate 可见
+    Ports (uc-core)
 ```
 
-### 强制规则
+### 11.4.2 Facade 目录的组织规则
 
-* 模块对外 `mod.rs` 的 `pub use` **只允许**导出：
-  * Facade 类型（如 `PairingFacade`、`SetupFacade`、`ClipboardFacade`）
-  * UseCase 类型（如 `CaptureClipboardUseCase`、`SearchClipboardUseCase`）
-  * Command / Query / Result / Error / 显式状态枚举（应用语义）
-  * 明确必要的事件类型 / event port trait（订阅用）
-* **禁止导出** `*Orchestrator` / `*SessionManager` / `*StateMachine` / `*Handler` 等内部协调类型的公共符号
-* Facade 的构造方法内部持有 `Arc<Orchestrator>`、组合 UseCase；外部只能通过 Facade 方法间接驱动 Orchestrator
-* 同一业务模块内部允许 UseCase 以 `pub(crate)` 可见性与 Orchestrator 互相持有引用；这类内部依赖不穿越 crate 边界
-* 如果某个方法语义上只能"直接驱动 Orchestrator"（比如状态查询），也必须在 Facade 上显式加一个 thin method 转发；**不得通过 `pub(crate)` 泄露 Orchestrator 引用给外部**
+* 所有 Facade 类型必须定义在 `src/facade/` 目录下
+* 顶层 `AppFacade` 聚合各域 Facade；每个域 Facade（`SpaceSetupFacade`、`ClipboardSyncFacade`、`PairingFacade` 等）暴露该域的应用动作
+* `src/facade/mod.rs` 的 `pub use` 是 crate 对外的**白名单**。只允许导出：
+  * Facade 类型本身（`AppFacade`、`<Domain>Facade`）
+  * Facade 方法的输入输出类型：Command / Query / Result / Error / 显式状态枚举
+  * Facade 构造所需的 Deps 结构（供 bootstrap 组装）
+  * 外部需订阅的事件类型 / event port trait
+* **禁止**在 `src/facade/mod.rs` 里 `pub use` 任何 `*Orchestrator` / `*SessionManager` / `*StateMachine` / `*Handler` / 业务子模块内部类型
+* UseCase 类型若需要被外部以"无状态动作"形式直接调用，也必须通过 Facade 目录下某个 Facade 的方法转发；不鼓励把裸 UseCase 当作对外 API 暴露
 
-### 反模式
+### 11.4.3 Crate 根 `lib.rs` 的纪律
 
-* 让外部 crate 同时拿到 `Arc<Facade>` 和 `Arc<Orchestrator>` —— 这样 Facade 的封装就是装饰
-* 在 `mod.rs` 写 `pub use orchestrator::*Orchestrator`
-* 在 bootstrap context 中把 `pairing_orchestrator: Arc<PairingOrchestrator>` 暴露出来（应为 `pairing_facade: Arc<PairingFacade>`）
-* 为了测试方便，把 Orchestrator 变成 `pub`（正确做法：在 crate 内对 Orchestrator 写单元测试；对外写 Facade 集成测试）
+* `lib.rs` 的顶层 `pub mod` / `pub use` **只允许**暴露 `facade` 模块（或从 `facade` 再导出的符号）
+* 业务子模块在 `lib.rs` 中必须是 `pub(crate) mod <domain>;` 或完全不 `pub`
+* 如需为测试开放内部可见性，使用 `pub(crate)` + `#[cfg(test)]` 或独立的 `mod tests`，**绝不**为了测试把业务子模块整体升级为 `pub`
 
-### 理由
+### 11.4.4 构造与持有
 
-外部消费者看见 Orchestrator = 封装破产：
-1. 流程状态的演进路径分裂成"走 Facade"和"直接调 Orchestrator"两条，真相来源失控（违反 §10.2）
-2. Orchestrator 的内部签名变成事实公共 API，每次重构都要跨 crate 同步改签名
-3. UseCase / Facade thin wrapper 的隔离意义消失，变成冗余的一层
+* Facade 内部持有 `Arc<Orchestrator>` / `Arc<UseCase>` / Ports 的方式由 Facade 自行决定
+* bootstrap 层只允许持有 `Arc<AppFacade>` 或 `Arc<<Domain>Facade>`；**不得**持有 `Arc<*Orchestrator>` / `Arc<*SessionManager>` 等内部类型
+* 同一业务模块内部允许 UseCase 与 Orchestrator 以 `pub(crate)` 互相持有引用，这类依赖不穿越 crate 边界
+* 若某方法语义上只是"读一下 orchestrator 状态"，也必须在 Facade 上加一个 thin method 转发；**不得**通过 `pub(crate)` 或任何 trick 把 Orchestrator 引用泄露给外部
 
-这条规则写死以后，**重构 Orchestrator 内部签名不再是 breaking change**，只要 Facade 方法签名稳定，外部一律无感。
+### 11.4.5 反模式
+
+* 外部代码里出现 `use uc_application::pairing::PairingOrchestrator;` / `use uc_application::setup::SetupStateMachine;` 等绕过 `facade/` 的 import
+* 在 `lib.rs` 写 `pub mod pairing;` / `pub mod setup;` 让业务子模块直接对外
+* 在业务子模块的 `mod.rs` 写 `pub use orchestrator::*Orchestrator` 把内部类型顶出去
+* 在 bootstrap context 里暴露 `pairing_orchestrator: Arc<PairingOrchestrator>`（应为 `pairing_facade: Arc<PairingFacade>`，且 `PairingFacade` 定义在 `src/facade/` 下）
+* 外部 crate 同时拿到 `Arc<Facade>` 和 `Arc<Orchestrator>` —— 封装等于装饰
+* 为了测试方便把 Orchestrator 改成 `pub` —— 正确做法是 crate 内对 Orchestrator 写单元测试，crate 外只通过 Facade 写集成测试
+
+### 11.4.6 理由
+
+让 `src/facade/` 成为唯一对外出口，换来的是：
+
+1. **封装稳定**。Orchestrator / StateMachine / 内部 UseCase 的签名变更不再是 breaking change —— 只要 Facade 公开方法签名不变，外部一律无感
+2. **真相来源单点收口**（呼应 §10.2）。流程状态只能通过 Facade 查询，不会出现"外面走 Facade、内部直接调 Orchestrator"两条演进路径的真相分裂
+3. **依赖方向清晰**。外部 crate 的 import 只会出现 `uc_application::facade::*`，grep / code review 一眼就能识别越界访问
+4. **重构摩擦最小**。业务子模块目录结构调整、模块拆分合并、orchestrator 改名，全部是 crate 内部事务
+
+### 11.4.7 迁移现状与新实现要求
+
+当前代码库**尚未完全符合本节规则**：部分外部消费者仍然直接从 `uc_application::<业务子模块>::...` 导入类型。这是历史欠账，会逐步迁移到 `src/facade/` 下。
+
+但从本条规则写入本文件起：
+
+* **所有新增的对外入口、新增业务模块、新增 Facade / UseCase，必须严格遵循 §11.4.1–§11.4.5**
+* **所有对现有模块的修改**，若触及对外可见性，优先把不该对外的符号下沉回 `pub(crate)`，并在 `src/facade/` 下补齐对应 Facade 方法
+* 任何 PR 若新增 `use uc_application::<非 facade 子模块>::...` 形式的外部调用，视为违规，必须在评审中阻止并改为通过 `src/facade/` 访问
+* 历史欠账的清理工作以独立 PR / phase 推进，不得作为"新功能顺手引入新越界调用"的借口
 
 ---
 

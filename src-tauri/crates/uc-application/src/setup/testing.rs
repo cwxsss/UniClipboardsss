@@ -393,7 +393,7 @@ pub(crate) fn build_harness(opts: HarnessOptions) -> TestHarness {
     let space_access_facade = Arc::new(SpaceAccessFacade::new());
 
     let orchestrator = Arc::new(SetupOrchestrator::new(
-        Arc::new(super::mark_complete::MarkSetupComplete::from_ports(
+        Arc::new(super::usecases::MarkSetupCompleteUsecase::new(
             status.clone(),
         )),
         status.clone(),

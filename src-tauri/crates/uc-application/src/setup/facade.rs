@@ -35,11 +35,11 @@ use uc_core::{
 };
 
 use super::event_port::SetupEventPort;
-use super::mark_complete::MarkSetupComplete;
 use super::orchestrator::{SetupError, SetupOrchestrator};
 use super::pairing_facade::SetupPairingFacadePort;
 use super::ports::SetupAppLifecyclePort;
 use super::state::SetupState;
+use super::usecases::MarkSetupCompleteUsecase;
 use super::usecases::{
     ApplyJoinerSpaceAccessResultUseCase, CancelSetupUseCase, ClearSetupTransientStateUseCase,
     CompleteJoinSpaceUseCase, ConfirmPeerTrustUseCase, GetSetupStateQuery, ResetSetupUseCase,
@@ -81,8 +81,8 @@ pub struct SetupFacade {
 impl SetupFacade {
     /// Construct a fully wired `SetupFacade`.
     ///
-    /// Internally builds `MarkSetupComplete` from `setup_status` and
-    /// composes `SetupOrchestrator` with all 14 UseCases/Query. Bootstrap
+    /// Internally builds `MarkSetupCompleteUsecase` from `setup_status`
+    /// and composes `SetupOrchestrator` with all 14 UseCases/Query. Bootstrap
     /// now passes the setup-status port plus the ports/adapters that the
     /// orchestrator still needs.
     #[allow(clippy::too_many_arguments)]
@@ -101,7 +101,7 @@ impl SetupFacade {
         timer_port: Arc<Mutex<dyn TimerPort>>,
         persistence_port: Arc<Mutex<dyn PersistencePort>>,
     ) -> Self {
-        let mark_setup_complete = Arc::new(MarkSetupComplete::from_ports(setup_status.clone()));
+        let mark_setup_complete = Arc::new(MarkSetupCompleteUsecase::new(setup_status.clone()));
 
         let orchestrator = Arc::new(SetupOrchestrator::new(
             mark_setup_complete,
