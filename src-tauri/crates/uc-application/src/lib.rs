@@ -1,5 +1,6 @@
 //! Application-layer workflows for UniClipboard.
 
+pub mod clipboard_capture;
 pub mod facade;
 pub mod file_transfer;
 pub mod membership;
