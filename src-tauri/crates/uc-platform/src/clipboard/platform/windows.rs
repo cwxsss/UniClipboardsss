@@ -23,14 +23,37 @@ fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str>
                 Some("text/plain")
             }
             "public.html" | "Apple HTML pasteboard type" | "html" => Some("text/html"),
+            // PixPin 截图等场景 format_id 为 "image"，mime 通常为 "image/png"。
+            // `common.rs::read_snapshot` 把 macOS `public.png` / `public.tiff` 都转成 PNG。
+            "public.png" | "image" => Some("image/png"),
             _ => None,
         })
 }
 
+/// 把 PNG 字节解码后重新编码为"完整 BMP 文件"（BITMAPFILEHEADER + BITMAPINFOHEADER
+/// + pixel data）—— 这是 `clipboard_win::raw::set_bitmap_with` 期望的输入格式：
+/// 内部读 file header 的 `bfOffBits` 定位 pixel data 起始，再走 `CreateDIBitmap`。
+///
+/// 注意：BMP 不支持 alpha 通道，带 alpha 的 PNG 转 BMP 时透明度会被压平。
+/// 这是可接受的降级 —— 目的地应用若需要 alpha，从同一会话内写入的 "PNG"
+/// 自定义 format 读原始 PNG 字节即可。
+fn png_to_bmp(png_bytes: &[u8]) -> Result<Vec<u8>> {
+    use image::{load_from_memory_with_format, ImageFormat};
+    use std::io::Cursor;
+
+    let img = load_from_memory_with_format(png_bytes, ImageFormat::Png)
+        .map_err(|e| anyhow::anyhow!("decode PNG failed: {e}"))?;
+    let mut bmp = Vec::new();
+    img.write_to(&mut Cursor::new(&mut bmp), ImageFormat::Bmp)
+        .map_err(|e| anyhow::anyhow!("encode BMP failed: {e}"))?;
+    Ok(bmp)
+}
+
 /// Windows 原子多 representation 写入。
 ///
-/// 在**单次** `OpenClipboard` 会话内写入多个剪贴板格式（CF_UNICODETEXT + CF_HTML），
-/// 确保纯文本目的地（记事本、命令提示符等）和富文本目的地（Word、写字板等）都能正确粘贴。
+/// 在**单次** `OpenClipboard` 会话内写入多个剪贴板格式（CF_UNICODETEXT + CF_HTML +
+/// CF_BITMAP + 自定义 "PNG" format），确保纯文本目的地（记事本）、富文本目的地
+/// （Word / 写字板）、图片目的地（画图 / Chrome / Paint.NET）都能正确粘贴。
 ///
 /// ## 设计要点
 ///
@@ -43,13 +66,21 @@ fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str>
 /// `raw::set()` 和 `raw::set_string()` 在写入时会内部调用 `EmptyClipboard`，
 /// 将前面已写入的格式全部抹掉——正是本次要修复的 bug 根因。
 /// `raw::set_without_clear` / `raw::set_html`（默认 NoClear）/
-/// `raw::set_string_with::<NoClear>` 不调 `EmptyClipboard`，可以在同一 RAII 会话内
-/// 累加多个 format 到同一 clipboard item。
+/// `raw::set_string_with::<NoClear>` / `raw::set_bitmap_with::<NoClear>` 不调
+/// `EmptyClipboard`，可以在同一 RAII 会话内累加多个 format 到同一 clipboard item。
 ///
-/// ### 本次只处理 text + html
-/// image (CF_DIB) / RTF (CF_RTF) / files (CF_HDROP) 的多 rep 互操作性需要更多验证
-/// （CF_DIB 与 CF_UNICODETEXT 混写、CF_RTF format code 注册等），留待后续 phase 补齐。
-/// 遇到非 text/html 的 rep 时记 debug 日志并跳过。
+/// ### 本次支持 text/plain + text/html + image/png
+/// - `text/plain` → CF_UNICODETEXT（`set_string_with::<NoClear>`）
+/// - `text/html` → CF_HTML（`set_html`，内部默认 NoClear）
+/// - `image/png` → CF_BITMAP（PNG→BMP 转码后 `set_bitmap_with::<NoClear>`）
+///   + 自定义 "PNG" format（`register_format("PNG")` 后 `set_without_clear`）
+///   双写策略：老应用认 CF_BITMAP（画图 / Office 2010-）、现代应用认 "PNG"
+///   （Chrome / Firefox / Paint.NET / 新版 Office）。BMP 会压平 alpha 通道，
+///   目的地应用若需要透明度，从 "PNG" format 读原始字节即可。
+///
+/// `image/jpeg` / `image/tiff` / `image/webp` / `image/gif` 以及 RTF (CF_RTF) /
+/// files (CF_HDROP) 的多 rep 互操作性留到后续 phase 补齐（各自有独立编码 / format
+/// 注册 / 文件同步依赖）。遇到本路径不认的 rep 记 debug 日志并跳过。
 ///
 /// ### 调用方注意
 /// 此函数由 `common.rs::write_snapshot_multi` 在 `#[cfg(target_os = "windows")]`
@@ -69,13 +100,13 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
     use clipboard_win::raw as cb_raw;
     use clipboard_win::Clipboard as ClipboardWin;
 
-    // 前置扫描：如果没有任何 rep 是我们能写的（text/plain 或 text/html），
+    // 前置扫描：如果没有任何 rep 是我们能写的（text/plain、text/html 或 image/png），
     // 直接 bail；**不**打开 Windows 剪贴板、**不**调 empty()。
     // 避免把用户原本的 OS 剪贴板清掉却什么都写不进去（见上方 doc comment "empty() 副作用的防御"）。
     let has_writable = snapshot.representations.iter().any(|rep| {
         matches!(
             resolve_multi_rep_mime(rep),
-            Some("text/plain") | Some("text/html")
+            Some("text/plain") | Some("text/html") | Some("image/png")
         )
     });
 
@@ -86,7 +117,7 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
             .map(|r| r.format_id.as_str().to_string())
             .collect();
         anyhow::bail!(
-            "Windows 多 rep 写入：无可写 rep（支持 text/plain, text/html）；\
+            "Windows 多 rep 写入：无可写 rep（支持 text/plain, text/html, image/png）；\
              未清空 OS 剪贴板；跳过的 rep = {:?}",
             skipped
         );
@@ -140,14 +171,80 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
                 debug!(bytes = rep.bytes.len(), "写入 CF_HTML 成功");
                 wrote_any = true;
             }
-            // 本次只支持 text/plain + text/html 的原子多 rep 写入。
-            // image / rtf / files 的多 rep 写入留到后续 phase（需要 CF_DIB + CF_RTF
-            // 的互操作性验证以及 RTF format code 注册），本次非目标——跳过并记录。
+            Some("image/png") => {
+                // 双写策略：CF_BITMAP（老应用兼容）+ 自定义 "PNG" format（现代应用直读 PNG 字节）。
+                // 同一次 OpenClipboard 会话内累加，NoClear 变体不抹掉已写入的其他 format。
+                //
+                // 兼容矩阵：
+                //   - CF_BITMAP ← 画图、Office 2010 以下、写字板
+                //   - "PNG"     ← Chrome、Firefox、Paint.NET、新版 Office、Google Docs
+                //
+                // 任一路径成功就算 wrote_any；都失败时落到 skipped，由末尾防御 bail 兜底
+                // （前置扫描已确认至少有一条 writable rep，走到这里说明意外失败）。
+                let mut wrote_bitmap = false;
+                let mut wrote_png = false;
+
+                // —— CF_BITMAP 路径 ——
+                // PNG→BMP 转码失败不 abort：降级为"只写 PNG format"，目的地应用若认 "PNG"
+                // 仍能拿到图片；alpha 通道会被 BMP encoder 压平，这是可接受的降级。
+                match png_to_bmp(&rep.bytes) {
+                    Ok(bmp_bytes) => {
+                        match cb_raw::set_bitmap_with::<NoClear>(&bmp_bytes, NoClear) {
+                            Ok(()) => {
+                                debug!(
+                                    bmp_bytes = bmp_bytes.len(),
+                                    png_bytes = rep.bytes.len(),
+                                    "写入 CF_BITMAP 成功"
+                                );
+                                wrote_bitmap = true;
+                            }
+                            Err(e) => {
+                                warn!(error = %e, "set CF_BITMAP failed；降级为只写 \"PNG\" format");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            png_bytes = rep.bytes.len(),
+                            "PNG→BMP 转码失败；降级为只写 \"PNG\" format"
+                        );
+                    }
+                }
+
+                // —— 自定义 "PNG" format 路径 ——
+                // register_format 对同名幂等，进程内常驻；返回 None 极罕见（内核资源耗尽）。
+                match cb_raw::register_format("PNG") {
+                    Some(png_fmt) => match cb_raw::set_without_clear(png_fmt.get(), &rep.bytes) {
+                        Ok(()) => {
+                            debug!(
+                                png_bytes = rep.bytes.len(),
+                                "写入 \"PNG\" 自定义 format 成功"
+                            );
+                            wrote_png = true;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "set \"PNG\" custom format failed");
+                        }
+                    },
+                    None => {
+                        warn!("register_format(\"PNG\") 返回 None；跳过 \"PNG\" 路径");
+                    }
+                }
+
+                if wrote_bitmap || wrote_png {
+                    wrote_any = true;
+                } else {
+                    skipped.push(rep.format_id.as_str().to_string());
+                }
+            }
+            // image/jpeg / image/tiff / image/webp / image/gif / RTF / files 等均未支持，
+            // 未来在独立 phase 补齐（各自需要独立的编码转换 / format 注册 / 文件同步依赖）。
             other => {
                 debug!(
                     format_id = %rep.format_id,
                     mime = ?other,
-                    "Windows 多 rep 写入：跳过非 text/html 的 rep"
+                    "Windows 多 rep 写入：跳过不支持的 rep"
                 );
                 skipped.push(rep.format_id.as_str().to_string());
             }
@@ -155,10 +252,12 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
     }
 
     if !wrote_any {
-        // 所有 rep 都被跳过——上游发来了一个全是 image/rtf 的多 rep snapshot。
+        // 防御分支：前置 has_writable 扫描已确认至少有一条 rep 可写。
+        // 走到这里说明主循环内部 encode / 写入意外全失败（极罕见）。
         // 本函数不负责 fallback（§6.1 平台层不替业务决定），直接报错让调用方处理。
+        // 注：此时 EmptyClipboard 已被调用，OS 剪贴板已被清空 —— 文案区别于前置扫描。
         anyhow::bail!(
-            "Windows 多 rep 写入：无可写 rep（支持 text/plain, text/html）；\
+            "Windows 多 rep 写入：所有候选 rep 在写入阶段均失败（支持 text/plain, text/html, image/png）；\
              跳过的 rep = {:?}",
             skipped
         );
@@ -168,7 +267,7 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
         debug!(
             skipped_count = skipped.len(),
             skipped = ?skipped,
-            "Windows 多 rep 写入：部分 rep 已跳过（非 text/html）"
+            "Windows 多 rep 写入：部分 rep 已跳过（不支持或写入失败）"
         );
     }
 
