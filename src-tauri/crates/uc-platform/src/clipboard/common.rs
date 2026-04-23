@@ -578,8 +578,9 @@ impl CommonClipboardImpl {
     ///    - Windows：原子多 rep 写入（`write_snapshot_multi_windows`）——在单次
     ///      `OpenClipboard` 会话内用 `raw::set_without_clear` 累加 CF_UNICODETEXT
     ///      + CF_HTML 等多个 format，确保纯文本目的地也能粘贴。
-    ///    - macOS / Linux：暂不支持原子多 rep，降级为"写第一个 rep"并 warn 日志。
-    ///      后续 phase 补齐 `NSPasteboardItem` / Wayland data source 实现。
+    ///    - macOS / Linux：暂不支持原子多 rep，降级为"用 `SelectRepresentationPolicyV1`
+    ///      选出 paste-priority rep 再走单 rep 快路径"并 warn 日志。后续 phase 补齐
+    ///      `NSPasteboardItem` / Wayland data source 实现。
     ///
     /// 历史背景见 https://github.com/UniClipboard/UniClipboard/issues/92
     /// 以及 `uc-platform/src/clipboard/platform/windows.rs::write_snapshot_multi_windows`。
@@ -718,8 +719,9 @@ impl CommonClipboardImpl {
     ///   `OpenClipboard` 会话内用 `raw::set_without_clear` 累加 CF_UNICODETEXT + CF_HTML，
     ///   确保纯文本目的地（记事本等）也能粘贴到正确内容。
     /// - macOS / Linux：当前尚未支持（需 `NSPasteboardItem` / Wayland data source 重写），
-    ///   本次降级为"只写 paste-priority 的第一个 rep"，并以 `warn!` 日志显式说明。
-    ///   后续 phase 再统一（§9.3：不允许静默降级）。
+    ///   本次降级为 "用 `SelectRepresentationPolicyV1` 选出 paste-priority rep 再走单 rep
+    ///   快路径"，并以 `warn!` 日志显式说明。行为与应用层原 `narrow_to_primary` 等价，
+    ///   保证 macOS / Linux 粘贴语义零回归。后续 phase 再统一（§9.3：不允许静默降级）。
     ///
     /// 注意：本方法不应被"单 rep 快路径"调用。调用者需保证 `snapshot.representations.len() >= 1`。
     fn write_snapshot_multi(
@@ -739,27 +741,45 @@ impl CommonClipboardImpl {
         #[cfg(not(target_os = "windows"))]
         {
             // macOS / Linux：显式降级（§9.3 不允许静默降级）。
+            //
+            // 用 V1 policy 选出 paste-priority rep —— 与应用层原 `narrow_to_primary`
+            // 等价。硬编码 V1：当前 uc-core 只有这一个 `SelectRepresentationPolicyPort`
+            // 实现；出现 V2 时再考虑从调用方注入 policy。
+            use uc_core::clipboard::SelectRepresentationPolicyV1;
+            use uc_core::ports::SelectRepresentationPolicyPort;
+
+            let policy = SelectRepresentationPolicyV1::default();
+            let selection = policy
+                .select(&snapshot)
+                .map_err(|e| anyhow!("representation policy failed: {e}"))?;
+            let paste_id = selection.paste_rep_id.clone();
+
+            let chosen_idx = snapshot
+                .representations
+                .iter()
+                .position(|rep| rep.id == paste_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "policy selected paste_rep_id {:?} not present in snapshot",
+                        paste_id
+                    )
+                })?;
+
             warn!(
                 rep_count,
-                formats = ?snapshot
-                    .representations
-                    .iter()
-                    .map(|r| r.format_id.as_str().to_string())
-                    .collect::<Vec<_>>(),
+                paste_rep_id = ?paste_id,
+                chosen_format_id = %snapshot.representations[chosen_idx].format_id,
                 "multi-representation write not yet supported on this platform; \
-                 falling back to single-rep path — only the first rep will be written"
+                 falling back to single-rep path — writing the paste-priority rep \
+                 selected by SelectRepresentationPolicyV1"
             );
 
-            // 退到单 rep 快路径：取 snapshot 的第一条 rep，当作 len==1 递归调用。
             let ts_ms = snapshot.ts_ms;
-            let first = snapshot
-                .representations
-                .into_iter()
-                .next()
-                .expect("write_snapshot_multi 以 empty snapshot 调用，违反调用方契约");
+            let mut reps = snapshot.representations;
+            let chosen = reps.remove(chosen_idx);
             let reduced = SystemClipboardSnapshot {
                 ts_ms,
-                representations: vec![first],
+                representations: vec![chosen],
             };
             return Self::write_snapshot(ctx, reduced);
         }
