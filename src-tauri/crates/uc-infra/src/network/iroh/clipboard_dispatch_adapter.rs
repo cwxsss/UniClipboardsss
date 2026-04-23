@@ -64,15 +64,13 @@ impl IrohClipboardDispatchAdapter {
     /// data-integrity issue the next pairing sync will self-heal.
     async fn resolve_addr(&self, target: &DeviceId) -> Option<EndpointAddr> {
         match self.peer_addr_repo.get(target).await {
+            // Stored blobs are guaranteed to be persistable form (NodeId
+            // + Relay hint, no `Ip(...)` ephemera) — see
+            // `persistable_addr::to_persistable_addr`. Iroh's pkarr
+            // discovery resolves the peer's current direct addrs at
+            // connect time, so we hand the decoded addr through as-is.
             Ok(Some(record)) => match postcard::from_bytes::<EndpointAddr>(&record.addr_blob) {
-                // Strip stored direct IP addrs — they hold the peer's
-                // pairing-time UDP port, which is reassigned on every
-                // daemon restart. Pushing the stale port into
-                // `endpoint.connect` costs a 30-s kernel-drop timeout
-                // per dial (observed). Kept relay url stays as a
-                // fallback; iroh's pkarr discovery fills in the peer's
-                // current direct addrs.
-                Ok(addr) => Some(super::connect_addr::strip_stale_direct_addrs(addr)),
+                Ok(addr) => Some(addr),
                 Err(err) => {
                     warn!(
                         device = %target.as_str(),

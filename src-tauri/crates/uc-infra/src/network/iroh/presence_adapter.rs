@@ -236,20 +236,15 @@ impl PresencePort for IrohPresenceAdapter {
         // Step 3: decode the opaque blob into the adapter-private
         // `EndpointAddr`. Failure is a data-integrity issue (someone wrote
         // junk into the repo) — surface it as `Internal` without leaking
-        // the postcard error type upward.
+        // the postcard error type upward. The blob is guaranteed to have
+        // had its ephemeral `Ip(...)` direct addresses stripped at
+        // pairing-time write (see `persistable_addr::to_persistable_addr`),
+        // so what we decode here is `id + Relay(...)`. iroh's built-in
+        // pkarr discovery fills in fresh direct addrs at connect time.
         let endpoint_addr: EndpointAddr =
             postcard::from_bytes(&record.addr_blob).map_err(|err| {
                 PresenceError::Internal(format!("postcard decode EndpointAddr: {err}"))
             })?;
-
-        // Step 3a: strip stored direct IP addresses. Stored blobs freeze
-        // the peer's pairing-time UDP port, which gets reassigned on
-        // every subsequent daemon restart — keeping them just burns
-        // dial budget on dead ports (real-device observation: 30-s
-        // timeouts). iroh's built-in pkarr discovery will fill in the
-        // peer's current direct addrs when it connects. Keeps the stored
-        // relay URL as a fallback hint.
-        let endpoint_addr = super::connect_addr::strip_stale_direct_addrs(endpoint_addr);
 
         // Step 4: dial.
         match self.endpoint.connect(endpoint_addr, PRESENCE_ALPN).await {

@@ -477,11 +477,21 @@ impl PairingSessionPort for IrohPairingSessionAdapter {
     /// 前调用此方法填充 `transport_address_blob`，对端接到后直接写入
     /// `PeerAddressRepositoryPort`。
     ///
+    /// `endpoint.addr()` 当下观察值里包含 magicsock 这次进程绑定的随机
+    /// UDP 端口；那是 ephemeral 信息，进程一重启就失效。我们在这里通过
+    /// [`crate::network::iroh::persistable_addr::to_persistable_addr`]
+    /// 把 `Ip(...)` 直连项剥掉，只把 NodeId + 长寿命的 `Relay(...)` 写
+    /// 进 wire/repo。读侧解码后直接给 `endpoint.connect`，iroh 内置的
+    /// pkarr discovery 会在每次 connect 时拉取对端**当前发布**的直连
+    /// 地址——正确的 contract 是"持久化身份+ relay hint，让 discovery
+    /// 负责寻址"。详见 `persistable_addr` 模块文档。
+    ///
     /// 返回 `None` 表示编码失败（理论上不会发生——postcard 对
     /// `EndpointAddr` 的序列化是 total），此时对端会以空 blob 兜底跳过
     /// upsert。
     async fn local_transport_address_blob(&self) -> Option<Vec<u8>> {
-        let addr = self.endpoint.addr();
+        let raw = self.endpoint.addr();
+        let addr = crate::network::iroh::persistable_addr::to_persistable_addr(raw);
         match postcard::to_stdvec(&addr) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
