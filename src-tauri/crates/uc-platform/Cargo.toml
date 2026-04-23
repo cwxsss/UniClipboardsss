@@ -100,3 +100,13 @@ tracing-subscriber = { version = "0.3", features = ["registry"] }
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = { version = "5.4" }
+
+# macOS 平台原子多 rep 写入（见 `clipboard/platform/macos.rs::write_snapshot_multi_macos`）。
+# 显式启用 NSPasteboard + NSPasteboardItem feature，以拿到 NSPasteboardTypeString /
+# NSPasteboardTypeHTML 常量与 setData_forType / writeObjects API。
+# objc2-foundation 的 features 虽然被 NSPasteboard feature transitively 启用，
+# 但这里显式列出以便阅读；避免未来 objc2-app-kit 的 feature 传递规则变更后静默失效。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSString"] }
