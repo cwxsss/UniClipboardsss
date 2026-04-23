@@ -30,41 +30,79 @@ fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str>
         })
 }
 
-/// 把 PNG 字节解码后重新编码为"完整 BMP 文件"（BITMAPFILEHEADER + BITMAPINFOHEADER
-/// + pixel data）—— 这是 `clipboard_win::raw::set_bitmap_with` 期望的输入格式：
-/// 内部读 file header 的 `bfOffBits` 定位 pixel data 起始，再走 `CreateDIBitmap`。
+/// 把 PNG 字节解码后编码为 **CF_DIBV5** 格式的字节流（`BITMAPV5HEADER` + pixel data）。
 ///
-/// **调用时机**：必须在 `OpenClipboard` 会话**之外**完成预编码。大 PNG
-/// （MB 级）的 `image` crate 解码 + BMP 再编码可能耗时几十到几百毫秒；若在持有
-/// 剪贴板会话期间做这个耗时操作，会把整段持有窗口拉长，触发 Windows 偶发的
-/// `ERROR_CLIPBOARD_NOT_OPEN (1418)`（来源不完全清楚，可能与消息泵或 GDI
-/// 隐式关闭剪贴板有关，但可稳定观测到与 PNG 大小正相关）。
+/// CF_DIBV5（Win2000+）相比 CF_BITMAP / CF_DIB 有三个关键优势，这也是我们在多 rep
+/// 写入路径选它的原因：
 ///
-/// 注意：BMP 不支持 alpha 通道，带 alpha 的 PNG 转 BMP 时透明度会被压平。
-/// 这是可接受的降级 —— 目的地应用若需要 alpha，从同一会话内写入的 "PNG"
-/// 自定义 format 读原始 PNG 字节即可。
-fn png_to_bmp(png_bytes: &[u8]) -> Result<Vec<u8>> {
+/// 1. **保留 alpha 通道**：`BI_BITFIELDS` + 32bpp + `bV5AlphaMask = 0xFF000000`
+///    让透明像素在 PowerPoint / Photoshop 等目标应用里保留。BMP / CF_DIB 会把
+///    alpha 压平成黑/白边。
+/// 2. **不经过 GDI**：`SetClipboardData(CF_DIBV5, bytes)` 只做 GlobalAlloc + memcpy，
+///    不走 `CreateDIBitmap`。CF_BITMAP 路径的 1418 根因就是 `CreateDIBitmap` 对大
+///    bitmap 触发 GDI 消息泵 / 资源竞争。
+/// 3. **自动合成**：写 CF_DIBV5 之后 Windows 会为其他应用合成 CF_BITMAP / CF_DIB /
+///    CF_PALETTE，对只认 CF_BITMAP 的老应用（画图、Office 2010-）完全兼容。
+///
+/// **调用时机**：仍然建议在 `OpenClipboard` 会话之外预编码。PNG 解码 + RGBA→BGRA
+/// 拷贝对 MB 级图像仍有几十毫秒成本，保持"预编码前移"策略可以进一步压缩剪贴板
+/// 持有窗口。
+///
+/// **像素布局**：top-down（`bV5Height` 为负），32bpp，内存 byte order 为 BGRA —— 这
+/// 由 little-endian + bit-field mask 决定：`bV5RedMask = 0x00FF0000` 意味着 R 落在
+/// dword 的 byte-offset 2，`bV5GreenMask = 0x0000FF00` → offset 1，`bV5BlueMask
+/// = 0x000000FF` → offset 0，`bV5AlphaMask = 0xFF000000` → offset 3。
+fn png_to_dibv5(png_bytes: &[u8]) -> Result<Vec<u8>> {
     use image::{load_from_memory_with_format, ImageFormat};
-    use std::io::Cursor;
 
     let img = load_from_memory_with_format(png_bytes, ImageFormat::Png)
-        .map_err(|e| anyhow::anyhow!("decode PNG failed: {e}"))?;
-    let mut bmp = Vec::new();
-    img.write_to(&mut Cursor::new(&mut bmp), ImageFormat::Bmp)
-        .map_err(|e| anyhow::anyhow!("encode BMP failed: {e}"))?;
-    Ok(bmp)
-}
+        .map_err(|e| anyhow::anyhow!("decode PNG failed: {e}"))?
+        .to_rgba8();
+    let width = img.width();
+    let height = img.height();
+    let pixel_bytes = (width as usize) * (height as usize) * 4;
 
-/// CF_BITMAP 双写的 PNG 大小上限。
-///
-/// 超过此阈值时只写 `"PNG"` 自定义 format，跳过 CF_BITMAP：
-/// - `png_to_bmp` 对大 PNG 解码 + BMP 再编码耗时显著（MB 级 PNG 可达百毫秒级）
-/// - `set_bitmap_with` 对大 bitmap 的 GlobalAlloc + memcpy 也放大了持有剪贴板的时间
-/// - 二者叠加后可稳定观测到 `ERROR_CLIPBOARD_NOT_OPEN (1418)`
-///
-/// 1 MiB 是经验阈值：Seq 日志统计显示 PNG ≤ ~600 KB 均稳定成功，≥ 1.5 MB 均失败。
-/// 老应用（画图 / Office 2010-）粘贴大图时本来就较少见；现代目标应用都认 `"PNG"`。
-const CF_BITMAP_MAX_PNG_BYTES: usize = 1_048_576;
+    let mut out = Vec::with_capacity(124 + pixel_bytes);
+
+    // BITMAPV5HEADER (124 bytes) — 字段顺序按 MSDN wingdi.h 定义。
+    out.extend_from_slice(&124u32.to_le_bytes()); // bV5Size
+    out.extend_from_slice(&(width as i32).to_le_bytes()); // bV5Width
+    out.extend_from_slice(&(-(height as i32)).to_le_bytes()); // bV5Height（负值 = top-down，免翻转）
+    out.extend_from_slice(&1u16.to_le_bytes()); // bV5Planes
+    out.extend_from_slice(&32u16.to_le_bytes()); // bV5BitCount
+    out.extend_from_slice(&3u32.to_le_bytes()); // bV5Compression = BI_BITFIELDS
+    out.extend_from_slice(&(pixel_bytes as u32).to_le_bytes()); // bV5SizeImage
+    out.extend_from_slice(&0i32.to_le_bytes()); // bV5XPelsPerMeter
+    out.extend_from_slice(&0i32.to_le_bytes()); // bV5YPelsPerMeter
+    out.extend_from_slice(&0u32.to_le_bytes()); // bV5ClrUsed
+    out.extend_from_slice(&0u32.to_le_bytes()); // bV5ClrImportant
+                                                // Channel bit masks — 决定 32bpp 内 BGRA byte layout（见上方 doc comment）。
+    out.extend_from_slice(&0x00FF0000u32.to_le_bytes()); // bV5RedMask
+    out.extend_from_slice(&0x0000FF00u32.to_le_bytes()); // bV5GreenMask
+    out.extend_from_slice(&0x000000FFu32.to_le_bytes()); // bV5BlueMask
+    out.extend_from_slice(&0xFF000000u32.to_le_bytes()); // bV5AlphaMask
+    out.extend_from_slice(&0x7352_4742u32.to_le_bytes()); // bV5CSType = LCS_sRGB ('sRGB' little-endian)
+    out.extend_from_slice(&[0u8; 36]); // bV5Endpoints CIEXYZTRIPLE（sRGB 下被忽略）
+    out.extend_from_slice(&0u32.to_le_bytes()); // bV5GammaRed
+    out.extend_from_slice(&0u32.to_le_bytes()); // bV5GammaGreen
+    out.extend_from_slice(&0u32.to_le_bytes()); // bV5GammaBlue
+    out.extend_from_slice(&4u32.to_le_bytes()); // bV5Intent = LCS_GM_IMAGES（图像渲染意图）
+    out.extend_from_slice(&0u32.to_le_bytes()); // bV5ProfileData
+    out.extend_from_slice(&0u32.to_le_bytes()); // bV5ProfileSize
+    out.extend_from_slice(&0u32.to_le_bytes()); // bV5Reserved
+    debug_assert_eq!(out.len(), 124);
+
+    // Pixel data：image crate 给 RGBA，CF_DIBV5 BI_BITFIELDS 需要 BGRA（见 mask 解释）。
+    out.reserve(pixel_bytes);
+    for chunk in img.as_raw().chunks_exact(4) {
+        out.push(chunk[2]); // B
+        out.push(chunk[1]); // G
+        out.push(chunk[0]); // R
+        out.push(chunk[3]); // A
+    }
+
+    Ok(out)
+}
 
 /// 单次写入尝试的最大次数。
 ///
@@ -78,8 +116,8 @@ const RETRY_BACKOFF_MS: [u64; MAX_WRITE_ATTEMPTS as usize] = [0, 20, 40];
 /// Windows 原子多 representation 写入。
 ///
 /// 在**单次** `OpenClipboard` 会话内写入多个剪贴板格式（CF_UNICODETEXT + CF_HTML +
-/// CF_BITMAP + 自定义 "PNG" format），确保纯文本目的地（记事本）、富文本目的地
-/// （Word / 写字板）、图片目的地（画图 / Chrome / Paint.NET）都能正确粘贴。
+/// CF_DIBV5 + 自定义 "PNG" format），确保纯文本目的地（记事本）、富文本目的地
+/// （Word / 写字板）、图片目的地（画图 / Chrome / Paint.NET / PowerPoint 等）都能正确粘贴。
 ///
 /// ## 设计要点
 ///
@@ -92,17 +130,19 @@ const RETRY_BACKOFF_MS: [u64; MAX_WRITE_ATTEMPTS as usize] = [0, 20, 40];
 /// `raw::set()` 和 `raw::set_string()` 在写入时会内部调用 `EmptyClipboard`，
 /// 将前面已写入的格式全部抹掉——正是本次要修复的 bug 根因。
 /// `raw::set_without_clear` / `raw::set_html`（默认 NoClear）/
-/// `raw::set_string_with::<NoClear>` / `raw::set_bitmap_with::<NoClear>` 不调
+/// `raw::set_string_with::<NoClear>` / `raw::set_without_clear` 不调
 /// `EmptyClipboard`，可以在同一 RAII 会话内累加多个 format 到同一 clipboard item。
 ///
 /// ### 本次支持 text/plain + text/html + image/png
 /// - `text/plain` → CF_UNICODETEXT（`set_string_with::<NoClear>`）
 /// - `text/html` → CF_HTML（`set_html`，内部默认 NoClear）
-/// - `image/png` → CF_BITMAP（PNG→BMP 转码后 `set_bitmap_with::<NoClear>`）
+/// - `image/png` → CF_DIBV5（PNG→`BITMAPV5HEADER` 字节后 `set_without_clear(CF_DIBV5, …)`）
 ///   + 自定义 "PNG" format（`register_format("PNG")` 后 `set_without_clear`）
-///   双写策略：老应用认 CF_BITMAP（画图 / Office 2010-）、现代应用认 "PNG"
-///   （Chrome / Firefox / Paint.NET / 新版 Office）。BMP 会压平 alpha 通道，
-///   目的地应用若需要透明度，从 "PNG" format 读原始字节即可。
+///   双写策略：CF_DIBV5 由 Windows 自动合成出 CF_BITMAP / CF_DIB 给老应用（画图 /
+///   Office 2010- / 剪贴板历史 / 第三方剪贴板工具）；现代应用（Chrome / Firefox /
+///   Paint.NET / 新版 Office / Google Docs）优先读 "PNG" 拿到原始字节保留压缩率
+///   与全部 PNG 元数据。CF_DIBV5 原生带 alpha 通道（`bV5AlphaMask = 0xFF000000`），
+///   粘贴到 PowerPoint / Photoshop 时透明度不会被压平。
 ///
 /// `image/jpeg` / `image/tiff` / `image/webp` / `image/gif` 以及 RTF (CF_RTF) /
 /// files (CF_HDROP) 的多 rep 互操作性留到后续 phase 补齐（各自有独立编码 / format
@@ -121,12 +161,16 @@ const RETRY_BACKOFF_MS: [u64; MAX_WRITE_ATTEMPTS as usize] = [0, 20, 40];
 /// 有一条可写的 rep，再打开剪贴板并清空——没可写时直接 bail，OS 剪贴板保持原样。
 /// bail 错误文案包含 "未清空 OS 剪贴板" 字样以便排障。
 ///
-/// ### 大 PNG 的分裂写入策略
-/// 由于 Windows 偶发 `ERROR_CLIPBOARD_NOT_OPEN (1418)`（与 PNG 大小正相关），
-/// 本函数对 image/png rep 做两层防御：
-/// 1. **预编码前移**：`png_to_bmp` 在 `OpenClipboard` 会话**之外**完成，缩短剪贴板持有窗口。
-/// 2. **阈值降级**：PNG 超过 `CF_BITMAP_MAX_PNG_BYTES` 时跳过 CF_BITMAP 路径，只写 `"PNG"` 自定义 format。
-/// 3. **整体重试**：整个会话（open → empty → 逐 rep 写入）作为一个原子单元，失败后退避重试，最多 `MAX_WRITE_ATTEMPTS` 次。
+/// ### 大 PNG 的鲁棒写入策略
+/// 早期用 `set_bitmap_with`（CF_BITMAP）在大图场景稳定触发
+/// `ERROR_CLIPBOARD_NOT_OPEN (1418)`：`CreateDIBitmap` 对大 bitmap 的 GDI 交互
+/// 与消息泵存在竞争。切到 CF_DIBV5（纯 `GlobalAlloc + memcpy`，不走 GDI）后
+/// 根因消失。在此之上仍保留两层工程化防御：
+/// 1. **预编码前移**：`png_to_dibv5` 在 `OpenClipboard` 会话**之外**完成，
+///    压缩剪贴板持有窗口。
+/// 2. **整体重试**：整个会话（open → empty → 逐 rep 写入）作为一个原子单元，
+///    失败后退避重试，最多 `MAX_WRITE_ATTEMPTS` 次。兜底其他瞬态因素
+///    （第三方剪贴板工具抢句柄、消息泵偶发竞争等）。
 pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) -> Result<()> {
     // 前置扫描：如果没有任何 rep 是我们能写的（text/plain、text/html 或 image/png），
     // 直接 bail；**不**打开 Windows 剪贴板、**不**调 empty()。
@@ -151,31 +195,23 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
         );
     }
 
-    // 预编码阶段 —— 在 OpenClipboard 会话**之外**完成耗时的 PNG→BMP 解码。
-    // 和 `rep` 一一对应；None 表示该 rep 不走 CF_BITMAP 路径（非 image/png、
-    // 超过 CF_BITMAP_MAX_PNG_BYTES 阈值、或解码失败）。
-    let bmp_preencoded: Vec<Option<Vec<u8>>> = snapshot
+    // 预编码阶段 —— 在 OpenClipboard 会话**之外**完成耗时的 PNG→CF_DIBV5 转码。
+    // 和 `rep` 一一对应；None 表示该 rep 不走 CF_DIBV5 路径（非 image/png 或解码失败）。
+    // 不再按大小做阈值降级 —— CF_DIBV5 不走 GDI `CreateDIBitmap`，对大图稳定。
+    let dib_preencoded: Vec<Option<Vec<u8>>> = snapshot
         .representations
         .iter()
         .map(|rep| {
             if resolve_multi_rep_mime(rep) != Some("image/png") {
                 return None;
             }
-            if rep.bytes.len() > CF_BITMAP_MAX_PNG_BYTES {
-                debug!(
-                    png_bytes = rep.bytes.len(),
-                    threshold = CF_BITMAP_MAX_PNG_BYTES,
-                    "PNG 超过 CF_BITMAP 阈值，仅写 \"PNG\" 自定义 format"
-                );
-                return None;
-            }
-            match png_to_bmp(&rep.bytes) {
-                Ok(bmp) => Some(bmp),
+            match png_to_dibv5(&rep.bytes) {
+                Ok(dib) => Some(dib),
                 Err(e) => {
                     warn!(
                         error = %e,
                         png_bytes = rep.bytes.len(),
-                        "PNG→BMP 转码失败；仅写 \"PNG\" 自定义 format"
+                        "PNG→CF_DIBV5 转码失败；仅写 \"PNG\" 自定义 format"
                     );
                     None
                 }
@@ -188,9 +224,9 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
     // guard drop 关闭剪贴板，退避后重新打开再写一遍。
     //
     // 关键语义：重试时再次调 EmptyClipboard 会抹掉上一次失败 attempt 里已经写进去
-    // 的部分格式；但由于 attempt 失败时往往是第一个 set_bitmap_with 就炸（此时
-    // 剪贴板只有 empty() 清空后的空状态，没有用户可见的新内容），重新 empty 不会
-    // 进一步损失用户感知的内容。
+    // 的部分格式；但由于 attempt 失败时 OS 剪贴板要么只含 empty() 后的空状态、
+    // 要么含极少量已写入格式（尚未让用户感知），重新 empty 不会进一步损失用户
+    // 可见的内容。
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..MAX_WRITE_ATTEMPTS {
         if attempt > 0 {
@@ -199,7 +235,7 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
             ));
         }
 
-        match attempt_multi_write_inner(&snapshot, &bmp_preencoded) {
+        match attempt_multi_write_inner(&snapshot, &dib_preencoded) {
             Ok(skipped) => {
                 if !skipped.is_empty() {
                     debug!(
@@ -244,13 +280,13 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
 /// 每次尝试的所有 rep 要么全在同一会话内成功，要么整体作废。
 ///
 /// 返回值是"因为不支持 / 子路径失败而跳过的 format_id 列表"。注意这只记录**明确
-/// 跳过**的 rep（比如 image/png 的 CF_BITMAP 预编码为 None 且 register_format
+/// 跳过**的 rep（比如 image/png 的 CF_DIBV5 预编码为 None 且 register_format
 /// 返回 None），不包含"整体尝试失败"的情况。
 fn attempt_multi_write_inner(
     snapshot: &SystemClipboardSnapshot,
-    bmp_preencoded: &[Option<Vec<u8>>],
+    dib_preencoded: &[Option<Vec<u8>>],
 ) -> Result<Vec<String>> {
-    use clipboard_win::formats::Html as HtmlFmt;
+    use clipboard_win::formats::{Html as HtmlFmt, CF_DIBV5};
     use clipboard_win::options::NoClear;
     use clipboard_win::raw as cb_raw;
     use clipboard_win::Clipboard as ClipboardWin;
@@ -302,26 +338,28 @@ fn attempt_multi_write_inner(
                 wrote_any = true;
             }
             Some("image/png") => {
-                // 双写策略：CF_BITMAP（老应用兼容）+ 自定义 "PNG" format（现代应用直读 PNG 字节）。
+                // 双写策略：CF_DIBV5（标准格式，Windows 自动合成 CF_BITMAP/CF_DIB 给老应用）
+                // + 自定义 "PNG" format（现代应用直读 PNG 字节，保留 PNG 压缩率与 alpha 元数据）。
                 //
                 // 兼容矩阵：
-                //   - CF_BITMAP ← 画图、Office 2010 以下、写字板（仅 PNG ≤ CF_BITMAP_MAX_PNG_BYTES）
-                //   - "PNG"     ← Chrome、Firefox、Paint.NET、新版 Office、Google Docs（总是尝试）
+                //   - CF_DIBV5 ← 画图、Office、写字板、剪贴板历史（Win+V）、第三方剪贴板工具
+                //     （合成路径覆盖所有认 CF_BITMAP / CF_DIB 的应用）
+                //   - "PNG"    ← Chrome、Firefox、Paint.NET、新版 Office、Google Docs
                 //
-                // BMP 预编码已在 OpenClipboard 会话外完成，这里只做系统调用；任一
-                // set_* 失败都 `?` 抛到外层由重试机制兜底。
-                let mut wrote_bitmap = false;
+                // CF_DIBV5 字节已在 OpenClipboard 会话外完成预编码（见 `png_to_dibv5`），
+                // 这里只做纯系统调用；任一 set_* 失败都 `?` 抛到外层由重试机制兜底。
+                let mut wrote_dib = false;
                 let mut wrote_png = false;
 
-                if let Some(bmp_bytes) = bmp_preencoded.get(idx).and_then(|o| o.as_ref()) {
-                    cb_raw::set_bitmap_with::<NoClear>(bmp_bytes, NoClear)
-                        .map_err(|e| anyhow::anyhow!("set CF_BITMAP failed: {}", e))?;
+                if let Some(dib_bytes) = dib_preencoded.get(idx).and_then(|o| o.as_ref()) {
+                    cb_raw::set_without_clear(CF_DIBV5, dib_bytes)
+                        .map_err(|e| anyhow::anyhow!("set CF_DIBV5 failed: {}", e))?;
                     debug!(
-                        bmp_bytes = bmp_bytes.len(),
+                        dib_bytes = dib_bytes.len(),
                         png_bytes = rep.bytes.len(),
-                        "写入 CF_BITMAP 成功"
+                        "写入 CF_DIBV5 成功"
                     );
-                    wrote_bitmap = true;
+                    wrote_dib = true;
                 }
 
                 match cb_raw::register_format("PNG") {
@@ -340,7 +378,7 @@ fn attempt_multi_write_inner(
                     }
                 }
 
-                if wrote_bitmap || wrote_png {
+                if wrote_dib || wrote_png {
                     wrote_any = true;
                 } else {
                     skipped.push(rep.format_id.as_str().to_string());
