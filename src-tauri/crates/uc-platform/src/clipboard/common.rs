@@ -1,4 +1,4 @@
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, Result};
 use clipboard_rs::{common::RustImage, Clipboard, ContentFormat};
 use tracing::{debug, info, warn};
 use uc_core::clipboard::{MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot};
@@ -568,43 +568,37 @@ impl CommonClipboardImpl {
         ))
     }
 
-    /// TODO(clipboard/multi-representation):
+    /// 写入 `SystemClipboardSnapshot` 到系统剪贴板。
     ///
-    /// This implementation writes clipboard content via `clipboard-rs` high-level APIs,
-    /// which implicitly overwrite the clipboard on each call.
+    /// 分流策略：
+    /// 1. `representations.len() == 1`：走 `clipboard-rs` 高层 API 快路径（跨平台）。
+    ///    —— 由 `clipboard-rs` 封装 set_text / set_html / set_image / set_files 等，
+    ///    行为与早期版本完全一致。
+    /// 2. `representations.len() > 1`：进入 `write_snapshot_multi` 分流：
+    ///    - Windows：原子多 rep 写入（`write_snapshot_multi_windows`）——在单次
+    ///      `OpenClipboard` 会话内用 `raw::set_without_clear` 累加 CF_UNICODETEXT
+    ///      + CF_HTML 等多个 format，确保纯文本目的地也能粘贴。
+    ///    - macOS / Linux：暂不支持原子多 rep，降级为"写第一个 rep"并 warn 日志。
+    ///      后续 phase 补齐 `NSPasteboardItem` / Wayland data source 实现。
     ///
-    /// As a result, **multiple representations cannot be written as a single clipboard item**.
-    /// Only the last written representation is reliably preserved.
-    ///
-    /// This is acceptable for now, but it prevents high-fidelity restore of clipboard snapshots
-    /// that contain multiple representations (e.g. text + html + rtf + private formats).
-    ///
-    /// Proper support requires a platform-specific implementation that:
-    /// - Constructs a single clipboard item
-    /// - Attaches multiple representations to that item
-    /// - Commits it atomically (e.g. `NSPasteboardItem` on macOS)
-    ///
-    /// Tracked in: https://github.com/UniClipboard/UniClipboard/issues/92
+    /// 历史背景见 https://github.com/UniClipboard/UniClipboard/issues/92
+    /// 以及 `uc-platform/src/clipboard/platform/windows.rs::write_snapshot_multi_windows`。
     pub fn write_snapshot(
         ctx: &mut clipboard_rs::ClipboardContext,
         snapshot: SystemClipboardSnapshot,
     ) -> Result<()> {
-        #[cfg(debug_assertions)]
-        {
-            if snapshot.representations.len() > 1 {
-                eprintln!(
-                    "warning: writing {} clipboard representations via clipboard-rs; \
-             multi-representation restore is lossy in current implementation",
-                    snapshot.representations.len()
-                );
-            }
+        use anyhow::bail;
+
+        if snapshot.representations.is_empty() {
+            bail!("platform::write expects at least ONE representation, got 0");
         }
 
-        ensure!(
-            snapshot.representations.len() == 1,
-            "platform::write expects exactly ONE representation"
-        );
+        // 多 rep 分流入口：Windows 走原子写入，其他平台显式降级（§9.3 不允许静默降级）。
+        if snapshot.representations.len() > 1 {
+            return Self::write_snapshot_multi(ctx, snapshot);
+        }
 
+        // 单 rep 快路径：走既有 clipboard-rs 高层 API（行为与改动前完全一致）。
         let rep = &snapshot.representations[0];
 
         // Use explicit MIME if present, otherwise infer from macOS/cross-platform format_id.
@@ -715,5 +709,157 @@ impl CommonClipboardImpl {
         }
 
         Ok(())
+    }
+
+    /// 多 representation 写入入口。
+    ///
+    /// 平台能力差异：
+    /// - Windows：具备真正的原子多 rep 写入（`write_snapshot_multi_windows`），在单次
+    ///   `OpenClipboard` 会话内用 `raw::set_without_clear` 累加 CF_UNICODETEXT + CF_HTML，
+    ///   确保纯文本目的地（记事本等）也能粘贴到正确内容。
+    /// - macOS / Linux：当前尚未支持（需 `NSPasteboardItem` / Wayland data source 重写），
+    ///   本次降级为"只写 paste-priority 的第一个 rep"，并以 `warn!` 日志显式说明。
+    ///   后续 phase 再统一（§9.3：不允许静默降级）。
+    ///
+    /// 注意：本方法不应被"单 rep 快路径"调用。调用者需保证 `snapshot.representations.len() >= 1`。
+    fn write_snapshot_multi(
+        ctx: &mut clipboard_rs::ClipboardContext,
+        snapshot: SystemClipboardSnapshot,
+    ) -> Result<()> {
+        let rep_count = snapshot.representations.len();
+
+        #[cfg(target_os = "windows")]
+        {
+            // 把实际实现委托给平台子模块。
+            // common.rs 通过 `crate::clipboard::platform::windows::write_snapshot_multi_windows`
+            // 调用，不跨 crate 暴露，符合 §4.4 cfg 收敛原则。
+            return crate::clipboard::platform::windows::write_snapshot_multi_windows(snapshot);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            // macOS / Linux：显式降级（§9.3 不允许静默降级）。
+            warn!(
+                rep_count,
+                formats = ?snapshot
+                    .representations
+                    .iter()
+                    .map(|r| r.format_id.as_str().to_string())
+                    .collect::<Vec<_>>(),
+                "multi-representation write not yet supported on this platform; \
+                 falling back to single-rep path — only the first rep will be written"
+            );
+
+            // 退到单 rep 快路径：取 snapshot 的第一条 rep，当作 len==1 递归调用。
+            let ts_ms = snapshot.ts_ms;
+            let first = snapshot
+                .representations
+                .into_iter()
+                .next()
+                .expect("write_snapshot_multi 以 empty snapshot 调用，违反调用方契约");
+            let reduced = SystemClipboardSnapshot {
+                ts_ms,
+                representations: vec![first],
+            };
+            return Self::write_snapshot(ctx, reduced);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_skip_barrier_ownership_regardless_of_image_flag() {
+        assert!(should_skip_raw_format("BarrierOwnership", false, false));
+        assert!(should_skip_raw_format("BarrierOwnership", true, false));
+        assert!(should_skip_raw_format("barrierownership", true, false));
+    }
+
+    #[test]
+    fn should_skip_tiff_aliases_when_image_already_read() {
+        // On macOS, TIFF aliases should be skipped when image was already captured.
+        #[cfg(target_os = "macos")]
+        {
+            assert!(should_skip_raw_format("public.tiff", true, false));
+            assert!(should_skip_raw_format(
+                "NeXT TIFF v4.0 pasteboard type",
+                true,
+                false
+            ));
+        }
+
+        // On non-macOS, these are never skipped by the TIFF alias logic.
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(!should_skip_raw_format("public.tiff", true, false));
+            assert!(!should_skip_raw_format(
+                "NeXT TIFF v4.0 pasteboard type",
+                true,
+                false
+            ));
+        }
+    }
+
+    #[test]
+    fn should_not_skip_tiff_aliases_when_image_not_read() {
+        // When no image was captured, TIFF aliases should NOT be skipped
+        // (they might be the only representation of image data).
+        assert!(!should_skip_raw_format("public.tiff", false, false));
+        assert!(!should_skip_raw_format(
+            "NeXT TIFF v4.0 pasteboard type",
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn should_not_skip_unrelated_formats() {
+        assert!(!should_skip_raw_format(
+            "org.nspasteboard.AutoGeneratedPasteboard",
+            false,
+            false
+        ));
+        assert!(!should_skip_raw_format(
+            "org.nspasteboard.AutoGeneratedPasteboard",
+            true,
+            false
+        ));
+        assert!(!should_skip_raw_format(
+            "com.apple.finder.node",
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn should_skip_file_url_formats_when_files_already_read() {
+        #[cfg(target_os = "macos")]
+        {
+            assert!(should_skip_raw_format("public.file-url", false, true));
+            assert!(should_skip_raw_format("NSFilenamesPboardType", false, true));
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            // On non-macOS, these are not skipped by the file-URL logic
+            assert!(!should_skip_raw_format("public.file-url", false, true));
+            assert!(!should_skip_raw_format(
+                "NSFilenamesPboardType",
+                false,
+                true
+            ));
+        }
+    }
+
+    #[test]
+    fn should_not_skip_file_url_formats_when_files_not_read() {
+        assert!(!should_skip_raw_format("public.file-url", false, false));
+        assert!(!should_skip_raw_format(
+            "NSFilenamesPboardType",
+            false,
+            false
+        ));
     }
 }
