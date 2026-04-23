@@ -9,6 +9,24 @@ use uc_core::clipboard::{MimeType, ObservedClipboardRepresentation, SystemClipbo
 use uc_core::ids::RepresentationId;
 use uc_core::ports::SystemClipboardPort;
 
+/// 推断 rep 在 Windows 多 rep 写入路径下的"有效 MIME"。
+///
+/// 与 `write_snapshot_multi_windows` 主循环使用的推断逻辑保持一致 ——
+/// 既用于前置 "有无可写 rep" 扫描，也用于主循环分派，避免两处逻辑漂移。
+/// 与 `common.rs` 单 rep 快路径的 format_id → mime 推断表对齐。
+fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str> {
+    rep.mime
+        .as_ref()
+        .map(|m| m.as_str())
+        .or_else(|| match rep.format_id.as_str() {
+            "public.utf8-plain-text" | "public.text" | "NSStringPboardType" | "text" => {
+                Some("text/plain")
+            }
+            "public.html" | "Apple HTML pasteboard type" | "html" => Some("text/html"),
+            _ => None,
+        })
+}
+
 /// Windows 原子多 representation 写入。
 ///
 /// 在**单次** `OpenClipboard` 会话内写入多个剪贴板格式（CF_UNICODETEXT + CF_HTML），
@@ -37,11 +55,42 @@ use uc_core::ports::SystemClipboardPort;
 /// 此函数由 `common.rs::write_snapshot_multi` 在 `#[cfg(target_os = "windows")]`
 /// 分支调用。`WindowsClipboard::write_snapshot` 在多 rep 场景下会提前 drop
 /// clipboard-rs ctx，避免与本函数的 `clipboard-win` OpenClipboard 抢句柄（OSError 1418）。
+///
+/// ### `empty()` 副作用的防御
+/// `EmptyClipboard` 会立即清空用户当前的 OS 剪贴板。如果我们开了会话、清空了、
+/// 然后发现全部 rep 都不认（例如 PixPin 截图：files + image + 5 个平台私有类型，
+/// 没有 text/plain 也没有 text/html），用户看到的就是"粘贴为空"——原本剪贴板里的
+/// 有效内容被静默抹掉了。为避免这个副作用，本函数**先**扫描 snapshot 判断至少
+/// 有一条可写的 rep，再打开剪贴板并清空——没可写时直接 bail，OS 剪贴板保持原样。
+/// bail 错误文案包含 "未清空 OS 剪贴板" 字样以便排障。
 pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) -> Result<()> {
     use clipboard_win::formats::Html as HtmlFmt;
     use clipboard_win::options::NoClear;
     use clipboard_win::raw as cb_raw;
     use clipboard_win::Clipboard as ClipboardWin;
+
+    // 前置扫描：如果没有任何 rep 是我们能写的（text/plain 或 text/html），
+    // 直接 bail；**不**打开 Windows 剪贴板、**不**调 empty()。
+    // 避免把用户原本的 OS 剪贴板清掉却什么都写不进去（见上方 doc comment "empty() 副作用的防御"）。
+    let has_writable = snapshot.representations.iter().any(|rep| {
+        matches!(
+            resolve_multi_rep_mime(rep),
+            Some("text/plain") | Some("text/html")
+        )
+    });
+
+    if !has_writable {
+        let skipped: Vec<String> = snapshot
+            .representations
+            .iter()
+            .map(|r| r.format_id.as_str().to_string())
+            .collect();
+        anyhow::bail!(
+            "Windows 多 rep 写入：无可写 rep（支持 text/plain, text/html）；\
+             未清空 OS 剪贴板；跳过的 rep = {:?}",
+            skipped
+        );
+    }
 
     // RAII：作用域内整段占有 Windows 剪贴板，drop 时自动 CloseClipboard。
     let _clip = ClipboardWin::new_attempts(10)
@@ -61,17 +110,8 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
 
     for rep in &snapshot.representations {
         // 优先用显式 MIME，其次按 format_id 推断（与 common.rs 单 rep 路径保持一致）。
-        let effective_mime =
-            rep.mime
-                .as_ref()
-                .map(|m| m.as_str())
-                .or_else(|| match rep.format_id.as_str() {
-                    "public.utf8-plain-text" | "public.text" | "NSStringPboardType" | "text" => {
-                        Some("text/plain")
-                    }
-                    "public.html" | "Apple HTML pasteboard type" | "html" => Some("text/html"),
-                    _ => None,
-                });
+        // 与前置扫描使用同一个 helper，保证 "能否写" 的判定与主循环分派逻辑不漂移。
+        let effective_mime = resolve_multi_rep_mime(rep);
 
         match effective_mime {
             Some("text/plain") => {
