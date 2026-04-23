@@ -18,8 +18,13 @@
 //!    `RemotePush` intent — registers a 60s hash guard + one-shot
 //!    next-origin override so the daemon's own clipboard watcher doesn't
 //!    re-dispatch the just-written content (write-back loop defence).
+//!    The **full** snapshot (every V3-decoded representation) is handed
+//!    to the coordinator; the platform layer internally decides whether
+//!    to atomically write multiple formats (Windows today) or to narrow
+//!    to the paste-priority rep via `SelectRepresentationPolicyV1`
+//!    (macOS / Linux fallback today).
 //!
-//! Step ordering (4 → 5) matters: capture commits the event before the
+//! Step ordering (3 → 4) matters: capture commits the event before the
 //! OS write fires, so when the watcher consumes the origin guard it
 //! already sees the persisted row.
 //!
@@ -41,11 +46,11 @@ use thiserror::Error;
 use tracing::{debug, info, instrument};
 
 use uc_core::ids::{DeviceId, EntryId};
-use uc_core::ports::{ClipboardEntryRepositoryPort, SelectRepresentationPolicyPort};
+use uc_core::ports::ClipboardEntryRepositoryPort;
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 
 use crate::clipboard_capture::CaptureClipboardUseCase;
-use crate::clipboard_write::{narrow_to_primary, ClipboardWriteCoordinator, ClipboardWriteIntent};
+use crate::clipboard_write::{ClipboardWriteCoordinator, ClipboardWriteIntent};
 use crate::usecases::clipboard_sync::payload_codec::decode_v3_bytes_to_snapshot;
 
 /// Caller-supplied input mapped from the facade's public `InboundNotice`.
@@ -132,12 +137,6 @@ pub struct ApplyInboundClipboardUseCase {
     entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
     capture: Arc<dyn InboundCapture>,
     write: Arc<dyn InboundWrite>,
-    /// Reused by the narrow-to-primary step between capture + write so
-    /// `paste_rep_id` priority matches what `CaptureClipboardUseCase`
-    /// picks for UI paste. See `clipboard_write::narrow_to_primary` and
-    /// `uc-platform/src/clipboard/common.rs` TODO (`write_snapshot`
-    /// requires exactly one representation).
-    representation_policy: Arc<dyn SelectRepresentationPolicyPort>,
 }
 
 impl ApplyInboundClipboardUseCase {
@@ -145,13 +144,11 @@ impl ApplyInboundClipboardUseCase {
         entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
         capture: Arc<dyn InboundCapture>,
         write: Arc<dyn InboundWrite>,
-        representation_policy: Arc<dyn SelectRepresentationPolicyPort>,
     ) -> Self {
         Self {
             entry_repo,
             capture,
             write,
-            representation_policy,
         }
     }
 
@@ -213,24 +210,21 @@ impl ApplyInboundClipboardUseCase {
                 )
             })?;
 
-        // 4. Narrow the snapshot to its paste-priority representation.
-        // V3 envelopes carry every rep the sender observed (text/plain
-        // + text/html + text/rtf + image/png + ...); the platform layer
-        // `write_snapshot` only accepts a single-rep snapshot (see
-        // `uc-platform/src/clipboard/common.rs` TODO), so without this
-        // step inbound sync fails with "platform::write expects exactly
-        // ONE representation" for every multi-rep copy. Using the same
-        // `SelectRepresentationPolicyPort` that `CaptureClipboardUseCase`
-        // runs keeps capture's stored `paste_rep_id` and the byte we
-        // push to the OS clipboard consistent.
-        let narrowed = narrow_to_primary(snapshot_for_write, &*self.representation_policy)
-            .map_err(|e| ApplyInboundError::WriteCoordinator(e.to_string()))?;
-
-        // 5. Write OS clipboard with RemotePush guard. Order matters —
+        // 4. Write OS clipboard with RemotePush guard. Order matters —
         // capture must complete first so the watcher's origin lookup
         // sees the persisted row even if it fires immediately.
+        //
+        // 送入 full snapshot（不 narrow）：platform 层内部按能力差异消化多 rep。
+        // - Windows：`write_snapshot_multi_windows` 原子写入 CF_UNICODETEXT + CF_HTML 等
+        // - macOS / Linux：`write_snapshot_multi` 的降级分支用 `SelectRepresentationPolicyV1`
+        //   选 paste-priority rep 后走单 rep 快路径（行为与上游 `narrow_to_primary` 等价）
+        //
+        // 背景：quick `260423-9do` 交付了平台层的多 rep 写入能力，但此前应用层仍在
+        // narrow，导致主流量走单 rep 快路径、新能力 0 触发。本改动把 full snapshot 直送
+        // platform 层，由 platform 根据自身 OS 能力内部分流。详见
+        // `.planning/quick/260423-a3b-windows-rep-apply-inbound-narrow/`。
         self.write
-            .write(narrowed)
+            .write(snapshot_for_write)
             .await
             .map_err(|e| ApplyInboundError::WriteCoordinator(e.to_string()))?;
 
@@ -245,7 +239,6 @@ mod tests {
     use crate::usecases::clipboard_sync::payload_codec::encode_snapshot_to_v3_bytes;
     use mockall::predicate::*;
 
-    use uc_core::clipboard::SelectRepresentationPolicyV1;
     use uc_core::ids::{FormatId, RepresentationId};
     use uc_core::ports::PeerAddressError;
     use uc_core::{MimeType, ObservedClipboardRepresentation};
@@ -313,16 +306,7 @@ mod tests {
         capture: MockCapture,
         write: MockWrite,
     ) -> ApplyInboundClipboardUseCase {
-        // `SelectRepresentationPolicyV1` is pure (no ports, no state) so
-        // every verdict can share the real implementation instead of a
-        // mock. The narrow step only runs when we reach step 4, i.e. on
-        // the Applied-path verdicts — others never observe it.
-        ApplyInboundClipboardUseCase::new(
-            Arc::new(repo),
-            Arc::new(capture),
-            Arc::new(write),
-            Arc::new(SelectRepresentationPolicyV1::default()),
-        )
+        ApplyInboundClipboardUseCase::new(Arc::new(repo), Arc::new(capture), Arc::new(write))
     }
 
     // ── verdicts ────────────────────────────────────────────────────────

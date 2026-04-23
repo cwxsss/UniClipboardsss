@@ -176,11 +176,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
         apply_inbound_capture_uc as Arc<dyn ApplyInboundCapture>,
         Arc::clone(&clipboard_write_coordinator) as Arc<dyn ApplyInboundWrite>,
-        runtime
-            .wiring_deps()
-            .clipboard
-            .representation_policy
-            .clone(),
     ));
 
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
