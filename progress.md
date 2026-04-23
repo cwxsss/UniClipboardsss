@@ -2159,3 +2159,108 @@ Slice 1 落帷。Slice 2 启动前 T-15(A2 unlock space_id)和 T-16(`unlock`/`lo
 - **follow-up 4**(任意时点):**e2e harness 抽 `tests/common`** —— slice1 + slice2-phase1 + slice2-phase2 三份重复,Phase 3 出第四份前可统一抽取
 - **Slice 2 整体**:剩下 A3 revoke + A5 rename UI + 大 payload(图片 / 富文本)未做;前两条进 Phase 3,后者推 Slice 3 blob
 - **Slice 3 准备**:blob / 文件 ticket 路径,Phase 2 wire `MAX_PAYLOAD_SIZE=2MiB` 上限就是为这条路径预留
+
+---
+
+## Session 2026-04-23(续 29) — Slice 2 Phase 3 封版 · daemon 接管 iroh 剪贴板同步
+
+**触发**:用户在 Phase 2 封版后按 `slice2-phase3-plan.md` 15 任务拆解逐项推进;真机验收 T14 期间暴露 6 处 iroh / pairing / snapshot / lifecycle 缺陷,在本 session 之前全部修复;本 session 为 T15 收尾,用户口头确认 "12、14 已经验证通过",T12 按 Phase 1/2 先例战略跳过,T14 真机验收通过。
+
+### 交付范围
+
+单句概括:**A 设备复制文字 → B 设备 daemon ≤ 2s 自动写入系统剪贴板**,闭环 `系统剪贴板复制 → 自动 dispatch → 对端落库 + 写系统剪贴板 + WS 事件`;payload 全链路走 V3 envelope;CLI `send` / `watch` 降为可选验收工具。**不含**per-member sync preferences、wire `DuplicateIgnored` ack、A3/A5 UI、大 payload。
+
+结构按 usecase crate 迁移 → port → application → daemon → CLI → 验收修复由低到高:
+
+- **usecase 迁 crate**(`uc-app` → `uc-application`):
+  - `CaptureClipboardUseCase`(T0a `cb4ac588`)+ `ClipboardWriteCoordinator`(T0b `ad5ac7ac`)迁到 `uc-application/src/usecases/clipboard_capture/` 与 `clipboard_write/`;`uc-app` 老路径保留 `#[deprecated]` re-export shim,Slice 5 删
+- **Port 层**(`uc-core`):
+  - `ClipboardEntryRepositoryPort::find_entry_id_by_snapshot_hash(&str) -> Option<EntryId>`(T1 `9ce27893`)— dedup 查询原语;Diesel 两步查询避开 JoinDsl 冲突
+- **Application 层**(`uc-application`):
+  - `payload_codec`(T2 `68f89b31`)— V3 envelope encode/decode;content_hash 走 `snapshot_hash()` canonical `blake3v1:...` 对齐 DB 列
+  - `ClipboardSyncFacade::dispatch_snapshot(snapshot, origin)`(T3 `de2c8da6`)— 内部 encode → `dispatch_entry(payload_version=3)`;保留 `dispatch_entry` 兼容 Phase 2 路径
+  - `ApplyInboundClipboardUseCase`(T4 `84129746`)— 6 mockall 单测(dedup miss/hit + decode failure + capture failure + write failure + dedup-query failure);`InboundCapture` + `InboundWrite` 两 internal traits 把 7+2 port 依赖外包给 blanket impl,测试 mockall
+- **Daemon 装配**(`uc-bootstrap` + `uc-daemon`):
+  - `DaemonBootstrapContext` 加 `clipboard_sync_facade` + `space_setup_assembly` 两 pub 字段(T5 `19595e06`);`build_daemon_app` 的 `block_on` 块新增第三 future 跑 `build_space_setup_assembly`
+  - `entrypoint.rs` 注入 + 两 worker 改装(T6+T7+T8 `8e007150`,一次合入):
+    - `DaemonClipboardChangeHandler` 删 `build_sync_outbound_clipboard_use_case`,dispatch arm 改走 `clipboard_sync.dispatch_snapshot`
+    - `InboundClipboardSyncWorker` 订阅源切 `subscribe_inbound_notices` + 处理走 `ApplyInboundClipboardUseCase`,`parse_clipboard_frame` + `SyncInboundClipboardUseCase` + `ClipboardInboundTransportPort` 订阅 + file_cache / file_transfer 装配全删(~230→~190 LOC)
+    - shutdown 路径加 `assembly.shutdown().await`,iroh router 干净 CONNECTION_CLOSE
+- **CLI envelope 升级**(`uc-cli`):
+  - `send`(T9)wrap text 成 single-rep `SystemClipboardSnapshot` 走 `dispatch_snapshot(LocalCapture)`,删 sha2 + bytes dep + 本地 `sha256_hex` / `hex_lower`
+  - `watch`(T10)`decode_v3_bytes_to_snapshot` 展开 envelope,first `text/*` rep 优先渲染,JSON schema `plaintext_utf8` → `text` + 新 `rep_summary`
+  - 两命令一次合入 `8e075213`,伴随 `usecases` / `usecases::clipboard_sync` 模块可见性 surgery(pub mod 但内部项仍 pub(crate))
+- **测试**(`uc-bootstrap/tests` + `scripts/`):
+  - Phase 2 e2e 迁 V3 envelope(T11 `f8f2079c`)— 两 verdict 切 `dispatch_snapshot` + decode 校验(first rep 字节级 + mime 相等),content_hash 改断 canonical;第二 verdict `repeat_dispatch_lands_twice_phase2_no_dedup` 保留"wire 层不 dedup"契约,daemon 层 dedup 由 T14 真机覆盖
+  - shell e2e schema 更新(T13 `416346f2`)— `"plaintext_utf8"` → `"text"` 全局 9 处,header 改说 Phase 3 envelope
+  - T12 `slice2_phase3_daemon_e2e` 战略跳过(见关键决策 #5)
+- **§11.4 合规性修复**(T14 byproduct):
+  - `SetupStatus` 访问收敛到 `SpaceSetupFacade`(`dec6f5fb` / `5eb1bb2c`)— daemon `build_daemon_app` 直读 `SetupStatusRepositoryPort` 绕过 facade 的 violation;迁 `IsSetupCompleteUseCase` pub(crate) + `facade::is_setup_complete()` thin wrapper;全链路 daemon + CLI 改走 facade
+- **T14 真机 iroh / snapshot 修**(全部已合入):
+  - `90048909` 共享 daemon long-lived runtime,iroh stack 存活到 `daemon.run()` 返回后(之前 iroh `Endpoint` / `Router` 早 drop → ingest loop panic)
+  - `dbaa5cbd` outbound dispatch 删 `ReachabilityState::Online` pre-filter → 全量 iterate `peer_addr_repo.list()`;失败折叠为 `Err("Offline")`(之前 B 刚启动 presence 未 converge 时 A 第一次复制丢失)
+  - `67e6cb3a` `ApplyInboundClipboardUseCase` 在 `ClipboardWriteCoordinator.write` 前调 `narrow_to_primary` 收敛 paste-priority rep
+  - `21716a02` iroh connect 前过滤 stored addr 中 stale `DirectIp(...)` 条目
+  - `9e65ab73` pairing 序列化 NodeAddr 丢 ephemeral `Ip(...)`,只 persist `NodeId + relay`
+  - `9ebb03be` chore 日志记录"图像同步 known-issue"(不修)— `narrow_to_primary` 在 snapshot 含 `FileList + Image` 双 rep 时优先输出 FileList,图片退化;**Phase 3 scope 外**(2026-04-23 用户决策)
+- **文档**(T15 本提交):`task_plan.md` Phase 3 节标 ✅ + commit hash 全列;`slice2-phase3-plan.md §15` tracker 全部封版(§15.1 所有 T 标 ✅ / ⏭️;§15.2 累计 15/17;§15.3 关键决策 6 条;§15.4 后续提醒 6 项;§15.5 T14 真机 bug-fix 追记 8 条表)
+
+### 关键决策 / 偏离
+
+1. **T4 `InboundCapture` / `InboundWrite` 内部 traits**(2026-04-22):plan §3 原意是 use case 直接持有 `CaptureClipboardUseCase` / `ClipboardWriteCoordinator` 的 Arc;实际设计改成两个 `pub(super) trait` 桥接,production 走 blanket impl、test 走 mockall。比直接构造完整 `CaptureClipboardUseCase` 的 7 port 依赖树干净,mockall 用 stable trait object 路径。
+2. **T5 `SpaceSetupAssembly` 整体作为 `DaemonBootstrapContext` 字段暴露**(2026-04-22):plan §6.1 只说 `clipboard_sync_facade`,实际为 T6 shutdown 路径 `.await` assembly.shutdown() 把整 assembly 也挂进 ctx。D1(完全替换)语境下无 libp2p 路径需要 isolate,不破 §11.4 精神。
+3. **T6+T7+T8 一次合入**(`8e007150`,2026-04-22):plan 依赖图把 T7/T8 画成依赖 T6 entrypoint,但代码改动是 cross-cut(`entrypoint.rs` 注入的正是 T7 改装 handler + T8 重写 worker 的新签名),分开合 workspace 编译不过。改三任务一次 commit,commit message 前缀合并 `T6+T7+T8`。
+4. **T11 Phase 2 e2e 第二 verdict 保留"wire 不 dedup"契约**(2026-04-22):Phase 3 dedup 在 application 层(`ApplyInboundClipboardUseCase`);wire 层 `AckCode::DuplicateIgnored` 仍无生产者。`repeat_dispatch_lands_twice_phase2_no_dedup` 继续 pin 这个事实,flip 到 Phase 3.5 receiver-side dedup 做。
+5. **T12 战略跳过**(2026-04-23):沿用 Phase 1 T12 / Phase 2 T13 先例。`slice2_phase2_clipboard_e2e`(T11 envelope 迁移后)已覆盖 real-iroh transport + V3 envelope encode/decode + broadcast 分发 + cipher AEAD round-trip 完整 application 层;新写 daemon-process-level e2e 需要拉两个真实 daemon process + mock 系统剪贴板 + 绕 `UC_DISABLE_SYSTEM_CLIPBOARD`,~2.5h 工程成本的增量覆盖(process lifecycle + OS clipboard IO)由 T14 人工验收 ~1h 覆盖。
+6. **§11.4 setup-complete gate 迁 use case**(`dec6f5fb` / `5eb1bb2c`,2026-04-23 真机 byproduct):T14 真机跑时发现 daemon `build_daemon_app` 直读 `SetupStatusRepositoryPort::load` 判 space 是否 setup,绕过 facade。不在 T1–T15 任务图,是真机验收的 byproduct refactor。完成后 `SetupStatus` 访问全链路收敛到 `SpaceSetupFacade`。
+7. **T14 真机暴露的 6 处 iroh / snapshot bug**(2026-04-23):真机双 daemon 跑时依次发现并修复 —— runtime 寿命(`90048909`)、online pre-filter 误伤(`dbaa5cbd`)、paste rep 选择(`67e6cb3a`)、stale direct addr(`21716a02`)、ephemeral IP 持久化(`9e65ab73`)、图像 rep 优先级(`9ebb03be` 不修仅记录)。全部是 production real-world 场景才会触发的 lifecycle / 网络切换 / multi-rep 协议细节问题,单元 / e2e 测不到。**验证真机验收不可替代的价值**。
+
+### 提交(按拓扑顺序)
+
+- `cb4ac588` refactor(Slice2/P3): T0a migrate `CaptureClipboardUseCase` to uc-application
+- `ad5ac7ac` refactor(Slice2/P3): T0b migrate `ClipboardWriteCoordinator` to uc-application
+- `9ce27893` feat(Slice2/P3): T1 `ClipboardEntryRepositoryPort::find_entry_id_by_snapshot_hash`
+- `68f89b31` feat(Slice2/P3): T2 payload_codec — V3 envelope encode/decode helpers
+- `de2c8da6` feat(Slice2/P3): T3 `ClipboardSyncFacade::dispatch_snapshot`
+- `84129746` feat(Slice2/P3): T4 `ApplyInboundClipboardUseCase` + 6 mockall verdicts
+- `19595e06` feat(Slice2/P3): T5 `build_daemon_app` surfaces `SpaceSetupAssembly` + `ClipboardSyncFacade`
+- `8e007150` feat(Slice2/P3): T6+T7+T8 daemon workers take over iroh clipboard path
+- `8e075213` feat(Slice2/P3): T9+T10 CLI send/watch switch to V3 envelope codec
+- `f8f2079c` test(Slice2/P3): T11 phase 2 e2e — migrate to V3 envelope + `dispatch_snapshot`
+- `416346f2` test(Slice2/P3): T13 shell clipboard e2e — update JSON schema for envelope
+- `dec6f5fb` fix(Slice2/P3): start gate delegated to `IsSetupComplete` use case
+- `5eb1bb2c` refactor(uc-application): funnel `SetupStatus` access through facade/ per §11.4
+- `90048909` fix(Slice2/P3): keep iroh stack alive by sharing daemon's long-lived runtime
+- `dbaa5cbd` fix(Slice2/P3): dispatch to all paired peers; drop online pre-filter
+- `67e6cb3a` fix(Slice2/P3): narrow inbound snapshot to paste-priority rep before OS write
+- `21716a02` fix(Slice2/P3): drop stale stored direct addrs before iroh connect
+- `9e65ab73` fix(Slice2/P3): persist NodeId + relay only; drop ephemeral `Ip(...)` at pairing write
+- `9ebb03be` chore(Slice2/P3): log image sync known-issue — FileList beats Image in narrow_to_primary
+- 本提交 `docs(Slice2/P3): T15 mark Phase 3 complete; record all commit hashes`
+
+### 测试
+
+- 单测累计:T1(1 port) + T2(4 codec) + T3(1 facade) + T4(6 apply) = 12 新增 + Phase 2 迁移 2 e2e = 14 pass
+- `cargo test -p uc-application`:绿(含 T0a/T0b 迁移后的 188 + 原 uc-app shim path 的 7)
+- `cargo test -p uc-bootstrap --tests`:5 e2e 全绿(slice1 + phase1 2 + phase2 2 verdict 升级版)
+- shell `bash -n scripts/test_clipboard_e2e.sh`:通过
+- **真机双 profile 验收(T14,2026-04-23 用户确认)**:两 daemon process profile 并跑,A 复制文字 → B 系统剪贴板 ≤ 2s 内被覆盖 + B 侧 WS 客户端收 `clipboard.new_content origin: "remote"`;重复内容第二次 dispatch → B 侧 `ApplyOutcome::DuplicateSkipped`,DB 不增 entry / 系统剪贴板不变 / 无 WS;B 关掉 A 复制 → A daemon log `Offline`,不 panic;B 重启后 A 下一次复制 B 能收到
+
+### 统计
+
+- 完成 15/17 tasks(T12 战略跳过)
+- 实际总工时 ~7.9h vs 原估 11.3h(乐观) / 15h(保守),**-30% vs 乐观**
+- 工时分布:主线 T0a..T11+T13 ~5.6h + T14 真机验收 + 6 处修 ~2.0h + T15 收尾 ~0.3h
+- 节省来源:T3/T5/T7/T8 大量复用 Phase 2 模式;T12 战略跳过 -2.5h;bug-fix 单次定位快(3~30 行修法)
+- 超支来源:T4 internal traits 设计 +0.3h;T5 block_on 嵌套第三 future +0.2h
+- **真机验收占比 ~25% 工时**,但抓到的 bug 100% 是 production 场景独有(runtime 寿命 / 地址持久化 / 协议细节),单元 + e2e 不可替代
+
+### 遗留 / 下一步
+
+- **图像同步 known-issue**(不开 follow-up,仅记录):`narrow_to_primary` 选 FileList 压过 Image,Phase 3 scope 外,用户 2026-04-23 决策不处理;需要时按 `9ebb03be` chore commit 日志定位
+- **Phase 3.5 候选**(非紧急):
+  - **per-member sync preferences**(D3 deferred)— `MemberSyncPreferences.send_enabled` / `send_content_types` 当前失效,只保 global master toggle;需扩 `ClipboardSyncFacade.dispatch_entry` 加 `target_filter` 或新 `dispatch_entry_to_targets`
+  - **wire `DuplicateIgnored` ack**(D4 deferred)— receiver adapter 当前不 emit,Phase 3.5 做 + flip `repeat_dispatch_lands_twice_phase2_no_dedup`
+- **Slice 2 整体**:Phase 1/2/3 完工 → C1 outbound / C2 inbound / F1 完整版 / E1 roster / E2 presence events 全部 ✅;剩下 A3 revoke / A5 rename UI 推 Phase 4 或 Slice 6;大 payload(图片 / 富文本 / 文件)推 Slice 3 blob
+- **Slice 5 前置就绪**:Phase 3 完工 = daemon 内 deprecated `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort` 0 消费者;`uc-app::sync_outbound` / `sync_inbound` 仍 impl(deprecated 活着)。Slice 5 按计划统一删
+- **Slice 3 准备**:blob / 文件 ticket 路径,Phase 2 wire `MAX_PAYLOAD_SIZE=2MiB` 上限预留
