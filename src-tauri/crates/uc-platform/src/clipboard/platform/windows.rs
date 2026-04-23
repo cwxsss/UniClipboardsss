@@ -34,6 +34,12 @@ fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str>
 /// + pixel data）—— 这是 `clipboard_win::raw::set_bitmap_with` 期望的输入格式：
 /// 内部读 file header 的 `bfOffBits` 定位 pixel data 起始，再走 `CreateDIBitmap`。
 ///
+/// **调用时机**：必须在 `OpenClipboard` 会话**之外**完成预编码。大 PNG
+/// （MB 级）的 `image` crate 解码 + BMP 再编码可能耗时几十到几百毫秒；若在持有
+/// 剪贴板会话期间做这个耗时操作，会把整段持有窗口拉长，触发 Windows 偶发的
+/// `ERROR_CLIPBOARD_NOT_OPEN (1418)`（来源不完全清楚，可能与消息泵或 GDI
+/// 隐式关闭剪贴板有关，但可稳定观测到与 PNG 大小正相关）。
+///
 /// 注意：BMP 不支持 alpha 通道，带 alpha 的 PNG 转 BMP 时透明度会被压平。
 /// 这是可接受的降级 —— 目的地应用若需要 alpha，从同一会话内写入的 "PNG"
 /// 自定义 format 读原始 PNG 字节即可。
@@ -48,6 +54,26 @@ fn png_to_bmp(png_bytes: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| anyhow::anyhow!("encode BMP failed: {e}"))?;
     Ok(bmp)
 }
+
+/// CF_BITMAP 双写的 PNG 大小上限。
+///
+/// 超过此阈值时只写 `"PNG"` 自定义 format，跳过 CF_BITMAP：
+/// - `png_to_bmp` 对大 PNG 解码 + BMP 再编码耗时显著（MB 级 PNG 可达百毫秒级）
+/// - `set_bitmap_with` 对大 bitmap 的 GlobalAlloc + memcpy 也放大了持有剪贴板的时间
+/// - 二者叠加后可稳定观测到 `ERROR_CLIPBOARD_NOT_OPEN (1418)`
+///
+/// 1 MiB 是经验阈值：Seq 日志统计显示 PNG ≤ ~600 KB 均稳定成功，≥ 1.5 MB 均失败。
+/// 老应用（画图 / Office 2010-）粘贴大图时本来就较少见；现代目标应用都认 `"PNG"`。
+const CF_BITMAP_MAX_PNG_BYTES: usize = 1_048_576;
+
+/// 单次写入尝试的最大次数。
+///
+/// `ERROR_CLIPBOARD_NOT_OPEN (1418)` 在大多数情况下是瞬态的（消息泵、GDI 竞争
+/// 或其他进程短暂打开剪贴板）。经验上第二次尝试几乎都能成功；3 次兜底保守。
+const MAX_WRITE_ATTEMPTS: u32 = 3;
+
+/// 每次重试前的退避（毫秒）。索引 = attempt 次数，0 次不退避。
+const RETRY_BACKOFF_MS: [u64; MAX_WRITE_ATTEMPTS as usize] = [0, 20, 40];
 
 /// Windows 原子多 representation 写入。
 ///
@@ -94,12 +120,14 @@ fn png_to_bmp(png_bytes: &[u8]) -> Result<Vec<u8>> {
 /// 有效内容被静默抹掉了。为避免这个副作用，本函数**先**扫描 snapshot 判断至少
 /// 有一条可写的 rep，再打开剪贴板并清空——没可写时直接 bail，OS 剪贴板保持原样。
 /// bail 错误文案包含 "未清空 OS 剪贴板" 字样以便排障。
+///
+/// ### 大 PNG 的分裂写入策略
+/// 由于 Windows 偶发 `ERROR_CLIPBOARD_NOT_OPEN (1418)`（与 PNG 大小正相关），
+/// 本函数对 image/png rep 做两层防御：
+/// 1. **预编码前移**：`png_to_bmp` 在 `OpenClipboard` 会话**之外**完成，缩短剪贴板持有窗口。
+/// 2. **阈值降级**：PNG 超过 `CF_BITMAP_MAX_PNG_BYTES` 时跳过 CF_BITMAP 路径，只写 `"PNG"` 自定义 format。
+/// 3. **整体重试**：整个会话（open → empty → 逐 rep 写入）作为一个原子单元，失败后退避重试，最多 `MAX_WRITE_ATTEMPTS` 次。
 pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) -> Result<()> {
-    use clipboard_win::formats::Html as HtmlFmt;
-    use clipboard_win::options::NoClear;
-    use clipboard_win::raw as cb_raw;
-    use clipboard_win::Clipboard as ClipboardWin;
-
     // 前置扫描：如果没有任何 rep 是我们能写的（text/plain、text/html 或 image/png），
     // 直接 bail；**不**打开 Windows 剪贴板、**不**调 empty()。
     // 避免把用户原本的 OS 剪贴板清掉却什么都写不进去（见上方 doc comment "empty() 副作用的防御"）。
@@ -123,6 +151,110 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
         );
     }
 
+    // 预编码阶段 —— 在 OpenClipboard 会话**之外**完成耗时的 PNG→BMP 解码。
+    // 和 `rep` 一一对应；None 表示该 rep 不走 CF_BITMAP 路径（非 image/png、
+    // 超过 CF_BITMAP_MAX_PNG_BYTES 阈值、或解码失败）。
+    let bmp_preencoded: Vec<Option<Vec<u8>>> = snapshot
+        .representations
+        .iter()
+        .map(|rep| {
+            if resolve_multi_rep_mime(rep) != Some("image/png") {
+                return None;
+            }
+            if rep.bytes.len() > CF_BITMAP_MAX_PNG_BYTES {
+                debug!(
+                    png_bytes = rep.bytes.len(),
+                    threshold = CF_BITMAP_MAX_PNG_BYTES,
+                    "PNG 超过 CF_BITMAP 阈值，仅写 \"PNG\" 自定义 format"
+                );
+                return None;
+            }
+            match png_to_bmp(&rep.bytes) {
+                Ok(bmp) => Some(bmp),
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        png_bytes = rep.bytes.len(),
+                        "PNG→BMP 转码失败；仅写 \"PNG\" 自定义 format"
+                    );
+                    None
+                }
+            }
+        })
+        .collect();
+
+    // 整体重试 —— 把 OpenClipboard → EmptyClipboard → 逐 rep 写入 → CloseClipboard
+    // 作为一个原子单元重试。任一 set_* 失败（典型为 1418）都放弃本次尝试，让 RAII
+    // guard drop 关闭剪贴板，退避后重新打开再写一遍。
+    //
+    // 关键语义：重试时再次调 EmptyClipboard 会抹掉上一次失败 attempt 里已经写进去
+    // 的部分格式；但由于 attempt 失败时往往是第一个 set_bitmap_with 就炸（此时
+    // 剪贴板只有 empty() 清空后的空状态，没有用户可见的新内容），重新 empty 不会
+    // 进一步损失用户感知的内容。
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..MAX_WRITE_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(
+                RETRY_BACKOFF_MS[attempt as usize],
+            ));
+        }
+
+        match attempt_multi_write_inner(&snapshot, &bmp_preencoded) {
+            Ok(skipped) => {
+                if !skipped.is_empty() {
+                    debug!(
+                        skipped_count = skipped.len(),
+                        skipped = ?skipped,
+                        "Windows 多 rep 写入：部分 rep 已跳过（不支持或写入失败）"
+                    );
+                }
+                info!(
+                    total_reps = snapshot.representations.len(),
+                    skipped = skipped.len(),
+                    attempt = attempt + 1,
+                    "Windows 原子多 rep 写入完成"
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    attempt = attempt + 1,
+                    max_attempts = MAX_WRITE_ATTEMPTS,
+                    error = %e,
+                    "Windows 原子多 rep 写入本次尝试失败"
+                );
+                last_err = Some(e);
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "Windows 多 rep 写入：{} 次尝试均失败；最后一次错误：{}",
+        MAX_WRITE_ATTEMPTS,
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "<unknown>".to_string())
+    )
+}
+
+/// 单次写入尝试：打开 → empty → 逐 rep 写入 → guard drop 时关闭。
+///
+/// 任何 `set_*` 失败（含 `ERROR_CLIPBOARD_NOT_OPEN (1418)`）都直接 `?` 上抛到
+/// 外层重试；不在本函数内做"只写一部分"的局部降级 —— 降级由外层重试覆盖，保证
+/// 每次尝试的所有 rep 要么全在同一会话内成功，要么整体作废。
+///
+/// 返回值是"因为不支持 / 子路径失败而跳过的 format_id 列表"。注意这只记录**明确
+/// 跳过**的 rep（比如 image/png 的 CF_BITMAP 预编码为 None 且 register_format
+/// 返回 None），不包含"整体尝试失败"的情况。
+fn attempt_multi_write_inner(
+    snapshot: &SystemClipboardSnapshot,
+    bmp_preencoded: &[Option<Vec<u8>>],
+) -> Result<Vec<String>> {
+    use clipboard_win::formats::Html as HtmlFmt;
+    use clipboard_win::options::NoClear;
+    use clipboard_win::raw as cb_raw;
+    use clipboard_win::Clipboard as ClipboardWin;
+
     // RAII：作用域内整段占有 Windows 剪贴板，drop 时自动 CloseClipboard。
     let _clip = ClipboardWin::new_attempts(10)
         .map_err(|e| anyhow::anyhow!("OpenClipboard failed after retries: {}", e))?;
@@ -139,15 +271,13 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
     let mut wrote_any = false;
     let mut skipped: Vec<String> = Vec::new();
 
-    for rep in &snapshot.representations {
-        // 优先用显式 MIME，其次按 format_id 推断（与 common.rs 单 rep 路径保持一致）。
+    for (idx, rep) in snapshot.representations.iter().enumerate() {
         // 与前置扫描使用同一个 helper，保证 "能否写" 的判定与主循环分派逻辑不漂移。
         let effective_mime = resolve_multi_rep_mime(rep);
 
         match effective_mime {
             Some("text/plain") => {
-                // 写入 CF_UNICODETEXT。
-                // 必须使用 set_string_with::<NoClear> 而非 set_string：
+                // 必须使用 set_string_with::<NoClear>：
                 // set_string 内部调用 DoClear（EmptyClipboard），会把已写的其他 format 抹掉。
                 let text = String::from_utf8(rep.bytes.clone())
                     .map_err(|e| anyhow::anyhow!("text/plain rep is not valid UTF-8: {}", e))?;
@@ -173,60 +303,38 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
             }
             Some("image/png") => {
                 // 双写策略：CF_BITMAP（老应用兼容）+ 自定义 "PNG" format（现代应用直读 PNG 字节）。
-                // 同一次 OpenClipboard 会话内累加，NoClear 变体不抹掉已写入的其他 format。
                 //
                 // 兼容矩阵：
-                //   - CF_BITMAP ← 画图、Office 2010 以下、写字板
-                //   - "PNG"     ← Chrome、Firefox、Paint.NET、新版 Office、Google Docs
+                //   - CF_BITMAP ← 画图、Office 2010 以下、写字板（仅 PNG ≤ CF_BITMAP_MAX_PNG_BYTES）
+                //   - "PNG"     ← Chrome、Firefox、Paint.NET、新版 Office、Google Docs（总是尝试）
                 //
-                // 任一路径成功就算 wrote_any；都失败时落到 skipped，由末尾防御 bail 兜底
-                // （前置扫描已确认至少有一条 writable rep，走到这里说明意外失败）。
+                // BMP 预编码已在 OpenClipboard 会话外完成，这里只做系统调用；任一
+                // set_* 失败都 `?` 抛到外层由重试机制兜底。
                 let mut wrote_bitmap = false;
                 let mut wrote_png = false;
 
-                // —— CF_BITMAP 路径 ——
-                // PNG→BMP 转码失败不 abort：降级为"只写 PNG format"，目的地应用若认 "PNG"
-                // 仍能拿到图片；alpha 通道会被 BMP encoder 压平，这是可接受的降级。
-                match png_to_bmp(&rep.bytes) {
-                    Ok(bmp_bytes) => {
-                        match cb_raw::set_bitmap_with::<NoClear>(&bmp_bytes, NoClear) {
-                            Ok(()) => {
-                                debug!(
-                                    bmp_bytes = bmp_bytes.len(),
-                                    png_bytes = rep.bytes.len(),
-                                    "写入 CF_BITMAP 成功"
-                                );
-                                wrote_bitmap = true;
-                            }
-                            Err(e) => {
-                                warn!(error = %e, "set CF_BITMAP failed；降级为只写 \"PNG\" format");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            png_bytes = rep.bytes.len(),
-                            "PNG→BMP 转码失败；降级为只写 \"PNG\" format"
-                        );
-                    }
+                if let Some(bmp_bytes) = bmp_preencoded.get(idx).and_then(|o| o.as_ref()) {
+                    cb_raw::set_bitmap_with::<NoClear>(bmp_bytes, NoClear)
+                        .map_err(|e| anyhow::anyhow!("set CF_BITMAP failed: {}", e))?;
+                    debug!(
+                        bmp_bytes = bmp_bytes.len(),
+                        png_bytes = rep.bytes.len(),
+                        "写入 CF_BITMAP 成功"
+                    );
+                    wrote_bitmap = true;
                 }
 
-                // —— 自定义 "PNG" format 路径 ——
-                // register_format 对同名幂等，进程内常驻；返回 None 极罕见（内核资源耗尽）。
                 match cb_raw::register_format("PNG") {
-                    Some(png_fmt) => match cb_raw::set_without_clear(png_fmt.get(), &rep.bytes) {
-                        Ok(()) => {
-                            debug!(
-                                png_bytes = rep.bytes.len(),
-                                "写入 \"PNG\" 自定义 format 成功"
-                            );
-                            wrote_png = true;
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "set \"PNG\" custom format failed");
-                        }
-                    },
+                    Some(png_fmt) => {
+                        cb_raw::set_without_clear(png_fmt.get(), &rep.bytes).map_err(|e| {
+                            anyhow::anyhow!("set \"PNG\" custom format failed: {}", e)
+                        })?;
+                        debug!(
+                            png_bytes = rep.bytes.len(),
+                            "写入 \"PNG\" 自定义 format 成功"
+                        );
+                        wrote_png = true;
+                    }
                     None => {
                         warn!("register_format(\"PNG\") 返回 None；跳过 \"PNG\" 路径");
                     }
@@ -253,9 +361,9 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
 
     if !wrote_any {
         // 防御分支：前置 has_writable 扫描已确认至少有一条 rep 可写。
-        // 走到这里说明主循环内部 encode / 写入意外全失败（极罕见）。
-        // 本函数不负责 fallback（§6.1 平台层不替业务决定），直接报错让调用方处理。
-        // 注：此时 EmptyClipboard 已被调用，OS 剪贴板已被清空 —— 文案区别于前置扫描。
+        // 走到这里说明主循环内部所有可写 rep 的 encode / register 都失败（极罕见）。
+        // 本函数返回 Err，由外层重试兜底；若所有 attempt 都落到这里，最终由
+        // `write_snapshot_multi_windows` 的 `bail!` 报给调用方。
         anyhow::bail!(
             "Windows 多 rep 写入：所有候选 rep 在写入阶段均失败（支持 text/plain, text/html, image/png）；\
              跳过的 rep = {:?}",
@@ -263,21 +371,7 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
         );
     }
 
-    if !skipped.is_empty() {
-        debug!(
-            skipped_count = skipped.len(),
-            skipped = ?skipped,
-            "Windows 多 rep 写入：部分 rep 已跳过（不支持或写入失败）"
-        );
-    }
-
-    info!(
-        total_reps = snapshot.representations.len(),
-        skipped = skipped.len(),
-        "Windows 原子多 rep 写入完成"
-    );
-
-    Ok(())
+    Ok(skipped)
 }
 
 /// Windows clipboard implementation using clipboard-rs and clipboard-win
