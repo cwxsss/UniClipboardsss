@@ -162,13 +162,14 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
     }
 
     // 1. 拿 general pasteboard 单例（macOS NSPasteboard 无独占句柄模型，可直接获取）
-    let pasteboard: Retained<NSPasteboard> = unsafe { NSPasteboard::generalPasteboard() };
+    // objc2-app-kit 0.3.2 中 generalPasteboard() 是 `pub fn`（非 unsafe），直接调用。
+    let pasteboard: Retained<NSPasteboard> = NSPasteboard::generalPasteboard();
 
     // 2. 清空旧内容；忽略返回的 changeCount（仅标识版本号，不代表错误）
-    let _ = unsafe { pasteboard.clearContents() };
+    let _ = pasteboard.clearContents();
 
     // 3. 构造 item，依次 setData
-    let item: Retained<NSPasteboardItem> = unsafe { NSPasteboardItem::new() };
+    let item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
 
     let mut wrote_any = false;
     let mut skipped: Vec<String> = Vec::new();
@@ -179,6 +180,8 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                 // text/plain 的字节是 UTF-8，NSPasteboardTypeString 期望 UTF-8 字节，
                 // 直接写原始字节，不经 NSString 转换（避免对非法 UTF-8 误报）。
                 let data = make_nsdata(&rep.bytes);
+                // NSPasteboardTypeString 是 extern "C" 静态变量，访问需要 unsafe 块。
+                // setData_forType 本身是 `pub fn`（安全方法）。
                 let ok = unsafe { item.setData_forType(&data, NSPasteboardTypeString) };
                 if ok {
                     debug!(bytes = rep.bytes.len(), "写入 NSPasteboardTypeString 成功");
@@ -193,6 +196,7 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
             }
             Some("text/html") => {
                 let data = make_nsdata(&rep.bytes);
+                // NSPasteboardTypeHTML 是 extern "C" 静态变量，访问需要 unsafe 块。
                 let ok = unsafe { item.setData_forType(&data, NSPasteboardTypeHTML) };
                 if ok {
                     debug!(bytes = rep.bytes.len(), "写入 NSPasteboardTypeHTML 成功");
@@ -241,7 +245,8 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
         NSArray::from_retained_slice(&items_vec);
 
     // 5. 原子提交；writeObjects: 返回 false 表示失败，上抛 Err
-    let ok = unsafe { pasteboard.writeObjects(&items_array) };
+    // objc2-app-kit 0.3.2 中 writeObjects 是 `pub fn`（非 unsafe）。
+    let ok = pasteboard.writeObjects(&items_array);
     if !ok {
         return Err(anyhow!(
             "NSPasteboard.writeObjects 返回 false；pasteboard 可能处于不一致状态\

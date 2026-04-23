@@ -578,12 +578,16 @@ impl CommonClipboardImpl {
     ///    - Windows：原子多 rep 写入（`write_snapshot_multi_windows`）——在单次
     ///      `OpenClipboard` 会话内用 `raw::set_without_clear` 累加 CF_UNICODETEXT
     ///      + CF_HTML 等多个 format，确保纯文本目的地也能粘贴。
-    ///    - macOS / Linux：暂不支持原子多 rep，降级为"用 `SelectRepresentationPolicyV1`
-    ///      选出 paste-priority rep 再走单 rep 快路径"并 warn 日志。后续 phase 补齐
-    ///      `NSPasteboardItem` / Wayland data source 实现。
+    ///    - macOS：原子多 rep 写入（`write_snapshot_multi_macos`）——在单次
+    ///      `NSPasteboard::writeObjects:` 调用内提交 `NSPasteboardItem`，承载
+    ///      `NSPasteboardTypeString` + `NSPasteboardTypeHTML`，与 Windows 语义对齐。
+    ///    - Linux / 其他 Unix：暂不支持原子多 rep（Wayland `wl-clipboard-rs` 与 X11
+    ///      selection owner 模型与 `clipboard-rs` 不兼容，工作量独立），当前降级为
+    ///      "用 `SelectRepresentationPolicyV1` 选出 paste-priority rep 再走单 rep
+    ///      快路径"并 warn 日志。后续 phase 补齐（FIXME 见分支内注释）。
     ///
     /// 历史背景见 https://github.com/UniClipboard/UniClipboard/issues/92
-    /// 以及 `uc-platform/src/clipboard/platform/windows.rs::write_snapshot_multi_windows`。
+    /// 以及 `uc-platform/src/clipboard/platform/{windows,macos}.rs`。
     pub fn write_snapshot(
         ctx: &mut clipboard_rs::ClipboardContext,
         snapshot: SystemClipboardSnapshot,
@@ -718,10 +722,13 @@ impl CommonClipboardImpl {
     /// - Windows：具备真正的原子多 rep 写入（`write_snapshot_multi_windows`），在单次
     ///   `OpenClipboard` 会话内用 `raw::set_without_clear` 累加 CF_UNICODETEXT + CF_HTML，
     ///   确保纯文本目的地（记事本等）也能粘贴到正确内容。
-    /// - macOS / Linux：当前尚未支持（需 `NSPasteboardItem` / Wayland data source 重写），
-    ///   本次降级为 "用 `SelectRepresentationPolicyV1` 选出 paste-priority rep 再走单 rep
-    ///   快路径"，并以 `warn!` 日志显式说明。行为与应用层原 `narrow_to_primary` 等价，
-    ///   保证 macOS / Linux 粘贴语义零回归。后续 phase 再统一（§9.3：不允许静默降级）。
+    /// - macOS：具备真正的原子多 rep 写入（`write_snapshot_multi_macos`），在单次
+    ///   `NSPasteboard::writeObjects:` 调用内提交 `NSPasteboardItem`。
+    /// - Linux / 其他 Unix：当前尚未支持（需 `wl-clipboard-rs` DataSource 或 X11
+    ///   selection owner 重写），本次降级为 "用 `SelectRepresentationPolicyV1` 选出
+    ///   paste-priority rep 再走单 rep 快路径"，并以 `warn!` 日志显式说明。行为与
+    ///   应用层原 `narrow_to_primary` 等价，保证 Linux 粘贴语义零回归。后续 phase
+    ///   再统一（§9.3：不允许静默降级）。
     ///
     /// 注意：本方法不应被"单 rep 快路径"调用。调用者需保证 `snapshot.representations.len() >= 1`。
     fn write_snapshot_multi(
@@ -738,10 +745,31 @@ impl CommonClipboardImpl {
             return crate::clipboard::platform::windows::write_snapshot_multi_windows(snapshot);
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         {
-            // macOS / Linux：显式降级（§9.3 不允许静默降级）。
-            //
+            // macOS：具备真正的原子多 rep 写入能力（NSPasteboardItem + writeObjects:）。
+            // 实现在 `clipboard::platform::macos::write_snapshot_multi_macos`。
+            // 该函数自己通过 `NSPasteboard::generalPasteboard()` 拿系统剪贴板单例，
+            // 不使用传入的 clipboard-rs `ctx`，也不需要 "提前 drop + dummy_ctx" 的绕道
+            //（与 Windows 不同：macOS NSPasteboard 不是独占句柄模型）。
+            let _ = ctx; // 显式标注未使用，消除 unused-variable warning。
+            let _ = rep_count; // macOS 分支不需要 rep_count，显式忽略。
+            return crate::clipboard::platform::macos::write_snapshot_multi_macos(snapshot);
+        }
+
+        // Linux 与其他非 Windows / 非 macOS 的 Unix：显式降级（§9.3 不允许静默降级）。
+        //
+        // FIXME(260423-mxu-next-phase)：Linux 的真正多 rep 原子写入需要 Wayland
+        // `wl-clipboard-rs` 的 DataSource 接口（多 MIME type 注册）或 X11 的
+        // selection owner 持久持有模型；二者与 `clipboard-rs` 高层 API 不兼容，
+        // 工作量与 macOS 相当，留到下一个独立 phase 补齐。本次保留以下 V1-policy
+        // 降级逻辑，语义与 260423-9do 改造前完全一致，保证浏览器复制到 Linux 的
+        // 粘贴行为不回归。
+        #[cfg(any(
+            target_os = "linux",
+            not(any(target_os = "windows", target_os = "macos"))
+        ))]
+        {
             // 用 V1 policy 选出 paste-priority rep —— 与应用层原 `narrow_to_primary`
             // 等价。硬编码 V1：当前 uc-core 只有这一个 `SelectRepresentationPolicyPort`
             // 实现；出现 V2 时再考虑从调用方注入 policy。
@@ -769,9 +797,10 @@ impl CommonClipboardImpl {
                 rep_count,
                 paste_rep_id = ?paste_id,
                 chosen_format_id = %snapshot.representations[chosen_idx].format_id,
-                "multi-representation write not yet supported on this platform; \
-                 falling back to single-rep path — writing the paste-priority rep \
-                 selected by SelectRepresentationPolicyV1"
+                "Linux: multi-representation atomic write not yet supported; \
+                 falling back to single-rep path via SelectRepresentationPolicyV1 \
+                 — will be addressed in a follow-up phase (wl-clipboard-rs / X11 \
+                 selection owner)."
             );
 
             let ts_ms = snapshot.ts_ms;
