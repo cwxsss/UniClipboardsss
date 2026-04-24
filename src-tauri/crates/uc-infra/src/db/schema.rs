@@ -14,6 +14,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    blob_reference (plaintext_hash) {
+        plaintext_hash -> Text,
+        digest -> Text,
+        created_at -> BigInt,
+    }
+}
+
+diesel::table! {
     file_transfer (transfer_id) {
         transfer_id -> Text,
         entry_id -> Text,
@@ -179,6 +187,7 @@ diesel::joinable!(clipboard_snapshot_representation -> clipboard_event (event_id
 
 diesel::allow_tables_to_appear_in_same_query!(
     blob,
+    blob_reference,
     clipboard_entry,
     clipboard_event,
     clipboard_selection,
