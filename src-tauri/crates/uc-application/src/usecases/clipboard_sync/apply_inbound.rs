@@ -45,7 +45,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;
-use tracing::{debug, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 use url::Url;
 
 use uc_core::ids::{DeviceId, EntryId, FormatId, RepresentationId};
@@ -192,15 +192,39 @@ impl InboundBlobMaterializer for FileCacheBlobMaterializer {
 
         let mut local_paths = Vec::with_capacity(blob_refs.len());
         let mut used_names = HashSet::new();
+        let blob_ref_total = blob_refs.len();
 
         for (idx, blob_ref) in blob_refs.into_iter().enumerate() {
+            let entry_id = blob_ref.entry_id.clone();
+            let advertised_size = blob_ref.size_bytes;
+            let declared_name = blob_ref.filename.clone();
+            debug!(
+                idx,
+                total = blob_ref_total,
+                entry_id = %entry_id,
+                size_bytes = advertised_size,
+                filename = declared_name.as_deref().unwrap_or(""),
+                "materialize: fetching blob"
+            );
+
             let fetched = self
                 .fetcher
                 .fetch_blob(FetchBlobCommand {
                     ticket: blob_ref.ticket,
                     entry_id: blob_ref.entry_id.clone(),
                 })
-                .await?;
+                .await
+                .map_err(|e| {
+                    warn!(
+                        idx,
+                        total = blob_ref_total,
+                        entry_id = %entry_id,
+                        size_bytes = advertised_size,
+                        error = %e,
+                        "materialize: blob fetch failed"
+                    );
+                    e
+                })?;
 
             let entry_dir = self
                 .cache_dir
@@ -210,20 +234,29 @@ impl InboundBlobMaterializer for FileCacheBlobMaterializer {
 
             let filename = unique_filename(blob_ref.filename.as_deref(), idx, &mut used_names);
             let path = entry_dir.join(filename);
+            let fetched_len = fetched.plaintext.len();
             tokio::fs::write(&path, fetched.plaintext).await?;
+            info!(
+                idx,
+                total = blob_ref_total,
+                entry_id = %entry_id,
+                bytes_written = fetched_len,
+                path = %path.display(),
+                "materialize: blob cached to local path"
+            );
             local_paths.push(path);
         }
 
         let uri_list = local_file_uri_list(&local_paths)?;
-        let mut rewrote = false;
+        let mut rewritten_rep_count = 0usize;
         for rep in &mut snapshot.representations {
             if is_file_list_representation(rep) {
                 rep.bytes = uri_list.as_bytes().to_vec();
-                rewrote = true;
+                rewritten_rep_count += 1;
             }
         }
 
-        if !rewrote {
+        if rewritten_rep_count == 0 {
             snapshot
                 .representations
                 .push(ObservedClipboardRepresentation::new(
@@ -232,6 +265,16 @@ impl InboundBlobMaterializer for FileCacheBlobMaterializer {
                     Some(MimeType("text/uri-list".to_string())),
                     uri_list.into_bytes(),
                 ));
+            info!(
+                local_path_count = local_paths.len(),
+                "materialize: appended synthetic files rep (no file-list rep in payload)"
+            );
+        } else {
+            info!(
+                rewritten_rep_count,
+                local_path_count = local_paths.len(),
+                "materialize: rewrote file-list reps with local paths"
+            );
         }
 
         Ok(snapshot)
@@ -376,21 +419,41 @@ impl ApplyInboundClipboardUseCase {
                 Ok(decoded) => decoded,
                 Err(e) => {
                     let reason = e.to_string();
-                    debug!(reason, "inbound dropped: envelope decode failed");
+                    warn!(reason, "inbound dropped: envelope decode failed");
                     return Ok(ApplyOutcome::DecodeFailed { reason });
                 }
             };
 
+        info!(
+            blob_ref_count = blob_refs.len(),
+            rep_count = snapshot.representations.len(),
+            rep_formats = %format_rep_summary(&snapshot),
+            "inbound: decoded V3 envelope"
+        );
+
         let snapshot = match (blob_refs.is_empty(), &self.blob_materializer) {
             (true, _) => snapshot,
-            (false, Some(materializer)) => materializer
-                .materialize(snapshot, blob_refs)
-                .await
-                .map_err(|e| ApplyInboundError::Internal(format!("blob materialize: {e}")))?,
+            (false, Some(materializer)) => {
+                let count = blob_refs.len();
+                let snapshot = materializer
+                    .materialize(snapshot, blob_refs)
+                    .await
+                    .map_err(|e| {
+                        warn!(error = %e, blob_ref_count = count, "inbound: blob materialize failed");
+                        ApplyInboundError::Internal(format!("blob materialize: {e}"))
+                    })?;
+                info!(
+                    blob_ref_count = count,
+                    rep_count = snapshot.representations.len(),
+                    rep_formats = %format_rep_summary(&snapshot),
+                    "inbound: blob refs materialized into local cache"
+                );
+                snapshot
+            }
             (false, None) => {
                 let reason =
                     "payload contains blob refs but no blob materializer is wired".to_string();
-                debug!(reason, "inbound dropped: blob materializer missing");
+                warn!(reason, "inbound dropped: blob materializer missing");
                 return Ok(ApplyOutcome::DecodeFailed { reason });
             }
         };
@@ -423,14 +486,40 @@ impl ApplyInboundClipboardUseCase {
         // narrow，导致主流量走单 rep 快路径、新能力 0 触发。本改动把 full snapshot 直送
         // platform 层，由 platform 根据自身 OS 能力内部分流。详见
         // `.planning/quick/260423-a3b-windows-rep-apply-inbound-narrow/`。
-        self.write
-            .write(snapshot_for_write)
-            .await
-            .map_err(|e| ApplyInboundError::WriteCoordinator(e.to_string()))?;
+        debug!(entry_id = %entry_id, "inbound: entry persisted, writing OS clipboard");
+
+        self.write.write(snapshot_for_write).await.map_err(|e| {
+            error!(error = %e, entry_id = %entry_id, "inbound: OS clipboard write failed after capture");
+            ApplyInboundError::WriteCoordinator(e.to_string())
+        })?;
 
         info!(entry_id = %entry_id, "inbound clipboard applied");
         Ok(ApplyOutcome::Applied { entry_id })
     }
+}
+
+/// Compact summary of the snapshot's representations for tracing.
+/// Format: `format_id[@mime]:bytes, ...` — always safe to log because
+/// `format_id` / `mime` / byte counts are metadata, never user payload.
+fn format_rep_summary(snapshot: &SystemClipboardSnapshot) -> String {
+    snapshot
+        .representations
+        .iter()
+        .map(|rep| {
+            let mime_suffix = rep
+                .mime
+                .as_ref()
+                .map(|m| format!("@{}", m.as_str()))
+                .unwrap_or_default();
+            format!(
+                "{}{}:{}",
+                rep.format_id.as_str(),
+                mime_suffix,
+                rep.bytes.len()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

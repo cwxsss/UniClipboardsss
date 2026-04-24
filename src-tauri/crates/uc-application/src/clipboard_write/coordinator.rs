@@ -18,8 +18,8 @@ use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::info_span;
 use tracing::Instrument;
+use tracing::{error, info_span};
 
 use uc_core::clipboard::ClipboardChangeOrigin;
 use uc_core::clipboard::SystemClipboardSnapshot;
@@ -140,9 +140,16 @@ impl ClipboardWriteCoordinator {
                 }
             }
 
-            // Attempt the write.
+            // Attempt the write. Log and unwind the guard on failure so subsequent
+            // writes start from a clean slate (and so outages surface in Seq/stdout
+            // instead of being hidden in the `Err` bubbling back up the call chain).
             if let Err(err) = self.system_clipboard.write_snapshot(snapshot) {
-                // On failure: consume the guard to prevent stale state accumulation.
+                error!(
+                    error = %err,
+                    intent = ?intent,
+                    origin_guard_key = %origin_guard_key,
+                    "clipboard_write_coordinator: OS clipboard write failed"
+                );
                 self.clipboard_change_origin
                     .consume_origin_for_snapshot_or_default(
                         &origin_guard_key,
