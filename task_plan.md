@@ -218,6 +218,29 @@
 **验收**:
 - [x] core 内只有一个 `IdentityFingerprint` 类型表达"公钥指纹"
 - [x] `cargo check --workspace` 通过
+
+## Session 2026-04-24 · Slice 3 Phase 1 T0 开工
+
+**完成标准**:
+- 写出 `uc-infra/tests/iroh_blobs_probe.rs`,覆盖本地 store、tag、ticket 字节编解码、router/downloader 单节点自回环。
+- 用真实 `cargo test -p uc-infra iroh_blobs_probe --tests` 验证通过。
+- 若探针发现计划中的 iroh-blobs API / 版本假设不成立,同步修订 `slice3-phase1-plan.md` 与本计划记录。
+
+**T0 当前状态**:`complete`
+
+**T0 初始发现**:
+- `uc-infra` 直接依赖 `iroh 0.95.1`。
+- 当前 `iroh-blobs 0.95.0` 依赖 `iroh 0.93.2`,和共享 `IrohNodeBuilder` 的 endpoint 类型不一致。
+- 已确认 `iroh-blobs 0.97.0` 依赖 `iroh 0.95`,与当前共享 endpoint 路线匹配;T0 将先用测试跑实,再升级依赖。
+- 已升级到 `iroh-blobs 0.97.0` + `iroh-tickets 0.2`,T0 探针 4 项通过。
+- `downloader().download` 只吃 provider id;adapter `fetch` 必须先用 ticket 内 `EndpointAddr` 做一次 `endpoint.connect(..., iroh_blobs::ALPN)` 预热。
+
+**Errors Encountered**:
+| Error | Attempt | Resolution |
+|---|---|---|
+| `cargo tree` 被 `sccache` 拦截:`Operation not permitted` | 直接运行 cargo / escalate 后仍失败 | 使用 `RUSTC_WRAPPER=` + `CARGO_BUILD_RUSTC_WRAPPER=` 覆盖本机 cargo config |
+| 沙箱网络无法访问 crates.io | `cargo test` 触发依赖解析 | escalation 后下载并完成测试 |
+| 沙箱禁止绑定本地 UDP socket | loopback downloader 探针 | escalation 后正常运行 |
 - [x] 现有 pairing/membership/trusted_peer 单测通过(uc-core 22 + uc-infra 24 + uc-application 58 + uc-app 7)
 
 **设计决策 Q-0.5**:`SpaceAccessContext.peer_fingerprint` 采用 **(a) 升级为 `Option<IdentityFingerprint>`**,在 WS/daemon-contract 投影边界(query.rs、host.rs snapshot 构造点)用 `.to_string()` 降维回 JSON。DTO 契约(`daemon-contract::types`、`daemon-client::realtime`、`setup::state::JoinSpaceConfirmPeer.peer_fingerprint`、`pairing::events::PairingDomainEvent`)**保持 `Option<String>`**——属序列化/UI 边界。
@@ -1033,7 +1056,26 @@ pub struct StopNetworkCommand; // 无字段
 - [ ] 大文件(1GB)断点续传(iroh-blobs 原生能力)
 - [ ] 一对多 fanout:同一 ticket 被多接收方并发拉取
 
-**阻塞**:Slice 2 完成
+**阻塞**:Slice 2 完成(已于 2026-04-23 完成)
+
+**Phase 拆分**(参照 Slice 2 成熟节奏,2026-04-24 敲定):
+
+| Phase | 范围 | 验收重心 |
+|---|---|---|
+| Phase 1 · Blob 基础设施 🔲 | 2 个新 port + iroh-blobs FsStore adapter + `blob_reference` Diesel 表 + bootstrap 装配 | adapter 单元测试(含自回环 publish/fetch);**不接** usecase/CLI/剪贴板 |
+| Phase 2 · D1/D2 usecase + CLI-only e2e 🔲 | `PublishBlobUseCase` / `FetchBlobUseCase` + `uniclipboard-cli blob publish/fetch`(长期命令) | application e2e:publish→ticket→fetch 字节一致;去重 10 次只存 1 份密文;1GB 断点续传;并发 fanout |
+| Phase 3 · C3 剪贴板含文件端到端 🔲 | V3 envelope 兼容扩展(`Option<Vec<BlobTicket>>`,不 bump V4) + dispatch / apply 分支 + blob cache 写临时目录 | 复制文件 → 另一台粘贴字节一致;真机两台;顺带收掉 Slice 2 Phase 3 的 `FileList+Image` 双 rep 退化 known-issue |
+
+**跨 Phase 决策锁定**(2026-04-24):
+
+| # | 决策 | 理由 |
+|---|---|---|
+| S3-D1 | Phase 1/2/3 三段拆分(不合并 Phase 2 到 Phase 3) | 沿用 Slice 2 成熟节奏;先 CLI 闭环再接剪贴板,降低调试半径 |
+| S3-D2 | V3 envelope 走**兼容扩展**(新字段 `Option<Vec<BlobTicket>>`),不 bump V4 | `postcard` 结尾追加 `Option` 字段对旧 decoder 透明;避免 wire version 矩阵 |
+| S3-D3 | Blob cache 落盘走**临时目录**,路径由调用方决定 | 不引入"blob cache 生命周期"新 domain;C3 落地时由 usecase 返回路径,调用方自行处置 |
+| S3-D4 | `uniclipboard-cli blob publish` / `blob fetch` 为**长期命令**,Slice 5 不删 | 用户侧长期验收工具;daemon 路径之外的 blob 直用场景(脚本 / 自动化) |
+
+**阻塞**:无(可开工)
 
 ---
 
@@ -1545,7 +1587,11 @@ pub trait ClipboardInboundStream: Send {
 
 #### 11. `BlobTransferPort` · 🆕
 路径:`uc-core/src/ports/blob/transfer.rs`
+
+> **2026-04-24 更新**:下方草案的 `BlobTicket::digest()` 值对象方法违反 `uc-core/AGENTS §19.1`(以实现反推领域)——已在 `slice3-phase1-plan.md §8 R2` 定稿改走方案 C:`BlobTicket` 真正 opaque,digest 提取走 `BlobTransferPort::digest_of(ticket) -> Result<BlobDigest, BlobError>`。下方 `impl BlobTicket { digest }` 已过时,仅保留作为重构轨迹参考。
+
 ```rust
+// ⚠️ 过时初稿(2026-04-18),实际签名见 slice3-phase1-plan.md §3.1
 impl BlobTicket {
     pub fn digest(&self) -> BlobDigest { /* parse postcard */ todo!() }
 }
@@ -1966,7 +2012,7 @@ enum Reachability {
 **输入**:`BlobTicket` + `ActiveSpace`
 
 **业务步骤**:
-1. `digest = ticket.digest()`
+1. `digest = blob_transfer.digest_of(&ticket)?`(2026-04-24 R2 方案 C:`digest()` 从值对象方法移至 port,见 `slice3-phase1-plan.md §8`)
 2. `BlobTransferPort::has(digest)?`
    - 本地已有(曾经发过或拉过)→ 走 4 解密
    - 没有 → 走 3
@@ -2018,11 +2064,11 @@ pub enum TagReason {
 }
 ```
 
-**domain 值对象**:
+**domain 值对象**(2026-04-24 按 R2 方案 C 定稿,完整签名见 `slice3-phase1-plan.md §3.1`):
 ```rust
-pub struct BlobDigest([u8; 32]);              // BLAKE3 of ciphertext
-pub struct BlobTicket(Vec<u8>);               // opaque postcard bytes from iroh-blobs
-impl BlobTicket { pub fn digest(&self) -> BlobDigest { ... } }
+pub struct BlobDigest([u8; 32]);  // content-addressed identifier of ciphertext; adapter-computed
+pub struct BlobTicket(Vec<u8>);   // opaque handoff token; uc-core never decodes
+// 无值对象 digest() 方法 —— 走 BlobTransferPort::digest_of(ticket)
 ```
 
 **进度事件(v1 先不做)**:iroh-blobs 返回 `AddProgress` / `DownloadProgress` stream,本 port 先用阻塞式 `publish/fetch`;真需要进度时另加 `BlobProgressPort::subscribe()`(技术债)。

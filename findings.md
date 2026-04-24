@@ -2,6 +2,23 @@
 
 > 随探索过程更新。格式:事实 / 来源 / 影响。
 
+## Slice 3 Phase 1 · T0 iroh-blobs 探针发现(2026-04-24)
+
+### F-030 · `iroh-blobs 0.95.0` 与当前 `iroh 0.95.1` 不同栈
+- **事实**:`uc-infra` 直接依赖 `iroh 0.95.1`,但 `iroh-blobs 0.95.0` 自身依赖 `iroh 0.93.2`。
+- **来源**:`Cargo.lock` + `cargo tree -p uc-infra -i iroh@0.93.2` / `cargo tree -p uc-infra -i iroh@0.95.1`
+- **影响**:不能把 `iroh-blobs 0.95.0` 的 `BlobsProtocol` 直接挂到当前共享 `iroh::protocol::Router` 上;`BlobTicket` 的地址类型也不是当前 `iroh 0.95` 的 `EndpointAddr`。这会破坏 Slice 1/2 已建立的“单进程一个共享 iroh endpoint”设计。
+
+### F-031 · `iroh-blobs 0.97.0` 才是当前 iroh 0.95 路线的匹配版本
+- **事实**:`iroh-blobs 0.97.0` 的 Cargo 元数据依赖 `iroh 0.95`,`BlobTicket` 使用 `EndpointAddr` / `EndpointId`,和当前工程的 iroh 命名一致。
+- **来源**:`cargo info iroh-blobs@0.97.0` + 本机 registry 源码 `iroh-blobs-0.97.0/Cargo.toml` / `src/ticket.rs`
+- **影响**:T0 探针应把依赖从 `iroh-blobs = "0.95"` 升到 `0.97.0`,再锁定真实 API。计划里所有“iroh-blobs 0.95 API 探针”的表述需要在 T0 结束时改成“iroh 0.95 对齐栈 / iroh-blobs 0.97 API 探针”。
+
+### F-032 · downloader 只吃 provider id,fetch 需要先带入 ticket 地址
+- **事实**:`store.downloader(&endpoint).download(ticket.hash_and_format(), [ticket.addr().id])` 只传 provider id。T0 loopback 中,即使 StaticProvider 已添加 provider `EndpointAddr`,直接 download 仍失败;先 `endpoint.connect(ticket.addr().clone(), iroh_blobs::ALPN).await` 后再 download 成功。
+- **来源**:`uc-infra/tests/iroh_blobs_probe.rs::blobs_protocol_router_and_downloader_fetch_between_loopback_nodes`
+- **影响**:`IrohBlobTransferAdapter::fetch` 不能只从 ticket 取 id 交给 downloader;必须先用 ticket 内完整 `EndpointAddr` 走一次 public connect 路径,让 iroh endpoint 获得地址/连接状态,再调用 downloader。这个预热连接会成为 T5 实现要求。
+
 ## 现状审计结论(已完成)
 
 ### F-001 · libp2p adapter 规模与位置

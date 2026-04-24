@@ -2264,3 +2264,105 @@ Slice 1 落帷。Slice 2 启动前 T-15(A2 unlock space_id)和 T-16(`unlock`/`lo
 - **Slice 2 整体**:Phase 1/2/3 完工 → C1 outbound / C2 inbound / F1 完整版 / E1 roster / E2 presence events 全部 ✅;剩下 A3 revoke / A5 rename UI 推 Phase 4 或 Slice 6;大 payload(图片 / 富文本 / 文件)推 Slice 3 blob
 - **Slice 5 前置就绪**:Phase 3 完工 = daemon 内 deprecated `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort` 0 消费者;`uc-app::sync_outbound` / `sync_inbound` 仍 impl(deprecated 活着)。Slice 5 按计划统一删
 - **Slice 3 准备**:blob / 文件 ticket 路径,Phase 2 wire `MAX_PAYLOAD_SIZE=2MiB` 上限预留
+
+---
+
+## Session 2026-04-24(续 30) — Slice 3 规划启动 · Phase 1/2/3 拆分 + 跨 Phase 决策
+
+### 背景
+
+Slice 2 Phase 3 于 2026-04-23 封版后,项目进入 Slice 3 · 文件 / Blob 起步阶段。
+task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 port 清单**,**没有 Phase 级拆分**。本 session 目标:参照 Slice 2(Phase 1/2/3)成熟节奏,给 Slice 3 定 Phase 拆分 + 锁定跨 Phase 决策,为 `slice3-phase1-plan.md` 编写做预备。
+
+### 决策(用户 2026-04-24 拍板)
+
+| # | 提问 | 决策 | 落位 |
+|---|---|---|---|
+| S3-D1 | Phase 1/2/3 三段拆分 vs Phase 2 并入 Phase 3(CLI+剪贴板一次做完) | **三段拆** | task_plan.md Slice 3 `Phase 拆分`表 |
+| S3-D2 | V3 envelope 加 `blob_refs` 字段时走兼容扩展 vs bump V4 | **兼容扩展**(`Option<Vec<BlobTicket>>` postcard 尾追加) | task_plan.md Slice 3 决策锁定表 S3-D2 |
+| S3-D3 | blob cache fetch 落盘去哪 | **临时目录**,路径由调用方 / usecase 返回后自行处置 | task_plan.md Slice 3 决策锁定表 S3-D3 |
+| S3-D4 | `uniclipboard-cli blob publish/fetch` 是长期命令还是 Phase 2 验收工具 | **长期命令**,Slice 5 不删 | task_plan.md Slice 3 决策锁定表 S3-D4 |
+
+### Phase 拆分(已写入 task_plan.md)
+
+**Phase 1 · Blob 基础设施**(本 session 下一步详细展开 → `slice3-phase1-plan.md`):
+- core:`BlobDigest` / `BlobTicket` / `PlaintextHash` 值对象;`BlobTransferPort` / `BlobReferenceRepositoryPort` trait
+- infra:iroh-blobs `FsStore` adapter;`blob_reference` Diesel migration + sqlite repo
+- bootstrap:`IrohNodeBuilder::install_blobs` 扩展点 + `SpaceSetupAssembly` 字段装配
+- 验收:adapter 自回环单元测试(publish/has/tag/untag/issue_ticket);**不接** usecase/CLI/剪贴板
+
+**Phase 2 · D1/D2 usecase + CLI-only e2e**:
+- `PublishBlobUseCase`(D1)+ `FetchBlobUseCase`(D2),完整加密 + 去重路径
+- `uniclipboard-cli blob publish <file>` / `blob fetch <ticket> --out <path>`
+- 验收:字节一致 + 去重 10 次只存 1 份密文 + 1GB 断点续传 + 并发 fanout
+
+**Phase 3 · C3 剪贴板含文件端到端**:
+- V3 envelope 兼容扩展(S3-D2)
+- `ClipboardSyncFacade::dispatch_snapshot` 大 rep 检测 → `PublishBlobUseCase`
+- `ApplyInboundClipboardUseCase` 检测 `blob_refs` → `FetchBlobUseCase`(策略:小即拉 + 大懒拉,阈值待 Phase 3 设计阶段敲定)
+- 顺带收 Slice 2 Phase 3 留下的 `FileList + Image` 双 rep 退化 known-issue
+- 验收:真机两台 + 4 个 Slice 3 原始验收项全通
+
+### 代码现状侦察(2026-04-24 本 session)
+
+**现有 blob 命名空间冲突提示**(留给 `slice3-phase1-plan.md` 决):
+- `uc-core/src/blob/ports/{reader,writer}.rs` — 旧 libp2p file_transfer 遗留,Slice 5 清理
+- `uc-core/src/blob/` module 持有 `Blob` / `BlobStorageLocator` 老值对象
+- `uc-infra/src/blob/{blob_writer,filesystem_store,repository_port,store_port,domain}.rs` — 同上遗留
+- `uc-core/src/ports/security/blob_cipher.rs` — Slice 3 要复用的 `BlobCipherPort`(milestone/1.0.0 已在)
+
+**Phase 1 新 port 落位候选**(倾向):
+- `uc-core/src/ports/blob/{mod,transfer,reference}.rs`(新 ports/ 子目录 vs 旧 `uc-core/src/blob/ports/` 并存,Slice 5 统一清旧)
+- `uc-infra/src/network/iroh/blobs.rs`(和 Phase 1 `install_presence` / Phase 2 `install_clipboard` 同风格)
+
+### 产出
+
+- **本 session**:task_plan.md `Slice 3` 小节追加"Phase 拆分表" + "跨 Phase 决策锁定表"(S3-D1~D4);progress.md 续 30 记录
+- **阻塞已移除**:`阻塞:Slice 2 完成` → `阻塞:无(可开工)`
+
+### 下一步
+
+1. 编写 `slice3-phase1-plan.md`(参照 slice2-phase1-plan.md 的 12 章节骨架,~400 行规模)
+2. 内容重点:
+   - §2 架构分层(新建 / 扩展对照)— 解决"新 ports/blob/ 与旧 core/blob/ 共存"落位
+   - §3 新 port 契约草图 — `BlobTransferPort` / `BlobReferenceRepositoryPort` 定稿签名(对齐 task_plan.md §11 Slice 3 草案)
+   - §4 iroh-blobs adapter 设计 — `FsStore` 目录布局(runtime profile 感知)、ALPN 约定、`install_blobs` 扩展点形状
+   - §6 任务拆解 — T0/T1/T2/... 粒度(参照 slice2-phase1 的 10+ task 拆法)
+   - §7 测试策略 — 单节点 loopback adapter 单测(publish+fetch 自回环);repo CRUD
+3. 用户确认 `slice3-phase1-plan.md` 后启动 Phase 1 执行
+
+---
+
+## Session 2026-04-24(续 31) — Slice 3 Phase 1 T0 启动 · iroh-blobs API 探针
+
+**触发**:用户发出“开始 T0”。
+
+**完成标准**:
+- 新增 `uc-infra/tests/iroh_blobs_probe.rs`。
+- 覆盖本地 FsStore add/get/observe、tag set/delete、BlobTicket 字节编解码、BlobsProtocol + downloader 单节点自回环。
+- 从 `src-tauri/` 运行目标测试并确认通过。
+- 如果依赖/API 假设不成立,同步修订计划文件。
+
+**已做**:
+- 运行 planning-with-files catchup,发现上一轮有未同步上下文,已读取 `task_plan.md` / `findings.md` / `progress.md` / `slice3-phase1-plan.md`。
+- 读取 Rust/Tauri 规则、现有 iroh 探针测试、`uc-infra` 依赖配置。
+- 发现当前 `iroh-blobs 0.95.0` 依赖 `iroh 0.93.2`,而工程直接依赖 `iroh 0.95.1`。
+- 通过 `cargo info iroh-blobs@0.97.0` 和本机 registry 源码确认 `iroh-blobs 0.97.0` 对齐 `iroh 0.95`。
+
+**错误记录**:
+| Error | Attempt | Resolution |
+|---|---|---|
+| `cargo tree` 触发 `sccache: Operation not permitted` | 直接运行 cargo / escalation 均失败 | 用 `env RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=` 覆盖 wrapper 后成功 |
+| 沙箱网络无法访问 crates.io(`127.0.0.1:7890`) | `cargo info iroh-blobs@0.97.0` | escalation 后成功下载并读取 crate 信息 |
+
+**结果**:
+- T0 已完成。
+- 新增 `uc-infra/tests/iroh_blobs_probe.rs`,4 个 verdict 覆盖 FsStore add/get/observe、tag set/get/delete、ticket bytes round-trip、BlobsProtocol + downloader loopback。
+- `uc-infra` 依赖从 `iroh-blobs = "0.95"` 升到 `0.97.0`,并新增 `iroh-tickets = "0.2"` 以调用 binary ticket trait。
+- `cargo tree` 确认 `iroh-blobs 0.97.0` 和工程直接依赖都收敛到 `iroh 0.95.1`;`iroh@0.93.2` 已不存在。
+- T0 发现 downloader 只吃 provider id,adapter fetch 需要先用 ticket 内完整地址 `endpoint.connect(ticket.addr().clone(), iroh_blobs::ALPN)` 预热。
+
+**验证**:
+- `cargo test -p uc-infra --test iroh_blobs_probe`:4 passed
+- `cargo tree -p uc-infra -i iroh@0.95.1`:显示 `iroh-blobs v0.97.0` 与 `uc-infra` 同用 `iroh v0.95.1`
+- `cargo tree -p uc-infra -i iroh@0.93.2`:无匹配包
