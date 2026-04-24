@@ -33,6 +33,7 @@ use crate::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardC
 use crate::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
 use crate::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
 use crate::workers::peer_discovery::PeerDiscoveryWorker;
+use crate::workers::peer_keepalive::PeerKeepAliveWorker;
 use uc_platform::clipboard::LocalClipboard;
 
 /// Run the daemon process. This is the composition root.
@@ -221,6 +222,13 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         daemon_settings,
     ));
 
+    // Keep iroh magicsock paths warm so blob fetches don't cold-start 30s+
+    // after being idle for a minute. Ticks `SpaceSetupFacade::refresh_presence`
+    // every 25s (well under the ~60s QUIC idle timeout).
+    let peer_keepalive_worker: Arc<dyn DaemonService> = Arc::new(PeerKeepAliveWorker::new(
+        ctx.space_setup_assembly.facade.clone(),
+    ));
+
     // Phase 67: Recover encryption session BEFORE building services.
     let encryption_unlocked = rt.block_on(async {
         use tracing::{info_span, Instrument};
@@ -287,6 +295,14 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             },
         },
         DaemonServiceSnapshot {
+            name: "peer-keepalive".to_string(),
+            health: if encryption_unlocked {
+                ServiceHealth::Healthy
+            } else {
+                ServiceHealth::Stopped
+            },
+        },
+        DaemonServiceSnapshot {
             name: "pairing-host".to_string(),
             health: ServiceHealth::Healthy,
         },
@@ -339,8 +355,10 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
 
         if encryption_unlocked {
             initial.push(Arc::clone(&peer_discovery_worker) as Arc<dyn DaemonService>);
+            initial.push(Arc::clone(&peer_keepalive_worker) as Arc<dyn DaemonService>);
         } else {
             deferred.push(peer_discovery_worker);
+            deferred.push(peer_keepalive_worker);
         }
 
         (initial, deferred)
