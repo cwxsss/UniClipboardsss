@@ -1,3 +1,4 @@
+pub mod blob;
 pub mod devices;
 pub mod init;
 pub mod invite;

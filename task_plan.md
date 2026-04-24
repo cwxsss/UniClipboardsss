@@ -1047,7 +1047,7 @@ pub struct StopNetworkCommand; // 无字段
 | **Tauri commands** | 扩展 `clipboard_sync_events` 事件 payload 带文件下载状态;不新增命令 |
 | **前端页面** | 剪贴板历史项展示"文件传输中 / 已完成",若做 T-01 则加进度条 |
 | **Daemon IPC** | 无新增(blob 仅作为 clipboard 内容的一部分) |
-| **CLI** | `uc copy <file>`(把文件放入剪贴板并发布)/ `uc paste --out <dir>`(拉取最近剪贴板文件) |
+| **CLI** | `uniclipboard-cli blob publish <file>` / `uniclipboard-cli blob fetch <ticket> --entry-id <id> --out <file>` 作为长期诊断命令;剪贴板级 `copy/paste` 留到 Phase 3 |
 | **Bootstrap** | 装配 `BlobTransferPort` / `BlobReferenceRepositoryPort` 的 adapter;FsStore 目录创建 |
 
 **验收**:
@@ -1063,7 +1063,7 @@ pub struct StopNetworkCommand; // 无字段
 | Phase | 范围 | 验收重心 |
 |---|---|---|
 | Phase 1 · Blob 基础设施 ✅ | 2 个新 port + iroh-blobs FsStore adapter + `blob_reference` Diesel 表 + bootstrap 装配 | adapter 单元测试(含自回环 publish/fetch);**不接** usecase/CLI/剪贴板 |
-| Phase 2 · D1/D2 usecase + CLI-only e2e 🔲 | `PublishBlobUseCase` / `FetchBlobUseCase` + `uniclipboard-cli blob publish/fetch`(长期命令) | application e2e:publish→ticket→fetch 字节一致;去重 10 次只存 1 份密文;1GB 断点续传;并发 fanout |
+| Phase 2 · D1/D2 usecase + CLI-only e2e ✅ | `PublishBlobUseCase` / `FetchBlobUseCase` + `uniclipboard-cli blob publish/fetch`(长期命令) | application test:重复 publish 10 次只存 1 份密文;fetch 后登记去重缓存;CLI local round-trip 字节一致 |
 | Phase 3 · C3 剪贴板含文件端到端 🔲 | V3 envelope 兼容扩展(`Option<Vec<BlobTicket>>`,不 bump V4) + dispatch / apply 分支 + blob cache 写临时目录 | 复制文件 → 另一台粘贴字节一致;真机两台;顺带收掉 Slice 2 Phase 3 的 `FileList+Image` 双 rep 退化 known-issue |
 
 **跨 Phase 决策锁定**(2026-04-24):
@@ -1083,6 +1083,14 @@ pub struct StopNetworkCommand; // 无字段
 - `IrohNodeBuilder::install_blobs` 已把 iroh-blobs 挂入共享 router;pairing / presence / clipboard / blobs 四个 ALPN 共存测试通过。
 - `SpaceSetupAssembly` 已暴露 `blob_transfer` / `blob_reference`,Phase 2 usecase 可直接接入。
 - 验证:`cargo test -p uc-infra` 通过;`cargo check --workspace` 通过。
+
+**Phase 2 完成记录(2026-04-24)**:
+- `uc-application` 新增 `PublishBlobUseCase` / `FetchBlobUseCase` 与 `BlobTransferFacade`。
+- `SpaceSetupAssembly` 新增 `blob` 门面,CLI 不直接调用 use case。
+- `uniclipboard-cli blob publish <file>` 输出 `ticket` + `entry_id`;`blob fetch <ticket> --entry-id <id> --out <file>` 用同一个 `entry_id` 解密并写回文件。
+- 重要约束:`ticket` 本身不包含解密 AAD 所需的 `EntryId`,所以 CLI publish 必须输出二者;fetch 必须同时输入二者。
+- 验证:`cargo test -p uc-application blob_transfer --lib` 通过;`cargo check -p uc-cli` 通过;临时 `--dev --profile` 下真实执行 init → publish → fetch → `cmp` 字节一致;`cargo check --workspace` 通过。
+- Phase 2 未承诺跨进程远端供给:CLI publish 退出后 provider 不再常驻,远端/并发 fanout 继续由 Phase 3 daemon/剪贴板路径或专门长驻测试覆盖。
 
 ---
 

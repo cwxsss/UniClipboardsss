@@ -2510,3 +2510,55 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 **下一步**:
 - 进入 Slice 3 Phase 2:实现 `PublishBlobUseCase` / `FetchBlobUseCase` 与 CLI-only e2e。
+
+---
+
+## Session 2026-04-24(续 36) — Slice 3 Phase 2 · D1/D2 use case + CLI-only e2e
+
+**触发**:用户要求先 commit 上一段,然后继续。
+
+**完成标准**:
+- 提交 Slice 3 Phase 1 成果。
+- 应用层新增 D1 publish / D2 fetch 编排,只通过 facade 暴露给外部。
+- CLI 新增 `blob publish` / `blob fetch`,能真实发布文件、输出 ticket + entry_id、再按二者拉回文件。
+- 覆盖去重核心规则:重复发布同一明文 10 次只发生 1 次底层 publish。
+- 真实命令验证:init → publish → fetch → 字节比对一致。
+
+**已做**:
+- 已提交 Phase 1:`703e5578 feat(Slice3/P1): add iroh blob infrastructure`。
+- `uc-application` 新增 `usecases/blob_transfer::{PublishBlobUseCase,FetchBlobUseCase}`:
+  - publish:明文 hash 查重;命中且本地有 digest 时复用;未命中则加密、publish、save、tag、issue_ticket。
+  - fetch:从 ticket 解析 digest,fetch 密文,按 entry_id 生成同一 AAD 解密,save 去重缓存,tag entry。
+- 新增 `facade/blob_transfer::BlobTransferFacade`,CLI / 后续 daemon/UI 只调 facade。
+- `SpaceSetupAssembly` 新增 `blob: Arc<BlobTransferFacade>`,继续保留 Phase 1 的 raw ports 供后续内部扩展。
+- `uc-cli` 新增 `blob` 子命令:
+  - `blob publish <path>` 输出 base64 ticket、entry_id、plaintext_hash、digest、是否复用。
+  - `blob fetch <ticket> --entry-id <id> --out <path>` 解密并写出文件。
+- 新增 2 个应用层测试:
+  - 重复 publish 10 次只加密 / 底层 publish 1 次,但 tag 10 次。
+  - fetch 后保存 plaintext_hash → digest 映射,并打 entry tag。
+
+**关键发现 / 修正**:
+| 发现 | 修正 |
+|---|---|
+| 单独 `BlobTicket` 不足以 CLI fetch,因为业务加密 AAD 绑定 `EntryId` | CLI publish 同时输出 `ticket` + `entry_id`;fetch 要求二者都传入 |
+| CLI publish 退出后 provider 不再常驻,不适合承诺远端 fanout | Phase 2 定位为本机闭环 + use case 规则验证;远端/并发 fanout 放 Phase 3 daemon/剪贴板路径或专门长驻测试 |
+
+**验证**:
+- `cargo fmt --all`:通过。
+- `cargo test -p uc-application blob_transfer --lib`:2 passed。
+- `cargo check -p uc-application`:通过(仅既存 warning)。
+- `cargo check -p uc-cli`:通过(仅既存 warning)。
+- `cargo check --workspace`:通过(仅既存 warning)。
+- 真实 CLI 验证:
+  - `uniclipboard-cli --dev --profile slice3-blob-smoke-18751 init ...`
+  - `blob publish /tmp/uniclipboard-blob-input-18751.txt --json`
+  - `blob fetch <ticket> --entry-id ab3e9c21-bb37-4e13-81ba-e70047e085a4 --out /tmp/uniclipboard-blob-output-18751.txt --json`
+  - `cmp input output`:一致。
+
+**警告**:
+- 仍只有既存 warning:`uc-infra` 的 `Kek` unused import、`uc-platform` 若干 dead_code、`uc-application` 两个未构造变体、`uc-app` legacy clipboard transport deprecated warning。本次未改。
+
+**下一步**:
+- 提交 Slice 3 Phase 2。
+- 之后进入 Phase 3:把 blob ticket 接进 clipboard V3 envelope,实现含文件剪贴板端到端。

@@ -6,12 +6,17 @@
 //! sub-facades expose them through domain-scoped methods.
 
 pub mod app_facade;
+pub mod blob_transfer;
 pub mod clipboard;
 pub mod roster;
 pub mod setup_status;
 pub mod space_setup;
 
 pub use app_facade::AppFacade;
+pub use blob_transfer::{
+    BlobTransferDeps, BlobTransferError, BlobTransferFacade, FetchBlobCommand, FetchBlobResult,
+    PublishBlobCommand, PublishBlobResult,
+};
 pub use clipboard::{
     ClipboardSyncDeps, ClipboardSyncError, ClipboardSyncFacade, DispatchEntryInput,
     DispatchEntryOutcome, DispatchEntryPerTarget, InboundAction, InboundNotice, IngestHandle,

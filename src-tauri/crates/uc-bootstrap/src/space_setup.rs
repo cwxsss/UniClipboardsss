@@ -23,8 +23,8 @@ use std::sync::Arc;
 use tracing::{info, instrument};
 
 use uc_application::facade::{
-    ClipboardSyncDeps, ClipboardSyncFacade, IngestHandle, MemberRosterDeps, MemberRosterFacade,
-    SpaceSetupDeps, SpaceSetupFacade,
+    BlobTransferDeps, BlobTransferFacade, ClipboardSyncDeps, ClipboardSyncFacade, IngestHandle,
+    MemberRosterDeps, MemberRosterFacade, SpaceSetupDeps, SpaceSetupFacade,
 };
 use uc_application::space_access::HmacProofAdapter;
 use uc_core::ports::blob::{BlobReferenceRepositoryPort, BlobTransferPort};
@@ -58,6 +58,9 @@ pub struct SpaceSetupAssembly {
     /// 与 `roster` 同样共享 `peer_addr_repo` / `presence`,所以 F1 hook
     /// 喂好的 presence 缓存,`dispatch_entry` 能直接读到。
     pub clipboard_sync: Arc<ClipboardSyncFacade>,
+    /// Slice 3 Phase 2:大 payload 发布 / 拉取门面。CLI 与后续 daemon/UI
+    /// 都从这里走完整的 hash 去重、加解密和 blob 传输编排。
+    pub blob: Arc<BlobTransferFacade>,
     /// Slice 3 Phase 1:大 payload 的 iroh-blobs 传输能力。Phase 2 的
     /// blob use case 会从这里接入。
     pub blob_transfer: Arc<dyn BlobTransferPort>,
@@ -225,12 +228,19 @@ pub async fn build_space_setup_assembly(
         clock: Arc::clone(&deps.system.clock),
     }));
     let ingest_handle = clipboard_sync.spawn_ingest_loop();
+    let blob = Arc::new(BlobTransferFacade::new(BlobTransferDeps {
+        hash: Arc::clone(&deps.system.hash),
+        blob_cipher: Arc::clone(&deps.security.blob_cipher),
+        blob_transfer: Arc::clone(&blob_transfer),
+        blob_reference: Arc::clone(&wired.blob_reference_repo),
+    }));
 
-    info!("Slice 2 SpaceSetupFacade + MemberRosterFacade + ClipboardSyncFacade assembled");
+    info!("Slice 2/3 SpaceSetupFacade + MemberRosterFacade + ClipboardSyncFacade + BlobTransferFacade assembled");
     Ok(SpaceSetupAssembly {
         facade,
         roster,
         clipboard_sync,
+        blob,
         blob_transfer,
         blob_reference: Arc::clone(&wired.blob_reference_repo),
         iroh_node,

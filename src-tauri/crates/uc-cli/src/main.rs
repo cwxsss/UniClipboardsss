@@ -144,6 +144,11 @@ enum Commands {
     /// envelopes). Does NOT write the system clipboard — that's the
     /// daemon's job; the CLI watch is purely a diagnostic observer.
     Watch,
+    /// 发布或拉取加密的大 payload blob(直连模式)。
+    Blob {
+        #[command(subcommand)]
+        subcommand: commands::blob::BlobCommands,
+    },
     /// Search clipboard history (query or inspect search availability)
     Search {
         #[command(subcommand)]
@@ -262,6 +267,9 @@ fn main() -> anyhow::Result<()> {
                 commands::send::run(commands::send::SendArgs { text }, cli.json, cli.verbose).await
             }
             Commands::Watch => commands::watch::run(cli.json, cli.verbose).await,
+            Commands::Blob { subcommand } => {
+                commands::blob::run(subcommand, cli.json, cli.verbose).await
+            }
             Commands::Search { subcommand } => {
                 commands::search::run(subcommand, cli.json, cli.verbose).await
             }
