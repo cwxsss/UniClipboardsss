@@ -22,6 +22,9 @@ thiserror = "2.0"
 # Async traits
 async-trait = "0.1"
 
+# Stream consumption for iroh-blobs Downloader progress events
+futures-util = "0.3"
+
 # ===== 数据库 =====
 diesel = { version = "2.3.5", features = [
     "sqlite",

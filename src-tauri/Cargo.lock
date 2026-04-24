@@ -11376,6 +11376,7 @@ dependencies = [
  "diesel",
  "diesel_migrations",
  "dirs 6.0.0",
+ "futures-util",
  "hex",
  "hkdf",
  "hmac",

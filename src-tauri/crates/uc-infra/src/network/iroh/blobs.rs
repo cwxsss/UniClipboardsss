@@ -9,9 +9,12 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_util::StreamExt;
 use iroh::Endpoint;
 use iroh_blobs::{
-    api::downloader::Downloader, store::fs::FsStore, ticket::BlobTicket as NativeBlobTicket,
+    api::downloader::{DownloadProgressItem, Downloader},
+    store::fs::FsStore,
+    ticket::BlobTicket as NativeBlobTicket,
     BlobFormat, Hash, HashAndFormat,
 };
 use iroh_tickets::Ticket;
@@ -115,7 +118,7 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
         let hash_prefix = hex_prefix(native.hash().as_bytes());
 
         if self.has(&digest).await? {
-            debug!(hash = %hash_prefix, "blob fetch: local hit, skipping network");
+            info!(hash = %hash_prefix, "blob fetch: local hit, skipping network");
             return self
                 .store
                 .blobs()
@@ -150,29 +153,127 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
                 );
                 BlobError::Unavailable(e.to_string())
             })?;
-        debug!(
+        info!(
             hash = %hash_prefix,
             elapsed_ms = connect_start.elapsed().as_millis() as u64,
             "blob fetch: endpoint.connect ready, launching download"
         );
 
+        // Subscribe to the Downloader's progress stream instead of `.await`ing
+        // the IntoFuture form. iroh-blobs 0.97 `execute_get` (downloader.rs:472)
+        // discards the underlying QUIC error with `Err(_cause) => continue`,
+        // surfacing only the high-level `bail!("Unable to download {}", hash)`
+        // when all providers are exhausted. The progress channel is the only
+        // place where we can observe per-provider failures, byte-level
+        // progress, and the eventual `Error(anyhow::Error)` whose chain
+        // contains the real quinn cause (ConnectionLost, Read(Reset), etc).
         let download_start = Instant::now();
-        self.downloader()
+        let mut progress_stream = self
+            .downloader()
             .download(native.hash_and_format(), [native.addr().id])
+            .stream()
             .await
             .map_err(|e| {
                 warn!(
                     hash = %hash_prefix,
                     elapsed_ms = download_start.elapsed().as_millis() as u64,
                     error = %e,
-                    "blob fetch: downloader.download failed"
+                    "blob fetch: downloader.stream() open failed"
                 );
                 BlobError::Unavailable(e.to_string())
             })?;
+
+        // Throttle Progress(n) logs: 65MB blobs emit one event per chunk.
+        // Log a checkpoint every PROGRESS_LOG_BYTES so Seq can show shape of
+        // the transfer (continuous vs stalled) without flooding.
+        const PROGRESS_LOG_BYTES: u64 = 4 * 1024 * 1024;
+        let mut bytes_so_far: u64 = 0;
+        let mut last_logged_bytes: u64 = 0;
+        let mut provider_failures: u32 = 0;
+        let mut tried_providers: u32 = 0;
+
+        let download_result: Result<(), BlobError> = loop {
+            let Some(item) = progress_stream.next().await else {
+                break Ok(());
+            };
+            match item {
+                DownloadProgressItem::TryProvider { id, .. } => {
+                    tried_providers += 1;
+                    info!(
+                        hash = %hash_prefix,
+                        provider = %id.fmt_short(),
+                        elapsed_ms = download_start.elapsed().as_millis() as u64,
+                        "blob fetch: trying provider"
+                    );
+                }
+                DownloadProgressItem::ProviderFailed { id, .. } => {
+                    provider_failures += 1;
+                    // execute_get drops the underlying error here — we only
+                    // get to know which provider failed and how far we got.
+                    warn!(
+                        hash = %hash_prefix,
+                        provider = %id.fmt_short(),
+                        elapsed_ms = download_start.elapsed().as_millis() as u64,
+                        bytes_downloaded = bytes_so_far,
+                        "blob fetch: provider failed (cause discarded by iroh-blobs::execute_get)"
+                    );
+                }
+                DownloadProgressItem::Progress(total) => {
+                    bytes_so_far = total;
+                    if total >= last_logged_bytes + PROGRESS_LOG_BYTES {
+                        info!(
+                            hash = %hash_prefix,
+                            bytes = total,
+                            elapsed_ms = download_start.elapsed().as_millis() as u64,
+                            "blob fetch: progress checkpoint"
+                        );
+                        last_logged_bytes = total;
+                    }
+                }
+                DownloadProgressItem::PartComplete { .. } => {
+                    info!(
+                        hash = %hash_prefix,
+                        bytes = bytes_so_far,
+                        elapsed_ms = download_start.elapsed().as_millis() as u64,
+                        "blob fetch: part complete"
+                    );
+                }
+                DownloadProgressItem::DownloadError => {
+                    warn!(
+                        hash = %hash_prefix,
+                        elapsed_ms = download_start.elapsed().as_millis() as u64,
+                        bytes_downloaded = bytes_so_far,
+                        provider_failures,
+                        tried_providers,
+                        "blob fetch: DownloadError signalled (split-strategy aggregate failure)"
+                    );
+                    break Err(BlobError::Unavailable("Download error".into()));
+                }
+                DownloadProgressItem::Error(e) => {
+                    // The single most useful event: the anyhow chain here
+                    // typically wraps the quinn::ConnectionError or
+                    // ReadError that `execute_get` swallowed earlier.
+                    warn!(
+                        hash = %hash_prefix,
+                        elapsed_ms = download_start.elapsed().as_millis() as u64,
+                        bytes_downloaded = bytes_so_far,
+                        provider_failures,
+                        tried_providers,
+                        error = ?e,
+                        "blob fetch: downloader Error event (root cause from anyhow chain)"
+                    );
+                    break Err(BlobError::Unavailable(e.to_string()));
+                }
+            }
+        };
+        download_result?;
+
         info!(
             hash = %hash_prefix,
+            bytes = bytes_so_far,
             download_ms = download_start.elapsed().as_millis() as u64,
-            connect_ms = connect_start.elapsed().as_millis() as u64 - download_start.elapsed().as_millis() as u64,
+            connect_ms = (connect_start.elapsed() - download_start.elapsed()).as_millis() as u64,
+            tried_providers,
             "blob fetch: download complete"
         );
 
