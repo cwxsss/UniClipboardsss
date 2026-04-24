@@ -26,8 +26,89 @@ fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str>
             // PixPin 截图等场景 format_id 为 "image"，mime 通常为 "image/png"。
             // `common.rs::read_snapshot` 把 macOS `public.png` / `public.tiff` 都转成 PNG。
             "public.png" | "image" => Some("image/png"),
+            // file-list 表示：接收端 materializer 会把 rep.bytes 改写为本机 file:// URI
+            // 列表（每行一条），写入时解析为原生路径后通过 CF_HDROP 提交，Explorer /
+            // 资源管理器识别的规范形式。
+            "public.file-url" | "NSFilenamesPboardType" | "files" => Some("text/uri-list"),
             _ => None,
         })
+}
+
+/// 把 text/uri-list rep 的字节解析为本机路径列表（`Vec<PathBuf>`）。
+///
+/// 接受两种形式：
+/// - `file://...` URI：通过 `url::Url::to_file_path` 还原为原生路径
+/// - 原始路径：非 URI 字符串按行直接当作路径处理（兼容 materializer 变更前的行为）
+///
+/// 空行与以 `#` 开头的注释行（RFC 2483 text/uri-list 规定）被跳过。
+fn parse_uri_list_to_paths(bytes: &[u8]) -> Result<Vec<std::path::PathBuf>> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|e| anyhow::anyhow!("text/uri-list rep is not valid UTF-8: {}", e))?;
+    let mut paths = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Ok(url) = url::Url::parse(line) {
+            if url.scheme() == "file" {
+                if let Ok(path) = url.to_file_path() {
+                    paths.push(path);
+                    continue;
+                }
+            }
+        }
+        // Fallback：非 URI 当原生路径处理（允许下游 materializer 向后兼容）。
+        paths.push(std::path::PathBuf::from(line));
+    }
+    Ok(paths)
+}
+
+/// 把 `Vec<PathBuf>` 编码为 CF_HDROP 所需的 DROPFILES 结构。
+///
+/// CF_HDROP 二进制布局（Win32 SDK `shlobj_core.h`）：
+/// ```text
+/// [DROPFILES struct (20 bytes)]
+///   pFiles: u32       // 文件名数组相对 DROPFILES 起点的偏移
+///   pt.x: i32
+///   pt.y: i32         // 拖放时的像素坐标（剪贴板粘贴场景 0/0 即可）
+///   fNC: u32          // 0
+///   fWide: u32        // 非零 = 文件名数组为 Unicode (UTF-16 LE)
+/// [UTF-16 LE, NUL-terminated file names (一个接一个)]
+/// [额外的 UTF-16 NUL (u16 0)]  // double-NUL 终结
+/// ```
+fn paths_to_cf_hdrop_bytes(paths: &[std::path::PathBuf]) -> Result<Vec<u8>> {
+    if paths.is_empty() {
+        anyhow::bail!("CF_HDROP 要求至少一条路径");
+    }
+
+    // DROPFILES (20 bytes) + UTF-16 名字串 + 终止 NUL。
+    let mut out = Vec::with_capacity(20 + paths.len() * 32);
+
+    // DROPFILES.pFiles = 20 (struct 长度)
+    out.extend_from_slice(&20u32.to_le_bytes());
+    // POINT.x / POINT.y / fNC
+    out.extend_from_slice(&0i32.to_le_bytes());
+    out.extend_from_slice(&0i32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    // fWide = 1 (Unicode)
+    out.extend_from_slice(&1u32.to_le_bytes());
+    debug_assert_eq!(out.len(), 20);
+
+    // Windows 上 OsStr 原生 UTF-16；用 `OsStrExt::encode_wide` 直接拿 surrogate-safe
+    // 的 u16 迭代，避免经过 UTF-8 `to_string_lossy` 的有损中转。
+    use std::os::windows::ffi::OsStrExt;
+    for path in paths {
+        for code_unit in path.as_os_str().encode_wide() {
+            out.extend_from_slice(&code_unit.to_le_bytes());
+        }
+        // 每条路径以 UTF-16 NUL 结束
+        out.extend_from_slice(&0u16.to_le_bytes());
+    }
+    // 额外一个 UTF-16 NUL —— double-NUL 终结
+    out.extend_from_slice(&0u16.to_le_bytes());
+
+    Ok(out)
 }
 
 /// 把 PNG 字节解码后编码为 **CF_DIBV5** 格式的字节流（`BITMAPV5HEADER` + pixel data）。
@@ -178,7 +259,7 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
     let has_writable = snapshot.representations.iter().any(|rep| {
         matches!(
             resolve_multi_rep_mime(rep),
-            Some("text/plain") | Some("text/html") | Some("image/png")
+            Some("text/plain") | Some("text/html") | Some("image/png") | Some("text/uri-list")
         )
     });
 
@@ -188,8 +269,13 @@ pub(crate) fn write_snapshot_multi_windows(snapshot: SystemClipboardSnapshot) ->
             .iter()
             .map(|r| r.format_id.as_str().to_string())
             .collect();
+        warn!(
+            rep_count = snapshot.representations.len(),
+            skipped = ?skipped,
+            "Windows 多 rep 写入：无可写 rep；未清空 OS 剪贴板（防副作用兜底）"
+        );
         anyhow::bail!(
-            "Windows 多 rep 写入：无可写 rep（支持 text/plain, text/html, image/png）；\
+            "Windows 多 rep 写入：无可写 rep（支持 text/plain, text/html, image/png, text/uri-list）；\
              未清空 OS 剪贴板；跳过的 rep = {:?}",
             skipped
         );
@@ -384,13 +470,54 @@ fn attempt_multi_write_inner(
                     skipped.push(rep.format_id.as_str().to_string());
                 }
             }
-            // image/jpeg / image/tiff / image/webp / image/gif / RTF / files 等均未支持，
-            // 未来在独立 phase 补齐（各自需要独立的编码转换 / format 注册 / 文件同步依赖）。
-            other => {
+            Some("text/uri-list") => {
+                // CF_HDROP 写入路径：把 rep 里的 file:// URI 列表（接收端 materializer
+                // 已把 blob 落地到本机 iroh-blobs 缓存目录并改写为本机 URI）解析回本机
+                // 路径，打包成 DROPFILES + UTF-16 名字串，`SetClipboardData(CF_HDROP)`。
+                // 这是 Explorer / Office / 大多数桌面应用识别的文件拷贝语义。
+                let paths = match parse_uri_list_to_paths(&rep.bytes) {
+                    Ok(paths) => paths,
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            bytes = rep.bytes.len(),
+                            format_id = %rep.format_id,
+                            "Windows 多 rep 写入：text/uri-list 解析失败，跳过该 rep"
+                        );
+                        skipped.push(rep.format_id.as_str().to_string());
+                        continue;
+                    }
+                };
+                if paths.is_empty() {
+                    info!(
+                        format_id = %rep.format_id,
+                        "Windows 多 rep 写入：text/uri-list 为空，跳过该 rep"
+                    );
+                    skipped.push(rep.format_id.as_str().to_string());
+                    continue;
+                }
+                let hdrop_bytes = paths_to_cf_hdrop_bytes(&paths)
+                    .map_err(|e| anyhow::anyhow!("CF_HDROP 编码失败: {}", e))?;
+                // CF_HDROP = 15（见 Win32 `winuser.h`）。clipboard-win 的 `formats` 模块
+                // 未直接导出该常量，直接使用数值避免引入额外的 `windows-sys` 依赖。
+                const CF_HDROP: u32 = 15;
+                cb_raw::set_without_clear(CF_HDROP, &hdrop_bytes)
+                    .map_err(|e| anyhow::anyhow!("set CF_HDROP failed: {}", e))?;
                 debug!(
+                    path_count = paths.len(),
+                    hdrop_bytes = hdrop_bytes.len(),
+                    "写入 CF_HDROP 成功"
+                );
+                wrote_any = true;
+            }
+            // image/jpeg / image/tiff / image/webp / image/gif / RTF 等均未支持，
+            // 未来在独立 phase 补齐（各自需要独立的编码转换 / format 注册）。
+            other => {
+                info!(
                     format_id = %rep.format_id,
                     mime = ?other,
-                    "Windows 多 rep 写入：跳过不支持的 rep"
+                    bytes = rep.bytes.len(),
+                    "Windows 多 rep 写入：跳过不支持的 rep（当前支持 text/plain, text/html, image/png, text/uri-list）"
                 );
                 skipped.push(rep.format_id.as_str().to_string());
             }

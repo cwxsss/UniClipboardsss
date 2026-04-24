@@ -5,8 +5,8 @@ use clipboard_rs::ClipboardContext;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_app_kit::{
-    NSPasteboard, NSPasteboardItem, NSPasteboardTypeHTML, NSPasteboardTypeString,
-    NSPasteboardWriting,
+    NSPasteboard, NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypeHTML,
+    NSPasteboardTypeString, NSPasteboardWriting,
 };
 use objc2_foundation::{NSArray, NSData};
 use std::sync::{Arc, Mutex};
@@ -75,8 +75,28 @@ fn resolve_multi_rep_mime(rep: &ObservedClipboardRepresentation) -> Option<&str>
                 Some("text/plain")
             }
             "public.html" | "Apple HTML pasteboard type" | "html" => Some("text/html"),
+            // file-list 表示：接收端 materializer 会把 rep.bytes 改写为本机 file:// URI
+            // 列表（每行一条），写入时为每个 URI 生成一个独立 NSPasteboardItem 承载
+            // NSPasteboardTypeFileURL —— Finder / NSDocumentController 识别的规范形式。
+            "public.file-url" | "NSFilenamesPboardType" | "files" => Some("text/uri-list"),
             _ => None,
         })
+}
+
+/// 把 text/uri-list rep 的字节解析为每行一条 URI 字符串。
+///
+/// 空行与前后空白忽略。保留原始字符串（不做 percent-decode），因为
+/// `NSPasteboardTypeFileURL` 直接接受 UTF-8 编码的 `file://...` 串。
+fn parse_uri_list(bytes: &[u8]) -> Result<Vec<String>> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|e| anyhow!("text/uri-list rep is not valid UTF-8: {}", e))?;
+    let uris: Vec<String> = text
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect();
+    Ok(uris)
 }
 
 /// 把 `&[u8]` 包装成 `NSData`。
@@ -127,24 +147,28 @@ fn make_nsdata(bytes: &[u8]) -> Retained<NSData> {
 ///   同样通过该单例操作，**不存在句柄争抢**，因此本函数可直接 grab generalPasteboard
 ///   而无需先 drop clipboard-rs ctx。
 ///
-/// ## MVP 范围
+/// ## 支持范围
 ///
-/// 本次仅支持 `text/plain`（→ NSPasteboardTypeString）+ `text/html`（→ NSPasteboardTypeHTML）。
-/// 其他 mime（image / rtf / files）在多 rep 路径里跳过并 debug 日志，
+/// - `text/plain` → `NSPasteboardTypeString`
+/// - `text/html`  → `NSPasteboardTypeHTML`
+/// - `text/uri-list` → 每个 URI 一个独立 `NSPasteboardItem`，承载 `NSPasteboardTypeFileURL`
+///   （Apple 官方推荐的多文件写入形式）
+///
+/// 其他 mime（image / rtf 等）在多 rep 路径里跳过并 info 日志，
 /// 留待后续 phase 补齐 `NSPasteboardTypePNG / NSPasteboardTypeRTF` 等。
 ///
 /// ## clearContents() 副作用防御
 ///
-/// 函数开头扫描 snapshot 是否包含至少一条可写 rep（text/plain 或 text/html）。
+/// 函数开头扫描 snapshot 是否包含至少一条可写 rep（text/plain、text/html 或 text/uri-list）。
 /// 若扫描结果为空，直接 bail——**不调用 clearContents()**，避免把用户原本的 clipboard
 /// 内容抹掉却什么都写不进去（与 Windows 任务的 `empty()` 副作用防御同构）。
 pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> Result<()> {
-    // 预扫描：snapshot 中至少要有一条可写 rep（text/plain 或 text/html）。
+    // 预扫描：snapshot 中至少要有一条可写 rep（text/plain、text/html 或 text/uri-list）。
     // 否则直接 bail，不打开 / 不 clear pasteboard。
     let has_writable = snapshot.representations.iter().any(|rep| {
         matches!(
             resolve_multi_rep_mime(rep),
-            Some("text/plain") | Some("text/html")
+            Some("text/plain") | Some("text/html") | Some("text/uri-list")
         )
     });
 
@@ -154,8 +178,13 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
             .iter()
             .map(|r| r.format_id.as_str().to_string())
             .collect();
+        warn!(
+            rep_count = snapshot.representations.len(),
+            skipped = ?skipped,
+            "macOS 多 rep 写入：无可写 rep；未清空系统 pasteboard（防副作用兜底）"
+        );
         anyhow::bail!(
-            "macOS 多 rep 写入：无可写 rep（支持 text/plain, text/html）；\
+            "macOS 多 rep 写入：无可写 rep（支持 text/plain, text/html, text/uri-list）；\
              未清空系统 pasteboard；跳过的 rep = {:?}",
             skipped
         );
@@ -168,11 +197,21 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
     // 2. 清空旧内容；忽略返回的 changeCount（仅标识版本号，不代表错误）
     let _ = pasteboard.clearContents();
 
-    // 3. 构造 item，依次 setData
-    let item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
+    // 3. 构造 items。
+    //
+    // Apple 文档：多文件写入应为每个 file URL 创建独立 NSPasteboardItem，每个 item
+    // 承载一个 NSPasteboardTypeFileURL（`public.file-url`，value 为 UTF-8 编码的
+    // `file://...` 字符串字节）。
+    //
+    // 我们为 text/plain + text/html 创建一个 "文本 item"（合并承载多个 type），这样
+    // 纯文本目的地（TextEdit / Terminal）从一个 item 就能拿到文本；而 files 按 Apple
+    // 规范各自一个 item。
+    let text_item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
+    let mut file_items: Vec<Retained<NSPasteboardItem>> = Vec::new();
 
     let mut wrote_any = false;
     let mut skipped: Vec<String> = Vec::new();
+    let mut file_uri_total = 0usize;
 
     for rep in &snapshot.representations {
         match resolve_multi_rep_mime(rep) {
@@ -182,7 +221,7 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                 let data = make_nsdata(&rep.bytes);
                 // NSPasteboardTypeString 是 extern "C" 静态变量，访问需要 unsafe 块。
                 // setData_forType 本身是 `pub fn`（安全方法）。
-                let ok = unsafe { item.setData_forType(&data, NSPasteboardTypeString) };
+                let ok = unsafe { text_item.setData_forType(&data, NSPasteboardTypeString) };
                 if ok {
                     debug!(bytes = rep.bytes.len(), "写入 NSPasteboardTypeString 成功");
                     wrote_any = true;
@@ -197,7 +236,7 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
             Some("text/html") => {
                 let data = make_nsdata(&rep.bytes);
                 // NSPasteboardTypeHTML 是 extern "C" 静态变量，访问需要 unsafe 块。
-                let ok = unsafe { item.setData_forType(&data, NSPasteboardTypeHTML) };
+                let ok = unsafe { text_item.setData_forType(&data, NSPasteboardTypeHTML) };
                 if ok {
                     debug!(bytes = rep.bytes.len(), "写入 NSPasteboardTypeHTML 成功");
                     wrote_any = true;
@@ -209,11 +248,52 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
                     skipped.push(rep.format_id.as_str().to_string());
                 }
             }
+            Some("text/uri-list") => {
+                let uris = match parse_uri_list(&rep.bytes) {
+                    Ok(list) => list,
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            bytes = rep.bytes.len(),
+                            format_id = %rep.format_id,
+                            "macOS 多 rep 写入：text/uri-list 解析失败，跳过该 rep"
+                        );
+                        skipped.push(rep.format_id.as_str().to_string());
+                        continue;
+                    }
+                };
+                if uris.is_empty() {
+                    info!(
+                        format_id = %rep.format_id,
+                        "macOS 多 rep 写入：text/uri-list 为空，跳过该 rep"
+                    );
+                    skipped.push(rep.format_id.as_str().to_string());
+                    continue;
+                }
+                file_uri_total += uris.len();
+                for uri in uris {
+                    let file_item: Retained<NSPasteboardItem> = NSPasteboardItem::new();
+                    let data = make_nsdata(uri.as_bytes());
+                    // NSPasteboardTypeFileURL 是 extern "C" 静态变量，访问需要 unsafe 块。
+                    let ok = unsafe { file_item.setData_forType(&data, NSPasteboardTypeFileURL) };
+                    if ok {
+                        debug!(uri_bytes = uri.len(), "写入 NSPasteboardTypeFileURL 成功");
+                        wrote_any = true;
+                        file_items.push(file_item);
+                    } else {
+                        warn!(
+                            uri = %uri,
+                            "setData_forType(NSPasteboardTypeFileURL) 返回 false，跳过该 URI"
+                        );
+                    }
+                }
+            }
             other => {
-                debug!(
+                info!(
                     format_id = %rep.format_id,
                     mime = ?other,
-                    "macOS 多 rep 写入：跳过不支持的 rep（后续 phase 补齐 image/rtf/files）"
+                    bytes = rep.bytes.len(),
+                    "macOS 多 rep 写入：跳过不支持的 rep（当前支持 text/plain, text/html, text/uri-list）"
                 );
                 skipped.push(rep.format_id.as_str().to_string());
             }
@@ -230,17 +310,28 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
         );
     }
 
-    // 4. 把 NSPasteboardItem 包装成 NSArray<ProtocolObject<dyn NSPasteboardWriting>>
+    // 4. 把所有 NSPasteboardItem 打包为 NSArray<ProtocolObject<dyn NSPasteboardWriting>>。
     //
     // 实测 API（objc2 0.6.3）：
     // - `ProtocolObject::from_retained(obj: Retained<T>) -> Retained<ProtocolObject<P>>`
     //   （`pub fn`，内部为 `Retained::cast_unchecked`，编译期检查 T: ImplementedBy<P>）
     // - `NSArray::from_retained_slice(&[Retained<T>]) -> Retained<NSArray<T>>`
     //   （objc2-foundation `src/array.rs`）
-    //   注意：此处需要传入 `Vec` 再取切片，因为 `from_retained_slice` 消费 Retained
-    let proto_item: Retained<ProtocolObject<dyn NSPasteboardWriting>> =
-        ProtocolObject::from_retained(item);
-    let items_vec = vec![proto_item];
+    //   注意：此处需要先把所有 item 收进 Vec，再取切片。
+    //
+    // Item 顺序：text_item 在前（text/plain + text/html），file_items 依次在后。
+    // NSPasteboard::writeObjects 会原子地把整个数组提交到 pasteboard；目的地应用
+    // 按需选择各 item 的对应 type。
+    //
+    // 注意：text_item 即使为空也一并提交 —— 只有 file rep 的场景下它不会携带 string/html
+    // type，readers 自然不会从中拿到内容，与只写 file_items 等价。真实场景里几乎总会
+    // 伴随至少一种文本表示（参见 materialize 注入的 rep_count >= 2）。
+    let mut items_vec: Vec<Retained<ProtocolObject<dyn NSPasteboardWriting>>> =
+        Vec::with_capacity(1 + file_items.len());
+    items_vec.push(ProtocolObject::from_retained(text_item));
+    for item in file_items {
+        items_vec.push(ProtocolObject::from_retained(item));
+    }
     let items_array: Retained<NSArray<ProtocolObject<dyn NSPasteboardWriting>>> =
         NSArray::from_retained_slice(&items_vec);
 
@@ -265,6 +356,7 @@ pub(crate) fn write_snapshot_multi_macos(snapshot: SystemClipboardSnapshot) -> R
     info!(
         total_reps = snapshot.representations.len(),
         skipped_count = skipped.len(),
+        file_uri_total,
         "macOS 原子多 rep 写入完成"
     );
 
