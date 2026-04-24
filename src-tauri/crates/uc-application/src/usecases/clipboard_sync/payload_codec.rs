@@ -23,12 +23,34 @@
 //! `content_hash` via `dispatch_entry`; Phase 3 CLI upgrades (T9/T10) go
 //! through these helpers to match the daemon's wire format.
 
+use std::io::{Read, Write};
+
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 
-use uc_core::ids::{FormatId, RepresentationId};
+use uc_core::ids::{EntryId, FormatId, RepresentationId};
 use uc_core::network::protocol::{BinaryRepresentation, ClipboardBinaryPayload};
+use uc_core::ports::blob::BlobTicket;
 use uc_core::{MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot};
+
+const BLOB_REFS_MAGIC: &[u8; 4] = b"UCBR";
+const NONE_STRING_LEN: u16 = u16::MAX;
+const MAX_BLOB_REFS: usize = 1_024;
+const MAX_TICKET_LEN: usize = 64 * 1024;
+const MAX_BLOB_REF_STRING_LEN: usize = 8 * 1024;
+
+/// V3 尾部扩展里的 blob 引用。
+///
+/// `ticket` 负责定位密文,`entry_id` 负责还原业务加密 AAD。二者缺一不可:
+/// 只有 ticket 无法解密 Phase 2 的业务 blob。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V3BlobRef {
+    pub ticket: BlobTicket,
+    pub entry_id: EntryId,
+    pub filename: Option<String>,
+    pub mime: Option<String>,
+    pub size_bytes: u64,
+}
 
 /// Encode a snapshot into the V3 wire envelope and return
 /// `(envelope_bytes, content_hash)`.
@@ -66,6 +88,25 @@ pub(crate) fn encode_snapshot_to_v3_bytes(
     Ok((Bytes::from(bytes), content_hash))
 }
 
+/// 编码 V3 envelope,并在尾部追加可选 blob 引用扩展。
+///
+/// 旧 decoder 只读取 `ClipboardBinaryPayload` 本体,不会触碰尾部字节,因此
+/// 这个扩展不需要 bump payload version。新 decoder 通过固定 magic 识别尾部。
+pub fn encode_snapshot_with_blob_refs_to_v3_bytes(
+    snapshot: &SystemClipboardSnapshot,
+    blob_refs: &[V3BlobRef],
+) -> Result<(Bytes, String)> {
+    let (bytes, content_hash) = encode_snapshot_to_v3_bytes(snapshot)?;
+    if blob_refs.is_empty() {
+        return Ok((bytes, content_hash));
+    }
+
+    let mut out = bytes.to_vec();
+    write_blob_refs_extension(&mut out, blob_refs)
+        .map_err(|e| anyhow!("encode V3 blob refs extension: {e}"))?;
+    Ok((Bytes::from(out), content_hash))
+}
+
 /// Decode V3 envelope bytes back into a `SystemClipboardSnapshot`.
 ///
 /// Each `BinaryRepresentation` becomes an
@@ -78,6 +119,13 @@ pub(crate) fn encode_snapshot_to_v3_bytes(
 /// Caller should pass `notice.plaintext.as_ref()` from the inbound
 /// notice; the decoder does not claim ownership of the buffer.
 pub fn decode_v3_bytes_to_snapshot(bytes: &[u8]) -> Result<SystemClipboardSnapshot> {
+    decode_v3_bytes_to_snapshot_and_blob_refs(bytes).map(|(snapshot, _)| snapshot)
+}
+
+/// 解码 V3 envelope,同时读取可选 blob 引用尾部扩展。
+pub fn decode_v3_bytes_to_snapshot_and_blob_refs(
+    bytes: &[u8],
+) -> Result<(SystemClipboardSnapshot, Vec<V3BlobRef>)> {
     let mut cursor = bytes;
     let payload = ClipboardBinaryPayload::decode_from(&mut cursor)
         .map_err(|e| anyhow!("decode V3 envelope: {e}"))?;
@@ -95,10 +143,211 @@ pub fn decode_v3_bytes_to_snapshot(bytes: &[u8]) -> Result<SystemClipboardSnapsh
         })
         .collect();
 
-    Ok(SystemClipboardSnapshot {
-        ts_ms: payload.ts_ms,
-        representations,
-    })
+    let blob_refs = read_blob_refs_extension(cursor)?;
+    Ok((
+        SystemClipboardSnapshot {
+            ts_ms: payload.ts_ms,
+            representations,
+        },
+        blob_refs,
+    ))
+}
+
+fn write_blob_refs_extension<W: Write>(
+    writer: &mut W,
+    blob_refs: &[V3BlobRef],
+) -> std::io::Result<()> {
+    if blob_refs.len() > MAX_BLOB_REFS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "blob ref count {} exceeds maximum {}",
+                blob_refs.len(),
+                MAX_BLOB_REFS
+            ),
+        ));
+    }
+
+    writer.write_all(BLOB_REFS_MAGIC)?;
+    writer.write_all(&(blob_refs.len() as u16).to_le_bytes())?;
+    for blob_ref in blob_refs {
+        write_bytes_u32(writer, blob_ref.ticket.as_bytes(), "ticket")?;
+        write_string_u16(writer, blob_ref.entry_id.as_ref(), "entry_id")?;
+        write_optional_string_u16(writer, blob_ref.filename.as_deref(), "filename")?;
+        write_optional_string_u16(writer, blob_ref.mime.as_deref(), "mime")?;
+        writer.write_all(&blob_ref.size_bytes.to_le_bytes())?;
+    }
+    Ok(())
+}
+
+fn read_blob_refs_extension(mut bytes: &[u8]) -> Result<Vec<V3BlobRef>> {
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut magic = [0u8; 4];
+    bytes
+        .read_exact(&mut magic)
+        .map_err(|e| anyhow!("read V3 blob refs magic: {e}"))?;
+    if &magic != BLOB_REFS_MAGIC {
+        return Err(anyhow!("unknown V3 trailing extension"));
+    }
+
+    let count = read_u16(&mut bytes, "blob_ref_count")? as usize;
+    if count > MAX_BLOB_REFS {
+        return Err(anyhow!(
+            "blob_ref_count {count} exceeds maximum {MAX_BLOB_REFS}"
+        ));
+    }
+
+    let mut refs = Vec::with_capacity(count);
+    for _ in 0..count {
+        let ticket = BlobTicket::from_bytes(read_bytes_u32(&mut bytes, "ticket")?);
+        let entry_id = EntryId::from_string(read_string_u16(&mut bytes, "entry_id")?);
+        let filename = read_optional_string_u16(&mut bytes, "filename")?;
+        let mime = read_optional_string_u16(&mut bytes, "mime")?;
+        let size_bytes = read_u64(&mut bytes, "size_bytes")?;
+        refs.push(V3BlobRef {
+            ticket,
+            entry_id,
+            filename,
+            mime,
+            size_bytes,
+        });
+    }
+
+    if !bytes.is_empty() {
+        return Err(anyhow!(
+            "V3 blob refs extension has {} trailing byte(s)",
+            bytes.len()
+        ));
+    }
+    Ok(refs)
+}
+
+fn write_bytes_u32<W: Write>(writer: &mut W, value: &[u8], label: &str) -> std::io::Result<()> {
+    if value.len() > MAX_TICKET_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{label} length {} exceeds maximum {MAX_TICKET_LEN}",
+                value.len()
+            ),
+        ));
+    }
+    let len = u32::try_from(value.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} length {} cannot fit u32", value.len()),
+        )
+    })?;
+    writer.write_all(&len.to_le_bytes())?;
+    writer.write_all(value)
+}
+
+fn write_string_u16<W: Write>(writer: &mut W, value: &str, label: &str) -> std::io::Result<()> {
+    let bytes = value.as_bytes();
+    if bytes.len() >= NONE_STRING_LEN as usize || bytes.len() > MAX_BLOB_REF_STRING_LEN {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{label} length {} exceeds maximum {}",
+                bytes.len(),
+                MAX_BLOB_REF_STRING_LEN
+            ),
+        ));
+    }
+    let len = u16::try_from(bytes.len()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{label} length {} cannot fit u16", bytes.len()),
+        )
+    })?;
+    writer.write_all(&len.to_le_bytes())?;
+    writer.write_all(bytes)
+}
+
+fn write_optional_string_u16<W: Write>(
+    writer: &mut W,
+    value: Option<&str>,
+    label: &str,
+) -> std::io::Result<()> {
+    match value {
+        Some(value) => write_string_u16(writer, value, label),
+        None => writer.write_all(&NONE_STRING_LEN.to_le_bytes()),
+    }
+}
+
+fn read_bytes_u32<R: Read>(reader: &mut R, label: &str) -> Result<Vec<u8>> {
+    let len = read_u32(reader, label)? as usize;
+    if len > MAX_TICKET_LEN {
+        return Err(anyhow!(
+            "{label} length {len} exceeds maximum {MAX_TICKET_LEN}"
+        ));
+    }
+    let mut bytes = vec![0u8; len];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|e| anyhow!("read {label}: {e}"))?;
+    Ok(bytes)
+}
+
+fn read_string_u16<R: Read>(reader: &mut R, label: &str) -> Result<String> {
+    let len = read_u16(reader, label)? as usize;
+    if len > MAX_BLOB_REF_STRING_LEN {
+        return Err(anyhow!(
+            "{label} length {len} exceeds maximum {MAX_BLOB_REF_STRING_LEN}"
+        ));
+    }
+    let mut bytes = vec![0u8; len];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|e| anyhow!("read {label}: {e}"))?;
+    String::from_utf8(bytes).map_err(|e| anyhow!("invalid UTF-8 in {label}: {e}"))
+}
+
+fn read_optional_string_u16<R: Read>(reader: &mut R, label: &str) -> Result<Option<String>> {
+    let len = read_u16(reader, label)?;
+    if len == NONE_STRING_LEN {
+        return Ok(None);
+    }
+    let len = len as usize;
+    if len > MAX_BLOB_REF_STRING_LEN {
+        return Err(anyhow!(
+            "{label} length {len} exceeds maximum {MAX_BLOB_REF_STRING_LEN}"
+        ));
+    }
+    let mut bytes = vec![0u8; len];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|e| anyhow!("read {label}: {e}"))?;
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|e| anyhow!("invalid UTF-8 in {label}: {e}"))
+}
+
+fn read_u16<R: Read>(reader: &mut R, label: &str) -> Result<u16> {
+    let mut bytes = [0u8; 2];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|e| anyhow!("read {label}: {e}"))?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_u32<R: Read>(reader: &mut R, label: &str) -> Result<u32> {
+    let mut bytes = [0u8; 4];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|e| anyhow!("read {label}: {e}"))?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn read_u64<R: Read>(reader: &mut R, label: &str) -> Result<u64> {
+    let mut bytes = [0u8; 8];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|e| anyhow!("read {label}: {e}"))?;
+    Ok(u64::from_le_bytes(bytes))
 }
 
 #[cfg(test)]
@@ -209,5 +458,61 @@ mod tests {
             msg.contains("decode V3 envelope"),
             "error should mention V3 envelope context, got: {msg}"
         );
+    }
+
+    /// Verdict 5 —— 带 blob 扩展的 V3 payload 仍能被旧 decoder 当普通
+    /// snapshot 读出;新 decoder 能额外取回 ticket + entry_id + 文件元数据。
+    #[test]
+    fn blob_refs_extension_is_backward_compatible_trailer() {
+        let original = fixture_snapshot("file placeholder");
+        let entry_id = EntryId::from("entry-1");
+        let blob_ref = V3BlobRef {
+            ticket: BlobTicket::from_bytes(vec![1, 2, 3, 4, 5]),
+            entry_id: entry_id.clone(),
+            filename: Some("report.pdf".to_string()),
+            mime: Some("application/pdf".to_string()),
+            size_bytes: 12_345,
+        };
+
+        let (bytes, hash) =
+            encode_snapshot_with_blob_refs_to_v3_bytes(&original, &[blob_ref.clone()])
+                .expect("encode with blob refs should succeed");
+        assert!(hash.starts_with("blake3v1:"));
+
+        let legacy_decoded =
+            decode_v3_bytes_to_snapshot(&bytes).expect("legacy snapshot decode should succeed");
+        assert_eq!(legacy_decoded.representations[0].bytes, b"file placeholder");
+
+        let (decoded, refs) = decode_v3_bytes_to_snapshot_and_blob_refs(&bytes)
+            .expect("decode with blob refs should succeed");
+        assert_eq!(decoded.representations[0].bytes, b"file placeholder");
+        assert_eq!(refs, vec![blob_ref]);
+        assert_eq!(refs[0].entry_id, entry_id);
+    }
+
+    /// Verdict 6 —— 不带扩展时新 decoder 返回空 blob 引用,保持普通文本
+    /// 路径的行为不变。
+    #[test]
+    fn blob_refs_decoder_returns_empty_for_plain_v3_payload() {
+        let original = fixture_snapshot("plain text");
+        let (bytes, _) = encode_snapshot_to_v3_bytes(&original).unwrap();
+        let (decoded, refs) = decode_v3_bytes_to_snapshot_and_blob_refs(&bytes).unwrap();
+
+        assert_eq!(decoded.representations[0].bytes, b"plain text");
+        assert!(refs.is_empty());
+    }
+
+    /// Verdict 7 —— 新 decoder 遇到未知尾部扩展要明确报错,避免悄悄丢失
+    /// 后续版本的关键数据。
+    #[test]
+    fn blob_refs_decoder_rejects_unknown_trailer() {
+        let original = fixture_snapshot("plain text");
+        let (bytes, _) = encode_snapshot_to_v3_bytes(&original).unwrap();
+        let mut bytes = bytes.to_vec();
+        bytes.extend_from_slice(b"NOPE");
+
+        let err = decode_v3_bytes_to_snapshot_and_blob_refs(&bytes)
+            .expect_err("unknown trailer should fail");
+        assert!(err.to_string().contains("unknown V3 trailing extension"));
     }
 }

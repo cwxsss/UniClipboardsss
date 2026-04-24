@@ -2562,3 +2562,37 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **下一步**:
 - 提交 Slice 3 Phase 2。
 - 之后进入 Phase 3:把 blob ticket 接进 clipboard V3 envelope,实现含文件剪贴板端到端。
+
+---
+
+## Session 2026-04-24(续 37) — Slice 3 Phase 3 T1 · V3 blob refs 兼容扩展
+
+**触发**:Phase 2 提交后继续推进 Phase 3 的第一个低风险切口。
+
+**完成标准**:
+- V3 payload 可追加 blob 引用尾部,不 bump payload version。
+- 旧 decoder 仍能把带尾部的 payload 当普通 snapshot 解出。
+- 新 decoder 能读回 ticket、entry_id、filename、mime、size。
+- 普通文本 payload 新 decoder 返回空 blob refs。
+- 未知尾部扩展明确报错。
+
+**已做**:
+- `payload_codec.rs` 新增 `V3BlobRef`:
+  - `ticket: BlobTicket`
+  - `entry_id: EntryId`
+  - `filename: Option<String>`
+  - `mime: Option<String>`
+  - `size_bytes: u64`
+- 新增 `encode_snapshot_with_blob_refs_to_v3_bytes`。
+- 新增 `decode_v3_bytes_to_snapshot_and_blob_refs`。
+- 尾部扩展格式以 `UCBR` magic 开头;普通 V3 payload 没有尾部时行为不变。
+- 保留 `decode_v3_bytes_to_snapshot` 原签名,内部复用新 decoder 并丢弃 blob refs,保证 CLI watch / 旧调用方不改。
+
+**验证**:
+- `cargo fmt --all`:通过。
+- `cargo test -p uc-application payload_codec --lib`:7 passed。
+- `cargo check -p uc-application`:通过(仅既存 warning)。
+
+**下一步**:
+- Phase 3 T2:发送侧识别 file URI list,读取文件并调用 `BlobTransferFacade::publish_blob`,再用 `encode_snapshot_with_blob_refs_to_v3_bytes` 附带 blob refs。
+- Phase 3 T3:接收侧 `ApplyInboundClipboardUseCase` 读取 blob refs,fetch 到临时目录,把 file list 改写成本机路径后写系统剪贴板。
