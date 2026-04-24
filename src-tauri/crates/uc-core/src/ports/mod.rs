@@ -16,6 +16,7 @@
 //! If all three answers are **yes**, place it in `uc-core/ports`.
 //! Otherwise, place it in the relevant `domain` submodule.
 
+pub mod blob;
 pub mod cache_fs;
 pub mod clipboard;
 mod clipboard_change_handler;
