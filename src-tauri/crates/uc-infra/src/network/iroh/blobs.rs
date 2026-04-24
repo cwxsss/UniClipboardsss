@@ -4,16 +4,18 @@
 //! ticket、按 ticket 拉取、记录本地保留标签。加解密与明文去重分别由
 //! 上层 use case 和 sqlite `BlobReferenceRepositoryPort` 负责。
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use iroh::Endpoint;
 use iroh_blobs::{
-    store::fs::FsStore, ticket::BlobTicket as NativeBlobTicket, BlobFormat, Hash, HashAndFormat,
+    api::downloader::Downloader, store::fs::FsStore, ticket::BlobTicket as NativeBlobTicket,
+    BlobFormat, Hash, HashAndFormat,
 };
 use iroh_tickets::Ticket;
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use uc_core::ports::blob::{BlobDigest, BlobError, BlobTicket, BlobTransferPort, TagReason};
 
@@ -22,11 +24,29 @@ pub const BLOBS_ALPN: &[u8] = iroh_blobs::ALPN;
 pub struct IrohBlobTransferAdapter {
     endpoint: Arc<Endpoint>,
     store: FsStore,
+    /// Long-lived downloader. `iroh_blobs::Store::downloader(&endpoint)` spawns
+    /// a DownloaderActor and its internal `ConnectionPool` on every call — if
+    /// we rebuild it per `fetch()`, the pool (idle_timeout=5s, connect_timeout=1s)
+    /// can never accumulate a reusable QUIC connection, so every fetch pays the
+    /// full hole-punch cost. Cache it once per adapter instance.
+    downloader: OnceLock<Downloader>,
 }
 
 impl IrohBlobTransferAdapter {
     pub fn new(endpoint: Arc<Endpoint>, store: FsStore) -> Self {
-        Self { endpoint, store }
+        Self {
+            endpoint,
+            store,
+            downloader: OnceLock::new(),
+        }
+    }
+
+    /// Lazy-init and cache the iroh-blobs `Downloader`. First call spawns the
+    /// DownloaderActor; subsequent calls hand back the same instance so the
+    /// internal ConnectionPool can reuse live QUIC connections across fetches.
+    fn downloader(&self) -> &Downloader {
+        self.downloader
+            .get_or_init(|| self.store.downloader(&self.endpoint))
     }
 
     fn native_hash(digest: &BlobDigest) -> Hash {
@@ -48,6 +68,17 @@ impl IrohBlobTransferAdapter {
             }
         }
     }
+}
+
+/// Render the first 10 hex chars of a blob hash for log correlation.
+/// Never log full hashes — combined with a tag reason, they can become a
+/// weak content identifier.
+fn hex_prefix(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(10);
+    for b in bytes.iter().take(5) {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
 }
 
 #[async_trait]
@@ -81,7 +112,10 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
     async fn fetch(&self, ticket: &BlobTicket) -> Result<Bytes, BlobError> {
         let native = Self::parse_ticket(ticket)?;
         let digest = Self::core_digest(native.hash());
+        let hash_prefix = hex_prefix(native.hash().as_bytes());
+
         if self.has(&digest).await? {
+            debug!(hash = %hash_prefix, "blob fetch: local hit, skipping network");
             return self
                 .store
                 .blobs()
@@ -90,18 +124,57 @@ impl BlobTransferPort for IrohBlobTransferAdapter {
                 .map_err(|e| BlobError::Internal(e.to_string()));
         }
 
-        let connection = self
+        // Pre-connect to seed the iroh endpoint's address lookup with the
+        // ticket's full `EndpointAddr` (relay + direct addrs). The downloader's
+        // ConnectionPool only takes `EndpointId`, so without this step it'd
+        // have to rediscover addrs via mDNS / pkarr.
+        //
+        // CRITICAL: We keep `_connection` in scope for the whole fetch. The
+        // previous implementation did `drop(connection)` immediately, which
+        // let the QUIC connection close before the downloader's ConnectionPool
+        // had a chance to reuse it — forcing a second hole-punch on every
+        // fetch (see phase notes: observed 33s blob-unavailable failures on
+        // cold paths). Holding the connection until the download completes
+        // gives the pool a warm reference to grab.
+        let connect_start = Instant::now();
+        let _connection = self
             .endpoint
             .connect(native.addr().clone(), BLOBS_ALPN)
             .await
-            .map_err(|e| BlobError::Unavailable(e.to_string()))?;
-        drop(connection);
+            .map_err(|e| {
+                warn!(
+                    hash = %hash_prefix,
+                    elapsed_ms = connect_start.elapsed().as_millis() as u64,
+                    error = %e,
+                    "blob fetch: endpoint.connect failed"
+                );
+                BlobError::Unavailable(e.to_string())
+            })?;
+        debug!(
+            hash = %hash_prefix,
+            elapsed_ms = connect_start.elapsed().as_millis() as u64,
+            "blob fetch: endpoint.connect ready, launching download"
+        );
 
-        self.store
-            .downloader(&self.endpoint)
+        let download_start = Instant::now();
+        self.downloader()
             .download(native.hash_and_format(), [native.addr().id])
             .await
-            .map_err(|e| BlobError::Unavailable(e.to_string()))?;
+            .map_err(|e| {
+                warn!(
+                    hash = %hash_prefix,
+                    elapsed_ms = download_start.elapsed().as_millis() as u64,
+                    error = %e,
+                    "blob fetch: downloader.download failed"
+                );
+                BlobError::Unavailable(e.to_string())
+            })?;
+        info!(
+            hash = %hash_prefix,
+            download_ms = download_start.elapsed().as_millis() as u64,
+            connect_ms = connect_start.elapsed().as_millis() as u64 - download_start.elapsed().as_millis() as u64,
+            "blob fetch: download complete"
+        );
 
         self.store
             .blobs()
