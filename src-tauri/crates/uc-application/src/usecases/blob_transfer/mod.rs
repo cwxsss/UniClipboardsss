@@ -9,8 +9,10 @@ mod publish_blob;
 pub(crate) use fetch_blob::{FetchBlobInput, FetchBlobUseCase};
 pub(crate) use publish_blob::{PublishBlobInput, PublishBlobUseCase};
 
-fn aad_for_entry(entry_id: &uc_core::ids::EntryId) -> uc_core::crypto::domain::Aad {
-    uc_core::crypto::domain::Aad::from(format!("uniclipboard:blob:v1:{entry_id}").as_bytes())
+fn aad_for_entry(_entry_id: &uc_core::ids::EntryId) -> uc_core::crypto::domain::Aad {
+    // blob 内容按明文 hash 去重,同一密文可能归属多个剪贴板记录。
+    // `entry_id` 只负责 tag 归属,不能进入加密上下文。
+    uc_core::crypto::domain::Aad::from(&b"uniclipboard:blob:v1"[..])
 }
 
 fn active_space_placeholder() -> uc_core::crypto::domain::ActiveSpace {
@@ -69,6 +71,51 @@ mod tests {
         assert_eq!(transfer.publish_count(), 1);
         assert_eq!(transfer.tag_count(), 10);
         assert_eq!(reference.save_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn fetch_reused_digest_with_new_entry_id_decrypts() {
+        let hash = Arc::new(FakeHash);
+        let cipher = Arc::new(FakeBlobCipher::default());
+        let transfer = Arc::new(FakeBlobTransfer::default());
+        let reference = Arc::new(FakeBlobReferenceRepository::default());
+        let publish = PublishBlobUseCase::new(
+            hash.clone(),
+            cipher.clone(),
+            transfer.clone(),
+            reference.clone(),
+        );
+        let fetch = FetchBlobUseCase::new(hash, cipher, transfer, reference);
+
+        let plaintext = Bytes::from_static(b"same file bytes");
+        let first = publish
+            .execute(PublishBlobInput {
+                plaintext: plaintext.clone(),
+                entry_id: EntryId::from("entry-one"),
+            })
+            .await
+            .expect("first publish should succeed");
+        let second = publish
+            .execute(PublishBlobInput {
+                plaintext: plaintext.clone(),
+                entry_id: EntryId::from("entry-two"),
+            })
+            .await
+            .expect("second publish should reuse digest");
+
+        assert_eq!(first.digest, second.digest);
+        assert!(second.reused_existing);
+
+        let outcome = fetch
+            .execute(FetchBlobInput {
+                ticket: second.ticket,
+                entry_id: EntryId::from("entry-two"),
+            })
+            .await
+            .expect("reused digest should decrypt for the new entry tag");
+
+        assert_eq!(outcome.plaintext, plaintext);
+        assert_eq!(outcome.entry_id, EntryId::from("entry-two"));
     }
 
     #[tokio::test]

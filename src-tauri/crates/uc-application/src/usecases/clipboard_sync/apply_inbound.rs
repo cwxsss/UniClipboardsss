@@ -37,21 +37,29 @@
 //! without requiring tests to construct full real implementations.
 //! Production wires the concrete types via the blanket impls below.
 
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;
 use tracing::{debug, info, instrument};
+use url::Url;
 
-use uc_core::ids::{DeviceId, EntryId};
+use uc_core::ids::{DeviceId, EntryId, FormatId, RepresentationId};
 use uc_core::ports::ClipboardEntryRepositoryPort;
-use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+use uc_core::{
+    ClipboardChangeOrigin, MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
+};
 
 use crate::clipboard_capture::CaptureClipboardUseCase;
 use crate::clipboard_write::{ClipboardWriteCoordinator, ClipboardWriteIntent};
-use crate::usecases::clipboard_sync::payload_codec::decode_v3_bytes_to_snapshot;
+use crate::facade::blob_transfer::{BlobTransferFacade, FetchBlobCommand, FetchBlobResult};
+use crate::usecases::clipboard_sync::payload_codec::{
+    decode_v3_bytes_to_snapshot_and_blob_refs, V3BlobRef,
+};
 
 /// Caller-supplied input mapped from the facade's public `InboundNotice`.
 ///
@@ -133,10 +141,178 @@ impl InboundWrite for ClipboardWriteCoordinator {
     }
 }
 
+/// 入站 blob 本地化抽象。
+///
+/// 生产环境会把每个 blob 拉到本机缓存目录,再把 file-list 表示改写为本机路径;
+/// 测试用 mock 固定调用顺序,避免触碰真实文件系统。
+#[async_trait]
+pub trait InboundBlobMaterializer: Send + Sync {
+    async fn materialize(
+        &self,
+        snapshot: SystemClipboardSnapshot,
+        blob_refs: Vec<V3BlobRef>,
+    ) -> Result<SystemClipboardSnapshot>;
+}
+
+#[async_trait]
+pub trait InboundBlobFetcher: Send + Sync {
+    async fn fetch_blob(&self, command: FetchBlobCommand) -> Result<FetchBlobResult>;
+}
+
+#[async_trait]
+impl InboundBlobFetcher for BlobTransferFacade {
+    async fn fetch_blob(&self, command: FetchBlobCommand) -> Result<FetchBlobResult> {
+        BlobTransferFacade::fetch_blob(self, command)
+            .await
+            .map_err(|e| anyhow!(e.to_string()))
+    }
+}
+
+pub struct FileCacheBlobMaterializer {
+    fetcher: Arc<dyn InboundBlobFetcher>,
+    cache_dir: PathBuf,
+}
+
+impl FileCacheBlobMaterializer {
+    pub fn new(fetcher: Arc<dyn InboundBlobFetcher>, cache_dir: PathBuf) -> Self {
+        Self { fetcher, cache_dir }
+    }
+}
+
+#[async_trait]
+impl InboundBlobMaterializer for FileCacheBlobMaterializer {
+    async fn materialize(
+        &self,
+        mut snapshot: SystemClipboardSnapshot,
+        blob_refs: Vec<V3BlobRef>,
+    ) -> Result<SystemClipboardSnapshot> {
+        if blob_refs.is_empty() {
+            return Ok(snapshot);
+        }
+
+        let mut local_paths = Vec::with_capacity(blob_refs.len());
+        let mut used_names = HashSet::new();
+
+        for (idx, blob_ref) in blob_refs.into_iter().enumerate() {
+            let fetched = self
+                .fetcher
+                .fetch_blob(FetchBlobCommand {
+                    ticket: blob_ref.ticket,
+                    entry_id: blob_ref.entry_id.clone(),
+                })
+                .await?;
+
+            let entry_dir = self
+                .cache_dir
+                .join("iroh-blobs")
+                .join(sanitize_path_segment(blob_ref.entry_id.as_ref()));
+            tokio::fs::create_dir_all(&entry_dir).await?;
+
+            let filename = unique_filename(blob_ref.filename.as_deref(), idx, &mut used_names);
+            let path = entry_dir.join(filename);
+            tokio::fs::write(&path, fetched.plaintext).await?;
+            local_paths.push(path);
+        }
+
+        let uri_list = local_file_uri_list(&local_paths)?;
+        let mut rewrote = false;
+        for rep in &mut snapshot.representations {
+            if is_file_list_representation(rep) {
+                rep.bytes = uri_list.as_bytes().to_vec();
+                rewrote = true;
+            }
+        }
+
+        if !rewrote {
+            snapshot
+                .representations
+                .push(ObservedClipboardRepresentation::new(
+                    RepresentationId::new(),
+                    FormatId::from("files"),
+                    Some(MimeType("text/uri-list".to_string())),
+                    uri_list.into_bytes(),
+                ));
+        }
+
+        Ok(snapshot)
+    }
+}
+
 pub struct ApplyInboundClipboardUseCase {
     entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
     capture: Arc<dyn InboundCapture>,
     write: Arc<dyn InboundWrite>,
+    blob_materializer: Option<Arc<dyn InboundBlobMaterializer>>,
+}
+
+fn is_file_list_representation(rep: &ObservedClipboardRepresentation) -> bool {
+    rep.mime
+        .as_ref()
+        .map(|mime| {
+            mime.as_str().eq_ignore_ascii_case("text/uri-list")
+                || mime.as_str().eq_ignore_ascii_case("file/uri-list")
+        })
+        .unwrap_or(false)
+        || rep.format_id.eq_ignore_ascii_case("files")
+        || rep.format_id.eq_ignore_ascii_case("public.file-url")
+}
+
+fn unique_filename(
+    candidate: Option<&str>,
+    idx: usize,
+    used_names: &mut HashSet<String>,
+) -> String {
+    let base = candidate
+        .and_then(|name| {
+            std::path::Path::new(name)
+                .file_name()
+                .and_then(|n| n.to_str())
+        })
+        .map(sanitize_path_segment)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("blob-{idx}"));
+
+    if used_names.insert(base.clone()) {
+        return base;
+    }
+
+    let mut counter = 1usize;
+    loop {
+        let candidate = format!("{counter}-{base}");
+        if used_names.insert(candidate.clone()) {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '\0' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string()
+}
+
+fn local_file_uri_list(paths: &[PathBuf]) -> Result<String> {
+    let mut out = String::new();
+    for path in paths {
+        let url = Url::from_file_path(path).map_err(|_| {
+            anyhow!(
+                "failed to convert cache path to file URL: {}",
+                path.display()
+            )
+        })?;
+        out.push_str(url.as_str());
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 impl ApplyInboundClipboardUseCase {
@@ -149,7 +325,16 @@ impl ApplyInboundClipboardUseCase {
             entry_repo,
             capture,
             write,
+            blob_materializer: None,
         }
+    }
+
+    pub fn with_blob_materializer(
+        mut self,
+        blob_materializer: Arc<dyn InboundBlobMaterializer>,
+    ) -> Self {
+        self.blob_materializer = Some(blob_materializer);
+        self
     }
 
     #[instrument(
@@ -186,11 +371,26 @@ impl ApplyInboundClipboardUseCase {
 
         // 2. Decode V3 envelope. Decode failure is non-fatal — drop the
         // frame, keep the loop alive (peer may be on a newer wire).
-        let snapshot = match decode_v3_bytes_to_snapshot(input.plaintext.as_ref()) {
-            Ok(s) => s,
-            Err(e) => {
-                let reason = e.to_string();
-                debug!(reason, "inbound dropped: envelope decode failed");
+        let (snapshot, blob_refs) =
+            match decode_v3_bytes_to_snapshot_and_blob_refs(input.plaintext.as_ref()) {
+                Ok(decoded) => decoded,
+                Err(e) => {
+                    let reason = e.to_string();
+                    debug!(reason, "inbound dropped: envelope decode failed");
+                    return Ok(ApplyOutcome::DecodeFailed { reason });
+                }
+            };
+
+        let snapshot = match (blob_refs.is_empty(), &self.blob_materializer) {
+            (true, _) => snapshot,
+            (false, Some(materializer)) => materializer
+                .materialize(snapshot, blob_refs)
+                .await
+                .map_err(|e| ApplyInboundError::Internal(format!("blob materialize: {e}")))?,
+            (false, None) => {
+                let reason =
+                    "payload contains blob refs but no blob materializer is wired".to_string();
+                debug!(reason, "inbound dropped: blob materializer missing");
                 return Ok(ApplyOutcome::DecodeFailed { reason });
             }
         };
@@ -236,10 +436,13 @@ impl ApplyInboundClipboardUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usecases::clipboard_sync::payload_codec::encode_snapshot_to_v3_bytes;
+    use crate::usecases::clipboard_sync::payload_codec::{
+        encode_snapshot_to_v3_bytes, encode_snapshot_with_blob_refs_to_v3_bytes, V3BlobRef,
+    };
     use mockall::predicate::*;
 
     use uc_core::ids::{FormatId, RepresentationId};
+    use uc_core::ports::blob::{BlobDigest, BlobTicket, PlaintextHash};
     use uc_core::ports::PeerAddressError;
     use uc_core::{MimeType, ObservedClipboardRepresentation};
 
@@ -278,6 +481,29 @@ mod tests {
         }
     }
 
+    mockall::mock! {
+        pub BlobMaterializer {}
+        #[async_trait]
+        impl InboundBlobMaterializer for BlobMaterializer {
+            async fn materialize(
+                &self,
+                snapshot: SystemClipboardSnapshot,
+                blob_refs: Vec<V3BlobRef>,
+            ) -> Result<SystemClipboardSnapshot>;
+        }
+    }
+
+    mockall::mock! {
+        pub BlobFetcher {}
+        #[async_trait]
+        impl InboundBlobFetcher for BlobFetcher {
+            async fn fetch_blob(
+                &self,
+                command: crate::facade::blob_transfer::FetchBlobCommand,
+            ) -> Result<crate::facade::blob_transfer::FetchBlobResult>;
+        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────
 
     fn fixture_input(text: &str) -> (ApplyInboundInput, String) {
@@ -307,6 +533,16 @@ mod tests {
         write: MockWrite,
     ) -> ApplyInboundClipboardUseCase {
         ApplyInboundClipboardUseCase::new(Arc::new(repo), Arc::new(capture), Arc::new(write))
+    }
+
+    fn build_with_blob_materializer(
+        repo: MockEntryRepo,
+        capture: MockCapture,
+        write: MockWrite,
+        materializer: MockBlobMaterializer,
+    ) -> ApplyInboundClipboardUseCase {
+        ApplyInboundClipboardUseCase::new(Arc::new(repo), Arc::new(capture), Arc::new(write))
+            .with_blob_materializer(Arc::new(materializer))
     }
 
     // ── verdicts ────────────────────────────────────────────────────────
@@ -504,5 +740,138 @@ mod tests {
             ApplyInboundError::DedupQuery(_) => {}
             other => panic!("expected DedupQuery, got {other:?}"),
         }
+    }
+
+    /// Verdict 7 — 入站 blob refs 会先本地化,再进入 capture 和剪贴板写入。
+    /// capture/write mock 校验收到的是改写后的本机 file URI,不是发送端原始路径。
+    #[tokio::test]
+    async fn materializes_blob_refs_before_capture_and_write() {
+        let original = SystemClipboardSnapshot {
+            ts_ms: 1_700_000_000_000,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("files"),
+                Some(MimeType("text/uri-list".to_string())),
+                b"file:///sender/original.txt\n".to_vec(),
+            )],
+        };
+        let blob_ref = V3BlobRef {
+            ticket: BlobTicket::from_bytes(vec![9, 8, 7]),
+            entry_id: EntryId::from("entry-remote"),
+            filename: Some("original.txt".to_string()),
+            mime: Some("text/plain".to_string()),
+            size_bytes: 13,
+        };
+        let (plaintext, content_hash) =
+            encode_snapshot_with_blob_refs_to_v3_bytes(&original, &[blob_ref.clone()]).unwrap();
+        let input = ApplyInboundInput {
+            from_device: DeviceId::new("peer-x"),
+            content_hash: content_hash.clone(),
+            plaintext,
+        };
+
+        let mut repo = MockEntryRepo::new();
+        repo.expect_find_entry_id_by_snapshot_hash()
+            .with(eq(content_hash))
+            .times(1)
+            .returning(|_| Ok(None));
+
+        let mut materializer = MockBlobMaterializer::new();
+        materializer
+            .expect_materialize()
+            .times(1)
+            .withf(move |snapshot, refs| {
+                snapshot.representations[0].bytes == b"file:///sender/original.txt\n"
+                    && refs == &vec![blob_ref.clone()]
+            })
+            .returning(|mut snapshot, _| {
+                snapshot.representations[0].bytes = b"file:///local/cache/original.txt\n".to_vec();
+                Ok(snapshot)
+            });
+
+        let assert_local_file = |snapshot: &SystemClipboardSnapshot| {
+            snapshot.representations[0].bytes == b"file:///local/cache/original.txt\n"
+        };
+        let mut capture = MockCapture::new();
+        capture
+            .expect_capture()
+            .withf(move |snapshot| assert_local_file(snapshot))
+            .times(1)
+            .returning(|_| Ok(Some(EntryId::from("entry-new"))));
+
+        let mut write = MockWrite::new();
+        write
+            .expect_write()
+            .withf(move |snapshot| assert_local_file(snapshot))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let uc = build_with_blob_materializer(repo, capture, write, materializer);
+        let outcome = uc.execute(input).await.expect("blob materialize path ok");
+        assert_eq!(
+            outcome,
+            ApplyOutcome::Applied {
+                entry_id: EntryId::from("entry-new")
+            }
+        );
+    }
+
+    /// Verdict 8 — 真实文件缓存 materializer 会拉取 blob 内容,写入接收端缓存目录,
+    /// 并把 file-list 表示改写为本机 `file://` URI。
+    #[tokio::test]
+    async fn file_cache_blob_materializer_writes_file_and_rewrites_file_uri_list() {
+        let cache_dir = tempfile::tempdir().expect("tempdir");
+        let entry_id = EntryId::from("entry-file");
+        let ticket = BlobTicket::from_bytes(vec![1, 2, 3]);
+        let blob_ref = V3BlobRef {
+            ticket: ticket.clone(),
+            entry_id: entry_id.clone(),
+            filename: Some("report.txt".to_string()),
+            mime: Some("text/plain".to_string()),
+            size_bytes: 11,
+        };
+        let snapshot = SystemClipboardSnapshot {
+            ts_ms: 1,
+            representations: vec![ObservedClipboardRepresentation::new(
+                RepresentationId::new(),
+                FormatId::from("files"),
+                Some(MimeType("text/uri-list".to_string())),
+                b"file:///sender/report.txt\n".to_vec(),
+            )],
+        };
+
+        let mut fetcher = MockBlobFetcher::new();
+        fetcher
+            .expect_fetch_blob()
+            .times(1)
+            .withf(move |command| command.entry_id == entry_id && command.ticket == ticket)
+            .returning(|command| {
+                Ok(crate::facade::blob_transfer::FetchBlobResult {
+                    plaintext: Bytes::from_static(b"hello world"),
+                    entry_id: command.entry_id,
+                    plaintext_hash: PlaintextHash::from_bytes([0; 32]),
+                    digest: BlobDigest::from_bytes([1; 32]),
+                })
+            });
+
+        let materializer =
+            FileCacheBlobMaterializer::new(Arc::new(fetcher), cache_dir.path().to_path_buf());
+        let rewritten = materializer
+            .materialize(snapshot, vec![blob_ref])
+            .await
+            .expect("materialize should succeed");
+
+        let uri_list = String::from_utf8(rewritten.representations[0].bytes.clone())
+            .expect("uri-list should be UTF-8");
+        assert!(uri_list.starts_with("file://"));
+        assert!(uri_list.ends_with("/report.txt\n"));
+        assert!(!uri_list.contains("/sender/"));
+
+        let local_url = url::Url::parse(uri_list.trim()).expect("valid file URL");
+        let local_path = local_url.to_file_path().expect("file URL to path");
+        let bytes = tokio::fs::read(local_path)
+            .await
+            .expect("materialized file should exist");
+        assert_eq!(bytes, b"hello world");
     }
 }

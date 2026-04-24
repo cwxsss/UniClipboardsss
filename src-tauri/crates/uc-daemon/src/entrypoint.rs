@@ -12,7 +12,7 @@ use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::LoggingLifecycleEventEmitter;
 use uc_app::usecases::SessionReadyEmitter;
 use uc_application::{
-    ApplyInboundClipboardUseCase, InboundCapture as ApplyInboundCapture,
+    ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
     InboundWrite as ApplyInboundWrite,
 };
 use uc_bootstrap::assembly::SetupAssemblyPorts;
@@ -147,6 +147,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // shutdown. Feeds both the outbound watcher (T7) and the inbound
     // worker (T8).
     let clipboard_sync_facade = ctx.clipboard_sync_facade.clone();
+    let blob_transfer_facade = ctx.space_setup_assembly.blob.clone();
 
     // Slice 2 Phase 3 · T6 — build `ApplyInboundClipboardUseCase` from
     // runtime wiring deps. `CaptureClipboardUseCase` (migrated to
@@ -172,19 +173,26 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         runtime.wiring_deps().clipboard.representation_cache.clone(),
         runtime.wiring_deps().clipboard.spool_queue.clone(),
     ));
-    let apply_inbound_uc = Arc::new(ApplyInboundClipboardUseCase::new(
-        runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-        apply_inbound_capture_uc as Arc<dyn ApplyInboundCapture>,
-        Arc::clone(&clipboard_write_coordinator) as Arc<dyn ApplyInboundWrite>,
+    let blob_materializer = Arc::new(FileCacheBlobMaterializer::new(
+        blob_transfer_facade.clone(),
+        file_cache_dir.clone(),
     ));
+    let apply_inbound_uc = Arc::new(
+        ApplyInboundClipboardUseCase::new(
+            runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+            apply_inbound_capture_uc as Arc<dyn ApplyInboundCapture>,
+            Arc::clone(&clipboard_write_coordinator) as Arc<dyn ApplyInboundWrite>,
+        )
+        .with_blob_materializer(blob_materializer),
+    );
 
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
         runtime.clone(),
         event_tx.clone(),
         clipboard_change_origin.clone(),
-        file_transfer_lifecycle.clone(),
         clipboard_capture_gate.clone(),
         clipboard_sync_facade.clone(),
+        blob_transfer_facade.clone(),
     ));
     let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
         local_clipboard.clone(),

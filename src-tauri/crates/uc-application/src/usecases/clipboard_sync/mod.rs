@@ -33,11 +33,12 @@ pub(crate) use payload_codec::encode_snapshot_to_v3_bytes;
 // behind `pub(crate)`.
 pub use apply_inbound::{
     ApplyInboundClipboardUseCase, ApplyInboundError, ApplyInboundInput, ApplyOutcome,
-    InboundCapture, InboundWrite,
+    FileCacheBlobMaterializer, InboundBlobFetcher, InboundBlobMaterializer, InboundCapture,
+    InboundWrite,
 };
 
 // Slice 2 Phase 3 · T10 — CLI `watch` decodes the V3 envelope payload
 // so it can display human-readable text (daemon-sent payloads are now
 // always enveloped). Exposed publicly because `InboundNotice.plaintext`
 // is the facade-returned wire bytes, not representations.
-pub use payload_codec::decode_v3_bytes_to_snapshot;
+pub use payload_codec::{decode_v3_bytes_to_snapshot, V3BlobRef};

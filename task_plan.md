@@ -1064,7 +1064,7 @@ pub struct StopNetworkCommand; // 无字段
 |---|---|---|
 | Phase 1 · Blob 基础设施 ✅ | 2 个新 port + iroh-blobs FsStore adapter + `blob_reference` Diesel 表 + bootstrap 装配 | adapter 单元测试(含自回环 publish/fetch);**不接** usecase/CLI/剪贴板 |
 | Phase 2 · D1/D2 usecase + CLI-only e2e ✅ | `PublishBlobUseCase` / `FetchBlobUseCase` + `uniclipboard-cli blob publish/fetch`(长期命令) | application test:重复 publish 10 次只存 1 份密文;fetch 后登记去重缓存;CLI local round-trip 字节一致 |
-| Phase 3 · C3 剪贴板含文件端到端 🔲 | V3 envelope 兼容扩展(`Option<Vec<BlobTicket>>`,不 bump V4) + dispatch / apply 分支 + blob cache 写临时目录 | 复制文件 → 另一台粘贴字节一致;真机两台;顺带收掉 Slice 2 Phase 3 的 `FileList+Image` 双 rep 退化 known-issue |
+| Phase 3 · C3 剪贴板含文件端到端 🟡 | V3 envelope 兼容扩展 + daemon dispatch / apply 分支 + blob cache 写本机缓存目录 | 已完成代码接线与单元/编译验证;剩余真机两台 `cli start` 后复制文件 → 另一台粘贴字节一致 |
 
 **跨 Phase 决策锁定**(2026-04-24):
 
@@ -1087,10 +1087,18 @@ pub struct StopNetworkCommand; // 无字段
 **Phase 2 完成记录(2026-04-24)**:
 - `uc-application` 新增 `PublishBlobUseCase` / `FetchBlobUseCase` 与 `BlobTransferFacade`。
 - `SpaceSetupAssembly` 新增 `blob` 门面,CLI 不直接调用 use case。
-- `uniclipboard-cli blob publish <file>` 输出 `ticket` + `entry_id`;`blob fetch <ticket> --entry-id <id> --out <file>` 用同一个 `entry_id` 解密并写回文件。
-- 重要约束:`ticket` 本身不包含解密 AAD 所需的 `EntryId`,所以 CLI publish 必须输出二者;fetch 必须同时输入二者。
+- `uniclipboard-cli blob publish <file>` 输出 `ticket` + `entry_id`;`blob fetch <ticket> --entry-id <id> --out <file>` 拉取内容并按这个 `entry_id` 登记归属。
+- 重要约束:`ticket` 定位内容,`EntryId` 用于 fetch 后登记本次剪贴板归属;CLI publish 仍输出二者,fetch 仍同时输入二者。
 - 验证:`cargo test -p uc-application blob_transfer --lib` 通过;`cargo check -p uc-cli` 通过;临时 `--dev --profile` 下真实执行 init → publish → fetch → `cmp` 字节一致;`cargo check --workspace` 通过。
 - Phase 2 未承诺跨进程远端供给:CLI publish 退出后 provider 不再常驻,远端/并发 fanout 继续由 Phase 3 daemon/剪贴板路径或专门长驻测试覆盖。
+
+**Phase 3 接线记录(2026-04-24)**:
+- V3 payload 已能附带 `V3BlobRef`,旧 decoder 仍能读取普通 snapshot,新 decoder 能读出 blob 引用。
+- 发送侧 daemon 剪贴板监听器遇到文件列表时,先把本机文件发布成 blob,再随剪贴板消息发出;不再走旧的文件传输分支。
+- 接收侧 `ApplyInboundClipboardUseCase` 会先拉取 blob 到本机 `file_cache_dir/iroh-blobs/...`,再把剪贴板里的文件路径改成本机 `file://` 路径,最后落库并写系统剪贴板。
+- `cli start` 启动的 daemon 已装配同一套发送/接收路径:出站使用 `BlobTransferFacade`,入站使用 `FileCacheBlobMaterializer`。
+- 验证: `cargo test -p uc-application apply_inbound --lib` 通过;`cargo test -p uc-daemon --lib` 通过;`cargo check -p uc-application` / `cargo check -p uc-daemon` / `cargo check -p uc-cli` 通过。
+- 未完成:尚未跑两台真机或双 profile 的真实 OS 剪贴板文件复制粘贴验收;Phase 3 最终验收仍保留该项。
 
 ---
 
@@ -1989,7 +1997,7 @@ enum Reachability {
 - C1 捕获到的剪贴板含文件类型(C3 扩展路径)
 - UI / 其他 usecase 直接要求共享一份内容
 
-**输入**:`Plaintext`(已载入内存的字节,或通过 reader 流式产生)+ `ActiveSpace` + `ClipboardEntryId`(作为 AAD + 引用归属)
+**输入**:`Plaintext`(已载入内存的字节,或通过 reader 流式产生)+ `ActiveSpace` + `ClipboardEntryId`(作为引用归属)
 
 **业务步骤**:
 1. 计算 `plaintext_hash = HashPort::blake3(plaintext)`(便宜,已有 `HashPort`)

@@ -41,8 +41,7 @@ const MAX_BLOB_REF_STRING_LEN: usize = 8 * 1024;
 
 /// V3 尾部扩展里的 blob 引用。
 ///
-/// `ticket` 负责定位密文,`entry_id` 负责还原业务加密 AAD。二者缺一不可:
-/// 只有 ticket 无法解密 Phase 2 的业务 blob。
+/// `ticket` 负责定位内容,`entry_id` 负责在接收端登记本次剪贴板归属。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct V3BlobRef {
     pub ticket: BlobTicket,

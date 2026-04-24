@@ -10,13 +10,14 @@ pub mod facade;
 // re-export only the small public surface here.
 pub use usecases::clipboard_sync::{
     ApplyInboundClipboardUseCase, ApplyInboundError, ApplyInboundInput, ApplyOutcome,
-    InboundCapture, InboundWrite,
+    FileCacheBlobMaterializer, InboundBlobFetcher, InboundBlobMaterializer, InboundCapture,
+    InboundWrite,
 };
 
 // Slice 2 Phase 3 · T10 — CLI `watch` decodes V3 envelope bytes from
 // `InboundNotice.plaintext` to show human-readable text. Daemon uses the
 // same helper internally via `ApplyInboundClipboardUseCase`.
-pub use usecases::clipboard_sync::decode_v3_bytes_to_snapshot;
+pub use usecases::clipboard_sync::{decode_v3_bytes_to_snapshot, V3BlobRef};
 pub mod file_transfer;
 pub mod membership;
 pub mod pairing;

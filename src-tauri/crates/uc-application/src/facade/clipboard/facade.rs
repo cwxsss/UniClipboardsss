@@ -25,6 +25,9 @@ use uc_core::ports::{
 };
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 
+use crate::usecases::clipboard_sync::payload_codec::{
+    encode_snapshot_with_blob_refs_to_v3_bytes, V3BlobRef,
+};
 use crate::usecases::clipboard_sync::{
     encode_snapshot_to_v3_bytes, DispatchClipboardEntryInput, DispatchClipboardEntryUseCase,
     DispatchOutcome, DispatchPerTarget, DispatchSyncError, InboundAction as UcInboundAction,
@@ -199,6 +202,29 @@ impl ClipboardSyncFacade {
         let _ = origin; // span metadata only (see doc above)
         let (plaintext, content_hash) = encode_snapshot_to_v3_bytes(&snapshot)
             .map_err(|e| ClipboardSyncError::CipherFailure(format!("payload encode: {e}")))?;
+        self.dispatch_entry(DispatchEntryInput {
+            plaintext,
+            content_hash,
+            payload_version: 3,
+        })
+        .await
+    }
+
+    /// 编码并发送带 Slice 3 blob 引用的剪贴板快照。
+    ///
+    /// 普通小 payload 仍在 V3 本体里;大文件内容通过 `blob_refs` 让接收端
+    /// 拉取并改写成本机 file-list。
+    #[instrument(skip_all, fields(rep_count = snapshot.representations.len(), blob_ref_count = blob_refs.len(), origin = ?origin))]
+    pub async fn dispatch_snapshot_with_blob_refs(
+        &self,
+        snapshot: SystemClipboardSnapshot,
+        blob_refs: Vec<V3BlobRef>,
+        origin: ClipboardChangeOrigin,
+    ) -> Result<DispatchEntryOutcome, ClipboardSyncError> {
+        let _ = origin;
+        let (plaintext, content_hash) =
+            encode_snapshot_with_blob_refs_to_v3_bytes(&snapshot, &blob_refs)
+                .map_err(|e| ClipboardSyncError::CipherFailure(format!("payload encode: {e}")))?;
         self.dispatch_entry(DispatchEntryInput {
             plaintext,
             content_hash,

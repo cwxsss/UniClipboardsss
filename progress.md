@@ -2528,7 +2528,7 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - 已提交 Phase 1:`703e5578 feat(Slice3/P1): add iroh blob infrastructure`。
 - `uc-application` 新增 `usecases/blob_transfer::{PublishBlobUseCase,FetchBlobUseCase}`:
   - publish:明文 hash 查重;命中且本地有 digest 时复用;未命中则加密、publish、save、tag、issue_ticket。
-  - fetch:从 ticket 解析 digest,fetch 密文,按 entry_id 生成同一 AAD 解密,save 去重缓存,tag entry。
+  - fetch:从 ticket 解析 digest,fetch 密文,解密后 save 去重缓存,并按 entry_id tag entry。
 - 新增 `facade/blob_transfer::BlobTransferFacade`,CLI / 后续 daemon/UI 只调 facade。
 - `SpaceSetupAssembly` 新增 `blob: Arc<BlobTransferFacade>`,继续保留 Phase 1 的 raw ports 供后续内部扩展。
 - `uc-cli` 新增 `blob` 子命令:
@@ -2541,7 +2541,7 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **关键发现 / 修正**:
 | 发现 | 修正 |
 |---|---|
-| 单独 `BlobTicket` 不足以 CLI fetch,因为业务加密 AAD 绑定 `EntryId` | CLI publish 同时输出 `ticket` + `entry_id`;fetch 要求二者都传入 |
+| 单独 `BlobTicket` 不足以完整登记 CLI fetch 结果,因为需要知道归属 entry | CLI publish 同时输出 `ticket` + `entry_id`;fetch 要求二者都传入 |
 | CLI publish 退出后 provider 不再常驻,不适合承诺远端 fanout | Phase 2 定位为本机闭环 + use case 规则验证;远端/并发 fanout 放 Phase 3 daemon/剪贴板路径或专门长驻测试 |
 
 **验证**:
@@ -2596,3 +2596,47 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **下一步**:
 - Phase 3 T2:发送侧识别 file URI list,读取文件并调用 `BlobTransferFacade::publish_blob`,再用 `encode_snapshot_with_blob_refs_to_v3_bytes` 附带 blob refs。
 - Phase 3 T3:接收侧 `ApplyInboundClipboardUseCase` 读取 blob refs,fetch 到临时目录,把 file list 改写成本机路径后写系统剪贴板。
+
+---
+
+## Session 2026-04-24(续 38) — Slice 3 Phase 3 · daemon 文件剪贴板接线
+
+**触发**:用户确认按“两个设备各自 `cli start` 后文件可以同步”的步骤继续。
+
+**完成标准**:
+- 接收侧能识别 V3 blob refs,先把文件拉到本机缓存目录,再写入系统剪贴板。
+- 发送侧 daemon 监听到文件剪贴板时,发布文件 blob,把 blob refs 随剪贴板消息发送。
+- `cli start` 启动的 daemon 装配发送和接收路径。
+- 编译和相关测试通过;真机两台验收若未跑,必须明确保留。
+
+**已做**:
+- `ApplyInboundClipboardUseCase` 新增 `InboundBlobMaterializer` 接入点。
+- 新增 `FileCacheBlobMaterializer`,按 blob ref 拉取文件内容,写入 `file_cache_dir/iroh-blobs/<entry_id>/...`,并把 file-list 改成本机 `file://` URI。
+- `ClipboardSyncFacade` 新增 `dispatch_snapshot_with_blob_refs`,用于发送带文件引用的 V3 payload。
+- `DaemonClipboardChangeHandler` 改为:
+  - 从剪贴板 file URI list 提取本机文件;
+  - 通过 `BlobTransferFacade::publish_blob` 发布文件;
+  - 把 blob refs 放进剪贴板同步消息;
+  - 停用本路径里的旧文件传输分支。
+- `entrypoint.rs` 在 `cli start` daemon 组合根里同时装配出站 blob 发布和入站 blob 本地化。
+- 补修重复文件去重后的解密问题:blob 加密上下文不再绑定单个 `entry_id`,`entry_id` 只用于 tag 归属,避免同一文件复用旧 digest 后接收端按新 entry 解不开。
+
+**验证**:
+- `cargo fmt --all`:通过。
+- `cargo test -p uc-application blob_transfer --lib`:3 passed。
+- `cargo test -p uc-application apply_inbound --lib`:8 passed。
+- `cargo test -p uc-application fetch_reused_digest_with_new_entry_id_decrypts --lib`:先失败复现,修复后通过。
+- `cargo test -p uc-daemon --lib`:2 passed。
+- `cargo check -p uc-application`:通过(仅既存 warning)。
+- `cargo check -p uc-daemon`:通过(仅既存 warning)。
+- `cargo check -p uc-cli`:通过(仅既存 warning)。
+- 真实 CLI blob smoke:临时 `--dev --profile slice3-file-smoke-*` 下 init → blob publish → blob fetch → `cmp` 字节一致。
+- 真实 CLI start smoke:临时 `--dev --profile slice3-start-smoke-*` 下 init → `start --json` → `status --json` → `stop` 通过。
+
+**未完成 / 风险**:
+- 尚未跑两台真机或双 profile 的真实 OS 剪贴板文件复制粘贴验收;Phase 3 最终“复制文件 → 另一台粘贴字节一致”仍未关闭。
+- 如果文件发布失败,当前实现会跳过本次剪贴板同步,避免把发送端本机路径发给接收端造成不可用内容。
+
+**下一步**:
+- 提交本次 daemon 文件剪贴板接线。
+- 之后补真实双端验收脚本或手动真机验收,再关闭 Slice 3 Phase 3。

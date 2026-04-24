@@ -2,7 +2,7 @@
 //!
 //! 这组命令走和后续 daemon/UI 相同的应用层门面:先恢复空间会话,再执行
 //! hash 去重、业务加解密和 iroh-blobs 发布/拉取。`publish` 输出 ticket
-//! 与 entry_id,`fetch` 必须同时带回这两个值才能用相同 AAD 解密。
+//! 与 entry_id,`fetch` 带回二者:ticket 定位内容,entry_id 登记归属。
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

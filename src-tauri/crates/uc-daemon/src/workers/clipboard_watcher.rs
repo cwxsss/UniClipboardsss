@@ -16,12 +16,12 @@ use tracing::{debug, info, instrument, warn, Instrument};
 
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
-use uc_app::shared::host_event::{HostEvent, TransferHostEvent};
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
-use uc_app::usecases::sync_planner::{FileCandidate, OutboundSyncPlanner};
+use uc_app::usecases::sync_planner::{FileCandidate, FileSyncIntent, OutboundSyncPlanner};
 use uc_app::usecases::CoreUseCases;
-use uc_application::facade::ClipboardSyncFacade;
-use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
+use uc_application::facade::{BlobTransferFacade, ClipboardSyncFacade, PublishBlobCommand};
+use uc_application::V3BlobRef;
+use uc_core::ids::EntryId;
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_daemon_contract::constants::{ws_event, ws_topic};
@@ -127,7 +127,6 @@ pub struct DaemonClipboardChangeHandler {
     runtime: Arc<CoreRuntime>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
-    file_transfer_lifecycle: Arc<FileTransferLifecycle>,
     /// Gate that controls whether clipboard capture is active.
     /// When false, clipboard change events are silently dropped.
     /// Used in `--gui-managed` mode to defer clipboard capture until
@@ -137,6 +136,8 @@ pub struct DaemonClipboardChangeHandler {
     /// deprecated libp2p `SyncOutboundClipboardUseCase` path. Wired from
     /// `DaemonBootstrapContext.clipboard_sync_facade` in `entrypoint.rs`.
     clipboard_sync: Arc<ClipboardSyncFacade>,
+    /// Slice 3 Phase 3:发布本机文件为 blob refs,再随剪贴板消息广播。
+    blob_transfer: Arc<BlobTransferFacade>,
 }
 
 impl DaemonClipboardChangeHandler {
@@ -144,17 +145,17 @@ impl DaemonClipboardChangeHandler {
         runtime: Arc<CoreRuntime>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
-        file_transfer_lifecycle: Arc<FileTransferLifecycle>,
         capture_gate: Arc<AtomicBool>,
         clipboard_sync: Arc<ClipboardSyncFacade>,
+        blob_transfer: Arc<BlobTransferFacade>,
     ) -> Self {
         Self {
             runtime,
             event_tx,
             clipboard_change_origin,
-            file_transfer_lifecycle,
             capture_gate,
             clipboard_sync,
+            blob_transfer,
         }
     }
 
@@ -395,19 +396,46 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                 // gates on global `auto_sync` + LocalCapture origin, so that layer
                 // continues to work.
                 //
-                // File transfers referenced in `clipboard_intent.file_transfers`
-                // are ignored here — Phase 3 is text-only; file sync runs through
-                // `plan.files` below on the legacy `SyncOutboundFileUseCase` path
-                // (Slice 3 will land the iroh blob ticket alternative).
                 if let Some(clipboard_intent) = plan.clipboard {
                     let clipboard_sync = Arc::clone(&self.clipboard_sync);
+                    let blob_transfer = Arc::clone(&self.blob_transfer);
                     let snapshot_for_dispatch = clipboard_intent.snapshot;
+                    let file_intents = plan.files;
+                    let entry_id_for_blob = entry_id.clone();
                     tokio::spawn(
                         async move {
-                            match clipboard_sync
-                                .dispatch_snapshot(snapshot_for_dispatch, origin)
-                                .await
+                            let blob_refs = match publish_file_blob_refs(
+                                &blob_transfer,
+                                &file_intents,
+                                &entry_id_for_blob,
+                            )
+                            .await
                             {
+                                Ok(refs) => refs,
+                                Err(e) => {
+                                    warn!(
+                                        error = %e,
+                                        "Daemon outbound file blob publish failed; skipping clipboard dispatch"
+                                    );
+                                    return;
+                                }
+                            };
+
+                            let dispatch_result = if blob_refs.is_empty() {
+                                clipboard_sync
+                                    .dispatch_snapshot(snapshot_for_dispatch, origin)
+                                    .await
+                            } else {
+                                clipboard_sync
+                                    .dispatch_snapshot_with_blob_refs(
+                                        snapshot_for_dispatch,
+                                        blob_refs,
+                                        origin,
+                                    )
+                                    .await
+                            };
+
+                            match dispatch_result {
                                 Ok(outcome) => info!(
                                     accepted = outcome.total_accepted,
                                     duplicate = outcome.total_duplicate,
@@ -419,88 +447,6 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                                     error = %e,
                                     "Daemon outbound clipboard sync (iroh) failed"
                                 ),
-                            }
-                        }
-                        .in_current_span(),
-                    );
-                }
-
-                // Dispatch file sync for each file intent.
-                if !plan.files.is_empty() {
-                    let outbound_file_uc = {
-                        let deps = self.runtime.wiring_deps();
-                        uc_app::usecases::file_sync::SyncOutboundFileUseCase::new(
-                            deps.settings.clone(),
-                            deps.device.member_repo.clone(),
-                            deps.network_ports.peers.clone(),
-                            deps.network_ports.file_transfer.clone(),
-                        )
-                    };
-                    let lifecycle = Arc::clone(&self.file_transfer_lifecycle);
-                    let entry_id_string = entry_id.to_string();
-                    tokio::spawn(
-                        async move {
-                            for file_intent in plan.files {
-                                let transfer_id = file_intent.transfer_id.clone();
-                                let path = file_intent.path.clone();
-                                let file_name = path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("")
-                                    .to_string();
-
-                                // Register sender-side entry_id hint so the publisher
-                                // can resolve it on subsequent events (sender has no
-                                // receiver-side projection row).
-                                lifecycle
-                                    .outbound_entry_cache
-                                    .insert(transfer_id.clone(), entry_id_string.clone());
-
-                                // Emit a UI-only `pending` status hint. The domain
-                                // timeline starts at `Started` (fired by the platform
-                                // file-send stream). `pending` is a presentation-layer
-                                // preview, not a domain fact.
-                                let emitter = lifecycle
-                                    .emitter_cell
-                                    .read()
-                                    .unwrap_or_else(|p| p.into_inner())
-                                    .clone();
-                                if let Err(err) = emitter.emit(HostEvent::Transfer(
-                                    TransferHostEvent::StatusChanged {
-                                        transfer_id: transfer_id.clone(),
-                                        entry_id: entry_id_string.clone(),
-                                        status: "pending".to_string(),
-                                        reason: None,
-                                    },
-                                )) {
-                                    warn!(
-                                        error = %err,
-                                        transfer_id = %transfer_id,
-                                        "Failed to emit pending status hint"
-                                    );
-                                }
-
-                                info!(
-                                    transfer_id = %transfer_id,
-                                    entry_id = %entry_id_string,
-                                    file = %path.display(),
-                                    "Daemon sending file to peers"
-                                );
-                                match outbound_file_uc
-                                    .execute(file_intent.path, Some(transfer_id))
-                                    .await
-                                {
-                                    Ok(result) => info!(
-                                        transfer_id = %result.transfer_id,
-                                        peer_count = result.peer_count,
-                                        "Daemon outbound file sync completed"
-                                    ),
-                                    Err(e) => warn!(
-                                        error = %e,
-                                        file = %file_name,
-                                        "Daemon outbound file sync failed"
-                                    ),
-                                }
                             }
                         }
                         .in_current_span(),
@@ -518,6 +464,35 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
 
         Ok(())
     }
+}
+
+async fn publish_file_blob_refs(
+    blob_transfer: &BlobTransferFacade,
+    files: &[FileSyncIntent],
+    entry_id: &EntryId,
+) -> anyhow::Result<Vec<V3BlobRef>> {
+    let mut blob_refs = Vec::with_capacity(files.len());
+
+    for file in files {
+        let plaintext = tokio::fs::read(&file.path).await?;
+        let size_bytes = plaintext.len() as u64;
+        let result = blob_transfer
+            .publish_blob(PublishBlobCommand {
+                plaintext: plaintext.into(),
+                entry_id: Some(entry_id.clone()),
+            })
+            .await?;
+
+        blob_refs.push(V3BlobRef {
+            ticket: result.ticket,
+            entry_id: result.entry_id,
+            filename: Some(file.filename.clone()).filter(|name| !name.is_empty()),
+            mime: None,
+            size_bytes,
+        });
+    }
+
+    Ok(blob_refs)
 }
 
 // ---------------------------------------------------------------------------
