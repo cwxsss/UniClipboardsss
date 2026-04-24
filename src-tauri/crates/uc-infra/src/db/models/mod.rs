@@ -1,4 +1,5 @@
 pub mod blob;
+pub mod blob_reference;
 pub mod clipboard_entry;
 pub mod clipboard_event;
 pub mod clipboard_representation_thumbnail;
@@ -10,6 +11,7 @@ pub mod space_member_row;
 pub mod trusted_peer_row;
 
 pub use blob::{BlobRow, NewBlobRow};
+pub use blob_reference::{BlobReferenceRow, NewBlobReferenceRow};
 pub use clipboard_entry::{ClipboardEntryRow, NewClipboardEntryRow};
 pub use clipboard_event::{ClipboardEventRow, NewClipboardEventRow};
 pub use clipboard_representation_thumbnail::{

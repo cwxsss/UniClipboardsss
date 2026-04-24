@@ -17,13 +17,14 @@
 //! [`install_presence`]: IrohNodeBuilder::install_presence
 //! [`install_clipboard`]: IrohNodeBuilder::install_clipboard
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode};
 use tracing::{debug, instrument};
 
 use uc_core::membership::MemberRepositoryPort;
+use uc_core::ports::blob::BlobTransferPort;
 use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
 use uc_core::ports::pairing_invitation::PairingInvitationPort;
 use uc_core::ports::security::IdentityFingerprintFactoryPort;
@@ -35,6 +36,7 @@ use uc_core::ports::{
 use crate::pairing::{IrohPairingSessionAdapter, PAIRING_ALPN};
 use crate::rendezvous::{RendezvousClient, RendezvousPairingInvitationAdapter};
 
+use super::blobs::{IrohBlobTransferAdapter, BLOBS_ALPN};
 use super::clipboard_dispatch_adapter::{IrohClipboardDispatchAdapter, CLIPBOARD_ALPN};
 use super::clipboard_receiver_adapter::IrohClipboardReceiverAdapter;
 use super::identity_store::IrohIdentityStore;
@@ -62,6 +64,11 @@ pub struct PairingHandlers {
 pub struct ClipboardHandlers {
     pub dispatch: Arc<dyn ClipboardDispatchPort>,
     pub receiver: Arc<dyn ClipboardReceiverPort>,
+}
+
+/// [`IrohNodeBuilder::install_blobs`] 产出的 blob port。
+pub struct BlobHandlers {
+    pub blob_transfer: Arc<dyn BlobTransferPort>,
 }
 
 /// Live iroh node with a spawned [`Router`].
@@ -295,6 +302,37 @@ impl IrohNodeBuilder {
         }
     }
 
+    /// 安装 iroh-blobs 传输能力。
+    ///
+    /// 这个方法把官方 iroh-blobs handler 注册到当前共享 Router 上,同时
+    /// 返回实现 `BlobTransferPort` 的 adapter。sqlite 去重缓存不在这里
+    /// 构造,它属于数据库装配链。
+    pub async fn install_blobs(
+        &mut self,
+        store_dir: PathBuf,
+    ) -> Result<BlobHandlers, IrohNodeError> {
+        let store = iroh_blobs::store::fs::FsStore::load(&store_dir)
+            .await
+            .map_err(|err| IrohNodeError::BlobStoreInit(err.to_string()))?;
+        let protocol = iroh_blobs::BlobsProtocol::new(&store, None);
+
+        let builder = self
+            .router_builder
+            .take()
+            .expect("router_builder missing — install_* called after spawn");
+        let builder = builder.accept(BLOBS_ALPN, protocol);
+        self.router_builder = Some(builder);
+
+        let adapter = Arc::new(IrohBlobTransferAdapter::new(
+            Arc::clone(&self.endpoint),
+            store,
+        ));
+
+        Ok(BlobHandlers {
+            blob_transfer: adapter,
+        })
+    }
+
     /// Finalize the builder: spawn the [`Router`]. After this point no more
     /// `install_*` calls are allowed.
     pub fn spawn(self) -> IrohNode {
@@ -317,6 +355,9 @@ impl IrohNodeBuilder {
 pub enum IrohNodeError {
     #[error("failed to bind iroh endpoint: {0}")]
     Bind(String),
+
+    #[error("failed to initialize iroh blob store: {0}")]
+    BlobStoreInit(String),
 
     #[error(transparent)]
     Identity(#[from] LocalIdentityError),
@@ -571,6 +612,46 @@ mod tests {
 
         // Receiver's subscribe handle is ready for the ingest use case.
         let _inbound_rx = receiver.subscribe();
+
+        let node = builder.spawn();
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn install_pairing_presence_clipboard_and_blobs_coexist_on_same_router() {
+        let store = identity_store();
+        let mut builder = IrohNodeBuilder::bind(&store, IrohNodeConfig::default())
+            .await
+            .expect("bind");
+
+        let _pairing = builder.install_pairing(
+            Arc::new(FixedDeviceIdentity(DeviceId::new("device-quad"))),
+            Arc::new(InMemorySettings(StdMutex::new(Settings::default()))),
+        );
+
+        let peer_addr_repo: Arc<dyn PeerAddressRepositoryPort> = Arc::new(EmptyPeerAddressRepo);
+        let _presence = builder.install_presence(
+            Arc::clone(&peer_addr_repo),
+            Arc::new(FixedClock(1_700_000_000_000)),
+        );
+
+        let _clipboard = builder.install_clipboard(
+            peer_addr_repo,
+            Arc::new(EmptyMemberRepo),
+            Arc::new(crate::security::Sha256IdentityFingerprintFactory),
+        );
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let BlobHandlers { blob_transfer } = builder
+            .install_blobs(tempdir.path().join("iroh-blobs"))
+            .await
+            .expect("install blobs");
+
+        let digest = blob_transfer
+            .publish(bytes::Bytes::from_static(b"router-four-alpns"))
+            .await
+            .expect("publish through blob port");
+        assert!(blob_transfer.has(&digest).await.expect("has digest"));
 
         let node = builder.spawn();
         node.shutdown().await;

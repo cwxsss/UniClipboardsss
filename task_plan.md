@@ -1062,7 +1062,7 @@ pub struct StopNetworkCommand; // 无字段
 
 | Phase | 范围 | 验收重心 |
 |---|---|---|
-| Phase 1 · Blob 基础设施 🔲 | 2 个新 port + iroh-blobs FsStore adapter + `blob_reference` Diesel 表 + bootstrap 装配 | adapter 单元测试(含自回环 publish/fetch);**不接** usecase/CLI/剪贴板 |
+| Phase 1 · Blob 基础设施 ✅ | 2 个新 port + iroh-blobs FsStore adapter + `blob_reference` Diesel 表 + bootstrap 装配 | adapter 单元测试(含自回环 publish/fetch);**不接** usecase/CLI/剪贴板 |
 | Phase 2 · D1/D2 usecase + CLI-only e2e 🔲 | `PublishBlobUseCase` / `FetchBlobUseCase` + `uniclipboard-cli blob publish/fetch`(长期命令) | application e2e:publish→ticket→fetch 字节一致;去重 10 次只存 1 份密文;1GB 断点续传;并发 fanout |
 | Phase 3 · C3 剪贴板含文件端到端 🔲 | V3 envelope 兼容扩展(`Option<Vec<BlobTicket>>`,不 bump V4) + dispatch / apply 分支 + blob cache 写临时目录 | 复制文件 → 另一台粘贴字节一致;真机两台;顺带收掉 Slice 2 Phase 3 的 `FileList+Image` 双 rep 退化 known-issue |
 
@@ -1076,6 +1076,13 @@ pub struct StopNetworkCommand; // 无字段
 | S3-D4 | `uniclipboard-cli blob publish` / `blob fetch` 为**长期命令**,Slice 5 不删 | 用户侧长期验收工具;daemon 路径之外的 blob 直用场景(脚本 / 自动化) |
 
 **阻塞**:无(可开工)
+
+**Phase 1 完成记录(2026-04-24)**:
+- `BlobTransferPort` / `BlobReferenceRepositoryPort` 已进入 core;infra 已实现 iroh-blobs adapter 与 sqlite 去重缓存。
+- `IrohBlobTransferAdapter` 支持 publish / has / issue_ticket / digest_of / fetch / tag / untag,并覆盖 9 个单测(self-fetch + 双节点 fetch + tag 幂等)。
+- `IrohNodeBuilder::install_blobs` 已把 iroh-blobs 挂入共享 router;pairing / presence / clipboard / blobs 四个 ALPN 共存测试通过。
+- `SpaceSetupAssembly` 已暴露 `blob_transfer` / `blob_reference`,Phase 2 usecase 可直接接入。
+- 验证:`cargo test -p uc-infra` 通过;`cargo check --workspace` 通过。
 
 ---
 

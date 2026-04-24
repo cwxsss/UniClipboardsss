@@ -27,12 +27,13 @@ use uc_application::facade::{
     SpaceSetupDeps, SpaceSetupFacade,
 };
 use uc_application::space_access::HmacProofAdapter;
+use uc_core::ports::blob::{BlobReferenceRepositoryPort, BlobTransferPort};
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::{
     ClipboardDispatchPort, ClipboardReceiverPort, LocalIdentityPort, PresencePort,
 };
 use uc_infra::network::iroh::{
-    ClipboardHandlers, IrohIdentityStore, IrohNode, IrohNodeBuilder, IrohNodeError,
+    BlobHandlers, ClipboardHandlers, IrohIdentityStore, IrohNode, IrohNodeBuilder, IrohNodeError,
 };
 // Re-exported so external callers can parametrise the assembly without
 // having to `use uc_infra` themselves.
@@ -57,6 +58,12 @@ pub struct SpaceSetupAssembly {
     /// 与 `roster` 同样共享 `peer_addr_repo` / `presence`,所以 F1 hook
     /// 喂好的 presence 缓存,`dispatch_entry` 能直接读到。
     pub clipboard_sync: Arc<ClipboardSyncFacade>,
+    /// Slice 3 Phase 1:大 payload 的 iroh-blobs 传输能力。Phase 2 的
+    /// blob use case 会从这里接入。
+    pub blob_transfer: Arc<dyn BlobTransferPort>,
+    /// Slice 3 Phase 1:明文 hash → 密文 digest 去重缓存。与
+    /// `blob_transfer` 分开装配,保持传输和 sqlite 缓存职责独立。
+    pub blob_reference: Arc<dyn BlobReferenceRepositoryPort>,
     /// The shared iroh node. Held privately so callers can't bind a second
     /// node or install additional handlers after `spawn` — that would
     /// fragment peer identity (§"共用网络栈" decision, Slice 1 planning).
@@ -155,6 +162,11 @@ pub async fn build_space_setup_assembly(
     );
     let clipboard_dispatch: Arc<dyn ClipboardDispatchPort> = clipboard_dispatch;
     let clipboard_receiver: Arc<dyn ClipboardReceiverPort> = clipboard_receiver;
+    // Slice 3 Phase 1:同一节点装第四个 ALPN(iroh-blobs)。BlobReference
+    // 是 sqlite 仓储,不跟 router 绑定;这里只拿传输 port。
+    let BlobHandlers { blob_transfer } = builder
+        .install_blobs(wired.iroh_blob_store_dir.clone())
+        .await?;
     let iroh_node = builder.spawn();
 
     // HMAC proof adapter verifies the joiner's ChallengeResponse against
@@ -219,6 +231,8 @@ pub async fn build_space_setup_assembly(
         facade,
         roster,
         clipboard_sync,
+        blob_transfer,
+        blob_reference: Arc::clone(&wired.blob_reference_repo),
         iroh_node,
         ingest_handle,
     })

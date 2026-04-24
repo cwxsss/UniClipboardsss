@@ -636,26 +636,32 @@ table! {
 | # | 任务 | 状态 | commit | 实际工时 | 备注 |
 |---|---|---|---|---|---|
 | T0 | iroh-blobs API 探针(0.97.0 对齐 iroh 0.95) | ✅ | — | ~1.5h | 4 verdict 全绿;`0.95.0` 已排除 |
-| T1 | uc-core ports/blob/{transfer,reference}(含 `digest_of`,R2 方案 C) | 🔲 | — | — | — |
-| T2 | blob_reference migration + schema | 🔲 | — | — | — |
-| T3 | DieselBlobReferenceRepository + 5 单测 | 🔲 | — | — | — |
-| T4 | IrohBlobTransferAdapter publish/has/issue_ticket/digest_of + 4 单测 | 🔲 | — | — | — |
-| T5 | IrohBlobTransferAdapter fetch + loopback 单测 | 🔲 | — | — | — |
-| T6 | IrohBlobTransferAdapter tag/untag + 3 单测 | 🔲 | — | — | — |
-| T7 | install_blobs 扩展点 + 4 ALPN 共存单测 | 🔲 | — | — | — |
-| T8 | bootstrap 装配 + workspace 全绿回归 | 🔲 | — | — | — |
-| T9 | 收尾(task_plan ✅ + progress 续 31) | 🔲 | — | — | — |
+| T1 | uc-core ports/blob/{transfer,reference}(含 `digest_of`,R2 方案 C) | ✅ | `297f1e87` | ~0.5h | 38 uc-core 单测绿;§9.3 合规 lint 0 行 |
+| T2 | blob_reference migration + schema | ✅ | `9170f7f4` | ~0.3h | 109 uc-infra 单测绿;diesel migration run 对空 sqlite 成功 |
+| T3 | DieselBlobReferenceRepository + 5 单测 | ✅ | — | ~0.7h | 5 个仓储单测绿;`cargo test -p uc-infra` 全量绿 |
+| T4 | IrohBlobTransferAdapter publish/has/issue_ticket/digest_of + 4 单测 | ✅ | — | ~1.0h | 实际合并 T5/T6 一次落地;adapter 9 单测绿 |
+| T5 | IrohBlobTransferAdapter fetch + loopback 单测 | ✅ | — | ~0.4h | self-fetch + 双节点 remote-fetch 都绿 |
+| T6 | IrohBlobTransferAdapter tag/untag + 3 单测 | ✅ | — | ~0.3h | tag/untag 幂等 + 多 reason 独立 |
+| T7 | install_blobs 扩展点 + 4 ALPN 共存单测 | ✅ | — | ~0.4h | pairing+presence+clipboard+blobs 同 router 通过 |
+| T8 | bootstrap 装配 + workspace 全绿回归 | ✅ | — | ~0.5h | `cargo check --workspace` 通过 |
+| T9 | 收尾(task_plan ✅ + progress 续 31) | ✅ | — | ~0.2h | 本表 + `task_plan.md` + `progress.md` 已更新 |
 
 ### 12.2 累计
 
-- T0:1/9 done
+- T0+T1+T2+T3+T4+T5+T6+T7+T8+T9:9/9 done
 
 ### 12.3 关键发现 / 偏离
 
 - `iroh-blobs 0.95.0` 依赖 `iroh 0.93.2`,不能挂到当前 `iroh 0.95.1` 的共享 `Router` 上。
 - `iroh-blobs 0.97.0` 依赖 `iroh 0.95`,`BlobTicket` 使用 `EndpointAddr` / `EndpointId`;已升级并锁定该版本 API。
 - `downloader().download` 只接收 provider id,不会直接消费 ticket 内完整地址;adapter `fetch` 需要先用 `endpoint.connect(ticket.addr().clone(), iroh_blobs::ALPN)` 把 ticket 地址带入 endpoint。
+- T1 实际引用 `crate::ids::EntryId`(public re-export),不走计划 §3.1 写的 `crate::clipboard::entry::ClipboardEntryId`(该路径不存在;`ids/clipboard.rs::EntryId` 才是真名)。
+- T2:`diesel migration run` 不加 `--locked-schema` 会重写 `schema.rs`,抹掉项目手动把 `*_at`/`joined_at`/`trusted_at` 等列标为 `BigInt` 的 override(Diesel 自动推断 `INTEGER` → `Integer`)。今后在本仓库跑 `diesel migration run` 统一加 `--locked-schema`。
+- T3:`blob_reference` 仓储不新增 core record 类型,按 port 方法形态在 infra 内用 `BlobReferenceRowMapper` 做 `PlaintextHash` / `BlobDigest` 与 hex row 的转换;`save` 采用 last-write-wins upsert。
+- T4:`has` 不能用 `observe(...).await_completion()` 判断缺失 digest,未知 digest 会一直等;改用 `observe(hash).await` 读取当前 bitfield 后判断 `is_complete()`。
+- T5:self-fetch 不能先 `endpoint.connect(self_addr, BLOBS_ALPN)`,iroh 会拒绝 "Connecting to ourself";`fetch` 先查本地已有 digest,命中直接 `get_bytes`,未命中才按 ticket 连接远端。
+- T8:`BlobReferenceRepositoryPort` 走 sqlite 装配链,`BlobTransferPort` 走 `IrohNodeBuilder::install_blobs`;两者都挂到 `SpaceSetupAssembly`,但保持职责分离。
 
 ### 12.4 后续提醒
 
-- 待填充
+- Phase 2 写 use case 时直接从 `SpaceSetupAssembly::{blob_transfer,blob_reference}` 取 port,不需要再碰 iroh router 装配。

@@ -2366,3 +2366,147 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - `cargo test -p uc-infra --test iroh_blobs_probe`:4 passed
 - `cargo tree -p uc-infra -i iroh@0.95.1`:显示 `iroh-blobs v0.97.0` 与 `uc-infra` 同用 `iroh v0.95.1`
 - `cargo tree -p uc-infra -i iroh@0.93.2`:无匹配包
+
+---
+
+## Session 2026-04-24(续 32) — Slice 3 Phase 1 T1 · uc-core blob ports
+
+**触发**:`/planning-with-files 继续`,从 T0 之后接着做 T1。
+
+**完成标准**:
+- 新增 `uc-core/src/ports/blob/{mod,transfer,reference}.rs`,只含 trait + 值对象 + error,不实现。
+- `ports/mod.rs` 挂 `pub mod blob`。
+- `cargo check -p uc-core` 绿,`rg -w 'iroh|iroh-blobs|postcard|BLAKE3|Argon2|XChaCha20' src-tauri/crates/uc-core/src/ports/blob/` 返回 0 行(uc-core/AGENTS §2.2 / §6.3 / §7 合规)。
+
+**已做**:
+- 读 `slice3-phase1-plan.md §3` 契约草图 + `src-tauri/crates/uc-core/src/ports/mod.rs` / `peer_address.rs` / `local_identity.rs` 现有风格。
+- 确认 `EntryId` 定义在 `crates/uc-core/src/ids/clipboard.rs`(`mod clipboard; pub use clipboard::*;`),顶层引用路径为 `crate::ids::EntryId`(计划里写的 `crate::ids::clipboard::EntryId` 私模块路径不通,改用顶层 re-export)。
+- 写三个新文件(`mod.rs` / `transfer.rs` / `reference.rs`),文案全部业务中性:docstring 用 "shareable store" / "retrieval credential" / "content identity" / "fingerprint",零技术术语。
+- `ports/mod.rs` 追 `pub mod blob;`(和 cache_fs / clipboard 邻位)。
+- `cargo fmt` pre-commit hook 把 `reference.rs` 的 `save` 签名压成单行,已照收。
+
+**结果**:
+- T1 完成,commit `297f1e87`。
+- `cargo check -p uc-core`:绿。
+- `cargo test -p uc-core --lib`:38 passed。
+- `rg -w 'iroh|iroh-blobs|postcard|BLAKE3|Argon2|XChaCha20' src-tauri/crates/uc-core/src/ports/blob/`:0 行。
+
+**偏离计划**:
+- 计划 §3.1 写的是 `crate::clipboard::entry::ClipboardEntryId`,实际类型是 `uc_core::ids::EntryId`(`ids/clipboard.rs` 里的 `pub struct EntryId(String)` + `ids/mod.rs` glob re-export)。`TagReason::ClipboardEntry(EntryId)` 命名依然业务中性,不影响决策。
+
+---
+
+## Session 2026-04-24(续 33) — Slice 3 Phase 1 T2 · blob_reference migration + schema
+
+**触发**:承接上一轮同 session 的"继续",做 T2。
+
+**完成标准**:
+- 新增 `uc-infra/migrations/2026-04-24-000001_create_blob_reference/{up,down}.sql`
+- `uc-infra/src/db/schema.rs` 追加 `blob_reference` table! + 加入 `allow_tables_to_appear_in_same_query!` 注册表
+- `diesel migration run` 对空 sqlite 成功
+- `cargo check -p uc-infra` / 单测绿
+
+**已做**:
+- 读 `peer_address` migration + `schema.rs` / `db/pool.rs` 现有风格(`embed_migrations!` 自动扫 `migrations/`;运行时走 `run_pending_migrations`)。
+- 写 up.sql(表结构注释 1:1 对齐 `uc-core::ports::blob::reference`) + down.sql。
+- `schema.rs` 追加 `blob_reference (plaintext_hash)` 块(放在 `blob` 与 `file_transfer` 之间,与 `blob_reference` 名字前缀一致)。
+- `allow_tables_to_appear_in_same_query!` 按字母序插 `blob_reference` 在 `blob` 之后。
+- 对空 sqlite 跑 `diesel migration run` —— 意外踩坑:CLI 会重写 `schema.rs`,把项目手动 override 的 `BigInt` 列(`peer_address.observed_at` / `trusted_peer.trusted_at` / `space_member.joined_at` 等)全部回退到 `Integer`,并且把 `search_index_meta.profile_id` 从 `Text` 改成 `Nullable<Text>`、`clipboard_entry` 字段顺序重排。
+- 回退:`git checkout -- schema.rs` 恢复原始文件,手工只插我的 `blob_reference` 块 + 注册。
+- 再跑 `diesel migration run --locked-schema`,验证迁移本身成功 + 表结构正确(sqlite3 `.schema blob_reference` 显示期望 SQL)。`--locked-schema` 末尾会抱怨 "would result in changes to schema.rs",这是项目先天条件(手动 override 与 Diesel 自动推断长期不一致),不是本次引入。
+
+**结果**:
+- T2 完成,commit `9170f7f4`。
+- `cargo check -p uc-infra`:绿(仅遗留的 `Kek` 未用 import warn)。
+- `cargo test -p uc-infra --lib`:109 passed(覆盖 iroh / pairing / rendezvous / sqlite repo / security 等 109 项)。
+- 最终 `git diff` 相对 `HEAD~1` 只新增 11 行 schema + 两个 migration SQL 文件,0 回退 override。
+
+**错误记录**:
+| Error | Attempt | Resolution |
+|---|---|---|
+| `diesel migration run` 不加 `--locked-schema` 重写 schema.rs,抹掉手动 `BigInt` override | 1 次 | `git checkout -- schema.rs` 恢复,改用手动 Edit 追加 `blob_reference` 块 + 后续固定加 `--locked-schema` |
+
+**偏离计划**:
+- 无。`created_at -> BigInt` 与计划 §5.2 `created_at -> BigInt` 一致(虽然 `up.sql` 里用 `INTEGER` —— sqlite 底层是 64-bit int,只是 Diesel 自动推断会给 `Integer`,项目约定手写 `BigInt`)。
+
+**观察**:
+- 项目-wide `diesel migration run` 惯例应固定加 `--locked-schema`。CLAUDE.md / AGENTS.md 暂未明记,考虑未来加一条提示(非本 T scope)。
+
+---
+
+## Session 2026-04-24(续 34) — Slice 3 Phase 1 T3 · BlobReferenceRepository
+
+**触发**:`$planning-with-files 继续`,从 T2 之后接着做 T3。
+
+**完成标准**:
+- 新增 `BlobReferenceRow` / `NewBlobReferenceRow` 模型。
+- 新增 `BlobReferenceRowMapper`,负责 `PlaintextHash` / `BlobDigest` 与 32 字节 hex row 的转换。
+- 新增 `DieselBlobReferenceRepository`,实现 `BlobReferenceRepositoryPort::{find_by_plaintext_hash,save,forget}`。
+- 5 个仓储单测覆盖 save 后命中、miss 返回 None、同 hash 覆盖、forget 删除、forget 幂等。
+- `cargo test -p uc-infra` 全量通过。
+
+**已做**:
+- 读 `slice3-phase1-plan.md §3.2/§5.2` 与 `DieselPeerAddressRepository` 模板,确认 T3 只做 sqlite 去重缓存,不碰 iroh adapter / bootstrap。
+- 新增 `db/models/blob_reference.rs`、`db/mappers/blob_reference_mapper.rs`、`db/repositories/blob_reference_repo.rs`。
+- `models/mod.rs` / `mappers/mod.rs` / `repositories/mod.rs` 导出新模块。
+- `save` 走 `insert_into(...).on_conflict(plaintext_hash).do_update()`,满足 last-write-wins。
+- `forget` 直接 delete,sqlite 0 行删除也返回 Ok,满足幂等。
+
+**结果**:
+- T3 完成。
+- `cargo test -p uc-infra blob_reference --lib`:5 passed。
+- `cargo test -p uc-infra`:114 lib tests + 4 iroh_blobs_probe + 3 clipboard_identity_probe + 4 presence_probe + 16 doc-tests 全部通过。
+
+**警告**:
+- `uc-infra/src/security/mod.rs` 仍有既存 `Kek` unused import warning,本次未改。
+
+**偏离计划**:
+- 无。未新增 core record 类型;infra mapper 直接围绕 port 的 `PlaintextHash` / `BlobDigest` 做 row 转换,保持 core 契约不变。
+
+---
+
+## Session 2026-04-24(续 35) — Slice 3 Phase 1 T4-T9 · Blob adapter + router + bootstrap
+
+**触发**:T3 完成后继续推进同一 Phase。
+
+**完成标准**:
+- `IrohBlobTransferAdapter` 实现 publish / has / issue_ticket / digest_of / fetch / tag / untag。
+- adapter 覆盖 publish 幂等、has 命中/未命中、ticket round-trip、坏 ticket、fetch、tag/untag 等测试。
+- `IrohNodeBuilder::install_blobs` 注册 iroh-blobs handler,并证明 pairing / presence / clipboard / blobs 四个 ALPN 可共用同一 router。
+- `SpaceSetupAssembly` 暴露 `blob_transfer` / `blob_reference`;`WiredDependencies` 提供 iroh-blobs store 目录与 sqlite repo。
+- `cargo test -p uc-infra` 与 `cargo check --workspace` 通过。
+
+**已做**:
+- 新增 `uc-infra/src/network/iroh/blobs.rs`:
+  - `BLOBS_ALPN = iroh_blobs::ALPN`
+  - `IrohBlobTransferAdapter::new(endpoint, store)`
+  - digest/ticket 转换、tag name 集中编码
+  - fetch 本地命中先短路,未命中再用 ticket 地址预热 endpoint + downloader 拉取
+- `uc-infra/src/network/iroh/node.rs` 新增 `BlobHandlers` 与 `install_blobs(store_dir)`。
+- `uc-infra/src/network/iroh/mod.rs` 导出 `IrohBlobTransferAdapter` / `BLOBS_ALPN` / `BlobHandlers`。
+- `uc-bootstrap/src/assembly.rs`:
+  - 构造 `DieselBlobReferenceRepository`
+  - `WiredDependencies` 增加 `blob_reference_repo` 与 `iroh_blob_store_dir`
+  - iroh store 目录为 `apply_profile_suffix(app_data_root_dir.join("iroh-blobs"))`
+- `uc-bootstrap/src/space_setup.rs`:
+  - `build_space_setup_assembly` 在 `install_clipboard` 后调用 `install_blobs`
+  - `SpaceSetupAssembly` 增加 `blob_transfer` / `blob_reference`
+
+**关键发现 / 修正**:
+| 发现 | 修正 |
+|---|---|
+| `store.blobs().observe(hash).await_completion()` 对未知 digest 会一直等 | `has` 改用 `observe(hash).await` 读取当前 bitfield 判断 `is_complete()` |
+| self-fetch 时 `endpoint.connect(self_addr, BLOBS_ALPN)` 被 iroh 拒绝 | `fetch` 先 `has(digest)`,本地已有直接 `get_bytes`,本地没有才连接 ticket 内远端 |
+| 单节点 self-fetch 不能证明 downloader 远端路径 | 追加双 `Fixture` remote-fetch 测试,provider 出 ticket,receiver 真实拉取 |
+
+**结果**:
+- Slice 3 Phase 1 完成,T0-T9 全部 ✅。
+- 新增 adapter 9 个单测 + router 4 ALPN 共存单测 + repo 5 单测。
+- `cargo test -p uc-infra`:124 lib tests + 4 iroh_blobs_probe + 3 clipboard_identity_probe + 4 presence_probe + 16 doc-tests 全部通过。
+- `cargo check --workspace`:通过。
+
+**警告**:
+- 仍有既存 warning:`uc-infra` 的 `Kek` unused import、`uc-platform` 若干 dead_code、`uc-application` 两个未构造变体、`uc-app` legacy clipboard transport deprecated warning。本次未改。
+
+**下一步**:
+- 进入 Slice 3 Phase 2:实现 `PublishBlobUseCase` / `FetchBlobUseCase` 与 CLI-only e2e。

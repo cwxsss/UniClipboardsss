@@ -1,4 +1,5 @@
 pub mod blob_mapper;
+pub mod blob_reference_mapper;
 pub mod clipboard_entry_mapper;
 pub mod clipboard_event_mapper;
 pub mod clipboard_selection_mapper;

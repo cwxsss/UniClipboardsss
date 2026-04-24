@@ -32,6 +32,7 @@ use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
 use uc_core::ids::RepresentationId;
+use uc_core::ports::blob::BlobReferenceRepositoryPort;
 use uc_core::ports::clipboard::{
     ClipboardChangeOriginPort, ClipboardRepresentationNormalizerPort, RepresentationCachePort,
     SpoolQueuePort, SpoolRequest,
@@ -56,10 +57,10 @@ use uc_infra::db::mappers::{
 };
 use uc_infra::db::pool::{init_db_pool, DbPool};
 use uc_infra::db::repositories::{
-    DieselBlobRepository, DieselClipboardEntryRepository, DieselClipboardEventRepository,
-    DieselClipboardRepresentationRepository, DieselClipboardSelectionRepository,
-    DieselFileTransferRepository, DieselPeerAddressRepository, DieselSpaceMemberRepository,
-    DieselThumbnailRepository, DieselTrustedPeerRepository,
+    DieselBlobReferenceRepository, DieselBlobRepository, DieselClipboardEntryRepository,
+    DieselClipboardEventRepository, DieselClipboardRepresentationRepository,
+    DieselClipboardSelectionRepository, DieselFileTransferRepository, DieselPeerAddressRepository,
+    DieselSpaceMemberRepository, DieselThumbnailRepository, DieselTrustedPeerRepository,
 };
 use uc_infra::device::LocalDeviceIdentity;
 use uc_infra::fs::key_slot_store::JsonKeySlotStore;
@@ -157,6 +158,11 @@ pub struct WiredDependencies {
     /// 用于配对完成后 best-effort 写对端传输地址 blob。跟
     /// `trusted_peer_repo` 同样绕开 `AppDeps`：消费者在 uc-application 里。
     pub peer_addr_repo: Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
+    /// Slice 3 Phase 1:iroh-blobs store 目录。由 `SpaceSetupAssembly`
+    /// 装配 iroh blob handler 时使用。
+    pub iroh_blob_store_dir: PathBuf,
+    /// Slice 3 Phase 1:明文 hash → 密文 digest 去重缓存。
+    pub blob_reference_repo: Arc<dyn BlobReferenceRepositoryPort>,
 }
 
 /// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
@@ -217,6 +223,9 @@ struct InfraLayer {
     // Slice 2 Phase 1 · T5：peer address 仓库。pairing 收尾点 best-effort
     // 写入对端传输地址，供 F1 `ensure_reachable_all` 直接拨号。
     peer_addr_repo: Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
+
+    // Slice 3 Phase 1:明文 hash → 密文 digest 去重缓存。
+    blob_reference_repo: Arc<dyn BlobReferenceRepositoryPort>,
 
     // Blob storage
     blob_repository: Arc<dyn BlobRepositoryPort>,
@@ -363,6 +372,9 @@ fn create_infra_layer(
     let peer_addr_repo: Arc<dyn uc_core::ports::PeerAddressRepositoryPort> =
         Arc::new(peer_addr_repo_impl);
 
+    let blob_reference_repo: Arc<dyn BlobReferenceRepositoryPort> =
+        Arc::new(DieselBlobReferenceRepository::new(Arc::clone(&db_executor)));
+
     let blob_repo = DieselBlobRepository::new(
         Arc::clone(&db_executor),
         blob_row_mapper,
@@ -413,6 +425,7 @@ fn create_infra_layer(
         member_repo,
         trusted_peer_repo,
         peer_addr_repo,
+        blob_reference_repo,
         blob_repository,
         thumbnail_repo,
         thumbnail_generator,
@@ -841,6 +854,9 @@ pub fn wire_dependencies_with_identity_store(
     // Same pattern for `peer_addr_repo` — Slice 2 Phase 1 wiring consumer
     // is `SpaceSetupFacade`, which lives in uc-application, not uc-app.
     let peer_addr_repo_for_wiring = Arc::clone(&infra.peer_addr_repo);
+    let blob_reference_repo_for_wiring = Arc::clone(&infra.blob_reference_repo);
+    let iroh_blob_store_dir_for_wiring =
+        apply_profile_suffix(paths.app_data_root_dir.join("iroh-blobs"));
 
     // Create payload resolver for resolving staged/processing payloads
     let payload_resolver: Arc<dyn ClipboardPayloadResolverPort> =
@@ -929,6 +945,8 @@ pub fn wire_dependencies_with_identity_store(
         deps,
         trusted_peer_repo: trusted_peer_repo_for_wiring,
         peer_addr_repo: peer_addr_repo_for_wiring,
+        iroh_blob_store_dir: iroh_blob_store_dir_for_wiring,
+        blob_reference_repo: blob_reference_repo_for_wiring,
         background: BackgroundRuntimeDeps {
             libp2p_network: platform.libp2p_network.clone(),
             representation_cache,
