@@ -72,9 +72,9 @@ zstd = { version = "0.13", features = ["zstdmt"] }
 # Slice 1 decision I-3: introduced unconditionally (no feature gate);
 # libp2p adapter stays frozen via trait-default no-op (decision N-1) plus the
 # new pairing session port (decision N-2).
-iroh = "0.97.0"
-iroh-blobs = "0.99.0"
-iroh-tickets = "0.4"
+iroh = "0.95.1"
+iroh-blobs = "0.97.0"
+iroh-tickets = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
 # Slice 1 pairing session wire codec — binary, compact, serde-compatible.
 postcard = { version = "1", features = ["use-std"] }

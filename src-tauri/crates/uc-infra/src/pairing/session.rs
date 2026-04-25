@@ -570,7 +570,7 @@ mod tests {
 
     async fn bound_endpoint() -> Arc<Endpoint> {
         Arc::new(
-            Endpoint::builder(iroh::endpoint::presets::N0DisableRelay)
+            Endpoint::builder()
                 .alpns(vec![PAIRING_ALPN.to_vec()])
                 .relay_mode(RelayMode::Disabled)
                 .bind()

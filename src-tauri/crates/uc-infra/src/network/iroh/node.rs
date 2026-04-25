@@ -19,7 +19,6 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use iroh::endpoint::presets;
 use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode};
 use tracing::{debug, instrument};
@@ -147,12 +146,7 @@ impl IrohNodeBuilder {
         } else {
             RelayMode::Default
         };
-        // iroh 0.97 changed `Endpoint::builder()` to require a `Preset`.
-        // `presets::N0` matches our previous implicit defaults
-        // (PkarrPublisher::n0_dns + DnsAddressLookup::n0_dns + default relay).
-        // The `.relay_mode(relay_mode)` call below still overrides the preset's
-        // relay choice when `disable_relays` is set.
-        let endpoint = Endpoint::builder(presets::N0)
+        let endpoint = Endpoint::builder()
             .secret_key(secret)
             // Only PAIRING is declared at bind time; additional ALPNs are
             // added to the endpoint via `RouterBuilder::spawn`, which
