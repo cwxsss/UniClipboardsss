@@ -24,17 +24,15 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use uc_application::space_access::SpaceAccessFacade;
-use uc_daemon_contract::constants::pairing_error_code;
 
 use crate::api::auth::{build_connection_info, DaemonAuthToken, DaemonConnectionInfo};
 use crate::api::dto::error::ApiError;
-use crate::api::dto::pairing::PairingApiErrorResponse;
 use crate::api::openapi::ApiDoc;
 use crate::api::query::DaemonQueryService;
 use crate::api::routes;
 use crate::api::types::DaemonWsEvent;
 use crate::api::ws;
-use crate::pairing::host::{DaemonPairingHost, DaemonPairingHostError};
+use crate::pairing::host::DaemonPairingHost;
 use crate::search::coordinator::SearchCoordinator;
 use crate::security::SecurityState;
 use crate::socket::{try_resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
@@ -247,51 +245,6 @@ fn is_allowed_cors_origin(origin: &str) -> bool {
         || origin.starts_with("http://localhost:")
         || origin.starts_with("http://127.0.0.1:")
         || origin.starts_with("http://[::1]:")
-}
-
-pub(crate) fn map_daemon_pairing_error(
-    error: DaemonPairingHostError,
-) -> (StatusCode, PairingApiErrorResponse) {
-    match error {
-        DaemonPairingHostError::ActivePairingSessionExists => (
-            StatusCode::CONFLICT,
-            PairingApiErrorResponse {
-                code: pairing_error_code::ACTIVE_SESSION_EXISTS.to_string(),
-                message: "active pairing session exists".to_string(),
-            },
-        ),
-        DaemonPairingHostError::HostNotDiscoverable => (
-            StatusCode::BAD_REQUEST,
-            PairingApiErrorResponse {
-                code: pairing_error_code::HOST_NOT_DISCOVERABLE.to_string(),
-                message: "host not discoverable".to_string(),
-            },
-        ),
-        DaemonPairingHostError::NoLocalPairingParticipantReady => (
-            StatusCode::BAD_REQUEST,
-            PairingApiErrorResponse {
-                code: pairing_error_code::NO_LOCAL_PARTICIPANT.to_string(),
-                message: "no local pairing participant ready".to_string(),
-            },
-        ),
-        DaemonPairingHostError::SessionNotFound(_) => (
-            StatusCode::NOT_FOUND,
-            PairingApiErrorResponse {
-                code: pairing_error_code::SESSION_NOT_FOUND.to_string(),
-                message: "pairing session not found".to_string(),
-            },
-        ),
-        DaemonPairingHostError::Internal(message) => {
-            tracing::error!(error = %message, "daemon pairing command failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                PairingApiErrorResponse {
-                    code: pairing_error_code::INTERNAL.to_string(),
-                    message,
-                },
-            )
-        }
-    }
 }
 
 pub async fn run_http_server(

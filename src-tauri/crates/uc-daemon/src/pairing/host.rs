@@ -13,22 +13,17 @@ use tracing::{debug, error, info, warn, Instrument};
 use uc_app::runtime::CoreRuntime;
 use uc_application::pairing::PairingAction;
 use uc_application::pairing::{PairingDomainEvent, PairingEventPort, PairingFacade};
-use uc_application::setup::SetupFacade;
-use uc_application::space_access::{
-    SpaceAccessCompletedEvent, SpaceAccessEventPort, SpaceAccessFacade,
-};
+use uc_application::space_access::SpaceAccessFacade;
 use uc_core::network::{
     protocol::PairingKeyslotOffer, NetworkEvent, PairingBusy, PairingMessage, PairingRequest,
 };
 use uc_core::pairing::PairingRole;
-use uc_core::space_access::{deny_reason_from_code, SpaceAccessProofArtifact};
 use uc_daemon_contract::constants::{pairing_busy_reason, pairing_stage, ws_event, ws_topic};
 use uc_infra::fs::key_slot_store::KeySlotStore;
 use uc_infra::security::crypto_model::KeySlot;
 
 use crate::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
-    SetupSpaceAccessCompletedPayload, SpaceAccessStateChangedPayload,
 };
 use crate::pairing::session_projection::{mark_pairing_session_terminal, upsert_pairing_snapshot};
 use crate::service::{DaemonService, ServiceHealth};
@@ -72,12 +67,6 @@ impl LeaseRegistry {
         self.active.store(active, Ordering::SeqCst);
         active
     }
-
-    async fn clear(&self) {
-        let mut leases = self.leases.write().await;
-        leases.clear();
-        self.active.store(false, Ordering::SeqCst);
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +102,10 @@ pub struct DaemonPairingHost {
     pairing_action_rx: Mutex<Option<mpsc::Receiver<PairingAction>>>,
     state: Arc<RwLock<RuntimeState>>,
     space_access_facade: Arc<SpaceAccessFacade>,
+    /// Held for backwards-compat constructor surface only — the only consumer
+    /// (Slice4 P3 T3.4 S3-deleted completed-host sponsor follow-up) is gone.
+    /// Drop in S4 alongside the entrypoint chain.
+    #[allow(dead_code)]
     key_slot_store: Arc<dyn KeySlotStore>,
     trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
     discoverability: Arc<LeaseRegistry>,
@@ -191,23 +184,6 @@ impl DaemonPairingHost {
         self.set_participant_ready(GUI_CLIENT_KIND.to_string(), enabled, lease_ttl_ms)
             .await;
         Ok(())
-    }
-
-    pub async fn reset_setup_state(&self) {
-        if let Some(session_id) = self.active_session_id().await {
-            if let Err(error) = self.pairing_facade.reject_pairing(&session_id).await {
-                warn!(
-                    error = %error,
-                    session_id = %session_id,
-                    "failed to reject active pairing session during setup reset"
-                );
-            }
-            self.clear_active_session(Some(&session_id)).await;
-        }
-
-        self.discoverability.clear().await;
-        self.participant_readiness.clear().await;
-        self.broadcast_space_access_state(&uc_core::space_access::state::SpaceAccessState::Idle);
     }
 
     pub async fn initiate_pairing(
@@ -350,20 +326,14 @@ impl DaemonPairingHost {
         let domain_events = PairingEventPort::subscribe(self.pairing_facade.as_ref())
             .await
             .context("failed to subscribe to pairing domain events")?;
-        let space_access_events =
-            SpaceAccessEventPort::subscribe(self.space_access_facade.as_ref())
-                .await
-                .context("failed to subscribe to space access events")?;
 
         let mut tasks = JoinSet::new();
 
         tasks.spawn(
             run_pairing_action_loop(
                 self.runtime.clone(),
-                self.runtime.setup_facade().clone(),
                 self.pairing_facade.clone(),
                 self.space_access_facade.clone(),
-                self.key_slot_store.clone(),
                 self.trusted_peer_repo.clone(),
                 self.state.clone(),
                 self.active_session_id.clone(),
@@ -389,8 +359,6 @@ impl DaemonPairingHost {
         tasks.spawn(
             run_pairing_protocol_loop(
                 self.runtime.clone(),
-                self.runtime.setup_facade().clone(),
-                self.space_access_facade.clone(),
                 self.pairing_facade.clone(),
                 self.state.clone(),
                 self.active_session_id.clone(),
@@ -408,15 +376,6 @@ impl DaemonPairingHost {
             self.participant_readiness.clone(),
             cancel.child_token(),
         ));
-
-        tasks.spawn(
-            run_space_access_event_loop(
-                space_access_events,
-                self.event_tx.clone(),
-                cancel.child_token(),
-            )
-            .instrument(tracing::info_span!("space_access.event_loop")),
-        );
 
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -572,10 +531,6 @@ impl DaemonPairingHost {
         }
     }
 
-    fn broadcast_space_access_state(&self, state: &uc_core::space_access::state::SpaceAccessState) {
-        broadcast_space_access_state_changed(&self.event_tx, state);
-    }
-
     async fn session_peer_id(&self, session_id: &str) -> Option<String> {
         if let Some(peer) = self.pairing_facade.get_session_peer(session_id).await {
             return Some(peer.peer_id);
@@ -601,10 +556,8 @@ impl DaemonPairingHost {
 
 async fn run_pairing_action_loop(
     runtime: Arc<CoreRuntime>,
-    setup_facade: Arc<SetupFacade>,
     pairing_facade: Arc<PairingFacade>,
     space_access_facade: Arc<SpaceAccessFacade>,
-    key_slot_store: Arc<dyn KeySlotStore>,
     trusted_peer_repo: Arc<dyn uc_core::TrustedPeerRepositoryPort>,
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
@@ -770,48 +723,6 @@ async fn run_pairing_action_loop(
                                 space_access_facade
                                     .set_sponsor_peer_id(Some(peer.peer_id.clone()))
                                     .await;
-                                match key_slot_store.load().await {
-                                    Ok(keyslot_file) => {
-                                        if matches!(
-                                            setup_facade.get_state().await,
-                                            uc_application::setup::SetupState::Completed
-                                        ) {
-                                            let space_id = uc_core::ids::SpaceId::from(
-                                                keyslot_file.scope.profile_id.as_str(),
-                                            );
-                                            match setup_facade
-                                                .start_completed_host_sponsor_authorization(
-                                                    session_id.clone(),
-                                                    peer.peer_id.clone(),
-                                                    space_id,
-                                                )
-                                                .await
-                                            {
-                                                Ok(_) => {
-                                                    broadcast_space_access_state_changed(
-                                                        &event_tx,
-                                                        &space_access_facade.get_state().await,
-                                                    );
-                                                }
-                                                Err(err) => {
-                                                    warn!(
-                                                        error = %err,
-                                                        session_id = %session_id,
-                                                        peer_id = %peer.peer_id,
-                                                        "failed to start completed-host sponsor authorization"
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(err) => {
-                                        debug!(
-                                            error = %err,
-                                            session_id = %session_id,
-                                            "key slot store unavailable for responder-side follow-up"
-                                        );
-                                    }
-                                }
                             }
                         }
 
@@ -1173,8 +1084,6 @@ async fn run_pairing_domain_event_loop(
 
 async fn run_pairing_protocol_loop(
     runtime: Arc<CoreRuntime>,
-    setup_facade: Arc<SetupFacade>,
-    space_access_facade: Arc<SpaceAccessFacade>,
     pairing_facade: Arc<PairingFacade>,
     state: Arc<RwLock<RuntimeState>>,
     active_session_id: Arc<RwLock<Option<String>>>,
@@ -1207,8 +1116,6 @@ async fn run_pairing_protocol_loop(
                             match event {
                                 NetworkEvent::PairingMessageReceived { peer_id, message } => {
                                     handle_pairing_message(
-                                        setup_facade.as_ref(),
-                                        space_access_facade.as_ref(),
                                         pairing_facade.as_ref(),
                                         &state,
                                         &active_session_id,
@@ -1288,8 +1195,6 @@ async fn run_pairing_session_sweep_loop(
     )
 )]
 async fn handle_pairing_message(
-    setup_facade: &SetupFacade,
-    space_access_facade: &SpaceAccessFacade,
     pairing_facade: &PairingFacade,
     state: &Arc<RwLock<RuntimeState>>,
     active_session_id: &Arc<RwLock<Option<String>>>,
@@ -1466,63 +1371,6 @@ async fn handle_pairing_message(
                             .await?;
                         return Ok(());
                     }
-                    Ok(SpaceAccessBusyPayload::Proof(payload)) => {
-                        let challenge_len = payload.challenge_nonce.len();
-                        let challenge_nonce: [u8; 32] = match payload.challenge_nonce.try_into() {
-                            Ok(nonce) => nonce,
-                            Err(_) => {
-                                warn!(
-                                    session_id = %busy.session_id,
-                                    peer_id = %peer_id,
-                                    challenge_len,
-                                    "invalid space access proof nonce length"
-                                );
-                                return Ok(());
-                            }
-                        };
-                        setup_facade
-                            .resolve_host_space_access_proof(
-                                SpaceAccessProofArtifact {
-                                    pairing_session_id: uc_core::SessionId::from(
-                                        payload.pairing_session_id.as_str(),
-                                    ),
-                                    space_id: uc_core::ids::SpaceId::from(
-                                        payload.space_id.as_str(),
-                                    ),
-                                    challenge_nonce,
-                                    proof_bytes: payload.proof_bytes,
-                                },
-                                Some(peer_id.clone()),
-                            )
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-                        broadcast_space_access_state_changed(
-                            event_tx,
-                            &space_access_facade.get_state().await,
-                        );
-                        return Ok(());
-                    }
-                    Ok(SpaceAccessBusyPayload::Result(payload)) => {
-                        let deny_reason = payload
-                            .deny_reason
-                            .as_deref()
-                            .and_then(deny_reason_from_code);
-                        setup_facade
-                            .apply_joiner_space_access_result(
-                                busy.session_id.clone(),
-                                uc_core::ids::SpaceId::from(payload.space_id.as_str()),
-                                Some(peer_id.clone()),
-                                payload.success,
-                                deny_reason,
-                            )
-                            .await
-                            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
-                        broadcast_space_access_state_changed(
-                            event_tx,
-                            &space_access_facade.get_state().await,
-                        );
-                        return Ok(());
-                    }
                     Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload) => {}
                     Err(error) => {
                         warn!(
@@ -1582,29 +1430,6 @@ async fn reject_inbound_request(
     {
         debug!(error = %err, peer_id = %peer_id, session_id = %session_id, "failed to send busy pairing message");
     }
-}
-
-fn broadcast_space_access_state_changed(
-    event_tx: &broadcast::Sender<DaemonWsEvent>,
-    state: &uc_core::space_access::state::SpaceAccessState,
-) {
-    let payload = SpaceAccessStateChangedPayload {
-        state: state.clone(),
-    };
-    let serialized = match serde_json::to_value(&payload) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(error = %e, "failed to serialize space_access.state_changed payload");
-            return;
-        }
-    };
-    let _ = event_tx.send(DaemonWsEvent {
-        topic: ws_topic::SPACE_ACCESS.to_string(),
-        event_type: ws_event::SPACE_ACCESS_STATE_CHANGED.to_string(),
-        session_id: None,
-        ts: chrono::Utc::now().timestamp_millis(),
-        payload: serialized,
-    });
 }
 
 fn emit_ws_event<T: serde::Serialize>(
@@ -1774,42 +1599,6 @@ fn pairing_events_subscribe_backoff_ms(attempt: u32) -> u64 {
         .min(PAIRING_EVENTS_SUBSCRIBE_BACKOFF_MAX_MS)
 }
 
-async fn run_space_access_event_loop(
-    mut event_rx: mpsc::Receiver<SpaceAccessCompletedEvent>,
-    event_tx: broadcast::Sender<DaemonWsEvent>,
-    cancel: CancellationToken,
-) -> anyhow::Result<()> {
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => return Ok(()),
-            maybe_event = event_rx.recv() => {
-                let Some(event) = maybe_event else {
-                    return Ok(());
-                };
-                info!(
-                    event = "space_access.completed",
-                    session_id = %event.session_id,
-                    peer_id = %event.peer_id,
-                    success = event.success,
-                );
-                emit_ws_event(
-                    &event_tx,
-                    ws_topic::SETUP,
-                    ws_event::SETUP_SPACE_ACCESS_COMPLETED,
-                    Some(event.session_id.clone()),
-                    SetupSpaceAccessCompletedPayload {
-                        session_id: event.session_id,
-                        peer_id: event.peer_id,
-                        success: event.success,
-                        reason: event.reason,
-                        ts: event.ts,
-                    },
-                );
-            }
-        }
-    }
-}
-
 fn pairing_failure_message(reason: &uc_core::TrustAbortReason) -> String {
     // 0.4.2.b: The pairing domain event now carries the 3-category
     // `TrustAbortReason` (D24); detailed error strings from the internal
@@ -1835,34 +1624,8 @@ struct SpaceAccessBusyOfferPayload {
     keyslot: KeySlot,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SpaceAccessBusyProofPayload {
-    kind: String,
-    pairing_session_id: String,
-    space_id: String,
-    challenge_nonce: Vec<u8>,
-    proof_bytes: Vec<u8>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SpaceAccessBusyResultPayload {
-    kind: String,
-    space_id: String,
-    #[serde(default)]
-    sponsor_peer_id: Option<String>,
-    success: bool,
-    #[serde(default)]
-    deny_reason: Option<String>,
-}
-
 enum SpaceAccessBusyPayload {
     Offer(SpaceAccessBusyOfferPayload),
-    Proof(SpaceAccessBusyProofPayload),
-    Result(SpaceAccessBusyResultPayload),
 }
 
 #[derive(Debug)]
@@ -1904,12 +1667,6 @@ fn parse_space_access_busy_payload(
 
     match kind {
         "space_access_offer" => Ok(SpaceAccessBusyPayload::Offer(serde_json::from_value(
-            payload,
-        )?)),
-        "space_access_proof" => Ok(SpaceAccessBusyPayload::Proof(serde_json::from_value(
-            payload,
-        )?)),
-        "space_access_result" => Ok(SpaceAccessBusyPayload::Result(serde_json::from_value(
             payload,
         )?)),
         _ => Err(ParseSpaceAccessBusyPayloadError::NotSpaceAccessPayload),
