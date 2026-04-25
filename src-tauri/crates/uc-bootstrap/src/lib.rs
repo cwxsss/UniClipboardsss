@@ -18,8 +18,8 @@ pub mod tracing;
 // Re-export primary public items
 pub use assembly::{
     build_clipboard_write_coordinator, get_storage_paths, resolve_pairing_config,
-    resolve_pairing_device_name, wire_dependencies, wire_dependencies_with_identity_store,
-    BackgroundRuntimeDeps, WiredDependencies, WiringError, WiringResult,
+    resolve_pairing_device_name, wire_dependencies, BackgroundRuntimeDeps, WiredDependencies,
+    WiringError, WiringResult,
 };
 pub use background_tasks::{spawn_blob_processing_tasks, BlobProcessingPorts};
 pub use builders::{

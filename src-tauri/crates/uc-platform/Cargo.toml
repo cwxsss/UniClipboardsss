@@ -31,21 +31,6 @@ tracing = "0.1"
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }
 
-# Networking
-libp2p = { version = "0.56", features = [
-  "tokio",
-  "tcp",
-  "noise",
-  "yamux",
-  "mdns",
-  "identify",
-  "macros",
-  "request-response",
-  "quic",
-] }
-libp2p-request-response = { version = "0.29", features = ["json"] }
-libp2p-stream = "0.4.0-alpha"
-
 # Encryption
 sha2 = "0.10"
 base64 = "0.22"

@@ -72,8 +72,7 @@ use uc_infra::{FileSetupStatusRepository, SystemClock};
 use uc_platform::adapters::DisabledNetwork;
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::{LocalClipboard, NoopSystemClipboard};
-use uc_platform::identity_store::FileIdentityStore;
-use uc_platform::ports::{AppDirsPort, IdentityStorePort};
+use uc_platform::ports::AppDirsPort;
 
 use tokio::sync::mpsc;
 
@@ -422,8 +421,6 @@ pub fn create_platform_layer(
     _member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
     clock: Arc<dyn ClockPort>,
     storage_config: Arc<ClipboardStorageConfig>,
-    _identity_store: Arc<dyn IdentityStorePort>,
-    _file_cache_dir: PathBuf,
 ) -> WiringResult<PlatformLayer> {
     // Slice 1 CLI commands (init/invite/join) do not touch the system
     // clipboard, but a non-bundled CLI launched from a shell lacks the
@@ -651,17 +648,12 @@ pub fn apply_profile_suffix(path: PathBuf) -> PathBuf {
 }
 
 /// Wires and constructs the application's dependency graph, returning ready-to-use dependencies.
-pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> {
-    wire_dependencies_with_identity_store(config, None)
-}
-
-/// Wires dependencies with a caller-provided identity store.
 ///
-/// This is primarily intended for tests or environments without system secure storage.
-pub fn wire_dependencies_with_identity_store(
-    config: &AppConfig,
-    identity_store: Option<Arc<dyn IdentityStorePort>>,
-) -> WiringResult<WiredDependencies> {
+/// Slice 4 P5b 起 libp2p adapter 已删除,旧的 `wire_dependencies_with_identity_store`
+/// 变体随之退场——iroh 栈走 `IrohIdentityStore`(由 `build_space_setup_assembly`
+/// 构造,密钥落地 `SecureStoragePort`),不再需要 platform 层
+/// `IdentityStorePort` 兼容入口。
+pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> {
     let platform_dirs = get_default_app_dirs()?;
     let paths = resolve_app_paths(&platform_dirs, config)?;
 
@@ -679,11 +671,6 @@ pub fn wire_dependencies_with_identity_store(
         )
         .map_err(|e| WiringError::SecureStorageInit(e.to_string()))?;
 
-    let identity_store = identity_store.unwrap_or_else(|| {
-        Arc::new(FileIdentityStore::new(paths.app_data_root_dir.clone()))
-            as Arc<dyn IdentityStorePort>
-    });
-
     let infra = create_infra_layer(db_pool, &vault_path, &settings_path, secure_storage.clone())?;
 
     let storage_config = Arc::new(ClipboardStorageConfig::defaults());
@@ -694,8 +681,6 @@ pub fn wire_dependencies_with_identity_store(
         infra.member_repo.clone(),
         infra.clock.clone(),
         storage_config.clone(),
-        identity_store,
-        paths.file_cache_dir.clone(),
     )?;
 
     // SpaceAccessPort——单一会话/密钥访问入口。adapter 自管 KeyMaterialStore +
