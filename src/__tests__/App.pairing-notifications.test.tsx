@@ -112,12 +112,7 @@ describe('App pairing notifications', () => {
     usePlatformMock.mockReturnValue({ isMac: false, isTauri: false, isWindows: false })
     useSetupRealtimeStoreMock.mockReturnValue({
       hydrated: true,
-      setupState: {
-        JoinSpaceSelectDevice: {
-          error: null,
-        },
-      },
-      syncSetupStateFromCommand: vi.fn(),
+      flow: { kind: 'entry' },
     })
   })
 

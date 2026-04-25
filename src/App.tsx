@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter as Router, Route, Navigate, Outlet, useNavigate } from 'react-router-dom'
 import { signalLifecycleReady } from '@/api/daemon/lifecycle'
 import { unlockEncryptionSession } from '@/api/security'
-import { type SetupState } from '@/api/setup'
 import { TitleBar } from '@/components'
 import { GlobalShortcuts } from '@/components/GlobalShortcuts'
 import { PairingNotificationProvider } from '@/components/PairingNotificationProvider'
@@ -29,7 +28,7 @@ import SettingsPage from '@/pages/SettingsPage'
 import SetupPage from '@/pages/SetupPage'
 import UnlockPage from '@/pages/UnlockPage'
 import { useGetEncryptionSessionStatusQuery } from '@/store/api'
-import { useSetupRealtimeStore } from '@/store/setupRealtimeStore'
+import { type SetupFlow, useSetupRealtimeStore } from '@/store/setupRealtimeStore'
 import './App.css'
 
 // 认证布局包装器 - 保持 Sidebar 持久化
@@ -41,25 +40,33 @@ const AuthenticatedLayout = () => {
   )
 }
 
+/**
+ * Returns true when the setup completion screen should remain visible after
+ * the underlying flow has just transitioned to `completed`. We only latch
+ * this if the previous flow was a non-completed state — that distinguishes
+ * "just-finished pairing in this session" (show the success summary) from
+ * "this device was already set up at launch" (skip straight into the app).
+ */
 export function shouldKeepSetupCompletionStep(
-  previousSetupState: SetupState | null,
-  nextSetupState: SetupState | null,
+  previousFlow: SetupFlow | null,
+  nextFlow: SetupFlow,
   hydrated: boolean
 ): boolean {
   return (
     hydrated &&
-    previousSetupState !== null &&
-    previousSetupState !== 'Completed' &&
-    nextSetupState === 'Completed'
+    previousFlow !== null &&
+    previousFlow.kind !== 'completed' &&
+    previousFlow.kind !== 'loading' &&
+    nextFlow.kind === 'completed'
   )
 }
 
 export function isSetupGateActive(
-  setupState: SetupState | null,
+  flow: SetupFlow,
   hydrated: boolean,
   showCompletionStep: boolean
 ): boolean {
-  return !hydrated || setupState !== 'Completed' || showCompletionStep
+  return !hydrated || flow.kind !== 'completed' || showCompletionStep
 }
 
 // 主应用程序内容
@@ -285,19 +292,19 @@ export const AppContentWithBar = () => {
   // - Content: App layout layer (Sidebar + Main via routes)
   const { isMac, isTauri, isWindows } = usePlatform()
   const showCustomTitleBar = !isTauri || isMac || isWindows
-  const { hydrated, setupState } = useSetupRealtimeStore()
+  const { hydrated, flow } = useSetupRealtimeStore()
   const [showCompletionStep, setShowCompletionStep] = useState(false)
-  const previousSetupStateRef = useRef<SetupState | null>(null)
+  const previousFlowRef = useRef<SetupFlow | null>(null)
 
   useEffect(() => {
-    const previousSetupState = previousSetupStateRef.current
-    if (shouldKeepSetupCompletionStep(previousSetupState, setupState, hydrated)) {
+    const previousFlow = previousFlowRef.current
+    if (shouldKeepSetupCompletionStep(previousFlow, flow, hydrated)) {
       setShowCompletionStep(true)
     }
-    previousSetupStateRef.current = setupState
-  }, [hydrated, setupState])
+    previousFlowRef.current = flow
+  }, [hydrated, flow])
 
-  const isSetupActive = isSetupGateActive(setupState, hydrated, showCompletionStep)
+  const isSetupActive = isSetupGateActive(flow, hydrated, showCompletionStep)
 
   const navigate = useNavigate()
   const handleNavigate = useCallback(

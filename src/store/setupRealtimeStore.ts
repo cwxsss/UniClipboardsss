@@ -1,102 +1,121 @@
 import { useEffect, useSyncExternalStore } from 'react'
+import { getSetupState, type SetupStateResponse, SetupV2Error } from '@/api/daemon/setupV2'
 import {
-  getSetupState,
-  handleSpaceAccessCompleted,
-  onSetupStateChanged,
-  onSpaceAccessCompleted,
-  type SetupState,
-} from '@/api/setup'
+  onSetupInvitationIssued,
+  onSetupInvitationRevoked,
+  onSetupPairingCompleted,
+  type SetupInvitationIssuedEvent,
+  type SetupInvitationRevokedEvent,
+  type SetupPairingCompletedEvent,
+} from '@/api/setupEvents'
 import { connectDaemonWs } from '@/lib/daemon-ws-bootstrap'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('setup-realtime-store')
 
-// ── Store-level realtime diagnostics ───────────────────────────────────────
-
 /**
- * Record a store-level decision for setup realtime sync lifecycle events.
- *
- * Decisions:
- * - "started"    — sync initialization beginning
- * - "running"    — sync is active
- * - "skipped"    — action suppressed (already running, stale generation, etc.)
- * - "scheduled"  — retry timer scheduled after failure
- * - "failure"    — initialization error
- *
- * Security: never logs passphrase or encryption key material.
+ * Coarse setup gate state derived from `GET /v2/setup/state` and the three
+ * setup ws events. Anything finer-grained (which screen the user is on
+ * inside `entry` mode, in-flight requests, transient errors) is held in
+ * `useSetupFlow` page-local state, not here.
  */
-function logStoreDecision(
-  decision: 'started' | 'running' | 'skipped' | 'scheduled' | 'failure' | 'space_access_ignored',
-  context: {
-    reason?: string
-    generation?: number
-  } = {}
-) {
-  const { reason, generation } = context
-  const parts: string[] = [`[setupRealtimeStore] ${decision}`]
-  if (generation !== undefined) parts.push(`gen=${generation}`)
-  if (reason) parts.push(`reason=${reason}`)
+export type SetupFlow =
+  /** Initial fetch in progress; setup gate stays active. */
+  | { kind: 'loading' }
+  /** No space initialised yet — show the entry / initialise / redeem screens. */
+  | { kind: 'entry' }
+  /** Sponsor has issued an invitation; resume the show-code screen on launch. */
+  | { kind: 'invitation_pending'; code: string; expiresAtMs: number }
+  /** Setup has completed and there is no in-flight invitation; gate is closed. */
+  | { kind: 'completed'; deviceName: string | null }
 
-  log.debug(parts.join(' '))
-}
-
-type SetupRealtimeSnapshot = {
-  setupState: SetupState | null
-  sessionId: string | null
+interface Snapshot {
+  flow: SetupFlow
   hydrated: boolean
-}
-
-type SetupRealtimeStore = SetupRealtimeSnapshot & {
-  syncSetupStateFromCommand: (nextState: SetupState) => void
 }
 
 const RETRY_DELAY_MS = 2000
 
-let snapshot: SetupRealtimeSnapshot = {
-  setupState: null,
-  sessionId: null,
+let snapshot: Snapshot = {
+  flow: { kind: 'loading' },
   hydrated: false,
 }
 
 const listeners = new Set<() => void>()
-let stopListening: (() => void) | null = null
-let stopListeningSpaceAccess: (() => void) | null = null
+let stopInvitationIssued: (() => void) | null = null
+let stopInvitationRevoked: (() => void) | null = null
+let stopPairingCompleted: (() => void) | null = null
 let startPromise: Promise<void> | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let syncGeneration = 0
 let syncPhase: 'idle' | 'starting' | 'running' = 'idle'
 
 function emitChange() {
-  listeners.forEach(listener => listener())
-}
-
-function isSetupFlowActive(state: SetupState | null): boolean {
-  return state !== null && state !== 'Welcome' && state !== 'Completed'
+  for (const listener of listeners) listener()
 }
 
 function clearRetryTimer() {
-  if (!retryTimer) {
-    return
-  }
-
+  if (retryTimer === null) return
   clearTimeout(retryTimer)
   retryTimer = null
 }
 
-function updateSnapshot(nextState: SetupState, sessionId?: string | null) {
-  snapshot = {
-    setupState: nextState,
-    sessionId: isSetupFlowActive(nextState) ? (sessionId ?? snapshot.sessionId) : null,
-    hydrated: true,
+function flowFromState(state: SetupStateResponse): SetupFlow {
+  if (state.currentInvitation) {
+    return {
+      kind: 'invitation_pending',
+      code: state.currentInvitation.code,
+      expiresAtMs: state.currentInvitation.expiresAtMs,
+    }
   }
+  if (state.hasCompleted) {
+    return { kind: 'completed', deviceName: state.deviceName }
+  }
+  return { kind: 'entry' }
+}
+
+function update(flow: SetupFlow, hydrated = true) {
+  snapshot = { flow, hydrated }
   emitChange()
 }
 
-function scheduleRetry() {
-  if (retryTimer) {
-    return
-  }
+function applyInvitationIssued(event: SetupInvitationIssuedEvent) {
+  // Sponsor issued a new invitation — switch to the show-code screen even if
+  // we previously thought we were in `completed` state.
+  update({ kind: 'invitation_pending', code: event.code, expiresAtMs: event.expiresAtMs })
+}
 
+function applyInvitationRevoked(_event: SetupInvitationRevokedEvent) {
+  // Invitation cancelled or expired — refresh from the server to discover
+  // whether `hasCompleted` is true (sponsor stays in `completed`) or false
+  // (this device hasn't initialised yet, drop back to entry).
+  void refreshFromServer()
+}
+
+function applyPairingCompleted(_event: SetupPairingCompletedEvent) {
+  // Either side finished a handshake. The sponsor's invitation is now
+  // consumed; `hasCompleted` may have flipped on the joiner. Refresh the
+  // authoritative state from the server.
+  void refreshFromServer()
+}
+
+async function refreshFromServer() {
+  const generation = syncGeneration
+  try {
+    const next = await getSetupState()
+    if (generation !== syncGeneration) return
+    update(flowFromState(next))
+  } catch (err) {
+    if (err instanceof SetupV2Error) {
+      log.warn({ kind: err.kind, raw: err.raw }, 'failed to refresh setup state')
+    } else {
+      log.warn({ err }, 'failed to refresh setup state')
+    }
+  }
+}
+
+function scheduleRetry() {
+  if (retryTimer !== null) return
   retryTimer = setTimeout(() => {
     retryTimer = null
     void ensureSetupRealtimeSync()
@@ -104,98 +123,49 @@ function scheduleRetry() {
 }
 
 export async function ensureSetupRealtimeSync(): Promise<void> {
-  if (syncPhase === 'running') {
-    logStoreDecision('skipped', { reason: 'already_running' })
-    return
-  }
-
-  if (startPromise) {
-    logStoreDecision('skipped', { reason: 'start_in_progress' })
-    return startPromise
-  }
+  if (syncPhase === 'running') return
+  if (startPromise) return startPromise
 
   syncPhase = 'starting'
   const generation = ++syncGeneration
-  logStoreDecision('started', { generation })
 
   startPromise = (async () => {
     try {
       clearRetryTimer()
-
-      // Ensure daemon is connected before making API calls — the connection may not
-      // have been established yet if this fires before AppContent calls connectDaemonWs().
       await connectDaemonWs()
 
-      if (!snapshot.hydrated) {
-        const initialState = await getSetupState()
-        if (generation !== syncGeneration) {
-          logStoreDecision('skipped', { reason: 'stale_generation_after_hydrate', generation })
-          return
-        }
-        updateSnapshot(initialState, null)
-      }
+      const initial = await getSetupState()
+      if (generation !== syncGeneration) return
+      update(flowFromState(initial))
 
-      const unlisten = await onSetupStateChanged(event => {
-        if (generation !== syncGeneration) {
-          logStoreDecision('skipped', { reason: 'stale_generation_in_state_changed', generation })
-          return
-        }
-
-        updateSnapshot(event.state, event.sessionId)
-      })
-
+      const offIssued = await onSetupInvitationIssued(applyInvitationIssued)
       if (generation !== syncGeneration) {
-        logStoreDecision('skipped', { reason: 'stale_generation_after_state_listener', generation })
-        unlisten()
+        offIssued()
+        return
+      }
+      const offRevoked = await onSetupInvitationRevoked(applyInvitationRevoked)
+      if (generation !== syncGeneration) {
+        offIssued()
+        offRevoked()
+        return
+      }
+      const offCompleted = await onSetupPairingCompleted(applyPairingCompleted)
+      if (generation !== syncGeneration) {
+        offIssued()
+        offRevoked()
+        offCompleted()
         return
       }
 
-      const unlistenSpaceAccess = await onSpaceAccessCompleted(async event => {
-        if (generation !== syncGeneration) {
-          logStoreDecision('skipped', { reason: 'stale_generation_in_space_access', generation })
-          return
-        }
-
-        // Skip if setup is already completed (sponsor role — this event fires on both
-        // sponsor and joiner sides, but only the joiner needs to finalize setup here).
-        if (snapshot.setupState === 'Completed') {
-          logStoreDecision('space_access_ignored', { reason: 'setup_already_completed' })
-          return
-        }
-
-        try {
-          const newState = await handleSpaceAccessCompleted()
-          updateSnapshot(newState, event.sessionId)
-        } catch (error) {
-          logStoreDecision('failure', { reason: 'handleSpaceAccessCompleted_error' })
-          log.error({ err: error }, 'Failed to handle space access completed')
-        }
-      })
-
-      if (generation !== syncGeneration) {
-        logStoreDecision('skipped', {
-          reason: 'stale_generation_after_space_access_listener',
-          generation,
-        })
-        unlisten()
-        unlistenSpaceAccess()
-        return
-      }
-
-      stopListening = unlisten
-      stopListeningSpaceAccess = unlistenSpaceAccess
+      stopInvitationIssued = offIssued
+      stopInvitationRevoked = offRevoked
+      stopPairingCompleted = offCompleted
       syncPhase = 'running'
-      logStoreDecision('running', { generation })
-    } catch (error) {
-      if (generation !== syncGeneration) {
-        return
-      }
-
-      logStoreDecision('failure', { reason: 'initialization_error', generation })
-      log.error({ err: error }, 'Failed to initialize setup realtime store')
+    } catch (err) {
+      if (generation !== syncGeneration) return
+      log.error({ err }, 'failed to initialise setup realtime sync')
       syncPhase = 'idle'
       scheduleRetry()
-      logStoreDecision('scheduled', { reason: 'retry_after_init_failure', generation })
     } finally {
       if (syncPhase !== 'running') {
         startPromise = null
@@ -206,8 +176,19 @@ export async function ensureSetupRealtimeSync(): Promise<void> {
   return startPromise
 }
 
-export function syncSetupStateFromCommand(nextState: SetupState) {
-  updateSnapshot(nextState)
+/**
+ * Imperatively merge a fresh `SetupStateResponse` (from a REST call the
+ * page just made) into the store. Use this after `initializeSpace`,
+ * `redeemInvitation`, `cancelInvitation`, or `resetSetup` so the UI
+ * reflects the change before the (possibly slower) ws roundtrip lands.
+ */
+export function applyServerSetupState(state: SetupStateResponse) {
+  update(flowFromState(state))
+}
+
+/** Force a `GET /v2/setup/state` refresh from page code. */
+export async function refreshSetupState(): Promise<void> {
+  await refreshFromServer()
 }
 
 function subscribe(listener: () => void) {
@@ -217,21 +198,18 @@ function subscribe(listener: () => void) {
   }
 }
 
-function getSnapshot(): SetupRealtimeSnapshot {
+function getSnapshot(): Snapshot {
   return snapshot
 }
 
-export function useSetupRealtimeStore(): SetupRealtimeStore {
-  const currentSnapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+export function useSetupRealtimeStore(): Snapshot {
+  const current = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 
   useEffect(() => {
     void ensureSetupRealtimeSync()
   }, [])
 
-  return {
-    ...currentSnapshot,
-    syncSetupStateFromCommand,
-  }
+  return current
 }
 
 export function resetSetupRealtimeStoreForTests() {
@@ -240,21 +218,19 @@ export function resetSetupRealtimeStoreForTests() {
   startPromise = null
   clearRetryTimer()
 
-  if (stopListening) {
-    stopListening()
-    stopListening = null
+  if (stopInvitationIssued) {
+    stopInvitationIssued()
+    stopInvitationIssued = null
+  }
+  if (stopInvitationRevoked) {
+    stopInvitationRevoked()
+    stopInvitationRevoked = null
+  }
+  if (stopPairingCompleted) {
+    stopPairingCompleted()
+    stopPairingCompleted = null
   }
 
-  if (stopListeningSpaceAccess) {
-    stopListeningSpaceAccess()
-    stopListeningSpaceAccess = null
-  }
-
-  snapshot = {
-    setupState: null,
-    sessionId: null,
-    hydrated: false,
-  }
-
+  snapshot = { flow: { kind: 'loading' }, hydrated: false }
   emitChange()
 }

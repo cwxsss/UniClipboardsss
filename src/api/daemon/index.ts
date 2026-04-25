@@ -43,15 +43,25 @@ export { getStorageStats, clearCache } from './storage'
 export type { StorageStats } from './storage'
 export {
   getSetupState,
-  startNewSpace,
-  startJoinSpace,
-  selectJoinPeer,
-  submitPassphrase,
-  verifyPassphrase,
-  confirmPeerTrust,
-  cancelSetup,
-} from './setup'
-export type { SetupError, SetupState } from './setup'
+  initializeSpace,
+  issuePairingInvitation,
+  redeemInvitation,
+  cancelInvitation,
+  resetSetup,
+  SetupV2Error,
+} from './setupV2'
+export type {
+  CurrentInvitation,
+  InitializeSpaceErrorKind,
+  InitializeSpaceRequest,
+  InitializeSpaceResponse,
+  IssueInvitationErrorKind,
+  IssueInvitationResponse,
+  RedeemInvitationErrorKind,
+  RedeemRequest,
+  RedeemResponse,
+  SetupStateResponse,
+} from './setupV2'
 export {
   getP2PPeers,
   getPairedPeers,
@@ -76,7 +86,6 @@ export type {
   P2PPeerNameUpdatedEvent,
   P2PPeerDiscoveryChangedEvent,
 } from './pairing'
-export type { SpaceAccessCompletedEvent } from './setup'
 export { querySearch, getSearchStatus, triggerSearchRebuild } from './search'
 export type {
   SearchResultDto,
