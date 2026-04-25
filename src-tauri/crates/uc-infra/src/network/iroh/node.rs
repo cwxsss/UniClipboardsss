@@ -19,7 +19,7 @@
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use iroh::endpoint::TransportConfig;
+use iroh::endpoint::{TransportConfig, VarInt};
 use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode};
 use iroh_quinn_proto::congestion::BbrConfig;
@@ -145,6 +145,24 @@ fn build_transport_config() -> TransportConfig {
         // shared bottleneck; that's a non-issue for our P2P single-flow
         // direct UDP path.
         .congestion_controller_factory(Arc::new(BbrConfig::default()))
+        // QUIC flow-control sized for hole-punched cross-WAN BDP. iroh-blobs
+        // opens a single bidi stream per blob fetch (`open_bi`), so the
+        // stream window — not the connection window — is the per-transfer
+        // ceiling: max throughput ≈ stream_receive_window / RTT. Quinn's
+        // default 1.25 MB is sized for a 100ms × 100 Mbps internet path; on
+        // the relay fallback (~360ms RTT) it caps a single blob at ~28 Mbps,
+        // and even on a successful hole-punch across continents (~200ms RTT)
+        // it caps at ~50 Mbps. 32 MB supports 1 Gbps over 256ms RTT with
+        // headroom — well beyond any realistic peer link. Memory cost is
+        // bounded: each in-flight blob fetch can stage up to 32 MB of
+        // unread chunks, but iroh-blobs reads continuously so the buffer
+        // rarely fills.
+        .stream_receive_window(VarInt::from_u32(32 * 1024 * 1024))
+        // Mirror on the send side. Default `send_window = 8 × 1.25 MB = 10
+        // MB` caps connection-total in-flight bytes at the same WAN-hostile
+        // value. 64 MB keeps both directions of a sync from saturating
+        // their own backpressure on long paths.
+        .send_window(64 * 1024 * 1024)
         // Default 3 → 5 PTOs before declaring persistent congestion, so
         // isolated 100–150ms AWDL spikes don't collapse CWND.
         .persistent_congestion_threshold(5)
