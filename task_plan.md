@@ -1123,9 +1123,35 @@ pub struct StopNetworkCommand; // 无字段
 | Phase | 范围 | 验收重心 |
 |---|---|---|
 | Phase 1 · daemon peer worker 切换 ✅(2026-04-24) | 新增 `uc-daemon/src/peers/presence_monitor.rs`(基于 `PresencePort::subscribe()`),删除旧 `monitor.rs` | daemon 在每次 `PresenceEvent::Online/Offline` 后向 ws `peers` topic 推一条 `peers.changed` 全量快照(已用单测覆盖,真机两台验收挪到 Slice 4 整体收尾);`peer_connection_changed` / `peer_name_updated` 现已无生产者,契约结构留给 Phase 3 整体删除 |
-| Phase 2 · 应用层 consumer 切换 | A 已完成(2026-04-24):`uc-application/setup/{orchestrator,action_executor,facade,testing}.rs` 已拿掉 `Arc<dyn DiscoveryPort>` 参数 + `EnsureDiscovery` action 仅保留 `start_network()`;`uc-bootstrap/src/assembly.rs` 同步删除 `SetupAssemblyPorts.discovery_port` + `NetworkDiscoveryPort` / `EmptyDiscoveryPort` 内联占位。B 待做:`space_access/network_adapter.rs` 把 `PairingTransportPort` 调用替换为新 `PairingSessionPort`/`PairingEventPort` | `cargo check --workspace` 通过;Slice 1 pairing e2e + Slice 2 clipboard e2e + Slice 3 blob e2e 全绿 |
-| Phase 3 · 整体删除 | 见下"删除清单"按目录/文件级一次性 `rm`;`mod.rs` / `lib.rs` / `deps.rs` / `Cargo.toml` 同步清理 | `rg -w libp2p src-tauri/crates/uc-{core,app,application,platform,infra,bootstrap,daemon,tauri,cli}/src/` 0 命中(除 logging 注释);`cargo build --workspace` 0 warning(关于旧 deprecated 项) |
+| Phase 2 · 应用层 consumer 切换 ✅(2026-04-24) | `uc-application/setup/{orchestrator,action_executor,facade,testing}.rs` 已拿掉 `Arc<dyn DiscoveryPort>` 参数 + `EnsureDiscovery` action 仅保留 `start_network()`;`uc-bootstrap/src/assembly.rs` 同步删除 `SetupAssemblyPorts.discovery_port` + `NetworkDiscoveryPort` / `EmptyDiscoveryPort` 内联占位。**原计划的"B · `space_access/network_adapter.rs` 切到 PairingSessionPort/PairingEventPort"已重新评估并推迟到 Phase 3,理由见下方决策记录** | `cargo check --workspace` 通过;Slice 1 pairing e2e + Slice 2 clipboard e2e + Slice 3 blob e2e 全绿 |
+| Phase 3 · 整体删除(含 space-access envelope 迁移前置项) | 见下"删除清单"按目录/文件级一次性 `rm`;**前置子任务 P3-pre:`space_access/network_adapter.rs` 的 PairingMessage::Busy envelope 迁移落地(必须先做完才能删 libp2p adapter)**;`mod.rs` / `lib.rs` / `deps.rs` / `Cargo.toml` 同步清理 | `rg -w libp2p src-tauri/crates/uc-{core,app,application,platform,infra,bootstrap,daemon,tauri,cli}/src/` 0 命中(除 logging 注释);`cargo build --workspace` 0 warning(关于旧 deprecated 项) |
 | Phase 4 · 收尾 | 移除 Cargo feature `iroh` 门控(若有),清理 frozen 注释 / `#![allow(deprecated)]`,跑全套 e2e 回归 | `grep -r "frozen libp2p\|allow(deprecated).*libp2p" src-tauri/` 0 命中 |
+
+---
+
+#### 决策记录:Phase 2 B → Phase 3 P3-pre(2026-04-24)
+
+**原计划 B**:`uc-application/src/space_access/network_adapter.rs` 把 `PairingTransportPort` 调用替换为 `PairingSessionPort` + `PairingEventPort`。
+
+**重新评估后推迟,理由**:
+1. **`PairingSessionMessage` 没有 envelope 变体**——只有 5 个 pairing 握手专用变体(Request/KeyslotOffer/ChallengeResponse/Confirm/Reject),没有 Busy 或通用 envelope。`SpaceAccessNetworkAdapter` 当前依赖 `PairingMessage::Busy.reason` 作为 JSON envelope 承载 space_access_offer/proof/result——直接换 port **不存在 1:1 替换路径**。
+2. **iroh 栈下当前没有 `PairingTransportPort` 的活 impl**——唯一非占位 impl 是 `Libp2pNetworkAdapter`(`uc-platform/src/adapters/libp2p_network/mod.rs:825`),即所有 space-access 协议消息**目前还在走 libp2p stream**。Phase 2 范围内单独切 network_adapter 没有 iroh 落点。
+3. **F-050 明文预言**:"`uc-application/src/space_access/network_adapter.rs` —— 桥接旧 pairing transport 到 space_access(Slice 5 换 iroh pairing session;**文件可能保留但内部重写**)"——这是 Slice 5 / Phase 3 工作,不是 Phase 2"应用层 consumer 切换"。
+4. **Phase 2 验收条件已满足**——`cargo check --workspace` 通过 + Slice 1/2/3 e2e 全绿是 A 完成时的状态。
+5. **强联动**:envelope 迁移和 libp2p adapter 删除必须在同一阶段做——adapter 没删之前 envelope 切走没收益,adapter 删之前 envelope 没切走 setup 整段断。所以挪进 Phase 3 作为**前置子任务 P3-pre**(必须先做完再删 libp2p adapter)。
+
+**P3-pre 范围**(Phase 3 起手):
+- **决策点**:envelope 落 iroh 走哪条路径
+  - 方案 A:`PairingSessionMessage` 加 `SpaceAccess { kind, payload_json }` 变体——改动小,但侵入新 port 的"专用握手消息"语义
+  - 方案 B:uc-core 新增独立 `SpaceAccessSessionPort` + iroh adapter 独立 stream 实现——最纯净,工作量大
+- **落地清单**(无论 A/B):
+  - iroh adapter(`uc-platform/src/adapters/iroh/...`)新增 envelope 双侧 codec + send/recv 路径
+  - `uc-application/src/space_access/network_adapter.rs` 重写:不再调 `PairingTransportPort`,改调新 port(`PairingSessionPort` 扩展版 / `SpaceAccessSessionPort`)
+  - `uc-daemon/src/pairing/host.rs` 接收侧从 `PairingMessage::Busy` 解析切到新 wire type 解析(保留 daemon 侧 dispatch 入口语义)
+  - 保留 `PairingMessage` / `PairingBusy` 仅当 codec 复用其 JSON shape;若选方案 B,可以一并删除这两个 wire 类型
+- **完成判据**:`SpaceAccessNetworkAdapter` 不再依赖 `PairingTransportPort`;Slice 1 pairing e2e(joiner-flow,含 offer/proof/result 三段)在 iroh-only 配置下全绿;然后才进入正式删除清单
+
+**`task_plan.md:1180` 自相矛盾的修正**:1180 行原文"保 `PairingMessage` / `PairingBusy`(被新 `space_access/network_adapter.rs` 用)"——只有当 P3-pre 选**方案 A**(JSON 字符串塞 PairingSessionMessage::SpaceAccess)且 codec 复用历史 JSON shape 时才成立;选方案 B 时 `PairingMessage` 整族跟 `pairing_transport.rs` 一起删。该行的最终态由 P3-pre 决策落地后回填。
 
 ---
 
@@ -1197,7 +1223,7 @@ pub struct StopNetworkCommand; // 无字段
 - [ ] `uc-application/src/setup/action_executor.rs:20` + `:59` 等同上
 - [ ] `uc-application/src/setup/facade.rs`:Discovery/PairingTransport 占位参数清理
 - [ ] `uc-application/src/setup/testing.rs:196`(`impl PairingTransportPort for FakePairingTransport`)整文件依赖清理
-- [ ] `uc-application/src/space_access/network_adapter.rs`:把 `PairingTransportPort` 调用替换为 `PairingSessionPort` + `PairingEventPort`(Phase 2 主要工作)
+- [ ] `uc-application/src/space_access/network_adapter.rs`:envelope 迁移并切到 iroh port(P3-pre 前置子任务,必须早于 libp2p adapter 删除;具体方案 A/B 见上方决策记录)
 - [ ] `uc-application/src/pairing/mod.rs`:去掉 `state_machine` 子模块导出
 
 **uc-platform**:
