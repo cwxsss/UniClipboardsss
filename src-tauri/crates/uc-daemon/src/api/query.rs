@@ -1,6 +1,5 @@
 //! Read-only daemon query service.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -10,7 +9,6 @@ use uc_app::usecases::CoreUseCases;
 use uc_application::membership::usecases::ListMembersUseCase;
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::space_access::state::SpaceAccessState;
-use uc_core::SpaceMember;
 
 use crate::api::dto::pairing::PairingSessionSummaryDto;
 use crate::api::projection::IntoApiDto;
@@ -135,21 +133,14 @@ impl DaemonQueryService {
     }
 
     pub async fn paired_devices(&self) -> Result<Vec<SpaceMemberDto>> {
-        let connected_peers = self
-            .peers()
-            .await?
-            .into_iter()
-            .map(|peer| (peer.peer_id, peer.connected))
-            .collect::<HashMap<_, _>>();
         let members =
             ListMembersUseCase::new(self.runtime.wiring_deps().device.member_repo.clone())
                 .execute()
                 .await?;
 
-        Ok(members
-            .into_iter()
-            .map(|member| map_member(member, &connected_peers))
-            .collect())
+        // Slice 4 P5a-1: connected 字段在 libp2p 删除后失去数据源；
+        // 暂时全部填 false，等 iroh 侧的连接状态接入后再回填。
+        Ok(members.into_iter().map(|m| m.into_api_dto()).collect())
     }
 
     pub async fn pairing_session(
@@ -182,13 +173,6 @@ impl DaemonQueryService {
         };
         SpaceAccessStateResponse { state }
     }
-}
-
-fn map_member(member: SpaceMember, connected_peers: &HashMap<String, bool>) -> SpaceMemberDto {
-    let peer_id = member.device_id.as_str().to_string();
-    let mut dto = member.into_api_dto();
-    dto.connected = connected_peers.get(&peer_id).copied().unwrap_or(false);
-    dto
 }
 
 fn worker_health_label(health: &ServiceHealth) -> String {

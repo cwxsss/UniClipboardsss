@@ -443,15 +443,9 @@ async fn handle_unpair_device(
     let deps = runtime.wiring_deps();
     let peer_id = payload.peer_id;
 
-    deps.network_ports
-        .pairing
-        .unpair_device(peer_id.clone())
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, peer_id = %peer_id, "daemon unpair: pairing transport failed");
-            ApiError::internal(e.to_string())
-        })?;
-
+    // Slice 4 P5a-1: 取消配对 = 删除本机成员记录。libp2p 时代的
+    // `PairingTransportPort::unpair_device` 通知对端的能力随 libp2p 一同下线；
+    // 本地自治模型下不再广播给对端（对端发现后会自行清理）。
     RevokeMemberUseCase::new(deps.device.member_repo.clone())
         .execute(RevokeMember {
             device_id: DeviceId::new(peer_id.as_str()),

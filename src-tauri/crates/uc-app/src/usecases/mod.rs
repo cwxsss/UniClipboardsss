@@ -178,7 +178,7 @@ impl<'a> CoreUseCases<'a> {
     /// Get local device info (peer id + device name).
     pub fn get_local_device_info(&self) -> crate::usecases::GetLocalDeviceInfo {
         crate::usecases::GetLocalDeviceInfo::new(
-            self.runtime.deps.network_ports.peers.clone(),
+            self.runtime.deps.device.device_identity.clone(),
             self.runtime.deps.settings.clone(),
         )
     }

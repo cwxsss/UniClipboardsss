@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use uc_core::ports::{PeerDirectoryPort, SettingsPort};
+use uc_core::ports::{DeviceIdentityPort, SettingsPort};
 
 const DEFAULT_PAIRING_DEVICE_NAME: &str = "Uniclipboard Device";
 
@@ -14,13 +14,19 @@ pub struct LocalDeviceInfo {
 }
 
 pub struct GetLocalDeviceInfo {
-    network: Arc<dyn PeerDirectoryPort>,
+    device_identity: Arc<dyn DeviceIdentityPort>,
     settings: Arc<dyn SettingsPort>,
 }
 
 impl GetLocalDeviceInfo {
-    pub fn new(network: Arc<dyn PeerDirectoryPort>, settings: Arc<dyn SettingsPort>) -> Self {
-        Self { network, settings }
+    pub fn new(
+        device_identity: Arc<dyn DeviceIdentityPort>,
+        settings: Arc<dyn SettingsPort>,
+    ) -> Self {
+        Self {
+            device_identity,
+            settings,
+        }
     }
 
     pub async fn execute(&self) -> Result<LocalDeviceInfo> {
@@ -41,7 +47,7 @@ impl GetLocalDeviceInfo {
         };
 
         Ok(LocalDeviceInfo {
-            peer_id: self.network.local_peer_id(),
+            peer_id: self.device_identity.current_device_id().to_string(),
             device_name,
         })
     }
