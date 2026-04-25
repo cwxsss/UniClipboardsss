@@ -4,7 +4,12 @@
  * Provides classifyPairingError: maps error strings to PairingErrorKind.
  */
 
-import type { PairingErrorKind } from '@/api/daemon/pairing'
+export type PairingErrorKind =
+  | 'active_session_exists'
+  | 'no_local_participant'
+  | 'session_not_found'
+  | 'daemon_unavailable'
+  | 'unknown'
 
 /**
  * Maps a raw error string to a typed PairingErrorKind.
@@ -49,5 +54,3 @@ export function classifyPairingError(rawError?: string | null): PairingErrorKind
 
   return 'unknown'
 }
-
-export type { PairingErrorKind }

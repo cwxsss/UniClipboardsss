@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { getDeviceIcon, getIconColor } from './device-utils'
 import DeviceSettingsSheet from './DeviceSettingsSheet'
 import UnpairAlertDialog from './UnpairAlertDialog'
-import { unpairP2PDevice } from '@/api/daemon/pairing'
+import { unpairDevice } from '@/api/daemon/members'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useSetting } from '@/hooks/useSetting'
@@ -76,7 +76,7 @@ const SpaceMembersPanel: React.FC = () => {
   const handleUnpairConfirm = async () => {
     if (!unpairTargetId) return
     try {
-      await unpairP2PDevice(unpairTargetId)
+      await unpairDevice(unpairTargetId)
       dispatch(fetchSpaceMembers())
       setUnpairDialogOpen(false)
       setSheetOpen(false)

@@ -63,9 +63,14 @@ export type {
   SetupStateResponse,
 } from './setupV2'
 export {
-  getP2PPeers,
+  getLocalDeviceInfo,
   getPairedPeers,
   getPairedPeersWithStatus,
+  unpairDevice,
+} from './members'
+export type { LocalDeviceInfo, SpaceMember } from './members'
+export {
+  getP2PPeers,
   initiateP2PPairing,
   acceptP2PPairing,
   rejectP2PPairing,
@@ -74,8 +79,6 @@ export {
 } from './pairing'
 export type {
   P2PPeerInfo,
-  LocalDeviceInfo,
-  SpaceMember,
   P2PPairingRequest,
   P2PPairingResponse,
   P2PPinVerifyRequest,

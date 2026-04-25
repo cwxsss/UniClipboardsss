@@ -10,7 +10,7 @@ import {
   getPairedPeersWithStatus,
   type LocalDeviceInfo,
   type SpaceMember,
-} from '@/api/daemon/pairing'
+} from '@/api/daemon/members'
 
 interface DevicesState {
   // 当前设备
