@@ -17,8 +17,9 @@
 //! [`install_presence`]: IrohNodeBuilder::install_presence
 //! [`install_clipboard`]: IrohNodeBuilder::install_clipboard
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
+use iroh::endpoint::TransportConfig;
 use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode};
 use tracing::{debug, instrument};
@@ -115,6 +116,40 @@ pub struct IrohNodeConfig {
     pub disable_relays: bool,
 }
 
+/// Build the QUIC `TransportConfig` we attach to the shared endpoint.
+///
+/// Defaults are tuned assuming "internet"-shaped paths; on macOS the shared
+/// Wi-Fi radio is periodically yanked away by AWDL (AirDrop / Handoff /
+/// Continuity) and background SSID scans, producing 50–150ms RTT spikes
+/// even on a quiet LAN with great signal. Left at defaults, CUBIC interprets
+/// those spikes as persistent congestion after 3 PTOs and halves CWND, so a
+/// 60 MB transfer drags to ~700 KB/s over a link capable of hundreds of
+/// MB/s. These knobs give QUIC more slack for the jitter floor without
+/// changing the congestion algorithm itself.
+///
+/// Any change here affects every transport (pairing / presence / clipboard
+/// / blobs) because they share this one endpoint.
+fn build_transport_config() -> TransportConfig {
+    let mut cfg = TransportConfig::default();
+    cfg
+        // Default 3 → 5 PTOs before declaring persistent congestion, so
+        // isolated 100–150ms AWDL spikes don't collapse CWND.
+        .persistent_congestion_threshold(5)
+        // Default 30s idle timeout drops connections between bursty user
+        // copies, forcing a fresh hole-punch on every resume. 60s keeps
+        // the ConnectionPool entry warm across typical copy gaps.
+        .max_idle_timeout(Some(
+            Duration::from_secs(60)
+                .try_into()
+                .expect("60s is well within QUIC's idle-timeout encoding"),
+        ))
+        // QUIC-level keepalive, complementary to PeerKeepAliveWorker's
+        // app-level pings: keeps the magicsock path's last-activity stamp
+        // fresh so iroh doesn't tear the path down between transfers.
+        .keep_alive_interval(Some(Duration::from_secs(15)));
+    cfg
+}
+
 /// Staged builder — bind endpoint, install transport handlers, then
 /// [`spawn`](Self::spawn) the router.
 pub struct IrohNodeBuilder {
@@ -154,6 +189,7 @@ impl IrohNodeBuilder {
             // `install_presence` / `install_clipboard`.
             .alpns(vec![PAIRING_ALPN.to_vec()])
             .relay_mode(relay_mode)
+            .transport_config(build_transport_config())
             .bind()
             .await
             .map_err(|err| IrohNodeError::Bind(err.to_string()))?;
