@@ -230,7 +230,6 @@ pub async fn build_space_setup_assembly(
     let ingest_handle = clipboard_sync.spawn_ingest_loop();
     let blob = Arc::new(BlobTransferFacade::new(BlobTransferDeps {
         hash: Arc::clone(&deps.system.hash),
-        blob_cipher: Arc::clone(&deps.security.blob_cipher),
         blob_transfer: Arc::clone(&blob_transfer),
         blob_reference: Arc::clone(&wired.blob_reference_repo),
     }));

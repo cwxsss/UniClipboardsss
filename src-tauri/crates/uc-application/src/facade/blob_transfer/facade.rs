@@ -6,7 +6,6 @@ use uc_core::ids::EntryId;
 use uc_core::ports::blob::{
     BlobDigest, BlobReferenceRepositoryPort, BlobTicket, BlobTransferPort, PlaintextHash,
 };
-use uc_core::ports::security::BlobCipherPort;
 use uc_core::ports::ContentHashPort;
 
 use crate::usecases::blob_transfer::{
@@ -15,7 +14,6 @@ use crate::usecases::blob_transfer::{
 
 pub struct BlobTransferDeps {
     pub hash: Arc<dyn ContentHashPort>,
-    pub blob_cipher: Arc<dyn BlobCipherPort>,
     pub blob_transfer: Arc<dyn BlobTransferPort>,
     pub blob_reference: Arc<dyn BlobReferenceRepositoryPort>,
 }
@@ -66,13 +64,11 @@ impl BlobTransferFacade {
     pub fn new(deps: BlobTransferDeps) -> Self {
         let publish_uc = Arc::new(PublishBlobUseCase::new(
             Arc::clone(&deps.hash),
-            Arc::clone(&deps.blob_cipher),
             Arc::clone(&deps.blob_transfer),
             Arc::clone(&deps.blob_reference),
         ));
         let fetch_uc = Arc::new(FetchBlobUseCase::new(
             deps.hash,
-            deps.blob_cipher,
             deps.blob_transfer,
             deps.blob_reference,
         ));

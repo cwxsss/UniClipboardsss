@@ -1,23 +1,17 @@
 //! Blob 发布 / 拉取用例。
 //!
-//! 这里处理应用层编排:明文 hash 去重、业务 blob 加解密、iroh-blobs
-//! 发布/拉取、引用标签登记。外部调用方只通过 facade 进入。
+//! 这里处理应用层编排:明文 hash 去重、iroh-blobs 内容寻址发布/拉取、
+//! 引用标签登记。文件 blob 走 raw bytes 通道,不在应用层加解密——
+//! 敏感元数据(文件名、路径等)由 `EncryptingClipboardEventWriter` 在
+//! clipboard event 的 inline_data 里独立加密。
+//!
+//! 外部调用方只通过 facade 进入。
 
 mod fetch_blob;
 mod publish_blob;
 
 pub(crate) use fetch_blob::{FetchBlobInput, FetchBlobUseCase};
 pub(crate) use publish_blob::{PublishBlobInput, PublishBlobUseCase};
-
-fn aad_for_entry(_entry_id: &uc_core::ids::EntryId) -> uc_core::crypto::domain::Aad {
-    // blob 内容按明文 hash 去重,同一密文可能归属多个剪贴板记录。
-    // `entry_id` 只负责 tag 归属,不能进入加密上下文。
-    uc_core::crypto::domain::Aad::from(&b"uniclipboard:blob:v1"[..])
-}
-
-fn active_space_placeholder() -> uc_core::crypto::domain::ActiveSpace {
-    uc_core::crypto::domain::ActiveSpace::new(uc_core::ids::SpaceId::from("space"))
-}
 
 #[cfg(test)]
 mod tests {
@@ -26,27 +20,22 @@ mod tests {
 
     use async_trait::async_trait;
     use bytes::Bytes;
-    use uc_core::crypto::domain::{Aad, ActiveSpace, Ciphertext, Plaintext};
     use uc_core::ids::EntryId;
     use uc_core::ports::blob::{
         BlobDigest, BlobError, BlobReferenceError, BlobReferenceRepositoryPort, BlobTicket,
         BlobTransferPort, PlaintextHash, TagReason,
     };
-    use uc_core::ports::security::{BlobCipherError, BlobCipherPort};
     use uc_core::ports::ContentHashPort;
     use uc_core::{ContentHash, HashAlgorithm};
 
-    use super::aad_for_entry;
     use super::{FetchBlobInput, FetchBlobUseCase, PublishBlobInput, PublishBlobUseCase};
 
     #[tokio::test]
     async fn publish_reuses_existing_digest_for_repeated_plaintext() {
         let hash = Arc::new(FakeHash);
-        let cipher = Arc::new(FakeBlobCipher::default());
         let transfer = Arc::new(FakeBlobTransfer::default());
         let reference = Arc::new(FakeBlobReferenceRepository::default());
-        let usecase =
-            PublishBlobUseCase::new(hash, cipher.clone(), transfer.clone(), reference.clone());
+        let usecase = PublishBlobUseCase::new(hash, transfer.clone(), reference.clone());
 
         let plaintext = Bytes::from_static(b"same file bytes");
         let mut first_digest = None;
@@ -67,25 +56,18 @@ mod tests {
             }
         }
 
-        assert_eq!(cipher.encrypt_count(), 1);
         assert_eq!(transfer.publish_count(), 1);
         assert_eq!(transfer.tag_count(), 10);
         assert_eq!(reference.save_count(), 1);
     }
 
     #[tokio::test]
-    async fn fetch_reused_digest_with_new_entry_id_decrypts() {
+    async fn fetch_reused_digest_with_new_entry_id_returns_plaintext() {
         let hash = Arc::new(FakeHash);
-        let cipher = Arc::new(FakeBlobCipher::default());
         let transfer = Arc::new(FakeBlobTransfer::default());
         let reference = Arc::new(FakeBlobReferenceRepository::default());
-        let publish = PublishBlobUseCase::new(
-            hash.clone(),
-            cipher.clone(),
-            transfer.clone(),
-            reference.clone(),
-        );
-        let fetch = FetchBlobUseCase::new(hash, cipher, transfer, reference);
+        let publish = PublishBlobUseCase::new(hash.clone(), transfer.clone(), reference.clone());
+        let fetch = FetchBlobUseCase::new(hash, transfer, reference);
 
         let plaintext = Bytes::from_static(b"same file bytes");
         let first = publish
@@ -112,31 +94,23 @@ mod tests {
                 entry_id: EntryId::from("entry-two"),
             })
             .await
-            .expect("reused digest should decrypt for the new entry tag");
+            .expect("reused digest should fetch for the new entry tag");
 
         assert_eq!(outcome.plaintext, plaintext);
         assert_eq!(outcome.entry_id, EntryId::from("entry-two"));
     }
 
     #[tokio::test]
-    async fn fetch_decrypts_saves_reference_and_tags_entry() {
+    async fn fetch_saves_reference_and_tags_entry() {
         let hash = Arc::new(FakeHash);
-        let cipher = Arc::new(FakeBlobCipher::default());
         let transfer = Arc::new(FakeBlobTransfer::default());
         let reference = Arc::new(FakeBlobReferenceRepository::default());
-        let usecase = FetchBlobUseCase::new(
-            hash.clone(),
-            cipher.clone(),
-            transfer.clone(),
-            reference.clone(),
-        );
+        let usecase = FetchBlobUseCase::new(hash.clone(), transfer.clone(), reference.clone());
 
         let entry_id = EntryId::new();
         let plaintext = Bytes::from_static(b"remote blob bytes");
-        let aad = aad_for_entry(&entry_id);
-        let ciphertext = cipher_bytes(&plaintext, &aad);
         let digest = transfer
-            .publish(Bytes::from(ciphertext))
+            .publish(plaintext.clone())
             .await
             .expect("seed publish should succeed");
         let ticket = transfer
@@ -178,44 +152,6 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeBlobCipher {
-        encrypt_count: Mutex<usize>,
-    }
-
-    impl FakeBlobCipher {
-        fn encrypt_count(&self) -> usize {
-            *self.encrypt_count.lock().expect("lock encrypt count")
-        }
-    }
-
-    #[async_trait]
-    impl BlobCipherPort for FakeBlobCipher {
-        async fn encrypt(
-            &self,
-            _space: &ActiveSpace,
-            plaintext: &Plaintext,
-            aad: &Aad,
-        ) -> Result<Ciphertext, BlobCipherError> {
-            *self.encrypt_count.lock().expect("lock encrypt count") += 1;
-            Ok(Ciphertext::new(cipher_bytes(plaintext.as_bytes(), aad)))
-        }
-
-        async fn decrypt(
-            &self,
-            _space: &ActiveSpace,
-            ciphertext: &Ciphertext,
-            aad: &Aad,
-        ) -> Result<Plaintext, BlobCipherError> {
-            let prefix = cipher_prefix(aad);
-            let bytes = ciphertext.as_bytes();
-            if !bytes.starts_with(&prefix) {
-                return Err(BlobCipherError::InvalidCiphertext);
-            }
-            Ok(Plaintext::new(bytes[prefix.len()..].to_vec()))
-        }
-    }
-
-    #[derive(Default)]
     struct FakeBlobTransfer {
         store: Mutex<HashMap<BlobDigest, Bytes>>,
         tags: Mutex<Vec<(BlobDigest, TagReason)>>,
@@ -234,13 +170,13 @@ mod tests {
 
     #[async_trait]
     impl BlobTransferPort for FakeBlobTransfer {
-        async fn publish(&self, ciphertext: Bytes) -> Result<BlobDigest, BlobError> {
+        async fn publish(&self, plaintext: Bytes) -> Result<BlobDigest, BlobError> {
             *self.publish_count.lock().expect("lock publish count") += 1;
-            let digest = digest_for(&ciphertext);
+            let digest = digest_for(&plaintext);
             self.store
                 .lock()
                 .expect("lock store")
-                .insert(digest, ciphertext);
+                .insert(digest, plaintext);
             Ok(digest)
         }
 
@@ -319,19 +255,6 @@ mod tests {
             self.rows.lock().expect("lock rows").remove(hash);
             Ok(())
         }
-    }
-
-    fn cipher_bytes(plaintext: &[u8], aad: &Aad) -> Vec<u8> {
-        let mut bytes = cipher_prefix(aad);
-        bytes.extend_from_slice(plaintext);
-        bytes
-    }
-
-    fn cipher_prefix(aad: &Aad) -> Vec<u8> {
-        let mut prefix = b"fake-blob-cipher:".to_vec();
-        prefix.extend_from_slice(aad.as_bytes());
-        prefix.push(0);
-        prefix
     }
 
     fn digest_for(bytes: &[u8]) -> BlobDigest {

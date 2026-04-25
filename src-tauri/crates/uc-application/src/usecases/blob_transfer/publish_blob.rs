@@ -2,15 +2,11 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 
-use uc_core::crypto::domain::Plaintext;
 use uc_core::ids::EntryId;
 use uc_core::ports::blob::{
     BlobDigest, BlobReferenceRepositoryPort, BlobTicket, BlobTransferPort, PlaintextHash, TagReason,
 };
-use uc_core::ports::security::BlobCipherPort;
 use uc_core::ports::ContentHashPort;
-
-use super::{aad_for_entry, active_space_placeholder};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PublishBlobInput {
@@ -29,7 +25,6 @@ pub(crate) struct PublishBlobOutcome {
 
 pub(crate) struct PublishBlobUseCase {
     hash: Arc<dyn ContentHashPort>,
-    blob_cipher: Arc<dyn BlobCipherPort>,
     blob_transfer: Arc<dyn BlobTransferPort>,
     blob_reference: Arc<dyn BlobReferenceRepositoryPort>,
 }
@@ -37,13 +32,11 @@ pub(crate) struct PublishBlobUseCase {
 impl PublishBlobUseCase {
     pub fn new(
         hash: Arc<dyn ContentHashPort>,
-        blob_cipher: Arc<dyn BlobCipherPort>,
         blob_transfer: Arc<dyn BlobTransferPort>,
         blob_reference: Arc<dyn BlobReferenceRepositoryPort>,
     ) -> Self {
         Self {
             hash,
-            blob_cipher,
             blob_transfer,
             blob_reference,
         }
@@ -83,20 +76,16 @@ impl PublishBlobUseCase {
             });
         }
 
-        let plaintext = Plaintext::new(input.plaintext.to_vec());
-        let ciphertext = self
-            .blob_cipher
-            .encrypt(
-                &active_space_placeholder(),
-                &plaintext,
-                &aad_for_entry(&input.entry_id),
-            )
-            .await
-            .map_err(|e| PublishBlobError::Cipher(e.to_string()))?;
-
+        // File blobs go through iroh-blobs as raw bytes — content-addressed by
+        // blake3 of the plaintext, which equals `plaintext_hash`. Application-
+        // layer encryption is intentionally absent: file payloads are opaque
+        // user-chosen content (the user already consented by copying), and any
+        // sensitive *metadata* (filenames, paths, mime, thumbnails) lives on
+        // the clipboard event side and is encrypted there by
+        // `EncryptingClipboardEventWriter`.
         let digest = self
             .blob_transfer
-            .publish(Bytes::from(ciphertext.into_bytes()))
+            .publish(input.plaintext)
             .await
             .map_err(|e| PublishBlobError::Transfer(e.to_string()))?;
         self.blob_reference
@@ -150,8 +139,6 @@ pub(crate) enum PublishBlobError {
     EmptyPlaintext,
     #[error("hash failed: {0}")]
     Hash(String),
-    #[error("blob cipher failed: {0}")]
-    Cipher(String),
     #[error("blob transfer failed: {0}")]
     Transfer(String),
     #[error("blob reference failed: {0}")]
