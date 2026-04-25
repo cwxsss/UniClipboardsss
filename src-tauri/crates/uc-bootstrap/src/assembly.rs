@@ -1007,7 +1007,7 @@ use uc_application::pairing::PairingFacade;
 use uc_application::setup::{SetupFacade, SetupPairingFacadePort};
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::space::SpaceAccessTransportPort;
-use uc_core::ports::{DiscoveryPort, TimerPort};
+use uc_core::ports::TimerPort;
 use uc_core::TrustedPeerRepositoryPort;
 
 /// Bundle of network/external adapter ports needed to assemble the SetupOrchestrator.
@@ -1021,7 +1021,6 @@ use uc_core::TrustedPeerRepositoryPort;
 pub struct SetupAssemblyPorts {
     pub setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
     pub space_access_facade: Arc<SpaceAccessFacade>,
-    pub discovery_port: Arc<dyn DiscoveryPort>,
     pub device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
     pub lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
     /// Trusted-peer repository (0.4.3): consumed by
@@ -1033,30 +1032,17 @@ pub struct SetupAssemblyPorts {
 }
 
 impl SetupAssemblyPorts {
-    /// Create a bundle using the peer-directory port as the discovery adapter.
+    /// Create a bundle wired to the production network/lifecycle adapters.
     pub fn from_network(
         pairing_facade: Arc<PairingFacade>,
         space_access_facade: Arc<SpaceAccessFacade>,
-        peers: Arc<dyn uc_core::ports::PeerDirectoryPort>,
         device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
         lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
         trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     ) -> Self {
-        struct NetworkDiscoveryPort {
-            peers: Arc<dyn uc_core::ports::PeerDirectoryPort>,
-        }
-        #[async_trait::async_trait]
-        impl DiscoveryPort for NetworkDiscoveryPort {
-            async fn list_discovered_peers(
-                &self,
-            ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>> {
-                self.peers.get_discovered_peers().await
-            }
-        }
         Self {
             setup_pairing_facade: pairing_facade,
             space_access_facade,
-            discovery_port: Arc::new(NetworkDiscoveryPort { peers }),
             device_announcer,
             lifecycle_emitter,
             trusted_peer_repo,
@@ -1071,16 +1057,6 @@ impl SetupAssemblyPorts {
     /// here — they are created by AppRuntime::new() / with_setup() and passed
     /// separately to build_setup_facade().
     pub fn placeholder(_deps: &uc_app::AppDeps) -> Self {
-        struct EmptyDiscoveryPort;
-        #[async_trait::async_trait]
-        impl DiscoveryPort for EmptyDiscoveryPort {
-            async fn list_discovered_peers(
-                &self,
-            ) -> anyhow::Result<Vec<uc_core::network::DiscoveredPeer>> {
-                Ok(Vec::new())
-            }
-        }
-
         struct NoopSetupPairingFacade;
 
         #[async_trait::async_trait]
@@ -1154,7 +1130,6 @@ impl SetupAssemblyPorts {
         Self {
             setup_pairing_facade: Arc::new(NoopSetupPairingFacade),
             space_access_facade: Arc::new(SpaceAccessFacade::new()),
-            discovery_port: Arc::new(EmptyDiscoveryPort),
             device_announcer: None,
             lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
             trusted_peer_repo: Arc::new(NoopTrustedPeerRepository),
@@ -1237,7 +1212,6 @@ pub fn build_setup_facade(
         ports.setup_pairing_facade,
         setup_event_port,
         ports.space_access_facade,
-        ports.discovery_port,
         deps.network_control.clone(),
         space_access_port,
         deps.network_ports.pairing.clone(),

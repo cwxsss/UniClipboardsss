@@ -17,7 +17,7 @@ use uc_core::{
     crypto::{model::Passphrase, SecretString},
     ids::SessionId,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
-    ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, TimerPort},
+    ports::{NetworkControlPort, PairingTransportPort, TimerPort},
     space_access::{
         event::SpaceAccessEvent,
         state::{DenyReason, SpaceAccessState},
@@ -56,7 +56,6 @@ pub struct SetupActionExecutor {
     pub(super) setup_event_port: Arc<dyn SetupEventPort>,
 
     // Infrastructure ports
-    pub(super) discovery_port: Arc<dyn DiscoveryPort>,
     pub(super) network_control: Arc<dyn NetworkControlPort>,
     pub(super) space_access_port: Arc<dyn SpaceAccessPort>,
     pub(super) pairing_transport: Arc<dyn PairingTransportPort>,
@@ -121,26 +120,6 @@ impl SetupActionExecutor {
                         );
                         SetupError::PairingFailed
                     })?;
-
-                    let discovered_peers = self
-                        .discovery_port
-                        .list_discovered_peers()
-                        .await
-                        .map_err(|err| {
-                            error!(
-                                action = "EnsureDiscovery",
-                                step = "list_discovered_peers",
-                                error = %err,
-                                "setup ensure discovery failed"
-                            );
-                            SetupError::PairingFailed
-                        })?;
-
-                    info!(
-                        discovered_peer_count = discovered_peers.len(),
-                        "setup ensure discovery: initial discovered peer snapshot"
-                    );
-
                     debug!("setup action EnsureDiscovery completed");
                 }
                 SetupAction::EnsurePairing => {

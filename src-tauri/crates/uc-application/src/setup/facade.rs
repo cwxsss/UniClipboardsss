@@ -27,7 +27,7 @@ use tokio::sync::Mutex;
 use uc_core::{
     ids::SpaceId,
     ports::space::{PersistencePort, ProofPort, SpaceAccessTransportPort},
-    ports::{DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort},
+    ports::{NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort},
     space_access::{
         state::{DenyReason, SpaceAccessState},
         SpaceAccessProofArtifact,
@@ -92,7 +92,6 @@ impl SetupFacade {
         setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
         setup_event_port: Arc<dyn SetupEventPort>,
         space_access_facade: Arc<SpaceAccessFacade>,
-        discovery_port: Arc<dyn DiscoveryPort>,
         network_control: Arc<dyn NetworkControlPort>,
         space_access_port: Arc<dyn SpaceAccessPort>,
         pairing_transport: Arc<dyn PairingTransportPort>,
@@ -110,7 +109,6 @@ impl SetupFacade {
             setup_pairing_facade,
             setup_event_port,
             space_access_facade,
-            discovery_port,
             network_control,
             space_access_port,
             pairing_transport,

@@ -85,7 +85,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let setup_ports = SetupAssemblyPorts::from_network(
         ctx.pairing_facade.clone(),
         ctx.space_access_facade.clone(),
-        ctx.deps.network_ports.peers.clone(),
         None,
         Arc::new(LoggingLifecycleEventEmitter),
         ctx.trusted_peer_repo.clone(),

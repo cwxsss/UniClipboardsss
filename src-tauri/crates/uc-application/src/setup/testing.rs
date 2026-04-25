@@ -22,13 +22,11 @@ use tokio::sync::{mpsc, Mutex};
 
 use uc_core::crypto::domain::{ActiveSpace, Passphrase as DomainPassphrase};
 use uc_core::ids::{SessionId, SpaceId};
-use uc_core::network::{DiscoveredPeer, PairingMessage};
+use uc_core::network::PairingMessage;
 use uc_core::ports::space::{
     PersistencePort, ProofPort, SpaceAccessError, SpaceAccessPort, SpaceAccessTransportPort,
 };
-use uc_core::ports::{
-    DiscoveryPort, NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort,
-};
+use uc_core::ports::{NetworkControlPort, PairingTransportPort, SetupStatusPort, TimerPort};
 use uc_core::setup::SetupStatus;
 use uc_core::space_access::{JoinOffer, ProofDerivedKey, SpaceAccessProofArtifact};
 
@@ -169,15 +167,6 @@ impl SetupPairingFacadePort for FakePairingFacade {
 
     async fn verify_pairing(&self, _session_id: &str, _pin_matches: bool) -> Result<()> {
         Ok(())
-    }
-}
-
-pub(crate) struct FakeDiscovery;
-
-#[async_trait]
-impl DiscoveryPort for FakeDiscovery {
-    async fn list_discovered_peers(&self) -> Result<Vec<DiscoveredPeer>> {
-        Ok(Vec::new())
     }
 }
 
@@ -401,7 +390,6 @@ pub(crate) fn build_harness(opts: HarnessOptions) -> TestHarness {
         opts.pairing_facade,
         events.clone(),
         space_access_facade,
-        Arc::new(FakeDiscovery),
         Arc::new(FakeNetworkControl),
         Arc::new(NoopSpaceAccess),
         Arc::new(FakePairingTransport),

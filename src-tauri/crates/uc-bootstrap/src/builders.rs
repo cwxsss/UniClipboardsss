@@ -154,7 +154,6 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
 
     let pairing_device_identity = deps.device.device_identity.clone();
     let pairing_settings = deps.settings.clone();
-    let discovery_network = deps.network_ports.peers.clone();
     let pairing_peer_id = background.libp2p_network.local_peer_id();
     let pairing_identity_pubkey = background.libp2p_network.local_identity_pubkey();
 
@@ -215,7 +214,6 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     let setup_ports = SetupAssemblyPorts::from_network(
         pairing_facade.clone(),
         space_access_facade.clone(),
-        discovery_network,
         device_announcer,
         lifecycle_emitter,
         Arc::clone(&trusted_peer_repo),
