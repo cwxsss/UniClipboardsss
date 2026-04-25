@@ -24,7 +24,6 @@ pub mod pairing;
 pub(crate) mod pairing_inbound;
 pub(crate) mod pairing_invitation;
 pub(crate) mod pairing_outbound;
-pub mod setup;
 pub mod space_access;
 pub mod trusted_peer;
 /// `pub` (not `pub(crate)`) only because Slice 2 Phase 3 · T10 needs a

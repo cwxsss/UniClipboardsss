@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use uc_application::setup::SetupState;
 use uc_core::space_access::state::SpaceAccessState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,21 +82,6 @@ pub struct SpaceMembersChangedEvent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SetupStateChangedEvent {
-    pub session_id: Option<String>,
-    pub state: SetupState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SetupSpaceAccessCompletedEvent {
-    pub session_id: String,
-    pub peer_id: String,
-    pub success: bool,
-    pub reason: Option<String>,
-    pub ts: i64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct SpaceAccessStateChangedEvent {
     pub state: SpaceAccessState,
 }
@@ -119,8 +103,6 @@ pub enum RealtimeEvent {
     PeersNameUpdated(PeerNameUpdatedEvent),
     PeersConnectionChanged(PeerConnectionChangedEvent),
     SpaceMembersChanged(SpaceMembersChangedEvent),
-    SetupStateChanged(SetupStateChangedEvent),
-    SetupSpaceAccessCompleted(SetupSpaceAccessCompletedEvent),
     SpaceAccessStateChanged(SpaceAccessStateChangedEvent),
     ClipboardNewContent(ClipboardNewContentEvent),
 }

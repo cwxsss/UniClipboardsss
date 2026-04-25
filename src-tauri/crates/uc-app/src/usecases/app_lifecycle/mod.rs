@@ -193,10 +193,3 @@ impl AppLifecycleCoordinator {
         .await
     }
 }
-
-#[async_trait]
-impl uc_application::setup::SetupAppLifecyclePort for AppLifecycleCoordinator {
-    async fn ensure_ready(&self) -> Result<()> {
-        AppLifecycleCoordinator::ensure_ready(self).await
-    }
-}

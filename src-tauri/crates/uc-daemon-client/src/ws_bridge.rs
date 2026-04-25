@@ -7,8 +7,7 @@ use crate::realtime::{
     ClipboardNewContentEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
     PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
     PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
-    SetupSpaceAccessCompletedEvent, SetupStateChangedEvent, SpaceAccessStateChangedEvent,
-    SpaceMembersChangedEvent,
+    SpaceAccessStateChangedEvent, SpaceMembersChangedEvent,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -24,8 +23,7 @@ use uc_daemon_contract::api::auth::DaemonConnectionInfo;
 use uc_daemon_contract::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
     PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload,
-    SetupSpaceAccessCompletedPayload, SetupStateChangedPayload, SpaceAccessStateChangedPayload,
-    SpaceMembersChangedPayload,
+    SpaceAccessStateChangedPayload, SpaceMembersChangedPayload,
 };
 use uc_daemon_contract::constants::{pairing_stage, ws_event, ws_topic};
 
@@ -714,9 +712,6 @@ fn log_decode_failed(
     );
 }
 
-// Allow legacy SETUP_STATE_CHANGED / SETUP_SPACE_ACCESS_COMPLETED match arms
-// until Slice4 P3 T3.4 deletes the old setup module and these branches with it.
-#[allow(deprecated)]
 fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
     let event_type = event.event_type.clone();
     let topic = event.topic.clone();
@@ -1119,102 +1114,6 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                 }
             }
         }
-        ws_event::SETUP_STATE_CHANGED => {
-            match serde_json::from_value::<SetupStateChangedPayload>(event.payload) {
-                Ok(payload) => {
-                    debug!(
-                        event = "bridge.payload_decoded",
-                        source_topic = %topic,
-                        source_event_type = %event_type,
-                        session_id = payload.session_id.as_deref().unwrap_or(""),
-                        payload_type = "SetupStateChangedPayload",
-                        "decoded websocket payload"
-                    );
-                    match serde_json::from_value(payload.state.clone()) {
-                        Ok(state) => {
-                            log_bridge_routing(
-                                &topic,
-                                &event_type,
-                                payload.session_id.as_deref(),
-                                None,
-                                "SetupStateChanged",
-                            );
-                            Some(RealtimeEvent::SetupStateChanged(SetupStateChangedEvent {
-                                session_id: payload.session_id,
-                                state,
-                            }))
-                        }
-                        Err(err) => {
-                            warn!(
-                                event = "bridge.decode_failed",
-                                source_topic = %topic,
-                                source_event_type = %event_type,
-                                session_id = payload.session_id.as_deref().unwrap_or(""),
-                                payload_type = "SetupStateValue",
-                                error = %err,
-                                raw_state = %payload.state,
-                                "failed to decode websocket payload"
-                            );
-                            None
-                        }
-                    }
-                }
-                Err(err) => {
-                    log_decode_failed(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        "SetupStateChangedPayload",
-                        &err,
-                    );
-                    None
-                }
-            }
-        }
-        ws_event::SETUP_SPACE_ACCESS_COMPLETED => {
-            match serde_json::from_value::<SetupSpaceAccessCompletedPayload>(event.payload) {
-                Ok(payload) => {
-                    debug!(
-                        event = "bridge.payload_decoded",
-                        source_topic = %topic,
-                        source_event_type = %event_type,
-                        session_id = %payload.session_id,
-                        payload_type = "SetupSpaceAccessCompletedPayload",
-                        peer_id = %payload.peer_id,
-                        success = payload.success,
-                        has_reason = payload.reason.is_some(),
-                        ts = payload.ts,
-                        "decoded websocket payload"
-                    );
-                    log_bridge_routing(
-                        &topic,
-                        &event_type,
-                        Some(&payload.session_id),
-                        None,
-                        "SetupSpaceAccessCompleted",
-                    );
-                    Some(RealtimeEvent::SetupSpaceAccessCompleted(
-                        SetupSpaceAccessCompletedEvent {
-                            session_id: payload.session_id,
-                            peer_id: payload.peer_id,
-                            success: payload.success,
-                            reason: payload.reason,
-                            ts: payload.ts,
-                        },
-                    ))
-                }
-                Err(err) => {
-                    log_decode_failed(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        "SetupSpaceAccessCompletedPayload",
-                        &err,
-                    );
-                    None
-                }
-            }
-        }
         ws_event::SPACE_ACCESS_STATE_CHANGED => {
             match serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload) {
                 Ok(payload) => {
@@ -1349,9 +1248,6 @@ fn event_topic(event: &RealtimeEvent) -> RealtimeTopic {
         | RealtimeEvent::PeersNameUpdated(_)
         | RealtimeEvent::PeersConnectionChanged(_) => RealtimeTopic::Peers,
         RealtimeEvent::SpaceMembersChanged(_) => RealtimeTopic::PairedDevices,
-        RealtimeEvent::SetupStateChanged(_) | RealtimeEvent::SetupSpaceAccessCompleted(_) => {
-            RealtimeTopic::Setup
-        }
         RealtimeEvent::SpaceAccessStateChanged(_) => RealtimeTopic::SpaceAccess,
         RealtimeEvent::ClipboardNewContent(_) => RealtimeTopic::Clipboard,
     }
