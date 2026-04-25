@@ -12,12 +12,6 @@ import {
   type SpaceMember,
 } from '@/api/daemon/pairing'
 
-export interface DiscoveredPeer {
-  id: string
-  deviceName: string | null
-  device_type: string
-}
-
 interface DevicesState {
   // 当前设备
   localDevice: LocalDeviceInfo | null
@@ -32,10 +26,6 @@ interface DevicesState {
   // 每成员同步偏好（phase 4b PR-3：从 DeviceSyncSettings 切换到 MemberSyncPreferences）
   memberSyncPreferences: Record<string, MemberSyncPreferences>
   memberSyncPreferencesLoading: Record<string, boolean>
-
-  // Discovered peers (from peer discovery scan)
-  discoveredPeers: DiscoveredPeer[]
-  discoveredPeersLoading: boolean
 }
 
 const initialState: DevicesState = {
@@ -47,8 +37,6 @@ const initialState: DevicesState = {
   spaceMembersError: null,
   memberSyncPreferences: {},
   memberSyncPreferencesLoading: {},
-  discoveredPeers: [],
-  discoveredPeersLoading: false,
 }
 
 // 异步 Thunk Actions
@@ -129,33 +117,6 @@ const devicesSlice = createSlice({
         peer.deviceName = action.payload.deviceName
       }
     },
-    setDiscoveredPeers: (
-      state,
-      action: {
-        payload: DiscoveredPeer[] | ((prev: DiscoveredPeer[]) => DiscoveredPeer[])
-      }
-    ) => {
-      if (typeof action.payload === 'function') {
-        // Functional updater: append new peers to existing state without stale closure.
-        // Used by useDeviceDiscovery when diffPeerSnapshots reports newly discovered peers.
-        state.discoveredPeers = action.payload(state.discoveredPeers)
-      } else {
-        state.discoveredPeers = action.payload
-      }
-      state.discoveredPeersLoading = false
-    },
-    clearDiscoveredPeers: state => {
-      state.discoveredPeers = []
-    },
-    updateDiscoveredPeerDeviceName: (
-      state,
-      action: { payload: { peerId: string; deviceName: string } }
-    ) => {
-      const peer = state.discoveredPeers.find(p => p.id === action.payload.peerId)
-      if (peer) {
-        peer.deviceName = action.payload.deviceName
-      }
-    },
   },
   extraReducers: builder => {
     // Local device info
@@ -227,8 +188,5 @@ export const {
   clearSpaceMembersError,
   updatePeerConnectionStatus,
   updatePeerDeviceName,
-  setDiscoveredPeers,
-  clearDiscoveredPeers,
-  updateDiscoveredPeerDeviceName,
 } = devicesSlice.actions
 export default devicesSlice.reducer
