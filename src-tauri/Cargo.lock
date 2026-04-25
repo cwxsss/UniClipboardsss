@@ -11383,6 +11383,7 @@ dependencies = [
  "image",
  "iroh",
  "iroh-blobs",
+ "iroh-quinn-proto",
  "iroh-tickets",
  "libsqlite3-sys",
  "log",

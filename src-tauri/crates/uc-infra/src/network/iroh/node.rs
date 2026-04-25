@@ -22,6 +22,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use iroh::endpoint::TransportConfig;
 use iroh::protocol::{Router, RouterBuilder};
 use iroh::{Endpoint, RelayMode};
+use iroh_quinn_proto::congestion::BbrConfig;
 use tracing::{debug, instrument};
 
 use uc_core::membership::MemberRepositoryPort;
@@ -132,6 +133,18 @@ pub struct IrohNodeConfig {
 fn build_transport_config() -> TransportConfig {
     let mut cfg = TransportConfig::default();
     cfg
+        // BBR over CUBIC: we're observing iroh emit "Congestion controller
+        // state reset" 3× per connection (path-validation churn) which slams
+        // the CUBIC CWND back to 10 MSS each time, forcing slow-start. Even
+        // once warmed up, on macOS Wi-Fi a single sporadic loss halves the
+        // window — visible in our blob-fetch traces as 1–3s stalls every
+        // 4 MB chunk after the first ~22 MB/s burst. BBR models bandwidth ×
+        // RTT directly instead of treating loss as a congestion signal, so
+        // it recovers from those stalls without giving back the rate it
+        // earned. The trade-off is BBR can be unfair to CUBIC flows on a
+        // shared bottleneck; that's a non-issue for our P2P single-flow
+        // direct UDP path.
+        .congestion_controller_factory(Arc::new(BbrConfig::default()))
         // Default 3 → 5 PTOs before declaring persistent congestion, so
         // isolated 100–150ms AWDL spikes don't collapse CWND.
         .persistent_congestion_threshold(5)
