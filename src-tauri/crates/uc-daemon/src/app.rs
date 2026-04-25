@@ -14,14 +14,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
-use uc_application::facade::{PairingOutcome, SpaceSetupFacade};
+use uc_application::facade::SpaceSetupFacade;
 use uc_application::space_access::SpaceAccessFacade;
 
 use crate::api::auth::load_or_create_auth_token;
 use crate::api::event_emitter::DaemonApiEventEmitter;
 use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
-use crate::api::setup_events::SetupEventBroadcaster;
+use crate::api::setup_events::spawn_pairing_completion_forwarder;
 use crate::api::types::DaemonWsEvent;
 use crate::pairing::host::DaemonPairingHost;
 use crate::process_metadata::DaemonPidManager;
@@ -310,59 +310,17 @@ impl DaemonApp {
         // forwarder before the HTTP server. Subscribes to the facade's
         // broadcast stream and translates each `PairingOutcome` into a
         // `setup.pairingCompleted` ws frame on the shared event bus.
-        // Failure-only modes (proof mismatch, etc.) carry `joinerDeviceId
-        // = null` since the joiner identity isn't known until commit.
-        // Lives until `self.cancel` fires — the receiver ends as
-        // `RecvError::Closed` once the facade's broadcast Sender drops on
-        // assembly shutdown, which is the long-stop guard.
+        // Lives until `self.cancel` fires.
         if let (Some(facade), Some(sponsor_id)) = (
             self.space_setup_facade.as_ref(),
             self.local_device_id.as_ref(),
         ) {
-            let mut outcome_rx = facade.subscribe_pairing_completion();
-            let broadcaster = SetupEventBroadcaster::new(self.event_tx.clone());
-            let sponsor_id = sponsor_id.clone();
-            let cancel = self.cancel.child_token();
-            tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        _ = cancel.cancelled() => {
-                            debug!("pairing-completion forwarder cancelled");
-                            break;
-                        }
-                        recv = outcome_rx.recv() => match recv {
-                            Ok(PairingOutcome::Success { peer_device_id, .. }) => {
-                                broadcaster.emit_pairing_completed(
-                                    sponsor_id.clone(),
-                                    Some(peer_device_id.to_string()),
-                                    true,
-                                    None,
-                                );
-                            }
-                            Ok(PairingOutcome::Failure { reason }) => {
-                                broadcaster.emit_pairing_completed(
-                                    sponsor_id.clone(),
-                                    None,
-                                    false,
-                                    Some(reason),
-                                );
-                            }
-                            Err(broadcast::error::RecvError::Lagged(n)) => {
-                                warn!(
-                                    skipped = n,
-                                    "pairing-completion forwarder lagged — some events dropped"
-                                );
-                            }
-                            Err(broadcast::error::RecvError::Closed) => {
-                                debug!(
-                                    "pairing-completion forwarder: facade broadcast closed, exiting"
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-            });
+            spawn_pairing_completion_forwarder(
+                facade.subscribe_pairing_completion(),
+                self.event_tx.clone(),
+                sponsor_id.clone(),
+                self.cancel.child_token(),
+            );
         }
 
         // 5. Spawn HTTP server and rate limiter cleanup task

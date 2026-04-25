@@ -1,13 +1,19 @@
-//! Daemon-side broadcaster for the new stateless setup pairing events
-//! (Slice4 Phase 3 T3.1).
+//! Daemon-side broadcaster for the stateless setup pairing events
+//! (Slice4 Phase 3).
 //!
-//! T3.3 will inject this into `SpaceSetupFacade` so its lifecycle
-//! callbacks can fan out to the `setup` ws topic with a single call.
-//! The legacy `setup.stateChanged` / `setup.spaceAccessCompleted` path
-//! stays in `event_emitter.rs` until T3.4 deletes the old setup module.
+//! Fans `SpaceSetupFacade` lifecycle outcomes onto the `setup` ws topic.
+//! The forwarder spawned by [`spawn_pairing_completion_forwarder`] is the
+//! glue between the application-layer `PairingOutcome` broadcast and the
+//! daemon-wide ws event bus.
+
+use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::sync::broadcast;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, warn};
+use uc_application::facade::PairingOutcome;
 use uc_daemon_contract::api::dto::setup_events::{
     SetupInvitationIssuedEvent, SetupInvitationRevokedEvent, SetupPairingCompletedEvent,
 };
@@ -78,6 +84,69 @@ impl SetupEventBroadcaster {
             payload,
         });
     }
+}
+
+/// Bridge sponsor-side `PairingOutcome` events onto the daemon ws bus as
+/// `setup.pairingCompleted` envelopes.
+///
+/// Spawns a single tokio task that lives until `cancel` fires or the
+/// upstream broadcast `Sender` drops (which lands as `Closed` on the
+/// receiver). `Lagged` is logged but never aborts the loop — the next
+/// outcome still fans out.
+///
+/// `sponsor_device_id` is captured at spawn time and stamped on every
+/// outgoing envelope so the frontend can attribute the event without
+/// having to thread it through the application layer.
+///
+/// Takes a raw `Receiver<PairingOutcome>` rather than the facade so the
+/// loop is unit-testable without the full setup-deps assembly.
+pub fn spawn_pairing_completion_forwarder(
+    mut outcome_rx: broadcast::Receiver<PairingOutcome>,
+    event_tx: broadcast::Sender<DaemonWsEvent>,
+    sponsor_device_id: String,
+    cancel: CancellationToken,
+) -> JoinHandle<()> {
+    let broadcaster = Arc::new(SetupEventBroadcaster::new(event_tx));
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => {
+                    debug!("pairing-completion forwarder cancelled");
+                    break;
+                }
+                recv = outcome_rx.recv() => match recv {
+                    Ok(PairingOutcome::Success { peer_device_id, .. }) => {
+                        broadcaster.emit_pairing_completed(
+                            sponsor_device_id.clone(),
+                            Some(peer_device_id.to_string()),
+                            true,
+                            None,
+                        );
+                    }
+                    Ok(PairingOutcome::Failure { reason }) => {
+                        broadcaster.emit_pairing_completed(
+                            sponsor_device_id.clone(),
+                            None,
+                            false,
+                            Some(reason),
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(
+                            skipped = n,
+                            "pairing-completion forwarder lagged — some events dropped"
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        debug!(
+                            "pairing-completion forwarder: facade broadcast closed, exiting"
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -187,5 +256,185 @@ mod tests {
             before,
             after
         );
+    }
+
+    // ── pairing-completion forwarder ───────────────────────────────────────
+
+    mod forwarder {
+        use super::*;
+        use std::time::Duration;
+        use uc_core::ids::DeviceId;
+        use uc_core::security::IdentityFingerprint;
+
+        fn fp() -> IdentityFingerprint {
+            IdentityFingerprint::from_raw_string("ABCDEFGHIJKLMNOP").unwrap()
+        }
+
+        async fn next_event(rx: &mut broadcast::Receiver<DaemonWsEvent>) -> Option<DaemonWsEvent> {
+            tokio::time::timeout(Duration::from_millis(500), rx.recv())
+                .await
+                .ok()
+                .and_then(Result::ok)
+        }
+
+        #[tokio::test]
+        async fn success_outcome_emits_pairing_completed_with_joiner_id() {
+            let (outcome_tx, outcome_rx) = broadcast::channel(8);
+            let (event_tx, mut event_rx) = broadcast::channel(8);
+            let cancel = CancellationToken::new();
+
+            let handle = spawn_pairing_completion_forwarder(
+                outcome_rx,
+                event_tx,
+                "sponsor-A".to_string(),
+                cancel.clone(),
+            );
+
+            outcome_tx
+                .send(PairingOutcome::Success {
+                    peer_device_id: DeviceId::new("joiner-B"),
+                    peer_device_name: "Mac".to_string(),
+                    peer_fingerprint: fp(),
+                })
+                .expect("forwarder should keep an active receiver");
+
+            let event = next_event(&mut event_rx).await.expect("event delivered");
+            assert_eq!(event.topic, "setup");
+            assert_eq!(event.event_type, "setup.pairingCompleted");
+            assert_eq!(event.payload["sponsorDeviceId"], "sponsor-A");
+            assert_eq!(event.payload["joinerDeviceId"], "joiner-B");
+            assert_eq!(event.payload["success"], true);
+            assert!(event.payload["reason"].is_null());
+
+            cancel.cancel();
+            let _ = handle.await;
+        }
+
+        #[tokio::test]
+        async fn failure_outcome_emits_pairing_completed_with_null_joiner_and_reason() {
+            let (outcome_tx, outcome_rx) = broadcast::channel(8);
+            let (event_tx, mut event_rx) = broadcast::channel(8);
+            let cancel = CancellationToken::new();
+
+            let handle = spawn_pairing_completion_forwarder(
+                outcome_rx,
+                event_tx,
+                "sponsor-A".to_string(),
+                cancel.clone(),
+            );
+
+            outcome_tx
+                .send(PairingOutcome::Failure {
+                    reason: "proof_mismatch".to_string(),
+                })
+                .expect("forwarder receiver active");
+
+            let event = next_event(&mut event_rx).await.expect("event delivered");
+            assert_eq!(event.event_type, "setup.pairingCompleted");
+            assert_eq!(event.payload["sponsorDeviceId"], "sponsor-A");
+            assert!(event.payload["joinerDeviceId"].is_null());
+            assert_eq!(event.payload["success"], false);
+            assert_eq!(event.payload["reason"], "proof_mismatch");
+
+            cancel.cancel();
+            let _ = handle.await;
+        }
+
+        #[tokio::test]
+        async fn cancel_token_stops_forwarder_promptly() {
+            let (_outcome_tx, outcome_rx) = broadcast::channel::<PairingOutcome>(8);
+            let (event_tx, _event_rx) = broadcast::channel(8);
+            let cancel = CancellationToken::new();
+
+            let handle = spawn_pairing_completion_forwarder(
+                outcome_rx,
+                event_tx,
+                "sponsor".to_string(),
+                cancel.clone(),
+            );
+
+            cancel.cancel();
+            tokio::time::timeout(Duration::from_millis(500), handle)
+                .await
+                .expect("forwarder should exit within 500ms after cancel")
+                .expect("task should join cleanly");
+        }
+
+        #[tokio::test]
+        async fn upstream_close_exits_forwarder() {
+            let (outcome_tx, outcome_rx) = broadcast::channel::<PairingOutcome>(8);
+            let (event_tx, _event_rx) = broadcast::channel(8);
+            let cancel = CancellationToken::new();
+
+            let handle = spawn_pairing_completion_forwarder(
+                outcome_rx,
+                event_tx,
+                "sponsor".to_string(),
+                cancel,
+            );
+
+            // Drop the upstream sender — the receiver should observe Closed
+            // and the loop should exit on its own without cancellation.
+            drop(outcome_tx);
+
+            tokio::time::timeout(Duration::from_millis(500), handle)
+                .await
+                .expect("forwarder should exit within 500ms after upstream close")
+                .expect("task should join cleanly");
+        }
+
+        #[tokio::test]
+        async fn lagged_outcome_is_logged_and_loop_keeps_running() {
+            // Capacity 1: send 3 outcomes back-to-back to force the forwarder
+            // to lag past the buffer; a fourth send must still reach it.
+            let (outcome_tx, outcome_rx) = broadcast::channel(1);
+            let (event_tx, mut event_rx) = broadcast::channel(8);
+            let cancel = CancellationToken::new();
+
+            let handle = spawn_pairing_completion_forwarder(
+                outcome_rx,
+                event_tx,
+                "sponsor".to_string(),
+                cancel.clone(),
+            );
+
+            // Block the forwarder from draining for a moment; pile up sends.
+            for _ in 0..3 {
+                let _ = outcome_tx.send(PairingOutcome::Failure {
+                    reason: "noise".to_string(),
+                });
+            }
+            // The forwarder may have observed Lagged on the first recv.
+            // A subsequent send must still be delivered.
+            outcome_tx
+                .send(PairingOutcome::Success {
+                    peer_device_id: DeviceId::new("late-joiner"),
+                    peer_device_name: "Late".to_string(),
+                    peer_fingerprint: fp(),
+                })
+                .expect("forwarder still alive");
+
+            // Drain ws events until we see the success — earlier failure
+            // events from before the lag may also land; we only assert the
+            // forwarder eventually delivers the final success.
+            let mut seen_success = false;
+            for _ in 0..6 {
+                match next_event(&mut event_rx).await {
+                    Some(event) if event.payload["joinerDeviceId"] == "late-joiner" => {
+                        seen_success = true;
+                        break;
+                    }
+                    Some(_) => continue,
+                    None => break,
+                }
+            }
+            assert!(
+                seen_success,
+                "forwarder must keep running after a Lagged error"
+            );
+
+            cancel.cancel();
+            let _ = handle.await;
+        }
     }
 }
