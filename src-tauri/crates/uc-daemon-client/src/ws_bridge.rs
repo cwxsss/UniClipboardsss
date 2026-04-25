@@ -714,6 +714,9 @@ fn log_decode_failed(
     );
 }
 
+// Allow legacy SETUP_STATE_CHANGED / SETUP_SPACE_ACCESS_COMPLETED match arms
+// until Slice4 P3 T3.4 deletes the old setup module and these branches with it.
+#[allow(deprecated)]
 fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
     let event_type = event.event_type.clone();
     let topic = event.topic.clone();

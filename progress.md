@@ -2640,3 +2640,48 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **下一步**:
 - 提交本次 daemon 文件剪贴板接线。
 - 之后补真实双端验收脚本或手动真机验收,再关闭 Slice 3 Phase 3。
+
+---
+
+## Session 2026-04-25(续 39) — Slice 4 Phase 3 T3.1 · daemon ws 事件类型新增 + topic 接通
+
+**触发**:用户起 `/planning-with-files T3.1 daemon ws 事件类型新增 + topic 接通`,进入 Slice 4 Phase 3 第一个子任务。
+
+**完成标准**(从 task_plan.md T3.1 执行细分搬过来):
+- `uc-daemon-contract` 新增 3 类 setup ws 事件常量 + payload DTO
+- daemon 侧暴露 broadcaster helper,能往 ws bus 推这 3 类事件到 `setup` topic
+- 单测覆盖 3 类事件的 wire 编码 + topic 路由
+- 老 `setup.stateChanged` / `setup.spaceAccessCompleted` 路径不动(留 T3.4)
+- `cargo check -p uc-daemon-contract -p uc-daemon` + `cargo test -p uc-daemon` 全绿
+
+**已盘点的现状**:
+- topic `ws_topic::SETUP = "setup"` 已存在,subscribe + supported topic 已通,snapshot 返 None(`uc-daemon-contract/src/constants.rs:11`、`uc-daemon/src/api/ws.rs:447,549`)
+- 老事件常量 `SETUP_STATE_CHANGED` / `SETUP_SPACE_ACCESS_COMPLETED` 仍被 daemon emitter / daemon-client / 前端 4 个文件引用 —— T3.1 不动它们
+- 既有 ws DTO 命名风格统一 camelCase(`#[serde(rename_all = "camelCase")]`)
+
+**决策已拍板**(2026-04-25):
+- D1 · camelCase(查 `useDaemonEvents.ts:60-95,378` 反推,前端两层都吃 camelCase);事件类型串 `setup.invitationIssued/pairingCompleted/invitationRevoked`,payload Rust snake_case + serde rename
+- D2 · A 选项 含 broadcaster helper(用户拍板)
+- D3 · 新建 `dto/setup_events.rs` 单独存 3 个事件 payload
+- D4 · 老事件常量加 `#[deprecated]`,5 处现存调用点(`event_emitter.rs:78,103`、`ws_bridge.rs:1119,1171`、`api/setup.rs:398` 注释字面量除外)加 `#[allow(deprecated)]`;workspace 未配 `deny(warnings)` 已确认,加 deprecated 不会编译失败
+
+**已做**:
+- T3.1 执行细分(决策记录、子步骤 S1-S6、验收门、显式不在范围、风险)落进 `task_plan.md` 的 T3.1 段下方
+- **S1 常量注册**:`uc-daemon-contract/src/constants.rs` 新增 `SETUP_INVITATION_ISSUED` / `SETUP_PAIRING_COMPLETED` / `SETUP_INVITATION_REVOKED`;老 `SETUP_STATE_CHANGED` / `SETUP_SPACE_ACCESS_COMPLETED` 加 `#[deprecated(note = "removed in Slice4 P3 T3.4 — switch to ...")]`
+- **S2 DTO**:**新建** `uc-daemon-contract/src/api/dto/setup_events.rs` 含 `SetupInvitationIssuedEvent` / `SetupPairingCompletedEvent` / `SetupInvitationRevokedEvent` 3 个 struct + 5 个序列化测试;`dto/mod.rs` 注册新模块
+- **S2.5 压 deprecated 噪音**:`uc-daemon/src/api/event_emitter.rs` 的 `impl HostEventEmitterPort::emit` 函数加 `#[allow(deprecated)]`(覆盖 line 78/103);`uc-daemon-client/src/ws_bridge.rs` 的 `fn map_daemon_ws_event` 函数加 `#[allow(deprecated)]`(覆盖 line 1119/1171)
+- **S3 broadcaster helper**:**新建** `uc-daemon/src/api/setup_events.rs` 含 `pub struct SetupEventBroadcaster { event_tx: broadcast::Sender<DaemonWsEvent> }` + Clone derive + `new` + 3 个 `emit_*` + 私有 `send` helper;`api/mod.rs` 注册新模块
+- **S4 broadcaster 单测**:5 个 `#[tokio::test]`,覆盖每类事件的 topic + event_type + payload(camelCase 字段名验证)+ ts 时间窗
+
+**验证**:
+- `cargo check -p uc-daemon-contract -p uc-daemon -p uc-daemon-client`:✅ 通过(显示的 4 个 deprecated warning 都来自既存 `ClipboardOutboundTransportPort`,与 T3.1 无关)
+- `cargo test -p uc-daemon-contract --lib`:✅ 5 passed(新增 5 个 DTO 序列化测试)
+- `cargo test -p uc-daemon --lib`:✅ 12 passed(5 新 broadcaster + 7 既有,零回归)
+- `cargo test -p uc-daemon-client --lib`:✅ 编译通过(crate 无单测)
+- `cargo test -p uc-daemon-contract`(含 doctests):有 1 个**既存** doctest 失败(`api/auth.rs` line 24 缺 import),与 T3.1 无关,不在本步范围内修
+
+**新事件被调用范围**:仅测试代码,业务路径零调用 → 为 T3.3 装配预留干净挂钩(符合"显式不在范围"清单)。
+
+**下一步**:
+- 等用户确认是否 commit `feat(Slice4/P3-T3.1)`(2 新文件 + 5 改文件)
+- T3.2 起跑前重读 task_plan 的 P3 详细任务段

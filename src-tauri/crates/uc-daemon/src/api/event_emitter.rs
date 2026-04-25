@@ -71,6 +71,9 @@ impl DaemonApiEventEmitter {
 }
 
 impl HostEventEmitterPort for DaemonApiEventEmitter {
+    // Allow legacy SETUP_STATE_CHANGED / SETUP_SPACE_ACCESS_COMPLETED ws constants
+    // until Slice4 P3 T3.4 deletes the stateful SetupFacade and this entire path.
+    #[allow(deprecated)]
     fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
         match event {
             HostEvent::Setup(SetupHostEvent::StateChanged { state, session_id }) => {

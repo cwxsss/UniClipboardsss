@@ -32,8 +32,20 @@ pub mod ws_event {
     pub const PAIRING_VERIFICATION_REQUIRED: &str = "pairing.verification_required";
     pub const PAIRING_COMPLETE: &str = "pairing.complete";
     pub const PAIRING_FAILED: &str = "pairing.failed";
+    #[deprecated(
+        note = "removed in Slice4 P3 T3.4 — switch to setup.invitationIssued / setup.pairingCompleted / setup.invitationRevoked"
+    )]
     pub const SETUP_STATE_CHANGED: &str = "setup.stateChanged";
+    #[deprecated(
+        note = "removed in Slice4 P3 T3.4 — switch to setup.pairingCompleted (carries sponsor + joiner ids)"
+    )]
     pub const SETUP_SPACE_ACCESS_COMPLETED: &str = "setup.spaceAccessCompleted";
+    /// Setup pairing invitation issued (Slice4 P3 T3.1) — sponsor side after `issue_pairing_invitation`.
+    pub const SETUP_INVITATION_ISSUED: &str = "setup.invitationIssued";
+    /// Setup pairing completed (Slice4 P3 T3.1) — both sponsor and joiner receive once handshake terminates.
+    pub const SETUP_PAIRING_COMPLETED: &str = "setup.pairingCompleted";
+    /// Setup invitation revoked (Slice4 P3 T3.1) — invitation cancelled or expired before redemption.
+    pub const SETUP_INVITATION_REVOKED: &str = "setup.invitationRevoked";
     pub const SPACE_ACCESS_SNAPSHOT: &str = "space_access.snapshot";
     pub const SPACE_ACCESS_STATE_CHANGED: &str = "space_access.state_changed";
     pub const CLIPBOARD_NEW_CONTENT: &str = "clipboard.new_content";

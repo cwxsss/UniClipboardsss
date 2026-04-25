@@ -1219,6 +1219,44 @@ pub struct StopNetworkCommand; // 无字段
 - daemon 侧 ws topic 名 `setup`(类比现有 `peers` / `space_access`),subscribe 协议复用
 - 取代老 `SetupStateChangedEvent` ws 推送
 
+##### T3.1 执行细分(2026-04-25 起,session 39)
+
+**现状盘点**(2026-04-25)
+- ✅ `ws_topic::SETUP = "setup"` 已存在(`uc-daemon-contract/src/constants.rs:11`),`is_supported_topic` 已收(`uc-daemon/src/api/ws.rs:447`),snapshot 返 `None`(`ws.rs:549`),subscribe 协议复用 OK
+- ❌ 待新增三类事件常量 + payload DTO + daemon 侧广播接口
+- 📌 老事件 `SETUP_STATE_CHANGED` / `SETUP_SPACE_ACCESS_COMPLETED` 仍被 daemon `event_emitter.rs:78,103` 发出、`uc-daemon-client/src/ws_bridge.rs:1119,1171` 消费、前端 `useDaemonEvents.ts` / `setup.ts` / `daemon/setup.ts` 订阅 —— **T3.1 不删**(留给 T3.4 + Phase 4 收尾),新事件并存
+
+**决策记录**(2026-04-25 拍板)
+- **D1 · camelCase**(已查前端 `src/hooks/useDaemonEvents.ts:60-95,378` 全用 camelCase):事件类型串 `setup.invitationIssued` / `setup.pairingCompleted` / `setup.invitationRevoked`;payload 字段 Rust 写 snake_case + `#[serde(rename_all = "camelCase")]` → 前端拿到 `code` / `expiresAtMs` / `sponsorDeviceId` / `joinerDeviceId` / `success` / `reason`
+- **D2 · A 选项**:T3.1 含 daemon broadcaster helper(用户拍板 A,避免 T3.3 各调用方手写 wire 编码;且与"topic 接通"标题对齐)
+- **D3 · 新建 `dto/setup_events.rs`**:3 个新事件 payload struct 单独成文件,不与 `dto/setup.rs` 内的老 `SetupStateResponse` / `SetupSelectPeerRequest` 等混(老的随 T3.4 整体删)
+- **D4 · 老事件常量加 `#[deprecated]`**:`SETUP_STATE_CHANGED` / `SETUP_SPACE_ACCESS_COMPLETED` 标 deprecated;5 处现存调用点(`uc-daemon/src/api/event_emitter.rs:78,103`、`uc-daemon-client/src/ws_bridge.rs:1119,1171`、`uc-daemon/src/api/setup.rs:398`)各自加 `#[allow(deprecated)]` 压噪音;workspace 未配 `deny(warnings)` 已确认 → 不会编译失败
+
+**子步骤**
+1. **S1 · 常量注册**(uc-daemon-contract) — 在 `constants.rs::ws_event` 新增三条 const:`SETUP_INVITATION_ISSUED = "setup.invitationIssued"` / `SETUP_PAIRING_COMPLETED = "setup.pairingCompleted"` / `SETUP_INVITATION_REVOKED = "setup.invitationRevoked"`;同步给老 `SETUP_STATE_CHANGED` / `SETUP_SPACE_ACCESS_COMPLETED` 加 `#[deprecated(note = "removed in T3.4 — switch to setup.invitationIssued/pairingCompleted/invitationRevoked")]`
+2. **S2 · DTO payload**(uc-daemon-contract) — **新建** `api/dto/setup_events.rs`:3 个 struct(`#[serde(rename_all = "camelCase")]`,`Debug + Clone + Serialize + Deserialize + ToSchema`):`SetupInvitationIssuedEvent { code, expires_at_ms }` / `SetupPairingCompletedEvent { sponsor_device_id, joiner_device_id, success, reason }` / `SetupInvitationRevokedEvent { reason }`;在 `api/dto/mod.rs` 注册新模块
+3. **S2.5 · 老调用点压 deprecated 噪音**(必做,否则 5 处 warning 飘) — `event_emitter.rs:78,103` / `ws_bridge.rs:1119,1171` 函数级或语句级 `#[allow(deprecated)]`;`api/setup.rs:398` 注释里的字面量不算 deprecated 调用,无需处理
+4. **S3 · daemon broadcaster helper**(uc-daemon) — 新建 `uc-daemon/src/api/setup_events.rs`(或并入 `event_emitter.rs`,看现有 emitter 是不是同形结构后定):`pub struct SetupEventBroadcaster { ws_bus: Arc<WsEventBus> }`,3 个方法 `emit_invitation_issued(code, expires_at_ms)` / `emit_pairing_completed(sponsor, joiner, success, reason)` / `emit_invitation_revoked(reason)`,内部组装 `DaemonWsEvent { topic: ws_topic::SETUP, event_type: ws_event::SETUP_*, payload: serde_json::to_value(...) }` 推 ws bus
+5. **S4 · 单元测试**(uc-daemon) — 新增测试:订阅 `setup` topic → broadcaster 发各事件 → 断言收到的 `DaemonWsEvent.topic == "setup"` + `event_type` + payload 字段名(必须是 camelCase)与契约一致;3 个事件各 1 测;复用 ws bus / event emitter 既有测试 helper(若有)
+6. **S5 · 编译 + 既有契约测试** — `cargo check -p uc-daemon-contract -p uc-daemon`、`cargo test -p uc-daemon-contract`、`cargo test -p uc-daemon --lib` 全绿;前端契约测 `src/api/__tests__/p2p-realtime-contract.test.ts` 不应受影响(老事件路径完全不动,只是常量加 deprecated 标注);**不**跑 e2e(留 T3.5)
+
+**验收门**
+- `cargo check -p uc-daemon-contract -p uc-daemon` 通过、无新增 warning
+- `cargo test -p uc-daemon` 全绿,新单测覆盖 3 类事件的 wire 编码
+- 老的 `SETUP_STATE_CHANGED` / `SETUP_SPACE_ACCESS_COMPLETED` 路径**完全不动**,行为不变(grep 验证 emitter / ws_bridge 老路径无修改)
+- 新事件**未在任何业务路径被调用**(只被测试调用),为 T3.3 装配预留空挂钩
+
+**显式不在范围**(T3.1 不做,留给后续)
+- ⛔ `SpaceSetupFacade::subscribe_pairing_completion()` 真实订阅 → T3.3
+- ⛔ daemon HTTP `/setup/issue-invitation` 等新路由 → T3.2
+- ⛔ 删除老 ws 事件常量 / 老 event_emitter 路径 → T3.4
+- ⛔ 前端订阅切换 → Phase 4
+- ⛔ daemon-client `ws_bridge.rs` 解析新事件 → 与前端订阅一同处理(若 Phase 4 用 daemon-client 路径)
+
+**风险 / 已知坑**
+- 命名风格不统一:既有 `peers.changed` 是 `.` + camelCase,但 `peers_snapshot` 这类还掺了下划线一面 —— 选 camelCase 后端到端检查所有新增点,避免又掺一种命名
+- broadcaster helper 切忌用 `Arc<dyn Trait>` 抽象过早,先用具体类型,T3.3 真实接 facade 时再视情况抽
+
 **T3.2 · 新 daemon HTTP endpoints**(0.5 天)
 
 替换路由:`uc-daemon/src/api/setup.rs` 整体重写
