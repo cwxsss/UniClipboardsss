@@ -20,12 +20,7 @@ use crate::api::dto::member::{
     GetMemberSyncPreferencesResponse, MemberSyncPreferencesDto, MemberSyncPreferencesPatchDto,
     UpdateMemberSyncPreferencesResponse,
 };
-use crate::api::dto::pairing::{
-    AckedPairingCommandResponse, InitiatePairingRequest, InitiatePairingResponse,
-    PairingApiErrorResponse, PairingGuiLeaseRequest, PairingSessionCommandRequest,
-    PairingSessionSummaryDto, SetPairingDiscoverabilityRequest, SetPairingParticipantRequest,
-    UnpairDeviceRequest, VerifyPairingRequest,
-};
+use crate::api::dto::pairing::UnpairDeviceRequest;
 use crate::api::dto::search::{
     SearchQueryResponse, SearchRebuildAcceptedData, SearchRebuildAcceptedResponse, SearchResultDto,
     SearchStatusData, SearchStatusResponse,
@@ -101,20 +96,7 @@ impl Modify for SecurityAddon {
         crate::api::v2::setup::cancel,
         crate::api::v2::setup::reset,
         crate::api::v2::setup::get_state,
-        crate::api::pairing::handle_initiate_pairing,
-        crate::api::pairing::handle_accept_pairing,
-        crate::api::pairing::handle_reject_pairing,
-        crate::api::pairing::handle_cancel_pairing,
         crate::api::pairing::handle_unpair_device,
-        crate::api::pairing::handle_pairing_gui_lease,
-        crate::api::pairing::set_pairing_discoverability,
-        crate::api::pairing::set_pairing_participant,
-        crate::api::pairing::initiate_pairing,
-        crate::api::pairing::pairing_session,
-        crate::api::pairing::accept_pairing,
-        crate::api::pairing::reject_pairing,
-        crate::api::pairing::cancel_pairing,
-        crate::api::pairing::verify_pairing,
     ),
     components(
         schemas(
@@ -154,17 +136,7 @@ impl Modify for SecurityAddon {
             UpdateChannelDto,
             EncryptionStateResponse,
             KeychainAccessResponse,
-            AckedPairingCommandResponse,
-            InitiatePairingRequest,
-            InitiatePairingResponse,
-            PairingApiErrorResponse,
-            PairingGuiLeaseRequest,
-            PairingSessionCommandRequest,
-            PairingSessionSummaryDto,
-            SetPairingDiscoverabilityRequest,
-            SetPairingParticipantRequest,
             UnpairDeviceRequest,
-            VerifyPairingRequest,
             // Search
             SearchQueryResponse,
             SearchResultDto,

@@ -10,72 +10,18 @@ use uc_application::membership::usecases::ListMembersUseCase;
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::space_access::state::SpaceAccessState;
 
-use crate::api::dto::pairing::PairingSessionSummaryDto;
 use crate::api::projection::IntoApiDto;
 use crate::api::types::{
     HealthResponse, PeerSnapshotDto, SpaceAccessStateResponse, SpaceMemberDto, StatusResponse,
     WorkerStatusDto,
 };
 use crate::service::ServiceHealth;
-use crate::state::{DaemonPairingSessionSnapshot, DaemonServiceSnapshot, RuntimeState};
+use crate::state::{DaemonServiceSnapshot, RuntimeState};
 use crate::{DAEMON_API_REVISION, DAEMON_VERSION};
 
 pub struct DaemonQueryService {
     runtime: Arc<CoreRuntime>,
     state: Arc<RwLock<RuntimeState>>,
-}
-
-impl From<DaemonPairingSessionSnapshot> for PairingSessionSummaryDto {
-    /// Converts a `DaemonPairingSessionSnapshot` into a `PairingSessionSummaryDto` by copying its public fields.
-
-    ///
-
-    /// # Examples
-
-    ///
-
-    /// ```
-
-    /// let snap = DaemonPairingSessionSnapshot {
-
-    ///     session_id: "s1".to_string(),
-
-    ///     peer_id: "p1".to_string(),
-
-    ///     device_name: "dev".to_string(),
-
-    ///     state: "verification".to_string(),
-
-    ///     updated_at_ms: 12345,
-
-    ///     short_code: None,
-
-    ///     peer_fingerprint: None,
-
-    /// };
-
-    /// let dto: PairingSessionSummaryDto = snap.into();
-
-    /// assert_eq!(dto.session_id, "s1");
-
-    /// assert_eq!(dto.peer_id, "p1");
-
-    /// assert_eq!(dto.device_name, "dev");
-
-    /// assert_eq!(dto.state, "verification");
-
-    /// assert_eq!(dto.updated_at_ms, 12345);
-
-    /// ```
-    fn from(value: DaemonPairingSessionSnapshot) -> Self {
-        Self {
-            session_id: value.session_id,
-            peer_id: value.peer_id,
-            device_name: value.device_name,
-            state: value.state,
-            updated_at_ms: value.updated_at_ms,
-        }
-    }
 }
 
 impl DaemonQueryService {
@@ -141,26 +87,6 @@ impl DaemonQueryService {
         // Slice 4 P5a-1: connected 字段在 libp2p 删除后失去数据源；
         // 暂时全部填 false，等 iroh 侧的连接状态接入后再回填。
         Ok(members.into_iter().map(|m| m.into_api_dto()).collect())
-    }
-
-    pub async fn pairing_session(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<PairingSessionSummaryDto>> {
-        let state = self.state.read().await;
-        Ok(state
-            .pairing_session(session_id)
-            .cloned()
-            .map(PairingSessionSummaryDto::from))
-    }
-
-    pub async fn pairing_sessions(&self) -> Vec<PairingSessionSummaryDto> {
-        let state = self.state.read().await;
-        state
-            .pairing_sessions()
-            .into_iter()
-            .map(PairingSessionSummaryDto::from)
-            .collect()
     }
 
     pub async fn space_access_state(

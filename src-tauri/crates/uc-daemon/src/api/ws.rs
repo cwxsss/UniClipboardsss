@@ -528,23 +528,10 @@ async fn build_snapshot_event(
         )
         .map(Some),
 
-        ws_topic::PAIRING => snapshot_event(
-            ws_topic::PAIRING,
-            ws_event::PAIRING_SNAPSHOT,
-            None,
-            state.query_service.pairing_sessions().await,
-        )
-        .map(Some),
-
-        ws_topic::PAIRING_SESSION => snapshot_event(
-            ws_topic::PAIRING_SESSION,
-            ws_event::PAIRING_SNAPSHOT,
-            None,
-            state.query_service.pairing_sessions().await,
-        )
-        .map(Some),
-
-        ws_topic::PAIRING_VERIFICATION => Ok(None),
+        // Slice 4 P5a-4: 旧 pairing 协议下线，PAIRING / PAIRING_SESSION /
+        // PAIRING_VERIFICATION 仅作为历史 topic 保留 — 订阅不报错，但不再
+        // 推送 snapshot。setup-v2 流程通过 SETUP topic 自有事件回报。
+        ws_topic::PAIRING | ws_topic::PAIRING_SESSION | ws_topic::PAIRING_VERIFICATION => Ok(None),
 
         ws_topic::SETUP => Ok(None),
         ws_topic::CLIPBOARD => Ok(None),
