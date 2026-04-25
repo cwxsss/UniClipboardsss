@@ -2787,3 +2787,50 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **下一步**:
 - 等用户确认开始 S1(uc-application 加 3 个 facade 方法 + SetupStateView)
 - S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 顺序落地
+
+## Session 2026-04-25(续 41) — Slice 4 Phase 3 T3.3 · daemon 装配链接通 + pairing 完成事件 forwarder
+
+**目标**:把 T3.2 留的 `DaemonApiState.with_space_setup(...)` 挂钩真正接通,同时让 sponsor 侧 pairing 完成事件流出 daemon ws 总线。
+
+### 决策(D1-D5 全部按推荐方案)
+- **D1 · a**:`DaemonApp` 加 `space_setup_facade: Option<Arc<SpaceSetupFacade>>` field,与 `space_access_facade` 等套路一致
+- **D2 · a**:forwarder task 在 `app.rs::run()` 内 spawn(`tokio::select!` 配合 `cancel.child_token()`)
+- **D3 · b**:entrypoint 一次性取 sponsor device_id 字符串传进 DaemonApp(避免 forwarder 持有新 port 依赖)
+- **D4 · a**(★ T3.1 留下的 wire schema 欠账修复):`SetupPairingCompletedEvent.joiner_device_id: String → Option<String>`,`PairingOutcome::Failure` 路径填 `None`;bump `DAEMON_API_REVISION = "setup-pairing-http-routes-v2-event-wired"`
+- **D5 · a**:T3.3 只接 `pairingCompleted`,`invitation_issued` / `invitation_revoked` 留 T4 前端真消费时再加(facade 当前没有 invitation broadcast channel)
+
+### 实际改动(7 文件,1 commit)
+
+1. **`uc-daemon-contract/src/api/dto/setup_events.rs`**:`SetupPairingCompletedEvent.joiner_device_id` 改 `Option<String>`,新增 `pairing_completed_failure_carries_null_joiner_id` test
+2. **`uc-daemon-contract/src/lib.rs`**:`DAEMON_API_REVISION` 升级
+3. **`uc-daemon/src/api/setup_events.rs`**:`emit_pairing_completed` 第 2 参数改 `Option<String>`,新增 `pairing_completed_failure_without_joiner_id_carries_null_field` test
+4. **`uc-application/src/facade/mod.rs`**:`pub use space_setup::PairingOutcome` 重导出(符合 §11.4 — daemon 必须从 facade 入口拿)
+5. **`uc-daemon/src/app.rs`**:
+   - import `SpaceSetupFacade` / `PairingOutcome` / `SetupEventBroadcaster`
+   - `DaemonApp` 加 `space_setup_facade` + `local_device_id` 两个 field
+   - `new_with_deferred(...)` 多两个参数 + `debug_assert!` 不变量(同时 Some 或同时 None)
+   - `run()` 内 `with_space_setup(facade)` 注入 api_state(在已有 builder 链最末端)
+   - `run()` 内 spawn forwarder task:`subscribe_pairing_completion()` 流 → 翻译 `PairingOutcome::Success { peer_device_id, .. } / Failure { reason }` → `setup.pairingCompleted` ws,`Lagged` warn、`Closed` debug 退出、cancel token 触发干净退出
+6. **`uc-daemon/src/entrypoint.rs`**:在调 `DaemonApp::new_with_deferred(...)` 之前 clone `ctx.space_setup_assembly.facade.clone()` + 取 `runtime.wiring_deps().device.device_identity.current_device_id().to_string()`,多传两个参数
+
+### 测试结果(zero regression)
+- `cargo check -p uc-daemon-contract -p uc-daemon -p uc-application -p uc-bootstrap`:✅ 全过(只剩既存 deprecation warning)
+- `cargo test -p uc-daemon-contract --lib`:✅ 13/13(含新增 failure 路径 test)
+- `cargo test -p uc-daemon --lib`:✅ 20/20(含新增 broadcaster failure 路径 test)
+- `cargo test -p uc-application --lib facade::space_setup`:✅ 24/24
+- 预存在的 `facade::clipboard::facade::tests::dispatch_*` 2 失败:T3.2 已确认与本任务无关
+
+### 完成后现状
+- `/v2/setup/*` endpoint **真正可用**(facade 已注入,503 路径只剩 facade 缺失场景)
+- sponsor 侧成功配对完成 → daemon ws `setup` topic 广播 `setup.pairingCompleted { sponsorDeviceId, joinerDeviceId, success: true, reason: null }`
+- sponsor 侧 pairing 失败 → 广播 `{ success: false, reason: "...", joinerDeviceId: null/Some }`
+- 老 `setup.stateChanged` / `setup.spaceAccessCompleted` 路径仍并存(`event_emitter.rs` 走老 `SetupFacade`),双发期内前端 Phase 4 切换时可忽略其一
+
+### 留给后续(明确不做)
+- ⛔ 删 `uc-application/src/setup/` 整个老目录 → T3.4
+- ⛔ 删 daemon 老 `setup_facade` 字段 / `with_setup` builder / `api/setup.rs` 11 handler → T3.4
+- ⛔ 删 `event_emitter.rs` 老 ws 事件路径 → T3.4
+- ⛔ 删 `assembly.rs:1209` 老 `SetupFacade::new(...)` 装配 → T3.4
+- ⛔ 删 `pairing/host.rs` / `query.rs` 内 `Arc<SetupFacade>` 用法 → T3.4
+- ⛔ `setup.invitationIssued` / `setup.invitationRevoked` 接通 → T4 前端真消费时
+- ⛔ daemon HTTP 集成测试(initialize → invite → joiner redeem → ws 收 pairingCompleted 端到端)→ T3.5

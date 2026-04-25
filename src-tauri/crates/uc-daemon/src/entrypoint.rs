@@ -372,6 +372,21 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         Some(deferred_ready_notify.clone())
     };
 
+    // Slice4 P3 T3.3 — clone the new SpaceSetupFacade Arc + resolve the
+    // sponsor device id (stable for the daemon's lifetime) so the
+    // pairing-completion forwarder doesn't need to pull
+    // `DeviceIdentityPort` at event time. The facade itself is moved
+    // (along with the rest of the assembly) into the post-`daemon.run()`
+    // shutdown closure below; this clone keeps the api_state + forwarder
+    // alive throughout `run()`.
+    let space_setup_facade_for_api = ctx.space_setup_assembly.facade.clone();
+    let local_device_id = runtime
+        .wiring_deps()
+        .device
+        .device_identity
+        .current_device_id()
+        .to_string();
+
     let daemon = DaemonApp::new_with_deferred(
         services,
         runtime,
@@ -385,6 +400,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         external_shutdown,
         Some(clipboard_capture_gate),
         Some(search_coordinator),
+        Some(space_setup_facade_for_api),
+        Some(local_device_id),
     );
 
     // Slice 2 Phase 3 · T6 — move the iroh-stack assembly into the

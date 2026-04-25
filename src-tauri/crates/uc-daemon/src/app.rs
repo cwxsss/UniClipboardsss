@@ -15,12 +15,14 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::{CoreUseCases, SessionReadyEmitter};
+use uc_application::facade::{PairingOutcome, SpaceSetupFacade};
 use uc_application::space_access::SpaceAccessFacade;
 
 use crate::api::auth::load_or_create_auth_token;
 use crate::api::event_emitter::DaemonApiEventEmitter;
 use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
+use crate::api::setup_events::SetupEventBroadcaster;
 use crate::api::types::DaemonWsEvent;
 use crate::pairing::host::DaemonPairingHost;
 use crate::process_metadata::DaemonPidManager;
@@ -152,6 +154,16 @@ pub struct DaemonApp {
     clipboard_capture_gate: Option<Arc<AtomicBool>>,
     /// Search coordinator — wired into DaemonApiState for HTTP route access.
     search_coordinator: Option<Arc<SearchCoordinator>>,
+    /// Slice4 P3 T3.3 — `SpaceSetupFacade` injected into `DaemonApiState`
+    /// so the `/v2/setup/*` handlers can drive real pairing flows. Same
+    /// `Arc` the keepalive worker holds, sourced from
+    /// `space_setup_assembly.facade`. Also subscribed at `run()` to fan
+    /// `PairingOutcome` events out as `setup.pairingCompleted` ws frames.
+    space_setup_facade: Option<Arc<SpaceSetupFacade>>,
+    /// Local device id (sponsor view) baked in at construction so the
+    /// pairing-completion forwarder doesn't need to pull
+    /// `DeviceIdentityPort` at event time. Pre-resolved in `entrypoint`.
+    local_device_id: Option<String>,
 }
 
 impl DaemonApp {
@@ -183,6 +195,8 @@ impl DaemonApp {
             external_shutdown: None,
             clipboard_capture_gate: None,
             search_coordinator: None,
+            space_setup_facade: None,
+            local_device_id: None,
         }
     }
 
@@ -195,6 +209,7 @@ impl DaemonApp {
     ///
     /// `encryption_unlocked` is a required parameter to enforce the invariant that
     /// the caller MUST have completed encryption recovery before constructing DaemonApp.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_deferred(
         services: Vec<Arc<dyn DaemonService>>,
         runtime: Arc<CoreRuntime>,
@@ -208,12 +223,21 @@ impl DaemonApp {
         external_shutdown: Option<CancellationToken>,
         clipboard_capture_gate: Option<Arc<AtomicBool>>,
         search_coordinator: Option<Arc<SearchCoordinator>>,
+        space_setup_facade: Option<Arc<SpaceSetupFacade>>,
+        local_device_id: Option<String>,
     ) -> Self {
         // Validate invariant: deferred_services and deferred_ready_notify must be
         // consistent. If there are deferred services, there must be a Notify to trigger them.
         debug_assert!(
             deferred_services.is_empty() || deferred_ready_notify.is_some(),
             "deferred_services is non-empty but deferred_ready_notify is None — services would never start"
+        );
+        // Slice4 P3 T3.3 invariant: when the new SpaceSetupFacade is wired
+        // in, the sponsor device id must be too — the pairing-completion
+        // forwarder needs both to emit `setup.pairingCompleted`.
+        debug_assert!(
+            space_setup_facade.is_some() == local_device_id.is_some(),
+            "space_setup_facade and local_device_id must be wired together"
         );
         Self {
             services,
@@ -228,6 +252,8 @@ impl DaemonApp {
             external_shutdown,
             clipboard_capture_gate,
             search_coordinator,
+            space_setup_facade,
+            local_device_id,
         }
     }
 
@@ -290,6 +316,12 @@ impl DaemonApp {
             Some(coordinator) => api_state.with_search_coordinator(Arc::clone(coordinator)),
             None => api_state,
         };
+        // Slice4 P3 T3.3: inject the new SpaceSetupFacade so the
+        // `/v2/setup/*` handlers stop returning 503 once T3.2 is wired.
+        let api_state = match &self.space_setup_facade {
+            Some(facade) => api_state.with_space_setup(Arc::clone(facade)),
+            None => api_state,
+        };
 
         // 3. Wire the event emitter into the runtime so use cases can emit WS events
         self.runtime
@@ -303,6 +335,65 @@ impl DaemonApp {
             let svc = Arc::clone(service);
             let token = self.cancel.child_token();
             service_tasks.spawn(async move { svc.start(token).await });
+        }
+
+        // Slice4 P3 T3.3: spawn the sponsor-side pairing-completion
+        // forwarder before the HTTP server. Subscribes to the facade's
+        // broadcast stream and translates each `PairingOutcome` into a
+        // `setup.pairingCompleted` ws frame on the shared event bus.
+        // Failure-only modes (proof mismatch, etc.) carry `joinerDeviceId
+        // = null` since the joiner identity isn't known until commit.
+        // Lives until `self.cancel` fires — the receiver ends as
+        // `RecvError::Closed` once the facade's broadcast Sender drops on
+        // assembly shutdown, which is the long-stop guard.
+        if let (Some(facade), Some(sponsor_id)) = (
+            self.space_setup_facade.as_ref(),
+            self.local_device_id.as_ref(),
+        ) {
+            let mut outcome_rx = facade.subscribe_pairing_completion();
+            let broadcaster = SetupEventBroadcaster::new(self.event_tx.clone());
+            let sponsor_id = sponsor_id.clone();
+            let cancel = self.cancel.child_token();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => {
+                            debug!("pairing-completion forwarder cancelled");
+                            break;
+                        }
+                        recv = outcome_rx.recv() => match recv {
+                            Ok(PairingOutcome::Success { peer_device_id, .. }) => {
+                                broadcaster.emit_pairing_completed(
+                                    sponsor_id.clone(),
+                                    Some(peer_device_id.to_string()),
+                                    true,
+                                    None,
+                                );
+                            }
+                            Ok(PairingOutcome::Failure { reason }) => {
+                                broadcaster.emit_pairing_completed(
+                                    sponsor_id.clone(),
+                                    None,
+                                    false,
+                                    Some(reason),
+                                );
+                            }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                warn!(
+                                    skipped = n,
+                                    "pairing-completion forwarder lagged — some events dropped"
+                                );
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                debug!(
+                                    "pairing-completion forwarder: facade broadcast closed, exiting"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
         }
 
         // 5. Spawn HTTP server and rate limiter cleanup task

@@ -25,13 +25,18 @@ pub struct SetupInvitationIssuedEvent {
 ///
 /// Both sides receive this when the pairing handshake terminates.
 /// `success = false` carries a `reason` describing the failure mode.
+///
+/// `joiner_device_id` is `None` when the handshake fails before the
+/// joiner identity is committed (e.g. proof verification failed before
+/// `PersistPairedDevice`); on success it is always populated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupPairingCompletedEvent {
     /// Device id of the sponsor (the side that issued the invitation).
     pub sponsor_device_id: String,
-    /// Device id of the joiner (the side that redeemed the invitation).
-    pub joiner_device_id: String,
+    /// Device id of the joiner. `None` on early failures before the
+    /// joiner identity is observed.
+    pub joiner_device_id: Option<String>,
     /// Whether the handshake succeeded.
     pub success: bool,
     /// Failure reason when `success = false`. `None` on success.
@@ -69,7 +74,7 @@ mod tests {
     fn pairing_completed_serializes_camel_case_with_reason() {
         let event = SetupPairingCompletedEvent {
             sponsor_device_id: "sponsor-1".to_string(),
-            joiner_device_id: "joiner-2".to_string(),
+            joiner_device_id: Some("joiner-2".to_string()),
             success: false,
             reason: Some("timeout".to_string()),
         };
@@ -84,12 +89,27 @@ mod tests {
     fn pairing_completed_omits_none_reason_as_null() {
         let event = SetupPairingCompletedEvent {
             sponsor_device_id: "sponsor-1".to_string(),
-            joiner_device_id: "joiner-2".to_string(),
+            joiner_device_id: Some("joiner-2".to_string()),
             success: true,
             reason: None,
         };
         let json = serde_json::to_value(&event).unwrap();
         assert!(json["reason"].is_null());
+    }
+
+    #[test]
+    fn pairing_completed_failure_carries_null_joiner_id() {
+        let event = SetupPairingCompletedEvent {
+            sponsor_device_id: "sponsor-1".to_string(),
+            joiner_device_id: None,
+            success: false,
+            reason: Some("proof_mismatch".to_string()),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["sponsorDeviceId"], "sponsor-1");
+        assert!(json["joinerDeviceId"].is_null());
+        assert_eq!(json["success"], false);
+        assert_eq!(json["reason"], "proof_mismatch");
     }
 
     #[test]

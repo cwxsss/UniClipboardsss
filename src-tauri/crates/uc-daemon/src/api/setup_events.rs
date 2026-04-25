@@ -39,7 +39,7 @@ impl SetupEventBroadcaster {
     pub fn emit_pairing_completed(
         &self,
         sponsor_device_id: String,
-        joiner_device_id: String,
+        joiner_device_id: Option<String>,
         success: bool,
         reason: Option<String>,
     ) {
@@ -111,7 +111,7 @@ mod tests {
 
         broadcaster.emit_pairing_completed(
             "sponsor-1".to_string(),
-            "joiner-2".to_string(),
+            Some("joiner-2".to_string()),
             false,
             Some("timeout".to_string()),
         );
@@ -131,7 +131,7 @@ mod tests {
 
         broadcaster.emit_pairing_completed(
             "sponsor-1".to_string(),
-            "joiner-2".to_string(),
+            Some("joiner-2".to_string()),
             true,
             None,
         );
@@ -139,6 +139,24 @@ mod tests {
 
         assert_eq!(event.payload["success"], true);
         assert!(event.payload["reason"].is_null());
+    }
+
+    #[tokio::test]
+    async fn pairing_completed_failure_without_joiner_id_carries_null_field() {
+        let (broadcaster, mut rx) = setup();
+
+        broadcaster.emit_pairing_completed(
+            "sponsor-1".to_string(),
+            None,
+            false,
+            Some("proof_mismatch".to_string()),
+        );
+        let event = rx.recv().await.expect("event delivered");
+
+        assert_eq!(event.payload["sponsorDeviceId"], "sponsor-1");
+        assert!(event.payload["joinerDeviceId"].is_null());
+        assert_eq!(event.payload["success"], false);
+        assert_eq!(event.payload["reason"], "proof_mismatch");
     }
 
     #[tokio::test]
