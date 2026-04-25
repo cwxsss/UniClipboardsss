@@ -1102,43 +1102,184 @@ pub struct StopNetworkCommand; // 无字段
 
 ---
 
-### Slice 4 · 双栈并行验证 🔲
+### Slice 4 · 删除 libp2p 业务代码 🔲(2026-04-24 重写,取消原"双栈并行验证")
 
-**目标**:`--features iroh` 切换的长周期稳定性验证。
+**目标**:把 libp2p 业务代码、旧 ports、旧 wire 协议、死代码 usecase 一次性清干净;daemon peer worker 切到 `PresencePort`;**不**做后端 / 装配 / 协议优化。`iroh` Cargo feature 一并取消,iroh 成为唯一实现。
 
-**任务**:
-- [ ] `uc-bootstrap` 条件装配:`#[cfg(feature = "iroh")]` 切换 port impl
-- [ ] CI 矩阵:两套 feature 都编译且 smoke 测通
-- [ ] 运行手册 `docs/dev-iroh.md`:本地跑 iroh 栈
-- [ ] 跨平台验证(macOS + Windows + Linux)联通性
-- [ ] Relay 失联 / 网络切换 / NAT 场景验证
-- [ ] 日常开发 + 多设备 ≥ 1–2 周,iroh 栈零回归
+**为什么取消原"双栈并行验证"**(决策记录,2026-04-24):
+- 证据:`findings.md` F-100 显示 GUI 进程的 `sync_outbound_clipboard()` 工厂**零调用方**,uc-app 内部 0 处引用旧 sync usecase——v0.4.0 daemon-first 完成后,libp2p 业务路径在 GUI 进程已是空跑死代码
+- daemon 路径 Slice 1/2/3 已端到端跑通三个切片(pairing / 剪贴板 / blob);双栈并行 1-2 周拿不到额外可验证场景
+- 双栈意味着维护 `#[cfg(feature = "iroh")]` 条件装配 + CI 矩阵,工程包袱大于收益
+- 用户偏好"先删后优化",降低架构腰带的过渡时长
 
-**验收**:
-- [ ] 所有 Slice 1-3 验收项在 iroh 栈下通过
-- [ ] 一线开发日常使用 iroh 栈至少一周无问题
+**前置准备**(已坐实,见 `findings.md`):
+- F-100:GUI sync 路径已是空跑死代码,删除零功能损失
+- F-102:7 个旧 port 中 4 个完全有 iroh 替代(`ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort` / `FileTransportPort` / `ConnectionPolicyResolverPort`),3 个需要切换 consumer(`PairingTransportPort` / `NetworkEventPort` / `DiscoveryPort`),`NetworkControlPort` 保留不动
+- F-113:DB schema 已无 `peer_id` 列,**无需新 migration**
+- F-114:`PresencePort::subscribe()` 接口已就绪,daemon peer worker 替换是新代码但工程量小
 
-**阻塞**:Slice 3 完成
+**Phase 拆分**:
+
+| Phase | 范围 | 验收重心 |
+|---|---|---|
+| Phase 1 · daemon peer worker 切换 | 新增 `uc-daemon/src/peers/presence_monitor.rs`,删除 `peer_discovery.rs`,`monitor.rs` 改造为基于 `PresencePort::subscribe()` | daemon 启动后两机互连仍能在 ws `peer_connection_changed` 事件里看到 Online/Offline 翻转;`PeerDiscovered` / `PeerLost` / `PeerNameUpdated` 三个 ws event_type 从契约删除 |
+| Phase 2 · 应用层 consumer 切换 | `uc-application/setup/{orchestrator,action_executor,facade,testing}.rs` 删 `Arc<dyn DiscoveryPort>` 参数;`space_access/network_adapter.rs` 把 `PairingTransportPort` 调用替换为新 `PairingSessionPort`/`PairingEventPort` | `cargo check --workspace` 通过;Slice 1 pairing e2e + Slice 2 clipboard e2e + Slice 3 blob e2e 全绿 |
+| Phase 3 · 整体删除 | 见下"删除清单"按目录/文件级一次性 `rm`;`mod.rs` / `lib.rs` / `deps.rs` / `Cargo.toml` 同步清理 | `rg -w libp2p src-tauri/crates/uc-{core,app,application,platform,infra,bootstrap,daemon,tauri,cli}/src/` 0 命中(除 logging 注释);`cargo build --workspace` 0 warning(关于旧 deprecated 项) |
+| Phase 4 · 收尾 | 移除 Cargo feature `iroh` 门控(若有),清理 frozen 注释 / `#![allow(deprecated)]`,跑全套 e2e 回归 | `grep -r "frozen libp2p\|allow(deprecated).*libp2p" src-tauri/` 0 命中 |
 
 ---
 
-### Slice 5 · 一次性清理 libp2p 🔲
+#### 删除清单(整目录 / 整文件)
 
-**目标**:libp2p 完全下线,iroh 成唯一实现。
+> 全部 0 个外部消费者,可直接 `rm`(详见 `findings.md` F-111)。
 
-**任务**:
-- [ ] 删除 `uc-platform/src/adapters/libp2p_network/`(整个目录)
-- [ ] 删除 `uc-core/src/network/`(wire + events + protocol)
-- [ ] 删除 `uc-core/src/ids/peer_id.rs`
-- [ ] 删除旧 ports:`pairing_transport.rs`(重建为无 `peer_id: String` 版)/ `file_transport.rs` / `network_events.rs` / `connection_policy.rs` / `discovery.rs` / 旧 `network_control.rs`
-- [ ] 删 Clipboard 帧模型 port:`ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort`
-- [ ] 状态机删 `AwaitingUserConfirm` + `PairingChallenge{pin}` / `PairingResponse{pin_hash}`
-- [ ] `Cargo.toml`:移除 `libp2p` / `libp2p-stream`
-- [ ] 移除 Cargo feature `iroh`(成为默认唯一实现)
-- [ ] 数据库迁移:drop 旧 peer_id 字段或标注废弃
-- [ ] 用户通知:发布要求"重新配对"
+**uc-platform**:
+- [ ] `uc-platform/src/adapters/libp2p_network/`(整目录,14 文件)
+- [ ] `uc-platform/src/adapters/pairing_stream/`(整目录,3 文件)
+- [ ] `uc-platform/src/adapters/file_transfer/`(整目录,6 文件)
+- [ ] `uc-platform/src/identity_store.rs`(libp2p 专用)
 
-**阻塞**:Slice 4 稳定 ≥ 1 周
+**uc-app(死代码 usecase)**:
+- [ ] `uc-app/src/usecases/clipboard/sync_outbound.rs`
+- [ ] `uc-app/src/usecases/clipboard/sync_inbound.rs`
+- [ ] `uc-app/src/usecases/file_sync/`(整目录:`sync_outbound.rs` / `sync_inbound.rs` / `sync_policy.rs` / `cleanup.rs` / `copy_file_to_clipboard.rs` / `mod.rs`,见 F-115)
+- [ ] `uc-app/src/usecases/pairing/resolve_connection_policy.rs`
+
+**uc-application**:
+- [ ] `uc-application/src/pairing/state_machine.rs`(整文件,带掉 `AwaitingUserConfirm` / `PairingChallenge` / `PairingResponse`,见 F-105)
+
+**uc-core ports**:
+- [ ] `uc-core/src/ports/pairing_transport.rs`
+- [ ] `uc-core/src/ports/network_events.rs`
+- [ ] `uc-core/src/ports/file_transport.rs`
+- [ ] `uc-core/src/ports/connection_policy.rs`
+- [ ] `uc-core/src/ports/discovery.rs`
+
+**uc-core 其他**:
+- [ ] `uc-core/src/ids/peer_id.rs`(F-104:0 业务消费,`PeerId` 类型未被任何代码当类型参数使用)
+- [ ] `uc-core/src/network/events.rs`(`NetworkEvent` / `ConnectedPeer` / `DiscoveredPeer` / `PeerTrustStatus`)
+- [ ] `uc-core/src/network/connection_policy.rs`
+- [ ] `uc-core/src/network/protocol/file_transfer.rs`
+- [ ] `uc-core/src/network/protocol/heartbeat.rs`
+- [ ] `uc-core/src/network/protocol/device_announce.rs`
+- [ ] `uc-core/src/network/protocol/protocol_message.rs`
+
+**uc-daemon**:
+- [ ] `uc-daemon/src/peers/monitor.rs`(被 Phase 1 新 `presence_monitor.rs` 取代)
+- [ ] `uc-daemon/src/workers/peer_discovery.rs`(F-114:整 worker 在 iroh 路径下无意义)
+
+---
+
+#### 文件内部清理(部分修改)
+
+**Clipboard 帧模型 port**:
+- [ ] `uc-core/src/ports/clipboard/transport.rs`:删 `ClipboardOutboundTransportPort` 和 `ClipboardInboundTransportPort` trait(见 F-102)
+- [ ] `uc-core/src/ports/clipboard/mod.rs`:同步去掉 transport 子模块导出
+
+**Wire 协议保留项瘦身**(见 F-103):
+- [ ] `uc-core/src/network/protocol/pairing.rs`:删 `PairingChallenge` / `PairingResponse` 类型(被 state_machine 唯一消费,state_machine 删后孤立);保 `PairingMessage` / `PairingBusy`(被新 `space_access/network_adapter.rs` 用)
+- [ ] `uc-core/src/network/protocol/clipboard.rs`:删 `ClipboardMessage` / `ProtocolMessage` / `ProtocolDirection` / `ClipboardPayloadVersion`;保 `ClipboardBinaryPayload` / `BinaryRepresentation` / `MIME_IMAGE_PREFIX`(被 `payload_codec.rs` + `list_entry_projections.rs` 用)
+- [ ] `uc-core/src/network/protocol/mod.rs`:同步导出
+- [ ] `uc-core/src/network/mod.rs`:删 `events`/`connection_policy` 子模块声明
+- [ ] `uc-core/src/ids/mod.rs:16`:删 `pub use peer_id::PeerId`
+- [ ] `uc-core/src/lib.rs:38`:从 `pub use ids::{...}` 列表删 `PeerId`
+- [ ] `uc-core/src/ports/mod.rs`:同步删除被删 port 的导出
+
+**uc-app**:
+- [ ] `uc-app/src/deps.rs`:删 `clipboard_outbound` / `clipboard_inbound` / `pairing` / `events` / `file_transfer` 字段 + 文件首行 `#![allow(deprecated)]`
+- [ ] `uc-app/src/usecases/clipboard/mod.rs`:去掉 `sync_outbound` / `sync_inbound` mod 声明 + re-export
+- [ ] `uc-app/src/usecases/pairing/mod.rs`:去掉 `resolve_connection_policy`
+- [ ] `uc-app/src/usecases/mod.rs`:去掉 `file_sync` 模块
+- [ ] `uc-app/src/runtime.rs` / `uc-app/src/lib.rs`:清掉旧路径残留(逐文件 grep 后处理)
+
+**uc-application**:
+- [ ] `uc-application/src/setup/orchestrator.rs:19`(`use ports::{DiscoveryPort, ..., PairingTransportPort, ...}`)+ `:85` 等 `Arc<dyn DiscoveryPort>` 字段
+- [ ] `uc-application/src/setup/action_executor.rs:20` + `:59` 等同上
+- [ ] `uc-application/src/setup/facade.rs`:Discovery/PairingTransport 占位参数清理
+- [ ] `uc-application/src/setup/testing.rs:196`(`impl PairingTransportPort for FakePairingTransport`)整文件依赖清理
+- [ ] `uc-application/src/space_access/network_adapter.rs`:把 `PairingTransportPort` 调用替换为 `PairingSessionPort` + `PairingEventPort`(Phase 2 主要工作)
+- [ ] `uc-application/src/pairing/mod.rs`:去掉 `state_machine` 子模块导出
+
+**uc-platform**:
+- [ ] `uc-platform/src/adapters/network.rs`:删 `DisabledPairingTransport`(随 `PairingTransportPort` 删除一起,F-102);保 `PairingRuntimeOwner` 枚举(若仍有意义,需复查)
+- [ ] `uc-platform/src/adapters/mod.rs`:删 `libp2p_network` / `pairing_stream` / `file_transfer` 子模块声明
+- [ ] `uc-platform/src/lib.rs`:删 `identity_store` 等子模块导出
+
+**uc-bootstrap**:
+- [ ] `uc-bootstrap/src/builders.rs`:删 libp2p adapter 装配分支
+- [ ] `uc-bootstrap/src/assembly.rs:1010-1157`:删 `DiscoveryPort` 装配 + `NetworkDiscoveryPort` / `EmptyDiscoveryPort` 内联占位
+
+**uc-tauri**:
+- [ ] `uc-tauri/src/bootstrap/runtime.rs:35`:从 `use uc_app::{...}` 移除已删字段相关 import
+- [ ] `uc-tauri/src/bootstrap/runtime.rs:331-388`:整段删 `sync_outbound_clipboard()` 工厂(零调用方,F-100)
+- [ ] `uc-tauri/src/bootstrap/logging.rs:31,49-52`:删 libp2p_mdns 相关 logging filter 注释
+- [ ] `uc-tauri/src/test_utils.rs`:删除测试 fakes(`NoopPairingTransport` 等,F-102)
+
+**uc-daemon**:
+- [ ] `uc-daemon/src/pairing/host.rs:1`:去掉 `#![allow(deprecated)]`
+- [ ] `uc-daemon/src/pairing/host.rs:20`:`use uc_core::network::{...}` 改为只 import 保留的 `PairingMessage` / `PairingBusy` / `SessionId`
+- [ ] `uc-daemon/src/peers/mod.rs`:把 `monitor` 改为 `presence_monitor`
+- [ ] `uc-daemon/src/workers/mod.rs`:删 `peer_discovery`
+- [ ] `uc-daemon` service 装配点:把旧 worker 注册替换为 `PresenceMonitor`
+
+**Cargo**:
+- [ ] workspace `Cargo.toml`:移除 `libp2p` / `libp2p-stream` 工作区依赖项
+- [ ] `uc-platform/Cargo.toml`:移除 libp2p deps
+- [ ] `uc-app/Cargo.toml`:移除(若有)
+- [ ] `uc-tauri/Cargo.toml`:保留 `uc-app = { path = "../uc-app" }`(uc-app 删旧 usecase 后仍是有用 crate)
+- [ ] 全 workspace 的 `iroh` Cargo feature 门控移除(变成默认)
+
+**daemon-contract**(WS 事件):
+- [ ] `uc-daemon-contract/src/api/dto/...`:核实并删除 `PeerDiscoveredPayload` / `PeerLostPayload` / `PeerNameUpdatedPayload` 这类 ws event(若有);保 `PeerConnectionChangedPayload`
+
+---
+
+#### Phase 1 详细任务(daemon peer worker 切换)
+
+**目标**:在删 `NetworkEventPort` 之前,把 daemon peer 事件流切到 `PresencePort`。
+
+**T1**:`uc-daemon/src/peers/presence_monitor.rs` 新增
+- 实现 `DaemonService`,持有 `Arc<dyn PresencePort>` + `broadcast::Sender<DaemonWsEvent>`
+- 在 `start()` 里 `port.subscribe()` 拿 receiver,循环把 `PresenceEvent { device_id, state, at }` 转成 `peer_connection_changed` ws event
+- 单测:`PresencePort` 用 mock 推 3 个事件 → ws 收到 3 条
+
+**T2**:`uc-daemon/src/peers/mod.rs` + service registry 装配点
+- 把 `PeerMonitor::new(...)` 替换为 `PresenceMonitor::new(...)`
+- 删 `PeerDiscoveryWorker` 注册
+
+**T3**:验证 daemon 启动 + 两机互连 + ws 仍翻 `Online/Offline`(用现有 e2e harness 或手动)
+
+**T4**:删 `uc-daemon/src/peers/monitor.rs` + `uc-daemon/src/workers/peer_discovery.rs`(整文件),`mod.rs` 同步
+
+**风险**:Phase 1 是**唯一需要写新代码**的部分,工程量约 0.5 天。其余 Phase 全是删除 / mechanical 替换。
+
+---
+
+#### 验收
+
+- [ ] `rg -w libp2p src-tauri/crates/uc-{core,app,application,platform,infra,bootstrap,daemon,tauri,cli}/src/` 0 命中(允许:logging filter 字符串字面量、git history 中的注释)
+- [ ] `cargo build --workspace` 通过且不再有"libp2p frozen"相关 deprecated warning
+- [ ] `cargo test --workspace` 通过
+- [ ] Slice 1/2/3 e2e 全绿(pairing 配对 / 剪贴板同步 / 含文件剪贴板)
+- [ ] daemon 启动后 ws `peer_connection_changed` 事件正常翻转
+- [ ] `Cargo.lock` 不再含 `libp2p` / `libp2p-stream` / `libp2p-*` 任何 crate
+
+**阻塞**:无(Slice 3 已完成,Phase 3 真机端到端验收挪到本 Slice 验收一并跑)
+
+---
+
+### Slice 5 · 后续优化 🔲
+
+**目标**:libp2p 删除后逐项处理还需要打磨的点。**不写死任务清单**,等 Slice 4 落地后再根据实际暴露的问题细化。
+
+**当前已知候选**(按优先级排序):
+1. **GUI 路径接入 daemon WS**:GUI 当前业务命令已经全部下沉到 daemon HTTP/WS,但前端代码可能仍有依赖旧 ws event 类型(`peer_discovered` / `peer_lost` / `peer_name_updated`)的地方,Slice 4 删除后需要前端适配
+2. **`uc-core/src/network/` 进一步整合**:Slice 4 后只剩 `session.rs` + 三个 protocol 文件,可考虑搬到 `uc-application` 或 `uc-infra`(协议帧不属于 core 业务概念)
+3. **`uc-app` crate 评估**:`uc-app/usecases/` 保留项(write_coordinator / list_entry_projections / 其他 GUI usecase)可能可以下沉到 `uc-application`,把 `uc-app` 整 crate 退役
+4. **技术债清单**(`task_plan.md` T-01 ~ T-17)按业务驱动逐项处理
+5. **跨平台 / Relay / NAT 场景验证**(原 Slice 4 任务)纳入正常 QA 流程,不再作为单独 milestone
+
+**阻塞**:Slice 4 完成
 
 ## 🧾 技术债清单
 
@@ -2295,12 +2436,13 @@ Phase 0(已完成,2026-04-18)
    Slice 3(Blob / Files)
         │
         ▼
-   Slice 4(双栈验证 1-2 周)
+   Slice 4(删除 libp2p 业务代码)
         │
         ▼
-   Slice 5(删 libp2p)
+   Slice 5(后续优化)
 ```
 
 - Phase 0 已完成
 - Slice 1 阻塞于 milestone/1.0.0 合并
 - **Slice 1→5 为严格线性**:每个 slice 是端到端业务交付,不适合并行(后续 slice 依赖前序建立的基础设施)
+- 2026-04-24 调整:原 Slice 4"双栈并行验证 1-2 周"已取消,改为直接删除 libp2p 业务代码(GUI 进程旧路径已是空跑死代码,见 `findings.md` F-100)
