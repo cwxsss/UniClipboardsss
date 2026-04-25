@@ -24,7 +24,7 @@ use uc_core::ports::SystemClipboardPort;
 use crate::api::types::DaemonWsEvent;
 use crate::app::{DaemonApp, SetupCompletionEmitter};
 use crate::pairing::host::DaemonPairingHost;
-use crate::peers::monitor::PeerMonitor;
+use crate::peers::presence_monitor::PresenceMonitor;
 use crate::search::coordinator::SearchCoordinator;
 use crate::service::DaemonService;
 use crate::service::ServiceHealth;
@@ -332,13 +332,17 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         event_tx.clone(),
     ));
 
-    let peer_monitor = Arc::new(PeerMonitor::new(runtime.clone(), event_tx.clone()));
+    let presence_monitor = Arc::new(PresenceMonitor::new(
+        ctx.space_setup_assembly.presence.clone(),
+        runtime.clone(),
+        event_tx.clone(),
+    ));
 
     let (services, deferred_services) = {
         let mut initial: Vec<Arc<dyn DaemonService>> = vec![
             Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
             Arc::clone(&pairing_host) as Arc<dyn DaemonService>,
-            Arc::clone(&peer_monitor) as Arc<dyn DaemonService>,
+            Arc::clone(&presence_monitor) as Arc<dyn DaemonService>,
         ];
         let mut deferred: Vec<Arc<dyn DaemonService>> = Vec::new();
 

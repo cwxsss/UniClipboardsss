@@ -67,6 +67,11 @@ pub struct SpaceSetupAssembly {
     /// Slice 3 Phase 1:明文 hash → 密文 digest 去重缓存。与
     /// `blob_transfer` 分开装配,保持传输和 sqlite 缓存职责独立。
     pub blob_reference: Arc<dyn BlobReferenceRepositoryPort>,
+    /// Slice 4 Phase 1:presence port 直出。`facade` / `roster` /
+    /// `clipboard_sync` 内部都已经持有同一份 Arc;daemon `PresenceMonitor`
+    /// 也需要直接订阅事件流,所以这里再 clone 一份对外暴露,避免门面层
+    /// 多包一道 subscribe 转发。
+    pub presence: Arc<dyn PresencePort>,
     /// The shared iroh node. Held privately so callers can't bind a second
     /// node or install additional handlers after `spawn` — that would
     /// fragment peer identity (§"共用网络栈" decision, Slice 1 planning).
@@ -242,6 +247,7 @@ pub async fn build_space_setup_assembly(
         blob,
         blob_transfer,
         blob_reference: Arc::clone(&wired.blob_reference_repo),
+        presence,
         iroh_node,
         ingest_handle,
     })
