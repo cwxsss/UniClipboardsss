@@ -43,11 +43,6 @@ use uc_daemon_contract::api::dto::v2::setup::{
     RedeemResponse as V2RedeemResponse, SetupStateResponse as V2SetupStateResponse,
 };
 
-use crate::api::dto::setup::{
-    GetSetupStateResponse, SetupActionResponse, SetupResetResponse, SetupSelectPeerRequest,
-    SetupStateResponseDto, SetupSubmitPassphraseRequest,
-};
-
 /// Adds a `session` Bearer security scheme to the OpenAPI document and applies it
 /// to all L2+ paths.
 ///
@@ -100,16 +95,6 @@ impl Modify for SecurityAddon {
         crate::api::device::get_local_device_info_handler,
         crate::api::member::get_member_sync_preferences_handler,
         crate::api::member::update_member_sync_preferences_handler,
-        crate::api::setup::get_setup_state,
-        crate::api::setup::start_new,
-        crate::api::setup::start_join,
-        crate::api::setup::select_peer,
-        crate::api::setup::confirm_peer,
-        crate::api::setup::submit_passphrase,
-        crate::api::setup::verify_passphrase,
-        crate::api::setup::cancel,
-        crate::api::setup::complete_space_access,
-        crate::api::setup::reset,
         crate::api::v2::setup::initialize,
         crate::api::v2::setup::issue_invitation,
         crate::api::v2::setup::redeem,
@@ -169,12 +154,6 @@ impl Modify for SecurityAddon {
             UpdateChannelDto,
             EncryptionStateResponse,
             KeychainAccessResponse,
-            GetSetupStateResponse,
-            SetupActionResponse,
-            SetupResetResponse,
-            SetupStateResponseDto,
-            SetupSelectPeerRequest,
-            SetupSubmitPassphraseRequest,
             AckedPairingCommandResponse,
             InitiatePairingRequest,
             InitiatePairingResponse,
@@ -214,7 +193,6 @@ impl Modify for SecurityAddon {
         (name = "member", description = "Space member sync preferences (phase 4b)"),
         (name = "settings", description = "Settings management APIs"),
         (name = "encryption", description = "Encryption state and session management"),
-        (name = "setup", description = "Device setup and pairing flow"),
         (name = "setup-v2", description = "Stateless v2 setup pairing endpoints (Slice4 P3 T3.2)"),
         (name = "pairing", description = "Pairing lifecycle management"),
         (name = "search", description = "Local encrypted search endpoints"),
