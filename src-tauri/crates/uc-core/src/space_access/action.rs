@@ -13,23 +13,12 @@ pub enum SpaceAccessAction {
         expires_at: DateTime<Utc>,
     },
 
-    // 请求将已准备好的 Offer 发送出去
-    SendOffer,
-
     // ===== Joiner intents =====
 
     // 用户已提交 passphrase，请求派生空间密钥
     RequestSpaceKeyDerivation {
         space_id: SpaceId,
     },
-
-    // 请求发送 Joiner 的证明
-    SendProof,
-
-    // ===== Result intents =====
-
-    // 请求发送最终裁决（Granted / Denied）
-    SendResult,
 
     // ===== Persistence intents =====
 

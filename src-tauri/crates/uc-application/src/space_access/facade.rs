@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 use uc_core::ids::{SessionId, SpaceId};
 use uc_core::space_access::event::SpaceAccessEvent;
@@ -18,7 +18,7 @@ use uc_core::crypto::SecretString;
 use uc_core::security::IdentityFingerprint;
 use uc_core::space_access::JoinOffer;
 
-use super::context::{SpaceAccessContext, SpaceAccessJoinerOffer};
+use super::context::SpaceAccessJoinerOffer;
 use super::events::{SpaceAccessCompletedEvent, SpaceAccessEventPort};
 use super::executor::SpaceAccessExecutor;
 use super::orchestrator::{AdmitMemberUseCaseDyn, SpaceAccessError, SpaceAccessOrchestrator};
@@ -157,16 +157,6 @@ impl SpaceAccessFacade {
         self.orchestrator
             .dispatch(executor, event, pairing_session_id)
             .await
-    }
-
-    /// Returns the shared `SpaceAccessContext` handle for bootstrap to wire
-    /// the internal adapters (`SpaceAccessNetworkAdapter`). External
-    /// consumers **must not** use this to mutate context fields directly —
-    /// call the explicit setters above. This escape hatch exists only so
-    /// that bootstrap can keep today's adapter-construction shape without
-    /// pulling the adapter build itself into the facade.
-    pub fn context_handle(&self) -> Arc<Mutex<SpaceAccessContext>> {
-        self.orchestrator.context()
     }
 }
 

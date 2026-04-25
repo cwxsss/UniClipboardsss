@@ -439,11 +439,6 @@ impl SpaceAccessOrchestrator {
                     context.prepared_offer = Some(offer);
                     let _ = pairing_session_id;
                 }
-                SpaceAccessAction::SendOffer => {
-                    let session_id =
-                        pairing_session_id.ok_or(SpaceAccessError::MissingPairingSessionId)?;
-                    executor.transport.send_offer(session_id).await?;
-                }
                 SpaceAccessAction::StartTimer { ttl_secs } => {
                     let session_id =
                         pairing_session_id.ok_or(SpaceAccessError::MissingPairingSessionId)?;
@@ -507,16 +502,6 @@ impl SpaceAccessOrchestrator {
 
                     let mut context = self.context.lock().await;
                     context.proof_artifact = Some(proof);
-                }
-                SpaceAccessAction::SendProof => {
-                    let session_id =
-                        pairing_session_id.ok_or(SpaceAccessError::MissingPairingSessionId)?;
-                    executor.transport.send_proof(session_id).await?;
-                }
-                SpaceAccessAction::SendResult => {
-                    let session_id =
-                        pairing_session_id.ok_or(SpaceAccessError::MissingPairingSessionId)?;
-                    executor.transport.send_result(session_id).await?;
                 }
                 SpaceAccessAction::PersistJoinerAccess { space_id } => {
                     let peer_id = {

@@ -53,7 +53,6 @@ impl SpaceAccessStateMachine {
                         space_id: space_id.clone(),
                         expires_at,
                     },
-                    SpaceAccessAction::SendOffer,
                     SpaceAccessAction::StartTimer { ttl_secs },
                 ];
                 (
@@ -103,10 +102,7 @@ impl SpaceAccessStateMachine {
                     space_id: space_id.clone(),
                     sent_at: now,
                 },
-                vec![
-                    SpaceAccessAction::RequestSpaceKeyDerivation { space_id },
-                    SpaceAccessAction::SendProof,
-                ],
+                vec![SpaceAccessAction::RequestSpaceKeyDerivation { space_id }],
             ),
 
             // ===== Proof =====
@@ -123,7 +119,6 @@ impl SpaceAccessStateMachine {
                     space_id: space_id.clone(),
                 },
                 vec![
-                    SpaceAccessAction::SendResult,
                     SpaceAccessAction::PersistSponsorAccess { space_id },
                     SpaceAccessAction::StopTimer,
                 ],
@@ -141,7 +136,7 @@ impl SpaceAccessStateMachine {
                     space_id,
                     reason,
                 },
-                vec![SpaceAccessAction::SendResult, SpaceAccessAction::StopTimer],
+                vec![SpaceAccessAction::StopTimer],
             ),
 
             // ===== Result =====
@@ -349,7 +344,6 @@ impl SpaceAccessStateMachine {
                         space_id: space_id.clone(),
                         expires_at,
                     },
-                    SpaceAccessAction::SendOffer,
                     SpaceAccessAction::StartTimer { ttl_secs },
                 ];
                 (
