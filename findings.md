@@ -1707,3 +1707,68 @@ P3-pre 实施清单:
 **结论**:P3-pre 推荐方案 D。task_plan.md 中关于 P3-pre 的"方案 A/B 二选一"决策记录可改写为"方案 D 已选定,等待 A1 路径行为验证"。
 
 ---
+
+### F-117 · P3-pre 真正的堵点:daemon HTTP `/setup/*` 仍依赖老 `SetupFacade` + libp2p stack
+
+**发现时间**:2026-04-24(F-116 之后,A1 路径行为验证延伸研究)
+
+**进程级路由表**(`uc-bootstrap/src/builders.rs:130–140`):
+| 进程 | `PairingRuntimeOwner` | `PairingTransportPort` 实际 impl |
+|---|---|---|
+| GUI(Tauri) | `ExternalDaemon` | `DisabledPairingTransport`(报错) |
+| CLI | `ExternalDaemon` | `DisabledPairingTransport`(报错) |
+| **daemon** | **`CurrentProcess`** | **`Libp2pNetworkAdapter`(真发包)** |
+
+**两套 setup facade 并存**(同一 crate 里):
+| facade | 位置 | 风格 | wire 路径 | 谁在用 |
+|---|---|---|---|---|
+| **新 `SpaceSetupFacade`** | `uc-application/src/facade/space_setup/facade.rs` | stateless commands(`initialize_space` / `issue_pairing_invitation` / `redeem_pairing_invitation`) | iroh-only(`sponsor_handshake.rs` / `joiner_handshake.rs` 直发 `PairingSessionMessage`) | `slice1_handshake_e2e.rs` 跑 iroh-only 验证;`bootstrap/src/space_setup.rs:190` 装配 |
+| **老 `SetupFacade`** | `uc-application/src/setup/facade.rs` | stateful FSM(`new_space` / `submit_passphrase` / `cancel_setup` / `reset` / `confirm_peer_trust`) | libp2p(`SpaceAccessNetworkAdapter` → `PairingTransportPort.send_pairing_on_session`) | **daemon HTTP `/setup/*` 11 个 endpoint**(`uc-daemon/src/api/setup.rs`);`bootstrap/src/assembly.rs:1209` 装配 |
+
+**daemon HTTP `/setup/*` 端点表**(`uc-daemon/src/api/setup.rs:19–32`):
+- `GET /setup/state`
+- `POST /setup/new` → `setup_facade().new_space()`
+- `POST /setup/join`
+- `POST /setup/select-peer`
+- `POST /setup/confirm-peer`
+- `POST /setup/submit-passphrase` → `setup_facade().submit_passphrase()` → FSM `SubmitPassphrase` → `SendProof` action → `SpaceAccessNetworkAdapter`
+- `POST /setup/verify-passphrase`
+- `POST /setup/cancel` → `setup_facade().cancel_setup()`
+- `POST /setup/clear-transient`
+- `POST /setup/complete-space-access`
+- `POST /setup/reset` → `setup_facade().reset()`
+
+**前端消费方**:`src/api/daemon/setup.ts`(React)走 daemon HTTP `/setup/*` 全套。
+
+**P3-pre 实际工作链(F-116 估算修正)**:
+
+要让 libp2p adapter 真正可删,必须**先迁移 daemon setup 流程从老 facade 到新 facade**:
+1. **核对** daemon HTTP `/setup/*` 11 个 endpoint 的语义在新 `SpaceSetupFacade` 里如何表达——新 facade 是 stateless commands,老 facade 是 stateful FSM,**契约模型不同**
+2. **重写** daemon HTTP setup endpoints 为新 facade 调用——可能涉及:
+   - 新增 stateful 状态投影层(daemon 侧把 stateless commands 包装成对前端的 stateful API)
+   - 或前端契约升级:把 setup 流程从"FSM 分步引导"改为"一次性命令 + 状态查询"
+3. **前端契约调整** `src/api/daemon/setup.ts` + 相关 React 组件
+4. **删除** 老 `SetupFacade` + `SpaceAccessOrchestrator` FSM transport leg + `SpaceAccessNetworkAdapter` + `SpaceAccessTransportPort`
+
+**工作量重估**:
+- F-116 原估"删除整套,1-2h"——**严重低估**
+- 修正:**1-3 天**(取决于前端契约是否同步升级)
+- 这个工作跨 daemon HTTP / 前端 / Tauri 命令三层,Slice 4 的"删 libp2p 业务代码"目标实际上隐含了 setup 流程从 stateful FSM 迁移到 stateless commands 的 architectural 改动
+
+**Slice 4 范围重新评估**:
+
+原 Slice 4 计划的"Phase 3 整体删除"要求 daemon 路径已经全部切到 iroh,但 daemon HTTP `/setup/*` 走的是老 facade + libp2p,**这违背了删除前置条件**。两个可选方向:
+
+**方向 1 · 扩大 Slice 4 Phase 3 范围**:把 daemon setup HTTP 迁移并入 Phase 3 P3-pre,Slice 4 总工期 +1-3 天
+
+**方向 2 · 收窄 Slice 4 目标**:
+- 仅删除"零外部消费者"的死代码(F-111 中绝大多数项,如 `uc-app/usecases/clipboard/sync_outbound.rs`、`file_sync/`、`pairing/state_machine.rs` 等)
+- **保留**`Libp2pNetworkAdapter` + `SetupFacade` + `SpaceAccessNetworkAdapter` + `PairingTransportPort` 直到 Slice 5 setup 流程迁移完成
+- Slice 4 退化为"清死代码 + Phase 1 daemon presence 切换",真正的 libp2p adapter 删除推到 Slice 5
+- 优势:Slice 4 可以在原计划工期内完成,libp2p 退役不再卡在 setup facade 迁移上
+
+**关联 Slice 5 优化候选 #1**(`task_plan.md:1276`)"GUI 路径接入 daemon WS":那条说的就是同一类工作——把 setup 流程从 stateful HTTP 改成 daemon WS event-driven。本 finding 等于把这条候选**从"优化"提升为"删除前置项"**。
+
+**结论**:P3-pre 不是一个能在几小时内完成的"删除任务",而是一个**跨 daemon HTTP / 前端 / Tauri 命令的 architectural 改动**。需要用户在两个方向间拍板:扩大 Slice 4 范围、还是收窄 Slice 4 目标把 libp2p 真正删除推到 Slice 5。
+
+---

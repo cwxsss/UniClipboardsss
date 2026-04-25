@@ -1168,6 +1168,50 @@ pub struct StopNetworkCommand; // 无字段
 
 ---
 
+#### A1 路径行为核实结论(2026-04-24,F-116 后续 + F-117)
+
+**进程级路由表**(`uc-bootstrap/src/builders.rs:130–140`):
+
+| 进程 | `PairingRuntimeOwner` | `PairingTransportPort` 实际 impl |
+|---|---|---|
+| GUI(Tauri) | `ExternalDaemon` | `DisabledPairingTransport`(报错) |
+| CLI | `ExternalDaemon` | `DisabledPairingTransport`(报错) |
+| **daemon** | **`CurrentProcess`** | **`Libp2pNetworkAdapter`(真发包)** |
+
+**关键事实**:
+1. e2e 测试 `slice1_handshake_e2e.rs` 用的是**新 `SpaceSetupFacade`**(`uc-application/src/facade/space_setup/facade.rs`)→ iroh-only 路径,不经过 `SpaceAccessNetworkAdapter` / FSM。这条路径**已验证通过**。
+2. **老 `SetupFacade`**(`uc-application/src/setup/facade.rs`)仍被 daemon HTTP `/setup/*` 11 个 endpoint 使用(`uc-daemon/src/api/setup.rs`),走 FSM → `SpaceAccessNetworkAdapter` → `PairingTransportPort`。daemon 进程下 `PairingTransportPort` = `Libp2pNetworkAdapter`,所以这条路径**当前在 libp2p 上跑通**。
+3. 前端(`src/api/daemon/setup.ts`)消费 daemon HTTP `/setup/*`——所以 GUI 用户的真实 setup 流程**仍在走老 facade + libp2p**。
+
+**结论**:F-116 提出的"方案 D · 删除 SpaceAccessTransportPort 套件"**前提不成立**,因为老 `SetupFacade` + libp2p stack 仍是**生产路径**(daemon HTTP setup endpoints 的实现)。
+
+**P3-pre 工作量重估(F-117)**:
+
+要让 libp2p adapter 真正可删,必须**先迁移 daemon setup 流程从老 facade 到新 facade**:
+- 老 `SetupFacade`:stateful FSM 风格(`new_space` / `submit_passphrase` / `cancel_setup` / `reset` / `confirm_peer_trust`)
+- 新 `SpaceSetupFacade`:stateless commands 风格(`initialize_space` / `issue_pairing_invitation` / `redeem_pairing_invitation`)
+
+迁移工作:
+1. 核对 daemon HTTP `/setup/*` 11 个 endpoint 在新 facade 里如何表达——契约模型不同
+2. 重写 daemon HTTP setup endpoints 为新 facade 调用,可能需要 stateful 状态投影层
+3. 调整前端 `src/api/daemon/setup.ts` + React 组件契约
+4. 删 `SetupFacade` + `SpaceAccessOrchestrator` FSM transport leg + `SpaceAccessNetworkAdapter` + `SpaceAccessTransportPort`
+
+**修正预算**:1-3 天(从 F-116 估的 1-2h 大幅上修)
+
+**Slice 4 范围决策点**:
+
+| 方向 | 描述 | Slice 4 工期 | 优势 | 劣势 |
+|---|---|---|---|---|
+| **方向 1 · 扩大 Phase 3** | 把 daemon setup HTTP 迁移并入 P3-pre | +1-3 天 | Slice 4 完成后 libp2p 真正可删 | 跨 daemon/前端/Tauri 三层,风险面大 |
+| **方向 2 · 收窄 Slice 4** | 仅删 F-111 死代码 + Phase 1 presence;**保留**`Libp2pNetworkAdapter` + `SetupFacade` + `SpaceAccessNetworkAdapter` + `PairingTransportPort` 直到 Slice 5 完成 setup 迁移 | 原计划 | 风险面小,Slice 4 可如期收尾 | libp2p 退役实际推到 Slice 5,本 Slice "删 libp2p" 目标降级 |
+
+**关联**:Slice 5 优化候选 #1(L1276)"GUI 路径接入 daemon WS"实际就是 daemon setup HTTP 迁移的扩展形态——若选方向 2,该候选从"优化"升级为"前置项"。
+
+**等待用户拍板**:进入 Phase 3 之前需要选 1 或 2。
+
+---
+
 #### 删除清单(整目录 / 整文件)
 
 > 全部 0 个外部消费者,可直接 `rm`(详见 `findings.md` F-111)。
