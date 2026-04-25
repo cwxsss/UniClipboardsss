@@ -1122,8 +1122,8 @@ pub struct StopNetworkCommand; // 无字段
 
 | Phase | 范围 | 验收重心 |
 |---|---|---|
-| Phase 1 · daemon peer worker 切换 | 新增 `uc-daemon/src/peers/presence_monitor.rs`,删除 `peer_discovery.rs`,`monitor.rs` 改造为基于 `PresencePort::subscribe()` | daemon 启动后两机互连仍能在 ws `peer_connection_changed` 事件里看到 Online/Offline 翻转;`PeerDiscovered` / `PeerLost` / `PeerNameUpdated` 三个 ws event_type 从契约删除 |
-| Phase 2 · 应用层 consumer 切换 | `uc-application/setup/{orchestrator,action_executor,facade,testing}.rs` 删 `Arc<dyn DiscoveryPort>` 参数;`space_access/network_adapter.rs` 把 `PairingTransportPort` 调用替换为新 `PairingSessionPort`/`PairingEventPort` | `cargo check --workspace` 通过;Slice 1 pairing e2e + Slice 2 clipboard e2e + Slice 3 blob e2e 全绿 |
+| Phase 1 · daemon peer worker 切换 ✅(2026-04-24) | 新增 `uc-daemon/src/peers/presence_monitor.rs`(基于 `PresencePort::subscribe()`),删除旧 `monitor.rs` | daemon 在每次 `PresenceEvent::Online/Offline` 后向 ws `peers` topic 推一条 `peers.changed` 全量快照(已用单测覆盖,真机两台验收挪到 Slice 4 整体收尾);`peer_connection_changed` / `peer_name_updated` 现已无生产者,契约结构留给 Phase 3 整体删除 |
+| Phase 2 · 应用层 consumer 切换 | A 已完成(2026-04-24):`uc-application/setup/{orchestrator,action_executor,facade,testing}.rs` 已拿掉 `Arc<dyn DiscoveryPort>` 参数 + `EnsureDiscovery` action 仅保留 `start_network()`;`uc-bootstrap/src/assembly.rs` 同步删除 `SetupAssemblyPorts.discovery_port` + `NetworkDiscoveryPort` / `EmptyDiscoveryPort` 内联占位。B 待做:`space_access/network_adapter.rs` 把 `PairingTransportPort` 调用替换为新 `PairingSessionPort`/`PairingEventPort` | `cargo check --workspace` 通过;Slice 1 pairing e2e + Slice 2 clipboard e2e + Slice 3 blob e2e 全绿 |
 | Phase 3 · 整体删除 | 见下"删除清单"按目录/文件级一次性 `rm`;`mod.rs` / `lib.rs` / `deps.rs` / `Cargo.toml` 同步清理 | `rg -w libp2p src-tauri/crates/uc-{core,app,application,platform,infra,bootstrap,daemon,tauri,cli}/src/` 0 命中(除 logging 注释);`cargo build --workspace` 0 warning(关于旧 deprecated 项) |
 | Phase 4 · 收尾 | 移除 Cargo feature `iroh` 门控(若有),清理 frozen 注释 / `#![allow(deprecated)]`,跑全套 e2e 回归 | `grep -r "frozen libp2p\|allow(deprecated).*libp2p" src-tauri/` 0 命中 |
 
