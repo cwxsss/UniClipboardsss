@@ -1300,17 +1300,12 @@ pub struct StopNetworkCommand; // 无字段
    - `facade.rs` 新增 3 个 `pub async fn`:`cancel_invitation()`、`reset()`、`query_setup_state()`;实现可先调底层 use case(若已有)或返 `Err(NotImplemented)` 桩,但**接口签名稳定**,T3.3 装配后再补完
    - `mod.rs` `pub use` 3 个新型(`SetupStateView` / `CurrentInvitation` / 3 个 Error)+ `facade/mod.rs` re-export
    - 单测(uc-application 内):至少 3 个 thin facade test 验签名走通
-2. **S2 · uc-daemon-contract 加新 DTO**(`api/dto/setup.rs` 末尾或新建 `api/dto/setup_v2.rs`)
-   - `InitializeSpaceRequestV2 { passphrase, passphrase_confirm, device_name }`
-   - `InitializeSpaceResponseV2 { space_id, self_device_id, fingerprint }`
-   - `IssueInvitationResponseV2 { code, expires_at_ms }`
-   - `RedeemRequestV2 { code, passphrase }`
-   - `RedeemResponseV2 { sponsor_device_id, sponsor_identity_fingerprint, space_id, self_device_id, self_identity_fingerprint }`
-   - `SetupStateResponseV2 { has_completed, current_invitation: Option<{code, expires_at_ms}>, device_name }`
-   - `CancelInvitationResponseV2 { /* empty or status */ }`、`ResetResponseV2`
-   - 全部 `#[serde(rename_all = "camelCase")]` + `ToSchema`
-   - **新建 `dto/setup_v2.rs`** 单独成文件(类比 T3.1 的 `setup_events.rs`,与老 `dto/setup.rs` 隔离)
-   - `constants.rs` `http_route` 模块新增 6 个常量:`SETUP_V2_INITIALIZE` / `SETUP_V2_ISSUE_INVITATION` / `SETUP_V2_REDEEM` / `SETUP_V2_CANCEL` / `SETUP_V2_RESET` / `SETUP_V2_STATE`
+2. **S2 · uc-daemon-contract 加新 DTO**(用户拍板**新建 `dto/v2/` 目录**,不混 setup_v2 单文件)
+   - 新建 `api/dto/v2/mod.rs`(`pub mod setup;`)+ `api/dto/v2/setup.rs`(类型不带 V2 后缀,模块路径 `api::dto::v2::setup` 已显式)
+   - 7 个 struct(全 `#[serde(rename_all = "camelCase")]` + `ToSchema`):`InitializeSpaceRequest` / `InitializeSpaceResponse` / `IssueInvitationResponse` / `RedeemRequest` / `RedeemResponse` / `SetupStateResponse` / `CurrentInvitation`
+   - cancel + reset 不需要 response DTO(返 HTTP 204 No Content)
+   - `constants.rs` 新增**兄弟模块** `http_route_v2 { SETUP_INITIALIZE, SETUP_ISSUE_INVITATION, SETUP_REDEEM, SETUP_CANCEL, SETUP_RESET, SETUP_STATE }`(与老 `http_route` 平级,T3.4 删老的不影响)
+   - `lib.rs` `DAEMON_API_REVISION` 升 `setup-pairing-http-routes-v1` → `setup-pairing-http-routes-v2`
 3. **S3 · server.rs 加新字段**(`uc-daemon/src/api/server.rs`)
    - `DaemonApiState` 加字段 `space_setup_facade: Option<Arc<SpaceSetupFacade>>`
    - `new()` 默认 `None`

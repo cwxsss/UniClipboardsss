@@ -117,6 +117,26 @@ pub mod http_route {
     pub const SEARCH_REBUILD: &str = "/search/rebuild";
 }
 
+/// HTTP route paths for the v2 daemon REST endpoints (Slice4 P3 T3.2).
+///
+/// Stateless setup pairing endpoints under `/v2/setup/*`. Each route
+/// maps to a `SpaceSetupFacade` method; legacy `/setup/*` paths in
+/// [`http_route`] above stay live until T3.4 deletes them in one shot.
+pub mod http_route_v2 {
+    /// POST /v2/setup/initialize — A1 initialise space.
+    pub const SETUP_INITIALIZE: &str = "/v2/setup/initialize";
+    /// POST /v2/setup/issue-invitation — B1 sponsor mints an invitation.
+    pub const SETUP_ISSUE_INVITATION: &str = "/v2/setup/issue-invitation";
+    /// POST /v2/setup/redeem — B2 joiner redeems an invitation.
+    pub const SETUP_REDEEM: &str = "/v2/setup/redeem";
+    /// POST /v2/setup/cancel — drop in-flight invitation; 409 when none.
+    pub const SETUP_CANCEL: &str = "/v2/setup/cancel";
+    /// POST /v2/setup/reset — clear setup status + pending invitations.
+    pub const SETUP_RESET: &str = "/v2/setup/reset";
+    /// GET /v2/setup/state — read-only snapshot for the v2 UI.
+    pub const SETUP_STATE: &str = "/v2/setup/state";
+}
+
 /// HTTP route paths for daemon auth endpoints.
 pub mod auth_route {
     /// POST /auth/connect — exchange bearer token for JWT session token

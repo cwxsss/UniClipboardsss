@@ -2732,6 +2732,21 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - `cargo test -p uc-application --lib facade::space_setup`:✅ 24/24 全过(18 既有 + 6 新)
 - 全 uc-application lib test:218 passed,2 failed — 但 `facade::clipboard::facade::tests::dispatch_*` 两个失败 **stash 验证为预先存在**(与 S1 无关,留作既存欠账)
 
+**S1 commit**:`411497e9 feat(Slice4/P3-T3.2/S1): add cancel/reset/query_setup_state to SpaceSetupFacade`(8 文件 +461/-12)。
+
+- **S2 完成**(uc-daemon-contract 加 v2 DTO,用户拍板**新建 `dto/v2/` 目录**而非 `setup_v2.rs` 单文件):
+  - 新建 `api/dto/v2/mod.rs` + `api/dto/v2/setup.rs`(模块路径 `api::dto::v2::setup` 已显式版本,struct 名不带 V2 后缀)
+  - 7 个 struct:`InitializeSpaceRequest` / `InitializeSpaceResponse` / `IssueInvitationResponse` / `RedeemRequest` / `RedeemResponse` / `SetupStateResponse` / `CurrentInvitation`
+  - cancel + reset 不加 response DTO(返 204 No Content)
+  - `constants.rs` 新增**兄弟模块** `http_route_v2 { SETUP_INITIALIZE/ISSUE_INVITATION/REDEEM/CANCEL/RESET/STATE }`(与老 `http_route` 平级)
+  - `lib.rs` `DAEMON_API_REVISION` 升 `setup-pairing-http-routes-v1` → `setup-pairing-http-routes-v2`(R3 已确认 daemon-client / 前端不严格校验,升版安全)
+  - `dto/mod.rs` 注册 `pub mod v2`
+  - 7 个新 `#[test]`:每个 v2 setup DTO 验序列化(camelCase)、round-trip、null 处理
+
+**S2 验证**:
+- `cargo test -p uc-daemon-contract --lib`:✅ 12/12 全过(7 v2 setup + 5 既有 setup_events)
+- `cargo check -p uc-daemon-contract -p uc-daemon -p uc-daemon-client`:✅ 全过,无新增 warning
+
 **核心风险**:
 - R1 破坏性变更 — 老 `/setup/*` 路由下线后前端立即 404,Phase 4 T4.1 必须紧跟切;回滚单文件 revert routes.rs 即可
 - R3 DAEMON_API_REVISION 升版可能让现有 daemon-client 拒连,S8 前 grep 确认 client 是否严格校验
