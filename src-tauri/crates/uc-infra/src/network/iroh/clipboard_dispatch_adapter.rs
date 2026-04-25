@@ -244,7 +244,7 @@ mod tests {
 
     async fn bind_endpoint() -> Arc<Endpoint> {
         Arc::new(
-            Endpoint::builder()
+            Endpoint::builder(iroh::endpoint::presets::N0DisableRelay)
                 .alpns(vec![CLIPBOARD_ALPN.to_vec()])
                 .relay_mode(RelayMode::Disabled)
                 .bind()

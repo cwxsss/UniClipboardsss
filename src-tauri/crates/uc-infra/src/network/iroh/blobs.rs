@@ -350,7 +350,7 @@ mod tests {
         async fn bind() -> anyhow::Result<Self> {
             let tempdir = tempdir()?;
             let store = FsStore::load(store_path(&tempdir)).await?;
-            let endpoint = Endpoint::builder()
+            let endpoint = Endpoint::builder(iroh::endpoint::presets::N0DisableRelay)
                 .relay_mode(RelayMode::Disabled)
                 .bind()
                 .await?;
