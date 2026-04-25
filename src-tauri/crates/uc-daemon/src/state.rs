@@ -4,10 +4,7 @@
 //! service health statuses. Does NOT own services — `DaemonApp` owns services
 //! and periodically updates this snapshot.
 
-use std::collections::HashMap;
 use std::time::Instant;
-
-use serde::Serialize;
 
 use crate::service::ServiceHealth;
 
@@ -15,20 +12,6 @@ use crate::service::ServiceHealth;
 pub struct DaemonServiceSnapshot {
     pub name: String,
     pub health: ServiceHealth,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DaemonPairingSessionSnapshot {
-    pub session_id: String,
-    pub peer_id: Option<String>,
-    pub device_name: Option<String>,
-    pub state: String,
-    pub updated_at_ms: i64,
-    #[serde(skip_serializing)]
-    pub short_code: Option<String>,
-    #[serde(skip_serializing)]
-    pub peer_fingerprint: Option<String>,
 }
 
 /// Runtime state snapshot for the daemon.
@@ -40,7 +23,6 @@ pub struct RuntimeState {
     start_time: Instant,
     worker_statuses: Vec<DaemonServiceSnapshot>,
     connected_peer_count: u32,
-    pairing_sessions: HashMap<String, DaemonPairingSessionSnapshot>,
 }
 
 impl RuntimeState {
@@ -50,7 +32,6 @@ impl RuntimeState {
             start_time: Instant::now(),
             worker_statuses: initial_statuses,
             connected_peer_count: 0,
-            pairing_sessions: HashMap::new(),
         }
     }
 
@@ -88,29 +69,5 @@ impl RuntimeState {
     /// Replace the cached connected peer count with a fresh summary.
     pub fn update_connected_peer_count(&mut self, count: u32) {
         self.connected_peer_count = count;
-    }
-
-    /// Lookup a daemon-owned pairing session summary.
-    pub fn pairing_session(&self, session_id: &str) -> Option<&DaemonPairingSessionSnapshot> {
-        self.pairing_sessions.get(session_id)
-    }
-
-    /// Return all daemon-owned pairing session summaries.
-    pub fn pairing_sessions(&self) -> Vec<DaemonPairingSessionSnapshot> {
-        self.pairing_sessions.values().cloned().collect()
-    }
-
-    /// Replace a daemon-owned pairing session summary.
-    pub fn upsert_pairing_session(&mut self, snapshot: DaemonPairingSessionSnapshot) {
-        self.pairing_sessions
-            .insert(snapshot.session_id.clone(), snapshot);
-    }
-
-    /// Remove a daemon-owned pairing session summary.
-    pub fn remove_pairing_session(
-        &mut self,
-        session_id: &str,
-    ) -> Option<DaemonPairingSessionSnapshot> {
-        self.pairing_sessions.remove(session_id)
     }
 }

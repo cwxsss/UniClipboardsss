@@ -23,7 +23,6 @@ use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
 use crate::api::setup_events::spawn_pairing_completion_forwarder;
 use crate::api::types::DaemonWsEvent;
-use crate::pairing::host::DaemonPairingHost;
 use crate::process_metadata::DaemonPidManager;
 use crate::search::coordinator::SearchCoordinator;
 use crate::security::{cleanup_rate_limiter_task, SecurityState};
@@ -99,16 +98,11 @@ pub async fn recover_encryption_session(
 /// Owns the service list and cancellation token.
 /// Services use `Arc<dyn DaemonService>` (not `Box`) to allow cloning
 /// for `tokio::spawn` `'static` requirement.
-///
-/// The `api_pairing_host` field retains typed access to the pairing host for
-/// HTTP routes (PH56-04), while the pairing host is also in the `services` vec
-/// for uniform lifecycle management.
 pub struct DaemonApp {
     services: Vec<Arc<dyn DaemonService>>,
     runtime: Arc<CoreRuntime>,
     state: Arc<RwLock<RuntimeState>>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
-    api_pairing_host: Option<Arc<DaemonPairingHost>>,
     space_access_facade: Option<Arc<SpaceAccessFacade>>,
     cancel: CancellationToken,
     // Deferred services: clipboard-watcher, inbound-clipboard-sync, and peer-discovery
@@ -139,9 +133,6 @@ pub struct DaemonApp {
 impl DaemonApp {
     /// Create a new DaemonApp with the given services and socket path.
     ///
-    /// The `state` is created by the caller (main.rs) so it can be shared
-    /// with `DaemonPairingHost` before DaemonApp is constructed.
-    ///
     /// The `event_tx` is created by the caller and shared with all services
     /// that emit WebSocket events, so they all write to the same broadcast channel.
     pub fn new(
@@ -149,7 +140,6 @@ impl DaemonApp {
         runtime: Arc<CoreRuntime>,
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
-        api_pairing_host: Option<Arc<DaemonPairingHost>>,
         space_access_facade: Option<Arc<SpaceAccessFacade>>,
     ) -> Self {
         Self {
@@ -157,7 +147,6 @@ impl DaemonApp {
             runtime,
             state,
             event_tx,
-            api_pairing_host,
             space_access_facade,
             cancel: CancellationToken::new(),
             deferred_services: Vec::new(),
@@ -185,7 +174,6 @@ impl DaemonApp {
         runtime: Arc<CoreRuntime>,
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
-        api_pairing_host: Option<Arc<DaemonPairingHost>>,
         space_access_facade: Option<Arc<SpaceAccessFacade>>,
         _encryption_unlocked: bool,
         deferred_services: Vec<Arc<dyn DaemonService>>,
@@ -214,7 +202,6 @@ impl DaemonApp {
             runtime,
             state,
             event_tx,
-            api_pairing_host,
             space_access_facade,
             cancel: CancellationToken::new(),
             deferred_services,
@@ -267,10 +254,6 @@ impl DaemonApp {
         api_state.event_tx = self.event_tx.clone();
         let api_state = match &self.space_access_facade {
             Some(sao) => api_state.with_space_access(sao.clone()),
-            None => api_state,
-        };
-        let api_state = match &self.api_pairing_host {
-            Some(ph) => api_state.with_pairing_host(Arc::clone(ph)),
             None => api_state,
         };
         let api_state = match &self.clipboard_capture_gate {

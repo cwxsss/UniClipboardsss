@@ -11,7 +11,6 @@ pub use uc_daemon_contract::DAEMON_API_REVISION;
 pub mod api;
 pub mod app;
 pub mod entrypoint;
-pub mod pairing;
 pub mod peers;
 pub mod process_metadata;
 pub mod search;

@@ -20,7 +20,6 @@ use uc_core::ports::SystemClipboardPort;
 
 use crate::api::types::DaemonWsEvent;
 use crate::app::DaemonApp;
-use crate::pairing::host::DaemonPairingHost;
 use crate::peers::presence_monitor::PresenceMonitor;
 use crate::search::coordinator::SearchCoordinator;
 use crate::service::DaemonService;
@@ -283,10 +282,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             },
         },
         DaemonServiceSnapshot {
-            name: "pairing-host".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-        DaemonServiceSnapshot {
             name: "peer-monitor".to_string(),
             health: ServiceHealth::Healthy,
         },
@@ -301,17 +296,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     ];
     let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses)));
 
-    let pairing_host = Arc::new(DaemonPairingHost::new(
-        runtime.clone(),
-        ctx.pairing_facade.clone(),
-        ctx.pairing_action_rx,
-        state.clone(),
-        ctx.space_access_facade.clone(),
-        ctx.key_slot_store.clone(),
-        ctx.trusted_peer_repo.clone(),
-        event_tx.clone(),
-    ));
-
     let presence_monitor = Arc::new(PresenceMonitor::new(
         ctx.space_setup_assembly.presence.clone(),
         runtime.clone(),
@@ -321,7 +305,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let (services, deferred_services) = {
         let mut initial: Vec<Arc<dyn DaemonService>> = vec![
             Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
-            Arc::clone(&pairing_host) as Arc<dyn DaemonService>,
             Arc::clone(&presence_monitor) as Arc<dyn DaemonService>,
         ];
         let mut deferred: Vec<Arc<dyn DaemonService>> = Vec::new();
@@ -373,7 +356,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         runtime,
         state,
         event_tx,
-        Some(pairing_host),
         Some(ctx.space_access_facade),
         encryption_unlocked,
         deferred_services,

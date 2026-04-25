@@ -32,7 +32,6 @@ use crate::api::query::DaemonQueryService;
 use crate::api::routes;
 use crate::api::types::DaemonWsEvent;
 use crate::api::ws;
-use crate::pairing::host::DaemonPairingHost;
 use crate::search::coordinator::SearchCoordinator;
 use crate::security::SecurityState;
 use crate::socket::{try_resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
@@ -42,7 +41,6 @@ pub struct DaemonApiState {
     pub query_service: Arc<DaemonQueryService>,
     pub auth_token: DaemonAuthToken,
     pub runtime: Option<Arc<CoreRuntime>>,
-    pub pairing_host: Option<Arc<DaemonPairingHost>>,
     /// Slice4 P3 T3.2 · stateless v2 setup facade.
     /// Wired in T3.3; the `/v2/setup/*` handlers return 503 if absent.
     pub space_setup_facade: Option<Arc<SpaceSetupFacade>>,
@@ -73,7 +71,6 @@ impl DaemonApiState {
             query_service,
             auth_token,
             runtime,
-            pairing_host: None,
             space_setup_facade: None,
             space_access_facade: None,
             event_tx,
@@ -87,15 +84,6 @@ impl DaemonApiState {
     pub fn with_security(mut self, security: Arc<SecurityState>) -> Self {
         self.security = security;
         self
-    }
-
-    pub fn with_pairing_host(mut self, pairing_host: Arc<DaemonPairingHost>) -> Self {
-        self.pairing_host = Some(pairing_host);
-        self
-    }
-
-    pub fn pairing_host(&self) -> Option<Arc<DaemonPairingHost>> {
-        self.pairing_host.clone()
     }
 
     /// Slice4 P3 T3.2 · attach the stateless v2 setup facade.
