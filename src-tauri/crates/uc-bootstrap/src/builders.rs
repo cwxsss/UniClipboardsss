@@ -20,7 +20,6 @@ use uc_application::facade::ClipboardSyncFacade;
 use uc_application::membership::usecases::AdmitMemberUseCase;
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::config::AppConfig;
-use uc_platform::adapters::PairingRuntimeOwner;
 
 use crate::assembly::{get_storage_paths, wire_dependencies, BackgroundRuntimeDeps};
 use crate::space_setup::{build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly};
@@ -79,8 +78,12 @@ pub struct DaemonBootstrapContext {
 ///
 /// If `log_profile_override` is `Some`, the `UC_LOG_PROFILE` env var is set
 /// before tracing initialization so the subscriber picks up the desired profile.
+///
+/// Slice 4 P5b: 旧的 `pairing_runtime_owner` 形参连同 PairingRuntimeOwner
+/// 枚举已删除——libp2p adapter 物理删除后 GUI/CLI/daemon 三种装配的网络
+/// 端口统一走 `DisabledNetwork` 桩,不再需要按"哪个进程承载 pairing
+/// runtime"分支构造。
 fn build_core(
-    pairing_runtime_owner: PairingRuntimeOwner,
     log_profile_override: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<(AppConfig, crate::assembly::WiredDependencies)> {
     // Apply log profile override before tracing init
@@ -93,22 +96,10 @@ fn build_core(
 
     let config = AppConfig::empty();
 
-    let wired = wire_dependencies(&config, pairing_runtime_owner)
+    let wired = wire_dependencies(&config)
         .map_err(|e| anyhow::anyhow!("Dependency wiring failed: {}", e))?;
 
     Ok((config, wired))
-}
-
-fn gui_pairing_runtime_owner() -> PairingRuntimeOwner {
-    PairingRuntimeOwner::ExternalDaemon
-}
-
-fn cli_pairing_runtime_owner() -> PairingRuntimeOwner {
-    PairingRuntimeOwner::ExternalDaemon
-}
-
-fn daemon_pairing_runtime_owner() -> PairingRuntimeOwner {
-    PairingRuntimeOwner::CurrentProcess
 }
 
 /// Build GUI bootstrap context. Returns raw AppDeps (not CoreRuntime) so that
@@ -118,7 +109,7 @@ fn daemon_pairing_runtime_owner() -> PairingRuntimeOwner {
 /// Slice 4 P5a-4: 旧 libp2p `PairingFacade` 不再在 GUI 进程构造,GUI
 /// 通过 daemon HTTP setup-v2 流程驱动 pairing,本函数只负责 deps + 路径。
 pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
-    let (config, wired) = build_core(gui_pairing_runtime_owner(), None)?;
+    let (config, wired) = build_core(None)?;
 
     let deps = wired.deps;
     let background = wired.background;
@@ -149,7 +140,7 @@ pub fn build_cli_context() -> anyhow::Result<CliBootstrapContext> {
 pub fn build_cli_context_with_profile(
     log_profile: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<CliBootstrapContext> {
-    let (config, wired) = build_core(cli_pairing_runtime_owner(), log_profile)?;
+    let (config, wired) = build_core(log_profile)?;
 
     // [Codex Review R1] Return AppDeps, not CoreRuntime.
     // CLI entry point constructs CoreRuntime itself with appropriate emitter.
@@ -168,7 +159,7 @@ pub fn build_cli_context_with_profile(
 pub fn build_slice1_cli_context(
     log_profile: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<(AppConfig, crate::assembly::WiredDependencies)> {
-    build_core(cli_pairing_runtime_owner(), log_profile)
+    build_core(log_profile)
 }
 
 /// Build daemon bootstrap context. Returns AppDeps + background deps.
@@ -185,7 +176,7 @@ pub fn build_slice1_cli_context(
 /// `DaemonPairingHost` 已删)。trusted_peer_repo 仍由 `wired` 透传给
 /// `build_space_setup_assembly` — 那里是 setup-v2 流程的合法消费方。
 pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
-    let (config, wired) = build_core(daemon_pairing_runtime_owner(), None)?;
+    let (config, wired) = build_core(None)?;
     let storage_paths = get_storage_paths(&config)?;
 
     // Build the iroh-stack assembly on the caller's runtime. Must NOT spin up

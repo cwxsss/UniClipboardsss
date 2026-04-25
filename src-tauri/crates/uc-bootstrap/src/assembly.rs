@@ -1,4 +1,4 @@
-#![allow(deprecated)] // wires the frozen libp2p PairingTransportPort; replaced in Slice 5
+#![allow(deprecated)] // wires DisabledNetwork into legacy libp2p-era ports scheduled for Slice 5c removal
 
 //! # Pure Dependency Assembly
 //!
@@ -19,11 +19,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tracing::{info, warn};
+use tracing::warn;
 
 use uc_app::deps::{NetworkPorts, SearchPorts};
 use uc_app::shared::host_event::HostEventEmitterPort;
-use uc_app::usecases::ResolveConnectionPolicy;
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
 use uc_application::pairing::PairingConfig;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
@@ -70,7 +69,7 @@ use uc_infra::security::{
 };
 use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
-use uc_platform::adapters::{DisabledPairingTransport, Libp2pNetworkAdapter, PairingRuntimeOwner};
+use uc_platform::adapters::DisabledNetwork;
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::{LocalClipboard, NoopSystemClipboard};
 use uc_platform::identity_store::FileIdentityStore;
@@ -111,7 +110,6 @@ pub enum WiringError {
 
 /// Background runtime components that must be started after async runtime is ready.
 pub struct BackgroundRuntimeDeps {
-    pub libp2p_network: Arc<Libp2pNetworkAdapter>,
     pub representation_cache: Arc<RepresentationCache>,
     pub spool_manager: Arc<SpoolManager>,
     /// Sender side of the legacy spool channel. Kept alive so that `SpoolerTask`
@@ -228,9 +226,6 @@ pub struct PlatformLayer {
 
     // Network operations
     pub network_ports: Arc<NetworkPorts>,
-
-    // libp2p network adapter (concrete)
-    pub libp2p_network: Arc<Libp2pNetworkAdapter>,
 
     // Device identity
     pub device_identity: Arc<dyn DeviceIdentityPort>,
@@ -402,24 +397,21 @@ fn create_infra_layer(
     Ok(infra)
 }
 
-/// Create platform layer implementations
-fn build_network_ports(
-    libp2p_network: Arc<Libp2pNetworkAdapter>,
-    pairing_runtime_owner: PairingRuntimeOwner,
-) -> Arc<NetworkPorts> {
-    let pairing: Arc<dyn PairingTransportPort> = match pairing_runtime_owner {
-        PairingRuntimeOwner::CurrentProcess => libp2p_network.clone(),
-        PairingRuntimeOwner::ExternalDaemon => Arc::new(DisabledPairingTransport),
-    };
-
+/// Build the legacy `NetworkPorts` bundle from the disabled-network stub.
+///
+/// Slice 4 P5b: 旧 libp2p adapter 已删除,7 个 trait dyn 字段统一由
+/// [`DisabledNetwork`] 桩满足。Slice 5c 删除上层旧消费者后,本函数 +
+/// `NetworkPorts` 结构整体可一起退场。
+fn build_network_ports() -> Arc<NetworkPorts> {
+    let stub = Arc::new(DisabledNetwork);
     Arc::new(NetworkPorts {
-        clipboard_outbound: libp2p_network.clone(),
-        clipboard_inbound: libp2p_network.clone(),
-        peers: libp2p_network.clone(),
-        pairing,
-        events: libp2p_network.clone(),
-        file_transfer: libp2p_network.clone(),
-        file_transfer_events: libp2p_network.clone(),
+        clipboard_outbound: stub.clone(),
+        clipboard_inbound: stub.clone(),
+        peers: stub.clone(),
+        pairing: stub.clone(),
+        events: stub.clone(),
+        file_transfer: stub.clone(),
+        file_transfer_events: stub,
     })
 }
 
@@ -427,12 +419,11 @@ pub fn create_platform_layer(
     secure_storage: Arc<dyn SecureStoragePort>,
     config_dir: &PathBuf,
     blob_repository: Arc<dyn BlobRepositoryPort>,
-    member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
+    _member_repo: Arc<dyn uc_core::MemberRepositoryPort>,
     clock: Arc<dyn ClockPort>,
     storage_config: Arc<ClipboardStorageConfig>,
-    identity_store: Arc<dyn IdentityStorePort>,
-    file_cache_dir: PathBuf,
-    pairing_runtime_owner: PairingRuntimeOwner,
+    _identity_store: Arc<dyn IdentityStorePort>,
+    _file_cache_dir: PathBuf,
 ) -> WiringResult<PlatformLayer> {
     // Slice 1 CLI commands (init/invite/join) do not touch the system
     // clipboard, but a non-bundled CLI launched from a shell lacks the
@@ -537,20 +528,8 @@ pub fn create_platform_layer(
     // 进程内会话: uc-infra adapter 共享的具体类型,替换历史
     // InMemoryEncryptionSessionPort + EncryptionSessionPort trait dyn 间接层。
     let session = Arc::new(InMemorySession::new());
-    let policy_resolver = Arc::new(ResolveConnectionPolicy::new(member_repo.clone()));
-    let libp2p_network = Arc::new(
-        Libp2pNetworkAdapter::new(
-            identity_store,
-            policy_resolver,
-            file_cache_dir,
-            pairing_runtime_owner,
-        )
-        .map_err(|e| {
-            WiringError::NetworkInit(format!("Failed to initialize libp2p identity: {e}"))
-        })?,
-    );
-    info!(peer_id = %libp2p_network.local_peer_id(), "Loaded libp2p identity");
-    let network_ports = build_network_ports(libp2p_network.clone(), pairing_runtime_owner);
+    // Slice 4 P5b: libp2p adapter 已删除,NetworkPorts 全部走 DisabledNetwork 桩。
+    let network_ports = build_network_ports();
 
     let encrypted_blob_store =
         Arc::new(EncryptedBlobStore::new(blob_store.clone(), session.clone()));
@@ -574,7 +553,6 @@ pub fn create_platform_layer(
         system_clipboard,
         secure_storage,
         network_ports,
-        libp2p_network,
         device_identity,
         representation_normalizer,
         blob_writer,
@@ -673,11 +651,8 @@ pub fn apply_profile_suffix(path: PathBuf) -> PathBuf {
 }
 
 /// Wires and constructs the application's dependency graph, returning ready-to-use dependencies.
-pub fn wire_dependencies(
-    config: &AppConfig,
-    pairing_runtime_owner: PairingRuntimeOwner,
-) -> WiringResult<WiredDependencies> {
-    wire_dependencies_with_identity_store(config, None, pairing_runtime_owner)
+pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> {
+    wire_dependencies_with_identity_store(config, None)
 }
 
 /// Wires dependencies with a caller-provided identity store.
@@ -686,7 +661,6 @@ pub fn wire_dependencies(
 pub fn wire_dependencies_with_identity_store(
     config: &AppConfig,
     identity_store: Option<Arc<dyn IdentityStorePort>>,
-    pairing_runtime_owner: PairingRuntimeOwner,
 ) -> WiringResult<WiredDependencies> {
     let platform_dirs = get_default_app_dirs()?;
     let paths = resolve_app_paths(&platform_dirs, config)?;
@@ -722,7 +696,6 @@ pub fn wire_dependencies_with_identity_store(
         storage_config.clone(),
         identity_store,
         paths.file_cache_dir.clone(),
-        pairing_runtime_owner,
     )?;
 
     // SpaceAccessPort——单一会话/密钥访问入口。adapter 自管 KeyMaterialStore +
@@ -858,7 +831,11 @@ pub fn wire_dependencies_with_identity_store(
             member_repo: infra.member_repo,
         },
         network_ports: platform.network_ports,
-        network_control: platform.libp2p_network.clone(),
+        // Slice 4 P5b: libp2p adapter 已删除,network_control 复用同一份
+        // DisabledNetwork 桩。GUI lifecycle 的 StartNetworkAfterUnlock 仍会
+        // 调到 start_network(),桩内返回 Ok 即可——iroh endpoint 由
+        // SpaceSetupAssembly 单独驱动。
+        network_control: Arc::new(DisabledNetwork),
         setup_status: infra.setup_status,
         storage: StoragePorts {
             blob_store: platform.blob_store,
@@ -909,7 +886,6 @@ pub fn wire_dependencies_with_identity_store(
         iroh_blob_store_dir: iroh_blob_store_dir_for_wiring,
         blob_reference_repo: blob_reference_repo_for_wiring,
         background: BackgroundRuntimeDeps {
-            libp2p_network: platform.libp2p_network.clone(),
             representation_cache,
             spool_manager,
             spool_tx,

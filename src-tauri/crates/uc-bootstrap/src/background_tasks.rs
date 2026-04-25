@@ -70,7 +70,6 @@ pub async fn spawn_blob_processing_tasks(
     task_registry: &Arc<TaskRegistry>,
 ) {
     let BackgroundRuntimeDeps {
-        libp2p_network: _,
         representation_cache,
         spool_manager,
         spool_tx: _spool_tx, // Kept alive by the caller — we just need to not drop it here
