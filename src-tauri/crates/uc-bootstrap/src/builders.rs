@@ -10,35 +10,19 @@
 //! Each builder returns a context struct containing `AppDeps` (NOT `CoreRuntime`).
 //! Callers construct `CoreRuntime` themselves with the appropriate emitter cell,
 //! lifecycle status, and task registry.
-//!
-//! ## Important
-//!
-//! `build_gui_app()` creates an internal single-threaded Tokio runtime for
-//! blocking async calls (pairing config resolution). It MUST NOT be called
-//! from inside an existing Tokio runtime (e.g. `#[tokio::test]`).
 
 use std::sync::Arc;
-
-use tokio::sync::mpsc;
 
 use uc_app::app_paths::AppPaths;
 use uc_app::shared::host_event::HostEventEmitterPort;
 use uc_app::AppDeps;
 use uc_application::facade::ClipboardSyncFacade;
 use uc_application::membership::usecases::AdmitMemberUseCase;
-use uc_application::pairing::{PairingAction, PairingCryptoPorts, PairingFacade};
 use uc_application::space_access::SpaceAccessFacade;
-use uc_application::trusted_peer::TrustPeerOrchestrator;
 use uc_core::config::AppConfig;
-use uc_core::ports::PeerDirectoryPort;
-use uc_core::TrustedPeerRepositoryPort;
-use uc_infra::fs::key_slot_store::{JsonKeySlotStore, KeySlotStore};
 use uc_platform::adapters::PairingRuntimeOwner;
 
-use crate::assembly::{
-    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
-    BackgroundRuntimeDeps,
-};
+use crate::assembly::{get_storage_paths, wire_dependencies, BackgroundRuntimeDeps};
 use crate::space_setup::{build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly};
 
 /// Context for GUI entry point. Contains everything needed to construct
@@ -51,10 +35,6 @@ pub struct GuiBootstrapContext {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
     pub storage_paths: AppPaths,
-    pub pairing_facade: Arc<PairingFacade>,
-    pub pairing_action_rx: mpsc::Receiver<PairingAction>,
-    pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
-    pub key_slot_store: Arc<dyn KeySlotStore>,
     pub config: AppConfig,
 }
 
@@ -71,11 +51,7 @@ pub struct DaemonBootstrapContext {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
     pub emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-    pub pairing_facade: Arc<PairingFacade>,
-    pub pairing_action_rx: mpsc::Receiver<PairingAction>,
-    pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
     pub space_access_facade: Arc<SpaceAccessFacade>,
-    pub key_slot_store: Arc<dyn KeySlotStore>,
     pub storage_paths: AppPaths,
     pub config: AppConfig,
     /// Slice 2 Phase 3 · T5 — iroh-stack clipboard sync facade.
@@ -139,62 +115,14 @@ fn daemon_pairing_runtime_owner() -> PairingRuntimeOwner {
 /// AppRuntime::with_setup() in uc-tauri can construct CoreRuntime with the
 /// correct emitter cell, lifecycle status, and task registry.
 ///
-/// MUST be called outside any Tokio runtime (panics otherwise due to internal
-/// `tokio::runtime::Builder::new_current_thread().block_on()`).
+/// Slice 4 P5a-4: 旧 libp2p `PairingFacade` 不再在 GUI 进程构造,GUI
+/// 通过 daemon HTTP setup-v2 流程驱动 pairing,本函数只负责 deps + 路径。
 pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     let (config, wired) = build_core(gui_pairing_runtime_owner(), None)?;
 
     let deps = wired.deps;
     let background = wired.background;
-    let trusted_peer_repo = wired.trusted_peer_repo;
-
-    let pairing_device_identity = deps.device.device_identity.clone();
-    let pairing_settings = deps.settings.clone();
-    let pairing_peer_id = background.libp2p_network.local_peer_id();
-    let pairing_identity_pubkey = background.libp2p_network.local_identity_pubkey();
-
-    // Use standalone tokio runtime (not tauri::async_runtime) -- uc-bootstrap has no tauri dep
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let (pairing_device_name, pairing_config) = rt.block_on(async {
-        let device_name = resolve_pairing_device_name(pairing_settings.clone()).await;
-        let config = resolve_pairing_config(pairing_settings).await;
-        (device_name, config)
-    });
-
-    let local_device_id = pairing_device_identity.current_device_id();
-    let pairing_device_id = local_device_id.to_string();
-
-    // Process-wide singleton TrustPeerOrchestrator (D19) — drives the
-    // trust-establishment state machine from `PersistPairedDevice` at
-    // the end of each pairing flow. Backed by the Diesel-backed
-    // `TrustedPeerRepositoryPort` wired above; `reset()` is invoked at
-    // the start of every pairing flow to support multiple pairings in
-    // a single process lifetime.
-    let trust_peer_orch: Arc<TrustPeerOrchestrator<dyn TrustedPeerRepositoryPort>> = Arc::new(
-        TrustPeerOrchestrator::new(Arc::clone(&trusted_peer_repo), local_device_id),
-    );
-
-    let pairing_crypto = Arc::new(PairingCryptoPorts {
-        pin_hasher: deps.security.pin_hasher.clone(),
-        short_code: deps.security.short_code.clone(),
-        fingerprint: deps.security.fingerprint.clone(),
-    });
-    let (pairing_facade, pairing_action_rx) = PairingFacade::new(
-        pairing_config,
-        trust_peer_orch,
-        pairing_device_name,
-        pairing_device_id,
-        pairing_peer_id,
-        pairing_identity_pubkey,
-        pairing_crypto,
-    );
-    let pairing_facade = Arc::new(pairing_facade);
-
     let storage_paths = get_storage_paths(&config)?;
-    let key_slot_store: Arc<dyn KeySlotStore> =
-        Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
 
     // [Codex Review R1] Return AppDeps, NOT CoreRuntime.
     // CoreRuntime is constructed by AppRuntime::with_setup() in uc-tauri,
@@ -203,10 +131,6 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         deps,
         background,
         storage_paths,
-        pairing_facade,
-        pairing_action_rx,
-        trusted_peer_repo,
-        key_slot_store,
         config,
     })
 }
@@ -255,32 +179,24 @@ pub fn build_slice1_cli_context(
 /// handlers) and exposes `clipboard_sync_facade` so daemon workers can
 /// dispatch / subscribe via the iroh stack instead of the deprecated
 /// libp2p `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort`.
-/// The libp2p `PairingFacade` is retained for the daemon's HTTP/WS
-/// pairing API (Tauri / GUI consumer); both stacks coexist until Slice 5.
+///
+/// Slice 4 P5a-4: 旧 libp2p `PairingFacade` 已下线,daemon 不再构造它,
+/// 也不再向 ctx 暴露 trusted_peer_repo / key_slot_store(消费者
+/// `DaemonPairingHost` 已删)。trusted_peer_repo 仍由 `wired` 透传给
+/// `build_space_setup_assembly` — 那里是 setup-v2 流程的合法消费方。
 pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let (config, wired) = build_core(daemon_pairing_runtime_owner(), None)?;
     let storage_paths = get_storage_paths(&config)?;
 
-    // Pre-extract clones for the libp2p pairing path. We must keep
-    // `wired` intact past this point because `build_space_setup_assembly`
-    // takes it by reference.
-    let pairing_device_identity = wired.deps.device.device_identity.clone();
-    let pairing_settings = wired.deps.settings.clone();
-    let pairing_peer_id = wired.background.libp2p_network.local_peer_id();
-    let pairing_identity_pubkey = wired.background.libp2p_network.local_identity_pubkey();
-
-    // Resolve pairing device name + pairing config + build the iroh-stack
-    // assembly on the caller's runtime. Must NOT spin up a throwaway
-    // current-thread rt here: `Endpoint::bind` spawns magicsock / relay /
-    // STUN actors via `tokio::spawn`, which attach to whatever runtime is
-    // running the bind. If that runtime drops (as a short-lived local rt
-    // would), those actors are aborted and the Endpoint becomes a zombie
-    // — `connect()` then returns "Unable to connect to remote" instantly
-    // and `accept` sees no incoming traffic. Keeping the bind on the
-    // caller's long-lived daemon runtime keeps iroh's tasks alive for the
-    // process lifetime.
-    let pairing_device_name = resolve_pairing_device_name(pairing_settings.clone()).await;
-    let pairing_config = resolve_pairing_config(pairing_settings.clone()).await;
+    // Build the iroh-stack assembly on the caller's runtime. Must NOT spin up
+    // a throwaway current-thread rt here: `Endpoint::bind` spawns magicsock /
+    // relay / STUN actors via `tokio::spawn`, which attach to whatever runtime
+    // is running the bind. If that runtime drops (as a short-lived local rt
+    // would), those actors are aborted and the Endpoint becomes a zombie —
+    // `connect()` then returns "Unable to connect to remote" instantly and
+    // `accept` sees no incoming traffic. Keeping the bind on the caller's
+    // long-lived daemon runtime keeps iroh's tasks alive for the process
+    // lifetime.
     let space_setup_assembly = build_space_setup_assembly(&wired, IrohNodeConfig::default())
         .await
         .map_err(|e| anyhow::anyhow!("Slice 1+ assembly build failed: {e}"))?;
@@ -290,39 +206,12 @@ pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let deps = wired.deps;
     let background = wired.background;
     let emitter_cell = wired.emitter_cell;
-    let trusted_peer_repo = wired.trusted_peer_repo;
 
-    let local_device_id = pairing_device_identity.current_device_id();
-    let pairing_device_id = local_device_id.to_string();
-
-    // Process-wide singleton TrustPeerOrchestrator (D19). See the
-    // `build_gui_app` comment above for lifecycle notes.
-    let trust_peer_orch: Arc<TrustPeerOrchestrator<dyn TrustedPeerRepositoryPort>> = Arc::new(
-        TrustPeerOrchestrator::new(Arc::clone(&trusted_peer_repo), local_device_id),
-    );
-
-    let pairing_crypto = Arc::new(PairingCryptoPorts {
-        pin_hasher: deps.security.pin_hasher.clone(),
-        short_code: deps.security.short_code.clone(),
-        fingerprint: deps.security.fingerprint.clone(),
-    });
-    let (pairing_facade, pairing_action_rx) = PairingFacade::new(
-        pairing_config,
-        trust_peer_orch,
-        pairing_device_name,
-        pairing_device_id,
-        pairing_peer_id,
-        pairing_identity_pubkey,
-        pairing_crypto,
-    );
-    let pairing_facade = Arc::new(pairing_facade);
     // Phase A.2: inject AdmitMemberUseCase so joiner-side `Granted` also
     // registers the sponsor peer as a local space member. Failure to admit
     // only logs WARN and does not block `Granted` itself.
     let admit_member = Arc::new(AdmitMemberUseCase::new(deps.device.member_repo.clone()));
     let space_access_facade = Arc::new(SpaceAccessFacade::with_admit_member(admit_member));
-    let key_slot_store: Arc<dyn KeySlotStore> =
-        Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
 
     // Same Arc the assembly holds — handed up to ctx so daemon entrypoint
     // (T6) can wire it into the two clipboard workers without unpacking
@@ -333,11 +222,7 @@ pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         deps,
         background,
         emitter_cell,
-        pairing_facade,
-        pairing_action_rx,
-        trusted_peer_repo,
         space_access_facade,
-        key_slot_store,
         storage_paths,
         config,
         clipboard_sync_facade,
