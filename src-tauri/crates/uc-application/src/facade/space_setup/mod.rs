@@ -16,14 +16,14 @@ mod events;
 mod facade;
 
 pub use commands::{
-    InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
-    RedeemPairingInvitationCommand, RedeemPairingInvitationResult, UnlockSpaceCommand,
-    UnlockSpaceResult,
+    CurrentInvitation, InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
+    RedeemPairingInvitationCommand, RedeemPairingInvitationResult, SetupStateView,
+    UnlockSpaceCommand, UnlockSpaceResult,
 };
 pub use deps::SpaceSetupDeps;
 pub use errors::{
-    InitializeSpaceError, IssuePairingInvitationError, RedeemPairingInvitationError,
-    TryResumeSessionError, UnlockSpaceError,
+    CancelInvitationError, InitializeSpaceError, IssuePairingInvitationError, QuerySetupStateError,
+    RedeemPairingInvitationError, ResetSpaceError, TryResumeSessionError, UnlockSpaceError,
 };
 pub use events::PairingOutcome;
 pub use facade::SpaceSetupFacade;

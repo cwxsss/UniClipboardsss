@@ -86,6 +86,39 @@ pub struct RedeemPairingInvitationCommand {
     pub passphrase: Passphrase,
 }
 
+// ---------------------------------------------------------------------------
+// Setup state query (Slice4 P3 T3.2)
+// ---------------------------------------------------------------------------
+
+/// Read-only view of setup state surfaced by
+/// [`crate::facade::space_setup::SpaceSetupFacade::query_setup_state`].
+///
+/// Replaces the legacy stateful FSM snapshot exposed via
+/// `SetupFacade::get_state`. The new shape carries only what the
+/// stateless v2 UI flow needs: whether onboarding is done, what
+/// invitation (if any) is currently parked on the sponsor side, and
+/// the local device name to prefill confirmation copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupStateView {
+    /// `true` when this device has completed A1 (`InitializeSpace`) or
+    /// B2 (`RedeemPairingInvitation`); `false` on a fresh install.
+    pub has_completed: bool,
+    /// `Some(_)` when the sponsor has a Pending invitation parked in
+    /// the in-memory holder; `None` when there is no in-flight code.
+    /// Multi-pending policy is "earliest-expiring wins".
+    pub current_invitation: Option<CurrentInvitation>,
+    /// Display name persisted in `Settings.general.device_name`, or
+    /// `None` when unset on a fresh install.
+    pub device_name: Option<String>,
+}
+
+/// Companion to [`SetupStateView::current_invitation`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentInvitation {
+    pub code: InvitationCode,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// Output of a successful B2 redemption.
 ///
 /// Returned fields let the UI show a "you are connected to X" confirmation

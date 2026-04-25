@@ -177,6 +177,48 @@ pub enum UnlockSpaceError {
     Internal(String),
 }
 
+/// Failure modes of [`crate::facade::space_setup::SpaceSetupFacade::cancel_invitation`]
+/// (Slice4 P3 T3.2).
+#[derive(Debug, Error)]
+pub enum CancelInvitationError {
+    /// No in-flight invitation to cancel — the holder is empty. Maps
+    /// to HTTP 409 Conflict at the daemon boundary so the UI can
+    /// distinguish "nothing to cancel" from a transport error.
+    #[error("no in-flight invitation to cancel")]
+    NotIssued,
+
+    /// Uncategorised infra / adapter failure.
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+/// Failure modes of [`crate::facade::space_setup::SpaceSetupFacade::reset`]
+/// (Slice4 P3 T3.2).
+#[derive(Debug, Error)]
+pub enum ResetSpaceError {
+    /// Failed to clear `SetupStatus` — the device may be in an
+    /// inconsistent state. Caller should surface to the operator.
+    #[error("failed to clear setup status: {0}")]
+    StorageFailed(String),
+
+    /// Uncategorised infra / adapter failure.
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
+/// Failure modes of [`crate::facade::space_setup::SpaceSetupFacade::query_setup_state`]
+/// (Slice4 P3 T3.2).
+#[derive(Debug, Error)]
+pub enum QuerySetupStateError {
+    /// Failed to read `SetupStatus` from persistent storage.
+    #[error("failed to read setup status: {0}")]
+    StorageFailed(String),
+
+    /// Uncategorised infra / adapter failure.
+    #[error("internal error: {0}")]
+    Internal(String),
+}
+
 /// Failure modes of [`crate::facade::space_setup::SpaceSetupFacade::try_resume_session`].
 ///
 /// Kept narrow on purpose: "nothing to resume" (setup never completed

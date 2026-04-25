@@ -2685,3 +2685,57 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **下一步**:
 - 等用户确认是否 commit `feat(Slice4/P3-T3.1)`(2 新文件 + 5 改文件)
 - T3.2 起跑前重读 task_plan 的 P3 详细任务段
+
+**Commit 完成**:`7de3329e feat(Slice4/P3-T3.1): add daemon ws setup pairing event projection`(2026-04-25)。
+
+---
+
+## Session 2026-04-25(续 40) — Slice 4 Phase 3 T3.2 · 新 daemon HTTP endpoints
+
+**触发**:用户回 "sure" 进 T3.2 规划。
+
+**完成标准**(从 task_plan.md T3.2 执行细分搬过来):
+- `SpaceSetupFacade` 补 3 个 thin 方法(`cancel_invitation` / `reset` / `query_setup_state`)+ `SetupStateView` 型
+- `uc-daemon-contract` 加新建 `dto/setup_v2.rs` 含 7 个 v2 DTO + 6 个 `http_route::SETUP_V2_*` 常量;`DAEMON_API_REVISION` 升版
+- `uc-daemon` `server.rs` 加 `space_setup_facade: Option<Arc<SpaceSetupFacade>>` 新字段(老字段不动)
+- `uc-daemon` `setup.rs` 加 6 个 `*_v2` handler;老 11 handler 加 `#[allow(dead_code)]`
+- `uc-daemon` `routes.rs` 注册 6 个 `/v2/setup/*` 路由;**移除**老 `/setup/*` 路由(破坏性变更,D3=B 预期后果)
+- `uc-daemon` `openapi.rs` 同步
+- 单测覆盖 6 handler + facade-未装配 → 503 + routes 注册
+- AGENTS.md §11.4 合规:新代码无 `use uc_application::setup::*`
+
+**已盘点的现状**:
+- 老 `setup.rs` 11 handler / 647 行
+- `SpaceSetupFacade` 已有 9 公开方法,T3.2 直接可用 4 个;缺 3 个 thin 方法待补
+- 老 `SetupFacade` 5 处装配点,**T3.2 一概不动**(留 T3.3)
+- AGENTS.md §11.4 强约束:外部 crate 只能从 `facade/` import;新 daemon 代码必须严格遵循
+
+**决策已拍板**(2026-04-25):
+- D1 = server.rs 加新字段(渐进,老字段保留)
+- D2 = T3.2 内补 3 个缺失 facade 方法
+- D3 = B 方案 + `/v2/setup/*` 命名空间(用户拍板)— 6 个 endpoint 全走 v2 子路径,老 `/setup/*` 全留 T3.4 删
+- D4 = 不删老 11 handler(只在 routes 不暴露,加 `#[allow(dead_code)]`)
+
+**已做**:
+- T3.2 执行细分(决策记录、子步骤 S1-S8、验收门、显式不在范围、风险 R1-R4)落进 `task_plan.md` 的 T3.2 段下方
+- D5 决策追加:facade 真实现(b 选项,用户拍板),3 个 facade 方法连同底层逻辑一并落地
+- **S1 完成**(uc-application 加 facade 方法):
+  - `pairing_invitation/holder.rs` 加 `snapshot_earliest() -> Option<(InvitationCode, DateTime<Utc>)>` + `cancel_all() -> usize`(均 pub(crate))
+  - `facade/space_setup/commands.rs` 加 `SetupStateView { has_completed, current_invitation, device_name }` + `CurrentInvitation { code, expires_at }`
+  - `facade/space_setup/errors.rs` 加 `CancelInvitationError { NotIssued, Internal }` / `ResetSpaceError { StorageFailed, Internal }` / `QuerySetupStateError { StorageFailed, Internal }`
+  - `facade/space_setup/facade.rs` 加 `settings: Arc<dyn SettingsPort>` + `invitation_holder: Arc<InMemoryPairingInvitationHolder>` 两个新字段;加 3 个 `pub async fn`:`cancel_invitation()`(holder 空 → NotIssued)、`reset()`(清 setup_status default + cancel_all)、`query_setup_state()`(组装 has_completed + earliest invitation + device_name)
+  - `facade/space_setup/mod.rs` + `facade/mod.rs` `pub use` 7 个新型(AGENTS.md §11.4 合规,外部只走 facade/)
+  - 6 个新 `#[tokio::test]`:空 holder cancel → NotIssued / issue 后 cancel 清 holder / reset 综合 / fresh-install query 全 None / completed + device_name query / pending invitation 浮现到 view
+
+**S1 验证**:
+- `cargo check -p uc-application`:✅ 通过(2 既存 dead_code warning 不相关)
+- `cargo test -p uc-application --lib facade::space_setup`:✅ 24/24 全过(18 既有 + 6 新)
+- 全 uc-application lib test:218 passed,2 failed — 但 `facade::clipboard::facade::tests::dispatch_*` 两个失败 **stash 验证为预先存在**(与 S1 无关,留作既存欠账)
+
+**核心风险**:
+- R1 破坏性变更 — 老 `/setup/*` 路由下线后前端立即 404,Phase 4 T4.1 必须紧跟切;回滚单文件 revert routes.rs 即可
+- R3 DAEMON_API_REVISION 升版可能让现有 daemon-client 拒连,S8 前 grep 确认 client 是否严格校验
+
+**下一步**:
+- 等用户确认开始 S1(uc-application 加 3 个 facade 方法 + SetupStateView)
+- S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8 顺序落地

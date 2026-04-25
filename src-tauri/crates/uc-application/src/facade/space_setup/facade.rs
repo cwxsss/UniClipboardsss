@@ -20,17 +20,20 @@ use tracing::{info, instrument, warn};
 
 use uc_core::ids::SpaceId;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
-use uc_core::ports::{NetworkControlPort, SetupStatusPort};
+use uc_core::ports::{NetworkControlPort, SettingsPort, SetupStatusPort};
+use uc_core::setup::SetupStatus;
 
 use crate::facade::space_setup::commands::{
-    InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
-    UnlockSpaceCommand, UnlockSpaceResult,
+    CurrentInvitation, InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
+    SetupStateView, UnlockSpaceCommand, UnlockSpaceResult,
 };
 use crate::facade::space_setup::commands::{
     RedeemPairingInvitationCommand, RedeemPairingInvitationResult,
 };
 use crate::facade::space_setup::deps::SpaceSetupDeps;
-use crate::facade::space_setup::errors::RedeemPairingInvitationError;
+use crate::facade::space_setup::errors::{
+    CancelInvitationError, QuerySetupStateError, RedeemPairingInvitationError, ResetSpaceError,
+};
 use crate::facade::space_setup::errors::{
     InitializeSpaceError, IssuePairingInvitationError, TryResumeSessionError, UnlockSpaceError,
 };
@@ -71,6 +74,16 @@ pub struct SpaceSetupFacade {
     /// Everything else still goes through use cases.
     space_access: Arc<dyn SpaceAccessPort>,
     setup_status: Arc<dyn SetupStatusPort>,
+    /// Slice4 P3 T3.2 · `query_setup_state` reads `device_name` from
+    /// `Settings.general`; `cancel_invitation` / `reset` need no
+    /// settings access but the field stays `pub(crate)` so a future
+    /// query can pick up additional general fields without churn.
+    settings: Arc<dyn SettingsPort>,
+    /// Slice4 P3 T3.2 · `cancel_invitation` clears the in-memory
+    /// pending-invitation map; `query_setup_state` snapshots the
+    /// earliest-expiring entry. Held in addition to the use-case-owned
+    /// clone so the facade keeps a stable read/write handle.
+    invitation_holder: Arc<InMemoryPairingInvitationHolder>,
     /// Slice 2 Phase 1 · T8：F1 hook。A1/A2/B2 成功后
     /// [`Self::auto_start_network`] 会在 `start_network` 成功之后
     /// 触发一次全员预连,把 presence 缓存填满,让 UI 查 roster 时
@@ -106,10 +119,17 @@ impl SpaceSetupFacade {
         // through a use case that would only wrap two port calls.
         let space_access_for_facade = Arc::clone(&space_access);
         let setup_status_for_facade = Arc::clone(&setup_status);
+        // Slice4 P3 T3.2 · facade-local handle for `query_setup_state`
+        // (reads `Settings.general.device_name`).
+        let settings_for_facade = Arc::clone(&settings);
 
         // Invitation holder is purely an internal flow-state component
         // (§11.4) — construct it here so bootstrap never sees the type.
         let invitation_holder = Arc::new(InMemoryPairingInvitationHolder::new());
+        // Slice4 P3 T3.2 · facade-local handle for `cancel_invitation`
+        // / `query_setup_state` snapshots; the use case + orchestrator
+        // already own their own `Arc::clone`s below.
+        let invitation_holder_for_facade = Arc::clone(&invitation_holder);
 
         let initialize_space = Arc::new(InitializeSpaceUseCase::new(
             Arc::clone(&space_access),
@@ -215,6 +235,8 @@ impl SpaceSetupFacade {
             pairing_outcome_tx,
             space_access: space_access_for_facade,
             setup_status: setup_status_for_facade,
+            settings: settings_for_facade,
+            invitation_holder: invitation_holder_for_facade,
             ensure_reachable_all,
         }
     }
@@ -331,6 +353,91 @@ impl SpaceSetupFacade {
     ) -> Result<RedeemPairingInvitationResult, RedeemPairingInvitationError> {
         self.auto_start_network().await;
         self.redeem_pairing_invitation.execute(cmd).await
+    }
+
+    /// Slice4 P3 T3.2 · Cancel any in-flight pairing invitation parked
+    /// in the in-memory holder.
+    ///
+    /// Maps to `POST /v2/setup/cancel`. Returns
+    /// [`CancelInvitationError::NotIssued`] when the holder is empty so
+    /// the daemon can surface HTTP 409 and the UI can distinguish
+    /// "nothing to cancel" from a transport failure.
+    ///
+    /// Does **not** touch `SetupStatus` — only Pending invitation
+    /// aggregates are cleared. The rendezvous server is **not**
+    /// notified: stateless v2 model treats invitations as pure local
+    /// state, and any joiner that races a redeem against this cancel
+    /// will simply hit `take_matching → NotFound` on the sponsor side.
+    #[instrument(skip_all)]
+    pub async fn cancel_invitation(&self) -> Result<(), CancelInvitationError> {
+        let removed = self.invitation_holder.cancel_all().await;
+        if removed == 0 {
+            return Err(CancelInvitationError::NotIssued);
+        }
+        info!(count = removed, "cancelled in-flight pairing invitations");
+        Ok(())
+    }
+
+    /// Slice4 P3 T3.2 · Reset this device back to a fresh-install
+    /// state by clearing `SetupStatus` and dropping any in-flight
+    /// invitations.
+    ///
+    /// Maps to `POST /v2/setup/reset`. Stateless model: the only
+    /// persistent fact this clears is `SetupStatus.has_completed` (and
+    /// `space_id`). The keyslot on disk is intentionally left in place
+    /// — operators recover key material via passphrase-based unlock
+    /// after re-init, and a true factory reset (key material wipe) is
+    /// a separate operator action handled outside this facade.
+    ///
+    /// The network runtime is **not** stopped: `on_shutdown` is the
+    /// canonical F2 path; reset is invoked while the daemon stays up.
+    #[instrument(skip_all)]
+    pub async fn reset(&self) -> Result<(), ResetSpaceError> {
+        self.setup_status
+            .set_status(&SetupStatus::default())
+            .await
+            .map_err(|err| ResetSpaceError::StorageFailed(err.to_string()))?;
+        let dropped = self.invitation_holder.cancel_all().await;
+        info!(
+            cancelled_invitations = dropped,
+            "reset cleared setup status and pending invitations"
+        );
+        Ok(())
+    }
+
+    /// Slice4 P3 T3.2 · Read-only snapshot of setup state for the
+    /// stateless v2 UI flow.
+    ///
+    /// Maps to `GET /v2/setup/state`. Composes three independent
+    /// reads into a single response so the UI doesn't have to
+    /// orchestrate them itself:
+    /// * `has_completed` from [`SetupStatusPort`].
+    /// * `current_invitation` from the in-memory holder
+    ///   (earliest-expiring Pending entry; `None` when the holder is
+    ///   empty).
+    /// * `device_name` from `Settings.general.device_name`.
+    #[instrument(skip_all)]
+    pub async fn query_setup_state(&self) -> Result<SetupStateView, QuerySetupStateError> {
+        let status = self
+            .setup_status
+            .get_status()
+            .await
+            .map_err(|err| QuerySetupStateError::StorageFailed(err.to_string()))?;
+        let current_invitation = self
+            .invitation_holder
+            .snapshot_earliest()
+            .await
+            .map(|(code, expires_at)| CurrentInvitation { code, expires_at });
+        let settings = self
+            .settings
+            .load()
+            .await
+            .map_err(|err| QuerySetupStateError::StorageFailed(err.to_string()))?;
+        Ok(SetupStateView {
+            has_completed: status.has_completed,
+            current_invitation,
+            device_name: settings.general.device_name,
+        })
     }
 
     /// Slice 2 Phase 1 · T10 · CLI `members` 入口:主动触发一轮
@@ -1213,6 +1320,105 @@ mod tests {
             err,
             IssuePairingInvitationError::NetworkNotStarted
         ));
+    }
+
+    // ── Slice4 P3 T3.2 · cancel / reset / query_setup_state ────────────
+
+    #[tokio::test]
+    async fn cancel_invitation_returns_not_issued_when_holder_empty() {
+        let (facade, _net, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        let err = facade.cancel_invitation().await.unwrap_err();
+        assert!(matches!(err, CancelInvitationError::NotIssued));
+    }
+
+    #[tokio::test]
+    async fn cancel_invitation_clears_pending_after_issue() {
+        let (facade, _net, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        facade.issue_pairing_invitation().await.expect("B1 ok");
+        assert_eq!(facade.invitation_holder.len().await, 1);
+        facade.cancel_invitation().await.expect("cancel ok");
+        assert_eq!(facade.invitation_holder.len().await, 0);
+    }
+
+    #[tokio::test]
+    async fn reset_clears_setup_status_and_invitations() {
+        let setup_status = InMemorySetupStatus::default();
+        *setup_status.status.lock().unwrap() = SetupStatus {
+            has_completed: true,
+            space_id: None,
+        };
+        let (facade, _net, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(setup_status),
+            Arc::new(InMemorySettings::default()),
+        );
+        facade.issue_pairing_invitation().await.expect("B1 ok");
+        assert_eq!(facade.invitation_holder.len().await, 1);
+
+        facade.reset().await.expect("reset ok");
+
+        assert_eq!(facade.invitation_holder.len().await, 0);
+        let view = facade.query_setup_state().await.expect("query ok");
+        assert!(!view.has_completed);
+        assert!(view.current_invitation.is_none());
+    }
+
+    #[tokio::test]
+    async fn query_setup_state_reports_fresh_install_defaults() {
+        let (facade, _net, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        let view = facade.query_setup_state().await.expect("query ok");
+        assert!(!view.has_completed);
+        assert!(view.current_invitation.is_none());
+        assert!(view.device_name.is_none());
+    }
+
+    #[tokio::test]
+    async fn query_setup_state_reflects_completed_status_and_device_name() {
+        let setup_status = InMemorySetupStatus::default();
+        *setup_status.status.lock().unwrap() = SetupStatus {
+            has_completed: true,
+            space_id: None,
+        };
+        let (facade, _net, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(setup_status),
+            settings_with_device_name("MacBook"),
+        );
+        let view = facade.query_setup_state().await.expect("query ok");
+        assert!(view.has_completed);
+        assert_eq!(view.device_name.as_deref(), Some("MacBook"));
+        assert!(view.current_invitation.is_none());
+    }
+
+    #[tokio::test]
+    async fn query_setup_state_surfaces_pending_invitation_after_issue() {
+        let (facade, _net, _inv, _peer) = make_facade(
+            Arc::new(FakeSpaceAccess::default()),
+            Arc::new(InMemorySetupStatus::default()),
+            Arc::new(InMemorySettings::default()),
+        );
+        facade.issue_pairing_invitation().await.expect("B1 ok");
+        let view = facade.query_setup_state().await.expect("query ok");
+        let inv = view.current_invitation.expect("invitation present");
+        assert_eq!(inv.code.as_str(), "SMOKE-0001");
+        assert_eq!(
+            inv.expires_at,
+            DateTime::parse_from_rfc3339("2026-04-20T10:05:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
     }
 
     #[tokio::test]

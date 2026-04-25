@@ -1276,6 +1276,87 @@ pub struct StopNetworkCommand; // 无字段
 | `POST /setup/clear-transient` | — | **删除**(stateless 模型不再有 transient state) |
 | `GET /setup/state` | `GET /setup/state`(语义瘦身) | 仅返回 `{ has_completed: bool, current_invitation: Option<{code, expires_at_ms}>, device_name: Option<String> }`——不再返回 stateful FSM |
 
+##### T3.2 执行细分(2026-04-25 起,session 40)
+
+**现状盘点**(2026-04-25)
+- 老 `uc-daemon/src/api/setup.rs`:11 个 handler / 647 行(`get_setup_state` / `start_new` / `start_join` / `select_peer` / `confirm_peer` / `submit_passphrase` / `verify_passphrase` / `complete_space_access` / `cancel` / `clear_transient` / `reset`)
+- `SpaceSetupFacade`(`uc-application/src/facade/space_setup/facade.rs`)已有 9 个公开方法,T3.2 直接可用 4 个:`initialize_space` / `unlock_space` / `issue_pairing_invitation` / `redeem_pairing_invitation`
+- `SpaceSetupFacade` **缺** 3 个 thin 方法,T3.2 必须补:`cancel_invitation()` / `reset()` / `query_setup_state() -> SetupStateView`
+- 老 `SetupFacade` 装配点:`daemon/src/app.rs:272`、`server.rs:22,48,77,101`、`query.rs:13,184,225`、`pairing/host.rs` 多处 — **T3.2 一概不动**(T3.3 切装配)
+- 命令/结果型已具备:`InitializeSpaceCommand` / `InitializeSpaceResult` / `IssuePairingInvitationResult` / `RedeemPairingInvitationCommand` / `RedeemPairingInvitationResult`(`uc-application/src/facade/space_setup/commands.rs`)
+- AGENTS.md §11.4 铁律:外部 crate 只能 `use uc_application::facade::*`;T3.2 内**所有新代码**严格遵循,不引入任何 `uc_application::setup::*` 老路径
+
+**决策记录**(2026-04-25 拍板)
+- **D1 · server.rs 加新字段**(渐进):`DaemonApiState.space_setup_facade: Option<Arc<SpaceSetupFacade>>`,老 `setup_facade: Option<Arc<SetupFacade>>` 字段保留;新 handler 从新字段拿,老 handler 从老字段拿;T3.4 删老字段 + 老 handler
+- **D2 · 含**:T3.2 内补 3 个缺失 facade 方法(`cancel_invitation` / `reset` / `query_setup_state`)+ 必要的 `SetupStateView` 型
+- **D3 · B 方案 + `/v2/setup/*` 命名空间**(用户拍板):新 6 个 endpoint 全部走 `/v2/setup/*` 子路径(`/v2/setup/initialize` / `/v2/setup/issue-invitation` / `/v2/setup/redeem` / `/v2/setup/cancel` / `/v2/setup/reset` / `/v2/setup/state`);老 `/setup/*` 全留,T3.4 一刀切删
+- **D4 · 不删老 handler**:本步只在 routes 注册侧不暴露(老 handler 加 `#[allow(dead_code)]` 静默 unused 警告);T3.4 整体清理时一并删
+- **D5 · facade 真实现(b 选项)**(用户拍板):S1 不写桩,3 个 facade 方法连同底层 use case 一并实现;`cancel_invitation` / `reset` / `query_setup_state` 完工后立刻可被 endpoint 调用并返真实结果(非 503/桩)
+
+**子步骤**
+1. **S1 · uc-application 加 facade 方法**(`facade/space_setup/facade.rs` + `commands.rs` + `errors.rs` + `mod.rs`)
+   - `commands.rs` 新增 `pub struct SetupStateView { has_completed: bool, current_invitation: Option<CurrentInvitation>, device_name: Option<String> }`、`pub struct CurrentInvitation { code: InvitationCode, expires_at: DateTime<Utc> }`
+   - `errors.rs` 新增 `pub enum CancelInvitationError { NotIssued, AlreadyRedeemed, /* infra */ }`、`pub enum ResetSpaceError { /* ... */ }`、`pub enum QuerySetupStateError { /* ... */ }`(具体 variant 看现有 facade 风格)
+   - `facade.rs` 新增 3 个 `pub async fn`:`cancel_invitation()`、`reset()`、`query_setup_state()`;实现可先调底层 use case(若已有)或返 `Err(NotImplemented)` 桩,但**接口签名稳定**,T3.3 装配后再补完
+   - `mod.rs` `pub use` 3 个新型(`SetupStateView` / `CurrentInvitation` / 3 个 Error)+ `facade/mod.rs` re-export
+   - 单测(uc-application 内):至少 3 个 thin facade test 验签名走通
+2. **S2 · uc-daemon-contract 加新 DTO**(`api/dto/setup.rs` 末尾或新建 `api/dto/setup_v2.rs`)
+   - `InitializeSpaceRequestV2 { passphrase, passphrase_confirm, device_name }`
+   - `InitializeSpaceResponseV2 { space_id, self_device_id, fingerprint }`
+   - `IssueInvitationResponseV2 { code, expires_at_ms }`
+   - `RedeemRequestV2 { code, passphrase }`
+   - `RedeemResponseV2 { sponsor_device_id, sponsor_identity_fingerprint, space_id, self_device_id, self_identity_fingerprint }`
+   - `SetupStateResponseV2 { has_completed, current_invitation: Option<{code, expires_at_ms}>, device_name }`
+   - `CancelInvitationResponseV2 { /* empty or status */ }`、`ResetResponseV2`
+   - 全部 `#[serde(rename_all = "camelCase")]` + `ToSchema`
+   - **新建 `dto/setup_v2.rs`** 单独成文件(类比 T3.1 的 `setup_events.rs`,与老 `dto/setup.rs` 隔离)
+   - `constants.rs` `http_route` 模块新增 6 个常量:`SETUP_V2_INITIALIZE` / `SETUP_V2_ISSUE_INVITATION` / `SETUP_V2_REDEEM` / `SETUP_V2_CANCEL` / `SETUP_V2_RESET` / `SETUP_V2_STATE`
+3. **S3 · server.rs 加新字段**(`uc-daemon/src/api/server.rs`)
+   - `DaemonApiState` 加字段 `space_setup_facade: Option<Arc<SpaceSetupFacade>>`
+   - `new()` 默认 `None`
+   - `with_space_setup(self, facade: Arc<SpaceSetupFacade>) -> Self` builder
+   - **import 用 `uc_application::facade::space_setup::SpaceSetupFacade`(AGENTS.md §11.4 合规),不动老 `uc_application::setup::SetupFacade` import**
+4. **S4 · setup.rs 新 6 个 handler**(`uc-daemon/src/api/setup.rs` 末尾追加)
+   - `pub async fn initialize_v2` / `issue_invitation_v2` / `redeem_v2` / `cancel_v2` / `reset_v2` / `get_state_v2`
+   - 每个 handler:从 `state.space_setup_facade.as_ref().ok_or(ApiError::ServiceUnavailable)?` 拿 facade → 调用 → 序列化结果
+   - 老 11 个 handler 函数顶上加 `#[allow(dead_code)]`(routes 不挂时编译器抱怨)
+5. **S5 · routes.rs 注册新路由**(`uc-daemon/src/api/routes.rs`)
+   - 6 条 `.route("/v2/setup/initialize", post(setup::initialize_v2))` 等
+   - 老 `/setup/*` 11 条路由**全部移除**(handler 留着但不挂 router)
+6. **S6 · OpenAPI 注册**(`uc-daemon/src/api/openapi.rs`)
+   - 新 6 个 handler + 新 DTO 注册到 utoipa schema
+   - 老 setup endpoints 同步从 OpenAPI 移除(避免文档不一致)
+7. **S7 · 单测**(`uc-daemon/src/api/setup.rs` 末尾 `mod tests`)
+   - 至少 6 个 handler test:用 `MockDaemonApiState` 或现有 axum test helper,各 endpoint 输入合法/非法各一个 case
+   - 1 个 routes 注册 test:断言 `/v2/setup/initialize` 等 6 条路径在 router 中可路由(若 routes.rs 已有 router test pattern,沿用)
+8. **S8 · 编译 + 测试**:
+   - `cargo check -p uc-application -p uc-daemon-contract -p uc-daemon`
+   - `cargo test -p uc-application -p uc-daemon-contract -p uc-daemon`
+   - 既存 daemon ws + setup 老路径测试**不应受影响**(老路径 handler 还在,只是 router 不挂)
+   - 关键:**老路径前端调用会立即 404**(老 routes 已下线)— **本步是破坏性变更**,验收 D3 用户决策的前端 Phase 4 时序
+
+**验收门**
+- 6 个 `/v2/setup/*` endpoint 全部能被 router 路由到,handler 调到对应 facade 方法(单测覆盖)
+- `cargo build -p uc-daemon` 通过(老 handler 留着但加 `#[allow(dead_code)]`,无新增 warning)
+- `cargo test -p uc-application -p uc-daemon-contract -p uc-daemon` 全绿
+- `DaemonApiState.space_setup_facade` 字段就位但**未被装配**(T3.3 装),所有 handler 在 facade 为 `None` 时返 503 — 单测覆盖一个"facade 未装配 → 503"路径
+- AGENTS.md §11.4 合规:新 daemon 代码中无 `use uc_application::setup::*`,只有 `use uc_application::facade::space_setup::*`
+- DAEMON_API_REVISION 升版(`uc-daemon-contract/src/lib.rs:3` 当前 `"setup-pairing-http-routes-v1"` → 改 `"setup-pairing-http-routes-v2"` 或类似)
+- daemon-client 暂不更新(等 Phase 4 前端切换)
+
+**显式不在范围**(T3.2 不做)
+- ⛔ daemon 装配 `SpaceSetupFacade` 实例 → T3.3
+- ⛔ daemon-client `ws_bridge.rs` 加新事件解析 → 与前端订阅一同在 Phase 4 处理(如果 daemon-client 路径还要保留)
+- ⛔ 删除老 `setup.rs` 11 handler / 老 `setup_facade` 字段 / 老路由 → T3.4
+- ⛔ 前端切到新 `/v2/setup/*` API → Phase 4 T4.1
+- ⛔ daemon 启动时订阅 `SpaceSetupFacade::subscribe_pairing_completion()` → T3.3
+
+**风险 / 已知坑**
+- **R1 · 破坏性变更**:S5 把老 `/setup/*` 路由从 router 中移除后,前端老调用立即 404。这是 D3=B 决策的预期后果。回滚预案:revert routes.rs 单文件即可恢复
+- **R2 · facade 桩实现**:S1 新增 3 个 facade 方法若内部 use case 未实现,T3.2 内可返 `Err(NotImplemented)` 桩;T3.3 真实接装配时同步补;但 endpoint 单测要 mock facade 而非真调 use case
+- **R3 · DAEMON_API_REVISION 升版触发 daemon-client mismatch**:若 daemon-client 在 connect 时校验 revision 字符串,升版会让所有现有 client 拒连。需 grep 确认 client 是否做严格校验(否则 fail-soft)
+- **R4 · OpenAPI 老 schema 残留**:openapi.rs 移除老 endpoints 后,若有持续集成的 OpenAPI snapshot test,会跑红 — 需同步更新 snapshot
+
 **T3.3 · daemon api 装配链切换**(0.5 天)
 - `uc-daemon/src/api/server.rs:22` `use uc_application::setup::SetupFacade` → `use uc_application::facade::space_setup::SpaceSetupFacade`
 - `uc-daemon/src/api/query.rs:13-14` 同上

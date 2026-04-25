@@ -24,6 +24,8 @@ pub use clipboard::{
 pub use roster::{MemberRosterDeps, MemberRosterFacade, PresenceEvent, RosterEntry, RosterError};
 pub use setup_status::SetupStatusFacade;
 pub use space_setup::{
-    InitializeSpaceCommand, InitializeSpaceError, InitializeSpaceResult, SpaceSetupDeps,
-    SpaceSetupFacade, UnlockSpaceCommand, UnlockSpaceError, UnlockSpaceResult,
+    CancelInvitationError, CurrentInvitation, InitializeSpaceCommand, InitializeSpaceError,
+    InitializeSpaceResult, IssuePairingInvitationResult, QuerySetupStateError,
+    RedeemPairingInvitationCommand, RedeemPairingInvitationResult, ResetSpaceError, SetupStateView,
+    SpaceSetupDeps, SpaceSetupFacade, UnlockSpaceCommand, UnlockSpaceError, UnlockSpaceResult,
 };

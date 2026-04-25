@@ -21,7 +21,9 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use uc_core::pairing::invitation::{ConsumeError, InvitationCode, PairingInvitation};
+use uc_core::pairing::invitation::{
+    ConsumeError, InvitationCode, InvitationState, PairingInvitation,
+};
 
 /// Process-local map of outstanding [`PairingInvitation`]s keyed by code.
 ///
@@ -87,6 +89,35 @@ impl InMemoryPairingInvitationHolder {
                 "holder stored a non-pending aggregate — insert/issue invariant broken".into(),
             )),
         }
+    }
+
+    /// Snapshot the **earliest-expiring** outstanding invitation, if any.
+    ///
+    /// Returned without consuming, intended for read-only query paths
+    /// (Slice4 P3 T3.2 `SpaceSetupFacade::query_setup_state`). Callers
+    /// must not assume a single pending invitation exists; this just
+    /// gives a deterministic representative when multiple are parked.
+    pub(crate) async fn snapshot_earliest(&self) -> Option<(InvitationCode, DateTime<Utc>)> {
+        let map = self.by_code.lock().await;
+        map.values()
+            .filter_map(|inv| match inv.state() {
+                InvitationState::Pending { expires_at } => Some((inv.code().clone(), *expires_at)),
+                _ => None,
+            })
+            .min_by_key(|(_, exp)| *exp)
+    }
+
+    /// Drop every outstanding invitation, returning the count removed.
+    ///
+    /// Used by Slice4 P3 T3.2 `SpaceSetupFacade::cancel_invitation` and
+    /// `reset` to wipe in-flight pairing state. Aggregates already
+    /// `Consumed` are not present in the holder (they are removed at
+    /// `take_matching` time), so this only clears `Pending` entries.
+    pub(crate) async fn cancel_all(&self) -> usize {
+        let mut map = self.by_code.lock().await;
+        let count = map.len();
+        map.clear();
+        count
     }
 
     /// Count of outstanding entries (test-only — not part of the
