@@ -7,14 +7,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::{CoreUseCases, SessionReadyEmitter};
+use uc_app::usecases::CoreUseCases;
 use uc_application::facade::{PairingOutcome, SpaceSetupFacade};
 use uc_application::space_access::SpaceAccessFacade;
 
@@ -92,35 +91,6 @@ pub async fn recover_encryption_session(
                 e
             )
         }
-    }
-}
-
-/// Fires a notification when the setup/unlock flow completes.
-///
-/// Used as the daemon's `SessionReadyEmitter` so that when
-/// `AppLifecycleCoordinator::ensure_ready()` fires `emit_ready()`,
-/// the daemon can dynamically start deferred services (clipboard-watcher,
-/// inbound-clipboard-sync, peer-discovery).
-///
-/// Uses `Notify` instead of a oneshot so that multiple sources can trigger it:
-/// - Setup flow completion (uninitialized encryption)
-/// - `/lifecycle/ready` API endpoint (GUI unlock)
-pub struct SetupCompletionEmitter {
-    notify: Arc<tokio::sync::Notify>,
-}
-
-impl SetupCompletionEmitter {
-    pub fn new(notify: Arc<tokio::sync::Notify>) -> Self {
-        Self { notify }
-    }
-}
-
-#[async_trait]
-impl SessionReadyEmitter for SetupCompletionEmitter {
-    async fn emit_ready(&self) -> anyhow::Result<()> {
-        self.notify.notify_one();
-        debug!("setup completion signal sent via Notify");
-        Ok(())
     }
 }
 

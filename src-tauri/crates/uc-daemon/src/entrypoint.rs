@@ -9,20 +9,17 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
-use uc_app::usecases::LoggingLifecycleEventEmitter;
-use uc_app::usecases::SessionReadyEmitter;
 use uc_application::{
     ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
     InboundWrite as ApplyInboundWrite,
 };
-use uc_bootstrap::assembly::SetupAssemblyPorts;
 use uc_bootstrap::build_non_gui_runtime_with_emitter;
 use uc_bootstrap::builders::build_daemon_app;
 use uc_bootstrap::BlobProcessingPorts;
 use uc_core::ports::SystemClipboardPort;
 
 use crate::api::types::DaemonWsEvent;
-use crate::app::{DaemonApp, SetupCompletionEmitter};
+use crate::app::DaemonApp;
 use crate::pairing::host::DaemonPairingHost;
 use crate::peers::presence_monitor::PresenceMonitor;
 use crate::search::coordinator::SearchCoordinator;
@@ -82,13 +79,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let daemon_file_transfer_repo = ctx.deps.storage.file_transfer_repo.clone();
     let daemon_peer_directory = ctx.deps.network_ports.peers.clone();
     let daemon_settings = ctx.deps.settings.clone();
-    let setup_ports = SetupAssemblyPorts::from_network(
-        ctx.pairing_facade.clone(),
-        ctx.space_access_facade.clone(),
-        None,
-        Arc::new(LoggingLifecycleEventEmitter),
-        ctx.trusted_peer_repo.clone(),
-    );
     // Extract file_cache_dir, file_transfer_orchestrator, clipboard_write_coordinator,
     // and emitter_cell before ctx is consumed by runtime construction.
     let file_cache_dir = ctx.storage_paths.file_cache_dir.clone();
@@ -100,23 +90,14 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let blob_ports = BlobProcessingPorts::from_app_deps(&ctx.deps);
     let background = ctx.background;
 
-    // Create Notify for deferred service startup.
-    // This is triggered by either:
-    // - SetupCompletionEmitter (setup flow completes on uninitialized device)
-    // - /lifecycle/ready API endpoint (GUI signals unlock)
+    // Create Notify for deferred service startup. After Slice4 P3 T3.4 the
+    // legacy SetupCompletionEmitter is gone; deferred services now wait
+    // exclusively on the `/lifecycle/ready` API endpoint (GUI signals unlock).
     let deferred_ready_notify = Arc::new(tokio::sync::Notify::new());
-    let setup_completion_emitter: Arc<dyn SessionReadyEmitter> =
-        Arc::new(SetupCompletionEmitter::new(deferred_ready_notify.clone()));
 
     let runtime = Arc::new(
-        build_non_gui_runtime_with_emitter(
-            ctx.deps,
-            ctx.storage_paths.clone(),
-            setup_ports,
-            setup_completion_emitter,
-            emitter_cell,
-        )?
-        .with_clipboard_write_coordinator(clipboard_write_coordinator.clone()),
+        build_non_gui_runtime_with_emitter(ctx.deps, ctx.storage_paths.clone(), emitter_cell)?
+            .with_clipboard_write_coordinator(clipboard_write_coordinator.clone()),
     );
 
     // 1. Create the shared broadcast channel for WebSocket events.

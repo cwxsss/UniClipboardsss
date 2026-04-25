@@ -1,15 +1,11 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 use uc_app::shared::host_event::{
-    ClipboardHostEvent, EmitError, HostEvent, HostEventEmitterPort, SetupHostEvent,
-    SpaceAccessHostEvent, TransferHostEvent,
+    ClipboardHostEvent, EmitError, HostEvent, HostEventEmitterPort, TransferHostEvent,
 };
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 
-use crate::api::types::{
-    DaemonWsEvent, FileTransferProgressPayload, SetupSpaceAccessCompletedPayload,
-    SetupStateChangedPayload,
-};
+use crate::api::types::{DaemonWsEvent, FileTransferProgressPayload};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,51 +67,8 @@ impl DaemonApiEventEmitter {
 }
 
 impl HostEventEmitterPort for DaemonApiEventEmitter {
-    // Allow legacy SETUP_STATE_CHANGED / SETUP_SPACE_ACCESS_COMPLETED ws constants
-    // until Slice4 P3 T3.4 deletes the stateful SetupFacade and this entire path.
-    #[allow(deprecated)]
     fn emit(&self, event: HostEvent) -> Result<(), EmitError> {
         match event {
-            HostEvent::Setup(SetupHostEvent::StateChanged { state, session_id }) => {
-                self.emit_ws_event(
-                    ws_event::SETUP_STATE_CHANGED,
-                    ws_topic::SETUP,
-                    session_id.clone(),
-                    Self::now_ms(),
-                    SetupStateChangedPayload {
-                        session_id,
-                        state: serde_json::to_value(state).unwrap_or_default(),
-                    },
-                );
-            }
-            HostEvent::SpaceAccess(SpaceAccessHostEvent::Completed {
-                session_id,
-                peer_id,
-                success,
-                reason,
-                ts,
-            })
-            | HostEvent::SpaceAccess(SpaceAccessHostEvent::P2PCompleted {
-                session_id,
-                peer_id,
-                success,
-                reason,
-                ts,
-            }) => {
-                self.emit_ws_event(
-                    ws_event::SETUP_SPACE_ACCESS_COMPLETED,
-                    ws_topic::SETUP,
-                    Some(session_id.clone()),
-                    ts,
-                    SetupSpaceAccessCompletedPayload {
-                        session_id,
-                        peer_id,
-                        success,
-                        reason,
-                        ts,
-                    },
-                );
-            }
             HostEvent::Transfer(TransferHostEvent::StatusChanged {
                 transfer_id,
                 entry_id,

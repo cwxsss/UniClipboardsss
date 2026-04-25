@@ -13,7 +13,6 @@
 //! - [`HostEventEmitterPort`] is synchronous (fire-and-forget semantics).
 //! - Emit failures are best-effort: callers log the error and continue.
 
-use uc_application::setup::SetupState;
 use uc_core::file_transfer::FileTransferDirection;
 
 // ---------------------------------------------------------------------------
@@ -72,51 +71,6 @@ pub enum TransferHostEvent {
 }
 
 // ---------------------------------------------------------------------------
-// SetupHostEvent
-// ---------------------------------------------------------------------------
-
-/// Semantic events emitted by the setup subsystem.
-#[derive(Debug, Clone)]
-pub enum SetupHostEvent {
-    /// The setup wizard state changed.
-    ///
-    /// IMPORTANT: `state` carries the full `SetupState` enum (not a String) to
-    /// preserve data-carrying variants (JoinSpaceConfirmPeer, ProcessingCreateSpace, etc.).
-    StateChanged {
-        state: SetupState,
-        session_id: Option<String>,
-    },
-}
-
-// ---------------------------------------------------------------------------
-// SpaceAccessHostEvent
-// ---------------------------------------------------------------------------
-
-/// Semantic events emitted by the space access subsystem.
-#[derive(Debug, Clone)]
-pub enum SpaceAccessHostEvent {
-    /// A space access attempt completed (WebDAV / local path).
-    ///
-    /// IMPORTANT: `peer_id` is `String` (non-optional), matching the existing
-    /// wire contract and `SpaceAccessCompletedEvent.peer_id: String`.
-    Completed {
-        session_id: String,
-        peer_id: String,
-        success: bool,
-        reason: Option<String>,
-        ts: i64,
-    },
-    /// A P2P space access attempt completed.
-    P2PCompleted {
-        session_id: String,
-        peer_id: String,
-        success: bool,
-        reason: Option<String>,
-        ts: i64,
-    },
-}
-
-// ---------------------------------------------------------------------------
 // HostEvent
 // ---------------------------------------------------------------------------
 
@@ -128,8 +82,6 @@ pub enum SpaceAccessHostEvent {
 pub enum HostEvent {
     Clipboard(ClipboardHostEvent),
     Transfer(TransferHostEvent),
-    Setup(SetupHostEvent),
-    SpaceAccess(SpaceAccessHostEvent),
 }
 
 // ---------------------------------------------------------------------------

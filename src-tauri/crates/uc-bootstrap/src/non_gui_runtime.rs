@@ -13,11 +13,10 @@ use uc_app::app_paths::AppPaths;
 use uc_app::runtime::CoreRuntime;
 use uc_app::shared::host_event::{EmitError, HostEvent, HostEventEmitterPort};
 use uc_app::task_registry::TaskRegistry;
-use uc_app::usecases::{InMemoryLifecycleStatus, LoggingSessionReadyEmitter, SessionReadyEmitter};
+use uc_app::usecases::InMemoryLifecycleStatus;
 use uc_app::AppDeps;
 use uc_core::clipboard::ClipboardIntegrationMode;
 
-use crate::assembly::{build_setup_facade, SetupAssemblyPorts};
 // ---------------------------------------------------------------------------
 // LoggingHostEventEmitter
 // ---------------------------------------------------------------------------
@@ -37,12 +36,6 @@ impl HostEventEmitterPort for LoggingHostEventEmitter {
             }
             HostEvent::Transfer(_) => {
                 tracing::debug!(event_type = "transfer", "host event (non-gui)");
-            }
-            HostEvent::Setup(_) => {
-                tracing::debug!(event_type = "setup", "host event (non-gui)");
-            }
-            HostEvent::SpaceAccess(_) => {
-                tracing::debug!(event_type = "space_access", "host event (non-gui)");
             }
         }
         Ok(())
@@ -68,85 +61,27 @@ pub fn build_non_gui_runtime(
     deps: AppDeps,
     storage_paths: AppPaths,
 ) -> anyhow::Result<CoreRuntime> {
-    let setup_ports = SetupAssemblyPorts::placeholder(&deps);
-    build_non_gui_runtime_with_setup(deps, storage_paths, setup_ports)
+    let emitter: Arc<dyn HostEventEmitterPort> = Arc::new(LoggingHostEventEmitter);
+    let emitter_cell = Arc::new(std::sync::RwLock::new(emitter));
+    build_non_gui_runtime_with_emitter(deps, storage_paths, emitter_cell)
 }
 
-/// Construct a [`CoreRuntime`] for non-GUI entry points with explicit setup ports.
-///
-/// Daemon startup uses this path so the runtime owns the real pairing/setup adapters
-/// rather than the placeholder bundle used by CLI tests and fallback call sites.
-pub fn build_non_gui_runtime_with_setup(
-    deps: AppDeps,
-    storage_paths: AppPaths,
-    setup_ports: SetupAssemblyPorts,
-) -> anyhow::Result<CoreRuntime> {
-    let session_ready_emitter: Arc<dyn SessionReadyEmitter> = Arc::new(LoggingSessionReadyEmitter);
-    build_non_gui_runtime_internal(deps, storage_paths, setup_ports, session_ready_emitter)
-}
-
-/// Construct a [`CoreRuntime`] for non-GUI entry points with explicit setup ports
-/// and a custom session-ready emitter.
-///
-/// Daemon uses this path to inject a `SetupCompletionEmitter` that signals
-/// `DaemonApp` when setup completes (Phase 67: deferred PeerDiscoveryWorker).
+/// Construct a [`CoreRuntime`] for non-GUI entry points with an explicit
+/// shared emitter cell. Daemon uses this so its `DaemonApiEventEmitter`
+/// can be swapped in after construction.
 pub fn build_non_gui_runtime_with_emitter(
     deps: AppDeps,
     storage_paths: AppPaths,
-    setup_ports: SetupAssemblyPorts,
-    session_ready_emitter: Arc<dyn SessionReadyEmitter>,
-    emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-) -> anyhow::Result<CoreRuntime> {
-    build_non_gui_runtime_internal_with_emitter(
-        deps,
-        storage_paths,
-        setup_ports,
-        session_ready_emitter,
-        emitter_cell,
-    )
-}
-
-fn build_non_gui_runtime_internal(
-    deps: AppDeps,
-    storage_paths: AppPaths,
-    setup_ports: SetupAssemblyPorts,
-    session_ready_emitter: Arc<dyn SessionReadyEmitter>,
-) -> anyhow::Result<CoreRuntime> {
-    let emitter: Arc<dyn HostEventEmitterPort> = Arc::new(LoggingHostEventEmitter);
-    let emitter_cell = Arc::new(std::sync::RwLock::new(emitter));
-    build_non_gui_runtime_internal_with_emitter(
-        deps,
-        storage_paths,
-        setup_ports,
-        session_ready_emitter,
-        emitter_cell,
-    )
-}
-
-fn build_non_gui_runtime_internal_with_emitter(
-    deps: AppDeps,
-    storage_paths: AppPaths,
-    setup_ports: SetupAssemblyPorts,
-    session_ready_emitter: Arc<dyn SessionReadyEmitter>,
     emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
 ) -> anyhow::Result<CoreRuntime> {
     let lifecycle_status = Arc::new(InMemoryLifecycleStatus::new());
     let task_registry = Arc::new(TaskRegistry::new());
     let clipboard_integration_mode = resolve_clipboard_integration_mode();
 
-    let setup_facade = build_setup_facade(
-        &deps,
-        setup_ports,
-        lifecycle_status.clone(),
-        emitter_cell.clone(),
-        session_ready_emitter,
-    );
-
     Ok(CoreRuntime::new(
         deps,
         emitter_cell,
         lifecycle_status,
-        setup_facade,
         clipboard_integration_mode,
         task_registry,
         storage_paths,

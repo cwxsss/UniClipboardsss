@@ -9,7 +9,6 @@
 //!
 //! - `WiredDependencies` struct (output of the wiring process)
 //! - `BackgroundRuntimeDeps` struct (background worker dependencies)
-//! - `HostEventSetupPort` adapter (pure, no Tauri types)
 //! - All infrastructure and platform layer construction functions
 //! - `wire_dependencies`, `get_storage_paths`, `resolve_pairing_device_name`, etc.
 //!
@@ -23,11 +22,10 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use uc_app::deps::{NetworkPorts, SearchPorts};
-use uc_app::shared::host_event::{HostEvent, HostEventEmitterPort, SetupHostEvent};
+use uc_app::shared::host_event::HostEventEmitterPort;
 use uc_app::usecases::ResolveConnectionPolicy;
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
 use uc_application::pairing::PairingConfig;
-use uc_application::setup::SetupEventPort;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
@@ -163,43 +161,6 @@ pub struct WiredDependencies {
     pub iroh_blob_store_dir: PathBuf,
     /// Slice 3 Phase 1:明文 hash → 密文 digest 去重缓存。
     pub blob_reference_repo: Arc<dyn BlobReferenceRepositoryPort>,
-}
-
-/// HostEventEmitterPort adapter that emits setup state changes to frontend listeners.
-///
-/// Uses Arc<RwLock<...>> shared cell so that HostEventSetupPort always reads the
-/// current emitter after bootstrap swaps it from LoggingEventEmitter to DaemonApiEventEmitter.
-/// This eliminates the stale emitter bug described in STATE.md Known Bugs.
-#[derive(Clone)]
-pub struct HostEventSetupPort {
-    emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-}
-
-impl HostEventSetupPort {
-    pub fn new(emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>) -> Self {
-        Self { emitter_cell }
-    }
-}
-
-#[async_trait::async_trait]
-impl SetupEventPort for HostEventSetupPort {
-    async fn emit_setup_state_changed(
-        &self,
-        state: uc_application::setup::SetupState,
-        session_id: Option<String>,
-    ) {
-        let emitter = self
-            .emitter_cell
-            .read()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        if let Err(err) = emitter.emit(HostEvent::Setup(SetupHostEvent::StateChanged {
-            state,
-            session_id,
-        })) {
-            warn!(error = %err, "Failed to emit setup-state-changed");
-        }
-    }
 }
 
 /// Infrastructure layer implementations
@@ -995,148 +956,6 @@ pub async fn resolve_pairing_config(settings: Arc<dyn SettingsPort>) -> PairingC
     }
 }
 
-// ---------------------------------------------------------------------------
-// SetupAssemblyPorts — network/external adapter ports for SetupOrchestrator
-// ---------------------------------------------------------------------------
-
-use tokio::sync::Mutex as TokioMutex;
-use uc_app::usecases::{
-    DeviceAnnouncer, LifecycleEventEmitter, LifecycleStatusPort, SessionReadyEmitter,
-};
-use uc_application::pairing::PairingFacade;
-use uc_application::setup::{SetupFacade, SetupPairingFacadePort};
-use uc_application::space_access::SpaceAccessFacade;
-use uc_core::ports::space::SpaceAccessTransportPort;
-use uc_core::ports::TimerPort;
-use uc_core::TrustedPeerRepositoryPort;
-
-/// Bundle of network/external adapter ports needed to assemble the SetupOrchestrator.
-///
-/// Replaces SetupRuntimePorts from runtime.rs. Contains ONLY network/external
-/// adapter ports that the caller (main.rs/wiring.rs) provides and that are NOT
-/// shared with AppRuntime or CoreRuntime. All shared/dual-use values
-/// (emitter_cell, lifecycle_status, session_ready_emitter) are separate
-/// parameters to build_setup_facade(), ensuring with_setup() can pass
-/// the SAME instance to both the orchestrator and AppRuntime/CoreRuntime.
-pub struct SetupAssemblyPorts {
-    pub setup_pairing_facade: Arc<dyn SetupPairingFacadePort>,
-    pub space_access_facade: Arc<SpaceAccessFacade>,
-    pub device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
-    pub lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
-    /// Trusted-peer repository (0.4.3): consumed by
-    /// `SpaceAccessPersistenceAdapter` to verify pairing-side persistence
-    /// before space_access promotes the peer. Same Arc as the one injected
-    /// into `TrustPeerOrchestrator` in bootstrap, shared across the
-    /// process.
-    pub trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
-}
-
-impl SetupAssemblyPorts {
-    /// Create a bundle wired to the production network/lifecycle adapters.
-    pub fn from_network(
-        pairing_facade: Arc<PairingFacade>,
-        space_access_facade: Arc<SpaceAccessFacade>,
-        device_announcer: Option<Arc<dyn DeviceAnnouncer>>,
-        lifecycle_emitter: Arc<dyn LifecycleEventEmitter>,
-        trusted_peer_repo: Arc<dyn TrustedPeerRepositoryPort>,
-    ) -> Self {
-        Self {
-            setup_pairing_facade: pairing_facade,
-            space_access_facade,
-            device_announcer,
-            lifecycle_emitter,
-            trusted_peer_repo,
-        }
-    }
-
-    /// Create placeholder ports for tests. All ports are noop implementations.
-    /// Used by AppRuntime::new() for command tests that don't exercise setup flow.
-    ///
-    /// NOTE: Shared state (emitter_cell, lifecycle_status, clipboard_integration_mode)
-    /// and with_setup()-constructed adapters (session_ready_emitter) are NOT created
-    /// here — they are created by AppRuntime::new() / with_setup() and passed
-    /// separately to build_setup_facade().
-    pub fn placeholder(_deps: &uc_app::AppDeps) -> Self {
-        struct NoopSetupPairingFacade;
-
-        #[async_trait::async_trait]
-        impl SetupPairingFacadePort for NoopSetupPairingFacade {
-            async fn subscribe(
-                &self,
-            ) -> anyhow::Result<
-                tokio::sync::mpsc::Receiver<uc_application::pairing::PairingDomainEvent>,
-            > {
-                let (_tx, rx) = tokio::sync::mpsc::channel(1);
-                Ok(rx)
-            }
-
-            async fn initiate_pairing(&self, _peer_id: String) -> anyhow::Result<String> {
-                Err(anyhow::anyhow!(
-                    "setup pairing facade placeholder cannot initiate pairing"
-                ))
-            }
-
-            async fn accept_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
-                Ok(())
-            }
-
-            async fn reject_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
-                Ok(())
-            }
-
-            async fn cancel_pairing(&self, _session_id: &str) -> anyhow::Result<()> {
-                Ok(())
-            }
-
-            async fn verify_pairing(
-                &self,
-                _session_id: &str,
-                _pin_matches: bool,
-            ) -> anyhow::Result<()> {
-                Ok(())
-            }
-        }
-
-        struct NoopTrustedPeerRepository;
-
-        #[async_trait::async_trait]
-        impl TrustedPeerRepositoryPort for NoopTrustedPeerRepository {
-            async fn get(
-                &self,
-                _peer_device_id: &uc_core::DeviceId,
-            ) -> Result<Option<uc_core::TrustedPeer>, uc_core::TrustedPeerError> {
-                Ok(None)
-            }
-
-            async fn list(&self) -> Result<Vec<uc_core::TrustedPeer>, uc_core::TrustedPeerError> {
-                Ok(Vec::new())
-            }
-
-            async fn save(
-                &self,
-                _trusted_peer: &uc_core::TrustedPeer,
-            ) -> Result<(), uc_core::TrustedPeerError> {
-                Ok(())
-            }
-
-            async fn remove(
-                &self,
-                _peer_device_id: &uc_core::DeviceId,
-            ) -> Result<bool, uc_core::TrustedPeerError> {
-                Ok(false)
-            }
-        }
-
-        Self {
-            setup_pairing_facade: Arc::new(NoopSetupPairingFacade),
-            space_access_facade: Arc::new(SpaceAccessFacade::new()),
-            device_announcer: None,
-            lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
-            trusted_peer_repo: Arc::new(NoopTrustedPeerRepository),
-        }
-    }
-}
-
 /// Constructs a `ClipboardWriteCoordinator` — the single write boundary for all
 /// programmatic clipboard writes.
 ///
@@ -1149,75 +968,5 @@ pub fn build_clipboard_write_coordinator(
     Arc::new(uc_app::usecases::ClipboardWriteCoordinator::new(
         system_clipboard,
         clipboard_change_origin,
-    ))
-}
-
-/// Build the `SetupFacade` with all required adapters.
-///
-/// This is the single composition point for setup (RNTM-05 / phase B.4).
-/// Returns the phase-B `SetupFacade`; the internal `SetupOrchestrator` is
-/// hidden per `uc-application/AGENTS.md` §11.4.
-pub fn build_setup_facade(
-    deps: &uc_app::AppDeps,
-    ports: SetupAssemblyPorts,
-    lifecycle_status: Arc<dyn LifecycleStatusPort>,
-    emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-    session_ready_emitter: Arc<dyn SessionReadyEmitter>,
-) -> Arc<SetupFacade> {
-    use uc_app::usecases::{
-        AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, StartNetworkAfterUnlock,
-    };
-
-    // Phase C: `InitializeEncryption` usecase 保留给 uc-cli run_new_space 入口;
-    // setup flow action_executor 现在直接调 `SpaceAccessPort.initialize`,不再绕
-    // `SetupInitializeEncryptionPort` 适配层(已删除)。
-
-    let start_network = Arc::new(StartNetworkAfterUnlock::from_port(
-        deps.network_control.clone(),
-    ));
-    let app_lifecycle = Arc::new(AppLifecycleCoordinator::from_deps(
-        AppLifecycleCoordinatorDeps {
-            network: start_network,
-            announcer: ports.device_announcer,
-            emitter: session_ready_emitter,
-            status: lifecycle_status,
-            lifecycle_emitter: ports.lifecycle_emitter,
-        },
-    ));
-    let space_access_port: Arc<dyn uc_core::ports::space::SpaceAccessPort> =
-        deps.security.space_access.clone();
-    let transport_port: Arc<TokioMutex<dyn SpaceAccessTransportPort>> = Arc::new(TokioMutex::new(
-        uc_application::space_access::SpaceAccessNetworkAdapter::new(
-            deps.network_ports.pairing.clone(),
-            ports.space_access_facade.context_handle(),
-        ),
-    ));
-    let proof_port: Arc<dyn uc_core::ports::space::ProofPort> = Arc::new(
-        uc_application::space_access::HmacProofAdapter::new_with_space_access(
-            deps.security.space_access.clone(),
-        ),
-    );
-    let timer_port: Arc<TokioMutex<dyn TimerPort>> =
-        Arc::new(TokioMutex::new(uc_infra::time::Timer::new()));
-    let persistence_port = Arc::new(TokioMutex::new(
-        uc_application::space_access::SpaceAccessPersistenceAdapter::new(
-            ports.trusted_peer_repo.clone(),
-        ),
-    ));
-    let setup_event_port = Arc::new(HostEventSetupPort::new(emitter_cell));
-
-    Arc::new(SetupFacade::new(
-        deps.setup_status.clone(),
-        app_lifecycle,
-        ports.setup_pairing_facade,
-        setup_event_port,
-        ports.space_access_facade,
-        deps.network_control.clone(),
-        space_access_port,
-        deps.network_ports.pairing.clone(),
-        transport_port,
-        proof_port,
-        timer_port,
-        persistence_port,
     ))
 }

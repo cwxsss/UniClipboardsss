@@ -23,9 +23,6 @@ use tokio::sync::mpsc;
 
 use uc_app::app_paths::AppPaths;
 use uc_app::shared::host_event::HostEventEmitterPort;
-use uc_app::usecases::{
-    DeviceAnnouncer, DeviceNameAnnouncer, LifecycleEventEmitter, LoggingLifecycleEventEmitter,
-};
 use uc_app::AppDeps;
 use uc_application::facade::ClipboardSyncFacade;
 use uc_application::membership::usecases::AdmitMemberUseCase;
@@ -40,7 +37,7 @@ use uc_platform::adapters::PairingRuntimeOwner;
 
 use crate::assembly::{
     get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
-    BackgroundRuntimeDeps, SetupAssemblyPorts,
+    BackgroundRuntimeDeps,
 };
 use crate::space_setup::{build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly};
 
@@ -53,7 +50,6 @@ use crate::space_setup::{build_space_setup_assembly, IrohNodeConfig, SpaceSetupA
 pub struct GuiBootstrapContext {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
-    pub setup_ports: SetupAssemblyPorts,
     pub storage_paths: AppPaths,
     pub pairing_facade: Arc<PairingFacade>,
     pub pairing_action_rx: mpsc::Receiver<PairingAction>,
@@ -195,29 +191,10 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
         pairing_crypto,
     );
     let pairing_facade = Arc::new(pairing_facade);
-    // Phase A.2: inject AdmitMemberUseCase so joiner-side `Granted` also
-    // registers the sponsor peer as a local space member. Failure to admit
-    // only logs WARN and does not block `Granted` itself.
-    let admit_member = Arc::new(AdmitMemberUseCase::new(deps.device.member_repo.clone()));
-    let space_access_facade = Arc::new(SpaceAccessFacade::with_admit_member(admit_member));
 
     let storage_paths = get_storage_paths(&config)?;
     let key_slot_store: Arc<dyn KeySlotStore> =
         Arc::new(JsonKeySlotStore::new(storage_paths.vault_dir.clone()));
-
-    // Create device announcer and lifecycle emitter for SetupAssemblyPorts
-    let device_announcer: Option<Arc<dyn DeviceAnnouncer>> = Some(Arc::new(
-        DeviceNameAnnouncer::new(deps.network_ports.peers.clone(), deps.settings.clone()),
-    ));
-    let lifecycle_emitter: Arc<dyn LifecycleEventEmitter> = Arc::new(LoggingLifecycleEventEmitter);
-
-    let setup_ports = SetupAssemblyPorts::from_network(
-        pairing_facade.clone(),
-        space_access_facade.clone(),
-        device_announcer,
-        lifecycle_emitter,
-        Arc::clone(&trusted_peer_repo),
-    );
 
     // [Codex Review R1] Return AppDeps, NOT CoreRuntime.
     // CoreRuntime is constructed by AppRuntime::with_setup() in uc-tauri,
@@ -225,7 +202,6 @@ pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     Ok(GuiBootstrapContext {
         deps,
         background,
-        setup_ports,
         storage_paths,
         pairing_facade,
         pairing_action_rx,

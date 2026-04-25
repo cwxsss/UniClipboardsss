@@ -16,7 +16,6 @@ use crate::deps::AppDeps;
 use crate::shared::host_event::HostEventEmitterPort;
 use crate::task_registry::TaskRegistry;
 use crate::usecases::LifecycleStatusPort;
-use uc_application::setup::SetupFacade;
 
 /// Tauri-free runtime holding all non-Tauri application state.
 ///
@@ -26,11 +25,10 @@ use uc_application::setup::SetupFacade;
 pub struct CoreRuntime {
     pub(crate) deps: AppDeps,
     /// Shared cell for event emitter. Uses Arc<RwLock<Arc<...>>> so that
-    /// consumers (like HostEventSetupPort) can hold a clone of the outer Arc
-    /// and always read the current emitter after bootstrap swaps it.
+    /// downstream consumers can hold a clone of the outer Arc and always
+    /// read the current emitter after bootstrap swaps it.
     pub(crate) event_emitter: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
     pub(crate) lifecycle_status: Arc<dyn LifecycleStatusPort>,
-    pub(crate) setup_facade: Arc<SetupFacade>,
     pub(crate) clipboard_integration_mode: ClipboardIntegrationMode,
     pub(crate) task_registry: Arc<TaskRegistry>,
     pub(crate) storage_paths: AppPaths,
@@ -44,14 +42,13 @@ impl CoreRuntime {
     ///
     /// IMPORTANT: `event_emitter` is a pre-built shared cell
     /// `Arc<RwLock<Arc<dyn HostEventEmitterPort>>>`. The caller creates
-    /// this cell and shares it with both CoreRuntime and
-    /// build_setup_facade so that HostEventSetupPort reads from
-    /// the same cell. CoreRuntime does NOT wrap the emitter internally.
+    /// this cell and shares it with downstream consumers so they all
+    /// observe the current emitter after bootstrap swaps it. CoreRuntime
+    /// does NOT wrap the emitter internally.
     pub fn new(
         deps: AppDeps,
         event_emitter: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
         lifecycle_status: Arc<dyn LifecycleStatusPort>,
-        setup_facade: Arc<SetupFacade>,
         clipboard_integration_mode: ClipboardIntegrationMode,
         task_registry: Arc<TaskRegistry>,
         storage_paths: AppPaths,
@@ -60,7 +57,6 @@ impl CoreRuntime {
             deps,
             event_emitter, // store directly — no wrapping
             lifecycle_status,
-            setup_facade,
             clipboard_integration_mode,
             task_registry,
             storage_paths,
@@ -160,10 +156,6 @@ impl CoreRuntime {
 
     pub fn task_registry(&self) -> &Arc<TaskRegistry> {
         &self.task_registry
-    }
-
-    pub fn setup_facade(&self) -> &Arc<SetupFacade> {
-        &self.setup_facade
     }
 
     pub fn lifecycle_status(&self) -> &Arc<dyn LifecycleStatusPort> {

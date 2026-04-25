@@ -17,10 +17,9 @@ pub mod tracing;
 
 // Re-export primary public items
 pub use assembly::{
-    build_clipboard_write_coordinator, build_setup_facade, get_storage_paths,
-    resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
-    wire_dependencies_with_identity_store, BackgroundRuntimeDeps, HostEventSetupPort,
-    SetupAssemblyPorts, WiredDependencies, WiringError, WiringResult,
+    build_clipboard_write_coordinator, get_storage_paths, resolve_pairing_config,
+    resolve_pairing_device_name, wire_dependencies, wire_dependencies_with_identity_store,
+    BackgroundRuntimeDeps, WiredDependencies, WiringError, WiringResult,
 };
 pub use background_tasks::{spawn_blob_processing_tasks, BlobProcessingPorts};
 pub use builders::{
@@ -31,7 +30,7 @@ pub use config::load_config;
 pub use init::{ensure_default_device_name, is_setup_complete};
 pub use non_gui_runtime::{
     build_cli_runtime, build_non_gui_runtime, build_non_gui_runtime_with_emitter,
-    build_non_gui_runtime_with_setup, resolve_clipboard_integration_mode, LoggingHostEventEmitter,
+    resolve_clipboard_integration_mode, LoggingHostEventEmitter,
 };
 pub use space_setup::{
     build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly, SpaceSetupAssemblyError,

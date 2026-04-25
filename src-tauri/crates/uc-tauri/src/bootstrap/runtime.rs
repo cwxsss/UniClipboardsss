@@ -147,16 +147,19 @@ impl AppRuntime {
     /// Create a new AppRuntime from dependencies.
     /// 从依赖创建新的 AppRuntime。
     pub fn new(deps: AppDeps, storage_paths: uc_app::app_paths::AppPaths) -> Self {
-        let setup_ports = uc_bootstrap::assembly::SetupAssemblyPorts::placeholder(&deps);
         let event_emitter: Arc<dyn HostEventEmitterPort> =
             Arc::new(uc_bootstrap::LoggingHostEventEmitter);
-        Self::with_setup(deps, setup_ports, storage_paths, event_emitter)
+        Self::with_setup(deps, storage_paths, event_emitter)
     }
 
-    /// Create a new AppRuntime with explicit setup orchestrator dependencies.
+    /// Construct an AppRuntime backed by an explicit emitter.
+    ///
+    /// Slice4 P3 T3.4 collapsed the previous `with_setup(deps, setup_ports,
+    /// paths, emitter)` signature: the legacy `SetupFacade` and its
+    /// `SetupAssemblyPorts` bundle are gone, so the GUI-side runtime now
+    /// only needs an emitter to wire CoreRuntime.
     pub fn with_setup(
         deps: AppDeps,
-        setup_ports: uc_bootstrap::assembly::SetupAssemblyPorts,
         storage_paths: uc_app::app_paths::AppPaths,
         event_emitter: Arc<dyn HostEventEmitterPort>,
     ) -> Self {
@@ -170,30 +173,14 @@ impl AppRuntime {
         let clipboard_integration_mode = uc_bootstrap::resolve_clipboard_integration_mode();
         let task_registry = Arc::new(TaskRegistry::new());
 
-        // Create the shared emitter cell BEFORE both consumers.
-        // This cell is shared between CoreRuntime and build_setup_orchestrator
-        // so that HostEventSetupPort reads the current emitter after swap.
+        // Shared emitter cell for downstream consumers that may need
+        // read-through after a future emitter swap.
         let emitter_cell = Arc::new(std::sync::RwLock::new(event_emitter));
 
-        // Build session_ready_emitter — emits "Session ready" log, no frontend event.
-        let session_ready_emitter: Arc<dyn uc_app::usecases::SessionReadyEmitter> =
-            Arc::new(uc_app::usecases::app_lifecycle::adapters::LoggingSessionReadyEmitter);
-
-        // Pass shared state + adapters to build_setup_facade as SEPARATE params.
-        let setup_facade = uc_bootstrap::assembly::build_setup_facade(
-            &deps,
-            setup_ports,
-            lifecycle_status.clone(), // same instance goes to CoreRuntime below
-            emitter_cell.clone(),     // same instance goes to CoreRuntime below
-            session_ready_emitter,    // constructed from app_handle above
-        );
-
-        // Pass the SAME cell to CoreRuntime — no re-wrapping.
         let core = Arc::new(CoreRuntime::new(
             deps,
             emitter_cell,
             lifecycle_status,
-            setup_facade,
             clipboard_integration_mode,
             task_registry,
             storage_paths,
