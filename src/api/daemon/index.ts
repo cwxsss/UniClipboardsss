@@ -69,25 +69,8 @@ export {
   unpairDevice,
 } from './members'
 export type { LocalDeviceInfo, SpaceMember } from './members'
-export {
-  getP2PPeers,
-  initiateP2PPairing,
-  acceptP2PPairing,
-  rejectP2PPairing,
-  verifyP2PPairingPin,
-  unpairP2PDevice,
-} from './pairing'
-export type {
-  P2PPeerInfo,
-  P2PPairingRequest,
-  P2PPairingResponse,
-  P2PPinVerifyRequest,
-  P2PPairingVerificationKind,
-  PairingErrorKind,
-  P2PPairingVerificationEvent,
-  P2PPeerConnectionEvent,
-  P2PPeerNameUpdatedEvent,
-} from './pairing'
+export { classifyPairingError } from './events'
+export type { PairingErrorKind } from './events'
 export { querySearch, getSearchStatus, triggerSearchRebuild } from './search'
 export type {
   SearchResultDto,

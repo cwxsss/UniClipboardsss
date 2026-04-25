@@ -71,7 +71,7 @@ initLogging().then(() => {
 
 // Connect the frontend WebSocket client to the daemon.
 // This must run before React renders so that daemonWs is connected by the time
-// hooks (useEncryptionState, usePairingEvents, useClipboardNewContent) mount.
+// hooks (useEncryptionState, useClipboardNewContent) mount.
 connectDaemonWs().catch(err => {
   console.error('[main] daemon WS bootstrap failed:', err)
 })

@@ -4,7 +4,6 @@ import { signalLifecycleReady } from '@/api/daemon/lifecycle'
 import { unlockEncryptionSession } from '@/api/security'
 import { TitleBar } from '@/components'
 import { GlobalShortcuts } from '@/components/GlobalShortcuts'
-import { PairingNotificationProvider } from '@/components/PairingNotificationProvider'
 import TelemetryNotice from '@/components/TelemetryNotice'
 import { Toaster } from '@/components/ui/sonner'
 import { useSearch } from '@/contexts/search-context'
@@ -191,7 +190,6 @@ const AppContent = ({
       <>
         <SetupPage onCompleteSetup={onSetupComplete} />
         <Toaster />
-        <PairingNotificationProvider />
       </>
     )
   }
@@ -219,15 +217,12 @@ const AppContent = ({
   }
 
   // If initialized but not ready, show unlock page.
-  // PairingNotificationProvider is mounted here too so that already-completed
-  // hosts can still receive and display pairing requests while on the unlock screen.
   if (resolvedEncryptionStatus?.initialized && !resolvedEncryptionStatus?.session_ready) {
     return (
       <>
         <UnlockPage
           onUnlockSucceeded={() => setEncryptionStatus({ initialized: true, session_ready: true })}
         />
-        <PairingNotificationProvider />
       </>
     )
   }
@@ -253,7 +248,6 @@ const AppContent = ({
         <Route path="*" element={<Navigate to="/" replace />} />
       </SentryRoutes>
       <Toaster />
-      <PairingNotificationProvider />
       <TelemetryNotice />
     </ShortcutProvider>
   )
