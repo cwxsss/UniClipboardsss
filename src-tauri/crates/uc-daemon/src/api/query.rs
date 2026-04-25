@@ -4,27 +4,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use serde_json::json;
-use serde_json::Value;
 use tokio::sync::RwLock;
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
 use uc_application::membership::usecases::ListMembersUseCase;
-use uc_application::setup::SetupFacade;
-use uc_application::setup::SetupState;
 use uc_application::space_access::SpaceAccessFacade;
-use uc_core::clipboard::ClipboardIntegrationMode;
 use uc_core::space_access::state::SpaceAccessState;
 use uc_core::SpaceMember;
 
 use crate::api::dto::pairing::PairingSessionSummaryDto;
-use crate::api::dto::setup::SetupStateResponse;
 use crate::api::projection::IntoApiDto;
 use crate::api::types::{
-    HealthResponse, PeerSnapshotDto, SetupActionAckResponse, SpaceAccessStateResponse,
-    SpaceMemberDto, StatusResponse, WorkerStatusDto,
+    HealthResponse, PeerSnapshotDto, SpaceAccessStateResponse, SpaceMemberDto, StatusResponse,
+    WorkerStatusDto,
 };
-use crate::pairing::host::DaemonPairingHost;
 use crate::service::ServiceHealth;
 use crate::state::{DaemonPairingSessionSnapshot, DaemonServiceSnapshot, RuntimeState};
 use crate::{DAEMON_API_REVISION, DAEMON_VERSION};
@@ -179,36 +172,6 @@ impl DaemonQueryService {
             .collect()
     }
 
-    pub async fn setup_state(
-        &self,
-        setup_orchestrator: &SetupFacade,
-        pairing_host: Option<&DaemonPairingHost>,
-    ) -> Result<SetupStateResponse> {
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let local_device = usecases.get_local_device_info().execute().await?;
-        let setup_state = setup_orchestrator.get_state().await;
-        let active_snapshot = active_pairing_snapshot(&self.state, pairing_host).await;
-
-        Ok(SetupStateResponse {
-            state: setup_state_payload(&setup_state, active_snapshot.as_ref()),
-            session_id: active_snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.session_id.clone()),
-            next_step_hint: next_step_hint(&setup_state, active_snapshot.as_ref()).to_string(),
-            profile: resolved_profile(),
-            clipboard_mode: clipboard_mode_label(self.runtime.clipboard_integration_mode()),
-            device_name: local_device.device_name,
-            peer_id: local_device.peer_id,
-            selected_peer_id: active_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.peer_id.clone()),
-            selected_peer_name: active_snapshot
-                .as_ref()
-                .and_then(|snapshot| snapshot.device_name.clone()),
-            has_completed: matches!(setup_state, SetupState::Completed),
-        })
-    }
-
     pub async fn space_access_state(
         &self,
         orchestrator: Option<&SpaceAccessFacade>,
@@ -218,19 +181,6 @@ impl DaemonQueryService {
             None => SpaceAccessState::Idle,
         };
         SpaceAccessStateResponse { state }
-    }
-
-    pub async fn setup_action_ack(
-        &self,
-        setup_orchestrator: &SetupFacade,
-        pairing_host: Option<&DaemonPairingHost>,
-    ) -> Result<SetupActionAckResponse> {
-        let state = self.setup_state(setup_orchestrator, pairing_host).await?;
-        Ok(SetupActionAckResponse {
-            state: state.state,
-            session_id: state.session_id,
-            next_step_hint: state.next_step_hint,
-        })
     }
 }
 
@@ -257,94 +207,4 @@ fn worker_statuses(snapshots: &[DaemonServiceSnapshot]) -> Vec<WorkerStatusDto> 
             health: worker_health_label(&worker.health),
         })
         .collect()
-}
-
-async fn active_pairing_snapshot(
-    state: &Arc<RwLock<RuntimeState>>,
-    pairing_host: Option<&DaemonPairingHost>,
-) -> Option<DaemonPairingSessionSnapshot> {
-    let session_id = pairing_host?.active_session_id().await?;
-    let guard = state.read().await;
-    guard.pairing_session(&session_id).cloned()
-}
-
-fn setup_state_payload(
-    state: &SetupState,
-    active_snapshot: Option<&DaemonPairingSessionSnapshot>,
-) -> Value {
-    if let Some(value) = synthesized_host_verification_state(state, active_snapshot) {
-        return value;
-    }
-
-    serde_json::to_value(state).unwrap_or_else(|_| Value::String(format!("{state:?}")))
-}
-
-fn synthesized_host_verification_state(
-    state: &SetupState,
-    active_snapshot: Option<&DaemonPairingSessionSnapshot>,
-) -> Option<Value> {
-    if !matches!(state, SetupState::Completed) {
-        return None;
-    }
-
-    let snapshot = active_snapshot?;
-    if snapshot.state != "verification" {
-        return None;
-    }
-
-    let short_code = snapshot.short_code.clone()?;
-    Some(json!({
-        "JoinSpaceConfirmPeer": {
-            "short_code": short_code,
-            "peer_fingerprint": snapshot.peer_fingerprint.clone(),
-            "error": Value::Null
-        }
-    }))
-}
-
-fn resolved_profile() -> String {
-    std::env::var("UC_PROFILE")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "default".to_string())
-}
-
-fn clipboard_mode_label(mode: ClipboardIntegrationMode) -> String {
-    match mode {
-        ClipboardIntegrationMode::Full => "full".to_string(),
-        ClipboardIntegrationMode::Passive => "passive".to_string(),
-    }
-}
-
-fn next_step_hint(
-    state: &SetupState,
-    active_snapshot: Option<&DaemonPairingSessionSnapshot>,
-) -> &'static str {
-    match state {
-        SetupState::Welcome => "idle",
-        SetupState::CreateSpaceInputPassphrase { .. }
-        | SetupState::ProcessingCreateSpace { .. } => "create-space-passphrase",
-        SetupState::JoinSpaceSelectDevice { .. } => "join-select-peer",
-        SetupState::JoinSpaceConfirmPeer { .. } => "host-confirm-peer",
-        SetupState::JoinSpaceInputPassphrase { .. } => "join-enter-passphrase",
-        SetupState::ProcessingJoinSpace { .. } => {
-            match active_snapshot.map(|snapshot| snapshot.state.as_str()) {
-                Some("request") | Some("verifying") | Some("complete") | Some("failed") | None => {
-                    "join-waiting-for-host"
-                }
-                Some(_) => "join-waiting-for-host",
-            }
-        }
-        SetupState::Completed => {
-            if matches!(
-                active_snapshot.map(|snapshot| snapshot.state.as_str()),
-                Some("request" | "verification")
-            ) {
-                "host-confirm-peer"
-            } else {
-                "completed"
-            }
-        }
-    }
 }

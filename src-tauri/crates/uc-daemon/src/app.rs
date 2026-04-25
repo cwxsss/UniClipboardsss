@@ -295,7 +295,6 @@ impl DaemonApp {
         // Replace the default-created channel with our shared one so all services
         // emit to the same broadcast channel that WebSocket subscribers receive from.
         api_state.event_tx = self.event_tx.clone();
-        let api_state = api_state.with_setup(self.runtime.setup_facade().clone());
         let api_state = match &self.space_access_facade {
             Some(sao) => api_state.with_space_access(sao.clone()),
             None => api_state,

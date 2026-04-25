@@ -20,7 +20,6 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
 use uc_application::facade::SpaceSetupFacade;
-use uc_application::setup::SetupFacade;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -46,10 +45,8 @@ pub struct DaemonApiState {
     pub auth_token: DaemonAuthToken,
     pub runtime: Option<Arc<CoreRuntime>>,
     pub pairing_host: Option<Arc<DaemonPairingHost>>,
-    pub setup_facade: Option<Arc<SetupFacade>>,
     /// Slice4 P3 T3.2 · stateless v2 setup facade.
-    /// Wired in T3.3 (assembly switch); v2 handlers fail with 503
-    /// until then.
+    /// Wired in T3.3; the `/v2/setup/*` handlers return 503 if absent.
     pub space_setup_facade: Option<Arc<SpaceSetupFacade>>,
     pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
@@ -79,7 +76,6 @@ impl DaemonApiState {
             auth_token,
             runtime,
             pairing_host: None,
-            setup_facade: None,
             space_setup_facade: None,
             space_access_facade: None,
             event_tx,
@@ -102,15 +98,6 @@ impl DaemonApiState {
 
     pub fn pairing_host(&self) -> Option<Arc<DaemonPairingHost>> {
         self.pairing_host.clone()
-    }
-
-    pub fn with_setup(mut self, setup_facade: Arc<SetupFacade>) -> Self {
-        self.setup_facade = Some(setup_facade);
-        self
-    }
-
-    pub fn setup_facade(&self) -> Option<Arc<SetupFacade>> {
-        self.setup_facade.clone()
     }
 
     /// Slice4 P3 T3.2 · attach the stateless v2 setup facade.
