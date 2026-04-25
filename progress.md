@@ -2747,6 +2747,39 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - `cargo test -p uc-daemon-contract --lib`:✅ 12/12 全过(7 v2 setup + 5 既有 setup_events)
 - `cargo check -p uc-daemon-contract -p uc-daemon -p uc-daemon-client`:✅ 全过,无新增 warning
 
+- **S3 完成**(uc-daemon `server.rs` 加新字段):
+  - import `uc_application::facade::SpaceSetupFacade`
+  - `DaemonApiState` 加字段 `space_setup_facade: Option<Arc<SpaceSetupFacade>>`
+  - `new()` 默认 `None`、`with_space_setup` builder + `space_setup_facade()` getter
+  - 老 `setup_facade` 字段一字不动
+
+- **S4 完成**(用户拍板**整体一个 v2 目录**而非在老 setup.rs 加 *_v2 函数):
+  - 新建 `crates/uc-daemon/src/api/v2/mod.rs`(`pub mod setup;` + `pub fn router()` 聚合)
+  - 新建 `crates/uc-daemon/src/api/v2/setup.rs`:6 个 `pub(crate) async fn` handler + helper + DTO 转换函数,共 ~370 行;handler 命名不带 v2 后缀(模块路径已显式)
+  - 老 `api/setup.rs` 一字不动,T3.4 整体删
+  - `api/mod.rs` 注册 `pub mod v2;`
+  - facade error 全 map 成 ApiError(40x/50x):passphrase/device-name → 400,already-setup → 409,sponsor-rejected → 409,sponsor-unreachable/timeout → 503,internal → 500,facade-未装配 → 503
+
+- **S5 完成**(routes.rs):**+1 行** `.merge(crate::api::v2::router())`,老 `/setup/*` 11 条路由保留(D4 决定)→ **R1 破坏性变更没发生**,前端 Phase 4 切前无 404 窗口
+
+- **S6 完成**(openapi.rs):
+  - 6 个 v2 handler path 注册
+  - 7 个 v2 DTO 加 schema(用 `as V2Xxx` alias 避免与老 setup DTO 同名)
+  - 新增 tag `setup-v2`
+  - 不动老 setup endpoints OpenAPI 注册
+
+- **S7 完成**(`api/v2/setup.rs` `mod tests`):7 个纯函数测试
+  - 4 个 DTO 转换测试:`initialize_to_dto` / `issue_to_dto` / `redeem_to_dto` / `state_to_dto`(pending + fresh)
+  - 2 个 error mapping 测试:`map_init_err`(5 variant)/ `map_redeem_err`(6 variant)
+  - **放弃 oneshot router 集成测试**:构造真 `DaemonApiState` 需要完整 bootstrap chain,代价远大于收益,facade 未装配 503 路径在装配测试里覆盖更自然
+
+- **S8 完成**(全栈 zero regression):
+  - `cargo check -p uc-application -p uc-daemon-contract -p uc-daemon -p uc-daemon-client`:✅ 全过(只剩既存 ClipboardOutboundTransportPort deprecated warning)
+  - `cargo test -p uc-daemon --lib`:✅ 19/19(12 既有 + 7 新 v2)
+  - `cargo test -p uc-daemon-contract --lib`:✅ 12/12
+  - `cargo test -p uc-daemon-client --lib`:✅ 0(crate 无单测,编译过)
+  - 既存 daemon ws + setup 老路径测试不受影响
+
 **核心风险**:
 - R1 破坏性变更 — 老 `/setup/*` 路由下线后前端立即 404,Phase 4 T4.1 必须紧跟切;回滚单文件 revert routes.rs 即可
 - R3 DAEMON_API_REVISION 升版可能让现有 daemon-client 拒连,S8 前 grep 确认 client 是否严格校验

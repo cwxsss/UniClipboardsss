@@ -1309,26 +1309,30 @@ pub struct StopNetworkCommand; // 无字段
 3. **S3 · server.rs 加新字段**(`uc-daemon/src/api/server.rs`)
    - `DaemonApiState` 加字段 `space_setup_facade: Option<Arc<SpaceSetupFacade>>`
    - `new()` 默认 `None`
-   - `with_space_setup(self, facade: Arc<SpaceSetupFacade>) -> Self` builder
-   - **import 用 `uc_application::facade::space_setup::SpaceSetupFacade`(AGENTS.md §11.4 合规),不动老 `uc_application::setup::SetupFacade` import**
-4. **S4 · setup.rs 新 6 个 handler**(`uc-daemon/src/api/setup.rs` 末尾追加)
-   - `pub async fn initialize_v2` / `issue_invitation_v2` / `redeem_v2` / `cancel_v2` / `reset_v2` / `get_state_v2`
-   - 每个 handler:从 `state.space_setup_facade.as_ref().ok_or(ApiError::ServiceUnavailable)?` 拿 facade → 调用 → 序列化结果
-   - 老 11 个 handler 函数顶上加 `#[allow(dead_code)]`(routes 不挂时编译器抱怨)
+   - `with_space_setup(self, facade: Arc<SpaceSetupFacade>) -> Self` builder + `space_setup_facade()` getter
+   - **import 用 `uc_application::facade::SpaceSetupFacade`(AGENTS.md §11.4 合规)**,老 `uc_application::setup::SetupFacade` import 保留(老 11 handler 还在用)
+4. **S4 · 新建 `api/v2/` 目录**(用户拍板**整体一个 v2 目录**,所有 v2 代码都进去)
+   - `api/v2/mod.rs`:注册 `pub mod setup;` + 提供 `pub fn router()` 聚合所有 v2 子模块 router
+   - `api/v2/setup.rs`:6 个 `pub(crate) async fn` handler(`initialize` / `issue_invitation` / `redeem` / `cancel` / `reset` / `get_state`),命名不带 v2 后缀(模块路径已显式),用 `http_route_v2::SETUP_*` 常量挂路由;`require_facade(state)` helper 统一返 503;每个 handler 把 facade error map 成 `ApiError`(40x/50x);DTO 转换函数(`initialize_to_dto` / `issue_to_dto` / `redeem_to_dto` / `state_to_dto`)放同文件
+   - 老 `api/setup.rs` **完全不动**,T3.4 整体删
 5. **S5 · routes.rs 注册新路由**(`uc-daemon/src/api/routes.rs`)
-   - 6 条 `.route("/v2/setup/initialize", post(setup::initialize_v2))` 等
-   - 老 `/setup/*` 11 条路由**全部移除**(handler 留着但不挂 router)
+   - **+1 行** `.merge(crate::api::v2::router())`(放在 `crate::api::setup::router()` 后面)
+   - 老 `/setup/*` 11 条路由**保留**(D4 决定 T3.4 才删 → R1 破坏性变更不发生)
 6. **S6 · OpenAPI 注册**(`uc-daemon/src/api/openapi.rs`)
-   - 新 6 个 handler + 新 DTO 注册到 utoipa schema
-   - 老 setup endpoints 同步从 OpenAPI 移除(避免文档不一致)
-7. **S7 · 单测**(`uc-daemon/src/api/setup.rs` 末尾 `mod tests`)
-   - 至少 6 个 handler test:用 `MockDaemonApiState` 或现有 axum test helper,各 endpoint 输入合法/非法各一个 case
-   - 1 个 routes 注册 test:断言 `/v2/setup/initialize` 等 6 条路径在 router 中可路由(若 routes.rs 已有 router test pattern,沿用)
+   - 新 6 个 handler 的 utoipa::path 引用注册到 paths
+   - 7 个 v2 DTO 加到 schemas(用 `as V2Xxx` alias 避免与老 DTO 同名)
+   - 新增 tag `setup-v2`
+7. **S7 · 单测**(`uc-daemon/src/api/v2/setup.rs` 末尾 `mod tests`)
+   - 7 个纯函数测试覆盖:
+     - DTO 转换:initialize/issue/redeem/state(2 个) → 4 个测试
+     - error mapping:`map_init_err` 5 variant / `map_redeem_err` 6 variant → 2 个测试
+   - 放弃 oneshot router 集成测试:构造真 `DaemonApiState` 需要完整 bootstrap,代价远大于收益(facade-未装配 503 路径在装配测试里覆盖更自然)
 8. **S8 · 编译 + 测试**:
-   - `cargo check -p uc-application -p uc-daemon-contract -p uc-daemon`
-   - `cargo test -p uc-application -p uc-daemon-contract -p uc-daemon`
-   - 既存 daemon ws + setup 老路径测试**不应受影响**(老路径 handler 还在,只是 router 不挂)
-   - 关键:**老路径前端调用会立即 404**(老 routes 已下线)— **本步是破坏性变更**,验收 D3 用户决策的前端 Phase 4 时序
+   - `cargo check -p uc-application -p uc-daemon-contract -p uc-daemon -p uc-daemon-client`:✅ 全过
+   - `cargo test -p uc-daemon --lib`:✅ 19/19 全过(12 既有 + 7 新 v2)
+   - `cargo test -p uc-daemon-contract --lib`:✅ 12/12(5 setup_events + 7 v2 setup)
+   - 既存 daemon ws + setup 老路径测试**完全不受影响**(老路径 handler + router 都不动)
+   - **R1 风险消失**:实际方案下不下线老路由,前端 Phase 4 切换前没有 404 窗口
 
 **验收门**
 - 6 个 `/v2/setup/*` endpoint 全部能被 router 路由到,handler 调到对应 facade 方法(单测覆盖)

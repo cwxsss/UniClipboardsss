@@ -19,6 +19,7 @@ use axum::Router;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
+use uc_application::facade::SpaceSetupFacade;
 use uc_application::setup::SetupFacade;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -46,6 +47,10 @@ pub struct DaemonApiState {
     pub runtime: Option<Arc<CoreRuntime>>,
     pub pairing_host: Option<Arc<DaemonPairingHost>>,
     pub setup_facade: Option<Arc<SetupFacade>>,
+    /// Slice4 P3 T3.2 · stateless v2 setup facade.
+    /// Wired in T3.3 (assembly switch); v2 handlers fail with 503
+    /// until then.
+    pub space_setup_facade: Option<Arc<SpaceSetupFacade>>,
     pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
     /// Gate controlling clipboard capture in the daemon.
@@ -75,6 +80,7 @@ impl DaemonApiState {
             runtime,
             pairing_host: None,
             setup_facade: None,
+            space_setup_facade: None,
             space_access_facade: None,
             event_tx,
             clipboard_capture_gate: None,
@@ -105,6 +111,16 @@ impl DaemonApiState {
 
     pub fn setup_facade(&self) -> Option<Arc<SetupFacade>> {
         self.setup_facade.clone()
+    }
+
+    /// Slice4 P3 T3.2 · attach the stateless v2 setup facade.
+    pub fn with_space_setup(mut self, space_setup_facade: Arc<SpaceSetupFacade>) -> Self {
+        self.space_setup_facade = Some(space_setup_facade);
+        self
+    }
+
+    pub fn space_setup_facade(&self) -> Option<Arc<SpaceSetupFacade>> {
+        self.space_setup_facade.clone()
     }
 
     pub fn with_space_access(mut self, space_access_facade: Arc<SpaceAccessFacade>) -> Self {

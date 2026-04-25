@@ -22,6 +22,7 @@ pub mod setup;
 pub mod setup_events;
 pub mod storage;
 pub mod types;
+pub mod v2;
 pub mod ws;
 
 #[cfg(debug_assertions)]

@@ -25,7 +25,8 @@ pub use roster::{MemberRosterDeps, MemberRosterFacade, PresenceEvent, RosterEntr
 pub use setup_status::SetupStatusFacade;
 pub use space_setup::{
     CancelInvitationError, CurrentInvitation, InitializeSpaceCommand, InitializeSpaceError,
-    InitializeSpaceResult, IssuePairingInvitationResult, QuerySetupStateError,
-    RedeemPairingInvitationCommand, RedeemPairingInvitationResult, ResetSpaceError, SetupStateView,
-    SpaceSetupDeps, SpaceSetupFacade, UnlockSpaceCommand, UnlockSpaceError, UnlockSpaceResult,
+    InitializeSpaceResult, IssuePairingInvitationError, IssuePairingInvitationResult,
+    QuerySetupStateError, RedeemPairingInvitationCommand, RedeemPairingInvitationError,
+    RedeemPairingInvitationResult, ResetSpaceError, SetupStateView, SpaceSetupDeps,
+    SpaceSetupFacade, UnlockSpaceCommand, UnlockSpaceError, UnlockSpaceResult,
 };
