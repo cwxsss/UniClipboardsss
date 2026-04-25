@@ -1140,18 +1140,31 @@ pub struct StopNetworkCommand; // 无字段
 4. **Phase 2 验收条件已满足**——`cargo check --workspace` 通过 + Slice 1/2/3 e2e 全绿是 A 完成时的状态。
 5. **强联动**:envelope 迁移和 libp2p adapter 删除必须在同一阶段做——adapter 没删之前 envelope 切走没收益,adapter 删之前 envelope 没切走 setup 整段断。所以挪进 Phase 3 作为**前置子任务 P3-pre**(必须先做完再删 libp2p adapter)。
 
-**P3-pre 范围**(Phase 3 起手):
-- **决策点**:envelope 落 iroh 走哪条路径
-  - 方案 A:`PairingSessionMessage` 加 `SpaceAccess { kind, payload_json }` 变体——改动小,但侵入新 port 的"专用握手消息"语义
-  - 方案 B:uc-core 新增独立 `SpaceAccessSessionPort` + iroh adapter 独立 stream 实现——最纯净,工作量大
-- **落地清单**(无论 A/B):
-  - iroh adapter(`uc-platform/src/adapters/iroh/...`)新增 envelope 双侧 codec + send/recv 路径
-  - `uc-application/src/space_access/network_adapter.rs` 重写:不再调 `PairingTransportPort`,改调新 port(`PairingSessionPort` 扩展版 / `SpaceAccessSessionPort`)
-  - `uc-daemon/src/pairing/host.rs` 接收侧从 `PairingMessage::Busy` 解析切到新 wire type 解析(保留 daemon 侧 dispatch 入口语义)
-  - 保留 `PairingMessage` / `PairingBusy` 仅当 codec 复用其 JSON shape;若选方案 B,可以一并删除这两个 wire 类型
-- **完成判据**:`SpaceAccessNetworkAdapter` 不再依赖 `PairingTransportPort`;Slice 1 pairing e2e(joiner-flow,含 offer/proof/result 三段)在 iroh-only 配置下全绿;然后才进入正式删除清单
+**P3-pre 决策结果(2026-04-24)**:**方案 D · 删除整条 `SpaceAccessTransportPort` 套件**(替代之前列的 A/B)。
 
-**`task_plan.md:1180` 自相矛盾的修正**:1180 行原文"保 `PairingMessage` / `PairingBusy`(被新 `space_access/network_adapter.rs` 用)"——只有当 P3-pre 选**方案 A**(JSON 字符串塞 PairingSessionMessage::SpaceAccess)且 codec 复用历史 JSON shape 时才成立;选方案 B 时 `PairingMessage` 整族跟 `pairing_transport.rs` 一起删。该行的最终态由 P3-pre 决策落地后回填。
+**依据**:研究表明 iroh path 已经完整覆盖 space-access 协议三段,字节级语义等价(详见 `findings.md` F-116):
+- 旧 `space_access_offer` envelope ↔ `PairingSessionMessage::KeyslotOffer`(由 `sponsor_handshake.rs:222` 直发)
+- 旧 `space_access_proof` envelope ↔ `PairingSessionMessage::ChallengeResponse { encrypted_challenge }`(`joiner_handshake.rs:247` 把 `proof.proof_bytes` 直接放入)
+- 旧 `space_access_result` envelope ↔ `PairingSessionMessage::Confirm` / `Reject`(sponsor_handshake.rs:385/436)
+
+`SpaceAccessNetworkAdapter` + `SpaceAccessTransportPort` + FSM `SendOffer/SendProof/SendResult` 三个 action 在 iroh-only 配置下都是 dead leg(只有 libp2p stack 的 PairingTransportPort impl 会真正发送),删除而非替换。
+
+**P3-pre 实施清单**(详见 F-116):
+1. 删 `uc-application/src/space_access/network_adapter.rs`(整文件)
+2. 删 `uc-core/src/ports/space/transport.rs`(整文件)
+3. 删 `SpaceAccessAction::SendOffer/SendProof/SendResult` 三变体(`uc-core/src/space_access/action.rs`)
+4. 改 `state_machine.rs` 转移序列:去掉这三个 action(L56/L108/L126/L144/L352)——FSM 状态机本身保留
+5. 改 `SpaceAccessExecutor`:删 `transport` 字段(executor.rs:7)
+6. 改 `SpaceAccessOrchestrator::execute_actions`:删 SendXxx 分支(orchestrator.rs:442–520)
+7. 改 setup `{orchestrator,action_executor,facade,testing}.rs`:移除 `transport_port: Arc<TokioMutex<dyn SpaceAccessTransportPort>>` 参数链
+8. 改 `bootstrap/assembly.rs:1189–1194`:删 transport_port 装配 + `SpaceAccessNetworkAdapter::new` 调用
+9. 删 daemon `pairing/host.rs:1436+` 的 `PairingMessage::Busy` envelope 解析段(随 libp2p adapter 整体删除一并清理)
+10. 删 `parse_space_access_busy_payload` / `SpaceAccessBusyPayload` 等 helper
+
+**入口风险**(进入 Phase 3 时必先验证):
+- A1 路径(`initialize_new_space`)走 FSM 触发 `SendOffer`,但 A1 是单机动作没有 joiner。需先核实 iroh-only 配置下 A1 当前到底跑通了没——是否被 libp2p stack 兜底,或被某种 fake/short-circuit 跳过
+
+**`task_plan.md:1180` 修正**:方案 D 落地后,`PairingMessage` / `PairingBusy` wire 类型一并删除,1180 行原文"保 `PairingMessage` / `PairingBusy`"自动失效——这两个 wire 类型不再有消费者。
 
 ---
 
@@ -1203,7 +1216,7 @@ pub struct StopNetworkCommand; // 无字段
 - [ ] `uc-core/src/ports/clipboard/mod.rs`:同步去掉 transport 子模块导出
 
 **Wire 协议保留项瘦身**(见 F-103):
-- [ ] `uc-core/src/network/protocol/pairing.rs`:删 `PairingChallenge` / `PairingResponse` 类型(被 state_machine 唯一消费,state_machine 删后孤立);保 `PairingMessage` / `PairingBusy`(被新 `space_access/network_adapter.rs` 用)
+- [ ] `uc-core/src/network/protocol/pairing.rs`:整文件删除——`PairingChallenge` / `PairingResponse` 被 state_machine 唯一消费(随 state_machine 删除);`PairingMessage` / `PairingBusy` 在 P3-pre 方案 D 落地后无消费者(详见决策记录 + F-116)
 - [ ] `uc-core/src/network/protocol/clipboard.rs`:删 `ClipboardMessage` / `ProtocolMessage` / `ProtocolDirection` / `ClipboardPayloadVersion`;保 `ClipboardBinaryPayload` / `BinaryRepresentation` / `MIME_IMAGE_PREFIX`(被 `payload_codec.rs` + `list_entry_projections.rs` 用)
 - [ ] `uc-core/src/network/protocol/mod.rs`:同步导出
 - [ ] `uc-core/src/network/mod.rs`:删 `events`/`connection_policy` 子模块声明

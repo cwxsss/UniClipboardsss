@@ -1651,3 +1651,59 @@ fn subscribe(&self) -> broadcast::Receiver<PresenceEvent>;
 均无外部消费者,加入 F-111 整体删除清单。同时 `uc-app/src/usecases/file_sync/mod.rs` 的所有 mod 声明 + re-export 全清空 —— 整个 `file_sync/` 子目录可整体 `rm -rf`。
 
 ---
+
+### F-116 · P3-pre 决策研究:`SpaceAccessNetworkAdapter` 是 dead leg,推荐方案 D(整套删除)
+
+**发现时间**:2026-04-24(Slice 4 Phase 3 P3-pre 决策研究)
+**触发**:Phase 2 B 重新评估暴露 PairingSessionMessage 没有 envelope 变体,需要决定 iroh-side space-access 协议怎么走
+
+**核心证据**:iroh 路径已经完整覆盖 space-access 协议三段,**根本不依赖 SpaceAccessNetworkAdapter / PairingTransportPort / PairingMessage::Busy envelope**:
+
+| 旧路径(libp2p,经 Busy envelope) | 新路径(iroh,经 PairingSessionMessage 专用变体) | 字节级一致 |
+|---|---|---|
+| `space_access_offer { space_id, nonce, keyslot }` envelope on `PairingMessage::Busy` | `PairingSessionMessage::KeyslotOffer { space_id, keyslot_blob, challenge, pairing_session_id }` 由 `sponsor_handshake.rs:222` 直接发送 | ✅ keyslot 仍为 JSON Value,challenge 是 32B nonce |
+| `space_access_proof { proof_bytes, challenge_nonce, ... }` envelope | `PairingSessionMessage::ChallengeResponse { encrypted_challenge }` 由 `joiner_handshake.rs:247` 发送,**字段名变 `encrypted_challenge` 但字节直接来自 `proof.proof_bytes`**;sponsor 侧 `sponsor_handshake.rs:321` 把收到的 `encrypted_challenge` 当 `proof_bytes` 喂 `verify_proof` | ✅ |
+| `space_access_result { space_id, success, deny_reason }` envelope | 成功侧 `PairingSessionMessage::Confirm { space_id, sender_device_id, sender_device_name, sender_identity_fingerprint, transport_address_blob }`(sponsor_handshake.rs:385);失败侧 `PairingSessionMessage::Reject { reason: PairingRejectReason::* }`(sponsor_handshake.rs:436) | ✅ Confirm 多带 sender 身份 + 传输地址(Slice 2 Phase 1 T5 强化);deny_reason 由 PairingRejectReason 枚举接管 |
+
+**进一步证据**:
+- `sponsor_handshake.rs:11–21` 顶部注释明文:"Sponsor path is linear ... running it through `SpaceAccessStateMachine` gives us enum ceremony without extra correctness guarantees, and the FSM's action order for the verified branch (`SendResult` → `PersistSponsorAccess`) is **inverted** from the ordering Slice 1 wants" —— 即 iroh sponsor 侧 **明文绕开** FSM
+- F-052 已经标记 sponsor 不走 `SpaceAccessStateMachine`(P7f cleanup)
+- `findings.md:1077`(F-091 附近)记录 joiner FSM 在 Slice 1 也不被 active 路径触发,joiner_handshake.rs 直接驱动
+
+**`SpaceAccessNetworkAdapter` 残留消费者(全部是 FSM transport leg)**:
+- `uc-application/src/space_access/orchestrator.rs:445/514/519` —— `SendOffer/SendProof/SendResult` action 触发
+- `uc-core/src/space_access/state_machine.rs:56/108/126/144/352` —— FSM 状态转移生成这三个 action
+- `uc-core/src/ports/space/transport.rs` —— port 定义本体,**唯一**的 application impl 是 `SpaceAccessNetworkAdapter`
+
+**A1 路径风险点**:`uc-application/src/space_access/initialize_new_space.rs:74` 调 `start_sponsor_authorization` 会触发 FSM 进入 `SponsorAuthorizationRequested` 转移(state_machine.rs:42–66),生成 `[RequestOfferPreparation, SendOffer, StartTimer]`。但 A1 是用户首次设密的**单机**动作,没有 joiner,SendOffer 在 iroh-only 配置下走 `SpaceAccessNetworkAdapter` → `DisabledPairingTransport`(`uc-platform/src/adapters/network.rs:32`)会**直接报错**"local pairing runtime is disabled"。
+
+> 这意味着两种可能:(1) 当前 e2e 跑 A1 走的是 libp2p stack(`PairingRuntimeOwner::CurrentProcess` → `Libp2pNetworkAdapter` impl),iroh-only 配置下 A1 实际未被验证;(2) 调用方提前短路或注入 fake adapter 跳过这条 leg。Phase 3 实施时**必须先核实 A1 路径在 iroh-only 配置下的实际行为**——这是删除工作的入口风险。
+
+**推荐方案 D · 删除整条 `SpaceAccessTransportPort` 套件**(替代之前列的 A/B):
+
+P3-pre 实施清单:
+1. 删 `uc-application/src/space_access/network_adapter.rs`(整文件)
+2. 删 `uc-core/src/ports/space/transport.rs`(整文件)
+3. 删 `SpaceAccessAction` enum 三个 transport 变体:`SendOffer` / `SendProof` / `SendResult`(uc-core/src/space_access/action.rs)
+4. 改 `state_machine.rs`:转移序列里去掉这三个 action(state_machine.rs:56/108/126/144/352)——FSM 状态机本身保留(initialize_new_space 仍用)
+5. 改 `SpaceAccessExecutor`:删 `transport: &mut dyn SpaceAccessTransportPort` 字段(executor.rs:7)
+6. 改 `SpaceAccessOrchestrator::execute_actions`:删 `SendOffer/SendProof/SendResult` 分支(orchestrator.rs:442–520)
+7. 改 setup `{orchestrator,action_executor,facade,testing}.rs`:移除 `transport_port: Arc<TokioMutex<dyn SpaceAccessTransportPort>>` 参数链
+8. 改 `bootstrap/assembly.rs:1189–1194`:删 `transport_port` 装配 + `SpaceAccessNetworkAdapter::new` 调用
+9. 删 `daemon/pairing/host.rs:1436–1530+` 的 `PairingMessage::Busy` envelope 解析段(随 libp2p adapter 整体删除一并清理,Phase 3 主体阶段)
+10. 删 `parse_space_access_busy_payload` / `SpaceAccessBusyPayload` 等 helper(位置待 grep,主体在 daemon 侧)
+
+**优势**:
+- 删除而非替换,工作量比方案 A/B 小一个量级
+- 不需要新增 wire 类型 / 新 port / 新 codec
+- iroh adapter / sponsor_handshake / joiner_handshake 完全无需改动
+- F-103 修正:`PairingMessage` / `PairingBusy` wire 类型可一并删除(原 task_plan.md:1180 "保 PairingBusy" 自动失效)
+
+**不确定项(进入 Phase 3 时必查)**:
+- A1 路径在 iroh-only 配置下的当前行为(上面已标)
+- `SpaceAccessOrchestrator::dispatch` 在 joiner 侧是否被 setup orchestrator 直接调用——若是,需要核对 joiner_handshake.rs 是否已替代该路径
+- `SpaceAccessExecutor` 在 setup 流程里其他字段是否仍需要(timer / store / proof)——这些应该不删
+
+**结论**:P3-pre 推荐方案 D。task_plan.md 中关于 P3-pre 的"方案 A/B 二选一"决策记录可改写为"方案 D 已选定,等待 A1 路径行为验证"。
+
+---
