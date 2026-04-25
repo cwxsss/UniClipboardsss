@@ -28,7 +28,6 @@ use crate::state::{DaemonServiceSnapshot, RuntimeState};
 use crate::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
 use crate::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
 use crate::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
-use crate::workers::peer_discovery::PeerDiscoveryWorker;
 use crate::workers::peer_keepalive::PeerKeepAliveWorker;
 use uc_platform::clipboard::LocalClipboard;
 
@@ -72,11 +71,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // build_daemon_app() calls build_core() which inits tracing + wires
     // deps, then awaits `build_space_setup_assembly` which binds iroh.
     let ctx = rt.block_on(build_daemon_app())?;
-    let daemon_network_control = ctx.deps.network_control.clone();
-    let daemon_network_events = ctx.deps.network_ports.events.clone();
     let daemon_file_transfer_events = ctx.deps.network_ports.file_transfer_events.clone();
     let daemon_file_transfer_repo = ctx.deps.storage.file_transfer_repo.clone();
-    let daemon_peer_directory = ctx.deps.network_ports.peers.clone();
     let daemon_settings = ctx.deps.settings.clone();
     // Extract file_cache_dir, file_transfer_orchestrator, clipboard_write_coordinator,
     // and emitter_cell before ctx is consumed by runtime construction.
@@ -194,13 +190,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         daemon_settings.clone(),
     ));
 
-    let peer_discovery_worker: Arc<dyn DaemonService> = Arc::new(PeerDiscoveryWorker::new(
-        daemon_network_control,
-        daemon_network_events,
-        daemon_peer_directory,
-        daemon_settings,
-    ));
-
     // Keep iroh magicsock paths warm so blob fetches don't cold-start 30s+
     // after being idle for a minute. Ticks `SpaceSetupFacade::refresh_presence`
     // every 25s (well under the ~60s QUIC idle timeout).
@@ -266,14 +255,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             health: ServiceHealth::Healthy,
         },
         DaemonServiceSnapshot {
-            name: "peer-discovery".to_string(),
-            health: if encryption_unlocked {
-                ServiceHealth::Healthy
-            } else {
-                ServiceHealth::Stopped
-            },
-        },
-        DaemonServiceSnapshot {
             name: "peer-keepalive".to_string(),
             health: if encryption_unlocked {
                 ServiceHealth::Healthy
@@ -321,10 +302,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         }
 
         if encryption_unlocked {
-            initial.push(Arc::clone(&peer_discovery_worker) as Arc<dyn DaemonService>);
             initial.push(Arc::clone(&peer_keepalive_worker) as Arc<dyn DaemonService>);
         } else {
-            deferred.push(peer_discovery_worker);
             deferred.push(peer_keepalive_worker);
         }
 
