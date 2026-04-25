@@ -1102,9 +1102,11 @@ pub struct StopNetworkCommand; // 无字段
 
 ---
 
-### Slice 4 · 删除 libp2p 业务代码 🔲(2026-04-24 重写,取消原"双栈并行验证")
+### Slice 4 · 删除 libp2p 业务代码 🔲(2026-04-24 重写;2026-04-24 二次扩张:含 setup 流程 setupFacade 迁移 + 前端 join space UI 重设计)
 
-**目标**:把 libp2p 业务代码、旧 ports、旧 wire 协议、死代码 usecase 一次性清干净;daemon peer worker 切到 `PresencePort`;**不**做后端 / 装配 / 协议优化。`iroh` Cargo feature 一并取消,iroh 成为唯一实现。
+**目标**:把 libp2p 业务代码、旧 ports、旧 wire 协议、死代码 usecase 一次性清干净;daemon peer worker 切到 `PresencePort`;**daemon HTTP `/setup/*` 从老 stateful FSM 迁移到新 stateless `SpaceSetupFacade`**;**前端 join space 流程从"扫描+点选+确认"重设计为"输入邀请码+口令"**;`iroh` Cargo feature 一并取消,iroh 成为唯一实现。
+
+**硬验收**:**通过 GUI 完成两台真机配对**(sponsor 创建空间 + 出码,joiner 输入码 + 口令,两端均落库 SpaceMember + TrustedPeer)。
 
 **为什么取消原"双栈并行验证"**(决策记录,2026-04-24):
 - 证据:`findings.md` F-100 显示 GUI 进程的 `sync_outbound_clipboard()` 工厂**零调用方**,uc-app 内部 0 处引用旧 sync usecase——v0.4.0 daemon-first 完成后,libp2p 业务路径在 GUI 进程已是空跑死代码
@@ -1122,10 +1124,12 @@ pub struct StopNetworkCommand; // 无字段
 
 | Phase | 范围 | 验收重心 |
 |---|---|---|
-| Phase 1 · daemon peer worker 切换 ✅(2026-04-24) | 新增 `uc-daemon/src/peers/presence_monitor.rs`(基于 `PresencePort::subscribe()`),删除旧 `monitor.rs` | daemon 在每次 `PresenceEvent::Online/Offline` 后向 ws `peers` topic 推一条 `peers.changed` 全量快照(已用单测覆盖,真机两台验收挪到 Slice 4 整体收尾);`peer_connection_changed` / `peer_name_updated` 现已无生产者,契约结构留给 Phase 3 整体删除 |
-| Phase 2 · 应用层 consumer 切换 ✅(2026-04-24) | `uc-application/setup/{orchestrator,action_executor,facade,testing}.rs` 已拿掉 `Arc<dyn DiscoveryPort>` 参数 + `EnsureDiscovery` action 仅保留 `start_network()`;`uc-bootstrap/src/assembly.rs` 同步删除 `SetupAssemblyPorts.discovery_port` + `NetworkDiscoveryPort` / `EmptyDiscoveryPort` 内联占位。**原计划的"B · `space_access/network_adapter.rs` 切到 PairingSessionPort/PairingEventPort"已重新评估并推迟到 Phase 3,理由见下方决策记录** | `cargo check --workspace` 通过;Slice 1 pairing e2e + Slice 2 clipboard e2e + Slice 3 blob e2e 全绿 |
-| Phase 3 · 整体删除(含 space-access envelope 迁移前置项) | 见下"删除清单"按目录/文件级一次性 `rm`;**前置子任务 P3-pre:`space_access/network_adapter.rs` 的 PairingMessage::Busy envelope 迁移落地(必须先做完才能删 libp2p adapter)**;`mod.rs` / `lib.rs` / `deps.rs` / `Cargo.toml` 同步清理 | `rg -w libp2p src-tauri/crates/uc-{core,app,application,platform,infra,bootstrap,daemon,tauri,cli}/src/` 0 命中(除 logging 注释);`cargo build --workspace` 0 warning(关于旧 deprecated 项) |
-| Phase 4 · 收尾 | 移除 Cargo feature `iroh` 门控(若有),清理 frozen 注释 / `#![allow(deprecated)]`,跑全套 e2e 回归 | `grep -r "frozen libp2p\|allow(deprecated).*libp2p" src-tauri/` 0 命中 |
+| Phase 1 · daemon peer worker 切换 ✅(2026-04-24) | 新增 `uc-daemon/src/peers/presence_monitor.rs`(基于 `PresencePort::subscribe()`),删除旧 `monitor.rs` | daemon 在每次 `PresenceEvent::Online/Offline` 后向 ws `peers` topic 推一条 `peers.changed` 全量快照(已用单测覆盖,真机两台验收挪到 Slice 4 整体收尾) |
+| Phase 2 · 应用层 consumer 切换(部分)✅(2026-04-24) | `uc-application/setup/{orchestrator,action_executor,facade,testing}.rs` 拿掉 `Arc<dyn DiscoveryPort>` 参数;`uc-bootstrap/src/assembly.rs` 同步删除 discovery 装配。**B 部分(network_adapter envelope 迁移)经 F-116/F-117 重评后并入 Phase 3** | `cargo check --workspace` 通过;Slice 1/2/3 e2e 全绿 |
+| **Phase 3 · daemon HTTP setup 迁移到新 facade**(新增,~2 天) | daemon `/setup/*` 11 个 HTTP endpoint 从老 `SetupFacade`(stateful FSM)迁移到新 `SpaceSetupFacade`(stateless commands);新增 daemon ws 事件投影 setup 进度;daemon api/server 装配链同步切换;**老 `SetupFacade` + `SpaceAccessOrchestrator` FSM + `SpaceAccessNetworkAdapter` + `SpaceAccessTransportPort` 删除** | daemon 进程不再依赖 `PairingTransportPort`;`PairingRuntimeOwner::CurrentProcess` 装配点能直接换成无 libp2p 模式;daemon 单元/集成测试全绿 |
+| **Phase 4 · 前端 join space UI 重新设计**(新增,~2-3 天) | `src/api/daemon/setup.ts` 重写为新 endpoint 调用;`src/pages/SetupPage.tsx` + `src/hooks/useSetupFlow.ts` 适配新状态投影;**join 流程重设计**:删 `JoinPickDeviceStep` + `useDeviceDiscovery`(libp2p mDNS 残留),改为单一 "输入邀请码 + 口令" 步;sponsor 流程加 **`SponsorInviteStep`**(展示邀请码 + 倒计时,订阅 ws `pairing.completed`) | 前端单测 / 组件测试全绿;两台真机本地局域网 GUI 配对成功 |
+| **Phase 5 · 整体删除 libp2p**(原 Phase 3) | 按 F-111 删除清单 14 个目录/文件级 `rm`;`mod.rs` / `lib.rs` / `deps.rs` / `Cargo.toml` 同步清理 | `rg -w libp2p src-tauri/crates/uc-{core,app,application,platform,infra,bootstrap,daemon,tauri,cli}/src/` 0 命中(允许 logging filter 字面量) |
+| **Phase 6 · 收尾 + 真机端到端验收**(原 Phase 4 + 验收上挪) | 移除 Cargo feature `iroh` 门控;清理 frozen 注释 / `#![allow(deprecated)]`;**两台真机 GUI 跑完整 setup 流程并完成剪贴板同步**(双 mac、mac+win 之一,本地局域网 + 跨网络 relay 各一遍) | `grep -r "frozen libp2p\|allow(deprecated).*libp2p" src-tauri/` 0 命中;`Cargo.lock` 不再含 `libp2p*` 任何 crate;两台真机 GUI 走完 setup → 剪贴板互通 |
 
 ---
 
@@ -1199,22 +1203,150 @@ pub struct StopNetworkCommand; // 无字段
 
 **修正预算**:1-3 天(从 F-116 估的 1-2h 大幅上修)
 
-**Slice 4 范围决策点**:
+**Slice 4 范围决策(2026-04-24 拍板)**:**方向 1 · 扩大 Phase 3**——把 daemon setup HTTP 迁移并入,**额外把前端 join space UI 重设计纳入**(原决策表里是 daemon 后端工作,扩张后明确包含前端)。Slice 4 验收升级为**两台真机 GUI 完成配对**。
 
-| 方向 | 描述 | Slice 4 工期 | 优势 | 劣势 |
-|---|---|---|---|---|
-| **方向 1 · 扩大 Phase 3** | 把 daemon setup HTTP 迁移并入 P3-pre | +1-3 天 | Slice 4 完成后 libp2p 真正可删 | 跨 daemon/前端/Tauri 三层,风险面大 |
-| **方向 2 · 收窄 Slice 4** | 仅删 F-111 死代码 + Phase 1 presence;**保留**`Libp2pNetworkAdapter` + `SetupFacade` + `SpaceAccessNetworkAdapter` + `PairingTransportPort` 直到 Slice 5 完成 setup 迁移 | 原计划 | 风险面小,Slice 4 可如期收尾 | libp2p 退役实际推到 Slice 5,本 Slice "删 libp2p" 目标降级 |
-
-**关联**:Slice 5 优化候选 #1(L1276)"GUI 路径接入 daemon WS"实际就是 daemon setup HTTP 迁移的扩展形态——若选方向 2,该候选从"优化"升级为"前置项"。
-
-**等待用户拍板**:进入 Phase 3 之前需要选 1 或 2。
+下面详细拆 Phase 3(daemon HTTP 迁移)+ Phase 4(前端重设计)的任务。
 
 ---
 
-#### 删除清单(整目录 / 整文件)
+#### Phase 3 详细任务 · daemon HTTP setup 迁移到新 facade(~2 天)
 
-> 全部 0 个外部消费者,可直接 `rm`(详见 `findings.md` F-111)。
+**T3.1 · daemon ws 事件投影层**(新增 0.5 天)
+- 新增 `uc-daemon-contract` ws event 类型:
+  - `setup.invitation_issued { code: String, expires_at_ms: i64 }`
+  - `setup.pairing_completed { sponsor_device_id: String, joiner_device_id: String, success: bool, reason: Option<String> }`(双侧均接收)
+  - `setup.invitation_revoked { reason: String }`(超时 / cancel)
+- daemon 侧 ws topic 名 `setup`(类比现有 `peers` / `space_access`),subscribe 协议复用
+- 取代老 `SetupStateChangedEvent` ws 推送
+
+**T3.2 · 新 daemon HTTP endpoints**(0.5 天)
+
+替换路由:`uc-daemon/src/api/setup.rs` 整体重写
+
+| 老 endpoint | 新 endpoint | 调用 |
+|---|---|---|
+| `POST /setup/new` | — | 取消(并入 `POST /setup/initialize`) |
+| `POST /setup/submit-passphrase` | `POST /setup/initialize` | `SpaceSetupFacade::initialize_space(InitializeSpaceCommand)` |
+| `POST /setup/join` | — | 取消(joiner 不再走"启动加入流程"动作,直接在 UI 输入 code 即可) |
+| `POST /setup/select-peer` | — | **删除**(libp2p mDNS 残留) |
+| `POST /setup/confirm-peer` | — | **删除**(invitation code 自身就是身份凭证) |
+| `POST /setup/verify-passphrase` | `POST /setup/redeem` | `SpaceSetupFacade::redeem_pairing_invitation(RedeemPairingInvitationCommand)` |
+| `POST /setup/complete-space-access` | — | **删除**(由 ws `setup.pairing_completed` 替代) |
+| — | `POST /setup/issue-invitation`(新增) | `SpaceSetupFacade::issue_pairing_invitation()` → 返回 `{code, expires_at_ms}` |
+| `POST /setup/cancel` | `POST /setup/cancel`(语义改) | 撤销 in-flight invitation;若 already completed,返回 409 |
+| `POST /setup/reset` | `POST /setup/reset`(保留) | 调用现有重置流程(清 keyslot + setup_status) |
+| `POST /setup/clear-transient` | — | **删除**(stateless 模型不再有 transient state) |
+| `GET /setup/state` | `GET /setup/state`(语义瘦身) | 仅返回 `{ has_completed: bool, current_invitation: Option<{code, expires_at_ms}>, device_name: Option<String> }`——不再返回 stateful FSM |
+
+**T3.3 · daemon api 装配链切换**(0.5 天)
+- `uc-daemon/src/api/server.rs:22` `use uc_application::setup::SetupFacade` → `use uc_application::facade::space_setup::SpaceSetupFacade`
+- `uc-daemon/src/api/query.rs:13-14` 同上
+- `uc-daemon/src/pairing/host.rs:16` 同上
+- `DaemonApiState.setup_facade()` 类型改 `Arc<SpaceSetupFacade>`
+- daemon 启动时订阅 `SpaceSetupFacade::subscribe_pairing_completion()`,广播为 ws `setup.pairing_completed`
+- `uc-bootstrap/src/assembly.rs:1209` 老 `SetupFacade::new(...)` 装配整段删除
+
+**T3.4 · 删除老 setup 模块**(0.5 天)
+- 删 `uc-application/src/setup/`(整个目录 12 个文件,见 inventory):
+  - `facade.rs` / `orchestrator.rs` / `action_executor.rs` / `state.rs` / `errors.rs` / `events.rs` / `actions.rs` / `event_port.rs` / `pairing_facade.rs` / `ports.rs` / `testing.rs` / `mod.rs`
+  - 11 个 usecase 子文件(`usecases/*.rs`)
+- 删 `uc-application/src/space_access/network_adapter.rs`
+- 删 `uc-application/src/space_access/orchestrator.rs` 中 `SendOffer/SendProof/SendResult` action 分支(`execute_actions` 内)
+- 删 `uc-application/src/space_access/executor.rs` 的 `transport` 字段
+- 删 `uc-core/src/ports/space/transport.rs`(`SpaceAccessTransportPort` trait)
+- 删 `uc-core/src/space_access/action.rs` 的 `SendOffer/SendProof/SendResult` 三 variant
+- 改 `uc-core/src/space_access/state_machine.rs` 转移序列移除这三个 action
+
+**T3.5 · daemon 单元测试 + handshake e2e 守住**
+- 跑 `cargo test -p uc-daemon` 全绿
+- 跑 `slice1_handshake_e2e.rs`(已用新 SpaceSetupFacade)全绿
+- 新增 daemon HTTP 集成测试:initialize → issue-invitation → 模拟 joiner redeem(用 daemon-client) → ws 收到 `setup.pairing_completed`
+
+---
+
+#### Phase 4 详细任务 · 前端 join space UI 重新设计(~2-3 天)
+
+**T4.1 · 前端 API 层重写**(0.5 天)
+- `src/api/daemon/setup.ts` 整体重写:
+  - 删:`startNewSpace` / `startJoinSpace` / `selectJoinPeer` / `confirmPeerTrust` / `submitPassphrase` / `verifyPassphrase` / `completeSpaceAccess` / `clearTransient`
+  - 新增:
+    - `initializeSpace(passphrase: string, deviceName?: string): Promise<InitializeSpaceResult>`
+    - `issuePairingInvitation(): Promise<{code: string, expiresAtMs: number}>`
+    - `redeemPairingInvitation(code: string, passphrase: string): Promise<RedeemResult>`
+    - `cancelInvitation(): Promise<void>`
+    - `resetSetup(): Promise<void>`
+    - `getSetupState(): Promise<{hasCompleted: boolean, currentInvitation: {...} | null, deviceName: string | null}>`
+- 类型定义:`SetupState` 简化为上述瘦身版,删 `SetupError` 老 variants 中 mDNS 相关项
+- `src/store/setupRealtimeStore.ts` 重写:订阅 `setup.invitation_issued` / `pairing_completed` ws events
+
+**T4.2 · UI 流程重设计 · sponsor 路径**(1 天)
+- **`WelcomeStep`**(保留)不变
+- **`CreateSpaceStep`**(替代 `CreatePassphraseStep`,新名):
+  - 输入 passphrase + passphrase confirm + device name
+  - 提交调 `initializeSpace(passphrase, deviceName)`
+  - 成功后自动进入 `SponsorInviteStep`(不需要用户额外点击)
+- **`SponsorInviteStep`**(全新组件):
+  - 进入时自动调 `issuePairingInvitation()` 获取 code + expires_at
+  - 醒目显示 code(大字体,monospace,易抄写;含 copy 按钮)
+  - 提示用户:"在另一台设备上输入此邀请码 + 创建空间时使用的口令"
+  - 倒计时 UI(从 expires_at 实时倒数;到期自动调 `issuePairingInvitation` 续发)
+  - 订阅 ws `setup.pairing_completed` → 跳 `SetupDoneStep`
+  - 取消按钮调 `cancelInvitation()` + 退回 `WelcomeStep`
+- **`SetupDoneStep`**(保留)显示 sponsor / joiner 设备名;复用现有 UI
+
+**T4.3 · UI 流程重设计 · joiner 路径**(0.5 天)
+- **`WelcomeStep`**(保留):"加入空间" 按钮直接跳 `JoinInputCodeStep`(不再调 `startJoinSpace`,因为后端无该 endpoint)
+- **`JoinInputCodeStep`**(全新组件,替代 `JoinPickDeviceStep` + `JoinVerifyPassphraseStep` + `PairingConfirmStep` 三步):
+  - 单一表单:邀请码输入框(支持粘贴) + passphrase 输入框
+  - 提交调 `redeemPairingInvitation(code, passphrase)`
+  - 成功跳 `SetupDoneStep`
+  - 失败错误码处理:
+    - `InvitationNotFound` → "邀请码无效或已过期"
+    - `InvitationExpired` → 同上
+    - `SponsorUnreachable` → "找不到对端设备,请确认 sponsor 在线"
+    - `PassphraseMismatch` → "口令错误"
+    - `Internal(_)` → 通用错误
+- 进入 `JoinInputCodeStep` 期间显示 inline `ProcessingJoinStep` 风格的等待态(submit 按钮 loading)
+- **`ProcessingJoinStep`**(保留)仅在 `redeemPairingInvitation` 调用过程中显示(spinner)
+
+**T4.4 · 删除 libp2p mDNS 残留**(0.5 天)
+- 删 `src/pages/setup/JoinPickDeviceStep.tsx`(整文件)
+- 删 `src/pages/setup/JoinVerifyPassphraseStep.tsx`(整文件)
+- 删 `src/pages/setup/PairingConfirmStep.tsx`(整文件)
+- 删 `src/hooks/useDeviceDiscovery.ts`(整文件,libp2p mDNS hook)
+- 删 `src/store/slices/devicesSlice.ts` 中 `discoveredPeers` 相关 state(若 store 仅此一处使用,整 slice 删)
+- 删 daemon ws event 老 type:`peer_discovered` / `peer_lost` / `peer_name_updated`(`uc-daemon-contract` 同步,task_plan L1316 已列入但需确认前端订阅点已切)
+
+**T4.5 · 路由 + 主流程整合**(0.5 天)
+- `src/pages/SetupPage.tsx` 重写:
+  - 不再依赖 daemon `SetupState` 投影,改为前端本地 React state 驱动 step 切换
+  - step 序列(sponsor):`Welcome → CreateSpace → SponsorInvite → SetupDone`
+  - step 序列(joiner):`Welcome → JoinInputCode →(processing)→ SetupDone`
+  - `useSetupFlow` hook 简化:仅管理 step + loading + error,不再轮询 `getSetupState`
+  - 启动时调一次 `getSetupState()` 检查 `hasCompleted`——为 true 直接跳过 setup
+- `src/App.tsx` 启动逻辑同步(`hasCompleted` 路径不变)
+
+**T4.6 · 测试更新**(0.5 天)
+- 删除 `src/pages/setup/__tests__/{joinPickDeviceErrorMessage,joinPickPeerIdDisplay,peerIdDisplay,ProcessingJoinStep}.test.tsx` 中已删组件测试
+- 新增:
+  - `__tests__/SponsorInviteStep.test.tsx`:countdown / copy code / cancel 行为
+  - `__tests__/JoinInputCodeStep.test.tsx`:错误态映射
+  - `__tests__/SetupPage.flow.test.tsx`:sponsor + joiner 两条 step 序列 navigation
+- `src/__tests__/api/daemon/setup.test.ts` 改写:测试新 endpoints
+
+**T4.7 · 真机两台 GUI 验收**(进入 Phase 6 一并跑,本阶段先在 dev mode 双开 daemon 跑通)
+- 双开两个 daemon(不同端口 + 不同 config_dir)
+- 双开两个 GUI 指向各自 daemon
+- 走完 sponsor 创建 + 出码 → joiner 输入 → 双侧 SetupDone 全程
+- 验证 ws `setup.pairing_completed` 双侧都收到
+
+---
+
+
+
+#### Phase 5 删除清单(整目录 / 整文件)
+
+> 全部 0 个外部消费者,可直接 `rm`(详见 `findings.md` F-111)。**前置**:Phase 3(daemon setup 迁移)+ Phase 4(前端重设计)落地后才能跑——这两个 Phase 已把 setup 模块 + space_access/network_adapter 删除,本清单是剩余 mechanical 删除。
 
 **uc-platform**:
 - [ ] `uc-platform/src/adapters/libp2p_network/`(整目录,14 文件)
@@ -1275,13 +1407,10 @@ pub struct StopNetworkCommand; // 无字段
 - [ ] `uc-app/src/usecases/mod.rs`:去掉 `file_sync` 模块
 - [ ] `uc-app/src/runtime.rs` / `uc-app/src/lib.rs`:清掉旧路径残留(逐文件 grep 后处理)
 
-**uc-application**:
-- [ ] `uc-application/src/setup/orchestrator.rs:19`(`use ports::{DiscoveryPort, ..., PairingTransportPort, ...}`)+ `:85` 等 `Arc<dyn DiscoveryPort>` 字段
-- [ ] `uc-application/src/setup/action_executor.rs:20` + `:59` 等同上
-- [ ] `uc-application/src/setup/facade.rs`:Discovery/PairingTransport 占位参数清理
-- [ ] `uc-application/src/setup/testing.rs:196`(`impl PairingTransportPort for FakePairingTransport`)整文件依赖清理
-- [ ] `uc-application/src/space_access/network_adapter.rs`:envelope 迁移并切到 iroh port(P3-pre 前置子任务,必须早于 libp2p adapter 删除;具体方案 A/B 见上方决策记录)
-- [ ] `uc-application/src/pairing/mod.rs`:去掉 `state_machine` 子模块导出
+**uc-application**(注:setup 模块整体随 Phase 3 T3.4 删除,以下条目此处仅作清单完整性,实际已合并到 Phase 3 计划):
+- [x] `uc-application/src/setup/`(整目录,12 文件 + 11 个 usecase 子文件)→ Phase 3 T3.4
+- [x] `uc-application/src/space_access/network_adapter.rs` → Phase 3 T3.4
+- [ ] `uc-application/src/pairing/mod.rs`:去掉 `state_machine` 子模块导出(Phase 5 mass delete)
 
 **uc-platform**:
 - [ ] `uc-platform/src/adapters/network.rs`:删 `DisabledPairingTransport`(随 `PairingTransportPort` 删除一起,F-102);保 `PairingRuntimeOwner` 枚举(若仍有意义,需复查)
@@ -1334,20 +1463,40 @@ pub struct StopNetworkCommand; // 无字段
 
 **T4**:删 `uc-daemon/src/peers/monitor.rs` + `uc-daemon/src/workers/peer_discovery.rs`(整文件),`mod.rs` 同步
 
-**风险**:Phase 1 是**唯一需要写新代码**的部分,工程量约 0.5 天。其余 Phase 全是删除 / mechanical 替换。
+**风险**:Phase 1 是 daemon-only 改动且已完成。Phase 3/4 的真正风险在 setup facade 迁移 + 前端 UI 重设计的契约一致性,详见各自任务段。
 
 ---
 
-#### 验收
+#### 验收(Slice 4 整体,Phase 6 收尾时检查)
 
+**代码层面**:
 - [ ] `rg -w libp2p src-tauri/crates/uc-{core,app,application,platform,infra,bootstrap,daemon,tauri,cli}/src/` 0 命中(允许:logging filter 字符串字面量、git history 中的注释)
-- [ ] `cargo build --workspace` 通过且不再有"libp2p frozen"相关 deprecated warning
+- [ ] `cargo build --workspace` 通过且不再有 "libp2p frozen" 相关 deprecated warning
 - [ ] `cargo test --workspace` 通过
-- [ ] Slice 1/2/3 e2e 全绿(pairing 配对 / 剪贴板同步 / 含文件剪贴板)
-- [ ] daemon 启动后 ws `peer_connection_changed` 事件正常翻转
+- [ ] `pnpm test`(前端单测)全绿
+- [ ] Slice 1/2/3 e2e 全绿(pairing 配对 / 剪贴板同步 / blob 传输)
 - [ ] `Cargo.lock` 不再含 `libp2p` / `libp2p-stream` / `libp2p-*` 任何 crate
 
-**阻塞**:无(Slice 3 已完成,Phase 3 真机端到端验收挪到本 Slice 验收一并跑)
+**daemon HTTP 契约**:
+- [ ] `/setup/initialize` / `/setup/issue-invitation` / `/setup/redeem` / `/setup/cancel` / `/setup/reset` / `/setup/state` 6 个 endpoint 正常返回
+- [ ] daemon ws topic `setup` 推送 `setup.invitation_issued` / `setup.pairing_completed` / `setup.invitation_revoked`
+- [ ] daemon ws 不再推送 `peer_discovered` / `peer_lost` / `peer_name_updated`(libp2p mDNS 残留)
+- [ ] daemon 启动后 ws `peers.changed` 事件正常翻转(Phase 1 已验)
+
+**前端 UI**:
+- [ ] sponsor 路径:`Welcome → CreateSpace → SponsorInvite → SetupDone` 4 步全程可走通
+- [ ] joiner 路径:`Welcome → JoinInputCode → SetupDone` 3 步全程可走通
+- [ ] 前端代码 grep `useDeviceDiscovery|JoinPickDeviceStep|JoinVerifyPassphraseStep|PairingConfirmStep|peer_discovered` 0 命中
+
+**真机端到端(硬验收)**:
+- [ ] 双开两台真机(同局域网,推荐 mac+mac 或 mac+win):
+  - sponsor 端 GUI 走 `Welcome → CreateSpace`(输入口令 + 设备名)→ 自动进 `SponsorInvite` 显示邀请码
+  - joiner 端 GUI 走 `Welcome → JoinInputCode`(输入码 + 同口令)→ ProcessingJoin → SetupDone
+  - 双侧落库 SpaceMember + TrustedPeer
+  - 双侧后续剪贴板同步可用(随手 copy 一段文本验证 round-trip)
+- [ ] 跨网络 relay 路径(任一台开热点切到 4G):上述同流程仍然成功(可能耗时增加,但不超时)
+
+**阻塞**:Slice 4 内部 Phase 3 / Phase 4 顺序进行(Phase 3 daemon 后端先落地,Phase 4 前端跟上;Phase 5 删 libp2p,Phase 6 收尾真机)。无外部阻塞。
 
 ---
 
@@ -1356,7 +1505,7 @@ pub struct StopNetworkCommand; // 无字段
 **目标**:libp2p 删除后逐项处理还需要打磨的点。**不写死任务清单**,等 Slice 4 落地后再根据实际暴露的问题细化。
 
 **当前已知候选**(按优先级排序):
-1. **GUI 路径接入 daemon WS**:GUI 当前业务命令已经全部下沉到 daemon HTTP/WS,但前端代码可能仍有依赖旧 ws event 类型(`peer_discovered` / `peer_lost` / `peer_name_updated`)的地方,Slice 4 删除后需要前端适配
+1. ~~**GUI 路径接入 daemon WS**~~ —— **已并入 Slice 4 Phase 4**(2026-04-24 决策),完成判据下移到 Slice 4 验收。本 Slice 5 不再保留这一项。
 2. **`uc-core/src/network/` 进一步整合**:Slice 4 后只剩 `session.rs` + 三个 protocol 文件,可考虑搬到 `uc-application` 或 `uc-infra`(协议帧不属于 core 业务概念)
 3. **`uc-app` crate 评估**:`uc-app/usecases/` 保留项(write_coordinator / list_entry_projections / 其他 GUI usecase)可能可以下沉到 `uc-application`,把 `uc-app` 整 crate 退役
 4. **技术债清单**(`task_plan.md` T-01 ~ T-17)按业务驱动逐项处理
