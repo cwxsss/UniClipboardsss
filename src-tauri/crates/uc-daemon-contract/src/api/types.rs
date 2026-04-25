@@ -51,31 +51,6 @@ pub struct SpaceMemberDto {
     pub connected: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupActionAckResponse {
-    pub state: Value,
-    pub session_id: Option<String>,
-    pub next_step_hint: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupStateChangedPayload {
-    pub session_id: Option<String>,
-    pub state: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetupSpaceAccessCompletedPayload {
-    pub session_id: String,
-    pub peer_id: String,
-    pub success: bool,
-    pub reason: Option<String>,
-    pub ts: i64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileTransferProgressPayload {
