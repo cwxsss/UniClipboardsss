@@ -107,13 +107,6 @@ export interface P2PPeerNameUpdatedEvent {
   deviceName: string
 }
 
-export interface P2PPeerDiscoveryChangedEvent {
-  peerId: string
-  deviceName?: string | null
-  addresses: string[]
-  discovered: boolean
-}
-
 export interface ContentTypes {
   text: boolean
   image: boolean

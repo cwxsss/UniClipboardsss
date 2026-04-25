@@ -1,72 +1,10 @@
 /**
  * Shared event utilities for daemon WebSocket event handling.
  *
- * Provides:
- * - diffPeerSnapshots: converts full peer snapshots into discovered/lost events
- * - classifyPairingError: maps error strings to PairingErrorKind
+ * Provides classifyPairingError: maps error strings to PairingErrorKind.
  */
 
 import type { PairingErrorKind } from '@/api/daemon/pairing'
-
-export interface PeerSnapshotPeer {
-  peerId: string
-  deviceName?: string | null
-  connected: boolean
-}
-
-export interface PeerDiffEvent {
-  peerId: string
-  deviceName?: string | null
-  addresses: string[]
-  discovered: boolean
-}
-
-/**
- * Converts a full peer snapshot into discovered/lost diff events.
- *
- * 将完整的 peer 快照转换为 discovered/lost 差分事件。
- *
- * Mutates `knownPeers` in-place to track the current snapshot state.
- * 直接修改 `knownPeers` 以跟踪当前快照状态。
- *
- * @param nextPeers - The current full list of peers from the server.
- * @param knownPeers - Mutable map tracking previously known peers.
- * @param callback - Called once per diff event (discovered or lost).
- */
-export function diffPeerSnapshots(
-  nextPeers: PeerSnapshotPeer[],
-  knownPeers: Map<string, { deviceName?: string | null }>,
-  callback: (event: PeerDiffEvent) => void
-): void {
-  const nextMap = new Map<string, { deviceName?: string | null }>()
-  for (const peer of nextPeers) {
-    nextMap.set(peer.peerId, { deviceName: peer.deviceName ?? null })
-    if (!knownPeers.has(peer.peerId)) {
-      callback({
-        peerId: peer.peerId,
-        deviceName: peer.deviceName ?? null,
-        addresses: [],
-        discovered: true,
-      })
-    }
-  }
-
-  for (const [peerId, previous] of knownPeers.entries()) {
-    if (!nextMap.has(peerId)) {
-      callback({
-        peerId,
-        deviceName: previous.deviceName ?? null,
-        addresses: [],
-        discovered: false,
-      })
-    }
-  }
-
-  knownPeers.clear()
-  for (const [peerId, peer] of nextMap.entries()) {
-    knownPeers.set(peerId, peer)
-  }
-}
 
 /**
  * Maps a raw error string to a typed PairingErrorKind.

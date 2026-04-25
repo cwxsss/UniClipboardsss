@@ -96,16 +96,6 @@ pub struct PairingFailurePayload {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerChangedPayload {
-    pub peer_id: String,
-    pub device_name: Option<String>,
-    pub addresses: Vec<String>,
-    pub discovered: bool,
-    pub connected: bool,
-}
-
 /// Full-snapshot payload for `peers.changed` events.
 /// Carries the complete current peer list so the frontend can replace its state atomically.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

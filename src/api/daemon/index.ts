@@ -84,7 +84,6 @@ export type {
   P2PPairingVerificationEvent,
   P2PPeerConnectionEvent,
   P2PPeerNameUpdatedEvent,
-  P2PPeerDiscoveryChangedEvent,
 } from './pairing'
 export { querySearch, getSearchStatus, triggerSearchRebuild } from './search'
 export type {
