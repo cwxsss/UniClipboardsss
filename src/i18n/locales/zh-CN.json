@@ -569,7 +569,7 @@
   },
   "devices": {
     "title": "设备管理",
-    "addNew": "添加新设备",
+    "addNew": "邀请新设备",
     "thisDevice": {
       "title": "本设备",
       "syncActive": "同步已开启",
@@ -628,8 +628,8 @@
         "retry": "重试",
         "unpair": "取消配对",
         "settings": "设置",
-        "addDevice": "添加设备",
-        "addAnotherDevice": "添加另一台设备"
+        "addDevice": "邀请设备",
+        "addAnotherDevice": "邀请另一台设备"
       }
     },
     "syncPaused": {
@@ -892,7 +892,7 @@
         "description": "与另一台设备配对，并使用其口令访问共享空间。",
         "cta": "通过配对加入"
       },
-      "footer": "你可以稍后在设置中切换空间或添加更多设备。"
+      "footer": "你可以稍后在设置中切换空间或邀请更多设备。"
     },
     "createPassphrase": {
       "title": "创建加密口令",
@@ -915,7 +915,7 @@
         "creating": "正在创建...",
         "submit": "创建空间"
       },
-      "hint": "请将口令保存在安全的位置，后续添加设备时会用到。"
+      "hint": "请将口令保存在安全的位置，后续邀请设备时会用到。"
     },
     "joinPickDevice": {
       "title": "选择要加入的设备",

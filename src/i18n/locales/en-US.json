@@ -578,7 +578,7 @@
   },
   "devices": {
     "title": "Device Management",
-    "addNew": "Add New Device",
+    "addNew": "Invite New Device",
     "thisDevice": {
       "title": "This Device",
       "syncActive": "Sync active",
@@ -637,8 +637,8 @@
         "retry": "Retry",
         "unpair": "Unpair",
         "settings": "Settings",
-        "addDevice": "Add Device",
-        "addAnotherDevice": "Add another device"
+        "addDevice": "Invite Device",
+        "addAnotherDevice": "Invite another device"
       }
     },
     "syncPaused": {
@@ -901,7 +901,7 @@
         "description": "Pair with another device and reuse the passphrase to access the shared space.",
         "cta": "Join via pairing"
       },
-      "footer": "You can switch spaces or add more devices later in Settings."
+      "footer": "You can switch spaces or invite more devices later in Settings."
     },
     "initializeSpace": {
       "title": "Create your space",
