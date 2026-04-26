@@ -211,6 +211,22 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
             "daemon clipboard watcher resolved origin for snapshot"
         );
 
+        // RemotePush 是 apply_inbound 写入 OS 剪切板后 watcher 收到的回声。
+        // entry / event / search 索引 / WS clipboard.new_content 已由
+        // apply_inbound 完整发出过；这里若再跑一次 capture pipeline 会产生
+        // 第二条 entry，用户层表现为同一份内容出现两份。直接短路返回，
+        // 与 LocalRestore 在功能效果上对称（LocalRestore 在 usecase 内部
+        // 短路，RemotePush 因 apply_inbound 也走同一 usecase 入口，必须
+        // 在 watcher 层短路才不会破坏入站落库路径）。
+        if origin == ClipboardChangeOrigin::RemotePush {
+            debug!(
+                origin_guard_key = %origin_guard_key,
+                flow_id = %flow_id,
+                "watcher: skip duplicate capture for RemotePush echo (already handled by apply_inbound)"
+            );
+            return Ok(());
+        }
+
         // 3. Determine the origin string for the WS event payload.
         let origin_str = match origin {
             ClipboardChangeOrigin::LocalCapture | ClipboardChangeOrigin::LocalRestore => "local",
