@@ -73,7 +73,7 @@ fn run_app(ctx: GuiBootstrapContext) {
     let daemon_connection_state = DaemonConnectionState::default();
     let gui_owned_daemon_state = GuiOwnedDaemonState::default();
 
-    let event_emitter: std::sync::Arc<dyn uc_app::shared::host_event::HostEventEmitterPort> =
+    let event_emitter: std::sync::Arc<dyn uc_application::facade::HostEventEmitterPort> =
         std::sync::Arc::new(uc_bootstrap::LoggingHostEventEmitter);
     let runtime = AppRuntime::with_setup(deps, storage_paths, event_emitter)
         .with_clipboard_write_coordinator(background.clipboard_write_coordinator.clone());

@@ -11,9 +11,10 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{info, info_span, warn, Instrument};
 
-use uc_app::shared::host_event::{HostEvent, HostEventEmitterPort, TransferHostEvent};
-use uc_app::shared::host_event_publisher::FileTransferHostEventPublisher;
-use uc_app::shared::outbound_entry_cache::OutboundEntryIdCache;
+use uc_application::facade::{
+    FileTransferHostEventPublisher, HostEvent, HostEventEmitterPort, OutboundEntryIdCache,
+    TransferHostEvent,
+};
 use uc_application::file_transfer::{
     CancelTransferUseCase, CompleteTransferUseCase, FailTransferUseCase,
     ReportTransferProgressUseCase, StartTransferUseCase,

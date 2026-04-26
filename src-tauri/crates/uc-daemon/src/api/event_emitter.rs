@@ -1,6 +1,6 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
-use uc_app::shared::host_event::{
+use uc_application::facade::{
     ClipboardHostEvent, EmitError, HostEvent, HostEventEmitterPort, TransferHostEvent,
 };
 use uc_daemon_contract::constants::{ws_event, ws_topic};

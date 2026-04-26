@@ -10654,6 +10654,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "uc-app",
+ "uc-application",
  "uc-bootstrap",
  "uc-core",
  "uc-daemon-client",

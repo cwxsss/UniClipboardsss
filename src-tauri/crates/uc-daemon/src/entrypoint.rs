@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
-use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
+use uc_application::clipboard_capture::CaptureClipboardUseCase;
 use uc_application::facade::{
     ClipboardCaptureFacade, ClipboardLiveIndexDeps, ClipboardLiveIndexFacade, ClipboardLiveIndexer,
     ClipboardOutboundDeps, ClipboardOutboundDispatcher, ClipboardOutboundFacade,

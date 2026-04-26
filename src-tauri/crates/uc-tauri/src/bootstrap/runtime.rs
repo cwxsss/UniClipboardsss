@@ -33,10 +33,9 @@ use std::sync::{Arc, RwLock};
 
 use uc_app::task_registry::TaskRegistry;
 use uc_app::{runtime::CoreRuntime, App, AppDeps};
+use uc_application::facade::HostEventEmitterPort;
 use uc_core::config::AppConfig;
 use uc_core::ports::SettingsPort;
-
-use uc_app::shared::host_event::HostEventEmitterPort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DaemonBootstrapOwnershipSnapshot {

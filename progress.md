@@ -3455,6 +3455,29 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — uc-app 退场 · host event 切片
+
+**触发**:继续推进 `uc-app` 是否能移除的问题,先清理仍被 daemon/bootstrap/Tauri 共用的 `uc_app::shared` 事件入口。
+
+**完成标准**:
+- 宿主事件模型和发送端口迁到 `uc-application`
+- daemon/bootstrap/Tauri 不再从 `uc_app::shared::*` 导入 host event 类型
+- `uc-app::shared::*` 只保留兼容转发
+- 验证 application 测试、daemon 测试和相关 crate 编译
+
+**已做**:
+- 新增 `uc-application/src/facade/host_event/`
+- 迁入 `HostEvent` / `HostEventEmitterPort` / `FileTransferHostEventPublisher` / `OutboundEntryIdCache`
+- 更新 daemon、bootstrap、Tauri、GUI main 的导入路径
+- daemon `entrypoint.rs` 改为从 `uc_application::clipboard_capture` 读取 capture use case,不再走 `uc-app` 的兼容 shim
+
+**验证**:
+- `cargo test -p uc-application facade::host_event --lib`:✅ 3 passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+- `cargo check -p uc-application -p uc-app -p uc-bootstrap -p uc-daemon -p uc-tauri`:✅ passed
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · query peers 切片
 
 **触发**:继续处理 daemon query / peers / ws 仍直接认识 core runtime、presence port 和分散 facade 的边界问题。

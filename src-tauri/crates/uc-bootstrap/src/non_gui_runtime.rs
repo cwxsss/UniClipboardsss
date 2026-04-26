@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use uc_app::app_paths::AppPaths;
 use uc_app::runtime::CoreRuntime;
-use uc_app::shared::host_event::{EmitError, HostEvent, HostEventEmitterPort};
 use uc_app::task_registry::TaskRegistry;
 use uc_app::usecases::InMemoryLifecycleStatus;
 use uc_app::AppDeps;
+use uc_application::facade::{EmitError, HostEvent, HostEventEmitterPort};
 use uc_core::clipboard::ClipboardIntegrationMode;
 
 // ---------------------------------------------------------------------------

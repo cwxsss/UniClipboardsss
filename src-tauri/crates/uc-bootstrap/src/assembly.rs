@@ -20,8 +20,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 use uc_app::deps::SearchPorts;
-use uc_app::shared::host_event::HostEventEmitterPort;
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
+use uc_application::facade::HostEventEmitterPort;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;

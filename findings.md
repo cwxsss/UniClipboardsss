@@ -9,6 +9,11 @@
 - **来源**:`uc-daemon/src/workers/clipboard_watcher.rs` 收口前后的 diff,以及 `cargo check -p uc-application -p uc-app -p uc-daemon`。
 - **影响**:daemon watcher 可以退回到进程内监听和事件转发职责;后续只剩 composition root 需要继续把多个子 facade 归并到统一 `AppFacade` 入口。
 
+### F-041 · host event 不需要留在 uc-app
+- **事实**:`HostEvent` / `HostEventEmitterPort` / 文件传输 host-event publisher 只表达 application 到宿主环境的事件契约,不依赖 `uc-app` runtime。
+- **来源**:`uc-app/src/shared/*` 迁入 `uc-application/src/facade/host_event/*` 后,daemon/bootstrap/Tauri 编译通过。
+- **影响**:`uc-app::shared` 可以降级为兼容转发;后续删除 `uc-app` 时无需再处理这组共享事件类型。
+
 ## Slice 3 Phase 1 · T0 iroh-blobs 探针发现(2026-04-24)
 
 ### F-030 · `iroh-blobs 0.95.0` 与当前 `iroh 0.95.1` 不同栈

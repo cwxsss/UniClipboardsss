@@ -15,3 +15,11 @@ daemon handler 调用面已经开始统一到 `AppFacade`,但 `app.rs` 和 `entr
 ## Solution
 
 在前面 HTTP / worker / query 入口逐步收口后,把 `AppFacade` 的构造和 daemon 所需服务组装迁到 application/bootstrap 内部可控边界。daemon 保留进程生命周期、HTTP server 启停和 OS 信号处理。
+
+## Progress
+
+- 2026-04-26:已把宿主事件模型 / 发送端口 / 文件传输 host-event publisher 从 `uc-app::shared` 迁到 `uc_application::facade::host_event`。
+  - `uc-app::shared::*` 只保留兼容转发。
+  - daemon / bootstrap / Tauri 不再 import `uc_app::shared::*`。
+  - daemon `entrypoint.rs` 不再通过 `uc-app` 的 capture 兼容 shim 获取 `CaptureClipboardUseCase`。
+  - 已验证 `cargo test -p uc-application facade::host_event --lib`、`cargo test -p uc-daemon --lib`、`cargo check -p uc-application -p uc-app -p uc-bootstrap -p uc-daemon -p uc-tauri`。

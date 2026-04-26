@@ -16,6 +16,7 @@ pub mod clipboard_outbound;
 pub mod clipboard_restore;
 pub mod device;
 pub mod encryption;
+pub mod host_event;
 pub mod lifecycle;
 pub mod resource;
 pub mod roster;
@@ -66,6 +67,10 @@ pub use clipboard_restore::{
 pub use device::{DeviceFacade, DeviceFacadeError, LocalDeviceInfoView};
 pub use encryption::{
     EncryptionFacade, EncryptionFacadeDeps, EncryptionFacadeError, EncryptionStateView,
+};
+pub use host_event::{
+    ClipboardHostEvent, ClipboardOriginKind, EmitError, FileTransferHostEventPublisher, HostEvent,
+    HostEventEmitterPort, OutboundEntryIdCache, TransferHostEvent,
 };
 pub use lifecycle::{
     LifecycleFacade, LifecycleFacadeDeps, LifecycleFacadeError, LifecycleStateView,

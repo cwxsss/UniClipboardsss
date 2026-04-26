@@ -14,9 +14,8 @@
 use std::sync::Arc;
 
 use uc_app::app_paths::AppPaths;
-use uc_app::shared::host_event::HostEventEmitterPort;
 use uc_app::AppDeps;
-use uc_application::facade::ClipboardSyncFacade;
+use uc_application::facade::{ClipboardSyncFacade, HostEventEmitterPort};
 use uc_application::membership::usecases::AdmitMemberUseCase;
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::config::AppConfig;
