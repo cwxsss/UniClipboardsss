@@ -1848,3 +1848,26 @@ P3-pre 实施清单:
 **结论**:P3-pre 不是一个能在几小时内完成的"删除任务",而是一个**跨 daemon HTTP / 前端 / Tauri 命令的 architectural 改动**。需要用户在两个方向间拍板:扩大 Slice 4 范围、还是收窄 Slice 4 目标把 libp2p 真正删除推到 Slice 5。
 
 ---
+
+### F-121 · daemon storage 可以先用 application facade 收口,不必等待 runtime 迁移
+
+**发现时间**:2026-04-26
+
+**背景**:daemon `api/storage.rs` 原来直接构造 `uc_app::usecases::CoreUseCases`,再调用 `get_storage_stats()` / `clear_cache()`。这违反了"外部入口只面对 `uc-application`"的目标。
+
+**处理结果**:
+- 新增 `uc-application::facade::storage::StorageFacade`
+- application 层暴露 `StorageStatsView` / `ClearCacheResultView`
+- daemon handler 改为只调用 `StorageFacade::stats()` / `StorageFacade::clear_cache()`
+- 清缓存逻辑仍复用已有 `CacheFsPort`,没有新增文件系统 adapter
+
+**保留边界**:
+- daemon `app.rs` 仍作为装配根,需要从 runtime 里取路径和 `cache_fs` 来构造 facade。这属于现阶段已有装配职责,不是 HTTP handler 直接认识 usecase。
+- 真正把 daemon runtime 装配也迁入 `uc-application` 需要后续单独做,不和本次 storage handler 收口混在一个 commit。
+
+**验证**:
+- `cargo test -p uc-application facade::storage --lib`:2 passed
+- `cargo check -p uc-daemon`:passed
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

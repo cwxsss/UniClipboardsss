@@ -3481,3 +3481,31 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - `cargo test -p uc-application facade::device --lib`:✅ 2 passed
 - `cargo check -p uc-daemon`:✅ passed
 - `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+---
+
+## Session 2026-04-26 — daemon application 边界收口 · storage 切片
+
+**触发**:继续收 daemon,选择较小的 `/storage/*` 管理入口。
+
+**完成标准**:
+- daemon storage handler 不再构造 `CoreUseCases`
+- 存储统计和清缓存结果通过 `uc-application` 的应用层模型返回
+- 清缓存规则迁入 `uc-application`
+- 验证 `uc-application` storage facade 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 新增 `uc-application/src/facade/storage/mod.rs`
+- `uc-application/src/facade/mod.rs` 导出 storage facade 和模型
+- `uc-daemon/src/api/storage.rs` 改为调用 `StorageFacade`
+- `uc-daemon/src/api/server.rs` 增加 `storage_facade`
+- `uc-daemon/src/app.rs` 注入 `StorageFacade`
+
+**验证**:
+- `cargo test -p uc-application facade::storage --lib`:✅ 2 passed
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon api::storage --lib`:✅ 0 tests matched
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**未纳入本次提交**:
+- `.claude/skills/...` 现有改动不是本轮产生,不 stage。

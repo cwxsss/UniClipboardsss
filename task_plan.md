@@ -2901,7 +2901,27 @@ Phase 0(已完成,2026-04-18)
 - `cargo check -p uc-daemon`
 - `cargo test -p uc-daemon --lib`
 
-### Phase D4 · daemon 下一块收口 — in_progress
+### Phase D4 · daemon storage 入口收口 — complete
+
+**范围**:
+- `GET /storage/stats`
+- `POST /storage/clear-cache`
+
+**结果**:
+- 新增 `uc-application::facade::storage::StorageFacade`
+- 存储统计 view 和清缓存结果模型进入 `uc-application`
+- 清缓存的目录遍历、删除和 freed bytes 计算规则移入 `uc-application`
+- daemon storage handler 不再直接构造 `CoreUseCases`
+
+**验证**:
+- `cargo test -p uc-application facade::storage --lib`
+- `cargo check -p uc-daemon`
+- `cargo test -p uc-daemon --lib`
+
+**注意**:
+- `api::storage` 当前没有专门 daemon 单测,`cargo test -p uc-daemon api::storage --lib` 筛选到 0 个用例;本轮用 facade 单测 + daemon 全量 lib 测试覆盖。
+
+### Phase D5 · daemon 下一块收口 — in_progress
 
 **候选优先级**:
 1. `api/search.rs`:直接构造 core search query / error,范围较大。

@@ -9,7 +9,6 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uc_app::usecases::CoreUseCases;
 
 use crate::api::routes::internal_error;
 use crate::api::server::DaemonApiState;
@@ -57,13 +56,12 @@ pub fn router() -> Router<DaemonApiState> {
 /// Returns storage statistics across database, cache, and spool directories.
 /// Includes blob_count derived from the total number of clipboard entries.
 async fn get_storage_stats_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
+    let facade = match state.storage_facade_or_error() {
+        Ok(facade) => facade,
+        Err(error) => return error.into_response(),
     };
 
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let result = match usecases.get_storage_stats().execute().await {
+    let result = match facade.stats().await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "Failed to compute storage stats");
@@ -90,10 +88,6 @@ async fn clear_cache_handler(
     State(state): State<DaemonApiState>,
     body: Result<Json<ClearCacheRequest>, JsonRejection>,
 ) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
-    };
-
     let Json(req) = match body {
         Ok(b) => b,
         Err(_) => {
@@ -127,12 +121,22 @@ async fn clear_cache_handler(
             .into_response();
     }
 
-    let usecases = CoreUseCases::new(runtime.as_ref());
-    match usecases.clear_cache().execute().await {
-        Ok(freed_bytes) => {
-            tracing::info!(freed_bytes, "Cache cleared via HTTP API");
+    let facade = match state.storage_facade_or_error() {
+        Ok(facade) => facade,
+        Err(error) => return error.into_response(),
+    };
+
+    match facade.clear_cache().await {
+        Ok(result) => {
+            tracing::info!(
+                freed_bytes = result.freed_bytes,
+                "Cache cleared via HTTP API"
+            );
             let ts = chrono::Utc::now().timestamp_millis();
-            Json(json!({ "data": ClearCacheResponse { freed_bytes }, "ts": ts })).into_response()
+            Json(
+                json!({ "data": ClearCacheResponse { freed_bytes: result.freed_bytes }, "ts": ts }),
+            )
+            .into_response()
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to clear cache");

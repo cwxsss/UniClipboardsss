@@ -13,6 +13,7 @@ pub mod roster;
 pub mod settings;
 pub mod setup_status;
 pub mod space_setup;
+pub mod storage;
 
 pub use app_facade::AppFacade;
 pub use blob_transfer::{
@@ -44,4 +45,7 @@ pub use space_setup::{
     PairingOutcome, QuerySetupStateError, RedeemPairingInvitationCommand,
     RedeemPairingInvitationError, RedeemPairingInvitationResult, ResetSpaceError, SetupStateView,
     SpaceSetupDeps, SpaceSetupFacade, UnlockSpaceCommand, UnlockSpaceError, UnlockSpaceResult,
+};
+pub use storage::{
+    ClearCacheResultView, StorageFacade, StorageFacadeDeps, StorageFacadeError, StorageStatsView,
 };

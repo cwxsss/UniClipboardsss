@@ -14,7 +14,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
-use uc_application::facade::{DeviceFacade, MemberRosterFacade, SettingsFacade, SpaceSetupFacade};
+use uc_application::facade::{
+    DeviceFacade, MemberRosterFacade, SettingsFacade, SpaceSetupFacade, StorageFacade,
+    StorageFacadeDeps,
+};
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::PresencePort;
 
@@ -301,6 +304,14 @@ impl DaemonApp {
             self.runtime.wiring_deps().device.device_identity.clone(),
             self.runtime.wiring_deps().settings.clone(),
         )));
+        let api_state = api_state.with_storage(Arc::new(StorageFacade::new(StorageFacadeDeps {
+            db_path: storage_paths.db_path.clone(),
+            vault_dir: storage_paths.vault_dir.clone(),
+            cache_dir: storage_paths.cache_dir.clone(),
+            logs_dir: storage_paths.logs_dir.clone(),
+            app_data_root_dir: storage_paths.app_data_root_dir.clone(),
+            cache_fs: self.runtime.wiring_deps().system.cache_fs.clone(),
+        })));
 
         // 3. Wire the event emitter into the runtime so use cases can emit WS events
         self.runtime
