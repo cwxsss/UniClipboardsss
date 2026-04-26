@@ -557,41 +557,27 @@ async fn build_snapshot_event(
         }
 
         ws_topic::SEARCH => {
-            // Build a combined snapshot from coordinator status + index meta timestamps.
-            let coordinator = match state.search_coordinator() {
-                Some(c) => c,
-                None => return Ok(None),
+            // Build a combined snapshot through the application facade.
+            let app = match state.app_facade_or_error() {
+                Ok(app) => app,
+                Err(err) => {
+                    warn!(error = %err.message, "search ws snapshot: application facade unavailable");
+                    return Ok(None);
+                }
             };
-            let status_snapshot = coordinator.status_snapshot().await;
-
-            // Get index meta for timestamps; log and return partial snapshot on failure.
-            let (last_rebuild_started_at_ms, last_rebuild_completed_at_ms) =
-                if let Some(runtime) = state.runtime.clone() {
-                    match runtime
-                        .wiring_deps()
-                        .search
-                        .search_index
-                        .get_index_meta()
-                        .await
-                    {
-                        Ok(meta) => (
-                            meta.last_rebuild_started_at_ms,
-                            meta.last_rebuild_completed_at_ms,
-                        ),
-                        Err(e) => {
-                            warn!(error = %e, "search ws snapshot: failed to get index meta");
-                            (None, None)
-                        }
-                    }
-                } else {
-                    (None, None)
-                };
+            let status = match app.search.status().await {
+                Ok(status) => status,
+                Err(err) => {
+                    warn!(error = %err, "search ws snapshot: failed to read status");
+                    return Ok(None);
+                }
+            };
 
             let payload = crate::api::dto::search::SearchStatusData {
-                state: status_snapshot.status,
-                reason: status_snapshot.reason,
-                last_rebuild_started_at_ms,
-                last_rebuild_completed_at_ms,
+                state: status.state,
+                reason: status.reason,
+                last_rebuild_started_at_ms: status.last_rebuild_started_at_ms,
+                last_rebuild_completed_at_ms: status.last_rebuild_completed_at_ms,
             };
 
             snapshot_event(

@@ -12,7 +12,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use tracing::{debug, info, instrument};
-use uc_application::facade::{SearchFacadeError, SearchPageView, SearchQueryInput};
+use uc_application::facade::{
+    SearchFacadeError, SearchPageView, SearchQueryInput, SearchStatusView,
+};
 use uc_daemon_contract::constants::http_route;
 
 use crate::api::dto::error::ApiError;
@@ -21,7 +23,6 @@ use crate::api::dto::search::{
     SearchStatusData, SearchStatusResponse,
 };
 use crate::api::server::DaemonApiState;
-use crate::search::coordinator::ManualRebuildResult;
 
 // ---------------------------------------------------------------------------
 // Raw query params (deserialized from URL query string)
@@ -166,39 +167,17 @@ async fn search_status_handler(
 ) -> Result<Json<SearchStatusResponse>, ApiError> {
     require_encryption_ready(&state).await?;
 
-    let runtime = state.runtime_or_error()?;
-
-    // Get coordinator snapshot (status/reason)
-    let snapshot = if let Some(coordinator) = state.search_coordinator() {
-        coordinator.status_snapshot().await
-    } else {
-        return Err(ApiError::service_unavailable(
-            "search coordinator unavailable",
-        ));
-    };
-
-    // Get index meta for timestamps — access the search index port directly
-    let meta = runtime
-        .wiring_deps()
-        .search
-        .search_index
-        .get_index_meta()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let app = state.app_facade_or_error()?;
+    let view = app.search.status().await.map_err(map_search_error)?;
 
     debug!(
-        state = %snapshot.status,
-        reason = ?snapshot.reason,
+        state = %view.state,
+        reason = ?view.reason,
         "search status queried"
     );
 
     Ok(Json(SearchStatusResponse {
-        data: SearchStatusData {
-            state: snapshot.status,
-            reason: snapshot.reason,
-            last_rebuild_started_at_ms: meta.last_rebuild_started_at_ms,
-            last_rebuild_completed_at_ms: meta.last_rebuild_completed_at_ms,
-        },
+        data: search_status_to_dto(view),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
@@ -214,30 +193,23 @@ async fn search_rebuild_handler(
 ) -> Result<(StatusCode, Json<SearchRebuildAcceptedResponse>), ApiError> {
     require_encryption_ready(&state).await?;
 
-    let coordinator = state
-        .search_coordinator()
-        .ok_or_else(|| ApiError::service_unavailable("search coordinator unavailable"))?;
+    let app = state.app_facade_or_error()?;
+    let accepted = app
+        .search
+        .request_rebuild()
+        .await
+        .map_err(map_search_error)?;
 
-    match coordinator.request_manual_rebuild().await {
-        ManualRebuildResult::Accepted => {
-            info!("manual search index rebuild accepted");
-            Ok((
-                StatusCode::ACCEPTED,
-                Json(SearchRebuildAcceptedResponse {
-                    data: SearchRebuildAcceptedData { accepted: true },
-                    ts: chrono::Utc::now().timestamp_millis(),
-                }),
-            ))
-        }
-        ManualRebuildResult::AlreadyInProgress => {
-            debug!("manual rebuild rejected — already in progress");
-            Err(ApiError {
-                status: StatusCode::CONFLICT,
-                code: "rebuild_already_running".to_string(),
-                message: "a rebuild is already in progress".to_string(),
-            })
-        }
-    }
+    info!("manual search index rebuild accepted");
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(SearchRebuildAcceptedResponse {
+            data: SearchRebuildAcceptedData {
+                accepted: accepted.accepted,
+            },
+            ts: chrono::Utc::now().timestamp_millis(),
+        }),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +243,25 @@ fn map_search_error(error: SearchFacadeError) -> ApiError {
             code: "index_unavailable".to_string(),
             message: "search index unavailable".to_string(),
         },
+        SearchFacadeError::ServiceUnavailable(message) => ApiError::service_unavailable(message),
+        SearchFacadeError::RebuildAlreadyRunning => {
+            debug!("manual rebuild rejected — already in progress");
+            ApiError {
+                status: StatusCode::CONFLICT,
+                code: "rebuild_already_running".to_string(),
+                message: "a rebuild is already in progress".to_string(),
+            }
+        }
         SearchFacadeError::Internal(message) => ApiError::internal(message),
+    }
+}
+
+fn search_status_to_dto(view: SearchStatusView) -> SearchStatusData {
+    SearchStatusData {
+        state: view.state,
+        reason: view.reason,
+        last_rebuild_started_at_ms: view.last_rebuild_started_at_ms,
+        last_rebuild_completed_at_ms: view.last_rebuild_completed_at_ms,
     }
 }
 

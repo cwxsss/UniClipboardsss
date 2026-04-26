@@ -3454,6 +3454,33 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · search status/rebuild/WS
+
+**触发**:继续收 search todo。query 已完成后,处理 `/search/status`、`/search/rebuild` 和 SEARCH websocket snapshot 还直接碰 coordinator / index meta 的问题。
+
+**完成标准**:
+- search HTTP status/rebuild handler 统一从 `AppFacade.search` 进入
+- SEARCH websocket snapshot 统一从 `AppFacade.search.status()` 进入
+- `DaemonApiState` 不再持有 search coordinator
+- 验证 daemon / application / contract 编译和 daemon lib 测试
+
+**已做**:
+- `SearchFacade` 增加 `status()` 和 `request_rebuild()`
+- 新增 application 层 `SearchStatusView` / `SearchRebuildAcceptedView`
+- `api/search.rs` status/rebuild handler 改为只调用 `AppFacade.search`
+- `api/ws.rs` SEARCH snapshot 改为只调用 `AppFacade.search.status()`
+- 删除 `DaemonApiState.search_coordinator` 字段和 accessor
+- pending search todo 标注 HTTP/WS 调用面已收,coordinator/projection 仍待处理
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon -p uc-daemon-contract`:✅ passed
+- `cargo test -p uc-daemon api::search --lib`:✅ 0 tests matched
+- `cargo test -p uc-daemon api::ws --lib`:✅ 0 tests matched
+- `cargo test -p uc-application facade::search --lib`:✅ 0 tests matched
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · clipboard HTTP 入口
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-clipboard-http.md`。目标是 clipboard HTTP handler 不再直接构造 `CoreUseCases`,也不再直接使用 core entry id / link parser / uc-app DTO。

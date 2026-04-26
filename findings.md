@@ -2058,3 +2058,28 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-130 · search status/rebuild 和 WS snapshot 也可经 AppFacade 收口
+
+**发现时间**:2026-04-26
+
+**背景**:`/search/status`、`/search/rebuild` 和 SEARCH websocket snapshot 仍在 daemon handler 中直接访问 `SearchCoordinator`、search index meta 和 rebuild result。这让 HTTP/WS 入口知道了搜索后台实现细节。
+
+**处理结果**:
+- `SearchFacade` 增加 `status()` 和 `request_rebuild()`。
+- application 层暴露 `SearchStatusView` / `SearchRebuildAcceptedView`。
+- daemon `api/search.rs` status/rebuild handler 改为只调用 `AppFacade.search`。
+- daemon `api/ws.rs` 的 SEARCH snapshot 改为只调用 `AppFacade.search.status()`。
+- `DaemonApiState` 删除 search coordinator 字段和 accessor,搜索状态不再挂在 HTTP state 上。
+
+**边界判断**:
+- `SearchCoordinator` 本体和 `SearchProjectionBuilder` 仍在 daemon 下,且仍知道 core / infra 搜索类型。这是 todo 剩余部分,不混入本次 HTTP/WS 调用面收口提交。
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon -p uc-daemon-contract`:passed
+- `cargo test -p uc-daemon api::search --lib`:0 tests matched
+- `cargo test -p uc-daemon api::ws --lib`:0 tests matched
+- `cargo test -p uc-application facade::search --lib`:0 tests matched
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

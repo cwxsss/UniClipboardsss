@@ -53,7 +53,7 @@ pub use roster::{
 };
 pub use search::{
     map_search_error, SearchFacade, SearchFacadeError, SearchGateway, SearchPageView,
-    SearchQueryInput, SearchResultView,
+    SearchQueryInput, SearchRebuildAcceptedView, SearchResultView, SearchStatusView,
 };
 pub use settings::{
     ContentTypesPatch as SettingsContentTypesPatch, ContentTypesView as SettingsContentTypesView,

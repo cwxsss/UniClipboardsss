@@ -33,6 +33,19 @@ pub struct SearchResultView {
     pub file_extensions: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchStatusView {
+    pub state: String,
+    pub reason: Option<String>,
+    pub last_rebuild_started_at_ms: Option<i64>,
+    pub last_rebuild_completed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRebuildAcceptedView {
+    pub accepted: bool,
+}
+
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum SearchFacadeError {
     #[error("invalid query: {0}")]
@@ -45,6 +58,10 @@ pub enum SearchFacadeError {
     IndexNotReady,
     #[error("search index is unavailable")]
     IndexUnavailable,
+    #[error("search service is unavailable: {0}")]
+    ServiceUnavailable(String),
+    #[error("search rebuild is already running")]
+    RebuildAlreadyRunning,
     #[error("search failed: {0}")]
     Internal(String),
 }
@@ -52,6 +69,10 @@ pub enum SearchFacadeError {
 #[async_trait]
 pub trait SearchGateway: Send + Sync {
     async fn query(&self, query: SearchQuery) -> Result<SearchPageView, SearchFacadeError>;
+
+    async fn status(&self) -> Result<SearchStatusView, SearchFacadeError>;
+
+    async fn request_rebuild(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError>;
 }
 
 pub struct SearchFacade {
@@ -69,6 +90,14 @@ impl SearchFacade {
     ) -> Result<SearchPageView, SearchFacadeError> {
         let query = parse_search_query(input)?;
         self.gateway.query(query).await
+    }
+
+    pub async fn status(&self) -> Result<SearchStatusView, SearchFacadeError> {
+        self.gateway.status().await
+    }
+
+    pub async fn request_rebuild(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError> {
+        self.gateway.request_rebuild().await
     }
 }
 

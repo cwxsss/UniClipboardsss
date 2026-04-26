@@ -28,8 +28,8 @@ use uc_application::facade::{
     EncryptionFacade, EncryptionFacadeDeps, EntryDetailView, EntryProjectionView,
     EntryResourceView, LifecycleFacade, LifecycleFacadeDeps, LifecycleStateView,
     LifecycleStatusGateway, MemberRosterFacade, ResourceFacade, ResourceFacadeDeps, SearchFacade,
-    SearchFacadeError, SearchGateway, SearchPageView, SearchResultView, SettingsFacade,
-    SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
+    SearchFacadeError, SearchGateway, SearchPageView, SearchRebuildAcceptedView, SearchResultView,
+    SearchStatusView, SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::clipboard::link_utils::extract_domain;
@@ -44,7 +44,7 @@ use crate::api::server::{run_http_server, DaemonApiState};
 use crate::api::setup_events::spawn_pairing_completion_forwarder;
 use crate::api::types::DaemonWsEvent;
 use crate::process_metadata::DaemonPidManager;
-use crate::search::coordinator::SearchCoordinator;
+use crate::search::coordinator::{ManualRebuildResult, SearchCoordinator};
 use crate::security::{cleanup_rate_limiter_task, SecurityState};
 use crate::service::DaemonService;
 use crate::state::RuntimeState;
@@ -299,10 +299,6 @@ impl DaemonApp {
             Some(notify) => api_state.with_deferred_ready_notify(Arc::clone(notify)),
             None => api_state,
         };
-        let api_state = match &self.search_coordinator {
-            Some(coordinator) => api_state.with_search_coordinator(Arc::clone(coordinator)),
-            None => api_state,
-        };
         let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
             space_setup: self.space_setup_facade.clone(),
             member_roster: self.member_roster_facade.clone(),
@@ -337,6 +333,7 @@ impl DaemonApp {
             ))),
             search: Arc::new(SearchFacade::new(Box::new(DaemonSearchGateway {
                 runtime: self.runtime.clone(),
+                coordinator: self.search_coordinator.clone(),
             }))),
             settings: Arc::new(SettingsFacade::new(
                 self.runtime.wiring_deps().settings.clone(),
@@ -687,6 +684,7 @@ fn clear_history_to_view(result: ClearHistoryResult) -> ClipboardClearHistoryRes
 
 struct DaemonSearchGateway {
     runtime: Arc<CoreRuntime>,
+    coordinator: Option<Arc<SearchCoordinator>>,
 }
 
 #[async_trait]
@@ -699,6 +697,39 @@ impl SearchGateway for DaemonSearchGateway {
             .await
             .map_err(uc_application::facade::map_search_error)?;
         Ok(search_page_to_view(page))
+    }
+
+    async fn status(&self) -> Result<SearchStatusView, SearchFacadeError> {
+        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
+            SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
+        })?;
+        let snapshot = coordinator.status_snapshot().await;
+        let meta = self
+            .runtime
+            .wiring_deps()
+            .search
+            .search_index
+            .get_index_meta()
+            .await
+            .map_err(|err| SearchFacadeError::Internal(err.to_string()))?;
+
+        Ok(SearchStatusView {
+            state: snapshot.status,
+            reason: snapshot.reason,
+            last_rebuild_started_at_ms: meta.last_rebuild_started_at_ms,
+            last_rebuild_completed_at_ms: meta.last_rebuild_completed_at_ms,
+        })
+    }
+
+    async fn request_rebuild(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError> {
+        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
+            SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
+        })?;
+
+        match coordinator.request_manual_rebuild().await {
+            ManualRebuildResult::Accepted => Ok(SearchRebuildAcceptedView { accepted: true }),
+            ManualRebuildResult::AlreadyInProgress => Err(SearchFacadeError::RebuildAlreadyRunning),
+        }
     }
 }
 
