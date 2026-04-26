@@ -30,6 +30,6 @@ pub use identity_fingerprint::{
     ShortCodeGenerator,
 };
 pub use key_material::KeyMaterialStore;
-pub(crate) use secrets::{Kek, MasterKey};
+pub(crate) use secrets::MasterKey;
 pub use session::InMemorySession;
 pub use space_access_adapter::DefaultSpaceAccessAdapter;

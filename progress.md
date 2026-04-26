@@ -3282,3 +3282,68 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - 旁路 · task_plan §1554 文本同步标 ✅(已在 C8e 完成)
 - 新阶段 · Phase 6 真机端到端验收(task_plan §1645-1665) — 需要双机环境
 - 新阶段 · Slice 5 后续优化(task_plan §1668+)
+
+---
+
+## Session 2026-04-25(续 51) — Slice 4 P5c W · 3 个预存 warning 修复
+
+**触发**:用户回 "yes",P5c 长期跟踪的最后清理。
+
+**3 个预存 warning 分析**(都来自 cargo check 的 dead-code 检测):
+1. `unused import: Kek` — `uc-infra/src/security/mod.rs:33`
+2. `variant LocalIdentity is never constructed` — `uc-application/src/usecases/clipboard_sync/dispatch_entry.rs:110`
+3. `variant DuplicateIgnored is never constructed` — `uc-application/src/usecases/clipboard_sync/ingest_inbound.rs:54`
+
+**逐项判断**:
+
+### 1. Kek import → 简单删
+- `crate::security::Kek` 路径 0 外部使用(verified)
+- `MasterKey` 通过 `crate::security::MasterKey` 在 `chunked_transfer.rs:38` 真实使用,必须保
+- 处理:`pub(crate) use secrets::{Kek, MasterKey};` → `pub(crate) use secrets::MasterKey;`
+- 模块内部仍可通过 `super::secrets::Kek` 直接 import,业务无影响
+
+### 2. LocalIdentity → 整链清(死错误链)
+- `DispatchSyncError::LocalIdentity` 在 `dispatch_entry.rs` 内部 0 构造点(只有 LockedSpace / CipherFailure / Repository 被构造)
+- 链式下游:`facade.rs:100` From impl 映射到 `ClipboardSyncError::LocalIdentity` → `uc-cli/src/commands/send.rs:213` 显示 "Local identity unavailable"
+- 整条链都是防御性预留(注释:"rare — the identity should be available by the time the CLI reaches `send`")
+- 处理:删 3 处:
+  - `dispatch_entry.rs:107-110` `DispatchSyncError::LocalIdentity` 变体
+  - `facade.rs:90-91, 100` `ClipboardSyncError::LocalIdentity` 变体 + From 分支
+  - `send.rs:213` `render_dispatch_error` match 分支
+- **breaking API change 风险**:`ClipboardSyncError` 是 pub enum;但全 workspace grep 0 其他消费者(只 cli/send.rs),且项目 alpha 阶段可接受
+- 未来若发现 local_identity lookup 真有失败可能,trivial 重新加回
+
+### 3. DuplicateIgnored → `#[allow(dead_code)]` 保留预留 API
+- `InboundAction::DuplicateIgnored`(uc-application 内 pub(crate) enum)0 构造点
+- 链式上游:`UcInboundAction::DuplicateIgnored`(uc-app 同义 enum)也 0 构造,但有 facade.rs:307 转换分支(穷尽 match 必须保两边对称)
+- 链式下游:`uc-cli/src/commands/watch.rs:232` 已经 match 了它(预备好显示 "duplicate")
+- 文档明确:`reserved for Phase 3 when local persistence dedup lands`
+- 删了 Phase 3 又要加回来 + watch.rs match 也要重补
+- 处理:`InboundAction` enum 加 `#[allow(dead_code)]` + 行内注释指向 doc
+
+**已做**:
+- **改** `uc-infra/src/security/mod.rs:33`:`pub(crate) use secrets::{Kek, MasterKey}` → `pub(crate) use secrets::MasterKey`
+- **改** `uc-application/src/usecases/clipboard_sync/dispatch_entry.rs:107-110`:删 `DispatchSyncError::LocalIdentity` 变体 + 上方 doc 注释
+- **改** `uc-application/src/facade/clipboard/facade.rs:90-91, 100`:删 `ClipboardSyncError::LocalIdentity` 变体 + `From<DispatchSyncError>` 对应 match 分支
+- **改** `uc-cli/src/commands/send.rs:213`:删 `render_dispatch_error` 中 `ClipboardSyncError::LocalIdentity` 分支
+- **改** `uc-application/src/usecases/clipboard_sync/ingest_inbound.rs:51`:`InboundAction` enum 上加 `#[allow(dead_code)] // DuplicateIgnored: reserved for Phase 3 dedup (see doc above)`
+
+**验证**:
+- `cargo check --workspace`:✅ 全过 2m42s,0 个真 warning(剩的 1 个是 build-script 的 "Daemon binary staged" info 行,非真 warning)
+- `cargo test -p uc-core -p uc-app -p uc-daemon -p uc-application --lib`:189 passed / 2 failed(uc-application);其他 crate 全过
+- 2 fail = 续 40 T3.2 S1 / C8c / C8d / C8e / C9 / C10 全程一致的 `facade::clipboard::facade::tests::dispatch_*` 预存欠账(MockPresence 期望调用次数 mismatch),与本次 W 无关
+
+**净瘦身**:`-13 行`(DispatchSyncError::LocalIdentity 4 行 + 注释 + ClipboardSyncError::LocalIdentity 3 行 + From 分支 1 行 + cli match 1 行 + Kek import 部分),+1 allow attr 行;净 `-12 行`
+
+**风险后顾**:
+- 删 `ClipboardSyncError::LocalIdentity` 是 pub enum 收缩,理论上是 SemVer breaking;项目 alpha 阶段无外部 SDK 消费者,接受
+- `LocalIdentityPort` 本身在 `dispatch_entry.rs` 内部仍持有(`local_identity: Arc<dyn LocalIdentityPort>`),没动 — 未来该字段真触发失败时仍可加回错误变体
+
+**Phase 5 / W 状态**:
+- 至此 P5c 主线 + W 全部完成,Slice 4 整阶段可视为 mechanically clean
+- 唯一长期欠账:2 个 `dispatch_*` 测试预存 fail(测试 mock 期望调用次数 mismatch,非业务问题)— 不属于 P5c / W,需独立修
+
+**下一步候选**:
+- 修 2 个 dispatch_* 测试欠账(独立 commit,需仔细复核 mock 期望与实际调用)
+- Phase 6 真机端到端验收(需双机环境)
+- Slice 5 后续优化(task_plan §1668+)

@@ -210,7 +210,6 @@ fn render_dispatch_error(err: &ClipboardSyncError) -> String {
         }
         ClipboardSyncError::CipherFailure(msg) => format!("Encryption failed: {msg}"),
         ClipboardSyncError::Repository(msg) => format!("Peer address lookup failed: {msg}"),
-        ClipboardSyncError::LocalIdentity(msg) => format!("Local identity unavailable: {msg}"),
     }
 }
 

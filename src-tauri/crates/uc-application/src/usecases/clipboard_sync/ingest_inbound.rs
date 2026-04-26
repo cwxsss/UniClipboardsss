@@ -49,6 +49,7 @@ pub(crate) struct InboundClipboardNotice {
 /// [`InboundAction::NewEntry`]; [`InboundAction::DuplicateIgnored`] is
 /// reserved for Phase 3 when local persistence dedup lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // DuplicateIgnored: reserved for Phase 3 dedup (see doc above)
 pub(crate) enum InboundAction {
     NewEntry,
     DuplicateIgnored,

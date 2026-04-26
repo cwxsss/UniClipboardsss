@@ -87,8 +87,6 @@ pub enum ClipboardSyncError {
     CipherFailure(String),
     #[error("peer address repository: {0}")]
     Repository(String),
-    #[error("local identity lookup: {0}")]
-    LocalIdentity(String),
 }
 
 impl From<DispatchSyncError> for ClipboardSyncError {
@@ -97,7 +95,6 @@ impl From<DispatchSyncError> for ClipboardSyncError {
             DispatchSyncError::LockedSpace => ClipboardSyncError::LockedSpace,
             DispatchSyncError::CipherFailure(msg) => ClipboardSyncError::CipherFailure(msg),
             DispatchSyncError::Repository(msg) => ClipboardSyncError::Repository(msg),
-            DispatchSyncError::LocalIdentity(msg) => ClipboardSyncError::LocalIdentity(msg),
         }
     }
 }

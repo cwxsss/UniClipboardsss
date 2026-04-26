@@ -104,10 +104,6 @@ pub(crate) enum DispatchSyncError {
     /// Listing the peer address repository failed.
     #[error("peer_addr_repo.list: {0}")]
     Repository(String),
-    /// Local identity lookup failed (rare — the identity should be
-    /// available by the time the CLI reaches `send`).
-    #[error("local identity lookup: {0}")]
-    LocalIdentity(String),
 }
 
 pub(crate) struct DispatchClipboardEntryUseCase {
