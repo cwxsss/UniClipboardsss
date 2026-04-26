@@ -25,8 +25,6 @@ pub mod internal;
 pub mod membership;
 pub mod pairing;
 pub mod search;
-pub mod start_network;
-pub mod start_network_after_unlock;
 pub mod storage;
 pub mod sync_planner;
 pub mod update_settings;
@@ -43,7 +41,6 @@ pub use initialize_encryption::InitializeEncryption;
 pub use membership::{GetMemberSyncPreferences, UpdateMemberSyncPreferences};
 pub use pairing::{GetLocalDeviceInfo, LocalDeviceInfo, ResolveConnectionPolicy};
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
-pub use start_network_after_unlock::StartNetworkAfterUnlock;
 pub use update_settings::UpdateSettings;
 pub use verify_keychain_access::VerifyKeychainAccess;
 
@@ -239,13 +236,6 @@ impl<'a> CoreUseCases<'a> {
     /// Update application settings.
     pub fn update_settings(&self) -> crate::usecases::UpdateSettings {
         crate::usecases::UpdateSettings::new(self.runtime.deps.settings.clone())
-    }
-
-    /// Start the network runtime after unlock.
-    pub fn start_network_after_unlock(&self) -> crate::usecases::StartNetworkAfterUnlock {
-        crate::usecases::StartNetworkAfterUnlock::from_port(
-            self.runtime.deps.network_control.clone(),
-        )
     }
 
     /// List clipboard entry projections.

@@ -63,8 +63,11 @@ async fn get_lifecycle_status_handler(State(state): State<DaemonApiState>) -> im
 }
 
 /// POST /lifecycle/retry
-/// Retries the lifecycle boot by calling ensure_ready() on the AppLifecycleCoordinator.
-/// Re-constructs the coordinator from daemon-owned components (no TauriSessionReadyEmitter needed).
+///
+/// Slice4 P5c: libp2p `start_network` 已退役,iroh 路由由
+/// `SpaceSetupAssembly` 启动时即装好,no longer 需要 retry 出动 network。
+/// 这个 endpoint 现在只做 lifecycle 状态推进 + 触发 deferred 服务启动,
+/// 等价于 GUI 端 `/lifecycle/ready` 的 idempotent 重试入口。
 async fn retry_lifecycle_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
     let Some(runtime) = state.runtime.clone() else {
         return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
@@ -81,7 +84,7 @@ async fn retry_lifecycle_handler(State(state): State<DaemonApiState>) -> impl In
             return StatusCode::NO_CONTENT.into_response();
         }
 
-        // Mark as Pending.
+        // Mark as Pending → Ready (no network start step under iroh stack).
         if let Err(e) = status_port
             .set_state(uc_app::usecases::app_lifecycle::LifecycleState::Pending)
             .await
@@ -89,24 +92,6 @@ async fn retry_lifecycle_handler(State(state): State<DaemonApiState>) -> impl In
             warn!(error = %e, "Failed to set lifecycle state to Pending");
         }
 
-        // Start the network runtime.
-        let network = usecases.start_network_after_unlock();
-        if let Err(e) = network.execute().await {
-            let msg = e.to_string();
-            if !msg.to_ascii_lowercase().contains("already started") {
-                warn!(error = %msg, "Network failed to start during lifecycle retry");
-                if let Err(e) = status_port
-                    .set_state(uc_app::usecases::app_lifecycle::LifecycleState::NetworkFailed)
-                    .await
-                {
-                    warn!(error = %e, "Failed to set lifecycle state to NetworkFailed");
-                }
-                return internal_error(anyhow::anyhow!(msg)).into_response();
-            }
-            info!(error = %msg, "Network already started; continuing");
-        }
-
-        // All good – mark ready.
         if let Err(e) = status_port
             .set_state(uc_app::usecases::app_lifecycle::LifecycleState::Ready)
             .await
