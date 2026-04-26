@@ -1,6 +1,7 @@
 [package]
 name = "uc-observability"
 version.workspace = true
+license.workspace = true
 edition = "2021"
 description = "Observability infrastructure for UniClipboard: dual-output tracing with profile-based filtering"
 

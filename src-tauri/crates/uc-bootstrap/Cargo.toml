@@ -1,6 +1,7 @@
 [package]
 name = "uc-bootstrap"
 version.workspace = true
+license.workspace = true
 edition = "2021"
 description = "Composition root — sole crate allowed to depend on uc-core + uc-app + uc-infra + uc-platform simultaneously"
 

@@ -1,6 +1,7 @@
 [package]
 name = "uc-daemon-client"
 version.workspace = true
+license.workspace = true
 edition = "2021"
 description = "Daemon HTTP and WebSocket client for UniClipboard"
 

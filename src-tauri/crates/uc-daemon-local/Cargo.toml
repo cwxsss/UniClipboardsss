@@ -1,6 +1,7 @@
 [package]
 name = "uc-daemon-local"
 version.workspace = true
+license.workspace = true
 edition = "2021"
 description = "Local daemon runtime metadata and process coordination"
 
