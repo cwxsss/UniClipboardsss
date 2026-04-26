@@ -56,9 +56,10 @@ pub use roster::{
     RosterEntry, RosterError,
 };
 pub use search::{
-    map_search_error, SearchFacade, SearchFacadeError, SearchGateway, SearchPageView,
-    SearchProjectionBuilder, SearchQueryInput, SearchRebuildAcceptedView, SearchResultView,
-    SearchStatusView,
+    map_search_error, ManualRebuildResult, SearchCoordinator, SearchCoordinatorDeps,
+    SearchCoordinatorEvent, SearchFacade, SearchFacadeError, SearchGateway, SearchPageView,
+    SearchProjectionBuilder, SearchQueryInput, SearchRebuildAcceptedView,
+    SearchRebuildProgressView, SearchResultView, SearchStatusSnapshot, SearchStatusView,
 };
 pub use settings::{
     ContentTypesPatch as SettingsContentTypesPatch, ContentTypesView as SettingsContentTypesView,

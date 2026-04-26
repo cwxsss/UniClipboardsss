@@ -31,6 +31,7 @@ use uc_application::facade::{
     SearchFacadeError, SearchGateway, SearchPageView, SearchRebuildAcceptedView, SearchResultView,
     SearchStatusView, SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
+use uc_application::facade::{ManualRebuildResult, SearchCoordinator};
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
@@ -44,7 +45,6 @@ use crate::api::setup_events::spawn_pairing_completion_forwarder;
 use crate::api::types::DaemonWsEvent;
 use crate::peers::presence_monitor::PresenceMonitor;
 use crate::process_metadata::DaemonPidManager;
-use crate::search::coordinator::{ManualRebuildResult, SearchCoordinator};
 use crate::security::{cleanup_rate_limiter_task, SecurityState};
 use crate::service::DaemonService;
 use crate::state::RuntimeState;
@@ -698,22 +698,10 @@ impl SearchGateway for DaemonSearchGateway {
         let coordinator = self.coordinator.as_ref().ok_or_else(|| {
             SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
         })?;
-        let snapshot = coordinator.status_snapshot().await;
-        let meta = self
-            .runtime
-            .wiring_deps()
-            .search
-            .search_index
-            .get_index_meta()
+        coordinator
+            .status_view()
             .await
-            .map_err(|err| SearchFacadeError::Internal(err.to_string()))?;
-
-        Ok(SearchStatusView {
-            state: snapshot.status,
-            reason: snapshot.reason,
-            last_rebuild_started_at_ms: meta.last_rebuild_started_at_ms,
-            last_rebuild_completed_at_ms: meta.last_rebuild_completed_at_ms,
-        })
+            .map_err(uc_application::facade::map_search_error)
     }
 
     async fn request_rebuild(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError> {

@@ -3511,6 +3511,32 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon search 边界收口 · coordinator 切片
+
+**触发**:search projection 已迁入 application 后,继续处理 search coordinator 仍直接持有 runtime / core / infra 的问题。
+
+**完成标准**:
+- search coordinator 的重建判断、状态、串行化和进度事件归 application
+- daemon search 模块只做服务生命周期和 WS 转发
+- search HTTP/WS 调用面继续走 `AppFacade`
+- 验证 daemon check、daemon lib 测试、application search 筛选测试
+
+**已做**:
+- 新增 application search coordinator 和 deps
+- daemon search coordinator 改为薄服务包装
+- `SearchFacade.status()` 改为从 application coordinator 取完整状态视图
+- entrypoint 组装 application coordinator deps 并把服务包装放入 daemon services
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+- `cargo test -p uc-application facade::search --lib`:✅ 0 tests matched
+
+**下一步**:
+- search todo 可收尾。daemon `entrypoint.rs` 仍组装底层 ports,留给 composition root 收口 todo。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · search query 入口
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-search.md`,先做 todo 里明确的第一步 `GET /search/query`。

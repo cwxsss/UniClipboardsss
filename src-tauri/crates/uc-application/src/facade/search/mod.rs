@@ -1,10 +1,15 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+mod coordinator;
 mod projection;
 
 use uc_core::search::{ContentType, QueryOperator, SearchError, SearchQuery, TimeRangeFilter};
 
+pub use coordinator::{
+    ManualRebuildResult, SearchCoordinator, SearchCoordinatorDeps, SearchCoordinatorEvent,
+    SearchRebuildProgressView, SearchStatusSnapshot,
+};
 pub use projection::SearchProjectionBuilder;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

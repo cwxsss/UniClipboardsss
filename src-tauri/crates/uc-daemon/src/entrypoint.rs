@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
+use uc_application::facade::{SearchCoordinator, SearchCoordinatorDeps};
 use uc_application::{
     ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
     InboundWrite as ApplyInboundWrite,
@@ -20,7 +21,7 @@ use uc_core::ports::SystemClipboardPort;
 
 use crate::api::types::DaemonWsEvent;
 use crate::app::DaemonApp;
-use crate::search::coordinator::SearchCoordinator;
+use crate::search::coordinator::SearchCoordinatorService;
 use crate::service::DaemonService;
 use crate::service::ServiceHealth;
 use crate::state::{DaemonServiceSnapshot, RuntimeState};
@@ -207,7 +208,19 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let should_defer_clipboard = gui_managed || !encryption_unlocked;
 
     // Construct the search coordinator before building the service snapshots.
-    let search_coordinator = Arc::new(SearchCoordinator::new(runtime.clone(), event_tx.clone()));
+    let search_deps = runtime.wiring_deps();
+    let search_coordinator = Arc::new(SearchCoordinator::new(SearchCoordinatorDeps::new(
+        search_deps.search.search_index.clone(),
+        search_deps.search.search_key_derivation.clone(),
+        search_deps.search.search_pipeline.clone(),
+        search_deps.clipboard.clipboard_entry_repo.clone(),
+        search_deps.clipboard.representation_repo.clone(),
+        search_deps.clipboard.selection_repo.clone(),
+    )));
+    let search_coordinator_service = Arc::new(SearchCoordinatorService::new(
+        Arc::clone(&search_coordinator),
+        event_tx.clone(),
+    ));
 
     let initial_statuses: Vec<DaemonServiceSnapshot> = vec![
         DaemonServiceSnapshot {
@@ -262,11 +275,11 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             deferred.push(Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>);
             deferred.push(Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>);
             // Defer search coordinator alongside clipboard services when locked/GUI-managed
-            deferred.push(Arc::clone(&search_coordinator) as Arc<dyn DaemonService>);
+            deferred.push(Arc::clone(&search_coordinator_service) as Arc<dyn DaemonService>);
         } else {
             initial.push(Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>);
             initial.push(Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>);
-            initial.push(Arc::clone(&search_coordinator) as Arc<dyn DaemonService>);
+            initial.push(Arc::clone(&search_coordinator_service) as Arc<dyn DaemonService>);
         }
 
         if encryption_unlocked {
