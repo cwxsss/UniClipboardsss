@@ -4235,3 +4235,39 @@ T7 cargo check + 修崩:
 **收尾**:`grep -rn "CoreRuntime\|uc_app::runtime\|use uc_app" uc-daemon/` = 0 hit。daemon crate Cargo.toml 不再含 uc-app。
 
 **关键验证**:`uc-daemon/Cargo.toml` 已经删 `uc-app` 依赖且仍能编译,这是真正意义的"daemon 脱离 uc-app"——不只是改 import,是把"我需要 uc-app 才能 build"这件事都去掉了。
+
+---
+
+## D14 — uc-tauri 去 CoreRuntime 化(in_progress, 2026-04-26)
+
+**起点**:D13 完成,daemon crate 已脱 uc-app(Cargo.toml 删依赖)。下一刀对准 uc-tauri::bootstrap::AppRuntime。
+
+**预调查结论**:
+- F-140: `runtime.usecases()` / `AppUseCases<'a>` / `apply_autostart()` 在整个 src-tauri 没有任何调用方,纯 dead code
+- F-141: `commands/autostart.rs` 直接走 `tauri_plugin_autostart::ManagerExt`,从未通过 `apply_autostart` use case
+- F-142: `AppRuntime` 真正活跃方法只有 `task_registry / settings_port / wiring_deps().settings / set_app_handle / set_event_emitter / event_emitter / device_id / core().storage_paths` —— 无任何业务用例调用
+
+**计划摘要**:
+- AppRuntime 字段重构:删 `core: Arc<CoreRuntime>`,加 `app_facade: Arc<AppFacade>` + `task_registry` + `settings_port` + `storage_paths` + `event_emitter_cell` + `device_id`
+- `AppUseCases<'a>` / `runtime.usecases()` 整个删除(dead code)
+- `runtime.core() / is_encryption_ready / has_completed_setup / clipboard_integration_mode / wiring_deps` 全去除
+- `commands/storage.rs:26` 改用 `runtime.storage_paths()`
+- `with_clipboard_write_coordinator`:不再注入 CoreRuntime,改为 AppFacade 装配时一次性传入(coordinator 是 restore facade 必需依赖)
+- AppFacade 装配代码搬到 `AppRuntime::with_setup` 内(composition root 性质,允许 import uc-app)
+- 验证:`grep -rn "CoreRuntime\|uc_app::runtime\|CoreUseCases" uc-tauri/src/` = 0 hit
+- 不删 uc-tauri Cargo.toml 的 uc-app 依赖(`wiring.rs::start_background_tasks` 仍用 `TaskRegistry` + `CleanupExpiredFilesUseCase`,留给 D16)
+
+**实际改动汇总**(D14 complete):
+- runtime.rs 重写(439→305 行):删 CoreRuntime 持有、AppUseCases 整个类型、apply_autostart、create_app/create_runtime/AppRuntimeSeed、is_encryption_ready/has_completed_setup/clipboard_integration_mode/wiring_deps/core 等 dead 方法;加 AppFacade 装配 + 6 个进程级零碎件字段
+- bootstrap/mod.rs:re-export 收窄到 `pub use runtime::AppRuntime;`
+- commands/storage.rs:`runtime.core().storage_paths()` → `runtime.storage_paths()`
+- main.rs(uniclipboard binary):链式 `with_clipboard_write_coordinator` 合并入 `with_setup`,`runtime.wiring_deps().settings` → `runtime.settings_port()`
+- src-tauri/Cargo.toml:补漏依赖 uc-application(预先 main.rs 已 import 但未列出,commit 034248a2 遗漏)
+- uc-cli/commands/members.rs:`RosterError::Unavailable` 顺手补 match 分支(D11/D12/D13 期间挂着的非穷举 debt)
+
+**验证**:
+- `cargo check -p uc-tauri` / `cargo check -p uniclipboard` / `cargo check --workspace --all-targets` 全过(uc-cli 历史欠账已修,workspace 干净)
+- `cargo test --workspace --lib` 全过 0 failures
+- grep CoreRuntime/uc_app::runtime/CoreUseCases 在 uc-tauri/src/ 仅余 doc-comment 字符串
+
+**关键判断**(F-140 验证后落地):AppUseCases / runtime.usecases() / apply_autostart 三件套是 dead code,D14 直接删除,无业务影响。这意味着 D11/D12 期间命令迁 daemon HTTP API 时,Tauri 端 use case 入口实际已经废弃,只是没人清。

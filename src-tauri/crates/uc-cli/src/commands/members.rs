@@ -113,6 +113,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
                 RosterError::MemberRepository(m) => format!("list members failed: {m}"),
                 RosterError::LocalIdentity(m) => format!("local identity read failed: {m}"),
                 RosterError::NotFound(m) => format!("member not found: {m}"),
+                RosterError::Unavailable => "member roster unavailable".to_string(),
             };
             ui::error(&msg);
             assembly.shutdown().await;

@@ -10764,6 +10764,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uc-app",
+ "uc-application",
  "uc-bootstrap",
  "uc-core",
  "uc-daemon-client",

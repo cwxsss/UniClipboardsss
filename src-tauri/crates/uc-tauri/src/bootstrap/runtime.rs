@@ -1,40 +1,52 @@
-//! # Use Cases Accessor
+//! # Tauri AppRuntime
 //!
-//! This module provides the `UseCases` accessor which is attached to `AppRuntime`
-//! to provide convenient access to all use cases with their dependencies pre-wired.
+//! Tauri 端的运行时句柄。D14 (2026-04-26) 起,本类型不再持有
+//! `uc_app::runtime::CoreRuntime`,而是直接持有:
 //!
-//! ## Architecture
+//! - `Arc<AppFacade>` —— 所有业务调用唯一入口(参见
+//!   `uc-application/AGENTS.md` §11.4)
+//! - 进程级零碎件:`task_registry` / `settings_port` / `storage_paths` /
+//!   `event_emitter_cell` / `device_id` —— 这些是"外部环境/进程基础
+//!   设施",不属于 application 层
+//! - Tauri 专属:`app_handle`(setup 完成后注入)
 //!
-//! - **uc-app/usecases**: Pure use cases with `new()` constructors taking ports
-//! - **uc-tauri/bootstrap**: This module wires `Arc<dyn Port>` from AppDeps into use cases
-//! - **Commands**: Call `runtime.usecases().xxx()` to get use case instances
+//! ## 与 daemon 的对齐
 //!
-//! ## Usage
+//! 与 `uc-daemon::DaemonApp` 同款 —— bootstrap 期把 ports 拼成 facade,
+//! commands / 业务代码只看见 `Arc<AppFacade>`,看不见 ports / deps /
+//! coordinator / mode。
 //!
-//! ```rust,no_run
+//! ## 用法示例
+//!
+//! ```rust,ignore
 //! use uc_tauri::bootstrap::AppRuntime;
 //! use tauri::State;
 //!
 //! #[tauri::command]
-//! async fn my_command(runtime: State<'_, AppRuntime>) -> Result<(), String> {
-//!     let uc = runtime.usecases().list_entry_projections();
-//!     uc.execute(50, 0).await.map_err(|e| e.to_string())?;
+//! async fn list_entries(
+//!     runtime: State<'_, std::sync::Arc<AppRuntime>>,
+//! ) -> Result<(), String> {
+//!     let facade = runtime.app_facade();
+//!     let entries = facade
+//!         .clipboard_history
+//!         .list_entry_projections(/* input */)
+//!         .await
+//!         .map_err(|e| e.to_string())?;
 //!     Ok(())
 //! }
 //! ```
-//!
-//! ## Adding New Use Cases
-//!
-//! 1. Ensure use case has a `new()` constructor taking its required ports
-//! 2. Add a method to `UseCases` that calls `new()` with deps
-//! 3. Commands can now call `runtime.usecases().your_use_case()`
 
 use std::sync::{Arc, RwLock};
 
 use uc_app::task_registry::TaskRegistry;
-use uc_app::{runtime::CoreRuntime, App, AppDeps};
-use uc_application::facade::HostEventEmitterPort;
-use uc_core::config::AppConfig;
+use uc_app::AppDeps;
+use uc_application::facade::{
+    AppFacade, AppFacadeParts, AppPaths, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
+    ClipboardRestoreFacade, ClipboardRestoreFacadeDeps, DeviceFacade, EncryptionFacade,
+    EncryptionFacadeDeps, HostEventEmitterPort, InMemoryLifecycleStatus, LifecycleFacade,
+    LifecycleFacadeDeps, LifecycleStatusGateway, ResourceFacade, ResourceFacadeDeps, SearchFacade,
+    SearchFacadeDeps, SettingsFacade, StorageFacade, StorageFacadeDeps,
+};
 use uc_core::ports::SettingsPort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -97,115 +109,134 @@ impl DaemonBootstrapOwnershipState {
     }
 }
 
-/// Application runtime with dependencies.
+/// Tauri 端的应用运行时句柄。
 ///
-/// This struct holds all application dependencies and provides
-/// access to use cases through the `usecases()` method.
+/// 持有 `Arc<AppFacade>` 作为唯一业务入口,加上几个进程级字段
+/// (task registry、settings port、storage paths、emitter cell、device id)。
 ///
-/// Approved access pattern for command modules:
-/// - Use `runtime.usecases()` for business operations
-/// - Use `runtime.device_id()`, `runtime.is_encryption_ready()`, and
-///   `runtime.settings_port()` for simple read-only state access
-/// - Direct `runtime.deps.*` access is not allowed in command modules
-///
-/// ## Architecture / 架构
-///
-/// The `AppRuntime` serves as the central point for accessing all application
-/// dependencies and use cases. It wraps `AppDeps` and provides a `usecases()`
-/// method that returns a `UseCases` accessor.
-///
-/// `AppRuntime` 是访问所有应用依赖和用例的中心点。它包装 `AppDeps` 并提供
-/// 返回 `UseCases` 访问器的 `usecases()` 方法。
-///
-/// ## Usage Example / 使用示例
-///
-/// ```rust,no_run
-/// use uc_tauri::bootstrap::AppRuntime;
-/// use tauri::State;
-///
-/// #[tauri::command]
-/// async fn get_entries(runtime: State<'_, AppRuntime>) -> Result<(), String> {
-///     let uc = runtime.usecases().list_entry_projections();
-///     let entries = uc.execute(50, 0).await.map_err(|e| e.to_string())?;
-///     Ok(())
-/// }
-/// ```
-///
-/// 包含所有应用依赖的运行时。
-///
-/// 此结构体保存所有应用依赖，并通过 `usecases()` 方法提供用例访问。
+/// **不持有** `Arc<CoreRuntime>`。所有业务调用走 `runtime.app_facade()`。
 pub struct AppRuntime {
-    /// Tauri-free core runtime with all domain state.
-    core: Arc<CoreRuntime>,
-    /// Tauri AppHandle for event emission (optional, set after Tauri setup).
-    /// Uses RwLock for interior mutability since Arc<AppRuntime> is shared.
-    app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,
+    app_facade: Arc<AppFacade>,
+    /// Tauri AppHandle for event emission (set after Tauri setup).
+    app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
+    task_registry: Arc<TaskRegistry>,
+    settings_port: Arc<dyn SettingsPort>,
+    storage_paths: AppPaths,
+    /// Shared emitter cell —— bootstrap 期可 swap (例如从
+    /// `LoggingHostEventEmitter` 切到 daemon API emitter)。
+    event_emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>,
+    device_id: String,
 }
 
 impl AppRuntime {
-    /// Create a new AppRuntime from dependencies.
-    /// 从依赖创建新的 AppRuntime。
-    pub fn new(deps: AppDeps, storage_paths: uc_application::facade::AppPaths) -> Self {
+    /// 默认 emitter (`LoggingHostEventEmitter`)。其它情况调用 `with_setup`。
+    pub fn new(
+        deps: AppDeps,
+        storage_paths: AppPaths,
+        clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
+    ) -> Self {
         let event_emitter: Arc<dyn HostEventEmitterPort> =
             Arc::new(uc_bootstrap::LoggingHostEventEmitter);
-        Self::with_setup(deps, storage_paths, event_emitter)
+        Self::with_setup(
+            deps,
+            storage_paths,
+            event_emitter,
+            clipboard_write_coordinator,
+        )
     }
 
-    /// Construct an AppRuntime backed by an explicit emitter.
+    /// 装配 `AppFacade` + 收集进程级零碎件,产出 `AppRuntime`。
     ///
-    /// Slice4 P3 T3.4 collapsed the previous `with_setup(deps, setup_ports,
-    /// paths, emitter)` signature: the legacy `SetupFacade` and its
-    /// `SetupAssemblyPorts` bundle are gone, so the GUI-side runtime now
-    /// only needs an emitter to wire CoreRuntime.
+    /// `clipboard_write_coordinator` 是必填参数 —— `ClipboardRestoreFacade`
+    /// 需要它,所以装 facade 时必须传入。
     pub fn with_setup(
         deps: AppDeps,
-        storage_paths: uc_application::facade::AppPaths,
+        storage_paths: AppPaths,
         event_emitter: Arc<dyn HostEventEmitterPort>,
+        clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
     ) -> Self {
-        let lifecycle_status: Arc<dyn uc_application::facade::LifecycleStatusGateway> =
-            Arc::new(uc_application::facade::InMemoryLifecycleStatus::new());
-        let app_handle = Arc::new(std::sync::RwLock::new(None));
+        let device_id = deps.device.device_identity.current_device_id().to_string();
+        let settings_port = deps.settings.clone();
+
+        let lifecycle_status: Arc<dyn LifecycleStatusGateway> =
+            Arc::new(InMemoryLifecycleStatus::new());
+        let task_registry = Arc::new(TaskRegistry::new());
+
         // Clipboard integration mode is resolved from the UC_CLIPBOARD_MODE env var.
         // Defaults to Full (standalone GUI watches clipboard directly).
         // Set UC_CLIPBOARD_MODE=passive when a daemon is running and handling
         // clipboard capture + broadcast via DaemonWsBridge.
         let clipboard_integration_mode = uc_bootstrap::resolve_clipboard_integration_mode();
-        let task_registry = Arc::new(TaskRegistry::new());
 
-        // Shared emitter cell for downstream consumers that may need
-        // read-through after a future emitter swap.
-        let emitter_cell = Arc::new(std::sync::RwLock::new(event_emitter));
+        let event_emitter_cell = Arc::new(RwLock::new(event_emitter));
 
-        let core = Arc::new(CoreRuntime::new(
-            deps,
-            emitter_cell,
-            lifecycle_status,
-            clipboard_integration_mode,
+        // Compose AppFacade — 与 uc-daemon::entrypoint 同款装配代码。
+        // GUI 端不直接做 space setup / member roster / search coordinator,
+        // 这三处传 None;其它 facade 全部从 deps 拼齐。
+        let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
+            space_setup: None,
+            member_roster: None,
+            lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
+                status: lifecycle_status,
+            })),
+            encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
+                setup_status: deps.setup_status.clone(),
+                space_access: deps.security.space_access.clone(),
+            })),
+            resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
+                representation_repo: deps.clipboard.representation_repo.clone(),
+                thumbnail_repo: deps.storage.thumbnail_repo.clone(),
+                blob_store: deps.storage.blob_store.clone(),
+            })),
+            clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
+                entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+                selection_repo: deps.clipboard.selection_repo.clone(),
+                representation_repo: deps.clipboard.representation_repo.clone(),
+                event_writer: deps.clipboard.clipboard_event_repo.clone(),
+                payload_resolver: deps.clipboard.payload_resolver.clone(),
+                blob_store: deps.storage.blob_store.clone(),
+                thumbnail_repo: deps.storage.thumbnail_repo.clone(),
+                file_transfer_repo: deps.storage.file_transfer_repo.clone(),
+                search_index: Some(deps.search.search_index.clone()),
+                file_cache_dir: Some(storage_paths.cache_dir.clone()),
+            })),
+            clipboard_restore: Arc::new(ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps {
+                entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+                selection_repo: deps.clipboard.selection_repo.clone(),
+                representation_repo: deps.clipboard.representation_repo.clone(),
+                blob_store: deps.storage.blob_store.clone(),
+                clock: deps.system.clock.clone(),
+                write_coordinator: clipboard_write_coordinator,
+                integration_mode: clipboard_integration_mode,
+            })),
+            search: Arc::new(SearchFacade::new(SearchFacadeDeps {
+                search_index: deps.search.search_index.clone(),
+                coordinator: None,
+            })),
+            settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
+            device: Arc::new(DeviceFacade::new(
+                deps.device.device_identity.clone(),
+                deps.settings.clone(),
+            )),
+            storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
+                db_path: storage_paths.db_path.clone(),
+                vault_dir: storage_paths.vault_dir.clone(),
+                cache_dir: storage_paths.cache_dir.clone(),
+                logs_dir: storage_paths.logs_dir.clone(),
+                app_data_root_dir: storage_paths.app_data_root_dir.clone(),
+                cache_fs: deps.system.cache_fs.clone(),
+            })),
+        }));
+
+        Self {
+            app_facade,
+            app_handle: Arc::new(RwLock::new(None)),
             task_registry,
+            settings_port,
             storage_paths,
-        ));
-
-        Self { core, app_handle }
-    }
-
-    /// Wire a `ClipboardWriteCoordinator` into the inner `CoreRuntime`.
-    ///
-    /// Must be called BEFORE `Arc::new(runtime)` (i.e. while the runtime is still
-    /// uniquely owned). GUI bootstrap calls this with
-    /// `background.clipboard_write_coordinator.clone()` after `with_setup()`.
-    pub fn with_clipboard_write_coordinator(
-        mut self,
-        coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
-    ) -> Self {
-        // Arc::get_mut succeeds here because the caller has not yet shared the Arc.
-        if let Some(core) = Arc::get_mut(&mut self.core) {
-            core.set_clipboard_write_coordinator(coordinator);
-        } else {
-            tracing::warn!(
-                "with_clipboard_write_coordinator called after Arc was shared — coordinator not set"
-            );
+            event_emitter_cell,
+            device_id,
         }
-        self
     }
 
     /// Set the Tauri AppHandle for event emission.
@@ -234,205 +265,62 @@ impl AppRuntime {
     }
 
     /// Returns a clone of the shared app_handle cell.
-    pub fn app_handle_cell(&self) -> Arc<std::sync::RwLock<Option<tauri::AppHandle>>> {
+    pub fn app_handle_cell(&self) -> Arc<RwLock<Option<tauri::AppHandle>>> {
         self.app_handle.clone()
     }
 
+    /// 业务入口 —— commands / 后台任务通过它访问业务。
+    pub fn app_facade(&self) -> &Arc<AppFacade> {
+        &self.app_facade
+    }
+
     /// Get the current event emitter (clones the inner Arc).
-    ///
-    /// Returns the active [`HostEventEmitterPort`] implementation. During early bootstrap,
-    /// this is a [`LoggingEventEmitter`]; after daemon setup, a `DaemonApiEventEmitter`.
     pub fn event_emitter(&self) -> Arc<dyn HostEventEmitterPort> {
-        self.core.event_emitter()
+        match self.event_emitter_cell.read() {
+            Ok(guard) => Arc::clone(&*guard),
+            Err(poisoned) => {
+                tracing::error!(
+                    "RwLock poisoned in AppRuntime::event_emitter, recovering from poisoned state"
+                );
+                Arc::clone(&*poisoned.into_inner())
+            }
+        }
     }
 
     /// Swap the event emitter. Called from daemon setup to replace the
-    /// initial [`LoggingEventEmitter`] with a [`DaemonApiEventEmitter`].
+    /// initial `LoggingHostEventEmitter` with a daemon API emitter.
     pub fn set_event_emitter(&self, emitter: Arc<dyn HostEventEmitterPort>) {
-        self.core.set_event_emitter(emitter);
-    }
-
-    /// Returns a reference to the CoreRuntime for consumers that need it.
-    pub fn core(&self) -> &Arc<CoreRuntime> {
-        &self.core
-    }
-
-    /// Get use cases accessor.
-    /// 获取用例访问器。
-    pub fn usecases(&self) -> AppUseCases<'_> {
-        AppUseCases::new(self)
+        match self.event_emitter_cell.write() {
+            Ok(mut guard) => {
+                *guard = emitter;
+            }
+            Err(poisoned) => {
+                tracing::error!(
+                    "RwLock poisoned in AppRuntime::set_event_emitter, recovering from poisoned state"
+                );
+                let mut guard = poisoned.into_inner();
+                *guard = emitter;
+            }
+        }
     }
 
     /// Returns the current device ID for tracing spans and session context.
-    /// For business operations involving device identity, use `self.usecases()`.
     pub fn device_id(&self) -> String {
-        self.core.device_id()
+        self.device_id.clone()
     }
 
-    /// Check if the encryption session is ready.
-    pub async fn is_encryption_ready(&self) -> bool {
-        self.core.is_encryption_ready().await
-    }
-
-    /// Phase C: unified truth source = `SetupStatus.has_completed`.
-    /// Replaces prior `encryption_state()` helper backed by `EncryptionStatePort`.
-    pub async fn has_completed_setup(&self) -> Result<bool, String> {
-        self.core.has_completed_setup().await
-    }
-
-    /// Returns a clone of the settings port for resolve_pairing_device_name.
-    /// This is a thin accessor; for settings business operations, use usecases().
+    /// Returns a clone of the settings port for resolve_pairing_device_name and startup tasks.
     pub fn settings_port(&self) -> Arc<dyn SettingsPort> {
-        self.core.settings_port()
+        self.settings_port.clone()
     }
 
-    /// Returns a reference to the underlying AppDeps for wiring/bootstrap code only.
-    ///
-    /// **IMPORTANT**: This method is intended exclusively for bootstrap wiring code
-    /// (e.g., `start_background_tasks` in `main.rs`). Command handlers MUST NOT use
-    /// this method — use `runtime.usecases()` or specific facade methods instead.
-    pub fn wiring_deps(&self) -> &AppDeps {
-        self.core.wiring_deps()
-    }
-
-    pub fn clipboard_integration_mode(&self) -> uc_core::clipboard::ClipboardIntegrationMode {
-        self.core.clipboard_integration_mode()
+    /// Returns the storage paths bundle (db / vault / cache / logs / app data root).
+    pub fn storage_paths(&self) -> &AppPaths {
+        &self.storage_paths
     }
 
     /// Returns a reference to the task registry for lifecycle management.
-    ///
-    /// Used by bootstrap code to spawn tracked background tasks and by the
-    /// app exit hook to trigger graceful shutdown.
     pub fn task_registry(&self) -> &Arc<TaskRegistry> {
-        self.core.task_registry()
+        &self.task_registry
     }
-}
-
-/// Tauri-aware use case accessors wrapping CoreUseCases.
-///
-/// Provides transparent access to all CoreUseCases methods (via Deref) plus
-/// the apply_autostart accessor that needs AppHandle.
-pub struct AppUseCases<'a> {
-    app_runtime: &'a AppRuntime,
-    core: uc_app::usecases::CoreUseCases<'a>,
-}
-
-impl<'a> AppUseCases<'a> {
-    pub fn new(app_runtime: &'a AppRuntime) -> Self {
-        let core = uc_app::usecases::CoreUseCases::new(&app_runtime.core);
-        Self { app_runtime, core }
-    }
-
-    /// Apply OS-level autostart setting.
-    ///
-    /// Requires AppHandle to be set (returns None during early bootstrap).
-    pub fn apply_autostart(
-        &self,
-    ) -> Option<
-        uc_platform::usecases::ApplyAutostartSetting<crate::adapters::autostart::TauriAutostart>,
-    > {
-        let guard = self.app_runtime.app_handle();
-        let handle = guard.as_ref()?;
-        let adapter = Arc::new(crate::adapters::autostart::TauriAutostart::new(
-            handle.clone(),
-        ));
-        Some(uc_platform::usecases::ApplyAutostartSetting::new(adapter))
-    }
-}
-
-impl<'a> std::ops::Deref for AppUseCases<'a> {
-    type Target = uc_app::usecases::CoreUseCases<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.core
-    }
-}
-
-/// Seed for creating the application runtime.
-///
-/// This is an assembly context that holds the AppConfig
-/// before Tauri setup phase completes. It does NOT contain
-/// a fully constructed runtime - that happens in the setup phase.
-///
-/// ## English
-///
-/// This struct serves as a bridge between:
-/// - Phase 1: Configuration loading (pre-Tauri)
-/// - Phase 2: Dependency wiring (Tauri setup)
-/// - Phase 3: App construction (post-setup)
-///
-/// ## 中文
-///
-/// 此结构作为以下阶段之间的桥梁：
-/// - 阶段 1：配置加载（Tauri 之前）
-/// - 阶段 2：依赖连接（Tauri 设置）
-/// - 阶段 3：应用构造（设置之后）
-pub struct AppRuntimeSeed {
-    /// Application configuration loaded from TOML
-    /// 从 TOML 加载的应用配置
-    pub config: AppConfig,
-}
-
-/// Create the runtime seed without touching Tauri.
-///
-/// This function must not depend on Tauri or any UI framework.
-/// 不依赖 Tauri 或任何 UI 框架创建运行时种子。
-///
-/// ## Phase Integration / 阶段集成
-///
-/// - **Phase 1**: Call this after `load_config()` to create the seed
-/// - **Phase 2**: Pass seed to `wire_dependencies()` in Tauri setup
-/// - **Phase 3**: Call `create_app()` with wired dependencies
-///
-/// ## English
-///
-/// This is the entry point for the bootstrap sequence:
-/// 1. `load_config()` → reads TOML into `AppConfig`
-/// 2. `create_runtime()` → wraps config in `AppRuntimeSeed`
-/// 3. `wire_dependencies()` → creates ports from config
-/// 4. `create_app()` → constructs `App` from dependencies
-pub fn create_runtime(config: AppConfig) -> anyhow::Result<AppRuntimeSeed> {
-    Ok(AppRuntimeSeed { config })
-}
-
-/// Create the App instance from wired dependencies.
-/// 从已连接的依赖创建 App 实例。
-///
-/// ## English
-///
-/// This function is called in Phase 3 (after Tauri setup completes)
-/// to construct the final `App` instance from the dependencies
-/// that were wired in Phase 2.
-///
-/// This is a direct construction function - NOT a builder pattern.
-/// All dependencies must be provided; no defaults, no optionals.
-///
-/// ## 中文
-///
-/// 此函数在阶段 3（Tauri 设置完成后）调用，
-/// 用于从阶段 2 中连接的依赖构造最终的 `App` 实例。
-///
-/// 这是一个直接构造函数 - 不是 Builder 模式。
-/// 必须提供所有依赖；无默认值，无可选项。
-///
-/// # Parameters / 参数
-///
-/// - `deps`: Application dependencies wired from configuration
-///           从配置连接的应用依赖
-///
-/// # Returns / 返回
-///
-/// - `App`: Fully constructed application runtime
-///          完全构造的应用运行时
-///
-/// # Phase 3 Integration / 阶段 3 集成
-///
-/// This function completes the bootstrap sequence:
-/// ```text
-/// load_config() → create_runtime() → wire_dependencies() → create_app()
-///     ↓                 ↓                    ↓                    ↓
-///   AppConfig      AppRuntimeSeed        AppDeps               App
-/// ```
-pub fn create_app(deps: AppDeps) -> App {
-    App::new(deps)
 }

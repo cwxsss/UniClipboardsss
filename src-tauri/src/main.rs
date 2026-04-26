@@ -75,8 +75,12 @@ fn run_app(ctx: GuiBootstrapContext) {
 
     let event_emitter: std::sync::Arc<dyn uc_application::facade::HostEventEmitterPort> =
         std::sync::Arc::new(uc_bootstrap::LoggingHostEventEmitter);
-    let runtime = AppRuntime::with_setup(deps, storage_paths, event_emitter)
-        .with_clipboard_write_coordinator(background.clipboard_write_coordinator.clone());
+    let runtime = AppRuntime::with_setup(
+        deps,
+        storage_paths,
+        event_emitter,
+        background.clipboard_write_coordinator.clone(),
+    );
     let runtime = Arc::new(runtime);
 
     // Startup barrier used to coordinate backend readiness and main window show timing.
@@ -271,7 +275,7 @@ fn run_app(ctx: GuiBootstrapContext) {
 
             // Start file cache cleanup task (runs once at startup)
             start_background_tasks(
-                runtime.wiring_deps().settings.clone(),
+                runtime.settings_port(),
                 background.file_cache_dir.clone(),
                 runtime.task_registry(),
             );

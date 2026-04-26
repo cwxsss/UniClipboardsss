@@ -3224,3 +3224,97 @@ D17  workspace 移除 uc-app crate
 - D15 — `uc-cli` 的 setup 命令还在用 `CoreUseCases`。
 - D16 — uc-tauri / uc-cli 完成后,清理 uc-app 内部:`AppDeps` 内部化进 uc-application、`TaskRegistry` 搬 uc-bootstrap、`CoreRuntime` 类型删除。
 - D17 — workspace 移除 uc-app crate。
+
+---
+
+### Phase D14 · uc-tauri 去 CoreRuntime 化 — complete (2026-04-26)
+
+**触发**:
+
+D13 把 daemon 端 `Arc<CoreRuntime>` 持有移除后,uc-tauri 端仍有同款问题:
+- `uc-tauri::bootstrap::runtime::AppRuntime` 内部持 `core: Arc<CoreRuntime>` 字段
+- 通过 `Deref` 暴露 `AppUseCases<'a>`,内部包裹 `uc_app::usecases::CoreUseCases<'a>`
+- `runtime.core()` 返回 `&Arc<CoreRuntime>` 给 commands
+
+**预调查关键发现**(F-140 ~ F-142):
+- `AppUseCases<'a>` / `runtime.usecases()` / `apply_autostart()` 在整个 src-tauri 没有任何调用方 —— **是 dead code**
+- `commands/autostart.rs` 直接走 `tauri_plugin_autostart::ManagerExt`,不通过 use case
+- `AppRuntime` 真正活跃方法只有: `task_registry / settings_port / wiring_deps().settings / set_app_handle / set_event_emitter / event_emitter / device_id / core().storage_paths`,无任何业务用例调用
+
+**D14 目标**(本切片):
+
+让 `uc-tauri` crate 不再依赖 `uc_app::runtime::CoreRuntime`,也不再依赖 `uc_app::usecases::CoreUseCases`:
+
+- `AppRuntime` 字段重构:删 `core: Arc<CoreRuntime>`,加 `app_facade: Arc<AppFacade>` / `task_registry: Arc<TaskRegistry>` / `settings_port: Arc<dyn SettingsPort>` / `storage_paths: AppPaths` / `event_emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>` / `device_id: String`,保留 `app_handle`
+- `AppUseCases<'a>` / `runtime.usecases()` / `apply_autostart` 整个删除(dead code)
+- `runtime.core() / runtime.is_encryption_ready() / runtime.has_completed_setup() / runtime.clipboard_integration_mode() / runtime.wiring_deps()` 全部去除(无 caller 或可改走 facade)
+- `commands/storage.rs:26` `runtime.core().storage_paths().app_data_root_dir` → `runtime.storage_paths().app_data_root_dir`
+- `with_clipboard_write_coordinator` 链式构造改造:不再注入到 CoreRuntime,改为在 AppFacade 装配时(在 main.rs 或 AppRuntime::with_setup 内)就传入
+- `src-tauri/src/main.rs` 端 facade 装配代码到位(composition root 角色,允许仍 import uc_app)
+- `cargo check --workspace` 通过
+- `grep -rn "CoreRuntime\|uc_app::runtime\|CoreUseCases" uc-tauri/src/` 返回 0 hit
+- `uc-tauri/Cargo.toml` 是否能删 `uc-app` 依赖:不能,`wiring.rs` 仍用 `TaskRegistry` 和 `CleanupExpiredFilesUseCase`(D16 处理)。但 D14 完成后,uc-tauri 对 uc-app 的依赖范围会大幅收窄,只剩"基础设施工具+维护任务"
+
+**子任务**:
+- T1 — 在 `AppRuntime::with_setup` 里装 `AppFacade`(参照 D13 daemon entrypoint 装配代码),取代旧 `CoreRuntime::new(..)` 那段
+- T2 — `AppRuntime` 字段精简 + 方法重写(删 dead code,改 thin accessor)
+- T3 — `commands/storage.rs` storage_paths 访问点改造
+- T4 — `commands/mod.rs` 保持 `runtime.device_id()`(底层从字段直接读)
+- T5 — `bootstrap/mod.rs` 不再 re-export `AppUseCases`
+- T6 — `src-tauri/src/main.rs` 调用方适配(facade 装配挪过来,或者保持 AppRuntime::with_setup 内部装,只调一次 with_setup 然后零碎件就齐了)
+- T7 — `cargo check -p uc-tauri` + `cargo check -p uniclipboard_lib` + `cargo check --workspace` 全过
+- T8 — `cargo test -p uc-tauri --lib` 全过
+- T9 — commit
+
+**预期保留**(D14 不动):
+- uc-tauri Cargo.toml 仍 `uc-app = { path = ".." }`(D16 处理,因 TaskRegistry / CleanupExpiredFilesUseCase 仍住 uc-app)
+- `wiring.rs` 中 `use uc_app::task_registry::TaskRegistry` / `use uc_app::usecases::file_sync::CleanupExpiredFilesUseCase`(同上)
+- `with_clipboard_write_coordinator` 参数类型 `Arc<uc_app::usecases::ClipboardWriteCoordinator>`(uc-app re-export shim,真身在 uc-application)
+
+**风险与规避**:
+- AppFacade 装配 14+ 个 ports,放在 `AppRuntime::with_setup` 内会让该方法变长(~80 行)。但这是 composition root 性质的代码,是合理的。也可考虑放在 main.rs 内,但会让 main.rs 更乱;权衡后选择 `AppRuntime::with_setup` 内装。
+- `with_clipboard_write_coordinator` 必须在 AppFacade 装配时已传入(restore facade 强制需要),所以接口要重新设计:把 `coordinator` 作为 `with_setup` 的必要参数,不再是链式可选。
+- search_coordinator 这种"非必须"的 facade 部分,GUI 端可能不存在:对照 daemon `SearchFacadeDeps { coordinator: Some(..) }`,GUI 端可能传 None 即可(facade 内部需要支持)。
+
+**实际改动**:
+
+`uc-tauri/src/bootstrap/runtime.rs`(重写):
+- 删除 `use uc_app::{runtime::CoreRuntime, App, AppDeps};`,改为 `use uc_app::AppDeps;`(仅类型引用,无 CoreRuntime)
+- 删除 `use uc_app::usecases::CoreUseCases` import 链
+- 加入 `use uc_application::facade::{AppFacade, AppFacadeParts, AppPaths, ClipboardHistoryFacade(Deps), ClipboardRestoreFacade(Deps), DeviceFacade, EncryptionFacade(Deps), HostEventEmitterPort, InMemoryLifecycleStatus, LifecycleFacade(Deps), LifecycleStatusGateway, ResourceFacade(Deps), SearchFacade(Deps), SettingsFacade, StorageFacade(Deps)}`
+- `AppRuntime` 字段:删 `core: Arc<CoreRuntime>`;加 `app_facade: Arc<AppFacade>` / `task_registry: Arc<TaskRegistry>` / `settings_port: Arc<dyn SettingsPort>` / `storage_paths: AppPaths` / `event_emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>` / `device_id: String`。保留 `app_handle: Arc<RwLock<Option<AppHandle>>>`。
+- `AppRuntime::with_setup(deps, paths, emitter, coordinator)` 内部 `Arc::new(AppFacade::new(AppFacadeParts {..}))` 一次性装好(GUI 端 `space_setup` / `member_roster` / search `coordinator` 全 None,其它 11 个 facade 从 deps 拼齐)。`with_clipboard_write_coordinator` 链式调用合并到 `with_setup` 必填参数。
+- 删除整个 `AppUseCases<'a>` 类型 + `runtime.usecases()` 方法 + `apply_autostart()` (F-140 dead code)。
+- 删除 `is_encryption_ready` / `has_completed_setup` / `clipboard_integration_mode` / `wiring_deps` / `core` (无 caller)。
+- 删除 `create_app` / `create_runtime` / `AppRuntimeSeed`(无 caller,dead code 顺手清理)。
+- 新增 `app_facade() -> &Arc<AppFacade>` thin accessor。
+- 行数从 439 → 305(-134 行,因为删了 dead code + 包装抽象,但加了 facade 装配代码)。
+
+`uc-tauri/src/bootstrap/mod.rs`:
+- `pub use runtime::{create_app, create_runtime, AppRuntime, AppUseCases};` → `pub use runtime::AppRuntime;`(死引用 + dead type 移除)。
+
+`uc-tauri/src/commands/storage.rs`:
+- `runtime.core().storage_paths().app_data_root_dir.clone()` → `runtime.storage_paths().app_data_root_dir.clone()`。
+
+`src-tauri/src/main.rs`(uniclipboard binary):
+- `AppRuntime::with_setup(deps, paths, emitter).with_clipboard_write_coordinator(coord)` → 单次 `AppRuntime::with_setup(deps, paths, emitter, coord)`(链式合并)。
+- `start_background_tasks(runtime.wiring_deps().settings.clone(), ...)` → `start_background_tasks(runtime.settings_port(), ...)`(thin accessor)。
+
+`src-tauri/Cargo.toml`(预先漏配,顺手补):
+- 加 `uc-application = { path = "crates/uc-application" }`。在 HEAD 之前 main.rs 已 `use uc_application::facade::HostEventEmitterPort` 但 Cargo.toml 未列出 —— 应该是 commit `034248a2 arch: move host events into application facade` 漏配。GUI binary 是 composition root,本来就应该直接依赖 application 层 facade 类型。
+
+`uc-cli/src/commands/members.rs`(顺手清历史欠账):
+- `match &err { ... }` 补 `RosterError::Unavailable => "member roster unavailable".to_string()` 分支。这是 commit 4aba60cc 引入 `Unavailable` 变体后挂着的非穷举 match,D11/D12/D13 全期间在跟 workspace check。
+
+**验证**:
+- `cargo check -p uc-tauri` ✅
+- `cargo check -p uniclipboard` ✅
+- `cargo check --workspace --all-targets` ✅(uc-cli 历史欠账已修,workspace 完全干净)
+- `cargo test --workspace --lib` ✅ all passed(uc-core 219 / uc-app 41 / uc-application 25 / uc-bootstrap 13 / uc-platform 6 / uc-infra 124 / uc-daemon 25 / uc-tauri 0 / 等等,共 0 failures)
+- `grep -rn "CoreRuntime\|uc_app::runtime\|CoreUseCases" uc-tauri/src/` 仅余 doc-comment 字符串(无 import / 无代码引用)
+
+**残留与下一步**:
+- uc-tauri Cargo.toml 仍依赖 uc-app(`wiring.rs` 用 `TaskRegistry` + `CleanupExpiredFilesUseCase`,`runtime.rs` 用 `AppDeps` + `ClipboardWriteCoordinator` 类型) —— 留给 D16
+- D15:`uc-cli` setup 命令仍用 `CoreUseCases`,要走 facade
+- D16:清理 uc-app 内部 —— `AppDeps` 内部化进 application、`TaskRegistry` 搬 uc-bootstrap、`CoreRuntime` 类型删除、`ClipboardWriteCoordinator` shim 删除(真身在 application)
+- D17:workspace 移除 uc-app crate

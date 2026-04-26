@@ -23,7 +23,7 @@ pub async fn open_data_directory(
     record_trace_fields(&span, &_trace);
 
     async move {
-        let dir = runtime.core().storage_paths().app_data_root_dir.clone();
+        let dir = runtime.storage_paths().app_data_root_dir.clone();
         if !dir.exists() {
             return Err(CommandError::NotFound(format!(
                 "Directory does not exist: {}",
