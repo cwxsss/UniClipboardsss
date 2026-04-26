@@ -16,6 +16,7 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
 use uc_application::facade::SpaceSetupFacade;
 use uc_application::space_access::SpaceAccessFacade;
+use uc_core::ports::PresencePort;
 
 use crate::api::auth::load_or_create_auth_token;
 use crate::api::event_emitter::DaemonApiEventEmitter;
@@ -128,6 +129,11 @@ pub struct DaemonApp {
     /// pairing-completion forwarder doesn't need to pull
     /// `DeviceIdentityPort` at event time. Pre-resolved in `entrypoint`.
     local_device_id: Option<String>,
+    /// iroh-stack `PresencePort` injected into `DaemonQueryService` so
+    /// `peers()` (and the WS `peers` topic snapshot it backs) can derive
+    /// online/offline state per remote member. Same `Arc` the
+    /// `presence_monitor` worker subscribes to.
+    presence: Arc<dyn PresencePort>,
 }
 
 impl DaemonApp {
@@ -141,6 +147,7 @@ impl DaemonApp {
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         space_access_facade: Option<Arc<SpaceAccessFacade>>,
+        presence: Arc<dyn PresencePort>,
     ) -> Self {
         Self {
             services,
@@ -156,6 +163,7 @@ impl DaemonApp {
             search_coordinator: None,
             space_setup_facade: None,
             local_device_id: None,
+            presence,
         }
     }
 
@@ -183,6 +191,7 @@ impl DaemonApp {
         search_coordinator: Option<Arc<SearchCoordinator>>,
         space_setup_facade: Option<Arc<SpaceSetupFacade>>,
         local_device_id: Option<String>,
+        presence: Arc<dyn PresencePort>,
     ) -> Self {
         // Validate invariant: deferred_services and deferred_ready_notify must be
         // consistent. If there are deferred services, there must be a Notify to trigger them.
@@ -211,6 +220,7 @@ impl DaemonApp {
             search_coordinator,
             space_setup_facade,
             local_device_id,
+            presence,
         }
     }
 
@@ -235,6 +245,7 @@ impl DaemonApp {
         info!(pid, "wrote daemon pid metadata");
         let query_service = Arc::new(DaemonQueryService::new(
             self.runtime.clone(),
+            self.presence.clone(),
             self.state.clone(),
         ));
 

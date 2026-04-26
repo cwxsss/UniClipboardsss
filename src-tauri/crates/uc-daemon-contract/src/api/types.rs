@@ -20,7 +20,6 @@ pub struct StatusResponse {
     pub api_revision: String,
     pub uptime_seconds: u64,
     pub workers: Vec<WorkerStatusDto>,
-    pub connected_peers: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

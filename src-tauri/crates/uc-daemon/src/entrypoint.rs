@@ -344,6 +344,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         Some(search_coordinator),
         Some(space_setup_facade_for_api),
         Some(local_device_id),
+        ctx.space_setup_assembly.presence.clone(),
     );
 
     // Slice 2 Phase 3 · T6 — move the iroh-stack assembly into the

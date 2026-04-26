@@ -41,9 +41,7 @@ pub use delete_clipboard_entry::DeleteClipboardEntry;
 pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
 pub use membership::{GetMemberSyncPreferences, UpdateMemberSyncPreferences};
-pub use pairing::{
-    GetLocalDeviceInfo, GetP2pPeersSnapshot, LocalDeviceInfo, ResolveConnectionPolicy,
-};
+pub use pairing::{GetLocalDeviceInfo, LocalDeviceInfo, ResolveConnectionPolicy};
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
 pub use update_settings::UpdateSettings;
@@ -174,14 +172,6 @@ impl<'a> CoreUseCases<'a> {
         crate::usecases::GetLocalDeviceInfo::new(
             self.runtime.deps.device.device_identity.clone(),
             self.runtime.deps.settings.clone(),
-        )
-    }
-
-    /// Get unified P2P peer snapshot combining discovered, connected, and admitted members.
-    pub fn get_p2p_peers_snapshot(&self) -> crate::usecases::GetP2pPeersSnapshot {
-        crate::usecases::GetP2pPeersSnapshot::new(
-            self.runtime.deps.network_ports.peers.clone(),
-            self.runtime.deps.device.member_repo.clone(),
         )
     }
 

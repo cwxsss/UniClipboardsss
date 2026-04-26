@@ -5,9 +5,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::RwLock;
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::CoreUseCases;
 use uc_application::membership::usecases::ListMembersUseCase;
 use uc_application::space_access::SpaceAccessFacade;
+use uc_core::ports::PresencePort;
 use uc_core::space_access::state::SpaceAccessState;
 
 use crate::api::projection::IntoApiDto;
@@ -15,33 +15,31 @@ use crate::api::types::{
     HealthResponse, PeerSnapshotDto, SpaceAccessStateResponse, SpaceMemberDto, StatusResponse,
     WorkerStatusDto,
 };
+use crate::peers::snapshot::derive_peer_snapshot;
 use crate::service::ServiceHealth;
 use crate::state::{DaemonServiceSnapshot, RuntimeState};
 use crate::{DAEMON_API_REVISION, DAEMON_VERSION};
 
 pub struct DaemonQueryService {
     runtime: Arc<CoreRuntime>,
+    presence: Arc<dyn PresencePort>,
     state: Arc<RwLock<RuntimeState>>,
 }
 
 impl DaemonQueryService {
-    /// Constructs a `DaemonQueryService` using the given runtime handle and shared runtime state.
-    ///
-    /// `runtime` is the shared core runtime used to build use-cases and read configuration.
-    /// `state` is the shared, asynchronously lockable runtime state.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    /// use tokio::sync::RwLock;
-    /// // assume CoreRuntime and RuntimeState types are in scope
-    /// let runtime = Arc::new(CoreRuntime::new_for_tests());
-    /// let state = Arc::new(RwLock::new(RuntimeState::default()));
-    /// let svc = DaemonQueryService::new(runtime, state);
-    /// ```
-    pub fn new(runtime: Arc<CoreRuntime>, state: Arc<RwLock<RuntimeState>>) -> Self {
-        Self { runtime, state }
+    /// Constructs a `DaemonQueryService` from the shared runtime, the
+    /// iroh-stack `PresencePort` (drives both `peers()` snapshots and the
+    /// `peers.changed` WS topic), and the daemon-wide `RuntimeState`.
+    pub fn new(
+        runtime: Arc<CoreRuntime>,
+        presence: Arc<dyn PresencePort>,
+        state: Arc<RwLock<RuntimeState>>,
+    ) -> Self {
+        Self {
+            runtime,
+            presence,
+            state,
+        }
     }
 
     pub async fn health(&self) -> HealthResponse {
@@ -53,29 +51,17 @@ impl DaemonQueryService {
     }
 
     pub async fn status(&self) -> Result<StatusResponse> {
-        let connected_peers = self
-            .peers()
-            .await?
-            .into_iter()
-            .filter(|peer| peer.connected)
-            .count() as u32;
         let state = self.state.read().await;
         Ok(StatusResponse {
             package_version: DAEMON_VERSION.to_string(),
             api_revision: DAEMON_API_REVISION.to_string(),
             uptime_seconds: state.uptime_seconds(),
             workers: worker_statuses(state.worker_statuses()),
-            connected_peers,
         })
     }
 
     pub async fn peers(&self) -> Result<Vec<PeerSnapshotDto>> {
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let snapshots = usecases.get_p2p_peers_snapshot().execute().await?;
-        Ok(snapshots
-            .into_iter()
-            .map(IntoApiDto::into_api_dto)
-            .collect())
+        derive_peer_snapshot(&self.presence, self.runtime.as_ref()).await
     }
 
     pub async fn paired_devices(&self) -> Result<Vec<SpaceMemberDto>> {

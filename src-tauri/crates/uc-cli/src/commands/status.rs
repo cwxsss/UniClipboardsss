@@ -83,7 +83,6 @@ fn render_status_output(status: &StatusResponse) -> String {
     ];
 
     lines.extend(status.workers.iter().map(render_worker_line));
-    lines.push(format!("Connected peers: {}", status.connected_peers));
 
     lines.join("\n")
 }

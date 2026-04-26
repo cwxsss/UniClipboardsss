@@ -41,11 +41,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use uc_app::runtime::CoreRuntime;
-use uc_core::ports::presence::ReachabilityState;
 use uc_core::ports::PresencePort;
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 
 use crate::api::types::{DaemonWsEvent, PeerSnapshotDto, PeersChangedFullPayload};
+use crate::peers::snapshot::derive_peer_snapshot;
 use crate::service::{DaemonService, ServiceHealth};
 
 fn now_ms() -> i64 {
@@ -82,13 +82,9 @@ pub(crate) trait PeerSnapshotProvider: Send + Sync {
     async fn fetch(&self) -> anyhow::Result<Vec<PeerSnapshotDto>>;
 }
 
-/// Production provider — derives the snapshot from the member repository
-/// (membership 真相) plus `PresencePort.current_state` per remote member
-/// (online/offline 当前态)。
-///
-/// Local device 通过 `DeviceIdentityPort.current_device_id()` 排除。
-/// 这里没有 "discovered but not yet a member" 概念——iroh stack 下,只有
-/// 走完 pairing 进入 `space_member` 的设备才会出现在 peers.changed 里。
+/// Production provider — delegates to [`derive_peer_snapshot`] which is
+/// shared with `DaemonQueryService::peers` so the WS push and the read-only
+/// query path stay in lockstep.
 struct CoreRuntimePeerSnapshotProvider {
     presence: Arc<dyn PresencePort>,
     runtime: Arc<CoreRuntime>,
@@ -97,36 +93,7 @@ struct CoreRuntimePeerSnapshotProvider {
 #[async_trait]
 impl PeerSnapshotProvider for CoreRuntimePeerSnapshotProvider {
     async fn fetch(&self) -> anyhow::Result<Vec<PeerSnapshotDto>> {
-        let deps = self.runtime.wiring_deps();
-        let local_id = deps.device.device_identity.current_device_id();
-        let members = deps
-            .device
-            .member_repo
-            .list()
-            .await
-            .map_err(|e| anyhow::anyhow!("failed to list space members: {e}"))?;
-
-        let mut snapshots = Vec::with_capacity(members.len());
-        for member in members {
-            if member.device_id == local_id {
-                continue;
-            }
-            let state = self.presence.current_state(&member.device_id).await;
-            let device_name = if member.device_name.is_empty() {
-                None
-            } else {
-                Some(member.device_name.clone())
-            };
-            snapshots.push(PeerSnapshotDto {
-                peer_id: member.device_id.as_str().to_string(),
-                device_name,
-                addresses: Vec::new(),
-                is_paired: true,
-                connected: matches!(state, ReachabilityState::Online),
-                pairing_state: "Trusted".to_string(),
-            });
-        }
-        Ok(snapshots)
+        derive_peer_snapshot(&self.presence, self.runtime.as_ref()).await
     }
 }
 
