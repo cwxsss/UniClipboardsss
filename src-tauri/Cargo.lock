@@ -10432,7 +10432,6 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
- "uc-app",
  "uc-application",
  "uc-bootstrap",
  "uc-core",

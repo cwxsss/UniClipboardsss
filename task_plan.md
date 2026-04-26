@@ -3130,3 +3130,97 @@ Phase 0(已完成,2026-04-18)
 **下一步候选**:
 - D13 — `uc-tauri::bootstrap::runtime` 里 `CoreUseCases<'a>` 包装拆解(把 Tauri 端最后一坨 `Deref<Target = CoreUseCases>` 模式去掉,Tauri command 走 facade)。
 - 或先收 `uc-bootstrap` 的 ClipboardWriteCoordinator 构造路径(uc-app shim → 直接 uc-application 真身),让 uc-app 那边的 re-export 文件能删。
+
+---
+
+### Phase D13 · daemon 去 CoreRuntime 化 — complete (2026-04-26)
+
+**触发与原则纠正**:
+
+D12 完成后,daemon 已脱离 `uc-app::usecases`,但仍在 `app.rs` / `entrypoint.rs` / `api/server.rs` 持有 `Arc<CoreRuntime>`,通过 `runtime.wiring_deps().<port>` 直接掏 ports 拼 facade deps。这是封装漏洞——daemon 在"穿透 application 摸 ports"。
+
+用户拨正方向:
+1. **`AppFacade` 是唯一对外关卡** — 外部调用 100% 走 `AppFacade`,看不到 ports / runtime / deps / coordinator / mode。
+2. **uc-application 只装"业务"** — `ClipboardIntegrationMode`(部署模式)、`TaskRegistry`(tokio 任务工具)、`AppPaths`(进程路径)、`AppDeps`(ports 包) 这些**外部环境/进程基础设施**不属于 application,application 不该知道也不该持有。
+3. **`CoreRuntime` 这个抽象应该在外部消失** — 不是搬到 application,而是让 daemon/Tauri/CLI 直接持 `Arc<AppFacade>` + 各自需要的本地零碎件,不再用 `CoreRuntime` 把它们打包当成"应用 runtime"。
+
+**长期路线图**(uc-app 终态):
+```
+D13  daemon 去 CoreRuntime
+D14  uc-tauri 去 AppRuntime
+D15  uc-cli 去 CoreUseCases
+       ↓ 三个调用方完成后
+D16  清理 uc-app 内部:usecases shim 删除、AppDeps 内部化进 application、TaskRegistry 搬 uc-bootstrap、CoreRuntime 类型删除
+D17  workspace 移除 uc-app crate
+```
+
+注意:**"删 uc-app crate"是终末副产品,不是阶段性目标**。每一步的目标是"让一个调用方不再穿透 application 摸 ports"。
+
+**D13 目标**(本切片):
+
+让 daemon 整个 crate 不再依赖 `uc_app::runtime::CoreRuntime`:
+- `DaemonApp` 持 `Arc<AppFacade>` + 几个独立字段(`Arc<TaskRegistry>` / `AppPaths` / `Arc<dyn LifecycleStatusPort>` / `event_emitter` cell / `ClipboardIntegrationMode`),不再持 `Arc<CoreRuntime>`。
+- `AppFacade` 在 `entrypoint.rs` 装配,装好后 `Arc<AppFacade>` 传给 `DaemonApp::new_with_deferred`。
+- `DaemonApp::run` 内 14 处 `self.runtime.wiring_deps().<port>` 全部消失(因为 facade 已经在 entrypoint 装好了)。
+- `recover_encryption_session(&CoreRuntime, bool)` → `recover_encryption_session(&AppFacade, bool)`。
+- `DaemonApiState::runtime: Option<Arc<CoreRuntime>>` 字段去除,handler 全部走 `state.app_facade`。
+- `cargo check --workspace` 通过(uc-cli `RosterError::Unavailable` 历史欠账除外)。
+- `grep -rn "CoreRuntime\|uc_app::runtime" uc-daemon/` 返回 0 hit。
+
+**子任务**(均建 TaskCreate):
+- T1 — daemon CoreRuntime 调用清单 + AppFacade 路径映射
+- T2 — facade 缺口补齐(若有)
+- T3 — `entrypoint.rs` 内装 `AppFacade`
+- T4 — `DaemonApp` 去 `CoreRuntime` 字段
+- T5 — `recover_encryption_session` 签名改造
+- T6 — `DaemonApiState::runtime` 字段下线
+- T7 — `cargo check` 全 workspace + 修崩
+- T8 — commit
+
+**预期保留在 uc-app**(D13 不动):
+- `CoreRuntime` / `AppDeps` / `TaskRegistry` 类型本身仍住在 uc-app(uc-bootstrap 还在用)
+- uc-tauri / uc-cli 仍引用 uc_app::*(D14/D15 处理)
+
+**风险与规避**:
+- daemon 装 facade 时需要 14+ 个 ports,如果在 entrypoint 里装,要把 wiring 流程提前——但 entrypoint 本来就先调 `wire_dependencies` 再造 `CoreRuntime`,只需把 `AppFacade::new(...)` 那段从 `DaemonApp::run` 里搬过来,前置依赖完整。
+- `set_event_emitter` 调用现在通过 runtime;改造后 daemon 直接持 emitter cell,bootstrap 期 swap 直接对 cell 操作。
+- HTTP handler(api/search.rs)的 `runtime.is_encryption_ready()` 改 `state.app_facade.encryption.state().session_ready`,语义等价。
+
+**实际改动**:
+
+`uc-daemon/src/app.rs`:
+- 删除 `use uc_app::runtime::CoreRuntime;`、`AppLifecycleStatusGateway` 包装类、`lifecycle_state_to_view` / `lifecycle_state_from_view` 转换函数(`LifecycleStatusPort` 实际就是 `LifecycleStatusGateway` 的别名,wrapper 完全冗余)。
+- `DaemonApp` 字段:删 `runtime/space_setup_facade/member_roster_facade/search_coordinator`;加 `app_facade: Arc<AppFacade>` / `storage_paths: AppPaths` / `event_emitter_cell: Arc<RwLock<Arc<dyn HostEventEmitterPort>>>`。`local_device_id` 字段保留(sponsor view,daemon 自身的运行时配置)。
+- `recover_encryption_session(&AppFacade, bool)`:内部用 `facade.encryption.state().initialized` 替代 `runtime.wiring_deps().setup_status.get_status()`,用 `facade.encryption.unlock()` 替代旧 use case path。
+- `run()` 方法删除整段 `AppFacade::new(AppFacadeParts {..})` (~110 行,搬到 entrypoint),`storage_paths` 直接读 `self.storage_paths`,emitter 写入直接对 `self.event_emitter_cell` 操作。
+- 行数从 601 → ~390(删了 wrapper 和 facade 装配段)。
+
+`uc-daemon/src/entrypoint.rs`:
+- 在 `DaemonApp::new_with_deferred(...)` 之前插入 ~80 行 `AppFacade::new(AppFacadeParts {..})`,从 `runtime.wiring_deps()` 拼 deps(entrypoint 是 daemon 端 composition root,认 CoreRuntime 不违反"AppFacade 是唯一关卡"原则——关卡是给业务代码,不是给 bootstrap)。
+- `recover_encryption_session(&unlock_runtime, ...)` → `recover_encryption_session(&unlock_app_facade, ...)`。
+- background unlock task 中读 settings 仍走 `unlock_runtime.wiring_deps().settings.load()`(entrypoint 内部行为,合规)。
+- `build_non_gui_runtime_with_emitter` 调用改为传 `emitter_cell.clone()`,daemon 也持有 cell 副本。
+
+`uc-daemon/src/api/server.rs`:
+- 删除 `use uc_app::runtime::CoreRuntime;`、`runtime: Option<Arc<CoreRuntime>>` 字段、`runtime_or_error()` 方法、`DaemonApiState::new` 第三个参数。
+
+`uc-daemon/src/api/search.rs`:
+- `let runtime = state.runtime_or_error()?; if !runtime.is_encryption_ready().await {..}` → `let app_facade = state.app_facade_or_error()?; let encryption_state = app_facade.encryption.state().await?; if !encryption_state.session_ready {..}`。
+
+`uc-daemon/src/security/connect.rs`:
+- 注释里 `CoreRuntime` 改 `AppFacade::encryption`(死注释清理)。
+
+`uc-daemon/Cargo.toml`:
+- 删除 `uc-app = { path = "../uc-app" }` 依赖。**daemon crate 现在完全不依赖 uc-app**。
+
+**验证**:
+- `cargo check -p uc-daemon`:✅ passed(`uc-app` 依赖移除后仍编译)
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+- `cargo check --workspace`:✅ uc-app/uc-daemon/uc-application/uc-bootstrap/uc-daemon-local/uc-daemon-client/uc-tauri 全部通过;uc-cli `RosterError::Unavailable` non-exhaustive 是 commit 4aba60cc 引入历史欠账,与本次无关。
+- `grep -rn "CoreRuntime\|uc_app::runtime\|use uc_app" uc-daemon/`:✅ 0 hit。
+
+**残留与下一步**:
+- D14 — `uc-tauri::bootstrap::runtime` 里的 `AppRuntime` 仍包 `Arc<CoreRuntime>` + `CoreUseCases`,Tauri command 走 facade。
+- D15 — `uc-cli` 的 setup 命令还在用 `CoreUseCases`。
+- D16 — uc-tauri / uc-cli 完成后,清理 uc-app 内部:`AppDeps` 内部化进 uc-application、`TaskRegistry` 搬 uc-bootstrap、`CoreRuntime` 类型删除。
+- D17 — workspace 移除 uc-app crate。

@@ -3,8 +3,8 @@
 //! All routes are protected by the auth_extractor + rate_limit middleware chain
 //! applied at the router level (see routes::router_l2_plus).
 //!
-//! Lock guard: every handler checks `runtime.is_encryption_ready()` and returns
-//! HTTP 423 with `session_locked` if the encryption session is not ready.
+//! Lock guard: every handler checks `app_facade.encryption.state().session_ready`
+//! and returns HTTP 423 with `session_locked` if the encryption session is not ready.
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -88,8 +88,13 @@ fn search_input_from_params(params: SearchQueryParams) -> SearchQueryInput {
 
 /// Returns `Err(session_locked ApiError)` if the encryption session is not ready.
 async fn require_encryption_ready(state: &DaemonApiState) -> Result<(), ApiError> {
-    let runtime = state.runtime_or_error()?;
-    if !runtime.is_encryption_ready().await {
+    let app_facade = state.app_facade_or_error()?;
+    let encryption_state = app_facade
+        .encryption
+        .state()
+        .await
+        .map_err(|e| ApiError::internal(format!("encryption state unavailable: {e}")))?;
+    if !encryption_state.session_ready {
         return Err(ApiError {
             status: StatusCode::LOCKED,
             code: "session_locked".to_string(),

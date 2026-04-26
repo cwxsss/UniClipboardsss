@@ -145,8 +145,8 @@ async fn connect_handler(
     // Phase 75 does NOT implement L3/L4 permission enforcement.
     // All clients receive L2 tokens (access_level = LEVEL_L2, encryption_ready = false).
     // The access_level field exists in the JWT for future use, but is not enforced by middleware.
-    // Future phases (Phase 76+) will wire encryption state from CoreRuntime to determine
-    // if the client should receive L3/L4 tokens based on encryption session state.
+    // Future phases (Phase 76+) will wire encryption state from `AppFacade::encryption`
+    // to determine if the client should receive L3/L4 tokens based on session state.
     let encryption_ready = false; // Phase 75: always false
     let access_level = LEVEL_L2; // Phase 75: always L2
 

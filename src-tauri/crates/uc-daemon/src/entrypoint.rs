@@ -10,9 +10,14 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uc_application::clipboard_capture::CaptureClipboardUseCase;
 use uc_application::facade::{
-    ClipboardCaptureFacade, ClipboardLiveIndexDeps, ClipboardLiveIndexFacade, ClipboardLiveIndexer,
-    ClipboardOutboundDeps, ClipboardOutboundDispatcher, ClipboardOutboundFacade,
-    InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps,
+    AppFacade, AppFacadeParts, ClipboardCaptureFacade, ClipboardHistoryFacade,
+    ClipboardHistoryFacadeDeps, ClipboardLiveIndexDeps, ClipboardLiveIndexFacade,
+    ClipboardLiveIndexer, ClipboardOutboundDeps, ClipboardOutboundDispatcher,
+    ClipboardOutboundFacade, ClipboardRestoreFacade, ClipboardRestoreFacadeDeps, DeviceFacade,
+    EncryptionFacade, EncryptionFacadeDeps, InboundClipboardFacade, LifecycleFacade,
+    LifecycleFacadeDeps, ResourceFacade, ResourceFacadeDeps, SearchCoordinator,
+    SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps, SettingsFacade, StorageFacade,
+    StorageFacadeDeps,
 };
 use uc_application::{
     ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
@@ -92,8 +97,12 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let deferred_ready_notify = Arc::new(tokio::sync::Notify::new());
 
     let runtime = Arc::new(
-        build_non_gui_runtime_with_emitter(ctx.deps, ctx.storage_paths.clone(), emitter_cell)?
-            .with_clipboard_write_coordinator(clipboard_write_coordinator.clone()),
+        build_non_gui_runtime_with_emitter(
+            ctx.deps,
+            ctx.storage_paths.clone(),
+            emitter_cell.clone(),
+        )?
+        .with_clipboard_write_coordinator(clipboard_write_coordinator.clone()),
     );
 
     // 1. Create the shared broadcast channel for WebSocket events.
@@ -338,9 +347,81 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         .current_device_id()
         .to_string();
 
+    // Assemble AppFacade — this is the single outward-facing entry point
+    // the daemon (and all HTTP handlers) reach through. Pulls ports from
+    // the bootstrap-built `runtime` since this is composition-root code;
+    // once daemon is constructed, daemon never touches `runtime` again.
+    let storage_paths_for_daemon = runtime.storage_paths().clone();
+    let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
+        space_setup: Some(space_setup_facade_for_api.clone()),
+        member_roster: Some(member_roster_facade_for_api.clone()),
+        lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
+            status: runtime.lifecycle_status().clone(),
+        })),
+        encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
+            setup_status: runtime.wiring_deps().setup_status.clone(),
+            space_access: runtime.wiring_deps().security.space_access.clone(),
+        })),
+        resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
+            representation_repo: runtime.wiring_deps().clipboard.representation_repo.clone(),
+            thumbnail_repo: runtime.wiring_deps().storage.thumbnail_repo.clone(),
+            blob_store: runtime.wiring_deps().storage.blob_store.clone(),
+        })),
+        clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
+            entry_repo: runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+            selection_repo: runtime.wiring_deps().clipboard.selection_repo.clone(),
+            representation_repo: runtime.wiring_deps().clipboard.representation_repo.clone(),
+            event_writer: runtime.wiring_deps().clipboard.clipboard_event_repo.clone(),
+            payload_resolver: runtime.wiring_deps().clipboard.payload_resolver.clone(),
+            blob_store: runtime.wiring_deps().storage.blob_store.clone(),
+            thumbnail_repo: runtime.wiring_deps().storage.thumbnail_repo.clone(),
+            file_transfer_repo: runtime.wiring_deps().storage.file_transfer_repo.clone(),
+            search_index: Some(runtime.wiring_deps().search.search_index.clone()),
+            file_cache_dir: Some(storage_paths_for_daemon.cache_dir.clone()),
+        })),
+        clipboard_restore: Arc::new(ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps {
+            entry_repo: runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+            selection_repo: runtime.wiring_deps().clipboard.selection_repo.clone(),
+            representation_repo: runtime.wiring_deps().clipboard.representation_repo.clone(),
+            blob_store: runtime.wiring_deps().storage.blob_store.clone(),
+            clock: runtime.wiring_deps().system.clock.clone(),
+            write_coordinator: runtime
+                .clipboard_write_coordinator()
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "clipboard_write_coordinator not wired into runtime — daemon cannot serve restore"
+                    )
+                })?,
+            integration_mode: runtime.clipboard_integration_mode(),
+        })),
+        search: Arc::new(SearchFacade::new(SearchFacadeDeps {
+            search_index: runtime.wiring_deps().search.search_index.clone(),
+            coordinator: Some(Arc::clone(&search_coordinator)),
+        })),
+        settings: Arc::new(SettingsFacade::new(
+            runtime.wiring_deps().settings.clone(),
+        )),
+        device: Arc::new(DeviceFacade::new(
+            runtime.wiring_deps().device.device_identity.clone(),
+            runtime.wiring_deps().settings.clone(),
+        )),
+        storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
+            db_path: storage_paths_for_daemon.db_path.clone(),
+            vault_dir: storage_paths_for_daemon.vault_dir.clone(),
+            cache_dir: storage_paths_for_daemon.cache_dir.clone(),
+            logs_dir: storage_paths_for_daemon.logs_dir.clone(),
+            app_data_root_dir: storage_paths_for_daemon.app_data_root_dir.clone(),
+            cache_fs: runtime.wiring_deps().system.cache_fs.clone(),
+        })),
+    }));
+    let unlock_app_facade = Arc::clone(&app_facade);
+
     let daemon = DaemonApp::new_with_deferred(
         services,
-        runtime.clone(),
+        Arc::clone(&app_facade),
+        storage_paths_for_daemon,
+        emitter_cell.clone(),
         state,
         event_tx,
         Some(ctx.space_access_facade),
@@ -349,9 +430,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         deferred_notify_opt,
         external_shutdown,
         Some(clipboard_capture_gate.clone()),
-        Some(search_coordinator),
-        Some(space_setup_facade_for_api),
-        Some(member_roster_facade_for_api),
         Some(local_device_id),
     );
 
@@ -390,20 +468,22 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
                 true
             };
 
-            let unlocked =
-                match crate::app::recover_encryption_session(&unlock_runtime, auto_unlock_enabled)
-                    .instrument(info_span!("daemon.startup.recover_encryption_session"))
-                    .await
-                {
-                    Ok(b) => b,
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "background unlock: recover_encryption_session failed"
-                        );
-                        false
-                    }
-                };
+            let unlocked = match crate::app::recover_encryption_session(
+                &unlock_app_facade,
+                auto_unlock_enabled,
+            )
+            .instrument(info_span!("daemon.startup.recover_encryption_session"))
+            .await
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "background unlock: recover_encryption_session failed"
+                    );
+                    false
+                }
+            };
 
             // Slice 2 Phase 3 fix — resume the Slice 1+ Space session and
             // prime peer reachability. Independent of the legacy unlock path

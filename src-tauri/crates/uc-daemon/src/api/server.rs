@@ -18,7 +18,6 @@ use axum::response::Response;
 use axum::Router;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use uc_app::runtime::CoreRuntime;
 use uc_application::facade::AppFacade;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -39,7 +38,6 @@ use crate::socket::{try_resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
 pub struct DaemonApiState {
     pub query_service: Arc<DaemonQueryService>,
     pub auth_token: DaemonAuthToken,
-    pub runtime: Option<Arc<CoreRuntime>>,
     pub app_facade: Option<Arc<AppFacade>>,
     pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
@@ -58,14 +56,12 @@ impl DaemonApiState {
     pub fn new(
         query_service: Arc<DaemonQueryService>,
         auth_token: DaemonAuthToken,
-        runtime: Option<Arc<CoreRuntime>>,
         security: Arc<SecurityState>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(64);
         Self {
             query_service,
             auth_token,
-            runtime,
             app_facade: None,
             space_access_facade: None,
             event_tx,
@@ -121,17 +117,6 @@ impl DaemonApiState {
             &self.auth_token,
             client_pid,
         )
-    }
-
-    /// Extracts the runtime, or returns an ApiError if unavailable.
-    ///
-    /// Usage: `let runtime = state.runtime_or_error()?;` (for `Result` handlers)
-    /// or `let runtime = state.runtime_or_error().map_err(ApiError::into_response)?;`
-    /// (for `impl IntoResponse` handlers).
-    pub fn runtime_or_error(&self) -> Result<Arc<CoreRuntime>, ApiError> {
-        self.runtime
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("daemon runtime unavailable"))
     }
 }
 

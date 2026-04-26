@@ -2405,3 +2405,75 @@ pub async fn unlock(&self) -> Result<bool, EncryptionFacadeError> {
 **通用原则**: facade 内部的依赖密度由域决定,不由当前 caller 决定。caller 只用一个方法不是"该拆一个新 facade"的信号。
 
 ---
+
+### F-137 · `LifecycleStatusPort` 是 `LifecycleStatusGateway` 的别名,wrapper 完全冗余
+
+**发现时间**: 2026-04-26
+
+**背景**: D13 改 daemon `app.rs` 时发现旧版有 ~30 行包装代码:
+```rust
+struct AppLifecycleStatusGateway {
+    status: Arc<dyn LifecycleStatusGateway>,
+}
+impl LifecycleStatusGateway for AppLifecycleStatusGateway { ... }
+fn lifecycle_state_to_view(state: LifecycleState) -> LifecycleStateView { ... }
+fn lifecycle_state_from_view(state: LifecycleStateView) -> LifecycleState { ... }
+```
+
+`AppLifecycleStatusGateway` 把 `Arc<dyn LifecycleStatusGateway>` 包成另一个 `LifecycleStatusGateway`,转换函数都是 identity match。看起来很像"为了给 daemon 注入做适配",但 grep 一下发现:
+
+```rust
+// uc-app/src/usecases/app_lifecycle/mod.rs
+pub use uc_application::facade::{
+    InMemoryLifecycleStatus, LifecycleStateView as LifecycleState,
+    LifecycleStatusGateway as LifecycleStatusPort,
+};
+```
+
+**`LifecycleStatusPort` 就是 `LifecycleStatusGateway` 的别名 re-export**——同一个 trait 的两个名字。所以 wrapper 内字段类型 `Arc<dyn LifecycleStatusGateway>` 跟 `runtime.lifecycle_status()` 返回的 `Arc<dyn LifecycleStatusPort>` 是同一个 trait object,根本不需要包装。
+
+**结论**: D13 时 `LifecycleFacadeDeps { status: runtime.lifecycle_status().clone() }` 直接传,不再有 30 行 wrapper 死码。
+
+**通用原则**: 当看到某段 wrapper 的所有方法都是 1:1 透传,先 grep 一下两边类型是否其实是同一个——很可能是历史早期 trait 改名时留下的"看起来需要适配,实际是冗余"的代码。识别这种 noop wrapper 应当一眼:**字段类型与构造时传入的类型在 trait object 层面相同,就一定是 noop**。
+
+---
+
+### F-138 · daemon 端 composition root(`entrypoint.rs`)持有 `CoreRuntime` 不违反"AppFacade 是唯一关卡"原则
+
+**发现时间**: 2026-04-26
+
+**背景**: D13 改造目标是"daemon 不再用 `runtime.wiring_deps().<port>` 穿透 application 摸 ports"。但 entrypoint.rs 内本来就有大量 `runtime.wiring_deps().<port>` 调用——装各种 use case、装 search coordinator、装 capture facade 等(`entrypoint.rs:137-237` 共 30+ 处)。
+
+要不要把这些也搬到 application 内部 / 消除掉?
+
+**判断**: 不动。entrypoint.rs 是 daemon 这一侧的 **composition root** —— 它的职责本来就是"把 ports 拼起来,造出 facade / use case / coordinator,递给业务代码"。
+
+**关卡原则的精确语义**:"AppFacade 是唯一对外关卡"约束的是**业务代码**(daemon `app.rs::run` / HTTP handlers / workers),不是 composition root。composition root 必须知道 ports 怎么摆放(否则没法造 facade),它认识 `CoreRuntime` 这种 ports bundle 是合规的。
+
+**反例对照**:如果 daemon `app.rs::run` 在装好 facade 之后还要拿 ports 干事(比如 "再 grab 一个 entry_repo 然后自己跑 SQL"),那才是穿透 application 摸 ports。entrypoint 装好之后就不再访问 wiring_deps,只把 facade 递下去——这是合规的。
+
+**通用原则**:
+- composition root(`entrypoint.rs` / `bootstrap`) 持有 ports bundle 与 application 类型 → 合规
+- 业务代码(`DaemonApp` / handlers / workers) 持有 ports bundle → 违规,只能持 facade
+- 区分点:谁负责"装",谁就允许接触 ports;谁负责"用",谁就只能走 facade
+
+---
+
+### F-139 · daemon Cargo.toml 删 uc-app 是真正的"脱离"信号,不只是改 import
+
+**发现时间**: 2026-04-26
+
+**背景**: D9-D12 期间,daemon 已逐步把 `use uc_app::usecases::*` 全部替换为 `use uc_application::facade::*`。但 daemon `Cargo.toml` 仍然 `uc-app = { path = "../uc-app" }`,因为 `app.rs` / `api/server.rs` 还 `use uc_app::runtime::CoreRuntime;`。
+
+D13 把这 2 处 import 也清掉之后,**Cargo.toml 上的 uc-app 依赖能不能真正去掉**?
+
+**判断与验证**: 能。删除后 `cargo check -p uc-daemon` 仍然通过。
+
+**为什么这是真正的胜利**:
+- `use uc_app::runtime::CoreRuntime;` 这种 import 改不改,只是表面动作——只要 daemon 间接持有 `CoreRuntime` 类型对象(即使不显式 import),Cargo 仍然要把 uc-app 编译进 daemon。
+- `Cargo.toml` 删 uc-app 后还能编译,说明 daemon 内部彻底不需要任何 uc-app 类型——连间接持有都没有。entrypoint.rs 通过 `uc_bootstrap::build_non_gui_runtime_with_emitter()` 拿 `CoreRuntime` 对象然后用其 inherent methods(`.wiring_deps()` / `.lifecycle_status()` / `.task_registry()` / `.storage_paths()` 等),这些是 method dispatch,不需要 daemon 知道 `CoreRuntime` 这个类型本身在哪。
+- 所以 daemon **只通过 trait method dispatch 间接使用 CoreRuntime,从不显式声明它**。这才是"完全脱离"的形态。
+
+**通用原则**: 评估一个 crate 是否真正脱离另一个 crate,看 Cargo.toml 的 `[dependencies]` 段而不是 `use` 语句。删 dep 后能否编译是唯一硬指标——这是 Rust 模块系统给我们的"封装边界 lint"。
+
+---
