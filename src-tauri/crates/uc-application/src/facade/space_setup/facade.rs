@@ -29,11 +29,12 @@ use uc_core::ports::{SettingsPort, SetupStatusPort};
 use uc_core::setup::SetupStatus;
 
 use crate::facade::space_setup::commands::{
-    CurrentInvitation, InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
-    SetupStateView, UnlockSpaceCommand, UnlockSpaceResult,
+    CurrentInvitation, InitializeSpaceCommand, InitializeSpaceInput, InitializeSpaceResult,
+    IssuePairingInvitationResult, SetupStateView, UnlockSpaceCommand, UnlockSpaceInput,
+    UnlockSpaceResult,
 };
 use crate::facade::space_setup::commands::{
-    RedeemPairingInvitationCommand, RedeemPairingInvitationResult,
+    RedeemPairingInvitationCommand, RedeemPairingInvitationInput, RedeemPairingInvitationResult,
 };
 use crate::facade::space_setup::deps::SpaceSetupDeps;
 use crate::facade::space_setup::errors::{
@@ -305,8 +306,9 @@ impl SpaceSetupFacade {
     #[instrument(skip_all)]
     pub async fn initialize_space(
         &self,
-        cmd: InitializeSpaceCommand,
+        input: InitializeSpaceInput,
     ) -> Result<InitializeSpaceResult, InitializeSpaceError> {
+        let cmd: InitializeSpaceCommand = input.into();
         let out = self.initialize_space.execute(cmd).await?;
         self.auto_prime_presence().await;
         Ok(out)
@@ -317,8 +319,9 @@ impl SpaceSetupFacade {
     #[instrument(skip_all)]
     pub async fn unlock_space(
         &self,
-        cmd: UnlockSpaceCommand,
+        input: UnlockSpaceInput,
     ) -> Result<UnlockSpaceResult, UnlockSpaceError> {
+        let cmd: UnlockSpaceCommand = input.into();
         let out = self.unlock_space.execute(cmd).await?;
         self.auto_prime_presence().await;
         Ok(out)
@@ -349,9 +352,10 @@ impl SpaceSetupFacade {
     #[instrument(skip_all)]
     pub async fn redeem_pairing_invitation(
         &self,
-        cmd: RedeemPairingInvitationCommand,
+        input: RedeemPairingInvitationInput,
     ) -> Result<RedeemPairingInvitationResult, RedeemPairingInvitationError> {
         self.auto_prime_presence().await;
+        let cmd: RedeemPairingInvitationCommand = input.into();
         self.redeem_pairing_invitation.execute(cmd).await
     }
 
@@ -960,9 +964,9 @@ mod tests {
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
         );
-        let cmd = InitializeSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-            passphrase_confirm: Passphrase::new("hunter22hunter22"),
+        let cmd = InitializeSpaceInput {
+            passphrase: "hunter22hunter22".to_string(),
+            passphrase_confirm: "hunter22hunter22".to_string(),
             device_name: None,
         };
         let out = facade.initialize_space(cmd).await.expect("A1 ok");
@@ -976,9 +980,9 @@ mod tests {
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
         );
-        let cmd = InitializeSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-            passphrase_confirm: Passphrase::new("different22else2"),
+        let cmd = InitializeSpaceInput {
+            passphrase: "hunter22hunter22".to_string(),
+            passphrase_confirm: "different22else2".to_string(),
             device_name: None,
         };
         let err = facade.initialize_space(cmd).await.unwrap_err();
@@ -997,8 +1001,8 @@ mod tests {
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
         );
-        let cmd = UnlockSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
+        let cmd = UnlockSpaceInput {
+            passphrase: "hunter22hunter22".to_string(),
         };
         facade.unlock_space(cmd).await.expect("A2 ok");
     }
@@ -1010,8 +1014,8 @@ mod tests {
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
         );
-        let cmd = UnlockSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
+        let cmd = UnlockSpaceInput {
+            passphrase: "hunter22hunter22".to_string(),
         };
         let err = facade.unlock_space(cmd).await.unwrap_err();
         assert!(matches!(err, UnlockSpaceError::SetupNotCompleted));
@@ -1031,8 +1035,8 @@ mod tests {
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
         );
-        let cmd = UnlockSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
+        let cmd = UnlockSpaceInput {
+            passphrase: "hunter22hunter22".to_string(),
         };
         let err = facade.unlock_space(cmd).await.unwrap_err();
         assert!(matches!(err, UnlockSpaceError::WrongPassphrase));
@@ -1068,9 +1072,9 @@ mod tests {
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
         );
-        let cmd = InitializeSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-            passphrase_confirm: Passphrase::new("hunter22hunter22"),
+        let cmd = InitializeSpaceInput {
+            passphrase: "hunter22hunter22".to_string(),
+            passphrase_confirm: "hunter22hunter22".to_string(),
             device_name: None,
         };
         facade.initialize_space(cmd).await.expect("A1 ok");
@@ -1093,8 +1097,8 @@ mod tests {
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
         );
-        let cmd = UnlockSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
+        let cmd = UnlockSpaceInput {
+            passphrase: "hunter22hunter22".to_string(),
         };
         facade.unlock_space(cmd).await.expect("A2 ok");
         assert_eq!(
@@ -1113,9 +1117,9 @@ mod tests {
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
         );
-        let cmd = InitializeSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-            passphrase_confirm: Passphrase::new("different22else2"),
+        let cmd = InitializeSpaceInput {
+            passphrase: "hunter22hunter22".to_string(),
+            passphrase_confirm: "different22else2".to_string(),
             device_name: None,
         };
         let _ = facade.initialize_space(cmd).await.unwrap_err();

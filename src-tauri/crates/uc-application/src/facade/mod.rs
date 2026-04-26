@@ -55,11 +55,11 @@ pub use settings::{
 };
 pub use setup_status::SetupStatusFacade;
 pub use space_setup::{
-    CancelInvitationError, CurrentInvitation, InitializeSpaceCommand, InitializeSpaceError,
+    CancelInvitationError, CurrentInvitation, InitializeSpaceError, InitializeSpaceInput,
     InitializeSpaceResult, IssuePairingInvitationError, IssuePairingInvitationResult,
-    PairingOutcome, QuerySetupStateError, RedeemPairingInvitationCommand,
-    RedeemPairingInvitationError, RedeemPairingInvitationResult, ResetSpaceError, SetupStateView,
-    SpaceSetupDeps, SpaceSetupFacade, UnlockSpaceCommand, UnlockSpaceError, UnlockSpaceResult,
+    PairingOutcome, QuerySetupStateError, RedeemPairingInvitationError,
+    RedeemPairingInvitationInput, RedeemPairingInvitationResult, ResetSpaceError, SetupStateView,
+    SpaceSetupDeps, SpaceSetupFacade, UnlockSpaceError, UnlockSpaceInput, UnlockSpaceResult,
 };
 pub use storage::{
     ClearCacheResultView, StorageFacade, StorageFacadeDeps, StorageFacadeError, StorageStatsView,

@@ -51,9 +51,8 @@ use uc_core::ports::{ClockPort, PeerAddressRecord, PeerAddressRepositoryPort, Se
 use uc_core::setup::SetupStatus;
 use uc_core::{MemberRepositoryPort, MemberSyncPreferences, TrustedPeerRepositoryPort};
 
-use crate::facade::space_setup::{
-    RedeemPairingInvitationCommand, RedeemPairingInvitationError, RedeemPairingInvitationResult,
-};
+use crate::facade::space_setup::commands::RedeemPairingInvitationCommand;
+use crate::facade::space_setup::{RedeemPairingInvitationError, RedeemPairingInvitationResult};
 use crate::membership::errors::MembershipApplicationError;
 use crate::membership::usecases::{AdmitMember, AdmitMemberUseCase};
 use crate::pairing_outbound::joiner_handshake::{

@@ -37,14 +37,13 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use uc_application::decode_v3_bytes_to_snapshot;
 use uc_application::facade::space_setup::{
-    InitializeSpaceCommand, RedeemPairingInvitationCommand, SpaceSetupDeps, SpaceSetupFacade,
+    InitializeSpaceInput, RedeemPairingInvitationInput, SpaceSetupDeps, SpaceSetupFacade,
 };
 use uc_application::facade::{
     ClipboardSyncDeps, ClipboardSyncFacade, IngestHandle, MemberRosterDeps, MemberRosterFacade,
 };
 use uc_application::space_access::HmacProofAdapter;
 use uc_bootstrap::IrohNodeConfig;
-use uc_core::crypto::domain::Passphrase;
 use uc_core::ids::{DeviceId, FormatId, RepresentationId};
 use uc_core::membership::{MemberRepositoryPort, MembershipError, SpaceMember};
 use uc_core::ports::pairing::PairingSessionPort;
@@ -471,9 +470,9 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
 async fn pair_sponsor_and_joiner(sponsor: &Side, joiner: &Side, passphrase: &str) {
     let init = sponsor
         .facade
-        .initialize_space(InitializeSpaceCommand {
-            passphrase: Passphrase::new(passphrase),
-            passphrase_confirm: Passphrase::new(passphrase),
+        .initialize_space(InitializeSpaceInput {
+            passphrase: passphrase.to_string(),
+            passphrase_confirm: passphrase.to_string(),
             device_name: None,
         })
         .await
@@ -488,9 +487,9 @@ async fn pair_sponsor_and_joiner(sponsor: &Side, joiner: &Side, passphrase: &str
 
     joiner
         .facade
-        .redeem_pairing_invitation(RedeemPairingInvitationCommand {
-            code: invitation.code.clone(),
-            passphrase: Passphrase::new(passphrase),
+        .redeem_pairing_invitation(RedeemPairingInvitationInput {
+            code: invitation.code.as_str().to_string(),
+            passphrase: passphrase.to_string(),
         })
         .await
         .expect("joiner B2");

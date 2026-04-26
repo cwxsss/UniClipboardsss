@@ -14,9 +14,17 @@ use uc_core::security::IdentityFingerprint;
 // A1 · InitializeSpace
 // ---------------------------------------------------------------------------
 
-/// Input to [`crate::usecases::setup::initialize_space::InitializeSpaceUseCase`].
+/// Public application input for initializing a space.
 #[derive(Debug)]
-pub struct InitializeSpaceCommand {
+pub struct InitializeSpaceInput {
+    pub passphrase: String,
+    pub passphrase_confirm: String,
+    pub device_name: Option<String>,
+}
+
+/// Internal command for [`crate::usecases::setup::initialize_space::InitializeSpaceUseCase`].
+#[derive(Debug)]
+pub(crate) struct InitializeSpaceCommand {
     /// User-entered passphrase protecting the new space.
     pub passphrase: Passphrase,
     /// Confirmation copy — must equal [`passphrase`](Self::passphrase).
@@ -28,6 +36,16 @@ pub struct InitializeSpaceCommand {
     /// * `None` — fall back to the currently-persisted `device_name`;
     ///   caller-level UI must have collected it beforehand.
     pub device_name: Option<String>,
+}
+
+impl From<InitializeSpaceInput> for InitializeSpaceCommand {
+    fn from(input: InitializeSpaceInput) -> Self {
+        Self {
+            passphrase: Passphrase::new(input.passphrase),
+            passphrase_confirm: Passphrase::new(input.passphrase_confirm),
+            device_name: input.device_name,
+        }
+    }
 }
 
 /// Output of a successful A1 initialise.
@@ -42,10 +60,24 @@ pub struct InitializeSpaceResult {
 // A2 · UnlockSpace
 // ---------------------------------------------------------------------------
 
-/// Input to [`crate::usecases::setup::unlock_space::UnlockSpaceUseCase`].
+/// Public application input for unlocking a space.
 #[derive(Debug)]
-pub struct UnlockSpaceCommand {
+pub struct UnlockSpaceInput {
+    pub passphrase: String,
+}
+
+/// Internal command for [`crate::usecases::setup::unlock_space::UnlockSpaceUseCase`].
+#[derive(Debug)]
+pub(crate) struct UnlockSpaceCommand {
     pub passphrase: Passphrase,
+}
+
+impl From<UnlockSpaceInput> for UnlockSpaceCommand {
+    fn from(input: UnlockSpaceInput) -> Self {
+        Self {
+            passphrase: Passphrase::new(input.passphrase),
+        }
+    }
 }
 
 /// Output of a successful A2 unlock.
@@ -72,18 +104,34 @@ pub struct IssuePairingInvitationResult {
 // B2 · RedeemPairingInvitation  (joiner side)
 // ---------------------------------------------------------------------------
 
-/// Input to [`crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase`].
+/// Public application input for redeeming a pairing invitation.
+#[derive(Debug)]
+pub struct RedeemPairingInvitationInput {
+    pub code: String,
+    pub passphrase: String,
+}
+
+/// Internal command for [`crate::usecases::pairing::redeem_invitation::RedeemPairingInvitationUseCase`].
 ///
 /// Joiner-side UX gathers both fields up front: the user types the
 /// invitation code the sponsor shared and the space passphrase the sponsor
 /// chose during A1. Slice 1 does not support a two-step flow where the
 /// passphrase is entered after receiving the keyslot offer.
 #[derive(Debug)]
-pub struct RedeemPairingInvitationCommand {
+pub(crate) struct RedeemPairingInvitationCommand {
     /// Invitation code the user typed (or scanned from the sponsor's UI).
     pub code: InvitationCode,
     /// Same passphrase the sponsor used in A1 `InitializeSpace`.
     pub passphrase: Passphrase,
+}
+
+impl From<RedeemPairingInvitationInput> for RedeemPairingInvitationCommand {
+    fn from(input: RedeemPairingInvitationInput) -> Self {
+        Self {
+            code: InvitationCode::new(input.code),
+            passphrase: Passphrase::new(input.passphrase),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

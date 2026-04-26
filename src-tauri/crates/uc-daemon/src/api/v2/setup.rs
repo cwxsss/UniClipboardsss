@@ -16,10 +16,8 @@ use uc_application::facade::{
     ResetSpaceError, SetupStateView, SpaceSetupFacade,
 };
 use uc_application::facade::{
-    InitializeSpaceCommand, InitializeSpaceResult, RedeemPairingInvitationCommand,
+    InitializeSpaceInput, InitializeSpaceResult, RedeemPairingInvitationInput,
 };
-use uc_core::crypto::domain::Passphrase;
-use uc_core::pairing::invitation::InvitationCode;
 use uc_daemon_contract::api::dto::v2::setup::{
     CurrentInvitation, InitializeSpaceRequest, InitializeSpaceResponse, IssueInvitationResponse,
     RedeemRequest, RedeemResponse, SetupStateResponse,
@@ -72,12 +70,12 @@ pub(crate) async fn initialize(
     Json(req): Json<InitializeSpaceRequest>,
 ) -> Result<Json<InitializeSpaceResponse>, ApiError> {
     let facade = require_facade(&state)?;
-    let cmd = InitializeSpaceCommand {
-        passphrase: Passphrase::new(req.passphrase),
-        passphrase_confirm: Passphrase::new(req.passphrase_confirm),
+    let input = InitializeSpaceInput {
+        passphrase: req.passphrase,
+        passphrase_confirm: req.passphrase_confirm,
         device_name: req.device_name,
     };
-    let out = facade.initialize_space(cmd).await.map_err(map_init_err)?;
+    let out = facade.initialize_space(input).await.map_err(map_init_err)?;
     Ok(Json(initialize_to_dto(out)))
 }
 
@@ -168,12 +166,12 @@ pub(crate) async fn redeem(
     Json(req): Json<RedeemRequest>,
 ) -> Result<Json<RedeemResponse>, ApiError> {
     let facade = require_facade(&state)?;
-    let cmd = RedeemPairingInvitationCommand {
-        code: InvitationCode::new(req.code),
-        passphrase: Passphrase::new(req.passphrase),
+    let input = RedeemPairingInvitationInput {
+        code: req.code,
+        passphrase: req.passphrase,
     };
     let out = facade
-        .redeem_pairing_invitation(cmd)
+        .redeem_pairing_invitation(input)
         .await
         .map_err(map_redeem_err)?;
     Ok(Json(redeem_to_dto(out)))

@@ -1982,3 +1982,29 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-127 · setup v2 的输入模型不能暴露 core 值对象
+
+**发现时间**:2026-04-26
+
+**背景**:daemon `/v2/setup/initialize` 和 `/v2/setup/redeem` 已经通过 `AppFacade` 调用,但 HTTP handler 仍直接构造 `Passphrase` / `InvitationCode`。这仍然让外部入口知道 core 输入模型。
+
+**处理结果**:
+- `SpaceSetupFacade` 公开方法改为接收 application 输入:
+  - `InitializeSpaceInput`
+  - `UnlockSpaceInput`
+  - `RedeemPairingInvitationInput`
+- core 的 `Passphrase` / `InvitationCode` 包装保留在 `uc-application` 内部命令中,由 facade 方法转换。
+- daemon setup v2 handler 只做 HTTP DTO 到 application 输入的映射,不再构造 core 输入模型。
+- CLI init/join 和相关 bootstrap e2e 测试同步切到 application 输入,避免外部调用方继续使用旧命令。
+
+**验证**:
+- `cargo test -p uc-application facade::space_setup --lib`:18 passed
+- `cargo test -p uc-daemon api::v2::setup --lib`:7 passed
+- `cargo check -p uc-daemon -p uc-cli`:passed
+- `cargo test -p uc-daemon --lib`:25 passed
+- `cargo test -p uc-bootstrap --test slice1_handshake_e2e --no-run`:passed
+- `cargo test -p uc-bootstrap --test slice2_phase1_presence_e2e --no-run`:passed
+- `cargo test -p uc-bootstrap --test slice2_phase2_clipboard_e2e --no-run`:passed
+
+---

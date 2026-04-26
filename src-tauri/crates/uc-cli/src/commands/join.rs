@@ -10,10 +10,8 @@ use tokio::select;
 use tokio::signal;
 
 use uc_application::facade::space_setup::{
-    RedeemPairingInvitationCommand, RedeemPairingInvitationError,
+    RedeemPairingInvitationError, RedeemPairingInvitationInput,
 };
-use uc_core::crypto::domain::Passphrase;
-use uc_core::pairing::InvitationCode;
 
 use crate::commands::slice1_common::{
     build_assembly, default_device_name, refuse_if_daemon_running,
@@ -112,9 +110,9 @@ pub async fn run(args: JoinArgs, verbose: bool) -> i32 {
         return exit_codes::EXIT_ERROR;
     }
 
-    let cmd = RedeemPairingInvitationCommand {
-        code: InvitationCode::new(&code_str),
-        passphrase: Passphrase::new(&passphrase_str),
+    let input = RedeemPairingInvitationInput {
+        code: code_str,
+        passphrase: passphrase_str,
     };
 
     let spinner = ui::spinner("Dialing sponsor and running handshake...");
@@ -123,7 +121,7 @@ pub async fn run(args: JoinArgs, verbose: bool) -> i32 {
     // — otherwise `bundle.assembly.shutdown().await` below can't take
     // ownership.
     let facade = std::sync::Arc::clone(&bundle.assembly.facade);
-    let redeem = async move { facade.redeem_pairing_invitation(cmd).await };
+    let redeem = async move { facade.redeem_pairing_invitation(input).await };
     tokio::pin!(redeem);
 
     let exit = select! {

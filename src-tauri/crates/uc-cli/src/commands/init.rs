@@ -5,8 +5,7 @@
 //! daemon is already claiming this profile's socket (see §1 of
 //! `slice1_common`).
 
-use uc_application::facade::space_setup::{InitializeSpaceCommand, InitializeSpaceError};
-use uc_core::crypto::domain::Passphrase;
+use uc_application::facade::space_setup::{InitializeSpaceError, InitializeSpaceInput};
 
 use crate::commands::slice1_common::{
     build_assembly, default_device_name, refuse_if_daemon_running,
@@ -59,16 +58,16 @@ pub async fn run(args: InitArgs, verbose: bool) -> i32 {
 
     let device_name = args.device_name.or_else(default_device_name);
 
-    let cmd = InitializeSpaceCommand {
-        passphrase: Passphrase::new(&passphrase_str),
+    let input = InitializeSpaceInput {
+        passphrase: passphrase_str.clone(),
         // A1 requires both fields; when the user supplied `--passphrase`
         // we take that as their confirmation too.
-        passphrase_confirm: Passphrase::new(&passphrase_str),
+        passphrase_confirm: passphrase_str,
         device_name,
     };
 
     let spinner = ui::spinner("Creating encrypted space...");
-    let exit = match assembly.facade.initialize_space(cmd).await {
+    let exit = match assembly.facade.initialize_space(input).await {
         Ok(result) => {
             ui::spinner_finish_success(&spinner, "Space initialized");
             ui::info("space_id", result.space_id.as_str());

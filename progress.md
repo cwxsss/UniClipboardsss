@@ -3428,6 +3428,40 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · setup v2 输入模型
+
+**触发**:继续收 `.planning/todos/pending/2026-04-26-setup-v2-application.md`。目标是 setup v2 虽已走 `AppFacade`,但外部 handler 不能再构造 core 的口令/邀请码模型。
+
+**完成标准**:
+- daemon setup v2 handler 不再构造 `Passphrase` / `InvitationCode`
+- `SpaceSetupFacade` 对外接收 application 输入模型
+- core 输入模型只留在 `uc-application` 内部转换
+- 验证 application setup facade、daemon setup handler、daemon lib、CLI 编译和受影响 e2e 测试编译
+
+**已做**:
+- `uc-application/src/facade/space_setup/commands.rs` 新增公开 input:
+  - `InitializeSpaceInput`
+  - `UnlockSpaceInput`
+  - `RedeemPairingInvitationInput`
+- 原内部 command 改为 `pub(crate)`,由 facade 方法把 input 转成 core 值对象。
+- `uc-daemon/src/api/v2/setup.rs` 改为只传字符串字段给 application 输入。
+- `uc-cli` init/join 和 bootstrap 相关 e2e 测试改为使用 application 输入。
+- 顺手补齐 `uc-cli/src/commands/members.rs` 对 `RosterError::NotFound` 的匹配,让 `uc-cli` 编译通过。
+
+**验证**:
+- `cargo test -p uc-application facade::space_setup --lib`:✅ 18 passed
+- `cargo test -p uc-daemon api::v2::setup --lib`:✅ 7 passed
+- `cargo check -p uc-daemon -p uc-cli`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+- `cargo test -p uc-bootstrap --test slice1_handshake_e2e --no-run`:✅ passed
+- `cargo test -p uc-bootstrap --test slice2_phase1_presence_e2e --no-run`:✅ passed
+- `cargo test -p uc-bootstrap --test slice2_phase2_clipboard_e2e --no-run`:✅ passed
+
+**收尾**:
+- todo `2026-04-26-setup-v2-application.md` 可移动到 completed。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · restore clipboard 切片
 
 **触发**:resource 提交后继续收 daemon,选择 `routes.rs` 中剩余的 restore 入口。

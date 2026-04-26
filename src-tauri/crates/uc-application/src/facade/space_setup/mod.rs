@@ -9,16 +9,16 @@
 //! the device-onboarding (pairing / join) flow that predates Slice 1. The
 //! two facades will co-exist until later slices consolidate them.
 
-mod commands;
+pub(crate) mod commands;
 mod deps;
 mod errors;
 mod events;
 mod facade;
 
 pub use commands::{
-    CurrentInvitation, InitializeSpaceCommand, InitializeSpaceResult, IssuePairingInvitationResult,
-    RedeemPairingInvitationCommand, RedeemPairingInvitationResult, SetupStateView,
-    UnlockSpaceCommand, UnlockSpaceResult,
+    CurrentInvitation, InitializeSpaceInput, InitializeSpaceResult, IssuePairingInvitationResult,
+    RedeemPairingInvitationInput, RedeemPairingInvitationResult, SetupStateView, UnlockSpaceInput,
+    UnlockSpaceResult,
 };
 pub use deps::SpaceSetupDeps;
 pub use errors::{
