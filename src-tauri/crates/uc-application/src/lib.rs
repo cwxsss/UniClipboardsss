@@ -20,7 +20,6 @@ pub use usecases::clipboard_sync::{
 pub use usecases::clipboard_sync::{decode_v3_bytes_to_snapshot, V3BlobRef};
 pub mod file_transfer;
 pub mod membership;
-pub mod pairing;
 pub(crate) mod pairing_inbound;
 pub(crate) mod pairing_invitation;
 pub(crate) mod pairing_outbound;

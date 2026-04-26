@@ -22,7 +22,6 @@ use tracing::warn;
 use uc_app::deps::SearchPorts;
 use uc_app::shared::host_event::HostEventEmitterPort;
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
-use uc_application::pairing::PairingConfig;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
 use uc_core::config::AppConfig;
@@ -33,7 +32,6 @@ use uc_core::ports::clipboard::{
     SpoolQueuePort, SpoolRequest,
 };
 use uc_core::ports::*;
-use uc_core::settings::model::Settings;
 use uc_infra::blob::{BlobRepositoryPort, BlobStorePort, BlobWriter, FilesystemBlobStore};
 use uc_infra::clipboard::{
     clipboard_change_origin, init_clipboard_change_origin, new_in_memory_change_origin,
@@ -871,16 +869,6 @@ pub async fn resolve_pairing_device_name(settings: Arc<dyn SettingsPort>) -> Str
         Err(err) => {
             warn!(error = %err, "Failed to load settings for pairing device name");
             DEFAULT_PAIRING_DEVICE_NAME.to_string()
-        }
-    }
-}
-
-pub async fn resolve_pairing_config(settings: Arc<dyn SettingsPort>) -> PairingConfig {
-    match settings.load().await {
-        Ok(settings) => PairingConfig::from_settings(&settings),
-        Err(err) => {
-            warn!(error = %err, "Failed to load settings for pairing config");
-            PairingConfig::from_settings(&Settings::default())
         }
     }
 }

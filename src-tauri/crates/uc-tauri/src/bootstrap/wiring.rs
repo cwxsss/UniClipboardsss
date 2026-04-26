@@ -44,8 +44,8 @@ use uc_daemon_client::{DaemonConnectionState, DaemonPairingClient};
 
 // Re-export assembly types from uc-bootstrap.
 pub use uc_bootstrap::assembly::{
-    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
-    WiredDependencies, WiringError, WiringResult,
+    get_storage_paths, resolve_pairing_device_name, wire_dependencies, WiredDependencies,
+    WiringError, WiringResult,
 };
 
 // Re-export BackgroundRuntimeDeps from uc-bootstrap (definition moved in Phase 40).

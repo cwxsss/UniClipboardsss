@@ -13,8 +13,7 @@ pub use uc_bootstrap::ensure_default_device_name;
 pub use uc_bootstrap::load_config;
 // uc_bootstrap re-exports (pure dependency construction — zero tauri imports)
 pub use uc_bootstrap::assembly::{
-    get_storage_paths, resolve_pairing_config, resolve_pairing_device_name, wire_dependencies,
-    WiredDependencies,
+    get_storage_paths, resolve_pairing_device_name, wire_dependencies, WiredDependencies,
 };
 // wiring.rs re-exports (Tauri event loops and background task management)
 pub use wiring::{start_background_tasks, start_gui_pairing_lease_task, BackgroundRuntimeDeps};

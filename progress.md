@@ -3003,3 +3003,56 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - C8c · 删 `uc-application/src/pairing/state_machine.rs`(F-105 中等大小,含 PIN-显示模型旧消息)
 - C8d · 一波删 `uc-core/ports/{connection_policy, discovery}.rs` + `uc-core/{ids/peer_id, network/events, network/connection_policy}.rs` + 4 个 protocol 文件 + 同步 mod.rs / lib.rs re-export(最大块,但纯 mechanical)
 
+---
+
+## Session 2026-04-25(续 46) — Slice 4 P5c C8c · 物理删 uc-application/src/pairing/ 整目录
+
+**触发**:用户回 "开"。原计划只删 1605 行 `state_machine.rs`,扫描后**完全改观** —— 整个 `uc-application/src/pairing/` 11 文件 / 3669 行都是 libp2p 时代残留。
+
+**实情勘察**:
+- `PairingFacade` / `PairingOrchestrator` —— `uc-bootstrap/src/builders.rs:109,174` 注释明确说"已下线",grep 确认外部 0 装配
+- 唯一外部 `use` 引用:`uc-bootstrap/src/assembly.rs:25 use uc_application::pairing::PairingConfig;` + `assembly.rs:878 resolve_pairing_config()` —— 但 `rg "resolve_pairing_config\("` 在所有 crate 里 **0 实际调用**(只有 lib.rs / wiring.rs / mod.rs 三层 re-export 死链)
+- Slice 1 之后的 iroh pairing 走的是**完全不同**的路径:
+  * `uc-application/src/pairing_inbound/`(独立目录)
+  * `uc-application/src/facade/space_setup/`(`SpaceSetupFacade` 入口)
+  * `uc_core::ports::pairing::PairingEventPort` / `PairingSessionPort`(uc-core 端口,与 uc-application 内部同名 trait 完全无关)
+  * `uc-infra/src/pairing/session.rs`(实现)
+- `uc-app::pairing` 是另一 crate(同名巧合);`uc-infra::pairing::PairingProtocolHandler` 是独立 type,与 uc-application 同名重合无关
+
+**完成标准**:
+- 物理删 `uc-application/src/pairing/` 整目录(11 文件)+ `pairing/usecases/`(4 文件)
+- 收尾 `uc-application/src/lib.rs:23` 删 `pub mod pairing;`
+- 收尾 `uc-bootstrap/src/assembly.rs:25,878-886` 删 `use PairingConfig` import + `resolve_pairing_config()` 整 fn + 顺手清孤立的 `Settings` import
+- 收尾 `uc-bootstrap/src/lib.rs:19-23` re-export 列表删 `resolve_pairing_config`
+- 收尾 `uc-tauri/src/bootstrap/wiring.rs:46-49` re-export 列表删 `resolve_pairing_config`
+- 收尾 `uc-tauri/src/bootstrap/mod.rs:15-18` re-export 列表删 `resolve_pairing_config`
+- `cargo check` + `cargo test` 全绿(已知 2 个 `facade::clipboard::tests::dispatch_*` 预存欠账除外)
+
+**已做**:
+- **删** `uc-application/src/pairing/`(11 文件 / 3669 行;含 `state_machine.rs:1605` / `orchestrator.rs:739` / `protocol_handler.rs:649` / `facade.rs:252` / `session_manager.rs:250` / `events.rs:51` / `crypto.rs:28` / `mod.rs:17` + `usecases/{accept,cancel,reject}_pairing.rs` + `usecases/mod.rs`)
+- **改** `uc-application/src/lib.rs` 删 `pub mod pairing;`(`pairing_inbound` 不动,它是 `pub(crate)` 的 Slice 1 真路径)
+- **改** `uc-bootstrap/src/assembly.rs` 删 3 个东西:`use uc_application::pairing::PairingConfig`、`use uc_core::settings::model::Settings`(随 fn 一起孤立)、`pub async fn resolve_pairing_config()` 整 fn
+- **改** `uc-bootstrap/src/lib.rs` re-export `pub use assembly::{...}` 列表删 `resolve_pairing_config,` 一项
+- **改** `uc-tauri/src/bootstrap/wiring.rs` re-export `pub use uc_bootstrap::assembly::{...}` 列表删 `resolve_pairing_config,`
+- **改** `uc-tauri/src/bootstrap/mod.rs` re-export 列表删 `resolve_pairing_config,`
+
+**验证**:
+- `cargo check -p uc-application -p uc-bootstrap -p uc-daemon -p uc-tauri -p uc-cli`:✅ 全过(剩 3 个预存 warning:`Kek` import / `LocalIdentity` / `DuplicateIgnored`,均与本次无关)
+- `cargo test -p uc-app --lib`:✅ 7/7
+- `cargo test -p uc-daemon --lib`:✅ 25/25(presence_monitor / setup_events / v2::setup 全套)
+- `cargo test -p uc-bootstrap --lib`:✅ 0 测试(crate 无单测)
+- `cargo test -p uc-application --lib`:189/191 通过,2 fail (`facade::clipboard::facade::tests::dispatch_entry_returns_public_outcome_for_online_peer` / `dispatch_snapshot_encodes_envelope_and_fans_out`) **=== 续 40 T3.2 S1 已确认的预存欠账,与 C8c 无关**
+
+**Phase 5 删除清单进度**(C8c 后):
+- 已删 (16 计数,但实际 +11 文件):新增整 `uc-application/src/pairing/` 目录 11 文件
+- 待删 (6 计数):`uc-core ports/{connection_policy, discovery}.rs`、`uc-core/{ids/peer_id, network/events, network/connection_policy}.rs`、`uc-core/network/protocol/{file_transfer, heartbeat, device_announce, protocol_message}.rs` + (file_sync/cleanup, copy_file_to_clipboard 留 V3 active,不计)
+
+**净瘦身**:`-3669 行`(pairing/) + 删除 `resolve_pairing_config` 9 行 + 4 处 re-export 行 = ~`-3700 行`。
+
+**风险后顾**:
+- 因为 `pairing/usecases/{accept,cancel,reject}_pairing.rs` 也一并删除,后续若发现某个 daemon HTTP 路径其实还在调 `accept_pairing` 之类,需要重新评估;但 grep 已确认 0 外部引用
+- task_plan §1571 写"Phase 5 mass delete `pairing/mod.rs`:去掉 `state_machine` 子模块导出"显然过期已远 —— 实际整目录可删。建议下一波(C8d 或单独 commit)修订 task_plan §1571 标"已在 P5c C8c 整目录删除"
+
+**下一步候选**:
+- C8d · 一波删 `uc-core/ports/{connection_policy, discovery}.rs` + `uc-core/{ids/peer_id, network/events, network/connection_policy}.rs` + 4 个 `network/protocol/{file_transfer, heartbeat, device_announce, protocol_message}.rs` + 同步 `mod.rs` / `lib.rs` re-export(纯 mechanical,9 文件)
+
