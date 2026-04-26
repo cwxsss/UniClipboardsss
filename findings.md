@@ -1917,3 +1917,26 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-124 · daemon blob 二进制读取可收口为 resource facade
+
+**发现时间**:2026-04-26
+
+**背景**:`api/blob.rs` 原来直接构造 `CoreUseCases`,并直接把 URL 字符串转成 core `BlobId` / `RepresentationId`。这让 HTTP handler 知道了 core 标识类型。
+
+**处理结果**:
+- 新增 `uc-application::facade::resource::ResourceFacade`
+- application 层暴露 `BinaryResourceView`
+- daemon blob / thumbnail handler 改为只传字符串 ID 给 facade
+- 资源 not found / mismatch / internal 错误由 application facade 分类,daemon 只映射 HTTP 状态码
+
+**边界判断**:
+- HTTP `Content-Type` header 和 response body 仍由 daemon 处理,属于 HTTP 表示层。
+- facade 直接依赖 core repository/blob reader ports,不依赖 `uc-app`,避免继续扩大旧 usecase 暴露面。
+
+**验证**:
+- `cargo test -p uc-application facade::resource --lib`:3 passed
+- `cargo check -p uc-daemon`:passed
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

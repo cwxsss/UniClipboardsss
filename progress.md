@@ -3428,6 +3428,33 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · blob/resource 切片
+
+**触发**:继续收 daemon,选择较小的二进制资源读取入口。
+
+**完成标准**:
+- daemon blob handler 不再构造 `CoreUseCases`
+- daemon blob handler 不再直接引用 core `BlobId` / `RepresentationId`
+- blob / thumbnail 资源读取通过 `uc-application`
+- 验证 `uc-application` resource facade 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 新增 `uc-application/src/facade/resource/mod.rs`
+- `uc-application/src/facade/mod.rs` 导出 resource facade 和模型
+- `uc-daemon/src/api/blob.rs` 改为调用 `ResourceFacade`
+- `uc-daemon/src/api/server.rs` 增加 `resource_facade`
+- `uc-daemon/src/app.rs` 注入 `ResourceFacade`
+
+**验证**:
+- `cargo test -p uc-application facade::resource --lib`:✅ 3 passed
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**未纳入本次提交**:
+- `.claude/skills/...` 现有改动不是本轮产生,不 stage。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · encryption 切片
 
 **触发**:lifecycle 提交后继续收 daemon,选择 encryption HTTP 入口。

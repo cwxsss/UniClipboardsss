@@ -18,8 +18,8 @@ use uc_app::usecases::CoreUseCases;
 use uc_app::usecases::{LifecycleState, LifecycleStatusPort};
 use uc_application::facade::{
     DeviceFacade, EncryptionFacade, EncryptionFacadeDeps, LifecycleFacade, LifecycleFacadeDeps,
-    LifecycleStateView, LifecycleStatusGateway, MemberRosterFacade, SettingsFacade,
-    SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
+    LifecycleStateView, LifecycleStatusGateway, MemberRosterFacade, ResourceFacade,
+    ResourceFacadeDeps, SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::PresencePort;
@@ -310,6 +310,17 @@ impl DaemonApp {
             api_state.with_encryption(Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
                 setup_status: self.runtime.wiring_deps().setup_status.clone(),
                 space_access: self.runtime.wiring_deps().security.space_access.clone(),
+            })));
+        let api_state =
+            api_state.with_resource(Arc::new(ResourceFacade::new(ResourceFacadeDeps {
+                representation_repo: self
+                    .runtime
+                    .wiring_deps()
+                    .clipboard
+                    .representation_repo
+                    .clone(),
+                thumbnail_repo: self.runtime.wiring_deps().storage.thumbnail_repo.clone(),
+                blob_store: self.runtime.wiring_deps().storage.blob_store.clone(),
             })));
         let api_state = api_state.with_settings(Arc::new(SettingsFacade::new(
             self.runtime.wiring_deps().settings.clone(),

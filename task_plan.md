@@ -2964,7 +2964,27 @@ Phase 0(已完成,2026-04-18)
 - `cargo check -p uc-daemon`
 - `cargo test -p uc-daemon --lib`
 
-### Phase D7 · daemon 下一块收口 — in_progress
+### Phase D7 · daemon blob/resource 入口收口 — complete
+
+**范围**:
+- `GET /clipboard/blobs/:blob_id`
+- `GET /clipboard/thumbnails/:rep_id`
+
+**结果**:
+- 新增 `uc-application::facade::resource::ResourceFacade`
+- 二进制资源 view 进入 `uc-application`
+- blob id / representation id 字符串解析移入 `uc-application`
+- daemon blob handler 不再直接构造 `CoreUseCases`,也不再直接引用 core `BlobId` / `RepresentationId`
+
+**保留职责**:
+- daemon 仍负责设置 HTTP `Content-Type` 和二进制响应状态码,这是 HTTP 表示层职责。
+
+**验证**:
+- `cargo test -p uc-application facade::resource --lib`
+- `cargo check -p uc-daemon`
+- `cargo test -p uc-daemon --lib`
+
+### Phase D8 · daemon 下一块收口 — in_progress
 
 **候选优先级**:
 1. `api/search.rs`:直接构造 core search query / error,范围较大。

@@ -11,6 +11,7 @@ pub mod clipboard;
 pub mod device;
 pub mod encryption;
 pub mod lifecycle;
+pub mod resource;
 pub mod roster;
 pub mod settings;
 pub mod setup_status;
@@ -34,6 +35,7 @@ pub use lifecycle::{
     LifecycleFacade, LifecycleFacadeDeps, LifecycleFacadeError, LifecycleStateView,
     LifecycleStatusGateway,
 };
+pub use resource::{BinaryResourceView, ResourceFacade, ResourceFacadeDeps, ResourceFacadeError};
 pub use roster::{
     ContentTypesPatch, ContentTypesView, MemberRosterDeps, MemberRosterFacade, MemberSummary,
     MemberSyncPreferencesPatch, MemberSyncPreferencesView, PresenceEvent, RosterEntry, RosterError,

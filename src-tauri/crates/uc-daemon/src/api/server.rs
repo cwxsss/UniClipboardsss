@@ -20,8 +20,8 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
 use uc_application::facade::{
-    DeviceFacade, EncryptionFacade, LifecycleFacade, MemberRosterFacade, SettingsFacade,
-    SpaceSetupFacade, StorageFacade,
+    DeviceFacade, EncryptionFacade, LifecycleFacade, MemberRosterFacade, ResourceFacade,
+    SettingsFacade, SpaceSetupFacade, StorageFacade,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -50,6 +50,7 @@ pub struct DaemonApiState {
     pub member_roster_facade: Option<Arc<MemberRosterFacade>>,
     pub lifecycle_facade: Option<Arc<LifecycleFacade>>,
     pub encryption_facade: Option<Arc<EncryptionFacade>>,
+    pub resource_facade: Option<Arc<ResourceFacade>>,
     pub settings_facade: Option<Arc<SettingsFacade>>,
     pub device_facade: Option<Arc<DeviceFacade>>,
     pub storage_facade: Option<Arc<StorageFacade>>,
@@ -84,6 +85,7 @@ impl DaemonApiState {
             member_roster_facade: None,
             lifecycle_facade: None,
             encryption_facade: None,
+            resource_facade: None,
             settings_facade: None,
             device_facade: None,
             storage_facade: None,
@@ -142,6 +144,17 @@ impl DaemonApiState {
         self.encryption_facade
             .clone()
             .ok_or_else(|| ApiError::service_unavailable("encryption facade unavailable"))
+    }
+
+    pub fn with_resource(mut self, resource_facade: Arc<ResourceFacade>) -> Self {
+        self.resource_facade = Some(resource_facade);
+        self
+    }
+
+    pub fn resource_facade_or_error(&self) -> Result<Arc<ResourceFacade>, ApiError> {
+        self.resource_facade
+            .clone()
+            .ok_or_else(|| ApiError::service_unavailable("resource facade unavailable"))
     }
 
     pub fn with_settings(mut self, settings_facade: Arc<SettingsFacade>) -> Self {
