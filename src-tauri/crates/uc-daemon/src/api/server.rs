@@ -19,7 +19,7 @@ use axum::Router;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
-use uc_application::facade::{MemberRosterFacade, SettingsFacade, SpaceSetupFacade};
+use uc_application::facade::{DeviceFacade, MemberRosterFacade, SettingsFacade, SpaceSetupFacade};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -46,6 +46,7 @@ pub struct DaemonApiState {
     pub space_setup_facade: Option<Arc<SpaceSetupFacade>>,
     pub member_roster_facade: Option<Arc<MemberRosterFacade>>,
     pub settings_facade: Option<Arc<SettingsFacade>>,
+    pub device_facade: Option<Arc<DeviceFacade>>,
     pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
     /// Gate controlling clipboard capture in the daemon.
@@ -76,6 +77,7 @@ impl DaemonApiState {
             space_setup_facade: None,
             member_roster_facade: None,
             settings_facade: None,
+            device_facade: None,
             space_access_facade: None,
             event_tx,
             clipboard_capture_gate: None,
@@ -120,6 +122,17 @@ impl DaemonApiState {
         self.settings_facade
             .clone()
             .ok_or_else(|| ApiError::service_unavailable("settings facade unavailable"))
+    }
+
+    pub fn with_device(mut self, device_facade: Arc<DeviceFacade>) -> Self {
+        self.device_facade = Some(device_facade);
+        self
+    }
+
+    pub fn device_facade_or_error(&self) -> Result<Arc<DeviceFacade>, ApiError> {
+        self.device_facade
+            .clone()
+            .ok_or_else(|| ApiError::service_unavailable("device facade unavailable"))
     }
 
     pub fn with_space_access(mut self, space_access_facade: Arc<SpaceAccessFacade>) -> Self {

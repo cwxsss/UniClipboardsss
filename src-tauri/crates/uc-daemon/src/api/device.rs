@@ -9,9 +9,6 @@ use axum::routing::get;
 use axum::{Json, Router};
 use utoipa;
 
-use uc_app::usecases::CoreUseCases;
-
-use crate::api::conversion::IntoApiDto;
 use crate::api::dto::device::GetLocalDeviceInfoResponse;
 use crate::api::dto::error::ApiError;
 use crate::api::server::DaemonApiState;
@@ -34,17 +31,17 @@ pub fn router() -> Router<DaemonApiState> {
 async fn get_local_device_info_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<GetLocalDeviceInfoResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let info = usecases
-        .get_local_device_info()
-        .execute()
+    let facade = state.device_facade_or_error()?;
+    let info = facade
+        .local_device_info()
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     Ok(Json(GetLocalDeviceInfoResponse {
-        data: info.into_api_dto(),
+        data: crate::api::dto::device::LocalDeviceInfoDto {
+            peer_id: info.peer_id,
+            device_name: info.device_name,
+        },
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }

@@ -11,12 +11,10 @@ use uc_app::usecases::clipboard::get_entry_detail::EntryDetailResult;
 use uc_app::usecases::clipboard::get_entry_resource::EntryResourceResult;
 use uc_app::usecases::clipboard::list_entry_projections::EntryProjectionDto;
 use uc_app::usecases::clipboard::ClipboardStats;
-use uc_app::usecases::pairing::LocalDeviceInfo;
 use uc_daemon_contract::api::dto::clipboard::{
     ClearHistoryResultDto, ClipboardStatsDto, EntryDetailDto, EntryProjectionResponseDto,
     EntryResourceDto,
 };
-use uc_daemon_contract::api::dto::device::LocalDeviceInfoDto;
 
 /// Local projection trait for converting app-layer types into transport DTOs.
 ///
@@ -90,15 +88,6 @@ impl IntoApiDto<ClearHistoryResultDto> for ClearHistoryResult {
         ClearHistoryResultDto {
             deleted_count: self.deleted_count,
             failed_entries: self.failed_entries,
-        }
-    }
-}
-
-impl IntoApiDto<LocalDeviceInfoDto> for LocalDeviceInfo {
-    fn into_api_dto(self) -> LocalDeviceInfoDto {
-        LocalDeviceInfoDto {
-            peer_id: self.peer_id,
-            device_name: self.device_name,
         }
     }
 }

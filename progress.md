@@ -3457,3 +3457,27 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 **后续注意**:
 - `uc-daemon-contract` 仍依赖 `uc-core` 来提供 DTO ↔ core 的旧转换实现。本切片先让 daemon 不再用这些转换;后续要彻底做到“外部不知道 core”,需要清理 contract 的 `uc-core` 依赖。
+
+---
+
+## Session 2026-04-26 — daemon application 边界收口 · device/me 切片
+
+**触发**:继续收 daemon,选择较小的 `GET /device/me` 查询入口。
+
+**完成标准**:
+- daemon device handler 不再构造 `CoreUseCases`
+- 本机设备名 fallback / trim 规则迁入 `uc-application`
+- daemon conversion 不再引用 `uc_app::usecases::pairing::LocalDeviceInfo`
+- 验证 `uc-application` device facade 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 新增 `uc-application/src/facade/device/mod.rs`
+- `uc-daemon/src/api/device.rs` 改为调用 `DeviceFacade`
+- `uc-daemon/src/api/server.rs` 增加 `device_facade`
+- `uc-daemon/src/app.rs` 注入 `DeviceFacade`
+- `uc-daemon/src/api/conversion.rs` 删除 LocalDeviceInfo 投影
+
+**验证**:
+- `cargo test -p uc-application facade::device --lib`:✅ 2 passed
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed

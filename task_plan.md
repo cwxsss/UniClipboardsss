@@ -2885,11 +2885,28 @@ Phase 0(已完成,2026-04-18)
 **遗留**:
 - `uc-daemon-contract` 仍依赖 `uc-core` 做 DTO 转换。daemon 当前不再使用这些转换,但外部 contract 彻底去 core 需要后续单独清理。
 
-### Phase D3 · daemon 下一块收口 — in_progress
+### Phase D3 · daemon device/me 入口收口 — complete
+
+**范围**:
+- `GET /device/me`
+
+**结果**:
+- 新增 `uc-application::facade::device::DeviceFacade`
+- 本机设备名 trim / fallback 规则移入 `uc-application`
+- daemon device handler 不再直接调用 `uc-app::CoreUseCases`
+- daemon conversion 删除 `LocalDeviceInfo` 投影
+
+**验证**:
+- `cargo test -p uc-application facade::device --lib`
+- `cargo check -p uc-daemon`
+- `cargo test -p uc-daemon --lib`
+
+### Phase D4 · daemon 下一块收口 — in_progress
 
 **候选优先级**:
 1. `api/search.rs`:直接构造 core search query / error,范围较大。
 2. clipboard workers:直接依赖 platform watcher / core snapshot,需要更完整的 application worker facade。
 3. `entrypoint.rs` / `app.rs`:仍是装配根,需要后续把 daemon runtime 装配入口迁入 `uc-application` 或内部装配模块。
+4. `api/encryption.rs` / `api/lifecycle.rs`:依赖 `uc-app` 旧用例,需要先判断是否搬迁用例还是新增 facade 包装。
 
 **下一步选择**:先评估 `api/search.rs`,若改动范围过大,改收 `api/encryption.rs` / `api/lifecycle.rs` 这类较小入口。

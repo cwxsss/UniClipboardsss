@@ -8,6 +8,7 @@
 pub mod app_facade;
 pub mod blob_transfer;
 pub mod clipboard;
+pub mod device;
 pub mod roster;
 pub mod settings;
 pub mod setup_status;
@@ -22,6 +23,7 @@ pub use clipboard::{
     ClipboardSyncDeps, ClipboardSyncError, ClipboardSyncFacade, DispatchEntryInput,
     DispatchEntryOutcome, DispatchEntryPerTarget, InboundAction, InboundNotice, IngestHandle,
 };
+pub use device::{DeviceFacade, DeviceFacadeError, LocalDeviceInfoView};
 pub use roster::{
     ContentTypesPatch, ContentTypesView, MemberRosterDeps, MemberRosterFacade, MemberSummary,
     MemberSyncPreferencesPatch, MemberSyncPreferencesView, PresenceEvent, RosterEntry, RosterError,

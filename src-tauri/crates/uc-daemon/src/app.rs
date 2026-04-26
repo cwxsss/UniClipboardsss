@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
-use uc_application::facade::{MemberRosterFacade, SettingsFacade, SpaceSetupFacade};
+use uc_application::facade::{DeviceFacade, MemberRosterFacade, SettingsFacade, SpaceSetupFacade};
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::PresencePort;
 
@@ -295,6 +295,10 @@ impl DaemonApp {
             None => api_state,
         };
         let api_state = api_state.with_settings(Arc::new(SettingsFacade::new(
+            self.runtime.wiring_deps().settings.clone(),
+        )));
+        let api_state = api_state.with_device(Arc::new(DeviceFacade::new(
+            self.runtime.wiring_deps().device.device_identity.clone(),
             self.runtime.wiring_deps().settings.clone(),
         )));
 
