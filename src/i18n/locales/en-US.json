@@ -607,6 +607,24 @@
       },
       "errors": {
         "issueFailed": "Failed to generate invitation. Please try again."
+      },
+      "success": {
+        "title": "Device joined",
+        "subtitle": "The other device has successfully joined this space"
+      },
+      "failed": {
+        "title": "Pairing failed",
+        "unknown": "The other device couldn't join",
+        "fallback": "Pairing failed: {{reason}}",
+        "reasons": {
+          "cancelled": "Invitation was cancelled",
+          "expired": "Invitation expired",
+          "timeout": "Timed out — the other device didn't complete pairing in time",
+          "passphrase_mismatch": "The other device entered the wrong passphrase",
+          "user_rejected": "You declined this pairing request",
+          "proof_mismatch": "Identity verification failed",
+          "joiner_disconnected": "The other device disconnected mid-pairing"
+        }
       }
     },
     "unpair": {

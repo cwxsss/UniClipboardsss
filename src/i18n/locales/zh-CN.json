@@ -598,6 +598,24 @@
       },
       "errors": {
         "issueFailed": "生成邀请码失败，请重试"
+      },
+      "success": {
+        "title": "设备已加入",
+        "subtitle": "对方设备已成功加入此空间"
+      },
+      "failed": {
+        "title": "配对失败",
+        "unknown": "对方设备未能成功加入",
+        "fallback": "配对失败：{{reason}}",
+        "reasons": {
+          "cancelled": "邀请已取消",
+          "expired": "邀请已过期",
+          "timeout": "等待超时，对方未在时限内完成配对",
+          "passphrase_mismatch": "对方输入的口令错误",
+          "user_rejected": "你拒绝了这次配对请求",
+          "proof_mismatch": "身份校验失败",
+          "joiner_disconnected": "对方设备中途断开"
+        }
       }
     },
     "unpair": {

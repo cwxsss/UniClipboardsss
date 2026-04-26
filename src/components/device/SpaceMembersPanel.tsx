@@ -1,5 +1,5 @@
 import { AlertTriangle, Monitor, Plus, RefreshCw } from 'lucide-react'
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import AddDeviceDialog from './AddDeviceDialog'
@@ -75,15 +75,6 @@ const SpaceMembersPanel: React.FC = () => {
     const unsub = daemonWs.subscribe(['peers'], handler)
     return unsub
   }, [dispatch])
-
-  // 配对成功 → 列表里出现新成员 → 自动关闭添加设备对话框
-  const prevPeersCountRef = useRef(spaceMembers.length)
-  useEffect(() => {
-    if (spaceMembers.length > prevPeersCountRef.current && addDialogOpen) {
-      setAddDialogOpen(false)
-    }
-    prevPeersCountRef.current = spaceMembers.length
-  }, [spaceMembers.length, addDialogOpen])
 
   const openSheet = (peerId: string) => {
     setSelectedDeviceId(peerId)
