@@ -10494,6 +10494,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uc-app",
+ "uc-application",
  "uc-daemon-contract",
  "uc-platform",
 ]

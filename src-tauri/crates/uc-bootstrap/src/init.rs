@@ -3,7 +3,7 @@
 //! This module contains initialization functions that run during application startup.
 
 use std::sync::Arc;
-use uc_app::app_paths::AppPaths;
+use uc_application::facade::AppPaths;
 use uc_application::facade::SetupStatusFacade;
 use uc_core::config::AppConfig;
 use uc_core::ports::{SettingsPort, SetupStatusPort};

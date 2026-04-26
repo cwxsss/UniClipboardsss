@@ -15,6 +15,7 @@ path = "src/lib.rs"
 
 [dependencies]
 uc-app = { path = "../uc-app" }
+uc-application = { path = "../uc-application" }
 uc-daemon-contract = { path = "../uc-daemon-contract" }
 uc-platform = { path = "../uc-platform" }
 anyhow = "1.0"

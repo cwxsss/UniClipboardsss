@@ -19,6 +19,11 @@
 - **来源**:`uc-app/src/usecases/app_lifecycle/*` 迁为 `uc-application/src/facade/lifecycle` 兼容转发后,daemon/bootstrap/Tauri 编译通过。
 - **影响**:daemon 构造 `LifecycleFacade` 时不再需要从 `uc-app::usecases` 导入 lifecycle 类型;后续 `uc-app` 退场少一个共享阻塞点。
 
+### F-043 · AppPaths 是 application 基础模型,不需要留在 uc-app
+- **事实**:`AppPaths` 只封装应用目录结构和派生文件路径,不依赖 `CoreRuntime` / usecase。
+- **来源**:`AppPaths` 迁入 `uc-application/src/facade/app_paths.rs` 后,bootstrap / daemon-local / Tauri 编译和 daemon 测试通过。
+- **影响**:daemon-local 和 bootstrap 不再为了路径模型依赖 `uc-app::app_paths`;后续 `uc-app` 退场时,路径模型已经有新归属。
+
 ## Slice 3 Phase 1 · T0 iroh-blobs 探针发现(2026-04-24)
 
 ### F-030 · `iroh-blobs 0.95.0` 与当前 `iroh 0.95.1` 不同栈

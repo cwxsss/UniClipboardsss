@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use uc_app::app_paths::AppPaths;
+use uc_application::facade::AppPaths;
 
 pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
 pub const DEFAULT_HTTP_PORT: u16 = 42715;

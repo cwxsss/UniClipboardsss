@@ -145,7 +145,7 @@ pub struct AppRuntime {
 impl AppRuntime {
     /// Create a new AppRuntime from dependencies.
     /// 从依赖创建新的 AppRuntime。
-    pub fn new(deps: AppDeps, storage_paths: uc_app::app_paths::AppPaths) -> Self {
+    pub fn new(deps: AppDeps, storage_paths: uc_application::facade::AppPaths) -> Self {
         let event_emitter: Arc<dyn HostEventEmitterPort> =
             Arc::new(uc_bootstrap::LoggingHostEventEmitter);
         Self::with_setup(deps, storage_paths, event_emitter)
@@ -159,7 +159,7 @@ impl AppRuntime {
     /// only needs an emitter to wire CoreRuntime.
     pub fn with_setup(
         deps: AppDeps,
-        storage_paths: uc_app::app_paths::AppPaths,
+        storage_paths: uc_application::facade::AppPaths,
         event_emitter: Arc<dyn HostEventEmitterPort>,
     ) -> Self {
         let lifecycle_status: Arc<dyn uc_application::facade::LifecycleStatusGateway> =

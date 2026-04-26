@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
-use uc_app::app_paths::AppPaths;
+use uc_application::facade::AppPaths;
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::ports::AppDirsPort;
 

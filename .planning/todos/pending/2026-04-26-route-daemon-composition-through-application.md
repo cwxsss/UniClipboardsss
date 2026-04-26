@@ -27,3 +27,7 @@ daemon handler 调用面已经开始统一到 `AppFacade`,但 `app.rs` 和 `entr
   - `uc-app` 旧 lifecycle 路径只保留兼容转发。
   - daemon / bootstrap / Tauri 不再从 `uc_app::usecases` 导入 lifecycle 状态端口。
   - 已验证 `cargo test -p uc-application facade::lifecycle --lib`、`cargo test -p uc-daemon --lib`、`cargo check -p uc-application -p uc-app -p uc-bootstrap -p uc-daemon -p uc-tauri`。
+- 2026-04-26:已把应用路径模型 `AppPaths` 从 `uc-app` 迁到 `uc_application::facade`。
+  - `uc-app::app_paths` 只保留兼容转发。
+  - bootstrap / daemon-local / Tauri 不再从 `uc_app::app_paths` 导入路径模型。
+  - 已验证 `cargo test -p uc-application facade::app_paths --lib`、`cargo check -p uc-application -p uc-app -p uc-bootstrap -p uc-daemon-local -p uc-daemon -p uc-tauri`、`cargo test -p uc-daemon-local --lib`、`cargo test -p uc-daemon --lib`。

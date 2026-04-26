@@ -3500,6 +3500,30 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — uc-app 退场 · AppPaths 切片
+
+**触发**:继续清理 bootstrap / daemon-local / Tauri 对 `uc-app` 基础模型的依赖。
+
+**完成标准**:
+- `AppPaths` 迁到 `uc-application`
+- bootstrap / daemon-local / Tauri 不再从 `uc_app::app_paths` 导入
+- `uc-app::app_paths` 只保留兼容转发
+- 验证 application、daemon-local、daemon 和相关 crate 编译
+
+**已做**:
+- 新增 `uc-application/src/facade/app_paths.rs`
+- `uc-app/src/app_paths.rs` 改为兼容转发
+- 更新 bootstrap、daemon-local、Tauri 的导入路径
+- 为 `uc-daemon-local` 补上 `uc-application` 依赖
+
+**验证**:
+- `cargo test -p uc-application facade::app_paths --lib`:✅ passed
+- `cargo check -p uc-application -p uc-app -p uc-bootstrap -p uc-daemon-local -p uc-daemon -p uc-tauri`:✅ passed
+- `cargo test -p uc-daemon-local --lib`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · query peers 切片
 
 **触发**:继续处理 daemon query / peers / ws 仍直接认识 core runtime、presence port 和分散 facade 的边界问题。

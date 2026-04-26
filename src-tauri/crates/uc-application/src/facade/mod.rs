@@ -6,6 +6,7 @@
 //! sub-facades expose them through domain-scoped methods.
 
 pub mod app_facade;
+pub mod app_paths;
 pub mod blob_transfer;
 pub mod clipboard;
 pub mod clipboard_capture;
@@ -30,6 +31,7 @@ pub use app_facade::{
     AppFacade, AppFacadeParts, AppPresenceEvent, AppPresenceSubscription,
     AppPresenceSubscriptionError,
 };
+pub use app_paths::AppPaths;
 pub use blob_transfer::{
     BlobTransferDeps, BlobTransferError, BlobTransferFacade, FetchBlobCommand, FetchBlobResult,
     PublishBlobCommand, PublishBlobResult,

@@ -541,7 +541,7 @@ pub fn get_default_app_dirs() -> WiringResult<uc_core::app_dirs::AppDirs> {
 /// Get resolved storage paths from configuration.
 pub fn get_storage_paths(
     config: &uc_core::config::AppConfig,
-) -> WiringResult<uc_app::app_paths::AppPaths> {
+) -> WiringResult<uc_application::facade::AppPaths> {
     let platform_dirs = get_default_app_dirs()?;
     resolve_app_paths(&platform_dirs, config)
 }
@@ -550,8 +550,8 @@ pub fn get_storage_paths(
 pub fn resolve_app_paths(
     platform_dirs: &uc_core::app_dirs::AppDirs,
     config: &AppConfig,
-) -> WiringResult<uc_app::app_paths::AppPaths> {
-    let mut paths = uc_app::app_paths::AppPaths::from_app_dirs(platform_dirs);
+) -> WiringResult<uc_application::facade::AppPaths> {
+    let mut paths = uc_application::facade::AppPaths::from_app_dirs(platform_dirs);
 
     let is_in_memory_db = config.database_path.as_os_str() == ":memory:";
 

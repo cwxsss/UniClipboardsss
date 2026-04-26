@@ -25,7 +25,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use tracing_subscriber::prelude::*;
-use uc_app::app_paths::AppPaths;
+use uc_application::facade::AppPaths;
 use uc_infra::settings::repository::load_settings_snapshot;
 use uc_observability::{otlp::OtlpGuard, LogProfile, WorkerGuard};
 use uc_platform::app_dirs::DirsAppDirsAdapter;
