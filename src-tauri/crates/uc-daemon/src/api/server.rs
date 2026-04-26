@@ -20,7 +20,8 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
 use uc_application::facade::{
-    DeviceFacade, MemberRosterFacade, SettingsFacade, SpaceSetupFacade, StorageFacade,
+    DeviceFacade, LifecycleFacade, MemberRosterFacade, SettingsFacade, SpaceSetupFacade,
+    StorageFacade,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -47,6 +48,7 @@ pub struct DaemonApiState {
     /// Wired in T3.3; the `/v2/setup/*` handlers return 503 if absent.
     pub space_setup_facade: Option<Arc<SpaceSetupFacade>>,
     pub member_roster_facade: Option<Arc<MemberRosterFacade>>,
+    pub lifecycle_facade: Option<Arc<LifecycleFacade>>,
     pub settings_facade: Option<Arc<SettingsFacade>>,
     pub device_facade: Option<Arc<DeviceFacade>>,
     pub storage_facade: Option<Arc<StorageFacade>>,
@@ -79,6 +81,7 @@ impl DaemonApiState {
             runtime,
             space_setup_facade: None,
             member_roster_facade: None,
+            lifecycle_facade: None,
             settings_facade: None,
             device_facade: None,
             storage_facade: None,
@@ -115,6 +118,17 @@ impl DaemonApiState {
         self.member_roster_facade
             .clone()
             .ok_or_else(|| ApiError::service_unavailable("member roster facade unavailable"))
+    }
+
+    pub fn with_lifecycle(mut self, lifecycle_facade: Arc<LifecycleFacade>) -> Self {
+        self.lifecycle_facade = Some(lifecycle_facade);
+        self
+    }
+
+    pub fn lifecycle_facade_or_error(&self) -> Result<Arc<LifecycleFacade>, ApiError> {
+        self.lifecycle_facade
+            .clone()
+            .ok_or_else(|| ApiError::service_unavailable("lifecycle facade unavailable"))
     }
 
     pub fn with_settings(mut self, settings_facade: Arc<SettingsFacade>) -> Self {

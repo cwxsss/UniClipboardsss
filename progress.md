@@ -3426,6 +3426,33 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **未纳入本次提交**:
 - `.claude/skills/...` 现有改动不是本轮产生,不 stage。
 
+---
+
+## Session 2026-04-26 — daemon application 边界收口 · lifecycle 切片
+
+**触发**:storage 提交后继续收 daemon,选择较小的 lifecycle 入口。
+
+**完成标准**:
+- daemon lifecycle handler 不再构造 `CoreUseCases`
+- daemon lifecycle handler 不再直接引用 `uc-app` lifecycle state
+- lifecycle 状态读取和 retry 状态推进通过 `uc-application`
+- 验证 `uc-application` lifecycle facade 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 新增 `uc-application/src/facade/lifecycle/mod.rs`
+- `uc-application/src/facade/mod.rs` 导出 lifecycle facade 和模型
+- `uc-daemon/src/api/lifecycle.rs` 改为调用 `LifecycleFacade`
+- `uc-daemon/src/api/server.rs` 增加 `lifecycle_facade`
+- `uc-daemon/src/app.rs` 注入 lifecycle facade,并在装配处做旧 lifecycle state 到 application view 的映射
+
+**验证**:
+- `cargo test -p uc-application facade::lifecycle --lib`:✅ 4 passed
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**未纳入本次提交**:
+- `.claude/skills/...` 现有改动不是本轮产生,不 stage。
+
 **下一步**:
 - 继续收 daemon。优先候选:`api/settings.rs` 或 `api/search.rs`。
 

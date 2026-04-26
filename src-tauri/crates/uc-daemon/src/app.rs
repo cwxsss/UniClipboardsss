@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tokio::sync::broadcast;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -14,9 +15,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
+use uc_app::usecases::{LifecycleState, LifecycleStatusPort};
 use uc_application::facade::{
-    DeviceFacade, MemberRosterFacade, SettingsFacade, SpaceSetupFacade, StorageFacade,
-    StorageFacadeDeps,
+    DeviceFacade, LifecycleFacade, LifecycleFacadeDeps, LifecycleStateView, LifecycleStatusGateway,
+    MemberRosterFacade, SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::PresencePort;
@@ -297,6 +299,12 @@ impl DaemonApp {
             Some(facade) => api_state.with_member_roster(Arc::clone(facade)),
             None => api_state,
         };
+        let api_state =
+            api_state.with_lifecycle(Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
+                status: Arc::new(AppLifecycleStatusGateway {
+                    status: self.runtime.lifecycle_status().clone(),
+                }),
+            })));
         let api_state = api_state.with_settings(Arc::new(SettingsFacade::new(
             self.runtime.wiring_deps().settings.clone(),
         )));
@@ -435,6 +443,41 @@ impl DaemonApp {
 
         info!("uniclipboard-daemon stopped");
         Ok(())
+    }
+}
+
+struct AppLifecycleStatusGateway {
+    status: Arc<dyn LifecycleStatusPort>,
+}
+
+#[async_trait]
+impl LifecycleStatusGateway for AppLifecycleStatusGateway {
+    async fn set_state(&self, state: LifecycleStateView) -> anyhow::Result<()> {
+        self.status
+            .set_state(lifecycle_state_from_view(state))
+            .await
+    }
+
+    async fn get_state(&self) -> LifecycleStateView {
+        lifecycle_state_to_view(self.status.get_state().await)
+    }
+}
+
+fn lifecycle_state_to_view(state: LifecycleState) -> LifecycleStateView {
+    match state {
+        LifecycleState::Idle => LifecycleStateView::Idle,
+        LifecycleState::Pending => LifecycleStateView::Pending,
+        LifecycleState::Ready => LifecycleStateView::Ready,
+        LifecycleState::NetworkFailed => LifecycleStateView::NetworkFailed,
+    }
+}
+
+fn lifecycle_state_from_view(state: LifecycleStateView) -> LifecycleState {
+    match state {
+        LifecycleStateView::Idle => LifecycleState::Idle,
+        LifecycleStateView::Pending => LifecycleState::Pending,
+        LifecycleStateView::Ready => LifecycleState::Ready,
+        LifecycleStateView::NetworkFailed => LifecycleState::NetworkFailed,
     }
 }
 

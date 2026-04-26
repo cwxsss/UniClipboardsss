@@ -8,8 +8,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use std::sync::atomic::Ordering;
-use tracing::{info, warn, Instrument};
-use uc_app::usecases::CoreUseCases;
+use tracing::{info, Instrument};
 
 use super::types::LifecycleStatusResponse;
 use crate::api::routes::internal_error;
@@ -49,15 +48,14 @@ async fn lifecycle_ready_handler(State(state): State<DaemonApiState>) -> impl In
 /// GET /lifecycle/status
 /// Returns the current lifecycle state as a plain JSON object.
 async fn get_lifecycle_status_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
+    let facade = match state.lifecycle_facade_or_error() {
+        Ok(facade) => facade,
+        Err(error) => return error.into_response(),
     };
-    let usecases = CoreUseCases::new(runtime.as_ref());
-    let status_port = usecases.get_lifecycle_status();
-    let current_state = status_port.get_state().await;
+    let current_state = facade.status().await;
 
     Json(LifecycleStatusResponse {
-        state: format!("{current_state:?}"),
+        state: current_state.as_str().to_string(),
     })
     .into_response()
 }
@@ -69,34 +67,15 @@ async fn get_lifecycle_status_handler(State(state): State<DaemonApiState>) -> im
 /// 这个 endpoint 现在只做 lifecycle 状态推进 + 触发 deferred 服务启动,
 /// 等价于 GUI 端 `/lifecycle/ready` 的 idempotent 重试入口。
 async fn retry_lifecycle_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
+    let facade = match state.lifecycle_facade_or_error() {
+        Ok(facade) => facade,
+        Err(error) => return error.into_response(),
     };
 
     let span = tracing::info_span!("daemon.lifecycle.retry");
     async move {
-        let usecases = CoreUseCases::new(runtime.as_ref());
-
-        // Check if already ready — skip if so.
-        let status_port = usecases.get_lifecycle_status();
-        if status_port.get_state().await == uc_app::usecases::app_lifecycle::LifecycleState::Ready {
-            info!("Lifecycle already Ready; skipping retry");
-            return StatusCode::NO_CONTENT.into_response();
-        }
-
-        // Mark as Pending → Ready (no network start step under iroh stack).
-        if let Err(e) = status_port
-            .set_state(uc_app::usecases::app_lifecycle::LifecycleState::Pending)
-            .await
-        {
-            warn!(error = %e, "Failed to set lifecycle state to Pending");
-        }
-
-        if let Err(e) = status_port
-            .set_state(uc_app::usecases::app_lifecycle::LifecycleState::Ready)
-            .await
-        {
-            warn!(error = %e, "Failed to set lifecycle state to Ready");
+        if let Err(error) = facade.retry_to_ready().await {
+            return internal_error(anyhow::anyhow!("{}", error)).into_response();
         }
 
         // Signal clipboard capture gate (if present) — same as /lifecycle/ready.

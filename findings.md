@@ -1871,3 +1871,26 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-122 · daemon lifecycle 的状态推进可以先收口,进程门闩仍留在 daemon
+
+**发现时间**:2026-04-26
+
+**背景**:`api/lifecycle.rs` 原来为了 `status` / `retry` 直接构造 `CoreUseCases`,并直接引用 `uc-app` 的 `LifecycleState`。这让 HTTP handler 知道了内部应用状态类型。
+
+**处理结果**:
+- 新增 `uc-application::facade::lifecycle::LifecycleFacade`
+- application 层暴露 `LifecycleStateView`
+- daemon `GET /lifecycle/status` 改为读取 facade 状态
+- daemon `POST /lifecycle/retry` 改为通过 facade 执行 Pending → Ready 推进
+
+**边界判断**:
+- `/lifecycle/ready` 没有应用状态读写,只是打开 daemon clipboard gate 和唤醒 deferred services,暂不需要 application facade。
+- `/lifecycle/retry` 里的 gate / notify 也保留在 daemon,因为这是 daemon 进程内服务启动控制,不属于应用状态模型。
+
+**验证**:
+- `cargo test -p uc-application facade::lifecycle --lib`:4 passed
+- `cargo check -p uc-daemon`:passed
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

@@ -2921,7 +2921,28 @@ Phase 0(已完成,2026-04-18)
 **注意**:
 - `api::storage` 当前没有专门 daemon 单测,`cargo test -p uc-daemon api::storage --lib` 筛选到 0 个用例;本轮用 facade 单测 + daemon 全量 lib 测试覆盖。
 
-### Phase D5 · daemon 下一块收口 — in_progress
+### Phase D5 · daemon lifecycle 入口收口 — complete
+
+**范围**:
+- `GET /lifecycle/status`
+- `POST /lifecycle/retry`
+
+**结果**:
+- 新增 `uc-application::facade::lifecycle::LifecycleFacade`
+- lifecycle 状态 view 进入 `uc-application`
+- retry 的状态推进规则移入 `uc-application`
+- daemon lifecycle handler 不再直接构造 `CoreUseCases` 或引用 `uc-app` lifecycle state
+
+**保留职责**:
+- `/lifecycle/ready` 仍只打开 daemon 本地 clipboard gate 并通知 deferred services,没有应用状态读写。
+- `/lifecycle/retry` 中打开 gate / notify deferred services 仍属于 daemon 进程控制,本轮只把 lifecycle 状态推进移入 application。
+
+**验证**:
+- `cargo test -p uc-application facade::lifecycle --lib`
+- `cargo check -p uc-daemon`
+- `cargo test -p uc-daemon --lib`
+
+### Phase D6 · daemon 下一块收口 — in_progress
 
 **候选优先级**:
 1. `api/search.rs`:直接构造 core search query / error,范围较大。
