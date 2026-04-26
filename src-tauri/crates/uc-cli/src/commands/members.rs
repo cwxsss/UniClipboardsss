@@ -112,6 +112,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
             let msg = match &err {
                 RosterError::MemberRepository(m) => format!("list members failed: {m}"),
                 RosterError::LocalIdentity(m) => format!("local identity read failed: {m}"),
+                RosterError::NotFound(m) => format!("member not found: {m}"),
             };
             ui::error(&msg);
             assembly.shutdown().await;
