@@ -3055,3 +3055,39 @@ Phase 0(已完成,2026-04-18)
 **下一步候选**:
 - search/restore gateway 同步收口(把 `DaemonSearchGateway`、`DaemonClipboardRestoreGateway` 内的旧 usecase 也搬到 `uc-application`)。
 - `recover_encryption_session` 拆出 `auto_unlock_encryption_session` 旧用例。
+
+---
+
+### Phase D11 · search 与 restore 旧用例物理迁移 — complete (2026-04-26)
+
+**目标**: 把 daemon `app.rs` 内 `DaemonSearchGateway` / `DaemonClipboardRestoreGateway` 两个适配器内部的旧 use case 物理迁入 `uc-application`,删除 gateway 适配层。daemon `app.rs` 只剩 `recover_encryption_session` 一处 `CoreUseCases::new`。
+
+**范围**:
+- search 用例: `SearchClipboardEntries` (39 行) → `uc-application/src/usecases/search/`
+- restore 用例: `RestoreClipboardSelectionUseCase` (296 行) + `TouchClipboardEntryUseCase` (28 行) + `build_path_list` / `build_file_snapshot` (30 行) → `uc-application/src/usecases/clipboard_restore/`
+
+**结果**:
+- 新增 `uc-application::usecases::search::SearchClipboardEntriesUseCase` (`pub(crate)`,只依赖 `SearchIndexPort`)。
+- 新增 `uc-application::usecases::clipboard_restore::{RestoreClipboardSelectionUseCase, TouchClipboardEntryUseCase, file_snapshot}` (`pub(crate)`)。
+- 改造 `SearchFacade`:删除 `SearchGateway` trait,新增 `SearchFacadeDeps { search_index, coordinator: Option<...> }`,内部一次性构造 `SearchClipboardEntriesUseCase`;status/rebuild 仍委托给 `SearchCoordinator`(coordinator 早已在 application)。
+- 改造 `ClipboardRestoreFacade`:删除 `ClipboardRestoreGateway` trait,新增 `ClipboardRestoreFacadeDeps`(7 个 ports / coordinator / mode);facade 直接持有 restore + touch 两个 use case,touch 在 restore 成功后作为后置动作,失败仅 warn。
+- daemon `app.rs`:
+  - 删除 `DaemonSearchGateway` struct + impl + `search_page_to_view` / `search_content_type_to_string`(约 70 行)。
+  - 删除 `DaemonClipboardRestoreGateway` struct + impl(约 30 行)。
+  - 删除 `use uc_core::ids::EntryId` 等 gateway 专属 import。
+  - 装配处改为 `SearchFacade::new(SearchFacadeDeps { ... })`、`ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps { ... })`,coordinator/integration_mode 通过 `runtime.clipboard_write_coordinator()` / `runtime.clipboard_integration_mode()` 抽出。
+- daemon `app.rs` 行数从 821 → 601。
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:✅ passed,无 warning
+- `cargo test -p uc-application --lib`:✅ 219 passed(D10 时 221,本次因删除 `ClipboardRestoreFacade` 内两个 gateway mock 测试减少 2 个,符合预期)
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**残留**:
+- daemon `app.rs` 仅剩 `recover_encryption_session` 一处 `CoreUseCases::new(runtime)`(line 83),用 `auto_unlock_encryption_session` 旧用例。
+- `uc-app::usecases::clipboard::*` / `uc-app::usecases::search::*` / `uc-app::usecases::delete_clipboard_entry` 仍保留,因为 `uc-tauri`、`uc-cli`、`uc-app` 内部仍引用,后续逐个调用方迁移完再统一删除。
+- `uc-cli/src/commands/members.rs:112` `RosterError::Unavailable` 缺 match 分支,与本切片无关。
+
+**下一步候选**:
+- D12 — auto-unlock encryption session 用例迁移,daemon `app.rs` 完全脱离 `uc-app::usecases`。
+- 或开始处理 `uc-tauri::bootstrap::runtime` 里仍包装的 `CoreUseCases`。

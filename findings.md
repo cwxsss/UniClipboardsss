@@ -2299,3 +2299,64 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-132 · search facade 内部如何处理"半 application / 半 coordinator"的二元入口
+
+**发现时间**: 2026-04-26
+
+**背景**: SearchFacade 同时暴露三个方法:
+- `query()` — 真正的搜索查询,走 `SearchClipboardEntriesUseCase`(只用 `SearchIndexPort`,薄编排)。
+- `status()` / `request_rebuild()` — 后台 reindex 状态机的查询和触发,走 `SearchCoordinator`(已在 application 内,持有 channel/Notify/back-pressure)。
+
+D11 把 `SearchGateway` trait 删掉时,这三者怎么共处?
+
+**结论**: `SearchFacadeDeps { search_index, coordinator: Option<Arc<SearchCoordinator>> }`。
+- `search_index` 必填,facade 内部直接从它构造 `SearchClipboardEntriesUseCase` 并持有(无外部观察方需要单独引用 use case)。
+- `coordinator` 可选,因为非 daemon 场景(test wiring / future tauri 路径)可以不带 reindex 后台流程;daemon 一定带。
+- status/rebuild 直接走 `coordinator.status_view()` / `coordinator.request_manual_rebuild()`,不再绕一层 trait。
+
+**为何不把 coordinator 也搬到 deps 之外**: coordinator 本身不是端口,它是 application 里完整的并发组件(spawn 后台任务、维护 ChannelBus、状态机)。它的所有权属于 application 生态,不该当作 dep 注入风格的"无状态 port"。把它直接塞 `Option<Arc<...>>` 而不是 `Box<dyn ...>` 反而更清楚地表达"有则用,无则 503"。
+
+**验证**:
+- `cargo test -p uc-application --lib`:219 passed(facade::search 测试早已是 0 tests,本次未新增)
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---
+
+### F-133 · ClipboardRestoreFacade 的 mock 测试值不值得用 fake ports 重写
+
+**发现时间**: 2026-04-26
+
+**背景**: D11 删 `ClipboardRestoreGateway` 时连带删了两个测试:
+- `restore_entry_delegates_to_gateway` — 验证调用穿透。
+- `restore_entry_preserves_not_found_error` — 验证 `NotFound` 错误透传。
+
+两个测试都 mock 了 `ClipboardRestoreGateway` trait,纯粹验证 trait → facade 的 1:1 转发。
+
+**判断**: 不重写。理由:
+- 这些测试覆盖的是 trait 转发,而 trait 已经删了——保护对象本身消失了。
+- restore 真正的复杂度在 `RestoreClipboardSelectionUseCase`(选 representation、文件路径解析、blob 兜底):那是另一层的测试(应该用 fake ports 写 unit test),已是后续待补的范围。
+- 用 fake ports 重写"facade 调通 use case"也是 1:1 转发,继承同样的"无保护对象"问题。
+
+**通用原则**: gateway trait 删除时,只验证 delegation 的测试可以一并删除;若测试包含真业务逻辑(比如错误 message 解析、状态推导),才需用新依赖结构重写。本次属于前者。
+
+---
+
+### F-134 · uc-application 内部跨业务模块共享纯函数的归属位置
+
+**发现时间**: 2026-04-26
+
+**背景**: D11 搬 `RestoreClipboardSelectionUseCase` 时,它依赖 uc-app 的 `usecases::file_sync::copy_file_to_clipboard::{build_path_list, build_file_snapshot}`——两个纯函数,只用 `uc-core` 类型构造 `SystemClipboardSnapshot`。
+
+`file_sync` 在 uc-app 是另一个完整模块(还有 `start_outbound_transfer` 等),并不是为 restore 准备的。restore 只用了里面的 2 个 helper。
+
+**决策**: 把这 2 个 helper 复制到 `uc-application/src/usecases/clipboard_restore/file_snapshot.rs`,作为 restore 模块内部 `pub(crate)` 工具,而不是在 application 顶层弄一个 `clipboard_helpers` 公共模块。
+
+**理由**:
+- 当前只有 restore 用,过度提取共享模块属于 §6.3"巨型 service"反模式的反向变体——为了"看起来共享"而新增空壳模块。
+- 如果未来 file_sync 整体也要搬迁,届时再决定 helper 的归属(可能跟着 file_sync 一起进 `usecases::file_sync`,也可能就地保留作为 restore 私有,看哪边调用方多)。
+- 现在保留在 restore 模块下,改动最小,语义最清——"restore 用的文件 snapshot helper"。
+
+**验证**: 编译 + 测试通过。
+
+---

@@ -64,7 +64,7 @@ pub use clipboard_outbound::{
     ClipboardOutboundPort,
 };
 pub use clipboard_restore::{
-    ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreGateway,
+    ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreFacadeDeps,
 };
 pub use device::{DeviceFacade, DeviceFacadeError, LocalDeviceInfoView};
 pub use encryption::{
@@ -86,7 +86,7 @@ pub use roster::{
 };
 pub use search::{
     map_search_error, ManualRebuildResult, SearchCoordinator, SearchCoordinatorDeps,
-    SearchCoordinatorEvent, SearchFacade, SearchFacadeError, SearchGateway, SearchPageView,
+    SearchCoordinatorEvent, SearchFacade, SearchFacadeDeps, SearchFacadeError, SearchPageView,
     SearchProjectionBuilder, SearchQueryInput, SearchRebuildAcceptedView,
     SearchRebuildProgressView, SearchResultView, SearchStatusSnapshot, SearchStatusView,
 };

@@ -1,13 +1,18 @@
 use std::sync::Arc;
 
-use anyhow::Result;
-use async_trait::async_trait;
 use tracing::instrument;
+use uc_core::blob::ports::BlobReaderPort;
+use uc_core::clipboard::ClipboardIntegrationMode;
+use uc_core::ids::EntryId;
+use uc_core::ports::{
+    ClipboardEntryRepositoryPort, ClipboardRepresentationRepositoryPort,
+    ClipboardSelectionRepositoryPort, ClockPort,
+};
 
-#[async_trait]
-pub trait ClipboardRestoreGateway: Send + Sync {
-    async fn restore_entry(&self, entry_id: &str) -> Result<(), ClipboardRestoreError>;
-}
+use crate::clipboard_write::ClipboardWriteCoordinator;
+use crate::usecases::clipboard_restore::{
+    RestoreClipboardSelectionUseCase, TouchClipboardEntryUseCase,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClipboardRestoreError {
@@ -17,70 +22,73 @@ pub enum ClipboardRestoreError {
     Internal(String),
 }
 
+/// Dependency bundle for `ClipboardRestoreFacade`. Composition roots build
+/// this once from their wiring deps and pass it to
+/// `ClipboardRestoreFacade::new`.
+pub struct ClipboardRestoreFacadeDeps {
+    pub entry_repo: Arc<dyn ClipboardEntryRepositoryPort>,
+    pub selection_repo: Arc<dyn ClipboardSelectionRepositoryPort>,
+    pub representation_repo: Arc<dyn ClipboardRepresentationRepositoryPort>,
+    pub blob_store: Arc<dyn BlobReaderPort>,
+    pub clock: Arc<dyn ClockPort>,
+    pub write_coordinator: Arc<ClipboardWriteCoordinator>,
+    pub integration_mode: ClipboardIntegrationMode,
+}
+
 pub struct ClipboardRestoreFacade {
-    gateway: Arc<dyn ClipboardRestoreGateway>,
+    restore_uc: RestoreClipboardSelectionUseCase,
+    touch_uc: TouchClipboardEntryUseCase,
 }
 
 impl ClipboardRestoreFacade {
-    pub fn new(gateway: Arc<dyn ClipboardRestoreGateway>) -> Self {
-        Self { gateway }
+    pub fn new(deps: ClipboardRestoreFacadeDeps) -> Self {
+        let ClipboardRestoreFacadeDeps {
+            entry_repo,
+            selection_repo,
+            representation_repo,
+            blob_store,
+            clock,
+            write_coordinator,
+            integration_mode,
+        } = deps;
+
+        let restore_uc = RestoreClipboardSelectionUseCase::new(
+            entry_repo.clone(),
+            write_coordinator,
+            selection_repo,
+            representation_repo,
+            blob_store,
+            integration_mode,
+        );
+        let touch_uc = TouchClipboardEntryUseCase::new(entry_repo, clock);
+
+        Self {
+            restore_uc,
+            touch_uc,
+        }
     }
 
     #[instrument(skip_all, fields(entry_id = %entry_id))]
     pub async fn restore_entry(&self, entry_id: &str) -> Result<(), ClipboardRestoreError> {
-        self.gateway.restore_entry(entry_id).await
-    }
-}
+        let parsed_id = EntryId::from(entry_id);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+        self.restore_uc.execute(&parsed_id).await.map_err(|err| {
+            let message = err.to_string();
+            if message.to_lowercase().contains("not found") {
+                ClipboardRestoreError::NotFound
+            } else {
+                ClipboardRestoreError::Internal(message)
+            }
+        })?;
 
-    use std::sync::Mutex;
-
-    struct FakeRestoreGateway {
-        calls: Mutex<Vec<String>>,
-        result: Mutex<Option<Result<(), ClipboardRestoreError>>>,
-    }
-
-    #[async_trait]
-    impl ClipboardRestoreGateway for FakeRestoreGateway {
-        async fn restore_entry(&self, entry_id: &str) -> Result<(), ClipboardRestoreError> {
-            self.calls
-                .lock()
-                .expect("calls lock")
-                .push(entry_id.to_string());
-            self.result
-                .lock()
-                .expect("result lock")
-                .take()
-                .unwrap_or(Ok(()))
+        if let Err(err) = self.touch_uc.execute(&parsed_id).await {
+            tracing::warn!(
+                error = %err,
+                entry_id = %entry_id,
+                "touch_clipboard_entry failed after restore"
+            );
         }
-    }
 
-    fn facade_with(result: Option<Result<(), ClipboardRestoreError>>) -> ClipboardRestoreFacade {
-        ClipboardRestoreFacade::new(Arc::new(FakeRestoreGateway {
-            calls: Mutex::new(Vec::new()),
-            result: Mutex::new(result),
-        }))
-    }
-
-    #[tokio::test]
-    async fn restore_entry_delegates_to_gateway() {
-        let facade = facade_with(None);
-
-        facade.restore_entry("entry-1").await.expect("restore");
-    }
-
-    #[tokio::test]
-    async fn restore_entry_preserves_not_found_error() {
-        let facade = facade_with(Some(Err(ClipboardRestoreError::NotFound)));
-
-        let error = facade
-            .restore_entry("missing")
-            .await
-            .expect_err("not found");
-
-        assert!(matches!(error, ClipboardRestoreError::NotFound));
+        Ok(())
     }
 }

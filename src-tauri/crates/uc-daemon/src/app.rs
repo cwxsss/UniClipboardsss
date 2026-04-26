@@ -17,17 +17,13 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
 use uc_application::facade::{
     AppFacade, AppFacadeParts, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
-    ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreGateway, DeviceFacade,
-    EncryptionFacade, EncryptionFacadeDeps, LifecycleFacade, LifecycleFacadeDeps,
+    ClipboardRestoreFacade, ClipboardRestoreFacadeDeps, DeviceFacade, EncryptionFacade,
+    EncryptionFacadeDeps, LifecycleFacade, LifecycleFacadeDeps,
     LifecycleStateView as LifecycleState, LifecycleStateView, LifecycleStatusGateway,
-    MemberRosterFacade, ResourceFacade, ResourceFacadeDeps, SearchFacade, SearchFacadeError,
-    SearchGateway, SearchPageView, SearchRebuildAcceptedView, SearchResultView, SearchStatusView,
-    SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
+    MemberRosterFacade, ResourceFacade, ResourceFacadeDeps, SearchCoordinator, SearchFacade,
+    SearchFacadeDeps, SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
-use uc_application::facade::{ManualRebuildResult, SearchCoordinator};
 use uc_application::space_access::SpaceAccessFacade;
-use uc_core::ids::EntryId;
-use uc_core::search::{ContentType as SearchContentType, SearchQuery, SearchResultsPage};
 
 use crate::api::auth::load_or_create_auth_token;
 use crate::api::event_emitter::DaemonApiEventEmitter;
@@ -308,15 +304,44 @@ impl DaemonApp {
                 search_index: Some(self.runtime.wiring_deps().search.search_index.clone()),
                 file_cache_dir: Some(storage_paths.cache_dir.clone()),
             })),
-            clipboard_restore: Arc::new(ClipboardRestoreFacade::new(Arc::new(
-                DaemonClipboardRestoreGateway {
-                    runtime: self.runtime.clone(),
+            clipboard_restore: Arc::new(ClipboardRestoreFacade::new(
+                ClipboardRestoreFacadeDeps {
+                    entry_repo: self
+                        .runtime
+                        .wiring_deps()
+                        .clipboard
+                        .clipboard_entry_repo
+                        .clone(),
+                    selection_repo: self
+                        .runtime
+                        .wiring_deps()
+                        .clipboard
+                        .selection_repo
+                        .clone(),
+                    representation_repo: self
+                        .runtime
+                        .wiring_deps()
+                        .clipboard
+                        .representation_repo
+                        .clone(),
+                    blob_store: self.runtime.wiring_deps().storage.blob_store.clone(),
+                    clock: self.runtime.wiring_deps().system.clock.clone(),
+                    write_coordinator: self
+                        .runtime
+                        .clipboard_write_coordinator()
+                        .cloned()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "clipboard_write_coordinator not wired into runtime — daemon cannot serve restore"
+                            )
+                        })?,
+                    integration_mode: self.runtime.clipboard_integration_mode(),
                 },
-            ))),
-            search: Arc::new(SearchFacade::new(Box::new(DaemonSearchGateway {
-                runtime: self.runtime.clone(),
+            )),
+            search: Arc::new(SearchFacade::new(SearchFacadeDeps {
+                search_index: self.runtime.wiring_deps().search.search_index.clone(),
                 coordinator: self.search_coordinator.clone(),
-            }))),
+            })),
             settings: Arc::new(SettingsFacade::new(
                 self.runtime.wiring_deps().settings.clone(),
             )),
@@ -529,106 +554,6 @@ fn lifecycle_state_from_view(state: LifecycleStateView) -> LifecycleState {
         LifecycleStateView::Pending => LifecycleState::Pending,
         LifecycleStateView::Ready => LifecycleState::Ready,
         LifecycleStateView::NetworkFailed => LifecycleState::NetworkFailed,
-    }
-}
-
-struct DaemonSearchGateway {
-    runtime: Arc<CoreRuntime>,
-    coordinator: Option<Arc<SearchCoordinator>>,
-}
-
-#[async_trait]
-impl SearchGateway for DaemonSearchGateway {
-    async fn query(&self, query: SearchQuery) -> Result<SearchPageView, SearchFacadeError> {
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let page = usecases
-            .search_clipboard_entries()
-            .execute(query)
-            .await
-            .map_err(uc_application::facade::map_search_error)?;
-        Ok(search_page_to_view(page))
-    }
-
-    async fn status(&self) -> Result<SearchStatusView, SearchFacadeError> {
-        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
-            SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
-        })?;
-        coordinator
-            .status_view()
-            .await
-            .map_err(uc_application::facade::map_search_error)
-    }
-
-    async fn request_rebuild(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError> {
-        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
-            SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
-        })?;
-
-        match coordinator.request_manual_rebuild().await {
-            ManualRebuildResult::Accepted => Ok(SearchRebuildAcceptedView { accepted: true }),
-            ManualRebuildResult::AlreadyInProgress => Err(SearchFacadeError::RebuildAlreadyRunning),
-        }
-    }
-}
-
-fn search_page_to_view(page: SearchResultsPage) -> SearchPageView {
-    SearchPageView {
-        total: page.total,
-        has_more: page.has_more,
-        items: page
-            .items
-            .into_iter()
-            .map(|item| SearchResultView {
-                entry_id: item.entry_id.to_string(),
-                content_type: search_content_type_to_string(&item.content_type),
-                active_time_ms: item.active_time_ms,
-                text_preview: item.text_preview,
-                mime_type: item.mime_type,
-                file_extensions: item.file_extensions,
-            })
-            .collect(),
-    }
-}
-
-fn search_content_type_to_string(content_type: &SearchContentType) -> String {
-    match content_type {
-        SearchContentType::Text => "text",
-        SearchContentType::Html => "html",
-        SearchContentType::Link => "link",
-        SearchContentType::File => "file",
-        SearchContentType::Image => "image",
-        SearchContentType::Other => "other",
-    }
-    .to_string()
-}
-
-struct DaemonClipboardRestoreGateway {
-    runtime: Arc<CoreRuntime>,
-}
-
-#[async_trait]
-impl ClipboardRestoreGateway for DaemonClipboardRestoreGateway {
-    async fn restore_entry(&self, entry_id: &str) -> Result<(), ClipboardRestoreError> {
-        let parsed_id = EntryId::from(entry_id);
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let restore_uc = usecases
-            .restore_clipboard_selection()
-            .map_err(|err| ClipboardRestoreError::Internal(err.to_string()))?;
-
-        restore_uc.execute(&parsed_id).await.map_err(|err| {
-            let message = err.to_string();
-            if message.to_lowercase().contains("not found") {
-                ClipboardRestoreError::NotFound
-            } else {
-                ClipboardRestoreError::Internal(message)
-            }
-        })?;
-
-        if let Err(err) = usecases.touch_clipboard_entry().execute(&parsed_id).await {
-            tracing::warn!(error = %err, entry_id = %entry_id, "touch_clipboard_entry failed after restore");
-        }
-
-        Ok(())
     }
 }
 

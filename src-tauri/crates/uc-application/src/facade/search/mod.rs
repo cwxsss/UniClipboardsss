@@ -1,10 +1,14 @@
-use async_trait::async_trait;
+use std::sync::Arc;
+
 use thiserror::Error;
 
 mod coordinator;
 mod projection;
 
+use uc_core::ports::SearchIndexPort;
 use uc_core::search::{ContentType, QueryOperator, SearchError, SearchQuery, TimeRangeFilter};
+
+use crate::usecases::search::SearchClipboardEntriesUseCase;
 
 pub use coordinator::{
     ManualRebuildResult, SearchCoordinator, SearchCoordinatorDeps, SearchCoordinatorEvent,
@@ -75,22 +79,30 @@ pub enum SearchFacadeError {
     Internal(String),
 }
 
-#[async_trait]
-pub trait SearchGateway: Send + Sync {
-    async fn query(&self, query: SearchQuery) -> Result<SearchPageView, SearchFacadeError>;
-
-    async fn status(&self) -> Result<SearchStatusView, SearchFacadeError>;
-
-    async fn request_rebuild(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError>;
+/// Dependency bundle for `SearchFacade`. Composition roots build this once
+/// and pass it to `SearchFacade::new`. The query side runs through the
+/// internal `SearchClipboardEntriesUseCase`; status/rebuild delegate to the
+/// optional `SearchCoordinator` which manages background reindexing.
+pub struct SearchFacadeDeps {
+    pub search_index: Arc<dyn SearchIndexPort>,
+    pub coordinator: Option<Arc<SearchCoordinator>>,
 }
 
 pub struct SearchFacade {
-    gateway: Box<dyn SearchGateway>,
+    query_uc: SearchClipboardEntriesUseCase,
+    coordinator: Option<Arc<SearchCoordinator>>,
 }
 
 impl SearchFacade {
-    pub fn new(gateway: Box<dyn SearchGateway>) -> Self {
-        Self { gateway }
+    pub fn new(deps: SearchFacadeDeps) -> Self {
+        let SearchFacadeDeps {
+            search_index,
+            coordinator,
+        } = deps;
+        Self {
+            query_uc: SearchClipboardEntriesUseCase::from_port(search_index),
+            coordinator,
+        }
     }
 
     pub async fn query(
@@ -98,16 +110,62 @@ impl SearchFacade {
         input: SearchQueryInput,
     ) -> Result<SearchPageView, SearchFacadeError> {
         let query = parse_search_query(input)?;
-        self.gateway.query(query).await
+        let page = self
+            .query_uc
+            .execute(query)
+            .await
+            .map_err(map_search_error)?;
+        Ok(search_page_to_view(page))
     }
 
     pub async fn status(&self) -> Result<SearchStatusView, SearchFacadeError> {
-        self.gateway.status().await
+        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
+            SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
+        })?;
+        coordinator.status_view().await.map_err(map_search_error)
     }
 
     pub async fn request_rebuild(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError> {
-        self.gateway.request_rebuild().await
+        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
+            SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
+        })?;
+
+        match coordinator.request_manual_rebuild().await {
+            ManualRebuildResult::Accepted => Ok(SearchRebuildAcceptedView { accepted: true }),
+            ManualRebuildResult::AlreadyInProgress => Err(SearchFacadeError::RebuildAlreadyRunning),
+        }
     }
+}
+
+fn search_page_to_view(page: uc_core::search::SearchResultsPage) -> SearchPageView {
+    SearchPageView {
+        total: page.total,
+        has_more: page.has_more,
+        items: page
+            .items
+            .into_iter()
+            .map(|item| SearchResultView {
+                entry_id: item.entry_id.to_string(),
+                content_type: search_content_type_to_string(&item.content_type),
+                active_time_ms: item.active_time_ms,
+                text_preview: item.text_preview,
+                mime_type: item.mime_type,
+                file_extensions: item.file_extensions,
+            })
+            .collect(),
+    }
+}
+
+fn search_content_type_to_string(content_type: &ContentType) -> String {
+    match content_type {
+        ContentType::Text => "text",
+        ContentType::Html => "html",
+        ContentType::Link => "link",
+        ContentType::File => "file",
+        ContentType::Image => "image",
+        ContentType::Other => "other",
+    }
+    .to_string()
 }
 
 fn parse_search_query(input: SearchQueryInput) -> Result<SearchQuery, SearchFacadeError> {

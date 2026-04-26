@@ -4087,3 +4087,56 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **下一步候选**:
 - D11 — search/restore gateway 同步收口(把 `DaemonSearchGateway`、`DaemonClipboardRestoreGateway` 内的旧 usecase 也搬到 `uc-application`)。
 - D12 — `recover_encryption_session` 拆 `auto_unlock_encryption_session` 旧用例。
+
+---
+
+## Session 2026-04-26 — daemon application 边界收口 · search 与 restore 旧用例物理迁移 (Phase D11)
+
+**触发**: D10 收完 clipboard history 后,daemon 还剩两个 gateway 适配器仍走 `CoreUseCases`。用户选方案 A,合并一次提交清掉两侧。
+
+**完成标准**:
+- `daemon/src/app.rs` 不再持有 `DaemonSearchGateway` / `DaemonClipboardRestoreGateway` 任何代码。
+- `SearchClipboardEntries` / `RestoreClipboardSelection` / `TouchClipboardEntry` / `build_path_list` / `build_file_snapshot` 物理位于 `uc-application::usecases`(`pub(crate)`)。
+- `SearchFacade` / `ClipboardRestoreFacade` 直接持有 use case,不再通过 gateway trait;两个 trait 一并删除。
+- `cargo check -p uc-application -p uc-daemon`、`cargo test -p uc-application -p uc-daemon --lib` 通过。
+
+**已做**:
+- 新增 `uc-application/src/usecases/search/`:
+  - `mod.rs`:`pub(crate) mod search_clipboard_entries; pub(crate) use ...`。
+  - `search_clipboard_entries.rs`:`SearchClipboardEntriesUseCase::from_port(SearchIndexPort)` + `execute(SearchQuery) -> Result<SearchResultsPage, SearchError>`,带 `tracing::instrument`。
+- 新增 `uc-application/src/usecases/clipboard_restore/`:
+  - `mod.rs`:`pub(crate) mod {file_snapshot, restore_selection, touch_entry}`。
+  - `touch_entry.rs`:`TouchClipboardEntryUseCase::new(entry_repo, clock)` + `execute`。
+  - `file_snapshot.rs`:纯函数 `build_path_list` / `build_file_snapshot`(从 `uc-app::usecases::file_sync::copy_file_to_clipboard` 搬过来,只用 `uc-core` 类型)。
+  - `restore_selection.rs`:`RestoreClipboardSelectionUseCase::new(entry_repo, coordinator, selection_repo, repr_repo, blob_store, mode)` + `execute(entry_id)`。内部调用本模块 `super::file_snapshot::*`,不再 `crate::usecases::file_sync::...`。`ClipboardIntegrationMode` 改为直接 `use uc_core::clipboard::ClipboardIntegrationMode`(uc-app 那边的 re-export shim 不再被本 crate 引用)。
+- `uc-application/src/usecases/mod.rs` 注册 `pub(crate) mod clipboard_restore; pub(crate) mod search;`。
+- 改造 `uc-application/src/facade/search/mod.rs`:
+  - 删除 `SearchGateway` trait 和 `Box<dyn SearchGateway>` 字段。
+  - 新增 `SearchFacadeDeps { search_index: Arc<dyn SearchIndexPort>, coordinator: Option<Arc<SearchCoordinator>> }`。
+  - `SearchFacade` 改为持有 `SearchClipboardEntriesUseCase` + `Option<Arc<SearchCoordinator>>`;query 走 use case,status/rebuild 仍走 coordinator。
+  - `search_page_to_view` / `search_content_type_to_string` 转换函数从 daemon 搬到 facade 文件本地。
+- 改造 `uc-application/src/facade/clipboard_restore/mod.rs`:
+  - 删除 `ClipboardRestoreGateway` trait + 测试 mock(2 个 mock 测试随之删除,因为它们只验证 trait delegation,对实际行为无保护)。
+  - 新增 `ClipboardRestoreFacadeDeps { entry_repo, selection_repo, representation_repo, blob_store, clock, write_coordinator, integration_mode }`。
+  - `ClipboardRestoreFacade::new(deps)` 一次性构造 `RestoreClipboardSelectionUseCase` + `TouchClipboardEntryUseCase`;`restore_entry` 调用 restore 后 fire-and-warn 调 touch。
+- `uc-application/src/facade/mod.rs` pub use 用 `SearchFacadeDeps` 替换 `SearchGateway`,用 `ClipboardRestoreFacadeDeps` 替换 `ClipboardRestoreGateway`。
+- `uc-daemon/src/app.rs`:
+  - 删除 `DaemonSearchGateway` struct + impl + `search_page_to_view` / `search_content_type_to_string`(约 70 行)。
+  - 删除 `DaemonClipboardRestoreGateway` struct + impl(约 30 行)。
+  - 删除 `use uc_core::ids::EntryId`、`use uc_core::search::*` 等 gateway 专属 import 共 5 行。
+  - 装配处改为 `SearchFacade::new(SearchFacadeDeps { search_index: ..., coordinator: self.search_coordinator.clone() })`,`ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps { ... write_coordinator: self.runtime.clipboard_write_coordinator().cloned().ok_or_else(...)?, integration_mode: self.runtime.clipboard_integration_mode(), })`。
+- daemon `app.rs` 行数从 821 → 601。
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:✅ passed,无 warning
+- `cargo test -p uc-application --lib`:✅ 219 passed(D10 时 221,删除两个 gateway mock 测试 → -2,符合预期)
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**未纳入本次提交**:
+- `uc-cli/src/commands/members.rs:112` `match &RosterError` 缺 `Unavailable` 分支——cli 端历史欠账,与 D11 无关。
+- `uc-app::usecases::search::*` / `uc-app::usecases::clipboard::{restore_clipboard_selection, touch_clipboard_entry, integration_mode, clipboard_write_coordinator}` 旧文件仍保留,因 uc-tauri / uc-cli 仍引用,后续待全部 caller 迁完统一删除。
+- `daemon/src/app.rs` 仅剩 `recover_encryption_session` 一处 `CoreUseCases::new(runtime)`(line 83)。
+
+**下一步候选**:
+- D12 — `recover_encryption_session` 拆 `auto_unlock_encryption_session` 旧用例,daemon `app.rs` 彻底脱离 `uc-app::usecases`。
+- 或开始处理 `uc-tauri::bootstrap::runtime` 里仍包装的 `CoreUseCases`。
