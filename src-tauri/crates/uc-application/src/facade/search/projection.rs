@@ -1,8 +1,7 @@
-//! `SearchProjectionBuilder` — the single daemon-side authority for building
+//! `SearchProjectionBuilder` — the application-side authority for building
 //! `SearchPipelineInput` from live and persisted clipboard sources.
 //!
-//! No other daemon module is allowed to construct `SearchPipelineInput` directly.
-//! All construction goes through the static methods on this struct.
+//! daemon 等外部入口不直接拼装搜索 pipeline 输入,统一从 application 调用。
 
 use uc_core::clipboard::{
     ClipboardEntry, ClipboardSelection, ClipboardSelectionDecision,

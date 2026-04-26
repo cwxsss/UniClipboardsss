@@ -3485,6 +3485,32 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon search 边界收口 · projection 切片
+
+**触发**:继续处理 daemon search todo,先拿掉 daemon 自己维护的搜索 projection 规则。
+
+**完成标准**:
+- search projection builder 不再位于 daemon crate
+- search coordinator / clipboard watcher 从 application 调用 projection builder
+- daemon search 模块不再导出 projection 子模块
+- 验证 daemon check 和 daemon lib 测试
+
+**已做**:
+- `SearchProjectionBuilder` 移到 `uc-application/src/facade/search/projection.rs`
+- `uc-application::facade` 导出 `SearchProjectionBuilder`
+- daemon search coordinator 与 clipboard watcher 更新导入路径
+- 删除 daemon search projection 模块
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+- `cargo test -p uc-application facade::search --lib`:✅ 0 tests matched
+
+**下一步**:
+- 继续处理 search coordinator 本体,把 rebuild lifecycle / status owner 收到 application 可控边界。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · search query 入口
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-search.md`,先做 todo 里明确的第一步 `GET /search/query`。

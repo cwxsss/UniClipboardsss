@@ -19,14 +19,15 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::sync_planner::{FileCandidate, FileSyncIntent, OutboundSyncPlanner};
 use uc_app::usecases::CoreUseCases;
-use uc_application::facade::{BlobTransferFacade, ClipboardSyncFacade, PublishBlobCommand};
+use uc_application::facade::{
+    BlobTransferFacade, ClipboardSyncFacade, PublishBlobCommand, SearchProjectionBuilder,
+};
 use uc_application::V3BlobRef;
 use uc_core::ids::EntryId;
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 
-use crate::search::projection::SearchProjectionBuilder;
 use uc_observability::FlowId;
 use uc_platform::clipboard::watcher::{ClipboardWatcher, PlatformEvent, PlatformEventSender};
 

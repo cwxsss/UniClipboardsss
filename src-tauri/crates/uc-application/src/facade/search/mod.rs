@@ -1,7 +1,11 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+mod projection;
+
 use uc_core::search::{ContentType, QueryOperator, SearchError, SearchQuery, TimeRangeFilter};
+
+pub use projection::SearchProjectionBuilder;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchQueryInput {

@@ -21,4 +21,5 @@ daemon search 入口仍直接构造 core `SearchQuery`、`ContentType`、`TimeRa
 
 - 2026-04-26:已完成 `GET /search/query` 收口。daemon handler 不再构造 core `SearchQuery` / `ContentType` / `TimeRangeFilter`,查询参数解析与错误分类迁入 `uc-application::facade::SearchFacade`。
 - 2026-04-26:已完成 `/search/status`、`/search/rebuild` 和 SEARCH websocket snapshot 收口。daemon HTTP/WS handler 不再直接读 search coordinator 或 search index meta,统一走 `AppFacade.search`。
-- 剩余:search coordinator / projection 仍直接知道 core 和 infra 搜索类型,需后续继续下沉到 application 可控边界。
+- 2026-04-26:已完成 search projection 规则迁移。`SearchProjectionBuilder` 移到 `uc-application`,daemon search coordinator / clipboard watcher 改为调用 application 导出的 projection builder。
+- 剩余:search coordinator 仍直接知道 core runtime 和 infra index 版本常量,需后续继续下沉到 application 可控边界。
