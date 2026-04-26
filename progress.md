@@ -3537,6 +3537,32 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon clipboard workers 收口 · inbound worker 切片
+
+**触发**:继续处理 daemon clipboard workers 直接依赖 application usecase / core id 的问题。
+
+**完成标准**:
+- inbound worker 不再直接持有 `ApplyInboundClipboardUseCase`
+- inbound worker 不再直接处理 core `EntryId`
+- application 层暴露入站应用输入/输出模型
+- 先写失败测试,再补实现并验证
+
+**已做**:
+- 新增 `InboundClipboardFacade`
+- 新增 application 层 `InboundClipboardNoticeInput` / `InboundClipboardApplyOutcome`
+- inbound worker 改为通过 `InboundClipboardFacade::apply_notice`
+- entrypoint 将现有入站 use case 包成 facade 后传给 worker
+
+**验证**:
+- `cargo test -p uc-application facade::clipboard_inbound --lib`:✅ 1 passed
+- `cargo check -p uc-application -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**下一步**:
+- 继续收 outbound clipboard watcher,重点是 capture/search index/outbound planning 仍在 daemon worker 内。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · search query 入口
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-search.md`,先做 todo 里明确的第一步 `GET /search/query`。

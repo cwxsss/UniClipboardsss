@@ -9,6 +9,7 @@ pub mod app_facade;
 pub mod blob_transfer;
 pub mod clipboard;
 pub mod clipboard_history;
+pub mod clipboard_inbound;
 pub mod clipboard_restore;
 pub mod device;
 pub mod encryption;
@@ -37,6 +38,10 @@ pub use clipboard_history::{
     ClearHistoryResultView as ClipboardClearHistoryResultView, ClipboardHistoryError,
     ClipboardHistoryFacade, ClipboardHistoryGateway, ClipboardListInput, ClipboardStatsView,
     EntryDetailView, EntryProjectionView, EntryResourceView,
+};
+pub use clipboard_inbound::{
+    InboundClipboardApplyError, InboundClipboardApplyInput, InboundClipboardApplyOutcome,
+    InboundClipboardApplyPort, InboundClipboardFacade, InboundClipboardNoticeInput,
 };
 pub use clipboard_restore::{
     ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreGateway,

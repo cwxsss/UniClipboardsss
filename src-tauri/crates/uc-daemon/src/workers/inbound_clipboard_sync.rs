@@ -32,9 +32,10 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use uc_application::facade::{ClipboardSyncFacade, InboundNotice};
-use uc_application::{ApplyInboundClipboardUseCase, ApplyInboundInput, ApplyOutcome};
-use uc_core::ids::EntryId;
+use uc_application::facade::{
+    ClipboardSyncFacade, InboundClipboardApplyOutcome, InboundClipboardFacade,
+    InboundClipboardNoticeInput, InboundNotice,
+};
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 
 use crate::api::types::DaemonWsEvent;
@@ -61,35 +62,35 @@ struct ClipboardNewContentPayload {
 /// and feeds each frame through `ApplyInboundClipboardUseCase`.
 pub struct InboundClipboardSyncWorker {
     clipboard_sync: Arc<ClipboardSyncFacade>,
-    apply_inbound_uc: Arc<ApplyInboundClipboardUseCase>,
+    inbound_clipboard: Arc<InboundClipboardFacade>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
 }
 
 impl InboundClipboardSyncWorker {
     pub fn new(
         clipboard_sync: Arc<ClipboardSyncFacade>,
-        apply_inbound_uc: Arc<ApplyInboundClipboardUseCase>,
+        inbound_clipboard: Arc<InboundClipboardFacade>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
     ) -> Self {
         Self {
             clipboard_sync,
-            apply_inbound_uc,
+            inbound_clipboard,
             event_tx,
         }
     }
 
     async fn handle_one(&self, notice: InboundNotice) {
-        let input = ApplyInboundInput {
-            from_device: notice.from_device,
+        let input = InboundClipboardNoticeInput {
+            from_device: notice.from_device.as_str().to_string(),
             content_hash: notice.content_hash,
             plaintext: notice.plaintext,
         };
-        match self.apply_inbound_uc.execute(input).await {
-            Ok(ApplyOutcome::Applied { entry_id }) => {
+        match self.inbound_clipboard.apply_notice(input).await {
+            Ok(InboundClipboardApplyOutcome::Applied { entry_id }) => {
                 info!(entry_id = %entry_id, "inbound clipboard applied; broadcasting WS event");
                 Self::emit_ws_event(&self.event_tx, entry_id);
             }
-            Ok(ApplyOutcome::DuplicateSkipped {
+            Ok(InboundClipboardApplyOutcome::DuplicateSkipped {
                 content_hash,
                 existing_entry_id,
             }) => {
@@ -99,7 +100,7 @@ impl InboundClipboardSyncWorker {
                     "inbound dropped: duplicate of existing local entry"
                 );
             }
-            Ok(ApplyOutcome::DecodeFailed { reason }) => {
+            Ok(InboundClipboardApplyOutcome::DecodeFailed { reason }) => {
                 warn!(reason, "inbound dropped: V3 envelope decode failed");
             }
             Err(e) => {
@@ -108,9 +109,9 @@ impl InboundClipboardSyncWorker {
         }
     }
 
-    fn emit_ws_event(event_tx: &broadcast::Sender<DaemonWsEvent>, entry_id: EntryId) {
+    fn emit_ws_event(event_tx: &broadcast::Sender<DaemonWsEvent>, entry_id: String) {
         let payload = ClipboardNewContentPayload {
-            entry_id: entry_id.to_string(),
+            entry_id,
             preview: "Remote clipboard content".to_string(),
             origin: "remote".to_string(),
         };

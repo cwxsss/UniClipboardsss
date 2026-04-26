@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
-use uc_application::facade::{SearchCoordinator, SearchCoordinatorDeps};
+use uc_application::facade::{InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps};
 use uc_application::{
     ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
     InboundWrite as ApplyInboundWrite,
@@ -158,6 +158,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         )
         .with_blob_materializer(blob_materializer),
     );
+    let inbound_clipboard_facade = Arc::new(InboundClipboardFacade::new(apply_inbound_uc));
 
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
         runtime.clone(),
@@ -174,7 +175,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
 
     let inbound_clipboard_sync = Arc::new(InboundClipboardSyncWorker::new(
         clipboard_sync_facade.clone(),
-        apply_inbound_uc,
+        inbound_clipboard_facade,
         event_tx.clone(),
     ));
 
