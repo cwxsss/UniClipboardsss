@@ -683,8 +683,9 @@ pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> 
         uc_infra::security::BlobCipherAdapter::new(platform.session.clone()),
     );
 
-    // TransferCipherPort——sync_outbound / sync_inbound 通过此 port 加解密
-    // 网络字节,与 BlobCipherPort 共享同一个 InMemorySession。
+    // TransferCipherPort——uc-application clipboard_sync 的 dispatch_entry /
+    // ingest_inbound 通过此 port 加解密 V3 网络字节,与 BlobCipherPort 共享
+    // 同一个 InMemorySession。
     let transfer_cipher: Arc<dyn uc_core::ports::security::TransferCipherPort> = Arc::new(
         uc_infra::clipboard::TransferCipherAdapter::new(platform.session.clone()),
     );
@@ -888,7 +889,8 @@ pub async fn resolve_pairing_config(settings: Arc<dyn SettingsPort>) -> PairingC
 /// programmatic clipboard writes.
 ///
 /// Centralises the guard-registration + write + cleanup-on-error pattern
-/// (previously duplicated across restore_clipboard_selection, sync_inbound, copy_file_to_clipboard).
+/// (previously duplicated across restore_clipboard_selection, copy_file_to_clipboard,
+/// and the now-deleted `sync_inbound` libp2p path).
 pub fn build_clipboard_write_coordinator(
     system_clipboard: Arc<dyn uc_core::ports::clipboard::SystemClipboardPort>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,

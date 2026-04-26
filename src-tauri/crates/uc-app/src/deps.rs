@@ -55,8 +55,9 @@ pub struct SecurityPorts {
     /// 业务 blob 加解密 port——4 个剪切板 decorator 通过此 port 加解密
     /// inline_data。adapter 内部端到端自管会话与 V1 AEAD。
     pub blob_cipher: Arc<dyn uc_core::ports::security::BlobCipherPort>,
-    /// 剪切板传输 chunked AEAD port——sync_outbound / sync_inbound usecase 通过
-    /// 此 port 加解密网络字节。adapter 内部端到端自管会话。
+    /// 剪切板传输 AEAD port——`uc_application::usecases::clipboard_sync` 的
+    /// `dispatch_entry` / `ingest_inbound` 通过此 port 加解密 V3 网络字节。
+    /// adapter 内部端到端自管会话。
     pub transfer_cipher: Arc<dyn uc_core::ports::security::TransferCipherPort>,
     /// Argon2 PIN hasher for pairing.
     pub pin_hasher: Arc<dyn uc_core::ports::security::PinHasherPort>,

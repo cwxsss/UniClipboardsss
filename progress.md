@@ -2834,3 +2834,100 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - ⛔ 删 `pairing/host.rs` / `query.rs` 内 `Arc<SetupFacade>` 用法 → T3.4
 - ⛔ `setup.invitationIssued` / `setup.invitationRevoked` 接通 → T4 前端真消费时
 - ⛔ daemon HTTP 集成测试(initialize → invite → joiner redeem → ws 收 pairingCompleted 端到端)→ T3.5
+
+---
+
+## Session 2026-04-25(续 42 · 汇总) — Slice 4 P3 T3.4 → P5c C6 期间补遗
+
+**触发**:`/planning-with-files 继续`,发现 progress.md 滞后 30 个 commit(T3.3 → P5c C6)。本节按 commit 链路一次性把所有阶段性产出汇总落档,避免后续再断档。**单测 / 编译细节略,仅记录每段的目的、产物与遗留**。
+
+### T3.4(legacy setup HTTP/UI 整体下线 + v2 接通,8 子步骤)
+- `c3918af8 S1` 删 daemon `/setup/*` 11 个老 HTTP handler(routes 不再注册),保留 `api/setup.rs` 待 S5 一并清
+- `d9362907 S2` daemon-internal `SetupFacade` 用法剥离(workers / pairing 内部不再持 `Arc<SetupFacade>`)
+- `1bffea6c S3` `pairing/host.rs` 去 `SetupFacade` 依赖
+- `5f7e1df4 S4` `assembly.rs` 去掉老 `SetupFacade::new(...)` 装配链
+- `b4b6359c S5` 删整个 `uc-application/src/setup/` 模块(12 文件 + 11 个 usecase 子文件,T3.2 v2 facade 已全替代)
+- `3d28473f S6` 删 legacy `SpaceAccessTransportPort` + `send-*` actions(老网络握手脚手架)
+- `2c750bc2 S7` 删 deprecated setup ws 常量 + payloads(`SETUP_STATE_CHANGED` / `SETUP_SPACE_ACCESS_COMPLETED`)
+- `139f6ec4 S8a` 前端加 v2 setup HTTP client + 新 ws subscribers + `InvitationCodeInput`
+- `7f6b04c2 S8b` 切 setup gate UI 到 v2 invitation flow(老 stateChanged 路径前端不再消费)
+
+### T3.5(测试硬化)
+- `5cbbb9c7` 把 pairing-completion forwarder 抽成独立函数 + 加 5 个单测(取代原本预想的 daemon HTTP e2e,代价/收益更优)
+
+### T4.4(前端 discoveredPeers 死代码清扫)
+- `d8826de5 S1` 删 `useDeviceDiscovery` hook + tests
+- `9e5490ed S2` `devicesSlice` 去掉 `discoveredPeers` 字段
+- `4802ed3f S3` 删 `discovered: bool` peer-diff 类型残留
+
+### P5a(GUI/前端 + daemon HTTP pairing 路径下线,4 子步骤)
+- `310c1d51 P5a-1` 前端 `/device/me` `/paired-devices` `/pairing/unpair` 不再依赖 `PeerDirectoryPort` / libp2p
+- `ebf919ad P5a-2` 把 `pairing.ts` LIVE 函数迁进 `members.ts`
+- `e7f31398 P5a-3` 删 `PairingDialog` + `PairingNotificationProvider` + `pairing.ts`
+- `c1eb9f59 P5a-4 C1` 删 daemon HTTP 旧 pairing routes + 收紧 OpenAPI
+- `8fe7aa86 P5a-4 C2` 删 `DaemonPairingHost` + 串接清扫
+- `72fae922 P5a-4 C4` 删 `builders.rs PairingFacade::new` + 字段(GUI 进程不再构造老 `PairingFacade`)
+
+### License
+- `b70b05c8` 项目协议切到 AGPL-3.0(纯 LICENSE 改动,与 Slice 4 工作并行)
+
+### P5b(libp2p adapter 物理删除,3 chunk)
+- `a87a6021 B1` 删 daemon `peer_discovery` worker
+- `e06e17f9 B3` `NetworkPorts` stub 化 + 物理删 `uc-platform/adapters/libp2p_network/`
+- `59c4747c B4` 删 `identity_store.rs`(libp2p 专用)+ workspace `libp2p` / `libp2p-stream` Cargo deps
+
+### P5c(剩余死代码扫尾,6 chunk)
+- `937832a2 C1` 删 3 块死 use case + tauri accessors(含 `sync_outbound.rs`)
+- `2f37baa9 C2` `presence_monitor` 数据源切到 `PresencePort` + `member_repo`(替代旧 `PeerDirectoryPort` 来源)
+- `59b348da C3` 删 `get_p2p_peers_snapshot` use case + `connected_peers` + 转换器
+- `a2290ef4 C4` 删 lifecycle retry 的 `start_network` 调用 + `StartNetworkAfterUnlock`
+- `f0541cdb C5` 物理删 6 个废弃 trait + `NetworkPorts` + `uc-tauri test_utils` fakes
+- `52fbb4de C6` 拆 `SpaceSetupFacade.network_control` + 物理删 `NetworkControlPort`(libp2p-era 全面下线最后一块)
+
+### Phase 5 删除清单总进度(2026-04-25 P5c C6 后)
+**已删 (12)**:`libp2p_network/` / `pairing_stream/` / `file_transfer/` 3 个 adapter 目录;`identity_store.rs`;`uc-app sync_outbound.rs`;`uc-core ports {pairing_transport, network_events, file_transport}.rs`;`uc-daemon peers/monitor.rs` + `workers/peer_discovery.rs`;`NetworkControlPort`(C6 加做)。
+
+**待删 (11)**:`uc-app {sync_inbound.rs, file_sync/, resolve_connection_policy.rs}`;`uc-application pairing/state_machine.rs`;`uc-core ports {connection_policy, discovery}.rs`;`uc-core {ids/peer_id.rs, network/events.rs, network/connection_policy.rs}`;`uc-core network/protocol/{file_transfer, heartbeat, device_announce, protocol_message}.rs`。
+
+**文件内清理待做**:`network/protocol/{pairing,clipboard}.rs` 瘦身;`network/mod.rs` / `ports/mod.rs` / `ids/mod.rs` / `lib.rs` 同步;daemon-contract 残留 ws 事件核查;Cargo `iroh` feature 门控移除。
+
+### 下一步
+进 **P5c C7** = 删 `uc-app/usecases/clipboard/sync_inbound.rs`(对称 C1 已删的 `sync_outbound.rs`)。
+
+---
+
+## Session 2026-04-25(续 43) — Slice 4 P5c C7 · 删 uc-app sync_inbound.rs
+
+**触发**:用户回 "好的补汇总开 c7"。
+
+**完成标准**:
+- 物理删 `uc-app/usecases/clipboard/sync_inbound.rs`(733 行,libp2p 时代 inbound 路径,iroh 走 `ApplyInboundClipboardUseCase`)
+- 同步去掉 `clipboard/mod.rs` 的 `pub mod sync_inbound;` 与所有提及该模块的注释
+- `cargo check` + `cargo test -p uc-app --lib` 全绿,无回归
+
+**消费者扫描**(确认 0 外部引用):
+- `rg SyncInboundClipboard` → 仅 `sync_inbound.rs` 自定义,无 uc-tauri / uc-cli / uc-daemon / uc-bootstrap 引用
+- `rg "use.*sync_inbound"` → 0 命中(`file_sync/mod.rs` 是另一个无关的 `file_sync::sync_inbound`,不是本文件)
+- `rg "InboundApplyOutcome|PendingTransferLinkage|warn_missing_traceparent_once"` → 全部仅 `sync_inbound.rs` 自身使用
+
+**已做**:
+- **删** `uc-app/src/usecases/clipboard/sync_inbound.rs`(整文件 733 行)
+- **改** `uc-app/src/usecases/clipboard/mod.rs:10` 去掉 `pub mod sync_inbound;`
+- **改** `uc-app/src/deps.rs:58-59` 注释:`transfer_cipher` 字段说明从"sync_outbound / sync_inbound usecase"改为"`uc_application::usecases::clipboard_sync` 的 `dispatch_entry` / `ingest_inbound`"
+- **改** `uc-bootstrap/src/assembly.rs:686` 注释同步更新
+- **改** `uc-bootstrap/src/assembly.rs:891` `build_clipboard_write_coordinator` 文档注释:`sync_inbound` 标为已删
+- **改** `uc-app/src/usecases/clipboard/clipboard_write_coordinator.rs:6` shim 注释:剔除 `sync_inbound` 提及
+- **改** `uc-application/src/clipboard_write/coordinator.rs:48` doc:剔除 `sync_inbound.rs` 提及
+
+**验证**:
+- `cargo check -p uc-app -p uc-application -p uc-bootstrap -p uc-daemon -p uc-tauri`:✅ 通过(剩 `Kek` import / `LocalIdentity` / `DuplicateIgnored` 3 个 warning 均为 C7 前预存)
+- `cargo test -p uc-app --lib`:✅ 7/7 通过(membership / outbound_entry_cache 既有测试,本次零新增)
+
+**Phase 5 删除清单进度**(C7 后):
+- 已删 (13):新增 `uc-app/clipboard/sync_inbound.rs`
+- 待删 (10):`uc-app/{file_sync/, resolve_connection_policy.rs}`、`uc-application/pairing/state_machine.rs`、`uc-core ports/{connection_policy, discovery}.rs`、`uc-core/{ids/peer_id, network/events, network/connection_policy}.rs`、`uc-core/network/protocol/{file_transfer, heartbeat, device_announce, protocol_message}.rs`
+
+**下一步候选**:
+- C8a · 删 `uc-app/usecases/file_sync/` 整目录(F-115,libp2p 时代文件传输 chunked 协议;iroh 走 `BlobTransferFacade` + `FileCacheBlobMaterializer`)— **建议作为 C8 主线**
+- C8b · 删 `uc-app/usecases/pairing/resolve_connection_policy.rs`(libp2p 时代连接策略,小独立文件)
+- C8c · 删 `uc-application/src/pairing/state_machine.rs`(F-105,含 `AwaitingUserConfirm` / `PairingChallenge` / `PairingResponse`)

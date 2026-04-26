@@ -2,11 +2,11 @@
 //!
 //! This module is a thin re-export shim. Slice 2 Phase 3 (T0b) migrated
 //! the real `ClipboardWriteCoordinator` + `ClipboardWriteIntent` source
-//! to `uc-application`; existing consumers (daemon workers, tauri runtime,
-//! uc-app's own `restore_clipboard_selection` / `sync_inbound`) continue
-//! to import from this path unchanged. Slice 5 / `uc-app` retirement
-//! deletes this shim and rewrites callers to import from
-//! `uc_application::clipboard_write` directly.
+//! to `uc-application`; remaining consumers (daemon workers, tauri runtime,
+//! uc-app's own `restore_clipboard_selection`) continue to import from
+//! this path unchanged. Slice 5 / `uc-app` retirement deletes this shim
+//! and rewrites callers to import from `uc_application::clipboard_write`
+//! directly.
 //!
 //! Reason for migration: `uc-application::ApplyInboundClipboardUseCase`
 //! (Slice 2 Phase 3 · T4) depends on `ClipboardWriteCoordinator` to write

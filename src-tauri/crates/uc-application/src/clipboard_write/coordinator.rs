@@ -44,8 +44,9 @@ pub enum ClipboardWriteIntent {
 /// Single write boundary for all programmatic clipboard writes.
 ///
 /// Centralises the guard-registration + write + cleanup-on-error pattern
-/// that was previously duplicated across `restore_clipboard_selection.rs`,
-/// `sync_inbound.rs`, and `copy_file_to_clipboard.rs`.
+/// that was previously duplicated across `restore_clipboard_selection.rs`
+/// and `copy_file_to_clipboard.rs` (and the now-deleted libp2p-era
+/// `sync_inbound.rs`).
 ///
 /// # Contract
 ///
