@@ -23,3 +23,7 @@ daemon handler 调用面已经开始统一到 `AppFacade`,但 `app.rs` 和 `entr
   - daemon / bootstrap / Tauri 不再 import `uc_app::shared::*`。
   - daemon `entrypoint.rs` 不再通过 `uc-app` 的 capture 兼容 shim 获取 `CaptureClipboardUseCase`。
   - 已验证 `cargo test -p uc-application facade::host_event --lib`、`cargo test -p uc-daemon --lib`、`cargo check -p uc-application -p uc-app -p uc-bootstrap -p uc-daemon -p uc-tauri`。
+- 2026-04-26:已把 lifecycle 状态端口和内存实现从 `uc-app::usecases::app_lifecycle` 迁到 `uc_application::facade::lifecycle`。
+  - `uc-app` 旧 lifecycle 路径只保留兼容转发。
+  - daemon / bootstrap / Tauri 不再从 `uc_app::usecases` 导入 lifecycle 状态端口。
+  - 已验证 `cargo test -p uc-application facade::lifecycle --lib`、`cargo test -p uc-daemon --lib`、`cargo check -p uc-application -p uc-app -p uc-bootstrap -p uc-daemon -p uc-tauri`。

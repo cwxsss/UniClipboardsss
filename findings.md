@@ -14,6 +14,11 @@
 - **来源**:`uc-app/src/shared/*` 迁入 `uc-application/src/facade/host_event/*` 后,daemon/bootstrap/Tauri 编译通过。
 - **影响**:`uc-app::shared` 可以降级为兼容转发;后续删除 `uc-app` 时无需再处理这组共享事件类型。
 
+### F-042 · lifecycle 状态端口不需要留在 uc-app
+- **事实**:lifecycle 状态端口只表达 application 就绪状态读写,与 `CoreUseCases` 无关。
+- **来源**:`uc-app/src/usecases/app_lifecycle/*` 迁为 `uc-application/src/facade/lifecycle` 兼容转发后,daemon/bootstrap/Tauri 编译通过。
+- **影响**:daemon 构造 `LifecycleFacade` 时不再需要从 `uc-app::usecases` 导入 lifecycle 类型;后续 `uc-app` 退场少一个共享阻塞点。
+
 ## Slice 3 Phase 1 · T0 iroh-blobs 探针发现(2026-04-24)
 
 ### F-030 · `iroh-blobs 0.95.0` 与当前 `iroh 0.95.1` 不同栈

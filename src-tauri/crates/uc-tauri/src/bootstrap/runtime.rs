@@ -162,8 +162,8 @@ impl AppRuntime {
         storage_paths: uc_app::app_paths::AppPaths,
         event_emitter: Arc<dyn HostEventEmitterPort>,
     ) -> Self {
-        let lifecycle_status: Arc<dyn uc_app::usecases::LifecycleStatusPort> =
-            Arc::new(uc_app::usecases::InMemoryLifecycleStatus::new());
+        let lifecycle_status: Arc<dyn uc_application::facade::LifecycleStatusGateway> =
+            Arc::new(uc_application::facade::InMemoryLifecycleStatus::new());
         let app_handle = Arc::new(std::sync::RwLock::new(None));
         // Clipboard integration mode is resolved from the UC_CLIPBOARD_MODE env var.
         // Defaults to Full (standalone GUI watches clipboard directly).

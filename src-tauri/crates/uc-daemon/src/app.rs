@@ -20,16 +20,16 @@ use uc_app::usecases::clipboard::get_entry_resource::EntryResourceResult;
 use uc_app::usecases::clipboard::list_entry_projections::EntryProjectionDto;
 use uc_app::usecases::clipboard::{ClearHistoryResult, ClipboardStats};
 use uc_app::usecases::CoreUseCases;
-use uc_app::usecases::{LifecycleState, LifecycleStatusPort};
 use uc_application::facade::{
     AppFacade, AppFacadeParts, ClipboardClearHistoryResultView, ClipboardHistoryError,
     ClipboardHistoryFacade, ClipboardHistoryGateway, ClipboardListInput, ClipboardRestoreError,
     ClipboardRestoreFacade, ClipboardRestoreGateway, ClipboardStatsView, DeviceFacade,
     EncryptionFacade, EncryptionFacadeDeps, EntryDetailView, EntryProjectionView,
-    EntryResourceView, LifecycleFacade, LifecycleFacadeDeps, LifecycleStateView,
-    LifecycleStatusGateway, MemberRosterFacade, ResourceFacade, ResourceFacadeDeps, SearchFacade,
-    SearchFacadeError, SearchGateway, SearchPageView, SearchRebuildAcceptedView, SearchResultView,
-    SearchStatusView, SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
+    EntryResourceView, LifecycleFacade, LifecycleFacadeDeps, LifecycleStateView as LifecycleState,
+    LifecycleStateView, LifecycleStatusGateway, MemberRosterFacade, ResourceFacade,
+    ResourceFacadeDeps, SearchFacade, SearchFacadeError, SearchGateway, SearchPageView,
+    SearchRebuildAcceptedView, SearchResultView, SearchStatusView, SettingsFacade,
+    SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
 use uc_application::facade::{ManualRebuildResult, SearchCoordinator};
 use uc_application::space_access::SpaceAccessFacade;
@@ -474,7 +474,7 @@ impl DaemonApp {
 }
 
 struct AppLifecycleStatusGateway {
-    status: Arc<dyn LifecycleStatusPort>,
+    status: Arc<dyn LifecycleStatusGateway>,
 }
 
 #[async_trait]

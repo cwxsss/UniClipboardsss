@@ -73,8 +73,8 @@ pub use host_event::{
     HostEventEmitterPort, OutboundEntryIdCache, TransferHostEvent,
 };
 pub use lifecycle::{
-    LifecycleFacade, LifecycleFacadeDeps, LifecycleFacadeError, LifecycleStateView,
-    LifecycleStatusGateway,
+    InMemoryLifecycleStatus, LifecycleFacade, LifecycleFacadeDeps, LifecycleFacadeError,
+    LifecycleStateView, LifecycleStatusGateway,
 };
 pub use resource::{BinaryResourceView, ResourceFacade, ResourceFacadeDeps, ResourceFacadeError};
 pub use roster::{

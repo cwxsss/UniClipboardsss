@@ -29,6 +29,36 @@ pub trait LifecycleStatusGateway: Send + Sync {
     async fn get_state(&self) -> LifecycleStateView;
 }
 
+pub struct InMemoryLifecycleStatus {
+    state: tokio::sync::Mutex<LifecycleStateView>,
+}
+
+impl InMemoryLifecycleStatus {
+    pub fn new() -> Self {
+        Self {
+            state: tokio::sync::Mutex::new(LifecycleStateView::Idle),
+        }
+    }
+}
+
+impl Default for InMemoryLifecycleStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl LifecycleStatusGateway for InMemoryLifecycleStatus {
+    async fn set_state(&self, state: LifecycleStateView) -> Result<()> {
+        *self.state.lock().await = state;
+        Ok(())
+    }
+
+    async fn get_state(&self) -> LifecycleStateView {
+        self.state.lock().await.clone()
+    }
+}
+
 #[derive(Clone)]
 pub struct LifecycleFacadeDeps {
     pub status: Arc<dyn LifecycleStatusGateway>,

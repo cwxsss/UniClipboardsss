@@ -3478,6 +3478,28 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — uc-app 退场 · lifecycle 切片
+
+**触发**:继续清理 daemon/bootstrap/Tauri 仍从 `uc-app::usecases` 获取的应用状态端口。
+
+**完成标准**:
+- lifecycle 状态端口迁到 `uc-application`
+- daemon/bootstrap/Tauri 不再从 `uc_app::usecases` 导入 lifecycle 状态端口
+- `uc-app` 旧 lifecycle 路径只保留兼容转发
+- 验证 application lifecycle 测试、daemon 测试和相关 crate 编译
+
+**已做**:
+- `uc-application/src/facade/lifecycle/` 增加 `InMemoryLifecycleStatus`
+- `uc-app/src/usecases/app_lifecycle/*` 改为兼容转发
+- 更新 daemon、bootstrap、Tauri runtime 的 lifecycle 导入路径
+
+**验证**:
+- `cargo test -p uc-application facade::lifecycle --lib`:✅ 4 passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+- `cargo check -p uc-application -p uc-app -p uc-bootstrap -p uc-daemon -p uc-tauri`:✅ passed
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · query peers 切片
 
 **触发**:继续处理 daemon query / peers / ws 仍直接认识 core runtime、presence port 和分散 facade 的边界问题。
