@@ -23,7 +23,10 @@ mod commands;
 mod errors;
 mod facade;
 
-pub use commands::RosterEntry;
+pub use commands::{
+    ContentTypesPatch, ContentTypesView, MemberSummary, MemberSyncPreferencesPatch,
+    MemberSyncPreferencesView, RosterEntry,
+};
 pub use errors::RosterError;
 pub use facade::{MemberRosterDeps, MemberRosterFacade};
 pub use uc_core::ports::PresenceEvent;

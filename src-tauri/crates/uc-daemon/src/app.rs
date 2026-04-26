@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
-use uc_application::facade::SpaceSetupFacade;
+use uc_application::facade::{MemberRosterFacade, SpaceSetupFacade};
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::PresencePort;
 
@@ -125,6 +125,7 @@ pub struct DaemonApp {
     /// `space_setup_assembly.facade`. Also subscribed at `run()` to fan
     /// `PairingOutcome` events out as `setup.pairingCompleted` ws frames.
     space_setup_facade: Option<Arc<SpaceSetupFacade>>,
+    member_roster_facade: Option<Arc<MemberRosterFacade>>,
     /// Local device id (sponsor view) baked in at construction so the
     /// pairing-completion forwarder doesn't need to pull
     /// `DeviceIdentityPort` at event time. Pre-resolved in `entrypoint`.
@@ -162,6 +163,7 @@ impl DaemonApp {
             clipboard_capture_gate: None,
             search_coordinator: None,
             space_setup_facade: None,
+            member_roster_facade: None,
             local_device_id: None,
             presence,
         }
@@ -190,6 +192,7 @@ impl DaemonApp {
         clipboard_capture_gate: Option<Arc<AtomicBool>>,
         search_coordinator: Option<Arc<SearchCoordinator>>,
         space_setup_facade: Option<Arc<SpaceSetupFacade>>,
+        member_roster_facade: Option<Arc<MemberRosterFacade>>,
         local_device_id: Option<String>,
         presence: Arc<dyn PresencePort>,
     ) -> Self {
@@ -219,6 +222,7 @@ impl DaemonApp {
             clipboard_capture_gate,
             search_coordinator,
             space_setup_facade,
+            member_roster_facade,
             local_device_id,
             presence,
         }
@@ -247,6 +251,7 @@ impl DaemonApp {
             self.runtime.clone(),
             self.presence.clone(),
             self.state.clone(),
+            self.member_roster_facade.clone(),
         ));
 
         // 2. Build security state and register daemon's own PID
@@ -283,6 +288,10 @@ impl DaemonApp {
         // `/v2/setup/*` handlers stop returning 503 once T3.2 is wired.
         let api_state = match &self.space_setup_facade {
             Some(facade) => api_state.with_space_setup(Arc::clone(facade)),
+            None => api_state,
+        };
+        let api_state = match &self.member_roster_facade {
+            Some(facade) => api_state.with_member_roster(Arc::clone(facade)),
             None => api_state,
         };
 

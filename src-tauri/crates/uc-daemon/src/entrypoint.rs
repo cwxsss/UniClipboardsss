@@ -300,6 +300,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // shutdown closure below; this clone keeps the api_state + forwarder
     // alive throughout `run()`.
     let space_setup_facade_for_api = ctx.space_setup_assembly.facade.clone();
+    let member_roster_facade_for_api = ctx.space_setup_assembly.roster.clone();
     let local_device_id = runtime
         .wiring_deps()
         .device
@@ -320,6 +321,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         Some(clipboard_capture_gate.clone()),
         Some(search_coordinator),
         Some(space_setup_facade_for_api),
+        Some(member_roster_facade_for_api),
         Some(local_device_id),
         ctx.space_setup_assembly.presence.clone(),
     );

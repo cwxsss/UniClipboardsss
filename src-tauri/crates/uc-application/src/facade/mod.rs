@@ -21,7 +21,10 @@ pub use clipboard::{
     ClipboardSyncDeps, ClipboardSyncError, ClipboardSyncFacade, DispatchEntryInput,
     DispatchEntryOutcome, DispatchEntryPerTarget, InboundAction, InboundNotice, IngestHandle,
 };
-pub use roster::{MemberRosterDeps, MemberRosterFacade, PresenceEvent, RosterEntry, RosterError};
+pub use roster::{
+    ContentTypesPatch, ContentTypesView, MemberRosterDeps, MemberRosterFacade, MemberSummary,
+    MemberSyncPreferencesPatch, MemberSyncPreferencesView, PresenceEvent, RosterEntry, RosterError,
+};
 pub use setup_status::SetupStatusFacade;
 pub use space_setup::{
     CancelInvitationError, CurrentInvitation, InitializeSpaceCommand, InitializeSpaceError,

@@ -2836,3 +2836,42 @@ Phase 0(已完成,2026-04-18)
 - Slice 1 阻塞于 milestone/1.0.0 合并
 - **Slice 1→5 为严格线性**:每个 slice 是端到端业务交付,不适合并行(后续 slice 依赖前序建立的基础设施)
 - 2026-04-24 调整:原 Slice 4"双栈并行验证 1-2 周"已取消,改为直接删除 libp2p 业务代码(GUI 进程旧路径已是空跑死代码,见 `findings.md` F-100)
+
+---
+
+## Daemon application 边界收口(2026-04-26 起)
+
+**目标**:daemon / CLI / Tauri / HTTP / IPC 入口最终只面对 `uc-application` 暴露的应用模型和 facade,不直接认识 `uc-core`、`uc-infra`、`uc-platform`、`uc-app` 的领域模型、port、adapter、runtime。
+
+**当前完成标准**:
+- 外层入口不直接拿 core 领域模型当 API 输入输出。
+- 外层入口不直接构造 usecase。
+- 业务规则和 patch 合并规则收敛到 `uc-application`。
+- daemon 每收一块都跑针对性测试和 `cargo check -p uc-daemon`。
+
+### Phase D1 · daemon 成员/配对入口收口 — complete
+
+**范围**:
+- `/member/:device_id/sync-preferences`
+- `/pairing/unpair`
+- paired devices 查询路径
+
+**结果**:
+- `MemberRosterFacade` 现在提供字符串设备 ID + application 层成员偏好模型。
+- daemon 成员接口不再直接调用 membership usecase。
+- 成员偏好 patch 合并规则移入 `uc-application`。
+
+**验证**:
+- `cargo test -p uc-application facade::roster --lib`
+- `cargo test -p uc-daemon api::member --lib`
+- `cargo check -p uc-daemon`
+
+### Phase D2 · daemon 下一块收口 — in_progress
+
+**候选优先级**:
+1. `api/settings.rs`:HTTP DTO 直接映射 core settings model,边界问题明显。
+2. `api/search.rs`:直接构造 core search query / error,范围较大。
+3. clipboard workers:直接依赖 platform watcher / core snapshot,需要更完整的 application worker facade。
+4. `entrypoint.rs` / `app.rs`:仍是装配根,需要后续把 daemon runtime 装配入口迁入 `uc-application` 或内部装配模块。
+
+**下一步选择**:先评估 `api/settings.rs`,若改动范围可控则作为 D2。

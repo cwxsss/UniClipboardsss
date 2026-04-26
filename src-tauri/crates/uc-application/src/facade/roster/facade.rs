@@ -21,8 +21,12 @@ use tracing::instrument;
 
 use uc_core::membership::MemberRepositoryPort;
 use uc_core::ports::{LocalIdentityPort, PresenceEvent, PresencePort};
+use uc_core::DeviceId;
 
-use crate::facade::roster::commands::RosterEntry;
+use crate::facade::roster::commands::{
+    apply_member_sync_preferences_patch, MemberSummary, MemberSyncPreferencesPatch,
+    MemberSyncPreferencesView, RosterEntry,
+};
 use crate::facade::roster::errors::RosterError;
 
 /// 构造 `MemberRosterFacade` 时需要的 port 束。对齐 `SpaceSetupDeps`
@@ -89,6 +93,87 @@ impl MemberRosterFacade {
         Ok(entries)
     }
 
+    /// 列出成员摘要。该方法面向 daemon/http 等外部入口,只返回应用层值对象。
+    #[instrument(skip_all)]
+    pub async fn list_members(&self) -> Result<Vec<MemberSummary>, RosterError> {
+        let members = self
+            .member_repo
+            .list()
+            .await
+            .map_err(|err| RosterError::MemberRepository(err.to_string()))?;
+
+        Ok(members
+            .into_iter()
+            .map(|member| MemberSummary {
+                device_id: member.device_id.as_str().to_string(),
+                device_name: member.device_name,
+            })
+            .collect())
+    }
+
+    /// 读取某个成员的同步偏好。调用方传入字符串设备 ID,不接触 core 类型。
+    #[instrument(skip_all, fields(device_id = %device_id))]
+    pub async fn get_sync_preferences(
+        &self,
+        device_id: &str,
+    ) -> Result<MemberSyncPreferencesView, RosterError> {
+        let device_id = DeviceId::new(device_id);
+        let member = self
+            .member_repo
+            .get(&device_id)
+            .await
+            .map_err(|err| RosterError::MemberRepository(err.to_string()))?
+            .ok_or_else(|| RosterError::NotFound(device_id.as_str().to_string()))?;
+
+        Ok(member.sync_preferences.into())
+    }
+
+    /// 局部更新某个成员的同步偏好。合并规则收敛在 application 层。
+    #[instrument(skip_all, fields(device_id = %device_id))]
+    pub async fn update_sync_preferences(
+        &self,
+        device_id: &str,
+        patch: MemberSyncPreferencesPatch,
+    ) -> Result<MemberSyncPreferencesView, RosterError> {
+        let device_id = DeviceId::new(device_id);
+        let existing = self
+            .member_repo
+            .get(&device_id)
+            .await
+            .map_err(|err| RosterError::MemberRepository(err.to_string()))?
+            .ok_or_else(|| RosterError::NotFound(device_id.as_str().to_string()))?;
+
+        let updated_preferences =
+            apply_member_sync_preferences_patch(existing.sync_preferences, patch);
+        let updated = uc_core::SpaceMember {
+            sync_preferences: updated_preferences,
+            ..existing
+        };
+
+        self.member_repo
+            .save(&updated)
+            .await
+            .map_err(|err| RosterError::MemberRepository(err.to_string()))?;
+
+        Ok(updated.sync_preferences.into())
+    }
+
+    /// 撤销成员。撤销语义由 application 层表达,daemon 不直接调用 use case。
+    #[instrument(skip_all, fields(device_id = %device_id))]
+    pub async fn revoke_member(&self, device_id: &str) -> Result<(), RosterError> {
+        let device_id = DeviceId::new(device_id);
+        let removed = self
+            .member_repo
+            .remove(&device_id)
+            .await
+            .map_err(|err| RosterError::MemberRepository(err.to_string()))?;
+        if removed {
+            Ok(())
+        } else {
+            Err(RosterError::NotFound(device_id.as_str().to_string()))
+        }
+    }
+
     /// `PresencePort::subscribe` 的 thin 转发。
     ///
     /// 每次调用拿一个新 receiver,共享 adapter 的 broadcast 源。标准
@@ -119,6 +204,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use std::sync::Mutex as StdMutex;
 
+    use crate::facade::roster::{ContentTypesPatch, MemberSyncPreferencesPatch};
     use uc_core::ids::DeviceId;
     use uc_core::membership::{MemberSyncPreferences, MembershipError, SpaceMember};
     use uc_core::ports::{LocalIdentityError, PresenceError, PresenceEvent, ReachabilityState};
@@ -451,5 +537,94 @@ mod tests {
             .unwrap();
         assert_eq!(got1.state, ReachabilityState::Online);
         assert_eq!(got2.state, ReachabilityState::Online);
+    }
+
+    #[tokio::test]
+    async fn get_sync_preferences_accepts_application_device_id() {
+        let mut repo = MockMemberRepo::new();
+        let member = member("dev-1", "phone", fp("REMOTE"));
+        let expected = member.sync_preferences.clone();
+        repo.expect_get()
+            .times(1)
+            .returning(move |_| Ok(Some(member.clone())));
+        let id = MockLocalIdentity::new();
+        let presence = Arc::new(FakePresence::new(vec![]));
+        let facade = build_facade(repo, id, presence);
+
+        let got = facade.get_sync_preferences("dev-1").await.expect("ok");
+
+        assert_eq!(got.send_enabled, expected.send_enabled);
+        assert_eq!(got.receive_enabled, expected.receive_enabled);
+        assert_eq!(
+            got.send_content_types.text,
+            expected.send_content_types.text
+        );
+    }
+
+    #[tokio::test]
+    async fn update_sync_preferences_patch_preserves_unmentioned_fields() {
+        let mut repo = MockMemberRepo::new();
+        let mut existing = member("dev-1", "phone", fp("REMOTE"));
+        existing.sync_preferences.send_enabled = true;
+        existing.sync_preferences.receive_enabled = true;
+        existing.sync_preferences.send_content_types.text = false;
+        existing.sync_preferences.send_content_types.image = true;
+        let existing_for_get = existing.clone();
+
+        repo.expect_get()
+            .times(1)
+            .returning(move |_| Ok(Some(existing_for_get.clone())));
+        repo.expect_save()
+            .times(1)
+            .withf(|member| {
+                member.device_id == DeviceId::new("dev-1")
+                    && !member.sync_preferences.send_enabled
+                    && member.sync_preferences.receive_enabled
+                    && member.sync_preferences.send_content_types.text
+                    && member.sync_preferences.send_content_types.image
+            })
+            .returning(|_| Ok(()));
+        let id = MockLocalIdentity::new();
+        let presence = Arc::new(FakePresence::new(vec![]));
+        let facade = build_facade(repo, id, presence);
+
+        let updated = facade
+            .update_sync_preferences(
+                "dev-1",
+                MemberSyncPreferencesPatch {
+                    send_enabled: Some(false),
+                    receive_enabled: None,
+                    send_content_types: Some(ContentTypesPatch {
+                        text: Some(true),
+                        image: None,
+                        link: None,
+                        file: None,
+                        code_snippet: None,
+                        rich_text: None,
+                    }),
+                    receive_content_types: None,
+                },
+            )
+            .await
+            .expect("ok");
+
+        assert!(!updated.send_enabled);
+        assert!(updated.receive_enabled);
+        assert!(updated.send_content_types.text);
+        assert!(updated.send_content_types.image);
+    }
+
+    #[tokio::test]
+    async fn revoke_member_accepts_application_device_id() {
+        let mut repo = MockMemberRepo::new();
+        repo.expect_remove()
+            .times(1)
+            .withf(|device_id| device_id == &DeviceId::new("dev-1"))
+            .returning(|_| Ok(true));
+        let id = MockLocalIdentity::new();
+        let presence = Arc::new(FakePresence::new(vec![]));
+        let facade = build_facade(repo, id, presence);
+
+        facade.revoke_member("dev-1").await.expect("ok");
     }
 }

@@ -7,9 +7,9 @@ use axum::extract::{Path, State};
 use axum::routing::{get, patch};
 use axum::{Json, Router};
 
-use uc_app::usecases::CoreUseCases;
-use uc_core::membership::MemberSyncPreferences;
-use uc_core::DeviceId;
+use uc_application::facade::{
+    ContentTypesPatch, MemberSyncPreferencesPatch, MemberSyncPreferencesView, RosterError,
+};
 
 use crate::api::dto::error::ApiError;
 use crate::api::dto::member::{
@@ -49,17 +49,14 @@ pub async fn get_member_sync_preferences_handler(
     State(state): State<DaemonApiState>,
     Path(device_id): Path<String>,
 ) -> Result<Json<GetMemberSyncPreferencesResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let prefs = usecases
-        .get_member_sync_preferences()
-        .execute(&DeviceId::new(device_id.clone()))
+    let facade = state.member_roster_facade_or_error()?;
+    let prefs = facade
+        .get_sync_preferences(&device_id)
         .await
         .map_err(|e| map_member_error(&device_id, "get_member_sync_preferences", e))?;
 
     Ok(Json(GetMemberSyncPreferencesResponse {
-        data: prefs.into(),
+        data: member_sync_preferences_to_dto(prefs),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
@@ -88,70 +85,67 @@ pub async fn update_member_sync_preferences_handler(
     Path(device_id): Path<String>,
     Json(payload): Json<MemberSyncPreferencesPatchDto>,
 ) -> Result<Json<UpdateMemberSyncPreferencesResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let existing = usecases
-        .get_member_sync_preferences()
-        .execute(&DeviceId::new(device_id.clone()))
-        .await
-        .map_err(|e| map_member_error(&device_id, "load existing member sync preferences", e))?;
-
-    let merged = merge_member_sync_preferences_patch(existing, payload);
-
-    let updated_member = usecases
-        .update_member_sync_preferences()
-        .execute(&DeviceId::new(device_id.clone()), merged)
+    let facade = state.member_roster_facade_or_error()?;
+    let updated = facade
+        .update_sync_preferences(&device_id, member_sync_preferences_patch_from_dto(payload))
         .await
         .map_err(|e| map_member_error(&device_id, "update_member_sync_preferences", e))?;
 
     Ok(Json(UpdateMemberSyncPreferencesResponse {
         success: true,
-        data: updated_member.sync_preferences.into(),
+        data: member_sync_preferences_to_dto(updated),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
 
-fn merge_member_sync_preferences_patch(
-    mut existing: MemberSyncPreferences,
+fn member_sync_preferences_patch_from_dto(
     patch: MemberSyncPreferencesPatchDto,
-) -> MemberSyncPreferences {
-    if let Some(v) = patch.send_enabled {
-        existing.send_enabled = v;
+) -> MemberSyncPreferencesPatch {
+    MemberSyncPreferencesPatch {
+        send_enabled: patch.send_enabled,
+        receive_enabled: patch.receive_enabled,
+        send_content_types: patch.send_content_types.map(content_types_patch_from_dto),
+        receive_content_types: patch
+            .receive_content_types
+            .map(content_types_patch_from_dto),
     }
-    if let Some(v) = patch.receive_enabled {
-        existing.receive_enabled = v;
-    }
-    if let Some(send) = patch.send_content_types {
-        apply_content_types_patch(&mut existing.send_content_types, send);
-    }
-    if let Some(receive) = patch.receive_content_types {
-        apply_content_types_patch(&mut existing.receive_content_types, receive);
-    }
-    existing
 }
 
-fn apply_content_types_patch(
-    target: &mut uc_core::settings::model::ContentTypes,
+fn content_types_patch_from_dto(
     patch: crate::api::dto::settings::ContentTypesPatchDto,
-) {
-    if let Some(v) = patch.text {
-        target.text = v;
+) -> ContentTypesPatch {
+    ContentTypesPatch {
+        text: patch.text,
+        image: patch.image,
+        link: patch.link,
+        file: patch.file,
+        code_snippet: patch.code_snippet,
+        rich_text: patch.rich_text,
     }
-    if let Some(v) = patch.image {
-        target.image = v;
-    }
-    if let Some(v) = patch.link {
-        target.link = v;
-    }
-    if let Some(v) = patch.file {
-        target.file = v;
-    }
-    if let Some(v) = patch.code_snippet {
-        target.code_snippet = v;
-    }
-    if let Some(v) = patch.rich_text {
-        target.rich_text = v;
+}
+
+fn member_sync_preferences_to_dto(
+    value: MemberSyncPreferencesView,
+) -> crate::api::dto::member::MemberSyncPreferencesDto {
+    crate::api::dto::member::MemberSyncPreferencesDto {
+        send_enabled: value.send_enabled,
+        receive_enabled: value.receive_enabled,
+        send_content_types: crate::api::dto::settings::ContentTypesDto {
+            text: value.send_content_types.text,
+            image: value.send_content_types.image,
+            link: value.send_content_types.link,
+            file: value.send_content_types.file,
+            code_snippet: value.send_content_types.code_snippet,
+            rich_text: value.send_content_types.rich_text,
+        },
+        receive_content_types: crate::api::dto::settings::ContentTypesDto {
+            text: value.receive_content_types.text,
+            image: value.receive_content_types.image,
+            link: value.receive_content_types.link,
+            file: value.receive_content_types.file,
+            code_snippet: value.receive_content_types.code_snippet,
+            rich_text: value.receive_content_types.rich_text,
+        },
     }
 }
 
@@ -160,53 +154,37 @@ fn apply_content_types_patch(
 /// `MembershipApplicationError::NotFound` 在 uc-app 层被包成 anyhow 时保留了
 /// "not found" 文案（见 `GetMemberSyncPreferences::execute`），这里做字符串匹配
 /// 把它提升为 404；其余视为 500。
-fn map_member_error(device_id: &str, context: &str, err: anyhow::Error) -> ApiError {
-    let msg = err.to_string();
-    tracing::error!(error = %msg, device_id = %device_id, context = context, "member handler failed");
-    if msg.to_lowercase().contains("not found") {
+fn map_member_error(device_id: &str, context: &str, err: RosterError) -> ApiError {
+    tracing::error!(error = %err, device_id = %device_id, context = context, "member handler failed");
+    if matches!(err, RosterError::NotFound(_)) {
         ApiError::not_found(format!("member `{device_id}` not found"))
     } else {
-        ApiError::internal(msg)
+        ApiError::internal(err.to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uc_core::settings::model::ContentTypes;
 
     #[test]
-    fn merge_applies_only_provided_fields() {
-        let base = MemberSyncPreferences {
-            send_enabled: true,
-            receive_enabled: true,
-            send_content_types: ContentTypes::default(),
-            receive_content_types: ContentTypes::default(),
-        };
+    fn patch_mapping_preserves_omitted_fields_as_none() {
         let patch = MemberSyncPreferencesPatchDto {
             send_enabled: Some(false),
             receive_enabled: None,
             send_content_types: None,
             receive_content_types: None,
         };
-        let merged = merge_member_sync_preferences_patch(base.clone(), patch);
-        assert!(!merged.send_enabled);
-        assert!(merged.receive_enabled);
-        assert_eq!(merged.send_content_types, base.send_content_types);
-        assert_eq!(merged.receive_content_types, base.receive_content_types);
+        let mapped = member_sync_preferences_patch_from_dto(patch);
+
+        assert_eq!(mapped.send_enabled, Some(false));
+        assert_eq!(mapped.receive_enabled, None);
+        assert!(mapped.send_content_types.is_none());
+        assert!(mapped.receive_content_types.is_none());
     }
 
     #[test]
-    fn merge_partial_content_types_patch_retains_unmentioned_fields() {
-        let mut base_ct = ContentTypes::default();
-        base_ct.text = false;
-        base_ct.image = true;
-        let base = MemberSyncPreferences {
-            send_enabled: true,
-            receive_enabled: true,
-            send_content_types: base_ct,
-            receive_content_types: ContentTypes::default(),
-        };
+    fn patch_mapping_keeps_partial_content_type_shape() {
         let patch = MemberSyncPreferencesPatchDto {
             send_enabled: None,
             receive_enabled: None,
@@ -220,8 +198,9 @@ mod tests {
             }),
             receive_content_types: None,
         };
-        let merged = merge_member_sync_preferences_patch(base, patch);
-        assert!(merged.send_content_types.text);
-        assert!(merged.send_content_types.image); // 未提供 → 保留
+        let mapped = member_sync_preferences_patch_from_dto(patch);
+        let send = mapped.send_content_types.expect("send patch");
+        assert_eq!(send.text, Some(true));
+        assert_eq!(send.image, None);
     }
 }

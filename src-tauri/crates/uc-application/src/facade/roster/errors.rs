@@ -20,4 +20,8 @@ pub enum RosterError {
     /// (那返回 `Ok(None)`,不是 error),此 variant 表示存储本身故障。
     #[error("failed to read local identity: {0}")]
     LocalIdentity(String),
+
+    /// 目标成员不存在。
+    #[error("member `{0}` not found")]
+    NotFound(String),
 }

@@ -5,12 +5,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::RwLock;
 use uc_app::runtime::CoreRuntime;
-use uc_application::membership::usecases::ListMembersUseCase;
+use uc_application::facade::MemberRosterFacade;
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ports::PresencePort;
 use uc_core::space_access::state::SpaceAccessState;
 
-use crate::api::projection::IntoApiDto;
 use crate::api::types::{
     HealthResponse, PeerSnapshotDto, SpaceAccessStateResponse, SpaceMemberDto, StatusResponse,
     WorkerStatusDto,
@@ -24,6 +23,7 @@ pub struct DaemonQueryService {
     runtime: Arc<CoreRuntime>,
     presence: Arc<dyn PresencePort>,
     state: Arc<RwLock<RuntimeState>>,
+    member_roster: Option<Arc<MemberRosterFacade>>,
 }
 
 impl DaemonQueryService {
@@ -34,11 +34,13 @@ impl DaemonQueryService {
         runtime: Arc<CoreRuntime>,
         presence: Arc<dyn PresencePort>,
         state: Arc<RwLock<RuntimeState>>,
+        member_roster: Option<Arc<MemberRosterFacade>>,
     ) -> Self {
         Self {
             runtime,
             presence,
             state,
+            member_roster,
         }
     }
 
@@ -65,14 +67,21 @@ impl DaemonQueryService {
     }
 
     pub async fn paired_devices(&self) -> Result<Vec<SpaceMemberDto>> {
-        let members =
-            ListMembersUseCase::new(self.runtime.wiring_deps().device.member_repo.clone())
-                .execute()
-                .await?;
-
-        // Slice 4 P5a-1: connected 字段在 libp2p 删除后失去数据源；
-        // 暂时全部填 false，等 iroh 侧的连接状态接入后再回填。
-        Ok(members.into_iter().map(|m| m.into_api_dto()).collect())
+        let facade = self
+            .member_roster
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("member roster facade unavailable"))?;
+        let members = facade.list_members().await?;
+        Ok(members
+            .into_iter()
+            .map(|m| SpaceMemberDto {
+                peer_id: m.device_id,
+                device_name: m.device_name,
+                pairing_state: "Trusted".to_string(),
+                last_seen_at_ms: None,
+                connected: false,
+            })
+            .collect())
     }
 
     pub async fn space_access_state(

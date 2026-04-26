@@ -3395,3 +3395,36 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - Phase 6 真机端到端验收(task_plan §1645-1665) — 需要双机环境
 - Slice 5 后续优化(task_plan §1668+)
 - 旁路 task_plan 文本同步(把 P5c 已完成的 30+ 条目 ✅ 标到 task_plan.md 里),保持文档与代码一致
+
+---
+
+## Session 2026-04-26 — daemon application 边界收口 · 成员/配对切片
+
+**触发**:用户明确新的目标边界:外部入口只调用 `uc-application`,不直接认识 infra/platform/core;先从 daemon 开始。
+
+**完成标准**:
+- daemon 的成员偏好和取消配对入口不再直接调用 membership usecase
+- daemon 不再在成员偏好路径直接持有 core `DeviceId` / `MemberSyncPreferences`
+- 成员偏好 patch 合并规则由 `uc-application` 承担
+- 验证 `uc-application` roster facade、daemon 成员 API 测试和 daemon 编译
+
+**已做**:
+- `uc-application/src/facade/roster/commands.rs`:新增应用层成员摘要、成员偏好 view、偏好 patch、内容类型 view/patch,并收拢 patch 合并规则。
+- `uc-application/src/facade/roster/facade.rs`:新增 `list_members` / `get_sync_preferences` / `update_sync_preferences` / `revoke_member`。
+- `uc-application/src/facade/roster/errors.rs`:新增 `RosterError::NotFound`。
+- `uc-daemon/src/api/member.rs`:改为通过 `MemberRosterFacade` 操作成员偏好,daemon 只做 HTTP DTO 投影。
+- `uc-daemon/src/api/pairing.rs`:取消配对改为走 `MemberRosterFacade::revoke_member`。
+- `uc-daemon/src/api/query.rs`:paired devices 改为走 `MemberRosterFacade::list_members`。
+- `uc-daemon/src/api/projection.rs`:删除旧 `SpaceMember -> SpaceMemberDto` 投影文件。
+- `uc-daemon/src/api/server.rs` / `app.rs` / `entrypoint.rs`:把 `MemberRosterFacade` 注入 HTTP state 和 query service。
+
+**验证**:
+- `cargo test -p uc-application facade::roster --lib`:✅ 11 passed
+- `cargo test -p uc-daemon api::member --lib`:✅ 2 passed
+- `cargo check -p uc-daemon`:✅ passed
+
+**未纳入本次提交**:
+- `.claude/skills/...` 现有改动不是本轮产生,不 stage。
+
+**下一步**:
+- 继续收 daemon。优先候选:`api/settings.rs` 或 `api/search.rs`。
