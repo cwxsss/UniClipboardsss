@@ -24,4 +24,8 @@ pub enum RosterError {
     /// 目标成员不存在。
     #[error("member `{0}` not found")]
     NotFound(String),
+
+    /// 成员 roster 入口尚未接入。通常表示 daemon/CLI 组合阶段没有注入该能力。
+    #[error("member roster facade unavailable")]
+    Unavailable,
 }

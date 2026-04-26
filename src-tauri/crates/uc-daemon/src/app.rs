@@ -34,7 +34,6 @@ use uc_application::facade::{
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
-use uc_core::ports::PresencePort;
 use uc_core::search::{ContentType as SearchContentType, SearchQuery, SearchResultsPage};
 
 use crate::api::auth::load_or_create_auth_token;
@@ -149,11 +148,6 @@ pub struct DaemonApp {
     /// pairing-completion forwarder doesn't need to pull
     /// `DeviceIdentityPort` at event time. Pre-resolved in `entrypoint`.
     local_device_id: Option<String>,
-    /// iroh-stack `PresencePort` injected into `DaemonQueryService` so
-    /// `peers()` (and the WS `peers` topic snapshot it backs) can derive
-    /// online/offline state per remote member. Same `Arc` the
-    /// `presence_monitor` worker subscribes to.
-    presence: Arc<dyn PresencePort>,
 }
 
 impl DaemonApp {
@@ -167,7 +161,6 @@ impl DaemonApp {
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         space_access_facade: Option<Arc<SpaceAccessFacade>>,
-        presence: Arc<dyn PresencePort>,
     ) -> Self {
         Self {
             services,
@@ -184,7 +177,6 @@ impl DaemonApp {
             space_setup_facade: None,
             member_roster_facade: None,
             local_device_id: None,
-            presence,
         }
     }
 
@@ -213,7 +205,6 @@ impl DaemonApp {
         space_setup_facade: Option<Arc<SpaceSetupFacade>>,
         member_roster_facade: Option<Arc<MemberRosterFacade>>,
         local_device_id: Option<String>,
-        presence: Arc<dyn PresencePort>,
     ) -> Self {
         // Validate invariant: deferred_services and deferred_ready_notify must be
         // consistent. If there are deferred services, there must be a Notify to trigger them.
@@ -243,7 +234,6 @@ impl DaemonApp {
             space_setup_facade,
             member_roster_facade,
             local_device_id,
-            presence,
         }
     }
 
@@ -266,39 +256,6 @@ impl DaemonApp {
         let _pid_file_guard = DaemonPidFileGuard::activate(pid_manager.clone())?;
         let pid = pid_manager.write_current_pid()?;
         info!(pid, "wrote daemon pid metadata");
-        let query_service = Arc::new(DaemonQueryService::new(
-            self.runtime.clone(),
-            self.presence.clone(),
-            self.state.clone(),
-            self.member_roster_facade.clone(),
-        ));
-
-        // 2. Build security state and register daemon's own PID
-        let security = Arc::new(SecurityState::new());
-        security.register_pid(pid).await;
-
-        // 3. Build API state using the shared event_tx (same channel used by all services)
-        let mut api_state = DaemonApiState::new(
-            query_service,
-            auth_token,
-            Some(self.runtime.clone()),
-            security,
-        );
-        // Replace the default-created channel with our shared one so all services
-        // emit to the same broadcast channel that WebSocket subscribers receive from.
-        api_state.event_tx = self.event_tx.clone();
-        let api_state = match &self.space_access_facade {
-            Some(sao) => api_state.with_space_access(sao.clone()),
-            None => api_state,
-        };
-        let api_state = match &self.clipboard_capture_gate {
-            Some(gate) => api_state.with_clipboard_gate(Arc::clone(gate)),
-            None => api_state,
-        };
-        let api_state = match &self.deferred_ready_notify {
-            Some(notify) => api_state.with_deferred_ready_notify(Arc::clone(notify)),
-            None => api_state,
-        };
         let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
             space_setup: self.space_setup_facade.clone(),
             member_roster: self.member_roster_facade.clone(),
@@ -351,6 +308,37 @@ impl DaemonApp {
                 cache_fs: self.runtime.wiring_deps().system.cache_fs.clone(),
             })),
         }));
+        let query_service = Arc::new(DaemonQueryService::new(
+            self.state.clone(),
+            Arc::clone(&app_facade),
+        ));
+
+        // 2. Build security state and register daemon's own PID
+        let security = Arc::new(SecurityState::new());
+        security.register_pid(pid).await;
+
+        // 3. Build API state using the shared event_tx (same channel used by all services)
+        let mut api_state = DaemonApiState::new(
+            query_service,
+            auth_token,
+            Some(self.runtime.clone()),
+            security,
+        );
+        // Replace the default-created channel with our shared one so all services
+        // emit to the same broadcast channel that WebSocket subscribers receive from.
+        api_state.event_tx = self.event_tx.clone();
+        let api_state = match &self.space_access_facade {
+            Some(sao) => api_state.with_space_access(sao.clone()),
+            None => api_state,
+        };
+        let api_state = match &self.clipboard_capture_gate {
+            Some(gate) => api_state.with_clipboard_gate(Arc::clone(gate)),
+            None => api_state,
+        };
+        let api_state = match &self.deferred_ready_notify {
+            Some(notify) => api_state.with_deferred_ready_notify(Arc::clone(notify)),
+            None => api_state,
+        };
         let api_state = api_state.with_app_facade(app_facade);
 
         // 3. Wire the event emitter into the runtime so use cases can emit WS events

@@ -25,7 +25,7 @@ use uc_core::DeviceId;
 
 use crate::facade::roster::commands::{
     apply_member_sync_preferences_patch, MemberSummary, MemberSyncPreferencesPatch,
-    MemberSyncPreferencesView, RosterEntry,
+    MemberSyncPreferencesView, PeerSnapshotView, RosterEntry,
 };
 use crate::facade::roster::errors::RosterError;
 
@@ -107,6 +107,29 @@ impl MemberRosterFacade {
             .map(|member| MemberSummary {
                 device_id: member.device_id.as_str().to_string(),
                 device_name: member.device_name,
+            })
+            .collect())
+    }
+
+    /// 列出对外 peer 快照。该方法复用 roster + presence 聚合规则,并隐藏
+    /// core `ReachabilityState` / `DeviceId` 等内部模型。
+    #[instrument(skip_all)]
+    pub async fn list_peer_snapshots(&self) -> Result<Vec<PeerSnapshotView>, RosterError> {
+        let entries = self.list_with_presence().await?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| !entry.is_local)
+            .map(|entry| PeerSnapshotView {
+                peer_id: entry.device_id.as_str().to_string(),
+                device_name: if entry.device_name.is_empty() {
+                    None
+                } else {
+                    Some(entry.device_name)
+                },
+                addresses: Vec::new(),
+                is_paired: true,
+                connected: matches!(entry.state, uc_core::ports::ReachabilityState::Online),
+                pairing_state: "Trusted".to_string(),
             })
             .collect())
     }

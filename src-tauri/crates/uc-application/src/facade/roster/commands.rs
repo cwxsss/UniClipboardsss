@@ -36,6 +36,17 @@ pub struct RosterEntry {
     pub state: ReachabilityState,
 }
 
+/// 应用层 peer 快照。供 daemon HTTP/WS 对外投影,不暴露 core presence 类型。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerSnapshotView {
+    pub peer_id: String,
+    pub device_name: Option<String>,
+    pub addresses: Vec<String>,
+    pub is_paired: bool,
+    pub connected: bool,
+    pub pairing_state: String,
+}
+
 /// 应用层成员摘要。对外只暴露稳定字符串和值对象,不暴露 core 类型。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberSummary {

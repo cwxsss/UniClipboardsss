@@ -3428,6 +3428,35 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · query peers 切片
+
+**触发**:继续处理 daemon query / peers / ws 仍直接认识 core runtime、presence port 和分散 facade 的边界问题。
+
+**完成标准**:
+- daemon query service 不再持有 `CoreRuntime` / `PresencePort`
+- `/peers` 和 paired devices 查询只通过 `AppFacade`
+- peer snapshot 对外使用 application 层模型
+- 验证 application roster facade、daemon query/WS 相关路径和 daemon lib 测试
+
+**已做**:
+- `AppFacade` 增加成员列表和 peer 快照统一入口
+- `uc-application` 新增 `PeerSnapshotView`
+- `MemberRosterFacade` 增加 peer 快照投影
+- `DaemonQueryService` 改为持有 `AppFacade`
+- `DaemonApp` 不再向 query service 传入 presence port
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:✅ passed
+- `cargo test -p uc-application facade::roster --lib`:✅ 11 passed
+- `cargo test -p uc-daemon peers::presence_monitor --lib`:✅ 5 passed
+- `cargo test -p uc-daemon api::ws --lib`:✅ 0 tests matched
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**下一步**:
+- 继续收 `.planning/todos/pending/2026-04-26-daemon-query-peers-ws.md` 中剩余的 presence monitor / snapshot provider。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · search query 入口
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-search.md`,先做 todo 里明确的第一步 `GET /search/query`。

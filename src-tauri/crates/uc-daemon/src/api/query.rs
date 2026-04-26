@@ -4,44 +4,28 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::RwLock;
-use uc_app::runtime::CoreRuntime;
-use uc_application::facade::MemberRosterFacade;
+use uc_application::facade::{AppFacade, PeerSnapshotView};
 use uc_application::space_access::SpaceAccessFacade;
-use uc_core::ports::PresencePort;
 use uc_core::space_access::state::SpaceAccessState;
 
 use crate::api::types::{
     HealthResponse, PeerSnapshotDto, SpaceAccessStateResponse, SpaceMemberDto, StatusResponse,
     WorkerStatusDto,
 };
-use crate::peers::snapshot::derive_peer_snapshot;
 use crate::service::ServiceHealth;
 use crate::state::{DaemonServiceSnapshot, RuntimeState};
 use crate::{DAEMON_API_REVISION, DAEMON_VERSION};
 
 pub struct DaemonQueryService {
-    runtime: Arc<CoreRuntime>,
-    presence: Arc<dyn PresencePort>,
     state: Arc<RwLock<RuntimeState>>,
-    member_roster: Option<Arc<MemberRosterFacade>>,
+    app_facade: Arc<AppFacade>,
 }
 
 impl DaemonQueryService {
-    /// Constructs a `DaemonQueryService` from the shared runtime, the
-    /// iroh-stack `PresencePort` (drives both `peers()` snapshots and the
-    /// `peers.changed` WS topic), and the daemon-wide `RuntimeState`.
-    pub fn new(
-        runtime: Arc<CoreRuntime>,
-        presence: Arc<dyn PresencePort>,
-        state: Arc<RwLock<RuntimeState>>,
-        member_roster: Option<Arc<MemberRosterFacade>>,
-    ) -> Self {
-        Self {
-            runtime,
-            presence,
-            state,
-            member_roster,
-        }
+    /// Constructs a `DaemonQueryService` from the daemon-wide `RuntimeState`
+    /// and the unified application facade used by read-only query endpoints.
+    pub fn new(state: Arc<RwLock<RuntimeState>>, app_facade: Arc<AppFacade>) -> Self {
+        Self { state, app_facade }
     }
 
     pub async fn health(&self) -> HealthResponse {
@@ -63,15 +47,12 @@ impl DaemonQueryService {
     }
 
     pub async fn peers(&self) -> Result<Vec<PeerSnapshotDto>> {
-        derive_peer_snapshot(&self.presence, self.runtime.as_ref()).await
+        let peers = self.app_facade.list_peer_snapshots().await?;
+        Ok(peers.into_iter().map(peer_snapshot_to_dto).collect())
     }
 
     pub async fn paired_devices(&self) -> Result<Vec<SpaceMemberDto>> {
-        let facade = self
-            .member_roster
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("member roster facade unavailable"))?;
-        let members = facade.list_members().await?;
+        let members = self.app_facade.list_members().await?;
         Ok(members
             .into_iter()
             .map(|m| SpaceMemberDto {
@@ -93,6 +74,17 @@ impl DaemonQueryService {
             None => SpaceAccessState::Idle,
         };
         SpaceAccessStateResponse { state }
+    }
+}
+
+fn peer_snapshot_to_dto(peer: PeerSnapshotView) -> PeerSnapshotDto {
+    PeerSnapshotDto {
+        peer_id: peer.peer_id,
+        device_name: peer.device_name,
+        addresses: peer.addresses,
+        is_paired: peer.is_paired,
+        connected: peer.connected,
+        pairing_state: peer.pairing_state,
     }
 }
 

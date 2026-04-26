@@ -23,6 +23,7 @@
 
 use std::sync::Arc;
 
+use crate::facade::roster::{MemberSummary, PeerSnapshotView, RosterError};
 use crate::facade::{
     ClipboardHistoryFacade, ClipboardRestoreFacade, DeviceFacade, EncryptionFacade,
     LifecycleFacade, MemberRosterFacade, ResourceFacade, SearchFacade, SettingsFacade,
@@ -67,6 +68,24 @@ impl AppFacade {
             device: parts.device,
             storage: parts.storage,
         }
+    }
+
+    /// 列出对外成员摘要。外部调用只经过 `AppFacade`,不直接依赖 roster 子 facade。
+    pub async fn list_members(&self) -> Result<Vec<MemberSummary>, RosterError> {
+        self.member_roster
+            .as_ref()
+            .ok_or(RosterError::Unavailable)?
+            .list_members()
+            .await
+    }
+
+    /// 列出对外 peer 快照。外部调用只经过 `AppFacade`,不直接依赖 roster 子 facade。
+    pub async fn list_peer_snapshots(&self) -> Result<Vec<PeerSnapshotView>, RosterError> {
+        self.member_roster
+            .as_ref()
+            .ok_or(RosterError::Unavailable)?
+            .list_peer_snapshots()
+            .await
     }
 }
 
