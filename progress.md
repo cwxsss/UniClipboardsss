@@ -3125,3 +3125,41 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - C8e · `network/protocol/clipboard.rs` type-level 精简 + `network/mod.rs` 最终瘦身(纯 mechanical,小)
 - C9 · uc-platform / uc-bootstrap libp2p 装配残骸清理(task_plan §1574-1599,中等;可能涉及多文件 wiring 调整)
 - C10 · workspace `Cargo.toml` libp2p / libp2p-stream 依赖项删除(task_plan §1596-1598;是大瘦身,但要先确认所有 use 端清完)
+
+---
+
+## Session 2026-04-25(续 48) — Slice 4 P5c C8e · clipboard.rs type-level 精简
+
+**触发**:用户回 "sure",延续 C8d 收尾。
+
+**消费者扫描**(末次确认):
+- `ClipboardMessage`:0 外部消费者(全 uc-core 内部 mod re-export 死链 + 文档注释提及)
+- `ClipboardPayloadVersion`:0 外部消费者(只在 `ClipboardMessage.payload_version` 字段被消费,删 ClipboardMessage 后即死)
+- `FileTransferMapping`:**保**(`uc-app/src/usecases/sync_planner/{planner.rs:7,88-116, types.rs:5,29}` 真实在用)
+
+**完成标准**(task_plan §1554):
+- 改 `network/protocol/clipboard.rs`:删 `ClipboardMessage` + `ClipboardPayloadVersion`(及其 4 个 impl + base64/chrono/serde_with import),只保留 `FileTransferMapping`
+- 同步 `network/protocol/mod.rs:10`:re-export 列表删 `ClipboardMessage` / `ClipboardPayloadVersion`
+- 同步 `network/mod.rs:8`:re-export 列表删 `ClipboardMessage` / `ClipboardPayloadVersion`
+
+**已做**:
+- **改** `network/protocol/clipboard.rs`:从 76 行精简到 11 行(删 65 行;只剩 `FileTransferMapping` 5 字段 struct + 1 行 serde import)
+- **改** `network/protocol/mod.rs:10`:`pub use clipboard::{ClipboardMessage, ClipboardPayloadVersion, FileTransferMapping}` → `pub use clipboard::FileTransferMapping`
+- **改** `network/mod.rs:8`:re-export 列表去掉 `ClipboardMessage, ClipboardPayloadVersion,` 两项
+
+**验证**:
+- `cargo check -p uc-core -p uc-app -p uc-application -p uc-bootstrap -p uc-daemon -p uc-tauri -p uc-cli -p uc-infra -p uc-platform -p uc-daemon-client`:✅ 全过,只剩 3 个预存 warning(`Kek` import / `LocalIdentity` / `DuplicateIgnored`)
+- `cargo test -p uc-core --lib`:✅ 38/38
+- `cargo test -p uc-app --lib`:✅ 7/7
+- `cargo test -p uc-daemon --lib`:✅ 25/25
+- `cargo test -p uc-application --lib`:189/191(2 fail 持平 续 40 T3.2 S1 预存欠账)
+
+**Phase 5 删除清单进度**(C8e 后):
+- ✅ task_plan §1554:`clipboard.rs` 完成"删 ClipboardMessage / ClipboardPayloadVersion,保 FileTransferMapping / ClipboardBinaryPayload / BinaryRepresentation / MIME_IMAGE_PREFIX"
+
+**净瘦身**:`-65 行`(小但价值高:把 chrono / serde_with / base64 等"为旧 wire 协议而留"的依赖在 uc-core/network/protocol/clipboard 中也清掉了;Cargo 依赖能不能跟着减取决于其他 module 是否在用)
+
+**下一步候选**:
+- C9 · uc-platform / uc-bootstrap libp2p 装配残骸(task_plan §1574-1599;中等-大,涉及多文件 wiring 调整) — 优先
+- C10 · workspace `Cargo.toml` 删 libp2p / libp2p-stream / 相关 transitive deps(终极一击;须 C9 完成后才能动)
+- 旁路:task_plan 长期跟踪的 3 个预存 warning 修复(`Kek` import / `LocalIdentity` 变体 / `DuplicateIgnored` 变体) — 与 P5c 主线无关,可单 commit

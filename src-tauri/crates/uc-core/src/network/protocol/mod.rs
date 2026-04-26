@@ -7,5 +7,5 @@ pub const MIME_TEXT_HTML: &str = "text/html";
 pub const MIME_TEXT_RTF: &str = "text/rtf";
 pub const MIME_TEXT_PLAIN: &str = "text/plain";
 
-pub use clipboard::{ClipboardMessage, ClipboardPayloadVersion, FileTransferMapping};
+pub use clipboard::FileTransferMapping;
 pub use clipboard_payload_v3::{BinaryRepresentation, ClipboardBinaryPayload};
