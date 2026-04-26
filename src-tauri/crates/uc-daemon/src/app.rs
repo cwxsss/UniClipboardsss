@@ -27,13 +27,15 @@ use uc_application::facade::{
     ClipboardRestoreFacade, ClipboardRestoreGateway, ClipboardStatsView, DeviceFacade,
     EncryptionFacade, EncryptionFacadeDeps, EntryDetailView, EntryProjectionView,
     EntryResourceView, LifecycleFacade, LifecycleFacadeDeps, LifecycleStateView,
-    LifecycleStatusGateway, MemberRosterFacade, ResourceFacade, ResourceFacadeDeps, SettingsFacade,
+    LifecycleStatusGateway, MemberRosterFacade, ResourceFacade, ResourceFacadeDeps, SearchFacade,
+    SearchFacadeError, SearchGateway, SearchPageView, SearchResultView, SettingsFacade,
     SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 use uc_core::ports::PresencePort;
+use uc_core::search::{ContentType as SearchContentType, SearchQuery, SearchResultsPage};
 
 use crate::api::auth::load_or_create_auth_token;
 use crate::api::event_emitter::DaemonApiEventEmitter;
@@ -333,6 +335,9 @@ impl DaemonApp {
                     runtime: self.runtime.clone(),
                 },
             ))),
+            search: Arc::new(SearchFacade::new(Box::new(DaemonSearchGateway {
+                runtime: self.runtime.clone(),
+            }))),
             settings: Arc::new(SettingsFacade::new(
                 self.runtime.wiring_deps().settings.clone(),
             )),
@@ -678,6 +683,54 @@ fn clear_history_to_view(result: ClearHistoryResult) -> ClipboardClearHistoryRes
         deleted_count: result.deleted_count,
         failed_entries: result.failed_entries,
     }
+}
+
+struct DaemonSearchGateway {
+    runtime: Arc<CoreRuntime>,
+}
+
+#[async_trait]
+impl SearchGateway for DaemonSearchGateway {
+    async fn query(&self, query: SearchQuery) -> Result<SearchPageView, SearchFacadeError> {
+        let usecases = CoreUseCases::new(self.runtime.as_ref());
+        let page = usecases
+            .search_clipboard_entries()
+            .execute(query)
+            .await
+            .map_err(uc_application::facade::map_search_error)?;
+        Ok(search_page_to_view(page))
+    }
+}
+
+fn search_page_to_view(page: SearchResultsPage) -> SearchPageView {
+    SearchPageView {
+        total: page.total,
+        has_more: page.has_more,
+        items: page
+            .items
+            .into_iter()
+            .map(|item| SearchResultView {
+                entry_id: item.entry_id.to_string(),
+                content_type: search_content_type_to_string(&item.content_type),
+                active_time_ms: item.active_time_ms,
+                text_preview: item.text_preview,
+                mime_type: item.mime_type,
+                file_extensions: item.file_extensions,
+            })
+            .collect(),
+    }
+}
+
+fn search_content_type_to_string(content_type: &SearchContentType) -> String {
+    match content_type {
+        SearchContentType::Text => "text",
+        SearchContentType::Html => "html",
+        SearchContentType::Link => "link",
+        SearchContentType::File => "file",
+        SearchContentType::Image => "image",
+        SearchContentType::Other => "other",
+    }
+    .to_string()
 }
 
 struct DaemonClipboardRestoreGateway {

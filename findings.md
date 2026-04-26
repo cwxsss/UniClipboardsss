@@ -2033,3 +2033,28 @@ P3-pre 实施清单:
 - `cargo test -p uc-application facade:: --lib`:56 passed
 
 ---
+
+### F-129 · search query 可先从 daemon handler 收口到 AppFacade
+
+**发现时间**:2026-04-26
+
+**背景**:`GET /search/query` 原来在 daemon handler 内直接构造 core `SearchQuery`、`ContentType`、`TimeRangeFilter`,并直接映射 core `SearchError`。这是外部入口直接认识 core 搜索模型。
+
+**处理结果**:
+- 新增 `uc-application::facade::search::SearchFacade`
+- application 层暴露 `SearchQueryInput` / `SearchPageView` / `SearchResultView` / `SearchFacadeError`
+- 查询参数解析、AND/OR 推断、time preset、content type、extension 解析迁入 application facade。
+- daemon `api/search.rs` 的 query handler 改为通过 `AppFacade.search.query(...)` 调用。
+- `uc-daemon-contract` 的 `SearchResultDto.content_type` 改为 `String`,避免搜索 DTO 继续直接暴露 core enum。
+
+**边界判断**:
+- 本次只收 `GET /search/query`。`/search/status`、`/search/rebuild`、`SearchCoordinator`、`SearchProjectionBuilder` 仍在 pending todo 里继续处理。
+- daemon 装配层新增 `DaemonSearchGateway` 临时包住旧搜索 usecase,后续 composition root 收口时继续下沉。
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon -p uc-daemon-contract`:passed
+- `cargo test -p uc-daemon api::search --lib`:0 tests matched
+- `cargo test -p uc-application facade::search --lib`:0 tests matched
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

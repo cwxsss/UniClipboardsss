@@ -12,8 +12,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use tracing::{debug, info, instrument};
-use uc_app::usecases::CoreUseCases;
-use uc_core::search::{ContentType, QueryOperator, SearchQuery, TimeRangeFilter};
+use uc_application::facade::{SearchFacadeError, SearchPageView, SearchQueryInput};
 use uc_daemon_contract::constants::http_route;
 
 use crate::api::dto::error::ApiError;
@@ -68,180 +67,18 @@ fn default_limit() -> u32 {
 // Parsing
 // ---------------------------------------------------------------------------
 
-/// Parse raw `SearchQueryParams` into a domain `SearchQuery`.
-///
-/// Rules:
-/// - Strip standalone AND/OR tokens from the query string before passing it through.
-/// - If `operator` is absent, infer from the remaining standalone tokens.
-/// - Mixed standalone AND and OR tokens → `invalid_query` 400.
-/// - Invalid `timePreset` → `bad_request` 400.
-/// - Invalid `fileTypes` value → `bad_request` 400.
-/// - Mismatched `fromMs` / `toMs` (one present, other absent) → `bad_request` 400.
-pub(crate) fn parse_search_query(params: &SearchQueryParams) -> Result<SearchQuery, ApiError> {
-    // --- operator inference from raw query string ---
-    let raw_query = &params.query;
-    let (query_string, inferred_operator) = strip_and_infer_operator(raw_query)?;
-
-    // --- explicit operator wins over inferred ---
-    let operator = if let Some(ref op_str) = params.operator {
-        match op_str.to_lowercase().as_str() {
-            "and" => QueryOperator::And,
-            "or" => QueryOperator::Or,
-            _ => {
-                return Err(ApiError {
-                    status: StatusCode::BAD_REQUEST,
-                    code: "bad_request".to_string(),
-                    message: format!("invalid operator: {op_str}"),
-                })
-            }
-        }
-    } else {
-        inferred_operator.unwrap_or(QueryOperator::And)
-    };
-
-    // --- time range ---
-    let time_range = parse_time_range(params)?;
-
-    // --- file types ---
-    let content_types = parse_content_types(params.content_types.as_deref())?;
-
-    // --- extensions ---
-    let extensions = parse_extensions(params.extensions.as_deref());
-
-    // --- limit (clamp to 200) ---
-    let limit = params.limit.min(200);
-
-    Ok(SearchQuery {
-        query_string,
-        operator,
-        time_range,
-        content_types,
-        extensions,
-        limit,
+fn search_input_from_params(params: SearchQueryParams) -> SearchQueryInput {
+    SearchQueryInput {
+        query: params.query,
+        operator: params.operator,
+        time_preset: params.time_preset,
+        from_ms: params.from_ms,
+        to_ms: params.to_ms,
+        content_types: params.content_types,
+        extensions: params.extensions,
+        limit: params.limit,
         offset: params.offset,
-    })
-}
-
-/// Strip standalone boolean operator tokens from the raw query string.
-///
-/// Returns `(cleaned_query, inferred_operator)` where:
-/// - Standalone `AND` or `OR` tokens (case-insensitive, surrounded by whitespace or at
-///   start/end) are removed from the returned query string.
-/// - `inferred_operator` is `Some(And)`, `Some(Or)`, or `None` (no operator tokens found).
-/// - Mixed AND and OR tokens return an `invalid_query` error.
-fn strip_and_infer_operator(raw: &str) -> Result<(String, Option<QueryOperator>), ApiError> {
-    let tokens: Vec<&str> = raw.split_whitespace().collect();
-
-    let mut has_and = false;
-    let mut has_or = false;
-    let mut non_operator_tokens: Vec<&str> = Vec::new();
-
-    for token in &tokens {
-        match token.to_uppercase().as_str() {
-            "AND" => has_and = true,
-            "OR" => has_or = true,
-            _ => non_operator_tokens.push(token),
-        }
     }
-
-    if has_and && has_or {
-        return Err(ApiError {
-            status: StatusCode::BAD_REQUEST,
-            code: "invalid_query".to_string(),
-            message: "mixed AND/OR operators are not supported".to_string(),
-        });
-    }
-
-    let cleaned = non_operator_tokens.join(" ");
-    let inferred = if has_and {
-        Some(QueryOperator::And)
-    } else if has_or {
-        Some(QueryOperator::Or)
-    } else {
-        None
-    };
-
-    Ok((cleaned, inferred))
-}
-
-fn parse_time_range(params: &SearchQueryParams) -> Result<Option<TimeRangeFilter>, ApiError> {
-    // fromMs/toMs pair — both or neither
-    let has_from = params.from_ms.is_some();
-    let has_to = params.to_ms.is_some();
-
-    if has_from != has_to {
-        return Err(ApiError::bad_request(
-            "fromMs and toMs must both be present or both absent",
-        ));
-    }
-
-    if let (Some(from_ms), Some(to_ms)) = (params.from_ms, params.to_ms) {
-        if from_ms < 0 || to_ms < 0 {
-            return Err(ApiError::bad_request(
-                "fromMs and toMs must be non-negative",
-            ));
-        }
-        return Ok(Some(TimeRangeFilter::Absolute {
-            from_ms: from_ms as u64,
-            to_ms: to_ms as u64,
-        }));
-    }
-
-    // timePreset takes effect when no absolute range is given
-    if let Some(ref preset) = params.time_preset {
-        let filter = match preset.as_str() {
-            "today" => TimeRangeFilter::Today,
-            "yesterday" => TimeRangeFilter::Yesterday,
-            "last_24h" => TimeRangeFilter::Last24h,
-            "last_7d" => TimeRangeFilter::Last7d,
-            "last_30d" => TimeRangeFilter::Last30d,
-            "this_week" => TimeRangeFilter::ThisWeek,
-            "this_month" => TimeRangeFilter::ThisMonth,
-            other => {
-                return Err(ApiError::bad_request(format!(
-                    "invalid timePreset: {other}"
-                )))
-            }
-        };
-        return Ok(Some(filter));
-    }
-
-    Ok(None)
-}
-
-fn parse_content_types(raw: Option<&str>) -> Result<Vec<ContentType>, ApiError> {
-    let Some(raw) = raw else {
-        return Ok(vec![]);
-    };
-
-    let mut result = Vec::new();
-    for value in raw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let ft = match value {
-            "text" => ContentType::Text,
-            "html" => ContentType::Html,
-            "link" => ContentType::Link,
-            "file" => ContentType::File,
-            "image" => ContentType::Image,
-            "other" => ContentType::Other,
-            unknown => {
-                return Err(ApiError::bad_request(format!(
-                    "invalid fileType: {unknown}"
-                )))
-            }
-        };
-        result.push(ft);
-    }
-    Ok(result)
-}
-
-fn parse_extensions(raw: Option<&str>) -> Vec<String> {
-    let Some(raw) = raw else {
-        return vec![];
-    };
-    raw.split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -293,42 +130,27 @@ async fn search_query_handler(
 ) -> Result<Json<SearchQueryResponse>, ApiError> {
     require_encryption_ready(&state).await?;
 
-    let runtime = state.runtime_or_error()?;
-    let query = parse_search_query(&params)?;
-    debug!(query_string = %query.query_string, operator = ?query.operator, "parsed search query");
+    let app = state.app_facade_or_error()?;
+    let input = search_input_from_params(params);
+    debug!(query = %input.query, "dispatching search query through app facade");
 
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let page = usecases
-        .search_clipboard_entries()
-        .execute(query)
-        .await
-        .map_err(|e| map_search_error(e))?;
+    let page = app.search.query(input).await.map_err(map_search_error)?;
 
     let result_count = page.items.len();
-    let data: Vec<SearchResultDto> = page
-        .items
-        .into_iter()
-        .map(|r| SearchResultDto {
-            entry_id: r.entry_id.to_string(),
-            content_type: r.content_type,
-            active_time_ms: r.active_time_ms,
-            text_preview: r.text_preview,
-            mime_type: r.mime_type,
-            file_extensions: r.file_extensions,
-        })
-        .collect();
+    let total = page.total;
+    let has_more = page.has_more;
+    let data = search_page_to_dto(page);
 
     info!(
-        total = page.total,
+        total,
         returned = result_count,
-        has_more = page.has_more,
+        has_more,
         "search query completed"
     );
 
     Ok(Json(SearchQueryResponse {
-        total: page.total,
-        has_more: page.has_more,
+        total,
+        has_more,
         data,
         ts: chrono::Utc::now().timestamp_millis(),
     }))
@@ -422,30 +244,49 @@ async fn search_rebuild_handler(
 // Error mapping
 // ---------------------------------------------------------------------------
 
-fn map_search_error(e: uc_core::search::SearchError) -> ApiError {
-    match e {
-        uc_core::search::SearchError::InvalidQuery(msg) => ApiError {
+fn map_search_error(error: SearchFacadeError) -> ApiError {
+    match error {
+        SearchFacadeError::InvalidQuery(message) => ApiError {
             status: StatusCode::BAD_REQUEST,
             code: "invalid_query".to_string(),
-            message: msg,
+            message,
         },
-        uc_core::search::SearchError::SessionLocked => ApiError {
+        SearchFacadeError::BadRequest(message) => ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "bad_request".to_string(),
+            message,
+        },
+        SearchFacadeError::SessionLocked => ApiError {
             status: StatusCode::LOCKED,
             code: "session_locked".to_string(),
             message: "encryption session is locked".to_string(),
         },
-        uc_core::search::SearchError::IndexNotReady => ApiError {
+        SearchFacadeError::IndexNotReady => ApiError {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: "index_not_ready".to_string(),
             message: "search index not ready".to_string(),
         },
-        uc_core::search::SearchError::IndexUnavailable => ApiError {
+        SearchFacadeError::IndexUnavailable => ApiError {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: "index_unavailable".to_string(),
             message: "search index unavailable".to_string(),
         },
-        uc_core::search::SearchError::Internal(msg) => ApiError::internal(msg),
+        SearchFacadeError::Internal(message) => ApiError::internal(message),
     }
+}
+
+fn search_page_to_dto(page: SearchPageView) -> Vec<SearchResultDto> {
+    page.items
+        .into_iter()
+        .map(|result| SearchResultDto {
+            entry_id: result.entry_id,
+            content_type: result.content_type,
+            active_time_ms: result.active_time_ms,
+            text_preview: result.text_preview,
+            mime_type: result.mime_type,
+            file_extensions: result.file_extensions,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ pub mod encryption;
 pub mod lifecycle;
 pub mod resource;
 pub mod roster;
+pub mod search;
 pub mod settings;
 pub mod setup_status;
 pub mod space_setup;
@@ -49,6 +50,10 @@ pub use resource::{BinaryResourceView, ResourceFacade, ResourceFacadeDeps, Resou
 pub use roster::{
     ContentTypesPatch, ContentTypesView, MemberRosterDeps, MemberRosterFacade, MemberSummary,
     MemberSyncPreferencesPatch, MemberSyncPreferencesView, PresenceEvent, RosterEntry, RosterError,
+};
+pub use search::{
+    map_search_error, SearchFacade, SearchFacadeError, SearchGateway, SearchPageView,
+    SearchQueryInput, SearchResultView,
 };
 pub use settings::{
     ContentTypesPatch as SettingsContentTypesPatch, ContentTypesView as SettingsContentTypesView,
