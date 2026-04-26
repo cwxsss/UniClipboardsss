@@ -18,14 +18,12 @@
 //! ## Design
 //!
 //! * Subscribes once at startup; the broadcast channel is process-local
-//!   so no reconnect/backoff loop is needed (compare the legacy
-//!   `PeerMonitor` which had to retry `NetworkEventPort::subscribe_events`
-//!   across libp2p swarm restarts).
+//!   so no reconnect/backoff loop is needed.
 //! * On every `PresenceEvent`, fetches a fresh peer snapshot via the
 //!   injected [`PeerSnapshotProvider`] and emits one `peers.changed`
-//!   payload. The snapshot already encodes per-peer reachability + device
-//!   name, so consumers don't need a separate increment event to stay
-//!   correct.
+//!   payload. Production now derives the snapshot from
+//!   `MemberRepositoryPort` (membership 真相) + `PresencePort.current_state`
+//!   (online/offline 当前态),不再依赖已退役的 libp2p `PeerDirectoryPort`。
 //! * `RecvError::Lagged` is logged and skipped — the next event will
 //!   always re-publish the canonical snapshot, so a missed transition
 //!   self-heals.
@@ -43,11 +41,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::CoreUseCases;
+use uc_core::ports::presence::ReachabilityState;
 use uc_core::ports::PresencePort;
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 
-use crate::api::projection::IntoApiDto;
 use crate::api::types::{DaemonWsEvent, PeerSnapshotDto, PeersChangedFullPayload};
 use crate::service::{DaemonService, ServiceHealth};
 
@@ -85,21 +82,51 @@ pub(crate) trait PeerSnapshotProvider: Send + Sync {
     async fn fetch(&self) -> anyhow::Result<Vec<PeerSnapshotDto>>;
 }
 
-/// Production provider — delegates to the `get_p2p_peers_snapshot` use
-/// case via `CoreRuntime`.
+/// Production provider — derives the snapshot from the member repository
+/// (membership 真相) plus `PresencePort.current_state` per remote member
+/// (online/offline 当前态)。
+///
+/// Local device 通过 `DeviceIdentityPort.current_device_id()` 排除。
+/// 这里没有 "discovered but not yet a member" 概念——iroh stack 下,只有
+/// 走完 pairing 进入 `space_member` 的设备才会出现在 peers.changed 里。
 struct CoreRuntimePeerSnapshotProvider {
+    presence: Arc<dyn PresencePort>,
     runtime: Arc<CoreRuntime>,
 }
 
 #[async_trait]
 impl PeerSnapshotProvider for CoreRuntimePeerSnapshotProvider {
     async fn fetch(&self) -> anyhow::Result<Vec<PeerSnapshotDto>> {
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let snapshots = usecases.get_p2p_peers_snapshot().execute().await?;
-        Ok(snapshots
-            .into_iter()
-            .map(IntoApiDto::into_api_dto)
-            .collect())
+        let deps = self.runtime.wiring_deps();
+        let local_id = deps.device.device_identity.current_device_id();
+        let members = deps
+            .device
+            .member_repo
+            .list()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to list space members: {e}"))?;
+
+        let mut snapshots = Vec::with_capacity(members.len());
+        for member in members {
+            if member.device_id == local_id {
+                continue;
+            }
+            let state = self.presence.current_state(&member.device_id).await;
+            let device_name = if member.device_name.is_empty() {
+                None
+            } else {
+                Some(member.device_name.clone())
+            };
+            snapshots.push(PeerSnapshotDto {
+                peer_id: member.device_id.as_str().to_string(),
+                device_name,
+                addresses: Vec::new(),
+                is_paired: true,
+                connected: matches!(state, ReachabilityState::Online),
+                pairing_state: "Trusted".to_string(),
+            });
+        }
+        Ok(snapshots)
     }
 }
 
@@ -116,7 +143,10 @@ impl PresenceMonitor {
         event_tx: broadcast::Sender<DaemonWsEvent>,
     ) -> Self {
         let snapshot_provider: Arc<dyn PeerSnapshotProvider> =
-            Arc::new(CoreRuntimePeerSnapshotProvider { runtime });
+            Arc::new(CoreRuntimePeerSnapshotProvider {
+                presence: presence.clone(),
+                runtime,
+            });
         Self::with_snapshot_provider(presence, snapshot_provider, event_tx)
     }
 
