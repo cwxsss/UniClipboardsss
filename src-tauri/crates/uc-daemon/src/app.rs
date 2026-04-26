@@ -42,6 +42,7 @@ use crate::api::query::DaemonQueryService;
 use crate::api::server::{run_http_server, DaemonApiState};
 use crate::api::setup_events::spawn_pairing_completion_forwarder;
 use crate::api::types::DaemonWsEvent;
+use crate::peers::presence_monitor::PresenceMonitor;
 use crate::process_metadata::DaemonPidManager;
 use crate::search::coordinator::{ManualRebuildResult, SearchCoordinator};
 use crate::security::{cleanup_rate_limiter_task, SecurityState};
@@ -312,6 +313,10 @@ impl DaemonApp {
             self.state.clone(),
             Arc::clone(&app_facade),
         ));
+        let presence_monitor = Arc::new(PresenceMonitor::new(
+            Arc::clone(&app_facade),
+            self.event_tx.clone(),
+        ));
 
         // 2. Build security state and register daemon's own PID
         let security = Arc::new(SecurityState::new());
@@ -349,6 +354,8 @@ impl DaemonApp {
 
         // 4. Start ALL services uniformly via JoinSet
         let mut service_tasks = JoinSet::new();
+        self.services
+            .push(Arc::clone(&presence_monitor) as Arc<dyn DaemonService>);
         for service in &self.services {
             let svc = Arc::clone(service);
             let token = self.cancel.child_token();

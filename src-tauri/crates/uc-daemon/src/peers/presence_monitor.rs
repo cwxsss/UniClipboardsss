@@ -1,13 +1,10 @@
-//! Presence monitor — bridges [`PresencePort`] events into the daemon
+//! Presence monitor — bridges application presence events into the daemon
 //! WebSocket as `peers.changed` snapshots.
 //!
 //! ## Why
 //!
-//! `PresencePort` (Slice 2 Phase 1) is the iroh-stack signal for
-//! reachability changes; its `subscribe()` returns a `broadcast::Receiver`
-//! that fires on every Online/Offline transition driven by either the
-//! `ensure_reachable` dial path or the per-peer watchdog observing
-//! `Connection::closed()`.
+//! presence 变化由 application 入口转成稳定事件。daemon 不直接订阅
+//! `PresencePort`,也不直接读取 core runtime。
 //!
 //! The frontend's existing `peers` topic subscribers (Setup scan page via
 //! `useDeviceDiscovery`) consume the `peers.changed` full-snapshot event
@@ -19,19 +16,16 @@
 //!
 //! * Subscribes once at startup; the broadcast channel is process-local
 //!   so no reconnect/backoff loop is needed.
-//! * On every `PresenceEvent`, fetches a fresh peer snapshot via the
+//! * On every application presence event, fetches a fresh peer snapshot via the
 //!   injected [`PeerSnapshotProvider`] and emits one `peers.changed`
-//!   payload. Production now derives the snapshot from
-//!   `MemberRepositoryPort` (membership 真相) + `PresencePort.current_state`
-//!   (online/offline 当前态),不再依赖已退役的 libp2p `PeerDirectoryPort`。
+//!   payload. Production derives the snapshot through `AppFacade`,keeping
+//!   roster/presence 聚合规则 inside application。
 //! * `RecvError::Lagged` is logged and skipped — the next event will
 //!   always re-publish the canonical snapshot, so a missed transition
 //!   self-heals.
 //!
-//! The snapshot fetch is abstracted behind `PeerSnapshotProvider` so the
-//! loop logic can be unit-tested without constructing a full
-//! [`CoreRuntime`]. Production wires `CoreRuntimePeerSnapshotProvider`,
-//! tests inject a lightweight fake.
+//! The event source and snapshot fetch are abstracted so the loop logic can
+//! be unit-tested without constructing a full `AppFacade`.
 
 use std::sync::Arc;
 
@@ -40,12 +34,13 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use uc_app::runtime::CoreRuntime;
-use uc_core::ports::PresencePort;
+use uc_application::facade::{
+    AppFacade, AppPresenceEvent, AppPresenceSubscription, AppPresenceSubscriptionError,
+    PeerSnapshotView,
+};
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 
 use crate::api::types::{DaemonWsEvent, PeerSnapshotDto, PeersChangedFullPayload};
-use crate::peers::snapshot::derive_peer_snapshot;
 use crate::service::{DaemonService, ServiceHealth};
 
 fn now_ms() -> i64 {
@@ -76,54 +71,84 @@ fn emit_ws_event<T: serde::Serialize>(
 }
 
 /// Source of `PeerSnapshotDto` lists, abstracted so the monitor's loop
-/// logic can be unit-tested without wiring a full `CoreRuntime`.
+/// logic can be unit-tested without wiring a full `AppFacade`.
 #[async_trait]
 pub(crate) trait PeerSnapshotProvider: Send + Sync {
     async fn fetch(&self) -> anyhow::Result<Vec<PeerSnapshotDto>>;
 }
 
-/// Production provider — delegates to [`derive_peer_snapshot`] which is
-/// shared with `DaemonQueryService::peers` so the WS push and the read-only
-/// query path stay in lockstep.
-struct CoreRuntimePeerSnapshotProvider {
-    presence: Arc<dyn PresencePort>,
-    runtime: Arc<CoreRuntime>,
+/// Source of application presence events.
+#[async_trait]
+pub(crate) trait PeerPresenceEventSource: Send + Sync {
+    async fn subscribe(&self) -> anyhow::Result<Box<dyn PeerPresenceSubscription>>;
 }
 
 #[async_trait]
-impl PeerSnapshotProvider for CoreRuntimePeerSnapshotProvider {
+pub(crate) trait PeerPresenceSubscription: Send {
+    async fn recv(&mut self) -> Result<AppPresenceEvent, AppPresenceSubscriptionError>;
+}
+
+struct AppFacadePeerSnapshotProvider {
+    app_facade: Arc<AppFacade>,
+}
+
+#[async_trait]
+impl PeerSnapshotProvider for AppFacadePeerSnapshotProvider {
     async fn fetch(&self) -> anyhow::Result<Vec<PeerSnapshotDto>> {
-        derive_peer_snapshot(&self.presence, self.runtime.as_ref()).await
+        let peers = self.app_facade.list_peer_snapshots().await?;
+        Ok(peers.into_iter().map(peer_snapshot_to_dto).collect())
+    }
+}
+
+struct AppFacadePresenceEventSource {
+    app_facade: Arc<AppFacade>,
+}
+
+#[async_trait]
+impl PeerPresenceEventSource for AppFacadePresenceEventSource {
+    async fn subscribe(&self) -> anyhow::Result<Box<dyn PeerPresenceSubscription>> {
+        let subscription = self.app_facade.subscribe_peer_presence_events()?;
+        Ok(Box::new(AppFacadePresenceSubscription { subscription }))
+    }
+}
+
+struct AppFacadePresenceSubscription {
+    subscription: AppPresenceSubscription,
+}
+
+#[async_trait]
+impl PeerPresenceSubscription for AppFacadePresenceSubscription {
+    async fn recv(&mut self) -> Result<AppPresenceEvent, AppPresenceSubscriptionError> {
+        self.subscription.recv().await
     }
 }
 
 pub struct PresenceMonitor {
-    presence: Arc<dyn PresencePort>,
+    event_source: Arc<dyn PeerPresenceEventSource>,
     snapshot_provider: Arc<dyn PeerSnapshotProvider>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
 }
 
 impl PresenceMonitor {
-    pub fn new(
-        presence: Arc<dyn PresencePort>,
-        runtime: Arc<CoreRuntime>,
-        event_tx: broadcast::Sender<DaemonWsEvent>,
-    ) -> Self {
-        let snapshot_provider: Arc<dyn PeerSnapshotProvider> =
-            Arc::new(CoreRuntimePeerSnapshotProvider {
-                presence: presence.clone(),
-                runtime,
+    pub fn new(app_facade: Arc<AppFacade>, event_tx: broadcast::Sender<DaemonWsEvent>) -> Self {
+        let event_source: Arc<dyn PeerPresenceEventSource> =
+            Arc::new(AppFacadePresenceEventSource {
+                app_facade: Arc::clone(&app_facade),
             });
-        Self::with_snapshot_provider(presence, snapshot_provider, event_tx)
+        let snapshot_provider: Arc<dyn PeerSnapshotProvider> =
+            Arc::new(AppFacadePeerSnapshotProvider {
+                app_facade: Arc::clone(&app_facade),
+            });
+        Self::with_dependencies(event_source, snapshot_provider, event_tx)
     }
 
-    pub(crate) fn with_snapshot_provider(
-        presence: Arc<dyn PresencePort>,
+    pub(crate) fn with_dependencies(
+        event_source: Arc<dyn PeerPresenceEventSource>,
         snapshot_provider: Arc<dyn PeerSnapshotProvider>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
     ) -> Self {
         Self {
-            presence,
+            event_source,
             snapshot_provider,
             event_tx,
         }
@@ -157,7 +182,7 @@ impl DaemonService for PresenceMonitor {
 
     async fn start(&self, cancel: CancellationToken) -> anyhow::Result<()> {
         info!("presence monitor starting");
-        let mut rx = self.presence.subscribe();
+        let mut rx = self.event_source.subscribe().await?;
 
         loop {
             tokio::select! {
@@ -169,19 +194,19 @@ impl DaemonService for PresenceMonitor {
                     match result {
                         Ok(event) => {
                             debug!(
-                                device = %event.device_id.as_str(),
-                                state = ?event.state,
+                                device = %event.device_id,
+                                state = %event.state,
                                 "presence monitor: state change → publishing peers.changed"
                             );
                             self.publish_snapshot().await;
                         }
-                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        Err(AppPresenceSubscriptionError::Lagged(skipped)) => {
                             warn!(
                                 skipped,
                                 "presence monitor: dropped events (lagged); next event will re-publish snapshot"
                             );
                         }
-                        Err(broadcast::error::RecvError::Closed) => {
+                        Err(AppPresenceSubscriptionError::Closed) => {
                             warn!("presence monitor: subscription closed; exiting loop");
                             return Ok(());
                         }
@@ -200,6 +225,17 @@ impl DaemonService for PresenceMonitor {
     }
 }
 
+fn peer_snapshot_to_dto(peer: PeerSnapshotView) -> PeerSnapshotDto {
+    PeerSnapshotDto {
+        peer_id: peer.peer_id,
+        device_name: peer.device_name,
+        addresses: peer.addresses,
+        is_paired: peer.is_paired,
+        connected: peer.connected,
+        pairing_state: peer.pairing_state,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,27 +243,21 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use chrono::Utc;
     use tokio::time::timeout;
 
-    use uc_core::ids::DeviceId;
-    use uc_core::ports::presence::{PresenceError, PresenceEvent, ReachabilityState};
-
-    /// Fake `PresencePort` whose `subscribe()` hands out receivers attached
-    /// to a caller-controlled broadcast::Sender. The inner sender lives in
-    /// a `Mutex<Option<_>>` so tests can `close()` the channel and verify
-    /// the monitor exits on `RecvError::Closed`.
-    struct FakePresence {
-        tx: Mutex<Option<broadcast::Sender<PresenceEvent>>>,
+    /// Fake presence event source whose `subscribe()` hands out receivers
+    /// attached to a caller-controlled broadcast::Sender.
+    struct FakePresenceEventSource {
+        tx: Mutex<Option<broadcast::Sender<AppPresenceEvent>>>,
     }
 
-    impl FakePresence {
-        fn new(capacity: usize) -> (Arc<Self>, broadcast::Sender<PresenceEvent>) {
+    impl FakePresenceEventSource {
+        fn new(capacity: usize) -> (Arc<Self>, broadcast::Sender<AppPresenceEvent>) {
             let (tx, _) = broadcast::channel(capacity);
-            let port = Arc::new(Self {
+            let source = Arc::new(Self {
                 tx: Mutex::new(Some(tx.clone())),
             });
-            (port, tx)
+            (source, tx)
         }
 
         fn close(&self) {
@@ -236,25 +266,32 @@ mod tests {
     }
 
     #[async_trait]
-    impl PresencePort for FakePresence {
-        async fn ensure_reachable(
-            &self,
-            _device: &DeviceId,
-        ) -> Result<ReachabilityState, PresenceError> {
-            unreachable!("PresenceMonitor should not call ensure_reachable")
-        }
-
-        async fn current_state(&self, _device: &DeviceId) -> ReachabilityState {
-            unreachable!("PresenceMonitor should not call current_state")
-        }
-
-        fn subscribe(&self) -> broadcast::Receiver<PresenceEvent> {
-            self.tx
+    impl PeerPresenceEventSource for FakePresenceEventSource {
+        async fn subscribe(&self) -> anyhow::Result<Box<dyn PeerPresenceSubscription>> {
+            let rx = self
+                .tx
                 .lock()
                 .unwrap()
                 .as_ref()
-                .expect("FakePresence closed before subscribe")
-                .subscribe()
+                .expect("FakePresenceEventSource closed before subscribe")
+                .subscribe();
+            Ok(Box::new(FakePresenceSubscription { rx }))
+        }
+    }
+
+    struct FakePresenceSubscription {
+        rx: broadcast::Receiver<AppPresenceEvent>,
+    }
+
+    #[async_trait]
+    impl PeerPresenceSubscription for FakePresenceSubscription {
+        async fn recv(&mut self) -> Result<AppPresenceEvent, AppPresenceSubscriptionError> {
+            self.rx.recv().await.map_err(|err| match err {
+                broadcast::error::RecvError::Lagged(skipped) => {
+                    AppPresenceSubscriptionError::Lagged(skipped)
+                }
+                broadcast::error::RecvError::Closed => AppPresenceSubscriptionError::Closed,
+            })
         }
     }
 
@@ -311,11 +348,11 @@ mod tests {
         }
     }
 
-    fn online_event(device: &str) -> PresenceEvent {
-        PresenceEvent {
-            device_id: DeviceId::new(device),
-            state: ReachabilityState::Online,
-            at: Utc::now(),
+    fn online_event(device: &str) -> AppPresenceEvent {
+        AppPresenceEvent {
+            device_id: device.to_string(),
+            state: "online".to_string(),
+            at_ms: 0,
         }
     }
 
@@ -359,11 +396,11 @@ mod tests {
 
     #[tokio::test]
     async fn presence_event_publishes_peers_changed() {
-        let (presence, presence_tx) = FakePresence::new(8);
+        let (presence, presence_tx) = FakePresenceEventSource::new(8);
         let snapshots = FakeSnapshotProvider::returning(vec![sample_dto("peer-a")]);
         let (event_tx, mut event_rx) = broadcast::channel::<DaemonWsEvent>(8);
 
-        let monitor = Arc::new(PresenceMonitor::with_snapshot_provider(
+        let monitor = Arc::new(PresenceMonitor::with_dependencies(
             presence,
             snapshots.clone(),
             event_tx,
@@ -399,11 +436,11 @@ mod tests {
 
     #[tokio::test]
     async fn each_event_triggers_independent_snapshot() {
-        let (presence, presence_tx) = FakePresence::new(8);
+        let (presence, presence_tx) = FakePresenceEventSource::new(8);
         let snapshots = FakeSnapshotProvider::returning(vec![sample_dto("peer-a")]);
         let (event_tx, mut event_rx) = broadcast::channel::<DaemonWsEvent>(8);
 
-        let monitor = Arc::new(PresenceMonitor::with_snapshot_provider(
+        let monitor = Arc::new(PresenceMonitor::with_dependencies(
             presence,
             snapshots.clone(),
             event_tx,
@@ -434,11 +471,11 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_failure_does_not_exit_loop() {
-        let (presence, presence_tx) = FakePresence::new(8);
+        let (presence, presence_tx) = FakePresenceEventSource::new(8);
         let snapshots = FakeSnapshotProvider::failing();
         let (event_tx, mut event_rx) = broadcast::channel::<DaemonWsEvent>(8);
 
-        let monitor = Arc::new(PresenceMonitor::with_snapshot_provider(
+        let monitor = Arc::new(PresenceMonitor::with_dependencies(
             presence,
             snapshots.clone(),
             event_tx,
@@ -473,11 +510,11 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_exits_loop() {
-        let (presence, _presence_tx) = FakePresence::new(8);
+        let (presence, _presence_tx) = FakePresenceEventSource::new(8);
         let snapshots = FakeSnapshotProvider::returning(vec![]);
         let (event_tx, _event_rx) = broadcast::channel::<DaemonWsEvent>(8);
 
-        let monitor = Arc::new(PresenceMonitor::with_snapshot_provider(
+        let monitor = Arc::new(PresenceMonitor::with_dependencies(
             presence, snapshots, event_tx,
         ));
         let cancel = CancellationToken::new();
@@ -497,11 +534,11 @@ mod tests {
 
     #[tokio::test]
     async fn closed_subscription_exits_loop() {
-        let (presence, presence_tx) = FakePresence::new(8);
+        let (presence, presence_tx) = FakePresenceEventSource::new(8);
         let snapshots = FakeSnapshotProvider::returning(vec![]);
         let (event_tx, _event_rx) = broadcast::channel::<DaemonWsEvent>(8);
 
-        let monitor = Arc::new(PresenceMonitor::with_snapshot_provider(
+        let monitor = Arc::new(PresenceMonitor::with_dependencies(
             presence.clone(),
             snapshots,
             event_tx,
@@ -514,7 +551,7 @@ mod tests {
         };
 
         // Let the monitor subscribe, then drop both sender handles
-        // (external + the one held inside FakePresence) so the
+        // (external + the one held inside FakePresenceEventSource) so the
         // subscription returns RecvError::Closed.
         tokio::task::yield_now().await;
         drop(presence_tx);

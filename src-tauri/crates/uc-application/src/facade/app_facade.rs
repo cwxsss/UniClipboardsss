@@ -23,12 +23,16 @@
 
 use std::sync::Arc;
 
+use thiserror::Error;
+use tokio::sync::broadcast;
+
 use crate::facade::roster::{MemberSummary, PeerSnapshotView, RosterError};
 use crate::facade::{
     ClipboardHistoryFacade, ClipboardRestoreFacade, DeviceFacade, EncryptionFacade,
     LifecycleFacade, MemberRosterFacade, ResourceFacade, SearchFacade, SettingsFacade,
     SpaceSetupFacade, StorageFacade,
 };
+use uc_core::ports::{PresenceEvent, ReachabilityState};
 
 /// Aggregator exposing one field per business sub-facade.
 ///
@@ -87,6 +91,70 @@ impl AppFacade {
             .list_peer_snapshots()
             .await
     }
+
+    /// 订阅成员在线状态变化。外部拿到的是 application 事件,不暴露 core 事件类型。
+    pub fn subscribe_peer_presence_events(&self) -> Result<AppPresenceSubscription, RosterError> {
+        let inner = self
+            .member_roster
+            .as_ref()
+            .ok_or(RosterError::Unavailable)?
+            .subscribe_presence_events();
+        Ok(AppPresenceSubscription { inner })
+    }
+}
+
+/// application 层 presence 事件。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppPresenceEvent {
+    pub device_id: String,
+    pub state: String,
+    pub at_ms: i64,
+}
+
+/// application 层 presence 订阅错误。
+#[derive(Debug, Error)]
+pub enum AppPresenceSubscriptionError {
+    #[error("presence event receiver lagged by {0} messages")]
+    Lagged(u64),
+    #[error("presence event receiver closed")]
+    Closed,
+}
+
+/// application 层 presence 订阅句柄。
+pub struct AppPresenceSubscription {
+    inner: broadcast::Receiver<PresenceEvent>,
+}
+
+impl AppPresenceSubscription {
+    pub async fn recv(&mut self) -> Result<AppPresenceEvent, AppPresenceSubscriptionError> {
+        self.inner
+            .recv()
+            .await
+            .map(presence_event_to_app)
+            .map_err(|err| match err {
+                broadcast::error::RecvError::Lagged(skipped) => {
+                    AppPresenceSubscriptionError::Lagged(skipped)
+                }
+                broadcast::error::RecvError::Closed => AppPresenceSubscriptionError::Closed,
+            })
+    }
+}
+
+fn presence_event_to_app(event: PresenceEvent) -> AppPresenceEvent {
+    AppPresenceEvent {
+        device_id: event.device_id.as_str().to_string(),
+        state: reachability_state_to_string(event.state),
+        at_ms: event.at.timestamp_millis(),
+    }
+}
+
+fn reachability_state_to_string(state: ReachabilityState) -> String {
+    match state {
+        ReachabilityState::Online => "online",
+        ReachabilityState::Offline => "offline",
+        ReachabilityState::Unknown => "unknown",
+    }
+    .to_string()
 }
 
 pub struct AppFacadeParts {

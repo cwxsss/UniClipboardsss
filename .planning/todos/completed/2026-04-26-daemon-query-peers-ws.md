@@ -5,7 +5,6 @@ area: api
 files:
   - src-tauri/crates/uc-daemon/src/api/query.rs
   - src-tauri/crates/uc-daemon/src/api/ws.rs
-  - src-tauri/crates/uc-daemon/src/peers/snapshot.rs
   - src-tauri/crates/uc-daemon/src/peers/presence_monitor.rs
 ---
 
@@ -25,7 +24,12 @@ daemon 的 query / peers / ws 状态读取仍直接持有 `CoreRuntime`、`Prese
   - `/peers` 查询使用 application 层 `PeerSnapshotView` 后再投影为 daemon DTO。
   - 已验证 `cargo check -p uc-application -p uc-daemon`、`cargo test -p uc-application facade::roster --lib`、`cargo test -p uc-daemon peers::presence_monitor --lib`、`cargo test -p uc-daemon api::ws --lib`、`cargo test -p uc-daemon --lib`。
 
-## Remaining
+- 2026-04-26:已完成 presence monitor / WS 推送收口。
+  - `AppFacade` 增加 `subscribe_peer_presence_events()` 统一入口。
+  - daemon `PresenceMonitor` 不再直接订阅 `PresencePort`,也不再从 `CoreRuntime` 派生 peer snapshot。
+  - 删除 daemon 内部 `peers/snapshot.rs`,peer snapshot 规则统一由 application 侧提供。
+  - 已验证 `cargo check -p uc-application -p uc-daemon`、`cargo test -p uc-daemon peers::presence_monitor --lib`、`cargo test -p uc-application facade::roster --lib`、`cargo test -p uc-daemon --lib`。
 
-- `PresenceMonitor` 仍直接使用 `PresencePort` 和 daemon `derive_peer_snapshot`,需要继续把 snapshot provider 收到 application。
-- daemon 装配阶段仍直接接收 `MemberRosterFacade` 用于创建 `AppFacade`,归入 composition root 收口 todo。
+## Completed
+
+本 todo 范围已完成。daemon 装配阶段仍直接接收 `MemberRosterFacade` 用于创建 `AppFacade`,归入已有 composition root 收口 todo。

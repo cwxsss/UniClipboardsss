@@ -21,7 +21,10 @@ pub mod setup_status;
 pub mod space_setup;
 pub mod storage;
 
-pub use app_facade::{AppFacade, AppFacadeParts};
+pub use app_facade::{
+    AppFacade, AppFacadeParts, AppPresenceEvent, AppPresenceSubscription,
+    AppPresenceSubscriptionError,
+};
 pub use blob_transfer::{
     BlobTransferDeps, BlobTransferError, BlobTransferFacade, FetchBlobCommand, FetchBlobResult,
     PublishBlobCommand, PublishBlobResult,

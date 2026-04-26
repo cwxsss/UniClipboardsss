@@ -20,7 +20,6 @@ use uc_core::ports::SystemClipboardPort;
 
 use crate::api::types::DaemonWsEvent;
 use crate::app::DaemonApp;
-use crate::peers::presence_monitor::PresenceMonitor;
 use crate::search::coordinator::SearchCoordinator;
 use crate::service::DaemonService;
 use crate::service::ServiceHealth;
@@ -254,17 +253,9 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     ];
     let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses)));
 
-    let presence_monitor = Arc::new(PresenceMonitor::new(
-        ctx.space_setup_assembly.presence.clone(),
-        runtime.clone(),
-        event_tx.clone(),
-    ));
-
     let (services, deferred_services) = {
-        let mut initial: Vec<Arc<dyn DaemonService>> = vec![
-            Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>,
-            Arc::clone(&presence_monitor) as Arc<dyn DaemonService>,
-        ];
+        let mut initial: Vec<Arc<dyn DaemonService>> =
+            vec![Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>];
         let mut deferred: Vec<Arc<dyn DaemonService>> = Vec::new();
 
         if should_defer_clipboard {

@@ -3457,6 +3457,34 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · presence monitor 切片
+
+**触发**:query peers 已收口后,继续处理 WS `peers.changed` 推送仍直接订阅 presence port 和读取 core runtime 的问题。
+
+**完成标准**:
+- `PresenceMonitor` 不再直接持有 `PresencePort` / `CoreRuntime`
+- presence 事件订阅通过 `AppFacade`
+- peer snapshot 规则只保留 application 侧一份
+- 删除 daemon 内部旧 snapshot helper
+- 验证 application roster facade、presence monitor 和 daemon lib 测试
+
+**已做**:
+- `AppFacade` 增加 presence 事件订阅入口和 application 事件模型
+- `PresenceMonitor` 改为通过 `AppFacade` 订阅变化和读取快照
+- `DaemonApp` 在创建 `AppFacade` 后启动 `PresenceMonitor`
+- 删除 `uc-daemon/src/peers/snapshot.rs`
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon peers::presence_monitor --lib`:✅ 5 passed
+- `cargo test -p uc-application facade::roster --lib`:✅ 11 passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**下一步**:
+- `daemon-query-peers-ws` todo 只剩更大的 composition root 收口项,可转入单独 todo 继续。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · search query 入口
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-search.md`,先做 todo 里明确的第一步 `GET /search/query`。
