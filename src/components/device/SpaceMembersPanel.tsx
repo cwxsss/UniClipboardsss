@@ -26,7 +26,14 @@ const SpaceMembersPanel: React.FC = () => {
   const { setting } = useSetting()
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
-  const { spaceMembers, spaceMembersError } = useAppSelector(state => state.devices)
+  const {
+    spaceMembers: rawSpaceMembers,
+    spaceMembersError,
+    localDevice,
+  } = useAppSelector(state => state.devices)
+  const spaceMembers = localDevice
+    ? rawSpaceMembers.filter(d => d.peerId !== localDevice.peerId)
+    : rawSpaceMembers
   const globalAutoSyncOff = setting?.sync.autoSync === false
   const globalFileSyncOff = setting?.fileSync?.fileSyncEnabled === false
 

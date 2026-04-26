@@ -66,8 +66,9 @@ const ThisDeviceCard: React.FC = () => {
 
   if (!localDevice) return null
 
-  const onlineCount = spaceMembers.filter(d => d.connected).length
-  const pairedCount = spaceMembers.length
+  const peers = spaceMembers.filter(d => d.peerId !== localDevice.peerId)
+  const onlineCount = peers.filter(d => d.connected).length
+  const pairedCount = peers.length
 
   return (
     <div className="rounded-xl border border-border/60 bg-card p-5">
