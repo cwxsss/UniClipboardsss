@@ -452,13 +452,37 @@ impl CommonClipboardImpl {
         }
 
         // If the clipboard carried file references (but no image bytes were
-        // captured above) and any of those files look like image files,
-        // load their bytes and add them as image representations. This makes
-        // screenshot tools that copy a temp PNG path render as a real image
-        // preview in the UI rather than showing a filename.
+        // captured above) and any of those files look like image files, this
+        // fallback may load their bytes as inline `image-from-file` reps so
+        // that screenshot tools (which copy a temp PNG path) render as a real
+        // image preview in the UI rather than showing only a filename.
+        //
+        // Contract (post 260426-1gz quick task):
+        // - Only "small" image files (< MAX_INLINE_IMAGE_BYTES) become inline
+        //   `image-from-file` reps for immediate UI preview. Daily screenshots
+        //   from system tools are typically well under this threshold.
+        // - Large image files are intentionally NOT inlined here. Locally the
+        //   UI still has the `files` rep (filename / file list) and the
+        //   `BackgroundBlobWorker.try_generate_thumbnail` path will populate
+        //   `clipboard_representation_thumbnail` asynchronously, so the
+        //   history list still gets a thumbnail. Cross-device transfer of the
+        //   actual pixels is the responsibility of the file transfer / blob
+        //   ref path, not this fallback.
+        // - This guarantees that no single rep produced by capture exceeds
+        //   the V3 envelope budget, preventing the
+        //   `peer rejected: payload ... exceeds local maximum 2097152`
+        //   dispatch failure observed when a >= 2 MiB PNG file URI is copied.
         if !image_already_read && !captured_file_paths.is_empty() {
-            // Safety cap to avoid blocking capture on huge files.
+            // Hard upper safety cap: never read an image file larger than this
+            // even if the inline-budget check below were somehow bypassed.
             const MAX_IMAGE_FILE_BYTES: u64 = 20 * 1024 * 1024; // 20 MB
+                                                                // Conservative inline budget: stays well under the 2 MiB envelope
+                                                                // (`MAX_PAYLOAD_SIZE` in `clipboard_wire.rs`) so that even after
+                                                                // V3 header + AEAD tag + co-existing reps (plain text, files,
+                                                                // html, ...) the encrypted envelope fits with ~8x headroom.
+                                                                // 256 KiB still covers typical screenshot-tool PNGs (usually
+                                                                // < 200 KiB), so the immediate inline preview UX does not regress.
+            const MAX_INLINE_IMAGE_BYTES: u64 = 256 * 1024; // 256 KiB
 
             for path in &captured_file_paths {
                 let ext = match path.extension().and_then(|e| e.to_str()) {
@@ -492,6 +516,25 @@ impl CommonClipboardImpl {
                         "Skipping clipboard image file (size out of range)"
                     );
                     continue;
+                }
+                if meta.len() > MAX_INLINE_IMAGE_BYTES {
+                    // Intentionally do NOT read or push an inline rep here.
+                    // The downstream `files` rep + BackgroundBlobWorker
+                    // thumbnail path covers local UI; cross-device pixel
+                    // transfer is handled by file transfer / blob ref. This
+                    // prevents the snapshot from carrying a multi-MiB inline
+                    // rep that would blow the V3 envelope budget.
+                    //
+                    // Note (per uc-platform AGENTS §12.3): only path/size/
+                    // mime/threshold are logged — never any file bytes.
+                    debug!(
+                        path = %path.display(),
+                        size_bytes = meta.len(),
+                        mime = mime,
+                        threshold = MAX_INLINE_IMAGE_BYTES,
+                        "Skipping inline image-from-file rep (too large for envelope); files rep + background thumbnail will handle it"
+                    );
+                    break;
                 }
                 match std::fs::read(path) {
                     Ok(bytes) => {
