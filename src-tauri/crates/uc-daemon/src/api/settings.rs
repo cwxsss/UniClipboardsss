@@ -40,8 +40,8 @@ pub fn router() -> Router<DaemonApiState> {
 async fn get_settings_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<GetSettingsResponse>, ApiError> {
-    let facade = state.settings_facade_or_error()?;
-    let settings = facade.get().await.map_err(settings_error_to_api)?;
+    let app = state.app_facade_or_error()?;
+    let settings = app.settings.get().await.map_err(settings_error_to_api)?;
 
     Ok(Json(GetSettingsResponse {
         data: settings_view_to_dto(settings),
@@ -70,8 +70,9 @@ async fn update_settings_handler(
     State(state): State<DaemonApiState>,
     Json(payload): Json<SettingsPatchDto>,
 ) -> Result<Json<UpdateSettingsResponse>, ApiError> {
-    let facade = state.settings_facade_or_error()?;
-    let updated = facade
+    let app = state.app_facade_or_error()?;
+    let updated = app
+        .settings
         .update(settings_patch_from_dto(payload))
         .await
         .map_err(settings_error_to_api)?;

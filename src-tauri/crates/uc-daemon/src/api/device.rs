@@ -31,8 +31,9 @@ pub fn router() -> Router<DaemonApiState> {
 async fn get_local_device_info_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<GetLocalDeviceInfoResponse>, ApiError> {
-    let facade = state.device_facade_or_error()?;
-    let info = facade
+    let app = state.app_facade_or_error()?;
+    let info = app
+        .device
         .local_device_info()
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;

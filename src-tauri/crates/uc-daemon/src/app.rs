@@ -17,10 +17,11 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
 use uc_app::usecases::{LifecycleState, LifecycleStatusPort};
 use uc_application::facade::{
-    ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreGateway, DeviceFacade,
-    EncryptionFacade, EncryptionFacadeDeps, LifecycleFacade, LifecycleFacadeDeps,
-    LifecycleStateView, LifecycleStatusGateway, MemberRosterFacade, ResourceFacade,
-    ResourceFacadeDeps, SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
+    AppFacade, AppFacadeParts, ClipboardRestoreError, ClipboardRestoreFacade,
+    ClipboardRestoreGateway, DeviceFacade, EncryptionFacade, EncryptionFacadeDeps, LifecycleFacade,
+    LifecycleFacadeDeps, LifecycleStateView, LifecycleStatusGateway, MemberRosterFacade,
+    ResourceFacade, ResourceFacadeDeps, SettingsFacade, SpaceSetupFacade, StorageFacade,
+    StorageFacadeDeps,
 };
 use uc_application::space_access::SpaceAccessFacade;
 use uc_core::ids::EntryId;
@@ -292,29 +293,19 @@ impl DaemonApp {
             Some(coordinator) => api_state.with_search_coordinator(Arc::clone(coordinator)),
             None => api_state,
         };
-        // Slice4 P3 T3.3: inject the new SpaceSetupFacade so the
-        // `/v2/setup/*` handlers stop returning 503 once T3.2 is wired.
-        let api_state = match &self.space_setup_facade {
-            Some(facade) => api_state.with_space_setup(Arc::clone(facade)),
-            None => api_state,
-        };
-        let api_state = match &self.member_roster_facade {
-            Some(facade) => api_state.with_member_roster(Arc::clone(facade)),
-            None => api_state,
-        };
-        let api_state =
-            api_state.with_lifecycle(Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
+        let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
+            space_setup: self.space_setup_facade.clone(),
+            member_roster: self.member_roster_facade.clone(),
+            lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
                 status: Arc::new(AppLifecycleStatusGateway {
                     status: self.runtime.lifecycle_status().clone(),
                 }),
-            })));
-        let api_state =
-            api_state.with_encryption(Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
+            })),
+            encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
                 setup_status: self.runtime.wiring_deps().setup_status.clone(),
                 space_access: self.runtime.wiring_deps().security.space_access.clone(),
-            })));
-        let api_state =
-            api_state.with_resource(Arc::new(ResourceFacade::new(ResourceFacadeDeps {
+            })),
+            resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
                 representation_repo: self
                     .runtime
                     .wiring_deps()
@@ -323,27 +314,29 @@ impl DaemonApp {
                     .clone(),
                 thumbnail_repo: self.runtime.wiring_deps().storage.thumbnail_repo.clone(),
                 blob_store: self.runtime.wiring_deps().storage.blob_store.clone(),
-            })));
-        let api_state = api_state.with_clipboard_restore(Arc::new(ClipboardRestoreFacade::new(
-            Arc::new(DaemonClipboardRestoreGateway {
-                runtime: self.runtime.clone(),
-            }),
-        )));
-        let api_state = api_state.with_settings(Arc::new(SettingsFacade::new(
-            self.runtime.wiring_deps().settings.clone(),
-        )));
-        let api_state = api_state.with_device(Arc::new(DeviceFacade::new(
-            self.runtime.wiring_deps().device.device_identity.clone(),
-            self.runtime.wiring_deps().settings.clone(),
-        )));
-        let api_state = api_state.with_storage(Arc::new(StorageFacade::new(StorageFacadeDeps {
-            db_path: storage_paths.db_path.clone(),
-            vault_dir: storage_paths.vault_dir.clone(),
-            cache_dir: storage_paths.cache_dir.clone(),
-            logs_dir: storage_paths.logs_dir.clone(),
-            app_data_root_dir: storage_paths.app_data_root_dir.clone(),
-            cache_fs: self.runtime.wiring_deps().system.cache_fs.clone(),
-        })));
+            })),
+            clipboard_restore: Arc::new(ClipboardRestoreFacade::new(Arc::new(
+                DaemonClipboardRestoreGateway {
+                    runtime: self.runtime.clone(),
+                },
+            ))),
+            settings: Arc::new(SettingsFacade::new(
+                self.runtime.wiring_deps().settings.clone(),
+            )),
+            device: Arc::new(DeviceFacade::new(
+                self.runtime.wiring_deps().device.device_identity.clone(),
+                self.runtime.wiring_deps().settings.clone(),
+            )),
+            storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
+                db_path: storage_paths.db_path.clone(),
+                vault_dir: storage_paths.vault_dir.clone(),
+                cache_dir: storage_paths.cache_dir.clone(),
+                logs_dir: storage_paths.logs_dir.clone(),
+                app_data_root_dir: storage_paths.app_data_root_dir.clone(),
+                cache_fs: self.runtime.wiring_deps().system.cache_fs.clone(),
+            })),
+        }));
+        let api_state = api_state.with_app_facade(app_facade);
 
         // 3. Wire the event emitter into the runtime so use cases can emit WS events
         self.runtime

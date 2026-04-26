@@ -3005,6 +3005,17 @@ Phase 0(已完成,2026-04-18)
 
 ### Phase D9 · daemon 下一块收口 — in_progress
 
+**纠偏(2026-04-26)**:
+- 前几轮把入口收到了 `uc-application/src/facade/*`,但 daemon 仍分别持有多个子 facade。
+- 用户明确纠正:外部统一调用 `src-tauri/crates/uc-application/src/facade/app_facade.rs`,不能分开 import/持有子 facade。
+- 已调整 `AppFacade` 为聚合入口,`DaemonApiState` 只持有 `Arc<AppFacade>`。
+- 已收口的 daemon handlers 统一从 `state.app_facade_or_error()?` 进入,再调用对应业务入口。
+
+**纠偏验证**:
+- `cargo test -p uc-application facade:: --lib`
+- `cargo check -p uc-daemon`
+- `cargo test -p uc-daemon --lib`
+
 **候选优先级**:
 1. `api/search.rs`:直接构造 core search query / error,范围较大。
 2. clipboard workers:直接依赖 platform watcher / core snapshot,需要更完整的 application worker facade。

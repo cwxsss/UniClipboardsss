@@ -42,8 +42,9 @@ pub fn router() -> Router<DaemonApiState> {
 async fn get_encryption_state_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let facade = state.encryption_facade_or_error()?;
-    let view = facade
+    let app = state.app_facade_or_error()?;
+    let view = app
+        .encryption
         .state()
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -74,9 +75,9 @@ async fn get_encryption_state_handler(
 async fn unlock_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let facade = state.encryption_facade_or_error()?;
+    let app = state.app_facade_or_error()?;
 
-    match facade.unlock().await {
+    match app.encryption.unlock().await {
         Ok(true) => {
             info!("encryption session auto-unlocked via keyring");
 
@@ -122,8 +123,8 @@ async fn unlock_handler(
 async fn lock_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let facade = state.encryption_facade_or_error()?;
-    facade
+    let app = state.app_facade_or_error()?;
+    app.encryption
         .lock()
         .await
         .map_err(|e| ApiError::internal(format!("failed to lock encryption: {e}")))?;
@@ -149,8 +150,9 @@ async fn lock_handler(
 async fn verify_keychain_access_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let facade = state.encryption_facade_or_error()?;
-    let granted = facade
+    let app = state.app_facade_or_error()?;
+    let granted = app
+        .encryption
         .verify_keychain_access()
         .await
         .map_err(|e| ApiError::internal(format!("keychain access check failed: {e}")))?;

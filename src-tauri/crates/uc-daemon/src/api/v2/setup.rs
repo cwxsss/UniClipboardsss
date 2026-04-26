@@ -44,7 +44,9 @@ pub fn router() -> Router<DaemonApiState> {
 
 fn require_facade(state: &DaemonApiState) -> Result<std::sync::Arc<SpaceSetupFacade>, ApiError> {
     state
-        .space_setup_facade()
+        .app_facade_or_error()?
+        .space_setup
+        .clone()
         .ok_or_else(|| ApiError::service_unavailable("space setup facade not assembled"))
 }
 

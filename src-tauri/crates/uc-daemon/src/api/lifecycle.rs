@@ -48,11 +48,11 @@ async fn lifecycle_ready_handler(State(state): State<DaemonApiState>) -> impl In
 /// GET /lifecycle/status
 /// Returns the current lifecycle state as a plain JSON object.
 async fn get_lifecycle_status_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    let facade = match state.lifecycle_facade_or_error() {
-        Ok(facade) => facade,
+    let app = match state.app_facade_or_error() {
+        Ok(app) => app,
         Err(error) => return error.into_response(),
     };
-    let current_state = facade.status().await;
+    let current_state = app.lifecycle.status().await;
 
     Json(LifecycleStatusResponse {
         state: current_state.as_str().to_string(),
@@ -67,14 +67,14 @@ async fn get_lifecycle_status_handler(State(state): State<DaemonApiState>) -> im
 /// 这个 endpoint 现在只做 lifecycle 状态推进 + 触发 deferred 服务启动,
 /// 等价于 GUI 端 `/lifecycle/ready` 的 idempotent 重试入口。
 async fn retry_lifecycle_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    let facade = match state.lifecycle_facade_or_error() {
-        Ok(facade) => facade,
+    let app = match state.app_facade_or_error() {
+        Ok(app) => app,
         Err(error) => return error.into_response(),
     };
 
     let span = tracing::info_span!("daemon.lifecycle.retry");
     async move {
-        if let Err(error) = facade.retry_to_ready().await {
+        if let Err(error) = app.lifecycle.retry_to_ready().await {
             return internal_error(anyhow::anyhow!("{}", error)).into_response();
         }
 

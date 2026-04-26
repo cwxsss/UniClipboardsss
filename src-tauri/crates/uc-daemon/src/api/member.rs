@@ -49,8 +49,12 @@ pub async fn get_member_sync_preferences_handler(
     State(state): State<DaemonApiState>,
     Path(device_id): Path<String>,
 ) -> Result<Json<GetMemberSyncPreferencesResponse>, ApiError> {
-    let facade = state.member_roster_facade_or_error()?;
-    let prefs = facade
+    let app = state.app_facade_or_error()?;
+    let roster = app
+        .member_roster
+        .clone()
+        .ok_or_else(|| ApiError::service_unavailable("member roster facade unavailable"))?;
+    let prefs = roster
         .get_sync_preferences(&device_id)
         .await
         .map_err(|e| map_member_error(&device_id, "get_member_sync_preferences", e))?;
@@ -85,8 +89,12 @@ pub async fn update_member_sync_preferences_handler(
     Path(device_id): Path<String>,
     Json(payload): Json<MemberSyncPreferencesPatchDto>,
 ) -> Result<Json<UpdateMemberSyncPreferencesResponse>, ApiError> {
-    let facade = state.member_roster_facade_or_error()?;
-    let updated = facade
+    let app = state.app_facade_or_error()?;
+    let roster = app
+        .member_roster
+        .clone()
+        .ok_or_else(|| ApiError::service_unavailable("member roster facade unavailable"))?;
+    let updated = roster
         .update_sync_preferences(&device_id, member_sync_preferences_patch_from_dto(payload))
         .await
         .map_err(|e| map_member_error(&device_id, "update_member_sync_preferences", e))?;

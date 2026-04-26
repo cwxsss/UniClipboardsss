@@ -37,13 +37,17 @@ pub(crate) async fn handle_unpair_device(
     State(state): State<DaemonApiState>,
     Json(payload): Json<UnpairDeviceRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let facade = state.member_roster_facade_or_error()?;
+    let app = state.app_facade_or_error()?;
+    let roster = app
+        .member_roster
+        .clone()
+        .ok_or_else(|| ApiError::service_unavailable("member roster facade unavailable"))?;
     let peer_id = payload.peer_id;
 
     // Slice 4 P5a-1: 取消配对 = 删除本机成员记录。libp2p 时代的
     // `PairingTransportPort::unpair_device` 通知对端的能力随 libp2p 一同下线；
     // 本地自治模型下不再广播给对端（对端发现后会自行清理）。
-    facade.revoke_member(peer_id.as_str()).await.map_err(|e| {
+    roster.revoke_member(peer_id.as_str()).await.map_err(|e| {
         tracing::error!(error = %e, peer_id = %peer_id, "daemon unpair: revoke member failed");
         match e {
             RosterError::NotFound(_) => {

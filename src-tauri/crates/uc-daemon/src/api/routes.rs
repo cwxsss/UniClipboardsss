@@ -120,14 +120,14 @@ async fn restore_clipboard_entry_handler(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
 ) -> impl IntoResponse {
-    let facade = match state.clipboard_restore_facade_or_error() {
-        Ok(facade) => facade,
+    let app = match state.app_facade_or_error() {
+        Ok(app) => app,
         Err(error) => return error.into_response(),
     };
 
     tracing::info!(entry_id = %entry_id, "daemon restore request received");
 
-    match facade.restore_entry(&entry_id).await {
+    match app.clipboard_restore.restore_entry(&entry_id).await {
         Ok(()) => {
             tracing::info!(entry_id = %entry_id, "daemon restore request succeeded");
             (StatusCode::OK, Json(json!({"success": true}))).into_response()

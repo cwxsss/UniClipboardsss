@@ -1963,3 +1963,22 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-126 · 仅进入 facade 目录还不够,外部调用必须统一走 AppFacade
+
+**发现时间**:2026-04-26
+
+**背景**:D1-D8 把 daemon 多个入口从 `uc-app` / `uc-core` 直接调用改成了 `uc-application/src/facade/*` 下的子 facade,但 daemon state 仍分别持有 settings / device / storage / encryption / resource / restore 等多个 facade。用户纠正:外部应该统一调用 `facade/app_facade.rs` 暴露的 `AppFacade`,而不是分别 import/持有子 facade。
+
+**处理结果**:
+- `AppFacade` 扩展为聚合入口,包含已收口的成员、设置、设备、存储、生命周期、加密、资源、恢复、setup 入口。
+- `DaemonApiState` 删除分散的子 facade 字段,只保留 `app_facade: Option<Arc<AppFacade>>`。
+- 已收口的 daemon handlers 改为统一从 `state.app_facade_or_error()?` 进入。
+- 保留 daemon 装配根里构造子 facade 的代码,因为这是组装 `AppFacade` 的内部装配步骤,不是对外调用面。
+
+**验证**:
+- `cargo test -p uc-application facade:: --lib`:56 passed
+- `cargo check -p uc-daemon`:passed
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

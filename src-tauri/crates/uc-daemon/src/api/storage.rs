@@ -56,12 +56,12 @@ pub fn router() -> Router<DaemonApiState> {
 /// Returns storage statistics across database, cache, and spool directories.
 /// Includes blob_count derived from the total number of clipboard entries.
 async fn get_storage_stats_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    let facade = match state.storage_facade_or_error() {
-        Ok(facade) => facade,
+    let app = match state.app_facade_or_error() {
+        Ok(app) => app,
         Err(error) => return error.into_response(),
     };
 
-    let result = match facade.stats().await {
+    let result = match app.storage.stats().await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "Failed to compute storage stats");
@@ -121,12 +121,12 @@ async fn clear_cache_handler(
             .into_response();
     }
 
-    let facade = match state.storage_facade_or_error() {
-        Ok(facade) => facade,
+    let app = match state.app_facade_or_error() {
+        Ok(app) => app,
         Err(error) => return error.into_response(),
     };
 
-    match facade.clear_cache().await {
+    match app.storage.clear_cache().await {
         Ok(result) => {
             tracing::info!(
                 freed_bytes = result.freed_bytes,

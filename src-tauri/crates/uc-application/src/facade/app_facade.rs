@@ -21,7 +21,12 @@
 //!   `AppFacade` → Slice 1.5 or later. Those sub-facades remain `pub`
 //!   this slice to keep existing entry points working.
 
-use crate::facade::space_setup::SpaceSetupFacade;
+use std::sync::Arc;
+
+use crate::facade::{
+    ClipboardRestoreFacade, DeviceFacade, EncryptionFacade, LifecycleFacade, MemberRosterFacade,
+    ResourceFacade, SettingsFacade, SpaceSetupFacade, StorageFacade,
+};
 
 /// Aggregator exposing one field per business sub-facade.
 ///
@@ -29,9 +34,15 @@ use crate::facade::space_setup::SpaceSetupFacade;
 /// directly (`app.space_setup.initialize_space(..)`). The aggregator
 /// carries no logic, so there are no invariants to guard.
 pub struct AppFacade {
-    pub space_setup: SpaceSetupFacade,
-    // P7+: pub pairing: PairingFacade
-    // Slice 2: pub sync: SyncFacade
+    pub space_setup: Option<Arc<SpaceSetupFacade>>,
+    pub member_roster: Option<Arc<MemberRosterFacade>>,
+    pub lifecycle: Arc<LifecycleFacade>,
+    pub encryption: Arc<EncryptionFacade>,
+    pub resource: Arc<ResourceFacade>,
+    pub clipboard_restore: Arc<ClipboardRestoreFacade>,
+    pub settings: Arc<SettingsFacade>,
+    pub device: Arc<DeviceFacade>,
+    pub storage: Arc<StorageFacade>,
 }
 
 impl AppFacade {
@@ -39,7 +50,29 @@ impl AppFacade {
     ///
     /// Bootstrap builds each sub-facade from its own `*Deps` bundle and
     /// hands them here — the aggregator never sees raw ports.
-    pub fn new(space_setup: SpaceSetupFacade) -> Self {
-        Self { space_setup }
+    pub fn new(parts: AppFacadeParts) -> Self {
+        Self {
+            space_setup: parts.space_setup,
+            member_roster: parts.member_roster,
+            lifecycle: parts.lifecycle,
+            encryption: parts.encryption,
+            resource: parts.resource,
+            clipboard_restore: parts.clipboard_restore,
+            settings: parts.settings,
+            device: parts.device,
+            storage: parts.storage,
+        }
     }
+}
+
+pub struct AppFacadeParts {
+    pub space_setup: Option<Arc<SpaceSetupFacade>>,
+    pub member_roster: Option<Arc<MemberRosterFacade>>,
+    pub lifecycle: Arc<LifecycleFacade>,
+    pub encryption: Arc<EncryptionFacade>,
+    pub resource: Arc<ResourceFacade>,
+    pub clipboard_restore: Arc<ClipboardRestoreFacade>,
+    pub settings: Arc<SettingsFacade>,
+    pub device: Arc<DeviceFacade>,
+    pub storage: Arc<StorageFacade>,
 }

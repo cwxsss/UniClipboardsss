@@ -3455,6 +3455,29 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · AppFacade 统一入口纠偏
+
+**触发**:用户纠正:外部统一调用 `src-tauri/crates/uc-application/src/facade/app_facade.rs`,不能分别 import/持有子 facade。
+
+**完成标准**:
+- `AppFacade` 聚合已收口的 application 入口
+- `DaemonApiState` 不再分别持有 settings/device/storage/encryption/resource/restore/member/setup 子 facade
+- 已收口的 daemon handlers 从 `state.app_facade_or_error()?` 进入
+- 验证 application facade 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 扩展 `uc-application/src/facade/app_facade.rs`
+- `uc-daemon/src/api/server.rs` 改为只持有 `Arc<AppFacade>`
+- `uc-daemon/src/app.rs` 组装 `AppFacade`
+- settings/device/storage/lifecycle/encryption/resource/restore/member/pairing/v2 setup handlers 改为通过 `AppFacade` 调用
+
+**验证**:
+- `cargo test -p uc-application facade:: --lib`:✅ 56 passed
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · blob/resource 切片
 
 **触发**:继续收 daemon,选择较小的二进制资源读取入口。

@@ -19,10 +19,7 @@ use axum::Router;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
-use uc_application::facade::{
-    ClipboardRestoreFacade, DeviceFacade, EncryptionFacade, LifecycleFacade, MemberRosterFacade,
-    ResourceFacade, SettingsFacade, SpaceSetupFacade, StorageFacade,
-};
+use uc_application::facade::AppFacade;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -44,17 +41,7 @@ pub struct DaemonApiState {
     pub query_service: Arc<DaemonQueryService>,
     pub auth_token: DaemonAuthToken,
     pub runtime: Option<Arc<CoreRuntime>>,
-    /// Slice4 P3 T3.2 · stateless v2 setup facade.
-    /// Wired in T3.3; the `/v2/setup/*` handlers return 503 if absent.
-    pub space_setup_facade: Option<Arc<SpaceSetupFacade>>,
-    pub member_roster_facade: Option<Arc<MemberRosterFacade>>,
-    pub lifecycle_facade: Option<Arc<LifecycleFacade>>,
-    pub encryption_facade: Option<Arc<EncryptionFacade>>,
-    pub resource_facade: Option<Arc<ResourceFacade>>,
-    pub clipboard_restore_facade: Option<Arc<ClipboardRestoreFacade>>,
-    pub settings_facade: Option<Arc<SettingsFacade>>,
-    pub device_facade: Option<Arc<DeviceFacade>>,
-    pub storage_facade: Option<Arc<StorageFacade>>,
+    pub app_facade: Option<Arc<AppFacade>>,
     pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
     /// Gate controlling clipboard capture in the daemon.
@@ -82,15 +69,7 @@ impl DaemonApiState {
             query_service,
             auth_token,
             runtime,
-            space_setup_facade: None,
-            member_roster_facade: None,
-            lifecycle_facade: None,
-            encryption_facade: None,
-            resource_facade: None,
-            clipboard_restore_facade: None,
-            settings_facade: None,
-            device_facade: None,
-            storage_facade: None,
+            app_facade: None,
             space_access_facade: None,
             event_tx,
             clipboard_capture_gate: None,
@@ -105,107 +84,15 @@ impl DaemonApiState {
         self
     }
 
-    /// Slice4 P3 T3.2 · attach the stateless v2 setup facade.
-    pub fn with_space_setup(mut self, space_setup_facade: Arc<SpaceSetupFacade>) -> Self {
-        self.space_setup_facade = Some(space_setup_facade);
+    pub fn with_app_facade(mut self, app_facade: Arc<AppFacade>) -> Self {
+        self.app_facade = Some(app_facade);
         self
     }
 
-    pub fn space_setup_facade(&self) -> Option<Arc<SpaceSetupFacade>> {
-        self.space_setup_facade.clone()
-    }
-
-    pub fn with_member_roster(mut self, member_roster_facade: Arc<MemberRosterFacade>) -> Self {
-        self.member_roster_facade = Some(member_roster_facade);
-        self
-    }
-
-    pub fn member_roster_facade_or_error(&self) -> Result<Arc<MemberRosterFacade>, ApiError> {
-        self.member_roster_facade
+    pub fn app_facade_or_error(&self) -> Result<Arc<AppFacade>, ApiError> {
+        self.app_facade
             .clone()
-            .ok_or_else(|| ApiError::service_unavailable("member roster facade unavailable"))
-    }
-
-    pub fn with_lifecycle(mut self, lifecycle_facade: Arc<LifecycleFacade>) -> Self {
-        self.lifecycle_facade = Some(lifecycle_facade);
-        self
-    }
-
-    pub fn lifecycle_facade_or_error(&self) -> Result<Arc<LifecycleFacade>, ApiError> {
-        self.lifecycle_facade
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("lifecycle facade unavailable"))
-    }
-
-    pub fn with_encryption(mut self, encryption_facade: Arc<EncryptionFacade>) -> Self {
-        self.encryption_facade = Some(encryption_facade);
-        self
-    }
-
-    pub fn encryption_facade_or_error(&self) -> Result<Arc<EncryptionFacade>, ApiError> {
-        self.encryption_facade
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("encryption facade unavailable"))
-    }
-
-    pub fn with_resource(mut self, resource_facade: Arc<ResourceFacade>) -> Self {
-        self.resource_facade = Some(resource_facade);
-        self
-    }
-
-    pub fn resource_facade_or_error(&self) -> Result<Arc<ResourceFacade>, ApiError> {
-        self.resource_facade
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("resource facade unavailable"))
-    }
-
-    pub fn with_clipboard_restore(
-        mut self,
-        clipboard_restore_facade: Arc<ClipboardRestoreFacade>,
-    ) -> Self {
-        self.clipboard_restore_facade = Some(clipboard_restore_facade);
-        self
-    }
-
-    pub fn clipboard_restore_facade_or_error(
-        &self,
-    ) -> Result<Arc<ClipboardRestoreFacade>, ApiError> {
-        self.clipboard_restore_facade
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("clipboard restore facade unavailable"))
-    }
-
-    pub fn with_settings(mut self, settings_facade: Arc<SettingsFacade>) -> Self {
-        self.settings_facade = Some(settings_facade);
-        self
-    }
-
-    pub fn settings_facade_or_error(&self) -> Result<Arc<SettingsFacade>, ApiError> {
-        self.settings_facade
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("settings facade unavailable"))
-    }
-
-    pub fn with_device(mut self, device_facade: Arc<DeviceFacade>) -> Self {
-        self.device_facade = Some(device_facade);
-        self
-    }
-
-    pub fn device_facade_or_error(&self) -> Result<Arc<DeviceFacade>, ApiError> {
-        self.device_facade
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("device facade unavailable"))
-    }
-
-    pub fn with_storage(mut self, storage_facade: Arc<StorageFacade>) -> Self {
-        self.storage_facade = Some(storage_facade);
-        self
-    }
-
-    pub fn storage_facade_or_error(&self) -> Result<Arc<StorageFacade>, ApiError> {
-        self.storage_facade
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("storage facade unavailable"))
+            .ok_or_else(|| ApiError::service_unavailable("application facade unavailable"))
     }
 
     pub fn with_space_access(mut self, space_access_facade: Arc<SpaceAccessFacade>) -> Self {

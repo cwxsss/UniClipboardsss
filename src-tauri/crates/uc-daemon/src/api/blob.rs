@@ -22,18 +22,18 @@ async fn get_blob(
     State(state): State<DaemonApiState>,
     Path(blob_id): Path<String>,
 ) -> impl IntoResponse {
-    let facade = match state.resource_facade_or_error() {
-        Ok(facade) => facade,
+    let app = match state.app_facade_or_error() {
+        Ok(app) => app,
         Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "daemon resource facade unavailable",
+                "daemon application facade unavailable",
             )
                 .into_response();
         }
     };
 
-    match facade.blob(&blob_id).await {
+    match app.resource.blob(&blob_id).await {
         Ok(result) => {
             let content_type = result
                 .mime_type
@@ -63,18 +63,18 @@ async fn get_thumbnail(
     State(state): State<DaemonApiState>,
     Path(rep_id): Path<String>,
 ) -> impl IntoResponse {
-    let facade = match state.resource_facade_or_error() {
-        Ok(facade) => facade,
+    let app = match state.app_facade_or_error() {
+        Ok(app) => app,
         Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "daemon resource facade unavailable",
+                "daemon application facade unavailable",
             )
                 .into_response();
         }
     };
 
-    match facade.thumbnail(&rep_id).await {
+    match app.resource.thumbnail(&rep_id).await {
         Ok(result) => {
             let content_type = result
                 .mime_type
