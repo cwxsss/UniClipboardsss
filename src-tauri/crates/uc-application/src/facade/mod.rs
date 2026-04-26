@@ -8,6 +8,7 @@
 pub mod app_facade;
 pub mod blob_transfer;
 pub mod clipboard;
+pub mod clipboard_capture;
 pub mod clipboard_history;
 pub mod clipboard_inbound;
 pub mod clipboard_restore;
@@ -33,6 +34,10 @@ pub use blob_transfer::{
 pub use clipboard::{
     ClipboardSyncDeps, ClipboardSyncError, ClipboardSyncFacade, DispatchEntryInput,
     DispatchEntryOutcome, DispatchEntryPerTarget, InboundAction, InboundNotice, IngestHandle,
+};
+pub use clipboard_capture::{
+    CapturedClipboardEntryView, ClipboardCaptureFacade, ClipboardCaptureFacadeError,
+    ClipboardCapturePort,
 };
 pub use clipboard_history::{
     ClearHistoryResultView as ClipboardClearHistoryResultView, ClipboardHistoryError,

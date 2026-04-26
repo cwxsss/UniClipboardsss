@@ -3563,6 +3563,31 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon clipboard workers 收口 · capture 切片
+
+**触发**:inbound worker 已收口后,继续处理 outbound watcher 内直接构造 capture use case 的问题。
+
+**完成标准**:
+- watcher 不再构造 `CaptureClipboardUseCase`
+- capture 结果通过 application 层模型返回
+- 先写失败测试,再补实现并验证
+
+**已做**:
+- 新增 `ClipboardCaptureFacade`
+- 新增 application 层 `CapturedClipboardEntryView`
+- watcher 改为通过 `ClipboardCaptureFacade::capture`
+- entrypoint 复用现有 capture use case 并包成 facade 注入 watcher
+
+**验证**:
+- `cargo test -p uc-application facade::clipboard_capture --lib`:✅ 1 passed
+- `cargo check -p uc-application -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**下一步**:
+- 继续收 watcher 内的 search live index 和 outbound planning。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · search query 入口
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-search.md`,先做 todo 里明确的第一步 `GET /search/query`。

@@ -23,8 +23,12 @@ daemon clipboard worker 仍直接依赖 `uc-app` capture/usecase/planner、core 
   - 新增 `InboundClipboardFacade` 和 application 层输入/输出模型。
   - daemon `InboundClipboardSyncWorker` 不再直接持有 `ApplyInboundClipboardUseCase`,也不再直接处理 core `EntryId`。
   - 已验证 `cargo test -p uc-application facade::clipboard_inbound --lib`、`cargo check -p uc-application -p uc-daemon`、`cargo test -p uc-daemon --lib`。
+- 2026-04-26:已完成 watcher capture 落库调用收口。
+  - 新增 `ClipboardCaptureFacade` 和 application 层 `CapturedClipboardEntryView`。
+  - daemon `DaemonClipboardChangeHandler` 不再构造 `CaptureClipboardUseCase`,改为调用 application facade。
+  - 已验证 `cargo test -p uc-application facade::clipboard_capture --lib`、`cargo check -p uc-application -p uc-daemon`、`cargo test -p uc-daemon --lib`。
 
 ## Remaining
 
-- outbound `DaemonClipboardChangeHandler` 仍直接持有 `CoreRuntime`,并在 worker 内执行 capture、search live index、outbound planning、blob refs dispatch。
+- outbound `DaemonClipboardChangeHandler` 仍直接持有 `CoreRuntime`,并在 worker 内执行 search live index、outbound planning、blob refs dispatch。
 - `entrypoint.rs` 仍负责构造 inbound use case 并包成 facade,归入 composition root 收口。

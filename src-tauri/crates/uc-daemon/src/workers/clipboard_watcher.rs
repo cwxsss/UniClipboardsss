@@ -1,7 +1,7 @@
 //! Real clipboard watcher service for the daemon.
 //!
 //! Monitors OS clipboard changes via clipboard_rs, persists captured entries
-//! via CaptureClipboardUseCase, and broadcasts clipboard.new_content WS events.
+//! via application clipboard capture facade, and broadcasts clipboard.new_content WS events.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,11 +16,11 @@ use tracing::{debug, info, instrument, warn, Instrument};
 
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_app::usecases::sync_planner::{FileCandidate, FileSyncIntent, OutboundSyncPlanner};
 use uc_app::usecases::CoreUseCases;
 use uc_application::facade::{
-    BlobTransferFacade, ClipboardSyncFacade, PublishBlobCommand, SearchProjectionBuilder,
+    BlobTransferFacade, ClipboardCaptureFacade, ClipboardSyncFacade, PublishBlobCommand,
+    SearchProjectionBuilder,
 };
 use uc_application::V3BlobRef;
 use uc_core::ids::EntryId;
@@ -118,7 +118,7 @@ struct ClipboardNewContentPayload {
 /// Clipboard change handler for the daemon.
 ///
 /// Invoked by ClipboardWatcherWorker for each de-duplicated clipboard change.
-/// Persists entries via CaptureClipboardUseCase and broadcasts a
+/// Persists entries via application clipboard capture facade and broadcasts a
 /// clipboard.new_content WS event through the shared event broadcast channel.
 ///
 /// The shared `clipboard_change_origin` instance is used to detect whether a
@@ -133,6 +133,7 @@ pub struct DaemonClipboardChangeHandler {
     /// Used in `--gui-managed` mode to defer clipboard capture until
     /// the GUI user explicitly unlocks the app.
     capture_gate: Arc<AtomicBool>,
+    clipboard_capture: Arc<ClipboardCaptureFacade>,
     /// Slice 2 Phase 3 · T7 — iroh-stack clipboard sync. Replaces the
     /// deprecated libp2p `SyncOutboundClipboardUseCase` path. Wired from
     /// `DaemonBootstrapContext.clipboard_sync_facade` in `entrypoint.rs`.
@@ -147,6 +148,7 @@ impl DaemonClipboardChangeHandler {
         event_tx: broadcast::Sender<DaemonWsEvent>,
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
         capture_gate: Arc<AtomicBool>,
+        clipboard_capture: Arc<ClipboardCaptureFacade>,
         clipboard_sync: Arc<ClipboardSyncFacade>,
         blob_transfer: Arc<BlobTransferFacade>,
     ) -> Self {
@@ -155,22 +157,10 @@ impl DaemonClipboardChangeHandler {
             event_tx,
             clipboard_change_origin,
             capture_gate,
+            clipboard_capture,
             clipboard_sync,
             blob_transfer,
         }
-    }
-
-    fn build_capture_use_case(&self) -> CaptureClipboardUseCase {
-        let deps = self.runtime.wiring_deps();
-        CaptureClipboardUseCase::new(
-            deps.clipboard.clipboard_entry_repo.clone(),
-            deps.clipboard.clipboard_event_repo.clone(),
-            deps.clipboard.representation_policy.clone(),
-            deps.clipboard.representation_normalizer.clone(),
-            deps.device.device_identity.clone(),
-            deps.clipboard.representation_cache.clone(),
-            deps.clipboard.spool_queue.clone(),
-        )
     }
 }
 
@@ -187,7 +177,6 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
             debug!("Clipboard capture gate closed, skipping clipboard change");
             return Ok(());
         }
-        let usecase = self.build_capture_use_case();
         let flow_id = FlowId::generate().to_string();
 
         // 1. Compute snapshot hash for write-back loop prevention.
@@ -234,18 +223,20 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
             ClipboardChangeOrigin::RemotePush => "remote",
         };
 
-        // 4. Clone snapshot BEFORE execute_with_origin which takes ownership.
+        // 4. Clone snapshot before capture consumes it.
         let outbound_snapshot = snapshot.clone();
 
-        match usecase
-            .execute_with_origin(snapshot, origin, Some(flow_id.clone()))
+        match self
+            .clipboard_capture
+            .capture(snapshot, origin, Some(flow_id.clone()))
             .await
         {
-            Ok(Some(entry_id)) => {
+            Ok(Some(captured)) => {
+                let entry_id = EntryId::from(captured.entry_id.as_str());
                 debug!(entry_id = %entry_id, ?origin, "Daemon clipboard capture succeeded");
 
                 let payload = ClipboardNewContentPayload {
-                    entry_id: entry_id.to_string(),
+                    entry_id: captured.entry_id,
                     preview: "New clipboard content".to_string(),
                     origin: origin_str.to_string(),
                 };
@@ -273,7 +264,7 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
 
                 // --- Search indexing ---
                 // Build search document for the captured entry using the projection builder.
-                // We use a clone of the snapshot made before execute_with_origin consumed it.
+                // We use a clone of the snapshot made before capture consumed it.
                 {
                     let search_span =
                         tracing::info_span!("search.live_index", entry_id = %entry_id);

@@ -1,0 +1,112 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use async_trait::async_trait;
+use thiserror::Error;
+use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+
+use crate::clipboard_capture::CaptureClipboardUseCase;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedClipboardEntryView {
+    pub entry_id: String,
+}
+
+#[derive(Debug, Error)]
+pub enum ClipboardCaptureFacadeError {
+    #[error("clipboard capture failed: {0}")]
+    Internal(String),
+}
+
+#[async_trait]
+pub trait ClipboardCapturePort: Send + Sync {
+    async fn capture(
+        &self,
+        snapshot: SystemClipboardSnapshot,
+        origin: ClipboardChangeOrigin,
+        flow_id: Option<String>,
+    ) -> Result<Option<CapturedClipboardEntryView>, ClipboardCaptureFacadeError>;
+}
+
+#[async_trait]
+impl ClipboardCapturePort for CaptureClipboardUseCase {
+    async fn capture(
+        &self,
+        snapshot: SystemClipboardSnapshot,
+        origin: ClipboardChangeOrigin,
+        flow_id: Option<String>,
+    ) -> Result<Option<CapturedClipboardEntryView>, ClipboardCaptureFacadeError> {
+        let entry_id = self
+            .execute_with_origin(snapshot, origin, flow_id)
+            .await
+            .map_err(|err| ClipboardCaptureFacadeError::Internal(err.to_string()))?;
+        Ok(entry_id.map(|entry_id| CapturedClipboardEntryView {
+            entry_id: entry_id.to_string(),
+        }))
+    }
+}
+
+pub struct ClipboardCaptureFacade {
+    capture: Arc<dyn ClipboardCapturePort>,
+}
+
+impl ClipboardCaptureFacade {
+    pub fn new(capture: Arc<dyn ClipboardCapturePort>) -> Self {
+        Self { capture }
+    }
+
+    pub async fn capture(
+        &self,
+        snapshot: SystemClipboardSnapshot,
+        origin: ClipboardChangeOrigin,
+        flow_id: Option<String>,
+    ) -> Result<Option<CapturedClipboardEntryView>, ClipboardCaptureFacadeError> {
+        self.capture.capture(snapshot, origin, flow_id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use uc_core::SystemClipboardSnapshot;
+
+    struct FakeCapture;
+
+    #[async_trait]
+    impl ClipboardCapturePort for FakeCapture {
+        async fn capture(
+            &self,
+            _snapshot: SystemClipboardSnapshot,
+            _origin: ClipboardChangeOrigin,
+            _flow_id: Option<String>,
+        ) -> Result<Option<CapturedClipboardEntryView>, ClipboardCaptureFacadeError> {
+            Ok(Some(CapturedClipboardEntryView {
+                entry_id: "entry-a".to_string(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_returns_application_entry_id_string() {
+        let facade = ClipboardCaptureFacade::new(std::sync::Arc::new(FakeCapture));
+        let outcome = facade
+            .capture(
+                SystemClipboardSnapshot {
+                    representations: Vec::new(),
+                    ts_ms: 0,
+                },
+                ClipboardChangeOrigin::LocalCapture,
+                Some("flow-a".to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            Some(CapturedClipboardEntryView {
+                entry_id: "entry-a".to_string()
+            })
+        );
+    }
+}

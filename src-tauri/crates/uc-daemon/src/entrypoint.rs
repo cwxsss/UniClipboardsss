@@ -9,7 +9,9 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
-use uc_application::facade::{InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps};
+use uc_application::facade::{
+    ClipboardCaptureFacade, InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps,
+};
 use uc_application::{
     ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
     InboundWrite as ApplyInboundWrite,
@@ -153,18 +155,20 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let apply_inbound_uc = Arc::new(
         ApplyInboundClipboardUseCase::new(
             runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-            apply_inbound_capture_uc as Arc<dyn ApplyInboundCapture>,
+            Arc::clone(&apply_inbound_capture_uc) as Arc<dyn ApplyInboundCapture>,
             Arc::clone(&clipboard_write_coordinator) as Arc<dyn ApplyInboundWrite>,
         )
         .with_blob_materializer(blob_materializer),
     );
     let inbound_clipboard_facade = Arc::new(InboundClipboardFacade::new(apply_inbound_uc));
+    let clipboard_capture_facade = Arc::new(ClipboardCaptureFacade::new(apply_inbound_capture_uc));
 
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
         runtime.clone(),
         event_tx.clone(),
         clipboard_change_origin.clone(),
         clipboard_capture_gate.clone(),
+        clipboard_capture_facade,
         clipboard_sync_facade.clone(),
         blob_transfer_facade.clone(),
     ));
