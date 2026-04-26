@@ -14,7 +14,6 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::CoreUseCases;
 use uc_application::facade::{
     AppFacade, AppFacadeParts, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
     ClipboardRestoreFacade, ClipboardRestoreFacadeDeps, DeviceFacade, EncryptionFacade,
@@ -80,9 +79,11 @@ pub async fn recover_encryption_session(
     }
 
     // Auto-unlock enabled: attempt to recover the session from keyring.
-    let usecases = CoreUseCases::new(runtime);
-    let uc = usecases.auto_unlock_encryption_session();
-    match uc.execute().await {
+    let encryption_facade = EncryptionFacade::new(EncryptionFacadeDeps {
+        setup_status: runtime.wiring_deps().setup_status.clone(),
+        space_access: runtime.wiring_deps().security.space_access.clone(),
+    });
+    match encryption_facade.unlock().await {
         Ok(true) => {
             info!("Encryption session recovered from disk");
             Ok(true)

@@ -14,7 +14,6 @@
 //         ↓
 // MaterializeClipboardSelectionUseCase → 粘贴 / 恢复 / 同步
 pub mod app_lifecycle;
-pub mod auto_unlock_encryption_session;
 pub mod change_passphrase;
 pub mod clipboard;
 pub mod delete_clipboard_entry;
@@ -31,7 +30,6 @@ pub mod update_settings;
 pub mod verify_keychain_access;
 
 pub use app_lifecycle::{InMemoryLifecycleStatus, LifecycleState, LifecycleStatusPort};
-pub use auto_unlock_encryption_session::AutoUnlockEncryptionSession;
 pub use clipboard::list_entry_projections::{
     EntryProjectionDto, ListClipboardEntryProjections, ListProjectionsError,
 };
@@ -215,13 +213,6 @@ impl<'a> CoreUseCases<'a> {
         &self,
     ) -> crate::usecases::verify_keychain_access::VerifyKeychainAccess {
         crate::usecases::verify_keychain_access::VerifyKeychainAccess::from_ports(
-            self.runtime.deps.security.space_access.clone(),
-        )
-    }
-
-    /// Get the AutoUnlockEncryptionSession use case.
-    pub fn auto_unlock_encryption_session(&self) -> crate::usecases::AutoUnlockEncryptionSession {
-        crate::usecases::AutoUnlockEncryptionSession::from_ports(
             self.runtime.deps.security.space_access.clone(),
         )
     }

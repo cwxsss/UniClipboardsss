@@ -4140,3 +4140,42 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **下一步候选**:
 - D12 — `recover_encryption_session` 拆 `auto_unlock_encryption_session` 旧用例,daemon `app.rs` 彻底脱离 `uc-app::usecases`。
 - 或开始处理 `uc-tauri::bootstrap::runtime` 里仍包装的 `CoreUseCases`。
+
+---
+
+## Session 2026-04-26 — daemon application 边界收口 · auto-unlock encryption 收口 (Phase D12)
+
+**触发**: D11 收完 search/restore 后,daemon 仅剩 `recover_encryption_session` 一处 `CoreUseCases::new(runtime)`。用户说"继续 d12"。
+
+**关键发现**: `EncryptionFacade::unlock()` 在 `uc-application/src/facade/encryption/mod.rs:62` 已经实现,内部直接 `space_access.try_resume_session(&"space")`,与 `AutoUnlockEncryptionSession::execute()` 完全是同一段代码(连占位 SpaceId 都一致)。也就是说不需要新建任何东西,daemon 直接复用 facade 即可。
+
+**完成标准**:
+- daemon `app.rs` 不再 `use uc_app::usecases::CoreUseCases;`,`recover_encryption_session` 走 `EncryptionFacade::unlock()`。
+- uc-app 端 `auto_unlock_encryption_session` 用例 + pub use + CoreUseCases 工厂方法删除。
+- `cargo check -p uc-app -p uc-daemon` + `cargo check --workspace` 通过(uc-cli `RosterError::Unavailable` 历史欠账除外)。
+- daemon 整个 crate `grep -rn "uc_app::usecases"` 应该 0 hit。
+
+**已做**:
+- `uc-daemon/src/app.rs`:
+  - 删除 line 17 `use uc_app::usecases::CoreUseCases;`。
+  - 替换 `recover_encryption_session` 内部 unlock 入口:
+    - 旧:`let usecases = CoreUseCases::new(runtime); usecases.auto_unlock_encryption_session().execute().await`
+    - 新:`EncryptionFacade::new(EncryptionFacadeDeps { setup_status: runtime.wiring_deps().setup_status.clone(), space_access: runtime.wiring_deps().security.space_access.clone() }).unlock().await`
+  - 错误日志格式不变(`%e` 的 Display 在两边都能用)。
+- `uc-app/src/usecases/auto_unlock_encryption_session.rs`:删除整个文件。
+- `uc-app/src/usecases/mod.rs`:删除 `pub mod auto_unlock_encryption_session;` / `pub use ...AutoUnlockEncryptionSession;` / `CoreUseCases::auto_unlock_encryption_session()` 工厂方法。
+
+**验证**:
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo check -p uc-app -p uc-daemon`:✅ passed
+- `cargo check --workspace`:✅ uc-app / uc-daemon / uc-application / uc-bootstrap / uc-daemon-local / uc-daemon-client / uc-tauri 全部通过;uc-cli `members.rs:112` `RosterError::Unavailable` non-exhaustive 来自 commit 4aba60cc 历史欠账,与本次无关。
+- `grep -rn "uc_app::usecases" uc-daemon/`:✅ 0 hit,daemon 完全脱离 `uc-app::usecases`。
+
+**未纳入本次提交**:
+- uc-cli `RosterError::Unavailable` 缺 match 分支——历史欠账,不在 D12 范围。
+- `uc-tauri::bootstrap::runtime`、`uc-bootstrap::assembly`、`uc-cli::commands::setup` 仍引用 `uc_app::usecases::*`,后续逐个 caller 迁移。
+- `uc-observability/src/profile.rs` tracing directive 字符串中的 `uc_app::usecases::clipboard=debug` 不是 import,可暂时不动(日后 uc-app 重命名时同步更新)。
+
+**下一步候选**:
+- D13 — `uc-tauri::bootstrap::runtime` 里的 `CoreUseCases<'a>` 包装拆解(Tauri command 走 facade)。
+- 或先收 `uc-bootstrap::assembly` 的 `ClipboardWriteCoordinator` 构造路径,改用 `uc-application` 的真实实现,让 uc-app 那边的 shim 文件可以删。

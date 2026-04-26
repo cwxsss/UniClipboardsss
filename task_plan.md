@@ -3091,3 +3091,42 @@ Phase 0(已完成,2026-04-18)
 **下一步候选**:
 - D12 — auto-unlock encryption session 用例迁移,daemon `app.rs` 完全脱离 `uc-app::usecases`。
 - 或开始处理 `uc-tauri::bootstrap::runtime` 里仍包装的 `CoreUseCases`。
+
+---
+
+### Phase D12 · auto-unlock encryption session 收口 — complete (2026-04-26)
+
+**目标**: daemon `app.rs::recover_encryption_session` 不再走 `CoreUseCases::auto_unlock_encryption_session()`,改为直接调 `EncryptionFacade::unlock()`,删掉最后一处 `use uc_app::usecases::CoreUseCases;`。同时清理 uc-app 端死码(`AutoUnlockEncryptionSession`)。
+
+**背景**: `EncryptionFacade::unlock()` (`uc-application/src/facade/encryption/mod.rs:62`) 早就存在,内部直接调 `space_access.try_resume_session(&"space")`,与 `AutoUnlockEncryptionSession::execute()` 完全等价(连占位 SpaceId 都一样)。daemon 是 `AutoUnlockEncryptionSession` 在整个 workspace 的唯一消费者。
+
+**改动**:
+- `uc-daemon/src/app.rs`:
+  - 删除 `use uc_app::usecases::CoreUseCases;`(line 17)。
+  - `recover_encryption_session` 内部:`CoreUseCases::new(runtime).auto_unlock_encryption_session().execute().await` → `EncryptionFacade::new(EncryptionFacadeDeps { setup_status, space_access }).unlock().await`,setup_status / space_access 仍从 `runtime.wiring_deps()` 抽出。
+- `uc-app/src/usecases/auto_unlock_encryption_session.rs`:删除整个文件。
+- `uc-app/src/usecases/mod.rs`:
+  - 删除 `pub mod auto_unlock_encryption_session;`。
+  - 删除 `pub use auto_unlock_encryption_session::AutoUnlockEncryptionSession;`。
+  - 删除 `CoreUseCases::auto_unlock_encryption_session()` 工厂方法。
+
+**验证**:
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo check -p uc-app -p uc-daemon`:✅ passed
+- `cargo check --workspace`:✅ 与 D12 影响范围相关的 crate 全部干净;uc-cli `RosterError::Unavailable` non-exhaustive match 历史欠账(commit 4aba60cc 引入)与本次无关。
+- `grep -rn "uc_app::usecases" uc-daemon/`:✅ 0 hit。
+
+**影响**:
+- daemon `app.rs` 彻底脱离 `uc-app::usecases`(从 D9 时 7+ 处 → D10 后 4 处 → D11 后 2 处 → 现在 0 处)。
+- daemon 现在的应用层入口 100% 通过 `uc-application::facade::*`,符合 §11.4 边界。
+- uc-app 体积进一步缩水:删除 1 个用例文件、1 个 pub mod、1 个 pub use、1 个 CoreUseCases 工厂方法。
+
+**残留**:
+- `uc-tauri::bootstrap::runtime` 仍包装 `CoreUseCases<'a>`(`runtime.rs:317`)。
+- `uc-cli::commands::setup` 仍 `use uc_app::usecases::CoreUseCases`。
+- `uc-bootstrap::assembly` 仍直接构造 `uc_app::usecases::ClipboardWriteCoordinator`(注意:这个类型的真实实现已在 uc-application,uc-app 那边只是 re-export shim)。
+- `uc-observability` 的 tracing directive 字符串里仍硬编码 `uc_app::usecases::clipboard=debug`(非 import,日后随 uc-app 重命名同步)。
+
+**下一步候选**:
+- D13 — `uc-tauri::bootstrap::runtime` 里 `CoreUseCases<'a>` 包装拆解(把 Tauri 端最后一坨 `Deref<Target = CoreUseCases>` 模式去掉,Tauri command 走 facade)。
+- 或先收 `uc-bootstrap` 的 ClipboardWriteCoordinator 构造路径(uc-app shim → 直接 uc-application 真身),让 uc-app 那边的 re-export 文件能删。

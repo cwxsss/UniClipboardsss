@@ -2360,3 +2360,48 @@ D11 把 `SearchGateway` trait 删掉时,这三者怎么共处?
 **验证**: 编译 + 测试通过。
 
 ---
+
+### F-135 · `EncryptionFacade::unlock()` 已经是 `AutoUnlockEncryptionSession::execute()` 的完整等价体
+
+**发现时间**: 2026-04-26
+
+**背景**: D12 准备阶段调研 `recover_encryption_session` 怎么脱掉 `CoreUseCases::auto_unlock_encryption_session()` 时,本以为要在 uc-application 新建一个 use case。但读源码发现 `uc-application/src/facade/encryption/mod.rs:62` 的 `EncryptionFacade::unlock()` 已经实现:
+
+```rust
+pub async fn unlock(&self) -> Result<bool, EncryptionFacadeError> {
+    match self.deps.space_access.try_resume_session(&default_space_id()).await {
+        Ok(Some(_)) => Ok(true),
+        Ok(None) => Ok(false),
+        Err(err) => Err(space_access_error(err)),
+    }
+}
+```
+
+这与 `AutoUnlockEncryptionSession::execute()` 是完全相同的语义:
+- 都用 `SpaceId::from("space")` 占位。
+- 都委托 `SpaceAccessPort::try_resume_session`。
+- 返回值映射相同(`Some(_) → true / None → false / Err → 错误`)。
+
+唯一差别:错误类型从 `AutoUnlockError::SpaceAccess(SpaceAccessError)` → `EncryptionFacadeError::SpaceAccess(String)`。这层翻译对调用方(daemon `recover_encryption_session`)无感,因为它只用 `%e` 的 Display 输出后 `anyhow::bail!`。
+
+**结论**: D12 不需要新建任何 use case 或 facade method,直接让 daemon 复用现有 `EncryptionFacade::unlock()` 即可。`AutoUnlockEncryptionSession` 在 uc-app 是 dead code,迁移工作 = 删除。
+
+**通用原则**: 在物理迁移用例之前,先在 uc-application 内部 grep 一下"目标语义是否已存在"——很多 facade 早期建设期就已经把端口直接调通,旧 use case 只是当时为了"先有一个能跑"的临时包装,现在已经退化成纯 delegation。
+
+---
+
+### F-136 · 用 facade 替换 use case 时,setup_status port 顺手一起注入并不算扩界
+
+**发现时间**: 2026-04-26
+
+**背景**: `EncryptionFacadeDeps` 同时持有 `setup_status_port` 和 `space_access_port`,但 daemon `recover_encryption_session` 只想做 unlock 这一步——构造 `EncryptionFacade` 时把 `setup_status` 也塞进去会不会"顺手把不需要的依赖也带上"?
+
+**判断**: 不算扩界,反而更对。
+- `EncryptionFacade` 是面向应用语义的入口,它持有的依赖是"这个域要做的所有事都需要的端口集合"(unlock / lock / state / verify_keychain_access)——`state()` 就要 setup_status 来判 `initialized`。
+- 调用方(daemon)只用了 unlock 一个方法,但 facade 实例的成本只是 2 个 `Arc::clone`,完全可以接受。
+- 反例:如果为了"只 unlock 一次"而拆出一个只持 `space_access` 的迷你 facade(比如 `AutoUnlockOnlyFacade`),反而是过度细分,违背 §11.1"facade 是稳定入口"的原则——facade 数量应跟随域数量,不跟随调用 site 数量。
+- 即便日后 `recover_encryption_session` 想在同一函数里既判断 `setup_completed` 又触发 `unlock`,也只会让"复用 EncryptionFacade"的选择更值。
+
+**通用原则**: facade 内部的依赖密度由域决定,不由当前 caller 决定。caller 只用一个方法不是"该拆一个新 facade"的信号。
+
+---
