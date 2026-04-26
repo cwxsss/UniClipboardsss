@@ -27,16 +27,12 @@ pub mod device_identity;
 mod discovery;
 pub mod errors;
 pub mod file_transfer_repository;
-pub mod file_transport;
 mod hash;
 pub mod local_identity;
 pub mod network_control;
-pub mod network_events;
 pub mod pairing;
 pub mod pairing_invitation;
-pub mod pairing_transport;
 pub mod peer_address;
-pub mod peer_directory;
 pub mod presence;
 pub mod search;
 pub mod security;
@@ -62,11 +58,8 @@ pub use file_transfer_repository::{
     FileTransferRepositoryPort, NoopFileTransferRepositoryPort, PendingInboundTransfer,
     TrackedFileTransfer, TrackedFileTransferStatus,
 };
-pub use file_transport::{FileTransportPort, NoopFileTransportPort};
 pub use local_identity::{LocalIdentityError, LocalIdentityPort};
 pub use network_control::NetworkControlPort;
-#[allow(deprecated)]
-pub use network_events::NetworkEventPort;
 pub use pairing::{
     DialError, PairingEventPort, PairingSessionEvent, PairingSessionId, PairingSessionPort,
     SessionError,
@@ -75,10 +68,7 @@ pub use pairing_invitation::{
     ConsumeInvitationError, InvitationCode, InvitationError, IssuedInvitation,
     PairingInvitationPort,
 };
-#[allow(deprecated)]
-pub use pairing_transport::PairingTransportPort;
 pub use peer_address::{PeerAddressError, PeerAddressRecord, PeerAddressRepositoryPort};
-pub use peer_directory::PeerDirectoryPort;
 pub use presence::{PresenceError, PresenceEvent, PresencePort, ReachabilityState};
 pub use search::search_index::SearchIndexPort;
 pub use search::search_key::SearchKeyDerivationPort;

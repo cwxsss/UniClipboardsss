@@ -1,5 +1,3 @@
-#![allow(deprecated)] // frozen libp2p wiring (PairingTransportPort / NetworkEventPort) — dropped in Slice 5
-
 //! # Application Dependencies / 应用依赖
 //!
 //! This module defines the dependency grouping for App construction.
@@ -21,38 +19,11 @@ use uc_core::ports::clipboard::{
     RepresentationCachePort, SpoolQueuePort, SystemClipboardPort, ThumbnailGeneratorPort,
     ThumbnailRepositoryPort,
 };
-use uc_core::ports::file_transport::FileTransportPort;
 use uc_core::ports::search::search_index::SearchIndexPort;
 use uc_core::ports::search::search_key::SearchKeyDerivationPort;
 use uc_core::ports::search::search_pipeline::SearchPipelinePort;
 use uc_core::ports::*;
 use uc_core::MemberRepositoryPort;
-
-/// Focused network capability bundle for dependency injection.
-/// 用于依赖注入的网络能力聚合。
-pub struct NetworkPorts {
-    /// Outbound clipboard transport capability (`Arc<dyn ClipboardOutboundTransportPort>`).
-    /// 出站剪贴板传输能力（`Arc<dyn ClipboardOutboundTransportPort>`）。
-    pub clipboard_outbound: Arc<dyn ClipboardOutboundTransportPort>,
-    /// Inbound clipboard transport capability (`Arc<dyn ClipboardInboundTransportPort>`).
-    /// 入站剪贴板传输能力（`Arc<dyn ClipboardInboundTransportPort>`）。
-    pub clipboard_inbound: Arc<dyn ClipboardInboundTransportPort>,
-    /// Peer directory capability (`Arc<dyn PeerDirectoryPort>`).
-    /// 对等端目录能力（`Arc<dyn PeerDirectoryPort>`）。
-    pub peers: Arc<dyn PeerDirectoryPort>,
-    /// Pairing transport capability (`Arc<dyn PairingTransportPort>`).
-    /// 配对传输能力（`Arc<dyn PairingTransportPort>`）。
-    pub pairing: Arc<dyn PairingTransportPort>,
-    /// Network event subscription capability (`Arc<dyn NetworkEventPort>`).
-    /// 网络事件订阅能力（`Arc<dyn NetworkEventPort>`）。
-    pub events: Arc<dyn NetworkEventPort>,
-    /// File transfer transport capability (`Arc<dyn FileTransportPort>`).
-    /// 文件传输能力（`Arc<dyn FileTransportPort>`）。
-    pub file_transfer: Arc<dyn FileTransportPort>,
-    /// File-transfer domain event inbound stream from the platform layer.
-    /// 文件传输领域事件入站流（由平台层产出）。
-    pub file_transfer_events: Arc<dyn uc_core::file_transfer::FileTransferEventInboundPort>,
-}
 
 /// Clipboard-domain ports bundle.
 /// 剪贴板领域端口组。
@@ -152,8 +123,6 @@ pub struct AppDeps {
     pub security: SecurityPorts,
     /// Device-domain ports (includes pairing) / 设备领域端口（含配对）
     pub device: DevicePorts,
-    /// Network ports bundle (unchanged) / 网络端口组（不变）
-    pub network_ports: Arc<NetworkPorts>,
     /// Network control (cross-cutting) / 网络控制（横切关注）
     pub network_control: Arc<dyn NetworkControlPort>,
     /// Setup status (setup-specific) / 设置状态（设置流程专用）

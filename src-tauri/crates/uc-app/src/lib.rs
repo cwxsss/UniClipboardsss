@@ -12,9 +12,7 @@ pub mod shared;
 pub mod task_registry;
 pub mod usecases;
 
-pub use deps::{
-    AppDeps, ClipboardPorts, DevicePorts, NetworkPorts, SecurityPorts, StoragePorts, SystemPorts,
-};
+pub use deps::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
 pub use runtime::CoreRuntime;
 pub use usecases::CoreUseCases;
 

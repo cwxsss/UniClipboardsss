@@ -15,7 +15,6 @@ mod sync_dispatch;
 mod sync_receiver;
 mod thumbnail_generator;
 mod thumbnail_repository;
-mod transport;
 
 pub use clipboard_change_origin::ClipboardChangeOriginPort;
 pub use clipboard_entry_repository::ClipboardEntryRepositoryPort;
@@ -38,8 +37,3 @@ pub use sync_dispatch::{
 pub use sync_receiver::{ClipboardReceiverPort, InboundClipboard};
 pub use thumbnail_generator::{GeneratedThumbnail, ThumbnailGeneratorPort};
 pub use thumbnail_repository::ThumbnailRepositoryPort;
-#[allow(deprecated)]
-pub use transport::{
-    ClipboardInboundMessageSource, ClipboardInboundTransportPort, ClipboardOutboundTransportPort,
-    ClipboardTransportError, InboundClipboardFrame, OutboundClipboardFrame, SyncTargetId,
-};

@@ -1,12 +1,15 @@
 //! File sync orchestrator worker for the daemon.
 //!
-//! Subscribes to `FileTransferEventInboundPort` for domain-level
-//! file-transfer lifecycle events and delegates to the lifecycle use cases
-//! for durable state tracking. Restores completed files to the OS clipboard
-//! by reading the `cached_path` back from the receiver projection.
+//! Slice4 P5c: 旧的 `FileTransferEventInboundPort` 已退役,事件循环本身
+//! 失去了上游(libp2p adapter 删除后,iroh 侧通过 `FileTransferEventPublisherPort`
+//! 直接写 store/lifecycle,不再经此 worker)。本 worker 现在只承担两件事:
 //!
-//! Also runs startup reconciliation (orphaned in-flight → failed) and
-//! periodic timeout sweeps (stalled pending/transferring → failed).
+//! 1. 启动期 reconcile —— 把进程崩溃留下的 in-flight transfer 标记为 failed
+//! 2. 周期性 sweep —— 把超时的 pending/transferring 状态收口
+//!
+//! 事件路径下沉到 `FileTransferEventStore` + iroh blob handler 直接消费;
+//! 这里的 `handle_event` / `handle_*` 私有方法保留为内部辅助,等 iroh 侧
+//! 接入 daemon 事件分发时(`vNext`)再复用。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,9 +26,7 @@ use uc_application::file_transfer::{
     CompleteTransfer, FailTransfer, ReportTransferProgress, StartTransfer,
 };
 use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
-use uc_core::file_transfer::{
-    FileTransferEvent, FileTransferEventInboundPort, FileTransferFailureReason,
-};
+use uc_core::file_transfer::{FileTransferEvent, FileTransferFailureReason};
 use uc_core::ports::file_transfer_repository::FileTransferRepositoryPort;
 use uc_core::ports::SettingsPort;
 
@@ -33,17 +34,19 @@ use crate::service::{DaemonService, ServiceHealth};
 
 pub struct FileSyncOrchestratorWorker {
     lifecycle: Arc<FileTransferLifecycle>,
-    file_transfer_events: Arc<dyn FileTransferEventInboundPort>,
+    #[allow(dead_code)]
     file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
+    #[allow(dead_code)]
     clipboard_write_coordinator: Arc<ClipboardWriteCoordinator>,
+    #[allow(dead_code)]
     file_cache_dir: PathBuf,
+    #[allow(dead_code)]
     settings: Arc<dyn SettingsPort>,
 }
 
 impl FileSyncOrchestratorWorker {
     pub fn new(
         lifecycle: Arc<FileTransferLifecycle>,
-        file_transfer_events: Arc<dyn FileTransferEventInboundPort>,
         file_transfer_repo: Arc<dyn FileTransferRepositoryPort>,
         clipboard_write_coordinator: Arc<ClipboardWriteCoordinator>,
         file_cache_dir: PathBuf,
@@ -51,7 +54,6 @@ impl FileSyncOrchestratorWorker {
     ) -> Self {
         Self {
             lifecycle,
-            file_transfer_events,
             file_transfer_repo,
             clipboard_write_coordinator,
             file_cache_dir,
@@ -76,35 +78,12 @@ impl DaemonService for FileSyncOrchestratorWorker {
         let (sweep_cancel_tx, sweep_cancel_rx) = tokio::sync::watch::channel(false);
         let _sweep_handle = self.lifecycle.spawn_timeout_sweep(sweep_cancel_rx);
 
-        // 3. Subscribe to file-transfer domain events
-        let mut event_rx = match self.file_transfer_events.subscribe().await {
-            Ok(rx) => rx,
-            Err(err) => {
-                let _ = sweep_cancel_tx.send(true);
-                return Err(err);
-            }
-        };
-
-        info!("file sync orchestrator subscribed to file-transfer events");
-
-        // 4. Event loop
-        loop {
-            tokio::select! {
-                _ = cancel.cancelled() => {
-                    let _ = sweep_cancel_tx.send(true);
-                    info!("file sync orchestrator cancelled");
-                    return Ok(());
-                }
-                maybe_event = event_rx.recv() => {
-                    let Some(event) = maybe_event else {
-                        warn!("file-transfer event channel closed");
-                        let _ = sweep_cancel_tx.send(true);
-                        return Ok(());
-                    };
-                    self.handle_event(event).await;
-                }
-            }
-        }
+        // 3. 等取消 —— 旧的 inbound 事件循环已下线,iroh 侧改走
+        //    `FileTransferEventPublisherPort` 直接写 store/lifecycle。
+        cancel.cancelled().await;
+        let _ = sweep_cancel_tx.send(true);
+        info!("file sync orchestrator cancelled");
+        Ok(())
     }
 
     async fn stop(&self) -> anyhow::Result<()> {
@@ -118,6 +97,7 @@ impl DaemonService for FileSyncOrchestratorWorker {
 }
 
 impl FileSyncOrchestratorWorker {
+    #[allow(dead_code)]
     async fn handle_event(&self, event: FileTransferEvent) {
         match event {
             FileTransferEvent::Started {

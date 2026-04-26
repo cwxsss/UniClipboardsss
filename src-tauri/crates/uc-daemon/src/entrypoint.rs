@@ -71,7 +71,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // build_daemon_app() calls build_core() which inits tracing + wires
     // deps, then awaits `build_space_setup_assembly` which binds iroh.
     let ctx = rt.block_on(build_daemon_app())?;
-    let daemon_file_transfer_events = ctx.deps.network_ports.file_transfer_events.clone();
     let daemon_file_transfer_repo = ctx.deps.storage.file_transfer_repo.clone();
     let daemon_settings = ctx.deps.settings.clone();
     // Extract file_cache_dir, file_transfer_orchestrator, clipboard_write_coordinator,
@@ -183,7 +182,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
 
     let file_sync_orchestrator_worker = Arc::new(FileSyncOrchestratorWorker::new(
         file_transfer_lifecycle,
-        daemon_file_transfer_events,
         daemon_file_transfer_repo,
         clipboard_write_coordinator,
         file_cache_dir,

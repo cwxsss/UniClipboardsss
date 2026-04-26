@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use uc_app::deps::{NetworkPorts, SearchPorts};
+use uc_app::deps::SearchPorts;
 use uc_app::shared::host_event::HostEventEmitterPort;
 use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
 use uc_application::pairing::PairingConfig;
@@ -223,9 +223,6 @@ pub struct PlatformLayer {
     // Secure storage
     pub secure_storage: Arc<dyn SecureStoragePort>,
 
-    // Network operations
-    pub network_ports: Arc<NetworkPorts>,
-
     // Device identity
     pub device_identity: Arc<dyn DeviceIdentityPort>,
 
@@ -396,24 +393,6 @@ fn create_infra_layer(
     Ok(infra)
 }
 
-/// Build the legacy `NetworkPorts` bundle from the disabled-network stub.
-///
-/// Slice 4 P5b: 旧 libp2p adapter 已删除,7 个 trait dyn 字段统一由
-/// [`DisabledNetwork`] 桩满足。Slice 5c 删除上层旧消费者后,本函数 +
-/// `NetworkPorts` 结构整体可一起退场。
-fn build_network_ports() -> Arc<NetworkPorts> {
-    let stub = Arc::new(DisabledNetwork);
-    Arc::new(NetworkPorts {
-        clipboard_outbound: stub.clone(),
-        clipboard_inbound: stub.clone(),
-        peers: stub.clone(),
-        pairing: stub.clone(),
-        events: stub.clone(),
-        file_transfer: stub.clone(),
-        file_transfer_events: stub,
-    })
-}
-
 pub fn create_platform_layer(
     secure_storage: Arc<dyn SecureStoragePort>,
     config_dir: &PathBuf,
@@ -525,8 +504,6 @@ pub fn create_platform_layer(
     // 进程内会话: uc-infra adapter 共享的具体类型,替换历史
     // InMemoryEncryptionSessionPort + EncryptionSessionPort trait dyn 间接层。
     let session = Arc::new(InMemorySession::new());
-    // Slice 4 P5b: libp2p adapter 已删除,NetworkPorts 全部走 DisabledNetwork 桩。
-    let network_ports = build_network_ports();
 
     let encrypted_blob_store =
         Arc::new(EncryptedBlobStore::new(blob_store.clone(), session.clone()));
@@ -549,7 +526,6 @@ pub fn create_platform_layer(
         clipboard,
         system_clipboard,
         secure_storage,
-        network_ports,
         device_identity,
         representation_normalizer,
         blob_writer,
@@ -815,11 +791,10 @@ pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> 
             device_identity: platform.device_identity,
             member_repo: infra.member_repo,
         },
-        network_ports: platform.network_ports,
-        // Slice 4 P5b: libp2p adapter 已删除,network_control 复用同一份
-        // DisabledNetwork 桩。GUI lifecycle 的 StartNetworkAfterUnlock 仍会
-        // 调到 start_network(),桩内返回 Ok 即可——iroh endpoint 由
-        // SpaceSetupAssembly 单独驱动。
+        // Slice 4 P5c: 5b 的 7-trait NetworkPorts 已退役,只剩 SpaceSetupFacade
+        // 仍在用 NetworkControlPort.start_network/stop_network 做 best-effort 调用,
+        // 全部走 DisabledNetwork 桩(no-op,真实 iroh endpoint 由 SpaceSetupAssembly
+        // 直接驱动)。clean up 留给后续 phase。
         network_control: Arc::new(DisabledNetwork),
         setup_status: infra.setup_status,
         storage: StoragePorts {
