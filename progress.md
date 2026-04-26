@@ -3428,6 +3428,33 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · restore clipboard 切片
+
+**触发**:resource 提交后继续收 daemon,选择 `routes.rs` 中剩余的 restore 入口。
+
+**完成标准**:
+- daemon restore handler 不再构造 `CoreUseCases`
+- daemon restore handler 不再直接引用 core `EntryId`
+- restore + touch 组合通过 `uc-application` facade 进入
+- 验证 `uc-application` clipboard_restore facade 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 新增 `uc-application/src/facade/clipboard_restore/mod.rs`
+- `uc-application/src/facade/mod.rs` 导出 clipboard restore facade
+- `uc-daemon/src/api/routes.rs` 改为调用 `ClipboardRestoreFacade`
+- `uc-daemon/src/api/server.rs` 增加 `clipboard_restore_facade`
+- `uc-daemon/src/app.rs` 注入 daemon gateway 适配旧 restore 用例
+
+**验证**:
+- `cargo test -p uc-application facade::clipboard_restore --lib`:✅ 2 passed
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**未纳入本次提交**:
+- `.claude/skills/...` 现有改动不是本轮产生,不 stage。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · blob/resource 切片
 
 **触发**:继续收 daemon,选择较小的二进制资源读取入口。

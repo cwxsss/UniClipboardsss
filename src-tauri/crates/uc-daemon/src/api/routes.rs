@@ -20,7 +20,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
-use uc_app::usecases::CoreUseCases;
+use uc_application::facade::ClipboardRestoreError;
 use uc_daemon_contract::constants::http_route;
 
 use crate::api::server::DaemonApiState;
@@ -120,54 +120,30 @@ async fn restore_clipboard_entry_handler(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
 ) -> impl IntoResponse {
-    let Some(runtime) = state.runtime.clone() else {
-        return internal_error(anyhow::anyhow!("daemon runtime unavailable")).into_response();
+    let facade = match state.clipboard_restore_facade_or_error() {
+        Ok(facade) => facade,
+        Err(error) => return error.into_response(),
     };
-
-    let parsed_id = uc_core::ids::EntryId::from(entry_id.clone());
-    let usecases = CoreUseCases::new(runtime.as_ref());
 
     tracing::info!(entry_id = %entry_id, "daemon restore request received");
 
-    // Restore to OS clipboard first - this calls set_next_origin(LocalRestore) in-process.
-    // The daemon's ClipboardWatcherWorker will detect the write, but CaptureClipboardUseCase
-    // skips capture for LocalRestore origin - no duplicate DB entry, no outbound sync.
-    // This is correct behavior: restored content is already in DB and was previously synced.
-    // Do NOT call SyncOutboundClipboardUseCase here - it would cause unwanted duplicate sync.
-    let restore_uc = match usecases.restore_clipboard_selection() {
-        Ok(uc) => uc,
-        Err(e) => {
-            tracing::warn!(entry_id = %entry_id, error = %e, "clipboard_write_coordinator unavailable for restore");
-            return internal_error(e).into_response();
-        }
-    };
-    match restore_uc.execute(&parsed_id).await {
+    match facade.restore_entry(&entry_id).await {
         Ok(()) => {
             tracing::info!(entry_id = %entry_id, "daemon restore request succeeded");
+            (StatusCode::OK, Json(json!({"success": true}))).into_response()
         }
-        Err(e) => {
-            // Map "entry not found" errors to 404 (not 500).
-            // RestoreClipboardSelectionUseCase returns anyhow error with "not found" text
-            // when entry or representations are missing.
-            let msg = e.to_string().to_lowercase();
-            tracing::warn!(entry_id = %entry_id, error = %e, "daemon restore request failed");
-            if msg.contains("not found") {
-                return (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"})))
-                    .into_response();
+        Err(error) => {
+            tracing::warn!(entry_id = %entry_id, error = %error, "daemon restore request failed");
+            match error {
+                ClipboardRestoreError::NotFound => {
+                    (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))).into_response()
+                }
+                ClipboardRestoreError::Internal(message) => {
+                    internal_error(anyhow::anyhow!(message)).into_response()
+                }
             }
-            return internal_error(e).into_response();
         }
     }
-
-    // Touch after successful restore to bump active_time (avoids stale timestamp on failed restore)
-    match usecases.touch_clipboard_entry().execute(&parsed_id).await {
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!(error = %e, entry_id = %entry_id, "touch_clipboard_entry failed after restore");
-        }
-    }
-
-    (StatusCode::OK, Json(json!({"success": true}))).into_response()
 }
 
 async fn status(State(state): State<DaemonApiState>) -> impl IntoResponse {

@@ -1940,3 +1940,26 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-125 · daemon restore handler 可先收口到 application gateway
+
+**发现时间**:2026-04-26
+
+**背景**:`api/routes.rs` 的 restore endpoint 原来直接构造 `CoreUseCases`,把 URL 字符串转成 core `EntryId`,然后串起 restore + touch 两个旧用例。
+
+**处理结果**:
+- 新增 `uc-application::facade::clipboard_restore::ClipboardRestoreFacade`
+- daemon handler 改为只调用 `ClipboardRestoreFacade::restore_entry(&str)`
+- daemon handler 不再直接知道 core `EntryId` 和旧 usecase 组合
+- not found / internal 错误由 application facade 统一表达,daemon 只映射 HTTP 响应
+
+**边界判断**:
+- 当前真正 restore 实现仍在 `uc-app` 旧 usecase,因此本轮在 daemon 装配层放了 `ClipboardRestoreGateway` 适配器。这是过渡收口:先让外部 HTTP handler 只面对 `uc-application`,后续再把 restore 用例本体迁入 `uc-application`。
+- touch active time 仍作为 restore 成功后的内部后置动作,不暴露给 handler。
+
+**验证**:
+- `cargo test -p uc-application facade::clipboard_restore --lib`:2 passed
+- `cargo check -p uc-daemon`:passed
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

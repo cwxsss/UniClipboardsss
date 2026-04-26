@@ -8,6 +8,7 @@
 pub mod app_facade;
 pub mod blob_transfer;
 pub mod clipboard;
+pub mod clipboard_restore;
 pub mod device;
 pub mod encryption;
 pub mod lifecycle;
@@ -26,6 +27,9 @@ pub use blob_transfer::{
 pub use clipboard::{
     ClipboardSyncDeps, ClipboardSyncError, ClipboardSyncFacade, DispatchEntryInput,
     DispatchEntryOutcome, DispatchEntryPerTarget, InboundAction, InboundNotice, IngestHandle,
+};
+pub use clipboard_restore::{
+    ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreGateway,
 };
 pub use device::{DeviceFacade, DeviceFacadeError, LocalDeviceInfoView};
 pub use encryption::{

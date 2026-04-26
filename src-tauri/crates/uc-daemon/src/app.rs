@@ -17,11 +17,13 @@ use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::CoreUseCases;
 use uc_app::usecases::{LifecycleState, LifecycleStatusPort};
 use uc_application::facade::{
-    DeviceFacade, EncryptionFacade, EncryptionFacadeDeps, LifecycleFacade, LifecycleFacadeDeps,
+    ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreGateway, DeviceFacade,
+    EncryptionFacade, EncryptionFacadeDeps, LifecycleFacade, LifecycleFacadeDeps,
     LifecycleStateView, LifecycleStatusGateway, MemberRosterFacade, ResourceFacade,
     ResourceFacadeDeps, SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
 use uc_application::space_access::SpaceAccessFacade;
+use uc_core::ids::EntryId;
 use uc_core::ports::PresencePort;
 
 use crate::api::auth::load_or_create_auth_token;
@@ -322,6 +324,11 @@ impl DaemonApp {
                 thumbnail_repo: self.runtime.wiring_deps().storage.thumbnail_repo.clone(),
                 blob_store: self.runtime.wiring_deps().storage.blob_store.clone(),
             })));
+        let api_state = api_state.with_clipboard_restore(Arc::new(ClipboardRestoreFacade::new(
+            Arc::new(DaemonClipboardRestoreGateway {
+                runtime: self.runtime.clone(),
+            }),
+        )));
         let api_state = api_state.with_settings(Arc::new(SettingsFacade::new(
             self.runtime.wiring_deps().settings.clone(),
         )));
@@ -495,6 +502,36 @@ fn lifecycle_state_from_view(state: LifecycleStateView) -> LifecycleState {
         LifecycleStateView::Pending => LifecycleState::Pending,
         LifecycleStateView::Ready => LifecycleState::Ready,
         LifecycleStateView::NetworkFailed => LifecycleState::NetworkFailed,
+    }
+}
+
+struct DaemonClipboardRestoreGateway {
+    runtime: Arc<CoreRuntime>,
+}
+
+#[async_trait]
+impl ClipboardRestoreGateway for DaemonClipboardRestoreGateway {
+    async fn restore_entry(&self, entry_id: &str) -> Result<(), ClipboardRestoreError> {
+        let parsed_id = EntryId::from(entry_id);
+        let usecases = CoreUseCases::new(self.runtime.as_ref());
+        let restore_uc = usecases
+            .restore_clipboard_selection()
+            .map_err(|err| ClipboardRestoreError::Internal(err.to_string()))?;
+
+        restore_uc.execute(&parsed_id).await.map_err(|err| {
+            let message = err.to_string();
+            if message.to_lowercase().contains("not found") {
+                ClipboardRestoreError::NotFound
+            } else {
+                ClipboardRestoreError::Internal(message)
+            }
+        })?;
+
+        if let Err(err) = usecases.touch_clipboard_entry().execute(&parsed_id).await {
+            tracing::warn!(error = %err, entry_id = %entry_id, "touch_clipboard_entry failed after restore");
+        }
+
+        Ok(())
     }
 }
 

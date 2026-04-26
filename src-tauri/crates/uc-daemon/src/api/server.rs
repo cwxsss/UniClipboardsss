@@ -20,8 +20,8 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
 use uc_application::facade::{
-    DeviceFacade, EncryptionFacade, LifecycleFacade, MemberRosterFacade, ResourceFacade,
-    SettingsFacade, SpaceSetupFacade, StorageFacade,
+    ClipboardRestoreFacade, DeviceFacade, EncryptionFacade, LifecycleFacade, MemberRosterFacade,
+    ResourceFacade, SettingsFacade, SpaceSetupFacade, StorageFacade,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -51,6 +51,7 @@ pub struct DaemonApiState {
     pub lifecycle_facade: Option<Arc<LifecycleFacade>>,
     pub encryption_facade: Option<Arc<EncryptionFacade>>,
     pub resource_facade: Option<Arc<ResourceFacade>>,
+    pub clipboard_restore_facade: Option<Arc<ClipboardRestoreFacade>>,
     pub settings_facade: Option<Arc<SettingsFacade>>,
     pub device_facade: Option<Arc<DeviceFacade>>,
     pub storage_facade: Option<Arc<StorageFacade>>,
@@ -86,6 +87,7 @@ impl DaemonApiState {
             lifecycle_facade: None,
             encryption_facade: None,
             resource_facade: None,
+            clipboard_restore_facade: None,
             settings_facade: None,
             device_facade: None,
             storage_facade: None,
@@ -155,6 +157,22 @@ impl DaemonApiState {
         self.resource_facade
             .clone()
             .ok_or_else(|| ApiError::service_unavailable("resource facade unavailable"))
+    }
+
+    pub fn with_clipboard_restore(
+        mut self,
+        clipboard_restore_facade: Arc<ClipboardRestoreFacade>,
+    ) -> Self {
+        self.clipboard_restore_facade = Some(clipboard_restore_facade);
+        self
+    }
+
+    pub fn clipboard_restore_facade_or_error(
+        &self,
+    ) -> Result<Arc<ClipboardRestoreFacade>, ApiError> {
+        self.clipboard_restore_facade
+            .clone()
+            .ok_or_else(|| ApiError::service_unavailable("clipboard restore facade unavailable"))
     }
 
     pub fn with_settings(mut self, settings_facade: Arc<SettingsFacade>) -> Self {

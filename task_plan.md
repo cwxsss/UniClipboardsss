@@ -2984,7 +2984,26 @@ Phase 0(已完成,2026-04-18)
 - `cargo check -p uc-daemon`
 - `cargo test -p uc-daemon --lib`
 
-### Phase D8 · daemon 下一块收口 — in_progress
+### Phase D8 · daemon restore clipboard 入口收口 — complete
+
+**范围**:
+- `POST /clipboard/restore/:entry_id`
+
+**结果**:
+- 新增 `uc-application::facade::clipboard_restore::ClipboardRestoreFacade`
+- restore 输入从 HTTP 字符串进入 application facade
+- daemon restore handler 不再直接构造 `CoreUseCases`,也不再直接引用 core `EntryId`
+- touch active time 的后置动作收进 daemon gateway,handler 不再知道旧用例组合
+
+**保留职责**:
+- 当前 restore 的具体实现仍由 daemon 装配层适配旧 runtime,这是过渡做法;后续需要把真正 restore usecase 搬到 `uc-application` 内部。
+
+**验证**:
+- `cargo test -p uc-application facade::clipboard_restore --lib`
+- `cargo check -p uc-daemon`
+- `cargo test -p uc-daemon --lib`
+
+### Phase D9 · daemon 下一块收口 — in_progress
 
 **候选优先级**:
 1. `api/search.rs`:直接构造 core search query / error,范围较大。
