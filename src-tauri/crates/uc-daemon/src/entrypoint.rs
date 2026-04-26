@@ -188,30 +188,16 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         ctx.space_setup_assembly.facade.clone(),
     ));
 
-    // Phase 67: Recover encryption session BEFORE building services.
-    let encryption_unlocked = rt.block_on(async {
-        use tracing::{info_span, Instrument};
-
-        // Determine whether auto-unlock should be attempted.
-        // - CLI mode (gui_managed=false): always attempt auto-unlock
-        // - GUI mode (gui_managed=true): respect the auto_unlock_enabled setting
-        let auto_unlock_enabled = if gui_managed {
-            let settings = runtime
-                .wiring_deps()
-                .settings
-                .load()
-                .await
-                .unwrap_or_default();
-            settings.security.auto_unlock_enabled
-        } else {
-            // CLI mode: always auto-unlock
-            true
-        };
-
-        crate::app::recover_encryption_session(&runtime, auto_unlock_enabled)
-            .instrument(info_span!("daemon.startup.recover_encryption_session"))
-            .await
-    })?;
+    // Phase 67 (revised): encryption recovery + slice 2/3 try_resume_session
+    // run in a background task spawned below inside `rt.block_on`, AFTER
+    // `daemon.run()` brings up the HTTP listener. macOS keychain calls
+    // routinely block 5–7 s on cold start; doing them on the startup
+    // critical path used to push daemon-ready past the GUI's 8 s health
+    // timeout. Treating the daemon as "locked until proven unlocked"
+    // keeps clipboard + keepalive in the deferred bucket; on success the
+    // background task auto-triggers them in CLI mode (GUI mode still
+    // waits for an explicit `/lifecycle/ready`).
+    let encryption_unlocked = false;
 
     // Start background clipboard processing tasks.
     let task_registry = runtime.task_registry().clone();
@@ -323,7 +309,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
 
     let daemon = DaemonApp::new_with_deferred(
         services,
-        runtime,
+        runtime.clone(),
         state,
         event_tx,
         Some(ctx.space_access_facade),
@@ -331,7 +317,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         deferred_services,
         deferred_notify_opt,
         external_shutdown,
-        Some(clipboard_capture_gate),
+        Some(clipboard_capture_gate.clone()),
         Some(search_coordinator),
         Some(space_setup_facade_for_api),
         Some(local_device_id),
@@ -346,33 +332,77 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // peer. Without this, peers see TCP RST / QUIC timeout instead of
     // a clean close.
     let space_setup_assembly = ctx.space_setup_assembly;
+    let unlock_runtime = runtime.clone();
+    let unlock_facade = space_setup_assembly.facade.clone();
+    let unlock_notify = deferred_ready_notify.clone();
+    let unlock_gate = clipboard_capture_gate.clone();
     rt.block_on(async move {
-        // Slice 2 Phase 3 fix — resume the Slice 1+ Space session and prime
-        // peer reachability, matching what `uniclipboard-cli watch / members /
-        // send` do at entry. Without this, `recover_encryption_session` (the
-        // legacy libp2p-era unlock path above) never drives the F1 hook
-        // `ensure_reachable_all`, so the daemon's iroh router is up but:
-        //   1. paired peers see `offline` — no reverse Connection is ever
-        //      established for `IrohPresenceAdapter` to observe.
-        //   2. `dispatch_snapshot` / inbound `ApplyInboundClipboardUseCase`
-        //      operate without an active space session, so clipboard sync
-        //      silently fails in both directions.
-        // `Ok(false)` means the profile has no space yet (pre-`init/join`),
-        // which is legitimate — we just skip the probe. Errors are logged,
-        // never fatal: daemon stays up so the operator can recover.
-        match space_setup_assembly.facade.try_resume_session().await {
-            Ok(true) => {
-                if let Err(e) = space_setup_assembly.facade.refresh_presence().await {
-                    tracing::warn!(error = %e, "daemon startup: presence probe failed");
+        // Background unlock task. Combines the legacy
+        // `recover_encryption_session` keychain path with the slice 2/3
+        // `space_setup_facade.try_resume_session` + `refresh_presence` priming
+        // that used to run synchronously here. Both touch the macOS keychain
+        // and routinely take seconds; running them off the critical path lets
+        // the HTTP listener come up first. Errors are logged, never fatal —
+        // GUI / CLI can recover via manual `/space/unlock` + `/lifecycle/ready`.
+        tokio::spawn(async move {
+            use tracing::{info_span, Instrument};
+
+            let auto_unlock_enabled = if gui_managed {
+                let settings = unlock_runtime
+                    .wiring_deps()
+                    .settings
+                    .load()
+                    .await
+                    .unwrap_or_default();
+                settings.security.auto_unlock_enabled
+            } else {
+                true
+            };
+
+            let unlocked =
+                match crate::app::recover_encryption_session(&unlock_runtime, auto_unlock_enabled)
+                    .instrument(info_span!("daemon.startup.recover_encryption_session"))
+                    .await
+                {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "background unlock: recover_encryption_session failed"
+                        );
+                        false
+                    }
+                };
+
+            // Slice 2 Phase 3 fix — resume the Slice 1+ Space session and
+            // prime peer reachability. Independent of the legacy unlock path
+            // above; both touch the keychain but for different `space_id`s.
+            // `Ok(false)` means the profile has no space yet (pre-`init/join`).
+            match unlock_facade.try_resume_session().await {
+                Ok(true) => {
+                    if let Err(e) = unlock_facade.refresh_presence().await {
+                        tracing::warn!(error = %e, "background unlock: presence probe failed");
+                    }
+                }
+                Ok(false) => {
+                    tracing::info!(
+                        "background unlock: no space on this profile — skipping resume/probe"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = ?e, "background unlock: try_resume_session failed");
                 }
             }
-            Ok(false) => {
-                tracing::info!("daemon startup: no space on this profile — skipping resume/probe");
+
+            // CLI mode: a successful keychain unlock auto-triggers the
+            // deferred clipboard / keepalive services. GUI mode keeps waiting
+            // for `/lifecycle/ready` so the GUI controls when capture begins.
+            if !gui_managed && unlocked {
+                unlock_gate.store(true, std::sync::atomic::Ordering::SeqCst);
+                unlock_notify.notify_one();
+                tracing::info!("background unlock: CLI mode auto-triggered deferred services");
             }
-            Err(e) => {
-                tracing::warn!(error = ?e, "daemon startup: try_resume_session failed");
-            }
-        }
+        });
 
         let res = daemon.run().await;
         space_setup_assembly.shutdown().await;
