@@ -2008,3 +2008,28 @@ P3-pre 实施清单:
 - `cargo test -p uc-bootstrap --test slice2_phase2_clipboard_e2e --no-run`:passed
 
 ---
+
+### F-128 · daemon clipboard HTTP 可通过 application gateway 先收口
+
+**发现时间**:2026-04-26
+
+**背景**:`api/clipboard.rs` 原来直接构造 `CoreUseCases`,并使用 `uc_core::EntryId`、`uc_core::clipboard::link_utils` 和 `api/conversion.rs` 里的 `uc-app` DTO 投影。它是 HTTP 外部入口,不应直接认识这些底层类型。
+
+**处理结果**:
+- 新增 `uc-application::facade::clipboard_history::ClipboardHistoryFacade`
+- application 层暴露 clipboard HTTP 需要的列表、详情、资源、统计、收藏、删除、清空模型。
+- `AppFacade` 增加 `clipboard_history` 入口。
+- daemon `api/clipboard.rs` 改为只从 `state.app_facade_or_error()?.clipboard_history` 调用。
+- 删除 daemon `api/conversion.rs`,不再维护 `uc-app` DTO 到 HTTP DTO 的直接投影。
+
+**边界判断**:
+- 旧 `uc-app` clipboard 用例暂时由 daemon 装配层的 `DaemonClipboardHistoryGateway` 包住,和 restore 切片相同,属于过渡收口。
+- 后续要彻底移除 daemon 装配层对 `uc-app` / core ports 的认识,需要继续做 composition root 收口 todo。
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:passed
+- `cargo test -p uc-daemon api::clipboard --lib`:0 tests matched
+- `cargo test -p uc-daemon --lib`:25 passed
+- `cargo test -p uc-application facade:: --lib`:56 passed
+
+---

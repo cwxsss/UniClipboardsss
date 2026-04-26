@@ -4,17 +4,21 @@
 //! applied at the router level (see routes::router_l2_plus).
 
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use serde::Deserialize;
-use uc_app::usecases::clipboard::compute_clipboard_stats;
-use uc_app::usecases::CoreUseCases;
-use uc_core::clipboard::link_utils::extract_domain;
-use uc_core::ids::EntryId;
+use uc_application::facade::{
+    ClipboardClearHistoryResultView, ClipboardHistoryError, ClipboardHistoryFacade,
+    ClipboardListInput, ClipboardStatsView, EntryDetailView, EntryProjectionView,
+    EntryResourceView,
+};
 
-use crate::api::conversion::IntoApiDto;
 use crate::api::dto::clipboard::{
-    ClearHistoryResponse, EntryProjectionResponseDto, GetClipboardStatsResponse,
+    ClearHistoryResponse, ClearHistoryResultDto, ClipboardStatsDto, EntryDetailDto,
+    EntryProjectionResponseDto, EntryResourceDto, GetClipboardStatsResponse,
     GetEntryDetailResponse, GetEntryResourceResponse, ListEntriesResponse, ToggleFavoriteRequest,
     ToggleFavoriteResponse, ToggleFavoriteResultDto,
 };
@@ -36,6 +40,12 @@ fn default_limit() -> usize {
 fn clamp_limit(limit: usize) -> usize {
     // Prevent unbounded queries — cap at 1000 entries per request
     limit.min(1000)
+}
+
+fn require_facade(
+    state: &DaemonApiState,
+) -> Result<std::sync::Arc<ClipboardHistoryFacade>, ApiError> {
+    Ok(state.app_facade_or_error()?.clipboard_history.clone())
 }
 
 pub fn router() -> Router<DaemonApiState> {
@@ -70,26 +80,18 @@ async fn list_entries(
     State(state): State<DaemonApiState>,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ListEntriesResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
+    let facade = require_facade(&state)?;
     let limit = clamp_limit(params.limit);
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let mut entries = usecases
-        .list_entry_projections()
-        .execute(limit, params.offset)
+    let entries = facade
+        .list_entries(ClipboardListInput {
+            limit,
+            offset: params.offset,
+        })
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // Populate link_domains from link_urls
-    for dto in &mut entries {
-        dto.link_domains = dto
-            .link_urls
-            .as_ref()
-            .map(|urls| urls.iter().filter_map(|u| extract_domain(u)).collect());
-    }
+        .map_err(map_clipboard_err)?;
 
     let response_entries: Vec<EntryProjectionResponseDto> =
-        entries.into_iter().map(IntoApiDto::into_api_dto).collect();
+        entries.into_iter().map(entry_projection_to_dto).collect();
 
     Ok(Json(ListEntriesResponse {
         data: response_entries,
@@ -119,31 +121,14 @@ async fn get_entry(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
 ) -> Result<Json<GetEntryDetailResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let parsed_id = EntryId::from(entry_id);
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let detail = usecases
-        .get_entry_detail()
-        .execute(&parsed_id)
+    let facade = require_facade(&state)?;
+    let detail = facade
+        .get_entry(&entry_id)
         .await
-        .map_err(|e| {
-            let msg = e.to_string().to_lowercase();
-            if msg.contains("not found") {
-                return ApiError::not_found("entry not found");
-            }
-            if msg.contains("not text content") || msg.contains("not text") {
-                return ApiError {
-                    status: axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-                    code: "unsupported_content".to_string(),
-                    message: "entry is not text content".to_string(),
-                };
-            }
-            ApiError::internal(e.to_string())
-        })?;
+        .map_err(map_clipboard_err)?;
 
     Ok(Json(GetEntryDetailResponse {
-        data: detail.into_api_dto(),
+        data: entry_detail_to_dto(detail),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
@@ -168,23 +153,13 @@ async fn delete_entry(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let parsed_id = EntryId::from(entry_id);
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    usecases
-        .delete_clipboard_entry()
-        .execute(&parsed_id)
+    let facade = require_facade(&state)?;
+    facade
+        .delete_entry(&entry_id)
         .await
-        .map_err(|e| {
-            let msg = e.to_string().to_lowercase();
-            if msg.contains("not found") {
-                return ApiError::not_found("entry not found");
-            }
-            ApiError::internal(e.to_string())
-        })?;
+        .map_err(map_clipboard_err)?;
 
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /clipboard/entries/:id/favorite
@@ -210,18 +185,14 @@ async fn toggle_favorite(
     Path(entry_id): Path<String>,
     body: Result<Json<ToggleFavoriteRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<ToggleFavoriteResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
+    let facade = require_facade(&state)?;
 
     let Json(body) = body.map_err(|_| ApiError::bad_request("missing isFavorited field"))?;
 
-    let parsed_id = EntryId::from(entry_id);
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let found = usecases
-        .toggle_favorite_clipboard_entry()
-        .execute(&parsed_id, body.is_favorited)
+    let found = facade
+        .toggle_favorite(&entry_id, body.is_favorited)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(map_clipboard_err)?;
 
     if !found {
         return Err(ApiError::not_found("entry not found"));
@@ -248,20 +219,11 @@ async fn toggle_favorite(
 async fn get_stats(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<GetClipboardStatsResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let limit = clamp_limit(10_000);
-    let entries = usecases
-        .list_entry_projections()
-        .execute(limit, 0)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let stats = compute_clipboard_stats(&entries);
+    let facade = require_facade(&state)?;
+    let stats = facade.stats().await.map_err(map_clipboard_err)?;
 
     Ok(Json(GetClipboardStatsResponse {
-        data: stats.into_api_dto(),
+        data: clipboard_stats_to_dto(stats),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
@@ -286,24 +248,14 @@ async fn get_entry_resource(
     State(state): State<DaemonApiState>,
     Path(entry_id): Path<String>,
 ) -> Result<Json<GetEntryResourceResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let parsed_id = EntryId::from(entry_id);
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let resource = usecases
-        .get_entry_resource()
-        .execute(&parsed_id)
+    let facade = require_facade(&state)?;
+    let resource = facade
+        .get_entry_resource(&entry_id)
         .await
-        .map_err(|e| {
-            let msg = e.to_string().to_lowercase();
-            if msg.contains("not found") {
-                return ApiError::not_found("entry not found");
-            }
-            ApiError::internal(e.to_string())
-        })?;
+        .map_err(map_clipboard_err)?;
 
     Ok(Json(GetEntryResourceResponse {
-        data: resource.into_api_dto(),
+        data: entry_resource_to_dto(resource),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
 }
@@ -324,17 +276,81 @@ async fn get_entry_resource(
 async fn clear_history(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<ClearHistoryResponse>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let result = usecases
-        .clear_clipboard_history()
-        .execute()
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let facade = require_facade(&state)?;
+    let result = facade.clear_history().await.map_err(map_clipboard_err)?;
 
     Ok(Json(ClearHistoryResponse {
-        data: result.into_api_dto(),
+        data: clear_history_to_dto(result),
         ts: chrono::Utc::now().timestamp_millis(),
     }))
+}
+
+fn map_clipboard_err(err: ClipboardHistoryError) -> ApiError {
+    match err {
+        ClipboardHistoryError::NotFound => ApiError::not_found("entry not found"),
+        ClipboardHistoryError::UnsupportedContent => ApiError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            code: "unsupported_content".to_string(),
+            message: "entry is not text content".to_string(),
+        },
+        ClipboardHistoryError::Internal(message) => ApiError::internal(message),
+    }
+}
+
+fn entry_projection_to_dto(view: EntryProjectionView) -> EntryProjectionResponseDto {
+    EntryProjectionResponseDto {
+        id: view.id,
+        preview: view.preview,
+        has_detail: view.has_detail,
+        size_bytes: view.size_bytes,
+        captured_at: view.captured_at,
+        content_type: view.content_type,
+        thumbnail_url: view.thumbnail_url,
+        is_encrypted: view.is_encrypted,
+        is_favorited: view.is_favorited,
+        updated_at: view.updated_at,
+        active_time: view.active_time,
+        file_transfer_status: view.file_transfer_status,
+        file_transfer_reason: view.file_transfer_reason,
+        link_urls: view.link_urls,
+        link_domains: view.link_domains,
+        file_sizes: view.file_sizes,
+        image_width: view.image_width,
+        image_height: view.image_height,
+    }
+}
+
+fn entry_detail_to_dto(view: EntryDetailView) -> EntryDetailDto {
+    EntryDetailDto {
+        id: view.id,
+        content: view.content,
+        size_bytes: view.size_bytes,
+        created_at_ms: view.created_at_ms,
+        active_time_ms: view.active_time_ms,
+        mime_type: view.mime_type,
+    }
+}
+
+fn entry_resource_to_dto(view: EntryResourceView) -> EntryResourceDto {
+    EntryResourceDto {
+        blob_id: view.blob_id,
+        mime_type: view.mime_type,
+        size_bytes: view.size_bytes,
+        url: view.url,
+        inline_data: view.inline_data.map(|bytes| STANDARD.encode(bytes)),
+    }
+}
+
+fn clipboard_stats_to_dto(view: ClipboardStatsView) -> ClipboardStatsDto {
+    ClipboardStatsDto {
+        total_items: view.total_items,
+        total_size: view.total_size,
+    }
+}
+
+fn clear_history_to_dto(view: ClipboardClearHistoryResultView) -> ClearHistoryResultDto {
+    ClearHistoryResultDto {
+        deleted_count: view.deleted_count,
+        failed_entries: view.failed_entries,
+    }
 }

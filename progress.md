@@ -3428,6 +3428,35 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · clipboard HTTP 入口
+
+**触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-clipboard-http.md`。目标是 clipboard HTTP handler 不再直接构造 `CoreUseCases`,也不再直接使用 core entry id / link parser / uc-app DTO。
+
+**完成标准**:
+- daemon `api/clipboard.rs` 统一从 `AppFacade` 进入
+- clipboard HTTP 输入输出先有 application-facing 模型
+- daemon 不再需要 `api/conversion.rs` 投影 `uc-app` DTO
+- 验证 application facade、daemon 编译、daemon lib 测试
+
+**已做**:
+- 新增 `uc-application/src/facade/clipboard_history/mod.rs`
+- `AppFacade` / `AppFacadeParts` 增加 `clipboard_history`
+- daemon 装配层新增 `DaemonClipboardHistoryGateway`,临时包住旧 clipboard usecases
+- `api/clipboard.rs` 改为只调用 `AppFacade.clipboard_history`
+- 删除 `api/conversion.rs` 和对应 module 导出
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon api::clipboard --lib`:✅ 0 tests matched
+- `cargo test -p uc-application facade::clipboard_history --lib`:✅ 0 tests matched
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+- `cargo test -p uc-application facade:: --lib`:✅ 56 passed
+
+**收尾**:
+- todo `2026-04-26-daemon-clipboard-http.md` 可移动到 completed。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · setup v2 输入模型
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-setup-v2-application.md`。目标是 setup v2 虽已走 `AppFacade`,但外部 handler 不能再构造 core 的口令/邀请码模型。

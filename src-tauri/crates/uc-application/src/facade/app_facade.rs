@@ -24,8 +24,9 @@
 use std::sync::Arc;
 
 use crate::facade::{
-    ClipboardRestoreFacade, DeviceFacade, EncryptionFacade, LifecycleFacade, MemberRosterFacade,
-    ResourceFacade, SettingsFacade, SpaceSetupFacade, StorageFacade,
+    ClipboardHistoryFacade, ClipboardRestoreFacade, DeviceFacade, EncryptionFacade,
+    LifecycleFacade, MemberRosterFacade, ResourceFacade, SettingsFacade, SpaceSetupFacade,
+    StorageFacade,
 };
 
 /// Aggregator exposing one field per business sub-facade.
@@ -39,6 +40,7 @@ pub struct AppFacade {
     pub lifecycle: Arc<LifecycleFacade>,
     pub encryption: Arc<EncryptionFacade>,
     pub resource: Arc<ResourceFacade>,
+    pub clipboard_history: Arc<ClipboardHistoryFacade>,
     pub clipboard_restore: Arc<ClipboardRestoreFacade>,
     pub settings: Arc<SettingsFacade>,
     pub device: Arc<DeviceFacade>,
@@ -57,6 +59,7 @@ impl AppFacade {
             lifecycle: parts.lifecycle,
             encryption: parts.encryption,
             resource: parts.resource,
+            clipboard_history: parts.clipboard_history,
             clipboard_restore: parts.clipboard_restore,
             settings: parts.settings,
             device: parts.device,
@@ -71,6 +74,7 @@ pub struct AppFacadeParts {
     pub lifecycle: Arc<LifecycleFacade>,
     pub encryption: Arc<EncryptionFacade>,
     pub resource: Arc<ResourceFacade>,
+    pub clipboard_history: Arc<ClipboardHistoryFacade>,
     pub clipboard_restore: Arc<ClipboardRestoreFacade>,
     pub settings: Arc<SettingsFacade>,
     pub device: Arc<DeviceFacade>,
