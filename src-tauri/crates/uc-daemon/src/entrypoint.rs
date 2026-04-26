@@ -71,8 +71,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // build_daemon_app() calls build_core() which inits tracing + wires
     // deps, then awaits `build_space_setup_assembly` which binds iroh.
     let ctx = rt.block_on(build_daemon_app())?;
-    let daemon_file_transfer_repo = ctx.deps.storage.file_transfer_repo.clone();
-    let daemon_settings = ctx.deps.settings.clone();
     // Extract file_cache_dir, file_transfer_orchestrator, clipboard_write_coordinator,
     // and emitter_cell before ctx is consumed by runtime construction.
     let file_cache_dir = ctx.storage_paths.file_cache_dir.clone();
@@ -180,13 +178,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         event_tx.clone(),
     ));
 
-    let file_sync_orchestrator_worker = Arc::new(FileSyncOrchestratorWorker::new(
-        file_transfer_lifecycle,
-        daemon_file_transfer_repo,
-        clipboard_write_coordinator,
-        file_cache_dir,
-        daemon_settings.clone(),
-    ));
+    let file_sync_orchestrator_worker =
+        Arc::new(FileSyncOrchestratorWorker::new(file_transfer_lifecycle));
 
     // Keep iroh magicsock paths warm so blob fetches don't cold-start 30s+
     // after being idle for a minute. Ticks `SpaceSetupFacade::refresh_presence`

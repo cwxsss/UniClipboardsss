@@ -2931,3 +2931,48 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - C8a · 删 `uc-app/usecases/file_sync/` 整目录(F-115,libp2p 时代文件传输 chunked 协议;iroh 走 `BlobTransferFacade` + `FileCacheBlobMaterializer`)— **建议作为 C8 主线**
 - C8b · 删 `uc-app/usecases/pairing/resolve_connection_policy.rs`(libp2p 时代连接策略,小独立文件)
 - C8c · 删 `uc-application/src/pairing/state_machine.rs`(F-105,含 `AwaitingUserConfirm` / `PairingChallenge` / `PairingResponse`)
+
+---
+
+## Session 2026-04-25(续 44) — Slice 4 P5c C8a · 删 file_sync 半边 + daemon worker dead 链
+
+**触发**:用户回 "开干"。
+
+**实情勘察**(task_plan §1518 写"file_sync 整目录可删"已过时):
+- `cleanup.rs::CleanupExpiredFilesUseCase` 被 `uc-tauri/src/bootstrap/wiring.rs:42,67` cleanup 任务用 → **必留**
+- `copy_file_to_clipboard::{build_file_snapshot, build_path_list}` 被 `uc-app/usecases/clipboard/restore_clipboard_selection.rs:271-272` 用,而 `RestoreClipboardSelectionUseCase` 被 `daemon/api/routes.rs:137` active 调用 → **必留**
+- `sync_inbound.rs::SyncInboundFileUseCase`(273 行) + `sync_policy.rs::apply_file_sync_policy`(88 行) → 唯一消费者是 `daemon/workers/file_sync_orchestrator.rs` 内**已挂 `#[allow(dead_code)]` 的** `handle_event` / `handle_completed` 死链路(注释说 "事件路径下沉到 `FileTransferEventStore` + iroh blob handler 直接消费,这里保留为内部辅助等 vNext 复用")
+
+**结论**:把 daemon worker 的 dead 链路一起物理删,才能把 `sync_inbound.rs` + `sync_policy.rs` 干掉。
+
+**完成标准**:
+- 物理删 `file_sync/sync_inbound.rs` + `file_sync/sync_policy.rs`(2 文件 361 行)
+- `file_sync/mod.rs` 只剩 `cleanup` + `copy_file_to_clipboard` 模块声明 + `cleanup::*` re-export
+- `usecases/mod.rs:49` 删 `pub use file_sync::SyncInboundFileUseCase;`
+- `daemon/workers/file_sync_orchestrator.rs` 物理删 4 个 dead fn(`handle_event` / `handle_completed` / `restore_file_to_clipboard_after_transfer` / `fail_transfer`,共 ~338 行)+ 4 个 dead 字段(`file_transfer_repo` / `clipboard_write_coordinator` / `file_cache_dir` / `settings`)+ 收紧 `new()` 签名为只接 `lifecycle`
+- `daemon/entrypoint.rs:74-75,183` 装配点同步收紧:删 2 个无用 var(`daemon_file_transfer_repo` / `daemon_settings`)+ `FileSyncOrchestratorWorker::new(...)` 改为 1 参数
+- `cargo check -p uc-app -p uc-application -p uc-bootstrap -p uc-daemon -p uc-tauri` + `cargo test -p uc-app -p uc-daemon --lib` 全绿
+
+**已做**:
+- **删** `uc-app/usecases/file_sync/sync_inbound.rs`(整文件 273 行)
+- **删** `uc-app/usecases/file_sync/sync_policy.rs`(整文件 88 行)
+- **改** `uc-app/usecases/file_sync/mod.rs` 重写为最简 (cleanup + copy_file_to_clipboard 两模块 + cleanup::* re-export 一行)
+- **改** `uc-app/usecases/mod.rs` 删 `pub use file_sync::SyncInboundFileUseCase;`
+- **重写** `uc-daemon/src/workers/file_sync_orchestrator.rs`:从 436 行收紧到 71 行;只保留 1 个字段 (`lifecycle`)、1-参数 `new()`、3 个 trait 方法 (`name` / `start` / `stop` / `health_check`);`start()` 仍跑 reconcile + sweep + 等 cancel(无变化)。模块注释加 P5c C8a 标记说明 dead 链已物理删
+- **改** `uc-daemon/src/entrypoint.rs:74-75` 删 `daemon_file_transfer_repo` + `daemon_settings` 2 个无用 var
+- **改** `uc-daemon/src/entrypoint.rs:183` `FileSyncOrchestratorWorker::new(...)` 调用从 5 参数瘦到 1 参数
+
+**验证**:
+- `cargo check -p uc-app -p uc-application -p uc-bootstrap -p uc-daemon -p uc-tauri`:✅ 通过(剩 3 个预存 warning:`Kek` import / `LocalIdentity` / `DuplicateIgnored`,均与本次无关)
+- `cargo test -p uc-app --lib`:✅ 7/7 通过
+- `cargo test -p uc-daemon --lib`:✅ 25/25 通过(含 `presence_monitor` / `setup_events` / `v2::setup` 全套既有测试,零回归)
+
+**Phase 5 删除清单进度**(C8a 后):
+- 已删 (15):新增 `file_sync/sync_inbound.rs` + `file_sync/sync_policy.rs`(file_sync/ 目录从 5 → 3 文件)
+- 待删 (8):`uc-app/{file_sync/cleanup.rs(留)、file_sync/copy_file_to_clipboard.rs(留)、resolve_connection_policy.rs}`、`uc-application/pairing/state_machine.rs`、`uc-core ports/{connection_policy, discovery}.rs`、`uc-core/{ids/peer_id, network/events, network/connection_policy}.rs`、`uc-core/network/protocol/{file_transfer, heartbeat, device_announce, protocol_message}.rs`
+- **task_plan §1518 待修订**:`file_sync/{cleanup.rs, copy_file_to_clipboard.rs}` 因有 active V3 消费者(uc-tauri cleanup task / uc-app restore_clipboard_selection),**不能整目录删**;若未来要彻底退役,需先把这 2 文件作为"应用层共享 helper"搬出 `file_sync/` 目录,或随 `uc-app` crate 整体退役一起处理(Slice 5 候选 §1668)
+
+**下一步候选**:
+- C8b · 删 `uc-app/usecases/pairing/resolve_connection_policy.rs`(libp2p 时代连接策略,小独立文件)
+- C8c · 删 `uc-application/src/pairing/state_machine.rs`(F-105,含 `AwaitingUserConfirm` / `PairingChallenge` / `PairingResponse`,先 grep 确认 0 消费者)
+
