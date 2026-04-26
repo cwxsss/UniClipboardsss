@@ -32,10 +32,17 @@ Last activity: 2026-04-23 - Completed quick task 260423-mxu: macOS / Linux 多 r
 
 ## Pending Todos
 
-3 pending (see `.planning/todos/pending/`):
+10 pending (see `.planning/todos/pending/`):
 - 修复 setup 配对确认提示缺失 (ui)
 - 给 FileTransferEvent::Cancelled 接入真实发射方 (file-transfer)
 - 让 timeout sweep 走事件存储而非直接操作 projection (file-transfer)
+- 复制图片跨设备同步时 narrow_to_primary 选中发送端本地文件路径导致对端粘贴失效 (clipboard-sync)
+- 收口 setup v2 application 输入模型 (api)
+- 收口 daemon clipboard HTTP 入口 (api)
+- 收口 daemon search 入口 (api)
+- 收口 daemon clipboard workers (clipboard-sync)
+- 收口 daemon query peers ws (api)
+- 收口 daemon 装配根 (architecture)
 
 ## Blockers/Concerns
 
