@@ -1894,3 +1894,26 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-123 · daemon encryption 可直接复用 core ports 建 application facade
+
+**发现时间**:2026-04-26
+
+**背景**:`api/encryption.rs` 原来混合了三类职责:HTTP 返回、WebSocket 事件、setup 状态/space access 调用。handler 直接构造 `CoreUseCases`,并直接使用 core `SpaceId`。
+
+**处理结果**:
+- 新增 `uc-application::facade::encryption::EncryptionFacade`
+- application 层暴露 `EncryptionStateView`
+- daemon handler 改为只调用 `state` / `unlock` / `lock` / `verify_keychain_access`
+- WebSocket 事件仍留在 daemon,因为它是 daemon API 输出通道
+
+**边界判断**:
+- facade 直接依赖 `SetupStatusPort` 和 `SpaceAccessPort`,没有依赖 `uc-app`,避免 `uc-application` ↔ `uc-app` 形成反向依赖。
+- `SpaceId("space")` 的历史占位规则移入 application facade,daemon handler 不再知道它。
+
+**验证**:
+- `cargo test -p uc-application facade::encryption --lib`:5 passed
+- `cargo check -p uc-daemon`:passed
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

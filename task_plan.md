@@ -2942,7 +2942,29 @@ Phase 0(已完成,2026-04-18)
 - `cargo check -p uc-daemon`
 - `cargo test -p uc-daemon --lib`
 
-### Phase D6 · daemon 下一块收口 — in_progress
+### Phase D6 · daemon encryption 入口收口 — complete
+
+**范围**:
+- `GET /encryption/state`
+- `POST /encryption/unlock`
+- `POST /encryption/lock`
+- `GET /encryption/keychain-access`
+
+**结果**:
+- 新增 `uc-application::facade::encryption::EncryptionFacade`
+- encryption state view 进入 `uc-application`
+- setup 完成状态、session ready 判断、静默解锁、锁定、keychain 探测都由 application facade 承担
+- daemon encryption handler 不再直接构造 `CoreUseCases`,也不再直接引用 core `SpaceId`
+
+**保留职责**:
+- `/encryption/unlock` 成功后的 WebSocket 事件仍由 daemon 发出,因为这是 daemon HTTP/WS 表示层职责。
+
+**验证**:
+- `cargo test -p uc-application facade::encryption --lib`
+- `cargo check -p uc-daemon`
+- `cargo test -p uc-daemon --lib`
+
+### Phase D7 · daemon 下一块收口 — in_progress
 
 **候选优先级**:
 1. `api/search.rs`:直接构造 core search query / error,范围较大。

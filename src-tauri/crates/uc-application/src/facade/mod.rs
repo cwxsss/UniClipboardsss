@@ -9,6 +9,7 @@ pub mod app_facade;
 pub mod blob_transfer;
 pub mod clipboard;
 pub mod device;
+pub mod encryption;
 pub mod lifecycle;
 pub mod roster;
 pub mod settings;
@@ -26,6 +27,9 @@ pub use clipboard::{
     DispatchEntryOutcome, DispatchEntryPerTarget, InboundAction, InboundNotice, IngestHandle,
 };
 pub use device::{DeviceFacade, DeviceFacadeError, LocalDeviceInfoView};
+pub use encryption::{
+    EncryptionFacade, EncryptionFacadeDeps, EncryptionFacadeError, EncryptionStateView,
+};
 pub use lifecycle::{
     LifecycleFacade, LifecycleFacadeDeps, LifecycleFacadeError, LifecycleStateView,
     LifecycleStatusGateway,

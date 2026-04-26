@@ -20,8 +20,8 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
 use uc_application::facade::{
-    DeviceFacade, LifecycleFacade, MemberRosterFacade, SettingsFacade, SpaceSetupFacade,
-    StorageFacade,
+    DeviceFacade, EncryptionFacade, LifecycleFacade, MemberRosterFacade, SettingsFacade,
+    SpaceSetupFacade, StorageFacade,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -49,6 +49,7 @@ pub struct DaemonApiState {
     pub space_setup_facade: Option<Arc<SpaceSetupFacade>>,
     pub member_roster_facade: Option<Arc<MemberRosterFacade>>,
     pub lifecycle_facade: Option<Arc<LifecycleFacade>>,
+    pub encryption_facade: Option<Arc<EncryptionFacade>>,
     pub settings_facade: Option<Arc<SettingsFacade>>,
     pub device_facade: Option<Arc<DeviceFacade>>,
     pub storage_facade: Option<Arc<StorageFacade>>,
@@ -82,6 +83,7 @@ impl DaemonApiState {
             space_setup_facade: None,
             member_roster_facade: None,
             lifecycle_facade: None,
+            encryption_facade: None,
             settings_facade: None,
             device_facade: None,
             storage_facade: None,
@@ -129,6 +131,17 @@ impl DaemonApiState {
         self.lifecycle_facade
             .clone()
             .ok_or_else(|| ApiError::service_unavailable("lifecycle facade unavailable"))
+    }
+
+    pub fn with_encryption(mut self, encryption_facade: Arc<EncryptionFacade>) -> Self {
+        self.encryption_facade = Some(encryption_facade);
+        self
+    }
+
+    pub fn encryption_facade_or_error(&self) -> Result<Arc<EncryptionFacade>, ApiError> {
+        self.encryption_facade
+            .clone()
+            .ok_or_else(|| ApiError::service_unavailable("encryption facade unavailable"))
     }
 
     pub fn with_settings(mut self, settings_facade: Arc<SettingsFacade>) -> Self {

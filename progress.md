@@ -3428,6 +3428,33 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · encryption 切片
+
+**触发**:lifecycle 提交后继续收 daemon,选择 encryption HTTP 入口。
+
+**完成标准**:
+- daemon encryption handler 不再构造 `CoreUseCases`
+- daemon encryption handler 不再直接引用 core `SpaceId`
+- encryption state / unlock / lock / keychain access 通过 `uc-application`
+- 验证 `uc-application` encryption facade 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 新增 `uc-application/src/facade/encryption/mod.rs`
+- `uc-application/src/facade/mod.rs` 导出 encryption facade 和模型
+- `uc-daemon/src/api/encryption.rs` 改为调用 `EncryptionFacade`
+- `uc-daemon/src/api/server.rs` 增加 `encryption_facade`
+- `uc-daemon/src/app.rs` 注入 `EncryptionFacade`
+
+**验证**:
+- `cargo test -p uc-application facade::encryption --lib`:✅ 5 passed
+- `cargo check -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**未纳入本次提交**:
+- `.claude/skills/...` 现有改动不是本轮产生,不 stage。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · lifecycle 切片
 
 **触发**:storage 提交后继续收 daemon,选择较小的 lifecycle 入口。

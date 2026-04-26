@@ -6,7 +6,6 @@ use axum::{Json, Router};
 use serde_json::json;
 use tokio::sync::broadcast::error::SendError;
 use tracing::{info, warn};
-use uc_app::usecases::CoreUseCases;
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 use utoipa;
 
@@ -43,26 +42,18 @@ pub fn router() -> Router<DaemonApiState> {
 async fn get_encryption_state_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let deps = runtime.wiring_deps();
-
-    // Phase C: setup 完成真相源 = `SetupStatus.has_completed`。
-    let initialized = deps
-        .setup_status
-        .get_status()
+    let facade = state.encryption_facade_or_error()?;
+    let view = facade
+        .state()
         .await
-        .map(|s| s.has_completed)
-        .map_err(|e| ApiError::internal(format!("failed to load setup status: {e}")))?;
-    let space_id = uc_core::ids::SpaceId::from("space");
-    let session_ready = if initialized {
-        deps.security.space_access.is_unlocked(&space_id).await
-    } else {
-        false
-    };
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let ts = chrono::Utc::now().timestamp_millis();
     Ok(Json(json!({
-        "data": EncryptionStateResponse { initialized, session_ready },
+        "data": EncryptionStateResponse {
+            initialized: view.initialized,
+            session_ready: view.session_ready
+        },
         "ts": ts
     })))
 }
@@ -83,10 +74,9 @@ async fn get_encryption_state_handler(
 async fn unlock_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let usecases = CoreUseCases::new(runtime.as_ref());
+    let facade = state.encryption_facade_or_error()?;
 
-    match usecases.auto_unlock_encryption_session().execute().await {
+    match facade.unlock().await {
         Ok(true) => {
             info!("encryption session auto-unlocked via keyring");
 
@@ -132,14 +122,9 @@ async fn unlock_handler(
 async fn lock_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-
-    let space_id = uc_core::ids::SpaceId::from("space");
-    runtime
-        .wiring_deps()
-        .security
-        .space_access
-        .lock(&space_id)
+    let facade = state.encryption_facade_or_error()?;
+    facade
+        .lock()
         .await
         .map_err(|e| ApiError::internal(format!("failed to lock encryption: {e}")))?;
 
@@ -164,12 +149,9 @@ async fn lock_handler(
 async fn verify_keychain_access_handler(
     State(state): State<DaemonApiState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let runtime = state.runtime_or_error()?;
-    let usecases = CoreUseCases::new(runtime.as_ref());
-
-    let granted = usecases
+    let facade = state.encryption_facade_or_error()?;
+    let granted = facade
         .verify_keychain_access()
-        .execute()
         .await
         .map_err(|e| ApiError::internal(format!("keychain access check failed: {e}")))?;
 
