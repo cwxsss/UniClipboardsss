@@ -17,10 +17,9 @@ use tracing::{debug, info, instrument, warn, Instrument};
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
 use uc_app::runtime::CoreRuntime;
 use uc_app::usecases::sync_planner::{FileCandidate, FileSyncIntent, OutboundSyncPlanner};
-use uc_app::usecases::CoreUseCases;
 use uc_application::facade::{
-    BlobTransferFacade, ClipboardCaptureFacade, ClipboardSyncFacade, PublishBlobCommand,
-    SearchProjectionBuilder,
+    BlobTransferFacade, ClipboardCaptureFacade, ClipboardLiveIndexFacade, ClipboardLiveIndexInput,
+    ClipboardLiveIndexOutcome, ClipboardSyncFacade, PublishBlobCommand,
 };
 use uc_application::V3BlobRef;
 use uc_core::ids::EntryId;
@@ -134,6 +133,7 @@ pub struct DaemonClipboardChangeHandler {
     /// the GUI user explicitly unlocks the app.
     capture_gate: Arc<AtomicBool>,
     clipboard_capture: Arc<ClipboardCaptureFacade>,
+    clipboard_live_index: Arc<ClipboardLiveIndexFacade>,
     /// Slice 2 Phase 3 · T7 — iroh-stack clipboard sync. Replaces the
     /// deprecated libp2p `SyncOutboundClipboardUseCase` path. Wired from
     /// `DaemonBootstrapContext.clipboard_sync_facade` in `entrypoint.rs`.
@@ -149,6 +149,7 @@ impl DaemonClipboardChangeHandler {
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
         capture_gate: Arc<AtomicBool>,
         clipboard_capture: Arc<ClipboardCaptureFacade>,
+        clipboard_live_index: Arc<ClipboardLiveIndexFacade>,
         clipboard_sync: Arc<ClipboardSyncFacade>,
         blob_transfer: Arc<BlobTransferFacade>,
     ) -> Self {
@@ -158,6 +159,7 @@ impl DaemonClipboardChangeHandler {
             clipboard_change_origin,
             capture_gate,
             clipboard_capture,
+            clipboard_live_index,
             clipboard_sync,
             blob_transfer,
         }
@@ -262,100 +264,25 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                     debug!(error = %e, "No WS subscribers for clipboard.new_content");
                 }
 
-                // --- Search indexing ---
-                // Build search document for the captured entry using the projection builder.
-                // We use a clone of the snapshot made before capture consumed it.
+                let search_span = tracing::info_span!("search.live_index", entry_id = %entry_id);
+                match self
+                    .clipboard_live_index
+                    .index_capture(ClipboardLiveIndexInput {
+                        entry_id: entry_id.to_string(),
+                        snapshot: outbound_snapshot.clone(),
+                    })
+                    .instrument(search_span)
+                    .await
                 {
-                    let search_span =
-                        tracing::info_span!("search.live_index", entry_id = %entry_id);
-                    let deps = self.runtime.wiring_deps();
-                    async {
-                    // Fetch the persisted ClipboardEntry to get event_id and timestamps
-                    match deps.clipboard.clipboard_entry_repo.get_entry(&entry_id).await {
-                        Ok(Some(entry)) => {
-                            // Compute the selection policy result for the live snapshot
-                            let selection_result =
-                                deps.clipboard.representation_policy.select(&outbound_snapshot);
-                            match selection_result {
-                                Ok(selection) => {
-                                    // Build SearchPipelineInput via the single projection authority
-                                    match SearchProjectionBuilder::build_from_capture(
-                                        &entry,
-                                        &outbound_snapshot,
-                                        &selection,
-                                    ) {
-                                        Some(pipeline_input) => {
-                                            // Derive search key and build postings
-                                            match deps.search.search_key_derivation.derive_search_key().await {
-                                                Ok(search_key) => {
-                                                    match deps.search.search_pipeline.build(&pipeline_input, &search_key) {
-                                                        Ok((document, postings)) => {
-                                                            if postings.is_empty() {
-                                                                debug!(
-                                                                    entry_id = %entry_id,
-                                                                    "search: no postings generated, skipping index"
-                                                                );
-                                                            } else {
-                                                                let uc = CoreUseCases::new(self.runtime.as_ref());
-                                                                if let Err(e) = uc.index_clipboard_entry().execute(document, postings).await {
-                                                                    warn!(
-                                                                        error = %e,
-                                                                        entry_id = %entry_id,
-                                                                        "search: index_clipboard_entry failed"
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                        Err(e) => {
-                                                            warn!(
-                                                                error = %e,
-                                                                entry_id = %entry_id,
-                                                                "search: pipeline.build failed"
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    debug!(
-                                                        error = %e,
-                                                        entry_id = %entry_id,
-                                                        "search: key derivation failed (session likely locked)"
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        None => {
-                                            debug!(
-                                                entry_id = %entry_id,
-                                                "search: no searchable content in capture, skipping"
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    debug!(
-                                        error = %e,
-                                        entry_id = %entry_id,
-                                        "search: representation policy selection failed, skipping"
-                                    );
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            debug!(
-                                entry_id = %entry_id,
-                                "search: captured entry not found in repo, skipping"
-                            );
-                        }
-                        Err(e) => {
-                            warn!(
-                                error = %e,
-                                entry_id = %entry_id,
-                                "search: failed to fetch entry from repo"
-                            );
-                        }
+                    Ok(ClipboardLiveIndexOutcome::Indexed) => {
+                        debug!(entry_id = %entry_id, "search: indexed captured entry");
                     }
-                    }.instrument(search_span).await;
+                    Ok(ClipboardLiveIndexOutcome::Skipped { reason }) => {
+                        debug!(entry_id = %entry_id, reason, "search: skipped live index");
+                    }
+                    Err(e) => {
+                        warn!(error = %e, entry_id = %entry_id, "search: live index failed");
+                    }
                 }
 
                 // --- Outbound sync dispatch (mirrors AppRuntime::on_clipboard_changed) ---

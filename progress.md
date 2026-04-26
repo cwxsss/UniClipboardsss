@@ -3588,6 +3588,32 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon clipboard workers 收口 · live index 切片
+
+**触发**:watcher capture 已收口后,继续处理 capture 成功后的 live search index 逻辑。
+
+**完成标准**:
+- watcher 不再直接构建 search projection / pipeline / postings
+- watcher 不再直接调用 index use case
+- application 层暴露 live index 入口和应用层输入/输出
+- 验证 application live index 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 新增 `ClipboardLiveIndexFacade` / `ClipboardLiveIndexer`
+- live index 的 entry 读取、selection、projection、key、pipeline 和 index 写入迁入 application
+- watcher 改为调用 `ClipboardLiveIndexFacade::index_capture`
+- entrypoint 组装 live index deps 并注入 watcher
+
+**验证**:
+- `cargo test -p uc-application facade::clipboard_live_index --lib`:✅ 1 passed
+- `cargo check -p uc-application -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**下一步**:
+- 继续收 watcher 内 outbound planning / blob refs dispatch。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · search query 入口
 
 **触发**:继续收 `.planning/todos/pending/2026-04-26-daemon-search.md`,先做 todo 里明确的第一步 `GET /search/query`。

@@ -10,7 +10,8 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_application::facade::{
-    ClipboardCaptureFacade, InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps,
+    ClipboardCaptureFacade, ClipboardLiveIndexDeps, ClipboardLiveIndexFacade, ClipboardLiveIndexer,
+    InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps,
 };
 use uc_application::{
     ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
@@ -162,6 +163,19 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     );
     let inbound_clipboard_facade = Arc::new(InboundClipboardFacade::new(apply_inbound_uc));
     let clipboard_capture_facade = Arc::new(ClipboardCaptureFacade::new(apply_inbound_capture_uc));
+    let clipboard_live_index_facade = Arc::new(ClipboardLiveIndexFacade::new(Arc::new(
+        ClipboardLiveIndexer::new(ClipboardLiveIndexDeps {
+            clipboard_entry_repo: runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+            representation_policy: runtime
+                .wiring_deps()
+                .clipboard
+                .representation_policy
+                .clone(),
+            search_key_derivation: runtime.wiring_deps().search.search_key_derivation.clone(),
+            search_pipeline: runtime.wiring_deps().search.search_pipeline.clone(),
+            search_index: runtime.wiring_deps().search.search_index.clone(),
+        }),
+    )));
 
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
         runtime.clone(),
@@ -169,6 +183,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         clipboard_change_origin.clone(),
         clipboard_capture_gate.clone(),
         clipboard_capture_facade,
+        clipboard_live_index_facade,
         clipboard_sync_facade.clone(),
         blob_transfer_facade.clone(),
     ));
