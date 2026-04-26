@@ -582,6 +582,24 @@
     "pairedDevices": {
       "title": "已配对设备"
     },
+    "addDevice": {
+      "title": "邀请新设备",
+      "subtitle": "在新设备上输入此邀请码",
+      "expiresIn": "{{remaining}} 后过期",
+      "expired": "邀请码已过期",
+      "passphraseHint": "新设备还需输入空间口令完成配对",
+      "loading": "正在生成邀请码……",
+      "actions": {
+        "cancel": "取消邀请",
+        "regenerate": "重新生成",
+        "close": "关闭",
+        "copy": "复制邀请码",
+        "copied": "已复制"
+      },
+      "errors": {
+        "issueFailed": "生成邀请码失败，请重试"
+      }
+    },
     "unpair": {
       "confirmTitle": "取消配对",
       "confirmDescription": "确定要取消与 {{deviceName}} 的配对吗？取消后需要重新配对才能同步剪贴板内容。"

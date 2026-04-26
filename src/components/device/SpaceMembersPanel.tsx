@@ -1,7 +1,8 @@
 import { AlertTriangle, Monitor, Plus, RefreshCw } from 'lucide-react'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
+import AddDeviceDialog from './AddDeviceDialog'
 import { getDeviceIcon, getIconColor } from './device-utils'
 import DeviceSettingsSheet from './DeviceSettingsSheet'
 import UnpairAlertDialog from './UnpairAlertDialog'
@@ -41,12 +42,17 @@ const SpaceMembersPanel: React.FC = () => {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [unpairDialogOpen, setUnpairDialogOpen] = useState(false)
   const [unpairTargetId, setUnpairTargetId] = useState<string | null>(null)
+  const [addDialogOpen, setAddDialogOpen] = useState(false)
 
   useEffect(() => {
     dispatch(fetchSpaceMembers())
 
     const handler = (event: { topic: string; eventType: string; payload: unknown }) => {
       if (event.topic !== 'peers') return
+      if (event.eventType === 'peers.changed') {
+        // 成员加入/离开 — 重新拉一遍以同步本地缓存
+        dispatch(fetchSpaceMembers())
+      }
       if (event.eventType === 'peers.connectionChanged') {
         const p = event.payload as {
           peerId: string
@@ -69,6 +75,15 @@ const SpaceMembersPanel: React.FC = () => {
     const unsub = daemonWs.subscribe(['peers'], handler)
     return unsub
   }, [dispatch])
+
+  // 配对成功 → 列表里出现新成员 → 自动关闭添加设备对话框
+  const prevPeersCountRef = useRef(spaceMembers.length)
+  useEffect(() => {
+    if (spaceMembers.length > prevPeersCountRef.current && addDialogOpen) {
+      setAddDialogOpen(false)
+    }
+    prevPeersCountRef.current = spaceMembers.length
+  }, [spaceMembers.length, addDialogOpen])
 
   const openSheet = (peerId: string) => {
     setSelectedDeviceId(peerId)
@@ -128,26 +143,29 @@ const SpaceMembersPanel: React.FC = () => {
 
   if (spaceMembers.length === 0) {
     return (
-      <div className="space-y-2">
-        <h3 className="text-xs font-medium text-muted-foreground px-1 uppercase tracking-wider">
-          {t('devices.pairedDevices.title')}
-        </h3>
-        <div className="flex flex-col items-center rounded-xl border border-dashed border-border/80 py-10 px-6 text-center">
-          <div className="mb-4 rounded-full bg-muted/50 p-4 ring-1 ring-border/50">
-            <Monitor className="h-8 w-8 text-muted-foreground/70" />
-          </div>
-          <h3 className="mb-1.5 text-sm font-medium text-foreground">
-            {t('devices.list.empty.title')}
+      <>
+        <div className="space-y-2">
+          <h3 className="text-xs font-medium text-muted-foreground px-1 uppercase tracking-wider">
+            {t('devices.pairedDevices.title')}
           </h3>
-          <p className="mb-4 max-w-xs text-xs text-muted-foreground">
-            {t('devices.list.empty.description')}
-          </p>
-          <Button variant="outline" size="sm" disabled>
-            <Plus className="h-3.5 w-3.5" />
-            {t('devices.list.actions.addDevice')}
-          </Button>
+          <div className="flex flex-col items-center rounded-xl border border-dashed border-border/80 py-10 px-6 text-center">
+            <div className="mb-4 rounded-full bg-muted/50 p-4 ring-1 ring-border/50">
+              <Monitor className="h-8 w-8 text-muted-foreground/70" />
+            </div>
+            <h3 className="mb-1.5 text-sm font-medium text-foreground">
+              {t('devices.list.empty.title')}
+            </h3>
+            <p className="mb-4 max-w-xs text-xs text-muted-foreground">
+              {t('devices.list.empty.description')}
+            </p>
+            <Button variant="outline" size="sm" onClick={() => setAddDialogOpen(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              {t('devices.list.actions.addDevice')}
+            </Button>
+          </div>
         </div>
-      </div>
+        <AddDeviceDialog open={addDialogOpen} onOpenChange={setAddDialogOpen} />
+      </>
     )
   }
 
@@ -221,18 +239,19 @@ const SpaceMembersPanel: React.FC = () => {
             )
           })}
 
-          {/* Add device card (disabled, pending backend) */}
-          <div
-            title={t('devices.settings.badges.comingSoon')}
-            className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border/60 p-5 pt-6 pb-4 text-center opacity-50 cursor-not-allowed"
+          {/* Add device card */}
+          <button
+            type="button"
+            onClick={() => setAddDialogOpen(true)}
+            className="group flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border/60 p-5 pt-6 pb-4 text-center transition-all hover:border-border hover:bg-muted/30 cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <div className="mb-3 h-14 w-14 rounded-2xl flex items-center justify-center bg-muted/50">
-              <Plus className="h-7 w-7 text-muted-foreground/70" />
+            <div className="mb-3 h-14 w-14 rounded-2xl flex items-center justify-center bg-muted/50 transition-colors group-hover:bg-muted">
+              <Plus className="h-7 w-7 text-muted-foreground/70 group-hover:text-foreground" />
             </div>
-            <span className="text-sm font-medium text-muted-foreground">
+            <span className="text-sm font-medium text-muted-foreground group-hover:text-foreground">
               {t('devices.list.actions.addDevice')}
             </span>
-          </div>
+          </button>
         </div>
       </div>
 
@@ -252,6 +271,8 @@ const SpaceMembersPanel: React.FC = () => {
         deviceName={unpairTargetDevice?.deviceName || t('devices.list.labels.unknownDevice')}
         onConfirm={handleUnpairConfirm}
       />
+
+      <AddDeviceDialog open={addDialogOpen} onOpenChange={setAddDialogOpen} />
     </>
   )
 }
