@@ -1,17 +1,9 @@
 import { type ComponentProps } from 'react'
-import { InputOTP, InputOTPGroup, InputOTPSeparator, InputOTPSlot } from '@/components/ui/input-otp'
+import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp'
 import { cn } from '@/lib/utils'
 
-/**
- * Invitation code length matches the rendezvous-issued code shape currently
- * used in tests: 4 alphanumeric chars + dash + 4 alphanumeric chars (total
- * 8 OTP slots). The dash is purely visual — the wire form keeps it as
- * `XXXX-XXXX` but `InputOTPSeparator` renders it independently of the
- * underlying value.
- */
 export const INVITATION_CODE_LENGTH = 8
 
-/** Allowed input chars: A-Z + 0-9 (auto-uppercased on entry). */
 const ALLOWED_CHARS = /[A-Z0-9]/
 
 type Props = Omit<
@@ -21,19 +13,34 @@ type Props = Omit<
   value: string
   onChange: (value: string) => void
   disabled?: boolean
-  /** Renders the slots with `aria-invalid="true"` styling. */
   invalid?: boolean
-  /** Optional class for the surrounding container. */
   className?: string
 }
 
 /**
- * 8-slot OTP-style input for setup invitation codes.
+ * 8-slot OTP-style invitation code input, restyled to read as a single
+ * underlined field. Internally still backed by `input-otp`, so caret
+ * tracking, paste-splitting, and arrow/backspace navigation come for free.
  *
- * - auto upper-cases keystrokes and pasted text
- * - accepts only A-Z and 0-9; strips whitespace and dashes from paste
- * - splits 4-4 with a visual separator that does not consume input
+ * Visual: each slot drops the boxed look and keeps only a bottom rule;
+ * slots within a group are flush, and a small gap between the two groups
+ * stands in for the `XXXX-XXXX` separator.
  */
+const slotClass = cn(
+  // sizing & typography
+  'size-11 sm:size-12 text-xl sm:text-2xl font-mono font-medium uppercase',
+  // strip the boxed default — keep only a bottom rule
+  'rounded-none first:rounded-none last:rounded-none',
+  'border-0 first:border-l-0 border-b border-border/60 bg-transparent',
+  // active slot: highlight underline only, suppress the default ring
+  'data-[active=true]:border-b-primary data-[active=true]:ring-0',
+  // smooth color transitions on focus changes
+  'transition-colors'
+)
+
+const invalidSlotClass =
+  'border-b-destructive text-destructive data-[active=true]:border-b-destructive'
+
 export function InvitationCodeInput({
   value,
   onChange,
@@ -52,6 +59,8 @@ export function InvitationCodeInput({
     onChange(cleaned)
   }
 
+  const finalSlotClass = cn(slotClass, invalid && invalidSlotClass)
+
   return (
     <InputOTP
       maxLength={INVITATION_CODE_LENGTH}
@@ -59,21 +68,18 @@ export function InvitationCodeInput({
       onChange={handleChange}
       disabled={disabled}
       aria-invalid={invalid || undefined}
-      containerClassName={cn('justify-center gap-2', className)}
+      containerClassName={cn('justify-center gap-3', className)}
       {...rest}
     >
-      <InputOTPGroup>
-        <InputOTPSlot index={0} className="size-10 text-base font-mono uppercase" />
-        <InputOTPSlot index={1} className="size-10 text-base font-mono uppercase" />
-        <InputOTPSlot index={2} className="size-10 text-base font-mono uppercase" />
-        <InputOTPSlot index={3} className="size-10 text-base font-mono uppercase" />
+      <InputOTPGroup className="gap-0 has-aria-invalid:ring-0">
+        {[0, 1, 2, 3].map(i => (
+          <InputOTPSlot key={i} index={i} className={finalSlotClass} />
+        ))}
       </InputOTPGroup>
-      <InputOTPSeparator />
-      <InputOTPGroup>
-        <InputOTPSlot index={4} className="size-10 text-base font-mono uppercase" />
-        <InputOTPSlot index={5} className="size-10 text-base font-mono uppercase" />
-        <InputOTPSlot index={6} className="size-10 text-base font-mono uppercase" />
-        <InputOTPSlot index={7} className="size-10 text-base font-mono uppercase" />
+      <InputOTPGroup className="gap-0 has-aria-invalid:ring-0">
+        {[4, 5, 6, 7].map(i => (
+          <InputOTPSlot key={i} index={i} className={finalSlotClass} />
+        ))}
       </InputOTPGroup>
     </InputOTP>
   )

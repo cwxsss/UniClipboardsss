@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   AlertCircle,
   ArrowLeft,
@@ -11,14 +11,18 @@ import {
   Smartphone,
   XCircle,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type {
   InitializeSpaceErrorKind,
   RedeemInvitationErrorKind,
   RedeemResponse,
 } from '@/api/daemon/setupV2'
-import { InvitationCodeInput, formatInvitationCode } from '@/components/InvitationCodeInput'
+import {
+  INVITATION_CODE_LENGTH,
+  InvitationCodeInput,
+  formatInvitationCode,
+} from '@/components/InvitationCodeInput'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -411,8 +415,6 @@ function redeemErrorMessage(
   }
 }
 
-const INVITATION_CODE_FULL_LENGTH = 8
-
 export function RedeemInvitationScreen({
   onSubmit,
   onBack,
@@ -433,9 +435,18 @@ export function RedeemInvitationScreen({
   const [pass, setPass] = useState('')
   const [showPass, setShowPass] = useState(false)
   const [errorKind, setErrorKind] = useState<RedeemInvitationErrorKind | null>(null)
+  const passInputRef = useRef<HTMLInputElement>(null)
 
   const errorMessage = redeemErrorMessage(t, errorKind)
-  const canSubmit = code.length === INVITATION_CODE_FULL_LENGTH && pass.length > 0 && !loading
+  const codeComplete = code.length === INVITATION_CODE_LENGTH
+  const canSubmit = codeComplete && pass.length > 0 && !loading
+  const codeInvalid = errorKind === 'invitation_not_found' || errorKind === 'invitation_expired'
+
+  // Hand focus over to passphrase the moment the code reaches full length —
+  // works for both paste and the last keystroke of manual entry.
+  useEffect(() => {
+    if (codeComplete) passInputRef.current?.focus()
+  }, [codeComplete])
 
   const handleSubmit = async () => {
     setErrorKind(null)
@@ -447,7 +458,6 @@ export function RedeemInvitationScreen({
   return (
     <ScreenShell
       title={t('title')}
-      subtitle={t('subtitle')}
       error={errorMessage}
       hint={t('hint')}
       footer={
@@ -468,40 +478,60 @@ export function RedeemInvitationScreen({
           </Button>
         </div>
       }
+      centered
     >
-      <div className="mt-6 space-y-6 sm:mt-8">
-        <div className="space-y-3">
-          <Label className="block text-center">{t('labels.code')}</Label>
-          <InvitationCodeInput
-            value={code}
-            onChange={setCode}
-            disabled={loading}
-            invalid={errorKind === 'invitation_not_found' || errorKind === 'invitation_expired'}
-          />
-        </div>
+      <div className="mx-auto mt-10 w-full max-w-sm space-y-1 sm:mt-12">
+        <Label htmlFor="join-code" className="sr-only">
+          {t('labels.code')}
+        </Label>
+        <InvitationCodeInput
+          id="join-code"
+          value={code}
+          onChange={setCode}
+          disabled={loading}
+          invalid={codeInvalid}
+          autoFocus
+        />
 
-        <div className="space-y-2">
-          <Label htmlFor="join-pass">{t('labels.passphrase')}</Label>
-          <div className="relative">
-            <Input
-              id="join-pass"
-              type={showPass ? 'text' : 'password'}
-              value={pass}
-              onChange={e => setPass(e.target.value)}
-              disabled={loading}
-              className="pr-10"
-              placeholder={t('placeholders.passphrase')}
-              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPass(!showPass)}
-              className="absolute right-0 top-0 flex h-full items-center px-3 text-muted-foreground transition-colors hover:text-foreground"
+        <AnimatePresence initial={false}>
+          {codeComplete && (
+            <motion.div
+              key="passphrase"
+              initial={{ opacity: 0, height: 0, y: -4 }}
+              animate={{ opacity: 1, height: 'auto', y: 0 }}
+              exit={{ opacity: 0, height: 0, y: -4 }}
+              transition={{ duration: 0.22, ease: [0.22, 0.61, 0.36, 1] }}
+              className="overflow-hidden"
             >
-              {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-        </div>
+              <div className="pt-6">
+                <Label htmlFor="join-pass" className="sr-only">
+                  {t('labels.passphrase')}
+                </Label>
+                <div className="relative">
+                  <Input
+                    id="join-pass"
+                    ref={passInputRef}
+                    type={showPass ? 'text' : 'password'}
+                    value={pass}
+                    onChange={e => setPass(e.target.value)}
+                    disabled={loading}
+                    className="h-11 border-0 border-b border-border/60 bg-transparent px-0 pr-10 text-center text-base shadow-none focus-visible:border-primary focus-visible:ring-0"
+                    placeholder={t('placeholders.passphrase')}
+                    onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPass(!showPass)}
+                    className="absolute right-0 top-0 flex h-full items-center px-2 text-muted-foreground transition-colors hover:text-foreground"
+                    tabIndex={-1}
+                  >
+                    {showPass ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </ScreenShell>
   )
