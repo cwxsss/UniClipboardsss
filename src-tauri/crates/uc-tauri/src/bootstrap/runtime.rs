@@ -312,10 +312,7 @@ impl AppRuntime {
 /// Tauri-aware use case accessors wrapping CoreUseCases.
 ///
 /// Provides transparent access to all CoreUseCases methods (via Deref) plus
-/// 3 non-core accessors that cannot live in uc-app:
-/// - apply_autostart (needs AppHandle)
-/// - app_lifecycle_coordinator (needs LoggingSessionReadyEmitter)
-/// - sync_outbound_clipboard (needs uc_infra TransferCipherAdapter)
+/// the apply_autostart accessor that needs AppHandle.
 pub struct AppUseCases<'a> {
     app_runtime: &'a AppRuntime,
     core: uc_app::usecases::CoreUseCases<'a>,
@@ -341,57 +338,6 @@ impl<'a> AppUseCases<'a> {
             handle.clone(),
         ));
         Some(uc_platform::usecases::ApplyAutostartSetting::new(adapter))
-    }
-
-    /// Get the AppLifecycleCoordinator use case for orchestrating
-    /// network startup and session readiness.
-    pub fn app_lifecycle_coordinator(&self) -> uc_app::usecases::AppLifecycleCoordinator {
-        let announcer = Arc::new(uc_app::usecases::DeviceNameAnnouncer::new(
-            self.app_runtime.wiring_deps().network_ports.peers.clone(),
-            self.app_runtime.wiring_deps().settings.clone(),
-        ));
-        uc_app::usecases::AppLifecycleCoordinator::from_deps(
-            uc_app::usecases::AppLifecycleCoordinatorDeps {
-                network: Arc::new(self.core.start_network_after_unlock()),
-                announcer: Some(announcer),
-                emitter: Arc::new(
-                    uc_app::usecases::app_lifecycle::adapters::LoggingSessionReadyEmitter,
-                ),
-                status: self.app_runtime.core.lifecycle_status().clone(),
-                lifecycle_emitter: Arc::new(uc_app::usecases::LoggingLifecycleEventEmitter),
-            },
-        )
-    }
-
-    pub fn sync_outbound_clipboard(
-        &self,
-    ) -> uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase {
-        uc_app::usecases::clipboard::sync_outbound::SyncOutboundClipboardUseCase::new(
-            self.app_runtime
-                .wiring_deps()
-                .clipboard
-                .system_clipboard
-                .clone(),
-            self.app_runtime
-                .wiring_deps()
-                .network_ports
-                .clipboard_outbound
-                .clone(),
-            self.app_runtime.wiring_deps().network_ports.peers.clone(),
-            self.app_runtime.wiring_deps().security.space_access.clone(),
-            self.app_runtime
-                .wiring_deps()
-                .device
-                .device_identity
-                .clone(),
-            self.app_runtime.wiring_deps().settings.clone(),
-            self.app_runtime
-                .wiring_deps()
-                .security
-                .transfer_cipher
-                .clone(),
-            self.app_runtime.wiring_deps().device.member_repo.clone(),
-        )
     }
 }
 

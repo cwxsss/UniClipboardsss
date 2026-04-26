@@ -32,12 +32,7 @@ pub mod sync_planner;
 pub mod update_settings;
 pub mod verify_keychain_access;
 
-pub use app_lifecycle::{
-    AppLifecycleCoordinator, AppLifecycleCoordinatorDeps, DeviceAnnouncer, DeviceNameAnnouncer,
-    InMemoryLifecycleStatus, LifecycleEvent, LifecycleEventEmitter, LifecycleState,
-    LifecycleStatusPort, LoggingLifecycleEventEmitter, LoggingSessionReadyEmitter,
-    SessionReadyEmitter,
-};
+pub use app_lifecycle::{InMemoryLifecycleStatus, LifecycleState, LifecycleStatusPort};
 pub use auto_unlock_encryption_session::AutoUnlockEncryptionSession;
 pub use clipboard::list_entry_projections::{
     EntryProjectionDto, ListClipboardEntryProjections, ListProjectionsError,
@@ -47,8 +42,7 @@ pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
 pub use membership::{GetMemberSyncPreferences, UpdateMemberSyncPreferences};
 pub use pairing::{
-    GetLocalDeviceInfo, GetP2pPeersSnapshot, ListSendablePeers, LocalDeviceInfo,
-    ResolveConnectionPolicy,
+    GetLocalDeviceInfo, GetP2pPeersSnapshot, LocalDeviceInfo, ResolveConnectionPolicy,
 };
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
 pub use start_network_after_unlock::StartNetworkAfterUnlock;
@@ -57,7 +51,7 @@ pub use verify_keychain_access::VerifyKeychainAccess;
 
 pub use clipboard::clipboard_write_coordinator::{ClipboardWriteCoordinator, ClipboardWriteIntent};
 
-pub use file_sync::{SyncInboundFileUseCase, SyncOutboundFileUseCase};
+pub use file_sync::SyncInboundFileUseCase;
 
 pub use sync_planner::{
     ClipboardSyncIntent, FileCandidate, FileSyncIntent, OutboundSyncPlan, OutboundSyncPlanner,
