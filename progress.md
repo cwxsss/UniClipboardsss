@@ -2976,3 +2976,30 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - C8b · 删 `uc-app/usecases/pairing/resolve_connection_policy.rs`(libp2p 时代连接策略,小独立文件)
 - C8c · 删 `uc-application/src/pairing/state_machine.rs`(F-105,含 `AwaitingUserConfirm` / `PairingChallenge` / `PairingResponse`,先 grep 确认 0 消费者)
 
+---
+
+## Session 2026-04-25(续 45) — Slice 4 P5c C8b · 删 uc-app resolve_connection_policy.rs
+
+**触发**:用户回 "开"。
+
+**消费者扫描**(确认 0 外部活引用):
+- `rg ResolveConnectionPolicy` → 仅自身定义 + `uc-app/usecases/pairing/mod.rs` re-export + `uc-app/usecases/mod.rs:42` 外层 re-export + `uc-application/space_access/orchestrator.rs:57,223` 注释提及(非代码)
+- 文件依赖的 core 类型 `ConnectionPolicy` / `PeerTrustStatus` / `ResolvedConnectionPolicy` / `ConnectionPolicyResolverError` / `ConnectionPolicyResolverPort` / `PeerId` 都是 task_plan §1528 / §1532 / §1534 计划要删的 libp2p 残留;C8b 删了消费者后 C8d 可以一波清
+
+**已做**:
+- **删** `uc-app/src/usecases/pairing/resolve_connection_policy.rs`(整文件 49 行)
+- **改** `uc-app/src/usecases/pairing/mod.rs`:重写为最简(去掉 `pub mod resolve_connection_policy;` + `pub use ResolveConnectionPolicy`)
+- **改** `uc-app/src/usecases/mod.rs:42`:`pub use pairing::{...}` 列表删 `ResolveConnectionPolicy`
+
+**验证**:
+- `cargo check -p uc-app -p uc-application -p uc-bootstrap -p uc-daemon -p uc-tauri`:✅ 通过(剩 3 个预存 warning,与本次无关)
+- `cargo test -p uc-app --lib`:✅ 7/7 通过(零回归)
+
+**Phase 5 删除清单进度**(C8b 后):
+- 已删 (16)
+- 待删 (7):`uc-application/pairing/state_machine.rs`、`uc-core ports/{connection_policy, discovery}.rs`、`uc-core/{ids/peer_id, network/events, network/connection_policy}.rs`、`uc-core/network/protocol/{file_transfer, heartbeat, device_announce, protocol_message}.rs`(注:`file_sync/{cleanup, copy_file_to_clipboard}` 留作 V3 active,不计待删)
+
+**下一步候选**:
+- C8c · 删 `uc-application/src/pairing/state_machine.rs`(F-105 中等大小,含 PIN-显示模型旧消息)
+- C8d · 一波删 `uc-core/ports/{connection_policy, discovery}.rs` + `uc-core/{ids/peer_id, network/events, network/connection_policy}.rs` + 4 个 protocol 文件 + 同步 mod.rs / lib.rs re-export(最大块,但纯 mechanical)
+

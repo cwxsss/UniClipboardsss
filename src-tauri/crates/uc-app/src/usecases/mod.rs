@@ -39,7 +39,7 @@ pub use delete_clipboard_entry::DeleteClipboardEntry;
 pub use get_settings::GetSettings;
 pub use initialize_encryption::InitializeEncryption;
 pub use membership::{GetMemberSyncPreferences, UpdateMemberSyncPreferences};
-pub use pairing::{GetLocalDeviceInfo, LocalDeviceInfo, ResolveConnectionPolicy};
+pub use pairing::{GetLocalDeviceInfo, LocalDeviceInfo};
 pub use search::{IndexClipboardEntry, RebuildSearchIndex, SearchClipboardEntries};
 pub use update_settings::UpdateSettings;
 pub use verify_keychain_access::VerifyKeychainAccess;
