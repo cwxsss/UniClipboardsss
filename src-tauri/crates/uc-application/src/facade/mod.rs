@@ -46,7 +46,7 @@ pub use clipboard_capture::{
 };
 pub use clipboard_history::{
     ClearHistoryResultView as ClipboardClearHistoryResultView, ClipboardHistoryError,
-    ClipboardHistoryFacade, ClipboardHistoryGateway, ClipboardListInput, ClipboardStatsView,
+    ClipboardHistoryFacade, ClipboardHistoryFacadeDeps, ClipboardListInput, ClipboardStatsView,
     EntryDetailView, EntryProjectionView, EntryResourceView,
 };
 pub use clipboard_inbound::{

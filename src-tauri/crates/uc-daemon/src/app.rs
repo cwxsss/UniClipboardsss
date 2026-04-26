@@ -14,26 +14,18 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::clipboard::compute_clipboard_stats;
-use uc_app::usecases::clipboard::get_entry_detail::EntryDetailResult;
-use uc_app::usecases::clipboard::get_entry_resource::EntryResourceResult;
-use uc_app::usecases::clipboard::list_entry_projections::EntryProjectionDto;
-use uc_app::usecases::clipboard::{ClearHistoryResult, ClipboardStats};
 use uc_app::usecases::CoreUseCases;
 use uc_application::facade::{
-    AppFacade, AppFacadeParts, ClipboardClearHistoryResultView, ClipboardHistoryError,
-    ClipboardHistoryFacade, ClipboardHistoryGateway, ClipboardListInput, ClipboardRestoreError,
-    ClipboardRestoreFacade, ClipboardRestoreGateway, ClipboardStatsView, DeviceFacade,
-    EncryptionFacade, EncryptionFacadeDeps, EntryDetailView, EntryProjectionView,
-    EntryResourceView, LifecycleFacade, LifecycleFacadeDeps, LifecycleStateView as LifecycleState,
-    LifecycleStateView, LifecycleStatusGateway, MemberRosterFacade, ResourceFacade,
-    ResourceFacadeDeps, SearchFacade, SearchFacadeError, SearchGateway, SearchPageView,
-    SearchRebuildAcceptedView, SearchResultView, SearchStatusView, SettingsFacade,
-    SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
+    AppFacade, AppFacadeParts, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
+    ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreGateway, DeviceFacade,
+    EncryptionFacade, EncryptionFacadeDeps, LifecycleFacade, LifecycleFacadeDeps,
+    LifecycleStateView as LifecycleState, LifecycleStateView, LifecycleStatusGateway,
+    MemberRosterFacade, ResourceFacade, ResourceFacadeDeps, SearchFacade, SearchFacadeError,
+    SearchGateway, SearchPageView, SearchRebuildAcceptedView, SearchResultView, SearchStatusView,
+    SettingsFacade, SpaceSetupFacade, StorageFacade, StorageFacadeDeps,
 };
 use uc_application::facade::{ManualRebuildResult, SearchCoordinator};
 use uc_application::space_access::SpaceAccessFacade;
-use uc_core::clipboard::link_utils::extract_domain;
 use uc_core::ids::EntryId;
 use uc_core::search::{ContentType as SearchContentType, SearchQuery, SearchResultsPage};
 
@@ -279,11 +271,43 @@ impl DaemonApp {
                 thumbnail_repo: self.runtime.wiring_deps().storage.thumbnail_repo.clone(),
                 blob_store: self.runtime.wiring_deps().storage.blob_store.clone(),
             })),
-            clipboard_history: Arc::new(ClipboardHistoryFacade::new(Box::new(
-                DaemonClipboardHistoryGateway {
-                    runtime: self.runtime.clone(),
-                },
-            ))),
+            clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
+                entry_repo: self
+                    .runtime
+                    .wiring_deps()
+                    .clipboard
+                    .clipboard_entry_repo
+                    .clone(),
+                selection_repo: self.runtime.wiring_deps().clipboard.selection_repo.clone(),
+                representation_repo: self
+                    .runtime
+                    .wiring_deps()
+                    .clipboard
+                    .representation_repo
+                    .clone(),
+                event_writer: self
+                    .runtime
+                    .wiring_deps()
+                    .clipboard
+                    .clipboard_event_repo
+                    .clone(),
+                payload_resolver: self
+                    .runtime
+                    .wiring_deps()
+                    .clipboard
+                    .payload_resolver
+                    .clone(),
+                blob_store: self.runtime.wiring_deps().storage.blob_store.clone(),
+                thumbnail_repo: self.runtime.wiring_deps().storage.thumbnail_repo.clone(),
+                file_transfer_repo: self
+                    .runtime
+                    .wiring_deps()
+                    .storage
+                    .file_transfer_repo
+                    .clone(),
+                search_index: Some(self.runtime.wiring_deps().search.search_index.clone()),
+                file_cache_dir: Some(storage_paths.cache_dir.clone()),
+            })),
             clipboard_restore: Arc::new(ClipboardRestoreFacade::new(Arc::new(
                 DaemonClipboardRestoreGateway {
                     runtime: self.runtime.clone(),
@@ -505,175 +529,6 @@ fn lifecycle_state_from_view(state: LifecycleStateView) -> LifecycleState {
         LifecycleStateView::Pending => LifecycleState::Pending,
         LifecycleStateView::Ready => LifecycleState::Ready,
         LifecycleStateView::NetworkFailed => LifecycleState::NetworkFailed,
-    }
-}
-
-struct DaemonClipboardHistoryGateway {
-    runtime: Arc<CoreRuntime>,
-}
-
-#[async_trait]
-impl ClipboardHistoryGateway for DaemonClipboardHistoryGateway {
-    async fn list_entries(
-        &self,
-        input: ClipboardListInput,
-    ) -> Result<Vec<EntryProjectionView>, ClipboardHistoryError> {
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let mut entries = usecases
-            .list_entry_projections()
-            .execute(input.limit, input.offset)
-            .await
-            .map_err(|err| ClipboardHistoryError::Internal(err.to_string()))?;
-
-        for entry in &mut entries {
-            entry.link_domains = entry
-                .link_urls
-                .as_ref()
-                .map(|urls| urls.iter().filter_map(|url| extract_domain(url)).collect());
-        }
-
-        Ok(entries.into_iter().map(entry_projection_to_view).collect())
-    }
-
-    async fn get_entry(&self, entry_id: &str) -> Result<EntryDetailView, ClipboardHistoryError> {
-        let parsed_id = EntryId::from(entry_id);
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let detail = usecases
-            .get_entry_detail()
-            .execute(&parsed_id)
-            .await
-            .map_err(map_clipboard_history_error)?;
-        Ok(entry_detail_to_view(detail))
-    }
-
-    async fn delete_entry(&self, entry_id: &str) -> Result<(), ClipboardHistoryError> {
-        let parsed_id = EntryId::from(entry_id);
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        usecases
-            .delete_clipboard_entry()
-            .execute(&parsed_id)
-            .await
-            .map_err(map_clipboard_history_error)
-    }
-
-    async fn toggle_favorite(
-        &self,
-        entry_id: &str,
-        is_favorited: bool,
-    ) -> Result<bool, ClipboardHistoryError> {
-        let parsed_id = EntryId::from(entry_id);
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        usecases
-            .toggle_favorite_clipboard_entry()
-            .execute(&parsed_id, is_favorited)
-            .await
-            .map_err(|err| ClipboardHistoryError::Internal(err.to_string()))
-    }
-
-    async fn stats(&self) -> Result<ClipboardStatsView, ClipboardHistoryError> {
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let entries = usecases
-            .list_entry_projections()
-            .execute(10_000, 0)
-            .await
-            .map_err(|err| ClipboardHistoryError::Internal(err.to_string()))?;
-        Ok(clipboard_stats_to_view(compute_clipboard_stats(&entries)))
-    }
-
-    async fn get_entry_resource(
-        &self,
-        entry_id: &str,
-    ) -> Result<EntryResourceView, ClipboardHistoryError> {
-        let parsed_id = EntryId::from(entry_id);
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let resource = usecases
-            .get_entry_resource()
-            .execute(&parsed_id)
-            .await
-            .map_err(map_clipboard_history_error)?;
-        Ok(entry_resource_to_view(resource))
-    }
-
-    async fn clear_history(
-        &self,
-    ) -> Result<ClipboardClearHistoryResultView, ClipboardHistoryError> {
-        let usecases = CoreUseCases::new(self.runtime.as_ref());
-        let result = usecases
-            .clear_clipboard_history()
-            .execute()
-            .await
-            .map_err(|err| ClipboardHistoryError::Internal(err.to_string()))?;
-        Ok(clear_history_to_view(result))
-    }
-}
-
-fn map_clipboard_history_error(err: anyhow::Error) -> ClipboardHistoryError {
-    let message = err.to_string();
-    let lower = message.to_lowercase();
-    if lower.contains("not found") {
-        ClipboardHistoryError::NotFound
-    } else if lower.contains("not text content") || lower.contains("not text") {
-        ClipboardHistoryError::UnsupportedContent
-    } else {
-        ClipboardHistoryError::Internal(message)
-    }
-}
-
-fn entry_projection_to_view(entry: EntryProjectionDto) -> EntryProjectionView {
-    EntryProjectionView {
-        id: entry.id,
-        preview: entry.preview,
-        has_detail: entry.has_detail,
-        size_bytes: entry.size_bytes,
-        captured_at: entry.captured_at,
-        content_type: entry.content_type,
-        thumbnail_url: entry.thumbnail_url,
-        is_encrypted: entry.is_encrypted,
-        is_favorited: entry.is_favorited,
-        updated_at: entry.updated_at,
-        active_time: entry.active_time,
-        file_transfer_status: entry.file_transfer_status,
-        file_transfer_reason: entry.file_transfer_reason,
-        link_urls: entry.link_urls,
-        link_domains: entry.link_domains,
-        file_sizes: entry.file_sizes,
-        image_width: entry.image_width,
-        image_height: entry.image_height,
-    }
-}
-
-fn entry_detail_to_view(detail: EntryDetailResult) -> EntryDetailView {
-    EntryDetailView {
-        id: detail.id,
-        content: detail.content,
-        size_bytes: detail.size_bytes,
-        created_at_ms: detail.created_at_ms,
-        active_time_ms: detail.active_time_ms,
-        mime_type: detail.mime_type,
-    }
-}
-
-fn entry_resource_to_view(resource: EntryResourceResult) -> EntryResourceView {
-    EntryResourceView {
-        blob_id: resource.blob_id.map(|id| id.to_string()),
-        mime_type: resource.mime_type,
-        size_bytes: resource.size_bytes,
-        url: resource.url,
-        inline_data: resource.inline_data,
-    }
-}
-
-fn clipboard_stats_to_view(stats: ClipboardStats) -> ClipboardStatsView {
-    ClipboardStatsView {
-        total_items: stats.total_items,
-        total_size: stats.total_size,
-    }
-}
-
-fn clear_history_to_view(result: ClearHistoryResult) -> ClipboardClearHistoryResultView {
-    ClipboardClearHistoryResultView {
-        deleted_count: result.deleted_count,
-        failed_entries: result.failed_entries,
     }
 }
 

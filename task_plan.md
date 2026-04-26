@@ -3023,3 +3023,35 @@ Phase 0(已完成,2026-04-18)
 4. `api/encryption.rs` / `api/lifecycle.rs`:依赖 `uc-app` 旧用例,需要先判断是否搬迁用例还是新增 facade 包装。
 
 **下一步选择**:先评估 `api/search.rs`,若改动范围过大,改收 `api/encryption.rs` / `api/lifecycle.rs` 这类较小入口。
+
+---
+
+### Phase D10 · clipboard history 旧用例物理迁移 — complete (2026-04-26)
+
+**目标**: daemon `app.rs` 不再依赖 `uc-app::usecases::clipboard::*`,clipboard history 6 个旧用例物理迁入 `uc-application::usecases::clipboard_history`。
+
+**范围**:
+- `ListClipboardEntryProjections` (578 行) + `EntryProjectionDto` + `compute_clipboard_stats`
+- `GetEntryDetail` / `GetEntryResource` / `ToggleFavorite`
+- `DeleteClipboardEntry` (从 `uc-app::usecases::delete_clipboard_entry`) + `ClearClipboardHistory`
+
+**结果**:
+- 在 `uc-application/src/usecases/clipboard_history/` 下新增 6 个 `pub(crate)` 模块,完整复制实现并把 `pub` 全部下沉为 `pub(crate)`。
+- `ClipboardHistoryFacade` 改为 `from(deps: ClipboardHistoryFacadeDeps)` 风格,直接持有 6 个 use case 实例。
+- 删除 `ClipboardHistoryGateway` trait 和 `pub use`,facade 不再走 gateway。
+- daemon `app.rs` 删除 `DaemonClipboardHistoryGateway` 适配器、5 个 view 转换函数、`map_clipboard_history_error`、对 `uc_app::usecases::clipboard::*` 的全部 import。
+- daemon 装配根改为 `ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps { ... })`,从 `wiring_deps()` 抽 9 个 ports + `cache_dir` 直接注入。
+
+**过渡 vs 完整收口**:
+- 本轮从"过渡 gateway"升级为"facade 直接持有 use case",符合 `uc-application/AGENTS.md` §11.4 (use case `pub(crate)`,只通过 facade 暴露)。
+- daemon 不再 `use uc_app::usecases::clipboard::*`,`use uc_app::usecases::CoreUseCases` 还残留 3 处:`recover_encryption_session`、`DaemonSearchGateway`、`DaemonClipboardRestoreGateway`。这些是后续 Phase D11+ 范围。
+
+**验证**:
+- `cargo check -p uc-application`:passed
+- `cargo check -p uc-daemon`:passed
+- `cargo test -p uc-application --lib`:221 passed
+- `cargo test -p uc-daemon --lib`:25 passed
+
+**下一步候选**:
+- search/restore gateway 同步收口(把 `DaemonSearchGateway`、`DaemonClipboardRestoreGateway` 内的旧 usecase 也搬到 `uc-application`)。
+- `recover_encryption_session` 拆出 `auto_unlock_encryption_session` 旧用例。

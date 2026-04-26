@@ -2269,3 +2269,33 @@ P3-pre 实施清单:
 - `cargo test -p uc-daemon --lib`:25 passed
 
 ---
+
+### F-131 · clipboard history use case 物理迁移成功条件
+
+**发现时间**: 2026-04-26
+
+**背景**: 之前 daemon HTTP handler 已经经 `AppFacade.clipboard_history` 进入,但 `DaemonClipboardHistoryGateway` 仍 `use uc_app::usecases::CoreUseCases::new(runtime)` 在内部反向调用 6 个旧 use case。这是"过渡 gateway"——facade 是 application 层的,实现却在 daemon 装配层。
+
+**关键事实**: `uc-application/Cargo.toml` 没有 `uc-app` 依赖。换言之,要让 `ClipboardHistoryFacade` 在 application 内部直接持有 use case 而不再走 daemon gateway,**必须把 6 个 use case 物理搬过来**——不能"调用 uc-app 里的实现"。
+
+**use case 物理迁移阻力小的原因**:
+- 6 个 use case 全部只依赖 `uc-core::ports::*`,没有 `uc-app` 内部其他模块的耦合(唯一例外:`ClearClipboardHistoryUseCase` 依赖 `DeleteClipboardEntryUseCase`,本轮把 `delete_entry` 也一起搬,放在同模块)。
+- 没有共享的流程状态、状态机或 orchestrator,纯粹是"通过 ports 跑薄编排"。
+- 实现里没有 `super::super` 类型的跨模块导入(只有 `clear_history` 用 `super::delete_entry`),搬走时改 import 即可。
+
+**搬迁后 facade 设计原则**(符合 `uc-application/AGENTS.md` §11.4):
+1. use case 全部 `pub(crate)`,只通过 facade 暴露。
+2. facade 用 `*FacadeDeps` 结构接收 ports,内部一次性构造 use case,不暴露 use case 类型。
+3. 表示层(`link_domains` 提取、view 类型映射、错误归类)由 facade 收口;use case 输出应用层 DTO,facade 转 view。
+4. 删除 `*Gateway` trait——它本来是为了让 daemon 装配层注入实现而设的过渡接口,迁移完成后没有存在意义(daemon 不再需要适配)。
+
+**避坑点**:
+- `EntryResourceResult.entry_id` 字段在 facade 转 view 时被丢弃。搬迁时直接删字段,免得 dead_code warning。
+- daemon 装配根注入 9 个 ports + `cache_dir`,看起来很冗长,但比 daemon 写一个 100 行 gateway 更清晰——deps 是数据,gateway 是行为耦合。
+
+**验证**:
+- `cargo check -p uc-application -p uc-daemon`:passed
+- `cargo test -p uc-application --lib`:221 passed
+- `cargo test -p uc-daemon --lib`:25 passed
+
+---

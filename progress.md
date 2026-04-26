@@ -4038,3 +4038,52 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 **未纳入本次提交**:
 - `.claude/skills/...` 现有改动不是本轮产生,不 stage。
+
+---
+
+## Session 2026-04-26 — daemon application 边界收口 · clipboard history 旧用例物理迁移 (Phase D10)
+
+**触发**: 用户决定继续清理 daemon 对 `uc-app::usecases` 的依赖,方案 A——把 clipboard history 6 个旧用例整体物理迁入 `uc-application`,而不是继续走 daemon 装配层 gateway。
+
+**完成标准**:
+- `daemon/src/app.rs` 不再 `use uc_app::usecases::clipboard::*`。
+- `DaemonClipboardHistoryGateway` 适配器和相关 view 转换函数(5 个 `*_to_view` + 1 个 `map_clipboard_history_error`)从 daemon 删除。
+- `ClipboardHistoryFacade` 在 `uc-application` 内部直接持有 6 个 use case 实例,不再走 `ClipboardHistoryGateway` trait。
+- `cargo check -p uc-application -p uc-daemon` 通过,`cargo test` 通过。
+
+**已做**:
+- 新增 `uc-application/src/usecases/clipboard_history/`(全部 `pub(crate)`):
+  - `mod.rs` (含 `ClipboardStats` + `compute_clipboard_stats`)
+  - `list_entry_projections.rs`:`ListClipboardEntryProjectionsUseCase` + `EntryProjectionDto` + `ListProjectionsError` + `detect_link_urls` / `compute_file_sizes`
+  - `get_entry_detail.rs`:`GetEntryDetailUseCase` + `EntryDetailResult`
+  - `get_entry_resource.rs`:`GetEntryResourceUseCase` + `EntryResourceResult`(顺手删掉 facade 用不上的 `entry_id` 字段)
+  - `toggle_favorite.rs`:`ToggleFavoriteClipboardEntryUseCase` + `ToggleFavoriteError`
+  - `delete_entry.rs`:`DeleteClipboardEntryUseCase`(`from_ports` + `with_file_cache_dir` + `with_search_index` 构造链)
+  - `clear_history.rs`:`ClearClipboardHistoryUseCase` + `ClearHistoryResult`(内部依赖兄弟模块的 `DeleteClipboardEntryUseCase`,不再 `super::super`)
+- `uc-application/src/usecases/mod.rs` 注册 `pub(crate) mod clipboard_history;`。
+- 改造 `uc-application/src/facade/clipboard_history/mod.rs`:
+  - 删除 `ClipboardHistoryGateway` trait。
+  - 新增 `ClipboardHistoryFacadeDeps`(9 个 ports + `Option<SearchIndex>` + `Option<file_cache_dir>`)。
+  - `ClipboardHistoryFacade::new(deps)` 内部一次性构造 6 个 use case;view 类型 / 错误映射全部移到 facade 文件本地。
+  - `link_domains` 由 facade 注入(从 `link_urls` 提 domain),use case 输出更纯。
+- `uc-application/src/facade/mod.rs` 的 pub use 用 `ClipboardHistoryFacadeDeps` 替换 `ClipboardHistoryGateway`。
+- `uc-daemon/src/app.rs`:
+  - 删除 `use uc_app::usecases::clipboard::*` 6 行 import 和 view 类型 import。
+  - 删除 `DaemonClipboardHistoryGateway` struct 和 7 个 trait 方法的实现(约 100 行)。
+  - 删除 5 个 `*_to_view` 转换函数 + `map_clipboard_history_error`(约 60 行)。
+  - `AppFacade` 装配处 `clipboard_history` 字段改为 `ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps { ... })`,从 `wiring_deps()` 抽 `clipboard.{clipboard_entry_repo, selection_repo, representation_repo, clipboard_event_repo, payload_resolver}`、`storage.{blob_store, thumbnail_repo, file_transfer_repo}`、`search.search_index`、`storage_paths.cache_dir` 注入。
+
+**验证**:
+- `cargo check -p uc-application`:✅ passed,无 warning
+- `cargo check -p uc-daemon`:✅ passed,无 warning
+- `cargo test -p uc-application --lib`:✅ 221 passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**未纳入本次提交**:
+- `uc-cli/src/commands/members.rs:112` `match &RosterError` 缺 `Unavailable` 分支——commit `4aba60cc arch: route daemon peer query through app facade` 引入的 cli 端历史欠账,与 D10 无关。`cargo check --workspace` 因此失败,但 `cargo check -p uc-application -p uc-daemon` 干净。
+- `daemon/src/app.rs` 仍有 3 处 `CoreUseCases::new(...)`:`recover_encryption_session`(auto-unlock)、`DaemonSearchGateway`(search query)、`DaemonClipboardRestoreGateway`(restore)。这些是后续 phase 的 scope。
+- `uc-app::usecases::clipboard::*` 旧文件仍保留(uc-tauri / uc-cli / uc-app 内部仍引用),后续逐个调用方迁移完再统一删除。
+
+**下一步候选**:
+- D11 — search/restore gateway 同步收口(把 `DaemonSearchGateway`、`DaemonClipboardRestoreGateway` 内的旧 usecase 也搬到 `uc-application`)。
+- D12 — `recover_encryption_session` 拆 `auto_unlock_encryption_session` 旧用例。
