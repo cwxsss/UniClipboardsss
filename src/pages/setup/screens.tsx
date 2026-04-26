@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { getSettings } from '@/api/daemon/settings'
 import type {
   InitializeSpaceErrorKind,
   RedeemInvitationErrorKind,
@@ -205,6 +206,26 @@ export function InitializeSpaceScreen({
   const [errorKind, setErrorKind] = useState<InitializeSpaceErrorKind | null>(null)
 
   const errorMessage = initializeErrorMessage(t, errorKind)
+
+  // Pre-fill the device name with the daemon-resolved default (the OS
+  // hostname, written during bootstrap). Skip the write if the user has
+  // already typed something so a late response never clobbers their input.
+  useEffect(() => {
+    let cancelled = false
+    getSettings()
+      .then(s => {
+        if (cancelled) return
+        const fallback = s.general.deviceName?.trim() ?? ''
+        if (!fallback) return
+        setDeviceName(prev => (prev ? prev : fallback))
+      })
+      .catch(() => {
+        // Non-fatal — user can still type a name manually.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const handleSubmit = async () => {
     setErrorKind(null)
