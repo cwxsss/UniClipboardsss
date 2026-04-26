@@ -35,5 +35,4 @@ pub use file_transfer::{
     FileTransferCancellationReason, FileTransferDirection, FileTransferEvent,
     FileTransferFailureReason, FileTransferProgress,
 };
-pub use ids::{BlobId, DeviceId, PeerId, SessionId};
-pub use network::{NetworkEvent, NetworkStatus, ProtocolMessage};
+pub use ids::{BlobId, DeviceId, SessionId};

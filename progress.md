@@ -3056,3 +3056,72 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 **下一步候选**:
 - C8d · 一波删 `uc-core/ports/{connection_policy, discovery}.rs` + `uc-core/{ids/peer_id, network/events, network/connection_policy}.rs` + 4 个 `network/protocol/{file_transfer, heartbeat, device_announce, protocol_message}.rs` + 同步 `mod.rs` / `lib.rs` re-export(纯 mechanical,9 文件)
 
+
+---
+
+## Session 2026-04-25(续 47) — Slice 4 P5c C8d · 物理删 uc-core 9+1 文件
+
+**触发**:用户回 `/compact 继续 C8d`,延续 C8c 的扫描-扩展模式。
+
+**消费者扫描汇总**(全部 0 业务消费,只剩 uc-core 内部 mod.rs / lib.rs re-export 死链):
+- `ports/connection_policy.rs`(`ConnectionPolicyResolverError` / `ConnectionPolicyResolverPort`)→ 仅 `ports/mod.rs` re-export
+- `ports/discovery.rs`(`DiscoveryPort`)→ 仅 `ports/mod.rs`
+- `ids/peer_id.rs`(`PeerId`)→ 仅 `ids/mod.rs` + `lib.rs` + `ports/connection_policy.rs`(随删);**外部 0 `uc_core::PeerId` 引用**
+- `network/events.rs`(`NetworkEvent` / `NetworkStatus` / `DiscoveredPeer` / `ConnectedPeer` / `ProtocolDirection` / `ProtocolDenyReason`)→ 仅 `network/mod.rs` + `lib.rs`
+- `network/connection_policy.rs`(`PeerTrustStatus` / `ProtocolKind` / `AllowedProtocols` / `ConnectionPolicy` / `ResolvedConnectionPolicy`)→ 仅 `network/mod.rs`
+- `network/protocol/file_transfer.rs`(`FileTransferMessage`)→ 仅 `protocol/mod.rs`
+- `network/protocol/heartbeat.rs`(`HeartbeatMessage`)→ 仅 `protocol/mod.rs` + `network/mod.rs`
+- `network/protocol/device_announce.rs`(`DeviceAnnounceMessage`)→ 仅 `protocol/mod.rs` + `network/mod.rs`
+- `network/protocol/protocol_message.rs`(`ProtocolMessage`)→ 仅 `protocol/mod.rs` + `network/mod.rs` + `lib.rs`
+- **新增** `network/protocol/pairing.rs`(整文件 `PairingMessage` 及 9 子 type)→ 仅 uc-core 内部链(`events.rs` 已随删 / `protocol_message.rs` 已随删 / `protocol/mod.rs` re-export 已删);**Slice 1 用的 `PairingReject` / `PairingChallenge` 等同名 type 来自完全独立的 `uc-core::pairing::session_message`,模块路径不同**(task_plan §1553 计划的整文件删除,确认可执行)
+
+**完成标准**:
+- 物理删 10 个文件
+- 收尾 `uc-core/src/network/protocol/mod.rs`:只留 `clipboard` / `clipboard_payload_v3` 两子模块 + 4 个 MIME 常量 + 对应 re-export
+- 收尾 `uc-core/src/network/mod.rs`:只留 `protocol` / `session` 两子模块 + clipboard 相关 re-export
+- 收尾 `uc-core/src/ports/mod.rs`:删 `connection_policy` / `discovery` 子模块声明 + 对应 re-export
+- 收尾 `uc-core/src/ids/mod.rs`:删 `peer_id` 子模块 + re-export
+- 收尾 `uc-core/src/lib.rs:38-39`:从 `pub use ids::{...}` 列表删 `PeerId`,整行删 `pub use network::{NetworkEvent, NetworkStatus, ProtocolMessage};`
+- `cargo check` 全绿,`cargo test` 零回归(2 个预存 dispatch_* fail 持平)
+
+**已做**:
+- **删** 10 文件:`crates/uc-core/src/{ports/connection_policy.rs, ports/discovery.rs, ids/peer_id.rs, network/events.rs, network/connection_policy.rs, network/protocol/file_transfer.rs, network/protocol/heartbeat.rs, network/protocol/device_announce.rs, network/protocol/protocol_message.rs, network/protocol/pairing.rs}`
+- **改** `network/protocol/mod.rs`:从 24 行精简到 12 行(删 5 个 `mod` + 5 处 re-export 行)
+- **改** `network/mod.rs`:从 23 行精简到 12 行(删 `connection_policy` / `events` 两子模块 + 全部 pairing-protocol re-export)
+- **改** `ports/mod.rs`:删 `pub mod connection_policy;` + `mod discovery;` + 2 行 re-export
+- **改** `ids/mod.rs`:删 `pub mod peer_id;` + `pub use peer_id::PeerId;`
+- **改** `lib.rs`:`pub use ids::{BlobId, DeviceId, PeerId, SessionId}` → `pub use ids::{BlobId, DeviceId, SessionId}`;整行删 `pub use network::{NetworkEvent, NetworkStatus, ProtocolMessage};`
+
+**验证**:
+- `cargo check -p uc-core`:✅(只 uc-core 单包)
+- `cargo check -p uc-app -p uc-application -p uc-bootstrap -p uc-daemon -p uc-tauri -p uc-cli -p uc-infra -p uc-platform -p uc-daemon-client`:✅ 全过,只剩 3 个预存 warning(`Kek` import / `LocalIdentity` / `DuplicateIgnored`)
+- `cargo test -p uc-core --lib`:✅ 38/38
+- `cargo test -p uc-app --lib`:✅ 7/7
+- `cargo test -p uc-daemon --lib`:✅ 25/25(presence_monitor / setup_events / v2::setup 全套)
+- `cargo test -p uc-application --lib`:189/191,2 fail(`facade::clipboard::facade::tests::dispatch_entry_returns_public_outcome_for_online_peer` / `dispatch_snapshot_encodes_envelope_and_fans_out`)**=== 续 40 T3.2 S1 已确认预存欠账,与 C8d 无关**
+
+**Phase 5 删除清单进度**(C8d 后):
+- 已删 (17 计数,但实际 +10 文件):本次新增 10 个 uc-core 物理删除
+- 待删:依据 task_plan §1515-1599,剩余主要是 uc-platform / uc-bootstrap libp2p 装配残骸 + Cargo.toml 依赖清理(§1574-1599),以及 task_plan §1554 提到的 `network/protocol/clipboard.rs` 内部精简(`ClipboardMessage` / `ClipboardPayloadVersion` 死代码,但因 `FileTransferMapping` 仍活,只能 type-level 精简而非整文件删)
+
+**净瘦身**:`-1024 行`左右(10 文件总和:`events.rs:130` + `connection_policy.rs:106` + `pairing.rs:310` + `protocol_message.rs:59` + `discovery.rs:~30` + `connection_policy(ports).rs:~25` + `peer_id.rs:~50` + `file_transfer.rs:~80` + `heartbeat.rs:~10` + `device_announce.rs:~10`)+ mod.rs / lib.rs ~30 行精简。
+
+**task_plan 对照确认**:
+- ✅ §1528-1529:`ports/connection_policy.rs` + `ports/discovery.rs` 已删
+- ✅ §1532:`ids/peer_id.rs` 已删
+- ✅ §1533:`network/events.rs` 已删
+- ✅ §1534:`network/connection_policy.rs` 已删
+- ✅ §1535-1538:4 个 protocol 文件已删
+- ✅ §1553:`network/protocol/pairing.rs` 整文件已删(本次"扩大"对应)
+- ✅ §1555-1559:相关 mod.rs / ids/mod.rs / lib.rs 同步收尾全部完成
+- ⚠️ §1554:`network/protocol/clipboard.rs` 内部精简未做(`ClipboardMessage` / `ClipboardPayloadVersion` 死,但要保 `FileTransferMapping`,需谨慎处理) → 留待下一次 C8e
+- ⚠️ §1556 措辞("删 events / connection_policy 子模块声明")已落实,但 task_plan 文本未勾选
+
+**风险后顾**:
+- `clipboard.rs` 中 `ClipboardMessage` / `ClipboardPayloadVersion` 现成"无下游 re-export 的孤岛 pub 类型",编译器**未**报 dead_code 警告(因 pub item dead_code 默认不警告);若要彻底清理,下一波(C8e)需 type-level 精简该文件,删除这两 type
+- `network/mod.rs` 仍 re-export `ClipboardMessage` / `ClipboardPayloadVersion`,这是兼容性 noise,可顺手在 C8e 一并清掉
+
+**下一步候选**:
+- C8e · `network/protocol/clipboard.rs` type-level 精简 + `network/mod.rs` 最终瘦身(纯 mechanical,小)
+- C9 · uc-platform / uc-bootstrap libp2p 装配残骸清理(task_plan §1574-1599,中等;可能涉及多文件 wiring 调整)
+- C10 · workspace `Cargo.toml` libp2p / libp2p-stream 依赖项删除(task_plan §1596-1598;是大瘦身,但要先确认所有 use 端清完)

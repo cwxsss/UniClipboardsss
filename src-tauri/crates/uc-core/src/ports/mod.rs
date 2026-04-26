@@ -22,9 +22,7 @@ pub mod clipboard;
 mod clipboard_change_handler;
 mod clipboard_event;
 mod clock;
-pub mod connection_policy;
 pub mod device_identity;
-mod discovery;
 pub mod errors;
 pub mod file_transfer_repository;
 mod hash;
@@ -43,8 +41,6 @@ mod timer;
 pub use cache_fs::{CacheFsPort, DirEntry as CacheFsDirEntry};
 pub use clipboard_event::*;
 pub use clock::*;
-pub use connection_policy::{ConnectionPolicyResolverError, ConnectionPolicyResolverPort};
-pub use discovery::DiscoveryPort;
 pub use hash::*;
 pub use timer::TimerPort;
 
