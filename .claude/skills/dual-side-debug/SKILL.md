@@ -19,6 +19,56 @@ The helper script lives at `.claude/skills/dual-side-debug/dual-logs.sh`. It is 
 * Format: **JSON Lines**. Each line has at least `timestamp` (UTC, ISO-8601 with `Z`), `level`, `target`, `message`, `span`, `device_id`, plus structured fields.
 * The date in the filename is **UTC**, not local time. A file named `...2026-04-25` can be the live file while it is still 2026-04-24 in PDT.
 
+## Mount setup (do this once per Mac reboot)
+
+The Windows logs only exist on this Mac because an SMB share is mounted from `DESKTOP-HIC7MLI`. The mount point is **not** auto-created — you must `mkdir` it first (otherwise `mount_smbfs` fails with `No such file or directory`), and the mount itself does **not** survive a reboot or a disconnect.
+
+Before debugging, verify a mount exists:
+
+```bash
+mount | grep -E 'win-uniclipboard|win-local' || echo "no SMB mount yet"
+```
+
+If nothing is mounted, **stop and ask the user before running `mount_smbfs`** — it prompts for the Windows password interactively and the agent shouldn't silently do credential prompts. Hand the user the exact commands and let them run via `! <cmd>`.
+
+There are two mount layouts in use; pick based on the use case:
+
+### A. Narrow mount — matches the script's default `WIN_LOGS`
+
+Mount **just the uniclipboard profile dir** at `/tmp/win-uniclipboard`. This is what `dual-logs.sh` expects out of the box, no env var needed:
+
+```bash
+mkdir -p /tmp/win-uniclipboard
+mount_smbfs '//DESKTOP-HIC7MLI/Users/mark/AppData/Local/app.uniclipboard.desktop-<WIN_PROFILE>' /tmp/win-uniclipboard
+```
+
+Caveat: this pins you to **one** Windows profile. Switching the Windows side to a different `UC_PROFILE` requires unmounting and re-mounting.
+
+### B. Broad mount — entire `AppData/Local`
+
+Mount the whole `Local` folder at `/tmp/win-local`. This lets you reach any profile without re-mounting, but you must point the script at the right subdir via `WIN_LOGS`:
+
+```bash
+mkdir -p /tmp/win-local
+mount_smbfs '//DESKTOP-HIC7MLI/Users/mark/AppData/Local' /tmp/win-local
+
+# Then for every dual-logs.sh invocation:
+WIN_LOGS=/tmp/win-local/app.uniclipboard.desktop-<WIN_PROFILE>/logs \
+  .claude/skills/dual-side-debug/dual-logs.sh status
+```
+
+(Or `export WIN_LOGS=...` once for the shell session.)
+
+### Tearing down
+
+If the mount is wedged (Finder hangs, `ls` blocks for 30s), unmount cleanly before re-mounting:
+
+```bash
+umount /tmp/win-uniclipboard   # or /tmp/win-local
+```
+
+If `umount` fails because the path is busy, fall back to `diskutil unmount force /tmp/win-uniclipboard`.
+
 ## Profile resolution (DO NOT skip this step)
 
 The default macOS profile is **`dev`** (`package.json`'s `tauri:dev` script sets `UC_PROFILE=dev`). Always treat `dev` as the assumed profile **unless** the user has said otherwise in this conversation.
