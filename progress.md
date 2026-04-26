@@ -3219,3 +3219,66 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - W · 处理 3 个预存 warning(小,1 commit)
 - 旁路 · task_plan §1554 旁支:`network/protocol/clipboard.rs` 已在 C8e 完成,但 task_plan 文本未勾选 — 文档同步
 - 新阶段 · Phase 6+ 或其他 milestone(需重看 task_plan 或与用户对齐)
+
+---
+
+## Session 2026-04-25(续 50) — Slice 4 P5c C10 · Cargo 终极一击 + uc-platform 死残骸
+
+**触发**:用户回 "c10",P5c 真正终结。
+
+**实情扫描**(task_plan §1596-1602 大部分已自然完成):
+- ✅ §1596:workspace `Cargo.toml` 0 `libp2p` deps
+- ✅ §1597-1599:`uc-platform` / `uc-app` / `uc-tauri` Cargo.toml 0 `libp2p` deps;`uc-tauri` `uc-app` 依赖保留
+- ✅ §1600:`iroh` 0 feature gate(直接默认)
+- ✅ §1601:无遗留(0 处 feature 引用)
+- ✅ §1602(隐含 ws event 清理):§1603 已确认 `PeerNameUpdatedPayload` / `PeerConnectionChangedPayload` 仍是活的(setup-v2 / iroh 路径),`PeerDiscoveredPayload` / `PeerLostPayload` 0 命中(早删)
+- ✅ §1623(rg -w libp2p):仅命中注释/文档(task_plan 明确允许)
+- ✅ §1628:Cargo.lock 0 `libp2p` 包
+
+**深度扫描发现 4 个真死残骸**(task_plan 未列):
+1. `uc-platform/src/net_utils.rs:15 get_physical_lan_ip()` — 90 行 + doc 明确 "for libp2p to listen on" + 0 外部消费者
+2. `uc-platform/src/adapters/protocol_ids.rs::ProtocolId enum` — 24 行 + doc 明确 "libp2p stream protocol identifiers" + 0 外部消费者(其中 `Pairing` / `PairingStream` / `Business` / `FileTransfer` / `FileTransferV2` 5 个 variant 全死)
+3. `uc-platform/src/adapters/mod.rs` — 整目录已无功能,仅剩 `pub mod protocol_ids;` + 1 段 P5c 历史标语注释("本目录现在只剩 protocol_ids,uc-app 仍用作协议常量"——但实际 grep 显示外部 0 消费者,注释过期)
+4. `uc-observability/Cargo.toml` `__wave0_scaffold_87 = []` — Phase 87 早期 scaffold feature,0 消费者
+
+**完成标准**:
+- 删 `uc-platform/src/net_utils.rs` + `uc-platform/src/adapters/{mod.rs, protocol_ids.rs}` 整 `adapters/` 目录
+- 改 `uc-platform/src/lib.rs` 删 `pub mod adapters;` + `pub mod net_utils;`
+- 改 `uc-platform/Cargo.toml` 删 `local-ip-address = "0.6"` 依赖(随 net_utils 删除而孤立)
+- 改 `uc-observability/Cargo.toml` 删 `[features] __wave0_scaffold_87 = []` 整段(0 消费者)
+- `cargo check --workspace` 全绿,`Cargo.lock` 同步去掉 `local-ip-address` 传递依赖
+
+**已做**:
+- **删** `uc-platform/src/net_utils.rs`(90 行,含 `get_physical_lan_ip` + 4 个 helper fn)
+- **删** `uc-platform/src/adapters/protocol_ids.rs`(24 行,5-variant `ProtocolId` enum)
+- **删** `uc-platform/src/adapters/mod.rs`(13 行,纯模块入口 + 历史注释)
+- **rmdir** `uc-platform/src/adapters/`(空目录清理)
+- **改** `uc-platform/src/lib.rs`:删 `pub mod adapters;` + `pub mod net_utils;`(2 行)
+- **改** `uc-platform/Cargo.toml`:删 `# Network utilities\nlocal-ip-address = "0.6"`(2 行 + 1 注释行)
+- **改** `uc-observability/Cargo.toml`:删 `[features]\n__wave0_scaffold_87 = []`(末尾 2 行)
+
+**验证**:
+- `cargo check --workspace`:✅ 5m39s 全过,只剩 3 个预存 warning(`Kek` / `LocalIdentity` / `DuplicateIgnored`)
+- `Cargo.lock` 自动更新(local-ip-address 及其传递依赖移除)
+- task_plan §1623 + §1628 完整验收 grep 通过
+
+**Phase 5 删除清单进度**(C10 后):
+- task_plan §1574-1603 + §1623-1628 实质条目全部完成或自然完成
+- 真路径:Cargo workspace 0 libp2p deps,Cargo.lock 0 libp2p crates,libp2p 命中仅存于注释/文档(约 30 处,task_plan §1623 明确允许)
+- uc-platform 死代码(`net_utils` / `adapters/`)清零
+
+**净瘦身**:`-127 行`(net_utils 90 + protocol_ids 24 + adapters/mod 13)+ -3 Cargo.toml 行 + -2 features 行 = `-132 行`;Cargo.lock 同步移除 1 直接 dep + 数个传递依赖
+
+**P5c 总裁切**(C1 → C10):
+- **13 个 commit**(C1-C8e + C9 + C10),累计 **-5028 行** 左右
+- 删除 31 个文件 / 1 整目录(`uc-application/pairing/` 11 文件 + `uc-platform/adapters/` 2 文件 + `uc-app/usecases/{file_sync,pairing}` 数 + `uc-core/{ports,ids,network/protocol}` 10 + `uc-platform/{net_utils,adapters/}` 3)
+- 删除 1 直接 Cargo dep(`local-ip-address`)+ 2 个 features(`__wave0_scaffold_87`)
+- 真路径 libp2p 物理痕迹清零(代码 + Cargo + lock)
+- 历史 Slice 2 Phase 3 / Slice 4 P5a-4 注释全部现状化
+- 唯一未完工:3 个预存 warning(2 dead variants + 1 unused import),不属于 P5c
+
+**下一步候选**(已完全离开 P5c 主线):
+- W · 处理 3 个预存 warning(小,1 commit)
+- 旁路 · task_plan §1554 文本同步标 ✅(已在 C8e 完成)
+- 新阶段 · Phase 6 真机端到端验收(task_plan §1645-1665) — 需要双机环境
+- 新阶段 · Slice 5 后续优化(task_plan §1668+)

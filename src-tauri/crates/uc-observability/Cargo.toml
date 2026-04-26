@@ -37,6 +37,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "chrono
 tempfile = "3"
 opentelemetry-stdout = "0.31"
 serial_test = "3"
-
-[features]
-__wave0_scaffold_87 = []
