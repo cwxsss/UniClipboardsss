@@ -518,8 +518,9 @@ mod tests {
 
     /// Verdict 1 — `dispatch_entry` delegates to the inner use case and
     /// returns the public-shape outcome. mockall asserts: peer_addr_repo
-    /// listed once, presence checked once for peer-a, encrypt called
-    /// once, dispatch called once for peer-a.
+    /// listed once, encrypt called once, dispatch called once for peer-a.
+    /// Presence is intentionally NOT consulted (see dispatch_entry.rs
+    /// module doc on iteration source).
     #[tokio::test]
     async fn dispatch_entry_returns_public_outcome_for_online_peer() {
         let mut repo = MockPeerAddrRepo::new();
@@ -527,12 +528,7 @@ mod tests {
             .times(1)
             .returning(|| Ok(vec![record("peer-a")]));
 
-        let mut presence = MockPresence::new();
-        presence
-            .expect_current_state()
-            .with(eq(DeviceId::new("peer-a")))
-            .times(1)
-            .returning(|_| ReachabilityState::Online);
+        let presence = MockPresence::new();
 
         let mut cipher = MockCipher::new();
         cipher
@@ -640,12 +636,7 @@ mod tests {
             .times(1)
             .returning(|| Ok(vec![record("peer-a")]));
 
-        let mut presence = MockPresence::new();
-        presence
-            .expect_current_state()
-            .with(eq(DeviceId::new("peer-a")))
-            .times(1)
-            .returning(|_| ReachabilityState::Online);
+        let presence = MockPresence::new();
 
         let mut cipher = MockCipher::new();
         // Encrypt gets the V3 envelope bytes, not the raw text. We just

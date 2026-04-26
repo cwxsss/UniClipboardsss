@@ -3347,3 +3347,51 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - 修 2 个 dispatch_* 测试欠账(独立 commit,需仔细复核 mock 期望与实际调用)
 - Phase 6 真机端到端验收(需双机环境)
 - Slice 5 后续优化(task_plan §1668+)
+
+---
+
+## Session 2026-04-25(续 52) — P5c 收官 · 修 2 个 dispatch_* 测试预存欠账
+
+**触发**:用户回 "sure",P5c 真终结(零长期欠账)。
+
+**根因诊断**:
+- 2 个 fail 测试(`dispatch_entry_returns_public_outcome_for_online_peer` + `dispatch_snapshot_encodes_envelope_and_fans_out`)在 `crates/uc-application/src/facade/clipboard/facade.rs:524 + :634`
+- 错误统一是:`MockPresence::current_state: Expectation(var == DeviceId("peer-a")) called 0 time(s) which is fewer than expected 1`
+- 一查实现 `crates/uc-application/src/usecases/clipboard_sync/dispatch_entry.rs:159-163`:
+  ```
+  // Presence state is intentionally NOT consulted — see module doc for
+  // rationale. The dispatch port reports `Offline` per-target for
+  // unreachable peers, which we fold into the outcome below.
+  ```
+- 模块顶 doc(`dispatch_entry.rs:22-31`)进一步说明:"We intentionally do **not** pre-filter by `PresencePort::current_state == Online`: presence's `last_state` is populated by our own outbound `ensure_reachable` probes, so when a peer dials us first (accept path only), our cache still reports `Unknown`/`Offline` and a pre-filter would drop a peer that's in fact reachable."
+- 结论:**测试期望过期** — 它们是基于早期"在线 presence 检查"实现写的;现在职责委派给 dispatch port,presence 不被 use case 直接调用。这是续 40 起遗留至今的测试-代码漂移
+
+**完成标准**:
+- 删除两个测试中的 `MockPresence::expect_current_state` 期望(让 mock 不期望被调用)
+- 同步更新 Verdict 1 的 doc 注释,删除"presence checked once for peer-a"过期描述,补上"Presence is intentionally NOT consulted"提示
+- `cargo test -p uc-application --lib` 191 passed / **0 failed**(从 189/2 ↗ 191/0)
+
+**已做**:
+- **改** `facade.rs:519-535`(Verdict 1 测试):
+  - 删 `MockPresence::expect_current_state(eq(peer-a)).times(1)` 5 行 + 改用空 `MockPresence::new()`
+  - 改 doc:`/// listed once, presence checked once for peer-a, encrypt called once, dispatch called once for peer-a.` → `/// listed once, encrypt called once, dispatch called once for peer-a. Presence is intentionally NOT consulted (see dispatch_entry.rs module doc on iteration source).`
+- **改** `facade.rs:643-648`(Verdict 3 `dispatch_snapshot` 测试):
+  - 同上删 5 行 `MockPresence::expect_current_state` 期望 + 改用空 `MockPresence::new()`
+
+**验证**:
+- `cargo test -p uc-application --lib facade::clipboard`:✅ 4/4(原 2 fail 现 0 fail)
+- `cargo test -p uc-application --lib`:✅ **191 passed / 0 failed**(消除长期欠账)
+- `eq` import 仍被 dispatch.expect_dispatch().with(eq(...), ...) 用,无 unused import warning
+
+**P5c 整段终结**(C1 → C10 + W + 测试欠账修复):
+- **15 个 commit**,~`-5040 行` 累计
+- 删 31 个文件 / 1 整目录 / 1 直接 Cargo dep / 2 Cargo features
+- 真路径 libp2p 物理痕迹清零(代码 + Cargo + Lock)
+- 历史 Slice 2 Phase 3 / Slice 4 P5a-4 注释全部现状化
+- 0 cargo warning(只 build-script 的 binary staged info 行)
+- **0 测试 fail**
+
+**下一步候选**(完全离开 P5c):
+- Phase 6 真机端到端验收(task_plan §1645-1665) — 需要双机环境
+- Slice 5 后续优化(task_plan §1668+)
+- 旁路 task_plan 文本同步(把 P5c 已完成的 30+ 条目 ✅ 标到 task_plan.md 里),保持文档与代码一致
