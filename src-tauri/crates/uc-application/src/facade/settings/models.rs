@@ -1,0 +1,587 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
+use uc_core::settings::model as core;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThemeView {
+    Light,
+    Dark,
+    System,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateChannelView {
+    Stable,
+    Alpha,
+    Beta,
+    Rc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShortcutKeyView {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentTypesView {
+    pub text: bool,
+    pub image: bool,
+    pub link: bool,
+    pub file: bool,
+    pub code_snippet: bool,
+    pub rich_text: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContentTypesPatch {
+    pub text: Option<bool>,
+    pub image: Option<bool>,
+    pub link: Option<bool>,
+    pub file: Option<bool>,
+    pub code_snippet: Option<bool>,
+    pub rich_text: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncFrequencyView {
+    Realtime,
+    Interval,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleEvaluationView {
+    AnyMatch,
+    AllMatch,
+}
+
+#[derive(Debug, Clone)]
+pub enum RetentionRuleView {
+    ByAge {
+        max_age: Duration,
+    },
+    ByCount {
+        max_items: usize,
+    },
+    ByContentType {
+        content_type: ContentTypesView,
+        max_age: Duration,
+    },
+    ByTotalSize {
+        max_bytes: u64,
+    },
+    Sensitive {
+        max_age: Duration,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct GeneralSettingsView {
+    pub auto_start: bool,
+    pub silent_start: bool,
+    pub auto_check_update: bool,
+    pub theme: ThemeView,
+    pub theme_color: Option<String>,
+    pub language: Option<String>,
+    pub device_name: Option<String>,
+    pub update_channel: Option<UpdateChannelView>,
+    pub telemetry_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncSettingsView {
+    pub auto_sync: bool,
+    pub sync_frequency: SyncFrequencyView,
+    pub content_types: ContentTypesView,
+}
+
+#[derive(Debug, Clone)]
+pub struct RetentionPolicyView {
+    pub enabled: bool,
+    pub rules: Vec<RetentionRuleView>,
+    pub skip_pinned: bool,
+    pub evaluation: RuleEvaluationView,
+}
+
+#[derive(Debug, Clone)]
+pub struct SecuritySettingsView {
+    pub encryption_enabled: bool,
+    pub passphrase_configured: bool,
+    pub auto_unlock_enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PairingSettingsView {
+    pub step_timeout: Duration,
+    pub user_verification_timeout: Duration,
+    pub session_timeout: Duration,
+    pub max_retries: u8,
+    pub protocol_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSyncSettingsView {
+    pub file_sync_enabled: bool,
+    pub small_file_threshold: u64,
+    pub max_file_size: u64,
+    pub file_cache_quota_per_device: u64,
+    pub file_retention_hours: u32,
+    pub file_auto_cleanup: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsView {
+    pub schema_version: u32,
+    pub general: GeneralSettingsView,
+    pub sync: SyncSettingsView,
+    pub retention_policy: RetentionPolicyView,
+    pub security: SecuritySettingsView,
+    pub pairing: PairingSettingsView,
+    pub keyboard_shortcuts: HashMap<String, ShortcutKeyView>,
+    pub file_sync: FileSyncSettingsView,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GeneralSettingsPatch {
+    pub auto_start: Option<bool>,
+    pub silent_start: Option<bool>,
+    pub auto_check_update: Option<bool>,
+    pub theme: Option<ThemeView>,
+    pub theme_color: Option<Option<String>>,
+    pub language: Option<Option<String>>,
+    pub device_name: Option<Option<String>>,
+    pub update_channel: Option<Option<UpdateChannelView>>,
+    pub telemetry_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SyncSettingsPatch {
+    pub auto_sync: Option<bool>,
+    pub sync_frequency: Option<SyncFrequencyView>,
+    pub content_types: Option<ContentTypesPatch>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RetentionRulePatchValue {
+    ByAge {
+        max_age: Duration,
+    },
+    ByCount {
+        max_items: usize,
+    },
+    ByContentType {
+        content_type: ContentTypesView,
+        max_age: Duration,
+    },
+    ByTotalSize {
+        max_bytes: u64,
+    },
+    Sensitive {
+        max_age: Duration,
+    },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RetentionPolicyPatch {
+    pub enabled: Option<bool>,
+    pub rules: Option<Vec<RetentionRulePatchValue>>,
+    pub skip_pinned: Option<bool>,
+    pub evaluation: Option<RuleEvaluationView>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SecuritySettingsPatch {
+    pub encryption_enabled: Option<bool>,
+    pub auto_unlock_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PairingSettingsPatch {
+    pub step_timeout: Option<Duration>,
+    pub user_verification_timeout: Option<Duration>,
+    pub session_timeout: Option<Duration>,
+    pub max_retries: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FileSyncSettingsPatch {
+    pub file_sync_enabled: Option<bool>,
+    pub small_file_threshold: Option<u64>,
+    pub max_file_size: Option<u64>,
+    pub file_cache_quota_per_device: Option<u64>,
+    pub file_retention_hours: Option<u32>,
+    pub file_auto_cleanup: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SettingsPatch {
+    pub general: Option<GeneralSettingsPatch>,
+    pub sync: Option<SyncSettingsPatch>,
+    pub retention_policy: Option<RetentionPolicyPatch>,
+    pub security: Option<SecuritySettingsPatch>,
+    pub pairing: Option<PairingSettingsPatch>,
+    pub keyboard_shortcuts: Option<HashMap<String, Option<ShortcutKeyView>>>,
+    pub file_sync: Option<FileSyncSettingsPatch>,
+}
+
+impl From<core::Theme> for ThemeView {
+    fn from(value: core::Theme) -> Self {
+        match value {
+            core::Theme::Light => Self::Light,
+            core::Theme::Dark => Self::Dark,
+            core::Theme::System => Self::System,
+        }
+    }
+}
+
+impl From<ThemeView> for core::Theme {
+    fn from(value: ThemeView) -> Self {
+        match value {
+            ThemeView::Light => Self::Light,
+            ThemeView::Dark => Self::Dark,
+            ThemeView::System => Self::System,
+        }
+    }
+}
+
+impl From<core::UpdateChannel> for UpdateChannelView {
+    fn from(value: core::UpdateChannel) -> Self {
+        match value {
+            core::UpdateChannel::Stable => Self::Stable,
+            core::UpdateChannel::Alpha => Self::Alpha,
+            core::UpdateChannel::Beta => Self::Beta,
+            core::UpdateChannel::Rc => Self::Rc,
+        }
+    }
+}
+
+impl From<UpdateChannelView> for core::UpdateChannel {
+    fn from(value: UpdateChannelView) -> Self {
+        match value {
+            UpdateChannelView::Stable => Self::Stable,
+            UpdateChannelView::Alpha => Self::Alpha,
+            UpdateChannelView::Beta => Self::Beta,
+            UpdateChannelView::Rc => Self::Rc,
+        }
+    }
+}
+
+impl From<core::ShortcutKey> for ShortcutKeyView {
+    fn from(value: core::ShortcutKey) -> Self {
+        match value {
+            core::ShortcutKey::Single(v) => Self::Single(v),
+            core::ShortcutKey::Multiple(v) => Self::Multiple(v),
+        }
+    }
+}
+
+impl From<ShortcutKeyView> for core::ShortcutKey {
+    fn from(value: ShortcutKeyView) -> Self {
+        match value {
+            ShortcutKeyView::Single(v) => Self::Single(v),
+            ShortcutKeyView::Multiple(v) => Self::Multiple(v),
+        }
+    }
+}
+
+impl From<core::ContentTypes> for ContentTypesView {
+    fn from(value: core::ContentTypes) -> Self {
+        Self {
+            text: value.text,
+            image: value.image,
+            link: value.link,
+            file: value.file,
+            code_snippet: value.code_snippet,
+            rich_text: value.rich_text,
+        }
+    }
+}
+
+impl From<ContentTypesView> for core::ContentTypes {
+    fn from(value: ContentTypesView) -> Self {
+        Self {
+            text: value.text,
+            image: value.image,
+            link: value.link,
+            file: value.file,
+            code_snippet: value.code_snippet,
+            rich_text: value.rich_text,
+        }
+    }
+}
+
+impl From<core::SyncFrequency> for SyncFrequencyView {
+    fn from(value: core::SyncFrequency) -> Self {
+        match value {
+            core::SyncFrequency::Realtime => Self::Realtime,
+            core::SyncFrequency::Interval => Self::Interval,
+        }
+    }
+}
+
+impl From<SyncFrequencyView> for core::SyncFrequency {
+    fn from(value: SyncFrequencyView) -> Self {
+        match value {
+            SyncFrequencyView::Realtime => Self::Realtime,
+            SyncFrequencyView::Interval => Self::Interval,
+        }
+    }
+}
+
+impl From<core::RuleEvaluation> for RuleEvaluationView {
+    fn from(value: core::RuleEvaluation) -> Self {
+        match value {
+            core::RuleEvaluation::AnyMatch => Self::AnyMatch,
+            core::RuleEvaluation::AllMatch => Self::AllMatch,
+        }
+    }
+}
+
+impl From<RuleEvaluationView> for core::RuleEvaluation {
+    fn from(value: RuleEvaluationView) -> Self {
+        match value {
+            RuleEvaluationView::AnyMatch => Self::AnyMatch,
+            RuleEvaluationView::AllMatch => Self::AllMatch,
+        }
+    }
+}
+
+impl From<core::RetentionRule> for RetentionRuleView {
+    fn from(value: core::RetentionRule) -> Self {
+        match value {
+            core::RetentionRule::ByAge { max_age } => Self::ByAge { max_age },
+            core::RetentionRule::ByCount { max_items } => Self::ByCount { max_items },
+            core::RetentionRule::ByContentType {
+                content_type,
+                max_age,
+            } => Self::ByContentType {
+                content_type: content_type.into(),
+                max_age,
+            },
+            core::RetentionRule::ByTotalSize { max_bytes } => Self::ByTotalSize { max_bytes },
+            core::RetentionRule::Sensitive { max_age } => Self::Sensitive { max_age },
+        }
+    }
+}
+
+impl From<RetentionRulePatchValue> for core::RetentionRule {
+    fn from(value: RetentionRulePatchValue) -> Self {
+        match value {
+            RetentionRulePatchValue::ByAge { max_age } => Self::ByAge { max_age },
+            RetentionRulePatchValue::ByCount { max_items } => Self::ByCount { max_items },
+            RetentionRulePatchValue::ByContentType {
+                content_type,
+                max_age,
+            } => Self::ByContentType {
+                content_type: content_type.into(),
+                max_age,
+            },
+            RetentionRulePatchValue::ByTotalSize { max_bytes } => Self::ByTotalSize { max_bytes },
+            RetentionRulePatchValue::Sensitive { max_age } => Self::Sensitive { max_age },
+        }
+    }
+}
+
+impl From<core::Settings> for SettingsView {
+    fn from(value: core::Settings) -> Self {
+        Self {
+            schema_version: value.schema_version,
+            general: GeneralSettingsView {
+                auto_start: value.general.auto_start,
+                silent_start: value.general.silent_start,
+                auto_check_update: value.general.auto_check_update,
+                theme: value.general.theme.into(),
+                theme_color: value.general.theme_color,
+                language: value.general.language,
+                device_name: value.general.device_name,
+                update_channel: value.general.update_channel.map(Into::into),
+                telemetry_enabled: value.general.telemetry_enabled,
+            },
+            sync: SyncSettingsView {
+                auto_sync: value.sync.auto_sync,
+                sync_frequency: value.sync.sync_frequency.into(),
+                content_types: value.sync.content_types.into(),
+            },
+            retention_policy: RetentionPolicyView {
+                enabled: value.retention_policy.enabled,
+                rules: value
+                    .retention_policy
+                    .rules
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                skip_pinned: value.retention_policy.skip_pinned,
+                evaluation: value.retention_policy.evaluation.into(),
+            },
+            security: SecuritySettingsView {
+                encryption_enabled: value.security.encryption_enabled,
+                passphrase_configured: value.security.passphrase_configured,
+                auto_unlock_enabled: value.security.auto_unlock_enabled,
+            },
+            pairing: PairingSettingsView {
+                step_timeout: value.pairing.step_timeout,
+                user_verification_timeout: value.pairing.user_verification_timeout,
+                session_timeout: value.pairing.session_timeout,
+                max_retries: value.pairing.max_retries,
+                protocol_version: value.pairing.protocol_version,
+            },
+            keyboard_shortcuts: value
+                .keyboard_shortcuts
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            file_sync: FileSyncSettingsView {
+                file_sync_enabled: value.file_sync.file_sync_enabled,
+                small_file_threshold: value.file_sync.small_file_threshold,
+                max_file_size: value.file_sync.max_file_size,
+                file_cache_quota_per_device: value.file_sync.file_cache_quota_per_device,
+                file_retention_hours: value.file_sync.file_retention_hours,
+                file_auto_cleanup: value.file_sync.file_auto_cleanup,
+            },
+        }
+    }
+}
+
+pub(crate) fn apply_settings_patch(
+    mut existing: core::Settings,
+    patch: SettingsPatch,
+) -> core::Settings {
+    if let Some(general) = patch.general {
+        if let Some(v) = general.auto_start {
+            existing.general.auto_start = v;
+        }
+        if let Some(v) = general.silent_start {
+            existing.general.silent_start = v;
+        }
+        if let Some(v) = general.auto_check_update {
+            existing.general.auto_check_update = v;
+        }
+        if let Some(v) = general.theme {
+            existing.general.theme = v.into();
+        }
+        if let Some(v) = general.theme_color {
+            existing.general.theme_color = v;
+        }
+        if let Some(v) = general.language {
+            existing.general.language = v;
+        }
+        if let Some(v) = general.device_name {
+            existing.general.device_name = v;
+        }
+        if let Some(v) = general.update_channel {
+            existing.general.update_channel = v.map(Into::into);
+        }
+        if let Some(v) = general.telemetry_enabled {
+            existing.general.telemetry_enabled = v;
+        }
+    }
+
+    if let Some(sync) = patch.sync {
+        if let Some(v) = sync.auto_sync {
+            existing.sync.auto_sync = v;
+        }
+        if let Some(v) = sync.sync_frequency {
+            existing.sync.sync_frequency = v.into();
+        }
+        if let Some(content_types) = sync.content_types {
+            apply_content_types_patch(&mut existing.sync.content_types, content_types);
+        }
+    }
+
+    if let Some(retention_policy) = patch.retention_policy {
+        if let Some(v) = retention_policy.enabled {
+            existing.retention_policy.enabled = v;
+        }
+        if let Some(v) = retention_policy.skip_pinned {
+            existing.retention_policy.skip_pinned = v;
+        }
+        if let Some(v) = retention_policy.evaluation {
+            existing.retention_policy.evaluation = v.into();
+        }
+        if let Some(rules) = retention_policy.rules {
+            existing.retention_policy.rules = rules.into_iter().map(Into::into).collect();
+        }
+    }
+
+    if let Some(security) = patch.security {
+        if let Some(v) = security.encryption_enabled {
+            existing.security.encryption_enabled = v;
+        }
+        if let Some(v) = security.auto_unlock_enabled {
+            existing.security.auto_unlock_enabled = v;
+        }
+    }
+
+    if let Some(pairing) = patch.pairing {
+        if let Some(v) = pairing.step_timeout {
+            existing.pairing.step_timeout = v;
+        }
+        if let Some(v) = pairing.user_verification_timeout {
+            existing.pairing.user_verification_timeout = v;
+        }
+        if let Some(v) = pairing.session_timeout {
+            existing.pairing.session_timeout = v;
+        }
+        if let Some(v) = pairing.max_retries {
+            existing.pairing.max_retries = v;
+        }
+    }
+
+    if let Some(keyboard_shortcuts) = patch.keyboard_shortcuts {
+        for (name, value) in keyboard_shortcuts {
+            match value {
+                Some(shortcut) => {
+                    existing.keyboard_shortcuts.insert(name, shortcut.into());
+                }
+                None => {
+                    existing.keyboard_shortcuts.remove(&name);
+                }
+            }
+        }
+    }
+
+    if let Some(file_sync) = patch.file_sync {
+        if let Some(v) = file_sync.file_sync_enabled {
+            existing.file_sync.file_sync_enabled = v;
+        }
+        if let Some(v) = file_sync.small_file_threshold {
+            existing.file_sync.small_file_threshold = v;
+        }
+        if let Some(v) = file_sync.max_file_size {
+            existing.file_sync.max_file_size = v;
+        }
+        if let Some(v) = file_sync.file_cache_quota_per_device {
+            existing.file_sync.file_cache_quota_per_device = v;
+        }
+        if let Some(v) = file_sync.file_retention_hours {
+            existing.file_sync.file_retention_hours = v;
+        }
+        if let Some(v) = file_sync.file_auto_cleanup {
+            existing.file_sync.file_auto_cleanup = v;
+        }
+    }
+
+    existing
+}
+
+fn apply_content_types_patch(target: &mut core::ContentTypes, patch: ContentTypesPatch) {
+    if let Some(v) = patch.text {
+        target.text = v;
+    }
+    if let Some(v) = patch.image {
+        target.image = v;
+    }
+    if let Some(v) = patch.link {
+        target.link = v;
+    }
+    if let Some(v) = patch.file {
+        target.file = v;
+    }
+    if let Some(v) = patch.code_snippet {
+        target.code_snippet = v;
+    }
+    if let Some(v) = patch.rich_text {
+        target.rich_text = v;
+    }
+}

@@ -9,6 +9,7 @@ pub mod app_facade;
 pub mod blob_transfer;
 pub mod clipboard;
 pub mod roster;
+pub mod settings;
 pub mod setup_status;
 pub mod space_setup;
 
@@ -24,6 +25,15 @@ pub use clipboard::{
 pub use roster::{
     ContentTypesPatch, ContentTypesView, MemberRosterDeps, MemberRosterFacade, MemberSummary,
     MemberSyncPreferencesPatch, MemberSyncPreferencesView, PresenceEvent, RosterEntry, RosterError,
+};
+pub use settings::{
+    ContentTypesPatch as SettingsContentTypesPatch, ContentTypesView as SettingsContentTypesView,
+    FileSyncSettingsPatch, FileSyncSettingsView, GeneralSettingsPatch, GeneralSettingsView,
+    PairingSettingsPatch, PairingSettingsView, RetentionPolicyPatch, RetentionPolicyView,
+    RetentionRulePatchValue, RetentionRuleView, RuleEvaluationView, SecuritySettingsPatch,
+    SecuritySettingsView, SettingsFacade, SettingsFacadeError, SettingsPatch, SettingsView,
+    ShortcutKeyView, SyncFrequencyView, SyncSettingsPatch, SyncSettingsView, ThemeView,
+    UpdateChannelView,
 };
 pub use setup_status::SetupStatusFacade;
 pub use space_setup::{

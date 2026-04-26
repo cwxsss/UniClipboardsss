@@ -3428,3 +3428,32 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 **下一步**:
 - 继续收 daemon。优先候选:`api/settings.rs` 或 `api/search.rs`。
+
+---
+
+## Session 2026-04-26 — daemon application 边界收口 · settings 切片
+
+**触发**:继续收 daemon,优先处理 `api/settings.rs` 直接使用 core settings model 和 `CoreUseCases` 的边界泄漏。
+
+**完成标准**:
+- daemon settings handler 不再直接构造 `CoreUseCases`
+- daemon settings handler 不再直接持有 `uc_core::settings::model::Settings`
+- settings patch 合并规则迁入 `uc-application`
+- 验证 `uc-application` settings facade 测试和 `cargo check -p uc-daemon`
+
+**已做**:
+- 新增 `uc-application/src/facade/settings/`
+  - `SettingsFacade::get`
+  - `SettingsFacade::update`
+  - application 层 `SettingsView` / `SettingsPatch` 及子模型
+  - patch 合并规则 `apply_settings_patch`
+- `uc-daemon/src/api/settings.rs` 改为调用 `SettingsFacade`
+- `uc-daemon/src/api/server.rs` 增加 `settings_facade`
+- `uc-daemon/src/app.rs` 从 runtime wiring 注入 `SettingsFacade`
+
+**验证**:
+- `cargo test -p uc-application facade::settings --lib`:✅ 2 passed
+- `cargo check -p uc-daemon`:✅ passed
+
+**后续注意**:
+- `uc-daemon-contract` 仍依赖 `uc-core` 来提供 DTO ↔ core 的旧转换实现。本切片先让 daemon 不再用这些转换;后续要彻底做到“外部不知道 core”,需要清理 contract 的 `uc-core` 依赖。

@@ -19,7 +19,7 @@ use axum::Router;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_app::runtime::CoreRuntime;
-use uc_application::facade::{MemberRosterFacade, SpaceSetupFacade};
+use uc_application::facade::{MemberRosterFacade, SettingsFacade, SpaceSetupFacade};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -45,6 +45,7 @@ pub struct DaemonApiState {
     /// Wired in T3.3; the `/v2/setup/*` handlers return 503 if absent.
     pub space_setup_facade: Option<Arc<SpaceSetupFacade>>,
     pub member_roster_facade: Option<Arc<MemberRosterFacade>>,
+    pub settings_facade: Option<Arc<SettingsFacade>>,
     pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
     /// Gate controlling clipboard capture in the daemon.
@@ -74,6 +75,7 @@ impl DaemonApiState {
             runtime,
             space_setup_facade: None,
             member_roster_facade: None,
+            settings_facade: None,
             space_access_facade: None,
             event_tx,
             clipboard_capture_gate: None,
@@ -107,6 +109,17 @@ impl DaemonApiState {
         self.member_roster_facade
             .clone()
             .ok_or_else(|| ApiError::service_unavailable("member roster facade unavailable"))
+    }
+
+    pub fn with_settings(mut self, settings_facade: Arc<SettingsFacade>) -> Self {
+        self.settings_facade = Some(settings_facade);
+        self
+    }
+
+    pub fn settings_facade_or_error(&self) -> Result<Arc<SettingsFacade>, ApiError> {
+        self.settings_facade
+            .clone()
+            .ok_or_else(|| ApiError::service_unavailable("settings facade unavailable"))
     }
 
     pub fn with_space_access(mut self, space_access_facade: Arc<SpaceAccessFacade>) -> Self {
