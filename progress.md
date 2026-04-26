@@ -3163,3 +3163,59 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 - C9 · uc-platform / uc-bootstrap libp2p 装配残骸(task_plan §1574-1599;中等-大,涉及多文件 wiring 调整) — 优先
 - C10 · workspace `Cargo.toml` 删 libp2p / libp2p-stream / 相关 transitive deps(终极一击;须 C9 完成后才能动)
 - 旁路:task_plan 长期跟踪的 3 个预存 warning 修复(`Kek` import / `LocalIdentity` 变体 / `DuplicateIgnored` 变体) — 与 P5c 主线无关,可单 commit
+
+---
+
+## Session 2026-04-25(续 49) — Slice 4 P5c C9 · 历史注释 + 死 logging filter 清理
+
+**触发**:用户回 "sure",P5c 收尾。
+
+**实情扫描**(task_plan §1574-1599 + §1603 大量条目已被 C1-C8e 自然完成):
+- ✅ §1574-1576:`uc-platform/src/adapters/network.rs` 已删,`adapters/mod.rs` 只剩 `protocol_ids`,`lib.rs` 干净(早期 chunk 完成)
+- ✅ §1579-1580:`uc-bootstrap/src/builders.rs` 无 libp2p 装配代码,`assembly.rs` 0 `DiscoveryPort` 引用(C5/C6/C8d 自然清完)
+- ✅ §1583-1584:`uc-tauri/src/bootstrap/runtime.rs` 0 `sync_outbound_clipboard` / `libp2p` 引用
+- ✅ §1586:`uc-tauri/src/test_utils.rs` 已删(C5)
+- ✅ §1589-1590:`uc-daemon/src/pairing/host.rs` 已不存在(P5b 阶段删除)
+- ✅ §1591:`uc-daemon/src/peers/mod.rs` 只剩 `presence_monitor` / `snapshot`
+- ✅ §1592:`uc-daemon/src/workers/mod.rs` 0 `peer_discovery`
+- ✅ §1593:旧 worker 注册早被 PresenceMonitor 替换
+- ✅ §1596-1599:`workspace Cargo.toml` / `uc-platform/Cargo.toml` / `uc-app/Cargo.toml` 0 `libp2p` deps,`uc-tauri/Cargo.toml` `uc-app` 依赖保留(uc-app 仍是有用 crate)
+- ✅ §1600:`iroh` Cargo feature 门控早已是默认,无 feature gate
+- ✅ §1603:`PeerDiscoveredPayload` / `PeerLostPayload` 0 命中(早被 C 系列删除);`PeerNameUpdatedPayload` + `PeerConnectionChangedPayload` 仍各 3 真实消费者(`api/ws.rs` + `ws_bridge.rs` + `types.rs`),task_plan 措辞需更新为"保 PeerNameUpdatedPayload + PeerConnectionChangedPayload"
+
+**剩余实质工作**(3 处):
+1. `uc-tauri/src/bootstrap/logging.rs:31, 49-52` — 删 `libp2p_mdns` logging filter(libp2p crate 早已不在依赖里,filter 死代码;task_plan §1585)
+2. `uc-bootstrap/src/builders.rs` — 5 处 doc 注释引用已删 type(`SyncOutboundClipboardUseCase` / `pairing_runtime_owner` / `PairingRuntimeOwner` / `PairingFacade` / `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort` / `DaemonPairingHost`),全部清理为现状中性描述
+3. `uc-infra/Cargo.toml:73-75` — 删历史注释 "libp2p adapter stays frozen via trait-default no-op"
+
+**已做**:
+- **改** `uc-tauri/src/bootstrap/logging.rs`:删 `libp2p_mdns` filter 共 4 行(文档注释 1 行 + 注释代码 2 行 + `.level_for("libp2p_mdns", LevelFilter::Warn)` 1 行)
+- **改** `uc-bootstrap/src/builders.rs`:5 处 doc-comment 现状化:
+  - `DaemonBootstrapContext.clipboard_sync_facade`(去 "Slice 2 Phase 3 · T5" + "deprecated libp2p `SyncOutboundClipboardUseCase`")
+  - `DaemonBootstrapContext.space_setup_assembly`(去 "Slice 2 Phase 3 · T5" 标签)
+  - `build_core` fn(整段删 "Slice 4 P5b: 旧的 `pairing_runtime_owner` 形参连同 PairingRuntimeOwner 枚举已删除——libp2p adapter…")
+  - `build_gui_app` fn(去 "Slice 4 P5a-4: 旧 libp2p `PairingFacade`…",改为现状描述 "GUI process drives pairing via daemon HTTP setup-v2")
+  - `build_daemon_app` fn(去 "Slice 2 Phase 3 · T5" + "deprecated libp2p `ClipboardOutbound/InboundTransportPort`" + "Slice 4 P5a-4: 旧 libp2p `PairingFacade`",合成单段)
+- **改** `uc-infra/Cargo.toml`:`# ===== Slice 1 network stack ===== / Slice 1 decision I-3: introduced unconditionally / libp2p adapter stays frozen…` 三行注释精简为 `# ===== Network stack (iroh + rendezvous HTTP) =====` 单行
+
+**验证**:
+- `cargo check -p uc-tauri -p uc-bootstrap -p uc-infra`(及完整传递链):✅ 全过,只剩 3 个预存 warning
+- 注释/Cargo 注释清理零功能影响,无需跑测试套(早期 C8e 后已无回归)
+
+**Phase 5 删除清单进度**(C9 后):
+- task_plan §1574-1603 实质条目全部完成或自然完成(约 30 项)
+- 仅剩 task_plan §1601-1602 之后的清单条目(若有)+ 长期跟踪的 3 个预存 warning(`Kek` / `LocalIdentity` / `DuplicateIgnored`)未处理,但这些已不属于 P5c 主线
+
+**净瘦身**:`-25 行`左右(logging.rs -4 行 + builders.rs ~17 行 doc 精简 + Cargo.toml -3 行;无功能代码改动)
+
+**P5c 总结**(C1 → C9):
+- 12 个 commit,删除 27 个文件,约 -4900 行代码
+- 真路径 libp2p 物理痕迹基本清零:`uc-platform/adapters/{libp2p_network,pairing_stream,file_transfer}` 整目录、`uc-application/pairing/` 整目录、`uc-app/usecases/{clipboard,file_sync,pairing}` 大部分死 usecase、`uc-core` 网络协议相关 9+1 文件
+- 真路径 iroh 完全独占:从端口契约(`uc_core::ports::pairing` / `presence` / `space_access`)到实现(`uc-infra/src/{pairing,presence,space_access}`)到装配(`uc-bootstrap::space_setup`)
+- 历史注释(Slice 2 Phase 3 / Slice 4 P5a-4 之类)在 builders.rs / Cargo.toml 中全部现状化
+- 唯一未完工的:3 个预存 warning(2 个 dead code 变体 + 1 个 unused import),与 P5c 主线无关,可后续单 commit 处理
+
+**下一步候选**(已离开 P5c 主线):
+- W · 处理 3 个预存 warning(小,1 commit)
+- 旁路 · task_plan §1554 旁支:`network/protocol/clipboard.rs` 已在 C8e 完成,但 task_plan 文本未勾选 — 文档同步
+- 新阶段 · Phase 6+ 或其他 milestone(需重看 task_plan 或与用户对齐)

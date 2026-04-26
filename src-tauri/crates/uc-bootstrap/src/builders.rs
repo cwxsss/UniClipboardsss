@@ -53,11 +53,10 @@ pub struct DaemonBootstrapContext {
     pub space_access_facade: Arc<SpaceAccessFacade>,
     pub storage_paths: AppPaths,
     pub config: AppConfig,
-    /// Slice 2 Phase 3 · T5 — iroh-stack clipboard sync facade.
-    /// Daemon's `DaemonClipboardChangeHandler` (T7) calls
-    /// `clipboard_sync_facade.dispatch_snapshot(...)` instead of the
-    /// deprecated libp2p `SyncOutboundClipboardUseCase`;
-    /// `InboundClipboardSyncWorker` (T8) subscribes via
+    /// iroh-stack clipboard sync facade.
+    /// Daemon's `DaemonClipboardChangeHandler` calls
+    /// `clipboard_sync_facade.dispatch_snapshot(...)`;
+    /// `InboundClipboardSyncWorker` subscribes via
     /// `subscribe_inbound_notices()`.
     ///
     /// Same Arc as the one held by `space_setup_assembly.clipboard_sync` —
@@ -65,11 +64,10 @@ pub struct DaemonBootstrapContext {
     /// off `ctx.clipboard_sync_facade` directly without unwrapping the
     /// assembly.
     pub clipboard_sync_facade: Arc<ClipboardSyncFacade>,
-    /// Slice 2 Phase 3 · T5 — full Slice 1+ assembly. Owns the iroh
-    /// node, pairing/presence/clipboard handlers, and the auto-spawned
-    /// ingest loop. Daemon shutdown calls `space_setup_assembly.shutdown()`
-    /// to cleanly tear down router + abort ingest before the Tokio
-    /// runtime exits.
+    /// Full iroh assembly. Owns the iroh node, pairing/presence/clipboard
+    /// handlers, and the auto-spawned ingest loop. Daemon shutdown calls
+    /// `space_setup_assembly.shutdown()` to cleanly tear down router +
+    /// abort ingest before the Tokio runtime exits.
     pub space_setup_assembly: SpaceSetupAssembly,
 }
 
@@ -78,11 +76,6 @@ pub struct DaemonBootstrapContext {
 ///
 /// If `log_profile_override` is `Some`, the `UC_LOG_PROFILE` env var is set
 /// before tracing initialization so the subscriber picks up the desired profile.
-///
-/// Slice 4 P5b: 旧的 `pairing_runtime_owner` 形参连同 PairingRuntimeOwner
-/// 枚举已删除——libp2p adapter 物理删除后 GUI/CLI/daemon 三种装配的网络
-/// 端口统一走 `DisabledNetwork` 桩,不再需要按"哪个进程承载 pairing
-/// runtime"分支构造。
 fn build_core(
     log_profile_override: Option<uc_observability::LogProfile>,
 ) -> anyhow::Result<(AppConfig, crate::assembly::WiredDependencies)> {
@@ -106,8 +99,8 @@ fn build_core(
 /// AppRuntime::with_setup() in uc-tauri can construct CoreRuntime with the
 /// correct emitter cell, lifecycle status, and task registry.
 ///
-/// Slice 4 P5a-4: 旧 libp2p `PairingFacade` 不再在 GUI 进程构造,GUI
-/// 通过 daemon HTTP setup-v2 流程驱动 pairing,本函数只负责 deps + 路径。
+/// GUI process drives pairing via daemon HTTP setup-v2; this function
+/// only builds deps + paths.
 pub fn build_gui_app() -> anyhow::Result<GuiBootstrapContext> {
     let (config, wired) = build_core(None)?;
 
@@ -165,16 +158,12 @@ pub fn build_slice1_cli_context(
 /// Build daemon bootstrap context. Returns AppDeps + background deps.
 /// Caller constructs CoreRuntime and starts background workers.
 ///
-/// Slice 2 Phase 3 · T5 — also binds the iroh node + builds the full
-/// `SpaceSetupAssembly` (Slice 1 pairing + Slice 2 presence + clipboard
-/// handlers) and exposes `clipboard_sync_facade` so daemon workers can
-/// dispatch / subscribe via the iroh stack instead of the deprecated
-/// libp2p `ClipboardOutboundTransportPort` / `ClipboardInboundTransportPort`.
-///
-/// Slice 4 P5a-4: 旧 libp2p `PairingFacade` 已下线,daemon 不再构造它,
-/// 也不再向 ctx 暴露 trusted_peer_repo / key_slot_store(消费者
-/// `DaemonPairingHost` 已删)。trusted_peer_repo 仍由 `wired` 透传给
-/// `build_space_setup_assembly` — 那里是 setup-v2 流程的合法消费方。
+/// Also binds the iroh node + builds the full `SpaceSetupAssembly`
+/// (pairing + presence + clipboard handlers) and exposes
+/// `clipboard_sync_facade` so daemon workers can dispatch / subscribe
+/// via the iroh stack. `trusted_peer_repo` is consumed by
+/// `build_space_setup_assembly` (the setup-v2 flow) and is not
+/// re-exposed on the returned ctx.
 pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let (config, wired) = build_core(None)?;
     let storage_paths = get_storage_paths(&config)?;
