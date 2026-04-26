@@ -3428,6 +3428,33 @@ task_plan.md 的 Slice 3 小节原本只有**总目标 + 4 个验收项 + 2 个 
 
 ---
 
+## Session 2026-04-26 — daemon application 边界收口 · clipboard outbound 切片
+
+**触发**:继续收 daemon clipboard workers,优先处理 watcher 里剩余的 outbound planning / blob refs / dispatch 逻辑。
+
+**完成标准**:
+- daemon watcher 不再持有 `CoreRuntime`
+- daemon watcher 不再直接执行文件路径提取、文件元数据读取、同步规划、blob 发布、剪贴板分发
+- 出站同步规划迁到 `uc-application`
+- 验证 application outbound facade 测试、daemon check、daemon lib 测试
+
+**已做**:
+- 新增 `uc-application/src/facade/clipboard_outbound/`
+- 新增 `ClipboardOutboundFacade` / `ClipboardOutboundDispatcher`
+- `OutboundSyncPlanner` 从 `uc-app` 迁到 `uc-application::sync_planner`
+- `uc-app::usecases::sync_planner` 改为过渡转发
+- `DaemonClipboardChangeHandler` 改为只把捕获结果交给 application outbound facade
+
+**验证**:
+- `cargo test -p uc-application facade::clipboard_outbound --lib`:✅ 1 passed
+- `cargo check -p uc-application -p uc-app -p uc-daemon`:✅ passed
+- `cargo test -p uc-daemon --lib`:✅ 25 passed
+
+**后续注意**:
+- `entrypoint.rs` 仍在组装多个子 facade,下一步应继续统一到 `AppFacade` 的单一入口。
+
+---
+
 ## Session 2026-04-26 — daemon application 边界收口 · query peers 切片
 
 **触发**:继续处理 daemon query / peers / ws 仍直接认识 core runtime、presence port 和分散 facade 的边界问题。

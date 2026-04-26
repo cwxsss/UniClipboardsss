@@ -12,6 +12,7 @@ pub mod clipboard_capture;
 pub mod clipboard_history;
 pub mod clipboard_inbound;
 pub mod clipboard_live_index;
+pub mod clipboard_outbound;
 pub mod clipboard_restore;
 pub mod device;
 pub mod encryption;
@@ -53,6 +54,11 @@ pub use clipboard_live_index::{
     ClipboardLiveIndexDeps, ClipboardLiveIndexError, ClipboardLiveIndexFacade,
     ClipboardLiveIndexInput, ClipboardLiveIndexOutcome, ClipboardLiveIndexPort,
     ClipboardLiveIndexer,
+};
+pub use clipboard_outbound::{
+    ClipboardOutboundDeps, ClipboardOutboundDispatcher, ClipboardOutboundError,
+    ClipboardOutboundFacade, ClipboardOutboundInput, ClipboardOutboundOutcome,
+    ClipboardOutboundPort,
 };
 pub use clipboard_restore::{
     ClipboardRestoreError, ClipboardRestoreFacade, ClipboardRestoreGateway,

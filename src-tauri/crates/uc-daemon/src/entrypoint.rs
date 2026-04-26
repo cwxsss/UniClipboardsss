@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use uc_app::usecases::internal::capture_clipboard::CaptureClipboardUseCase;
 use uc_application::facade::{
     ClipboardCaptureFacade, ClipboardLiveIndexDeps, ClipboardLiveIndexFacade, ClipboardLiveIndexer,
+    ClipboardOutboundDeps, ClipboardOutboundDispatcher, ClipboardOutboundFacade,
     InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps,
 };
 use uc_application::{
@@ -176,16 +177,21 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             search_index: runtime.wiring_deps().search.search_index.clone(),
         }),
     )));
+    let clipboard_outbound_facade = Arc::new(ClipboardOutboundFacade::new(Arc::new(
+        ClipboardOutboundDispatcher::new(ClipboardOutboundDeps {
+            settings: runtime.wiring_deps().settings.clone(),
+            clipboard_sync: clipboard_sync_facade.clone(),
+            blob_transfer: blob_transfer_facade.clone(),
+        }),
+    )));
 
     let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
-        runtime.clone(),
         event_tx.clone(),
         clipboard_change_origin.clone(),
         clipboard_capture_gate.clone(),
         clipboard_capture_facade,
         clipboard_live_index_facade,
-        clipboard_sync_facade.clone(),
-        blob_transfer_facade.clone(),
+        clipboard_outbound_facade,
     ));
     let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
         local_clipboard.clone(),

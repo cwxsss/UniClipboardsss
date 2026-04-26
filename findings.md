@@ -2,6 +2,13 @@
 
 > 随探索过程更新。格式:事实 / 来源 / 影响。
 
+## daemon application 边界收口发现(2026-04-26)
+
+### F-040 · clipboard watcher 的剩余业务块已可迁入 application
+- **事实**:watcher 里剩余的文件路径提取、元数据读取、同步规划、blob 发布、剪贴板分发全部依赖 application 已有能力,不需要 daemon 持有 `CoreRuntime`。
+- **来源**:`uc-daemon/src/workers/clipboard_watcher.rs` 收口前后的 diff,以及 `cargo check -p uc-application -p uc-app -p uc-daemon`。
+- **影响**:daemon watcher 可以退回到进程内监听和事件转发职责;后续只剩 composition root 需要继续把多个子 facade 归并到统一 `AppFacade` 入口。
+
 ## Slice 3 Phase 1 · T0 iroh-blobs 探针发现(2026-04-24)
 
 ### F-030 · `iroh-blobs 0.95.0` 与当前 `iroh 0.95.1` 不同栈

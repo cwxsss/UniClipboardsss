@@ -1,0 +1,304 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::Context;
+use async_trait::async_trait;
+use bytes::Bytes;
+use thiserror::Error;
+use tracing::warn;
+use uc_core::ids::EntryId;
+use uc_core::ports::SettingsPort;
+use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
+
+use crate::facade::{BlobTransferFacade, ClipboardSyncFacade, PublishBlobCommand};
+use crate::sync_planner::{FileCandidate, FileSyncIntent, OutboundSyncPlanner};
+use crate::V3BlobRef;
+
+#[derive(Debug, Clone)]
+pub struct ClipboardOutboundInput {
+    pub entry_id: String,
+    pub snapshot: SystemClipboardSnapshot,
+    pub origin: ClipboardChangeOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardOutboundOutcome {
+    Dispatched {
+        accepted: usize,
+        duplicate: usize,
+        offline: usize,
+        errored: usize,
+        blob_ref_count: usize,
+    },
+    Skipped {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Error)]
+pub enum ClipboardOutboundError {
+    #[error("clipboard outbound dispatch failed: {0}")]
+    Internal(String),
+}
+
+#[async_trait]
+pub trait ClipboardOutboundPort: Send + Sync {
+    async fn dispatch_capture(
+        &self,
+        input: ClipboardOutboundInput,
+    ) -> Result<ClipboardOutboundOutcome, ClipboardOutboundError>;
+}
+
+pub struct ClipboardOutboundDeps {
+    pub settings: Arc<dyn SettingsPort>,
+    pub clipboard_sync: Arc<ClipboardSyncFacade>,
+    pub blob_transfer: Arc<BlobTransferFacade>,
+}
+
+pub struct ClipboardOutboundDispatcher {
+    settings: Arc<dyn SettingsPort>,
+    clipboard_sync: Arc<ClipboardSyncFacade>,
+    blob_transfer: Arc<BlobTransferFacade>,
+}
+
+impl ClipboardOutboundDispatcher {
+    pub fn new(deps: ClipboardOutboundDeps) -> Self {
+        Self {
+            settings: deps.settings,
+            clipboard_sync: deps.clipboard_sync,
+            blob_transfer: deps.blob_transfer,
+        }
+    }
+}
+
+#[async_trait]
+impl ClipboardOutboundPort for ClipboardOutboundDispatcher {
+    async fn dispatch_capture(
+        &self,
+        input: ClipboardOutboundInput,
+    ) -> Result<ClipboardOutboundOutcome, ClipboardOutboundError> {
+        if input.origin == ClipboardChangeOrigin::RemotePush {
+            return Ok(ClipboardOutboundOutcome::Skipped {
+                reason: "remote_push_echo".to_string(),
+            });
+        }
+
+        let resolved_paths = if input.origin == ClipboardChangeOrigin::LocalCapture {
+            extract_file_paths_from_snapshot(&input.snapshot)
+        } else {
+            Vec::new()
+        };
+        let extracted_paths_count = resolved_paths.len();
+
+        let mut file_candidates = Vec::with_capacity(resolved_paths.len());
+        for path in resolved_paths {
+            match tokio::fs::metadata(&path).await {
+                Ok(meta) => file_candidates.push(FileCandidate {
+                    path,
+                    size: meta.len(),
+                }),
+                Err(err) => warn!(
+                    error = %err,
+                    file = %path.display(),
+                    "排除无法读取元数据的剪贴板文件"
+                ),
+            }
+        }
+
+        let planner = OutboundSyncPlanner::new(Arc::clone(&self.settings));
+        let plan = planner
+            .plan(
+                input.snapshot,
+                input.origin,
+                file_candidates,
+                extracted_paths_count,
+            )
+            .await;
+
+        let Some(clipboard_intent) = plan.clipboard else {
+            return Ok(ClipboardOutboundOutcome::Skipped {
+                reason: "planner_suppressed".to_string(),
+            });
+        };
+
+        let entry_id = EntryId::from(input.entry_id.as_str());
+        let blob_refs = publish_file_blob_refs(&self.blob_transfer, &plan.files, &entry_id).await?;
+        let blob_ref_count = blob_refs.len();
+
+        let dispatch_result = if blob_refs.is_empty() {
+            self.clipboard_sync
+                .dispatch_snapshot(clipboard_intent.snapshot, input.origin)
+                .await
+        } else {
+            self.clipboard_sync
+                .dispatch_snapshot_with_blob_refs(
+                    clipboard_intent.snapshot,
+                    blob_refs,
+                    input.origin,
+                )
+                .await
+        }
+        .map_err(|err| ClipboardOutboundError::Internal(err.to_string()))?;
+
+        Ok(ClipboardOutboundOutcome::Dispatched {
+            accepted: dispatch_result.total_accepted,
+            duplicate: dispatch_result.total_duplicate,
+            offline: dispatch_result.total_offline,
+            errored: dispatch_result.total_errored,
+            blob_ref_count,
+        })
+    }
+}
+
+pub struct ClipboardOutboundFacade {
+    dispatcher: Arc<dyn ClipboardOutboundPort>,
+}
+
+impl ClipboardOutboundFacade {
+    pub fn new(dispatcher: Arc<dyn ClipboardOutboundPort>) -> Self {
+        Self { dispatcher }
+    }
+
+    pub async fn dispatch_capture(
+        &self,
+        input: ClipboardOutboundInput,
+    ) -> Result<ClipboardOutboundOutcome, ClipboardOutboundError> {
+        self.dispatcher.dispatch_capture(input).await
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_apfs_file_reference(_path: &Path) -> Option<PathBuf> {
+    None
+}
+
+fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for rep in &snapshot.representations {
+        let is_file_rep = rep
+            .mime
+            .as_ref()
+            .map(|m| {
+                let s = m.as_str();
+                s.eq_ignore_ascii_case("text/uri-list") || s.eq_ignore_ascii_case("file/uri-list")
+            })
+            .unwrap_or(false)
+            || rep.format_id.eq_ignore_ascii_case("files")
+            || rep.format_id.eq_ignore_ascii_case("public.file-url");
+
+        if !is_file_rep {
+            continue;
+        }
+
+        let text = match std::str::from_utf8(&rep.bytes) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if let Ok(url) = url::Url::parse(line) {
+                if url.scheme() == "file" {
+                    if let Ok(path) = url.to_file_path() {
+                        #[cfg(target_os = "macos")]
+                        let resolved = resolve_apfs_file_reference(&path).unwrap_or(path);
+                        #[cfg(not(target_os = "macos"))]
+                        let resolved = path;
+                        paths.push(resolved);
+                    }
+                }
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+async fn publish_file_blob_refs(
+    blob_transfer: &BlobTransferFacade,
+    files: &[FileSyncIntent],
+    entry_id: &EntryId,
+) -> Result<Vec<V3BlobRef>, ClipboardOutboundError> {
+    let mut blob_refs = Vec::with_capacity(files.len());
+
+    for file in files {
+        let plaintext = tokio::fs::read(&file.path)
+            .await
+            .with_context(|| format!("read outbound file {}", file.path.display()))
+            .map_err(|err| ClipboardOutboundError::Internal(err.to_string()))?;
+        let size_bytes = plaintext.len() as u64;
+        let result = blob_transfer
+            .publish_blob(PublishBlobCommand {
+                plaintext: Bytes::from(plaintext),
+                entry_id: Some(entry_id.clone()),
+            })
+            .await
+            .map_err(|err| ClipboardOutboundError::Internal(err.to_string()))?;
+
+        blob_refs.push(V3BlobRef {
+            ticket: result.ticket,
+            entry_id: result.entry_id,
+            filename: Some(file.filename.clone()).filter(|name| !name.is_empty()),
+            mime: None,
+            size_bytes,
+        });
+    }
+
+    Ok(blob_refs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeOutbound;
+
+    #[async_trait]
+    impl ClipboardOutboundPort for FakeOutbound {
+        async fn dispatch_capture(
+            &self,
+            input: ClipboardOutboundInput,
+        ) -> Result<ClipboardOutboundOutcome, ClipboardOutboundError> {
+            assert_eq!(input.entry_id, "entry-a");
+            Ok(ClipboardOutboundOutcome::Dispatched {
+                accepted: 1,
+                duplicate: 0,
+                offline: 0,
+                errored: 0,
+                blob_ref_count: 0,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_capture_accepts_application_entry_id() {
+        let facade = ClipboardOutboundFacade::new(Arc::new(FakeOutbound));
+        let outcome = facade
+            .dispatch_capture(ClipboardOutboundInput {
+                entry_id: "entry-a".to_string(),
+                snapshot: SystemClipboardSnapshot {
+                    representations: Vec::new(),
+                    ts_ms: 0,
+                },
+                origin: ClipboardChangeOrigin::LocalCapture,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            ClipboardOutboundOutcome::Dispatched {
+                accepted: 1,
+                duplicate: 0,
+                offline: 0,
+                errored: 0,
+                blob_ref_count: 0,
+            }
+        );
+    }
+}

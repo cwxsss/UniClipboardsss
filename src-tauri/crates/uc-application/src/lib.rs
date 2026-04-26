@@ -3,6 +3,7 @@
 pub mod clipboard_capture;
 pub mod clipboard_write;
 pub mod facade;
+pub mod sync_planner;
 
 // Slice 2 Phase 3 · T4 — public use case consumed directly by daemon
 // `InboundClipboardSyncWorker` (T8). Lives inside `usecases::clipboard_sync`

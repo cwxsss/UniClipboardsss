@@ -3,7 +3,6 @@
 //! Monitors OS clipboard changes via clipboard_rs, persists captured entries
 //! via application clipboard capture facade, and broadcasts clipboard.new_content WS events.
 
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -15,13 +14,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, instrument, warn, Instrument};
 
 use clipboard_rs::{ClipboardWatcher as RSClipboardWatcher, ClipboardWatcherContext};
-use uc_app::runtime::CoreRuntime;
-use uc_app::usecases::sync_planner::{FileCandidate, FileSyncIntent, OutboundSyncPlanner};
 use uc_application::facade::{
-    BlobTransferFacade, ClipboardCaptureFacade, ClipboardLiveIndexFacade, ClipboardLiveIndexInput,
-    ClipboardLiveIndexOutcome, ClipboardSyncFacade, PublishBlobCommand,
+    ClipboardCaptureFacade, ClipboardLiveIndexFacade, ClipboardLiveIndexInput,
+    ClipboardLiveIndexOutcome, ClipboardOutboundFacade, ClipboardOutboundInput,
+    ClipboardOutboundOutcome,
 };
-use uc_application::V3BlobRef;
 use uc_core::ids::EntryId;
 use uc_core::ports::{ClipboardChangeHandler, ClipboardChangeOriginPort};
 use uc_core::{ClipboardChangeOrigin, SystemClipboardSnapshot};
@@ -32,70 +29,6 @@ use uc_platform::clipboard::watcher::{ClipboardWatcher, PlatformEvent, PlatformE
 
 use crate::api::types::DaemonWsEvent;
 use crate::service::{DaemonService, ServiceHealth};
-
-// ---------------------------------------------------------------------------
-// File path extraction helper
-// ---------------------------------------------------------------------------
-
-/// On macOS, attempt to resolve APFS file references (e.g. `/.file/id=...`) to real paths.
-/// Currently a no-op stub — APFS resolution deferred to a future phase.
-#[cfg(target_os = "macos")]
-fn resolve_apfs_file_reference(_path: &std::path::Path) -> Option<PathBuf> {
-    None
-}
-
-/// Extract file paths from a clipboard snapshot's representations.
-///
-/// Looks for `text/uri-list` or `file/uri-list` MIME types, or `files` / `public.file-url`
-/// format IDs, and parses `file://` URIs into `PathBuf`s.
-fn extract_file_paths_from_snapshot(snapshot: &SystemClipboardSnapshot) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for rep in &snapshot.representations {
-        let is_file_rep = rep
-            .mime
-            .as_ref()
-            .map(|m| {
-                let s = m.as_str();
-                s.eq_ignore_ascii_case("text/uri-list") || s.eq_ignore_ascii_case("file/uri-list")
-            })
-            .unwrap_or(false)
-            || rep.format_id.eq_ignore_ascii_case("files")
-            || rep.format_id.eq_ignore_ascii_case("public.file-url");
-
-        if !is_file_rep {
-            continue;
-        }
-
-        // Parse bytes as UTF-8 text containing file:// URIs (one per line)
-        let text = match std::str::from_utf8(&rep.bytes) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Ok(url) = url::Url::parse(line) {
-                if url.scheme() == "file" {
-                    if let Ok(path) = url.to_file_path() {
-                        // On macOS, resolve APFS file references (/.file/id=...) to real paths
-                        #[cfg(target_os = "macos")]
-                        let resolved = resolve_apfs_file_reference(&path).unwrap_or(path);
-                        #[cfg(not(target_os = "macos"))]
-                        let resolved = path;
-                        paths.push(resolved);
-                    }
-                }
-            }
-        }
-    }
-    // Safety net: deduplicate in case multiple representations contain the same path
-    paths.sort();
-    paths.dedup();
-    paths
-}
 
 // ---------------------------------------------------------------------------
 // ClipboardNewContentPayload
@@ -124,7 +57,6 @@ struct ClipboardNewContentPayload {
 /// clipboard change was triggered by daemon inbound sync (RemotePush) or by
 /// the local user (LocalCapture), preventing write-back loops.
 pub struct DaemonClipboardChangeHandler {
-    runtime: Arc<CoreRuntime>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
     /// Gate that controls whether clipboard capture is active.
@@ -134,34 +66,25 @@ pub struct DaemonClipboardChangeHandler {
     capture_gate: Arc<AtomicBool>,
     clipboard_capture: Arc<ClipboardCaptureFacade>,
     clipboard_live_index: Arc<ClipboardLiveIndexFacade>,
-    /// Slice 2 Phase 3 · T7 — iroh-stack clipboard sync. Replaces the
-    /// deprecated libp2p `SyncOutboundClipboardUseCase` path. Wired from
-    /// `DaemonBootstrapContext.clipboard_sync_facade` in `entrypoint.rs`.
-    clipboard_sync: Arc<ClipboardSyncFacade>,
-    /// Slice 3 Phase 3:发布本机文件为 blob refs,再随剪贴板消息广播。
-    blob_transfer: Arc<BlobTransferFacade>,
+    clipboard_outbound: Arc<ClipboardOutboundFacade>,
 }
 
 impl DaemonClipboardChangeHandler {
     pub fn new(
-        runtime: Arc<CoreRuntime>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
         clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
         capture_gate: Arc<AtomicBool>,
         clipboard_capture: Arc<ClipboardCaptureFacade>,
         clipboard_live_index: Arc<ClipboardLiveIndexFacade>,
-        clipboard_sync: Arc<ClipboardSyncFacade>,
-        blob_transfer: Arc<BlobTransferFacade>,
+        clipboard_outbound: Arc<ClipboardOutboundFacade>,
     ) -> Self {
         Self {
-            runtime,
             event_tx,
             clipboard_change_origin,
             capture_gate,
             clipboard_capture,
             clipboard_live_index,
-            clipboard_sync,
-            blob_transfer,
+            clipboard_outbound,
         }
     }
 }
@@ -285,108 +208,43 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
                     }
                 }
 
-                // --- Outbound sync dispatch (mirrors AppRuntime::on_clipboard_changed) ---
-
-                // Extract file paths only for LocalCapture (RemotePush must not re-sync).
-                let resolved_paths = if origin == ClipboardChangeOrigin::LocalCapture {
-                    extract_file_paths_from_snapshot(&outbound_snapshot)
-                } else {
-                    Vec::new()
-                };
-
-                // Capture count BEFORE metadata filtering for all_files_excluded detection.
-                let extracted_paths_count = resolved_paths.len();
-
-                // Build FileCandidate vec by reading metadata per resolved path.
-                let file_candidates: Vec<FileCandidate> = resolved_paths
-                    .into_iter()
-                    .filter_map(|path| {
-                        match std::fs::metadata(&path) {
-                            Ok(meta) => Some(FileCandidate { path, size: meta.len() }),
-                            Err(e) => {
-                                warn!(error = %e, file = %path.display(), "Excluding file from sync: metadata read failed");
-                                None
-                            }
-                        }
-                    })
-                    .collect();
-
-                // Delegate sync policy to OutboundSyncPlanner.
-                let deps = self.runtime.wiring_deps();
-                let planner = OutboundSyncPlanner::new(deps.settings.clone());
-                let plan = planner
-                    .plan(
-                        outbound_snapshot,
-                        origin,
-                        file_candidates,
-                        extracted_paths_count,
-                    )
-                    .await;
-
-                // Slice 2 Phase 3 · T7 — route outbound clipboard dispatch through the
-                // iroh-stack `ClipboardSyncFacade::dispatch_snapshot`. The legacy
-                // libp2p `SyncOutboundClipboardUseCase` path is retired; per-member
-                // sync preferences + content_type filters are not yet migrated
-                // (D3 decision: Phase 3 follow-up). The `OutboundSyncPlanner` still
-                // gates on global `auto_sync` + LocalCapture origin, so that layer
-                // continues to work.
-                //
-                if let Some(clipboard_intent) = plan.clipboard {
-                    let clipboard_sync = Arc::clone(&self.clipboard_sync);
-                    let blob_transfer = Arc::clone(&self.blob_transfer);
-                    let snapshot_for_dispatch = clipboard_intent.snapshot;
-                    let file_intents = plan.files;
-                    let entry_id_for_blob = entry_id.clone();
-                    tokio::spawn(
-                        async move {
-                            let blob_refs = match publish_file_blob_refs(
-                                &blob_transfer,
-                                &file_intents,
-                                &entry_id_for_blob,
-                            )
+                let clipboard_outbound = Arc::clone(&self.clipboard_outbound);
+                let entry_id_for_outbound = entry_id.to_string();
+                tokio::spawn(
+                    async move {
+                        match clipboard_outbound
+                            .dispatch_capture(ClipboardOutboundInput {
+                                entry_id: entry_id_for_outbound,
+                                snapshot: outbound_snapshot,
+                                origin,
+                            })
                             .await
-                            {
-                                Ok(refs) => refs,
-                                Err(e) => {
-                                    warn!(
-                                        error = %e,
-                                        "Daemon outbound file blob publish failed; skipping clipboard dispatch"
-                                    );
-                                    return;
-                                }
-                            };
-
-                            let dispatch_result = if blob_refs.is_empty() {
-                                clipboard_sync
-                                    .dispatch_snapshot(snapshot_for_dispatch, origin)
-                                    .await
-                            } else {
-                                clipboard_sync
-                                    .dispatch_snapshot_with_blob_refs(
-                                        snapshot_for_dispatch,
-                                        blob_refs,
-                                        origin,
-                                    )
-                                    .await
-                            };
-
-                            match dispatch_result {
-                                Ok(outcome) => info!(
-                                    accepted = outcome.total_accepted,
-                                    duplicate = outcome.total_duplicate,
-                                    offline = outcome.total_offline,
-                                    errored = outcome.total_errored,
-                                    "Daemon outbound clipboard sync (iroh) completed"
-                                ),
-                                Err(e) => warn!(
-                                    error = %e,
-                                    "Daemon outbound clipboard sync (iroh) failed"
-                                ),
+                        {
+                            Ok(ClipboardOutboundOutcome::Dispatched {
+                                accepted,
+                                duplicate,
+                                offline,
+                                errored,
+                                blob_ref_count,
+                            }) => info!(
+                                accepted,
+                                duplicate,
+                                offline,
+                                errored,
+                                blob_ref_count,
+                                "Daemon outbound clipboard sync completed"
+                            ),
+                            Ok(ClipboardOutboundOutcome::Skipped { reason }) => {
+                                debug!(reason, "Daemon outbound clipboard sync skipped");
                             }
+                            Err(e) => warn!(
+                                error = %e,
+                                "Daemon outbound clipboard sync failed"
+                            ),
                         }
-                        .in_current_span(),
-                    );
-                }
+                    }
+                    .in_current_span(),
+                );
             }
             Ok(None) => {
                 // Dedup at use-case level (e.g. unsupported representation) — skip silently.
@@ -399,35 +257,6 @@ impl ClipboardChangeHandler for DaemonClipboardChangeHandler {
 
         Ok(())
     }
-}
-
-async fn publish_file_blob_refs(
-    blob_transfer: &BlobTransferFacade,
-    files: &[FileSyncIntent],
-    entry_id: &EntryId,
-) -> anyhow::Result<Vec<V3BlobRef>> {
-    let mut blob_refs = Vec::with_capacity(files.len());
-
-    for file in files {
-        let plaintext = tokio::fs::read(&file.path).await?;
-        let size_bytes = plaintext.len() as u64;
-        let result = blob_transfer
-            .publish_blob(PublishBlobCommand {
-                plaintext: plaintext.into(),
-                entry_id: Some(entry_id.clone()),
-            })
-            .await?;
-
-        blob_refs.push(V3BlobRef {
-            ticket: result.ticket,
-            entry_id: result.entry_id,
-            filename: Some(file.filename.clone()).filter(|name| !name.is_empty()),
-            mime: None,
-            size_bytes,
-        });
-    }
-
-    Ok(blob_refs)
 }
 
 // ---------------------------------------------------------------------------

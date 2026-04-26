@@ -31,8 +31,12 @@ daemon clipboard worker 仍直接依赖 `uc-app` capture/usecase/planner、core 
   - 新增 `ClipboardLiveIndexFacade` / `ClipboardLiveIndexer`。
   - daemon `DaemonClipboardChangeHandler` 不再直接构建 search projection / pipeline / postings,也不再直接调用 index use case。
   - 已验证 `cargo test -p uc-application facade::clipboard_live_index --lib`、`cargo check -p uc-application -p uc-daemon`、`cargo test -p uc-daemon --lib`。
+- 2026-04-26:已完成 watcher outbound 外发收口。
+  - 新增 `ClipboardOutboundFacade` / `ClipboardOutboundDispatcher`。
+  - daemon `DaemonClipboardChangeHandler` 不再持有 `CoreRuntime`,也不再执行文件路径提取、同步规划、blob 发布和剪贴板分发。
+  - `OutboundSyncPlanner` 从 `uc-app` 迁入 `uc-application`,旧路径只保留过渡转发。
+  - 已验证 `cargo test -p uc-application facade::clipboard_outbound --lib`、`cargo check -p uc-application -p uc-app -p uc-daemon`、`cargo test -p uc-daemon --lib`。
 
 ## Remaining
 
-- outbound `DaemonClipboardChangeHandler` 仍直接持有 `CoreRuntime`,并在 worker 内执行 outbound planning、blob refs dispatch。
-- `entrypoint.rs` 仍负责构造 inbound use case 并包成 facade,归入 composition root 收口。
+- `entrypoint.rs` 仍负责构造 inbound/capture/live-index/outbound facade,需要归入统一 `AppFacade` / composition root 收口。

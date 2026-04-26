@@ -1,10 +1,5 @@
-//! OutboundSyncPlanner module.
-//!
-//! Consolidates all outbound sync eligibility decisions (settings load, file size filtering,
-//! transfer_id generation, and all_files_excluded guard) into a single `plan()` call.
+//! 已迁移到 `uc_application::sync_planner`。
 
-mod planner;
-mod types;
-
-pub use planner::OutboundSyncPlanner;
-pub use types::{ClipboardSyncIntent, FileCandidate, FileSyncIntent, OutboundSyncPlan};
+pub use uc_application::sync_planner::{
+    ClipboardSyncIntent, FileCandidate, FileSyncIntent, OutboundSyncPlan, OutboundSyncPlanner,
+};
