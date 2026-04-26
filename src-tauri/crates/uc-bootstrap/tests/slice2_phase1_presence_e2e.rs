@@ -48,8 +48,8 @@ use uc_core::membership::{MemberRepositoryPort, MembershipError, SpaceMember};
 use uc_core::ports::pairing::PairingSessionPort;
 use uc_core::ports::space::{ProofPort, SpaceAccessPort};
 use uc_core::ports::{
-    ClockPort, DeviceIdentityPort, LocalIdentityPort, NetworkControlPort, PresencePort,
-    ReachabilityState, SecureStorageError, SecureStoragePort, SettingsPort, SetupStatusPort,
+    ClockPort, DeviceIdentityPort, LocalIdentityPort, PresencePort, ReachabilityState,
+    SecureStorageError, SecureStoragePort, SettingsPort, SetupStatusPort,
 };
 use uc_core::settings::model::Settings;
 use uc_core::setup::SetupStatus;
@@ -250,17 +250,6 @@ impl ClockPort for SystemClock {
     }
 }
 
-struct NoopNetworkControl;
-#[async_trait]
-impl NetworkControlPort for NoopNetworkControl {
-    async fn start_network(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-    async fn stop_network(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
 // ─── wiremock respond handlers ──────────────────────────────────────────────
 
 type TicketVault = Arc<StdMutex<Option<String>>>;
@@ -402,7 +391,6 @@ async fn build_side(name: &'static str, rendezvous_base_url: String) -> Side {
         setup_status: Arc::clone(&setup_status) as Arc<dyn SetupStatusPort>,
         settings: Arc::clone(&settings) as Arc<dyn SettingsPort>,
         clock: Arc::new(SystemClock),
-        network_control: Arc::new(NoopNetworkControl),
         pairing_invitation,
         pairing_session: Arc::clone(&pairing_session) as Arc<dyn PairingSessionPort>,
         pairing_events,

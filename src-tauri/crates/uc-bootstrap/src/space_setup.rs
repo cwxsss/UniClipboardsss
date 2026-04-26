@@ -195,7 +195,6 @@ pub async fn build_space_setup_assembly(
         setup_status: Arc::clone(&deps.setup_status),
         settings: Arc::clone(&deps.settings),
         clock: Arc::clone(&deps.system.clock),
-        network_control: Arc::clone(&deps.network_control),
         pairing_invitation: handlers.invitation,
         pairing_session: handlers.session,
         pairing_events: handlers.events,

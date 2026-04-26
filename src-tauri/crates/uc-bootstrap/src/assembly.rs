@@ -1,5 +1,3 @@
-#![allow(deprecated)] // wires DisabledNetwork into legacy libp2p-era ports scheduled for Slice 5c removal
-
 //! # Pure Dependency Assembly
 //!
 //! This module contains all pure dependency construction functions that have
@@ -69,7 +67,6 @@ use uc_infra::security::{
 };
 use uc_infra::settings::repository::FileSettingsRepository;
 use uc_infra::{FileSetupStatusRepository, SystemClock};
-use uc_platform::adapters::DisabledNetwork;
 use uc_platform::app_dirs::DirsAppDirsAdapter;
 use uc_platform::clipboard::{LocalClipboard, NoopSystemClipboard};
 use uc_platform::ports::AppDirsPort;
@@ -791,11 +788,6 @@ pub fn wire_dependencies(config: &AppConfig) -> WiringResult<WiredDependencies> 
             device_identity: platform.device_identity,
             member_repo: infra.member_repo,
         },
-        // Slice 4 P5c: 5b 的 7-trait NetworkPorts 已退役,只剩 SpaceSetupFacade
-        // 仍在用 NetworkControlPort.start_network/stop_network 做 best-effort 调用,
-        // 全部走 DisabledNetwork 桩(no-op,真实 iroh endpoint 由 SpaceSetupAssembly
-        // 直接驱动)。clean up 留给后续 phase。
-        network_control: Arc::new(DisabledNetwork),
         setup_status: infra.setup_status,
         storage: StoragePorts {
             blob_store: platform.blob_store,

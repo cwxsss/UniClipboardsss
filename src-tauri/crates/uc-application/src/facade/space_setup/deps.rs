@@ -12,8 +12,8 @@ use uc_core::ports::pairing::{PairingEventPort, PairingSessionPort};
 use uc_core::ports::pairing_invitation::PairingInvitationPort;
 use uc_core::ports::space::{ProofPort, SpaceAccessPort};
 use uc_core::ports::{
-    ClockPort, DeviceIdentityPort, LocalIdentityPort, NetworkControlPort,
-    PeerAddressRepositoryPort, PresencePort, SettingsPort, SetupStatusPort,
+    ClockPort, DeviceIdentityPort, LocalIdentityPort, PeerAddressRepositoryPort, PresencePort,
+    SettingsPort, SetupStatusPort,
 };
 use uc_core::trusted_peer::TrustedPeerRepositoryPort;
 
@@ -31,9 +31,6 @@ pub struct SpaceSetupDeps {
     pub setup_status: Arc<dyn SetupStatusPort>,
     pub settings: Arc<dyn SettingsPort>,
     pub clock: Arc<dyn ClockPort>,
-    /// Network runtime lifecycle. Auto-started on A1/A2 success (F1) and
-    /// stopped by [`super::SpaceSetupFacade::on_shutdown`] (F2).
-    pub network_control: Arc<dyn NetworkControlPort>,
     /// Sponsor-side rendezvous client for issuing invitation codes (B1)
     /// and notifying the rendezvous of successful consumes (P7e inbound
     /// path).

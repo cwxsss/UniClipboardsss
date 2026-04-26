@@ -1,15 +1,20 @@
 //! `SpaceSetupFacade` — space-lifecycle entry point (A1 + A2 + shutdown).
 //!
-//! Owns the two use cases plus the network lifecycle port so A1/A2 success
-//! auto-triggers `start_network` (F1) and [`on_shutdown`](Self::on_shutdown)
-//! mirrors it with `stop_network` (F2). Also owns the sponsor-side inbound
-//! orchestrator so the rest of the crate never sees the spawn surface
-//! (§11.4).
+//! Owns the two use cases so A1/A2 success can prime presence cache (F1) via
+//! `ensure_reachable_all`. Also owns the sponsor-side inbound orchestrator so
+//! the rest of the crate never sees the spawn surface (§11.4).
 //!
-//! Network errors during auto-start are intentionally non-fatal: the
+//! Slice 4 P5c: 历史上还持有 `NetworkControlPort` 用于 A1/A2 后调
+//! `start_network` (F1) + `on_shutdown` 调 `stop_network` (F2),已退役——
+//! iroh router 由 `SpaceSetupAssembly` 直接驱动,libp2p 兼容路径整体下线。
+//! F1 hook 保留(改名 `auto_prime_presence`),只跑 `ensure_reachable_all`;
+//! F2 不再触碰网络层。
+//!
+//! Network errors during auto-prime are intentionally non-fatal: the
 //! underlying space mutation has already committed and isn't safe to roll
-//! back, and the network runtime is retryable from UI. Failures are
-//! surfaced through `tracing::warn!` so ops still sees them.
+//! back, and presence will lazily recover via the adapter's
+//! `Connection::closed` watchdog. Failures are surfaced through
+//! `tracing::warn!` so ops still sees them.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +25,7 @@ use tracing::{info, instrument, warn};
 
 use uc_core::ids::SpaceId;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
-use uc_core::ports::{NetworkControlPort, SettingsPort, SetupStatusPort};
+use uc_core::ports::{SettingsPort, SetupStatusPort};
 use uc_core::setup::SetupStatus;
 
 use crate::facade::space_setup::commands::{
@@ -59,7 +64,6 @@ pub struct SpaceSetupFacade {
     unlock_space: Arc<UnlockSpaceUseCase>,
     issue_pairing_invitation: Arc<IssuePairingInvitationUseCase>,
     redeem_pairing_invitation: Arc<RedeemPairingInvitationUseCase>,
-    network_control: Arc<dyn NetworkControlPort>,
     /// `JoinHandle` for the sponsor-side inbound pairing orchestrator
     /// spawned during construction. Aborted in [`Self::on_shutdown`] so
     /// the event loop doesn't outlive the facade.
@@ -85,9 +89,8 @@ pub struct SpaceSetupFacade {
     /// clone so the facade keeps a stable read/write handle.
     invitation_holder: Arc<InMemoryPairingInvitationHolder>,
     /// Slice 2 Phase 1 · T8：F1 hook。A1/A2/B2 成功后
-    /// [`Self::auto_start_network`] 会在 `start_network` 成功之后
-    /// 触发一次全员预连,把 presence 缓存填满,让 UI 查 roster 时
-    /// online/offline 立刻准。
+    /// [`Self::auto_prime_presence`] 触发一次全员预连,把 presence 缓存
+    /// 填满,让 UI 查 roster 时 online/offline 立刻准。
     ensure_reachable_all: Arc<EnsureReachableAllUseCase>,
 }
 
@@ -103,7 +106,6 @@ impl SpaceSetupFacade {
             setup_status,
             settings,
             clock,
-            network_control,
             pairing_invitation,
             pairing_session,
             pairing_events,
@@ -230,7 +232,6 @@ impl SpaceSetupFacade {
             unlock_space,
             issue_pairing_invitation,
             redeem_pairing_invitation,
-            network_control,
             pairing_inbound_handle,
             pairing_outcome_tx,
             space_access: space_access_for_facade,
@@ -300,26 +301,26 @@ impl SpaceSetupFacade {
     }
 
     /// A1 · Create the encrypted space on a fresh device. On success the
-    /// network runtime is auto-started (F1).
+    /// presence cache is primed (F1).
     #[instrument(skip_all)]
     pub async fn initialize_space(
         &self,
         cmd: InitializeSpaceCommand,
     ) -> Result<InitializeSpaceResult, InitializeSpaceError> {
         let out = self.initialize_space.execute(cmd).await?;
-        self.auto_start_network().await;
+        self.auto_prime_presence().await;
         Ok(out)
     }
 
     /// A2 · Unlock the encrypted space after a restart. On success the
-    /// network runtime is auto-started (F1).
+    /// presence cache is primed (F1).
     #[instrument(skip_all)]
     pub async fn unlock_space(
         &self,
         cmd: UnlockSpaceCommand,
     ) -> Result<UnlockSpaceResult, UnlockSpaceError> {
         let out = self.unlock_space.execute(cmd).await?;
-        self.auto_start_network().await;
+        self.auto_prime_presence().await;
         Ok(out)
     }
 
@@ -338,20 +339,19 @@ impl SpaceSetupFacade {
 
     /// B2 · Redeem a sponsor-issued invitation (joiner side).
     ///
-    /// Auto-starts the network before dialing because, unlike A1/A2, the
-    /// joiner's entry point may be the first user action on this device
-    /// (no prior `initialize_space` / `unlock_space` to have triggered
-    /// F1). Auto-start failures are logged but not propagated — the
-    /// subsequent dial will fail with [`RedeemPairingInvitationError::
-    /// SponsorUnreachable`] / `ServiceUnavailable` if the network is
-    /// genuinely unusable, which is the more actionable surface for the
-    /// UI.
+    /// Primes presence before dialing because, unlike A1/A2, the joiner's
+    /// entry point may be the first user action on this device (no prior
+    /// `initialize_space` / `unlock_space` to have triggered F1). Prime
+    /// failures are logged but not propagated — the subsequent dial will
+    /// fail with [`RedeemPairingInvitationError::SponsorUnreachable`] /
+    /// `ServiceUnavailable` if presence is genuinely unusable, which is
+    /// the more actionable surface for the UI.
     #[instrument(skip_all)]
     pub async fn redeem_pairing_invitation(
         &self,
         cmd: RedeemPairingInvitationCommand,
     ) -> Result<RedeemPairingInvitationResult, RedeemPairingInvitationError> {
-        self.auto_start_network().await;
+        self.auto_prime_presence().await;
         self.redeem_pairing_invitation.execute(cmd).await
     }
 
@@ -445,10 +445,9 @@ impl SpaceSetupFacade {
     /// 然后 CLI 再调 `MemberRosterFacade::list_with_presence` 读缓存 →
     /// 查询结果天然满足"B 重启后 ≤ 10s 内显示 online"的验收条款。
     ///
-    /// 与 F1 hook 里 `auto_start_network` 自动触发的那一轮的区别:本方法
-    /// 不调 `start_network`(iroh router 已在 assembly 构造时 `spawn`,
-    /// CLI 走直接模式无需 libp2p 兼容路径);只暴露 `ensure_reachable_all`
-    /// 使用例结果,让 CLI 决定如何展示(fatal 错误 / 个别 peer 失败计数)。
+    /// 与 F1 hook 里 `auto_prime_presence` 自动触发的那一轮的区别:本方法
+    /// 暴露 `ensure_reachable_all` 使用例的结果,让 CLI 决定如何展示
+    /// (fatal 错误 / 个别 peer 失败计数);F1 路径吞错只 warn。
     ///
     /// UseCase 本身保持 `pub(crate)`(§11.4),只通过本 facade thin wrapper
     /// 对外,后续 Tauri / GUI 也复用同一入口。
@@ -459,45 +458,28 @@ impl SpaceSetupFacade {
         self.ensure_reachable_all.execute().await
     }
 
-    /// F2 · Shut the network runtime down cleanly on app exit.
+    /// F2 · Tear down facade-owned background work cleanly on app exit.
     ///
-    /// Best-effort: failures are logged but not returned, since the caller
-    /// is on the teardown path and has no recourse. Also aborts the
-    /// inbound pairing orchestrator so its `subscribe` receiver drops and
-    /// the underlying adapter releases the event channel.
+    /// Slice 4 P5c: 历史上还会调 `network_control.stop_network()`,libp2p 走
+    /// 完后 iroh router 由 `SpaceSetupAssembly::shutdown` 直接收口,本入口
+    /// 现在只剩 abort 入站 pairing orchestrator——让它的 `subscribe` receiver
+    /// 立刻 drop,底层 adapter 才能释放事件 channel。
     #[instrument(skip_all)]
     pub async fn on_shutdown(&self) {
         self.pairing_inbound_handle.abort();
-        if let Err(err) = self.network_control.stop_network().await {
-            warn!(
-                error = %err,
-                "stop_network failed during shutdown; proceeding with teardown"
-            );
-        }
     }
 
-    /// Best-effort network startup after a successful space-lifecycle
-    /// action. Does not propagate errors: A1/A2 already committed the
-    /// space mutation and rolling that back is worse than leaving the
-    /// network offline until the user retries.
+    /// Best-effort presence prime after a successful space-lifecycle action.
+    /// Does not propagate errors: A1/A2 already committed the space mutation
+    /// and rolling that back is worse than leaving presence stale.
     ///
-    /// **Slice 2 Phase 1 · T8 · F1 hook**:`start_network` 成功后紧接着
+    /// **Slice 2 Phase 1 · T8 · F1 hook**(P5c 改名 `auto_prime_presence`):
     /// 跑一次 `ensure_reachable_all` —— 对所有已知 paired peer 并发探测,
     /// 把 presence 缓存填满,让 UI 下一次 `list_with_presence` 就能拿到
-    /// 正确的 online/offline 而不是全是 `Unknown`。预连失败不传给调用
-    /// 方:A1/A2/B2 的空间变更已经落盘,单个 peer 拨不通属正常情形,
+    /// 正确的 online/offline 而不是全是 `Unknown`。预连失败不传给调用方:
+    /// A1/A2/B2 的空间变更已经落盘,单个 peer 拨不通属正常情形,
     /// adapter 的 `Connection::closed` watchdog 会按正常流程 lazy 补齐。
-    async fn auto_start_network(&self) {
-        if let Err(err) = self.network_control.start_network().await {
-            warn!(
-                error = %err,
-                "start_network failed after space-lifecycle action; space state is \
-                 committed, user must retry network via manual reconnect"
-            );
-            // start_network 失败时不跑 ensure_reachable_all —— 没有网络
-            // 运行时,拨号一定返 adapter internal,制造一堆无用 warn。
-            return;
-        }
+    async fn auto_prime_presence(&self) {
         match self.ensure_reachable_all.execute().await {
             Ok(report) => {
                 info!(
@@ -511,8 +493,8 @@ impl SpaceSetupFacade {
             Err(err) => {
                 warn!(
                     error = %err,
-                    "ensure_reachable_all failed after start_network; presence will \
-                     recover lazily on next adapter probe"
+                    "ensure_reachable_all failed; presence will recover lazily \
+                     on next adapter probe"
                 );
             }
         }
@@ -549,8 +531,8 @@ mod tests {
     };
     use uc_core::ports::space::{ProofPort, SpaceAccessError, SpaceAccessPort};
     use uc_core::ports::{
-        ClockPort, DeviceIdentityPort, LocalIdentityError, LocalIdentityPort, NetworkControlPort,
-        SettingsPort, SetupStatusPort,
+        ClockPort, DeviceIdentityPort, LocalIdentityError, LocalIdentityPort, SettingsPort,
+        SetupStatusPort,
     };
     use uc_core::security::IdentityFingerprint;
     use uc_core::settings::model::Settings;
@@ -723,37 +705,6 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeNetworkControl {
-        start_calls: StdMutex<u32>,
-        stop_calls: StdMutex<u32>,
-        start_err: StdMutex<Option<String>>,
-    }
-
-    impl FakeNetworkControl {
-        fn start_calls(&self) -> u32 {
-            *self.start_calls.lock().unwrap()
-        }
-        fn stop_calls(&self) -> u32 {
-            *self.stop_calls.lock().unwrap()
-        }
-    }
-
-    #[async_trait]
-    impl NetworkControlPort for FakeNetworkControl {
-        async fn start_network(&self) -> anyhow::Result<()> {
-            *self.start_calls.lock().unwrap() += 1;
-            if let Some(msg) = self.start_err.lock().unwrap().take() {
-                return Err(anyhow::anyhow!(msg));
-            }
-            Ok(())
-        }
-        async fn stop_network(&self) -> anyhow::Result<()> {
-            *self.stop_calls.lock().unwrap() += 1;
-            Ok(())
-        }
-    }
-
-    #[derive(Default)]
     struct FakeInvitationPort {
         calls: StdMutex<u32>,
         next_err: StdMutex<Option<InvitationError>>,
@@ -887,8 +838,8 @@ mod tests {
     //
     // * T5:pairing 收尾点(orchestrator / redeem_invitation)会对 peer_addr_repo
     //   做 upsert——行为契约在各自的测试里覆盖,不在本文件。
-    // * T8:F1 hook `auto_start_network` 成功跑 `start_network` 之后会
-    //   unconditionally 调 `peer_addr_repo.list()` 喂给 `EnsureReachableAllUseCase`。
+    // * T8:F1 hook `auto_prime_presence` 在 A1/A2/B2 成功后会 unconditionally
+    //   调 `peer_addr_repo.list()` 喂给 `EnsureReachableAllUseCase`。
     //
     // 因此本 helper 换成一个 FakePeerAddrRepo:`list()` 默认返回空 vec
     // (→ ensure_reachable_all 跑完一轮,不触发 presence.ensure_reachable),
@@ -962,11 +913,9 @@ mod tests {
         settings: Arc<dyn SettingsPort>,
     ) -> (
         SpaceSetupFacade,
-        Arc<FakeNetworkControl>,
         Arc<FakeInvitationPort>,
         Arc<FakePeerAddrRepo>,
     ) {
-        let network_control = Arc::new(FakeNetworkControl::default());
         let pairing_invitation = Arc::new(FakeInvitationPort::default());
         let peer_addr_repo = Arc::new(FakePeerAddrRepo::default());
         let facade = SpaceSetupFacade::new(SpaceSetupDeps {
@@ -981,7 +930,6 @@ mod tests {
             setup_status,
             settings,
             clock: Arc::new(FixedClock(0)),
-            network_control: network_control.clone(),
             pairing_invitation: pairing_invitation.clone(),
             pairing_session: Arc::new(NoopSessionPort),
             pairing_events: Arc::new(IdleEventPort::new()),
@@ -991,7 +939,7 @@ mod tests {
                 as Arc<dyn uc_core::ports::PeerAddressRepositoryPort>,
             presence: Arc::new(FakePresence),
         });
-        (facade, network_control, pairing_invitation, peer_addr_repo)
+        (facade, pairing_invitation, peer_addr_repo)
     }
 
     fn settings_with_device_name(name: &str) -> Arc<InMemorySettings> {
@@ -1007,7 +955,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_forwards_happy_path() {
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -1023,7 +971,7 @@ mod tests {
 
     #[tokio::test]
     async fn initialize_space_forwards_passphrase_mismatch() {
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -1044,7 +992,7 @@ mod tests {
             has_completed: true,
             space_id: None,
         };
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -1057,7 +1005,7 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_space_forwards_setup_not_completed() {
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -1078,7 +1026,7 @@ mod tests {
         };
         let space_access = FakeSpaceAccess::default();
         *space_access.unlock_err.lock().unwrap() = Some(SpaceAccessError::WrongPassphrase);
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(space_access),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -1090,128 +1038,32 @@ mod tests {
         assert!(matches!(err, UnlockSpaceError::WrongPassphrase));
     }
 
-    // ── P6 · F1/F2 network wiring ────────────────────────────────────────
+    // ── F2 shutdown ──────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn initialize_space_success_starts_network() {
-        let (facade, net, _inv, _peer) = make_facade(
-            Arc::new(FakeSpaceAccess::default()),
-            Arc::new(InMemorySetupStatus::default()),
-            settings_with_device_name("mac"),
-        );
-        let cmd = InitializeSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-            passphrase_confirm: Passphrase::new("hunter22hunter22"),
-            device_name: None,
-        };
-        facade.initialize_space(cmd).await.expect("A1 ok");
-        assert_eq!(net.start_calls(), 1);
-        assert_eq!(net.stop_calls(), 0);
-    }
-
-    #[tokio::test]
-    async fn initialize_space_failure_does_not_start_network() {
-        let (facade, net, _inv, _peer) = make_facade(
-            Arc::new(FakeSpaceAccess::default()),
-            Arc::new(InMemorySetupStatus::default()),
-            settings_with_device_name("mac"),
-        );
-        let cmd = InitializeSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-            passphrase_confirm: Passphrase::new("different22else2"),
-            device_name: None,
-        };
-        let _ = facade.initialize_space(cmd).await.unwrap_err();
-        assert_eq!(
-            net.start_calls(),
-            0,
-            "A1 failure must not touch network runtime"
-        );
-    }
-
-    #[tokio::test]
-    async fn unlock_space_success_starts_network() {
-        let setup_status = InMemorySetupStatus::default();
-        *setup_status.status.lock().unwrap() = SetupStatus {
-            has_completed: true,
-            space_id: None,
-        };
-        let (facade, net, _inv, _peer) = make_facade(
-            Arc::new(FakeSpaceAccess::default()),
-            Arc::new(setup_status),
-            Arc::new(InMemorySettings::default()),
-        );
-        let cmd = UnlockSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-        };
-        facade.unlock_space(cmd).await.expect("A2 ok");
-        assert_eq!(net.start_calls(), 1);
-    }
-
-    #[tokio::test]
-    async fn unlock_space_failure_does_not_start_network() {
-        let (facade, net, _inv, _peer) = make_facade(
-            Arc::new(FakeSpaceAccess::default()),
-            Arc::new(InMemorySetupStatus::default()),
-            Arc::new(InMemorySettings::default()),
-        );
-        let cmd = UnlockSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-        };
-        let _ = facade.unlock_space(cmd).await.unwrap_err();
-        assert_eq!(
-            net.start_calls(),
-            0,
-            "A2 failure (SetupNotCompleted) must not touch network runtime"
-        );
-    }
-
-    #[tokio::test]
-    async fn start_network_failure_does_not_fail_initialize_space() {
-        let (facade, net, _inv, _peer) = make_facade(
-            Arc::new(FakeSpaceAccess::default()),
-            Arc::new(InMemorySetupStatus::default()),
-            settings_with_device_name("mac"),
-        );
-        *net.start_err.lock().unwrap() = Some("bind failed".to_string());
-        let cmd = InitializeSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-            passphrase_confirm: Passphrase::new("hunter22hunter22"),
-            device_name: None,
-        };
-        let out = facade
-            .initialize_space(cmd)
-            .await
-            .expect("A1 result must not reflect network failure");
-        assert_eq!(out.fingerprint, default_fingerprint());
-        assert_eq!(net.start_calls(), 1);
-    }
-
-    #[tokio::test]
-    async fn on_shutdown_stops_network() {
-        let (facade, net, _inv, _peer) = make_facade(
+    async fn on_shutdown_completes_without_panicking() {
+        // Slice 4 P5c: F2 hook 不再调 stop_network(NetworkControlPort 已退役),
+        // 这里只确认 abort 入站 orchestrator 后 facade 能正常清理,不 panic、
+        // 不阻塞。
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
         );
         facade.on_shutdown().await;
-        assert_eq!(net.stop_calls(), 1);
-        assert_eq!(net.start_calls(), 0);
     }
 
-    // ── T8 · F1 hook: auto_start_network triggers ensure_reachable_all ──
+    // ── T8 · F1 hook: auto_prime_presence triggers ensure_reachable_all ─
     //
     // 契约(plan §7.1 验收点):
-    // * A1 / A2 / B2 成功 → auto_start_network → ensure_reachable_all 跑一次
+    // * A1 / A2 / B2 成功 → auto_prime_presence → ensure_reachable_all 跑一次
     //   (以 peer_addr_repo.list() 被调计数代理——空 repo 路径下也跑过 list)
-    // * start_network 失败 → ensure_reachable_all 不跑(不调 list)
-    // * ensure_reachable_all 失败 → A1/A2 结果不受影响(已在 start_network_
-    //   failure_does_not_fail_initialize_space 覆盖了失败不传播;本集下
-    //   用空 repo,ensure_reachable_all 不会失败,只验证"跑过")
+    // * ensure_reachable_all 失败 → A1/A2 结果不受影响(本集下用空 repo,
+    //   ensure_reachable_all 不会失败,只验证"跑过")
 
     #[tokio::test]
     async fn f1_hook_initialize_space_success_triggers_ensure_reachable_all() {
-        let (facade, _net, _inv, peer) = make_facade(
+        let (facade, _inv, peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -1236,7 +1088,7 @@ mod tests {
             has_completed: true,
             space_id: None,
         };
-        let (facade, _net, _inv, peer) = make_facade(
+        let (facade, _inv, peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -1253,32 +1105,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn f1_hook_skipped_when_start_network_fails() {
-        let (facade, net, _inv, peer) = make_facade(
-            Arc::new(FakeSpaceAccess::default()),
-            Arc::new(InMemorySetupStatus::default()),
-            settings_with_device_name("mac"),
-        );
-        *net.start_err.lock().unwrap() = Some("bind failed".to_string());
-        let cmd = InitializeSpaceCommand {
-            passphrase: Passphrase::new("hunter22hunter22"),
-            passphrase_confirm: Passphrase::new("hunter22hunter22"),
-            device_name: None,
-        };
-        facade.initialize_space(cmd).await.expect("A1 ok");
-        assert_eq!(net.start_calls(), 1);
-        assert_eq!(
-            peer.list_calls(),
-            0,
-            "start_network failure must skip ensure_reachable_all",
-        );
-    }
-
-    #[tokio::test]
     async fn f1_hook_skipped_when_lifecycle_action_fails() {
-        // A1 失败(passphrase mismatch)→ 不跑 start_network → 也不跑
-        // ensure_reachable_all。验证 guard 顺序正确。
-        let (facade, net, _inv, peer) = make_facade(
+        // A1 失败(passphrase mismatch)→ 不跑 ensure_reachable_all。
+        // 验证 guard 顺序正确(失败短路在 prime 之前)。
+        let (facade, _inv, peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             settings_with_device_name("mac"),
@@ -1289,7 +1119,6 @@ mod tests {
             device_name: None,
         };
         let _ = facade.initialize_space(cmd).await.unwrap_err();
-        assert_eq!(net.start_calls(), 0);
         assert_eq!(peer.list_calls(), 0);
     }
 
@@ -1297,7 +1126,7 @@ mod tests {
 
     #[tokio::test]
     async fn issue_pairing_invitation_forwards_happy_path() {
-        let (facade, _net, inv, _peer) = make_facade(
+        let (facade, inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -1309,7 +1138,7 @@ mod tests {
 
     #[tokio::test]
     async fn issue_pairing_invitation_forwards_network_not_started() {
-        let (facade, _net, inv, _peer) = make_facade(
+        let (facade, inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -1326,7 +1155,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_invitation_returns_not_issued_when_holder_empty() {
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -1337,7 +1166,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_invitation_clears_pending_after_issue() {
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -1355,7 +1184,7 @@ mod tests {
             has_completed: true,
             space_id: None,
         };
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             Arc::new(InMemorySettings::default()),
@@ -1373,7 +1202,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_setup_state_reports_fresh_install_defaults() {
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -1391,7 +1220,7 @@ mod tests {
             has_completed: true,
             space_id: None,
         };
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(setup_status),
             settings_with_device_name("MacBook"),
@@ -1404,7 +1233,7 @@ mod tests {
 
     #[tokio::test]
     async fn query_setup_state_surfaces_pending_invitation_after_issue() {
-        let (facade, _net, _inv, _peer) = make_facade(
+        let (facade, _inv, _peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
@@ -1422,17 +1251,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn issue_pairing_invitation_does_not_auto_start_network() {
-        let (facade, net, _inv, _peer) = make_facade(
+    async fn issue_pairing_invitation_does_not_prime_presence() {
+        // B1 不是 space-lifecycle 动作,不应触发 auto_prime_presence
+        // (presence 缓存只该被 A1 / A2 / B2 触动,B1 出码不涉及与对端互联)。
+        let (facade, _inv, peer) = make_facade(
             Arc::new(FakeSpaceAccess::default()),
             Arc::new(InMemorySetupStatus::default()),
             Arc::new(InMemorySettings::default()),
         );
         facade.issue_pairing_invitation().await.expect("B1 ok");
         assert_eq!(
-            net.start_calls(),
+            peer.list_calls(),
             0,
-            "B1 is not a space-lifecycle action and must not touch network runtime",
+            "B1 must not trigger ensure_reachable_all",
         );
     }
 }

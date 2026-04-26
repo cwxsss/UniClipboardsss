@@ -123,8 +123,6 @@ pub struct AppDeps {
     pub security: SecurityPorts,
     /// Device-domain ports (includes pairing) / 设备领域端口（含配对）
     pub device: DevicePorts,
-    /// Network control (cross-cutting) / 网络控制（横切关注）
-    pub network_control: Arc<dyn NetworkControlPort>,
     /// Setup status (setup-specific) / 设置状态（设置流程专用）
     pub setup_status: Arc<dyn SetupStatusPort>,
     /// Storage-domain ports / 存储领域端口

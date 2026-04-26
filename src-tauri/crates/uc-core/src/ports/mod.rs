@@ -29,7 +29,6 @@ pub mod errors;
 pub mod file_transfer_repository;
 mod hash;
 pub mod local_identity;
-pub mod network_control;
 pub mod pairing;
 pub mod pairing_invitation;
 pub mod peer_address;
@@ -59,7 +58,6 @@ pub use file_transfer_repository::{
     TrackedFileTransfer, TrackedFileTransferStatus,
 };
 pub use local_identity::{LocalIdentityError, LocalIdentityPort};
-pub use network_control::NetworkControlPort;
 pub use pairing::{
     DialError, PairingEventPort, PairingSessionEvent, PairingSessionId, PairingSessionPort,
     SessionError,
