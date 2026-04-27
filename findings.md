@@ -31,6 +31,9 @@
 - 第四阶段新增 `daemon::runtime_assembly`，把 daemon worker 的依赖拼装从 `entrypoint.rs` 抽出。
 - clipboard watcher、inbound clipboard sync、file sync orchestrator 的构造现在集中在 `build_daemon_runtime_workers`。
 - `entrypoint.rs` 继续负责启动顺序和生命周期，不再直接知道 clipboard worker 内部依赖怎么拼。
+- 第五阶段新增 `daemon::startup_recovery`，把启动后的后台恢复任务从 `entrypoint.rs` 抽出。
+- 后台恢复仍按原顺序执行：读取自动解锁设置、恢复加密会话、恢复空间会话、刷新 presence，并在 CLI 模式成功解锁后触发延迟服务。
+- `entrypoint.rs` 现在只把启动恢复所需依赖交给 `spawn_startup_recovery`，不再直接写恢复任务细节。
 
 ## 验证发现
 
@@ -45,10 +48,11 @@
 - `cargo check -p uc-desktop -p uc-daemon -p uc-cli -p uniclipboard` 通过。
 - `cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - `cargo check -p uniclipboard` 通过。
+- `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 
 ## 后续 gap
 
 - 需要决定 `uc-bootstrap` 是保留为通用组装库，还是逐步并入 `uc-desktop` 的 bootstrap 模块。
 - 需要后续再收拢 HTTP/WS 和 Tauri bridge 的宿主归属。
 - 需要逐步缩小 `uc-daemon` 兼容层，最终只保留必要的外部入口。
-- 需要继续梳理 daemon 启动中的 unlock/recovery 后台任务，让 startup recovery 成为更清晰的独立宿主步骤。
+- 需要继续收窄 `entrypoint.rs`，把剩余 daemon run context、shutdown 包装和宿主启动顺序拆成更清晰的桌面宿主步骤。

@@ -25,6 +25,7 @@
 | 6 | 完成 | 收拢 `AppFacade` 公共装配，减少 daemon/Tauri/CLI 重复拼装 |
 | 7 | 完成 | 抽出 daemon 后台服务启动清单，明确立即启动与 ready 后启动的分组 |
 | 8 | 完成 | 抽出 daemon runtime worker 装配，进一步缩短入口编排 |
+| 9 | 完成 | 抽出 daemon 启动恢复任务，隔离解锁、会话恢复和 presence 预热 |
 
 ## 决策记录
 
@@ -36,6 +37,7 @@
 - 第二阶段将公共 `AppFacade` 装配放在 `uc-bootstrap`，由 `uc-desktop`、`uc-tauri`、CLI 共用；运行模式差异通过显式选项传入。
 - 第三阶段只抽服务启动清单，不改 worker 行为、不改 HTTP/WS、不改业务逻辑。
 - 第四阶段只抽 worker 构造，不改服务分组和启动策略。
+- 第五阶段只抽启动恢复后台任务，不改解锁、空间会话恢复、presence 预热和 ready 后服务触发行为。
 
 ## 错误记录
 

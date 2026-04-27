@@ -44,6 +44,14 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 运行 `git diff --check`，通过。
+- 开始第五阶段：抽出 daemon 启动恢复任务。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/startup_recovery.rs`，集中处理后台解锁、空间会话恢复、presence 预热和 CLI 模式 deferred services 触发。
+- 将 `entrypoint.rs` 中内联的启动恢复任务替换为 `spawn_startup_recovery` 调用。
+- `entrypoint.rs` 继续负责 daemon 主流程，不再直接维护恢复任务细节。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 
 ## 工作区备注
 
