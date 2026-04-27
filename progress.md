@@ -4297,3 +4297,31 @@ T7 cargo check + 修崩:
 
 **意义**:uc-cli 命令侧完全脱离 `uc_app::usecases`。剩下的 uc-app 依赖(Cargo.toml 层面)只剩 `build_cli_runtime` 间接引用 —— D16 处理 uc-app 内部清理时可一并删除。
 
+
+---
+
+## D16-1 — uc-app dead use cases 清理 + Cargo 依赖收缩(complete, 2026-04-26)
+
+**起点**:D14/D15 完成,uc-app 内部留下大量 dead code(13 个 use case 类型 + CoreUseCases + App struct),且 uc-cli / uc-daemon-local / uniclipboard binary 的 Cargo.toml 仍依赖 uc-app 但 src 里 0 引用。
+
+**精确判断**:
+- `grep -rE "(^|[^a-z])uc_app(::|[^a-z_])"` 在 uc-cli/src/ + uc-daemon-local/src/ + src-tauri/src/main.rs = **0 hit** —— 三个 crate 完全可脱离 uc-app
+- `grep "uc_app::usecases::*"`(精确字面)对 13 个 use case 类型逐一查 —— 全部 0 caller,可整批删除
+
+**实际改动**:
+- 删除 ~30 个 dead use case 文件(initialize_encryption / verify_keychain_access / change_passphrase / delete / get_settings / update_settings / 11 个 clipboard sub usecases / copy_file_to_clipboard / internal/ membership/ pairing/ search/ storage/ sync_planner/)
+- 重写 `usecases/mod.rs`(280→30 行,删 CoreUseCases 巨型 impl)
+- 重写 `usecases/clipboard/mod.rs`(删 ClipboardUseCases helper)
+- 重写 `usecases/file_sync/mod.rs`(只剩 CleanupExpiredFilesUseCase)
+- 重写 `lib.rs`(删 App struct + CoreUseCases re-export,docstring 解释残留状态)
+- Cargo.toml 删 uc-app 依赖:uc-cli / uc-daemon-local / uniclipboard binary
+
+**验证**:
+- `cargo check --workspace --all-targets` ✅
+- `cargo test --workspace --lib` ✅ 0 failures
+- `grep -rE "(^|[^a-z])uc_app(::|[^a-z_])"` 在三个 crate 仍 0 hit
+
+**意义**:
+- 依赖 uc-app 的 crate 从 5 个降到 2 个(uc-bootstrap / uc-tauri),为 D16-2 / D17 删除整个 crate 铺路
+- uc-app 体积大幅收缩,只剩"transition surface"用于跨 crate 类型借用(AppDeps / TaskRegistry / CoreRuntime / ClipboardWriteCoordinator shim / CleanupExpiredFilesUseCase 5 类)
+

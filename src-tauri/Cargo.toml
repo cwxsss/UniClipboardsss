@@ -21,7 +21,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # ===== Workspace crates =====
 uc-core = { path = "crates/uc-core" }
-uc-app = { path = "crates/uc-app" }
 uc-application = { path = "crates/uc-application" }
 uc-tauri = { path = "crates/uc-tauri" }
 uc-bootstrap = { path = "crates/uc-bootstrap" }

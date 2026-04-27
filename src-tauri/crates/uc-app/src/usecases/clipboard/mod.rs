@@ -1,43 +1,12 @@
-pub mod clear_history;
+//! Clipboard shim modules surviving D16-1.
+//!
+//! `clipboard_write_coordinator` re-exports the real type from
+//! `uc-application::clipboard_write`; `integration_mode` re-exports the
+//! `uc-core::clipboard::ClipboardIntegrationMode` enum. Both stay here
+//! only to keep `uc_app::usecases::clipboard::*` import paths working
+//! for uc-bootstrap / uc-tauri until D16-2 rewires those callers.
+
 pub mod clipboard_write_coordinator;
-pub mod get_entry_detail;
-pub mod get_entry_resource;
 pub mod integration_mode;
-pub mod list_entry_projections;
-pub mod resolve_blob_resource;
-pub mod resolve_thumbnail_resource;
-pub mod restore_clipboard_selection;
-pub mod toggle_favorite_clipboard_entry;
-pub mod touch_clipboard_entry;
-
-pub use clear_history::{ClearClipboardHistory, ClearHistoryResult};
-
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClipboardStats {
-    pub total_items: i64,
-    pub total_size: i64,
-}
-
-pub struct ClipboardUseCases;
-
-impl ClipboardUseCases {
-    pub fn compute_stats(entries: &[EntryProjectionDto]) -> ClipboardStats {
-        compute_clipboard_stats(entries)
-    }
-}
-
-pub fn compute_clipboard_stats(entries: &[EntryProjectionDto]) -> ClipboardStats {
-    let total_items = entries.len() as i64;
-    let total_size = entries.iter().map(|e| e.size_bytes).sum();
-    ClipboardStats {
-        total_items,
-        total_size,
-    }
-}
 
 pub use integration_mode::ClipboardIntegrationMode;
-pub use list_entry_projections::{
-    EntryProjectionDto, ListClipboardEntryProjections, ListProjectionsError,
-};
