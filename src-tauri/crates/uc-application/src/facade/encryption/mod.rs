@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tracing::instrument;
+use uc_core::crypto::model::Passphrase;
 use uc_core::ids::SpaceId;
 use uc_core::ports::setup::SetupStatusPort;
 use uc_core::ports::space::{SpaceAccessError, SpaceAccessPort};
@@ -25,6 +26,8 @@ pub enum EncryptionFacadeError {
     SetupStatus(String),
     #[error("space access failed: {0}")]
     SpaceAccess(String),
+    #[error("encryption is already initialized")]
+    AlreadyInitialized,
 }
 
 pub struct EncryptionFacade {
@@ -56,6 +59,43 @@ impl EncryptionFacade {
             initialized,
             session_ready,
         })
+    }
+
+    /// 首次初始化加密空间 —— 创建本地 space + 解锁 + 标记 setup 完成。
+    ///
+    /// 三步合并为单一原子动作:
+    /// 1. `space_access.initialize` 用 passphrase 创建本地空间并解锁会话
+    /// 2. `setup_status.set_status(has_completed=true)` 标记本设备已完成 setup
+    ///
+    /// 第 1 步失败立即返回错误,不写 setup_status。
+    #[instrument(skip_all)]
+    pub async fn initialize(&self, passphrase: Passphrase) -> Result<(), EncryptionFacadeError> {
+        let space_id = default_space_id();
+        let domain_passphrase = uc_core::crypto::domain::Passphrase::new(passphrase.0);
+
+        self.deps
+            .space_access
+            .initialize(&space_id, &domain_passphrase)
+            .await
+            .map_err(|err| match err {
+                SpaceAccessError::AlreadyInitialized => EncryptionFacadeError::AlreadyInitialized,
+                other => space_access_error(other),
+            })?;
+
+        let mut status = self
+            .deps
+            .setup_status
+            .get_status()
+            .await
+            .map_err(|err| EncryptionFacadeError::SetupStatus(err.to_string()))?;
+        status.has_completed = true;
+        self.deps
+            .setup_status
+            .set_status(&status)
+            .await
+            .map_err(|err| EncryptionFacadeError::SetupStatus(err.to_string()))?;
+
+        Ok(())
     }
 
     #[instrument(skip_all)]
@@ -132,6 +172,8 @@ mod tests {
         resume_returns_session: Mutex<bool>,
         verify_granted: Mutex<bool>,
         lock_calls: Mutex<u32>,
+        init_already_initialized: Mutex<bool>,
+        init_calls: Mutex<u32>,
     }
 
     #[async_trait]
@@ -141,6 +183,10 @@ mod tests {
             space_id: &SpaceId,
             _passphrase: &Passphrase,
         ) -> Result<ActiveSpace, SpaceAccessError> {
+            *self.init_calls.lock().expect("init calls lock") += 1;
+            if *self.init_already_initialized.lock().expect("init flag") {
+                return Err(SpaceAccessError::AlreadyInitialized);
+            }
             Ok(ActiveSpace::new(space_id.clone()))
         }
 
@@ -303,5 +349,39 @@ mod tests {
             .verify_keychain_access()
             .await
             .expect("verify keychain"));
+    }
+
+    #[tokio::test]
+    async fn initialize_creates_space_and_marks_setup_complete() {
+        use uc_core::crypto::model::Passphrase as ModelPassphrase;
+
+        let (facade, space_access) = facade_with(false, false, false, false);
+
+        facade
+            .initialize(ModelPassphrase("hunter2".to_string()))
+            .await
+            .expect("initialize");
+
+        assert_eq!(*space_access.init_calls.lock().expect("init calls"), 1);
+        let state = facade.state().await.expect("state");
+        assert!(state.initialized);
+    }
+
+    #[tokio::test]
+    async fn initialize_maps_already_initialized_error() {
+        use uc_core::crypto::model::Passphrase as ModelPassphrase;
+
+        let (facade, space_access) = facade_with(false, false, false, false);
+        *space_access.init_already_initialized.lock().expect("flag") = true;
+
+        let err = facade
+            .initialize(ModelPassphrase("hunter2".to_string()))
+            .await
+            .expect_err("initialize should fail");
+
+        assert!(matches!(err, EncryptionFacadeError::AlreadyInitialized));
+        // setup_status must remain unchanged when initialization aborts.
+        let state = facade.state().await.expect("state");
+        assert!(!state.initialized);
     }
 }

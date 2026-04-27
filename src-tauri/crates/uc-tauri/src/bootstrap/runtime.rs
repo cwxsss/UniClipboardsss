@@ -200,15 +200,17 @@ impl AppRuntime {
                 search_index: Some(deps.search.search_index.clone()),
                 file_cache_dir: Some(storage_paths.cache_dir.clone()),
             })),
-            clipboard_restore: Arc::new(ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps {
-                entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-                selection_repo: deps.clipboard.selection_repo.clone(),
-                representation_repo: deps.clipboard.representation_repo.clone(),
-                blob_store: deps.storage.blob_store.clone(),
-                clock: deps.system.clock.clone(),
-                write_coordinator: clipboard_write_coordinator,
-                integration_mode: clipboard_integration_mode,
-            })),
+            clipboard_restore: Some(Arc::new(ClipboardRestoreFacade::new(
+                ClipboardRestoreFacadeDeps {
+                    entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+                    selection_repo: deps.clipboard.selection_repo.clone(),
+                    representation_repo: deps.clipboard.representation_repo.clone(),
+                    blob_store: deps.storage.blob_store.clone(),
+                    clock: deps.system.clock.clone(),
+                    write_coordinator: clipboard_write_coordinator,
+                    integration_mode: clipboard_integration_mode,
+                },
+            ))),
             search: Arc::new(SearchFacade::new(SearchFacadeDeps {
                 search_index: deps.search.search_index.clone(),
                 coordinator: None,

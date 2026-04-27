@@ -127,7 +127,17 @@ async fn restore_clipboard_entry_handler(
 
     tracing::info!(entry_id = %entry_id, "daemon restore request received");
 
-    match app.clipboard_restore.restore_entry(&entry_id).await {
+    let restore_facade = match app.clipboard_restore.as_ref() {
+        Some(facade) => facade,
+        None => {
+            return internal_error(anyhow::anyhow!(
+                "clipboard_restore facade unavailable in this entry point"
+            ))
+            .into_response();
+        }
+    };
+
+    match restore_facade.restore_entry(&entry_id).await {
         Ok(()) => {
             tracing::info!(entry_id = %entry_id, "daemon restore request succeeded");
             (StatusCode::OK, Json(json!({"success": true}))).into_response()

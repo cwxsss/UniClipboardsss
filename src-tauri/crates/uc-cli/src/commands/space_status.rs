@@ -24,7 +24,7 @@ impl fmt::Display for SpaceStatusOutput {
 
 /// Run the space-status command.
 ///
-/// Uses `build_cli_runtime()` to query encryption state directly without
+/// Uses `build_cli_app_facade()` to query encryption state directly without
 /// requiring the daemon to be running.
 pub async fn run(json: bool, verbose: bool) -> i32 {
     let profile = if verbose {
@@ -33,17 +33,16 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         Some(uc_observability::LogProfile::Cli)
     };
 
-    let runtime = match uc_bootstrap::build_cli_runtime(profile) {
-        Ok(r) => r,
+    let app_facade = match uc_bootstrap::build_cli_app_facade(profile) {
+        Ok(f) => f,
         Err(e) => {
             eprintln!("Error: failed to build CLI runtime: {}", e);
             return exit_codes::EXIT_ERROR;
         }
     };
 
-    let encryption_ready = runtime.is_encryption_ready().await;
-    let setup_completed = match runtime.has_completed_setup().await {
-        Ok(v) => v,
+    let state = match app_facade.encryption.state().await {
+        Ok(state) => state,
         Err(e) => {
             eprintln!("Error: failed to query setup status: {}", e);
             return exit_codes::EXIT_ERROR;
@@ -51,8 +50,8 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
     };
 
     let result = SpaceStatusOutput {
-        encryption_ready,
-        setup_completed,
+        encryption_ready: state.session_ready,
+        setup_completed: state.initialized,
     };
 
     if let Err(e) = output::print_result(&result, json) {

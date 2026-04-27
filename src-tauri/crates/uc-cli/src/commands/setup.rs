@@ -16,7 +16,6 @@ use std::time::Duration;
 use console::style;
 use serde::Serialize;
 use serde_json::Value;
-use uc_app::usecases::CoreUseCases;
 use uc_core::crypto::model::Passphrase;
 use uc_daemon::api::dto::setup::SetupStateResponseDto;
 use uc_daemon::api::types::{PeerSnapshotDto, SetupStateResponse};
@@ -92,18 +91,19 @@ pub fn new_space_setup_guard(setup_completed: bool) -> Result<(), i32> {
 }
 
 async fn run_new_space() -> i32 {
-    // 1. Build CLI runtime directly (no daemon needed for encryption init)
-    let runtime = match uc_bootstrap::build_cli_runtime(Some(uc_observability::LogProfile::Cli)) {
-        Ok(r) => r,
-        Err(e) => {
-            ui::error(&format!("Failed to initialize: {e}"));
-            return exit_codes::EXIT_ERROR;
-        }
-    };
+    // 1. Build AppFacade directly (no daemon needed for encryption init)
+    let app_facade =
+        match uc_bootstrap::build_cli_app_facade(Some(uc_observability::LogProfile::Cli)) {
+            Ok(f) => f,
+            Err(e) => {
+                ui::error(&format!("Failed to initialize: {e}"));
+                return exit_codes::EXIT_ERROR;
+            }
+        };
 
     // 2. Check setup status — reject if already completed
-    let setup_completed = match runtime.has_completed_setup().await {
-        Ok(v) => v,
+    let setup_completed = match app_facade.encryption.state().await {
+        Ok(state) => state.initialized,
         Err(e) => {
             ui::error(&format!("Failed to check setup status: {e}"));
             return exit_codes::EXIT_ERROR;
@@ -128,12 +128,13 @@ async fn run_new_space() -> i32 {
         }
     };
 
-    // 4. Initialize encryption locally (no daemon involved)
+    // 4. Initialize encryption locally (no daemon involved). Single-step
+    // facade call — creates the local space, unlocks the session, and
+    // marks setup completed atomically.
     let spinner = ui::spinner("Creating encrypted space...");
-    let uc = CoreUseCases::new(&runtime);
-    match uc
-        .initialize_encryption()
-        .execute(Passphrase(passphrase_str))
+    match app_facade
+        .encryption
+        .initialize(Passphrase(passphrase_str))
         .await
     {
         Ok(()) => {
@@ -145,13 +146,7 @@ async fn run_new_space() -> i32 {
         }
     }
 
-    // 5. Persist setup completion so daemon/GUI recognise setup is done
-    if let Err(e) = uc.setup_status().mark_complete().await {
-        ui::error(&format!("Failed to persist setup status: {e}"));
-        return exit_codes::EXIT_ERROR;
-    }
-
-    // 6. Success
+    // 5. Success
     ui::bar();
     ui::end("Setup complete! Your space is ready.");
     exit_codes::EXIT_SUCCESS

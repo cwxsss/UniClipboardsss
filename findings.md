@@ -2539,3 +2539,70 @@ autostart_manager.enable()?;
 - AppHandle 协议:`set_app_handle() / app_handle()`
 - Emitter swap:`event_emitter() / set_event_emitter()`
 - 全部 thin accessor,不再 deref CoreRuntime
+
+---
+
+## F-143 — EncryptionFacade 缺 initialize 方法(D15 起新增)
+
+**事实**:
+D15 之前 `EncryptionFacade` 的方法集为 `state / unlock / lock / verify_keychain_access`。要让 CLI `setup new-space` 流程走 facade,必须补 `initialize(passphrase)` —— 创建本地空间 + 标记 setup 完成的原子动作。
+
+**实现**:
+新方法内部调 `space_access.initialize(&space_id, &domain_passphrase)` + `setup_status.set_status(has_completed=true)` 两步。第一步失败立即返回错误,不写 status —— 保证 setup_status 始终反映"实际是否有可用 space"。SpaceAccessError::AlreadyInitialized 单独映射成 EncryptionFacadeError::AlreadyInitialized,其它走通用 SpaceAccess 字符串。
+
+**位置**:`uc-application/src/facade/encryption/mod.rs::EncryptionFacade::initialize`,带 2 个单元测试。
+
+---
+
+## F-144 — SetupStatusFacade 不进 AppFacade.parts(D15 路线选择)
+
+**事实**:
+`SetupStatusFacade::mark_complete` 早就存在,但 `AppFacadeParts` 没收纳它。D15 没加进去。
+
+**理由**:
+"标记 setup 完成"在 CLI 端的语义上从来不是独立动作 —— 它只在"创建空间成功后"或"加入空间成功后"被调,与 `space_access.initialize` 是同一原子动作的两步。把 mark_complete 合进 `EncryptionFacade::initialize` 比单独导出更符合应用层"用例 = 用户动作"原则(uc-application/AGENTS.md §5.1 / §8.1)。
+
+如果未来出现独立"将 setup 标记为完成"的合法用例(如 reset 后回写),再把 SetupStatusFacade 加进 AppFacade.parts 也来得及。
+
+---
+
+## F-145 — InitializeEncryption use case 是 5 行薄 wrapper(可内联)
+
+**事实**:
+`uc-app/src/usecases/initialize_encryption.rs::InitializeEncryption::execute` 全部代码:
+1. `model::Passphrase` → `domain::Passphrase`(`SecretString` zeroize 包装)
+2. 调 `space_access.initialize(&space_id, &domain_passphrase)`
+3. 把 `SpaceAccessError::AlreadyInitialized` 映射成自己的 `InitializeEncryptionError::AlreadyInitialized`
+
+**含义**:
+这种"端口转发 + 错误重命名"完全可以内联进 `EncryptionFacade::initialize`(D15 已做)。InitializeEncryption use case 在 D15 后没有 caller —— 唯一调用方 `uc-cli setup new-space` 已迁 facade。D16 清理时可删 use case + `CoreUseCases::initialize_encryption` 工厂方法。
+
+---
+
+## F-146 — CLI "create space" 是原子两步,不该让 caller 拼
+
+**事实**:
+D15 之前 CLI 写法:
+```rust
+uc.initialize_encryption().execute(passphrase).await?;  // 步 1:创建 space
+uc.setup_status().mark_complete().await?;                // 步 2:标记完成
+```
+caller 必须知道两步顺序,且必须知道"步 1 失败时不该跳到步 2"。
+
+**问题**:
+这违反 uc-application/AGENTS.md §11.2 —— Facade 应该是入口,不应让 caller 自己拼业务流程。两步是同一应用动作的内部步骤,应该被 facade 封装。
+
+**修复**:
+`EncryptionFacade::initialize` 内部完成两步 + 失败时正确 abort,caller 一行调用即可。这也提升了幂等性 —— 如果中途失败,setup_status 不会被写入"假完成"状态。
+
+---
+
+## F-147 — AppFacade.clipboard_restore 在 CLI 场景天然不存在
+
+**事实**:
+`ClipboardRestoreFacade` 需要 `ClipboardWriteCoordinator`,而 coordinator 又需要 `system_clipboard: Arc<dyn SystemClipboardPort>` —— 这个 port 由 `LocalClipboard`(uc-platform) 实现,只在 daemon / GUI 进程构造。CLI 进程没有 LocalClipboard 实例,也没有 restore 业务需求(CLI 命令清单里 setup/space_status/join/members/invite/send/blob/init/watch 都不调 restore)。
+
+**含义**:
+`AppFacadeParts.clipboard_restore` 应该是 `Option`,与 `space_setup` / `member_roster` 一致。CLI 传 None,daemon / GUI 传 Some。这样 CLI 不需要伪造一个永远不会被调的 ClipboardWriteCoordinator。
+
+**已修**:D15 把字段改 `Option<Arc<ClipboardRestoreFacade>>`,daemon HTTP route 用 `as_ref().ok_or(internal_error(...))?` 防御。

@@ -4271,3 +4271,29 @@ T7 cargo check + 修崩:
 - grep CoreRuntime/uc_app::runtime/CoreUseCases 在 uc-tauri/src/ 仅余 doc-comment 字符串
 
 **关键判断**(F-140 验证后落地):AppUseCases / runtime.usecases() / apply_autostart 三件套是 dead code,D14 直接删除,无业务影响。这意味着 D11/D12 期间命令迁 daemon HTTP API 时,Tauri 端 use case 入口实际已经废弃,只是没人清。
+
+---
+
+## D15 — uc-cli setup 命令去 CoreUseCases 化(complete, 2026-04-26)
+
+**起点**:D14 完成,uc-tauri 已脱 CoreRuntime;唯一遗留:`uc-cli/setup.rs` 仍 `use uc_app::usecases::CoreUseCases;`,`space_status.rs` 仍走 `runtime.is_encryption_ready/has_completed_setup`。
+
+**关键发现**:
+- F-143 ~ F-146:`EncryptionFacade` 缺 `initialize`、`SetupStatusFacade` 已存在但未聚合进 `AppFacade`、`InitializeEncryption` use case 是 5 行薄 wrapper、CLI "create space" 语义就是 `space_access.initialize` + `setup_status.mark_complete` 原子两步
+
+**实际改动**:
+- `EncryptionFacade::initialize(passphrase)` 新增 —— 单步原子:create space + mark setup complete
+- `AppFacade.clipboard_restore` 改 Option(让 CLI 不构造 restore facade,避免没 ClipboardWriteCoordinator 的麻烦)
+- `uc_bootstrap::build_cli_app_facade()` 新增 —— CLI 一行装 AppFacade
+- `setup.rs::run_new_space` 改走 `app_facade.encryption.initialize`,3 步合 1 步
+- `space_status.rs::run` 改走 `app_facade.encryption.state()`
+- daemon route + entrypoint + uc-tauri runtime 适配 `clipboard_restore: Option<...>` 字段类型变化
+- 删除 setup.rs 顶部 `use uc_app::usecases::CoreUseCases;` import
+
+**验证**:
+- `cargo check --workspace --all-targets` ✅
+- `cargo test --workspace --lib` ✅ all passing(uc-application 新增 2 个 initialize 测试通过)
+- `grep "CoreUseCases\|uc_app::usecases\|use uc_app" uc-cli/src/` = **0 hit**
+
+**意义**:uc-cli 命令侧完全脱离 `uc_app::usecases`。剩下的 uc-app 依赖(Cargo.toml 层面)只剩 `build_cli_runtime` 间接引用 —— D16 处理 uc-app 内部清理时可一并删除。
+

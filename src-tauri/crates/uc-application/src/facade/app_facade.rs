@@ -46,7 +46,9 @@ pub struct AppFacade {
     pub encryption: Arc<EncryptionFacade>,
     pub resource: Arc<ResourceFacade>,
     pub clipboard_history: Arc<ClipboardHistoryFacade>,
-    pub clipboard_restore: Arc<ClipboardRestoreFacade>,
+    /// CLI / 仅查询场景下 daemon/Tauri 不构造 restore facade,这里是 None。
+    /// daemon API handler 取出前需做存在性检查。
+    pub clipboard_restore: Option<Arc<ClipboardRestoreFacade>>,
     pub search: Arc<SearchFacade>,
     pub settings: Arc<SettingsFacade>,
     pub device: Arc<DeviceFacade>,
@@ -164,7 +166,7 @@ pub struct AppFacadeParts {
     pub encryption: Arc<EncryptionFacade>,
     pub resource: Arc<ResourceFacade>,
     pub clipboard_history: Arc<ClipboardHistoryFacade>,
-    pub clipboard_restore: Arc<ClipboardRestoreFacade>,
+    pub clipboard_restore: Option<Arc<ClipboardRestoreFacade>>,
     pub search: Arc<SearchFacade>,
     pub settings: Arc<SettingsFacade>,
     pub device: Arc<DeviceFacade>,

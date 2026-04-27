@@ -379,22 +379,24 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             search_index: Some(runtime.wiring_deps().search.search_index.clone()),
             file_cache_dir: Some(storage_paths_for_daemon.cache_dir.clone()),
         })),
-        clipboard_restore: Arc::new(ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps {
-            entry_repo: runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-            selection_repo: runtime.wiring_deps().clipboard.selection_repo.clone(),
-            representation_repo: runtime.wiring_deps().clipboard.representation_repo.clone(),
-            blob_store: runtime.wiring_deps().storage.blob_store.clone(),
-            clock: runtime.wiring_deps().system.clock.clone(),
-            write_coordinator: runtime
-                .clipboard_write_coordinator()
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "clipboard_write_coordinator not wired into runtime — daemon cannot serve restore"
-                    )
-                })?,
-            integration_mode: runtime.clipboard_integration_mode(),
-        })),
+        clipboard_restore: Some(Arc::new(ClipboardRestoreFacade::new(
+            ClipboardRestoreFacadeDeps {
+                entry_repo: runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+                selection_repo: runtime.wiring_deps().clipboard.selection_repo.clone(),
+                representation_repo: runtime.wiring_deps().clipboard.representation_repo.clone(),
+                blob_store: runtime.wiring_deps().storage.blob_store.clone(),
+                clock: runtime.wiring_deps().system.clock.clone(),
+                write_coordinator: runtime
+                    .clipboard_write_coordinator()
+                    .cloned()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "clipboard_write_coordinator not wired into runtime — daemon cannot serve restore"
+                        )
+                    })?,
+                integration_mode: runtime.clipboard_integration_mode(),
+            },
+        ))),
         search: Arc::new(SearchFacade::new(SearchFacadeDeps {
             search_index: runtime.wiring_deps().search.search_index.clone(),
             coordinator: Some(Arc::clone(&search_coordinator)),
