@@ -17,5 +17,6 @@ pub mod shutdown;
 pub mod startup_recovery;
 pub(crate) mod state;
 pub mod tokio_runtime;
+pub(crate) mod workers;
 
 pub use host::run;

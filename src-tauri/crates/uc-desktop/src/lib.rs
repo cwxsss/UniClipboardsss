@@ -11,4 +11,3 @@ pub(crate) mod app;
 pub mod daemon;
 pub(crate) mod peers;
 pub(crate) mod search;
-pub(crate) mod workers;

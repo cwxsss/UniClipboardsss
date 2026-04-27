@@ -22,9 +22,11 @@ use uc_core::ports::SystemClipboardPort;
 use uc_platform::clipboard::LocalClipboard;
 use uc_webserver::api::types::DaemonWsEvent;
 
-use crate::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
-use crate::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
-use crate::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
+use crate::daemon::workers::clipboard_watcher::{
+    ClipboardWatcherWorker, DaemonClipboardChangeHandler,
+};
+use crate::daemon::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
+use crate::daemon::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
 
 /// daemon worker 装配所需输入。
 pub struct DaemonRuntimeAssemblyInput<'a> {

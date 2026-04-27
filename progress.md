@@ -66,6 +66,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
 - 运行 `git diff --check`，通过。
+- 提交 `00ad3c5c refactor: move daemon service state modules`。
+- 开始第二十六阶段：将 daemon workers 迁入 `daemon/`。
+- 移动 `workers/` 到 `daemon/workers/`，并更新 runtime assembly 和 app assembly 的引用路径。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
+- 运行 `git diff --check`，通过。
 - 提交 `b14a1e83 refactor: narrow uc-daemon compatibility exports`。
 - 开始第二十一阶段：将 `uc-cli` 从 `uc-daemon` 兼容壳迁出。
 - `uc-cli` 隐藏 daemon 子命令改为直接调用 `uc_desktop::daemon::run`。

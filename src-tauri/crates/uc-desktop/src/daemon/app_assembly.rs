@@ -11,7 +11,7 @@ use uc_webserver::api::types::DaemonWsEvent;
 use crate::app::DaemonApp;
 use crate::daemon::service::DaemonService;
 use crate::daemon::service_plan::DaemonServicePlan;
-use crate::workers::peer_keepalive::PeerKeepAliveWorker;
+use crate::daemon::workers::peer_keepalive::PeerKeepAliveWorker;
 
 /// daemon 应用实例装配输入。
 pub struct DaemonAppAssemblyInput {
