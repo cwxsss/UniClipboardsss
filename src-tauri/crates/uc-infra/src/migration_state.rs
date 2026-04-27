@@ -62,7 +62,7 @@ impl MigrationStatePort for FileMigrationStateRepository {
         Ok(phase)
     }
 
-    async fn set_current(&self, phase: Option<&MigrationPhase>) -> Result<(), MigrationStateError> {
+    async fn set_current(&self, phase: Option<MigrationPhase>) -> Result<(), MigrationStateError> {
         self.ensure_parent_dir().await?;
         let json = serde_json::to_string_pretty(&phase).map_err(|e| {
             MigrationStateError::Internal(format!("serialize migration state: {e}"))
@@ -100,7 +100,7 @@ mod tests {
         let phase = MigrationPhase::Prepared {
             run_id: MigrationRunId::new("mig-test"),
         };
-        repo.set_current(Some(&phase)).await.unwrap();
+        repo.set_current(Some(phase.clone())).await.unwrap();
         assert_eq!(repo.get_current().await.unwrap(), Some(phase));
     }
 
@@ -112,7 +112,7 @@ mod tests {
             run_id: MigrationRunId::new("mig-2"),
             target_space_id: SpaceId::from_str("space-2"),
         };
-        repo.set_current(Some(&phase)).await.unwrap();
+        repo.set_current(Some(phase.clone())).await.unwrap();
         repo.set_current(None).await.unwrap();
         assert_eq!(repo.get_current().await.unwrap(), None);
     }
@@ -135,7 +135,7 @@ mod tests {
             run_id: MigrationRunId::new("mig-3"),
             target_space_id: SpaceId::from_str("space-3"),
         };
-        repo.set_current(Some(&phase)).await.unwrap();
+        repo.set_current(Some(phase.clone())).await.unwrap();
         assert_eq!(repo.get_current().await.unwrap(), Some(phase));
     }
 }

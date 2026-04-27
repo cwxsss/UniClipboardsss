@@ -5,4 +5,5 @@
 //! invariant all belong to one atomic application action.
 
 pub(crate) mod initialize_space;
+pub(crate) mod switch_space;
 pub(crate) mod unlock_space;

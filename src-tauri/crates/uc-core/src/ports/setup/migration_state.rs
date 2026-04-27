@@ -41,5 +41,10 @@ pub enum MigrationStateError {
 pub trait MigrationStatePort: Send + Sync {
     async fn get_current(&self) -> Result<Option<MigrationPhase>, MigrationStateError>;
 
-    async fn set_current(&self, phase: Option<&MigrationPhase>) -> Result<(), MigrationStateError>;
+    /// 持久化当前迁移阶段。`None` 表示无在飞迁移。
+    ///
+    /// 取 owned 而非 `Option<&MigrationPhase>`：adapter 反正要 clone 出去做
+    /// serde 序列化，调用方传 owned 时无额外开销；测试侧 `mockall` 替身
+    /// 也避开了 `Option<&T>` 在 HRTB 上的处理难题。
+    async fn set_current(&self, phase: Option<MigrationPhase>) -> Result<(), MigrationStateError>;
 }
