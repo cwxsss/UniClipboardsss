@@ -40,6 +40,7 @@
 | 21 | 完成 | 抽出 daemon bootstrap 拆包装配 |
 | 22 | 完成 | 将 daemon API facade 句柄收回 AppFacade 装配模块 |
 | 23 | 完成 | 将 daemon host 实现迁入 `daemon/host.rs`，保留旧入口转发 |
+| 24 | 完成 | 收窄 `uc-daemon` 兼容导出面 |
 
 ## 决策记录
 
@@ -66,6 +67,7 @@
 - 第十七阶段只抽 daemon bootstrap context 拆包，不改依赖构造和资源持有顺序。
 - 第十八阶段只移动 AppFacade 相关句柄提取，不改本机设备 ID 来源和 facade 能力集合。
 - 第十九阶段只移动 daemon host 实现位置，不改 `uc_daemon::entrypoint::run` 兼容路径。
+- 第二十阶段只收窄 `uc-daemon` 对外重导出，不改旧命令和当前 CLI 调用路径。
 
 ## 错误记录
 

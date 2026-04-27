@@ -8,6 +8,6 @@ fn main() -> anyhow::Result<()> {
     let gui_managed = args.iter().any(|arg| arg == "--gui-managed");
     let hybrid = args.iter().any(|arg| arg == "--hybrid");
 
-    let run_mode = uc_daemon::daemon::run_mode::DaemonRunMode::from_flags(gui_managed, hybrid)?;
-    uc_daemon::entrypoint::run(run_mode)
+    let run_mode = uc_desktop::daemon::run_mode::DaemonRunMode::from_flags(gui_managed, hybrid)?;
+    uc_desktop::daemon::run(run_mode)
 }

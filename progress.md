@@ -54,6 +54,18 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `ae095ee8 refactor: move desktop daemon host into daemon module`。
+- 开始第二十阶段：收窄 `uc-daemon` 兼容导出面。
+- 将 `uc-daemon/src/lib.rs` 从 `pub use uc_desktop::*` 改为只保留 `entrypoint::run`、`daemon::run_mode::*`、`process_metadata::*` 三类旧路径。
+- 将 `uc-daemon` 二进制入口改为直接调用 `uc_desktop::daemon::run`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uc-desktop`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
+- 运行 `git diff --check`，通过。
 - 提交 `0656cb88 refactor: centralize desktop daemon api facade handles`。
 - 补充提交 `2e3d501e docs: add uc-desktop claude entrypoint`。
 - 开始第十九阶段：迁移 daemon host 实现。
