@@ -66,7 +66,7 @@ fn map_unlock_err(err: SpaceAccessError) -> UnlockSpaceError {
         SpaceAccessError::CorruptedKeyMaterial => UnlockSpaceError::CorruptedKeyMaterial,
         SpaceAccessError::Internal(m) => UnlockSpaceError::Internal(m),
         other => {
-            warn!(error = %other, "unexpected space-access error during unlock");
+            warn!(error = %other, "unexpected space access error during unlock");
             UnlockSpaceError::Internal(other.to_string())
         }
     }

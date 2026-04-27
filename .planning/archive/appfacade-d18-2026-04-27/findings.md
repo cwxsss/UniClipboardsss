@@ -2690,3 +2690,23 @@ caller 必须知道两步顺序,且必须知道"步 1 失败时不该跳到步 2
 > **方案 D — 彻底清理**:删除 `SpaceAccessFacade` 类型 + 整个 application 层 `space_access/` 模块 + uc-core 中只被它用的子模块 + daemon HTTP/WS endpoint + daemon-contract DTO + daemon-client 桥 + frontend topic 订阅。永远是 `Idle` 的 endpoint 对 UI 无任何信息量,无需保留为 future hook。
 
 被替换:原 D18-Q1 选项 A(新增 AppFacade 字段)、B(方法拆解)、C(并入 member_roster) 全部废弃。
+
+---
+
+## F-150 — D18.4 决策:`require_facade` 局部别名保留(2026-04-27)
+
+**结论**:保留 `uc-daemon/src/api/v2/setup.rs` 与 `uc-daemon/src/api/clipboard.rs` 中的 `require_facade` helper。
+
+### 判断依据
+
+- 两个 helper 都先走 `state.app_facade_or_error()?`,再从 `AppFacade` 取出对应子 facade。
+- 它们没有在 `DaemonApiState` / `DaemonApp` / bootstrap context 中新增独立字段,也没有绕过 `AppFacade` 装配边界。
+- 如果删除 helper,每个 handler 只会重复写同一段 `state.app_facade_or_error()?....clone()` 代码,不会带来更清晰的边界。
+
+### 与 D18 单一入口规则的关系
+
+D18 要清理的是"上层长期持有或注入子 facade,导致 AppFacade 之外出现第二入口"。这两个 helper 是 handler 内部的局部取用,生命周期只在一次请求内,仍以 `AppFacade` 为唯一入口。
+
+### 决策
+
+本 phase 不改这两处 handler 代码。后续若要进一步收紧,应先统一 daemon handler 的 facade 获取模式,而不是逐个内联 helper。

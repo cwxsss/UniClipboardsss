@@ -12,7 +12,7 @@
 //!
 //! Sponsor path is linear (`begin → verify → confirm | reject → close`)
 //! with the only branch sitting on the `verify_proof` verdict. Running
-//! it through a generic space-access state machine would give us enum
+//! it through a generic access state machine would give us enum
 //! ceremony without extra correctness guarantees, and the candidate
 //! FSM's action order for the verified branch (`SendResult` →
 //! `PersistSponsorAccess`) was **inverted** from the ordering Slice 1

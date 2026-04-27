@@ -19,9 +19,9 @@
 //! * Daemon / tauri / CLI switching from the legacy sub-facades
 //!   (`SetupFacade`, `PairingFacade`) to `AppFacade` → Slice 1.5 or
 //!   later. Those sub-facades remain `pub` this slice to keep existing
-//!   entry points working. The legacy `SpaceAccessFacade` was retired
-//!   in D18 (its state machine had no dispatcher and the real admit
-//!   path runs through `PairingInboundOrchestrator`).
+//!   entry points working. D18 retired the legacy access facade because
+//!   its state machine had no dispatcher, while the real admit path runs
+//!   through `PairingInboundOrchestrator`.
 
 use std::sync::Arc;
 

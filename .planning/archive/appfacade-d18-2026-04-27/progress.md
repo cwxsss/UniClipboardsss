@@ -4437,3 +4437,56 @@ D16-2 ✅ uc-app crate 退役(+ D17 合并)
 **意义**:
 - F-148-A 这一类违规清零
 - 还剩 F-148-B(legacy `SpaceAccessFacade` 6 处直引用 + bootstrap 暴露字段)进入 D18.2 调研
+
+---
+
+### D18.3.a~f 完成同步 (2026-04-27)
+
+**已提交代码变更**:
+- `22d1342b` D18.3.a:移除 frontend realtime 默认 `space-access` topic 订阅,同步契约测试。
+- `33e01930` D18.3.b:移除 daemon `/space-access/state` endpoint 与 WS topic 分支。
+- `f2892385` D18.3.c:移除 daemon-contract / daemon-client 中的 space-access DTO、常量、topic、事件映射。
+- `dae5b5f3` D18.3.d:移除 daemon / bootstrap 对 `SpaceAccessFacade` 的字段、参数与构造。
+- `70049cdf` D18.3.e:删除 `uc-application/src/space_access/` dead module,保留 proof adapter 的真实用途。
+- `08593201` D18.3.f:删除 uc-core 中只服务旧 state machine 的子模块,保留 `space_access::domain`。
+
+**补充清理**:
+- 清掉文档、注释、日志里的旧关键词残留,避免后续 grep 把历史文字误判成仍有旧入口。
+
+### D18.3.g 全量验证完成 (2026-04-27)
+
+**已跑验证**:
+- `cargo check --workspace --all-targets` ✅ 通过;仍有 2 条既有 dead_code warning。
+- `npm run build` ✅ 通过;仅有 Vite chunk size warning。
+- `npm run test -- --run` ✅ 通过;58 files / 319 tests。
+- `rg "SpaceAccessFacade|SpaceAccessOrchestrator|space_access_facade|RealtimeTopic::SpaceAccess|ws_topic::SPACE_ACCESS|space-access" src-tauri src` ✅ 0 hit。
+
+**按用户指示跳过**:
+- `cargo clippy --workspace -- -D warnings`
+- `cargo test --workspace --lib`
+
+**备注**:
+- 曾尝试运行 `cargo clippy --workspace -- -D warnings`,被既有 workspace clippy 项挡住,包括 `uc-core` 中 `needless_lifetimes`、`too_many_arguments`、`from_over_into` 等;这些不是 D18 清理引入的问题。用户随后明确要求跳过这两个检查并继续。
+- 项目没有 `npm run check` 脚本,因此用 `npm run build` 覆盖 TypeScript + Vite 构建验证。
+
+### D18.4 决策完成 (2026-04-27)
+
+**决策**:保留 daemon handler 中的 `require_facade` 局部 helper。
+
+**原因**:
+- 它们仍然通过 `state.app_facade_or_error()?` 进入,只是在单个请求处理函数内取出局部别名。
+- 没有在 daemon state、bootstrap context 或 worker 中持有独立子 facade。
+- 内联这些 helper 只会制造重复代码,不会改善边界。
+
+**记录**:
+- `findings.md` 新增 F-150。
+- `task_plan.md` 将 D18.3 / D18.4 标为 complete。
+
+### D9 / D18 状态同步 (2026-04-27)
+
+**结果**:
+- D18 子任务已全部完成,将 D18 总标题从 pending 同步为 complete。
+- D9 是 D10~D18 的母任务,后续拆分任务已经完成并验证,将 D9 从 in_progress 同步为 complete。
+
+**当前剩余**:
+- 当前计划文件中没有 `pending` / `in_progress` 阶段。

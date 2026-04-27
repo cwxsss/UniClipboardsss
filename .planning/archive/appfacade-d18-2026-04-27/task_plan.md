@@ -3003,7 +3003,7 @@ Phase 0(已完成,2026-04-18)
 - `cargo check -p uc-daemon`
 - `cargo test -p uc-daemon --lib`
 
-### Phase D9 · daemon 下一块收口 — in_progress
+### Phase D9 · daemon 下一块收口 — complete (2026-04-27, 由 D10~D18 收尾)
 
 **纠偏(2026-04-26)**:
 - 前几轮把入口收到了 `uc-application/src/facade/*`,但 daemon 仍分别持有多个子 facade。
@@ -3023,6 +3023,10 @@ Phase 0(已完成,2026-04-18)
 4. `api/encryption.rs` / `api/lifecycle.rs`:依赖 `uc-app` 旧用例,需要先判断是否搬迁用例还是新增 facade 包装。
 
 **下一步选择**:先评估 `api/search.rs`,若改动范围过大,改收 `api/encryption.rs` / `api/lifecycle.rs` 这类较小入口。
+
+**收尾说明(2026-04-27)**:
+- 后续 D10~D18 已分别完成 clipboard history、search/restore、auto-unlock、daemon/tauri/cli runtime 去旧入口、uc-app 退役,以及 D18 的 AppFacade 唯一入口补漏。
+- D18 验证后,daemon 主路径已不再保留 `SpaceAccessFacade` 旁路;D9 作为母任务关闭。
 
 ---
 
@@ -3629,7 +3633,7 @@ Crate 删除:
 
 ---
 
-### Phase D18 · 收紧 AppFacade 唯一入口(legacy `SpaceAccessFacade` + 子 facade 直注入清理) — pending (2026-04-24)
+### Phase D18 · 收紧 AppFacade 唯一入口(legacy `SpaceAccessFacade` + 子 facade 直注入清理) — complete (2026-04-27)
 
 **触发**:D16-2 完成后审计发现仍有 4 类调用绕过 `Arc<AppFacade>` 入口,违反 `app_facade.rs` 模块文档与 AGENTS §11.4 单一出口约束。
 
@@ -3675,7 +3679,7 @@ Crate 删除:
 - ✅ findings.md F-149 已更新调研结论
 - ✅ 用户裁决:原 D18-Q1(A/B/C) 全部废弃,改用方案 D 彻底清理
 
-#### D18.3 · 实施方案 D 彻底清理 — pending(分多个 atomic commit)
+#### D18.3 · 实施方案 D 彻底清理 — complete (2026-04-27, 分多个 atomic commit)
 
 **按依赖反向拆 commit**(避免中间状态编译失败):
 
@@ -3683,13 +3687,13 @@ Crate 删除:
 - `src/api/realtime.ts:61`:topics 列表删 `'space-access'`
 - `src/api/__tests__/p2p-realtime-contract.test.ts:44`:expected 列表同步删
 - 检查 frontend 是否有 store/hook 真消费 `space-access` 事件(预期无)
-- 验证:`npm run check` / `npm run test`
+- ✅ 验证:`npm run build` / `npm run test -- --run`(项目无 `npm run check` 脚本)
 
 ##### D18.3.b · daemon endpoint + ws 路由清理
 - `uc-daemon/src/api/routes.rs`:删 `/space-access/state` route 注册 + `space_access_state_handler`
 - `uc-daemon/src/api/ws.rs`:删 `SPACE_ACCESS` topic 的所有 match 分支(L448 / L540-549 / L647-648)
 - `uc-daemon/src/api/query.rs`:删 `space_access_state` method + 相关 import
-- 验证:`cargo check -p uc-daemon`
+- ✅ 验证:`cargo check -p uc-daemon`
 
 ##### D18.3.c · daemon-client / daemon-contract DTO / 常量清理
 - `uc-daemon-client/src/realtime.rs`:删 `SpaceAccessState` import / `SpaceAccessStateChangedEvent` struct / `RealtimeEvent::SpaceAccessStateChanged` variant / `RealtimeTopic::SpaceAccess` variant
@@ -3697,37 +3701,37 @@ Crate 删除:
 - `uc-daemon-contract/src/constants.rs`:删 3 个 SPACE_ACCESS_* 常量
 - `uc-daemon-contract/src/api/types.rs`:删 `SpaceAccessStateChangedPayload` + `SpaceAccessStateResponse` struct
 - `uc-daemon-contract/src/api/dto/ws.rs:46`:从 valid topics 列表移除
-- 验证:`cargo check -p uc-daemon-client -p uc-daemon-contract`
+- ✅ 验证:`cargo check -p uc-daemon-client -p uc-daemon-contract`
 
 ##### D18.3.d · daemon facade 字段 + bootstrap 清理
 - `uc-daemon/src/app.rs:16,107,128,158,229-232`:删 `SpaceAccessFacade` import / 字段 / 构造参数 / `with_space_access` 注入
 - `uc-daemon/src/api/server.rs:25,42,90-96`:删 `space_access_facade` 字段 / `with_space_access` / getter
 - `uc-daemon/src/entrypoint.rs:413`:删 `Some(ctx.space_access_facade)` 参数
 - `uc-bootstrap/src/builders.rs:19,51,192`:删 `space_access_facade` 字段 + `Arc::new(SpaceAccessFacade::with_admit_member(...))` 构造代码
-- 验证:`cargo check -p uc-daemon -p uc-bootstrap`
+- ✅ 验证:`cargo check -p uc-daemon -p uc-bootstrap`
 
 ##### D18.3.e · uc-application space_access 模块整体删除
 - 删除 `uc-application/src/space_access/` 整个目录(8 文件:facade.rs / orchestrator.rs / executor.rs / context.rs / events.rs / persistence_adapter.rs / proof_adapter.rs / mod.rs)
 - `uc-application/src/lib.rs:37`:删 `pub mod space_access;`
-- 验证:`cargo check -p uc-application`
+- ✅ 验证:`cargo check -p uc-application`
 
 ##### D18.3.f · uc-core space_access 子模块清理(domain 保留)
 - `uc-core/src/space_access/`:删 `state.rs` / `event.rs` / `state_machine.rs` / `action.rs` 文件 + `deny_reason_to_code` 函数
 - 保留 `domain.rs` (含 `JoinOffer` / `ProofDerivedKey` / `SpaceAccessProofArtifact`,pairing 仍在用)
 - `uc-core/src/space_access/mod.rs`:对应 `pub use` 同步
-- 验证:`cargo check --workspace`
+- ✅ 验证:`cargo check --workspace`
 
-##### D18.3.g · 全量验证
-- `cargo check --workspace --all-targets`
-- `cargo clippy --workspace -- -D warnings`(若 CI 这么配)
-- `cargo test --workspace --lib`
-- `npm run check` + `npm run test`(frontend)
-- grep 复核:`rg "SpaceAccessFacade|SpaceAccessOrchestrator|space_access_facade|RealtimeTopic::SpaceAccess|ws_topic::SPACE_ACCESS|space-access" src-tauri src` = 0 hit(领域 `domain::` 类型除外)
+##### D18.3.g · 全量验证 — complete (2026-04-27)
+- ✅ `cargo check --workspace --all-targets` 通过(2 条既有 dead_code warning)
+- ✅ `npm run build` 通过(仅 Vite chunk size warning)
+- ✅ `npm run test -- --run` 通过:58 files / 319 tests
+- ✅ grep 复核:`rg "SpaceAccessFacade|SpaceAccessOrchestrator|space_access_facade|RealtimeTopic::SpaceAccess|ws_topic::SPACE_ACCESS|space-access" src-tauri src` = 0 hit
+- ⏭️ 按用户 2026-04-27 指示跳过:`cargo clippy --workspace -- -D warnings` / `cargo test --workspace --lib`
 
-#### D18.4 · 决策:`require_facade` 局部解构是否保留 — pending
-- 评估 `api/v2/setup.rs:43` / `api/clipboard.rs:47`
-- 倾向保留(只是 `state.app_facade.space_setup` 的命名缩短,未破坏单一入口)
-- 在 findings.md 记录决策,本 phase 不动代码
+#### D18.4 · 决策:`require_facade` 局部解构是否保留 — complete (2026-04-27)
+- ✅ 评估 `api/v2/setup.rs:43` / `api/clipboard.rs:47`
+- ✅ 决策:保留。它们只是从 `state.app_facade_or_error()?` 取出子 facade 的 handler 局部别名,没有持有独立入口,也没有绕过 AppFacade 装配边界
+- ✅ findings.md 记录决策,本 phase 不改 handler 代码
 
 **不做(本 phase 范围外)**:
 - legacy `SetupFacade` / `PairingFacade` 的迁移(注释中标注 Slice 1.5+)
@@ -3743,5 +3747,5 @@ Crate 删除:
 **Phase 进度跟踪**:
 - D18.1 `complete` ✅ (2026-04-24)
 - D18.2 `complete` ✅ (2026-04-24, 调研后改方案 D)
-- D18.3 `pending` — 7 个 sub-commit (a~g)
-- D18.4 `pending`
+- D18.3 `complete` ✅ (2026-04-27, a~g 完成)
+- D18.4 `complete` ✅ (2026-04-27)

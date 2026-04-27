@@ -195,7 +195,7 @@ UI / CLI / daemon API 不应直接理解：
 
 * `SetupOrchestrator`
 * `FileTransferOrchestrator`
-* `SpaceAccessOrchestrator`
+* `PairingInboundOrchestrator`
 
 ---
 

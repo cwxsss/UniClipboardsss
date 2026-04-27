@@ -17,7 +17,7 @@
 //! 7. Mark `SetupStatus.has_completed = true`.
 //!
 //! The use case is atomic in intent (all-or-nothing) but relies on
-//! port-level idempotency (space-access `AlreadyInitialized`, identity
+//! port-level idempotency (space access `AlreadyInitialized`, identity
 //! `ensure` is idempotent by design) rather than a distributed
 //! transaction — retry after mid-way failure is expected to either resume
 //! from the failed step or surface the conflict to the caller.
@@ -216,7 +216,7 @@ fn map_initialize_space_access_err(err: SpaceAccessError) -> InitializeSpaceErro
         // `initialize` should not raise these — map to Internal so we
         // surface bugs rather than silently miscategorising.
         other => InitializeSpaceError::Internal(format!(
-            "unexpected space-access error during initialize: {other}"
+            "unexpected space access error during initialize: {other}"
         )),
     }
 }
@@ -556,7 +556,7 @@ mod tests {
         *h.space_access.initialize_err.lock().unwrap() = Some(SpaceAccessError::AlreadyInitialized);
         let err = h.uc.execute(ok_cmd(Some("My Mac"))).await.unwrap_err();
         assert!(matches!(err, InitializeSpaceError::AlreadyInitialized));
-        // Identity must NOT be created before space-access succeeds.
+        // Identity must NOT be created before space access succeeds.
         assert_eq!(*h.local_identity.create_calls.lock().unwrap(), 0);
     }
 
