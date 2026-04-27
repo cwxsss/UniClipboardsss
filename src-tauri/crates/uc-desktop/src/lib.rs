@@ -10,7 +10,6 @@ pub use uc_daemon_contract::DAEMON_API_REVISION;
 pub(crate) mod app;
 pub mod daemon;
 pub(crate) mod peers;
-pub mod process_metadata;
 pub(crate) mod search;
 pub(crate) mod service;
 pub(crate) mod state;

@@ -15,4 +15,5 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0"
+uc-daemon-local = { path = "../uc-daemon-local" }
 uc-desktop = { path = "../uc-desktop" }

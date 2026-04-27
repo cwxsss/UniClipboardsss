@@ -15,9 +15,9 @@ use tracing::{debug, error, info, warn};
 use uc_application::facade::{AppFacade, AppPaths, HostEventEmitterPort};
 
 use crate::peers::presence_monitor::PresenceMonitor;
-use crate::process_metadata::DaemonPidManager;
 use crate::service::DaemonService;
 use crate::state::RuntimeState;
+use uc_daemon_local::process_metadata::DaemonPidManager;
 use uc_webserver::api::auth::load_or_create_auth_token;
 use uc_webserver::api::event_emitter::DaemonApiEventEmitter;
 use uc_webserver::api::server::{run_http_server, DaemonApiState};

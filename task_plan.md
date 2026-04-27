@@ -44,6 +44,7 @@
 | 25 | 完成 | 将 `uc-cli` 从 `uc-daemon` 兼容壳迁出 |
 | 26 | 完成 | 删除 `uc-desktop` 内部旧 `entrypoint` 转发 |
 | 27 | 完成 | 收窄 `uc-desktop` 根模块公开面 |
+| 28 | 完成 | 删除 `uc-desktop` 的 PID 元数据转发 |
 
 ## 决策记录
 
@@ -74,6 +75,7 @@
 - 第二十一阶段只迁移 `uc-cli` 的依赖路径，不改 CLI 命令语义和 daemon 启动方式。
 - 第二十二阶段只删除 `uc-desktop::entrypoint` 旧路径；`uc_daemon::entrypoint::run` 继续保留。
 - 第二十三阶段只调整 `uc-desktop` 模块可见性，不移动文件、不改运行逻辑。
+- 第二十四阶段只删除 `uc-desktop::process_metadata` 转发；旧 `uc_daemon::process_metadata` 改为直接转发 `uc-daemon-local`。
 
 ## 错误记录
 

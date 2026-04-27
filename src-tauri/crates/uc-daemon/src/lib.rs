@@ -18,5 +18,5 @@ pub mod daemon {
 
 /// 旧 `uc_daemon::process_metadata::*` 路径。
 pub mod process_metadata {
-    pub use uc_desktop::process_metadata::*;
+    pub use uc_daemon_local::process_metadata::*;
 }

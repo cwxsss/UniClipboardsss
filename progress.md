@@ -85,6 +85,16 @@
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
 - 运行 `git diff --check`，通过。
+- 提交 `06fbf904 refactor: narrow desktop host public modules`。
+- 开始第二十四阶段：删除 `uc-desktop` 的 PID 元数据转发。
+- `uc-desktop` 内部改为直接使用 `uc_daemon_local::process_metadata::DaemonPidManager`。
+- 旧 `uc_daemon::process_metadata::*` 兼容路径改为直接转发 `uc-daemon-local`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
+- 运行 `rg -n "uc_desktop::process_metadata|crate::process_metadata|pub mod process_metadata" src-tauri/crates/uc-desktop src-tauri/crates/uc-daemon -g '*.rs'`，只剩 `uc-daemon` 兼容导出。
+- 运行 `git diff --check`，通过。
 - 提交 `3fcf6735 refactor: remove desktop entrypoint shim`。
 - 开始第二十三阶段：收窄 `uc-desktop` 根模块公开面。
 - 将 `app`、`peers`、`search`、`service`、`state`、`workers` 改为 crate 内可见，继续公开 `daemon` 和 `process_metadata`。
