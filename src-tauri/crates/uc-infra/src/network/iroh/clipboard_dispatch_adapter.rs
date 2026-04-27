@@ -35,6 +35,7 @@ use uc_core::ports::{
 };
 
 use super::clipboard_wire::{self, AckCode, WireEncodeError};
+use super::connect::connect_with_staggered_retry;
 
 /// ALPN identifier for the Slice 2 clipboard sync protocol. Independent of
 /// the presence / pairing ALPNs so the Router can multiplex all three
@@ -121,14 +122,17 @@ impl ClipboardDispatchPort for IrohClipboardDispatchAdapter {
         };
 
         // 3. Dial. Dial failure = offline (no typed iroh error leaks up).
-        let connection = self
-            .endpoint
-            .connect(addr, CLIPBOARD_ALPN)
-            .await
-            .map_err(|err| {
-                debug!(error = %err, "clipboard dispatch: dial failed, treating as Offline");
-                ClipboardDispatchError::Offline
-            })?;
+        let connection = connect_with_staggered_retry(
+            Arc::clone(&self.endpoint),
+            addr,
+            CLIPBOARD_ALPN,
+            "clipboard",
+        )
+        .await
+        .map_err(|err| {
+            debug!(error = %err, "clipboard dispatch: dial failed, treating as Offline");
+            ClipboardDispatchError::Offline
+        })?;
 
         // 4. Open one bi-stream for this message.
         let (mut send, mut recv) = connection

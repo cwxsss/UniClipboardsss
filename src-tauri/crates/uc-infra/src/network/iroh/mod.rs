@@ -8,6 +8,7 @@ pub mod blobs;
 pub mod clipboard_dispatch_adapter;
 pub mod clipboard_receiver_adapter;
 pub mod clipboard_wire;
+mod connect;
 pub mod identity_store;
 pub mod node;
 pub mod persistable_addr;

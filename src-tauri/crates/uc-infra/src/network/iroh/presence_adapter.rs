@@ -50,6 +50,8 @@ use uc_core::ports::{
     ReachabilityState,
 };
 
+use super::connect::connect_with_staggered_retry;
+
 /// ALPN identifier for the Slice 2 presence protocol. The accept-side
 /// handler performs no application-level handshake — its sole job is to
 /// keep the connection open so the dial-side watchdog can observe peer
@@ -247,7 +249,14 @@ impl PresencePort for IrohPresenceAdapter {
             })?;
 
         // Step 4: dial.
-        match self.endpoint.connect(endpoint_addr, PRESENCE_ALPN).await {
+        match connect_with_staggered_retry(
+            Arc::clone(&self.endpoint),
+            endpoint_addr,
+            PRESENCE_ALPN,
+            "presence",
+        )
+        .await
+        {
             Ok(connection) => {
                 let now = self.now();
                 let device_id_for_watchdog = device.clone();
