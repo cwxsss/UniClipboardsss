@@ -12,13 +12,15 @@
 use std::sync::Arc;
 
 use uc_application::deps::AppDeps;
+use uc_application::facade::space_setup::SpaceSetupFacade;
 use uc_application::facade::{
-    AppFacade, AppFacadeParts, AppPaths, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
-    DeviceFacade, EmitError, EncryptionFacade, EncryptionFacadeDeps, HostEvent,
-    HostEventEmitterPort, InMemoryLifecycleStatus, LifecycleFacade, LifecycleFacadeDeps,
-    LifecycleStatusGateway, ResourceFacade, ResourceFacadeDeps, SearchCoordinator,
-    SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps, SettingsFacade, StorageFacade,
-    StorageFacadeDeps,
+    AppFacade, AppFacadeParts, AppPaths, BlobTransferFacade, ClipboardHistoryFacade,
+    ClipboardHistoryFacadeDeps, ClipboardRestoreFacade, ClipboardRestoreFacadeDeps,
+    ClipboardSyncFacade, DeviceFacade, EmitError, EncryptionFacade, EncryptionFacadeDeps,
+    HostEvent, HostEventEmitterPort, InMemoryLifecycleStatus, LifecycleFacade, LifecycleFacadeDeps,
+    LifecycleStatusGateway, MemberRosterFacade, ResourceFacade, ResourceFacadeDeps,
+    SearchCoordinator, SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps, SettingsFacade,
+    StorageFacade, StorageFacadeDeps,
 };
 use uc_core::clipboard::ClipboardIntegrationMode;
 
@@ -92,6 +94,103 @@ pub fn build_non_gui_bundle(
     })
 }
 
+/// `ClipboardRestoreFacade` 的可选装配输入。
+///
+/// GUI 和 daemon 需要 restore 能力；部分 CLI 查询入口不需要，因此通过
+/// 显式选项传入，避免各入口各自复制 facade 拼装代码。
+pub struct ClipboardRestoreAssembly {
+    pub write_coordinator: Arc<uc_application::clipboard_write::ClipboardWriteCoordinator>,
+    pub integration_mode: ClipboardIntegrationMode,
+}
+
+/// 通用 `AppFacade` 装配选项。
+///
+/// 不同桌面入口只在这些可选能力上有差异。共同 facade 由
+/// [`build_app_facade_from_deps`] 统一创建，避免 daemon、Tauri、CLI 各自
+/// 手写一份相同的子 facade 拼装。
+#[derive(Default)]
+pub struct AppFacadeAssemblyOptions {
+    pub space_setup: Option<Arc<SpaceSetupFacade>>,
+    pub member_roster: Option<Arc<MemberRosterFacade>>,
+    pub clipboard_sync: Option<Arc<ClipboardSyncFacade>>,
+    pub blob_transfer: Option<Arc<BlobTransferFacade>>,
+    pub clipboard_restore: Option<ClipboardRestoreAssembly>,
+    pub search_coordinator: Option<Arc<SearchCoordinator>>,
+}
+
+/// 从已注入的 application deps 构造统一业务入口。
+///
+/// 这是 GUI、daemon、CLI 共享的 application facade 装配点。调用方仍然
+/// 决定运行模式、事件源、HTTP/WS/Tauri 接入和后台任务；本函数只负责把
+/// ports 组合成 `AppFacade`。
+pub fn build_app_facade_from_deps(
+    deps: &AppDeps,
+    storage_paths: &AppPaths,
+    lifecycle_status: Arc<dyn LifecycleStatusGateway>,
+    options: AppFacadeAssemblyOptions,
+) -> Arc<AppFacade> {
+    let clipboard_restore = options.clipboard_restore.map(|restore| {
+        Arc::new(ClipboardRestoreFacade::new(ClipboardRestoreFacadeDeps {
+            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            selection_repo: deps.clipboard.selection_repo.clone(),
+            representation_repo: deps.clipboard.representation_repo.clone(),
+            blob_store: deps.storage.blob_store.clone(),
+            clock: deps.system.clock.clone(),
+            write_coordinator: restore.write_coordinator,
+            integration_mode: restore.integration_mode,
+        }))
+    });
+
+    Arc::new(AppFacade::new(AppFacadeParts {
+        space_setup: options.space_setup,
+        member_roster: options.member_roster,
+        lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
+            status: lifecycle_status,
+        })),
+        encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
+            setup_status: deps.setup_status.clone(),
+            space_access: deps.security.space_access.clone(),
+        })),
+        resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
+            representation_repo: deps.clipboard.representation_repo.clone(),
+            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
+            blob_store: deps.storage.blob_store.clone(),
+        })),
+        clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
+            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            selection_repo: deps.clipboard.selection_repo.clone(),
+            representation_repo: deps.clipboard.representation_repo.clone(),
+            event_writer: deps.clipboard.clipboard_event_repo.clone(),
+            payload_resolver: deps.clipboard.payload_resolver.clone(),
+            blob_store: deps.storage.blob_store.clone(),
+            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
+            file_transfer_repo: deps.storage.file_transfer_repo.clone(),
+            search_index: Some(deps.search.search_index.clone()),
+            file_cache_dir: Some(storage_paths.cache_dir.clone()),
+        })),
+        clipboard_sync: options.clipboard_sync,
+        blob_transfer: options.blob_transfer,
+        clipboard_restore,
+        search: Arc::new(SearchFacade::new(SearchFacadeDeps {
+            search_index: deps.search.search_index.clone(),
+            coordinator: options.search_coordinator,
+        })),
+        settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
+        device: Arc::new(DeviceFacade::new(
+            deps.device.device_identity.clone(),
+            deps.settings.clone(),
+        )),
+        storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
+            db_path: storage_paths.db_path.clone(),
+            vault_dir: storage_paths.vault_dir.clone(),
+            cache_dir: storage_paths.cache_dir.clone(),
+            logs_dir: storage_paths.logs_dir.clone(),
+            app_data_root_dir: storage_paths.app_data_root_dir.clone(),
+            cache_fs: deps.system.cache_fs.clone(),
+        })),
+    }))
+}
+
 /// Construct an [`AppFacade`] for CLI entry points.
 ///
 /// CLI commands need a stable application-layer
@@ -122,54 +221,15 @@ pub fn build_cli_app_facade(
         deps.clipboard.selection_repo.clone(),
     )));
 
-    Ok(Arc::new(AppFacade::new(AppFacadeParts {
-        space_setup: None,
-        member_roster: None,
-        lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
-            status: lifecycle_status,
-        })),
-        encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
-            setup_status: deps.setup_status.clone(),
-            space_access: deps.security.space_access.clone(),
-        })),
-        resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
-            representation_repo: deps.clipboard.representation_repo.clone(),
-            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
-            blob_store: deps.storage.blob_store.clone(),
-        })),
-        clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
-            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-            selection_repo: deps.clipboard.selection_repo.clone(),
-            representation_repo: deps.clipboard.representation_repo.clone(),
-            event_writer: deps.clipboard.clipboard_event_repo.clone(),
-            payload_resolver: deps.clipboard.payload_resolver.clone(),
-            blob_store: deps.storage.blob_store.clone(),
-            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
-            file_transfer_repo: deps.storage.file_transfer_repo.clone(),
-            search_index: Some(deps.search.search_index.clone()),
-            file_cache_dir: Some(storage_paths.cache_dir.clone()),
-        })),
-        clipboard_sync: None,
-        blob_transfer: None,
-        clipboard_restore: None,
-        search: Arc::new(SearchFacade::new(SearchFacadeDeps {
-            search_index: deps.search.search_index.clone(),
-            coordinator: Some(search_coordinator),
-        })),
-        settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
-        device: Arc::new(DeviceFacade::new(
-            deps.device.device_identity.clone(),
-            deps.settings.clone(),
-        )),
-        storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
-            db_path: storage_paths.db_path.clone(),
-            vault_dir: storage_paths.vault_dir.clone(),
-            cache_dir: storage_paths.cache_dir.clone(),
-            logs_dir: storage_paths.logs_dir.clone(),
-            app_data_root_dir: storage_paths.app_data_root_dir.clone(),
-            cache_fs: deps.system.cache_fs.clone(),
-        })),
-    })))
+    Ok(build_app_facade_from_deps(
+        &deps,
+        &storage_paths,
+        lifecycle_status,
+        AppFacadeAssemblyOptions {
+            search_coordinator: Some(search_coordinator),
+            ..Default::default()
+        },
+    ))
 }
 
 /// CLI 进程内 application runtime。
@@ -216,54 +276,19 @@ pub async fn build_cli_app_runtime(
         deps.clipboard.selection_repo.clone(),
     )));
 
-    let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
-        space_setup: Some(assembly.facade.clone()),
-        member_roster: Some(assembly.roster.clone()),
-        lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
-            status: lifecycle_status,
-        })),
-        encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
-            setup_status: deps.setup_status.clone(),
-            space_access: deps.security.space_access.clone(),
-        })),
-        resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
-            representation_repo: deps.clipboard.representation_repo.clone(),
-            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
-            blob_store: deps.storage.blob_store.clone(),
-        })),
-        clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
-            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-            selection_repo: deps.clipboard.selection_repo.clone(),
-            representation_repo: deps.clipboard.representation_repo.clone(),
-            event_writer: deps.clipboard.clipboard_event_repo.clone(),
-            payload_resolver: deps.clipboard.payload_resolver.clone(),
-            blob_store: deps.storage.blob_store.clone(),
-            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
-            file_transfer_repo: deps.storage.file_transfer_repo.clone(),
-            search_index: Some(deps.search.search_index.clone()),
-            file_cache_dir: Some(storage_paths.cache_dir.clone()),
-        })),
-        clipboard_sync: Some(assembly.clipboard_sync.clone()),
-        blob_transfer: Some(assembly.blob.clone()),
-        clipboard_restore: None,
-        search: Arc::new(SearchFacade::new(SearchFacadeDeps {
-            search_index: deps.search.search_index.clone(),
-            coordinator: Some(search_coordinator),
-        })),
-        settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
-        device: Arc::new(DeviceFacade::new(
-            deps.device.device_identity.clone(),
-            deps.settings.clone(),
-        )),
-        storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
-            db_path: storage_paths.db_path.clone(),
-            vault_dir: storage_paths.vault_dir.clone(),
-            cache_dir: storage_paths.cache_dir.clone(),
-            logs_dir: storage_paths.logs_dir.clone(),
-            app_data_root_dir: storage_paths.app_data_root_dir.clone(),
-            cache_fs: deps.system.cache_fs.clone(),
-        })),
-    }));
+    let app_facade = build_app_facade_from_deps(
+        deps,
+        &storage_paths,
+        lifecycle_status,
+        AppFacadeAssemblyOptions {
+            space_setup: Some(assembly.facade.clone()),
+            member_roster: Some(assembly.roster.clone()),
+            clipboard_sync: Some(assembly.clipboard_sync.clone()),
+            blob_transfer: Some(assembly.blob.clone()),
+            search_coordinator: Some(search_coordinator),
+            ..Default::default()
+        },
+    );
 
     Ok(CliAppRuntime {
         app_facade,

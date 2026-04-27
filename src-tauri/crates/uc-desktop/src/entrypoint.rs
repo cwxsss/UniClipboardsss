@@ -10,14 +10,9 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uc_application::clipboard_capture::CaptureClipboardUseCase;
 use uc_application::facade::{
-    AppFacade, AppFacadeParts, ClipboardCaptureFacade, ClipboardHistoryFacade,
-    ClipboardHistoryFacadeDeps, ClipboardLiveIndexDeps, ClipboardLiveIndexFacade,
-    ClipboardLiveIndexer, ClipboardOutboundDeps, ClipboardOutboundDispatcher,
-    ClipboardOutboundFacade, ClipboardRestoreFacade, ClipboardRestoreFacadeDeps, DeviceFacade,
-    EncryptionFacade, EncryptionFacadeDeps, InboundClipboardFacade, LifecycleFacade,
-    LifecycleFacadeDeps, ResourceFacade, ResourceFacadeDeps, SearchCoordinator,
-    SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps, SettingsFacade, StorageFacade,
-    StorageFacadeDeps,
+    ClipboardCaptureFacade, ClipboardLiveIndexDeps, ClipboardLiveIndexFacade, ClipboardLiveIndexer,
+    ClipboardOutboundDeps, ClipboardOutboundDispatcher, ClipboardOutboundFacade,
+    InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps,
 };
 use uc_application::{
     ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
@@ -25,7 +20,10 @@ use uc_application::{
 };
 use uc_bootstrap::build_non_gui_bundle;
 use uc_bootstrap::builders::build_daemon_app;
-use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
+use uc_bootstrap::{
+    build_app_facade_from_deps, AppFacadeAssemblyOptions, BlobProcessingPorts,
+    ClipboardRestoreAssembly, NonGuiBundle,
+};
 use uc_core::ports::SystemClipboardPort;
 
 use crate::app::DaemonApp;
@@ -327,68 +325,26 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let local_device_id = deps.device.device_identity.current_device_id().to_string();
 
     // Assemble AppFacade — this is the single outward-facing entry point
-    // the daemon (and all HTTP handlers) reach through. Pulls ports from
-    // the bootstrap-built `runtime` since this is composition-root code;
-    // once daemon is constructed, daemon never touches `runtime` again.
+    // the daemon (and all HTTP handlers) reach through. Common facade
+    // construction lives in uc-bootstrap so desktop modes do not each hand-roll
+    // the same sub-facade graph.
     let storage_paths_for_daemon = storage_paths.clone();
-    let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
-        space_setup: Some(space_setup_facade_for_api.clone()),
-        member_roster: Some(member_roster_facade_for_api.clone()),
-        lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
-            status: lifecycle_status.clone(),
-        })),
-        encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
-            setup_status: deps.setup_status.clone(),
-            space_access: deps.security.space_access.clone(),
-        })),
-        resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
-            representation_repo: deps.clipboard.representation_repo.clone(),
-            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
-            blob_store: deps.storage.blob_store.clone(),
-        })),
-        clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
-            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-            selection_repo: deps.clipboard.selection_repo.clone(),
-            representation_repo: deps.clipboard.representation_repo.clone(),
-            event_writer: deps.clipboard.clipboard_event_repo.clone(),
-            payload_resolver: deps.clipboard.payload_resolver.clone(),
-            blob_store: deps.storage.blob_store.clone(),
-            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
-            file_transfer_repo: deps.storage.file_transfer_repo.clone(),
-            search_index: Some(deps.search.search_index.clone()),
-            file_cache_dir: Some(storage_paths_for_daemon.cache_dir.clone()),
-        })),
-        clipboard_sync: Some(clipboard_sync_facade.clone()),
-        blob_transfer: Some(blob_transfer_facade.clone()),
-        clipboard_restore: Some(Arc::new(ClipboardRestoreFacade::new(
-            ClipboardRestoreFacadeDeps {
-                entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-                selection_repo: deps.clipboard.selection_repo.clone(),
-                representation_repo: deps.clipboard.representation_repo.clone(),
-                blob_store: deps.storage.blob_store.clone(),
-                clock: deps.system.clock.clone(),
+    let app_facade = build_app_facade_from_deps(
+        &deps,
+        &storage_paths_for_daemon,
+        lifecycle_status.clone(),
+        AppFacadeAssemblyOptions {
+            space_setup: Some(space_setup_facade_for_api.clone()),
+            member_roster: Some(member_roster_facade_for_api.clone()),
+            clipboard_sync: Some(clipboard_sync_facade.clone()),
+            blob_transfer: Some(blob_transfer_facade.clone()),
+            clipboard_restore: Some(ClipboardRestoreAssembly {
                 write_coordinator: clipboard_write_coordinator.clone(),
                 integration_mode: clipboard_integration_mode,
-            },
-        ))),
-        search: Arc::new(SearchFacade::new(SearchFacadeDeps {
-            search_index: deps.search.search_index.clone(),
-            coordinator: Some(Arc::clone(&search_coordinator)),
-        })),
-        settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
-        device: Arc::new(DeviceFacade::new(
-            deps.device.device_identity.clone(),
-            deps.settings.clone(),
-        )),
-        storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
-            db_path: storage_paths_for_daemon.db_path.clone(),
-            vault_dir: storage_paths_for_daemon.vault_dir.clone(),
-            cache_dir: storage_paths_for_daemon.cache_dir.clone(),
-            logs_dir: storage_paths_for_daemon.logs_dir.clone(),
-            app_data_root_dir: storage_paths_for_daemon.app_data_root_dir.clone(),
-            cache_fs: deps.system.cache_fs.clone(),
-        })),
-    }));
+            }),
+            search_coordinator: Some(Arc::clone(&search_coordinator)),
+        },
+    );
     let unlock_app_facade = Arc::clone(&app_facade);
 
     // Keep iroh magicsock paths warm so blob fetches don't cold-start 30s+

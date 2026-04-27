@@ -40,13 +40,11 @@ use std::sync::{Arc, RwLock};
 
 use uc_application::deps::AppDeps;
 use uc_application::facade::{
-    AppFacade, AppFacadeParts, AppPaths, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
-    ClipboardRestoreFacade, ClipboardRestoreFacadeDeps, DeviceFacade, EncryptionFacade,
-    EncryptionFacadeDeps, HostEventEmitterPort, InMemoryLifecycleStatus, LifecycleFacade,
-    LifecycleFacadeDeps, LifecycleStatusGateway, ResourceFacade, ResourceFacadeDeps, SearchFacade,
-    SearchFacadeDeps, SettingsFacade, StorageFacade, StorageFacadeDeps,
+    AppFacade, AppPaths, HostEventEmitterPort, InMemoryLifecycleStatus, LifecycleStatusGateway,
 };
-use uc_bootstrap::TaskRegistry;
+use uc_bootstrap::{
+    build_app_facade_from_deps, AppFacadeAssemblyOptions, ClipboardRestoreAssembly, TaskRegistry,
+};
 use uc_core::ports::SettingsPort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -174,67 +172,21 @@ impl AppRuntime {
 
         let event_emitter_cell = Arc::new(RwLock::new(event_emitter));
 
-        // Compose AppFacade — 与 uc-daemon::entrypoint 同款装配代码。
+        // Compose AppFacade — 与 desktop daemon 入口共享同一装配函数。
         // GUI 端不直接做 space setup / member roster / search coordinator,
         // 这三处传 None;其它 facade 全部从 deps 拼齐。
-        let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
-            space_setup: None,
-            member_roster: None,
-            lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
-                status: lifecycle_status,
-            })),
-            encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
-                setup_status: deps.setup_status.clone(),
-                space_access: deps.security.space_access.clone(),
-            })),
-            resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
-                representation_repo: deps.clipboard.representation_repo.clone(),
-                thumbnail_repo: deps.storage.thumbnail_repo.clone(),
-                blob_store: deps.storage.blob_store.clone(),
-            })),
-            clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
-                entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-                selection_repo: deps.clipboard.selection_repo.clone(),
-                representation_repo: deps.clipboard.representation_repo.clone(),
-                event_writer: deps.clipboard.clipboard_event_repo.clone(),
-                payload_resolver: deps.clipboard.payload_resolver.clone(),
-                blob_store: deps.storage.blob_store.clone(),
-                thumbnail_repo: deps.storage.thumbnail_repo.clone(),
-                file_transfer_repo: deps.storage.file_transfer_repo.clone(),
-                search_index: Some(deps.search.search_index.clone()),
-                file_cache_dir: Some(storage_paths.cache_dir.clone()),
-            })),
-            clipboard_sync: None,
-            blob_transfer: None,
-            clipboard_restore: Some(Arc::new(ClipboardRestoreFacade::new(
-                ClipboardRestoreFacadeDeps {
-                    entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-                    selection_repo: deps.clipboard.selection_repo.clone(),
-                    representation_repo: deps.clipboard.representation_repo.clone(),
-                    blob_store: deps.storage.blob_store.clone(),
-                    clock: deps.system.clock.clone(),
+        let app_facade = build_app_facade_from_deps(
+            &deps,
+            &storage_paths,
+            lifecycle_status,
+            AppFacadeAssemblyOptions {
+                clipboard_restore: Some(ClipboardRestoreAssembly {
                     write_coordinator: clipboard_write_coordinator,
                     integration_mode: clipboard_integration_mode,
-                },
-            ))),
-            search: Arc::new(SearchFacade::new(SearchFacadeDeps {
-                search_index: deps.search.search_index.clone(),
-                coordinator: None,
-            })),
-            settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
-            device: Arc::new(DeviceFacade::new(
-                deps.device.device_identity.clone(),
-                deps.settings.clone(),
-            )),
-            storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
-                db_path: storage_paths.db_path.clone(),
-                vault_dir: storage_paths.vault_dir.clone(),
-                cache_dir: storage_paths.cache_dir.clone(),
-                logs_dir: storage_paths.logs_dir.clone(),
-                app_data_root_dir: storage_paths.app_data_root_dir.clone(),
-                cache_fs: deps.system.cache_fs.clone(),
-            })),
-        }));
+                }),
+                ..Default::default()
+            },
+        );
 
         Self {
             app_facade,

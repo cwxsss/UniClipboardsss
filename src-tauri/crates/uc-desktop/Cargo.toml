@@ -1,0 +1,40 @@
+[package]
+name = "uc-desktop"
+version.workspace = true
+license.workspace = true
+edition = "2021"
+description = "Desktop host for UniClipboard runtime, daemon mode, local API, and desktop event sources"
+
+[lib]
+name = "uc_desktop"
+path = "src/lib.rs"
+
+[dependencies]
+uc-bootstrap = { path = "../uc-bootstrap" }
+uc-application = { path = "../uc-application" }
+uc-core = { path = "../uc-core" }
+uc-infra = { path = "../uc-infra" }
+uc-platform = { path = "../uc-platform", features = ["test-helpers"] }
+uc-observability = { path = "../uc-observability" }
+uc-daemon-contract = { path = "../uc-daemon-contract" }
+uc-daemon-local = { path = "../uc-daemon-local" }
+uc-webserver = { path = "../uc-webserver" }
+clipboard-rs = { version = "0.3.3", features = ["default"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+tokio-util = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1.0"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+blake3 = "1"
+tracing = "0.1"
+futures-util = "0.3"
+url = "2"
+
+[dev-dependencies]
+uc-daemon-local = { path = "../uc-daemon-local", features = ["test-helpers"] }
+tempfile = "3"
+chrono = { version = "0.4", default-features = true }
+diesel = { version = "2.3.5", features = ["sqlite"] }
+mockall = "0.13"

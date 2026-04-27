@@ -10356,29 +10356,7 @@ name = "uc-daemon"
 version = "1.0.0-alpha.1"
 dependencies = [
  "anyhow",
- "async-trait",
- "blake3",
- "chrono",
- "clipboard-rs",
- "diesel",
- "futures-util",
- "mockall 0.13.1",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "uc-application",
- "uc-bootstrap",
- "uc-core",
- "uc-daemon-contract",
- "uc-daemon-local",
- "uc-infra",
- "uc-observability",
- "uc-platform",
- "uc-webserver",
- "url",
+ "uc-desktop",
 ]
 
 [[package]]
@@ -10430,6 +10408,36 @@ dependencies = [
  "uc-application",
  "uc-daemon-contract",
  "uc-platform",
+]
+
+[[package]]
+name = "uc-desktop"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "clipboard-rs",
+ "diesel",
+ "futures-util",
+ "mockall 0.13.1",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uc-application",
+ "uc-bootstrap",
+ "uc-core",
+ "uc-daemon-contract",
+ "uc-daemon-local",
+ "uc-infra",
+ "uc-observability",
+ "uc-platform",
+ "uc-webserver",
+ "url",
 ]
 
 [[package]]

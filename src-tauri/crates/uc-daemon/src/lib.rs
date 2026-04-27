@@ -1,18 +1,7 @@
-//! # uc-daemon — Headless Daemon Library
+//! `uc-daemon` 现在只保留兼容出口。
 //!
-//! Provides the [`DaemonService`] trait, placeholder workers,
-//! and [`RuntimeState`] for the UniClipboard headless daemon.
-//!
-//! This crate is used as a library and as a binary (`uniclipboard-daemon`).
+//! 桌面宿主实现已迁入 `uc-desktop`。外部仍可继续使用
+//! `uniclipboard-daemon` 二进制和 `uc_daemon::*` 路径，后续迁移完成后再
+//! 逐步收窄这个兼容层。
 
-pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub use uc_daemon_contract::DAEMON_API_REVISION;
-
-pub mod app;
-pub mod entrypoint;
-pub mod peers;
-pub mod process_metadata;
-pub mod search;
-pub mod service;
-pub mod state;
-pub mod workers;
+pub use uc_desktop::*;
