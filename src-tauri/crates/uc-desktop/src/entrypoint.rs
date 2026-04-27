@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
-use uc_application::facade::{SearchCoordinator, SearchCoordinatorDeps};
 use uc_bootstrap::build_non_gui_bundle;
 use uc_bootstrap::builders::build_daemon_app;
 use uc_bootstrap::{
@@ -17,10 +16,10 @@ use uc_bootstrap::{
 use crate::app::DaemonApp;
 use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
+use crate::daemon::search_assembly::build_daemon_search_assembly;
 use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
 use crate::daemon::shutdown::build_external_shutdown_token;
 use crate::daemon::startup_recovery::{spawn_startup_recovery, StartupRecoveryInput};
-use crate::search::coordinator::SearchCoordinatorService;
 use crate::service::DaemonService;
 use crate::workers::peer_keepalive::PeerKeepAliveWorker;
 use uc_webserver::api::types::DaemonWsEvent;
@@ -121,19 +120,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &task_registry).await;
     });
 
-    // Construct the search coordinator before building the service snapshots.
-    let search_coordinator = Arc::new(SearchCoordinator::new(SearchCoordinatorDeps::new(
-        deps.search.search_index.clone(),
-        deps.search.search_key_derivation.clone(),
-        deps.search.search_pipeline.clone(),
-        deps.clipboard.clipboard_entry_repo.clone(),
-        deps.clipboard.representation_repo.clone(),
-        deps.clipboard.selection_repo.clone(),
-    )));
-    let search_coordinator_service = Arc::new(SearchCoordinatorService::new(
-        Arc::clone(&search_coordinator),
-        event_tx.clone(),
-    ));
+    let search_assembly = build_daemon_search_assembly(&deps, event_tx.clone());
 
     let mut service_plan = DaemonServicePlan::build(DaemonServicePlanInput {
         run_mode,
@@ -143,7 +130,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         clipboard_watcher: Arc::clone(&runtime_workers.clipboard_watcher) as Arc<dyn DaemonService>,
         inbound_clipboard_sync: Arc::clone(&runtime_workers.inbound_clipboard_sync)
             as Arc<dyn DaemonService>,
-        search_coordinator: Arc::clone(&search_coordinator_service) as Arc<dyn DaemonService>,
+        search_coordinator: Arc::clone(&search_assembly.service) as Arc<dyn DaemonService>,
     });
 
     // Slice4 P3 T3.3 — clone the new SpaceSetupFacade Arc + resolve the
@@ -175,7 +162,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
                 write_coordinator: clipboard_write_coordinator.clone(),
                 integration_mode: clipboard_integration_mode,
             }),
-            search_coordinator: Some(Arc::clone(&search_coordinator)),
+            search_coordinator: Some(Arc::clone(&search_assembly.coordinator)),
         },
     );
     let unlock_app_facade = Arc::clone(&app_facade);

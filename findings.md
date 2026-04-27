@@ -42,6 +42,8 @@
 - 旧的 `--gui-managed` 参数只保留在入口解析层，`uc-desktop` 内部不再用裸布尔值表达运行模式。
 - hybrid 本地连接信息已作为待办记录，当前阶段不实现 GUI 连接、token、单实例锁或默认 hybrid 切换。
 - daemon 运行模式参数组合规则现在由 `DaemonRunMode::from_flags` 统一维护，避免 `uc-cli` 和 `uc-daemon` 各自判断。
+- 第九阶段新增 `daemon::search_assembly`，把搜索协调器和搜索服务构造从 `entrypoint.rs` 抽出。
+- 搜索业务仍由 `uc-application` facade 和既有搜索服务处理，`uc-desktop` 这里只做宿主装配。
 
 ## 验证发现
 
@@ -66,6 +68,10 @@
 - 收口 daemon 运行模式参数解析后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
 - 收口 daemon 运行模式参数解析后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 收口 daemon 运行模式参数解析后，`cargo check -p uniclipboard` 通过。
+- 抽出 daemon 搜索服务装配后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 抽出 daemon 搜索服务装配后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 抽出 daemon 搜索服务装配后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 抽出 daemon 搜索服务装配后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 

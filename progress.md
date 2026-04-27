@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `797c55cc refactor: centralize desktop daemon mode flags`。
+- 开始第九阶段：抽出 daemon 搜索服务装配。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/search_assembly.rs`，集中构造 `SearchCoordinator` 和 `SearchCoordinatorService`。
+- `entrypoint.rs` 不再直接拼装搜索依赖，只消费 `DaemonSearchAssembly`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 记录 hybrid daemon 本地连接信息待办：`.planning/todos/pending/2026-04-27-hybrid-daemon-connection-info.md`。
 - 开始第八阶段：收口 daemon 运行模式参数解析。
 - 将 `--gui-managed` / `--hybrid` 的组合规则收敛到 `DaemonRunMode::from_flags`。
