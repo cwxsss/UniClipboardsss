@@ -1,10 +1,21 @@
-//! UniClipboard daemon binary entry point.
+//! UniClipboard daemon 二进制入口。
 //!
-//! Delegates to `uc_daemon::entrypoint::run()` which contains the full
-//! composition root. The same function is also called by
-//! `uniclipboard-cli daemon` for single-binary distribution.
+//! 这里保留旧命令入口，实际宿主实现委托给 `uc-desktop` 暴露的
+//! `uc_daemon::entrypoint::run()`。
 
 fn main() -> anyhow::Result<()> {
-    let gui_managed = std::env::args().any(|arg| arg == "--gui-managed");
-    uc_daemon::entrypoint::run(gui_managed)
+    let args: Vec<String> = std::env::args().collect();
+    let gui_managed = args.iter().any(|arg| arg == "--gui-managed");
+    let hybrid = args.iter().any(|arg| arg == "--hybrid");
+
+    if gui_managed && hybrid {
+        anyhow::bail!("--hybrid cannot be combined with --gui-managed");
+    }
+
+    let run_mode = if hybrid {
+        uc_daemon::daemon::run_mode::DaemonRunMode::Hybrid
+    } else {
+        uc_daemon::daemon::run_mode::DaemonRunMode::from_gui_managed_flag(gui_managed)
+    };
+    uc_daemon::entrypoint::run(run_mode)
 }

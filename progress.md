@@ -43,6 +43,17 @@
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `264ad6dd refactor: extract desktop daemon shutdown signal`。
+- 开始第七阶段：引入明确的 daemon 运行模式。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/run_mode.rs`，定义 `Standalone`、`GuiSidecar`、`Hybrid` 三种模式。
+- 将 `entrypoint.rs`、`daemon::shutdown`、`daemon::startup_recovery`、`daemon::service_plan` 改为使用 `DaemonRunMode`。
+- 保留旧的 `--gui-managed` 参数，并在 CLI/daemon 二进制入口映射为 `GuiSidecar`。
+- 为 daemon/CLI 隐藏入口增加显式 `--hybrid` 模式；默认启动行为不变。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 运行 `git diff --check`，通过。
 - 开始第五阶段：抽出 daemon 启动恢复任务。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/startup_recovery.rs`，集中处理后台解锁、空间会话恢复、presence 预热和 CLI 模式 deferred services 触发。

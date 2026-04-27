@@ -2,12 +2,14 @@
 
 use tokio_util::sync::CancellationToken;
 
-/// GUI 管理模式下，父进程会保持 daemon 的 stdin 管道打开。
+use super::run_mode::DaemonRunMode;
+
+/// GUI sidecar 模式下，父进程会保持 daemon 的 stdin 管道打开。
 ///
 /// 一旦 GUI 正常退出、崩溃或被强制结束，stdin 会关闭；这里把 EOF 转成
 /// `CancellationToken`，交给 daemon 主循环统一做优雅关闭。
-pub fn build_external_shutdown_token(gui_managed: bool) -> Option<CancellationToken> {
-    if !gui_managed {
+pub fn build_external_shutdown_token(run_mode: DaemonRunMode) -> Option<CancellationToken> {
+    if !run_mode.follows_gui_parent() {
         return None;
     }
 

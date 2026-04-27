@@ -8,9 +8,11 @@ use tracing::{info_span, Instrument};
 use uc_application::facade::{AppFacade, SpaceSetupFacade};
 use uc_core::ports::SettingsPort;
 
+use super::run_mode::DaemonRunMode;
+
 /// 启动恢复任务所需输入。
 pub struct StartupRecoveryInput {
-    pub gui_managed: bool,
+    pub run_mode: DaemonRunMode,
     pub app_facade: Arc<AppFacade>,
     pub settings: Arc<dyn SettingsPort>,
     pub space_setup: Arc<SpaceSetupFacade>,
@@ -24,7 +26,7 @@ pub struct StartupRecoveryInput {
 /// HTTP 监听拉起来，再让这个后台任务慢慢恢复。
 pub fn spawn_startup_recovery(input: StartupRecoveryInput) {
     tokio::spawn(async move {
-        let auto_unlock_enabled = if input.gui_managed {
+        let auto_unlock_enabled = if input.run_mode.uses_auto_unlock_setting() {
             let settings = input.settings.load().await.unwrap_or_default();
             settings.security.auto_unlock_enabled
         } else {
@@ -62,10 +64,10 @@ pub fn spawn_startup_recovery(input: StartupRecoveryInput) {
             }
         }
 
-        if !input.gui_managed && unlocked {
+        if input.run_mode.auto_triggers_deferred_services() && unlocked {
             input.clipboard_capture_gate.store(true, Ordering::SeqCst);
             input.deferred_ready_notify.notify_one();
-            tracing::info!("background unlock: CLI mode auto-triggered deferred services");
+            tracing::info!("background unlock: persistent mode auto-triggered deferred services");
         }
     });
 }

@@ -7,9 +7,11 @@ use tokio::sync::RwLock;
 use crate::service::{DaemonService, ServiceHealth};
 use crate::state::{DaemonServiceSnapshot, RuntimeState};
 
+use super::run_mode::DaemonRunMode;
+
 /// daemon 启动时已经构造好的后台服务。
 pub struct DaemonServicePlanInput {
-    pub gui_managed: bool,
+    pub run_mode: DaemonRunMode,
     pub encryption_unlocked: bool,
     pub file_sync_orchestrator: Arc<dyn DaemonService>,
     pub clipboard_watcher: Arc<dyn DaemonService>,
@@ -28,7 +30,8 @@ pub struct DaemonServicePlan {
 
 impl DaemonServicePlan {
     pub fn build(input: DaemonServicePlanInput) -> Self {
-        let should_defer_clipboard = input.gui_managed || !input.encryption_unlocked;
+        let should_defer_clipboard =
+            input.run_mode.waits_for_gui_ready() || !input.encryption_unlocked;
         let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses(
             should_defer_clipboard,
             input.encryption_unlocked,
@@ -147,7 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn unlocked_standalone_mode_starts_clipboard_services_immediately() {
-        let plan = DaemonServicePlan::build(input(false, true));
+        let plan = DaemonServicePlan::build(input(DaemonRunMode::Standalone, true));
 
         assert_eq!(plan.services.len(), 4);
         assert!(plan.deferred_services.is_empty());
@@ -168,8 +171,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gui_managed_or_locked_mode_defers_clipboard_services() {
-        let mut plan = DaemonServicePlan::build(input(true, false));
+    async fn gui_sidecar_or_locked_mode_defers_clipboard_services() {
+        let mut plan = DaemonServicePlan::build(input(DaemonRunMode::GuiSidecar, false));
 
         assert_eq!(plan.services.len(), 1);
         assert_eq!(plan.deferred_services.len(), 3);
@@ -195,9 +198,9 @@ mod tests {
         );
     }
 
-    fn input(gui_managed: bool, encryption_unlocked: bool) -> DaemonServicePlanInput {
+    fn input(run_mode: DaemonRunMode, encryption_unlocked: bool) -> DaemonServicePlanInput {
         DaemonServicePlanInput {
-            gui_managed,
+            run_mode,
             encryption_unlocked,
             file_sync_orchestrator: service("file-sync-orchestrator"),
             clipboard_watcher: service("clipboard-watcher"),

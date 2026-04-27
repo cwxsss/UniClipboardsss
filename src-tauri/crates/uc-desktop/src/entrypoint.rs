@@ -1,8 +1,7 @@
-//! Reusable daemon entry point.
+//! 可复用的 daemon 入口。
 //!
-//! Contains the full composition root extracted from `main.rs` so that both the
-//! standalone `uniclipboard-daemon` binary and the `uniclipboard-cli daemon`
-//! subcommand can start an identical daemon process.
+//! 独立的 `uniclipboard-daemon` 二进制和 `uniclipboard-cli daemon` 子命令
+//! 都通过这里启动同一套 daemon 进程。
 
 use std::sync::Arc;
 
@@ -16,6 +15,7 @@ use uc_bootstrap::{
 };
 
 use crate::app::DaemonApp;
+use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
 use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
 use crate::daemon::shutdown::build_external_shutdown_token;
@@ -25,13 +25,11 @@ use crate::service::DaemonService;
 use crate::workers::peer_keepalive::PeerKeepAliveWorker;
 use uc_webserver::api::types::DaemonWsEvent;
 
-/// Run the daemon process. This is the composition root.
+/// 运行 daemon 进程。
 ///
-/// `gui_managed` mirrors the `--gui-managed` flag: when true, the daemon
-/// monitors stdin for EOF (parent GUI exit) and defers clipboard capture
-/// until the GUI signals readiness.
-pub fn run(gui_managed: bool) -> anyhow::Result<()> {
-    let external_shutdown = build_external_shutdown_token(gui_managed);
+/// 这里是桌面 daemon 模式的组装入口。
+pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
+    let external_shutdown = build_external_shutdown_token(run_mode);
 
     // Build the daemon's tokio runtime FIRST. Everything async in the
     // daemon's lifetime — iroh Endpoint::bind (inside build_daemon_app),
@@ -82,10 +80,11 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     //    All services that emit WS events write to this same sender.
     let (event_tx, _) = broadcast::channel::<DaemonWsEvent>(64);
 
-    // Clipboard capture gate: controls whether clipboard changes are processed.
-    // In standalone CLI mode, capture is always enabled.
-    // In GUI-managed mode, capture is disabled until the GUI signals readiness.
-    let clipboard_capture_gate = Arc::new(std::sync::atomic::AtomicBool::new(!gui_managed));
+    // 剪贴板采集开关：独立和常驻模式默认打开，GUI sidecar 模式等 GUI
+    // 发出 ready 后再打开。
+    let clipboard_capture_gate = Arc::new(std::sync::atomic::AtomicBool::new(
+        !run_mode.waits_for_gui_ready(),
+    ));
 
     // Slice 2 Phase 3 · T6 — pull clipboard_sync_facade out of the
     // assembly before we move it into `space_setup_assembly` for
@@ -112,15 +111,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // post-assembly block inserts it into `services` or `deferred_services`
     // based on `encryption_unlocked`.
 
-    // Phase 67 (revised): encryption recovery + slice 2/3 try_resume_session
-    // run in a background task spawned below inside `rt.block_on`, AFTER
-    // `daemon.run()` brings up the HTTP listener. macOS keychain calls
-    // routinely block 5–7 s on cold start; doing them on the startup
-    // critical path used to push daemon-ready past the GUI's 8 s health
-    // timeout. Treating the daemon as "locked until proven unlocked"
-    // keeps clipboard + keepalive in the deferred bucket; on success the
-    // background task auto-triggers them in CLI mode (GUI mode still
-    // waits for an explicit `/lifecycle/ready`).
+    // 启动时先按“未解锁”处理，把恢复动作放到 HTTP 监听启动后的后台任务里。
+    // macOS 钥匙串冷启动可能阻塞数秒，不能卡住 GUI 的健康检查。
     let encryption_unlocked = false;
 
     // Start background clipboard processing tasks.
@@ -144,7 +136,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     ));
 
     let mut service_plan = DaemonServicePlan::build(DaemonServicePlanInput {
-        gui_managed,
+        run_mode,
         encryption_unlocked,
         file_sync_orchestrator: Arc::clone(&runtime_workers.file_sync_orchestrator)
             as Arc<dyn DaemonService>,
@@ -228,7 +220,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let unlock_gate = clipboard_capture_gate.clone();
     rt.block_on(async move {
         spawn_startup_recovery(StartupRecoveryInput {
-            gui_managed,
+            run_mode,
             app_facade: unlock_app_facade,
             settings: unlock_settings,
             space_setup: unlock_facade,

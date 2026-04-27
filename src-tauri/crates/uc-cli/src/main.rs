@@ -146,12 +146,15 @@ enum Commands {
         #[command(subcommand)]
         subcommand: commands::search::SearchCommands,
     },
-    /// Run the daemon process inline (used internally by `start`)
+    /// 内联运行 daemon 进程，供 `start` 内部使用
     #[command(hide = true)]
     Daemon {
-        /// Launched by a GUI parent that keeps stdin open for lifecycle detection
+        /// 由 GUI 父进程启动，并通过 stdin 判断父进程生命周期
         #[arg(long)]
         gui_managed: bool,
+        /// 以常驻桌面 daemon 运行，不绑定 GUI 进程生命周期
+        #[arg(long, conflicts_with = "gui_managed")]
+        hybrid: bool,
     },
 }
 
@@ -189,8 +192,17 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    if let Commands::Daemon { gui_managed } = command {
-        return uc_daemon::entrypoint::run(gui_managed);
+    if let Commands::Daemon {
+        gui_managed,
+        hybrid,
+    } = command
+    {
+        let run_mode = if hybrid {
+            uc_daemon::daemon::run_mode::DaemonRunMode::Hybrid
+        } else {
+            uc_daemon::daemon::run_mode::DaemonRunMode::from_gui_managed_flag(gui_managed)
+        };
+        return uc_daemon::entrypoint::run(run_mode);
     }
 
     let rt = tokio::runtime::Builder::new_multi_thread()

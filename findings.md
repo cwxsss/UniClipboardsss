@@ -36,6 +36,10 @@
 - `entrypoint.rs` 现在只把启动恢复所需依赖交给 `spawn_startup_recovery`，不再直接写恢复任务细节。
 - 第六阶段新增 `daemon::shutdown`，把 GUI 管理模式下的 stdin EOF 监听从 `entrypoint.rs` 抽出。
 - daemon 主循环仍接收同一个关闭信号，关闭行为没有变化。
+- 第七阶段新增 `daemon::run_mode`，把 daemon 运行模式收敛成 `Standalone`、`GuiSidecar`、`Hybrid`。
+- `GuiSidecar` 保留旧行为：跟随 GUI 父进程退出，等待 GUI ready 后再启动剪贴板相关服务。
+- `Hybrid` 现在作为显式模式存在：不跟随 GUI 父进程，不等待 GUI ready，并使用桌面设置里的自动解锁开关。
+- 旧的 `--gui-managed` 参数只保留在入口解析层，`uc-desktop` 内部不再用裸布尔值表达运行模式。
 
 ## 验证发现
 
@@ -53,6 +57,10 @@
 - `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 抽出 GUI 管理模式关闭信号后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 抽出 GUI 管理模式关闭信号后，`cargo check -p uniclipboard` 通过。
+- 引入 `DaemonRunMode` 后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 引入 `DaemonRunMode` 后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 引入 `DaemonRunMode` 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 引入 `DaemonRunMode` 后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 
