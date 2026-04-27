@@ -12,6 +12,7 @@ use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
 
 use crate::app::DaemonApp;
 use crate::daemon::app_facade_assembly::{build_daemon_app_facade, DaemonAppFacadeAssemblyInput};
+use crate::daemon::background_tasks::spawn_daemon_background_tasks;
 use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
 use crate::daemon::search_assembly::build_daemon_search_assembly;
@@ -112,11 +113,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     // macOS 钥匙串冷启动可能阻塞数秒，不能卡住 GUI 的健康检查。
     let encryption_unlocked = false;
 
-    // Start background clipboard processing tasks.
-    let task_registry = task_registry.clone();
-    rt.spawn(async move {
-        uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &task_registry).await;
-    });
+    spawn_daemon_background_tasks(&rt, background, blob_ports, task_registry.clone());
 
     let search_assembly = build_daemon_search_assembly(&deps, event_tx.clone());
 

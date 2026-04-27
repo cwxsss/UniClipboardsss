@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `5351a069 refactor: extract desktop daemon app facade assembly`。
+- 开始第十一阶段：抽出 daemon 后台 blob 任务启动。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/background_tasks.rs`，封装 daemon runtime 上的 blob 后台任务启动。
+- `entrypoint.rs` 不再直接调用 `uc_bootstrap::spawn_blob_processing_tasks`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `dfee513a refactor: extract desktop daemon search assembly`。
 - 开始第十阶段：抽出 daemon AppFacade 装配。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/app_facade_assembly.rs`，集中声明 daemon 模式传给 `AppFacade` 的能力。
