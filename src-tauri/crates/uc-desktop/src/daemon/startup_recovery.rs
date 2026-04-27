@@ -33,20 +33,22 @@ pub fn spawn_startup_recovery(input: StartupRecoveryInput) {
             true
         };
 
-        let unlocked =
-            match crate::app::recover_encryption_session(&input.app_facade, auto_unlock_enabled)
-                .instrument(info_span!("daemon.startup.recover_encryption_session"))
-                .await
-            {
-                Ok(unlocked) => unlocked,
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        "background unlock: recover_encryption_session failed"
-                    );
-                    false
-                }
-            };
+        let unlocked = match crate::daemon::app::recover_encryption_session(
+            &input.app_facade,
+            auto_unlock_enabled,
+        )
+        .instrument(info_span!("daemon.startup.recover_encryption_session"))
+        .await
+        {
+            Ok(unlocked) => unlocked,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "background unlock: recover_encryption_session failed"
+                );
+                false
+            }
+        };
 
         match input.space_setup.try_resume_session().await {
             Ok(true) => {

@@ -73,6 +73,7 @@
 - `service` 和 `state` 只被 `uc-desktop` 的 daemon host、worker、service plan 使用，适合收进 `daemon/` 子目录。
 - `workers` 目录下的 clipboard watcher、file sync orchestrator、inbound clipboard sync、peer keepalive 都是 daemon 长生命周期服务，也适合收进 `daemon/` 子目录。
 - `peers/presence_monitor` 和 `search/coordinator` 都是 daemon 对外事件或后台服务的宿主胶水，不是 `uc-desktop` 根级公共概念。
+- `app.rs` 定义的是 `DaemonApp` 和 daemon 启动期恢复辅助，也属于 `daemon/` 子目录。
 
 ## 验证发现
 
@@ -154,6 +155,7 @@
 - 移动 daemon 服务状态模块后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli`、`cargo check -p uniclipboard` 和 `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 均通过。
 - 移动 daemon workers 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli`、`cargo check -p uniclipboard` 和 `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 均通过。
 - 移动 daemon peers/search 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli`、`cargo check -p uniclipboard` 和 `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 均通过。
+- 移动 daemon app 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli`、`cargo check -p uniclipboard` 和 `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 均通过。
 
 ## 后续 gap
 

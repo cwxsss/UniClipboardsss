@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use uc_application::facade::{AppFacade, AppPaths, HostEventEmitterPort};
 use uc_webserver::api::types::DaemonWsEvent;
 
-use crate::app::DaemonApp;
+use crate::daemon::app::DaemonApp;
 use crate::daemon::service::DaemonService;
 use crate::daemon::service_plan::DaemonServicePlan;
 use crate::daemon::workers::peer_keepalive::PeerKeepAliveWorker;

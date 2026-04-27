@@ -9,7 +9,7 @@ use uc_application::facade::AppFacade;
 use uc_bootstrap::SpaceSetupAssembly;
 use uc_core::ports::SettingsPort;
 
-use crate::app::DaemonApp;
+use crate::daemon::app::DaemonApp;
 use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::startup_recovery::{spawn_startup_recovery, StartupRecoveryInput};
 

@@ -7,5 +7,4 @@
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use uc_daemon_contract::DAEMON_API_REVISION;
 
-pub(crate) mod app;
 pub mod daemon;
