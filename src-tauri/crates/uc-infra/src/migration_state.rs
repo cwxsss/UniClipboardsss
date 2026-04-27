@@ -99,7 +99,6 @@ mod tests {
         let repo = FileMigrationStateRepository::with_defaults(dir.path().to_path_buf());
         let phase = MigrationPhase::Prepared {
             run_id: MigrationRunId::new("mig-test"),
-            target_space_id: SpaceId::from_str("space-target"),
         };
         repo.set_current(Some(&phase)).await.unwrap();
         assert_eq!(repo.get_current().await.unwrap(), Some(phase));

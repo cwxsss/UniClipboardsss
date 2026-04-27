@@ -51,26 +51,25 @@ impl std::fmt::Display for MigrationRunId {
 /// 一次迁移当前所处的阶段。
 ///
 /// 值唯一持久化点是 `MigrationStatePort`，整个生命周期里只有 4 种合法值：
-/// `None` / `Prepared` / `HandshakeDone` / `Swapped`，每个变体都携带
-/// `run_id`（让 adapter 找到 keyring 里的 migration key）和
-/// `target_space_id`（最终要切到的空间 id，phase 4 写回 `SetupStatus`）。
+/// `None` / `Prepared` / `HandshakeDone` / `Swapped`。所有变体都带 `run_id`，
+/// 但 `target_space_id` 只在 `HandshakeDone` 起出现——阶段 1 (备份) 跑在
+/// handshake 之前，那时还没和 sponsor 通过任何信，无法得知目标空间 id。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MigrationPhase {
     /// 阶段 1 已完成：所有 representation 已用 migration_key 重加密
     /// 写入 backup 表。主表内容未变，旧 master_key 仍在 session/磁盘/keyring。
+    /// 此时仍未与 sponsor 握手，所以目标空间 id 尚未知。
     ///
     /// 故障恢复：可以选择继续走阶段 2，也可以直接放弃（清空 backup 表 +
     /// 销毁 migration_key），旧空间数据完整。
-    Prepared {
-        run_id: MigrationRunId,
-        target_space_id: SpaceId,
-    },
+    Prepared { run_id: MigrationRunId },
 
     /// 阶段 2 已完成：sponsor handshake 走完，session / 磁盘 keyslot /
-    /// keyring KEK 三处都换成新空间的 master_key。主表里的密文都是用
-    /// 旧 master_key 加密的——此时主表已不可读，必须依靠 backup 表 +
-    /// migration_key 走完阶段 3 才能恢复。
+    /// keyring KEK 三处都换成新空间的 master_key，`target_space_id` 由
+    /// sponsor 在 `Confirm` 消息里给出。主表里的密文都是用旧 master_key
+    /// 加密的——此时主表已不可读，必须依靠 backup 表 + migration_key
+    /// 走完阶段 3 才能恢复。
     ///
     /// 故障恢复：自动重试阶段 3。无法回退（旧 master_key 已不可恢复）。
     HandshakeDone {
@@ -92,23 +91,23 @@ pub enum MigrationPhase {
 impl MigrationPhase {
     pub fn run_id(&self) -> &MigrationRunId {
         match self {
-            Self::Prepared { run_id, .. }
+            Self::Prepared { run_id }
             | Self::HandshakeDone { run_id, .. }
             | Self::Swapped { run_id, .. } => run_id,
         }
     }
 
-    pub fn target_space_id(&self) -> &SpaceId {
+    /// 阶段 2 之前没有目标空间——`Prepared` 返回 `None`，`HandshakeDone`
+    /// / `Swapped` 返回 `Some`。
+    pub fn target_space_id(&self) -> Option<&SpaceId> {
         match self {
-            Self::Prepared {
-                target_space_id, ..
-            }
-            | Self::HandshakeDone {
+            Self::Prepared { .. } => None,
+            Self::HandshakeDone {
                 target_space_id, ..
             }
             | Self::Swapped {
                 target_space_id, ..
-            } => target_space_id,
+            } => Some(target_space_id),
         }
     }
 }
@@ -128,7 +127,6 @@ mod tests {
     fn migration_phase_serde_round_trip_prepared() {
         let phase = MigrationPhase::Prepared {
             run_id: MigrationRunId::new("run-1"),
-            target_space_id: SpaceId::from_str("space-target"),
         };
         let json = serde_json::to_string(&phase).unwrap();
         let parsed: MigrationPhase = serde_json::from_str(&json).unwrap();
@@ -138,7 +136,26 @@ mod tests {
     }
 
     #[test]
-    fn migration_phase_accessors_match_variants() {
+    fn migration_phase_serde_round_trip_handshake_done() {
+        let phase = MigrationPhase::HandshakeDone {
+            run_id: MigrationRunId::new("run-h"),
+            target_space_id: SpaceId::from_str("space-h"),
+        };
+        let json = serde_json::to_string(&phase).unwrap();
+        let parsed: MigrationPhase = serde_json::from_str(&json).unwrap();
+        assert_eq!(phase, parsed);
+    }
+
+    #[test]
+    fn migration_phase_target_space_id_none_for_prepared() {
+        let phase = MigrationPhase::Prepared {
+            run_id: MigrationRunId::new("run-x"),
+        };
+        assert_eq!(phase.target_space_id(), None);
+    }
+
+    #[test]
+    fn migration_phase_accessors_match_handshake_done() {
         let run_id = MigrationRunId::new("run-x");
         let space = SpaceId::from_str("space-x");
         let phase = MigrationPhase::HandshakeDone {
@@ -146,6 +163,6 @@ mod tests {
             target_space_id: space.clone(),
         };
         assert_eq!(phase.run_id(), &run_id);
-        assert_eq!(phase.target_space_id(), &space);
+        assert_eq!(phase.target_space_id(), Some(&space));
     }
 }
