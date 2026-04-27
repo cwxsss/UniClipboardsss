@@ -86,7 +86,6 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
         .route("/status", get(status))
         .route("/peers", get(peers))
         .route("/paired-devices", get(paired_devices))
-        .route("/space-access/state", get(space_access_state_handler))
         .merge(crate::api::lifecycle::router())
         .route(
             &format!("{}/:entry_id", http_route::CLIPBOARD_RESTORE),
@@ -175,16 +174,6 @@ async fn paired_devices(State(state): State<DaemonApiState>) -> impl IntoRespons
         Ok(response) => Json(response).into_response(),
         Err(error) => internal_error(error).into_response(),
     }
-}
-
-async fn space_access_state_handler(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    Json(
-        state
-            .query_service
-            .space_access_state(state.space_access_facade().as_deref())
-            .await,
-    )
-    .into_response()
 }
 
 /// NOTE: Individual API handlers now use `ApiError::unauthorized()` directly.

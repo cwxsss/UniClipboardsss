@@ -5,12 +5,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::RwLock;
 use uc_application::facade::{AppFacade, PeerSnapshotView};
-use uc_application::space_access::SpaceAccessFacade;
-use uc_core::space_access::state::SpaceAccessState;
 
 use crate::api::types::{
-    HealthResponse, PeerSnapshotDto, SpaceAccessStateResponse, SpaceMemberDto, StatusResponse,
-    WorkerStatusDto,
+    HealthResponse, PeerSnapshotDto, SpaceMemberDto, StatusResponse, WorkerStatusDto,
 };
 use crate::service::ServiceHealth;
 use crate::state::{DaemonServiceSnapshot, RuntimeState};
@@ -63,17 +60,6 @@ impl DaemonQueryService {
                 connected: false,
             })
             .collect())
-    }
-
-    pub async fn space_access_state(
-        &self,
-        orchestrator: Option<&SpaceAccessFacade>,
-    ) -> SpaceAccessStateResponse {
-        let state = match orchestrator {
-            Some(o) => o.get_state().await,
-            None => SpaceAccessState::Idle,
-        };
-        SpaceAccessStateResponse { state }
     }
 }
 

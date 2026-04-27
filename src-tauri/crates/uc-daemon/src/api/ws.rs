@@ -30,8 +30,8 @@ use crate::api::server::DaemonApiState;
 use crate::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingSessionSummaryDto,
     PairingVerificationPayload, PeerConnectionChangedPayload, PeerNameUpdatedPayload,
-    PeerSnapshotDto, PeersChangedFullPayload, SpaceAccessStateResponse, SpaceMemberDto,
-    SpaceMembersChangedPayload, StatusResponse,
+    PeerSnapshotDto, PeersChangedFullPayload, SpaceMemberDto, SpaceMembersChangedPayload,
+    StatusResponse,
 };
 use crate::security::claims::SessionTokenClaims;
 
@@ -445,7 +445,6 @@ fn is_supported_topic(topic: &str) -> bool {
             | ws_topic::PAIRING_SESSION
             | ws_topic::PAIRING_VERIFICATION
             | ws_topic::SETUP
-            | ws_topic::SPACE_ACCESS
             | ws_topic::CLIPBOARD
             | ws_topic::FILE_TRANSFER
             | ws_topic::ENCRYPTION
@@ -537,20 +536,6 @@ async fn build_snapshot_event(
         ws_topic::CLIPBOARD => Ok(None),
         ws_topic::FILE_TRANSFER => Ok(None),
 
-        ws_topic::SPACE_ACCESS => {
-            let space_access_state = state
-                .query_service
-                .space_access_state(state.space_access_facade().as_deref())
-                .await;
-            snapshot_event(
-                ws_topic::SPACE_ACCESS,
-                ws_event::SPACE_ACCESS_SNAPSHOT,
-                None,
-                space_access_state,
-            )
-            .map(Some)
-        }
-
         ws_topic::ENCRYPTION => {
             // No snapshot for encryption — only an event is emitted on session_ready.
             Ok(None)
@@ -622,9 +607,8 @@ fn _event_type_markers(
     _: Vec<PeerSnapshotDto>,
     _: Vec<SpaceMemberDto>,
     _: Vec<PairingSessionSummaryDto>,
-    _: SpaceAccessStateResponse,
 ) -> (
-    [&'static str; 11],
+    [&'static str; 9],
     PairingSessionChangedPayload,
     PairingVerificationPayload,
     PairingFailurePayload,
@@ -644,8 +628,6 @@ fn _event_type_markers(
             ws_event::PAIRING_VERIFICATION_REQUIRED,
             ws_event::PAIRING_COMPLETE,
             ws_event::PAIRING_FAILED,
-            ws_event::SPACE_ACCESS_SNAPSHOT,
-            ws_event::SPACE_ACCESS_STATE_CHANGED,
         ],
         PairingSessionChangedPayload {
             session_id: String::new(),
