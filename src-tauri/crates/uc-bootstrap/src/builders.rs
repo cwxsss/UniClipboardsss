@@ -15,8 +15,6 @@ use std::sync::Arc;
 
 use uc_application::deps::AppDeps;
 use uc_application::facade::{AppPaths, ClipboardSyncFacade, HostEventEmitterPort};
-use uc_application::membership::usecases::AdmitMemberUseCase;
-use uc_application::space_access::SpaceAccessFacade;
 use uc_core::config::AppConfig;
 
 use crate::assembly::{get_storage_paths, wire_dependencies, BackgroundRuntimeDeps};
@@ -48,7 +46,6 @@ pub struct DaemonBootstrapContext {
     pub deps: AppDeps,
     pub background: BackgroundRuntimeDeps,
     pub emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-    pub space_access_facade: Arc<SpaceAccessFacade>,
     pub storage_paths: AppPaths,
     pub config: AppConfig,
     /// iroh-stack clipboard sync facade.
@@ -185,12 +182,6 @@ pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
     let background = wired.background;
     let emitter_cell = wired.emitter_cell;
 
-    // Phase A.2: inject AdmitMemberUseCase so joiner-side `Granted` also
-    // registers the sponsor peer as a local space member. Failure to admit
-    // only logs WARN and does not block `Granted` itself.
-    let admit_member = Arc::new(AdmitMemberUseCase::new(deps.device.member_repo.clone()));
-    let space_access_facade = Arc::new(SpaceAccessFacade::with_admit_member(admit_member));
-
     // Same Arc the assembly holds — handed up to ctx so daemon entrypoint
     // (T6) can wire it into the two clipboard workers without unpacking
     // the assembly.
@@ -200,7 +191,6 @@ pub async fn build_daemon_app() -> anyhow::Result<DaemonBootstrapContext> {
         deps,
         background,
         emitter_cell,
-        space_access_facade,
         storage_paths,
         config,
         clipboard_sync_facade,

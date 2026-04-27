@@ -22,8 +22,6 @@ use uc_application::facade::AppFacade;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use uc_application::space_access::SpaceAccessFacade;
-
 use crate::api::auth::{build_connection_info, DaemonAuthToken, DaemonConnectionInfo};
 use crate::api::dto::error::ApiError;
 use crate::api::openapi::ApiDoc;
@@ -39,7 +37,6 @@ pub struct DaemonApiState {
     pub query_service: Arc<DaemonQueryService>,
     pub auth_token: DaemonAuthToken,
     pub app_facade: Option<Arc<AppFacade>>,
-    pub space_access_facade: Option<Arc<SpaceAccessFacade>>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
     /// Gate controlling clipboard capture in the daemon.
     /// When set to true, clipboard monitoring becomes active.
@@ -63,7 +60,6 @@ impl DaemonApiState {
             query_service,
             auth_token,
             app_facade: None,
-            space_access_facade: None,
             event_tx,
             clipboard_capture_gate: None,
             deferred_ready_notify: None,
@@ -85,15 +81,6 @@ impl DaemonApiState {
         self.app_facade
             .clone()
             .ok_or_else(|| ApiError::service_unavailable("application facade unavailable"))
-    }
-
-    pub fn with_space_access(mut self, space_access_facade: Arc<SpaceAccessFacade>) -> Self {
-        self.space_access_facade = Some(space_access_facade);
-        self
-    }
-
-    pub fn space_access_facade(&self) -> Option<Arc<SpaceAccessFacade>> {
-        self.space_access_facade.clone()
     }
 
     pub fn with_clipboard_gate(mut self, gate: Arc<AtomicBool>) -> Self {

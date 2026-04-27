@@ -13,7 +13,6 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_application::facade::{AppFacade, AppPaths, HostEventEmitterPort};
-use uc_application::space_access::SpaceAccessFacade;
 
 use crate::api::auth::load_or_create_auth_token;
 use crate::api::event_emitter::DaemonApiEventEmitter;
@@ -104,7 +103,6 @@ pub struct DaemonApp {
     event_emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
     state: Arc<RwLock<RuntimeState>>,
     event_tx: broadcast::Sender<DaemonWsEvent>,
-    space_access_facade: Option<Arc<SpaceAccessFacade>>,
     cancel: CancellationToken,
     deferred_services: Vec<Arc<dyn DaemonService>>,
     deferred_ready_notify: Option<Arc<tokio::sync::Notify>>,
@@ -125,7 +123,6 @@ impl DaemonApp {
         event_emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
-        space_access_facade: Option<Arc<SpaceAccessFacade>>,
     ) -> Self {
         Self {
             services,
@@ -134,7 +131,6 @@ impl DaemonApp {
             event_emitter_cell,
             state,
             event_tx,
-            space_access_facade,
             cancel: CancellationToken::new(),
             deferred_services: Vec::new(),
             deferred_ready_notify: None,
@@ -155,7 +151,6 @@ impl DaemonApp {
         event_emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
         state: Arc<RwLock<RuntimeState>>,
         event_tx: broadcast::Sender<DaemonWsEvent>,
-        space_access_facade: Option<Arc<SpaceAccessFacade>>,
         _encryption_unlocked: bool,
         deferred_services: Vec<Arc<dyn DaemonService>>,
         deferred_ready_notify: Option<Arc<tokio::sync::Notify>>,
@@ -181,7 +176,6 @@ impl DaemonApp {
             event_emitter_cell,
             state,
             event_tx,
-            space_access_facade,
             cancel: CancellationToken::new(),
             deferred_services,
             deferred_ready_notify,
@@ -226,10 +220,6 @@ impl DaemonApp {
         // 3. Build API state using the shared event_tx (same channel used by all services)
         let mut api_state = DaemonApiState::new(query_service, auth_token, security);
         api_state.event_tx = self.event_tx.clone();
-        let api_state = match &self.space_access_facade {
-            Some(sao) => api_state.with_space_access(sao.clone()),
-            None => api_state,
-        };
         let api_state = match &self.clipboard_capture_gate {
             Some(gate) => api_state.with_clipboard_gate(Arc::clone(gate)),
             None => api_state,

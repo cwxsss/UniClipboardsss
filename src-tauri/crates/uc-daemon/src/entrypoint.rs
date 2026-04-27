@@ -410,7 +410,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         emitter_cell.clone(),
         state,
         event_tx,
-        Some(ctx.space_access_facade),
         encryption_unlocked,
         deferred_services,
         deferred_notify_opt,
