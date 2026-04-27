@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `f755e8da refactor: extract desktop daemon tokio runtime`。
+- 开始第十五阶段：抽出 daemon 运行控制量。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/runtime_controls.rs`，集中创建 WS 事件通道、deferred ready notify、剪贴板采集 gate 和初始解锁状态。
+- `entrypoint.rs` 不再直接创建这些运行控制量。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `4dda4904 refactor: extract desktop daemon run loop`。
 - 开始第十四阶段：抽出 daemon Tokio runtime 创建。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/tokio_runtime.rs`，集中创建 daemon 长生命周期 Tokio runtime。

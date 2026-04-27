@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use tokio::sync::broadcast;
 use uc_bootstrap::build_non_gui_bundle;
 use uc_bootstrap::builders::build_daemon_app;
 use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
@@ -16,12 +15,12 @@ use crate::daemon::background_tasks::spawn_daemon_background_tasks;
 use crate::daemon::run_loop::{run_daemon_until_shutdown, DaemonRunLoopInput};
 use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
+use crate::daemon::runtime_controls::build_daemon_runtime_controls;
 use crate::daemon::search_assembly::build_daemon_search_assembly;
 use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
 use crate::daemon::shutdown::build_external_shutdown_token;
 use crate::daemon::tokio_runtime::build_daemon_tokio_runtime;
 use crate::service::DaemonService;
-use uc_webserver::api::types::DaemonWsEvent;
 
 /// 运行 daemon 进程。
 ///
@@ -45,11 +44,6 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     let blob_ports = BlobProcessingPorts::from_app_deps(&ctx.deps);
     let background = ctx.background;
 
-    // Create Notify for deferred service startup. After Slice4 P3 T3.4 the
-    // legacy SetupCompletionEmitter is gone; deferred services now wait
-    // exclusively on the `/lifecycle/ready` API endpoint (GUI signals unlock).
-    let deferred_ready_notify = Arc::new(tokio::sync::Notify::new());
-
     let NonGuiBundle {
         deps,
         storage_paths,
@@ -62,16 +56,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     // closures further down can take owned Arc clones without holding
     // a `&deps` borrow across `await`.
     let settings_port = deps.settings.clone();
-
-    // 1. Create the shared broadcast channel for WebSocket events.
-    //    All services that emit WS events write to this same sender.
-    let (event_tx, _) = broadcast::channel::<DaemonWsEvent>(64);
-
-    // 剪贴板采集开关：独立和常驻模式默认打开，GUI sidecar 模式等 GUI
-    // 发出 ready 后再打开。
-    let clipboard_capture_gate = Arc::new(std::sync::atomic::AtomicBool::new(
-        !run_mode.waits_for_gui_ready(),
-    ));
+    let runtime_controls = build_daemon_runtime_controls(run_mode);
 
     // Slice 2 Phase 3 · T6 — pull clipboard_sync_facade out of the
     // assembly before we move it into `space_setup_assembly` for
@@ -82,8 +67,8 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
 
     let runtime_workers = build_daemon_runtime_workers(DaemonRuntimeAssemblyInput {
         deps: &deps,
-        event_tx: event_tx.clone(),
-        clipboard_capture_gate: clipboard_capture_gate.clone(),
+        event_tx: runtime_controls.event_tx.clone(),
+        clipboard_capture_gate: runtime_controls.clipboard_capture_gate.clone(),
         clipboard_sync_facade: clipboard_sync_facade.clone(),
         blob_transfer_facade: blob_transfer_facade.clone(),
         file_cache_dir: file_cache_dir.clone(),
@@ -91,24 +76,13 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         clipboard_write_coordinator: clipboard_write_coordinator.clone(),
     })?;
 
-    // `PeerKeepAliveWorker` is constructed AFTER `AppFacade` assembly below
-    // so it can hold `Arc<AppFacade>` and reach `space_setup` via the
-    // single AppFacade entry (see app_facade.rs module docs / AGENTS §11.4).
-    // The service-list assembly below leaves a `mut` slot for it, and the
-    // post-assembly block inserts it into `services` or `deferred_services`
-    // based on `encryption_unlocked`.
-
-    // 启动时先按“未解锁”处理，把恢复动作放到 HTTP 监听启动后的后台任务里。
-    // macOS 钥匙串冷启动可能阻塞数秒，不能卡住 GUI 的健康检查。
-    let encryption_unlocked = false;
-
     spawn_daemon_background_tasks(&rt, background, blob_ports, task_registry.clone());
 
-    let search_assembly = build_daemon_search_assembly(&deps, event_tx.clone());
+    let search_assembly = build_daemon_search_assembly(&deps, runtime_controls.event_tx.clone());
 
     let service_plan = DaemonServicePlan::build(DaemonServicePlanInput {
         run_mode,
-        encryption_unlocked,
+        encryption_unlocked: runtime_controls.encryption_unlocked,
         file_sync_orchestrator: Arc::clone(&runtime_workers.file_sync_orchestrator)
             as Arc<dyn DaemonService>,
         clipboard_watcher: Arc::clone(&runtime_workers.clipboard_watcher) as Arc<dyn DaemonService>,
@@ -146,11 +120,11 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         app_facade: Arc::clone(&app_facade),
         storage_paths: storage_paths_for_daemon,
         emitter_cell: emitter_cell.clone(),
-        event_tx,
-        encryption_unlocked,
-        deferred_ready_notify: deferred_ready_notify.clone(),
+        event_tx: runtime_controls.event_tx,
+        encryption_unlocked: runtime_controls.encryption_unlocked,
+        deferred_ready_notify: runtime_controls.deferred_ready_notify.clone(),
         external_shutdown,
-        clipboard_capture_gate: clipboard_capture_gate.clone(),
+        clipboard_capture_gate: runtime_controls.clipboard_capture_gate.clone(),
         local_device_id,
     });
 
@@ -162,8 +136,8 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
             app_facade,
             settings: settings_port,
             space_setup_assembly: ctx.space_setup_assembly,
-            deferred_ready_notify,
-            clipboard_capture_gate,
+            deferred_ready_notify: runtime_controls.deferred_ready_notify,
+            clipboard_capture_gate: runtime_controls.clipboard_capture_gate,
         },
     )
 }

@@ -35,6 +35,7 @@
 | 16 | 完成 | 抽出 daemon 应用实例装配 |
 | 17 | 完成 | 抽出 daemon 运行循环和退出收尾 |
 | 18 | 完成 | 抽出 daemon Tokio runtime 创建 |
+| 19 | 完成 | 抽出 daemon 运行控制量创建 |
 
 ## 决策记录
 
@@ -56,6 +57,7 @@
 - 第十二阶段只抽 `DaemonApp` 实例创建，不改服务清单、keepalive 和 deferred ready 语义。
 - 第十三阶段只抽最终运行循环，不改启动恢复、daemon 退出和 space setup shutdown 顺序。
 - 第十四阶段只抽 Tokio runtime 创建，不改 runtime 类型、线程模型和生命周期。
+- 第十五阶段只抽事件通道、ready notify、剪贴板 gate 和初始解锁状态创建，不改默认值。
 
 ## 错误记录
 

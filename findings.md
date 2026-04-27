@@ -54,6 +54,8 @@
 - space setup 仍在 `daemon.run()` 返回后、Tokio runtime 释放前关闭，原有收尾顺序保持不变。
 - 第十四阶段新增 `daemon::tokio_runtime`，把 daemon 专用 Tokio runtime 创建从 `entrypoint.rs` 抽出。
 - runtime 仍是同一个多线程、启用全部能力的长生命周期 runtime。
+- 第十五阶段新增 `daemon::runtime_controls`，把 daemon 启动时共享的事件通道、ready notify、剪贴板 gate 和初始解锁状态从 `entrypoint.rs` 抽出。
+- 事件通道容量仍为 64；GUI sidecar 仍默认关闭剪贴板采集，独立/常驻模式仍默认打开。
 
 ## 验证发现
 
@@ -102,6 +104,10 @@
 - 抽出 daemon Tokio runtime 创建后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 抽出 daemon Tokio runtime 创建后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 抽出 daemon Tokio runtime 创建后，`cargo check -p uniclipboard` 通过。
+- 抽出 daemon 运行控制量后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 抽出 daemon 运行控制量后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 抽出 daemon 运行控制量后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 抽出 daemon 运行控制量后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 
