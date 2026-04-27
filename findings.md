@@ -40,6 +40,8 @@
 - `GuiSidecar` 保留旧行为：跟随 GUI 父进程退出，等待 GUI ready 后再启动剪贴板相关服务。
 - `Hybrid` 现在作为显式模式存在：不跟随 GUI 父进程，不等待 GUI ready，并使用桌面设置里的自动解锁开关。
 - 旧的 `--gui-managed` 参数只保留在入口解析层，`uc-desktop` 内部不再用裸布尔值表达运行模式。
+- hybrid 本地连接信息已作为待办记录，当前阶段不实现 GUI 连接、token、单实例锁或默认 hybrid 切换。
+- daemon 运行模式参数组合规则现在由 `DaemonRunMode::from_flags` 统一维护，避免 `uc-cli` 和 `uc-daemon` 各自判断。
 
 ## 验证发现
 
@@ -61,6 +63,9 @@
 - 引入 `DaemonRunMode` 后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 引入 `DaemonRunMode` 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 引入 `DaemonRunMode` 后，`cargo check -p uniclipboard` 通过。
+- 收口 daemon 运行模式参数解析后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 收口 daemon 运行模式参数解析后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 收口 daemon 运行模式参数解析后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 

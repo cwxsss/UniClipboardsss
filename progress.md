@@ -54,6 +54,14 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 记录 hybrid daemon 本地连接信息待办：`.planning/todos/pending/2026-04-27-hybrid-daemon-connection-info.md`。
+- 开始第八阶段：收口 daemon 运行模式参数解析。
+- 将 `--gui-managed` / `--hybrid` 的组合规则收敛到 `DaemonRunMode::from_flags`。
+- `uc-cli` 隐藏 daemon 子命令和 `uc-daemon` 二进制入口都改为调用同一个模式解析函数。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 运行 `git diff --check`，通过。
 - 开始第五阶段：抽出 daemon 启动恢复任务。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/startup_recovery.rs`，集中处理后台解锁、空间会话恢复、presence 预热和 CLI 模式 deferred services 触发。

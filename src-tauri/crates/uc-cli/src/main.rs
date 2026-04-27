@@ -197,11 +197,7 @@ fn main() -> anyhow::Result<()> {
         hybrid,
     } = command
     {
-        let run_mode = if hybrid {
-            uc_daemon::daemon::run_mode::DaemonRunMode::Hybrid
-        } else {
-            uc_daemon::daemon::run_mode::DaemonRunMode::from_gui_managed_flag(gui_managed)
-        };
+        let run_mode = uc_daemon::daemon::run_mode::DaemonRunMode::from_flags(gui_managed, hybrid)?;
         return uc_daemon::entrypoint::run(run_mode);
     }
 

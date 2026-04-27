@@ -8,14 +8,6 @@ fn main() -> anyhow::Result<()> {
     let gui_managed = args.iter().any(|arg| arg == "--gui-managed");
     let hybrid = args.iter().any(|arg| arg == "--hybrid");
 
-    if gui_managed && hybrid {
-        anyhow::bail!("--hybrid cannot be combined with --gui-managed");
-    }
-
-    let run_mode = if hybrid {
-        uc_daemon::daemon::run_mode::DaemonRunMode::Hybrid
-    } else {
-        uc_daemon::daemon::run_mode::DaemonRunMode::from_gui_managed_flag(gui_managed)
-    };
+    let run_mode = uc_daemon::daemon::run_mode::DaemonRunMode::from_flags(gui_managed, hybrid)?;
     uc_daemon::entrypoint::run(run_mode)
 }

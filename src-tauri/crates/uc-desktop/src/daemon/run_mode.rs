@@ -1,5 +1,7 @@
 //! daemon 运行模式。
 
+use std::fmt;
+
 /// 桌面 daemon 的运行模式。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DaemonRunMode {
@@ -11,13 +13,30 @@ pub enum DaemonRunMode {
     Hybrid,
 }
 
+/// daemon 运行模式参数错误。
+#[derive(Debug)]
+pub struct DaemonRunModeParseError {
+    message: &'static str,
+}
+
+impl fmt::Display for DaemonRunModeParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message)
+    }
+}
+
+impl std::error::Error for DaemonRunModeParseError {}
+
 impl DaemonRunMode {
-    /// 从旧的 `--gui-managed` 标志转换到明确的运行模式。
-    pub fn from_gui_managed_flag(gui_managed: bool) -> Self {
-        if gui_managed {
-            Self::GuiSidecar
-        } else {
-            Self::Standalone
+    /// 从 daemon 命令行标志转换到明确的运行模式。
+    pub fn from_flags(gui_managed: bool, hybrid: bool) -> Result<Self, DaemonRunModeParseError> {
+        match (gui_managed, hybrid) {
+            (true, true) => Err(DaemonRunModeParseError {
+                message: "--hybrid cannot be combined with --gui-managed",
+            }),
+            (true, false) => Ok(Self::GuiSidecar),
+            (false, true) => Ok(Self::Hybrid),
+            (false, false) => Ok(Self::Standalone),
         }
     }
 
@@ -47,15 +66,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_gui_managed_flag_maps_to_gui_sidecar() {
+    fn daemon_flags_map_to_run_mode() {
         assert_eq!(
-            DaemonRunMode::from_gui_managed_flag(true),
+            DaemonRunMode::from_flags(true, false).unwrap(),
             DaemonRunMode::GuiSidecar
         );
         assert_eq!(
-            DaemonRunMode::from_gui_managed_flag(false),
+            DaemonRunMode::from_flags(false, false).unwrap(),
             DaemonRunMode::Standalone
         );
+        assert_eq!(
+            DaemonRunMode::from_flags(false, true).unwrap(),
+            DaemonRunMode::Hybrid
+        );
+        assert!(DaemonRunMode::from_flags(true, true).is_err());
     }
 
     #[test]
