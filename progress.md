@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `4dda4904 refactor: extract desktop daemon run loop`。
+- 开始第十四阶段：抽出 daemon Tokio runtime 创建。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/tokio_runtime.rs`，集中创建 daemon 长生命周期 Tokio runtime。
+- `entrypoint.rs` 不再直接构造 `tokio::runtime::Builder`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `69c2f244 refactor: extract desktop daemon app assembly`。
 - 开始第十三阶段：抽出 daemon 运行循环。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/run_loop.rs`，集中处理启动恢复、daemon run 和 space setup shutdown。

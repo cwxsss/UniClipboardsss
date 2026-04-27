@@ -19,6 +19,7 @@ use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntim
 use crate::daemon::search_assembly::build_daemon_search_assembly;
 use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
 use crate::daemon::shutdown::build_external_shutdown_token;
+use crate::daemon::tokio_runtime::build_daemon_tokio_runtime;
 use crate::service::DaemonService;
 use uc_webserver::api::types::DaemonWsEvent;
 
@@ -28,18 +29,7 @@ use uc_webserver::api::types::DaemonWsEvent;
 pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     let external_shutdown = build_external_shutdown_token(run_mode);
 
-    // Build the daemon's tokio runtime FIRST. Everything async in the
-    // daemon's lifetime — iroh Endpoint::bind (inside build_daemon_app),
-    // recover_encryption_session, try_resume_session + refresh_presence,
-    // and finally daemon.run() — MUST share this single long-lived
-    // runtime. `Endpoint::bind` spawns magicsock / relay / STUN actors
-    // via `tokio::spawn`; if they run on a short-lived rt that drops
-    // after construction, the Endpoint becomes a zombie and `connect()`
-    // returns "Unable to connect to remote" instantly while `accept`
-    // sees no inbound traffic.
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let rt = build_daemon_tokio_runtime()?;
 
     // build_daemon_app() calls build_core() which inits tracing + wires
     // deps, then awaits `build_space_setup_assembly` which binds iroh.
