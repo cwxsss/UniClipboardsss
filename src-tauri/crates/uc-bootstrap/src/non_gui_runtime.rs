@@ -1,7 +1,9 @@
 //! # Non-GUI Runtime Helpers
 //!
-//! Provides [`LoggingHostEventEmitter`] and [`build_non_gui_runtime()`] for
-//! constructing a [`CoreRuntime`] in non-GUI entry points (daemon, CLI).
+//! Provides [`LoggingHostEventEmitter`] and [`build_non_gui_bundle()`] for
+//! non-GUI entry points (daemon, CLI). D16-2 retired the legacy `CoreRuntime`
+//! wrapper; helpers here now return a flat [`NonGuiBundle`] that the caller
+//! destructures into independent locals.
 //!
 //! [`LoggingHostEventEmitter`] logs event type names via `tracing::debug!`
 //! without printing inner payloads (which may contain sensitive data like
@@ -9,9 +11,7 @@
 
 use std::sync::Arc;
 
-use uc_app::runtime::CoreRuntime;
-use uc_app::task_registry::TaskRegistry;
-use uc_app::AppDeps;
+use uc_application::deps::AppDeps;
 use uc_application::facade::{
     AppFacade, AppFacadeParts, AppPaths, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
     DeviceFacade, EmitError, EncryptionFacade, EncryptionFacadeDeps, HostEvent,
@@ -20,6 +20,8 @@ use uc_application::facade::{
     SettingsFacade, StorageFacade, StorageFacadeDeps,
 };
 use uc_core::clipboard::ClipboardIntegrationMode;
+
+use crate::task_registry::TaskRegistry;
 
 // ---------------------------------------------------------------------------
 // LoggingHostEventEmitter
@@ -47,74 +49,44 @@ impl HostEventEmitterPort for LoggingHostEventEmitter {
 }
 
 // ---------------------------------------------------------------------------
-// build_non_gui_runtime
+// NonGuiBundle
 // ---------------------------------------------------------------------------
 
-/// Construct a [`CoreRuntime`] for non-GUI entry points (daemon, CLI).
+/// Flat bundle of bootstrap-built handles consumed by daemon entry points.
 ///
-/// Uses [`LoggingHostEventEmitter`] as the permanent emitter (no swap needed
-/// in non-GUI modes), `InMemoryLifecycleStatus`, and the
-/// `UC_CLIPBOARD_MODE` environment override.
-///
-/// # Arguments
-///
-/// * `deps` — Pre-wired application dependencies from `wire_dependencies()`.
-/// * `storage_paths` — Resolved storage paths (caller resolves via
-///   `get_storage_paths(&config)` before calling this function).
-pub fn build_non_gui_runtime(
-    deps: AppDeps,
-    storage_paths: AppPaths,
-) -> anyhow::Result<CoreRuntime> {
-    let emitter: Arc<dyn HostEventEmitterPort> = Arc::new(LoggingHostEventEmitter);
-    let emitter_cell = Arc::new(std::sync::RwLock::new(emitter));
-    build_non_gui_runtime_with_emitter(deps, storage_paths, emitter_cell)
+/// Replaces the retired `CoreRuntime` wrapper. Composition-root code
+/// destructures the bundle into independent locals (`deps`, `task_registry`,
+/// `lifecycle_status`, etc.) and feeds them into facade construction.
+pub struct NonGuiBundle {
+    pub deps: AppDeps,
+    pub storage_paths: AppPaths,
+    pub emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
+    pub lifecycle_status: Arc<dyn LifecycleStatusGateway>,
+    pub task_registry: Arc<TaskRegistry>,
+    pub clipboard_integration_mode: ClipboardIntegrationMode,
 }
 
-/// Construct a [`CoreRuntime`] for non-GUI entry points with an explicit
+/// Construct a [`NonGuiBundle`] for non-GUI entry points with an explicit
 /// shared emitter cell. Daemon uses this so its `DaemonApiEventEmitter`
 /// can be swapped in after construction.
-pub fn build_non_gui_runtime_with_emitter(
+pub fn build_non_gui_bundle(
     deps: AppDeps,
     storage_paths: AppPaths,
     emitter_cell: Arc<std::sync::RwLock<Arc<dyn HostEventEmitterPort>>>,
-) -> anyhow::Result<CoreRuntime> {
-    let lifecycle_status = Arc::new(InMemoryLifecycleStatus::new());
+) -> anyhow::Result<NonGuiBundle> {
+    let lifecycle_status: Arc<dyn LifecycleStatusGateway> =
+        Arc::new(InMemoryLifecycleStatus::new());
     let task_registry = Arc::new(TaskRegistry::new());
     let clipboard_integration_mode = resolve_clipboard_integration_mode();
 
-    Ok(CoreRuntime::new(
+    Ok(NonGuiBundle {
         deps,
+        storage_paths,
         emitter_cell,
         lifecycle_status,
-        clipboard_integration_mode,
         task_registry,
-        storage_paths,
-    ))
-}
-
-// ---------------------------------------------------------------------------
-// build_cli_runtime
-// ---------------------------------------------------------------------------
-
-/// Construct a [`CoreRuntime`] for CLI entry points with a single function call.
-///
-/// This helper combines the common 4-step bootstrap sequence used by CLI commands:
-/// 1. Build CLI context via `build_cli_context_with_profile()`
-/// 2. Get storage paths via `get_storage_paths()`
-/// 3. Build non-GUI runtime via `build_non_gui_runtime()`
-///
-/// Callers then create `CoreUseCases::new(&runtime)` to access use cases.
-///
-/// # Arguments
-///
-/// * `log_profile` — Log profile override (e.g., `Some(LogProfile::Cli)` or `Some(LogProfile::Dev)`)
-pub fn build_cli_runtime(
-    log_profile: Option<uc_observability::LogProfile>,
-) -> anyhow::Result<CoreRuntime> {
-    let ctx = crate::builders::build_cli_context_with_profile(log_profile)?;
-    let storage_paths = crate::assembly::get_storage_paths(&ctx.config)?;
-    let runtime = build_non_gui_runtime(ctx.deps, storage_paths)?;
-    Ok(runtime)
+        clipboard_integration_mode,
+    })
 }
 
 /// Construct an [`AppFacade`] for CLI entry points.

@@ -11,8 +11,9 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use tokio::sync::mpsc;
-use uc_app::task_registry::TaskRegistry;
-use uc_app::AppDeps;
+use uc_application::deps::AppDeps;
+
+use crate::task_registry::TaskRegistry;
 use uc_core::ids::RepresentationId;
 use uc_core::ports::clipboard::{
     ClipboardRepresentationRepositoryPort, ThumbnailGeneratorPort, ThumbnailRepositoryPort,

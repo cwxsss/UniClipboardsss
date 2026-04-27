@@ -4325,3 +4325,45 @@ T7 cargo check + 修崩:
 - 依赖 uc-app 的 crate 从 5 个降到 2 个(uc-bootstrap / uc-tauri),为 D16-2 / D17 删除整个 crate 铺路
 - uc-app 体积大幅收缩,只剩"transition surface"用于跨 crate 类型借用(AppDeps / TaskRegistry / CoreRuntime / ClipboardWriteCoordinator shim / CleanupExpiredFilesUseCase 5 类)
 
+
+---
+
+## D16-2 — uc-app crate 退役(D16-2 + D17 合并, 2026-04-26)
+
+**起点**:D16-1 完成后,精确 grep `(^|[^a-z])uc_app(::|[^a-z_])` 显示 uc-app 内所有"transition surface"(AppDeps / TaskRegistry / CoreRuntime / ClipboardWriteCoordinator / CleanupExpiredFilesUseCase / shared 各 shim)在外部 crate 已 0 caller —— 决定把 D16-2 + D17 合并成一次完成。
+
+**代码搬迁**(3 个真身 + 1 个 shim 删除):
+- `uc-app/src/deps.rs` → `uc-application/src/deps.rs` + uc-application::lib.rs `pub mod deps + pub use *`
+- `uc-app/src/task_registry.rs` → `uc-bootstrap/src/task_registry.rs` + uc-bootstrap::lib.rs `pub mod + pub use TaskRegistry`
+- `uc-app/src/usecases/file_sync/cleanup.rs` → `uc-application/src/file_sync/cleanup.rs` + uc-application::lib.rs `pub mod file_sync + pub use CleanupExpiredFilesUseCase`
+- ClipboardWriteCoordinator shim 直接删,caller 改 `uc_application::clipboard_write::*` 直接路径
+
+**CoreRuntime 删除**:
+- `uc-bootstrap::non_gui_runtime`:删 `build_non_gui_runtime` / `build_non_gui_runtime_with_emitter` / `build_cli_runtime`;新增 `NonGuiBundle` 扁平 struct + `build_non_gui_bundle()` 助手
+- `uc-daemon/src/entrypoint.rs`:42 处 `runtime.X` → 直接字段(`deps` / `task_registry` / `storage_paths` / `lifecycle_status` / `clipboard_integration_mode`);`Arc<CoreRuntime>` 完全消失;sed 批量替换 + 手工修 4 处多行 `runtime\n.wiring_deps()` 残留 + `unlock_runtime` 替换为提前 clone 的 `unlock_settings`
+- `uc-tauri::bootstrap::runtime` + `wiring`:import 全改 uc-application::deps / uc-bootstrap::TaskRegistry / uc-application::CleanupExpiredFilesUseCase / uc-application::clipboard_write::ClipboardWriteCoordinator
+
+**Crate 删除**:
+- `uc-tauri/Cargo.toml` + `uc-bootstrap/Cargo.toml` 删 uc-app 依赖
+- workspace `src-tauri/Cargo.toml::[workspace].members` 删 `crates/uc-app`
+- `src-tauri/crates/uc-app/` 整个目录 `rm -rf`
+- uc-bootstrap description 改"sole crate allowed to depend on uc-core + uc-application + uc-infra + uc-platform"
+
+**验证**:
+- `cargo check --workspace --all-targets` ✅(2 个无关 dead_code warning)
+- `grep -rE "(^|[^a-z])uc_app(::|[^a-z_])"` workspace = **0 hit**
+- workspace crate 数:16 → 15
+
+**用户原目标全达成**(D13 的澄清):
+- ✅ "AppFacade 是唯一对外关卡" —— 业务调用 100% 走 uc_application::facade::*
+- ✅ "uc-application 只装业务" —— deps / task_registry / paths 这些进程基础设施已分别归属 uc-application(deps) 或 uc-bootstrap(task_registry,本质是 tokio 工具)
+- ✅ "CoreRuntime 抽象应该在外部消失" —— 不仅外部消失,整个类型已删除
+
+**长期路线图终结**:
+```
+D13  ✅ daemon 去 CoreRuntime
+D14  ✅ uc-tauri 去 AppRuntime/CoreRuntime
+D15  ✅ uc-cli 去 CoreUseCases
+D16-1 ✅ uc-app dead use cases 清理
+D16-2 ✅ uc-app crate 退役(+ D17 合并)
+```

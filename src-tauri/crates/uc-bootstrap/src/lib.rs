@@ -13,7 +13,10 @@ pub mod file_transfer_lifecycle;
 pub mod init;
 pub mod non_gui_runtime;
 pub mod space_setup;
+pub mod task_registry;
 pub mod tracing;
+
+pub use task_registry::TaskRegistry;
 
 // Re-export primary public items
 pub use assembly::{
@@ -28,9 +31,8 @@ pub use builders::{
 pub use config::load_config;
 pub use init::{ensure_default_device_name, is_setup_complete};
 pub use non_gui_runtime::{
-    build_cli_app_facade, build_cli_runtime, build_non_gui_runtime,
-    build_non_gui_runtime_with_emitter, resolve_clipboard_integration_mode,
-    LoggingHostEventEmitter,
+    build_cli_app_facade, build_non_gui_bundle, resolve_clipboard_integration_mode,
+    LoggingHostEventEmitter, NonGuiBundle,
 };
 pub use space_setup::{
     build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly, SpaceSetupAssemblyError,

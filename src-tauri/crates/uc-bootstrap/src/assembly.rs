@@ -19,8 +19,9 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use uc_app::deps::SearchPorts;
-use uc_app::{AppDeps, ClipboardPorts, DevicePorts, SecurityPorts, StoragePorts, SystemPorts};
+use uc_application::deps::{
+    AppDeps, ClipboardPorts, DevicePorts, SearchPorts, SecurityPorts, StoragePorts, SystemPorts,
+};
 use uc_application::facade::HostEventEmitterPort;
 use uc_core::blob::ports::{BlobReaderPort, BlobWriterPort};
 use uc_core::clipboard::SelectRepresentationPolicyV1;
@@ -125,7 +126,8 @@ pub struct BackgroundRuntimeDeps {
     pub file_transfer_lifecycle: Arc<crate::file_transfer_lifecycle::FileTransferLifecycle>,
     /// Single write boundary for all programmatic clipboard writes.
     /// Centralises guard-registration + write + cleanup-on-error.
-    pub clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
+    pub clipboard_write_coordinator:
+        Arc<uc_application::clipboard_write::ClipboardWriteCoordinator>,
 }
 
 /// Fully wired dependencies plus background runtime components.
@@ -882,9 +884,11 @@ pub async fn resolve_pairing_device_name(settings: Arc<dyn SettingsPort>) -> Str
 pub fn build_clipboard_write_coordinator(
     system_clipboard: Arc<dyn uc_core::ports::clipboard::SystemClipboardPort>,
     clipboard_change_origin: Arc<dyn ClipboardChangeOriginPort>,
-) -> Arc<uc_app::usecases::ClipboardWriteCoordinator> {
-    Arc::new(uc_app::usecases::ClipboardWriteCoordinator::new(
-        system_clipboard,
-        clipboard_change_origin,
-    ))
+) -> Arc<uc_application::clipboard_write::ClipboardWriteCoordinator> {
+    Arc::new(
+        uc_application::clipboard_write::ClipboardWriteCoordinator::new(
+            system_clipboard,
+            clipboard_change_origin,
+        ),
+    )
 }

@@ -23,9 +23,9 @@ use uc_application::{
     ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
     InboundWrite as ApplyInboundWrite,
 };
-use uc_bootstrap::build_non_gui_runtime_with_emitter;
+use uc_bootstrap::build_non_gui_bundle;
 use uc_bootstrap::builders::build_daemon_app;
-use uc_bootstrap::BlobProcessingPorts;
+use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
 use uc_core::ports::SystemClipboardPort;
 
 use crate::api::types::DaemonWsEvent;
@@ -96,14 +96,18 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // exclusively on the `/lifecycle/ready` API endpoint (GUI signals unlock).
     let deferred_ready_notify = Arc::new(tokio::sync::Notify::new());
 
-    let runtime = Arc::new(
-        build_non_gui_runtime_with_emitter(
-            ctx.deps,
-            ctx.storage_paths.clone(),
-            emitter_cell.clone(),
-        )?
-        .with_clipboard_write_coordinator(clipboard_write_coordinator.clone()),
-    );
+    let NonGuiBundle {
+        deps,
+        storage_paths,
+        emitter_cell: _bundle_emitter_cell,
+        lifecycle_status,
+        task_registry,
+        clipboard_integration_mode,
+    } = build_non_gui_bundle(ctx.deps, ctx.storage_paths.clone(), emitter_cell.clone())?;
+    // Settings + clipboard_change_origin are lifted out so the spawn
+    // closures further down can take owned Arc clones without holding
+    // a `&deps` borrow across `await`.
+    let settings_port = deps.settings.clone();
 
     // 1. Create the shared broadcast channel for WebSocket events.
     //    All services that emit WS events write to this same sender.
@@ -115,13 +119,9 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to create LocalClipboard: {}", e))?,
     );
 
-    // Reuse the runtime's clipboard change origin so restore commands, watcher,
+    // Reuse the bootstrap-built clipboard change origin so restore commands, watcher,
     // inbound sync, and file restore all observe the same guard state.
-    let clipboard_change_origin = runtime
-        .wiring_deps()
-        .clipboard
-        .clipboard_change_origin
-        .clone();
+    let clipboard_change_origin = deps.clipboard.clipboard_change_origin.clone();
 
     // Clipboard capture gate: controls whether clipboard changes are processed.
     // In standalone CLI mode, capture is always enabled.
@@ -143,21 +143,13 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // the exact same Arc the watcher reads `clipboard_change_origin`
     // from, so RemotePush guards register and consume on one cache.
     let apply_inbound_capture_uc = Arc::new(CaptureClipboardUseCase::new(
-        runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-        runtime.wiring_deps().clipboard.clipboard_event_repo.clone(),
-        runtime
-            .wiring_deps()
-            .clipboard
-            .representation_policy
-            .clone(),
-        runtime
-            .wiring_deps()
-            .clipboard
-            .representation_normalizer
-            .clone(),
-        runtime.wiring_deps().device.device_identity.clone(),
-        runtime.wiring_deps().clipboard.representation_cache.clone(),
-        runtime.wiring_deps().clipboard.spool_queue.clone(),
+        deps.clipboard.clipboard_entry_repo.clone(),
+        deps.clipboard.clipboard_event_repo.clone(),
+        deps.clipboard.representation_policy.clone(),
+        deps.clipboard.representation_normalizer.clone(),
+        deps.device.device_identity.clone(),
+        deps.clipboard.representation_cache.clone(),
+        deps.clipboard.spool_queue.clone(),
     ));
     let blob_materializer = Arc::new(FileCacheBlobMaterializer::new(
         blob_transfer_facade.clone(),
@@ -165,7 +157,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     ));
     let apply_inbound_uc = Arc::new(
         ApplyInboundClipboardUseCase::new(
-            runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
+            deps.clipboard.clipboard_entry_repo.clone(),
             Arc::clone(&apply_inbound_capture_uc) as Arc<dyn ApplyInboundCapture>,
             Arc::clone(&clipboard_write_coordinator) as Arc<dyn ApplyInboundWrite>,
         )
@@ -175,20 +167,16 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let clipboard_capture_facade = Arc::new(ClipboardCaptureFacade::new(apply_inbound_capture_uc));
     let clipboard_live_index_facade = Arc::new(ClipboardLiveIndexFacade::new(Arc::new(
         ClipboardLiveIndexer::new(ClipboardLiveIndexDeps {
-            clipboard_entry_repo: runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-            representation_policy: runtime
-                .wiring_deps()
-                .clipboard
-                .representation_policy
-                .clone(),
-            search_key_derivation: runtime.wiring_deps().search.search_key_derivation.clone(),
-            search_pipeline: runtime.wiring_deps().search.search_pipeline.clone(),
-            search_index: runtime.wiring_deps().search.search_index.clone(),
+            clipboard_entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            representation_policy: deps.clipboard.representation_policy.clone(),
+            search_key_derivation: deps.search.search_key_derivation.clone(),
+            search_pipeline: deps.search.search_pipeline.clone(),
+            search_index: deps.search.search_index.clone(),
         }),
     )));
     let clipboard_outbound_facade = Arc::new(ClipboardOutboundFacade::new(Arc::new(
         ClipboardOutboundDispatcher::new(ClipboardOutboundDeps {
-            settings: runtime.wiring_deps().settings.clone(),
+            settings: deps.settings.clone(),
             clipboard_sync: clipboard_sync_facade.clone(),
             blob_transfer: blob_transfer_facade.clone(),
         }),
@@ -235,7 +223,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let encryption_unlocked = false;
 
     // Start background clipboard processing tasks.
-    let task_registry = runtime.task_registry().clone();
+    let task_registry = task_registry.clone();
     rt.spawn(async move {
         uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &task_registry).await;
     });
@@ -243,14 +231,13 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let should_defer_clipboard = gui_managed || !encryption_unlocked;
 
     // Construct the search coordinator before building the service snapshots.
-    let search_deps = runtime.wiring_deps();
     let search_coordinator = Arc::new(SearchCoordinator::new(SearchCoordinatorDeps::new(
-        search_deps.search.search_index.clone(),
-        search_deps.search.search_key_derivation.clone(),
-        search_deps.search.search_pipeline.clone(),
-        search_deps.clipboard.clipboard_entry_repo.clone(),
-        search_deps.clipboard.representation_repo.clone(),
-        search_deps.clipboard.selection_repo.clone(),
+        deps.search.search_index.clone(),
+        deps.search.search_key_derivation.clone(),
+        deps.search.search_pipeline.clone(),
+        deps.clipboard.clipboard_entry_repo.clone(),
+        deps.clipboard.representation_repo.clone(),
+        deps.clipboard.selection_repo.clone(),
     )));
     let search_coordinator_service = Arc::new(SearchCoordinatorService::new(
         Arc::clone(&search_coordinator),
@@ -340,73 +327,59 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // alive throughout `run()`.
     let space_setup_facade_for_api = ctx.space_setup_assembly.facade.clone();
     let member_roster_facade_for_api = ctx.space_setup_assembly.roster.clone();
-    let local_device_id = runtime
-        .wiring_deps()
-        .device
-        .device_identity
-        .current_device_id()
-        .to_string();
+    let local_device_id = deps.device.device_identity.current_device_id().to_string();
 
     // Assemble AppFacade — this is the single outward-facing entry point
     // the daemon (and all HTTP handlers) reach through. Pulls ports from
     // the bootstrap-built `runtime` since this is composition-root code;
     // once daemon is constructed, daemon never touches `runtime` again.
-    let storage_paths_for_daemon = runtime.storage_paths().clone();
+    let storage_paths_for_daemon = storage_paths.clone();
     let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
         space_setup: Some(space_setup_facade_for_api.clone()),
         member_roster: Some(member_roster_facade_for_api.clone()),
         lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
-            status: runtime.lifecycle_status().clone(),
+            status: lifecycle_status.clone(),
         })),
         encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
-            setup_status: runtime.wiring_deps().setup_status.clone(),
-            space_access: runtime.wiring_deps().security.space_access.clone(),
+            setup_status: deps.setup_status.clone(),
+            space_access: deps.security.space_access.clone(),
         })),
         resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
-            representation_repo: runtime.wiring_deps().clipboard.representation_repo.clone(),
-            thumbnail_repo: runtime.wiring_deps().storage.thumbnail_repo.clone(),
-            blob_store: runtime.wiring_deps().storage.blob_store.clone(),
+            representation_repo: deps.clipboard.representation_repo.clone(),
+            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
+            blob_store: deps.storage.blob_store.clone(),
         })),
         clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
-            entry_repo: runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-            selection_repo: runtime.wiring_deps().clipboard.selection_repo.clone(),
-            representation_repo: runtime.wiring_deps().clipboard.representation_repo.clone(),
-            event_writer: runtime.wiring_deps().clipboard.clipboard_event_repo.clone(),
-            payload_resolver: runtime.wiring_deps().clipboard.payload_resolver.clone(),
-            blob_store: runtime.wiring_deps().storage.blob_store.clone(),
-            thumbnail_repo: runtime.wiring_deps().storage.thumbnail_repo.clone(),
-            file_transfer_repo: runtime.wiring_deps().storage.file_transfer_repo.clone(),
-            search_index: Some(runtime.wiring_deps().search.search_index.clone()),
+            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            selection_repo: deps.clipboard.selection_repo.clone(),
+            representation_repo: deps.clipboard.representation_repo.clone(),
+            event_writer: deps.clipboard.clipboard_event_repo.clone(),
+            payload_resolver: deps.clipboard.payload_resolver.clone(),
+            blob_store: deps.storage.blob_store.clone(),
+            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
+            file_transfer_repo: deps.storage.file_transfer_repo.clone(),
+            search_index: Some(deps.search.search_index.clone()),
             file_cache_dir: Some(storage_paths_for_daemon.cache_dir.clone()),
         })),
         clipboard_restore: Some(Arc::new(ClipboardRestoreFacade::new(
             ClipboardRestoreFacadeDeps {
-                entry_repo: runtime.wiring_deps().clipboard.clipboard_entry_repo.clone(),
-                selection_repo: runtime.wiring_deps().clipboard.selection_repo.clone(),
-                representation_repo: runtime.wiring_deps().clipboard.representation_repo.clone(),
-                blob_store: runtime.wiring_deps().storage.blob_store.clone(),
-                clock: runtime.wiring_deps().system.clock.clone(),
-                write_coordinator: runtime
-                    .clipboard_write_coordinator()
-                    .cloned()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "clipboard_write_coordinator not wired into runtime — daemon cannot serve restore"
-                        )
-                    })?,
-                integration_mode: runtime.clipboard_integration_mode(),
+                entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+                selection_repo: deps.clipboard.selection_repo.clone(),
+                representation_repo: deps.clipboard.representation_repo.clone(),
+                blob_store: deps.storage.blob_store.clone(),
+                clock: deps.system.clock.clone(),
+                write_coordinator: clipboard_write_coordinator.clone(),
+                integration_mode: clipboard_integration_mode,
             },
         ))),
         search: Arc::new(SearchFacade::new(SearchFacadeDeps {
-            search_index: runtime.wiring_deps().search.search_index.clone(),
+            search_index: deps.search.search_index.clone(),
             coordinator: Some(Arc::clone(&search_coordinator)),
         })),
-        settings: Arc::new(SettingsFacade::new(
-            runtime.wiring_deps().settings.clone(),
-        )),
+        settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
         device: Arc::new(DeviceFacade::new(
-            runtime.wiring_deps().device.device_identity.clone(),
-            runtime.wiring_deps().settings.clone(),
+            deps.device.device_identity.clone(),
+            deps.settings.clone(),
         )),
         storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
             db_path: storage_paths_for_daemon.db_path.clone(),
@@ -414,7 +387,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             cache_dir: storage_paths_for_daemon.cache_dir.clone(),
             logs_dir: storage_paths_for_daemon.logs_dir.clone(),
             app_data_root_dir: storage_paths_for_daemon.app_data_root_dir.clone(),
-            cache_fs: runtime.wiring_deps().system.cache_fs.clone(),
+            cache_fs: deps.system.cache_fs.clone(),
         })),
     }));
     let unlock_app_facade = Arc::clone(&app_facade);
@@ -443,7 +416,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // peer. Without this, peers see TCP RST / QUIC timeout instead of
     // a clean close.
     let space_setup_assembly = ctx.space_setup_assembly;
-    let unlock_runtime = runtime.clone();
+    let unlock_settings = settings_port.clone();
     let unlock_facade = space_setup_assembly.facade.clone();
     let unlock_notify = deferred_ready_notify.clone();
     let unlock_gate = clipboard_capture_gate.clone();
@@ -459,12 +432,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             use tracing::{info_span, Instrument};
 
             let auto_unlock_enabled = if gui_managed {
-                let settings = unlock_runtime
-                    .wiring_deps()
-                    .settings
-                    .load()
-                    .await
-                    .unwrap_or_default();
+                let settings = unlock_settings.load().await.unwrap_or_default();
                 settings.security.auto_unlock_enabled
             } else {
                 true

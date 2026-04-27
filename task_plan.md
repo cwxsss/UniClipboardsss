@@ -3501,3 +3501,128 @@ Cargo.toml 卸载 uc-app 依赖:
 **残留**:
 - D16-2:`AppDeps` 内部化进 uc-application、`TaskRegistry` 搬 uc-bootstrap、`CoreRuntime` 删除、`ClipboardWriteCoordinator` shim 删除、`CleanupExpiredFilesUseCase` 搬迁
 - D17:workspace 移除 uc-app crate
+
+---
+
+### Phase D16-2 · uc-app crate 退役(D16-2 + D17 合并) — complete (2026-04-26)
+
+**触发**:
+
+D16-1 完成后,uc-app 内只剩"transition surface":
+- `runtime.rs` (CoreRuntime, 168 行)
+- `deps.rs` (AppDeps + 5 个子结构, 137 行)
+- `task_registry.rs` (TaskRegistry, 102 行)
+- `usecases/file_sync/cleanup.rs` (CleanupExpiredFilesUseCase, 273 行)
+- `usecases/clipboard/clipboard_write_coordinator.rs` (re-export shim, 17 行)
+- `usecases/clipboard/integration_mode.rs` (re-export shim, 2 行)
+- `usecases/app_lifecycle/mod.rs+adapters.rs` (re-export shim)
+- `app_paths.rs` (re-export shim, 3 行)
+- `shared/host_event.rs` (re-export shim, 6 行)
+- `lib.rs` (transition docstring + re-exports)
+
+**caller 边界**:
+- `uc-bootstrap`:依赖 AppDeps / TaskRegistry / CoreRuntime / SearchPorts 等
+- `uc-tauri`:依赖 AppDeps / TaskRegistry / ClipboardWriteCoordinator / CleanupExpiredFilesUseCase
+- `uc-daemon`:通过 `runtime.wiring_deps()` 间接依赖 AppDeps(42 处),通过 `runtime.task_registry()` 等访问 helper(D16-2 之前 daemon Cargo.toml 已不依赖 uc-app,但运行时仍持 `Arc<CoreRuntime>`)
+
+**D16-2 目标**:
+
+把所有仍在用的类型搬到合适的归属,删除 CoreRuntime 抽象,daemon entrypoint 直接持 `AppDeps + 零碎件`(类似 D14 已经在 daemon 端做的 `DaemonApp`)。
+
+具体动作:
+
+1. **AppDeps 搬到 uc-application/src/deps.rs**
+   - 复制原文件到 uc-application/src/deps.rs
+   - uc-application::lib.rs 顶层 `pub mod deps; pub use deps::{AppDeps, ClipboardPorts, ...};`
+   - uc-app/src/deps.rs 改为 `pub use uc_application::deps::*;` shim
+
+2. **TaskRegistry 搬到 uc-bootstrap/src/task_registry.rs**
+   - 复制原文件到 uc-bootstrap/src/task_registry.rs
+   - uc-bootstrap::lib.rs 顶层 `pub mod task_registry; pub use task_registry::TaskRegistry;`
+   - uc-app/src/task_registry.rs 改为 `pub use uc_bootstrap::task_registry::TaskRegistry;` shim
+
+3. **CleanupExpiredFilesUseCase 搬到 uc-application**
+   - 复制 cleanup.rs 到 uc-application/src/file_sync/cleanup.rs(若 uc-application 已有 file_sync 模块则合并;否则新建)
+   - uc-application::lib.rs `pub mod file_sync; pub use file_sync::CleanupExpiredFilesUseCase;`
+   - uc-tauri::wiring 改 import:`use uc_application::CleanupExpiredFilesUseCase;`
+   - uc-app/src/usecases/file_sync/cleanup.rs 改 shim 或直接删
+
+4. **删除 ClipboardWriteCoordinator shim**
+   - uc-app/src/usecases/clipboard/clipboard_write_coordinator.rs 删除
+   - uc-app/src/usecases/clipboard/integration_mode.rs 删除
+   - uc-tauri / uc-bootstrap 改 import:`use uc_application::clipboard_write::ClipboardWriteCoordinator;`
+
+5. **删除 CoreRuntime + 改造 daemon entrypoint**
+   - daemon entrypoint:把 `runtime = build_non_gui_runtime_with_emitter(deps, paths, emitter_cell)?` 替换为直接持 `let task_registry = Arc::new(TaskRegistry::new()); let lifecycle_status = ...; let clipboard_integration_mode = resolve_clipboard_integration_mode();`
+   - 42 处 `runtime.wiring_deps().X` → 直接 `deps.X`
+   - `runtime.task_registry()` → `&task_registry`
+   - `runtime.storage_paths()` → `&storage_paths`
+   - 等等
+   - uc-bootstrap/non_gui_runtime.rs:`build_non_gui_runtime` / `build_non_gui_runtime_with_emitter` / `build_cli_runtime` 全部删除(无 caller 后)
+   - 因 build_cli_runtime 当前还被 uc-bootstrap 内部 / 旧 doc 引用,先移除 caller
+   - uc-app/src/runtime.rs 删除
+
+6. **uc-app/src/lib.rs 极简化**
+   - 只保留 `pub mod app_paths; pub mod shared;`(2 个 re-export shim)
+   - 顶部 `pub use uc_application::deps::*;`(D17 前过渡)
+   - 顶部 `pub use uc_bootstrap::task_registry::TaskRegistry;`(D17 前过渡)
+   - 删 `pub mod runtime;` / `pub mod deps;` / `pub mod task_registry;` / `pub mod usecases;`
+
+**子任务**:
+- T1 — AppDeps + 子结构搬到 uc-application,改 caller import
+- T2 — TaskRegistry 搬到 uc-bootstrap,改 caller import
+- T3 — CleanupExpiredFilesUseCase 搬到 uc-application,改 uc-tauri::wiring import
+- T4 — ClipboardWriteCoordinator shim 删,改 caller import
+- T5 — daemon entrypoint:从 CoreRuntime 切到独立字段(42 处替换)
+- T6 — uc-bootstrap::non_gui_runtime:删 build_non_gui_runtime / build_non_gui_runtime_with_emitter / build_cli_runtime
+- T7 — uc-tauri::AppRuntime:适配新 import 路径
+- T8 — 删除 uc-app/src/runtime.rs / deps.rs / task_registry.rs / usecases/(整个目录)
+- T9 — uc-app/src/lib.rs 极简化
+- T10 — `cargo check --workspace --all-targets` + `cargo test --workspace --lib`
+- T11 — commit
+
+**风险与规避**:
+- uc-application::lib.rs 把 deps 暴露后,§11.4 facade 唯一对外原则会受到影响 —— 但 deps 本质是 ports 的打包(application 的输入),不是业务,作为顶层 `pub` 暴露给 composition root 合理
+- daemon entrypoint 42 处替换,机械化但繁琐 —— 写一个统一前置块(let deps = ...; let task_registry = ...;)然后系统替换
+- build_cli_runtime 的删除会影响 uc-bootstrap::non_gui_runtime 的 doc-comment / build_cli_app_facade 的注释 —— 顺手清理
+- uc-bootstrap::non_gui_runtime 内部目前借了 CoreRuntime 提供 emitter cell + lifecycle status —— 改造为直接装一个 helper struct 或直接 inline
+
+**预期 diff 规模**: ~50 文件,+1k / -1k 行
+
+**残留**:
+- D17:删除 uc-app crate(届时 uc-app 应只剩 ~5 行 shim 和一个空的 lib.rs)
+
+**实际改动**(D16-2 + D17 合并执行):
+
+发现:D16-1 完成后,精确 grep 发现 uc-app 内的所有"transition surface"类型 (`AppDeps`/`ClipboardPorts`/`SecurityPorts`/`StoragePorts`/`SystemPorts`/`DevicePorts`/`SearchPorts`/`TaskRegistry`/`CoreRuntime`/`ClipboardWriteCoordinator`/`CleanupExpiredFilesUseCase` + shared 各 shim) 在外部 crate 已 0 caller。这意味着 D17 实际没什么独立工作可做 —— 把搬迁 + crate 删除合并成一次。
+
+代码搬迁:
+- `uc-app/src/deps.rs` → `uc-application/src/deps.rs`(uc-application::lib.rs 顶层 `pub mod deps; pub use deps::*;`)
+- `uc-app/src/task_registry.rs` → `uc-bootstrap/src/task_registry.rs`(uc-bootstrap::lib.rs 顶层 `pub mod task_registry; pub use task_registry::TaskRegistry;`)
+- `uc-app/src/usecases/file_sync/cleanup.rs` → `uc-application/src/file_sync/cleanup.rs`(新模块,uc-application::lib.rs `pub mod file_sync; pub use file_sync::CleanupExpiredFilesUseCase;`)
+- `uc-app::usecases::ClipboardWriteCoordinator` 的 shim 删除,caller 全改 `uc_application::clipboard_write::ClipboardWriteCoordinator` 直接路径
+
+CoreRuntime 删除 + caller 改造:
+- `uc-bootstrap::non_gui_runtime` 改:`build_non_gui_runtime` / `build_non_gui_runtime_with_emitter` / `build_cli_runtime` 全部删除,新增 `NonGuiBundle` struct + `build_non_gui_bundle()` 助手(返回 deps + storage_paths + emitter_cell + lifecycle_status + task_registry + clipboard_integration_mode 的扁平打包)
+- `uc-daemon/src/entrypoint.rs` 改造(42 处 `runtime.X` → 直接字段访问):`Arc<CoreRuntime>` 持有移除,改 destructure `NonGuiBundle` 拿独立 locals(`deps` / `storage_paths` / `task_registry` / `lifecycle_status` / `clipboard_integration_mode`);`unlock_runtime.wiring_deps().settings.load()` → 提前 clone `settings_port` 给 spawn task 持有
+- `uc-tauri::bootstrap::runtime::AppRuntime` import 改:`uc_app::AppDeps` → `uc_application::deps::AppDeps`,`uc_app::task_registry::TaskRegistry` → `uc_bootstrap::TaskRegistry`,`uc_app::usecases::ClipboardWriteCoordinator` → `uc_application::clipboard_write::ClipboardWriteCoordinator`
+- `uc-tauri::bootstrap::wiring` import 改:`uc_app::task_registry::TaskRegistry` → `uc_bootstrap::TaskRegistry`,`uc_app::usecases::file_sync::CleanupExpiredFilesUseCase` → `uc_application::CleanupExpiredFilesUseCase`
+- `uc-bootstrap::assembly` / `uc-bootstrap::background_tasks` import 改成 uc-application::deps + uc-bootstrap::task_registry
+
+Crate 删除:
+- `uc-app/Cargo.toml` 依赖删除:`uc-tauri/Cargo.toml` + `uc-bootstrap/Cargo.toml`
+- workspace `members` 数组删除 `crates/uc-app`
+- `src-tauri/crates/uc-app/` 整个目录删除(lib.rs / app_paths.rs / deps.rs / shared/* / 最近 D16-1 留的 usecases/* shim)
+- uc-bootstrap description 改 "depend on uc-core + uc-application + uc-infra + uc-platform"(不再提 uc-app)
+
+**验证**:
+- `cargo check --workspace --all-targets` ✅(仅 2 个无关 dead_code warning)
+- `cargo test --workspace --lib` 待用户运行(看 D16-2 commit 后的命令)
+- `grep -rE "(^|[^a-z])uc_app(::|[^a-z_])"` 整个 src-tauri = **0 hit**(uc_app 模块路径完全消失)
+- workspace crate 数:从 16(含 uc-app) → 15
+
+**意义**:
+- uc-app crate 完全退役 —— 用户在 D13 提出的"app 是对外的一道关卡 / CoreRuntime 这个抽象应该在外部消失"目标全部达成
+- 业务调用入口 100% 走 `uc_application::facade::*` 或 `uc_application::clipboard_write` 等顶层导出
+- composition root(daemon entrypoint / Tauri AppRuntime / CLI build_cli_app_facade)直接持 `AppDeps` + `Arc<AppFacade>` + 进程零碎件,无 CoreRuntime 包装层
+- D17(原计划"workspace 移除 uc-app crate")已合并入本次,不再有独立 phase

@@ -10222,39 +10222,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
-name = "uc-app"
-version = "0.5.0-alpha.7"
-dependencies = [
- "anyhow",
- "async-trait",
- "blake3",
- "chrono",
- "futures",
- "hmac",
- "image",
- "libc",
- "log",
- "mockall 0.13.1",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "uc-application",
- "uc-core",
- "uc-observability",
- "uc-platform",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "uc-application"
 version = "0.5.0-alpha.7"
 dependencies = [
@@ -10312,7 +10279,6 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
- "uc-app",
  "uc-application",
  "uc-core",
  "uc-infra",
@@ -10651,7 +10617,6 @@ dependencies = [
  "tracing",
  "tracing-log",
  "tracing-subscriber",
- "uc-app",
  "uc-application",
  "uc-bootstrap",
  "uc-core",

@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use uc_app::AppDeps;
+use uc_application::deps::AppDeps;
 use uc_application::facade::{AppPaths, ClipboardSyncFacade, HostEventEmitterPort};
 use uc_application::membership::usecases::AdmitMemberUseCase;
 use uc_application::space_access::SpaceAccessFacade;

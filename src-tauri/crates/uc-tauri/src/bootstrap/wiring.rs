@@ -38,8 +38,8 @@ use tauri::async_runtime;
 use tokio::time::{self, Duration};
 use tracing::{info, warn};
 
-use uc_app::task_registry::TaskRegistry;
-use uc_app::usecases::file_sync::CleanupExpiredFilesUseCase;
+use uc_application::CleanupExpiredFilesUseCase;
+use uc_bootstrap::TaskRegistry;
 use uc_daemon_client::{DaemonConnectionState, DaemonPairingClient};
 
 // Re-export assembly types from uc-bootstrap.

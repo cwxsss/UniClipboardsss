@@ -38,8 +38,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use uc_app::task_registry::TaskRegistry;
-use uc_app::AppDeps;
+use uc_application::deps::AppDeps;
 use uc_application::facade::{
     AppFacade, AppFacadeParts, AppPaths, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
     ClipboardRestoreFacade, ClipboardRestoreFacadeDeps, DeviceFacade, EncryptionFacade,
@@ -47,6 +46,7 @@ use uc_application::facade::{
     LifecycleFacadeDeps, LifecycleStatusGateway, ResourceFacade, ResourceFacadeDeps, SearchFacade,
     SearchFacadeDeps, SettingsFacade, StorageFacade, StorageFacadeDeps,
 };
+use uc_bootstrap::TaskRegistry;
 use uc_core::ports::SettingsPort;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -133,7 +133,9 @@ impl AppRuntime {
     pub fn new(
         deps: AppDeps,
         storage_paths: AppPaths,
-        clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
+        clipboard_write_coordinator: Arc<
+            uc_application::clipboard_write::ClipboardWriteCoordinator,
+        >,
     ) -> Self {
         let event_emitter: Arc<dyn HostEventEmitterPort> =
             Arc::new(uc_bootstrap::LoggingHostEventEmitter);
@@ -153,7 +155,9 @@ impl AppRuntime {
         deps: AppDeps,
         storage_paths: AppPaths,
         event_emitter: Arc<dyn HostEventEmitterPort>,
-        clipboard_write_coordinator: Arc<uc_app::usecases::ClipboardWriteCoordinator>,
+        clipboard_write_coordinator: Arc<
+            uc_application::clipboard_write::ClipboardWriteCoordinator,
+        >,
     ) -> Self {
         let device_id = deps.device.device_identity.current_device_id().to_string();
         let settings_port = deps.settings.clone();
