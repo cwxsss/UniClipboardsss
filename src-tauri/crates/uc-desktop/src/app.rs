@@ -14,9 +14,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_application::facade::{AppFacade, AppPaths, HostEventEmitterPort};
 
+use crate::daemon::peers::presence_monitor::PresenceMonitor;
 use crate::daemon::service::DaemonService;
 use crate::daemon::state::RuntimeState;
-use crate::peers::presence_monitor::PresenceMonitor;
 use uc_daemon_local::process_metadata::DaemonPidManager;
 use uc_webserver::api::auth::load_or_create_auth_token;
 use uc_webserver::api::event_emitter::DaemonApiEventEmitter;

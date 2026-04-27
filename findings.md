@@ -72,6 +72,7 @@
 - `uc-desktop::process_metadata` 只是转发 `uc-daemon-local::process_metadata`；PID 元数据的真实归属已经是 `uc-daemon-local`。
 - `service` 和 `state` 只被 `uc-desktop` 的 daemon host、worker、service plan 使用，适合收进 `daemon/` 子目录。
 - `workers` 目录下的 clipboard watcher、file sync orchestrator、inbound clipboard sync、peer keepalive 都是 daemon 长生命周期服务，也适合收进 `daemon/` 子目录。
+- `peers/presence_monitor` 和 `search/coordinator` 都是 daemon 对外事件或后台服务的宿主胶水，不是 `uc-desktop` 根级公共概念。
 
 ## 验证发现
 
@@ -152,6 +153,7 @@
 - 删除 `uc-desktop::process_metadata` 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 和 `cargo check -p uniclipboard` 均通过。
 - 移动 daemon 服务状态模块后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli`、`cargo check -p uniclipboard` 和 `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 均通过。
 - 移动 daemon workers 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli`、`cargo check -p uniclipboard` 和 `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 均通过。
+- 移动 daemon peers/search 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli`、`cargo check -p uniclipboard` 和 `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 均通过。
 
 ## 后续 gap
 

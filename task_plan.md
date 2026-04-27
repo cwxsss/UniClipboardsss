@@ -47,6 +47,7 @@
 | 28 | 完成 | 删除 `uc-desktop` 的 PID 元数据转发 |
 | 29 | 完成 | 将 daemon 服务状态模块迁入 `daemon/` |
 | 30 | 完成 | 将 daemon workers 迁入 `daemon/` |
+| 31 | 完成 | 将 daemon peers/search 模块迁入 `daemon/` |
 
 ## 决策记录
 
@@ -80,6 +81,7 @@
 - 第二十四阶段只删除 `uc-desktop::process_metadata` 转发；旧 `uc_daemon::process_metadata` 改为直接转发 `uc-daemon-local`。
 - 第二十五阶段只移动 `service` 和 `state` 文件位置，不改服务健康状态和 daemon 状态逻辑。
 - 第二十六阶段只移动 workers 文件位置，不改剪贴板、文件同步、入站同步和 keepalive 行为。
+- 第二十七阶段只移动 peers/search 文件位置，不改 presence 事件和搜索协调行为。
 
 ## 错误记录
 

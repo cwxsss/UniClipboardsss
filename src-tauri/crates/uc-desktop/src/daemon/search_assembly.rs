@@ -7,7 +7,7 @@ use uc_application::deps::AppDeps;
 use uc_application::facade::{SearchCoordinator, SearchCoordinatorDeps};
 use uc_webserver::api::types::DaemonWsEvent;
 
-use crate::search::coordinator::SearchCoordinatorService;
+use crate::daemon::search::coordinator::SearchCoordinatorService;
 
 /// daemon 搜索服务装配结果。
 pub struct DaemonSearchAssembly {

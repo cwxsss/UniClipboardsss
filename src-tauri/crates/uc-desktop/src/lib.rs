@@ -9,5 +9,3 @@ pub use uc_daemon_contract::DAEMON_API_REVISION;
 
 pub(crate) mod app;
 pub mod daemon;
-pub(crate) mod peers;
-pub(crate) mod search;
