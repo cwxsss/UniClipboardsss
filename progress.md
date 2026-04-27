@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `dfee513a refactor: extract desktop daemon search assembly`。
+- 开始第十阶段：抽出 daemon AppFacade 装配。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/app_facade_assembly.rs`，集中声明 daemon 模式传给 `AppFacade` 的能力。
+- `entrypoint.rs` 不再直接构造 `AppFacadeAssemblyOptions`，只调用 `build_daemon_app_facade`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `797c55cc refactor: centralize desktop daemon mode flags`。
 - 开始第九阶段：抽出 daemon 搜索服务装配。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/search_assembly.rs`，集中构造 `SearchCoordinator` 和 `SearchCoordinatorService`。

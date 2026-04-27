@@ -44,6 +44,8 @@
 - daemon 运行模式参数组合规则现在由 `DaemonRunMode::from_flags` 统一维护，避免 `uc-cli` 和 `uc-daemon` 各自判断。
 - 第九阶段新增 `daemon::search_assembly`，把搜索协调器和搜索服务构造从 `entrypoint.rs` 抽出。
 - 搜索业务仍由 `uc-application` facade 和既有搜索服务处理，`uc-desktop` 这里只做宿主装配。
+- 第十阶段新增 `daemon::app_facade_assembly`，把 daemon 模式需要传入 `AppFacade` 的能力清单从 `entrypoint.rs` 抽出。
+- 公共 `uc-bootstrap::build_app_facade_from_deps` 仍是 facade 构造的单一入口，`uc-desktop` 只提供 daemon 运行模式的参数装配。
 
 ## 验证发现
 
@@ -72,6 +74,10 @@
 - 抽出 daemon 搜索服务装配后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 抽出 daemon 搜索服务装配后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 抽出 daemon 搜索服务装配后，`cargo check -p uniclipboard` 通过。
+- 抽出 daemon AppFacade 装配后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 抽出 daemon AppFacade 装配后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 抽出 daemon AppFacade 装配后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 抽出 daemon AppFacade 装配后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 

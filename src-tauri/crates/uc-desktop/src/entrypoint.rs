@@ -8,12 +8,10 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use uc_bootstrap::build_non_gui_bundle;
 use uc_bootstrap::builders::build_daemon_app;
-use uc_bootstrap::{
-    build_app_facade_from_deps, AppFacadeAssemblyOptions, BlobProcessingPorts,
-    ClipboardRestoreAssembly, NonGuiBundle,
-};
+use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
 
 use crate::app::DaemonApp;
+use crate::daemon::app_facade_assembly::{build_daemon_app_facade, DaemonAppFacadeAssemblyInput};
 use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
 use crate::daemon::search_assembly::build_daemon_search_assembly;
@@ -144,27 +142,19 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     let member_roster_facade_for_api = ctx.space_setup_assembly.roster.clone();
     let local_device_id = deps.device.device_identity.current_device_id().to_string();
 
-    // Assemble AppFacade — this is the single outward-facing entry point
-    // the daemon (and all HTTP handlers) reach through. Common facade
-    // construction lives in uc-bootstrap so desktop modes do not each hand-roll
-    // the same sub-facade graph.
     let storage_paths_for_daemon = storage_paths.clone();
-    let app_facade = build_app_facade_from_deps(
-        &deps,
-        &storage_paths_for_daemon,
-        lifecycle_status.clone(),
-        AppFacadeAssemblyOptions {
-            space_setup: Some(space_setup_facade_for_api.clone()),
-            member_roster: Some(member_roster_facade_for_api.clone()),
-            clipboard_sync: Some(clipboard_sync_facade.clone()),
-            blob_transfer: Some(blob_transfer_facade.clone()),
-            clipboard_restore: Some(ClipboardRestoreAssembly {
-                write_coordinator: clipboard_write_coordinator.clone(),
-                integration_mode: clipboard_integration_mode,
-            }),
-            search_coordinator: Some(Arc::clone(&search_assembly.coordinator)),
-        },
-    );
+    let app_facade = build_daemon_app_facade(DaemonAppFacadeAssemblyInput {
+        deps: &deps,
+        storage_paths: &storage_paths_for_daemon,
+        lifecycle_status: lifecycle_status.clone(),
+        space_setup: space_setup_facade_for_api.clone(),
+        member_roster: member_roster_facade_for_api.clone(),
+        clipboard_sync: clipboard_sync_facade.clone(),
+        blob_transfer: blob_transfer_facade.clone(),
+        clipboard_write_coordinator: clipboard_write_coordinator.clone(),
+        clipboard_integration_mode,
+        search_coordinator: Arc::clone(&search_assembly.coordinator),
+    });
     let unlock_app_facade = Arc::clone(&app_facade);
 
     // Keep iroh magicsock paths warm so blob fetches don't cold-start 30s+
