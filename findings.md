@@ -28,6 +28,9 @@
 - 第三阶段新增 `daemon::service_plan`，把 daemon 服务启动分组从 `entrypoint.rs` 抽出。
 - `DaemonServicePlan` 现在统一决定哪些服务立即启动、哪些服务等待 ready 信号后启动。
 - `entrypoint.rs` 仍负责构造具体 worker 和 facade，但不再内联维护服务状态列表和分组规则。
+- 第四阶段新增 `daemon::runtime_assembly`，把 daemon worker 的依赖拼装从 `entrypoint.rs` 抽出。
+- clipboard watcher、inbound clipboard sync、file sync orchestrator 的构造现在集中在 `build_daemon_runtime_workers`。
+- `entrypoint.rs` 继续负责启动顺序和生命周期，不再直接知道 clipboard worker 内部依赖怎么拼。
 
 ## 验证发现
 
@@ -40,10 +43,12 @@
 - `git diff --check` 通过。
 - `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - `cargo check -p uc-desktop -p uc-daemon -p uc-cli -p uniclipboard` 通过。
+- `cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- `cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 
 - 需要决定 `uc-bootstrap` 是保留为通用组装库，还是逐步并入 `uc-desktop` 的 bootstrap 模块。
 - 需要后续再收拢 HTTP/WS 和 Tauri bridge 的宿主归属。
 - 需要逐步缩小 `uc-daemon` 兼容层，最终只保留必要的外部入口。
-- 需要继续把 worker 构造本身拆成更清晰的 daemon runtime assembly，进一步缩短 `entrypoint.rs`。
+- 需要继续梳理 daemon 启动中的 unlock/recovery 后台任务，让 startup recovery 成为更清晰的独立宿主步骤。

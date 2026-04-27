@@ -34,6 +34,16 @@
 - 运行 `cargo fmt --all`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 运行 `git diff --check`，通过。
+- 提交 `4aa9ecd1 refactor: extract desktop daemon service plan`。
+- 开始第四阶段：抽出 daemon runtime worker 装配。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/runtime_assembly.rs`，集中构造 clipboard watcher、inbound clipboard sync、file sync orchestrator。
+- 将 `entrypoint.rs` 中 clipboard capture、live index、outbound dispatch、inbound materializer 等 worker 依赖拼装迁入 `runtime_assembly`。
+- `entrypoint.rs` 保留共享通道、capture gate、service plan、facade 和 daemon app 的主流程。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `git diff --check`，通过。
 
 ## 工作区备注
 

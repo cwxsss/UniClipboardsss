@@ -8,33 +8,20 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use uc_application::clipboard_capture::CaptureClipboardUseCase;
-use uc_application::facade::{
-    ClipboardCaptureFacade, ClipboardLiveIndexDeps, ClipboardLiveIndexFacade, ClipboardLiveIndexer,
-    ClipboardOutboundDeps, ClipboardOutboundDispatcher, ClipboardOutboundFacade,
-    InboundClipboardFacade, SearchCoordinator, SearchCoordinatorDeps,
-};
-use uc_application::{
-    ApplyInboundClipboardUseCase, FileCacheBlobMaterializer, InboundCapture as ApplyInboundCapture,
-    InboundWrite as ApplyInboundWrite,
-};
+use uc_application::facade::{SearchCoordinator, SearchCoordinatorDeps};
 use uc_bootstrap::build_non_gui_bundle;
 use uc_bootstrap::builders::build_daemon_app;
 use uc_bootstrap::{
     build_app_facade_from_deps, AppFacadeAssemblyOptions, BlobProcessingPorts,
     ClipboardRestoreAssembly, NonGuiBundle,
 };
-use uc_core::ports::SystemClipboardPort;
 
 use crate::app::DaemonApp;
+use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
 use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
 use crate::search::coordinator::SearchCoordinatorService;
 use crate::service::DaemonService;
-use crate::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
-use crate::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
-use crate::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
 use crate::workers::peer_keepalive::PeerKeepAliveWorker;
-use uc_platform::clipboard::LocalClipboard;
 use uc_webserver::api::types::DaemonWsEvent;
 
 /// Run the daemon process. This is the composition root.
@@ -110,16 +97,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     //    All services that emit WS events write to this same sender.
     let (event_tx, _) = broadcast::channel::<DaemonWsEvent>(64);
 
-    // Build typed workers that don't depend on encryption state first.
-    let local_clipboard: Arc<dyn SystemClipboardPort> = Arc::new(
-        LocalClipboard::new()
-            .map_err(|e| anyhow::anyhow!("failed to create LocalClipboard: {}", e))?,
-    );
-
-    // Reuse the bootstrap-built clipboard change origin so restore commands, watcher,
-    // inbound sync, and file restore all observe the same guard state.
-    let clipboard_change_origin = deps.clipboard.clipboard_change_origin.clone();
-
     // Clipboard capture gate: controls whether clipboard changes are processed.
     // In standalone CLI mode, capture is always enabled.
     // In GUI-managed mode, capture is disabled until the GUI signals readiness.
@@ -132,74 +109,16 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let clipboard_sync_facade = ctx.clipboard_sync_facade.clone();
     let blob_transfer_facade = ctx.space_setup_assembly.blob.clone();
 
-    // Slice 2 Phase 3 · T6 — build `ApplyInboundClipboardUseCase` from
-    // runtime wiring deps. `CaptureClipboardUseCase` (migrated to
-    // uc-application in T0a) gets wrapped as `Arc<dyn InboundCapture>`
-    // via its blanket impl; `ClipboardWriteCoordinator` (T0b) likewise
-    // wraps as `Arc<dyn InboundWrite>`. The coordinator shared here is
-    // the exact same Arc the watcher reads `clipboard_change_origin`
-    // from, so RemotePush guards register and consume on one cache.
-    let apply_inbound_capture_uc = Arc::new(CaptureClipboardUseCase::new(
-        deps.clipboard.clipboard_entry_repo.clone(),
-        deps.clipboard.clipboard_event_repo.clone(),
-        deps.clipboard.representation_policy.clone(),
-        deps.clipboard.representation_normalizer.clone(),
-        deps.device.device_identity.clone(),
-        deps.clipboard.representation_cache.clone(),
-        deps.clipboard.spool_queue.clone(),
-    ));
-    let blob_materializer = Arc::new(FileCacheBlobMaterializer::new(
-        blob_transfer_facade.clone(),
-        file_cache_dir.clone(),
-    ));
-    let apply_inbound_uc = Arc::new(
-        ApplyInboundClipboardUseCase::new(
-            deps.clipboard.clipboard_entry_repo.clone(),
-            Arc::clone(&apply_inbound_capture_uc) as Arc<dyn ApplyInboundCapture>,
-            Arc::clone(&clipboard_write_coordinator) as Arc<dyn ApplyInboundWrite>,
-        )
-        .with_blob_materializer(blob_materializer),
-    );
-    let inbound_clipboard_facade = Arc::new(InboundClipboardFacade::new(apply_inbound_uc));
-    let clipboard_capture_facade = Arc::new(ClipboardCaptureFacade::new(apply_inbound_capture_uc));
-    let clipboard_live_index_facade = Arc::new(ClipboardLiveIndexFacade::new(Arc::new(
-        ClipboardLiveIndexer::new(ClipboardLiveIndexDeps {
-            clipboard_entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
-            representation_policy: deps.clipboard.representation_policy.clone(),
-            search_key_derivation: deps.search.search_key_derivation.clone(),
-            search_pipeline: deps.search.search_pipeline.clone(),
-            search_index: deps.search.search_index.clone(),
-        }),
-    )));
-    let clipboard_outbound_facade = Arc::new(ClipboardOutboundFacade::new(Arc::new(
-        ClipboardOutboundDispatcher::new(ClipboardOutboundDeps {
-            settings: deps.settings.clone(),
-            clipboard_sync: clipboard_sync_facade.clone(),
-            blob_transfer: blob_transfer_facade.clone(),
-        }),
-    )));
-
-    let clipboard_change_handler = Arc::new(DaemonClipboardChangeHandler::new(
-        event_tx.clone(),
-        clipboard_change_origin.clone(),
-        clipboard_capture_gate.clone(),
-        clipboard_capture_facade,
-        clipboard_live_index_facade,
-        clipboard_outbound_facade,
-    ));
-    let clipboard_watcher = Arc::new(ClipboardWatcherWorker::new(
-        local_clipboard.clone(),
-        clipboard_change_handler,
-    ));
-
-    let inbound_clipboard_sync = Arc::new(InboundClipboardSyncWorker::new(
-        clipboard_sync_facade.clone(),
-        inbound_clipboard_facade,
-        event_tx.clone(),
-    ));
-
-    let file_sync_orchestrator_worker =
-        Arc::new(FileSyncOrchestratorWorker::new(file_transfer_lifecycle));
+    let runtime_workers = build_daemon_runtime_workers(DaemonRuntimeAssemblyInput {
+        deps: &deps,
+        event_tx: event_tx.clone(),
+        clipboard_capture_gate: clipboard_capture_gate.clone(),
+        clipboard_sync_facade: clipboard_sync_facade.clone(),
+        blob_transfer_facade: blob_transfer_facade.clone(),
+        file_cache_dir: file_cache_dir.clone(),
+        file_transfer_lifecycle,
+        clipboard_write_coordinator: clipboard_write_coordinator.clone(),
+    })?;
 
     // `PeerKeepAliveWorker` is constructed AFTER `AppFacade` assembly below
     // so it can hold `Arc<AppFacade>` and reach `space_setup` via the
@@ -242,10 +161,11 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let mut service_plan = DaemonServicePlan::build(DaemonServicePlanInput {
         gui_managed,
         encryption_unlocked,
-        file_sync_orchestrator: Arc::clone(&file_sync_orchestrator_worker)
+        file_sync_orchestrator: Arc::clone(&runtime_workers.file_sync_orchestrator)
             as Arc<dyn DaemonService>,
-        clipboard_watcher: Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
-        inbound_clipboard_sync: Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
+        clipboard_watcher: Arc::clone(&runtime_workers.clipboard_watcher) as Arc<dyn DaemonService>,
+        inbound_clipboard_sync: Arc::clone(&runtime_workers.inbound_clipboard_sync)
+            as Arc<dyn DaemonService>,
         search_coordinator: Arc::clone(&search_coordinator_service) as Arc<dyn DaemonService>,
     });
 

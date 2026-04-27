@@ -24,6 +24,7 @@
 | 5 | 完成 | 运行编译检查，确认现有入口链未断 |
 | 6 | 完成 | 收拢 `AppFacade` 公共装配，减少 daemon/Tauri/CLI 重复拼装 |
 | 7 | 完成 | 抽出 daemon 后台服务启动清单，明确立即启动与 ready 后启动的分组 |
+| 8 | 完成 | 抽出 daemon runtime worker 装配，进一步缩短入口编排 |
 
 ## 决策记录
 
@@ -34,6 +35,7 @@
 - HTTP/WS 和 Tauri 先保持原有 crate 关系，不在本阶段继续搬迁。
 - 第二阶段将公共 `AppFacade` 装配放在 `uc-bootstrap`，由 `uc-desktop`、`uc-tauri`、CLI 共用；运行模式差异通过显式选项传入。
 - 第三阶段只抽服务启动清单，不改 worker 行为、不改 HTTP/WS、不改业务逻辑。
+- 第四阶段只抽 worker 构造，不改服务分组和启动策略。
 
 ## 错误记录
 
