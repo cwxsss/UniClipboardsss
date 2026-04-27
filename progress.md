@@ -54,6 +54,17 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `0656cb88 refactor: centralize desktop daemon api facade handles`。
+- 补充提交 `2e3d501e docs: add uc-desktop claude entrypoint`。
+- 开始第十九阶段：迁移 daemon host 实现。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/host.rs`，承载真正的 daemon host 入口实现。
+- `src-tauri/crates/uc-desktop/src/entrypoint.rs` 改为兼容转发，继续保留旧 `entrypoint::run` 路径。
+- `daemon/mod.rs` 现在从 `daemon::host` 重新导出 `run`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `6393b10d refactor: extract desktop daemon bootstrap assembly`。
 - 开始第十八阶段：收回 daemon API facade 句柄。
 - 调整 `daemon/app_facade_assembly.rs`，由它从 `SpaceSetupAssembly` 中提取 setup/roster facade，并返回 `AppFacade` 与本机设备 ID。

@@ -62,6 +62,8 @@
 - bootstrap 仍通过 `uc-bootstrap` 完成依赖注入；`uc-desktop` 只持有桌面宿主启动需要的句柄。
 - 第十八阶段让 `daemon::app_facade_assembly` 负责提取 setup/roster facade 和本机设备 ID。
 - 本机设备 ID 仍来自 `deps.device.device_identity.current_device_id()`，来源未变。
+- 第十九阶段新增 `daemon::host`，真正的 daemon host 入口已经归到 `uc-desktop/src/daemon` 下。
+- `entrypoint.rs` 只做兼容转发，避免破坏 `uc_daemon::entrypoint::run` 旧路径。
 
 ## 验证发现
 
@@ -126,6 +128,10 @@
 - 收回 daemon API facade 句柄后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 收回 daemon API facade 句柄后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 收回 daemon API facade 句柄后，`cargo check -p uniclipboard` 通过。
+- 迁移 daemon host 实现后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 迁移 daemon host 实现后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 迁移 daemon host 实现后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 迁移 daemon host 实现后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 
