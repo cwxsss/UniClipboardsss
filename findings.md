@@ -75,6 +75,7 @@
 - `peers/presence_monitor` 和 `search/coordinator` 都是 daemon 对外事件或后台服务的宿主胶水，不是 `uc-desktop` 根级公共概念。
 - `app.rs` 定义的是 `DaemonApp` 和 daemon 启动期恢复辅助，也属于 `daemon/` 子目录。
 - 当前外部实际只使用 `uc_desktop::daemon::run` 和 `uc_desktop::daemon::run_mode`，其余 daemon 子模块都是 `uc-desktop` 内部装配细节。
+- HTTP/WS 当前继续保留在独立 `uc-webserver` crate；`uc-desktop` 作为宿主调用它，不在本阶段做物理搬迁。
 
 ## 验证发现
 
@@ -162,6 +163,6 @@
 ## 后续 gap
 
 - 需要决定 `uc-bootstrap` 是保留为通用组装库，还是逐步并入 `uc-desktop` 的 bootstrap 模块。
-- 需要后续再收拢 HTTP/WS 和 Tauri bridge 的宿主归属。
-- 需要逐步缩小 `uc-daemon` 兼容层，最终只保留必要的外部入口。
-- 需要继续收窄 `entrypoint.rs`，把剩余 daemon run context、shutdown 包装和宿主启动顺序拆成更清晰的桌面宿主步骤。
+- HTTP/WS 暂时保留在 `uc-webserver`，后续只在明确要物理搬迁时再启动迁移。
+- Tauri bridge 的宿主归属还需要单独规划。
+- `uc-daemon` 兼容层现在只保留旧二进制和旧路径，是否进一步删除需要外部兼容性决定。

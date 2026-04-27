@@ -66,6 +66,9 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
 - 运行 `git diff --check`，通过。
+- 记录决策：HTTP/WS 暂时保留独立 `uc-webserver`，不在本阶段物理迁入 `uc-desktop`。
+- 更新 `src-tauri/crates/uc-desktop/AGENTS.md`，写明当前公开入口、`uc-webserver` 保留独立和 `uc-daemon` 兼容壳边界。
+- 运行 `git diff --check`，通过。
 - 提交 `531b8f63 refactor: move daemon app module`。
 - 开始第二十九阶段：收窄 `daemon` 子模块公开面。
 - 将 `daemon` 下除 `run_mode` 与重导出的 `run` 之外的装配模块改为 crate 内可见。
