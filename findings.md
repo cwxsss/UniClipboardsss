@@ -67,6 +67,7 @@
 - 第二十阶段把 `uc-daemon` 兼容层从全量重导出 `uc-desktop` 收窄为少量显式旧路径。
 - 当前代码内仍使用到的旧路径只有 `entrypoint::run`、`daemon::run_mode` 和 `process_metadata`。
 - `uc-cli` 仍通过 `uc-daemon` 兼容壳调用内联 daemon 入口和读取 PID；这些能力分别已经有更清楚的归属：daemon 入口在 `uc-desktop`，PID 元数据在 `uc-daemon-local`。
+- 当前仓库没有代码使用 `uc_desktop::entrypoint`，`uc-daemon` 兼容层也已经直接从 `uc_desktop::daemon::run` 重导出旧 `uc_daemon::entrypoint::run`。
 
 ## 验证发现
 
@@ -142,6 +143,7 @@
 - `uc-cli` 迁出 `uc-daemon` 兼容壳后，`cargo check -p uniclipboard` 通过，并成功准备 daemon 二进制。
 - `uc-cli` 迁出 `uc-daemon` 兼容壳后，`cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true` 仍无输出。
 - `uc-cli` 迁出 `uc-daemon` 兼容壳后，`rg -n "uc_daemon::|uc-daemon =" src-tauri/crates/uc-cli src-tauri/crates/uc-cli/Cargo.toml` 无输出。
+- 删除 `uc-desktop::entrypoint` 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 和 `cargo check -p uniclipboard` 均通过。
 
 ## 后续 gap
 

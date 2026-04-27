@@ -42,6 +42,7 @@
 | 23 | 完成 | 将 daemon host 实现迁入 `daemon/host.rs`，保留旧入口转发 |
 | 24 | 完成 | 收窄 `uc-daemon` 兼容导出面 |
 | 25 | 完成 | 将 `uc-cli` 从 `uc-daemon` 兼容壳迁出 |
+| 26 | 完成 | 删除 `uc-desktop` 内部旧 `entrypoint` 转发 |
 
 ## 决策记录
 
@@ -70,6 +71,7 @@
 - 第十九阶段只移动 daemon host 实现位置，不改 `uc_daemon::entrypoint::run` 兼容路径。
 - 第二十阶段只收窄 `uc-daemon` 对外重导出，不改旧命令和当前 CLI 调用路径。
 - 第二十一阶段只迁移 `uc-cli` 的依赖路径，不改 CLI 命令语义和 daemon 启动方式。
+- 第二十二阶段只删除 `uc-desktop::entrypoint` 旧路径；`uc_daemon::entrypoint::run` 继续保留。
 
 ## 错误记录
 

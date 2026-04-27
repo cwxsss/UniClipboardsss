@@ -77,6 +77,14 @@
 - 运行 `cargo tree -p uc-cli | rg "uc-daemon v|uc-desktop|uc-daemon-local|uc-daemon-contract"`，确认 `uc-cli` 仍依赖桌面宿主、本机 daemon 控制和 daemon 协议，但不再依赖 `uc-daemon`。
 - 运行 `rg -n "uc_daemon::|uc-daemon =" src-tauri/crates/uc-cli src-tauri/crates/uc-cli/Cargo.toml`，无输出。
 - 运行 `git diff --check`，通过。
+- 提交 `f0ee5b13 refactor: route cli daemon host through uc-desktop`。
+- 开始第二十二阶段：删除 `uc-desktop` 内部旧 `entrypoint` 转发。
+- 删除 `src-tauri/crates/uc-desktop/src/entrypoint.rs`，并从 `uc-desktop/src/lib.rs` 移除模块导出。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
+- 运行 `git diff --check`，通过。
 - 提交 `0656cb88 refactor: centralize desktop daemon api facade handles`。
 - 补充提交 `2e3d501e docs: add uc-desktop claude entrypoint`。
 - 开始第十九阶段：迁移 daemon host 实现。
