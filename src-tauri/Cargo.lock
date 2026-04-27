@@ -10294,9 +10294,9 @@ dependencies = [
  "uc-application",
  "uc-bootstrap",
  "uc-core",
- "uc-daemon",
  "uc-daemon-contract",
  "uc-daemon-local",
+ "uc-desktop",
  "uc-observability",
 ]
 

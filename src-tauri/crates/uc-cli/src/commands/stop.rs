@@ -29,7 +29,7 @@ impl fmt::Display for StopOutput {
 /// Run the stop command.
 pub async fn run(json: bool, _verbose: bool) -> i32 {
     run_stop_with(
-        || uc_daemon::process_metadata::read_pid_file(),
+        || uc_daemon_local::process_metadata::read_pid_file(),
         |pid| is_process_running(pid),
         |pid| send_sigterm(pid),
         json,

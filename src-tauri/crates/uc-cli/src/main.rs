@@ -197,8 +197,9 @@ fn main() -> anyhow::Result<()> {
         hybrid,
     } = command
     {
-        let run_mode = uc_daemon::daemon::run_mode::DaemonRunMode::from_flags(gui_managed, hybrid)?;
-        return uc_daemon::entrypoint::run(run_mode);
+        let run_mode =
+            uc_desktop::daemon::run_mode::DaemonRunMode::from_flags(gui_managed, hybrid)?;
+        return uc_desktop::daemon::run(run_mode);
     }
 
     let rt = tokio::runtime::Builder::new_multi_thread()

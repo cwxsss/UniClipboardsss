@@ -13,7 +13,7 @@ path = "src/main.rs"
 uc-bootstrap = { path = "../uc-bootstrap" }
 uc-observability = { path = "../uc-observability" }
 uc-core = { path = "../uc-core" }
-uc-daemon = { path = "../uc-daemon" }
+uc-desktop = { path = "../uc-desktop" }
 uc-daemon-contract = { path = "../uc-daemon-contract" }
 uc-daemon-local = { path = "../uc-daemon-local" }
 tokio = { version = "1", features = ["full"] }
