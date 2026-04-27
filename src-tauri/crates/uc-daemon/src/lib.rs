@@ -8,14 +8,11 @@
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use uc_daemon_contract::DAEMON_API_REVISION;
 
-pub mod api;
 pub mod app;
 pub mod entrypoint;
 pub mod peers;
 pub mod process_metadata;
 pub mod search;
-pub mod security;
 pub mod service;
-pub mod socket;
 pub mod state;
 pub mod workers;

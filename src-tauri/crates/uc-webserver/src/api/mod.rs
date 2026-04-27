@@ -11,7 +11,6 @@ pub mod lifecycle;
 pub mod member;
 pub mod openapi;
 pub mod pairing;
-pub mod query;
 pub mod routes;
 pub mod search;
 pub mod server;

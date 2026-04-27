@@ -27,8 +27,8 @@ use uc_daemon_contract::constants::{ws_event, ws_topic};
 use uc_observability::FlowId;
 use uc_platform::clipboard::watcher::{ClipboardWatcher, PlatformEvent, PlatformEventSender};
 
-use crate::api::types::DaemonWsEvent;
 use crate::service::{DaemonService, ServiceHealth};
+use uc_webserver::api::types::DaemonWsEvent;
 
 // ---------------------------------------------------------------------------
 // ClipboardNewContentPayload

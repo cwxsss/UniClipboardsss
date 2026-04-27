@@ -28,7 +28,6 @@ use uc_bootstrap::builders::build_daemon_app;
 use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
 use uc_core::ports::SystemClipboardPort;
 
-use crate::api::types::DaemonWsEvent;
 use crate::app::DaemonApp;
 use crate::search::coordinator::SearchCoordinatorService;
 use crate::service::DaemonService;
@@ -39,6 +38,7 @@ use crate::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
 use crate::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
 use crate::workers::peer_keepalive::PeerKeepAliveWorker;
 use uc_platform::clipboard::LocalClipboard;
+use uc_webserver::api::types::DaemonWsEvent;
 
 /// Run the daemon process. This is the composition root.
 ///

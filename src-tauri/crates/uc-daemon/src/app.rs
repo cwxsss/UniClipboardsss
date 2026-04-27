@@ -14,17 +14,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uc_application::facade::{AppFacade, AppPaths, HostEventEmitterPort};
 
-use crate::api::auth::load_or_create_auth_token;
-use crate::api::event_emitter::DaemonApiEventEmitter;
-use crate::api::query::DaemonQueryService;
-use crate::api::server::{run_http_server, DaemonApiState};
-use crate::api::setup_events::spawn_pairing_completion_forwarder;
-use crate::api::types::DaemonWsEvent;
 use crate::peers::presence_monitor::PresenceMonitor;
 use crate::process_metadata::DaemonPidManager;
-use crate::security::{cleanup_rate_limiter_task, SecurityState};
 use crate::service::DaemonService;
 use crate::state::RuntimeState;
+use uc_webserver::api::auth::load_or_create_auth_token;
+use uc_webserver::api::event_emitter::DaemonApiEventEmitter;
+use uc_webserver::api::server::{run_http_server, DaemonApiState};
+use uc_webserver::api::setup_events::spawn_pairing_completion_forwarder;
+use uc_webserver::api::types::DaemonWsEvent;
+use uc_webserver::security::{cleanup_rate_limiter_task, SecurityState};
 
 /// Recover encryption session from disk/keyring if encryption has been initialized.
 ///
@@ -204,10 +203,6 @@ impl DaemonApp {
         let pid = pid_manager.write_current_pid()?;
         info!(pid, "wrote daemon pid metadata");
 
-        let query_service = Arc::new(DaemonQueryService::new(
-            self.state.clone(),
-            Arc::clone(&self.app_facade),
-        ));
         let presence_monitor = Arc::new(PresenceMonitor::new(
             Arc::clone(&self.app_facade),
             self.event_tx.clone(),
@@ -218,7 +213,7 @@ impl DaemonApp {
         security.register_pid(pid).await;
 
         // 3. Build API state using the shared event_tx (same channel used by all services)
-        let mut api_state = DaemonApiState::new(query_service, auth_token, security);
+        let mut api_state = DaemonApiState::new(Arc::clone(&self.app_facade), auth_token, security);
         api_state.event_tx = self.event_tx.clone();
         let api_state = match &self.clipboard_capture_gate {
             Some(gate) => api_state.with_clipboard_gate(Arc::clone(gate)),
@@ -228,8 +223,6 @@ impl DaemonApp {
             Some(notify) => api_state.with_deferred_ready_notify(Arc::clone(notify)),
             None => api_state,
         };
-        let api_state = api_state.with_app_facade(Arc::clone(&self.app_facade));
-
         // 4. Wire the event emitter into the shared cell so application
         // use cases (which read through the cell) emit WS events.
         *self

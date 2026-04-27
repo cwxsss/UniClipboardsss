@@ -5,8 +5,8 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use reqwest::Client;
-use uc_daemon::api::types::HealthResponse;
-use uc_daemon::socket::try_resolve_daemon_http_addr;
+use uc_daemon_contract::api::types::HealthResponse;
+use uc_daemon_local::socket::try_resolve_daemon_http_addr;
 
 const HEALTH_PATH: &str = "/health";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);

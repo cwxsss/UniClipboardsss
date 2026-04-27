@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::body::Body;
 use axum::http::header::{
@@ -25,19 +26,20 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::api::auth::{build_connection_info, DaemonAuthToken, DaemonConnectionInfo};
 use crate::api::dto::error::ApiError;
 use crate::api::openapi::ApiDoc;
-use crate::api::query::DaemonQueryService;
 use crate::api::routes;
-use crate::api::types::DaemonWsEvent;
+use crate::api::types::{
+    DaemonWsEvent, HealthResponse, PeerSnapshotDto, SpaceMemberDto, StatusResponse,
+};
 use crate::api::ws;
 use crate::security::SecurityState;
 use crate::socket::{try_resolve_daemon_http_addr, DEFAULT_HTTP_HOST};
 
 #[derive(Clone)]
 pub struct DaemonApiState {
-    pub query_service: Arc<DaemonQueryService>,
     pub auth_token: DaemonAuthToken,
-    pub app_facade: Option<Arc<AppFacade>>,
+    pub app_facade: Arc<AppFacade>,
     pub event_tx: broadcast::Sender<DaemonWsEvent>,
+    pub started_at: Instant,
     /// Gate controlling clipboard capture in the daemon.
     /// When set to true, clipboard monitoring becomes active.
     pub clipboard_capture_gate: Option<Arc<AtomicBool>>,
@@ -51,16 +53,16 @@ pub struct DaemonApiState {
 
 impl DaemonApiState {
     pub fn new(
-        query_service: Arc<DaemonQueryService>,
+        app_facade: Arc<AppFacade>,
         auth_token: DaemonAuthToken,
         security: Arc<SecurityState>,
     ) -> Self {
         let (event_tx, _) = broadcast::channel(64);
         Self {
-            query_service,
             auth_token,
-            app_facade: None,
+            app_facade,
             event_tx,
+            started_at: Instant::now(),
             clipboard_capture_gate: None,
             deferred_ready_notify: None,
             security,
@@ -72,15 +74,54 @@ impl DaemonApiState {
         self
     }
 
-    pub fn with_app_facade(mut self, app_facade: Arc<AppFacade>) -> Self {
-        self.app_facade = Some(app_facade);
-        self
+    pub fn app_facade_or_error(&self) -> Result<Arc<AppFacade>, ApiError> {
+        Ok(Arc::clone(&self.app_facade))
     }
 
-    pub fn app_facade_or_error(&self) -> Result<Arc<AppFacade>, ApiError> {
-        self.app_facade
-            .clone()
-            .ok_or_else(|| ApiError::service_unavailable("application facade unavailable"))
+    pub fn health_response(&self) -> HealthResponse {
+        HealthResponse {
+            status: "ok".to_string(),
+            package_version: env!("CARGO_PKG_VERSION").to_string(),
+            api_revision: uc_daemon_contract::DAEMON_API_REVISION.to_string(),
+        }
+    }
+
+    pub fn status_response(&self) -> StatusResponse {
+        StatusResponse {
+            package_version: env!("CARGO_PKG_VERSION").to_string(),
+            api_revision: uc_daemon_contract::DAEMON_API_REVISION.to_string(),
+            uptime_seconds: self.started_at.elapsed().as_secs(),
+            workers: Vec::new(),
+        }
+    }
+
+    pub async fn peer_snapshots(&self) -> anyhow::Result<Vec<PeerSnapshotDto>> {
+        let peers = self.app_facade.list_peer_snapshots().await?;
+        Ok(peers
+            .into_iter()
+            .map(|peer| PeerSnapshotDto {
+                peer_id: peer.peer_id,
+                device_name: peer.device_name,
+                addresses: peer.addresses,
+                is_paired: peer.is_paired,
+                connected: peer.connected,
+                pairing_state: peer.pairing_state,
+            })
+            .collect())
+    }
+
+    pub async fn paired_devices(&self) -> anyhow::Result<Vec<SpaceMemberDto>> {
+        let members = self.app_facade.list_members().await?;
+        Ok(members
+            .into_iter()
+            .map(|member| SpaceMemberDto {
+                peer_id: member.device_id,
+                device_name: member.device_name,
+                pairing_state: "Trusted".to_string(),
+                last_seen_at_ms: None,
+                connected: false,
+            })
+            .collect())
     }
 
     pub fn with_clipboard_gate(mut self, gate: Arc<AtomicBool>) -> Self {

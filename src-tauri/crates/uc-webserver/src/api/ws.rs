@@ -507,7 +507,7 @@ async fn build_snapshot_event(
             ws_topic::STATUS,
             ws_event::STATUS_SNAPSHOT,
             None,
-            state.query_service.status().await?,
+            state.status_response(),
         )
         .map(Some),
 
@@ -515,7 +515,7 @@ async fn build_snapshot_event(
             ws_topic::PEERS,
             ws_event::PEERS_SNAPSHOT,
             None,
-            state.query_service.peers().await?,
+            state.peer_snapshots().await?,
         )
         .map(Some),
 
@@ -523,7 +523,7 @@ async fn build_snapshot_event(
             ws_topic::PAIRED_DEVICES,
             ws_event::PAIRED_DEVICES_SNAPSHOT,
             None,
-            state.query_service.paired_devices().await?,
+            state.paired_devices().await?,
         )
         .map(Some),
 

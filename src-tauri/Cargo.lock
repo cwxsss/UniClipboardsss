@@ -10295,6 +10295,8 @@ dependencies = [
  "uc-bootstrap",
  "uc-core",
  "uc-daemon",
+ "uc-daemon-contract",
+ "uc-daemon-local",
  "uc-observability",
 ]
 
@@ -10355,25 +10357,17 @@ version = "1.0.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum 0.7.9",
- "base64 0.22.1",
  "blake3",
  "chrono",
  "clipboard-rs",
  "diesel",
  "futures-util",
- "jsonwebtoken",
  "mockall 0.13.1",
- "percent-encoding",
- "rand 0.8.5",
  "serde",
  "serde_json",
- "serde_with",
  "tempfile",
  "tokio",
- "tokio-tungstenite",
  "tokio-util",
- "tower",
  "tracing",
  "uc-application",
  "uc-bootstrap",
@@ -10383,10 +10377,8 @@ dependencies = [
  "uc-infra",
  "uc-observability",
  "uc-platform",
+ "uc-webserver",
  "url",
- "utoipa 4.2.3",
- "utoipa-axum",
- "utoipa-swagger-ui",
 ]
 
 [[package]]
@@ -10607,6 +10599,33 @@ dependencies = [
  "url",
  "uuid",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "uc-webserver"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "anyhow",
+ "axum 0.7.9",
+ "base64 0.22.1",
+ "chrono",
+ "futures-util",
+ "jsonwebtoken",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "uc-application",
+ "uc-core",
+ "uc-daemon-contract",
+ "uc-daemon-local",
+ "url",
+ "utoipa 4.2.3",
+ "utoipa-axum",
+ "utoipa-swagger-ui",
 ]
 
 [[package]]

@@ -112,7 +112,7 @@ pub fn router_l2_plus(state: DaemonApiState) -> Router<DaemonApiState> {
 }
 
 async fn health(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    Json(state.query_service.health().await)
+    Json(state.health_response())
 }
 
 async fn restore_clipboard_entry_handler(
@@ -156,21 +156,18 @@ async fn restore_clipboard_entry_handler(
 }
 
 async fn status(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    match state.query_service.status().await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => internal_error(error).into_response(),
-    }
+    Json(state.status_response()).into_response()
 }
 
 async fn peers(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    match state.query_service.peers().await {
+    match state.peer_snapshots().await {
         Ok(response) => Json(response).into_response(),
         Err(error) => internal_error(error).into_response(),
     }
 }
 
 async fn paired_devices(State(state): State<DaemonApiState>) -> impl IntoResponse {
-    match state.query_service.paired_devices().await {
+    match state.paired_devices().await {
         Ok(response) => Json(response).into_response(),
         Err(error) => internal_error(error).into_response(),
     }
