@@ -58,7 +58,7 @@ export async function onDaemonRealtimeEvent(
   }
 
   // Subscribe to all topics that the daemon emits realtime events for.
-  const topics = ['clipboard', 'peers', 'pairing', 'setup', 'space-access', 'paired-devices']
+  const topics = ['clipboard', 'peers', 'pairing', 'setup', 'paired-devices']
 
   return daemonWs.subscribe(topics, handler)
 }

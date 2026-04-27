@@ -41,7 +41,7 @@ describe('p2p realtime contract', () => {
 
     expect(daemonWs.subscribe).toHaveBeenCalledTimes(1)
     expect(daemonWs.subscribe).toHaveBeenCalledWith(
-      ['clipboard', 'peers', 'pairing', 'setup', 'space-access', 'paired-devices'],
+      ['clipboard', 'peers', 'pairing', 'setup', 'paired-devices'],
       expect.any(Function)
     )
   })
