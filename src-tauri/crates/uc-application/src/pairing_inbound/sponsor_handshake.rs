@@ -12,11 +12,12 @@
 //!
 //! Sponsor path is linear (`begin → verify → confirm | reject → close`)
 //! with the only branch sitting on the `verify_proof` verdict. Running
-//! it through `SpaceAccessStateMachine` gives us enum ceremony without
-//! extra correctness guarantees, and the FSM's action order for the
-//! verified branch (`SendResult` → `PersistSponsorAccess`) is **inverted**
-//! from the ordering Slice 1 wants (persist must happen before Confirm
-//! so an admit failure cannot strand the joiner with a committed Confirm
+//! it through a generic space-access state machine would give us enum
+//! ceremony without extra correctness guarantees, and the candidate
+//! FSM's action order for the verified branch (`SendResult` →
+//! `PersistSponsorAccess`) was **inverted** from the ordering Slice 1
+//! wants (persist must happen before Confirm so an admit failure
+//! cannot strand the joiner with a committed Confirm
 //! they can't reach). The joiner side (P7h) has more states and genuine
 //! user-input branches; it will reuse the FSM.
 //!
