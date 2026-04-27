@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use uc_application::clipboard_capture::CaptureClipboardUseCase;
 use uc_application::facade::{
@@ -27,10 +27,9 @@ use uc_bootstrap::{
 use uc_core::ports::SystemClipboardPort;
 
 use crate::app::DaemonApp;
+use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
 use crate::search::coordinator::SearchCoordinatorService;
 use crate::service::DaemonService;
-use crate::service::ServiceHealth;
-use crate::state::{DaemonServiceSnapshot, RuntimeState};
 use crate::workers::clipboard_watcher::{ClipboardWatcherWorker, DaemonClipboardChangeHandler};
 use crate::workers::file_sync_orchestrator::FileSyncOrchestratorWorker;
 use crate::workers::inbound_clipboard_sync::InboundClipboardSyncWorker;
@@ -226,8 +225,6 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         uc_bootstrap::spawn_blob_processing_tasks(background, blob_ports, &task_registry).await;
     });
 
-    let should_defer_clipboard = gui_managed || !encryption_unlocked;
-
     // Construct the search coordinator before building the service snapshots.
     let search_coordinator = Arc::new(SearchCoordinator::new(SearchCoordinatorDeps::new(
         deps.search.search_index.clone(),
@@ -242,76 +239,15 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         event_tx.clone(),
     ));
 
-    let initial_statuses: Vec<DaemonServiceSnapshot> = vec![
-        DaemonServiceSnapshot {
-            name: "clipboard-watcher".to_string(),
-            health: if should_defer_clipboard {
-                ServiceHealth::Stopped
-            } else {
-                ServiceHealth::Healthy
-            },
-        },
-        DaemonServiceSnapshot {
-            name: "inbound-clipboard-sync".to_string(),
-            health: if should_defer_clipboard {
-                ServiceHealth::Stopped
-            } else {
-                ServiceHealth::Healthy
-            },
-        },
-        DaemonServiceSnapshot {
-            name: "file-sync-orchestrator".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-        DaemonServiceSnapshot {
-            name: "peer-keepalive".to_string(),
-            health: if encryption_unlocked {
-                ServiceHealth::Healthy
-            } else {
-                ServiceHealth::Stopped
-            },
-        },
-        DaemonServiceSnapshot {
-            name: "peer-monitor".to_string(),
-            health: ServiceHealth::Healthy,
-        },
-        DaemonServiceSnapshot {
-            name: "search-coordinator".to_string(),
-            health: if should_defer_clipboard {
-                ServiceHealth::Stopped
-            } else {
-                ServiceHealth::Healthy
-            },
-        },
-    ];
-    let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses)));
-
-    let (mut services, mut deferred_services) = {
-        let mut initial: Vec<Arc<dyn DaemonService>> =
-            vec![Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>];
-        let mut deferred: Vec<Arc<dyn DaemonService>> = Vec::new();
-
-        if should_defer_clipboard {
-            deferred.push(Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>);
-            deferred.push(Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>);
-            // Defer search coordinator alongside clipboard services when locked/GUI-managed
-            deferred.push(Arc::clone(&search_coordinator_service) as Arc<dyn DaemonService>);
-        } else {
-            initial.push(Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>);
-            initial.push(Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>);
-            initial.push(Arc::clone(&search_coordinator_service) as Arc<dyn DaemonService>);
-        }
-
-        // `peer_keepalive_worker` is pushed below, after `AppFacade` is
-        // assembled, since it now holds `Arc<AppFacade>`.
-
-        (initial, deferred)
-    };
-    let deferred_notify_opt = if deferred_services.is_empty() {
-        None
-    } else {
-        Some(deferred_ready_notify.clone())
-    };
+    let mut service_plan = DaemonServicePlan::build(DaemonServicePlanInput {
+        gui_managed,
+        encryption_unlocked,
+        file_sync_orchestrator: Arc::clone(&file_sync_orchestrator_worker)
+            as Arc<dyn DaemonService>,
+        clipboard_watcher: Arc::clone(&clipboard_watcher) as Arc<dyn DaemonService>,
+        inbound_clipboard_sync: Arc::clone(&inbound_clipboard_sync) as Arc<dyn DaemonService>,
+        search_coordinator: Arc::clone(&search_coordinator_service) as Arc<dyn DaemonService>,
+    });
 
     // Slice4 P3 T3.3 — clone the new SpaceSetupFacade Arc + resolve the
     // sponsor device id (stable for the daemon's lifetime) so the
@@ -355,21 +291,18 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     // module docs / AGENTS §11.4.
     let peer_keepalive_worker: Arc<dyn DaemonService> =
         Arc::new(PeerKeepAliveWorker::new(Arc::clone(&app_facade)));
-    if encryption_unlocked {
-        services.push(Arc::clone(&peer_keepalive_worker));
-    } else {
-        deferred_services.push(peer_keepalive_worker);
-    }
+    service_plan.add_peer_keepalive(encryption_unlocked, peer_keepalive_worker);
+    let deferred_notify_opt = service_plan.deferred_ready_notify(deferred_ready_notify.clone());
 
     let daemon = DaemonApp::new_with_deferred(
-        services,
+        service_plan.services,
         Arc::clone(&app_facade),
         storage_paths_for_daemon,
         emitter_cell.clone(),
-        state,
+        service_plan.state,
         event_tx,
         encryption_unlocked,
-        deferred_services,
+        service_plan.deferred_services,
         deferred_notify_opt,
         external_shutdown,
         Some(clipboard_capture_gate.clone()),

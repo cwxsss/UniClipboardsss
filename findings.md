@@ -25,6 +25,9 @@
 - 第二阶段新增 `uc-bootstrap::build_app_facade_from_deps`，将共同的 `AppFacade` 子 facade 拼装收拢到单一函数。
 - `uc-desktop`、`uc-tauri`、CLI runtime 现在共用同一个 `AppFacade` 装配函数。
 - daemon/Tauri/CLI 的差异没有硬编码在公共函数里，而是通过 `AppFacadeAssemblyOptions` 传入。
+- 第三阶段新增 `daemon::service_plan`，把 daemon 服务启动分组从 `entrypoint.rs` 抽出。
+- `DaemonServicePlan` 现在统一决定哪些服务立即启动、哪些服务等待 ready 信号后启动。
+- `entrypoint.rs` 仍负责构造具体 worker 和 facade，但不再内联维护服务状态列表和分组规则。
 
 ## 验证发现
 
@@ -35,10 +38,12 @@
 - `cargo check -p uc-cli -p uniclipboard` 通过。
 - `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true` 无输出，说明 `uc-tauri` 没有重新依赖 `uc-desktop` 或 `uc-daemon`。
 - `git diff --check` 通过。
+- `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- `cargo check -p uc-desktop -p uc-daemon -p uc-cli -p uniclipboard` 通过。
 
 ## 后续 gap
 
 - 需要决定 `uc-bootstrap` 是保留为通用组装库，还是逐步并入 `uc-desktop` 的 bootstrap 模块。
 - 需要后续再收拢 HTTP/WS 和 Tauri bridge 的宿主归属。
 - 需要逐步缩小 `uc-daemon` 兼容层，最终只保留必要的外部入口。
-- 需要继续收拢 daemon 启动流程里的 worker 构造和启动编排，让 `uc-desktop` 的 host/daemon 模式边界更清晰。
+- 需要继续把 worker 构造本身拆成更清晰的 daemon runtime assembly，进一步缩短 `entrypoint.rs`。

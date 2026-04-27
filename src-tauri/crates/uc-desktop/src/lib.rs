@@ -8,11 +8,7 @@ pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use uc_daemon_contract::DAEMON_API_REVISION;
 
 pub mod app;
-pub mod daemon {
-    //! daemon 运行模式入口。
-
-    pub use crate::entrypoint::run;
-}
+pub mod daemon;
 pub mod entrypoint;
 pub mod peers;
 pub mod process_metadata;

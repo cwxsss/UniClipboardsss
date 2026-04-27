@@ -24,6 +24,16 @@
 - 运行 `cargo check -p uc-cli -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出，说明 `uc-tauri` 没有重新依赖 `uc-desktop` 或 `uc-daemon`。
 - 运行 `git diff --check`，通过。
+- 提交 `70d14e52 arch: introduce uc-desktop host crate`。
+- 开始第三阶段：收拢 daemon 启动里的后台服务创建和启动编排。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/mod.rs`，作为 daemon 运行模式模块入口。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/service_plan.rs`，集中维护立即启动服务、延迟启动服务和初始服务状态。
+- 将 `entrypoint.rs` 中内联的服务分组逻辑替换为 `DaemonServicePlan`。
+- 为服务清单补充 2 个单元测试，覆盖解锁独立模式和 GUI/锁定延迟模式。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `git diff --check`，通过。
 
 ## 工作区备注
 
