@@ -34,5 +34,6 @@ pub trait DaemonService: Send + Sync {
     async fn stop(&self) -> anyhow::Result<()>;
 
     /// Return the current health status. Synchronous for lock-free polling.
+    #[allow(dead_code)]
     fn health_check(&self) -> ServiceHealth;
 }

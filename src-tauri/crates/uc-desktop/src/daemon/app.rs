@@ -115,6 +115,7 @@ pub struct DaemonApp {
 
 impl DaemonApp {
     /// Create a new DaemonApp with the given services.
+    #[allow(dead_code)]
     pub fn new(
         services: Vec<Arc<dyn DaemonService>>,
         app_facade: Arc<AppFacade>,

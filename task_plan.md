@@ -49,6 +49,7 @@
 | 30 | 完成 | 将 daemon workers 迁入 `daemon/` |
 | 31 | 完成 | 将 daemon peers/search 模块迁入 `daemon/` |
 | 32 | 完成 | 将 daemon app 模块迁入 `daemon/` |
+| 33 | 完成 | 收窄 `daemon` 子模块公开面 |
 
 ## 决策记录
 
@@ -84,6 +85,7 @@
 - 第二十六阶段只移动 workers 文件位置，不改剪贴板、文件同步、入站同步和 keepalive 行为。
 - 第二十七阶段只移动 peers/search 文件位置，不改 presence 事件和搜索协调行为。
 - 第二十八阶段只移动 daemon app 文件位置，不改 daemon 启动、HTTP/WS 或恢复行为。
+- 第二十九阶段只调整 `daemon` 子模块可见性，继续公开 `daemon::run` 和 `daemon::run_mode`。
 
 ## 错误记录
 

@@ -19,12 +19,14 @@ pub struct DaemonServiceSnapshot {
 /// This struct holds only pure data (start time + cached service statuses).
 /// It is fully `Send + Sync` without trait object concerns. RPC reads never
 /// contend with service lifecycle because this is a snapshot, not a live view.
+#[allow(dead_code)]
 pub struct RuntimeState {
     start_time: Instant,
     worker_statuses: Vec<DaemonServiceSnapshot>,
     connected_peer_count: u32,
 }
 
+#[allow(dead_code)]
 impl RuntimeState {
     /// Create a new RuntimeState with the given initial service statuses.
     pub fn new(initial_statuses: Vec<DaemonServiceSnapshot>) -> Self {

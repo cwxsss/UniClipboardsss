@@ -66,6 +66,16 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
 - 运行 `git diff --check`，通过。
+- 提交 `531b8f63 refactor: move daemon app module`。
+- 开始第二十九阶段：收窄 `daemon` 子模块公开面。
+- 将 `daemon` 下除 `run_mode` 与重导出的 `run` 之外的装配模块改为 crate 内可见。
+- 对收窄可见性后显露的保留状态查询入口加 `dead_code` 允许，避免干扰后续编译检查。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
+- 运行 `git diff --check`，通过。
 - 提交 `0c5a8178 refactor: move daemon peers search modules`。
 - 开始第二十八阶段：将 daemon app 模块迁入 `daemon/`。
 - 移动 `app.rs` 到 `daemon/app.rs`，并更新 app assembly、run loop 和启动恢复引用路径。
