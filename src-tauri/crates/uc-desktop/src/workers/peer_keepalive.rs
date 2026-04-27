@@ -42,7 +42,7 @@ use tracing::{debug, info, warn};
 
 use uc_application::facade::AppFacade;
 
-use crate::service::{DaemonService, ServiceHealth};
+use crate::daemon::service::{DaemonService, ServiceHealth};
 
 /// Refresh cadence. Must sit comfortably below iroh's default QUIC idle
 /// timeout (~60s) so the keepalive dial lands before the path is evicted.

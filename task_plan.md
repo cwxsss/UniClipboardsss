@@ -45,6 +45,7 @@
 | 26 | 完成 | 删除 `uc-desktop` 内部旧 `entrypoint` 转发 |
 | 27 | 完成 | 收窄 `uc-desktop` 根模块公开面 |
 | 28 | 完成 | 删除 `uc-desktop` 的 PID 元数据转发 |
+| 29 | 完成 | 将 daemon 服务状态模块迁入 `daemon/` |
 
 ## 决策记录
 
@@ -76,6 +77,7 @@
 - 第二十二阶段只删除 `uc-desktop::entrypoint` 旧路径；`uc_daemon::entrypoint::run` 继续保留。
 - 第二十三阶段只调整 `uc-desktop` 模块可见性，不移动文件、不改运行逻辑。
 - 第二十四阶段只删除 `uc-desktop::process_metadata` 转发；旧 `uc_daemon::process_metadata` 改为直接转发 `uc-daemon-local`。
+- 第二十五阶段只移动 `service` 和 `state` 文件位置，不改服务健康状态和 daemon 状态逻辑。
 
 ## 错误记录
 

@@ -20,7 +20,7 @@ use tracing::info;
 
 use uc_bootstrap::file_transfer_lifecycle::FileTransferLifecycle;
 
-use crate::service::{DaemonService, ServiceHealth};
+use crate::daemon::service::{DaemonService, ServiceHealth};
 
 pub struct FileSyncOrchestratorWorker {
     lifecycle: Arc<FileTransferLifecycle>,

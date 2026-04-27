@@ -95,6 +95,15 @@
 - 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
 - 运行 `rg -n "uc_desktop::process_metadata|crate::process_metadata|pub mod process_metadata" src-tauri/crates/uc-desktop src-tauri/crates/uc-daemon -g '*.rs'`，只剩 `uc-daemon` 兼容导出。
 - 运行 `git diff --check`，通过。
+- 提交 `5918756e refactor: remove desktop process metadata shim`。
+- 开始第二十五阶段：将 daemon 服务状态模块迁入 `daemon/`。
+- 移动 `service.rs` 到 `daemon/service.rs`，移动 `state.rs` 到 `daemon/state.rs`，并更新内部引用路径。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
+- 运行 `git diff --check`，通过。
 - 提交 `3fcf6735 refactor: remove desktop entrypoint shim`。
 - 开始第二十三阶段：收窄 `uc-desktop` 根模块公开面。
 - 将 `app`、`peers`、`search`、`service`、`state`、`workers` 改为 crate 内可见，继续公开 `daemon` 和 `process_metadata`。

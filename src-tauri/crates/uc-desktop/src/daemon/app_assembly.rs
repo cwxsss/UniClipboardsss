@@ -9,8 +9,8 @@ use uc_application::facade::{AppFacade, AppPaths, HostEventEmitterPort};
 use uc_webserver::api::types::DaemonWsEvent;
 
 use crate::app::DaemonApp;
+use crate::daemon::service::DaemonService;
 use crate::daemon::service_plan::DaemonServicePlan;
-use crate::service::DaemonService;
 use crate::workers::peer_keepalive::PeerKeepAliveWorker;
 
 /// daemon 应用实例装配输入。

@@ -70,6 +70,7 @@
 - 当前仓库没有代码使用 `uc_desktop::entrypoint`，`uc-daemon` 兼容层也已经直接从 `uc_desktop::daemon::run` 重导出旧 `uc_daemon::entrypoint::run`。
 - 收窄公开面前，当前仓库外部只直接使用 `uc_desktop::daemon` 和 `uc_desktop::process_metadata`；`app`、`peers`、`search`、`service`、`state`、`workers` 都只是 `uc-desktop` 内部宿主实现细节。
 - `uc-desktop::process_metadata` 只是转发 `uc-daemon-local::process_metadata`；PID 元数据的真实归属已经是 `uc-daemon-local`。
+- `service` 和 `state` 只被 `uc-desktop` 的 daemon host、worker、service plan 使用，适合收进 `daemon/` 子目录。
 
 ## 验证发现
 
@@ -148,6 +149,7 @@
 - 删除 `uc-desktop::entrypoint` 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 和 `cargo check -p uniclipboard` 均通过。
 - 收窄 `uc-desktop` 根模块公开面后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 和 `cargo check -p uniclipboard` 均通过。
 - 删除 `uc-desktop::process_metadata` 后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 和 `cargo check -p uniclipboard` 均通过。
+- 移动 daemon 服务状态模块后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli`、`cargo check -p uniclipboard` 和 `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 均通过。
 
 ## 后续 gap
 

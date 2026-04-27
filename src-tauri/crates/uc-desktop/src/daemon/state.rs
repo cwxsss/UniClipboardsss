@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use crate::service::ServiceHealth;
+use crate::daemon::service::ServiceHealth;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DaemonServiceSnapshot {

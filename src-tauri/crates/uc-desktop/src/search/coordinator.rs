@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 use uc_application::facade::{SearchCoordinator, SearchCoordinatorEvent};
 use uc_daemon_contract::constants::{ws_event, ws_topic};
 
-use crate::service::{DaemonService, ServiceHealth};
+use crate::daemon::service::{DaemonService, ServiceHealth};
 use uc_webserver::api::types::DaemonWsEvent;
 
 pub struct SearchCoordinatorService {

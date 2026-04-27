@@ -5,8 +5,8 @@ use std::sync::Arc;
 use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::DaemonRuntimeWorkers;
 use crate::daemon::search_assembly::DaemonSearchAssembly;
+use crate::daemon::service::DaemonService;
 use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
-use crate::service::DaemonService;
 
 /// 构造 daemon 服务启动清单。
 pub fn build_daemon_service_plan(

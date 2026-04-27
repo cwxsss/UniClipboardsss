@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::service::{DaemonService, ServiceHealth};
-use crate::state::{DaemonServiceSnapshot, RuntimeState};
+use crate::daemon::service::{DaemonService, ServiceHealth};
+use crate::daemon::state::{DaemonServiceSnapshot, RuntimeState};
 
 use super::run_mode::DaemonRunMode;
 
