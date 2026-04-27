@@ -8,6 +8,7 @@ mod encrypting_clipboard_event_writer;
 mod hashing;
 mod identity_fingerprint;
 mod key_material;
+mod key_migration_adapter;
 mod scope_identifier;
 mod secrets;
 mod session;
@@ -30,6 +31,7 @@ pub use identity_fingerprint::{
     ShortCodeGenerator,
 };
 pub use key_material::KeyMaterialStore;
+pub use key_migration_adapter::DefaultKeyMigrationAdapter;
 pub(crate) use secrets::MasterKey;
 pub use session::InMemorySession;
 pub use space_access_adapter::DefaultSpaceAccessAdapter;

@@ -71,6 +71,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    clipboard_migration_backup (event_id, representation_id) {
+        event_id -> Text,
+        representation_id -> Text,
+        migration_ciphertext -> Binary,
+    }
+}
+
+diesel::table! {
     clipboard_selection (entry_id) {
         entry_id -> Text,
         primary_rep_id -> Text,
@@ -190,6 +198,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     blob_reference,
     clipboard_entry,
     clipboard_event,
+    clipboard_migration_backup,
     clipboard_selection,
     clipboard_representation_thumbnail,
     clipboard_snapshot_representation,
