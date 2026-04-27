@@ -17,10 +17,9 @@ use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
 use crate::daemon::runtime_controls::build_daemon_runtime_controls;
 use crate::daemon::search_assembly::build_daemon_search_assembly;
-use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
+use crate::daemon::service_assembly::build_daemon_service_plan;
 use crate::daemon::shutdown::build_external_shutdown_token;
 use crate::daemon::tokio_runtime::build_daemon_tokio_runtime;
-use crate::service::DaemonService;
 
 /// 运行 daemon 进程。
 ///
@@ -80,16 +79,12 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
 
     let search_assembly = build_daemon_search_assembly(&deps, runtime_controls.event_tx.clone());
 
-    let service_plan = DaemonServicePlan::build(DaemonServicePlanInput {
+    let service_plan = build_daemon_service_plan(
         run_mode,
-        encryption_unlocked: runtime_controls.encryption_unlocked,
-        file_sync_orchestrator: Arc::clone(&runtime_workers.file_sync_orchestrator)
-            as Arc<dyn DaemonService>,
-        clipboard_watcher: Arc::clone(&runtime_workers.clipboard_watcher) as Arc<dyn DaemonService>,
-        inbound_clipboard_sync: Arc::clone(&runtime_workers.inbound_clipboard_sync)
-            as Arc<dyn DaemonService>,
-        search_coordinator: Arc::clone(&search_assembly.service) as Arc<dyn DaemonService>,
-    });
+        runtime_controls.encryption_unlocked,
+        &runtime_workers,
+        &search_assembly,
+    );
 
     // Slice4 P3 T3.3 — clone the new SpaceSetupFacade Arc + resolve the
     // sponsor device id (stable for the daemon's lifetime) so the

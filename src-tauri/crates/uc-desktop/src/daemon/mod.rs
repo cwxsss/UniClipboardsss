@@ -8,6 +8,7 @@ pub mod run_mode;
 pub mod runtime_assembly;
 pub mod runtime_controls;
 pub mod search_assembly;
+pub mod service_assembly;
 pub mod service_plan;
 pub mod shutdown;
 pub mod startup_recovery;

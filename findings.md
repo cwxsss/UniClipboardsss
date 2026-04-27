@@ -56,6 +56,8 @@
 - runtime 仍是同一个多线程、启用全部能力的长生命周期 runtime。
 - 第十五阶段新增 `daemon::runtime_controls`，把 daemon 启动时共享的事件通道、ready notify、剪贴板 gate 和初始解锁状态从 `entrypoint.rs` 抽出。
 - 事件通道容量仍为 64；GUI sidecar 仍默认关闭剪贴板采集，独立/常驻模式仍默认打开。
+- 第十六阶段新增 `daemon::service_assembly`，把 worker/search service 到 `DaemonServicePlan` 的装配从 `entrypoint.rs` 抽出。
+- 服务立即启动还是等待 ready 的规则仍在 `DaemonServicePlan` 内。
 
 ## 验证发现
 
@@ -108,6 +110,10 @@
 - 抽出 daemon 运行控制量后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 抽出 daemon 运行控制量后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 抽出 daemon 运行控制量后，`cargo check -p uniclipboard` 通过。
+- 抽出 daemon 服务清单装配后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 抽出 daemon 服务清单装配后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 抽出 daemon 服务清单装配后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 抽出 daemon 服务清单装配后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 

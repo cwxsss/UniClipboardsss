@@ -36,6 +36,7 @@
 | 17 | 完成 | 抽出 daemon 运行循环和退出收尾 |
 | 18 | 完成 | 抽出 daemon Tokio runtime 创建 |
 | 19 | 完成 | 抽出 daemon 运行控制量创建 |
+| 20 | 完成 | 抽出 daemon 服务清单装配 |
 
 ## 决策记录
 
@@ -58,6 +59,7 @@
 - 第十三阶段只抽最终运行循环，不改启动恢复、daemon 退出和 space setup shutdown 顺序。
 - 第十四阶段只抽 Tokio runtime 创建，不改 runtime 类型、线程模型和生命周期。
 - 第十五阶段只抽事件通道、ready notify、剪贴板 gate 和初始解锁状态创建，不改默认值。
+- 第十六阶段只抽 worker/search service 到服务清单的装配，不改服务分组规则。
 
 ## 错误记录
 
