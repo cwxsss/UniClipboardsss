@@ -21,6 +21,11 @@
 //! * Delegates to `SpaceSetupFacade::refresh_presence()`, which internally
 //!   runs `EnsureReachableAllUseCase` over every paired peer — reusing the
 //!   existing dial path instead of introducing a second one.
+//! * Worker only sees `Arc<AppFacade>`; `space_setup` is reached via
+//!   `app_facade.space_setup` to honor the single-entry rule documented in
+//!   `uc-application/src/facade/app_facade.rs`. CLI bundles where
+//!   `space_setup` is `None` make the keepalive tick a no-op (CLI has no
+//!   long-lived process to keep warm).
 //! * Ticker-only (no presence event subscription): the usecase is already
 //!   idempotent and handles both dialing new peers and re-dialing stale
 //!   connections. Subscribing would duplicate its scan.
@@ -35,7 +40,7 @@ use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use uc_application::facade::SpaceSetupFacade;
+use uc_application::facade::AppFacade;
 
 use crate::service::{DaemonService, ServiceHealth};
 
@@ -45,12 +50,12 @@ use crate::service::{DaemonService, ServiceHealth};
 const REFRESH_INTERVAL: Duration = Duration::from_secs(25);
 
 pub struct PeerKeepAliveWorker {
-    space_setup_facade: Arc<SpaceSetupFacade>,
+    app_facade: Arc<AppFacade>,
 }
 
 impl PeerKeepAliveWorker {
-    pub fn new(space_setup_facade: Arc<SpaceSetupFacade>) -> Self {
-        Self { space_setup_facade }
+    pub fn new(app_facade: Arc<AppFacade>) -> Self {
+        Self { app_facade }
     }
 }
 
@@ -77,7 +82,12 @@ impl DaemonService for PeerKeepAliveWorker {
             tokio::select! {
                 _ = cancel.cancelled() => break,
                 _ = ticker.tick() => {
-                    match self.space_setup_facade.refresh_presence().await {
+                    let Some(space_setup) = self.app_facade.space_setup.as_ref() else {
+                        // No space_setup facade in this bundle (CLI). Nothing to keep warm.
+                        debug!("peer keepalive tick skipped: space_setup facade unavailable");
+                        continue;
+                    };
+                    match space_setup.refresh_presence().await {
                         Ok(report) => {
                             debug!(
                                 total = report.total,

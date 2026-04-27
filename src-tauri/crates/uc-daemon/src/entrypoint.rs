@@ -204,12 +204,12 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     let file_sync_orchestrator_worker =
         Arc::new(FileSyncOrchestratorWorker::new(file_transfer_lifecycle));
 
-    // Keep iroh magicsock paths warm so blob fetches don't cold-start 30s+
-    // after being idle for a minute. Ticks `SpaceSetupFacade::refresh_presence`
-    // every 25s (well under the ~60s QUIC idle timeout).
-    let peer_keepalive_worker: Arc<dyn DaemonService> = Arc::new(PeerKeepAliveWorker::new(
-        ctx.space_setup_assembly.facade.clone(),
-    ));
+    // `PeerKeepAliveWorker` is constructed AFTER `AppFacade` assembly below
+    // so it can hold `Arc<AppFacade>` and reach `space_setup` via the
+    // single AppFacade entry (see app_facade.rs module docs / AGENTS §11.4).
+    // The service-list assembly below leaves a `mut` slot for it, and the
+    // post-assembly block inserts it into `services` or `deferred_services`
+    // based on `encryption_unlocked`.
 
     // Phase 67 (revised): encryption recovery + slice 2/3 try_resume_session
     // run in a background task spawned below inside `rt.block_on`, AFTER
@@ -288,7 +288,7 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
     ];
     let state = Arc::new(RwLock::new(RuntimeState::new(initial_statuses)));
 
-    let (services, deferred_services) = {
+    let (mut services, mut deferred_services) = {
         let mut initial: Vec<Arc<dyn DaemonService>> =
             vec![Arc::clone(&file_sync_orchestrator_worker) as Arc<dyn DaemonService>];
         let mut deferred: Vec<Arc<dyn DaemonService>> = Vec::new();
@@ -304,11 +304,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             initial.push(Arc::clone(&search_coordinator_service) as Arc<dyn DaemonService>);
         }
 
-        if encryption_unlocked {
-            initial.push(Arc::clone(&peer_keepalive_worker) as Arc<dyn DaemonService>);
-        } else {
-            deferred.push(peer_keepalive_worker);
-        }
+        // `peer_keepalive_worker` is pushed below, after `AppFacade` is
+        // assembled, since it now holds `Arc<AppFacade>`.
 
         (initial, deferred)
     };
@@ -391,6 +388,20 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
         })),
     }));
     let unlock_app_facade = Arc::clone(&app_facade);
+
+    // Keep iroh magicsock paths warm so blob fetches don't cold-start 30s+
+    // after being idle for a minute. Ticks `space_setup.refresh_presence`
+    // every 25s (well under the ~60s QUIC idle timeout). Constructed here
+    // (post-AppFacade assembly) so it can hold `Arc<AppFacade>` and reach
+    // `space_setup` via the single AppFacade entry — see app_facade.rs
+    // module docs / AGENTS §11.4.
+    let peer_keepalive_worker: Arc<dyn DaemonService> =
+        Arc::new(PeerKeepAliveWorker::new(Arc::clone(&app_facade)));
+    if encryption_unlocked {
+        services.push(Arc::clone(&peer_keepalive_worker));
+    } else {
+        deferred_services.push(peer_keepalive_worker);
+    }
 
     let daemon = DaemonApp::new_with_deferred(
         services,
