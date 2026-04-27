@@ -48,6 +48,8 @@
 - 公共 `uc-bootstrap::build_app_facade_from_deps` 仍是 facade 构造的单一入口，`uc-desktop` 只提供 daemon 运行模式的参数装配。
 - 第十一阶段新增 `daemon::background_tasks`，把 blob 后台任务的 runtime spawn 包装从 `entrypoint.rs` 抽出。
 - blob 后台任务本身仍由 `uc-bootstrap::spawn_blob_processing_tasks` 统一实现，`uc-desktop` 只负责在 daemon runtime 上启动它。
+- 第十二阶段新增 `daemon::app_assembly`，把 `DaemonApp` 实例创建和 peer keepalive 接入从 `entrypoint.rs` 抽出。
+- peer keepalive 仍通过 `AppFacade` 访问 space setup，服务分组规则仍由 `DaemonServicePlan` 决定。
 
 ## 验证发现
 
@@ -84,6 +86,10 @@
 - 抽出 daemon 后台 blob 任务启动后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 抽出 daemon 后台 blob 任务启动后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 抽出 daemon 后台 blob 任务启动后，`cargo check -p uniclipboard` 通过。
+- 抽出 daemon 应用实例装配后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 抽出 daemon 应用实例装配后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 抽出 daemon 应用实例装配后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 抽出 daemon 应用实例装配后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 

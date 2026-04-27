@@ -10,7 +10,7 @@ use uc_bootstrap::build_non_gui_bundle;
 use uc_bootstrap::builders::build_daemon_app;
 use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
 
-use crate::app::DaemonApp;
+use crate::daemon::app_assembly::{build_daemon_app_instance, DaemonAppAssemblyInput};
 use crate::daemon::app_facade_assembly::{build_daemon_app_facade, DaemonAppFacadeAssemblyInput};
 use crate::daemon::background_tasks::spawn_daemon_background_tasks;
 use crate::daemon::run_mode::DaemonRunMode;
@@ -20,7 +20,6 @@ use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
 use crate::daemon::shutdown::build_external_shutdown_token;
 use crate::daemon::startup_recovery::{spawn_startup_recovery, StartupRecoveryInput};
 use crate::service::DaemonService;
-use crate::workers::peer_keepalive::PeerKeepAliveWorker;
 use uc_webserver::api::types::DaemonWsEvent;
 
 /// 运行 daemon 进程。
@@ -117,7 +116,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
 
     let search_assembly = build_daemon_search_assembly(&deps, event_tx.clone());
 
-    let mut service_plan = DaemonServicePlan::build(DaemonServicePlanInput {
+    let service_plan = DaemonServicePlan::build(DaemonServicePlanInput {
         run_mode,
         encryption_unlocked,
         file_sync_orchestrator: Arc::clone(&runtime_workers.file_sync_orchestrator)
@@ -154,31 +153,18 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     });
     let unlock_app_facade = Arc::clone(&app_facade);
 
-    // Keep iroh magicsock paths warm so blob fetches don't cold-start 30s+
-    // after being idle for a minute. Ticks `space_setup.refresh_presence`
-    // every 25s (well under the ~60s QUIC idle timeout). Constructed here
-    // (post-AppFacade assembly) so it can hold `Arc<AppFacade>` and reach
-    // `space_setup` via the single AppFacade entry — see app_facade.rs
-    // module docs / AGENTS §11.4.
-    let peer_keepalive_worker: Arc<dyn DaemonService> =
-        Arc::new(PeerKeepAliveWorker::new(Arc::clone(&app_facade)));
-    service_plan.add_peer_keepalive(encryption_unlocked, peer_keepalive_worker);
-    let deferred_notify_opt = service_plan.deferred_ready_notify(deferred_ready_notify.clone());
-
-    let daemon = DaemonApp::new_with_deferred(
-        service_plan.services,
-        Arc::clone(&app_facade),
-        storage_paths_for_daemon,
-        emitter_cell.clone(),
-        service_plan.state,
+    let daemon = build_daemon_app_instance(DaemonAppAssemblyInput {
+        service_plan,
+        app_facade: Arc::clone(&app_facade),
+        storage_paths: storage_paths_for_daemon,
+        emitter_cell: emitter_cell.clone(),
         event_tx,
         encryption_unlocked,
-        service_plan.deferred_services,
-        deferred_notify_opt,
+        deferred_ready_notify: deferred_ready_notify.clone(),
         external_shutdown,
-        Some(clipboard_capture_gate.clone()),
-        Some(local_device_id),
-    );
+        clipboard_capture_gate: clipboard_capture_gate.clone(),
+        local_device_id,
+    });
 
     // Slice 2 Phase 3 · T6 — move the iroh-stack assembly into the
     // runtime closure so its shutdown runs AFTER daemon.run() returns

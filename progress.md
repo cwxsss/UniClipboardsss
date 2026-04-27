@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `17b0ff43 refactor: extract desktop daemon background task startup`。
+- 开始第十二阶段：抽出 daemon 应用实例装配。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/app_assembly.rs`，集中构造 `DaemonApp`。
+- `entrypoint.rs` 不再直接添加 peer keepalive worker，也不再直接计算 deferred ready notify。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `5351a069 refactor: extract desktop daemon app facade assembly`。
 - 开始第十一阶段：抽出 daemon 后台 blob 任务启动。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/background_tasks.rs`，封装 daemon runtime 上的 blob 后台任务启动。

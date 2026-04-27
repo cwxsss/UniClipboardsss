@@ -1,5 +1,6 @@
 //! daemon 运行模式。
 
+pub mod app_assembly;
 pub mod app_facade_assembly;
 pub mod background_tasks;
 pub mod run_mode;
