@@ -124,37 +124,6 @@ pub async fn ensure_local_daemon_running() -> Result<LocalDaemonSession, LocalDa
     }
 }
 
-/// Capture variant used by the `#[autostop]` proc-macro.
-///
-/// Behaves like [`ensure_local_daemon_running`] but, on success, arms an
-/// [`AutostopGuard`](crate::autostop::AutostopGuard) and stores it into the
-/// caller-provided `slot`. The guard is dropped when the caller's function
-/// returns, sending SIGTERM to the daemon iff this invocation spawned it.
-///
-/// Intended to be called only via `#[autostop]` rewrite. Direct use works too
-/// but is awkward — prefer the macro for ergonomics.
-pub async fn ensure_local_daemon_running_capture(
-    slot: &mut Option<crate::autostop::AutostopGuard>,
-) -> Result<LocalDaemonSession, LocalDaemonError> {
-    let session = ensure_local_daemon_running().await?;
-    *slot = Some(crate::autostop::AutostopGuard::arm(&session));
-    Ok(session)
-}
-
-/// One-shot variant of [`ensure_local_daemon_running`] that pairs the session
-/// with an [`AutostopGuard`](crate::autostop::AutostopGuard).
-///
-/// The guard is armed iff the daemon was spawned by this call. Callers must bind
-/// the returned tuple to two local variables so the guard lives for the whole
-/// command body:
-///
-/// ```ignore
-/// let (session, _autostop) = ensure_local_daemon_running_for_oneshot().await?;
-/// ```
-///
-/// The `#[autostop]` attribute macro in `uc-cli-macros` rewrites plain
-/// `ensure_local_daemon_running` calls into this form automatically.
-#[allow(dead_code)]
 async fn wait_for_daemon_health<Probe, ProbeFuture>(
     probe: &mut Probe,
     startup_timeout: Duration,

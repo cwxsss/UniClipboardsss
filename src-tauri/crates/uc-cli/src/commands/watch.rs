@@ -1,4 +1,4 @@
-//! `uniclipboard-cli watch` — foreground inbound clipboard observer
+//! `uniclip watch` — foreground inbound clipboard observer
 //! (Slice 2 Phase 2 · T11).
 //!
 //! Self-contained direct-mode command (no daemon). The backing
@@ -20,7 +20,7 @@ use uc_application::facade::space_setup::TryResumeSessionError;
 use uc_application::facade::{InboundAction, InboundNotice};
 use uc_core::SystemClipboardSnapshot;
 
-use crate::commands::slice1_common::{build_assembly, refuse_if_daemon_running};
+use crate::commands::app_session::{build_app_session, refuse_if_daemon_running};
 use crate::exit_codes;
 use crate::ui;
 
@@ -33,20 +33,20 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         return code;
     }
 
-    let assembly = match build_assembly(verbose).await {
-        Ok(bundle) => bundle.assembly,
+    let cli = match build_app_session(verbose).await {
+        Ok(bundle) => bundle,
         Err(code) => return code,
     };
 
     let resume_spinner = ui::spinner("Resuming space session...");
-    match assembly.facade.try_resume_session().await {
+    match cli.app_facade().try_resume_session().await {
         Ok(true) => ui::spinner_finish_success(&resume_spinner, "Session resumed"),
         Ok(false) => {
             ui::spinner_finish_error(
                 &resume_spinner,
                 "No space on this profile — run `init` or `join` first.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::CorruptedKeyMaterial) => {
@@ -54,7 +54,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
                 &resume_spinner,
                 "Key material is corrupted — consider resetting this profile.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::KeyringMiss) => {
@@ -62,12 +62,12 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
                 &resume_spinner,
                 "Keychain cannot silently unlock this space.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::Internal(msg)) => {
             ui::spinner_finish_error(&resume_spinner, &format!("Resume failed: {msg}"));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     }
@@ -75,7 +75,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
     // Refresh presence so the sender side, when it dispatches, doesn't
     // skip us under "Unknown" — same routine as `members` / `send`.
     let probe_spinner = ui::spinner("Probing paired peers...");
-    match assembly.facade.refresh_presence().await {
+    match cli.app_facade().refresh_presence().await {
         Ok(report) => ui::spinner_finish_success(
             &probe_spinner,
             &format!(
@@ -92,7 +92,16 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         ),
     }
 
-    let mut rx = assembly.clipboard_sync.subscribe_inbound_notices();
+    let mut rx = match cli.app_facade().subscribe_inbound_clipboard_notices() {
+        Ok(rx) => rx,
+        Err(err) => {
+            ui::error(&format!(
+                "Failed to subscribe inbound clipboard notices: {err}"
+            ));
+            cli.shutdown().await;
+            return exit_codes::EXIT_ERROR;
+        }
+    };
     if !json {
         ui::info("status", "Listening — press Ctrl-C to stop");
         ui::bar();
@@ -140,7 +149,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         }
     };
 
-    assembly.shutdown().await;
+    cli.shutdown().await;
     exit_code
 }
 

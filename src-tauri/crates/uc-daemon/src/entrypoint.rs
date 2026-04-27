@@ -358,6 +358,8 @@ pub fn run(gui_managed: bool) -> anyhow::Result<()> {
             search_index: Some(deps.search.search_index.clone()),
             file_cache_dir: Some(storage_paths_for_daemon.cache_dir.clone()),
         })),
+        clipboard_sync: Some(clipboard_sync_facade.clone()),
+        blob_transfer: Some(blob_transfer_facade.clone()),
         clipboard_restore: Some(Arc::new(ClipboardRestoreFacade::new(
             ClipboardRestoreFacadeDeps {
                 entry_repo: deps.clipboard.clipboard_entry_repo.clone(),

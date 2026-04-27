@@ -165,6 +165,25 @@ impl SearchCoordinator {
         }
     }
 
+    /// Run a manual rebuild on the caller task.
+    ///
+    /// CLI uses this path because there is no daemon process to own a
+    /// detached background rebuild after the CLI exits.
+    #[instrument(name = "search.run_manual_rebuild_now", level = "info", skip(self))]
+    pub async fn run_manual_rebuild_now(&self) -> ManualRebuildResult {
+        match self.rebuild_lock.clone().try_lock_owned() {
+            Ok(guard) => {
+                let deps = Arc::clone(&self.deps);
+                let event_tx = self.event_tx.clone();
+                let state = Arc::clone(&self.state);
+                let _guard = guard;
+                Self::run_rebuild(deps, event_tx, state, REASON_MANUAL_REBUILD).await;
+                ManualRebuildResult::Accepted
+            }
+            Err(_) => ManualRebuildResult::AlreadyInProgress,
+        }
+    }
+
     #[instrument(name = "search.startup_evaluation", level = "info", skip(self))]
     async fn startup_evaluation(&self) {
         let meta = match self.deps.search_index.get_index_meta().await {

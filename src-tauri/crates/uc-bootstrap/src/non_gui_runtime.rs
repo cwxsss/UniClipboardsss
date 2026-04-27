@@ -16,11 +16,14 @@ use uc_application::facade::{
     AppFacade, AppFacadeParts, AppPaths, ClipboardHistoryFacade, ClipboardHistoryFacadeDeps,
     DeviceFacade, EmitError, EncryptionFacade, EncryptionFacadeDeps, HostEvent,
     HostEventEmitterPort, InMemoryLifecycleStatus, LifecycleFacade, LifecycleFacadeDeps,
-    LifecycleStatusGateway, ResourceFacade, ResourceFacadeDeps, SearchFacade, SearchFacadeDeps,
-    SettingsFacade, StorageFacade, StorageFacadeDeps,
+    LifecycleStatusGateway, ResourceFacade, ResourceFacadeDeps, SearchCoordinator,
+    SearchCoordinatorDeps, SearchFacade, SearchFacadeDeps, SettingsFacade, StorageFacade,
+    StorageFacadeDeps,
 };
 use uc_core::clipboard::ClipboardIntegrationMode;
 
+use crate::assembly::get_storage_paths;
+use crate::space_setup::{build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly};
 use crate::task_registry::TaskRegistry;
 
 // ---------------------------------------------------------------------------
@@ -91,7 +94,7 @@ pub fn build_non_gui_bundle(
 
 /// Construct an [`AppFacade`] for CLI entry points.
 ///
-/// CLI commands (`setup`, `space_status`) need a stable application-layer
+/// CLI commands need a stable application-layer
 /// entry point per `uc-application/AGENTS.md` §11.4. This helper assembles
 /// the facade subset CLI cares about (encryption / settings / device /
 /// clipboard_history / search / lifecycle / storage / resource) and leaves
@@ -109,6 +112,15 @@ pub fn build_cli_app_facade(
     let deps = ctx.deps;
     let lifecycle_status: Arc<dyn LifecycleStatusGateway> =
         Arc::new(InMemoryLifecycleStatus::new());
+
+    let search_coordinator = Arc::new(SearchCoordinator::new(SearchCoordinatorDeps::new(
+        deps.search.search_index.clone(),
+        deps.search.search_key_derivation.clone(),
+        deps.search.search_pipeline.clone(),
+        deps.clipboard.clipboard_entry_repo.clone(),
+        deps.clipboard.representation_repo.clone(),
+        deps.clipboard.selection_repo.clone(),
+    )));
 
     Ok(Arc::new(AppFacade::new(AppFacadeParts {
         space_setup: None,
@@ -137,10 +149,12 @@ pub fn build_cli_app_facade(
             search_index: Some(deps.search.search_index.clone()),
             file_cache_dir: Some(storage_paths.cache_dir.clone()),
         })),
+        clipboard_sync: None,
+        blob_transfer: None,
         clipboard_restore: None,
         search: Arc::new(SearchFacade::new(SearchFacadeDeps {
             search_index: deps.search.search_index.clone(),
-            coordinator: None,
+            coordinator: Some(search_coordinator),
         })),
         settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
         device: Arc::new(DeviceFacade::new(
@@ -156,6 +170,105 @@ pub fn build_cli_app_facade(
             cache_fs: deps.system.cache_fs.clone(),
         })),
     })))
+}
+
+/// CLI 进程内 application runtime。
+///
+/// 业务命令只通过 `app_facade` 进入 application 层。需要 iroh 网络栈的
+/// 命令持有 `space_setup_assembly`,退出前调用 [`Self::shutdown`] 收口。
+pub struct CliAppRuntime {
+    pub app_facade: Arc<AppFacade>,
+    space_setup_assembly: Option<SpaceSetupAssembly>,
+}
+
+impl CliAppRuntime {
+    pub fn app_facade(&self) -> &Arc<AppFacade> {
+        &self.app_facade
+    }
+
+    pub async fn shutdown(mut self) {
+        if let Some(assembly) = self.space_setup_assembly.take() {
+            assembly.shutdown().await;
+        }
+    }
+}
+
+/// 构造完整 CLI runtime。适用于 pairing / roster / send / watch / blob 等
+/// 需要 iroh 网络栈的独立 CLI 命令。
+pub async fn build_cli_app_runtime(
+    log_profile: Option<uc_observability::LogProfile>,
+) -> anyhow::Result<CliAppRuntime> {
+    let (config, wired) = crate::builders::build_slice1_cli_context(log_profile)?;
+    let storage_paths = get_storage_paths(&config)?;
+    let assembly = build_space_setup_assembly(&wired, IrohNodeConfig::default())
+        .await
+        .map_err(|err| anyhow::anyhow!("failed to bind iroh endpoint: {err}"))?;
+    let deps = &wired.deps;
+
+    let lifecycle_status: Arc<dyn LifecycleStatusGateway> =
+        Arc::new(InMemoryLifecycleStatus::new());
+    let search_coordinator = Arc::new(SearchCoordinator::new(SearchCoordinatorDeps::new(
+        deps.search.search_index.clone(),
+        deps.search.search_key_derivation.clone(),
+        deps.search.search_pipeline.clone(),
+        deps.clipboard.clipboard_entry_repo.clone(),
+        deps.clipboard.representation_repo.clone(),
+        deps.clipboard.selection_repo.clone(),
+    )));
+
+    let app_facade = Arc::new(AppFacade::new(AppFacadeParts {
+        space_setup: Some(assembly.facade.clone()),
+        member_roster: Some(assembly.roster.clone()),
+        lifecycle: Arc::new(LifecycleFacade::new(LifecycleFacadeDeps {
+            status: lifecycle_status,
+        })),
+        encryption: Arc::new(EncryptionFacade::new(EncryptionFacadeDeps {
+            setup_status: deps.setup_status.clone(),
+            space_access: deps.security.space_access.clone(),
+        })),
+        resource: Arc::new(ResourceFacade::new(ResourceFacadeDeps {
+            representation_repo: deps.clipboard.representation_repo.clone(),
+            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
+            blob_store: deps.storage.blob_store.clone(),
+        })),
+        clipboard_history: Arc::new(ClipboardHistoryFacade::new(ClipboardHistoryFacadeDeps {
+            entry_repo: deps.clipboard.clipboard_entry_repo.clone(),
+            selection_repo: deps.clipboard.selection_repo.clone(),
+            representation_repo: deps.clipboard.representation_repo.clone(),
+            event_writer: deps.clipboard.clipboard_event_repo.clone(),
+            payload_resolver: deps.clipboard.payload_resolver.clone(),
+            blob_store: deps.storage.blob_store.clone(),
+            thumbnail_repo: deps.storage.thumbnail_repo.clone(),
+            file_transfer_repo: deps.storage.file_transfer_repo.clone(),
+            search_index: Some(deps.search.search_index.clone()),
+            file_cache_dir: Some(storage_paths.cache_dir.clone()),
+        })),
+        clipboard_sync: Some(assembly.clipboard_sync.clone()),
+        blob_transfer: Some(assembly.blob.clone()),
+        clipboard_restore: None,
+        search: Arc::new(SearchFacade::new(SearchFacadeDeps {
+            search_index: deps.search.search_index.clone(),
+            coordinator: Some(search_coordinator),
+        })),
+        settings: Arc::new(SettingsFacade::new(deps.settings.clone())),
+        device: Arc::new(DeviceFacade::new(
+            deps.device.device_identity.clone(),
+            deps.settings.clone(),
+        )),
+        storage: Arc::new(StorageFacade::new(StorageFacadeDeps {
+            db_path: storage_paths.db_path.clone(),
+            vault_dir: storage_paths.vault_dir.clone(),
+            cache_dir: storage_paths.cache_dir.clone(),
+            logs_dir: storage_paths.logs_dir.clone(),
+            app_data_root_dir: storage_paths.app_data_root_dir.clone(),
+            cache_fs: deps.system.cache_fs.clone(),
+        })),
+    }));
+
+    Ok(CliAppRuntime {
+        app_facade,
+        space_setup_assembly: Some(assembly),
+    })
 }
 
 /// Parse a raw string into a [`ClipboardIntegrationMode`].

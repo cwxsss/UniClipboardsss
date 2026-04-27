@@ -1,4 +1,4 @@
-//! `uniclipboard-cli invite` — sponsor side of Slice 1 pairing.
+//! `uniclip invite` — sponsor side of Slice 1 pairing.
 //!
 //! Silently resumes the local session (using the KEK cached in
 //! keychain / file secure storage by a prior `init` or `unlock`),
@@ -19,7 +19,7 @@ use uc_application::facade::space_setup::{
     IssuePairingInvitationError, PairingOutcome, TryResumeSessionError,
 };
 
-use crate::commands::slice1_common::{build_assembly, refuse_if_daemon_running};
+use crate::commands::app_session::{build_app_session, refuse_if_daemon_running};
 use crate::exit_codes;
 use crate::ui;
 
@@ -32,8 +32,8 @@ pub async fn run(verbose: bool) -> i32 {
         return code;
     }
 
-    let assembly = match build_assembly(verbose).await {
-        Ok(bundle) => bundle.assembly,
+    let cli = match build_app_session(verbose).await {
+        Ok(bundle) => bundle,
         Err(code) => return code,
     };
 
@@ -43,7 +43,7 @@ pub async fn run(verbose: bool) -> i32 {
     // when the joiner's ChallengeResponse arrives — manifesting to the
     // joiner as a spurious `PassphraseMismatch`.
     let resume_spinner = ui::spinner("Resuming space session...");
-    match assembly.facade.try_resume_session().await {
+    match cli.app_facade().try_resume_session().await {
         Ok(true) => {
             ui::spinner_finish_success(&resume_spinner, "Session resumed");
         }
@@ -52,7 +52,7 @@ pub async fn run(verbose: bool) -> i32 {
                 &resume_spinner,
                 "No space on this profile — run `init` first.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::CorruptedKeyMaterial) => {
@@ -60,43 +60,50 @@ pub async fn run(verbose: bool) -> i32 {
                 &resume_spinner,
                 "Key material is corrupted — consider resetting this profile.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::KeyringMiss) => {
             ui::spinner_finish_error(
                 &resume_spinner,
                 "Keychain cannot silently unlock this space. Run a future \
-                 `uniclipboard-cli unlock` (not yet shipped) or re-init.",
+                 `uniclip unlock` (not yet shipped) or re-init.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::Internal(msg)) => {
             ui::spinner_finish_error(&resume_spinner, &format!("Resume failed: {msg}"));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     }
 
     // Subscribe BEFORE issuing so we never miss an outcome that would
     // race between B1 returning and this task subscribing.
-    let mut outcome_rx = assembly.facade.subscribe_pairing_completion();
+    let mut outcome_rx = match cli.app_facade().subscribe_pairing_completion() {
+        Ok(rx) => rx,
+        Err(err) => {
+            ui::error(&format!("Failed to subscribe pairing completion: {err}"));
+            cli.shutdown().await;
+            return exit_codes::EXIT_ERROR;
+        }
+    };
 
     let spinner = ui::spinner("Requesting invitation from rendezvous...");
-    let invitation = match assembly.facade.issue_pairing_invitation().await {
+    let invitation = match cli.app_facade().issue_pairing_invitation().await {
         Ok(res) => {
             ui::spinner_finish_success(&spinner, "Invitation issued");
             res
         }
         Err(IssuePairingInvitationError::NetworkNotStarted) => {
             ui::spinner_finish_error(&spinner, "Network not started — run `init` first.");
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(other) => {
             ui::spinner_finish_error(&spinner, &format!("{other}"));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     };
@@ -149,6 +156,6 @@ pub async fn run(verbose: bool) -> i32 {
         }
     };
 
-    assembly.shutdown().await;
+    cli.shutdown().await;
     exit
 }

@@ -1,4 +1,4 @@
-//! `uniclipboard-cli members` — list paired devices + presence (Slice 2 Phase 1 · T10).
+//! `uniclip members` — list paired devices + presence (Slice 2 Phase 1 · T10).
 //!
 //! Self-contained direct-mode command (no daemon), mirroring the `init` /
 //! `invite` / `join` pattern in this crate. Builds a `SpaceSetupAssembly`,
@@ -21,7 +21,7 @@ use uc_application::facade::roster::{RosterEntry, RosterError};
 use uc_application::facade::space_setup::TryResumeSessionError;
 use uc_core::ports::ReachabilityState;
 
-use crate::commands::slice1_common::{build_assembly, refuse_if_daemon_running};
+use crate::commands::app_session::{build_app_session, refuse_if_daemon_running};
 use crate::exit_codes;
 use crate::ui;
 
@@ -32,8 +32,8 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         return code;
     }
 
-    let assembly = match build_assembly(verbose).await {
-        Ok(bundle) => bundle.assembly,
+    let cli = match build_app_session(verbose).await {
+        Ok(bundle) => bundle,
         Err(code) => return code,
     };
 
@@ -43,7 +43,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
     // 找不到可 resume 的空间时直接说明并退出,避免下游空列表让人误以为
     // 配对失败。
     let resume_spinner = ui::spinner("Resuming space session...");
-    match assembly.facade.try_resume_session().await {
+    match cli.app_facade().try_resume_session().await {
         Ok(true) => {
             ui::spinner_finish_success(&resume_spinner, "Session resumed");
         }
@@ -52,7 +52,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
                 &resume_spinner,
                 "No space on this profile — run `init` or `join` first.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::CorruptedKeyMaterial) => {
@@ -60,21 +60,21 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
                 &resume_spinner,
                 "Key material is corrupted — consider resetting this profile.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::KeyringMiss) => {
             ui::spinner_finish_error(
                 &resume_spinner,
                 "Keychain cannot silently unlock this space. Run a future \
-                 `uniclipboard-cli unlock` (not yet shipped) or re-init.",
+                 `uniclip unlock` (not yet shipped) or re-init.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::Internal(msg)) => {
             ui::spinner_finish_error(&resume_spinner, &format!("Resume failed: {msg}"));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     }
@@ -83,7 +83,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
     // 证"B 重启后下一次 CLI 查询 ≤ 10s 内看见 online"的验收条款。单个
     // peer 失败不 fatal —— 进 report.errors,摘要里展示个数即可。
     let probe_spinner = ui::spinner("Probing paired peers...");
-    match assembly.facade.refresh_presence().await {
+    match cli.app_facade().refresh_presence().await {
         Ok(report) => {
             ui::spinner_finish_success(
                 &probe_spinner,
@@ -106,7 +106,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         }
     }
 
-    let entries = match assembly.roster.list_with_presence().await {
+    let entries = match cli.app_facade().list_roster_entries().await {
         Ok(entries) => entries,
         Err(err) => {
             let msg = match &err {
@@ -116,7 +116,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
                 RosterError::Unavailable => "member roster unavailable".to_string(),
             };
             ui::error(&msg);
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     };
@@ -127,7 +127,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
             Ok(json_str) => println!("{json_str}"),
             Err(err) => {
                 ui::error(&format!("Failed to serialize roster: {err}"));
-                assembly.shutdown().await;
+                cli.shutdown().await;
                 return exit_codes::EXIT_ERROR;
             }
         }
@@ -135,7 +135,7 @@ pub async fn run(json: bool, verbose: bool) -> i32 {
         render_human(&entries);
     }
 
-    assembly.shutdown().await;
+    cli.shutdown().await;
     exit_codes::EXIT_SUCCESS
 }
 

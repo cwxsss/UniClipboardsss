@@ -204,6 +204,8 @@ impl AppRuntime {
                 search_index: Some(deps.search.search_index.clone()),
                 file_cache_dir: Some(storage_paths.cache_dir.clone()),
             })),
+            clipboard_sync: None,
+            blob_transfer: None,
             clipboard_restore: Some(Arc::new(ClipboardRestoreFacade::new(
                 ClipboardRestoreFacadeDeps {
                     entry_repo: deps.clipboard.clipboard_entry_repo.clone(),

@@ -65,8 +65,8 @@ async fn check_setup_complete(json: bool, _verbose: bool) -> Option<i32> {
         );
     } else {
         eprintln!(
-            "Error: setup not complete. Run `uniclipboard-cli init` (new Space) or \
-             `uniclipboard-cli join` (existing Space) first, then retry `start`."
+            "Error: setup not complete. Run `uniclip init` (new Space) or \
+             `uniclip join` (existing Space) first, then retry `start`."
         );
     }
     Some(exit_codes::EXIT_ERROR)

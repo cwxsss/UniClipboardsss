@@ -29,18 +29,29 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 
 use crate::facade::roster::{MemberSummary, PeerSnapshotView, RosterError};
+use crate::facade::settings::{GeneralSettingsPatch, SettingsPatch};
+use crate::facade::space_setup::{EnsureReachableAllError, EnsureReachableAllReport};
+use crate::facade::space_setup::{
+    InitializeSpaceError, InitializeSpaceInput, InitializeSpaceResult, IssuePairingInvitationError,
+    IssuePairingInvitationResult, PairingOutcome, RedeemPairingInvitationError,
+    RedeemPairingInvitationInput, RedeemPairingInvitationResult, TryResumeSessionError,
+};
 use crate::facade::{
-    ClipboardHistoryFacade, ClipboardRestoreFacade, DeviceFacade, EncryptionFacade,
-    LifecycleFacade, MemberRosterFacade, ResourceFacade, SearchFacade, SettingsFacade,
-    SpaceSetupFacade, StorageFacade,
+    BlobTransferError, BlobTransferFacade, ClipboardHistoryFacade, ClipboardRestoreFacade,
+    ClipboardSyncError, ClipboardSyncFacade, DeviceFacade, EncryptionFacade, EncryptionFacadeError,
+    EncryptionStateView, FetchBlobCommand, FetchBlobResult, InboundNotice, LifecycleFacade,
+    MemberRosterFacade, PublishBlobCommand, PublishBlobResult, ResourceFacade, SearchFacade,
+    SearchFacadeError, SearchPageView, SearchQueryInput, SearchRebuildAcceptedView,
+    SearchStatusView, SettingsFacade, SettingsFacadeError, SpaceSetupFacade, StorageFacade,
 };
 use uc_core::ports::{PresenceEvent, ReachabilityState};
+use uc_core::ClipboardChangeOrigin;
+use uc_core::SystemClipboardSnapshot;
 
-/// Aggregator exposing one field per business sub-facade.
+/// 应用层统一入口。
 ///
-/// Fields are `pub` on purpose — callers drive sub-facade methods
-/// directly (`app.space_setup.initialize_space(..)`). The aggregator
-/// carries no logic, so there are no invariants to guard.
+/// 新增外部业务调用应优先通过本文件中的顶层方法进入。公开子字段是历史兼容
+/// 状态,后续收口 daemon / Tauri 路径时应继续减少直接访问。
 pub struct AppFacade {
     pub space_setup: Option<Arc<SpaceSetupFacade>>,
     pub member_roster: Option<Arc<MemberRosterFacade>>,
@@ -48,6 +59,8 @@ pub struct AppFacade {
     pub encryption: Arc<EncryptionFacade>,
     pub resource: Arc<ResourceFacade>,
     pub clipboard_history: Arc<ClipboardHistoryFacade>,
+    pub clipboard_sync: Option<Arc<ClipboardSyncFacade>>,
+    pub blob_transfer: Option<Arc<BlobTransferFacade>>,
     /// CLI / 仅查询场景下 daemon/Tauri 不构造 restore facade,这里是 None。
     /// daemon API handler 取出前需做存在性检查。
     pub clipboard_restore: Option<Arc<ClipboardRestoreFacade>>,
@@ -70,12 +83,91 @@ impl AppFacade {
             encryption: parts.encryption,
             resource: parts.resource,
             clipboard_history: parts.clipboard_history,
+            clipboard_sync: parts.clipboard_sync,
+            blob_transfer: parts.blob_transfer,
             clipboard_restore: parts.clipboard_restore,
             search: parts.search,
             settings: parts.settings,
             device: parts.device,
             storage: parts.storage,
         }
+    }
+
+    /// A1:初始化空间。外部业务入口从 `AppFacade` 进入,不直接拿 `SpaceSetupFacade`。
+    pub async fn initialize_space(
+        &self,
+        input: InitializeSpaceInput,
+    ) -> Result<InitializeSpaceResult, InitializeSpaceError> {
+        self.space_setup
+            .as_ref()
+            .ok_or_else(|| {
+                InitializeSpaceError::Internal("space setup facade unavailable".to_string())
+            })?
+            .initialize_space(input)
+            .await
+    }
+
+    /// 尝试静默恢复空间会话。
+    pub async fn try_resume_session(&self) -> Result<bool, TryResumeSessionError> {
+        self.space_setup
+            .as_ref()
+            .ok_or_else(|| {
+                TryResumeSessionError::Internal("space setup facade unavailable".to_string())
+            })?
+            .try_resume_session()
+            .await
+    }
+
+    /// 刷新成员在线状态。
+    pub async fn refresh_presence(
+        &self,
+    ) -> Result<EnsureReachableAllReport, EnsureReachableAllError> {
+        self.space_setup
+            .as_ref()
+            .ok_or(EnsureReachableAllError::Repository(
+                "space setup facade unavailable".to_string(),
+            ))?
+            .refresh_presence()
+            .await
+    }
+
+    /// B1:签发配对邀请。
+    pub async fn issue_pairing_invitation(
+        &self,
+    ) -> Result<IssuePairingInvitationResult, IssuePairingInvitationError> {
+        self.space_setup
+            .as_ref()
+            .ok_or_else(|| {
+                IssuePairingInvitationError::Internal("space setup facade unavailable".to_string())
+            })?
+            .issue_pairing_invitation()
+            .await
+    }
+
+    /// B2:兑换配对邀请。
+    pub async fn redeem_pairing_invitation(
+        &self,
+        input: RedeemPairingInvitationInput,
+    ) -> Result<RedeemPairingInvitationResult, RedeemPairingInvitationError> {
+        self.space_setup
+            .as_ref()
+            .ok_or_else(|| {
+                RedeemPairingInvitationError::Internal("space setup facade unavailable".to_string())
+            })?
+            .redeem_pairing_invitation(input)
+            .await
+    }
+
+    /// 订阅配对完成事件。
+    pub fn subscribe_pairing_completion(
+        &self,
+    ) -> Result<broadcast::Receiver<PairingOutcome>, IssuePairingInvitationError> {
+        self.space_setup
+            .as_ref()
+            .map(|facade| facade.subscribe_pairing_completion())
+            .ok_or_else(|| {
+                IssuePairingInvitationError::Internal("space setup facade unavailable".to_string())
+            })
     }
 
     /// 列出对外成员摘要。外部调用只经过 `AppFacade`,不直接依赖 roster 子 facade。
@@ -85,6 +177,122 @@ impl AppFacade {
             .ok_or(RosterError::Unavailable)?
             .list_members()
             .await
+    }
+
+    /// 列出带 presence 的 roster entry。
+    pub async fn list_roster_entries(
+        &self,
+    ) -> Result<Vec<crate::facade::roster::RosterEntry>, RosterError> {
+        self.member_roster
+            .as_ref()
+            .ok_or(RosterError::Unavailable)?
+            .list_with_presence()
+            .await
+    }
+
+    /// 发送一个剪贴板快照到在线 peer。
+    pub async fn dispatch_clipboard_snapshot(
+        &self,
+        snapshot: SystemClipboardSnapshot,
+        origin: ClipboardChangeOrigin,
+    ) -> Result<crate::facade::DispatchEntryOutcome, ClipboardSyncError> {
+        self.clipboard_sync
+            .as_ref()
+            .ok_or_else(|| {
+                ClipboardSyncError::Repository("clipboard sync facade unavailable".to_string())
+            })?
+            .dispatch_snapshot(snapshot, origin)
+            .await
+    }
+
+    /// 订阅入站剪贴板通知。
+    pub fn subscribe_inbound_clipboard_notices(
+        &self,
+    ) -> Result<broadcast::Receiver<InboundNotice>, ClipboardSyncError> {
+        self.clipboard_sync
+            .as_ref()
+            .map(|facade| facade.subscribe_inbound_notices())
+            .ok_or_else(|| {
+                ClipboardSyncError::Repository("clipboard sync facade unavailable".to_string())
+            })
+    }
+
+    /// 发布 blob。
+    pub async fn publish_blob(
+        &self,
+        command: PublishBlobCommand,
+    ) -> Result<PublishBlobResult, BlobTransferError> {
+        self.blob_transfer
+            .as_ref()
+            .ok_or_else(|| BlobTransferError::Publish("blob facade unavailable".to_string()))?
+            .publish_blob(command)
+            .await
+    }
+
+    /// 拉取 blob。
+    pub async fn fetch_blob(
+        &self,
+        command: FetchBlobCommand,
+    ) -> Result<FetchBlobResult, BlobTransferError> {
+        self.blob_transfer
+            .as_ref()
+            .ok_or_else(|| BlobTransferError::Fetch("blob facade unavailable".to_string()))?
+            .fetch_blob(command)
+            .await
+    }
+
+    /// 查询本地搜索索引。
+    pub async fn search_query(
+        &self,
+        input: SearchQueryInput,
+    ) -> Result<SearchPageView, SearchFacadeError> {
+        self.search.query(input).await
+    }
+
+    /// 查询本地搜索状态。
+    pub async fn search_status(&self) -> Result<SearchStatusView, SearchFacadeError> {
+        self.search.status().await
+    }
+
+    /// 在当前进程内同步重建搜索索引。
+    pub async fn rebuild_search_now(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError> {
+        self.search.rebuild_now().await
+    }
+
+    /// 查询加密/初始化状态。
+    pub async fn encryption_state(&self) -> Result<EncryptionStateView, EncryptionFacadeError> {
+        self.encryption.state().await
+    }
+
+    /// 更新本机设备名。
+    pub async fn set_device_name(&self, device_name: String) -> Result<(), SettingsFacadeError> {
+        let current = self.settings.get().await?;
+        if current.general.device_name.as_deref() == Some(device_name.as_str()) {
+            return Ok(());
+        }
+
+        self.settings
+            .update(SettingsPatch {
+                general: Some(GeneralSettingsPatch {
+                    device_name: Some(Some(device_name)),
+                    auto_start: None,
+                    silent_start: None,
+                    auto_check_update: None,
+                    theme: None,
+                    theme_color: None,
+                    language: None,
+                    update_channel: None,
+                    telemetry_enabled: None,
+                }),
+                sync: None,
+                retention_policy: None,
+                security: None,
+                pairing: None,
+                keyboard_shortcuts: None,
+                file_sync: None,
+            })
+            .await?;
+        Ok(())
     }
 
     /// 列出对外 peer 快照。外部调用只经过 `AppFacade`,不直接依赖 roster 子 facade。
@@ -168,6 +376,8 @@ pub struct AppFacadeParts {
     pub encryption: Arc<EncryptionFacade>,
     pub resource: Arc<ResourceFacade>,
     pub clipboard_history: Arc<ClipboardHistoryFacade>,
+    pub clipboard_sync: Option<Arc<ClipboardSyncFacade>>,
+    pub blob_transfer: Option<Arc<BlobTransferFacade>>,
     pub clipboard_restore: Option<Arc<ClipboardRestoreFacade>>,
     pub search: Arc<SearchFacade>,
     pub settings: Arc<SettingsFacade>,

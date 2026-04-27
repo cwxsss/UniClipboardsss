@@ -1,9 +1,7 @@
-//! Styled CLI output helpers wrapping `dialoguer`, `console`, and `indicatif`.
+//! CLI 输出样式和交互输入辅助函数。
 
 use console::{style, Key, Style, Term};
-use dialoguer::{Confirm, Select};
 use indicatif::{ProgressBar, ProgressStyle};
-use uc_daemon_client::setup::format_peer_id_suffix;
 
 // ── Colour palette ──────────────────────────────────────────────────
 
@@ -41,12 +39,6 @@ pub fn header(text: &str) {
         style("◆").cyan().bold(),
         bold().apply_to(text)
     ));
-}
-
-/// Print a step label: `◇  Label`
-pub fn step(text: &str) {
-    let term = Term::stderr();
-    let _ = term.write_line(&format!(" {} {}", style("◇").cyan(), text));
 }
 
 /// Print a success line: `✓  Message`
@@ -95,29 +87,6 @@ pub fn end(text: &str) {
 }
 
 // ── Interactive prompts ─────────────────────────────────────────────
-
-/// Show a Select prompt and return the chosen index.
-pub fn select(prompt: &str, items: &[String]) -> Result<usize, String> {
-    Select::new()
-        .with_prompt(prompt)
-        .items(items)
-        .default(0)
-        .interact_on(&Term::stderr())
-        .map_err(|e| format!("selection cancelled: {e}"))
-}
-
-/// Show a Confirm prompt (y/n).
-///
-/// Prefixes the prompt with a `◇` glyph so it aligns with the left-side
-/// gutter used by [`step`], [`info`], and [`verification_code`].
-pub fn confirm(prompt: &str, default: bool) -> Result<bool, String> {
-    let prefixed = format!(" {} {}", style("◇").cyan(), prompt);
-    Confirm::new()
-        .with_prompt(prefixed)
-        .default(default)
-        .interact_on(&Term::stderr())
-        .map_err(|e| format!("confirmation cancelled: {e}"))
-}
 
 /// Show a masked password prompt (displays `•` per character).
 pub fn password(prompt: &str) -> Result<String, String> {
@@ -241,18 +210,6 @@ pub fn spinner_finish_success(pb: &ProgressBar, message: &str) {
 pub fn spinner_finish_error(pb: &ProgressBar, message: &str) {
     pb.finish_and_clear();
     error(message);
-}
-
-// ── Identity banner ─────────────────────────────────────────────────
-
-/// Print a styled identity banner for setup flows.
-pub fn identity_banner(profile: &str, mode: &str, device: &str, peer_id: &str) {
-    bar();
-    info("Profile", profile);
-    info("Mode", mode);
-    info("Device", device);
-    info("Peer ID", &format_peer_id_suffix(peer_id));
-    bar();
 }
 
 // ── Verification code display ───────────────────────────────────────

@@ -1,14 +1,13 @@
-//! `uniclipboard-cli init` — Slice 1 A1 on this profile.
+//! `uniclip init` — Slice 1 A1 on this profile.
 //!
 //! Prompts for (or accepts `--passphrase`) + optional `--device-name`,
 //! then drives [`SpaceSetupFacade::initialize_space`]. Refuses when a
-//! daemon is already claiming this profile's socket (see §1 of
-//! `slice1_common`).
+//! daemon is already claiming this profile's socket.
 
 use uc_application::facade::space_setup::{InitializeSpaceError, InitializeSpaceInput};
 
-use crate::commands::slice1_common::{
-    build_assembly, default_device_name, refuse_if_daemon_running,
+use crate::commands::app_session::{
+    build_app_session, default_device_name, refuse_if_daemon_running,
 };
 use crate::exit_codes;
 use crate::ui;
@@ -25,8 +24,8 @@ pub async fn run(args: InitArgs, verbose: bool) -> i32 {
         return code;
     }
 
-    let assembly = match build_assembly(verbose).await {
-        Ok(bundle) => bundle.assembly,
+    let cli = match build_app_session(verbose).await {
+        Ok(bundle) => bundle,
         Err(code) => return code,
     };
 
@@ -37,20 +36,20 @@ pub async fn run(args: InitArgs, verbose: bool) -> i32 {
     let passphrase_str = match args.passphrase {
         Some(ref p) if p.trim().is_empty() => {
             ui::error("--passphrase is empty");
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Some(p) => p,
         None => match ui::password_with_confirm("New space passphrase", "Confirm passphrase") {
             Ok(p) if p.trim().is_empty() => {
                 ui::error("Passphrase cannot be empty");
-                assembly.shutdown().await;
+                cli.shutdown().await;
                 return exit_codes::EXIT_ERROR;
             }
             Ok(p) => p,
             Err(e) => {
                 ui::error(&e);
-                assembly.shutdown().await;
+                cli.shutdown().await;
                 return exit_codes::EXIT_ERROR;
             }
         },
@@ -67,7 +66,7 @@ pub async fn run(args: InitArgs, verbose: bool) -> i32 {
     };
 
     let spinner = ui::spinner("Creating encrypted space...");
-    let exit = match assembly.facade.initialize_space(input).await {
+    let exit = match cli.app_facade().initialize_space(input).await {
         Ok(result) => {
             ui::spinner_finish_success(&spinner, "Space initialized");
             ui::info("space_id", result.space_id.as_str());
@@ -90,6 +89,6 @@ pub async fn run(args: InitArgs, verbose: bool) -> i32 {
         }
     };
 
-    assembly.shutdown().await;
+    cli.shutdown().await;
     exit
 }

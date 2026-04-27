@@ -6,7 +6,7 @@ edition = "2021"
 description = "Command-line interface for UniClipboard"
 
 [[bin]]
-name = "uniclipboard-cli"
+name = "uniclip"
 path = "src/main.rs"
 
 [dependencies]
@@ -14,8 +14,6 @@ uc-bootstrap = { path = "../uc-bootstrap" }
 uc-observability = { path = "../uc-observability" }
 uc-core = { path = "../uc-core" }
 uc-daemon = { path = "../uc-daemon" }
-uc-daemon-client = { path = "../uc-daemon-client" }
-uc-cli-macros = { path = "../uc-cli-macros" }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
@@ -26,7 +24,6 @@ bytes = "1.7"
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-webpki-roots"] }
-dialoguer = "0.11"
 console = "0.15"
 indicatif = "0.17"
 libc = "0.2"

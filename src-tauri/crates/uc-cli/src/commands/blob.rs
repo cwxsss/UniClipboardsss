@@ -1,4 +1,4 @@
-//! `uniclipboard-cli blob` —— 大 payload 发布 / 拉取诊断命令。
+//! `uniclip blob` —— 大 payload 发布 / 拉取诊断命令。
 //!
 //! 这组命令走和后续 daemon/UI 相同的应用层门面:先恢复空间会话,再执行
 //! hash 去重、业务加解密和 iroh-blobs 发布/拉取。`publish` 输出 ticket
@@ -18,25 +18,25 @@ use uc_application::facade::{FetchBlobCommand, PublishBlobCommand};
 use uc_core::ids::EntryId;
 use uc_core::ports::blob::BlobTicket;
 
-use crate::commands::slice1_common::{build_assembly, refuse_if_daemon_running};
+use crate::commands::app_session::{build_app_session, refuse_if_daemon_running, CliAppSession};
 use crate::exit_codes;
 use crate::ui;
 
 #[derive(Subcommand)]
 pub enum BlobCommands {
-    /// 发布本地文件,并输出拉取所需信息。
+    /// Publish a local file and print the information needed to fetch it.
     Publish {
-        /// 要发布的文件。
+        /// File to publish.
         path: PathBuf,
     },
-    /// 拉取 blob 并把解密后的内容写入本地文件。
+    /// Fetch a blob and write the decrypted content to a local file.
     Fetch {
-        /// `blob publish` 输出的 base64 ticket。
+        /// Base64 ticket printed by `blob publish`.
         ticket: String,
-        /// `blob publish` 输出的 entry id。
+        /// Entry id printed by `blob publish`.
         #[arg(long)]
         entry_id: String,
-        /// 输出文件路径。
+        /// Output file path.
         #[arg(long)]
         out: PathBuf,
     },
@@ -74,14 +74,14 @@ async fn publish(path: PathBuf, json: bool, verbose: bool) -> i32 {
         }
     };
 
-    let assembly = match build_ready_assembly(verbose).await {
-        Ok(assembly) => assembly,
+    let cli = match build_ready_session(verbose).await {
+        Ok(cli) => cli,
         Err(code) => return code,
     };
 
     let spinner = ui::spinner("Publishing blob...");
-    let result = assembly
-        .blob
+    let result = cli
+        .app_facade()
         .publish_blob(PublishBlobCommand {
             plaintext: Bytes::from(plaintext),
             entry_id: None,
@@ -95,7 +95,7 @@ async fn publish(path: PathBuf, json: bool, verbose: bool) -> i32 {
         }
         Err(err) => {
             ui::spinner_finish_error(&spinner, &format!("Publish failed: {err}"));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     };
@@ -108,7 +108,7 @@ async fn publish(path: PathBuf, json: bool, verbose: bool) -> i32 {
         reused_existing: result.reused_existing,
     };
     let code = print_publish(dto, json);
-    assembly.shutdown().await;
+    cli.shutdown().await;
     code
 }
 
@@ -122,14 +122,14 @@ async fn fetch(ticket: String, entry_id: String, out: PathBuf, json: bool, verbo
     };
     let entry_id = EntryId::from_str(entry_id.trim());
 
-    let assembly = match build_ready_assembly(verbose).await {
-        Ok(assembly) => assembly,
+    let cli = match build_ready_session(verbose).await {
+        Ok(cli) => cli,
         Err(code) => return code,
     };
 
     let spinner = ui::spinner("Fetching blob...");
-    let result = assembly
-        .blob
+    let result = cli
+        .app_facade()
         .fetch_blob(FetchBlobCommand { ticket, entry_id })
         .await;
 
@@ -140,19 +140,19 @@ async fn fetch(ticket: String, entry_id: String, out: PathBuf, json: bool, verbo
         }
         Err(err) => {
             ui::spinner_finish_error(&spinner, &format!("Fetch failed: {err}"));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     };
 
     if let Err(err) = ensure_parent_dir(&out).await {
         ui::error(&format!("Failed to prepare output path: {err}"));
-        assembly.shutdown().await;
+        cli.shutdown().await;
         return exit_codes::EXIT_ERROR;
     }
     if let Err(err) = tokio::fs::write(&out, &result.plaintext).await {
         ui::error(&format!("Failed to write output file: {err}"));
-        assembly.shutdown().await;
+        cli.shutdown().await;
         return exit_codes::EXIT_ERROR;
     }
 
@@ -164,24 +164,24 @@ async fn fetch(ticket: String, entry_id: String, out: PathBuf, json: bool, verbo
         bytes_written: result.plaintext.len(),
     };
     let code = print_fetch(dto, json);
-    assembly.shutdown().await;
+    cli.shutdown().await;
     code
 }
 
-async fn build_ready_assembly(verbose: bool) -> Result<uc_bootstrap::SpaceSetupAssembly, i32> {
-    let assembly = build_assembly(verbose).await?.assembly;
+async fn build_ready_session(verbose: bool) -> Result<CliAppSession, i32> {
+    let cli = build_app_session(verbose).await?;
     let resume_spinner = ui::spinner("Resuming space session...");
-    match assembly.facade.try_resume_session().await {
+    match cli.app_facade().try_resume_session().await {
         Ok(true) => {
             ui::spinner_finish_success(&resume_spinner, "Session resumed");
-            Ok(assembly)
+            Ok(cli)
         }
         Ok(false) => {
             ui::spinner_finish_error(
                 &resume_spinner,
                 "No space on this profile — run `init` or `join` first.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             Err(exit_codes::EXIT_ERROR)
         }
         Err(TryResumeSessionError::CorruptedKeyMaterial) => {
@@ -189,7 +189,7 @@ async fn build_ready_assembly(verbose: bool) -> Result<uc_bootstrap::SpaceSetupA
                 &resume_spinner,
                 "Key material is corrupted — consider resetting this profile.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             Err(exit_codes::EXIT_ERROR)
         }
         Err(TryResumeSessionError::KeyringMiss) => {
@@ -197,12 +197,12 @@ async fn build_ready_assembly(verbose: bool) -> Result<uc_bootstrap::SpaceSetupA
                 &resume_spinner,
                 "Keychain cannot silently unlock this space.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             Err(exit_codes::EXIT_ERROR)
         }
         Err(TryResumeSessionError::Internal(msg)) => {
             ui::spinner_finish_error(&resume_spinner, &format!("Resume failed: {msg}"));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             Err(exit_codes::EXIT_ERROR)
         }
     }

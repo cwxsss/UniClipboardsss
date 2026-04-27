@@ -1,3 +1,4 @@
+pub mod app_session;
 pub mod blob;
 pub mod devices;
 pub mod init;
@@ -6,9 +7,6 @@ pub mod join;
 pub mod members;
 pub mod search;
 pub mod send;
-pub mod setup;
-pub mod slice1_common;
-pub mod space_status;
 pub mod start;
 pub mod status;
 pub mod stop;

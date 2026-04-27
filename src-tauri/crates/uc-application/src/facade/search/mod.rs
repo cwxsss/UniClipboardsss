@@ -119,10 +119,22 @@ impl SearchFacade {
     }
 
     pub async fn status(&self) -> Result<SearchStatusView, SearchFacadeError> {
-        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
-            SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
-        })?;
-        coordinator.status_view().await.map_err(map_search_error)
+        if let Some(coordinator) = self.coordinator.as_ref() {
+            return coordinator.status_view().await.map_err(map_search_error);
+        }
+
+        let meta = self.query_uc.index_meta().await.map_err(map_search_error)?;
+        let state = if meta.search_blocked {
+            "unavailable"
+        } else {
+            "ready"
+        };
+        Ok(SearchStatusView {
+            state: state.to_string(),
+            reason: meta.search_blocked.then(|| "search_blocked".to_string()),
+            last_rebuild_started_at_ms: meta.last_rebuild_started_at_ms,
+            last_rebuild_completed_at_ms: meta.last_rebuild_completed_at_ms,
+        })
     }
 
     pub async fn request_rebuild(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError> {
@@ -131,6 +143,17 @@ impl SearchFacade {
         })?;
 
         match coordinator.request_manual_rebuild().await {
+            ManualRebuildResult::Accepted => Ok(SearchRebuildAcceptedView { accepted: true }),
+            ManualRebuildResult::AlreadyInProgress => Err(SearchFacadeError::RebuildAlreadyRunning),
+        }
+    }
+
+    pub async fn rebuild_now(&self) -> Result<SearchRebuildAcceptedView, SearchFacadeError> {
+        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
+            SearchFacadeError::ServiceUnavailable("search coordinator unavailable".to_string())
+        })?;
+
+        match coordinator.run_manual_rebuild_now().await {
             ManualRebuildResult::Accepted => Ok(SearchRebuildAcceptedView { accepted: true }),
             ManualRebuildResult::AlreadyInProgress => Err(SearchFacadeError::RebuildAlreadyRunning),
         }

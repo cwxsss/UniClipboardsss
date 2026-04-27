@@ -31,8 +31,8 @@ pub use builders::{
 pub use config::load_config;
 pub use init::{ensure_default_device_name, is_setup_complete};
 pub use non_gui_runtime::{
-    build_cli_app_facade, build_non_gui_bundle, resolve_clipboard_integration_mode,
-    LoggingHostEventEmitter, NonGuiBundle,
+    build_cli_app_facade, build_cli_app_runtime, build_non_gui_bundle,
+    resolve_clipboard_integration_mode, CliAppRuntime, LoggingHostEventEmitter, NonGuiBundle,
 };
 pub use space_setup::{
     build_space_setup_assembly, IrohNodeConfig, SpaceSetupAssembly, SpaceSetupAssemblyError,

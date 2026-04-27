@@ -1,4 +1,4 @@
-//! `uniclipboard-cli send` — one-shot clipboard dispatch.
+//! `uniclip send` — one-shot clipboard dispatch.
 //!
 //! Self-contained direct-mode command (no daemon), mirroring the `init` /
 //! `invite` / `join` / `members` pattern. Builds a `SpaceSetupAssembly`,
@@ -28,13 +28,13 @@ use uc_core::{
     ClipboardChangeOrigin, MimeType, ObservedClipboardRepresentation, SystemClipboardSnapshot,
 };
 
-use crate::commands::slice1_common::{build_assembly, refuse_if_daemon_running};
+use crate::commands::app_session::{build_app_session, refuse_if_daemon_running};
 use crate::exit_codes;
 use crate::ui;
 
 pub struct SendArgs {
     /// Plaintext to dispatch. When `None`, the command reads from stdin
-    /// until EOF — handy for `echo hi | uniclipboard-cli send` and the
+    /// until EOF — handy for `echo hi | uniclip send` and the
     /// dual-profile test recipe.
     pub text: Option<String>,
 }
@@ -60,20 +60,20 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
         }
     };
 
-    let assembly = match build_assembly(verbose).await {
-        Ok(bundle) => bundle.assembly,
+    let cli = match build_app_session(verbose).await {
+        Ok(bundle) => bundle,
         Err(code) => return code,
     };
 
     let resume_spinner = ui::spinner("Resuming space session...");
-    match assembly.facade.try_resume_session().await {
+    match cli.app_facade().try_resume_session().await {
         Ok(true) => ui::spinner_finish_success(&resume_spinner, "Session resumed"),
         Ok(false) => {
             ui::spinner_finish_error(
                 &resume_spinner,
                 "No space on this profile — run `init` or `join` first.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::CorruptedKeyMaterial) => {
@@ -81,7 +81,7 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
                 &resume_spinner,
                 "Key material is corrupted — consider resetting this profile.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::KeyringMiss) => {
@@ -89,12 +89,12 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
                 &resume_spinner,
                 "Keychain cannot silently unlock this space.",
             );
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
         Err(TryResumeSessionError::Internal(msg)) => {
             ui::spinner_finish_error(&resume_spinner, &format!("Resume failed: {msg}"));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     }
@@ -103,7 +103,7 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
     // current peer state instead of stale `Unknown`. Same pattern as the
     // `members` command.
     let probe_spinner = ui::spinner("Probing paired peers...");
-    match assembly.facade.refresh_presence().await {
+    match cli.app_facade().refresh_presence().await {
         Ok(report) => ui::spinner_finish_success(
             &probe_spinner,
             &format!(
@@ -137,9 +137,9 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
     };
 
     let dispatch_spinner = ui::spinner("Dispatching to online peers...");
-    let outcome = assembly
-        .clipboard_sync
-        .dispatch_snapshot(snapshot, ClipboardChangeOrigin::LocalCapture)
+    let outcome = cli
+        .app_facade()
+        .dispatch_clipboard_snapshot(snapshot, ClipboardChangeOrigin::LocalCapture)
         .await;
 
     let outcome = match outcome {
@@ -155,7 +155,7 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
         }
         Err(err) => {
             ui::spinner_finish_error(&dispatch_spinner, &render_dispatch_error(&err));
-            assembly.shutdown().await;
+            cli.shutdown().await;
             return exit_codes::EXIT_ERROR;
         }
     };
@@ -166,7 +166,7 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
             Ok(s) => println!("{s}"),
             Err(err) => {
                 ui::error(&format!("Failed to serialize outcome: {err}"));
-                assembly.shutdown().await;
+                cli.shutdown().await;
                 return exit_codes::EXIT_ERROR;
             }
         }
@@ -174,7 +174,7 @@ pub async fn run(args: SendArgs, json: bool, verbose: bool) -> i32 {
         render_human(&outcome);
     }
 
-    assembly.shutdown().await;
+    cli.shutdown().await;
     if outcome.total_accepted == 0 && outcome.total_duplicate == 0 {
         // Nothing actually landed: at least one peer was online but every
         // attempt errored (or no peers paired at all). Surface as non-zero

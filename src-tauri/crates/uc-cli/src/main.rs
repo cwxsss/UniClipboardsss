@@ -1,11 +1,10 @@
-mod autostop;
 mod commands;
 mod exit_codes;
 mod local_daemon;
 mod output;
 mod ui;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 /// Initialise AppKit enough for headless macOS CLI invocations.
 ///
@@ -28,7 +27,7 @@ fn init_macos_appkit() {}
 
 #[derive(Parser)]
 #[command(
-    name = "uniclipboard-cli",
+    name = "uniclip",
     version,
     about = "UniClipboard command-line interface"
 )]
@@ -53,7 +52,7 @@ struct Cli {
     profile: Option<String>,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -70,11 +69,11 @@ enum Commands {
     },
     /// Stop the running daemon
     Stop,
-    /// Show daemon status
+    /// Show application status
     Status,
-    /// Initialize a new encrypted space on this profile (Slice 1 A1).
+    /// Create a new encrypted space for this profile.
     ///
-    /// Runs directly against the core facade — no daemon in the loop.
+    /// Use this on the first device before inviting other devices.
     Init {
         /// Space passphrase. If omitted, prompts interactively with
         /// confirmation. Pass this flag only in non-interactive contexts
@@ -110,12 +109,7 @@ enum Commands {
         #[arg(long)]
         device_name: Option<String>,
     },
-    /// Drive daemon-owned setup flows (interactive guide when no subcommand given)
-    Setup {
-        #[command(subcommand)]
-        subcommand: Option<SetupCommands>,
-    },
-    /// List paired devices via the daemon API
+    /// List paired devices
     Devices,
     /// List members of this space with presence (online / offline / unknown).
     ///
@@ -123,8 +117,6 @@ enum Commands {
     /// all paired peers so states are fresh on every call. No daemon
     /// required. Prints `{name} ({state}) [local]` per device.
     Members,
-    /// Show space and encryption status (direct mode, no daemon required)
-    SpaceStatus,
     /// Dispatch one clipboard payload to every online paired peer.
     ///
     /// Self-contained direct mode. Reads text from the positional
@@ -144,7 +136,7 @@ enum Commands {
     /// envelopes). Does NOT write the system clipboard — that's the
     /// daemon's job; the CLI watch is purely a diagnostic observer.
     Watch,
-    /// 发布或拉取加密的大 payload blob(直连模式)。
+    /// Publish or fetch encrypted large payload blobs
     Blob {
         #[command(subcommand)]
         subcommand: commands::blob::BlobCommands,
@@ -161,18 +153,6 @@ enum Commands {
         #[arg(long)]
         gui_managed: bool,
     },
-}
-
-#[derive(Subcommand)]
-enum SetupCommands {
-    /// [DEPRECATED] Use `uniclipboard-cli invite` instead. Retained until libp2p setup flow is retired.
-    Pair,
-    /// [DEPRECATED] Use `uniclipboard-cli join <code>` instead. Retained until libp2p setup flow is retired.
-    Connect,
-    /// Inspect daemon-owned setup state
-    Status,
-    /// Reset daemon-owned setup state for repeatable local reruns
-    Reset,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -203,7 +183,13 @@ fn main() -> anyhow::Result<()> {
 
     // Handle `daemon` subcommand before creating the tokio runtime —
     // the daemon entrypoint creates its own runtime internally.
-    if let Commands::Daemon { gui_managed } = cli.command {
+    let Some(command) = cli.command else {
+        Cli::command().print_help()?;
+        println!();
+        return Ok(());
+    };
+
+    if let Commands::Daemon { gui_managed } = command {
         return uc_daemon::entrypoint::run(gui_managed);
     }
 
@@ -212,7 +198,7 @@ fn main() -> anyhow::Result<()> {
         .build()?;
 
     let exit_code = rt.block_on(async {
-        match cli.command {
+        match command {
             Commands::Start { foreground } => {
                 commands::start::run(foreground, cli.json, cli.verbose).await
             }
@@ -247,22 +233,8 @@ fn main() -> anyhow::Result<()> {
                 )
                 .await
             }
-            Commands::Setup { subcommand } => match subcommand {
-                None => commands::setup::run_interactive(cli.json, cli.verbose).await,
-                Some(SetupCommands::Pair) => commands::setup::run_pair(cli.json, cli.verbose).await,
-                Some(SetupCommands::Connect) => {
-                    commands::setup::run_connect(cli.json, cli.verbose).await
-                }
-                Some(SetupCommands::Status) => {
-                    commands::setup::run_status(cli.json, cli.verbose).await
-                }
-                Some(SetupCommands::Reset) => {
-                    commands::setup::run_reset(cli.json, cli.verbose).await
-                }
-            },
             Commands::Devices => commands::devices::run(cli.json, cli.verbose).await,
             Commands::Members => commands::members::run(cli.json, cli.verbose).await,
-            Commands::SpaceStatus => commands::space_status::run(cli.json, cli.verbose).await,
             Commands::Send { text } => {
                 commands::send::run(commands::send::SendArgs { text }, cli.json, cli.verbose).await
             }
@@ -278,4 +250,49 @@ fn main() -> anyhow::Result<()> {
     });
 
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn cli_binary_name_is_uniclip() {
+        let command = Cli::command();
+
+        assert_eq!(command.get_name(), "uniclip");
+    }
+
+    #[test]
+    fn no_subcommand_displays_help() {
+        let result = Cli::try_parse_from(["uniclip"]);
+
+        match result {
+            Ok(cli) => {
+                assert!(cli.command.is_none());
+            }
+            Err(error) => panic!("expected no subcommand to parse successfully, got {error}"),
+        }
+    }
+
+    #[test]
+    fn setup_command_is_removed() {
+        let result = Cli::try_parse_from(["uniclip", "setup"]);
+
+        assert!(
+            result.is_err(),
+            "legacy setup command should be removed; CLI should keep init/invite/join"
+        );
+    }
+
+    #[test]
+    fn search_rebuild_no_wait_is_removed() {
+        let result = Cli::try_parse_from(["uniclip", "search", "rebuild", "--no-wait"]);
+
+        assert!(
+            result.is_err(),
+            "standalone CLI search rebuild must be synchronous and reject --no-wait"
+        );
+    }
 }
