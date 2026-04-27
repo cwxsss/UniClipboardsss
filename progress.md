@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `69c2f244 refactor: extract desktop daemon app assembly`。
+- 开始第十三阶段：抽出 daemon 运行循环。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/run_loop.rs`，集中处理启动恢复、daemon run 和 space setup shutdown。
+- `entrypoint.rs` 不再直接调用 `spawn_startup_recovery`，也不再直接执行 `space_setup_assembly.shutdown()`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `17b0ff43 refactor: extract desktop daemon background task startup`。
 - 开始第十二阶段：抽出 daemon 应用实例装配。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/app_assembly.rs`，集中构造 `DaemonApp`。

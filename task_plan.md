@@ -33,6 +33,7 @@
 | 14 | 完成 | 抽出 daemon AppFacade 装配，明确桌面宿主传入哪些能力 |
 | 15 | 完成 | 抽出 daemon 后台 blob 任务启动 |
 | 16 | 完成 | 抽出 daemon 应用实例装配 |
+| 17 | 完成 | 抽出 daemon 运行循环和退出收尾 |
 
 ## 决策记录
 
@@ -52,6 +53,7 @@
 - 第十阶段只抽 daemon 专属 `AppFacade` 参数装配，不改公共 facade 构造函数和业务入口。
 - 第十一阶段只抽后台任务启动包装，不改任务内容、启动时机和取消行为。
 - 第十二阶段只抽 `DaemonApp` 实例创建，不改服务清单、keepalive 和 deferred ready 语义。
+- 第十三阶段只抽最终运行循环，不改启动恢复、daemon 退出和 space setup shutdown 顺序。
 
 ## 错误记录
 

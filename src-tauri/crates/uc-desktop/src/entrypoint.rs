@@ -13,12 +13,12 @@ use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
 use crate::daemon::app_assembly::{build_daemon_app_instance, DaemonAppAssemblyInput};
 use crate::daemon::app_facade_assembly::{build_daemon_app_facade, DaemonAppFacadeAssemblyInput};
 use crate::daemon::background_tasks::spawn_daemon_background_tasks;
+use crate::daemon::run_loop::{run_daemon_until_shutdown, DaemonRunLoopInput};
 use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
 use crate::daemon::search_assembly::build_daemon_search_assembly;
 use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
 use crate::daemon::shutdown::build_external_shutdown_token;
-use crate::daemon::startup_recovery::{spawn_startup_recovery, StartupRecoveryInput};
 use crate::service::DaemonService;
 use uc_webserver::api::types::DaemonWsEvent;
 
@@ -151,8 +151,6 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         clipboard_integration_mode,
         search_coordinator: Arc::clone(&search_assembly.coordinator),
     });
-    let unlock_app_facade = Arc::clone(&app_facade);
-
     let daemon = build_daemon_app_instance(DaemonAppAssemblyInput {
         service_plan,
         app_facade: Arc::clone(&app_facade),
@@ -166,30 +164,16 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         local_device_id,
     });
 
-    // Slice 2 Phase 3 · T6 — move the iroh-stack assembly into the
-    // runtime closure so its shutdown runs AFTER daemon.run() returns
-    // (graceful or signal-driven) but BEFORE the runtime itself drops.
-    // `SpaceSetupAssembly::shutdown` aborts the ingest loop + tears
-    // down the iroh router, emitting `CONNECTION_CLOSE` to any live
-    // peer. Without this, peers see TCP RST / QUIC timeout instead of
-    // a clean close.
-    let space_setup_assembly = ctx.space_setup_assembly;
-    let unlock_settings = settings_port.clone();
-    let unlock_facade = space_setup_assembly.facade.clone();
-    let unlock_notify = deferred_ready_notify.clone();
-    let unlock_gate = clipboard_capture_gate.clone();
-    rt.block_on(async move {
-        spawn_startup_recovery(StartupRecoveryInput {
+    run_daemon_until_shutdown(
+        &rt,
+        DaemonRunLoopInput {
             run_mode,
-            app_facade: unlock_app_facade,
-            settings: unlock_settings,
-            space_setup: unlock_facade,
-            deferred_ready_notify: unlock_notify,
-            clipboard_capture_gate: unlock_gate,
-        });
-
-        let res = daemon.run().await;
-        space_setup_assembly.shutdown().await;
-        res
-    })
+            daemon,
+            app_facade,
+            settings: settings_port,
+            space_setup_assembly: ctx.space_setup_assembly,
+            deferred_ready_notify,
+            clipboard_capture_gate,
+        },
+    )
 }

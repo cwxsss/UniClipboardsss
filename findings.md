@@ -50,6 +50,8 @@
 - blob 后台任务本身仍由 `uc-bootstrap::spawn_blob_processing_tasks` 统一实现，`uc-desktop` 只负责在 daemon runtime 上启动它。
 - 第十二阶段新增 `daemon::app_assembly`，把 `DaemonApp` 实例创建和 peer keepalive 接入从 `entrypoint.rs` 抽出。
 - peer keepalive 仍通过 `AppFacade` 访问 space setup，服务分组规则仍由 `DaemonServicePlan` 决定。
+- 第十三阶段新增 `daemon::run_loop`，把启动恢复任务、daemon 运行和 space setup 关闭顺序从 `entrypoint.rs` 抽出。
+- space setup 仍在 `daemon.run()` 返回后、Tokio runtime 释放前关闭，原有收尾顺序保持不变。
 
 ## 验证发现
 
@@ -90,6 +92,10 @@
 - 抽出 daemon 应用实例装配后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 抽出 daemon 应用实例装配后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 抽出 daemon 应用实例装配后，`cargo check -p uniclipboard` 通过。
+- 抽出 daemon 运行循环后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 抽出 daemon 运行循环后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 抽出 daemon 运行循环后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 抽出 daemon 运行循环后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 

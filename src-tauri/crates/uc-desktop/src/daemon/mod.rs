@@ -3,6 +3,7 @@
 pub mod app_assembly;
 pub mod app_facade_assembly;
 pub mod background_tasks;
+pub mod run_loop;
 pub mod run_mode;
 pub mod runtime_assembly;
 pub mod search_assembly;
