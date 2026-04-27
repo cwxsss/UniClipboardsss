@@ -85,6 +85,14 @@
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
 - 运行 `git diff --check`，通过。
+- 提交 `3fcf6735 refactor: remove desktop entrypoint shim`。
+- 开始第二十三阶段：收窄 `uc-desktop` 根模块公开面。
+- 将 `app`、`peers`、`search`、`service`、`state`、`workers` 改为 crate 内可见，继续公开 `daemon` 和 `process_metadata`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 运行 `cargo tree -p uc-tauri | rg "uc-desktop|uc-daemon v" || true`，无输出。
+- 运行 `git diff --check`，通过。
 - 提交 `0656cb88 refactor: centralize desktop daemon api facade handles`。
 - 补充提交 `2e3d501e docs: add uc-desktop claude entrypoint`。
 - 开始第十九阶段：迁移 daemon host 实现。

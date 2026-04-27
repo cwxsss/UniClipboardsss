@@ -7,11 +7,11 @@
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use uc_daemon_contract::DAEMON_API_REVISION;
 
-pub mod app;
+pub(crate) mod app;
 pub mod daemon;
-pub mod peers;
+pub(crate) mod peers;
 pub mod process_metadata;
-pub mod search;
-pub mod service;
-pub mod state;
-pub mod workers;
+pub(crate) mod search;
+pub(crate) mod service;
+pub(crate) mod state;
+pub(crate) mod workers;
