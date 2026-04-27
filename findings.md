@@ -60,6 +60,8 @@
 - 服务立即启动还是等待 ready 的规则仍在 `DaemonServicePlan` 内。
 - 第十七阶段新增 `daemon::bootstrap`，把 daemon bootstrap context 的构造和拆包从 `entrypoint.rs` 抽出。
 - bootstrap 仍通过 `uc-bootstrap` 完成依赖注入；`uc-desktop` 只持有桌面宿主启动需要的句柄。
+- 第十八阶段让 `daemon::app_facade_assembly` 负责提取 setup/roster facade 和本机设备 ID。
+- 本机设备 ID 仍来自 `deps.device.device_identity.current_device_id()`，来源未变。
 
 ## 验证发现
 
@@ -120,6 +122,10 @@
 - 抽出 daemon bootstrap 拆包装配后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
 - 抽出 daemon bootstrap 拆包装配后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - 抽出 daemon bootstrap 拆包装配后，`cargo check -p uniclipboard` 通过。
+- 收回 daemon API facade 句柄后，`cargo test -p uc-desktop daemon::run_mode -- --nocapture` 通过。
+- 收回 daemon API facade 句柄后，`cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 收回 daemon API facade 句柄后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 收回 daemon API facade 句柄后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 

@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use crate::daemon::app_assembly::{build_daemon_app_instance, DaemonAppAssemblyInput};
-use crate::daemon::app_facade_assembly::{build_daemon_app_facade, DaemonAppFacadeAssemblyInput};
+use crate::daemon::app_facade_assembly::{
+    build_daemon_app_facade, DaemonAppFacadeAssembly, DaemonAppFacadeAssemblyInput,
+};
 use crate::daemon::background_tasks::spawn_daemon_background_tasks;
 use crate::daemon::bootstrap::{build_daemon_bootstrap_assembly, DaemonBootstrapAssembly};
 use crate::daemon::run_loop::{run_daemon_until_shutdown, DaemonRunLoopInput};
@@ -73,24 +75,15 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
         &search_assembly,
     );
 
-    // Slice4 P3 T3.3 — clone the new SpaceSetupFacade Arc + resolve the
-    // sponsor device id (stable for the daemon's lifetime) so the
-    // pairing-completion forwarder doesn't need to pull
-    // `DeviceIdentityPort` at event time. The facade itself is moved
-    // (along with the rest of the assembly) into the post-`daemon.run()`
-    // shutdown closure below; this clone keeps the api_state + forwarder
-    // alive throughout `run()`.
-    let space_setup_facade_for_api = space_setup_assembly.facade.clone();
-    let member_roster_facade_for_api = space_setup_assembly.roster.clone();
-    let local_device_id = deps.device.device_identity.current_device_id().to_string();
-
     let storage_paths_for_daemon = storage_paths.clone();
-    let app_facade = build_daemon_app_facade(DaemonAppFacadeAssemblyInput {
+    let DaemonAppFacadeAssembly {
+        app_facade,
+        local_device_id,
+    } = build_daemon_app_facade(DaemonAppFacadeAssemblyInput {
         deps: &deps,
         storage_paths: &storage_paths_for_daemon,
         lifecycle_status: lifecycle_status.clone(),
-        space_setup: space_setup_facade_for_api.clone(),
-        member_roster: member_roster_facade_for_api.clone(),
+        space_setup_assembly: &space_setup_assembly,
         clipboard_sync: clipboard_sync_facade.clone(),
         blob_transfer: blob_transfer_facade.clone(),
         clipboard_write_coordinator: clipboard_write_coordinator.clone(),

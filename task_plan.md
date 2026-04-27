@@ -38,6 +38,7 @@
 | 19 | 完成 | 抽出 daemon 运行控制量创建 |
 | 20 | 完成 | 抽出 daemon 服务清单装配 |
 | 21 | 完成 | 抽出 daemon bootstrap 拆包装配 |
+| 22 | 完成 | 将 daemon API facade 句柄收回 AppFacade 装配模块 |
 
 ## 决策记录
 
@@ -62,6 +63,7 @@
 - 第十五阶段只抽事件通道、ready notify、剪贴板 gate 和初始解锁状态创建，不改默认值。
 - 第十六阶段只抽 worker/search service 到服务清单的装配，不改服务分组规则。
 - 第十七阶段只抽 daemon bootstrap context 拆包，不改依赖构造和资源持有顺序。
+- 第十八阶段只移动 AppFacade 相关句柄提取，不改本机设备 ID 来源和 facade 能力集合。
 
 ## 错误记录
 

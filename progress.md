@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `6393b10d refactor: extract desktop daemon bootstrap assembly`。
+- 开始第十八阶段：收回 daemon API facade 句柄。
+- 调整 `daemon/app_facade_assembly.rs`，由它从 `SpaceSetupAssembly` 中提取 setup/roster facade，并返回 `AppFacade` 与本机设备 ID。
+- `entrypoint.rs` 不再直接提取 space setup facade、member roster facade 和 local device id。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `9ea4bc30 refactor: extract desktop daemon service assembly`。
 - 开始第十七阶段：抽出 daemon bootstrap 拆包装配。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/bootstrap.rs`，集中构造 daemon bootstrap 并拆出 background、non-gui bundle、space setup 等宿主句柄。
