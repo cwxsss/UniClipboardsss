@@ -4367,3 +4367,73 @@ D15  ✅ uc-cli 去 CoreUseCases
 D16-1 ✅ uc-app dead use cases 清理
 D16-2 ✅ uc-app crate 退役(+ D17 合并)
 ```
+
+---
+
+## Session 2026-04-24 — Kickoff D18:收紧 AppFacade 唯一入口
+
+### 已完成
+
+- ✅ 静态审计 `src-tauri/crates/uc-daemon` + `uc-bootstrap` + `src-tauri/src` 中绕过 `Arc<AppFacade>` 的入口
+- ✅ 4 类违规点定位(详见 findings.md F-148)
+  - F-148-A · `peer_keepalive` worker 直接吃 `Arc<SpaceSetupFacade>`(1 文件)
+  - F-148-B · legacy `SpaceAccessFacade` 仍游离于 AppFacade 之外(daemon 3 处 + bootstrap 3 处)
+  - F-148-C · `require_facade` 局部解构(2 处,非违规但备案)
+  - F-148-D · `entrypoint.rs` 装配点(合规)
+- ✅ task_plan.md 追加 Phase D18(D18.1 ~ D18.4 子任务清单)
+- ✅ findings.md 追加 F-148 / F-149
+
+### 关键判断
+
+- D9 在 task_plan 中标 `in_progress` 是准确的 —— 主线尚未 100% 闭环
+- D16-2 commit message 的"100% 走 facade"严格说还差 `SpaceAccessFacade` 这条 legacy 旁路
+- D18 是 D9 的明确收尾;`SetupFacade` / `PairingFacade` 留待后续 phase(`app_facade.rs` 模块文档已注明 Slice 1.5+)
+
+### 待裁决(D18-Q1):`SpaceAccessFacade` 集成方式
+
+| 方案 | 说明 | 改动面 |
+|------|------|--------|
+| A | 作为 `AppFacade.space_access: Option<Arc<SpaceAccessFacade>>` 新字段 | 最小,与 `space_setup` 对称 |
+| B | 拆方法到 `space_setup` / `member_roster` | 大,但语义更纯 |
+| C | 吸收为 `member_roster` 扩展 | 中,需确认 admit_member 归属 |
+
+需用户裁决后才能进 D18.3(实施集成)。
+
+### 下一步动作(待用户对齐)
+
+1. 是否先做 D18.1(`peer_keepalive` 改造,1 文件,低风险)作为快速合入?
+2. D18-Q1 选 A/B/C 哪条?
+3. 是否本 phase 一并处理 `SetupFacade` / `PairingFacade`?(目前默认不做)
+
+### 文件变更(本 session)
+
+- `task_plan.md`:追加 "Phase D18" 整段(D18.1 ~ D18.4 子任务表)
+- `findings.md`:追加 F-148 / F-149
+- `progress.md`:追加本 session
+
+---
+
+### D18.1 完成 (2026-04-24)
+
+**目标**:`PeerKeepAliveWorker` 不再持有 `Arc<SpaceSetupFacade>`,改吃 `Arc<AppFacade>`,通过 `app_facade.space_setup` 取用。
+
+**改动**:
+- `workers/peer_keepalive.rs`:
+  - 字段 `space_setup_facade: Arc<SpaceSetupFacade>` → `app_facade: Arc<AppFacade>`
+  - tick 闭包改 `let Some(space_setup) = self.app_facade.space_setup.as_ref() else { skip }` 防御 CLI 场景(CLI 进程无 LocalClipboard 但同样无 keepalive 需求,空 bundle 时静默跳过更稳)
+  - 模块文档刷新:补"single-entry rule per AGENTS §11.4"
+- `entrypoint.rs`:
+  - worker 构造点从 L210(AppFacade 装配前)延后到 L398(AppFacade 装配后)
+  - L291 `let (services, deferred_services) = { ... }` → `let (mut services, mut deferred_services) = { ... }`,内部块不再 push peer_keepalive
+  - L398-404 在 AppFacade 装配后构造 worker + 按 `encryption_unlocked` push 到对应列表
+
+**装配顺序变更**:`AppFacade` 装配 → 立即构造 `PeerKeepAliveWorker(Arc::clone(&app_facade))` → 按 unlock 状态决定 initial / deferred。原"先构造 worker、后装 AppFacade"的顺序倒置,因为 worker 现在依赖 AppFacade。
+
+**验证**:
+- `cargo check -p uc-daemon` ✅
+- `cargo test -p uc-daemon --lib` ✅ 25 passed
+- `rg "Arc<SpaceSetupFacade>" src-tauri/crates/uc-daemon` = 0 hit(daemon 内已无对子 facade 的 Arc 注入)
+
+**意义**:
+- F-148-A 这一类违规清零
+- 还剩 F-148-B(legacy `SpaceAccessFacade` 6 处直引用 + bootstrap 暴露字段)进入 D18.2 调研

@@ -3626,3 +3626,75 @@ Crate 删除:
 - 业务调用入口 100% 走 `uc_application::facade::*` 或 `uc_application::clipboard_write` 等顶层导出
 - composition root(daemon entrypoint / Tauri AppRuntime / CLI build_cli_app_facade)直接持 `AppDeps` + `Arc<AppFacade>` + 进程零碎件,无 CoreRuntime 包装层
 - D17(原计划"workspace 移除 uc-app crate")已合并入本次,不再有独立 phase
+
+---
+
+### Phase D18 · 收紧 AppFacade 唯一入口(legacy `SpaceAccessFacade` + 子 facade 直注入清理) — pending (2026-04-24)
+
+**触发**:D16-2 完成后审计发现仍有 4 类调用绕过 `Arc<AppFacade>` 入口,违反 `app_facade.rs` 模块文档与 AGENTS §11.4 单一出口约束。
+
+**违规点清单**(按优先级):
+
+| # | 位置 | 性质 | 备选方案 |
+|---|------|------|---------|
+| 1 | `uc-daemon/src/workers/peer_keepalive.rs:38,48,52` | 直接吃 `Arc<SpaceSetupFacade>` | 改吃 `Arc<AppFacade>`,`.space_setup` 取用 |
+| 2a | `uc-daemon/src/app.rs:16,107,128` | 持有 `Option<Arc<SpaceAccessFacade>>` | 移除字段,走 AppFacade 新入口 |
+| 2b | `uc-daemon/src/api/query.rs:8` | `use uc_application::space_access::SpaceAccessFacade` | 同上 |
+| 2c | `uc-daemon/src/api/server.rs:25` | 同上 | 同上 |
+| 2d | `uc-bootstrap/src/builders.rs:19,51,192` | `DaemonBootstrapContext` 暴露 `space_access_facade` 字段 + 直接 `Arc::new(SpaceAccessFacade::...)` | 移除暴露,bootstrap 内部装入 `AppFacadeParts` |
+| 3 | `uc-daemon/src/api/v2/setup.rs:43` | `require_facade` 局部解出 `space_setup` | 保留(仅是从 `app_facade` 取出局部别名,不破坏入口规则) |
+| 4 | `uc-daemon/src/api/clipboard.rs:47` | `require_facade` 局部解出 `clipboard_history` | 同上 |
+
+**已裁决决策**(D18-Q1, 2026-04-24):`SpaceAccessFacade` 集成进 `AppFacade` 的方式 = **方案 B**
+- 把 `SpaceAccessFacade` 的方法**拆解到现有 `space_setup` / `member_roster` 子 facade**(语义最纯)
+- 拆分依据由 D18.2 调研产出:`admit_member` 归 `member_roster`;其余 access/control 流程按业务语义归 `space_setup` 或 `member_roster`
+- `SpaceAccessFacade` 类型最终消亡,不再以独立子 facade 形式存在于 `AppFacadeParts`
+- `space_access/` 模块的内部组件(orchestrator / executor / persistence_adapter 等)保留,仅入口聚合上移
+
+**子 Phase 顺序**:
+
+#### D18.1 · `peer_keepalive` worker 改吃 `Arc<AppFacade>` — complete (2026-04-24)
+- ✅ 改 `workers/peer_keepalive.rs`:`space_setup_facade: Arc<SpaceSetupFacade>` → `app_facade: Arc<AppFacade>`;tick 内 `app_facade.space_setup.as_ref()` 防御 CLI 场景(`Option` 为 `None` 时直接 skip 一拍)
+- ✅ `entrypoint.rs`:worker 构造点从 L210(早于 AppFacade 装配)延后到 L398(AppFacade 装配之后);service 列表 `let` → `let mut`,内部 push 块迁出整段
+- ✅ 验证:`cargo check -p uc-daemon` ✅ + `cargo test -p uc-daemon --lib` ✅ 25 passed
+- ✅ grep 复核:`rg "Arc<SpaceSetupFacade>" src-tauri/crates/uc-daemon` = 0 hit
+- 改动行数:peer_keepalive.rs ~10 行 + entrypoint.rs ~25 行
+
+#### D18.2 · `SpaceAccessFacade` 方法拆解调研(B 方案细化) — pending
+- 列出 `uc-application/src/space_access/` 公开方法清单(含 `admit_member` 等)
+- 按业务语义把每个方法落到 `space_setup` / `member_roster` 中的某一个
+- 调研 `space_setup` / `member_roster` 现有 deps,评估拆分后是否需要扩 deps bundle
+- 在 findings.md F-149 中落定方法→子 facade 的映射表
+- **本子 phase 仅产文档,不动代码**
+
+#### D18.3 · 实施方法拆解 + 清理 legacy 入口 — pending(blocked by D18.2)
+- 在 `space_setup` / `member_roster` facade 中按 D18.2 映射表新增方法(内部委托给 `space_access/` 现有 orchestrator/executor 等组件)
+- `uc-bootstrap/src/builders.rs`:移除 `DaemonBootstrapContext.space_access_facade` 字段
+  - `space_setup` / `member_roster` 装配时把 `space_access` 的内部组件(executor / persistence_adapter / proof_adapter 等)注入对应子 facade 的 deps
+- `uc-daemon/src/app.rs:16,107,128` 移除 `SpaceAccessFacade` 字段与构造参数
+- `uc-daemon/src/api/query.rs:8`、`api/server.rs:25` 改走 `state.app_facade.space_setup` / `member_roster` 的新方法
+- `uc-application/src/lib.rs`:`pub mod space_access` 是否仍需对外导出 → 视代码替换情况降级为 `pub(crate)` 或保留(`SetupFacade` / `PairingFacade` 仍需要时不动)
+- grep 复核:`rg "use uc_application::space_access::SpaceAccessFacade"` 在 `src-tauri/crates/uc-daemon` + `uc-bootstrap` = 0
+- 验证:`cargo check --workspace` + `cargo test -p uc-daemon -p uc-application --lib` + daemon 既有测试
+
+#### D18.4 · 决策:`require_facade` 局部解构是否保留 — pending
+- 评估 `api/v2/setup.rs:43` / `api/clipboard.rs:47`
+- 倾向保留(只是 `state.app_facade.space_setup` 的命名缩短,未破坏单一入口)
+- 在 findings.md 记录决策,本 phase 不动代码
+
+**不做(本 phase 范围外)**:
+- legacy `SetupFacade` / `PairingFacade` 的迁移(注释中标注 Slice 1.5+)
+- application 层内部 use_case / service 是否绕过子 facade 调用(单独审查)
+- tauri / cli crate 的子 facade 直引用审计(主路径目前都在 daemon)
+
+**退出条件**:
+- `rg "Arc<SpaceSetupFacade>|Arc<SpaceAccessFacade>" src-tauri/crates/uc-daemon src-tauri/src` 仅剩 application 内部使用
+- `rg "use uc_application::space_access::SpaceAccessFacade"` 在 daemon + bootstrap = 0
+- `cargo check --workspace --all-targets` ✅
+- daemon API 行为等价(无功能回归)
+
+**Phase 进度跟踪**:
+- D18.1 `complete` ✅ (2026-04-24)
+- D18.2 `pending`
+- D18.3 `pending`(blocked by D18.2)
+- D18.4 `pending`

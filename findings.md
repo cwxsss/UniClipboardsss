@@ -2606,3 +2606,59 @@ caller 必须知道两步顺序,且必须知道"步 1 失败时不该跳到步 2
 `AppFacadeParts.clipboard_restore` 应该是 `Option`,与 `space_setup` / `member_roster` 一致。CLI 传 None,daemon / GUI 传 Some。这样 CLI 不需要伪造一个永远不会被调的 ClipboardWriteCoordinator。
 
 **已修**:D15 把字段改 `Option<Arc<ClipboardRestoreFacade>>`,daemon HTTP route 用 `as_ref().ok_or(internal_error(...))?` 防御。
+
+---
+
+## F-148 — 审计:D16-2 之后仍有 4 类绕过 `Arc<AppFacade>` 的入口(2026-04-24)
+
+**事实**:在"uc-app crate 退役 + AppFacade 唯一入口"的主线宣告达成后,对 `src-tauri/crates/uc-daemon` + `src-tauri/crates/uc-bootstrap` 做静态审计,仍发现以下 4 类违规:
+
+### F-148-A · Worker 直接吃子 facade
+- `uc-daemon/src/workers/peer_keepalive.rs:38,48,52`:`PeerKeepAliveWorker::new(space_setup_facade: Arc<SpaceSetupFacade>)` —— 没有走 `Arc<AppFacade>.space_setup`
+- 影响:worker 持有的是子 facade 的 Arc,不是聚合 facade。entrypoint 装配时已把 `space_setup_facade` clone 出来一次,违反"只暴露聚合"
+- 修复路径:`new` 改吃 `Arc<AppFacade>`,内部 `app_facade.space_setup.as_ref().ok_or(...)?` 取用
+
+### F-148-B · Legacy `SpaceAccessFacade` 仍游离于 `AppFacade` 之外
+- 直接持有/导入位点:
+  - `uc-daemon/src/app.rs:16`:`use uc_application::space_access::SpaceAccessFacade;`
+  - `uc-daemon/src/app.rs:107`:`space_access_facade: Option<Arc<SpaceAccessFacade>>` 字段
+  - `uc-daemon/src/app.rs:128`:构造函数参数
+  - `uc-daemon/src/api/query.rs:8`、`api/server.rs:25`:handler 内 import
+  - `uc-bootstrap/src/builders.rs:19,51,192`:`DaemonBootstrapContext.space_access_facade` 暴露字段 + `Arc::new(SpaceAccessFacade::with_admit_member(...))` 构造
+- 与 `AppFacade` 的关系:`SpaceAccessFacade` **不在** `AppFacadeParts` / `AppFacade` 字段里(对照 `app_facade.rs:36-66` 字段表 — 仅有 `space_setup` / `member_roster` / `lifecycle` / `encryption` / `resource` / `clipboard_history` / `clipboard_restore` / `search` / `settings` / `device` / `storage`)
+- 这是 `app_facade.rs:18-25` 模块文档明确标注的 "Slice 1.5 or later" 遗留:"Daemon / tauri / CLI switching from the legacy sub-facades (`SetupFacade`, `PairingFacade`, `SpaceAccessFacade`) to `AppFacade`"
+- 三个 legacy facade 中,本 phase 只解决 `SpaceAccessFacade`(daemon 直接持有),`SetupFacade` / `PairingFacade` 留待后续 phase
+
+### F-148-C · 子 facade `require_facade` 局部解构(未违规但需备案)
+- `uc-daemon/src/api/v2/setup.rs:43`:`fn require_facade(state: &DaemonApiState) -> Result<Arc<SpaceSetupFacade>, ApiError>`
+- `uc-daemon/src/api/clipboard.rs:47`:`fn require_facade(state: &DaemonApiState) -> Result<Arc<ClipboardHistoryFacade>, ApiError>`
+- 性质:从 `state.app_facade` 局部解出子 facade 引用,**不是**绕过入口。等价于在每个 handler 写 `state.app_facade.space_setup.as_ref().ok_or(...)?`,只是命名缩短
+- 决策:保留。仅在 D18.4 文档化此判断
+
+### F-148-D · `entrypoint.rs` 装配点(合规)
+- `uc-daemon/src/entrypoint.rs:328-392`:本就是装配根,把所有子 facade 构造后塞入 `AppFacadeParts`。**不算违规**
+- 但需要在 D18.3 中同步:把 `SpaceAccessFacade` 也塞进 `AppFacadeParts`,而不是单独通过 `DaemonBootstrapContext.space_access_facade` 旁路传给 `DaemonApp`
+
+**审计方法**:
+1. 反向 grep `use uc_application::` 在 daemon + bootstrap + tauri + cli
+2. grep `Arc<XxxFacade>` 字段定义与函数签名
+3. 排除 `AppFacade` / `Option<Arc<AppFacade>>` / 来自 `state.app_facade.<field>` 的局部别名
+
+**含义**:
+- D9 标记 `in_progress` 是准确的 —— 主线仍未达成 100% 单一入口
+- D16-2 commit message 中的"业务调用入口 100% 走 `uc_application::facade::*`"严格说是"绝大多数入口走 facade,但仍有 SpaceAccessFacade 这条 legacy 旁路 + 1 个 worker 子 facade 注入"
+- D18 phase 是 D9 收尾的明确闭环
+
+---
+
+## F-149 — `SpaceAccessFacade` 集成方案的待裁决项(D18-Q1)
+
+**待补充调研**(待 D18.2 子 phase 执行):
+- `uc-application/src/space_access/` 公开方法清单
+- 与 `space_setup` / `member_roster` 子 facade 的语义重叠
+- `admit_member` 调用链当前形态(D18-Q1 选 A/B/C 的关键判据)
+
+**预选方案**(不预设最终结论,仅作 D18.2 调研对照):
+- A. 新字段 `AppFacade.space_access: Option<Arc<SpaceAccessFacade>>`(改动最小,与 `space_setup` 对称)
+- B. 拆解到 `space_setup` / `member_roster`(语义更纯)
+- C. 吸收为 `member_roster` 扩展(若本质是 roster 操作)
