@@ -2651,14 +2651,42 @@ caller 必须知道两步顺序,且必须知道"步 1 失败时不该跳到步 2
 
 ---
 
-## F-149 — `SpaceAccessFacade` 集成方案的待裁决项(D18-Q1)
+## F-149 — `SpaceAccessFacade` 调研结论:几乎全部是 dead code(2026-04-24, D18.2)
 
-**待补充调研**(待 D18.2 子 phase 执行):
-- `uc-application/src/space_access/` 公开方法清单
-- 与 `space_setup` / `member_roster` 子 facade 的语义重叠
-- `admit_member` 调用链当前形态(D18-Q1 选 A/B/C 的关键判据)
+**核心结论**:`SpaceAccessFacade` 的 12 个 pub 方法中,有 **10 个完全无外部调用方**。其依赖的 `SpaceAccessOrchestrator` 状态机永远停在 `Idle`,永远不会 dispatch 事件 → 注入的 `admit_member` 永远不会被它触发。
 
-**预选方案**(不预设最终结论,仅作 D18.2 调研对照):
-- A. 新字段 `AppFacade.space_access: Option<Arc<SpaceAccessFacade>>`(改动最小,与 `space_setup` 对称)
-- B. 拆解到 `space_setup` / `member_roster`(语义更纯)
-- C. 吸收为 `member_roster` 扩展(若本质是 roster 操作)
+### 真实调用面
+
+| 方法 | 外部 caller | 真实状态 |
+|------|-------------|---------|
+| `get_state()` | `daemon/src/api/query.rs:73` (经 `routes.rs:184` HTTP + `ws.rs:543` WS topic snapshot) | 永远返回 `Idle` |
+| `with_admit_member()` | `bootstrap/src/builders.rs:192` 构造调用 | 注入但永不触发 |
+| `new()` / `reset` / `set_sponsor_peer_id` / `initiate_joiner_flow` / `peek_joiner_offer` / `peek_prepared_offer` / `set_peer_identity` / `start_sponsor_authorization` / `dispatch` / `subscribe` | **0 caller** | dead |
+
+### 为什么 admit_member 不会被触发
+
+- `SpaceAccessOrchestrator::dispatch` 整个 src-tauri 0 外部 caller
+- 真正驱动 admit_member 的是 `pairing_inbound/orchestrator.rs:323` + `RedeemPairingInvitationUseCase`
+- 这两条线在 `space_setup/facade.rs:178,203,224` 内**独立构造**了一份 `AdmitMemberUseCase`,与 `SpaceAccessFacade::with_admit_member` 注入的实例**不是同一份**
+- 因此 bootstrap 里 `Arc::new(SpaceAccessFacade::with_admit_member(admit_member))` 这步是 wiring dead code
+
+### 影响半径(连带 dead code)
+
+| 模块 | 直接死掉的代码 |
+|------|----------------|
+| `uc-application/src/space_access/` (8 文件) | facade.rs / orchestrator.rs / executor.rs / context.rs / events.rs / persistence_adapter.rs / proof_adapter.rs / mod.rs |
+| `uc-core/src/space_access/{state.rs, event.rs, state_machine.rs, action.rs, deny_reason_to_code}` | 这些 uc-core 子模块**只**被 application 层 dead 模块使用;`domain::{JoinOffer, ProofDerivedKey, SpaceAccessProofArtifact}` 仍被 pairing 流程引用,**保留** |
+| `uc-daemon/src/api/{query.rs, routes.rs, ws.rs, server.rs}` | `space_access_state` HTTP/WS endpoint + `DaemonApiState.space_access_facade` 字段 |
+| `uc-daemon/src/{app.rs, entrypoint.rs}` | 6 处 `SpaceAccessFacade` 字段/参数 |
+| `uc-daemon-contract/src/{constants.rs, api/types.rs, api/dto/ws.rs}` | `ws_topic::SPACE_ACCESS` / `ws_event::SPACE_ACCESS_SNAPSHOT` / `SPACE_ACCESS_STATE_CHANGED` / `SpaceAccessStateChangedPayload` / `SpaceAccessStateResponse` |
+| `uc-daemon-client/src/{realtime.rs, ws_bridge.rs}` | `RealtimeTopic::SpaceAccess` / `RealtimeEvent::SpaceAccessStateChanged` / 两个 ws bridge handler 分支 + topic 映射 |
+| `uc-bootstrap/src/builders.rs` | `DaemonBootstrapContext.space_access_facade` 字段 + 构造代码 |
+| `src/api/realtime.ts` + `src/api/__tests__/p2p-realtime-contract.test.ts` | `'space-access'` topic 订阅项 |
+
+### D18-Q1 决策修订
+
+原 D18-Q1 设定 A/B/C 三方案皆假设方法有真实业务语义需要拆。调研后 A/B/C 均不适用 —— 没有方法可拆。因此 D18-Q1 替换为新方案 **D**(2026-04-24 用户裁决):
+
+> **方案 D — 彻底清理**:删除 `SpaceAccessFacade` 类型 + 整个 application 层 `space_access/` 模块 + uc-core 中只被它用的子模块 + daemon HTTP/WS endpoint + daemon-contract DTO + daemon-client 桥 + frontend topic 订阅。永远是 `Idle` 的 endpoint 对 UI 无任何信息量,无需保留为 future hook。
+
+被替换:原 D18-Q1 选项 A(新增 AppFacade 字段)、B(方法拆解)、C(并入 member_roster) 全部废弃。
