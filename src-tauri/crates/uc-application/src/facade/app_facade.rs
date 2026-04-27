@@ -17,9 +17,11 @@
 //! * F1 `on_startup` / F2 `on_shutdown` → P6 (lives inside the
 //!   sub-facades once `StartNetwork` plumbing exists)
 //! * Daemon / tauri / CLI switching from the legacy sub-facades
-//!   (`SetupFacade`, `PairingFacade`, `SpaceAccessFacade`) to
-//!   `AppFacade` → Slice 1.5 or later. Those sub-facades remain `pub`
-//!   this slice to keep existing entry points working.
+//!   (`SetupFacade`, `PairingFacade`) to `AppFacade` → Slice 1.5 or
+//!   later. Those sub-facades remain `pub` this slice to keep existing
+//!   entry points working. The legacy `SpaceAccessFacade` was retired
+//!   in D18 (its state machine had no dispatcher and the real admit
+//!   path runs through `PairingInboundOrchestrator`).
 
 use std::sync::Arc;
 
