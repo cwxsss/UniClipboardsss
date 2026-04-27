@@ -9,7 +9,6 @@ pub mod ws_topic {
     pub const PAIRING_SESSION: &str = "pairing/session";
     pub const PAIRING_VERIFICATION: &str = "pairing/verification";
     pub const SETUP: &str = "setup";
-    pub const SPACE_ACCESS: &str = "space-access";
     pub const CLIPBOARD: &str = "clipboard";
     pub const FILE_TRANSFER: &str = "file-transfer";
     pub const ENCRYPTION: &str = "encryption";
@@ -38,8 +37,6 @@ pub mod ws_event {
     pub const SETUP_PAIRING_COMPLETED: &str = "setup.pairingCompleted";
     /// Setup invitation revoked (Slice4 P3 T3.1) — invitation cancelled or expired before redemption.
     pub const SETUP_INVITATION_REVOKED: &str = "setup.invitationRevoked";
-    pub const SPACE_ACCESS_SNAPSHOT: &str = "space_access.snapshot";
-    pub const SPACE_ACCESS_STATE_CHANGED: &str = "space_access.state_changed";
     pub const CLIPBOARD_NEW_CONTENT: &str = "clipboard.new_content";
     pub const FILE_TRANSFER_STATUS_CHANGED: &str = "file-transfer.status_changed";
     pub const FILE_TRANSFER_PROGRESS: &str = "file-transfer.progress";

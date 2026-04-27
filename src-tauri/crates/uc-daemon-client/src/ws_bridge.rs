@@ -7,7 +7,7 @@ use crate::realtime::{
     ClipboardNewContentEvent, PairingCompleteEvent, PairingFailedEvent, PairingUpdatedEvent,
     PairingVerificationRequiredEvent, PeerChangedEvent, PeerConnectionChangedEvent,
     PeerNameUpdatedEvent, RealtimeEvent, RealtimePeerSummary, RealtimeTopic, RealtimeTopicPort,
-    SpaceAccessStateChangedEvent, SpaceMembersChangedEvent,
+    SpaceMembersChangedEvent,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -23,7 +23,7 @@ use uc_daemon_contract::api::auth::DaemonConnectionInfo;
 use uc_daemon_contract::api::types::{
     DaemonWsEvent, PairingFailurePayload, PairingSessionChangedPayload, PairingVerificationPayload,
     PeerConnectionChangedPayload, PeerNameUpdatedPayload, PeersChangedFullPayload,
-    SpaceAccessStateChangedPayload, SpaceMembersChangedPayload,
+    SpaceMembersChangedPayload,
 };
 use uc_daemon_contract::constants::{pairing_stage, ws_event, ws_topic};
 
@@ -1114,78 +1114,6 @@ fn map_daemon_ws_event(event: DaemonWsEvent) -> Option<RealtimeEvent> {
                 }
             }
         }
-        ws_event::SPACE_ACCESS_STATE_CHANGED => {
-            match serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload) {
-                Ok(payload) => {
-                    debug!(
-                        event = "bridge.payload_decoded",
-                        source_topic = %topic,
-                        source_event_type = %event_type,
-                        session_id = session_id.as_deref().unwrap_or(""),
-                        payload_type = "SpaceAccessStateChangedPayload",
-                        "decoded websocket payload"
-                    );
-                    log_bridge_routing(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        None,
-                        "SpaceAccessStateChanged",
-                    );
-                    Some(RealtimeEvent::SpaceAccessStateChanged(
-                        SpaceAccessStateChangedEvent {
-                            state: payload.state,
-                        },
-                    ))
-                }
-                Err(err) => {
-                    log_decode_failed(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        "SpaceAccessStateChangedPayload",
-                        &err,
-                    );
-                    None
-                }
-            }
-        }
-        ws_event::SPACE_ACCESS_SNAPSHOT => {
-            match serde_json::from_value::<SpaceAccessStateChangedPayload>(event.payload) {
-                Ok(payload) => {
-                    debug!(
-                        event = "bridge.payload_decoded",
-                        source_topic = %topic,
-                        source_event_type = %event_type,
-                        session_id = session_id.as_deref().unwrap_or(""),
-                        payload_type = "SpaceAccessStateChangedPayload",
-                        "decoded websocket payload"
-                    );
-                    log_bridge_routing(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        None,
-                        "SpaceAccessStateChanged",
-                    );
-                    Some(RealtimeEvent::SpaceAccessStateChanged(
-                        SpaceAccessStateChangedEvent {
-                            state: payload.state,
-                        },
-                    ))
-                }
-                Err(err) => {
-                    log_decode_failed(
-                        &topic,
-                        &event_type,
-                        session_id.as_deref(),
-                        "SpaceAccessStateChangedPayload",
-                        &err,
-                    );
-                    None
-                }
-            }
-        }
         ws_event::CLIPBOARD_NEW_CONTENT => {
             #[derive(serde::Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -1248,7 +1176,6 @@ fn event_topic(event: &RealtimeEvent) -> RealtimeTopic {
         | RealtimeEvent::PeersNameUpdated(_)
         | RealtimeEvent::PeersConnectionChanged(_) => RealtimeTopic::Peers,
         RealtimeEvent::SpaceMembersChanged(_) => RealtimeTopic::PairedDevices,
-        RealtimeEvent::SpaceAccessStateChanged(_) => RealtimeTopic::SpaceAccess,
         RealtimeEvent::ClipboardNewContent(_) => RealtimeTopic::Clipboard,
     }
 }
@@ -1259,7 +1186,6 @@ fn topic_name(topic: &RealtimeTopic) -> &'static str {
         RealtimeTopic::Peers => ws_topic::PEERS,
         RealtimeTopic::PairedDevices => ws_topic::PAIRED_DEVICES,
         RealtimeTopic::Setup => ws_topic::SETUP,
-        RealtimeTopic::SpaceAccess => ws_topic::SPACE_ACCESS,
         RealtimeTopic::Clipboard => ws_topic::CLIPBOARD,
     }
 }

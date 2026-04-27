@@ -1,15 +1,12 @@
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use uc_core::space_access::state::SpaceAccessState;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RealtimeTopic {
     Pairing,
     Peers,
     PairedDevices,
     Setup,
-    SpaceAccess,
     Clipboard,
 }
 
@@ -81,11 +78,6 @@ pub struct SpaceMembersChangedEvent {
     pub devices: Vec<RealtimeSpaceMemberSummary>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct SpaceAccessStateChangedEvent {
-    pub state: SpaceAccessState,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardNewContentEvent {
     pub entry_id: String,
@@ -103,7 +95,6 @@ pub enum RealtimeEvent {
     PeersNameUpdated(PeerNameUpdatedEvent),
     PeersConnectionChanged(PeerConnectionChangedEvent),
     SpaceMembersChanged(SpaceMembersChangedEvent),
-    SpaceAccessStateChanged(SpaceAccessStateChangedEvent),
     ClipboardNewContent(ClipboardNewContentEvent),
 }
 

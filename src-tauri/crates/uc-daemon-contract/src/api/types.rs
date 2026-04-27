@@ -3,7 +3,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uc_core::file_transfer::FileTransferDirection;
-use uc_core::space_access::state::SpaceAccessState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,18 +123,6 @@ pub struct SpaceMembersChangedPayload {
     pub peer_id: String,
     pub device_name: Option<String>,
     pub connected: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SpaceAccessStateChangedPayload {
-    pub state: SpaceAccessState,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SpaceAccessStateResponse {
-    pub state: SpaceAccessState,
 }
 
 /// Response payload for GET /lifecycle/status.

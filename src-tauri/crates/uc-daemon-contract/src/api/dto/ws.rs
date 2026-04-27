@@ -43,7 +43,6 @@ pub const WS_SUPPORTED_TOPICS: &[&str] = &[
     ws_topic::PAIRED_DEVICES,
     ws_topic::PAIRING,
     ws_topic::SETUP,
-    ws_topic::SPACE_ACCESS,
     ws_topic::CLIPBOARD,
     ws_topic::FILE_TRANSFER,
     ws_topic::ENCRYPTION,
