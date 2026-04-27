@@ -5,13 +5,10 @@
 
 use std::sync::Arc;
 
-use uc_bootstrap::build_non_gui_bundle;
-use uc_bootstrap::builders::build_daemon_app;
-use uc_bootstrap::{BlobProcessingPorts, NonGuiBundle};
-
 use crate::daemon::app_assembly::{build_daemon_app_instance, DaemonAppAssemblyInput};
 use crate::daemon::app_facade_assembly::{build_daemon_app_facade, DaemonAppFacadeAssemblyInput};
 use crate::daemon::background_tasks::spawn_daemon_background_tasks;
+use crate::daemon::bootstrap::{build_daemon_bootstrap_assembly, DaemonBootstrapAssembly};
 use crate::daemon::run_loop::{run_daemon_until_shutdown, DaemonRunLoopInput};
 use crate::daemon::run_mode::DaemonRunMode;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
@@ -29,40 +26,30 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
 
     let rt = build_daemon_tokio_runtime()?;
 
-    // build_daemon_app() calls build_core() which inits tracing + wires
-    // deps, then awaits `build_space_setup_assembly` which binds iroh.
-    let ctx = rt.block_on(build_daemon_app())?;
-    // Extract file_cache_dir, file_transfer_orchestrator, clipboard_write_coordinator,
-    // and emitter_cell before ctx is consumed by runtime construction.
-    let file_cache_dir = ctx.storage_paths.file_cache_dir.clone();
-    let file_transfer_lifecycle = ctx.background.file_transfer_lifecycle.clone();
-    let clipboard_write_coordinator = ctx.background.clipboard_write_coordinator.clone();
-    let emitter_cell = ctx.emitter_cell.clone();
+    let DaemonBootstrapAssembly {
+        non_gui_bundle,
+        background,
+        blob_ports,
+        file_cache_dir,
+        file_transfer_lifecycle,
+        clipboard_write_coordinator,
+        emitter_cell,
+        clipboard_sync_facade,
+        blob_transfer_facade,
+        space_setup_assembly,
+    } = build_daemon_bootstrap_assembly(&rt)?;
 
-    // Extract blob processing ports before ctx.deps is moved.
-    let blob_ports = BlobProcessingPorts::from_app_deps(&ctx.deps);
-    let background = ctx.background;
-
-    let NonGuiBundle {
+    let uc_bootstrap::NonGuiBundle {
         deps,
         storage_paths,
         emitter_cell: _bundle_emitter_cell,
         lifecycle_status,
         task_registry,
         clipboard_integration_mode,
-    } = build_non_gui_bundle(ctx.deps, ctx.storage_paths.clone(), emitter_cell.clone())?;
-    // Settings + clipboard_change_origin are lifted out so the spawn
-    // closures further down can take owned Arc clones without holding
-    // a `&deps` borrow across `await`.
+    } = non_gui_bundle;
+    // 后续后台任务需要持有 settings，先 clone 出来，避免跨 await 借用 deps。
     let settings_port = deps.settings.clone();
     let runtime_controls = build_daemon_runtime_controls(run_mode);
-
-    // Slice 2 Phase 3 · T6 — pull clipboard_sync_facade out of the
-    // assembly before we move it into `space_setup_assembly` for
-    // shutdown. Feeds both the outbound watcher (T7) and the inbound
-    // worker (T8).
-    let clipboard_sync_facade = ctx.clipboard_sync_facade.clone();
-    let blob_transfer_facade = ctx.space_setup_assembly.blob.clone();
 
     let runtime_workers = build_daemon_runtime_workers(DaemonRuntimeAssemblyInput {
         deps: &deps,
@@ -93,8 +80,8 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
     // (along with the rest of the assembly) into the post-`daemon.run()`
     // shutdown closure below; this clone keeps the api_state + forwarder
     // alive throughout `run()`.
-    let space_setup_facade_for_api = ctx.space_setup_assembly.facade.clone();
-    let member_roster_facade_for_api = ctx.space_setup_assembly.roster.clone();
+    let space_setup_facade_for_api = space_setup_assembly.facade.clone();
+    let member_roster_facade_for_api = space_setup_assembly.roster.clone();
     let local_device_id = deps.device.device_identity.current_device_id().to_string();
 
     let storage_paths_for_daemon = storage_paths.clone();
@@ -130,7 +117,7 @@ pub fn run(run_mode: DaemonRunMode) -> anyhow::Result<()> {
             daemon,
             app_facade,
             settings: settings_port,
-            space_setup_assembly: ctx.space_setup_assembly,
+            space_setup_assembly,
             deferred_ready_notify: runtime_controls.deferred_ready_notify,
             clipboard_capture_gate: runtime_controls.clipboard_capture_gate,
         },

@@ -54,6 +54,15 @@
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `9ea4bc30 refactor: extract desktop daemon service assembly`。
+- 开始第十七阶段：抽出 daemon bootstrap 拆包装配。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/bootstrap.rs`，集中构造 daemon bootstrap 并拆出 background、non-gui bundle、space setup 等宿主句柄。
+- `entrypoint.rs` 不再直接调用 `build_daemon_app` 和 `build_non_gui_bundle`。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo test -p uc-desktop daemon::run_mode -- --nocapture`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 - 提交 `03943051 refactor: extract desktop daemon runtime controls`。
 - 开始第十六阶段：抽出 daemon 服务清单装配。
 - 新增 `src-tauri/crates/uc-desktop/src/daemon/service_assembly.rs`，集中把 runtime workers 和 search service 组装成 `DaemonServicePlan`。
