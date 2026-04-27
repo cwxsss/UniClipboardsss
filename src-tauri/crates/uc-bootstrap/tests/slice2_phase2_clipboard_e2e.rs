@@ -42,7 +42,7 @@ use uc_application::facade::space_setup::{
 use uc_application::facade::{
     ClipboardSyncDeps, ClipboardSyncFacade, IngestHandle, MemberRosterDeps, MemberRosterFacade,
 };
-use uc_application::space_access::HmacProofAdapter;
+use uc_application::proof::HmacProofAdapter;
 use uc_bootstrap::IrohNodeConfig;
 use uc_core::ids::{DeviceId, FormatId, RepresentationId};
 use uc_core::membership::{MemberRepositoryPort, MembershipError, SpaceMember};

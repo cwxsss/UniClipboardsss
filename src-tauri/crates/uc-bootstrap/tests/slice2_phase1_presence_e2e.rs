@@ -40,7 +40,7 @@ use uc_application::facade::roster::{MemberRosterDeps, MemberRosterFacade};
 use uc_application::facade::space_setup::{
     InitializeSpaceInput, RedeemPairingInvitationInput, SpaceSetupDeps, SpaceSetupFacade,
 };
-use uc_application::space_access::HmacProofAdapter;
+use uc_application::proof::HmacProofAdapter;
 use uc_bootstrap::IrohNodeConfig;
 use uc_core::ids::DeviceId;
 use uc_core::membership::{MemberRepositoryPort, MembershipError, SpaceMember};

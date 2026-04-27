@@ -26,7 +26,7 @@ use uc_application::facade::{
     BlobTransferDeps, BlobTransferFacade, ClipboardSyncDeps, ClipboardSyncFacade, IngestHandle,
     MemberRosterDeps, MemberRosterFacade, SpaceSetupDeps, SpaceSetupFacade,
 };
-use uc_application::space_access::HmacProofAdapter;
+use uc_application::proof::HmacProofAdapter;
 use uc_core::ports::blob::{BlobReferenceRepositoryPort, BlobTransferPort};
 use uc_core::ports::space::ProofPort;
 use uc_core::ports::{
