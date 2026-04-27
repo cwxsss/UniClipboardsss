@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 use uc_application::facade::{SearchCoordinator, SearchCoordinatorDeps};
 use uc_bootstrap::build_non_gui_bundle;
 use uc_bootstrap::builders::build_daemon_app;
@@ -19,6 +18,7 @@ use uc_bootstrap::{
 use crate::app::DaemonApp;
 use crate::daemon::runtime_assembly::{build_daemon_runtime_workers, DaemonRuntimeAssemblyInput};
 use crate::daemon::service_plan::{DaemonServicePlan, DaemonServicePlanInput};
+use crate::daemon::shutdown::build_external_shutdown_token;
 use crate::daemon::startup_recovery::{spawn_startup_recovery, StartupRecoveryInput};
 use crate::search::coordinator::SearchCoordinatorService;
 use crate::service::DaemonService;
@@ -31,23 +31,7 @@ use uc_webserver::api::types::DaemonWsEvent;
 /// monitors stdin for EOF (parent GUI exit) and defers clipboard capture
 /// until the GUI signals readiness.
 pub fn run(gui_managed: bool) -> anyhow::Result<()> {
-    // When launched with --gui-managed, the parent GUI process keeps our stdin pipe open.
-    // If the parent exits (normally, crash, or SIGKILL), the pipe closes and we detect EOF.
-    // This token fires on EOF, triggering graceful daemon shutdown via DaemonApp's select loop.
-    let external_shutdown = if gui_managed {
-        let token = CancellationToken::new();
-        let token_clone = token.clone();
-        std::thread::spawn(move || {
-            use std::io::Read;
-            let mut buf = [0u8; 1];
-            // Blocks until stdin is closed (parent process gone)
-            let _ = std::io::stdin().read(&mut buf);
-            token_clone.cancel();
-        });
-        Some(token)
-    } else {
-        None
-    };
+    let external_shutdown = build_external_shutdown_token(gui_managed);
 
     // Build the daemon's tokio runtime FIRST. Everything async in the
     // daemon's lifetime — iroh Endpoint::bind (inside build_daemon_app),

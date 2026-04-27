@@ -52,6 +52,14 @@
 - 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
 - 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
 - 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
+- 提交 `f790844c refactor: extract desktop daemon startup recovery`。
+- 开始第六阶段：抽出 GUI 管理模式关闭信号。
+- 新增 `src-tauri/crates/uc-desktop/src/daemon/shutdown.rs`，集中把 GUI 父进程 stdin 关闭转换为 daemon 关闭信号。
+- 将 `entrypoint.rs` 中内联的 stdin EOF 监听替换为 `build_external_shutdown_token` 调用。
+- 运行 `cargo fmt --all`，通过。
+- 运行 `cargo check -p uc-desktop -p uc-daemon -p uc-cli`，通过。
+- 运行 `cargo test -p uc-desktop daemon::service_plan -- --nocapture`，通过。
+- 运行 `cargo check -p uniclipboard`，通过，并成功准备 daemon 二进制。
 
 ## 工作区备注
 

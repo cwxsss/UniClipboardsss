@@ -34,6 +34,8 @@
 - 第五阶段新增 `daemon::startup_recovery`，把启动后的后台恢复任务从 `entrypoint.rs` 抽出。
 - 后台恢复仍按原顺序执行：读取自动解锁设置、恢复加密会话、恢复空间会话、刷新 presence，并在 CLI 模式成功解锁后触发延迟服务。
 - `entrypoint.rs` 现在只把启动恢复所需依赖交给 `spawn_startup_recovery`，不再直接写恢复任务细节。
+- 第六阶段新增 `daemon::shutdown`，把 GUI 管理模式下的 stdin EOF 监听从 `entrypoint.rs` 抽出。
+- daemon 主循环仍接收同一个关闭信号，关闭行为没有变化。
 
 ## 验证发现
 
@@ -49,6 +51,8 @@
 - `cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
 - `cargo check -p uniclipboard` 通过。
 - `cargo test -p uc-desktop daemon::service_plan -- --nocapture` 通过。
+- 抽出 GUI 管理模式关闭信号后，`cargo check -p uc-desktop -p uc-daemon -p uc-cli` 通过。
+- 抽出 GUI 管理模式关闭信号后，`cargo check -p uniclipboard` 通过。
 
 ## 后续 gap
 
