@@ -33,8 +33,9 @@ use crate::facade::settings::{GeneralSettingsPatch, SettingsPatch};
 use crate::facade::space_setup::{EnsureReachableAllError, EnsureReachableAllReport};
 use crate::facade::space_setup::{
     InitializeSpaceError, InitializeSpaceInput, InitializeSpaceResult, IssuePairingInvitationError,
-    IssuePairingInvitationResult, PairingOutcome, RedeemPairingInvitationError,
-    RedeemPairingInvitationInput, RedeemPairingInvitationResult, TryResumeSessionError,
+    IssuePairingInvitationResult, MigrationProgress, PairingOutcome, QueryMigrationProgressError,
+    RedeemPairingInvitationError, RedeemPairingInvitationInput, RedeemPairingInvitationResult,
+    SwitchSpaceError, SwitchSpaceInput, SwitchSpaceResult, TryResumeSessionError,
 };
 use crate::facade::{
     BlobTransferError, BlobTransferFacade, ClipboardHistoryFacade, ClipboardRestoreFacade,
@@ -155,6 +156,34 @@ impl AppFacade {
                 RedeemPairingInvitationError::Internal("space setup facade unavailable".to_string())
             })?
             .redeem_pairing_invitation(input)
+            .await
+    }
+
+    /// 已 setup 设备加入另一个 sponsor 空间，4 阶段重加密迁移。详见
+    /// `usecases::setup::switch_space` 模块文档。
+    pub async fn switch_space(
+        &self,
+        input: SwitchSpaceInput,
+    ) -> Result<SwitchSpaceResult, SwitchSpaceError> {
+        self.space_setup
+            .as_ref()
+            .ok_or_else(|| {
+                SwitchSpaceError::Internal("space setup facade unavailable".to_string())
+            })?
+            .switch_space(input)
+            .await
+    }
+
+    /// 查询当前 switch-space 迁移进度（粗粒度——只返回阶段和备份表条目数）。
+    pub async fn query_migration_progress(
+        &self,
+    ) -> Result<MigrationProgress, QueryMigrationProgressError> {
+        self.space_setup
+            .as_ref()
+            .ok_or_else(|| {
+                QueryMigrationProgressError::Internal("space setup facade unavailable".to_string())
+            })?
+            .query_migration_progress()
             .await
     }
 

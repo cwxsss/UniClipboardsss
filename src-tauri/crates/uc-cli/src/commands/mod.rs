@@ -10,4 +10,5 @@ pub mod send;
 pub mod start;
 pub mod status;
 pub mod stop;
+pub mod switch_space;
 pub mod watch;

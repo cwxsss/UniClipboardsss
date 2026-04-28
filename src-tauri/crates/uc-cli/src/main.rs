@@ -109,6 +109,23 @@ enum Commands {
         #[arg(long)]
         device_name: Option<String>,
     },
+    /// Switch to another sponsor's space, re-encrypting local clipboard
+    /// history under the new master key (4-phase migration).
+    ///
+    /// Pre-condition: this device has already completed `init` or `join`.
+    /// Runs the full re-encryption pipeline: backup → handshake → swap →
+    /// commit. A daemon crash mid-run resumes automatically on the next
+    /// `uniclip` invocation thanks to `MigrationStatePort` persistence.
+    SwitchSpace {
+        /// Invitation code printed by the new sponsor's `invite`. Prompted
+        /// interactively when omitted.
+        #[arg(long)]
+        code: Option<String>,
+        /// Passphrase the new sponsor chose during `init`. Prompted
+        /// interactively when omitted.
+        #[arg(long)]
+        new_passphrase: Option<String>,
+    },
     /// List paired devices
     Devices,
     /// List members of this space with presence (online / offline / unknown).
@@ -237,6 +254,19 @@ fn main() -> anyhow::Result<()> {
                         code,
                         passphrase,
                         device_name,
+                    },
+                    cli.verbose,
+                )
+                .await
+            }
+            Commands::SwitchSpace {
+                code,
+                new_passphrase,
+            } => {
+                commands::switch_space::run(
+                    commands::switch_space::SwitchSpaceArgs {
+                        code,
+                        new_passphrase,
                     },
                     cli.verbose,
                 )
